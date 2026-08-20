@@ -3838,29 +3838,29 @@ var init_version = __esm({
 });
 
 // src/daemon/token.ts
-import fs15 from "node:fs";
+import fs16 from "node:fs";
 import os3 from "node:os";
-import path14 from "node:path";
+import path15 from "node:path";
 function fsHonorsPosixMode(dir) {
   let probe = null;
   try {
-    fs15.mkdirSync(dir, { recursive: true });
-    probe = path14.join(dir, `.dp-mode-probe-${process.pid}-${Date.now()}`);
-    const fd = fs15.openSync(probe, "w", 384);
-    fs15.closeSync(fd);
+    fs16.mkdirSync(dir, { recursive: true });
+    probe = path15.join(dir, `.dp-mode-probe-${process.pid}-${Date.now()}`);
+    const fd = fs16.openSync(probe, "w", 384);
+    fs16.closeSync(fd);
     try {
-      fs15.chmodSync(probe, 384);
+      fs16.chmodSync(probe, 384);
     } catch {
       return false;
     }
-    const mode = fs15.statSync(probe).mode & 511;
+    const mode = fs16.statSync(probe).mode & 511;
     return (mode & 63) === 0;
   } catch {
     return false;
   } finally {
     if (probe) {
       try {
-        fs15.unlinkSync(probe);
+        fs16.unlinkSync(probe);
       } catch {
       }
     }
@@ -3872,53 +3872,53 @@ function tokenPlacement(opts) {
 }
 function runtimeBaseDir() {
   const xdg = process.env.XDG_RUNTIME_DIR?.trim();
-  if (xdg && path14.isAbsolute(xdg)) {
+  if (xdg && path15.isAbsolute(xdg)) {
     try {
-      if (fs15.statSync(xdg).isDirectory()) return path14.join(xdg, "deeppairing");
+      if (fs16.statSync(xdg).isDirectory()) return path15.join(xdg, "deeppairing");
     } catch {
     }
   }
-  return path14.join(os3.tmpdir(), "deeppairing");
+  return path15.join(os3.tmpdir(), "deeppairing");
 }
 function tokenSidecarPath(projectRoot2) {
-  return path14.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
+  return path15.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
 }
 function writeTokenSidecar(projectRoot2, payload) {
   const file2 = tokenSidecarPath(projectRoot2);
-  const dir = path14.dirname(file2);
-  fs15.mkdirSync(dir, { recursive: true, mode: 448 });
+  const dir = path15.dirname(file2);
+  fs16.mkdirSync(dir, { recursive: true, mode: 448 });
   try {
-    fs15.chmodSync(dir, 448);
+    fs16.chmodSync(dir, 448);
   } catch {
   }
   const uid = typeof process.getuid === "function" ? process.getuid() : void 0;
   try {
-    const dstat = fs15.lstatSync(dir);
+    const dstat = fs16.lstatSync(dir);
     if (dstat.isSymbolicLink() || uid !== void 0 && dstat.uid !== uid) {
       return { path: file2, mode: dstat.mode & 511, honored: false, refused: true };
     }
   } catch {
     return { path: file2, mode: 511, honored: false, refused: true };
   }
-  const O_NOFOLLOW = fs15.constants.O_NOFOLLOW ?? 0;
+  const O_NOFOLLOW = fs16.constants.O_NOFOLLOW ?? 0;
   let fd;
   try {
-    fd = fs15.openSync(file2, fs15.constants.O_WRONLY | fs15.constants.O_CREAT | fs15.constants.O_TRUNC | O_NOFOLLOW, 384);
+    fd = fs16.openSync(file2, fs16.constants.O_WRONLY | fs16.constants.O_CREAT | fs16.constants.O_TRUNC | O_NOFOLLOW, 384);
   } catch {
     return { path: file2, mode: 511, honored: false, refused: true };
   }
   try {
-    fs15.writeFileSync(fd, JSON.stringify({ ...payload, projectRoot: projectRoot2 }, null, 2));
+    fs16.writeFileSync(fd, JSON.stringify({ ...payload, projectRoot: projectRoot2 }, null, 2));
   } finally {
-    fs15.closeSync(fd);
+    fs16.closeSync(fd);
   }
   try {
-    fs15.chmodSync(file2, 384);
+    fs16.chmodSync(file2, 384);
   } catch {
   }
   let mode = 511;
   try {
-    mode = fs15.statSync(file2).mode & 511;
+    mode = fs16.statSync(file2).mode & 511;
   } catch {
   }
   return { path: file2, mode, honored: (mode & 63) === 0 };
@@ -3926,15 +3926,15 @@ function writeTokenSidecar(projectRoot2, payload) {
 function readTokenSidecar(projectRoot2) {
   try {
     const file2 = tokenSidecarPath(projectRoot2);
-    if (!fs15.existsSync(file2)) return null;
-    return JSON.parse(fs15.readFileSync(file2, "utf-8"));
+    if (!fs16.existsSync(file2)) return null;
+    return JSON.parse(fs16.readFileSync(file2, "utf-8"));
   } catch {
     return null;
   }
 }
 function unlinkTokenSidecar(projectRoot2) {
   try {
-    fs15.unlinkSync(tokenSidecarPath(projectRoot2));
+    fs16.unlinkSync(tokenSidecarPath(projectRoot2));
   } catch {
   }
 }
@@ -3967,9 +3967,9 @@ __export(lifecycle_exports, {
   waitForPortRelease: () => waitForPortRelease
 });
 import { spawn, execFileSync } from "node:child_process";
-import fs16 from "node:fs";
+import fs17 from "node:fs";
 import net from "node:net";
-import path15 from "node:path";
+import path16 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 function logStale(msg) {
   try {
@@ -3979,13 +3979,13 @@ function logStale(msg) {
   }
 }
 function daemonInfoPath(projectRoot2) {
-  return path15.join(projectRoot2, ".deeppairing", DAEMON_FILE);
+  return path16.join(projectRoot2, ".deeppairing", DAEMON_FILE);
 }
 function readDaemonInfo(projectRoot2) {
   const infoPath = daemonInfoPath(projectRoot2);
   try {
-    if (!fs16.existsSync(infoPath)) return null;
-    const info = JSON.parse(fs16.readFileSync(infoPath, "utf-8"));
+    if (!fs17.existsSync(infoPath)) return null;
+    const info = JSON.parse(fs17.readFileSync(infoPath, "utf-8"));
     if (!info.authToken) {
       const sidecar = readTokenSidecar(projectRoot2);
       if (sidecar?.authToken && (sidecar.pid === void 0 || sidecar.pid === info.pid)) {
@@ -4103,7 +4103,7 @@ async function isDaemonRunning(projectRoot2, range = { start: preferredPortFor(p
   }
   if (info) {
     try {
-      fs16.unlinkSync(daemonInfoPath(projectRoot2));
+      fs17.unlinkSync(daemonInfoPath(projectRoot2));
     } catch {
     }
   }
@@ -4147,8 +4147,8 @@ function buildReadinessTimeoutMessage(args) {
     `deepPairing daemon did not become ready within ${timeoutMs}ms (probed this project's ports ${first}\u2013${last}).`,
     hint
   ];
-  const logPath2 = path15.join(projectRoot2, ".deeppairing", "daemon.log");
-  if (fs16.existsSync(logPath2)) {
+  const logPath2 = path16.join(projectRoot2, ".deeppairing", "daemon.log");
+  if (fs17.existsSync(logPath2)) {
     lines.push(`See ${logPath2} for the daemon's own startup log.`);
   }
   lines.push(`To diagnose: ${cliInvocation("doctor")}`);
@@ -4190,8 +4190,8 @@ async function describePortHolders(projectRoot2) {
   return parts.join("\n");
 }
 function spawnDaemon(projectRoot2) {
-  const daemonScript = path15.join(__thisDir2, "../../dist/daemon/index.js");
-  const scriptPath = fs16.existsSync(daemonScript) ? daemonScript : path15.join(__thisDir2, "daemon.js");
+  const daemonScript = path16.join(__thisDir2, "../../dist/daemon/index.js");
+  const scriptPath = fs17.existsSync(daemonScript) ? daemonScript : path16.join(__thisDir2, "daemon.js");
   const child = spawn("node", [scriptPath], {
     cwd: projectRoot2,
     detached: true,
@@ -4287,7 +4287,7 @@ function pidIsGone(pid) {
 function readProcessStartTime(pid) {
   try {
     if (process.platform === "linux") {
-      const stat = fs16.readFileSync(`/proc/${pid}/stat`, "utf-8");
+      const stat = fs17.readFileSync(`/proc/${pid}/stat`, "utf-8");
       const rparen = stat.lastIndexOf(")");
       if (rparen === -1) return null;
       const rest = stat.slice(rparen + 1).trim().split(/\s+/);
@@ -4432,7 +4432,7 @@ var init_lifecycle = __esm({
     init_project_root();
     init_version();
     init_cli_invocation();
-    __thisDir2 = path15.dirname(fileURLToPath3(import.meta.url));
+    __thisDir2 = path16.dirname(fileURLToPath3(import.meta.url));
     DAEMON_FILE = "daemon.json";
     DEFAULT_PORT = BASE_PORT;
     MAX_PORT_ATTEMPTS = 10;
@@ -5087,8 +5087,8 @@ var serve = (options, listeningListener) => {
 
 // src/daemon/index.ts
 import crypto4 from "node:crypto";
-import fs18 from "node:fs";
-import path17 from "node:path";
+import fs19 from "node:fs";
+import path18 from "node:path";
 
 // src/cli/setup-tasks.ts
 init_cli_invocation();
@@ -6151,26 +6151,26 @@ var handleParsingNestedValues = (form, key, value) => {
 };
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/utils/url.js
-var splitPath = (path18) => {
-  const paths = path18.split("/");
+var splitPath = (path19) => {
+  const paths = path19.split("/");
   if (paths[0] === "") {
     paths.shift();
   }
   return paths;
 };
 var splitRoutingPath = (routePath) => {
-  const { groups, path: path18 } = extractGroupsFromPath(routePath);
-  const paths = splitPath(path18);
+  const { groups, path: path19 } = extractGroupsFromPath(routePath);
+  const paths = splitPath(path19);
   return replaceGroupMarks(paths, groups);
 };
-var extractGroupsFromPath = (path18) => {
+var extractGroupsFromPath = (path19) => {
   const groups = [];
-  path18 = path18.replace(/\{[^}]+\}/g, (match2, index) => {
+  path19 = path19.replace(/\{[^}]+\}/g, (match2, index) => {
     const mark = `@${index}`;
     groups.push([mark, match2]);
     return mark;
   });
-  return { groups, path: path18 };
+  return { groups, path: path19 };
 };
 var replaceGroupMarks = (paths, groups) => {
   for (let i = groups.length - 1; i >= 0; i--) {
@@ -6227,8 +6227,8 @@ var getPath = (request) => {
       const queryIndex = url2.indexOf("?", i);
       const hashIndex = url2.indexOf("#", i);
       const end = queryIndex === -1 ? hashIndex === -1 ? void 0 : hashIndex : hashIndex === -1 ? queryIndex : Math.min(queryIndex, hashIndex);
-      const path18 = url2.slice(start, end);
-      return tryDecodeURI(path18.includes("%25") ? path18.replace(/%25/g, "%2525") : path18);
+      const path19 = url2.slice(start, end);
+      return tryDecodeURI(path19.includes("%25") ? path19.replace(/%25/g, "%2525") : path19);
     } else if (charCode === 63 || charCode === 35) {
       break;
     }
@@ -6245,11 +6245,11 @@ var mergePath = (base, sub, ...rest) => {
   }
   return `${base?.[0] === "/" ? "" : "/"}${base}${sub === "/" ? "" : `${base?.at(-1) === "/" ? "" : "/"}${sub?.[0] === "/" ? sub.slice(1) : sub}`}`;
 };
-var checkOptionalParameter = (path18) => {
-  if (path18.charCodeAt(path18.length - 1) !== 63 || !path18.includes(":")) {
+var checkOptionalParameter = (path19) => {
+  if (path19.charCodeAt(path19.length - 1) !== 63 || !path19.includes(":")) {
     return null;
   }
-  const segments = path18.split("/");
+  const segments = path19.split("/");
   const results = [];
   let basePath = "";
   segments.forEach((segment) => {
@@ -6390,9 +6390,9 @@ var HonoRequest = class {
    */
   path;
   bodyCache = {};
-  constructor(request, path18 = "/", matchResult = [[]]) {
+  constructor(request, path19 = "/", matchResult = [[]]) {
     this.raw = request;
-    this.path = path18;
+    this.path = path19;
     this.#matchResult = matchResult;
     this.#validatedData = {};
   }
@@ -7144,8 +7144,8 @@ var Hono = class _Hono {
         return this;
       };
     });
-    this.on = (method, path18, ...handlers) => {
-      for (const p of [path18].flat()) {
+    this.on = (method, path19, ...handlers) => {
+      for (const p of [path19].flat()) {
         this.#path = p;
         for (const m of [method].flat()) {
           handlers.map((handler) => {
@@ -7202,8 +7202,8 @@ var Hono = class _Hono {
    * app.route("/api", app2) // GET /api/user
    * ```
    */
-  route(path18, app) {
-    const subApp = this.basePath(path18);
+  route(path19, app) {
+    const subApp = this.basePath(path19);
     app.routes.map((r) => {
       let handler;
       if (app.errorHandler === errorHandler) {
@@ -7229,9 +7229,9 @@ var Hono = class _Hono {
    * const api = new Hono().basePath('/api')
    * ```
    */
-  basePath(path18) {
+  basePath(path19) {
     const subApp = this.#clone();
-    subApp._basePath = mergePath(this._basePath, path18);
+    subApp._basePath = mergePath(this._basePath, path19);
     return subApp;
   }
   /**
@@ -7305,7 +7305,7 @@ var Hono = class _Hono {
    * })
    * ```
    */
-  mount(path18, applicationHandler, options) {
+  mount(path19, applicationHandler, options) {
     let replaceRequest;
     let optionHandler;
     if (options) {
@@ -7332,7 +7332,7 @@ var Hono = class _Hono {
       return [c.env, executionContext];
     };
     replaceRequest ||= (() => {
-      const mergedPath = mergePath(this._basePath, path18);
+      const mergedPath = mergePath(this._basePath, path19);
       const pathPrefixLength = mergedPath === "/" ? 0 : mergedPath.length;
       return (request) => {
         const url2 = new URL(request.url);
@@ -7347,19 +7347,19 @@ var Hono = class _Hono {
       }
       await next();
     };
-    this.#addRoute(METHOD_NAME_ALL, mergePath(path18, "*"), handler);
+    this.#addRoute(METHOD_NAME_ALL, mergePath(path19, "*"), handler);
     return this;
   }
-  #addRoute(method, path18, handler, baseRoutePath) {
+  #addRoute(method, path19, handler, baseRoutePath) {
     method = method.toUpperCase();
-    path18 = mergePath(this._basePath, path18);
+    path19 = mergePath(this._basePath, path19);
     const r = {
       basePath: baseRoutePath !== void 0 ? mergePath(this._basePath, baseRoutePath) : this._basePath,
-      path: path18,
+      path: path19,
       method,
       handler
     };
-    this.router.add(method, path18, [handler, r]);
+    this.router.add(method, path19, [handler, r]);
     this.routes.push(r);
   }
   #handleError(err, c) {
@@ -7372,10 +7372,10 @@ var Hono = class _Hono {
     if (method === "HEAD") {
       return (async () => new Response(null, await this.#dispatch(request, executionCtx, env, "GET")))();
     }
-    const path18 = this.getPath(request, { env });
-    const matchResult = this.router.match(method, path18);
+    const path19 = this.getPath(request, { env });
+    const matchResult = this.router.match(method, path19);
     const c = new Context(request, {
-      path: path18,
+      path: path19,
       matchResult,
       env,
       executionCtx,
@@ -7475,7 +7475,7 @@ var Hono = class _Hono {
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/router/reg-exp-router/matcher.js
 var emptyParam = [];
-function match(method, path18) {
+function match(method, path19) {
   const matchers = this.buildAllMatchers();
   const match2 = ((method2, path22) => {
     const matcher = matchers[method2] || matchers[METHOD_NAME_ALL];
@@ -7491,7 +7491,7 @@ function match(method, path18) {
     return [matcher[1][index], match3];
   });
   this.match = match2;
-  return match2(method, path18);
+  return match2(method, path19);
 }
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/router/reg-exp-router/node.js
@@ -7606,12 +7606,12 @@ var Node = class _Node {
 var Trie = class {
   #context = { varIndex: 0 };
   #root = new Node();
-  insert(path18, index, pathErrorCheckOnly) {
+  insert(path19, index, pathErrorCheckOnly) {
     const paramAssoc = [];
     const groups = [];
     for (let i = 0; ; ) {
       let replaced = false;
-      path18 = path18.replace(/\{[^}]+\}/g, (m) => {
+      path19 = path19.replace(/\{[^}]+\}/g, (m) => {
         const mark = `@\\${i}`;
         groups[i] = [mark, m];
         i++;
@@ -7622,7 +7622,7 @@ var Trie = class {
         break;
       }
     }
-    const tokens = path18.match(/(?::[^\/]+)|(?:\/\*$)|./g) || [];
+    const tokens = path19.match(/(?::[^\/]+)|(?:\/\*$)|./g) || [];
     for (let i = groups.length - 1; i >= 0; i--) {
       const [mark] = groups[i];
       for (let j = tokens.length - 1; j >= 0; j--) {
@@ -7661,9 +7661,9 @@ var Trie = class {
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/router/reg-exp-router/router.js
 var nullMatcher = [/^$/, [], /* @__PURE__ */ Object.create(null)];
 var wildcardRegExpCache = /* @__PURE__ */ Object.create(null);
-function buildWildcardRegExp(path18) {
-  return wildcardRegExpCache[path18] ??= new RegExp(
-    path18 === "*" ? "" : `^${path18.replace(
+function buildWildcardRegExp(path19) {
+  return wildcardRegExpCache[path19] ??= new RegExp(
+    path19 === "*" ? "" : `^${path19.replace(
       /\/\*$|([.\\+*[^\]$()])/g,
       (_, metaChar) => metaChar ? `\\${metaChar}` : "(?:|/.*)"
     )}$`
@@ -7685,17 +7685,17 @@ function buildMatcherFromPreprocessedRoutes(routes) {
   );
   const staticMap = /* @__PURE__ */ Object.create(null);
   for (let i = 0, j = -1, len = routesWithStaticPathFlag.length; i < len; i++) {
-    const [pathErrorCheckOnly, path18, handlers] = routesWithStaticPathFlag[i];
+    const [pathErrorCheckOnly, path19, handlers] = routesWithStaticPathFlag[i];
     if (pathErrorCheckOnly) {
-      staticMap[path18] = [handlers.map(([h]) => [h, /* @__PURE__ */ Object.create(null)]), emptyParam];
+      staticMap[path19] = [handlers.map(([h]) => [h, /* @__PURE__ */ Object.create(null)]), emptyParam];
     } else {
       j++;
     }
     let paramAssoc;
     try {
-      paramAssoc = trie.insert(path18, j, pathErrorCheckOnly);
+      paramAssoc = trie.insert(path19, j, pathErrorCheckOnly);
     } catch (e) {
-      throw e === PATH_ERROR ? new UnsupportedPathError(path18) : e;
+      throw e === PATH_ERROR ? new UnsupportedPathError(path19) : e;
     }
     if (pathErrorCheckOnly) {
       continue;
@@ -7729,12 +7729,12 @@ function buildMatcherFromPreprocessedRoutes(routes) {
   }
   return [regexp, handlerMap, staticMap];
 }
-function findMiddleware(middleware, path18) {
+function findMiddleware(middleware, path19) {
   if (!middleware) {
     return void 0;
   }
   for (const k of Object.keys(middleware).sort((a, b) => b.length - a.length)) {
-    if (buildWildcardRegExp(k).test(path18)) {
+    if (buildWildcardRegExp(k).test(path19)) {
       return [...middleware[k]];
     }
   }
@@ -7748,7 +7748,7 @@ var RegExpRouter = class {
     this.#middleware = { [METHOD_NAME_ALL]: /* @__PURE__ */ Object.create(null) };
     this.#routes = { [METHOD_NAME_ALL]: /* @__PURE__ */ Object.create(null) };
   }
-  add(method, path18, handler) {
+  add(method, path19, handler) {
     const middleware = this.#middleware;
     const routes = this.#routes;
     if (!middleware || !routes) {
@@ -7763,18 +7763,18 @@ var RegExpRouter = class {
         });
       });
     }
-    if (path18 === "/*") {
-      path18 = "*";
+    if (path19 === "/*") {
+      path19 = "*";
     }
-    const paramCount = (path18.match(/\/:/g) || []).length;
-    if (/\*$/.test(path18)) {
-      const re = buildWildcardRegExp(path18);
+    const paramCount = (path19.match(/\/:/g) || []).length;
+    if (/\*$/.test(path19)) {
+      const re = buildWildcardRegExp(path19);
       if (method === METHOD_NAME_ALL) {
         Object.keys(middleware).forEach((m) => {
-          middleware[m][path18] ||= findMiddleware(middleware[m], path18) || findMiddleware(middleware[METHOD_NAME_ALL], path18) || [];
+          middleware[m][path19] ||= findMiddleware(middleware[m], path19) || findMiddleware(middleware[METHOD_NAME_ALL], path19) || [];
         });
       } else {
-        middleware[method][path18] ||= findMiddleware(middleware[method], path18) || findMiddleware(middleware[METHOD_NAME_ALL], path18) || [];
+        middleware[method][path19] ||= findMiddleware(middleware[method], path19) || findMiddleware(middleware[METHOD_NAME_ALL], path19) || [];
       }
       Object.keys(middleware).forEach((m) => {
         if (method === METHOD_NAME_ALL || method === m) {
@@ -7792,7 +7792,7 @@ var RegExpRouter = class {
       });
       return;
     }
-    const paths = checkOptionalParameter(path18) || [path18];
+    const paths = checkOptionalParameter(path19) || [path19];
     for (let i = 0, len = paths.length; i < len; i++) {
       const path22 = paths[i];
       Object.keys(routes).forEach((m) => {
@@ -7819,13 +7819,13 @@ var RegExpRouter = class {
     const routes = [];
     let hasOwnRoute = method === METHOD_NAME_ALL;
     [this.#middleware, this.#routes].forEach((r) => {
-      const ownRoute = r[method] ? Object.keys(r[method]).map((path18) => [path18, r[method][path18]]) : [];
+      const ownRoute = r[method] ? Object.keys(r[method]).map((path19) => [path19, r[method][path19]]) : [];
       if (ownRoute.length !== 0) {
         hasOwnRoute ||= true;
         routes.push(...ownRoute);
       } else if (method !== METHOD_NAME_ALL) {
         routes.push(
-          ...Object.keys(r[METHOD_NAME_ALL]).map((path18) => [path18, r[METHOD_NAME_ALL][path18]])
+          ...Object.keys(r[METHOD_NAME_ALL]).map((path19) => [path19, r[METHOD_NAME_ALL][path19]])
         );
       }
     });
@@ -7845,13 +7845,13 @@ var SmartRouter = class {
   constructor(init) {
     this.#routers = init.routers;
   }
-  add(method, path18, handler) {
+  add(method, path19, handler) {
     if (!this.#routes) {
       throw new Error(MESSAGE_MATCHER_IS_ALREADY_BUILT);
     }
-    this.#routes.push([method, path18, handler]);
+    this.#routes.push([method, path19, handler]);
   }
-  match(method, path18) {
+  match(method, path19) {
     if (!this.#routes) {
       throw new Error("Fatal error");
     }
@@ -7866,7 +7866,7 @@ var SmartRouter = class {
         for (let i2 = 0, len2 = routes.length; i2 < len2; i2++) {
           router.add(...routes[i2]);
         }
-        res = router.match(method, path18);
+        res = router.match(method, path19);
       } catch (e) {
         if (e instanceof UnsupportedPathError) {
           continue;
@@ -7916,10 +7916,10 @@ var Node2 = class _Node2 {
     }
     this.#patterns = [];
   }
-  insert(method, path18, handler) {
+  insert(method, path19, handler) {
     this.#order = ++this.#order;
     let curNode = this;
-    const parts = splitRoutingPath(path18);
+    const parts = splitRoutingPath(path19);
     const possibleKeys = [];
     for (let i = 0, len = parts.length; i < len; i++) {
       const p = parts[i];
@@ -7968,12 +7968,12 @@ var Node2 = class _Node2 {
       }
     }
   }
-  search(method, path18) {
+  search(method, path19) {
     const handlerSets = [];
     this.#params = emptyParams;
     const curNode = this;
     let curNodes = [curNode];
-    const parts = splitPath(path18);
+    const parts = splitPath(path19);
     const curNodesQueue = [];
     const len = parts.length;
     let partOffsets = null;
@@ -8015,13 +8015,13 @@ var Node2 = class _Node2 {
           if (matcher instanceof RegExp) {
             if (partOffsets === null) {
               partOffsets = new Array(len);
-              let offset = path18[0] === "/" ? 1 : 0;
+              let offset = path19[0] === "/" ? 1 : 0;
               for (let p = 0; p < len; p++) {
                 partOffsets[p] = offset;
                 offset += parts[p].length + 1;
               }
             }
-            const restPathString = path18.substring(partOffsets[i]);
+            const restPathString = path19.substring(partOffsets[i]);
             const m = matcher.exec(restPathString);
             if (m) {
               params[name] = m[0];
@@ -8074,18 +8074,18 @@ var TrieRouter = class {
   constructor() {
     this.#node = new Node2();
   }
-  add(method, path18, handler) {
-    const results = checkOptionalParameter(path18);
+  add(method, path19, handler) {
+    const results = checkOptionalParameter(path19);
     if (results) {
       for (let i = 0, len = results.length; i < len; i++) {
         this.#node.insert(method, results[i], handler);
       }
       return;
     }
-    this.#node.insert(method, path18, handler);
+    this.#node.insert(method, path19, handler);
   }
-  match(method, path18) {
-    return this.#node.search(method, path18);
+  match(method, path19) {
+    return this.#node.search(method, path19);
   }
 };
 
@@ -8198,8 +8198,8 @@ var import_websocket_server = __toESM(require_websocket_server(), 1);
 
 // src/daemon/create-daemon.ts
 import { fileURLToPath as fileURLToPath4 } from "node:url";
-import fs17 from "node:fs";
-import path16 from "node:path";
+import fs18 from "node:fs";
+import path17 from "node:path";
 import { spawn as spawn2 } from "node:child_process";
 
 // src/error-codes.ts
@@ -9080,10 +9080,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj2, path18) {
-  if (!path18)
+function getElementAtPath(obj2, path19) {
+  if (!path19)
     return obj2;
-  return path18.reduce((acc, key) => acc?.[key], obj2);
+  return path19.reduce((acc, key) => acc?.[key], obj2);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -9492,11 +9492,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path18, issues) {
+function prefixIssues(path19, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path18);
+    iss.path.unshift(path19);
     return iss;
   });
 }
@@ -9643,16 +9643,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path18 = []) => {
+  const processError = (error52, path19 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path18, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path19, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path18, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path19, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path18, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path19, ...issue2.path]);
       } else {
-        const fullpath = [...path18, ...issue2.path];
+        const fullpath = [...path19, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -9679,17 +9679,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path18 = []) => {
+  const processError = (error52, path19 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path18, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path19, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path18, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path19, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path18, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path19, ...issue2.path]);
       } else {
-        const fullpath = [...path18, ...issue2.path];
+        const fullpath = [...path19, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -9721,8 +9721,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path18 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path18) {
+  const path19 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path19) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -22414,13 +22414,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path18 = ref.slice(1).split("/").filter(Boolean);
-  if (path18.length === 0) {
+  const path19 = ref.slice(1).split("/").filter(Boolean);
+  if (path19.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path18[0] === defsKey) {
-    const key = path18[1];
+  if (path19[0] === defsKey) {
+    const key = path19[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -23648,6 +23648,7 @@ var isObj = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
 var obj = (v) => isObj(v) ? v : {};
 var str = (v, d = "") => typeof v === "string" ? v : d;
 var num = (v, d = 0) => typeof v === "number" && Number.isFinite(v) ? v : d;
+var bool = (v, d = false) => typeof v === "boolean" ? v : d;
 var arr = (v) => Array.isArray(v) ? v : [];
 var strArr = (v) => arr(v).filter((x) => typeof x === "string");
 var optStr = (v) => typeof v === "string" ? v : void 0;
@@ -23857,6 +23858,57 @@ function coerceSpecContent(raw2) {
     out.openQuestions = strArr(c.openQuestions);
   if (Array.isArray(c.visuals))
     out.visuals = c.visuals.map((v, i) => coerceVisual(v, `visual_${i}`));
+  return out;
+}
+function coerceOption(v) {
+  const o = obj(v);
+  const out = {
+    id: str(o.id),
+    title: str(o.title),
+    description: str(o.description),
+    pros: strArr(o.pros),
+    cons: strArr(o.cons),
+    effort: oneOf(o.effort, LMH, "medium"),
+    risk: oneOf(o.risk, LMH, "medium"),
+    recommendation: bool(o.recommendation)
+  };
+  const concept = coerceConcept(o.concept);
+  if (concept)
+    out.concept = concept;
+  if (Array.isArray(o.visuals)) {
+    out.visuals = o.visuals.map((vis, i) => coerceVisual(vis, `${out.id}_visual_${i}`));
+  }
+  return out;
+}
+function coerceDecisionContent(raw2) {
+  const c = obj(raw2);
+  const out = {
+    context: str(c.context),
+    options: arr(c.options).map(coerceOption),
+    decisionId: str(c.decisionId)
+  };
+  if (typeof c.title === "string" && c.title.trim())
+    out.title = c.title.trim();
+  const stakes = optOneOf(c.stakes, LMH);
+  if (stakes)
+    out.stakes = stakes;
+  return out;
+}
+function coerceCodeChangeContent(raw2) {
+  const c = obj(raw2);
+  const out = {
+    filePath: str(c.filePath),
+    changeType: oneOf(c.changeType, ["create", "modify", "delete"], "modify"),
+    before: str(c.before),
+    after: str(c.after),
+    reasoning: str(c.reasoning)
+  };
+  const confidence = optOneOf(c.confidence, LMH);
+  if (confidence)
+    out.confidence = confidence;
+  const concept = coerceConcept(c.concept);
+  if (concept)
+    out.concept = concept;
   return out;
 }
 function coerceReasoningContent(raw2) {
@@ -25338,7 +25390,7 @@ function listAllDecisions(projectRoot2, liveSessions = []) {
   const failedSessions = [];
   const pushSession = (sessionId, decRecords, artifacts) => {
     const sorted = [...artifacts].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    const sessionTitle = sorted[0]?.title ?? sessionId;
+    const sessionTitle2 = sorted[0]?.title ?? sessionId;
     for (const dec of decRecords) {
       const liveArtifact = resolveLiveArtifact(artifacts, dec.artifactId);
       const options = Array.isArray(dec.options) ? dec.options : [];
@@ -25348,7 +25400,7 @@ function listAllDecisions(projectRoot2, liveSessions = []) {
       decisions.push({
         decisionId: dec.decisionId,
         sessionId,
-        sessionTitle,
+        sessionTitle: sessionTitle2,
         artifactId: dec.artifactId,
         artifactTitle: liveArtifact?.title ?? dec.context ?? dec.artifactId,
         artifactMissing: !liveArtifact,
@@ -27350,8 +27402,8 @@ var FileStore = class _FileStore {
 };
 
 // src/http/routes.ts
-import fs13 from "node:fs";
-import path12 from "node:path";
+import fs14 from "node:fs";
+import path13 from "node:path";
 
 // src/store/feature-overrides.ts
 import fs11 from "node:fs";
@@ -28266,6 +28318,960 @@ function formatLearnings(state) {
   return sections.join("\n");
 }
 
+// src/export/html-export.ts
+import fs12 from "node:fs";
+import path11 from "node:path";
+
+// src/export/format-html.ts
+var MAX_SNIPPET_LINES = 40;
+var MAX_CODE_LINES = 120;
+var MAX_DIFF_LINES_PER_FILE = 400;
+var DIFF_COLLAPSE_THRESHOLD = 24;
+var REPO_URL = "https://github.com/mitchjablonski/deepPairing";
+var BLOCK_MARK = '<span class="gate-mark"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M4.2 8h7.6"/></svg></span>';
+var SHIELD_MARK = '<span class="gate-mark"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4.2c0 3-2.1 5.3-5 6.4-2.9-1.1-5-3.4-5-6.4V3.6z"/></svg></span>';
+function esc2(value) {
+  const s = value == null ? "" : String(value);
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+function sanitizePath(raw2, projectRoot2) {
+  let p = typeof raw2 === "string" ? raw2.trim() : "";
+  if (!p) return "";
+  const normalized = p.replace(/\\/g, "/");
+  if (projectRoot2) {
+    const root = projectRoot2.replace(/\\/g, "/").replace(/\/+$/, "");
+    if (root && normalized.startsWith(root + "/")) return normalized.slice(root.length + 1);
+    if (root && normalized === root) return ".";
+  }
+  p = normalized;
+  p = p.replace(/^.*?\/(?:home|Users)\/[^/]+\//i, "~/");
+  return p;
+}
+function fmtTimestamp(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return d.toISOString().replace("T", " ").slice(0, 16) + " UTC";
+}
+function fmtDay(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return d.toISOString().slice(0, 10);
+}
+function plural(n, one, many = one + "s") {
+  return `${n} ${n === 1 ? one : many}`;
+}
+var FENCE_OPEN = /^\s*(?:`{3,}|~{3,})\s*([^\s`~]*)/;
+var FENCE_CLOSE = /^\s*(?:`{3,}|~{3,})\s*$/;
+var SAFE_URL = /^(?:https?:\/\/|mailto:|#|\/(?!\/)|\.{1,2}\/)/i;
+function renderInline(text) {
+  let out = esc2(text);
+  const codeSpans = [];
+  out = out.replace(/`([^`]+)`/g, (_m, code) => {
+    codeSpans.push(`<code>${code}</code>`);
+    return `\0CODE${codeSpans.length - 1}\0`;
+  });
+  out = out.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, label, url2) => {
+    const raw2 = url2.replace(/&amp;/g, "&");
+    if (!SAFE_URL.test(raw2)) return label;
+    return `<a href="${esc2(raw2)}" rel="noopener noreferrer">${label}</a>`;
+  });
+  out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  out = out.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+  out = out.replace(/(^|[^_\w])_([^_\n]+)_(?![\w_])/g, "$1<em>$2</em>");
+  out = out.replace(/\u0000CODE(\d+)\u0000/g, (_m, i) => codeSpans[Number(i)] ?? "");
+  return out;
+}
+function renderMarkdown(md, baseHeading = 3, includeCode = true) {
+  const lines = String(md ?? "").replace(/\r\n?/g, "\n").split("\n");
+  const at = (k) => lines[k] ?? "";
+  const out = [];
+  let i = 0;
+  const flushList = (tag, items) => {
+    out.push(`<${tag}>`);
+    for (const item of items) out.push(`<li>${renderInline(item)}</li>`);
+    out.push(`</${tag}>`);
+  };
+  while (i < lines.length) {
+    const line = at(i);
+    if (/^\s*$/.test(line)) {
+      i++;
+      continue;
+    }
+    const fence = line.match(FENCE_OPEN);
+    if (fence) {
+      const body = [];
+      i++;
+      while (i < lines.length && !FENCE_CLOSE.test(at(i))) {
+        body.push(at(i));
+        i++;
+      }
+      i++;
+      const info = fence[1] ?? "";
+      const language = /^[A-Za-z0-9_+-]+$/.test(info) ? info : void 0;
+      out.push(codeBlock(body.join("\n"), { language, maxLines: MAX_CODE_LINES, includeCode }));
+      continue;
+    }
+    if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      out.push("<hr />");
+      i++;
+      continue;
+    }
+    const h = line.match(/^\s*(#{1,6})\s+(.*)$/);
+    if (h) {
+      const level = Math.min(6, baseHeading + (h[1] ?? "#").length - 1);
+      out.push(`<h${level}>${renderInline((h[2] ?? "").trim())}</h${level}>`);
+      i++;
+      continue;
+    }
+    if (/^\s*>\s?/.test(line)) {
+      const body = [];
+      while (i < lines.length && /^\s*>\s?/.test(at(i))) {
+        body.push(at(i).replace(/^\s*>\s?/, ""));
+        i++;
+      }
+      out.push(`<blockquote>${renderMarkdown(body.join("\n"), baseHeading, includeCode)}</blockquote>`);
+      continue;
+    }
+    if (/^\s*[-*+]\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\s*[-*+]\s+/.test(at(i))) {
+        items.push(at(i).replace(/^\s*[-*+]\s+/, ""));
+        i++;
+      }
+      flushList("ul", items);
+      continue;
+    }
+    if (/^\s*\d+[.)]\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\s*\d+[.)]\s+/.test(at(i))) {
+        items.push(at(i).replace(/^\s*\d+[.)]\s+/, ""));
+        i++;
+      }
+      flushList("ol", items);
+      continue;
+    }
+    const para = [];
+    while (i < lines.length && !/^\s*$/.test(at(i)) && !FENCE_OPEN.test(at(i)) && !/^\s*#{1,6}\s+/.test(at(i)) && !/^\s*>/.test(at(i)) && !/^\s*[-*+]\s+/.test(at(i)) && !/^\s*\d+[.)]\s+/.test(at(i))) {
+      para.push(at(i));
+      i++;
+    }
+    if (para.length === 0) {
+      para.push(at(i));
+      i++;
+    }
+    out.push(`<p>${renderInline(para.join("\n"))}</p>`);
+  }
+  return out.join("\n");
+}
+function codeBlock(text, opts = {}) {
+  const { language, maxLines = MAX_CODE_LINES, includeCode = true, label } = opts;
+  const head = label ? `<p class="code-label">${esc2(label)}</p>` : "";
+  if (includeCode === false) {
+    const lineCount = String(text ?? "").split("\n").length;
+    return `${head}<p class="redacted">Code omitted from this export (${plural(lineCount, "line")}).</p>`;
+  }
+  const all = String(text ?? "").replace(/\r\n?/g, "\n").split("\n");
+  const shown = all.slice(0, maxLines);
+  const omitted = all.length - shown.length;
+  const body = esc2(shown.join("\n"));
+  const trunc = omitted > 0 ? `
+<span class="truncated">\u2026 truncated \u2014 ${plural(omitted, "more line")} not shown</span>` : "";
+  const langAttr = language ? ` data-language="${esc2(language)}"` : "";
+  return `${head}<pre class="code"${langAttr}><code>${body}${trunc}</code></pre>`;
+}
+function diffBlock(file2, includeCode, projectRoot2) {
+  const path19 = sanitizePath(file2.path, projectRoot2);
+  const changeType = esc2(file2.changeType ?? "modified");
+  const hunks = Array.isArray(file2.hunks) ? file2.hunks : [];
+  const stats = file2.stats;
+  const derived = hunks.reduce(
+    (acc, h) => {
+      for (const l of h?.lines ?? []) {
+        if (l?.kind === "add") acc.additions++;
+        else if (l?.kind === "del") acc.deletions++;
+      }
+      return acc;
+    },
+    { additions: 0, deletions: 0 }
+  );
+  const additions = stats?.additions ?? derived.additions;
+  const deletions = stats?.deletions ?? derived.deletions;
+  const statLine = `<span class="diffstat"><span class="add">+${additions}</span> <span class="del">\u2212${deletions}</span></span>`;
+  const header = `<div class="file-head"><code class="path">${esc2(path19)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
+  if (!includeCode) {
+    return `<div class="file">${header}<p class="redacted">Diff omitted from this export.</p></div>`;
+  }
+  const rows = [];
+  let emitted = 0;
+  let dropped = 0;
+  for (const hunk of hunks) {
+    if (hunk?.header) {
+      rows.push(`<div class="dl dl--hunk">${esc2(hunk.header)}</div>`);
+    }
+    for (const line of hunk?.lines ?? []) {
+      if (emitted >= MAX_DIFF_LINES_PER_FILE) {
+        dropped++;
+        continue;
+      }
+      const kind = line?.kind === "add" ? "add" : line?.kind === "del" ? "del" : "ctx";
+      const sign = kind === "add" ? "+" : kind === "del" ? "-" : " ";
+      const num2 = kind === "del" ? line?.oldLine : line?.newLine;
+      rows.push(
+        `<div class="dl dl--${kind}"><span class="ln">${num2 == null ? "" : esc2(num2)}</span><span class="sign">${sign}</span><span class="src">${esc2(line?.content ?? "")}</span></div>`
+      );
+      emitted++;
+    }
+  }
+  if (dropped > 0) {
+    rows.push(`<div class="dl dl--trunc">\u2026 truncated \u2014 ${plural(dropped, "more diff line")} not shown</div>`);
+  }
+  const diff = `<div class="diff">${rows.join("")}</div>`;
+  const body = emitted > DIFF_COLLAPSE_THRESHOLD ? `<details><summary>Show the diff (${plural(emitted, "line")})</summary>${diff}</details>` : diff;
+  return `<div class="file">${header}${body}</div>`;
+}
+function evidenceBlock(evidence, includeCode, projectRoot2) {
+  if (!Array.isArray(evidence)) {
+    if (typeof evidence === "string" && evidence.trim()) {
+      return `<p class="evidence-note">${renderInline(evidence)}</p>`;
+    }
+    return "";
+  }
+  const parts = [];
+  for (const ev of evidence) {
+    if (typeof ev === "string") {
+      if (ev.trim()) parts.push(`<p class="evidence-note">${renderInline(ev)}</p>`);
+      continue;
+    }
+    if (!ev || typeof ev !== "object") continue;
+    const e = ev;
+    const path19 = sanitizePath(e.filePath, projectRoot2);
+    const range = e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null && e.lineEnd !== e.lineStart ? `-${e.lineEnd}` : ""}` : "";
+    const anchor = path19 ? `<p class="anchor"><code>${esc2(path19 + range)}</code></p>` : "";
+    const snippet = e.snippet ? codeBlock(e.snippet, { language: e.language, maxLines: MAX_SNIPPET_LINES, includeCode }) : "";
+    const explanation = e.explanation ? `<p class="evidence-note">${renderInline(e.explanation)}</p>` : "";
+    parts.push(`<div class="evidence">${anchor}${snippet}${explanation}</div>`);
+  }
+  return parts.join("");
+}
+function anchorLabel(c, projectRoot2) {
+  const t = c.target ?? {};
+  const bits = [];
+  if (t.filePath) {
+    const line = t.lineStart ?? t.lineNumber;
+    bits.push(`${sanitizePath(t.filePath, projectRoot2)}${line != null ? `:${line}` : ""}${t.side === "old" ? " (removed line)" : ""}`);
+  } else if (t.lineStart != null || t.lineNumber != null) {
+    bits.push(`line ${t.lineStart ?? t.lineNumber}`);
+  }
+  if (t.findingIndex != null) bits.push(`finding #${t.findingIndex + 1}`);
+  if (t.evidenceIndex != null) bits.push(`evidence #${t.evidenceIndex + 1}`);
+  if (t.stepIndex != null) bits.push(`step ${t.stepIndex + 1}`);
+  if (t.requirementId) bits.push(`requirement ${t.requirementId}`);
+  if (t.optionId) bits.push(`option ${t.optionId}`);
+  if (t.questionIndex != null) bits.push(`open question #${t.questionIndex + 1}`);
+  if (t.sectionId) bits.push(`section ${t.sectionId}`);
+  if (t.visualId) bits.push(t.region ? "a region of the diagram" : "the diagram");
+  if (Array.isArray(t.anchors) && t.anchors.length > 1) bits.push(`${t.anchors.length} linked locations`);
+  return bits.join(" \xB7 ");
+}
+function commentHtml(c, includeCode, projectRoot2) {
+  const who = c.author === "agent" ? "The agent" : "The human";
+  const intent = c.intent;
+  const intentChip = intent && intent !== "comment" ? `<span class="chip chip--${esc2(intent)}">${esc2(intent)}</span>` : "";
+  const anchor = anchorLabel(c, projectRoot2);
+  const anchorHtml = anchor ? `<span class="thread-anchor">on ${esc2(anchor)}</span>` : "";
+  const sug = c.suggestion;
+  let sugHtml = "";
+  if (sug) {
+    const state = sug.state ? `<span class="chip chip--${esc2(sug.state)}">suggestion ${esc2(sug.state)}</span>` : "";
+    const replacement = sug.replacementText ? codeBlock(sug.replacementText, { includeCode, maxLines: MAX_SNIPPET_LINES, label: "Suggested instead" }) : "";
+    const counter = sug.counter?.replacementText ? codeBlock(sug.counter.replacementText, { includeCode, maxLines: MAX_SNIPPET_LINES, label: "The agent's counter" }) : "";
+    const counterReason = sug.counter?.reason ? `<p>${renderInline(sug.counter.reason)}</p>` : "";
+    sugHtml = `<div class="suggestion">${state}${replacement}${counter}${counterReason}</div>`;
+  }
+  return `<li class="thread-item thread-item--${c.author === "agent" ? "agent" : "human"}"><div class="thread-meta"><span class="who">${esc2(who)}</span>${intentChip}${anchorHtml}<time>${esc2(fmtTimestamp(c.createdAt))}</time></div><div class="thread-body">${renderMarkdown(c.content ?? "", 5, includeCode)}</div>${sugHtml}</li>`;
+}
+function threadHtml(comments, includeCode, projectRoot2, heading = "Discussion") {
+  if (comments.length === 0) return "";
+  const items = comments.slice().sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).map((c) => commentHtml(c, includeCode, projectRoot2)).join("");
+  return `<div class="thread"><h4 class="thread-head">${esc2(heading)} (${comments.length})</h4><ul class="thread-list">${items}</ul></div>`;
+}
+function researchBody(a, ctx) {
+  const content = coerceResearchContent(a.content);
+  const parts = [];
+  if (content.summary) parts.push(renderMarkdown(content.summary, 4, ctx.includeCode));
+  for (const f of content.findings ?? []) {
+    const sig = f.significance ? `<span class="chip chip--sig-${esc2(f.significance)}">${esc2(f.significance)} significance</span>` : "";
+    const sev = f.severity ? `<span class="chip chip--sev-${esc2(f.severity)}">${esc2(f.severity)} severity</span>` : "";
+    const cat = f.category ? `<span class="chip">${esc2(f.category)}</span>` : "";
+    parts.push(
+      `<div class="finding"><h4>${esc2(f.title ?? f.category ?? "Finding")}</h4><div class="chips">${sig}${sev}${cat}</div>` + renderMarkdown(f.detail ?? "", 5, ctx.includeCode) + evidenceBlock(f.evidence, ctx.includeCode, ctx.projectRoot) + (f.impact ? `<p class="kv"><span class="k">Impact</span> ${renderInline(f.impact)}</p>` : "") + (f.recommendation ? `<p class="kv"><span class="k">Recommendation</span> ${renderInline(f.recommendation)}</p>` : "") + `</div>`
+    );
+  }
+  for (const q of content.openQuestions ?? []) {
+    parts.push(`<p class="open-question">Open question: ${renderInline(q)}</p>`);
+  }
+  return parts.join("");
+}
+function specBody(a, ctx) {
+  const content = coerceSpecContent(a.content);
+  const parts = [];
+  if (content.objective) parts.push(`<p class="kv"><span class="k">Objective</span> ${renderInline(content.objective)}</p>`);
+  if (content.context) parts.push(renderMarkdown(content.context, 4, ctx.includeCode));
+  if (content.requirements?.length) {
+    parts.push(`<h4>Requirements</h4><ul class="req-list">`);
+    for (const r of content.requirements) {
+      const pri = r.priority ? `<span class="chip">${esc2(r.priority)}</span>` : "";
+      const why = r.rationale ? `<p class="why">Why: ${renderInline(r.rationale)}</p>` : "";
+      const ac = (r.acceptanceCriteria ?? []).map((c) => `<li>${renderInline(c)}</li>`).join("");
+      parts.push(
+        `<li><div class="req-head"><code>${esc2(r.id)}</code>${pri}</div><p>${renderInline(r.statement)}</p>${why}` + (ac ? `<ul class="criteria">${ac}</ul>` : "") + `</li>`
+      );
+    }
+    parts.push(`</ul>`);
+  }
+  if (content.design) parts.push(`<h4>Design</h4>${renderMarkdown(content.design, 5, ctx.includeCode)}`);
+  if (content.tasks?.length) {
+    parts.push(`<h4>Tasks</h4><ul>${content.tasks.map((t) => `<li>${renderInline(t.description)}</li>`).join("")}</ul>`);
+  }
+  for (const q of content.openQuestions ?? []) {
+    parts.push(`<p class="open-question">Open question: ${renderInline(q)}</p>`);
+  }
+  return parts.join("");
+}
+function planBody(a, ctx) {
+  const content = coercePlanContent(a.content);
+  const parts = [];
+  if (content.estimatedChanges != null && content.estimatedChanges !== "") {
+    parts.push(`<p class="kv"><span class="k">Estimated size</span> ${esc2(content.estimatedChanges)}</p>`);
+  }
+  parts.push(`<ol class="steps">`);
+  for (const step of content.steps ?? []) {
+    const files = Array.isArray(step.files) ? step.files.map((f) => sanitizePath(typeof f === "string" ? f : f.filePath, ctx.projectRoot)).filter(Boolean) : [];
+    const fileHtml = files.length ? `<p class="files">${files.map((f) => `<code>${esc2(f)}</code>`).join(" ")}</p>` : "";
+    const status = step.status ? `<span class="chip chip--${esc2(step.status)}">${esc2(step.status)}</span>` : "";
+    const preview = step.preview ? codeBlock(step.preview.after ?? "", {
+      includeCode: ctx.includeCode,
+      maxLines: MAX_SNIPPET_LINES,
+      label: `After \u2014 ${sanitizePath(step.preview.filePath, ctx.projectRoot)}`
+    }) : "";
+    parts.push(
+      `<li><div class="step-head">${renderInline(step.description)}${status}</div>` + (step.reasoning ? `<p class="why">Why: ${renderInline(step.reasoning)}</p>` : "") + fileHtml + preview + `</li>`
+    );
+  }
+  parts.push(`</ol>`);
+  return parts.join("");
+}
+function decisionBody(a, ctx) {
+  const content = coerceDecisionContent(a.content);
+  const record2 = ctx.state.decisions.find(
+    (d) => d.decisionId === content.decisionId || d.artifactId === a.id
+  );
+  const chosenId = record2?.response?.optionId;
+  const parts = [];
+  if (content.context) parts.push(renderMarkdown(content.context, 4, ctx.includeCode));
+  parts.push(`<div class="options">`);
+  for (const o of content.options ?? []) {
+    const chosen = chosenId != null && o.id === chosenId;
+    const badge = chosen ? `<span class="chip chip--chosen">chosen</span>` : chosenId != null ? `<span class="chip chip--notchosen">not taken</span>` : "";
+    const rec = o.recommendation ? `<span class="chip">agent's pick</span>` : "";
+    const pros = (o.pros ?? []).map((p) => `<li>${renderInline(p)}</li>`).join("");
+    const cons = (o.cons ?? []).map((p) => `<li>${renderInline(p)}</li>`).join("");
+    const concept = o.concept?.name ? `<p class="concept">Pattern: <strong>${esc2(o.concept.name)}</strong>` + (o.concept.oneLineExplanation ? ` \u2014 ${renderInline(o.concept.oneLineExplanation)}` : "") + `</p>` : "";
+    parts.push(
+      `<div class="option${chosen ? " option--chosen" : ""}"><div class="option-head"><h4>${esc2(o.title ?? o.id)}</h4>${badge}${rec}</div><div class="chips"><span class="chip">effort: ${esc2(o.effort ?? "?")}</span><span class="chip">risk: ${esc2(o.risk ?? "?")}</span></div>` + (o.description ? `<p>${renderInline(o.description)}</p>` : "") + concept + (pros ? `<p class="k">Pros</p><ul class="pros">${pros}</ul>` : "") + (cons ? `<p class="k">Cons</p><ul class="cons">${cons}</ul>` : "") + `</div>`
+    );
+  }
+  parts.push(`</div>`);
+  if (record2?.response) {
+    const chosenOption = (content.options ?? []).find((o) => o.id === chosenId);
+    parts.push(
+      `<div class="verdict verdict--chosen"><strong>The human chose:</strong> ${esc2(chosenOption?.title ?? chosenId ?? "")}` + (record2.response.reasoning ? ` \u2014 \u201C${renderInline(record2.response.reasoning)}\u201D` : "") + `</div>`
+    );
+  } else {
+    parts.push(`<p class="pending">No answer recorded for this fork.</p>`);
+  }
+  return parts.join("");
+}
+function codeChangeBody(a, ctx) {
+  const content = coerceCodeChangeContent(a.content);
+  const path19 = sanitizePath(content.filePath, ctx.projectRoot);
+  const parts = [
+    `<div class="file-head"><code class="path">${esc2(path19)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
+  ];
+  if (content.reasoning) parts.push(`<p class="why">Why: ${renderInline(content.reasoning)}</p>`);
+  if (content.concept?.name) {
+    parts.push(
+      `<p class="concept">Pattern: <strong>${esc2(content.concept.name)}</strong>` + (content.concept.oneLineExplanation ? ` \u2014 ${renderInline(content.concept.oneLineExplanation)}` : "") + `</p>`
+    );
+  }
+  const after = codeBlock(content.after ?? "", {
+    includeCode: ctx.includeCode,
+    maxLines: MAX_CODE_LINES,
+    label: content.changeType === "delete" ? "Removed" : "After"
+  });
+  const beforeBody = content.before ? codeBlock(content.before, { includeCode: ctx.includeCode, maxLines: MAX_CODE_LINES, label: "Before" }) : "";
+  const beforeLines = String(content.before ?? "").split("\n").length;
+  parts.push(
+    beforeBody ? beforeLines > DIFF_COLLAPSE_THRESHOLD ? `<details><summary>Show the previous version (${plural(beforeLines, "line")})</summary>${beforeBody}</details>` : beforeBody : ""
+  );
+  parts.push(after);
+  return parts.join("");
+}
+function changesetBody(a, ctx, ownComments) {
+  const content = coerceChangesetContent(a.content);
+  const parts = [];
+  if (content.summary) parts.push(renderMarkdown(content.summary, 4, ctx.includeCode));
+  if (content.risks?.length) {
+    parts.push(`<div class="chips">${content.risks.map((r) => `<span class="chip chip--risk">${esc2(r)}</span>`).join("")}</div>`);
+  }
+  for (const file2 of content.files ?? []) {
+    const disposition = content.reviewState?.[file2.path];
+    const reason = content.reviewReasons?.[file2.path];
+    const dispHtml = disposition ? `<p class="disposition">Reviewed as <strong>${esc2(disposition)}</strong>${reason ? ` \u2014 ${renderInline(reason)}` : ""}</p>` : "";
+    const fileComments = ownComments.filter((c) => c.target?.filePath === file2.path);
+    for (const c of fileComments) {
+      const idx = ownComments.indexOf(c);
+      if (idx >= 0) ownComments.splice(idx, 1);
+    }
+    parts.push(
+      `<div class="file-wrap">${diffBlock(file2, ctx.includeCode, ctx.projectRoot)}${dispHtml}` + threadHtml(fileComments, ctx.includeCode, ctx.projectRoot, "On this file") + `</div>`
+    );
+  }
+  return parts.join("");
+}
+function debriefBody(a, ctx) {
+  const content = coerceDebriefContent(a.content);
+  const parts = [];
+  if (content.summary) parts.push(renderMarkdown(content.summary, 4, ctx.includeCode));
+  for (const s of content.sections ?? []) {
+    parts.push(
+      `<div class="walk-section"><h4>${esc2(s.title)}</h4>` + (s.body ? renderMarkdown(s.body, 5, ctx.includeCode) : "") + (s.concepts ?? []).map((c) => `<p class="concept">Pattern: <strong>${esc2(c.name)}</strong>${c.oneLineExplanation ? ` \u2014 ${renderInline(c.oneLineExplanation)}` : ""}</p>`).join("") + evidenceBlock(s.evidence, ctx.includeCode, ctx.projectRoot) + `</div>`
+    );
+  }
+  if (content.decisionsMade?.length) {
+    parts.push(
+      `<h4>Calls the agent made on its own</h4><ul>` + content.decisionsMade.map((d) => `<li><strong>${esc2(d.what)}</strong> \u2014 ${renderInline(d.why)}${d.alternative ? ` <em>(considered: ${esc2(d.alternative)})</em>` : ""}</li>`).join("") + `</ul>`
+    );
+  }
+  if (content.needsYourEyes?.length) {
+    parts.push(
+      `<div class="needs-eyes"><h4>Needs a human's eyes</h4><ul>` + content.needsYourEyes.map((n) => `<li><strong>${esc2(n.what)}</strong> \u2014 ${renderInline(n.why)}</li>`).join("") + `</ul></div>`
+    );
+  }
+  if (content.deferred?.length) {
+    parts.push(
+      `<h4>Deferred</h4><ul>` + content.deferred.map((d) => `<li><strong>${esc2(d.what)}</strong> \u2014 ${renderInline(d.why)}</li>`).join("") + `</ul>`
+    );
+  }
+  if (content.openQuestions?.length) {
+    parts.push(`<h4>Open questions</h4><ul>${content.openQuestions.map((q) => `<li>${renderInline(q)}</li>`).join("")}</ul>`);
+  }
+  return parts.join("");
+}
+function explainerBody(a, ctx) {
+  const content = coerceExplainerContent(a.content);
+  const parts = [];
+  if (content.overview) parts.push(renderMarkdown(content.overview, 4, ctx.includeCode));
+  (content.sections ?? []).forEach((s, i) => {
+    parts.push(
+      `<div class="walk-section"><h4>${i + 1}. ${esc2(s.heading ?? "")}</h4>` + (s.body ? renderMarkdown(s.body, 5, ctx.includeCode) : "") + evidenceBlock(s.evidence, ctx.includeCode, ctx.projectRoot) + `</div>`
+    );
+  });
+  return parts.join("");
+}
+function reasoningBody(a, includeCode) {
+  const content = coerceReasoningContent(a.content);
+  const concept = content.concept?.name ? `<p class="concept">Pattern: <strong>${esc2(content.concept.name)}</strong>${content.concept.oneLineExplanation ? ` \u2014 ${renderInline(content.concept.oneLineExplanation)}` : ""}</p>` : "";
+  return (content.action ? `<p class="kv"><span class="k">Action</span> ${renderInline(content.action)}</p>` : "") + (content.reasoning ? renderMarkdown(content.reasoning, 5, includeCode) : "") + (content.confidence ? `<p class="kv"><span class="k">Confidence</span> ${esc2(content.confidence)}</p>` : "") + concept;
+}
+function artifactBody(a, ctx, ownComments) {
+  switch (a.type) {
+    case "research":
+      return researchBody(a, ctx);
+    case "spec":
+      return specBody(a, ctx);
+    case "plan":
+      return planBody(a, ctx);
+    case "decision":
+      return decisionBody(a, ctx);
+    case "code_change":
+      return codeChangeBody(a, ctx);
+    case "changeset":
+      return changesetBody(a, ctx, ownComments);
+    case "debrief":
+      return debriefBody(a, ctx);
+    case "explainer":
+      return explainerBody(a, ctx);
+    case "reasoning":
+      return reasoningBody(a, ctx.includeCode);
+    default:
+      return `<p class="pending">This ${esc2(a.type)} has no renderer on the shareable page, so nothing is shown for it here \u2014 rather than something invented.</p>`;
+  }
+}
+var NOT_SHIPPED = /* @__PURE__ */ new Set(["rejected", "retracted", "superseded", "obsolete"]);
+function verdictLine(a, state) {
+  if (!NOT_SHIPPED.has(a.status)) return "";
+  const stances = state.sessionMemory?.rejectedApproaches ?? [];
+  const match2 = stances.find(
+    (r) => r.sourceArtifactId === a.id || r.description && r.description === a.title
+  );
+  const rawReason = match2?.reason?.trim().replace(/[.!?]+$/, "");
+  const reason = rawReason ? ` \u2014 \u201C${esc2(rawReason)}\u201D` : "";
+  switch (a.status) {
+    case "rejected":
+      return `<p class="verdict verdict--rejected">rejected: the human declined this${reason}. It is here for the record, not as part of what shipped.</p>`;
+    case "retracted":
+      return `<p class="verdict verdict--rejected">retracted: the agent withdrew this${reason}.</p>`;
+    case "superseded":
+      return `<p class="verdict verdict--superseded">superseded: a later version replaced this one.</p>`;
+    default:
+      return `<p class="verdict verdict--superseded">obsolete: the discussion overtook this.</p>`;
+  }
+}
+function beat(at, seq, html) {
+  return { at: at ?? "", seq, html };
+}
+function artifactBeat(a, ctx, seq) {
+  const own = (ctx.commentsByArtifact.get(a.id) ?? []).slice();
+  const notShipped = NOT_SHIPPED.has(a.status);
+  const title = esc2(a.title || a.type);
+  const heading = notShipped ? `<s>${title}</s>` : title;
+  const version2 = a.version > 1 ? `<span class="chip">v${a.version}</span>` : "";
+  const body = artifactBody(a, ctx, own);
+  return beat(
+    a.createdAt,
+    seq,
+    `<li class="beat beat--artifact${notShipped ? " beat--not-shipped" : ""}" id="artifact-${esc2(a.id)}"><div class="beat-head"><time>${esc2(fmtTimestamp(a.createdAt))}</time><span class="chip chip--type">${esc2(a.type)}</span>${version2}</div><h3>${heading}</h3>${verdictLine(a, ctx.state)}<div class="beat-body">${body}</div>` + threadHtml(own, ctx.includeCode, ctx.projectRoot) + `</li>`
+  );
+}
+function statusBeat(event, seq) {
+  const status = String((event.payload ?? {}).status ?? "");
+  const cls = status === "approved" ? "ok" : status === "rejected" ? "bad" : "neutral";
+  return beat(
+    event.at,
+    seq,
+    `<li class="beat beat--status beat--${cls}"><time>${esc2(fmtTimestamp(event.at))}</time><span class="beat-line">${esc2(event.label)}</span></li>`
+  );
+}
+function decisionBeat(event, seq) {
+  const p = event.payload ?? {};
+  const rejectedTitles = Array.isArray(p.rejectedTitles) ? p.rejectedTitles : [];
+  const rejected = rejectedTitles.length ? `<p class="not-taken">Not taken: ${rejectedTitles.map((t) => esc2(t)).join(", ")}</p>` : "";
+  return beat(
+    event.at,
+    seq,
+    `<li class="beat beat--decided"><time>${esc2(fmtTimestamp(event.at))}</time><h3>Decided: ${esc2(p.chosenTitle ?? p.chosenOptionId ?? "")}</h3>` + (p.reasoning ? `<blockquote class="human-reason">${renderInline(String(p.reasoning))}</blockquote>` : "") + rejected + `</li>`
+  );
+}
+function planReviewBeat(event, seq) {
+  const p = event.payload ?? {};
+  return beat(
+    event.at,
+    seq,
+    `<li class="beat beat--review"><time>${esc2(fmtTimestamp(event.at))}</time><span class="beat-line">Plan review: <strong>${esc2(p.verdict ?? "")}</strong></span>` + (p.feedback ? `<blockquote class="human-reason">${renderInline(String(p.feedback))}</blockquote>` : "") + `</li>`
+  );
+}
+function looseCommentBeat(c, ctx, seq) {
+  return beat(
+    c.createdAt,
+    seq,
+    `<li class="beat beat--comment"><time>${esc2(fmtTimestamp(c.createdAt))}</time><ul class="thread-list">${commentHtml(c, ctx.includeCode, ctx.projectRoot)}</ul></li>`
+  );
+}
+function stanceBeat(r, seq) {
+  const reason = r.reason ? `<blockquote class="human-reason">${renderInline(r.reason)}</blockquote>` : "";
+  const concept = r.concept ? `<p class="gate-note">Recorded as the concept <code>${esc2(r.concept)}</code> \u2014 a paraphrase of the same idea is caught too.</p>` : "";
+  return beat(
+    r.rejectedAt ?? "",
+    seq,
+    `<li class="beat beat--gate"><time>${esc2(fmtTimestamp(r.rejectedAt))}</time><h3>${BLOCK_MARK}Rejected \u2014 and remembered: ${esc2(r.description)}</h3>` + reason + concept + `<p class="gate-note">From here on the agent is blocked from proposing this again.</p></li>`
+  );
+}
+function traceBeat(t, seq) {
+  if (t.decision === "blocked" && t.block) {
+    const reason = t.block.reason ? `<blockquote class="human-reason">${renderInline(t.block.reason)}</blockquote>` : "";
+    return beat(
+      t.at ?? "",
+      seq,
+      `<li class="beat beat--gate"><time>${esc2(fmtTimestamp(t.at))}</time><h3>${BLOCK_MARK}The gate refused ${esc2(t.toolName ?? "a proposal")}</h3><p>It matched a stance the human had already recorded${t.block.concept ? `: <code>${esc2(t.block.concept)}</code>` : ""}.</p>` + reason + `<p class="gate-note">Source: ${esc2(t.block.source ?? "session")} memory. The artifact was never created.</p></li>`
+    );
+  }
+  const near = (t.nearMisses ?? []).filter((n) => n?.concept);
+  if (near.length === 0) return null;
+  return beat(
+    t.at ?? "",
+    seq,
+    `<li class="beat beat--near"><time>${esc2(fmtTimestamp(t.at))}</time><span class="beat-line">The gate weighed ${plural(t.consideredCount ?? 0, "recorded stance")} before this and let it through \u2014 nearest call: ${near.map((n) => `<code>${esc2(n.concept)}</code>`).join(", ")}.</span></li>`
+  );
+}
+function guardrailBeat(f, seq) {
+  const reason = String(f.reason ?? "");
+  if (f.hook !== "preflight" || !reason.startsWith("guardrail:")) return null;
+  const category = reason.slice("guardrail:".length);
+  if (!category) return null;
+  return beat(
+    f.at ?? "",
+    seq,
+    `<li class="beat beat--guardrail"><time>${esc2(fmtTimestamp(f.at))}</time><h3>${SHIELD_MARK}Guardrail ask</h3><p>The hook stopped the run because the agent was about to touch <strong>${esc2(category)}</strong> work \u2014 the human had to confirm before it continued.</p></li>`
+  );
+}
+function sessionTitle(state) {
+  const liveDecision = state.decisions.find((d) => {
+    const owner = state.artifacts.find((a) => a.id === d.artifactId);
+    return !owner || !NOT_SHIPPED.has(owner.status);
+  });
+  if (liveDecision) return liveDecision.title?.trim() || liveDecision.context;
+  const anchorTypes = ["spec", "research", "debrief", "plan", "changeset"];
+  for (const type of anchorTypes) {
+    const hit = state.artifacts.find((a) => a.type === type && !NOT_SHIPPED.has(a.status));
+    if (hit?.title) return hit.title;
+  }
+  return `Session ${state.sessionId}`;
+}
+function autoSummary(state, span) {
+  const byType = /* @__PURE__ */ new Map();
+  for (const a of state.artifacts) byType.set(a.type, (byType.get(a.type) ?? 0) + 1);
+  const typeList = Array.from(byType.entries()).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([t, n]) => `${n} ${esc2(t)}${n === 1 ? "" : "s"}`).join(", ");
+  const resolved = state.decisions.filter((d) => d.response);
+  const decisionList = resolved.length ? `<ul>${resolved.map((d) => {
+    const chosen = d.options?.find?.((o) => o.id === d.response?.optionId);
+    return `<li><strong>${esc2(d.title?.trim() || d.context)}</strong> \u2192 ${esc2(chosen?.title ?? d.response?.optionId ?? "")}` + (d.response?.reasoning ? ` \u2014 \u201C${esc2(d.response.reasoning)}\u201D` : "") + `</li>`;
+  }).join("")}</ul>` : `<p>No fork was put to the human in this session.</p>`;
+  const spanLine = span.first ? `<p>The session runs from ${esc2(fmtTimestamp(span.first))} to ${esc2(fmtTimestamp(span.last))}.</p>` : "";
+  const stances = state.sessionMemory?.rejectedApproaches ?? [];
+  const stanceLine = stances.length ? `<p>${plural(stances.length, "approach was", "approaches were")} rejected and recorded \u2014 the gate blocks them from being re-proposed.</p>` : "";
+  return `<p class="auto-note">Auto-generated summary \u2014 no narrative was written for this export.</p><p>This session produced ${typeList || "no artifacts"}, ${plural(state.comments.length, "comment")} and ${plural(resolved.length, "resolved decision")}.</p>` + spanLine + `<h3>Decisions</h3>` + decisionList + stanceLine;
+}
+var STYLES = `
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff; --surface: #f7f8fa; --surface-2: #eef0f4; --border: #d8dce4;
+  --text: #14181f; --muted: #5a6373; --accent: #2f6feb; --accent-soft: #e6efff;
+  --ok: #1a7f4b; --bad: #b42318; --warn: #a05a00; --warn-soft: #fff4e0;
+  --add-bg: #e6f6ec; --del-bg: #fdecea; --code-bg: #f4f5f8;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1216; --surface: #161a21; --surface-2: #1d222b; --border: #2b323d;
+    --text: #e6e9ef; --muted: #9aa4b5; --accent: #6aa0ff; --accent-soft: #16233a;
+    --ok: #4cc38a; --bad: #f2726a; --warn: #e0a458; --warn-soft: #2a2115;
+    --add-bg: #10291c; --del-bg: #2d1614; --code-bg: #12161c;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+.page { max-width: 62rem; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+h1 { font-size: 1.9rem; line-height: 1.25; margin: .2rem 0 .6rem; }
+h2 { font-size: 1.3rem; margin: 2.4rem 0 .8rem; padding-bottom: .35rem; border-bottom: 1px solid var(--border); }
+h3 { font-size: 1.07rem; margin: .2rem 0 .5rem; }
+h4 { font-size: .96rem; margin: 1rem 0 .35rem; }
+p { margin: .5rem 0; }
+a { color: var(--accent); }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: .86em;
+  background: var(--code-bg); padding: .08em .34em; border-radius: 4px; }
+.masthead { border-bottom: 2px solid var(--border); padding-bottom: 1.1rem; }
+.eyebrow { text-transform: uppercase; letter-spacing: .09em; font-size: .7rem; color: var(--muted); margin: 0; }
+.meta { display: flex; flex-wrap: wrap; gap: .4rem .9rem; font-size: .8rem; color: var(--muted); margin: .5rem 0 0; }
+.meta span { white-space: nowrap; }
+.audience { font-size: .85rem; color: var(--muted); font-style: italic; }
+.story { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 1.1rem 1.3rem; margin-top: 1.4rem; }
+.story h2 { margin-top: 0; border: 0; }
+.auto-note { font-size: .8rem; color: var(--muted); font-style: italic; }
+.beats { list-style: none; margin: 0; padding: 0; }
+.beat { border-left: 2px solid var(--border); margin: 0 0 1.1rem; padding: .2rem 0 .2rem 1.1rem; position: relative; }
+.beat > time, .beat-head time { display: inline-block; font-size: .74rem; color: var(--muted); letter-spacing: .02em; }
+.beat--artifact { border-left-color: var(--accent); background: var(--surface);
+  border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: 10px; padding: .9rem 1.1rem; }
+.beat--not-shipped { border-left-color: var(--bad); opacity: .92; }
+.beat--gate { border-left: 3px solid var(--bad); background: var(--surface); border-radius: 10px;
+  padding: .8rem 1.1rem; border-top: 1px solid var(--border); border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border); }
+.beat--guardrail { border-left: 3px solid var(--warn); background: var(--warn-soft); border-radius: 10px; padding: .8rem 1.1rem; }
+.beat--near { border-left-color: var(--warn); }
+.beat--decided { border-left: 3px solid var(--ok); background: var(--surface); border-radius: 10px;
+  padding: .8rem 1.1rem; border-top: 1px solid var(--border); border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border); }
+.beat--ok { border-left-color: var(--ok); }
+.beat--bad { border-left-color: var(--bad); }
+.beat-line { display: block; font-size: .9rem; }
+.gate-mark { display: inline-flex; vertical-align: -.16em; margin-right: .4rem; color: var(--bad); }
+.beat--guardrail .gate-mark { color: var(--warn); }
+.gate-note { font-size: .82rem; color: var(--muted); }
+.chips { display: flex; flex-wrap: wrap; gap: .3rem; margin: .35rem 0; }
+.chip { display: inline-block; font-size: .68rem; text-transform: uppercase; letter-spacing: .05em;
+  background: var(--surface-2); color: var(--muted); border: 1px solid var(--border);
+  border-radius: 999px; padding: .08rem .5rem; margin-left: .35rem; white-space: nowrap; }
+.chip--chosen { background: var(--ok); color: #fff; border-color: transparent; }
+.chip--sig-high, .chip--sev-high, .chip--sev-critical { background: var(--bad); color: #fff; border-color: transparent; }
+.chip--question { background: var(--accent-soft); color: var(--accent); }
+.verdict { font-size: .86rem; padding: .45rem .7rem; border-radius: 6px; margin: .4rem 0; }
+.verdict--rejected { background: var(--del-bg); color: var(--bad); }
+.verdict--superseded { background: var(--surface-2); color: var(--muted); }
+.verdict--chosen { background: var(--add-bg); color: var(--ok); }
+.human-reason { margin: .5rem 0; padding: .35rem 0 .35rem .8rem; border-left: 3px solid var(--accent);
+  color: var(--text); font-style: italic; }
+.kv .k, p.k { font-weight: 600; color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; }
+.why { color: var(--muted); font-size: .9rem; }
+.finding { border-top: 1px solid var(--border); padding-top: .7rem; margin-top: .7rem; }
+.evidence { margin: .5rem 0; }
+.anchor { margin: .3rem 0 .2rem; font-size: .8rem; }
+.evidence-note { font-size: .88rem; color: var(--muted); }
+pre.code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: .7rem .85rem; overflow-x: auto; font-size: .8rem; line-height: 1.5; margin: .4rem 0; }
+pre.code code { background: none; padding: 0; font-size: inherit; }
+.code-label { font-size: .74rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: .5rem 0 .1rem; }
+.truncated { display: block; color: var(--muted); font-style: italic; }
+.redacted { font-size: .82rem; color: var(--muted); font-style: italic;
+  background: var(--surface-2); border: 1px dashed var(--border); border-radius: 6px; padding: .4rem .6rem; }
+.file { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin: .7rem 0; }
+.file-head { background: var(--surface-2); padding: .4rem .7rem; display: flex; flex-wrap: wrap;
+  align-items: center; gap: .4rem; font-size: .85rem; }
+.file-head .path { background: none; padding: 0; word-break: break-all; }
+.diffstat { font-size: .75rem; margin-left: auto; }
+.diffstat .add { color: var(--ok); } .diffstat .del { color: var(--bad); }
+.diff { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .78rem;
+  line-height: 1.5; overflow-x: auto; }
+.dl { display: flex; white-space: pre; }
+.dl--add { background: var(--add-bg); } .dl--del { background: var(--del-bg); }
+.dl--hunk { color: var(--muted); background: var(--surface-2); padding: .1rem .7rem; }
+.dl--trunc { color: var(--muted); font-style: italic; padding: .2rem .7rem; white-space: normal; }
+.ln { flex: 0 0 3.2rem; text-align: right; padding-right: .6rem; color: var(--muted); user-select: none; }
+.sign { flex: 0 0 1rem; color: var(--muted); }
+.src { flex: 1 1 auto; padding-right: .7rem; }
+details { margin: .4rem 0; }
+summary { cursor: pointer; font-size: .82rem; color: var(--accent); padding: .2rem 0; }
+.thread { margin-top: .8rem; border-top: 1px dashed var(--border); padding-top: .5rem; }
+.thread-head { font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 .3rem; }
+.thread-list { list-style: none; margin: 0; padding: 0; }
+.thread-item { background: var(--surface-2); border-radius: 8px; padding: .5rem .7rem; margin: .35rem 0; }
+.thread-item--agent { background: var(--surface); border: 1px solid var(--border); }
+.thread-meta { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; font-size: .74rem; color: var(--muted); }
+.thread-meta .who { font-weight: 600; color: var(--text); }
+.thread-anchor { font-style: italic; }
+.thread-body p { margin: .25rem 0; font-size: .92rem; }
+.option { border: 1px solid var(--border); border-radius: 8px; padding: .6rem .8rem; margin: .5rem 0; }
+.option--chosen { border-color: var(--ok); background: var(--add-bg); }
+.option-head { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+.option-head h4 { margin: 0; }
+.pros li::marker { color: var(--ok); } .cons li::marker { color: var(--bad); }
+.needs-eyes { background: var(--warn-soft); border: 1px solid var(--border); border-radius: 8px; padding: .5rem .8rem; }
+.req-list, .steps { padding-left: 1.2rem; }
+.req-head { display: flex; align-items: center; gap: .4rem; }
+.open-question { color: var(--muted); font-style: italic; }
+.stances li { margin: .4rem 0; }
+footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border);
+  font-size: .8rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: .5rem 1rem; }
+@media (max-width: 640px) {
+  .page { padding: 1.5rem .8rem 3rem; }
+  .ln { flex-basis: 2.2rem; }
+}
+@media print {
+  body { background: #fff; color: #000; }
+  .beat, .beat--artifact, .story { break-inside: avoid; }
+  details { display: block; }
+  details > summary { display: none; }
+  details > *:not(summary) { display: block !important; }
+  a::after { content: " (" attr(href) ")"; font-size: .7em; color: #555; }
+}
+`;
+function formatSessionHtml(state, options = {}) {
+  const includeCode = options.includeCode !== false;
+  const generatedAt = options.generatedAt ?? (/* @__PURE__ */ new Date()).toISOString();
+  const version2 = options.version ?? "";
+  const projectName = options.projectName ?? "";
+  const projectRoot2 = options.projectRoot;
+  const artifactIds = new Set(state.artifacts.map((a) => a.id));
+  const commentsByArtifact = /* @__PURE__ */ new Map();
+  const looseComments = [];
+  for (const c of state.comments ?? []) {
+    const id = c.target?.artifactId;
+    if (id && artifactIds.has(id)) {
+      const list = commentsByArtifact.get(id) ?? [];
+      list.push(c);
+      commentsByArtifact.set(id, list);
+    } else {
+      looseComments.push(c);
+    }
+  }
+  const ctx = { state, includeCode, projectRoot: projectRoot2, commentsByArtifact };
+  const events = buildTimeline({
+    artifacts: state.artifacts,
+    comments: state.comments,
+    decisions: state.decisions,
+    planReviews: state.planReviews
+  });
+  const artifactById = new Map(state.artifacts.map((a) => [a.id, a]));
+  const beats = [];
+  let seq = 0;
+  for (const event of events) {
+    switch (event.kind) {
+      case "artifact_created": {
+        const a = event.artifactId ? artifactById.get(event.artifactId) : void 0;
+        if (a) beats.push(artifactBeat(a, ctx, seq++));
+        break;
+      }
+      case "artifact_status_changed":
+        beats.push(statusBeat(event, seq++));
+        break;
+      case "decision_resolved":
+        beats.push(decisionBeat(event, seq++));
+        break;
+      case "plan_reviewed":
+        beats.push(planReviewBeat(event, seq++));
+        break;
+      case "comment_added":
+        break;
+      default:
+        break;
+    }
+  }
+  for (const c of looseComments) beats.push(looseCommentBeat(c, ctx, seq++));
+  const stances = state.sessionMemory?.rejectedApproaches ?? [];
+  const timedStances = stances.filter((r) => !!r.rejectedAt);
+  const untimedStances = stances.filter((r) => !r.rejectedAt);
+  for (const r of timedStances) beats.push(stanceBeat(r, seq++));
+  for (const t of state.preflightTraces ?? []) {
+    const b = traceBeat(t, seq++);
+    if (b) beats.push(b);
+  }
+  const stamps = beats.map((b) => b.at).filter(Boolean).sort();
+  const spanFirst = stamps[0];
+  const spanLast = stamps[stamps.length - 1];
+  for (const f of state.guardrailFires ?? []) {
+    if (!f.at) continue;
+    if (spanFirst && f.at < spanFirst) continue;
+    if (spanLast && f.at > spanLast) continue;
+    const gb = guardrailBeat(f, seq++);
+    if (gb) beats.push(gb);
+  }
+  beats.sort((a, b) => {
+    if (a.at && b.at && a.at !== b.at) return a.at.localeCompare(b.at);
+    if (!a.at && b.at) return 1;
+    if (a.at && !b.at) return -1;
+    return a.seq - b.seq;
+  });
+  const allStamps = beats.map((b) => b.at).filter(Boolean).sort();
+  const span = { first: allStamps[0], last: allStamps[allStamps.length - 1] };
+  const title = sessionTitle(state);
+  const story = options.narrative?.trim() ? renderMarkdown(options.narrative, 3, includeCode) : autoSummary(state, span);
+  const metaBits = [
+    projectName ? `<span>Project: ${esc2(projectName)}</span>` : "",
+    `<span>Session: <code>${esc2(state.sessionId)}</code></span>`,
+    span.first ? `<span>${esc2(fmtDay(span.first))} \u2192 ${esc2(fmtDay(span.last))}</span>` : "",
+    `<span>Exported ${esc2(fmtDay(generatedAt))}</span>`,
+    version2 ? `<span>deepPairing v${esc2(version2)}</span>` : "",
+    includeCode ? "" : `<span>code omitted</span>`
+  ].filter(Boolean).join("");
+  const audienceLine = options.audience?.trim() ? `<p class="audience">Written for ${esc2(options.audience.trim())}.</p>` : "";
+  const timeline = beats.length ? `<ol class="beats">${beats.map((b) => b.html).join("")}</ol>` : `<p class="open-question">Nothing was recorded in this session.</p>`;
+  const stancesSection = untimedStances.length ? `<section><h2>Standing stances</h2><p>Recorded without a timestamp, so they can't be placed on the timeline \u2014 but the gate enforces them all the same.</p><ul class="stances">${untimedStances.map((r) => `<li><strong>${esc2(r.description)}</strong>${r.reason ? ` \u2014 \u201C${esc2(r.reason)}\u201D` : ""}${r.concept ? ` <code>${esc2(r.concept)}</code>` : ""}</li>`).join("")}</ul></section>` : "";
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="light dark" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'" />
+<meta name="generator" content="deepPairing${version2 ? ` ${esc2(version2)}` : ""}" />
+<title>${esc2(title)} \u2014 deepPairing session</title>
+<style>${STYLES}</style>
+</head>
+<body>
+<main class="page">
+<header class="masthead">
+<p class="eyebrow">deepPairing session</p>
+<h1>${esc2(title)}</h1>
+${audienceLine}
+<div class="meta">${metaBits}</div>
+</header>
+
+<section class="story">
+<h2>What this was</h2>
+${story}
+</section>
+
+<section class="timeline">
+<h2>How it unfolded</h2>
+${timeline}
+</section>
+
+${stancesSection}
+
+<footer>
+<span>Generated by deepPairing${version2 ? ` v${esc2(version2)}` : ""} \u2014 ${esc2(fmtTimestamp(generatedAt))}</span>
+<span><a href="${REPO_URL}" rel="noopener noreferrer">github.com/mitchjablonski/deepPairing</a></span>
+</footer>
+</main>
+</body>
+</html>
+`;
+}
+
+// src/export/html-export.ts
+var MAX_TRACE_LOOKUPS = 200;
+async function gatherPreflightTraces(store, artifacts) {
+  if (!store?.getPreflightTrace) return [];
+  const ids = artifacts.slice(0, MAX_TRACE_LOOKUPS).map((a) => a.id);
+  const results = await Promise.all(
+    ids.map(async (id) => {
+      try {
+        return await store.getPreflightTrace(id);
+      } catch {
+        return null;
+      }
+    })
+  );
+  return results.filter((t) => !!t && typeof t === "object");
+}
+function readGuardrailFires(projectRoot2) {
+  if (!projectRoot2) return [];
+  try {
+    const p = path11.join(projectRoot2, ".deeppairing", "hooks-state.json");
+    const parsed = JSON.parse(fs12.readFileSync(p, "utf-8"));
+    const fires = Array.isArray(parsed?.fires) ? parsed.fires : [];
+    const out = [];
+    for (const raw2 of fires) {
+      if (!raw2 || typeof raw2 !== "object") continue;
+      const f = raw2;
+      if (typeof f.at !== "string" || f.hook !== "preflight") continue;
+      if (typeof f.reason !== "string" || !/^guardrail:.+/.test(f.reason)) continue;
+      if (f.kind !== void 0 && f.kind !== "ask") continue;
+      out.push({ at: f.at, hook: f.hook, reason: f.reason });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+async function assembleSessionHtml(state, options = {}) {
+  const { store, ...renderOptions } = options;
+  const projectRoot2 = renderOptions.projectRoot;
+  const enriched = {
+    ...state,
+    preflightTraces: state.preflightTraces ?? await gatherPreflightTraces(store, state.artifacts ?? []),
+    guardrailFires: state.guardrailFires ?? readGuardrailFires(projectRoot2)
+  };
+  return formatSessionHtml(enriched, {
+    ...renderOptions,
+    projectName: renderOptions.projectName ?? (projectRoot2 ? path11.basename(projectRoot2) : void 0)
+  });
+}
+function htmlExportFileName(sessionId, generatedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+  const safeId = String(sessionId).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 60) || "session";
+  const day = generatedAt.slice(0, 10);
+  return `session-${safeId}-${day}.html`;
+}
+
+// src/http/routes.ts
+init_version();
+
 // src/store/rejected-option-recorder.ts
 function optionConceptKey(option) {
   for (const c of [option.concept?.name, option.description, option.title]) {
@@ -28285,19 +29291,19 @@ async function recordRejectedOptionConcept(store, broadcast, params) {
 init_project_root();
 
 // src/store/preflight-block-log.ts
-import fs12 from "node:fs";
-import path11 from "node:path";
+import fs13 from "node:fs";
+import path12 from "node:path";
 var MAX_BLOCKS = 50;
 var VERSION3 = 1;
 function logPath(projectRoot2) {
-  return path11.join(projectRoot2, ".deeppairing", "preflight-blocks.json");
+  return path12.join(projectRoot2, ".deeppairing", "preflight-blocks.json");
 }
 function readPreflightBlocks(projectRoot2) {
   const file2 = logPath(projectRoot2);
   let raw2;
   try {
-    if (!fs12.existsSync(file2)) return [];
-    raw2 = fs12.readFileSync(file2, "utf-8");
+    if (!fs13.existsSync(file2)) return [];
+    raw2 = fs13.readFileSync(file2, "utf-8");
   } catch {
     return [];
   }
@@ -28313,7 +29319,7 @@ function readPreflightBlocks(projectRoot2) {
   if (raw2.trim().length > 0) {
     try {
       const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-      fs12.writeFileSync(`${file2}.corrupt-${stamp}`, raw2);
+      fs13.writeFileSync(`${file2}.corrupt-${stamp}`, raw2);
     } catch {
     }
   }
@@ -28350,7 +29356,7 @@ function recordPreflightBlock(projectRoot2, sessionId, event) {
   try {
     const blocks = [entry, ...readPreflightBlocks(projectRoot2)].slice(0, MAX_BLOCKS);
     const file2 = logPath(projectRoot2);
-    fs12.mkdirSync(path11.dirname(file2), { recursive: true });
+    fs13.mkdirSync(path12.dirname(file2), { recursive: true });
     writeJsonAtomic(file2, { version: VERSION3, blocks });
     return entry;
   } catch {
@@ -29450,6 +30456,25 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const markdown = formatSessionMarkdown(state, format);
     return c.text(markdown, 200, { "Content-Type": "text/markdown; charset=utf-8" });
   });
+  app.get("/api/export.html", async (c) => {
+    const store = getStore(getSessionId(c));
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const includeCodeParam = c.req.query("includeCode");
+    const includeCode = includeCodeParam !== "0" && includeCodeParam !== "false";
+    const state = await store.getFullState();
+    const generatedAt = (/* @__PURE__ */ new Date()).toISOString();
+    const html = await assembleSessionHtml(state, {
+      store,
+      includeCode,
+      projectRoot: projectRoot2 ?? void 0,
+      version: SERVER_VERSION,
+      generatedAt
+    });
+    return c.body(html, 200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Disposition": `attachment; filename="${htmlExportFileName(state.sessionId, generatedAt)}"`
+    });
+  });
   app.post("/api/preferences", async (c) => {
     const sid = getSessionId(c);
     const store = getStore(sid);
@@ -29510,33 +30535,33 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (!filePath || !projectRoot2) {
       return c.json({ error: "path parameter required" }, 400);
     }
-    const resolved = path12.resolve(projectRoot2, filePath.startsWith("/") ? filePath.slice(1) : filePath);
-    const resolvedRoot = path12.resolve(projectRoot2);
-    if (!resolved.startsWith(resolvedRoot + path12.sep) && resolved !== resolvedRoot) {
+    const resolved = path13.resolve(projectRoot2, filePath.startsWith("/") ? filePath.slice(1) : filePath);
+    const resolvedRoot = path13.resolve(projectRoot2);
+    if (!resolved.startsWith(resolvedRoot + path13.sep) && resolved !== resolvedRoot) {
       return c.json({ error: "Path outside project root" }, 403);
     }
     let realResolved;
     let realRoot;
     try {
-      realResolved = fs13.realpathSync(resolved);
-      realRoot = fs13.realpathSync(resolvedRoot);
+      realResolved = fs14.realpathSync(resolved);
+      realRoot = fs14.realpathSync(resolvedRoot);
     } catch (err) {
       if (err?.code === "ENOENT") return c.json({ error: "File not found" }, 404);
       return c.json({ error: "Cannot read file" }, 500);
     }
-    if (!realResolved.startsWith(realRoot + path12.sep) && realResolved !== realRoot) {
+    if (!realResolved.startsWith(realRoot + path13.sep) && realResolved !== realRoot) {
       return c.json({ error: "Path outside project root" }, 403);
     }
     try {
       const MAX_FILE_BYTES = 5 * 1024 * 1024;
-      const size = fs13.statSync(realResolved).size;
+      const size = fs14.statSync(realResolved).size;
       if (size > MAX_FILE_BYTES) {
         return c.json(
           { error: `File too large to view (${size} bytes > ${MAX_FILE_BYTES}-byte cap).`, code: ERROR_CODES.body_too_large },
           413
         );
       }
-      const content = fs13.readFileSync(realResolved, "utf-8");
+      const content = fs14.readFileSync(realResolved, "utf-8");
       return c.json({ content, filePath, lines: content.split("\n").length });
     } catch (err) {
       if (err?.code === "ENOENT") return c.json({ error: "File not found" }, 404);
@@ -29550,10 +30575,10 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
   });
   app.get("/api/hook-state", (c) => {
     if (!projectRoot2) return c.json({ version: 1, fires: [] });
-    const statePath = path12.join(projectRoot2, ".deeppairing", "hooks-state.json");
-    if (!fs13.existsSync(statePath)) return c.json({ version: 1, fires: [] });
+    const statePath = path13.join(projectRoot2, ".deeppairing", "hooks-state.json");
+    if (!fs14.existsSync(statePath)) return c.json({ version: 1, fires: [] });
     try {
-      const raw2 = JSON.parse(fs13.readFileSync(statePath, "utf-8"));
+      const raw2 = JSON.parse(fs14.readFileSync(statePath, "utf-8"));
       const fires = Array.isArray(raw2?.fires) ? raw2.fires.slice(-25) : [];
       return c.json({ version: 1, fires });
     } catch {
@@ -29678,28 +30703,28 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const sessionTag = sanitize(body?.sessionId);
     const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
     const filename = [ts, sessionTag, decisionTag].filter(Boolean).join("_") + ".md";
-    const promptsDir = path12.join(projectRoot2, ".deeppairing", "prompts");
+    const promptsDir = path13.join(projectRoot2, ".deeppairing", "prompts");
     try {
-      fs13.mkdirSync(promptsDir, { recursive: true });
-      const fullPath = path12.join(promptsDir, filename);
-      const resolved = path12.resolve(fullPath);
-      const resolvedDir = path12.resolve(promptsDir);
-      if (!resolved.startsWith(resolvedDir + path12.sep)) {
+      fs14.mkdirSync(promptsDir, { recursive: true });
+      const fullPath = path13.join(promptsDir, filename);
+      const resolved = path13.resolve(fullPath);
+      const resolvedDir = path13.resolve(promptsDir);
+      if (!resolved.startsWith(resolvedDir + path13.sep)) {
         return c.json({ error: "invalid path" }, 400);
       }
       try {
-        const stat = fs13.lstatSync(resolved);
+        const stat = fs14.lstatSync(resolved);
         if (stat.isSymbolicLink()) return c.json({ error: "invalid path" }, 400);
       } catch (err) {
         if (err?.code !== "ENOENT") throw err;
       }
-      const realDir = fs13.realpathSync(resolvedDir);
-      const realRoot = fs13.realpathSync(path12.resolve(projectRoot2));
-      if (!realDir.startsWith(realRoot + path12.sep) && realDir !== realRoot) {
+      const realDir = fs14.realpathSync(resolvedDir);
+      const realRoot = fs14.realpathSync(path13.resolve(projectRoot2));
+      if (!realDir.startsWith(realRoot + path13.sep) && realDir !== realRoot) {
         return c.json({ error: "invalid path" }, 400);
       }
-      fs13.writeFileSync(resolved, content, "utf-8");
-      const relPath = path12.relative(projectRoot2, resolved);
+      fs14.writeFileSync(resolved, content, "utf-8");
+      const relPath = path13.relative(projectRoot2, resolved);
       return c.json({ status: "saved", path: resolved, relPath });
     } catch (err) {
       return c.json({ error: err?.message ?? "Save failed" }, 500);
@@ -29720,8 +30745,8 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
 }
 
 // src/http/static-ui.ts
-import fs14 from "node:fs";
-import path13 from "node:path";
+import fs15 from "node:fs";
+import path14 from "node:path";
 var MIME_TYPES = {
   html: "text/html",
   js: "application/javascript",
@@ -29733,9 +30758,9 @@ var MIME_TYPES = {
 };
 function mountStaticUi(app, opts) {
   const { webDistPath, authToken, projectHash, log: log2 } = opts;
-  if (!fs14.existsSync(webDistPath)) return;
+  if (!fs15.existsSync(webDistPath)) return;
   const serveInjectedIndex = (indexPath) => {
-    const html = fs14.readFileSync(indexPath, "utf-8");
+    const html = fs15.readFileSync(indexPath, "utf-8");
     const tokenJson = JSON.stringify(authToken);
     const hashJson = JSON.stringify(projectHash);
     const injection = `<script>window.__deepPairingToken = ${tokenJson}; window.__dpProjectHash = ${hashJson};</script>`;
@@ -29757,22 +30782,22 @@ function mountStaticUi(app, opts) {
   app.get("/*", async (c, next) => {
     if (c.req.path.startsWith("/api/")) return next();
     const filePath = c.req.path === "/" ? "/index.html" : c.req.path;
-    const fullPath = path13.join(webDistPath, filePath);
-    const resolvedPath = path13.resolve(fullPath);
-    const resolvedBase = path13.resolve(webDistPath);
-    if (!resolvedPath.startsWith(resolvedBase + path13.sep) && resolvedPath !== resolvedBase) {
+    const fullPath = path14.join(webDistPath, filePath);
+    const resolvedPath = path14.resolve(fullPath);
+    const resolvedBase = path14.resolve(webDistPath);
+    if (!resolvedPath.startsWith(resolvedBase + path14.sep) && resolvedPath !== resolvedBase) {
       return c.notFound();
     }
-    if (fs14.existsSync(fullPath)) {
-      const ext = path13.extname(filePath).slice(1);
+    if (fs15.existsSync(fullPath)) {
+      const ext = path14.extname(filePath).slice(1);
       if (ext === "html") return serveInjectedIndex(fullPath);
-      const content = fs14.readFileSync(fullPath);
+      const content = fs15.readFileSync(fullPath);
       return new Response(content, {
         headers: { "Content-Type": MIME_TYPES[ext] ?? "application/octet-stream" }
       });
     }
-    const indexPath = path13.join(webDistPath, "index.html");
-    if (fs14.existsSync(indexPath)) {
+    const indexPath = path14.join(webDistPath, "index.html");
+    if (fs15.existsSync(indexPath)) {
       return serveInjectedIndex(indexPath);
     }
     return c.notFound();
@@ -30898,13 +31923,13 @@ function createDaemon(deps) {
     env = process.env,
     version: version2 = SERVER_VERSION,
     openBrowser = defaultOpenBrowser,
-    watch = (dir, listener) => fs17.watch(dir, listener),
+    watch = (dir, listener) => fs18.watch(dir, listener),
     heartbeatIntervalMs = 3e4
   } = deps;
   const daemonProjectHash = projectHashOf(projectRoot2);
   let boundPort = 0;
-  const dpDir2 = path16.join(projectRoot2, ".deeppairing");
-  const daemonInfoFile = path16.join(dpDir2, "daemon.json");
+  const dpDir2 = path17.join(projectRoot2, ".deeppairing");
+  const daemonInfoFile = path17.join(dpDir2, "daemon.json");
   const sessions = /* @__PURE__ */ new Map();
   const sessionMeta = /* @__PURE__ */ new Map();
   const activeSessions = /* @__PURE__ */ new Set();
@@ -31166,11 +32191,11 @@ function createDaemon(deps) {
     return c.json({ status: "evicting", pid: process.pid });
   });
   app.get("/api/skill-status", (c) => {
-    const claudeMdPath = path16.join(projectRoot2, "CLAUDE.md");
+    const claudeMdPath = path17.join(projectRoot2, "CLAUDE.md");
     let claudeMdHasMarker = false;
     try {
-      if (fs17.existsSync(claudeMdPath)) {
-        claudeMdHasMarker = fs17.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
+      if (fs18.existsSync(claudeMdPath)) {
+        claudeMdHasMarker = fs18.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
       }
     } catch {
     }
@@ -31223,10 +32248,10 @@ function createDaemon(deps) {
     return c.json({ sessionId, startedAt: (/* @__PURE__ */ new Date()).toISOString() });
   });
   app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions));
-  const __thisDir3 = path16.dirname(fileURLToPath4(import.meta.url));
-  const monorepoWebDist = path16.join(__thisDir3, "../../dist/web");
-  const webDistCandidates = [monorepoWebDist, path16.join(__thisDir3, "web")];
-  const webDistPath = webDistCandidates.find((p) => fs17.existsSync(p)) ?? monorepoWebDist;
+  const __thisDir3 = path17.dirname(fileURLToPath4(import.meta.url));
+  const monorepoWebDist = path17.join(__thisDir3, "../../dist/web");
+  const webDistCandidates = [monorepoWebDist, path17.join(__thisDir3, "web")];
+  const webDistPath = webDistCandidates.find((p) => fs18.existsSync(p)) ?? monorepoWebDist;
   mountStaticUi(app, {
     webDistPath,
     authToken: daemonAuthToken2,
@@ -31238,7 +32263,7 @@ function createDaemon(deps) {
       store.forceFlush();
     }
     try {
-      if (fs17.existsSync(daemonInfoFile)) fs17.unlinkSync(daemonInfoFile);
+      if (fs18.existsSync(daemonInfoFile)) fs18.unlinkSync(daemonInfoFile);
     } catch {
     }
     try {
@@ -31262,7 +32287,7 @@ function createDaemon(deps) {
   function writeDaemonInfo(port) {
     const discovery = { pid: process.pid, port, startedAt: startedAt2, projectRoot: projectRoot2, version: version2 };
     try {
-      fs17.mkdirSync(dpDir2, { recursive: true });
+      fs18.mkdirSync(dpDir2, { recursive: true });
       if (resolveTokenPlacement() === "in-repo") {
         writeFile0600(daemonInfoFile, { ...discovery, authToken: daemonAuthToken2 });
         return;
@@ -31390,11 +32415,11 @@ function createDaemon(deps) {
   let hooksWatcher = null;
   function startHooksWatcher() {
     let lastFireSeen = 0;
-    const hooksStatePath = path16.join(projectRoot2, ".deeppairing", "hooks-state.json");
+    const hooksStatePath = path17.join(projectRoot2, ".deeppairing", "hooks-state.json");
     const broadcastNewFires = () => {
       try {
-        if (!fs17.existsSync(hooksStatePath)) return;
-        const raw2 = JSON.parse(fs17.readFileSync(hooksStatePath, "utf-8"));
+        if (!fs18.existsSync(hooksStatePath)) return;
+        const raw2 = JSON.parse(fs18.readFileSync(hooksStatePath, "utf-8"));
         const fires = Array.isArray(raw2?.fires) ? raw2.fires : [];
         for (const f of fires) {
           const t = new Date(f.at).getTime();
@@ -31406,8 +32431,8 @@ function createDaemon(deps) {
       }
     };
     try {
-      if (fs17.existsSync(hooksStatePath)) {
-        const raw2 = JSON.parse(fs17.readFileSync(hooksStatePath, "utf-8"));
+      if (fs18.existsSync(hooksStatePath)) {
+        const raw2 = JSON.parse(fs18.readFileSync(hooksStatePath, "utf-8"));
         const fires = Array.isArray(raw2?.fires) ? raw2.fires : [];
         for (const f of fires) {
           const t = new Date(f.at).getTime();
@@ -31417,10 +32442,10 @@ function createDaemon(deps) {
     } catch {
     }
     try {
-      const hooksDir = path16.dirname(hooksStatePath);
-      fs17.mkdirSync(hooksDir, { recursive: true });
+      const hooksDir = path17.dirname(hooksStatePath);
+      fs18.mkdirSync(hooksDir, { recursive: true });
       const watcher = watch(hooksDir, (_event, filename) => {
-        if (filename === "hooks-state.json" || filename === path16.basename(hooksStatePath)) {
+        if (filename === "hooks-state.json" || filename === path17.basename(hooksStatePath)) {
           broadcastNewFires();
         }
       });
@@ -31443,11 +32468,11 @@ function createDaemon(deps) {
     const pingDecision = decidePing(env);
     if (pingDecision.shouldSend) {
       pingTimer = setTimeout(() => {
-        const claudeMdPath = path16.join(projectRoot2, "CLAUDE.md");
+        const claudeMdPath = path17.join(projectRoot2, "CLAUDE.md");
         let claudeMdHasMarker = false;
         try {
-          if (fs17.existsSync(claudeMdPath)) {
-            claudeMdHasMarker = fs17.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
+          if (fs18.existsSync(claudeMdPath)) {
+            claudeMdHasMarker = fs18.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
           }
         } catch {
         }
@@ -31536,21 +32561,21 @@ function createDaemon(deps) {
 // src/daemon/index.ts
 var MAX_PORT_ATTEMPTS2 = 10;
 var projectRoot = process.env.DEEPPAIRING_PROJECT_ROOT ?? process.cwd();
-var dpDir = path17.join(projectRoot, ".deeppairing");
-var logFile = path17.join(dpDir, "daemon.log");
+var dpDir = path18.join(projectRoot, ".deeppairing");
+var logFile = path18.join(dpDir, "daemon.log");
 var startedAt = (/* @__PURE__ */ new Date()).toISOString();
 var daemonAuthToken = crypto4.randomBytes(32).toString("hex");
 var LOG_MAX_BYTES = 1024 * 1024;
 var LOG_KEEP_FILES = 3;
 function maybeRotateLog() {
   try {
-    const stat = fs18.statSync(logFile);
+    const stat = fs19.statSync(logFile);
     if (stat.size < LOG_MAX_BYTES) return;
     for (let i = LOG_KEEP_FILES - 1; i >= 1; i--) {
       const src = i === 1 ? logFile : `${logFile}.${i - 1}`;
       const dst = `${logFile}.${i}`;
       try {
-        if (fs18.existsSync(src)) fs18.renameSync(src, dst);
+        if (fs19.existsSync(src)) fs19.renameSync(src, dst);
       } catch {
       }
     }
@@ -31561,9 +32586,9 @@ function log(msg) {
   const line = `[${(/* @__PURE__ */ new Date()).toISOString()}] [daemon] ${msg}
 `;
   try {
-    fs18.mkdirSync(path17.dirname(logFile), { recursive: true });
+    fs19.mkdirSync(path18.dirname(logFile), { recursive: true });
     maybeRotateLog();
-    fs18.appendFileSync(logFile, line);
+    fs19.appendFileSync(logFile, line);
   } catch {
   }
 }

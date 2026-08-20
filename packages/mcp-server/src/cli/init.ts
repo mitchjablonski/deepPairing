@@ -1207,6 +1207,16 @@ async function exportCmd(format: string, sessionId?: string, opts: { redactCode?
     }
     const file = writeSessionHtml(cwd, chosenSessionId, html!, generatedAt);
     console.log(file);
+    // F6 — warn-only secret check. stdout stays JUST the path (it is piped);
+    // the warning goes to stderr where a human reads it.
+    try {
+      const { FileStore: FS } = await import("../store/file-store.js");
+      const { secretWarningFor } = await import("../export/html-export.js");
+      const warning = secretWarningFor(FS.loadSession(cwd, chosenSessionId));
+      if (warning) console.error(`  ${yellow("⚠")} ${warning}`);
+    } catch {
+      /* the check must never fail the export */
+    }
     console.error(
       `  ${dim("Self-contained page — open it in a browser or send the file to anyone.")}\n` +
       `  ${dim("For a page a stranger can follow, ask Claude to run /deeppairing:share (it composes the narrative).")}`,

@@ -54,6 +54,20 @@ describe("ExportMenu — share as page", () => {
     expect(String(fetchMock.mock.calls[0]![0])).toContain("includeCode=0");
   });
 
+  // F7 — the old catch opened the same URL in a new tab, which CANNOT work
+  // (II2 fail-closes /api/* without X-Project-Hash, which a plain navigation
+  // never sends) — it just produced a 403 JSON page. Say what happened.
+  it("surfaces an honest error instead of opening a tab that would 403", async () => {
+    const openSpy = vi.fn();
+    vi.stubGlobal("open", openSpy);
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 409, text: async () => "", blob: async () => new Blob([]) });
+    openMenu();
+    fireEvent.click(screen.getByText("Share as page (.html)"));
+    await waitFor(() => expect(screen.getByRole("status")).toBeTruthy());
+    expect(screen.getByRole("status").textContent).toMatch(/daemon/i);
+    expect(openSpy).not.toHaveBeenCalled();
+  });
+
   it("still copies markdown for the other formats", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });

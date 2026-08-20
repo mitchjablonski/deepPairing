@@ -19,6 +19,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Artifact } from "@deeppairing/shared";
+import { scanContentForSecrets } from "../secret-scan.js";
 import {
   formatSessionHtml,
   type HtmlExportOptions,
@@ -58,19 +59,72 @@ export async function gatherPreflightTraces(
  * The guardrail hook fire log. Project-scoped, capped at 50 by the writer, and
  * carrying only `{ at, hook, reason }` — the renderer says exactly that much
  * and never more. Unreadable/missing file → no beats (never a fabricated one).
+ *
+ * F3 — `fires[]` has TWO writers. Besides the preflight lane's
+ * `{hook:"preflight", reason:"guardrail:<class>"}` (a real ask: the run stopped
+ * and the human confirmed), the STOP hook appends
+ * `{hook:"stop", reason:"owes debrief in <sessionId>"}` — which exits 0,
+ * fail-open: nothing was stopped and nobody confirmed. Rendering that as a gate
+ * moment invented an event AND printed another session's id onto a page written
+ * for strangers. So the reader is narrowed at the source: only a preflight fire
+ * whose reason names a guardrail class survives. Anything else — a new writer,
+ * an unknown shape — is dropped rather than guessed at.
  */
 export function readGuardrailFires(projectRoot: string | undefined): HtmlGuardrailFire[] {
   if (!projectRoot) return [];
   try {
     const p = path.join(projectRoot, ".deeppairing", "hooks-state.json");
     const parsed = JSON.parse(fs.readFileSync(p, "utf-8"));
-    const fires = Array.isArray(parsed?.fires) ? parsed.fires : [];
-    return fires
-      .filter((f: any) => f && typeof f === "object" && typeof f.at === "string")
-      .map((f: any) => ({ at: f.at, hook: typeof f.hook === "string" ? f.hook : undefined, reason: typeof f.reason === "string" ? f.reason : undefined }));
+    const fires: unknown[] = Array.isArray(parsed?.fires) ? parsed.fires : [];
+    const out: HtmlGuardrailFire[] = [];
+    for (const raw of fires) {
+      if (!raw || typeof raw !== "object") continue;
+      const f = raw as { at?: unknown; hook?: unknown; reason?: unknown; kind?: unknown };
+      if (typeof f.at !== "string" || f.hook !== "preflight") continue;
+      if (typeof f.reason !== "string" || !/^guardrail:.+/.test(f.reason)) continue;
+      // Q1 stamps `kind: "ask"` on the preflight lane's fires. Accept an absent
+      // kind (older state files, the generated hook copies) but never a kind we
+      // don't recognise — a future `kind: "block"` must not silently inherit
+      // the ask wording.
+      if (f.kind !== undefined && f.kind !== "ask") continue;
+      out.push({ at: f.at, hook: f.hook, reason: f.reason });
+    }
+    return out;
   } catch {
     return [];
   }
+}
+
+/**
+ * F6 — a LAST-MOMENT secret check on what is about to leave the building.
+ *
+ * The store already scans artifact content at creation, but this export is the
+ * point where the material stops being a local review surface and becomes a
+ * file the human hands to someone else. So we re-scan the assembled state and
+ * WARN — never block: refusing to export because a fixture contains `AKIA…`
+ * would be the tool substituting its judgement for the human's on their own
+ * repo. The warning names the field, never the value (mirroring SecretWarning:
+ * surfacing a secret to warn about it would re-leak it).
+ *
+ * Returns null when the export is clean, so a clean run's reply is unchanged.
+ */
+export function secretWarningFor(state: unknown): string | null {
+  let matches;
+  try {
+    matches = scanContentForSecrets(state);
+  } catch {
+    return null; // a scan failure must never fail the export
+  }
+  if (!matches.length) return null;
+  const shown = matches.slice(0, 3).map((m) => {
+    const where = m.field ? ` in \`${m.field}\`${m.line != null ? ` (line ${m.line})` : ""}` : "";
+    return `${m.label}${where}`;
+  });
+  const more = matches.length > shown.length ? ` (+${matches.length - shown.length} more)` : "";
+  return (
+    `⚠️ Possible secret in this export — review before sharing: ${shown.join("; ")}${more}. ` +
+    `The value itself is not printed here. This page is meant to leave the building, so check it first.`
+  );
 }
 
 export interface AssembleHtmlOptions extends HtmlExportOptions {

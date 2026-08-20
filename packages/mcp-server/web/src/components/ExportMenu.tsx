@@ -14,21 +14,29 @@ const formats = [
 export function ExportMenu() {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
+  // F7 — an honest failure line. The old catch opened the same URL in a new
+  // tab, which CANNOT work: II2 fail-closes every /api/* request without
+  // X-Project-Hash, and a plain tab navigation sends none — so the "fallback"
+  // reliably produced a 403 JSON page and looked like the export was broken in
+  // a new and mysterious way. Better to say the export failed.
+  const [error, setError] = useState<string | null>(null);
   // Q5 — code is INCLUDED by default (the diffs are the point of a shared
   // page); the checkbox is the opt-out for a repo whose code shouldn't leave.
   const [includeCode, setIncludeCode] = useState(true);
 
   const handleExport = async (format: string) => {
+    setError(null);
     try {
       const res = await apiGet(`${apiBase()}/api/export?format=${format}`);
+      if (!res.ok) throw new Error(String(res.status));
       const markdown = await res.text();
 
       await navigator.clipboard.writeText(markdown);
       setCopied(format);
       setTimeout(() => setCopied(null), 2000);
     } catch {
-      // Fallback: open in new tab
-      window.open(`${apiBase()}/api/export?format=${format}`, "_blank");
+      setError("Export failed — is the daemon still running?");
+      setTimeout(() => setError(null), 4000);
     }
     setOpen(false);
   };
@@ -37,6 +45,7 @@ export function ExportMenu() {
   // clipboard) this one DOWNLOADS a self-contained .html file: it's a document
   // you send to someone, not text you paste.
   const handleShareAsPage = async () => {
+    setError(null);
     const url = `${apiBase()}/api/export.html?includeCode=${includeCode ? "1" : "0"}`;
     try {
       const res = await apiGet(url);
@@ -53,9 +62,8 @@ export function ExportMenu() {
       setCopied("html");
       setTimeout(() => setCopied(null), 2000);
     } catch {
-      // Fallback: let the browser fetch it directly (the route sets
-      // Content-Disposition, so this still lands as a download).
-      window.open(url, "_blank");
+      setError("Couldn't build the page — is the daemon still running?");
+      setTimeout(() => setError(null), 4000);
     }
     setOpen(false);
   };
@@ -72,6 +80,16 @@ export function ExportMenu() {
         </svg>
         {copied ? (copied === "html" ? "Downloaded!" : "Copied!") : "Export"}
       </button>
+
+      {error && (
+        <div
+          role="status"
+          className="absolute right-0 top-full mt-1 z-50 w-64 px-3 py-2 rounded-lg
+                     bg-surface-elevated border border-border-default shadow-xl text-2xs text-text-secondary"
+        >
+          {error}
+        </div>
+      )}
 
       {open && (
         <>

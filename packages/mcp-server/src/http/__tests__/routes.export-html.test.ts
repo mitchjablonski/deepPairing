@@ -90,6 +90,54 @@ describe("readGuardrailFires", () => {
     expect(readGuardrailFires(tmpDir)).toEqual([]);
   });
 
+  // F3 — fires[] has a SECOND writer: the stop hook appends
+  // {hook:"stop", reason:"owes debrief in <sessionId>"} and exits 0 (fail-open,
+  // nothing stopped, nobody confirmed). It is not a guardrail ask and it names
+  // another session, so it must never reach a page written for strangers.
+  it("keeps ONLY preflight guardrail asks — a stop-hook fire is dropped at the source", () => {
+    const dir = path.join(tmpDir, ".deeppairing");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "hooks-state.json"),
+      JSON.stringify({
+        version: 1,
+        fires: [
+          { at: "2026-08-19T10:00:00.000Z", hook: "stop", reason: "owes debrief in session_other_c0ffee" },
+          { at: "2026-08-19T10:01:00.000Z", hook: "preflight", reason: "blocked" },
+          { at: "2026-08-19T10:02:00.000Z", hook: "preflight", reason: "guardrail:" },
+          { at: "2026-08-19T10:03:00.000Z", hook: "preflight", reason: "guardrail:migrations" },
+        ],
+      }),
+    );
+    const fires = readGuardrailFires(tmpDir);
+    expect(fires).toEqual([
+      { at: "2026-08-19T10:03:00.000Z", hook: "preflight", reason: "guardrail:migrations" },
+    ]);
+    expect(JSON.stringify(fires)).not.toContain("session_other_c0ffee");
+  });
+
+  // Q1 stamps `kind` on the preflight lane. An absent kind (older state, the
+  // generated hook copies) is still an ask; an UNKNOWN kind must not inherit
+  // the ask wording just because its reason looks familiar.
+  it("accepts kind:'ask' and an absent kind, and refuses a kind it doesn't know", () => {
+    const dir = path.join(tmpDir, ".deeppairing");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "hooks-state.json"),
+      JSON.stringify({
+        fires: [
+          { at: "2026-08-19T10:00:00.000Z", hook: "preflight", kind: "ask", reason: "guardrail:secrets" },
+          { at: "2026-08-19T10:01:00.000Z", hook: "preflight", reason: "guardrail:workflows" },
+          { at: "2026-08-19T10:02:00.000Z", hook: "preflight", kind: "block", reason: "guardrail:migrations" },
+        ],
+      }),
+    );
+    expect(readGuardrailFires(tmpDir).map((f) => f.reason)).toEqual([
+      "guardrail:secrets",
+      "guardrail:workflows",
+    ]);
+  });
+
   it("drops entries with no timestamp (they can't be placed honestly)", () => {
     const dir = path.join(tmpDir, ".deeppairing");
     fs.mkdirSync(dir, { recursive: true });

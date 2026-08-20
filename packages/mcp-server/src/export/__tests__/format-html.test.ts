@@ -370,6 +370,36 @@ describe("formatSessionHtml — honesty", () => {
     expect(html).toContain("Rolling our own KDF");
   });
 
+  // F3 — hooks-state.json has a SECOND writer: the stop hook appends
+  // {hook:"stop", reason:"owes debrief in <sessionId>"} and exits 0 — nothing
+  // was stopped, nobody confirmed. Rendering it as a guardrail ask invented an
+  // event AND printed another session's id onto a page meant for strangers.
+  it("renders NOTHING for a stop-hook fire, and never leaks another session's id", () => {
+    const state = richState();
+    state.guardrailFires = [
+      { at: T(6), hook: "stop", reason: "owes debrief in session_other_project_c0ffee" },
+      { at: T(6), hook: "preflight", reason: "guardrail:migrations" },
+    ];
+    const html = formatSessionHtml(state, OPTS);
+    expect(html).not.toContain("session_other_project_c0ffee");
+    expect(html).not.toContain("owes debrief");
+    // The real ask beside it still renders — the filter is targeted, not blunt.
+    expect(html).toContain("Guardrail ask");
+    expect(html).toContain("<strong>migrations</strong>");
+    // Exactly ONE ask beat, not two.
+    expect((html.match(/Guardrail ask/g) ?? []).length).toBe(1);
+  });
+
+  it("renders nothing for an unknown fire shape rather than guessing", () => {
+    const state = richState();
+    state.guardrailFires = [
+      { at: T(6), hook: "preflight", reason: "blocked" },
+      { at: T(6), hook: "preflight", reason: "guardrail:" },
+      { at: T(6), hook: "checkpoint", reason: "guardrail:secrets" },
+    ];
+    expect(formatSessionHtml(state, OPTS)).not.toContain("Guardrail ask");
+  });
+
   it("invents no gate beats for a session that recorded none", () => {
     const bare: HtmlSessionState = { ...richState(), sessionMemory: undefined, preflightTraces: [], guardrailFires: [] };
     const html = formatSessionHtml(bare, OPTS);
@@ -507,6 +537,44 @@ describe("formatSessionHtml — the redact option", () => {
     expect(html).toContain("const memoryCost = 19456;");
     expect(html).not.toContain("Diff omitted from this export.");
   });
+
+  // F4 — prose reaches the page through a markdown renderer, and a human
+  // pasting a diff into a comment is exactly the case "strips every code body"
+  // has to cover. Fenced blocks go; inline `spans` stay (they are prose).
+  it("strips fenced code out of comments, narratives and summaries too", () => {
+    const state = richState();
+    state.comments.push(
+      comment({
+        id: "c_fenced",
+        content: "Should it be this instead?\n\n```ts\nconst SECRET_TUNING = 42;\n```",
+        target: { artifactId: "art_research" },
+        createdAt: T(3),
+      }),
+    );
+    (state.artifacts[0]!.content as any).summary =
+      "The hot path:\n\n```ts\nconst summaryOnlyToken = 7;\n```";
+    const html = formatSessionHtml(state, {
+      ...OPTS,
+      includeCode: false,
+      narrative: "Here is what we replaced:\n\n```ts\nconst narrativeOnlyToken = 1;\n```\n\nand `inlineIdentifier` survives.",
+    });
+    expect(html).not.toContain("SECRET_TUNING");
+    expect(html).not.toContain("narrativeOnlyToken");
+    expect(html).not.toContain("summaryOnlyToken");
+    expect(html).toContain("Code omitted from this export");
+    // Prose around them is untouched, and inline code spans stay.
+    expect(html).toContain("Should it be this instead?");
+    expect(html).toContain("Here is what we replaced:");
+    expect(html).toContain("<code>inlineIdentifier</code>");
+  });
+
+  it("keeps fenced prose code when code is included (the default)", () => {
+    const html = formatSessionHtml(richState(), {
+      ...OPTS,
+      narrative: "```ts\nconst narrativeOnlyToken = 1;\n```",
+    });
+    expect(html).toContain("narrativeOnlyToken");
+  });
 });
 
 describe("formatSessionHtml — degenerate input", () => {
@@ -559,5 +627,103 @@ describe("sanitizePath", () => {
   });
   it("leaves a repo-relative path alone", () => {
     expect(sanitizePath("src/a.ts", "/home/tester/checkout")).toBe("src/a.ts");
+  });
+
+  // F2 — the leak that shipped: this project is DEVELOPED under /mnt/c/Users/…,
+  // and the old anchored pattern let that username straight onto a page written
+  // to be handed to someone else. --redact-code cannot help: the path IS the leak.
+  it("collapses a WSL/Windows home directory (the layout this repo is developed on)", () => {
+    expect(sanitizePath("/mnt/c/Users/mitch/Documents/dev/proj/src/a.ts")).toBe("~/Documents/dev/proj/src/a.ts");
+    expect(sanitizePath("C:\\Users\\mitch\\proj\\src\\a.ts")).toBe("~/proj/src/a.ts");
+    expect(sanitizePath("/cygdrive/c/Users/mitch/proj/a.ts")).toBe("~/proj/a.ts");
+  });
+
+  it("never leaves a username on the page — the whole-page control", () => {
+    const state = richState();
+    (state.artifacts[0]!.content as any).findings[0].evidence[0].filePath =
+      "/mnt/c/Users/mitch/Documents/Development/deepPairing/src/auth/hash.ts";
+    const html = formatSessionHtml(state, { ...OPTS, projectRoot: undefined });
+    expect(html).not.toContain("/mnt/c/Users/mitch");
+    expect(html).not.toMatch(/\/(?:home|Users)\/[^/"<\s]+\//);
+    expect(html).toContain("~/Documents/Development/deepPairing/src/auth/hash.ts");
+    // Every remaining "mitch" on the page belongs to the footer's repo link
+    // (href + link text) — a deliberate anchor, not the exporter's home dir.
+    const contexts = [...html.matchAll(/.{0,20}mitch.{0,20}/g)].map((m) => m[0]);
+    expect(contexts.length).toBeGreaterThan(0);
+    for (const c of contexts) expect(c).toContain("github.com/mitchjablonsk");
+  });
+});
+
+// F1 — the renderer used to SPAN-LOOP on a fence its opener didn't accept but
+// its paragraph guard refused: the cursor never moved and it allocated <p></p>
+// until V8 died. In the daemon that is a wedged export AND a wedged daemon, so
+// every one of these carries a wall-clock guard: a hang fails as a hang.
+describe("renderMarkdown — fence handling can never hang (F1)", () => {
+  const VARIANTS: Array<[string, string]> = [
+    ["language with a hyphen", "```objective-c\nint x = 1;\n```"],
+    ["language with a plus", "```c++\nint x = 1;\n```"],
+    ["info string", '```js title="server.ts"\nconst x = 1;\n```'],
+    ["line-highlight meta", "```ts {1,3}\nconst x = 1;\n```"],
+    ["four backticks", "````\ncode\n````"],
+    ["tilde fence", "~~~\ncode\n~~~"],
+    ["inline triple backticks on one line", "```code```"],
+    ["unterminated fence", "```ts\nconst x = 1;"],
+    ["bare fence then prose", "```\n\nback to prose"],
+    ["fence inside a list", "- item\n\n```objective-c\nx\n```"],
+    ["fence inside a blockquote", "> ```objective-c\n> x\n> ```"],
+    ["fence with trailing spaces", "```objective-c   \nx\n```"],
+    ["nothing but a fence marker", "```"],
+  ];
+
+  for (const [name, md] of VARIANTS) {
+    it(`terminates on ${name}`, () => {
+      const started = Date.now();
+      const html = renderMarkdown(md);
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(typeof html).toBe("string");
+      // …and never degenerates into an unbounded run of empty paragraphs.
+      expect((html.match(/<p><\/p>/g) ?? []).length).toBeLessThan(5);
+    });
+  }
+
+  it("renders the whole rich page well inside a second, fences and all", () => {
+    const state = richState();
+    (state.artifacts[0]!.content as any).summary = "```objective-c\n[obj doThing];\n```\nand prose after it.";
+    const started = Date.now();
+    const html = formatSessionHtml(state, OPTS);
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(html).toContain("[obj doThing];");
+    expect(html).toContain("and prose after it.");
+  });
+
+  it("keeps a bare word as the language and drops an info string", () => {
+    expect(renderMarkdown("```ts\nx\n```")).toContain('data-language="ts"');
+    // The first token of an info string IS the language; the meta after it is
+    // what gets dropped (`title="x"` never reaches the attribute).
+    const info = renderMarkdown('```js title="x"\ny\n```');
+    expect(info).toContain('data-language="js"');
+    expect(info).not.toContain("title=");
+    expect(renderMarkdown("```objective-c\nz\n```")).toContain('data-language="objective-c"');
+  });
+});
+
+describe("formatSessionHtml — the meta CSP (F5)", () => {
+  it("declares a no-network policy in the document itself", () => {
+    const html = formatSessionHtml(richState(), OPTS);
+    expect(html).toContain(
+      `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'" />`,
+    );
+  });
+});
+
+describe("renderMarkdown — link safety (F8)", () => {
+  it("drops protocol-relative URLs, which are not relative at all", () => {
+    const html = renderMarkdown("[click](//evil.example/x)");
+    expect(html).not.toContain("evil.example");
+    expect(html).toContain("click");
+  });
+  it("keeps genuine root-relative and absolute https links", () => {
+    expect(renderMarkdown("[a](/docs/x)")).toContain('href="/docs/x"');
+    expect(renderMarkdown("[b](https://example.com/x)")).toContain('href="https://example.com/x"');
   });
 });

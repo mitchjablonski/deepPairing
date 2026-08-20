@@ -47,5 +47,6 @@ Add `includeCode: false` only if I ask for it — the diffs are usually the most
 useful part of the page.
 
 **Then tell me the file path** the tool returns, and one line on what's in the
-page. The file is self-contained: no network requests, opens straight from
+page. If the tool's reply carries a possible-secret warning, relay it to me
+verbatim before anything else — the file is about to leave the building. The file is self-contained: no network requests, opens straight from
 disk, and can be sent to anyone as-is.

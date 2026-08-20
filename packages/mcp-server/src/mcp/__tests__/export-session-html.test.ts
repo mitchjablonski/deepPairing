@@ -144,6 +144,43 @@ describe("export_session format:html", () => {
     expect(html).toContain("warm(cache);");
   });
 
+  // F6 — the export is the moment the material stops being a local review
+  // surface and becomes a file handed to someone else. Warn, never block: the
+  // human decides what may leave their own repo.
+  it("warns (without printing the value) when the session carries a secret shape", async () => {
+    const store = fx.track(new FileStore(tmpDir, "s_html"));
+    seed(store);
+    store.createArtifact({
+      id: "art_secret",
+      type: "code_change",
+      title: "Wire the uploader",
+      content: {
+        filePath: "src/upload.ts",
+        changeType: "modify",
+        before: "",
+        after: 'const key = "AKIAIOSFODNN7EXAMPLE";',
+        reasoning: "Needs the bucket credentials.",
+      },
+    });
+
+    const res = await handleExportSession(makeCtx(store), { format: "html" });
+    const text = textOf(res as any);
+    expect(text).toContain("Possible secret in this export");
+    expect(text).toContain("review before sharing");
+    // The warning names the SHAPE, never the value — surfacing a secret to
+    // warn about it would re-leak it into the agent's context.
+    expect(text).not.toContain("AKIAIOSFODNN7EXAMPLE");
+    // Warn-only: the page was still written.
+    expect(fs.existsSync(text.match(/Path: (.+)/)![1]!.trim())).toBe(true);
+  });
+
+  it("says nothing about secrets for a clean session", async () => {
+    const store = fx.track(new FileStore(tmpDir, "s_html"));
+    seed(store);
+    const res = await handleExportSession(makeCtx(store), { format: "html" });
+    expect(textOf(res as any)).not.toContain("Possible secret");
+  });
+
   it("leaves the six markdown formats untouched", async () => {
     const store = fx.track(new FileStore(tmpDir, "s_html"));
     seed(store);

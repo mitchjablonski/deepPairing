@@ -189,8 +189,14 @@ export function sanitizePath(raw: unknown, projectRoot?: string): string {
     if (root && normalized === root) return ".";
   }
   p = normalized;
-  // /home/<user>/…, /Users/<user>/…, C:/Users/<user>/… → ~/…
-  p = p.replace(/^(?:[A-Za-z]:)?\/(?:home|Users)\/[^/]+\//, "~/");
+  // F2 — collapse the user's home directory wherever it sits in the path.
+  // The old anchored form (`^(?:[A-Za-z]:)?/(home|Users)/<u>/`) missed the
+  // layout this project is DEVELOPED on: WSL's /mnt/c/Users/<u>/... sailed
+  // through verbatim, putting the exporter's username in a page written to be
+  // sent to strangers — and --redact-code cannot help, because the path IS the
+  // leak. Non-greedy prefix + case-insensitive covers /mnt/c/Users/<u>/,
+  // /cygdrive/c/Users/<u>/, C:/Users/<u>/ and plain /home/<u>/ alike.
+  p = p.replace(/^.*?\/(?:home|Users)\/[^/]+\//i, "~/");
   return p;
 }
 
@@ -220,7 +226,24 @@ function plural(n: number, one: string, many = one + "s"): string {
 // bullet + numbered lists, blockquotes, links, and rules. Everything is
 // ESCAPED first, so unmatched syntax degrades to literal text — never markup.
 
-const SAFE_URL = /^(?:https?:\/\/|mailto:|#|\/|\.{1,2}\/)/i;
+// F1 — ONE fence predicate, used by BOTH the block opener and the paragraph
+// guard. They used to disagree: the opener demanded `^\s*```(\w+)?\s*$` while
+// the paragraph loop refused any line starting ```. A line that starts a fence
+// but fails the strict opener (```objective-c, ````, ```js title="x") then
+// satisfied NEITHER — the cursor never advanced and renderMarkdown span-looped,
+// allocating <p></p> forever. In the daemon that is a wedged export route AND a
+// wedged daemon (the export is in-process). Any line whose first non-space run
+// is 3+ backticks/tildes is a fence, full stop; whatever follows is the info
+// string, and only its first token is treated as a language.
+const FENCE_OPEN = /^\s*(?:`{3,}|~{3,})\s*([^\s`~]*)/;
+const FENCE_CLOSE = /^\s*(?:`{3,}|~{3,})\s*$/;
+
+// F8 — `//evil.example/x` is protocol-RELATIVE: a bare `^/` treated it as a
+// same-page path and let a markdown link reach another host, which is exactly
+// the property this page promises it doesn't have. `\/(?!\/)` keeps real
+// root-relative paths and drops the two-slash form; explicit https:// links in
+// a narrative are still allowed (the author meant them).
+const SAFE_URL = /^(?:https?:\/\/|mailto:|#|\/(?!\/)|\.{1,2}\/)/i;
 
 function renderInline(text: string): string {
   // Escape first — every transform below operates on already-safe text.
@@ -247,8 +270,14 @@ function renderInline(text: string): string {
  * Render a markdown subset to HTML. `baseHeading` is the level a top-level `#`
  * maps to (the narrative sits under an <h2>, so its own headings start at h3
  * and the document outline stays sane).
+ *
+ * F4 — `includeCode: false` strips FENCED blocks here too. Prose reaches this
+ * renderer from comments, narratives and summaries, and a human pasting a diff
+ * into a comment is exactly the case the redaction contract ("strips every code
+ * body") has to cover. Inline `code spans` stay: they are prose — identifiers
+ * and flags, not bodies.
  */
-export function renderMarkdown(md: string, baseHeading = 3): string {
+export function renderMarkdown(md: string, baseHeading = 3, includeCode = true): string {
   const lines = String(md ?? "").replace(/\r\n?/g, "\n").split("\n");
   // noUncheckedIndexedAccess is on repo-wide: read every line through `at`.
   const at = (k: number): string => lines[k] ?? "";
@@ -266,14 +295,19 @@ export function renderMarkdown(md: string, baseHeading = 3): string {
 
     if (/^\s*$/.test(line)) { i++; continue; }
 
-    // Fenced code
-    const fence = line.match(/^\s*```(\w+)?\s*$/);
+    // Fenced code (F1 — same predicate the paragraph guard uses, so the two
+    // can never disagree about what a fence is).
+    const fence = line.match(FENCE_OPEN);
     if (fence) {
       const body: string[] = [];
       i++;
-      while (i < lines.length && !/^\s*```\s*$/.test(at(i))) { body.push(at(i)); i++; }
-      i++; // closing fence
-      out.push(codeBlock(body.join("\n"), { language: fence[1], maxLines: MAX_CODE_LINES }));
+      while (i < lines.length && !FENCE_CLOSE.test(at(i))) { body.push(at(i)); i++; }
+      i++; // closing fence (or EOF — an unterminated fence still terminates)
+      // Only a bare word is a language; an info string like `js title="x"`
+      // contributes its first token, and anything else contributes nothing.
+      const info = fence[1] ?? "";
+      const language = /^[A-Za-z0-9_+-]+$/.test(info) ? info : undefined;
+      out.push(codeBlock(body.join("\n"), { language, maxLines: MAX_CODE_LINES, includeCode }));
       continue;
     }
 
@@ -296,7 +330,7 @@ export function renderMarkdown(md: string, baseHeading = 3): string {
         body.push(at(i).replace(/^\s*>\s?/, ""));
         i++;
       }
-      out.push(`<blockquote>${renderMarkdown(body.join("\n"), baseHeading)}</blockquote>`);
+      out.push(`<blockquote>${renderMarkdown(body.join("\n"), baseHeading, includeCode)}</blockquote>`);
       continue;
     }
 
@@ -327,7 +361,7 @@ export function renderMarkdown(md: string, baseHeading = 3): string {
     while (
       i < lines.length &&
       !/^\s*$/.test(at(i)) &&
-      !/^\s*```/.test(at(i)) &&
+      !FENCE_OPEN.test(at(i)) &&
       !/^\s*#{1,6}\s+/.test(at(i)) &&
       !/^\s*>/.test(at(i)) &&
       !/^\s*[-*+]\s+/.test(at(i)) &&
@@ -336,6 +370,10 @@ export function renderMarkdown(md: string, baseHeading = 3): string {
       para.push(at(i));
       i++;
     }
+    // F1 belt-and-braces: if the paragraph loop consumed NOTHING the cursor
+    // must still move, or a future guard/opener mismatch becomes a hang again
+    // instead of one odd-looking line. Never remove this.
+    if (para.length === 0) { para.push(at(i)); i++; }
     out.push(`<p>${renderInline(para.join("\n"))}</p>`);
   }
 
@@ -512,7 +550,7 @@ function commentHtml(c: Comment, includeCode: boolean, projectRoot?: string): st
     `<li class="thread-item thread-item--${c.author === "agent" ? "agent" : "human"}">` +
     `<div class="thread-meta"><span class="who">${esc(who)}</span>${intentChip}${anchorHtml}` +
     `<time>${esc(fmtTimestamp(c.createdAt))}</time></div>` +
-    `<div class="thread-body">${renderMarkdown(c.content ?? "", 5)}</div>${sugHtml}</li>`
+    `<div class="thread-body">${renderMarkdown(c.content ?? "", 5, includeCode)}</div>${sugHtml}</li>`
   );
 }
 
@@ -539,7 +577,7 @@ interface RenderCtx {
 function researchBody(a: Artifact, ctx: RenderCtx): string {
   const content = coerceResearchContent(a.content);
   const parts: string[] = [];
-  if (content.summary) parts.push(renderMarkdown(content.summary, 4));
+  if (content.summary) parts.push(renderMarkdown(content.summary, 4, ctx.includeCode));
   for (const f of content.findings ?? []) {
     // significance (note-worthiness) and severity (risk) are DIFFERENT axes
     // that often carry the same word — name each so two "HIGH" chips beside
@@ -550,7 +588,7 @@ function researchBody(a: Artifact, ctx: RenderCtx): string {
     parts.push(
       `<div class="finding"><h4>${esc(f.title ?? f.category ?? "Finding")}</h4>` +
       `<div class="chips">${sig}${sev}${cat}</div>` +
-      renderMarkdown(f.detail ?? "", 5) +
+      renderMarkdown(f.detail ?? "", 5, ctx.includeCode) +
       evidenceBlock(f.evidence, ctx.includeCode, ctx.projectRoot) +
       (f.impact ? `<p class="kv"><span class="k">Impact</span> ${renderInline(f.impact)}</p>` : "") +
       (f.recommendation ? `<p class="kv"><span class="k">Recommendation</span> ${renderInline(f.recommendation)}</p>` : "") +
@@ -563,11 +601,11 @@ function researchBody(a: Artifact, ctx: RenderCtx): string {
   return parts.join("");
 }
 
-function specBody(a: Artifact, _ctx: RenderCtx): string {
+function specBody(a: Artifact, ctx: RenderCtx): string {
   const content = coerceSpecContent(a.content);
   const parts: string[] = [];
   if (content.objective) parts.push(`<p class="kv"><span class="k">Objective</span> ${renderInline(content.objective)}</p>`);
-  if (content.context) parts.push(renderMarkdown(content.context, 4));
+  if (content.context) parts.push(renderMarkdown(content.context, 4, ctx.includeCode));
   if (content.requirements?.length) {
     parts.push(`<h4>Requirements</h4><ul class="req-list">`);
     for (const r of content.requirements) {
@@ -582,7 +620,7 @@ function specBody(a: Artifact, _ctx: RenderCtx): string {
     }
     parts.push(`</ul>`);
   }
-  if (content.design) parts.push(`<h4>Design</h4>${renderMarkdown(content.design, 5)}`);
+  if (content.design) parts.push(`<h4>Design</h4>${renderMarkdown(content.design, 5, ctx.includeCode)}`);
   if (content.tasks?.length) {
     parts.push(`<h4>Tasks</h4><ul>${content.tasks.map((t) => `<li>${renderInline(t.description)}</li>`).join("")}</ul>`);
   }
@@ -633,7 +671,7 @@ function decisionBody(a: Artifact, ctx: RenderCtx): string {
   );
   const chosenId = record?.response?.optionId;
   const parts: string[] = [];
-  if (content.context) parts.push(renderMarkdown(content.context, 4));
+  if (content.context) parts.push(renderMarkdown(content.context, 4, ctx.includeCode));
   parts.push(`<div class="options">`);
   for (const o of content.options ?? []) {
     const chosen = chosenId != null && o.id === chosenId;
@@ -712,7 +750,7 @@ function codeChangeBody(a: Artifact, ctx: RenderCtx): string {
 function changesetBody(a: Artifact, ctx: RenderCtx, ownComments: Comment[]): string {
   const content = coerceChangesetContent(a.content);
   const parts: string[] = [];
-  if (content.summary) parts.push(renderMarkdown(content.summary, 4));
+  if (content.summary) parts.push(renderMarkdown(content.summary, 4, ctx.includeCode));
   if (content.risks?.length) {
     parts.push(`<div class="chips">${content.risks.map((r) => `<span class="chip chip--risk">${esc(r)}</span>`).join("")}</div>`);
   }
@@ -740,11 +778,11 @@ function changesetBody(a: Artifact, ctx: RenderCtx, ownComments: Comment[]): str
 function debriefBody(a: Artifact, ctx: RenderCtx): string {
   const content = coerceDebriefContent(a.content);
   const parts: string[] = [];
-  if (content.summary) parts.push(renderMarkdown(content.summary, 4));
+  if (content.summary) parts.push(renderMarkdown(content.summary, 4, ctx.includeCode));
   for (const s of content.sections ?? []) {
     parts.push(
       `<div class="walk-section"><h4>${esc(s.title)}</h4>` +
-      (s.body ? renderMarkdown(s.body, 5) : "") +
+      (s.body ? renderMarkdown(s.body, 5, ctx.includeCode) : "") +
       (s.concepts ?? [])
         .map((c) => `<p class="concept">Pattern: <strong>${esc(c.name)}</strong>${c.oneLineExplanation ? ` — ${renderInline(c.oneLineExplanation)}` : ""}</p>`)
         .join("") +
@@ -781,25 +819,25 @@ function debriefBody(a: Artifact, ctx: RenderCtx): string {
 function explainerBody(a: Artifact, ctx: RenderCtx): string {
   const content = coerceExplainerContent(a.content);
   const parts: string[] = [];
-  if (content.overview) parts.push(renderMarkdown(content.overview, 4));
+  if (content.overview) parts.push(renderMarkdown(content.overview, 4, ctx.includeCode));
   (content.sections ?? []).forEach((s, i) => {
     parts.push(
       `<div class="walk-section"><h4>${i + 1}. ${esc(s.heading ?? "")}</h4>` +
-      (s.body ? renderMarkdown(s.body, 5) : "") +
+      (s.body ? renderMarkdown(s.body, 5, ctx.includeCode) : "") +
       evidenceBlock(s.evidence, ctx.includeCode, ctx.projectRoot) + `</div>`,
     );
   });
   return parts.join("");
 }
 
-function reasoningBody(a: Artifact): string {
+function reasoningBody(a: Artifact, includeCode: boolean): string {
   const content = coerceReasoningContent(a.content);
   const concept = content.concept?.name
     ? `<p class="concept">Pattern: <strong>${esc(content.concept.name)}</strong>${content.concept.oneLineExplanation ? ` — ${renderInline(content.concept.oneLineExplanation)}` : ""}</p>`
     : "";
   return (
     (content.action ? `<p class="kv"><span class="k">Action</span> ${renderInline(content.action)}</p>` : "") +
-    (content.reasoning ? renderMarkdown(content.reasoning, 5) : "") +
+    (content.reasoning ? renderMarkdown(content.reasoning, 5, includeCode) : "") +
     (content.confidence ? `<p class="kv"><span class="k">Confidence</span> ${esc(content.confidence)}</p>` : "") +
     concept
   );
@@ -815,9 +853,9 @@ function artifactBody(a: Artifact, ctx: RenderCtx, ownComments: Comment[]): stri
     case "changeset": return changesetBody(a, ctx, ownComments);
     case "debrief": return debriefBody(a, ctx);
     case "explainer": return explainerBody(a, ctx);
-    case "reasoning": return reasoningBody(a);
+    case "reasoning": return reasoningBody(a, ctx.includeCode);
     default:
-      return `<p class="pending">(${esc(a.type)} — no renderer; nothing invented.)</p>`;
+      return `<p class="pending">This ${esc(a.type)} has no renderer on the shareable page, so nothing is shown for it here — rather than something invented.</p>`;
   }
 }
 
@@ -833,7 +871,11 @@ function verdictLine(a: Artifact, state: HtmlSessionState): string {
   const match = stances.find(
     (r) => r.sourceArtifactId === a.id || (r.description && r.description === a.title),
   );
-  const reason = match?.reason ? ` — “${esc(match.reason)}”` : "";
+  // F8 — trim a trailing sentence stop off the quoted reason: the sentence that
+  // carries it supplies its own, and `... — “we run three replicas.”.` reads
+  // like a typo on a page someone else is reading.
+  const rawReason = match?.reason?.trim().replace(/[.!?]+$/, "");
+  const reason = rawReason ? ` — “${esc(rawReason)}”` : "";
   switch (a.status) {
     case "rejected":
       return `<p class="verdict verdict--rejected">rejected: the human declined this${reason}. It is here for the record, not as part of what shipped.</p>`;
@@ -978,19 +1020,26 @@ function traceBeat(t: HtmlPreflightTrace, seq: number): Beat | null {
 /** A guardrail hook ask (`hooks-state.json`). Project-scoped and path-free by
  *  design — the record carries only `at`, `hook`, `reason` — so the beat says
  *  exactly that much and no more. */
-function guardrailBeat(f: HtmlGuardrailFire, seq: number): Beat {
-  const category = String(f.reason ?? "").startsWith("guardrail:")
-    ? String(f.reason).slice("guardrail:".length)
-    : "";
-  const what = category
-    ? `the agent was about to touch <strong>${esc(category)}</strong> work`
-    : `the agent hit the ${esc(f.hook ?? "preflight")} hook (<code>${esc(f.reason ?? "blocked")}</code>)`;
+function guardrailBeat(f: HtmlGuardrailFire, seq: number): Beat | null {
+  // F3 — a guardrail ASK is the only fire this beat can honestly describe, and
+  // readGuardrailFires already keeps nothing else. The old else-branch rendered
+  // ANY fire as "the hook stopped the run... the human had to confirm" — which
+  // turned the stop-hook's fail-open `{hook:"stop", reason:"owes debrief in
+  // <sessionId>"}` (exit 0; nothing was stopped, nobody confirmed) into a
+  // fabricated gate moment that also printed ANOTHER session's id onto a page
+  // meant for strangers. Belt-and-braces: re-check here, and render nothing
+  // rather than guess.
+  const reason = String(f.reason ?? "");
+  if (f.hook !== "preflight" || !reason.startsWith("guardrail:")) return null;
+  const category = reason.slice("guardrail:".length);
+  if (!category) return null;
   return beat(
     f.at ?? "",
     seq,
     `<li class="beat beat--guardrail"><time>${esc(fmtTimestamp(f.at))}</time>` +
     `<h3>${SHIELD_MARK}Guardrail ask</h3>` +
-    `<p>The hook stopped the run because ${what} — the human had to confirm before it continued.</p></li>`,
+    `<p>The hook stopped the run because the agent was about to touch ` +
+    `<strong>${esc(category)}</strong> work — the human had to confirm before it continued.</p></li>`,
   );
 }
 
@@ -1271,7 +1320,8 @@ export function formatSessionHtml(state: HtmlSessionState, options: HtmlExportOp
     if (!f.at) continue;
     if (spanFirst && f.at < spanFirst) continue;
     if (spanLast && f.at > spanLast) continue;
-    beats.push(guardrailBeat(f, seq++));
+    const gb = guardrailBeat(f, seq++);
+    if (gb) beats.push(gb);
   }
 
   beats.sort((a, b) => {
@@ -1286,7 +1336,7 @@ export function formatSessionHtml(state: HtmlSessionState, options: HtmlExportOp
 
   const title = sessionTitle(state);
   const story = options.narrative?.trim()
-    ? renderMarkdown(options.narrative, 3)
+    ? renderMarkdown(options.narrative, 3, includeCode)
     : autoSummary(state, span);
 
   const metaBits = [
@@ -1320,6 +1370,7 @@ export function formatSessionHtml(state: HtmlSessionState, options: HtmlExportOp
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="color-scheme" content="light dark" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'" />
 <meta name="generator" content="deepPairing${version ? ` ${esc(version)}` : ""}" />
 <title>${esc(title)} — deepPairing session</title>
 <style>${STYLES}</style>

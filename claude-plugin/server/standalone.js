@@ -2709,10 +2709,10 @@ var require_validate = __commonJS({
         else
           this.params = obj2;
       }
-      block$data(valid, codeBlock, $dataValid = codegen_1.nil) {
+      block$data(valid, codeBlock2, $dataValid = codegen_1.nil) {
         this.gen.block(() => {
           this.check$data(valid, $dataValid);
-          codeBlock();
+          codeBlock2();
         });
       }
       check$data(valid = codegen_1.nil, $dataValid = codegen_1.nil) {
@@ -3235,8 +3235,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path8) {
-      let input = path8;
+    function removeDotSegments(path10) {
+      let input = path10;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3310,8 +3310,8 @@ var require_utils = __commonJS({
       }
       return output.join("");
     }
-    function normalizeComponentEncoding(component, esc2) {
-      const func = esc2 !== true ? escape : unescape;
+    function normalizeComponentEncoding(component, esc3) {
+      const func = esc3 !== true ? escape : unescape;
       if (component.scheme !== void 0) {
         component.scheme = func(component.scheme);
       }
@@ -3435,8 +3435,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path8, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path8 && path8 !== "/" ? path8 : void 0;
+        const [path10, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path10 && path10 !== "/" ? path10 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -6798,12 +6798,12 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list, fs9, exportName) {
+    function addFormats(ajv, list, fs10, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list)
-        ajv.addFormat(f, fs9[f]);
+        ajv.addFormat(f, fs10[f]);
     }
     module.exports = exports = formatsPlugin;
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -6851,33 +6851,9 @@ var init_cli_invocation = __esm({
   }
 });
 
-// src/version.ts
-function parseSemver(v) {
-  const m = /^\s*(\d+)\.(\d+)\.(\d+)/.exec(v);
-  if (!m) return null;
-  return [Number(m[1]), Number(m[2]), Number(m[3])];
-}
-function compareServerVersions(a, b) {
-  const pa = parseSemver(a);
-  const pb = parseSemver(b);
-  if (!pa || !pb) return NaN;
-  const [aMaj, aMin, aPatch] = pa;
-  const [bMaj, bMin, bPatch] = pb;
-  if (aMaj !== bMaj) return aMaj - bMaj;
-  if (aMin !== bMin) return aMin - bMin;
-  return aPatch - bPatch;
-}
-var SERVER_VERSION;
-var init_version = __esm({
-  "src/version.ts"() {
-    "use strict";
-    SERVER_VERSION = "0.1.34";
-  }
-});
-
 // src/project-root.ts
-import path3 from "node:path";
-import fs4 from "node:fs";
+import path4 from "node:path";
+import fs5 from "node:fs";
 import crypto2 from "node:crypto";
 function projectHashOf(projectRoot2) {
   return crypto2.createHash("sha256").update(projectRoot2).digest("hex").slice(0, 8);
@@ -6921,15 +6897,15 @@ function resolveProjectRoot(opts = {}) {
   for (const c of candidates) {
     const v = c.value?.trim();
     if (!v) continue;
-    if (!path3.isAbsolute(v)) continue;
+    if (!path4.isAbsolute(v)) continue;
     try {
-      if (!fs4.statSync(v).isDirectory()) continue;
+      if (!fs5.statSync(v).isDirectory()) continue;
     } catch {
       continue;
     }
-    return { projectRoot: path3.resolve(v), source: c.source };
+    return { projectRoot: path4.resolve(v), source: c.source };
   }
-  return { projectRoot: path3.resolve(cwd()), source: "cwd" };
+  return { projectRoot: path4.resolve(cwd()), source: "cwd" };
 }
 var DEFAULT_BASE_PORT, DEFAULT_PORT_SPAN, portWindow, BASE_PORT, PORT_SPAN;
 var init_project_root = __esm({
@@ -6943,28 +6919,52 @@ var init_project_root = __esm({
   }
 });
 
+// src/version.ts
+function parseSemver(v) {
+  const m = /^\s*(\d+)\.(\d+)\.(\d+)/.exec(v);
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+function compareServerVersions(a, b) {
+  const pa = parseSemver(a);
+  const pb = parseSemver(b);
+  if (!pa || !pb) return NaN;
+  const [aMaj, aMin, aPatch] = pa;
+  const [bMaj, bMin, bPatch] = pb;
+  if (aMaj !== bMaj) return aMaj - bMaj;
+  if (aMin !== bMin) return aMin - bMin;
+  return aPatch - bPatch;
+}
+var SERVER_VERSION;
+var init_version = __esm({
+  "src/version.ts"() {
+    "use strict";
+    SERVER_VERSION = "0.1.34";
+  }
+});
+
 // src/daemon/token.ts
-import fs6 from "node:fs";
+import fs7 from "node:fs";
 import os2 from "node:os";
-import path5 from "node:path";
+import path7 from "node:path";
 function runtimeBaseDir() {
   const xdg = process.env.XDG_RUNTIME_DIR?.trim();
-  if (xdg && path5.isAbsolute(xdg)) {
+  if (xdg && path7.isAbsolute(xdg)) {
     try {
-      if (fs6.statSync(xdg).isDirectory()) return path5.join(xdg, "deeppairing");
+      if (fs7.statSync(xdg).isDirectory()) return path7.join(xdg, "deeppairing");
     } catch {
     }
   }
-  return path5.join(os2.tmpdir(), "deeppairing");
+  return path7.join(os2.tmpdir(), "deeppairing");
 }
 function tokenSidecarPath(projectRoot2) {
-  return path5.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
+  return path7.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
 }
 function readTokenSidecar(projectRoot2) {
   try {
     const file2 = tokenSidecarPath(projectRoot2);
-    if (!fs6.existsSync(file2)) return null;
-    return JSON.parse(fs6.readFileSync(file2, "utf-8"));
+    if (!fs7.existsSync(file2)) return null;
+    return JSON.parse(fs7.readFileSync(file2, "utf-8"));
   } catch {
     return null;
   }
@@ -6998,9 +6998,9 @@ __export(lifecycle_exports, {
   waitForPortRelease: () => waitForPortRelease
 });
 import { spawn as spawn2, execFileSync } from "node:child_process";
-import fs7 from "node:fs";
+import fs8 from "node:fs";
 import net from "node:net";
-import path6 from "node:path";
+import path8 from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function logStale(msg) {
   try {
@@ -7010,13 +7010,13 @@ function logStale(msg) {
   }
 }
 function daemonInfoPath(projectRoot2) {
-  return path6.join(projectRoot2, ".deeppairing", DAEMON_FILE);
+  return path8.join(projectRoot2, ".deeppairing", DAEMON_FILE);
 }
 function readDaemonInfo(projectRoot2) {
   const infoPath = daemonInfoPath(projectRoot2);
   try {
-    if (!fs7.existsSync(infoPath)) return null;
-    const info = JSON.parse(fs7.readFileSync(infoPath, "utf-8"));
+    if (!fs8.existsSync(infoPath)) return null;
+    const info = JSON.parse(fs8.readFileSync(infoPath, "utf-8"));
     if (!info.authToken) {
       const sidecar = readTokenSidecar(projectRoot2);
       if (sidecar?.authToken && (sidecar.pid === void 0 || sidecar.pid === info.pid)) {
@@ -7134,7 +7134,7 @@ async function isDaemonRunning(projectRoot2, range = { start: preferredPortFor(p
   }
   if (info) {
     try {
-      fs7.unlinkSync(daemonInfoPath(projectRoot2));
+      fs8.unlinkSync(daemonInfoPath(projectRoot2));
     } catch {
     }
   }
@@ -7178,8 +7178,8 @@ function buildReadinessTimeoutMessage(args) {
     `deepPairing daemon did not become ready within ${timeoutMs}ms (probed this project's ports ${first}\u2013${last}).`,
     hint
   ];
-  const logPath = path6.join(projectRoot2, ".deeppairing", "daemon.log");
-  if (fs7.existsSync(logPath)) {
+  const logPath = path8.join(projectRoot2, ".deeppairing", "daemon.log");
+  if (fs8.existsSync(logPath)) {
     lines.push(`See ${logPath} for the daemon's own startup log.`);
   }
   lines.push(`To diagnose: ${cliInvocation("doctor")}`);
@@ -7221,8 +7221,8 @@ async function describePortHolders(projectRoot2) {
   return parts.join("\n");
 }
 function spawnDaemon(projectRoot2) {
-  const daemonScript = path6.join(__thisDir2, "../../dist/daemon/index.js");
-  const scriptPath = fs7.existsSync(daemonScript) ? daemonScript : path6.join(__thisDir2, "daemon.js");
+  const daemonScript = path8.join(__thisDir2, "../../dist/daemon/index.js");
+  const scriptPath = fs8.existsSync(daemonScript) ? daemonScript : path8.join(__thisDir2, "daemon.js");
   const child = spawn2("node", [scriptPath], {
     cwd: projectRoot2,
     detached: true,
@@ -7318,7 +7318,7 @@ function pidIsGone(pid) {
 function readProcessStartTime(pid) {
   try {
     if (process.platform === "linux") {
-      const stat = fs7.readFileSync(`/proc/${pid}/stat`, "utf-8");
+      const stat = fs8.readFileSync(`/proc/${pid}/stat`, "utf-8");
       const rparen = stat.lastIndexOf(")");
       if (rparen === -1) return null;
       const rest = stat.slice(rparen + 1).trim().split(/\s+/);
@@ -7463,7 +7463,7 @@ var init_lifecycle = __esm({
     init_project_root();
     init_version();
     init_cli_invocation();
-    __thisDir2 = path6.dirname(fileURLToPath2(import.meta.url));
+    __thisDir2 = path8.dirname(fileURLToPath2(import.meta.url));
     DAEMON_FILE = "daemon.json";
     DEFAULT_PORT = BASE_PORT;
     MAX_PORT_ATTEMPTS = 10;
@@ -7998,10 +7998,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj2, path8) {
-  if (!path8)
+function getElementAtPath(obj2, path10) {
+  if (!path10)
     return obj2;
-  return path8.reduce((acc, key) => acc?.[key], obj2);
+  return path10.reduce((acc, key) => acc?.[key], obj2);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -8410,11 +8410,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path8, issues) {
+function prefixIssues(path10, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path8);
+    iss.path.unshift(path10);
     return iss;
   });
 }
@@ -8561,16 +8561,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path8 = []) => {
+  const processError = (error52, path10 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path8, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path10, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
       } else {
-        const fullpath = [...path8, ...issue2.path];
+        const fullpath = [...path10, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -8597,17 +8597,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path8 = []) => {
+  const processError = (error52, path10 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path8, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path10, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path8, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
       } else {
-        const fullpath = [...path8, ...issue2.path];
+        const fullpath = [...path10, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -8639,8 +8639,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path8 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path8) {
+  const path10 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path10) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -21638,13 +21638,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path8 = ref.slice(1).split("/").filter(Boolean);
-  if (path8.length === 0) {
+  const path10 = ref.slice(1).split("/").filter(Boolean);
+  if (path10.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path8[0] === defsKey) {
-    const key = path8[1];
+  if (path10[0] === defsKey) {
+    const key = path10[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -26207,6 +26207,7 @@ var isObj = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
 var obj = (v) => isObj(v) ? v : {};
 var str = (v, d = "") => typeof v === "string" ? v : d;
 var num = (v, d = 0) => typeof v === "number" && Number.isFinite(v) ? v : d;
+var bool = (v, d = false) => typeof v === "boolean" ? v : d;
 var arr = (v) => Array.isArray(v) ? v : [];
 var strArr = (v) => arr(v).filter((x) => typeof x === "string");
 var optStr = (v) => typeof v === "string" ? v : void 0;
@@ -26416,6 +26417,57 @@ function coerceSpecContent(raw) {
     out.openQuestions = strArr(c.openQuestions);
   if (Array.isArray(c.visuals))
     out.visuals = c.visuals.map((v, i) => coerceVisual(v, `visual_${i}`));
+  return out;
+}
+function coerceOption(v) {
+  const o = obj(v);
+  const out = {
+    id: str(o.id),
+    title: str(o.title),
+    description: str(o.description),
+    pros: strArr(o.pros),
+    cons: strArr(o.cons),
+    effort: oneOf(o.effort, LMH, "medium"),
+    risk: oneOf(o.risk, LMH, "medium"),
+    recommendation: bool(o.recommendation)
+  };
+  const concept = coerceConcept(o.concept);
+  if (concept)
+    out.concept = concept;
+  if (Array.isArray(o.visuals)) {
+    out.visuals = o.visuals.map((vis, i) => coerceVisual(vis, `${out.id}_visual_${i}`));
+  }
+  return out;
+}
+function coerceDecisionContent(raw) {
+  const c = obj(raw);
+  const out = {
+    context: str(c.context),
+    options: arr(c.options).map(coerceOption),
+    decisionId: str(c.decisionId)
+  };
+  if (typeof c.title === "string" && c.title.trim())
+    out.title = c.title.trim();
+  const stakes = optOneOf(c.stakes, LMH);
+  if (stakes)
+    out.stakes = stakes;
+  return out;
+}
+function coerceCodeChangeContent(raw) {
+  const c = obj(raw);
+  const out = {
+    filePath: str(c.filePath),
+    changeType: oneOf(c.changeType, ["create", "modify", "delete"], "modify"),
+    before: str(c.before),
+    after: str(c.after),
+    reasoning: str(c.reasoning)
+  };
+  const confidence = optOneOf(c.confidence, LMH);
+  if (confidence)
+    out.confidence = confidence;
+  const concept = coerceConcept(c.concept);
+  if (concept)
+    out.concept = concept;
   return out;
 }
 function coerceReasoningContent(raw) {
@@ -28109,11 +28161,11 @@ Each is a continuation of an existing thread (parentCommentId points at one of y
   } catch {
   }
   try {
-    const fs9 = await import("node:fs");
-    const path8 = await import("node:path");
-    const claudeMd = path8.join(process.cwd(), "CLAUDE.md");
-    if (fs9.existsSync(claudeMd)) {
-      const content = fs9.readFileSync(claudeMd, "utf-8");
+    const fs10 = await import("node:fs");
+    const path10 = await import("node:path");
+    const claudeMd = path10.join(process.cwd(), "CLAUDE.md");
+    if (fs10.existsSync(claudeMd)) {
+      const content = fs10.readFileSync(claudeMd, "utf-8");
       if (!content.includes("<!-- deepPairing -->")) {
         contextualParts.push(
           "\n\u{1F4A1} Tip: run `" + cliInvocation("init") + "` to add the deepPairing protocol to CLAUDE.md so the agent follows it on every session (optional \u2014 the plugin's pairing-protocol skill covers most of this already)."
@@ -28325,8 +28377,8 @@ function findTeamPreferenceViolation(proposalStrings, prefs, proposalPaths = [])
 function containsAsPhrase(haystack, needle) {
   const n = needle.trim();
   if (n.length < 3) return false;
-  const esc2 = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(?:^|[^a-z0-9])${esc2}(?:[^a-z0-9]|$)`).test(haystack);
+  const esc3 = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[^a-z0-9])${esc3}(?:[^a-z0-9]|$)`).test(haystack);
 }
 function findRejectedApproachMatch(proposalStrings, rejected) {
   const clean = (s) => s.trim().toLowerCase();
@@ -29030,9 +29082,9 @@ function scalarTypeTag(i) {
 function isScalarBoundIssue(i) {
   return i.code === "too_big" || i.code === "too_small";
 }
-function receivedSize(input, path8) {
+function receivedSize(input, path10) {
   let cur = input;
-  for (const seg of path8) {
+  for (const seg of path10) {
     if (cur == null || typeof cur !== "object") return void 0;
     cur = cur[seg];
   }
@@ -29055,8 +29107,8 @@ function scalarIssueClause(i, input) {
   }
   return `${field} (${scalarTypeTag(i)})`;
 }
-function collapsePath(path8) {
-  return path8.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
+function collapsePath(path10) {
+  return path10.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
 }
 function formatValidationError(toolName, err, example, input) {
   const raw = err.issues;
@@ -29082,9 +29134,9 @@ function formatValidationError(toolName, err, example, input) {
   }
   const groupArr = [...groups.values()];
   const issues = groupArr.slice(0, 5).map((g) => {
-    const path8 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
+    const path10 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
     const suffix = g.count > 1 ? ` (${g.count}\xD7)` : "";
-    return `  \u2022 ${path8}: ${g.first.message}${suffix}`;
+    return `  \u2022 ${path10}: ${g.first.message}${suffix}`;
   });
   const more = groupArr.length > 5 ? `
   \u2022 \u2026and ${groupArr.length - 5} more` : "";
@@ -29720,6 +29772,9 @@ async function handleLogReasoning(ctx, args) {
     content: [{ type: "text", text: `Reasoning logged. Proceed with code changes.${nudge}${await ctx.helpers.getPassiveFeedback()}` }]
   };
 }
+
+// src/mcp/tools/export-session.ts
+import path5 from "node:path";
 
 // src/replay/timeline.ts
 function buildTimeline(state) {
@@ -30624,17 +30679,1114 @@ function formatLearnings(state) {
   return sections.join("\n");
 }
 
+// src/export/html-export.ts
+import fs4 from "node:fs";
+import path3 from "node:path";
+
+// src/secret-scan.ts
+var PATTERNS = [
+  { re: /\bsk-[A-Za-z0-9_-]{16,}/, pattern: "sk-", label: "OpenAI / Anthropic-shape API key" },
+  { re: /\bAKIA[0-9A-Z]{12,20}\b/, pattern: "AKIA", label: "AWS access key id" },
+  { re: /\bghp_[A-Za-z0-9]{20,}/, pattern: "ghp_", label: "GitHub personal access token" },
+  { re: /\bgho_[A-Za-z0-9]{20,}/, pattern: "gho_", label: "GitHub OAuth token" },
+  { re: /\bglpat-[A-Za-z0-9_-]{20,}/, pattern: "glpat-", label: "GitLab personal access token" },
+  { re: /\bya29\.[A-Za-z0-9_-]{20,}/, pattern: "ya29.", label: "Google OAuth access token" },
+  { re: /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/, pattern: "PEM", label: "Private key (PEM)" },
+  // #160 — conservative expansion (see the noise-tradeoff note above).
+  // Stripe LIVE mode only: sk_test_ is deliberately out (docs/test snippets
+  // quote it constantly; a leaked test key is not the launch-day tweet).
+  { re: /\bsk_live_[A-Za-z0-9]{16,}/, pattern: "sk_live_", label: "Stripe live secret key" },
+  // Slack token families: bot (xoxb), user (xoxp), app (xoxa), refresh (xoxr),
+  // signing/session (xoxs). Requires token-length payload after the dash so
+  // prose like "tokens start with xoxb-" never trips it.
+  { re: /\bxox[bpars]-[A-Za-z0-9][A-Za-z0-9-]{9,}/, pattern: "xox", label: "Slack token" },
+  // npm automation tokens: npm_ + 36 base62 chars, NO underscores — which is
+  // exactly what keeps npm_config_registry / npm_package_name (real env vars
+  // in every npm lifecycle script) out.
+  { re: /\bnpm_[A-Za-z0-9]{30,}/, pattern: "npm_", label: "npm access token" },
+  // GitHub fine-grained PAT: github_pat_ + 22 base62 + "_" + 59 base62.
+  // The exact 22-char first segment is required so a prose placeholder like
+  // "github_pat_your_token_here" can't match.
+  { re: /\bgithub_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{30,}/, pattern: "github_pat_", label: "GitHub fine-grained personal access token" },
+  // GCP service-account JSON: the "private_key" field whose VALUE is a PEM
+  // opener. `"private_key_id"` (sibling field, non-secret hex) can't match —
+  // the field name must end exactly at the closing quote.
+  { re: /"private_key"\s*:\s*"-----BEGIN/, pattern: '"private_key"', label: "GCP service-account key (JSON)" },
+  // Signed JWT: three base64url segments. Collision-prone as a bare
+  // three-dotted-segments shape, so BOTH the header and payload segments must
+  // start with `eyJ` (base64url of `{"`) and the signature must be present
+  // and token-length — an unsigned/two-segment example never matches.
+  { re: /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{16,}/, pattern: "eyJ", label: "JWT (signed)" }
+];
+function lineOfIndex(text, index) {
+  let line = 1;
+  for (let i = 0; i < index; i++) {
+    if (text.charCodeAt(i) === 10) line++;
+  }
+  return line;
+}
+function scanForSecrets(text) {
+  if (typeof text !== "string" || text.length === 0) return [];
+  const matches = [];
+  for (const { re, pattern, label } of PATTERNS) {
+    const m = re.exec(text);
+    if (m) {
+      matches.push({ pattern, label, line: lineOfIndex(text, m.index) });
+    }
+  }
+  return matches;
+}
+function scanContentForSecrets(content, maxDepth = 6) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  const walk = (value, fieldPath, depth) => {
+    if (depth > maxDepth || value == null) return;
+    if (typeof value === "string") {
+      for (const m of scanForSecrets(value)) {
+        if (seen.has(m.pattern)) continue;
+        seen.add(m.pattern);
+        out.push(fieldPath ? { ...m, field: fieldPath } : m);
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((v, i) => walk(v, `${fieldPath}[${i}]`, depth + 1));
+      return;
+    }
+    if (typeof value === "object") {
+      for (const [k, v] of Object.entries(value)) {
+        walk(v, fieldPath ? `${fieldPath}.${k}` : k, depth + 1);
+      }
+    }
+  };
+  walk(content, "", 0);
+  return out;
+}
+
+// src/export/format-html.ts
+var MAX_SNIPPET_LINES = 40;
+var MAX_CODE_LINES = 120;
+var MAX_DIFF_LINES_PER_FILE = 400;
+var DIFF_COLLAPSE_THRESHOLD = 24;
+var REPO_URL = "https://github.com/mitchjablonski/deepPairing";
+var BLOCK_MARK = '<span class="gate-mark"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M4.2 8h7.6"/></svg></span>';
+var SHIELD_MARK = '<span class="gate-mark"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4.2c0 3-2.1 5.3-5 6.4-2.9-1.1-5-3.4-5-6.4V3.6z"/></svg></span>';
+function esc2(value) {
+  const s = value == null ? "" : String(value);
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+function sanitizePath(raw, projectRoot2) {
+  let p = typeof raw === "string" ? raw.trim() : "";
+  if (!p) return "";
+  const normalized = p.replace(/\\/g, "/");
+  if (projectRoot2) {
+    const root = projectRoot2.replace(/\\/g, "/").replace(/\/+$/, "");
+    if (root && normalized.startsWith(root + "/")) return normalized.slice(root.length + 1);
+    if (root && normalized === root) return ".";
+  }
+  p = normalized;
+  p = p.replace(/^.*?\/(?:home|Users)\/[^/]+\//i, "~/");
+  return p;
+}
+function fmtTimestamp(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return d.toISOString().replace("T", " ").slice(0, 16) + " UTC";
+}
+function fmtDay(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return d.toISOString().slice(0, 10);
+}
+function plural(n, one, many = one + "s") {
+  return `${n} ${n === 1 ? one : many}`;
+}
+var FENCE_OPEN = /^\s*(?:`{3,}|~{3,})\s*([^\s`~]*)/;
+var FENCE_CLOSE = /^\s*(?:`{3,}|~{3,})\s*$/;
+var SAFE_URL = /^(?:https?:\/\/|mailto:|#|\/(?!\/)|\.{1,2}\/)/i;
+function renderInline(text) {
+  let out = esc2(text);
+  const codeSpans = [];
+  out = out.replace(/`([^`]+)`/g, (_m, code) => {
+    codeSpans.push(`<code>${code}</code>`);
+    return `\0CODE${codeSpans.length - 1}\0`;
+  });
+  out = out.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, label, url2) => {
+    const raw = url2.replace(/&amp;/g, "&");
+    if (!SAFE_URL.test(raw)) return label;
+    return `<a href="${esc2(raw)}" rel="noopener noreferrer">${label}</a>`;
+  });
+  out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  out = out.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+  out = out.replace(/(^|[^_\w])_([^_\n]+)_(?![\w_])/g, "$1<em>$2</em>");
+  out = out.replace(/\u0000CODE(\d+)\u0000/g, (_m, i) => codeSpans[Number(i)] ?? "");
+  return out;
+}
+function renderMarkdown(md, baseHeading = 3, includeCode = true) {
+  const lines = String(md ?? "").replace(/\r\n?/g, "\n").split("\n");
+  const at = (k) => lines[k] ?? "";
+  const out = [];
+  let i = 0;
+  const flushList = (tag, items) => {
+    out.push(`<${tag}>`);
+    for (const item of items) out.push(`<li>${renderInline(item)}</li>`);
+    out.push(`</${tag}>`);
+  };
+  while (i < lines.length) {
+    const line = at(i);
+    if (/^\s*$/.test(line)) {
+      i++;
+      continue;
+    }
+    const fence = line.match(FENCE_OPEN);
+    if (fence) {
+      const body = [];
+      i++;
+      while (i < lines.length && !FENCE_CLOSE.test(at(i))) {
+        body.push(at(i));
+        i++;
+      }
+      i++;
+      const info = fence[1] ?? "";
+      const language = /^[A-Za-z0-9_+-]+$/.test(info) ? info : void 0;
+      out.push(codeBlock(body.join("\n"), { language, maxLines: MAX_CODE_LINES, includeCode }));
+      continue;
+    }
+    if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      out.push("<hr />");
+      i++;
+      continue;
+    }
+    const h = line.match(/^\s*(#{1,6})\s+(.*)$/);
+    if (h) {
+      const level = Math.min(6, baseHeading + (h[1] ?? "#").length - 1);
+      out.push(`<h${level}>${renderInline((h[2] ?? "").trim())}</h${level}>`);
+      i++;
+      continue;
+    }
+    if (/^\s*>\s?/.test(line)) {
+      const body = [];
+      while (i < lines.length && /^\s*>\s?/.test(at(i))) {
+        body.push(at(i).replace(/^\s*>\s?/, ""));
+        i++;
+      }
+      out.push(`<blockquote>${renderMarkdown(body.join("\n"), baseHeading, includeCode)}</blockquote>`);
+      continue;
+    }
+    if (/^\s*[-*+]\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\s*[-*+]\s+/.test(at(i))) {
+        items.push(at(i).replace(/^\s*[-*+]\s+/, ""));
+        i++;
+      }
+      flushList("ul", items);
+      continue;
+    }
+    if (/^\s*\d+[.)]\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\s*\d+[.)]\s+/.test(at(i))) {
+        items.push(at(i).replace(/^\s*\d+[.)]\s+/, ""));
+        i++;
+      }
+      flushList("ol", items);
+      continue;
+    }
+    const para = [];
+    while (i < lines.length && !/^\s*$/.test(at(i)) && !FENCE_OPEN.test(at(i)) && !/^\s*#{1,6}\s+/.test(at(i)) && !/^\s*>/.test(at(i)) && !/^\s*[-*+]\s+/.test(at(i)) && !/^\s*\d+[.)]\s+/.test(at(i))) {
+      para.push(at(i));
+      i++;
+    }
+    if (para.length === 0) {
+      para.push(at(i));
+      i++;
+    }
+    out.push(`<p>${renderInline(para.join("\n"))}</p>`);
+  }
+  return out.join("\n");
+}
+function codeBlock(text, opts = {}) {
+  const { language, maxLines = MAX_CODE_LINES, includeCode = true, label } = opts;
+  const head = label ? `<p class="code-label">${esc2(label)}</p>` : "";
+  if (includeCode === false) {
+    const lineCount = String(text ?? "").split("\n").length;
+    return `${head}<p class="redacted">Code omitted from this export (${plural(lineCount, "line")}).</p>`;
+  }
+  const all = String(text ?? "").replace(/\r\n?/g, "\n").split("\n");
+  const shown = all.slice(0, maxLines);
+  const omitted = all.length - shown.length;
+  const body = esc2(shown.join("\n"));
+  const trunc = omitted > 0 ? `
+<span class="truncated">\u2026 truncated \u2014 ${plural(omitted, "more line")} not shown</span>` : "";
+  const langAttr = language ? ` data-language="${esc2(language)}"` : "";
+  return `${head}<pre class="code"${langAttr}><code>${body}${trunc}</code></pre>`;
+}
+function diffBlock(file2, includeCode, projectRoot2) {
+  const path10 = sanitizePath(file2.path, projectRoot2);
+  const changeType = esc2(file2.changeType ?? "modified");
+  const hunks = Array.isArray(file2.hunks) ? file2.hunks : [];
+  const stats = file2.stats;
+  const derived = hunks.reduce(
+    (acc, h) => {
+      for (const l of h?.lines ?? []) {
+        if (l?.kind === "add") acc.additions++;
+        else if (l?.kind === "del") acc.deletions++;
+      }
+      return acc;
+    },
+    { additions: 0, deletions: 0 }
+  );
+  const additions = stats?.additions ?? derived.additions;
+  const deletions = stats?.deletions ?? derived.deletions;
+  const statLine = `<span class="diffstat"><span class="add">+${additions}</span> <span class="del">\u2212${deletions}</span></span>`;
+  const header = `<div class="file-head"><code class="path">${esc2(path10)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
+  if (!includeCode) {
+    return `<div class="file">${header}<p class="redacted">Diff omitted from this export.</p></div>`;
+  }
+  const rows = [];
+  let emitted = 0;
+  let dropped = 0;
+  for (const hunk of hunks) {
+    if (hunk?.header) {
+      rows.push(`<div class="dl dl--hunk">${esc2(hunk.header)}</div>`);
+    }
+    for (const line of hunk?.lines ?? []) {
+      if (emitted >= MAX_DIFF_LINES_PER_FILE) {
+        dropped++;
+        continue;
+      }
+      const kind = line?.kind === "add" ? "add" : line?.kind === "del" ? "del" : "ctx";
+      const sign = kind === "add" ? "+" : kind === "del" ? "-" : " ";
+      const num2 = kind === "del" ? line?.oldLine : line?.newLine;
+      rows.push(
+        `<div class="dl dl--${kind}"><span class="ln">${num2 == null ? "" : esc2(num2)}</span><span class="sign">${sign}</span><span class="src">${esc2(line?.content ?? "")}</span></div>`
+      );
+      emitted++;
+    }
+  }
+  if (dropped > 0) {
+    rows.push(`<div class="dl dl--trunc">\u2026 truncated \u2014 ${plural(dropped, "more diff line")} not shown</div>`);
+  }
+  const diff = `<div class="diff">${rows.join("")}</div>`;
+  const body = emitted > DIFF_COLLAPSE_THRESHOLD ? `<details><summary>Show the diff (${plural(emitted, "line")})</summary>${diff}</details>` : diff;
+  return `<div class="file">${header}${body}</div>`;
+}
+function evidenceBlock(evidence, includeCode, projectRoot2) {
+  if (!Array.isArray(evidence)) {
+    if (typeof evidence === "string" && evidence.trim()) {
+      return `<p class="evidence-note">${renderInline(evidence)}</p>`;
+    }
+    return "";
+  }
+  const parts = [];
+  for (const ev of evidence) {
+    if (typeof ev === "string") {
+      if (ev.trim()) parts.push(`<p class="evidence-note">${renderInline(ev)}</p>`);
+      continue;
+    }
+    if (!ev || typeof ev !== "object") continue;
+    const e = ev;
+    const path10 = sanitizePath(e.filePath, projectRoot2);
+    const range = e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null && e.lineEnd !== e.lineStart ? `-${e.lineEnd}` : ""}` : "";
+    const anchor = path10 ? `<p class="anchor"><code>${esc2(path10 + range)}</code></p>` : "";
+    const snippet = e.snippet ? codeBlock(e.snippet, { language: e.language, maxLines: MAX_SNIPPET_LINES, includeCode }) : "";
+    const explanation = e.explanation ? `<p class="evidence-note">${renderInline(e.explanation)}</p>` : "";
+    parts.push(`<div class="evidence">${anchor}${snippet}${explanation}</div>`);
+  }
+  return parts.join("");
+}
+function anchorLabel(c, projectRoot2) {
+  const t = c.target ?? {};
+  const bits = [];
+  if (t.filePath) {
+    const line = t.lineStart ?? t.lineNumber;
+    bits.push(`${sanitizePath(t.filePath, projectRoot2)}${line != null ? `:${line}` : ""}${t.side === "old" ? " (removed line)" : ""}`);
+  } else if (t.lineStart != null || t.lineNumber != null) {
+    bits.push(`line ${t.lineStart ?? t.lineNumber}`);
+  }
+  if (t.findingIndex != null) bits.push(`finding #${t.findingIndex + 1}`);
+  if (t.evidenceIndex != null) bits.push(`evidence #${t.evidenceIndex + 1}`);
+  if (t.stepIndex != null) bits.push(`step ${t.stepIndex + 1}`);
+  if (t.requirementId) bits.push(`requirement ${t.requirementId}`);
+  if (t.optionId) bits.push(`option ${t.optionId}`);
+  if (t.questionIndex != null) bits.push(`open question #${t.questionIndex + 1}`);
+  if (t.sectionId) bits.push(`section ${t.sectionId}`);
+  if (t.visualId) bits.push(t.region ? "a region of the diagram" : "the diagram");
+  if (Array.isArray(t.anchors) && t.anchors.length > 1) bits.push(`${t.anchors.length} linked locations`);
+  return bits.join(" \xB7 ");
+}
+function commentHtml(c, includeCode, projectRoot2) {
+  const who = c.author === "agent" ? "The agent" : "The human";
+  const intent = c.intent;
+  const intentChip = intent && intent !== "comment" ? `<span class="chip chip--${esc2(intent)}">${esc2(intent)}</span>` : "";
+  const anchor = anchorLabel(c, projectRoot2);
+  const anchorHtml = anchor ? `<span class="thread-anchor">on ${esc2(anchor)}</span>` : "";
+  const sug = c.suggestion;
+  let sugHtml = "";
+  if (sug) {
+    const state = sug.state ? `<span class="chip chip--${esc2(sug.state)}">suggestion ${esc2(sug.state)}</span>` : "";
+    const replacement = sug.replacementText ? codeBlock(sug.replacementText, { includeCode, maxLines: MAX_SNIPPET_LINES, label: "Suggested instead" }) : "";
+    const counter = sug.counter?.replacementText ? codeBlock(sug.counter.replacementText, { includeCode, maxLines: MAX_SNIPPET_LINES, label: "The agent's counter" }) : "";
+    const counterReason = sug.counter?.reason ? `<p>${renderInline(sug.counter.reason)}</p>` : "";
+    sugHtml = `<div class="suggestion">${state}${replacement}${counter}${counterReason}</div>`;
+  }
+  return `<li class="thread-item thread-item--${c.author === "agent" ? "agent" : "human"}"><div class="thread-meta"><span class="who">${esc2(who)}</span>${intentChip}${anchorHtml}<time>${esc2(fmtTimestamp(c.createdAt))}</time></div><div class="thread-body">${renderMarkdown(c.content ?? "", 5, includeCode)}</div>${sugHtml}</li>`;
+}
+function threadHtml(comments, includeCode, projectRoot2, heading = "Discussion") {
+  if (comments.length === 0) return "";
+  const items = comments.slice().sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).map((c) => commentHtml(c, includeCode, projectRoot2)).join("");
+  return `<div class="thread"><h4 class="thread-head">${esc2(heading)} (${comments.length})</h4><ul class="thread-list">${items}</ul></div>`;
+}
+function researchBody(a, ctx) {
+  const content = coerceResearchContent(a.content);
+  const parts = [];
+  if (content.summary) parts.push(renderMarkdown(content.summary, 4, ctx.includeCode));
+  for (const f of content.findings ?? []) {
+    const sig = f.significance ? `<span class="chip chip--sig-${esc2(f.significance)}">${esc2(f.significance)} significance</span>` : "";
+    const sev = f.severity ? `<span class="chip chip--sev-${esc2(f.severity)}">${esc2(f.severity)} severity</span>` : "";
+    const cat = f.category ? `<span class="chip">${esc2(f.category)}</span>` : "";
+    parts.push(
+      `<div class="finding"><h4>${esc2(f.title ?? f.category ?? "Finding")}</h4><div class="chips">${sig}${sev}${cat}</div>` + renderMarkdown(f.detail ?? "", 5, ctx.includeCode) + evidenceBlock(f.evidence, ctx.includeCode, ctx.projectRoot) + (f.impact ? `<p class="kv"><span class="k">Impact</span> ${renderInline(f.impact)}</p>` : "") + (f.recommendation ? `<p class="kv"><span class="k">Recommendation</span> ${renderInline(f.recommendation)}</p>` : "") + `</div>`
+    );
+  }
+  for (const q of content.openQuestions ?? []) {
+    parts.push(`<p class="open-question">Open question: ${renderInline(q)}</p>`);
+  }
+  return parts.join("");
+}
+function specBody(a, ctx) {
+  const content = coerceSpecContent(a.content);
+  const parts = [];
+  if (content.objective) parts.push(`<p class="kv"><span class="k">Objective</span> ${renderInline(content.objective)}</p>`);
+  if (content.context) parts.push(renderMarkdown(content.context, 4, ctx.includeCode));
+  if (content.requirements?.length) {
+    parts.push(`<h4>Requirements</h4><ul class="req-list">`);
+    for (const r of content.requirements) {
+      const pri = r.priority ? `<span class="chip">${esc2(r.priority)}</span>` : "";
+      const why = r.rationale ? `<p class="why">Why: ${renderInline(r.rationale)}</p>` : "";
+      const ac = (r.acceptanceCriteria ?? []).map((c) => `<li>${renderInline(c)}</li>`).join("");
+      parts.push(
+        `<li><div class="req-head"><code>${esc2(r.id)}</code>${pri}</div><p>${renderInline(r.statement)}</p>${why}` + (ac ? `<ul class="criteria">${ac}</ul>` : "") + `</li>`
+      );
+    }
+    parts.push(`</ul>`);
+  }
+  if (content.design) parts.push(`<h4>Design</h4>${renderMarkdown(content.design, 5, ctx.includeCode)}`);
+  if (content.tasks?.length) {
+    parts.push(`<h4>Tasks</h4><ul>${content.tasks.map((t) => `<li>${renderInline(t.description)}</li>`).join("")}</ul>`);
+  }
+  for (const q of content.openQuestions ?? []) {
+    parts.push(`<p class="open-question">Open question: ${renderInline(q)}</p>`);
+  }
+  return parts.join("");
+}
+function planBody(a, ctx) {
+  const content = coercePlanContent(a.content);
+  const parts = [];
+  if (content.estimatedChanges != null && content.estimatedChanges !== "") {
+    parts.push(`<p class="kv"><span class="k">Estimated size</span> ${esc2(content.estimatedChanges)}</p>`);
+  }
+  parts.push(`<ol class="steps">`);
+  for (const step of content.steps ?? []) {
+    const files = Array.isArray(step.files) ? step.files.map((f) => sanitizePath(typeof f === "string" ? f : f.filePath, ctx.projectRoot)).filter(Boolean) : [];
+    const fileHtml = files.length ? `<p class="files">${files.map((f) => `<code>${esc2(f)}</code>`).join(" ")}</p>` : "";
+    const status = step.status ? `<span class="chip chip--${esc2(step.status)}">${esc2(step.status)}</span>` : "";
+    const preview = step.preview ? codeBlock(step.preview.after ?? "", {
+      includeCode: ctx.includeCode,
+      maxLines: MAX_SNIPPET_LINES,
+      label: `After \u2014 ${sanitizePath(step.preview.filePath, ctx.projectRoot)}`
+    }) : "";
+    parts.push(
+      `<li><div class="step-head">${renderInline(step.description)}${status}</div>` + (step.reasoning ? `<p class="why">Why: ${renderInline(step.reasoning)}</p>` : "") + fileHtml + preview + `</li>`
+    );
+  }
+  parts.push(`</ol>`);
+  return parts.join("");
+}
+function decisionBody(a, ctx) {
+  const content = coerceDecisionContent(a.content);
+  const record2 = ctx.state.decisions.find(
+    (d) => d.decisionId === content.decisionId || d.artifactId === a.id
+  );
+  const chosenId = record2?.response?.optionId;
+  const parts = [];
+  if (content.context) parts.push(renderMarkdown(content.context, 4, ctx.includeCode));
+  parts.push(`<div class="options">`);
+  for (const o of content.options ?? []) {
+    const chosen = chosenId != null && o.id === chosenId;
+    const badge = chosen ? `<span class="chip chip--chosen">chosen</span>` : chosenId != null ? `<span class="chip chip--notchosen">not taken</span>` : "";
+    const rec = o.recommendation ? `<span class="chip">agent's pick</span>` : "";
+    const pros = (o.pros ?? []).map((p) => `<li>${renderInline(p)}</li>`).join("");
+    const cons = (o.cons ?? []).map((p) => `<li>${renderInline(p)}</li>`).join("");
+    const concept = o.concept?.name ? `<p class="concept">Pattern: <strong>${esc2(o.concept.name)}</strong>` + (o.concept.oneLineExplanation ? ` \u2014 ${renderInline(o.concept.oneLineExplanation)}` : "") + `</p>` : "";
+    parts.push(
+      `<div class="option${chosen ? " option--chosen" : ""}"><div class="option-head"><h4>${esc2(o.title ?? o.id)}</h4>${badge}${rec}</div><div class="chips"><span class="chip">effort: ${esc2(o.effort ?? "?")}</span><span class="chip">risk: ${esc2(o.risk ?? "?")}</span></div>` + (o.description ? `<p>${renderInline(o.description)}</p>` : "") + concept + (pros ? `<p class="k">Pros</p><ul class="pros">${pros}</ul>` : "") + (cons ? `<p class="k">Cons</p><ul class="cons">${cons}</ul>` : "") + `</div>`
+    );
+  }
+  parts.push(`</div>`);
+  if (record2?.response) {
+    const chosenOption = (content.options ?? []).find((o) => o.id === chosenId);
+    parts.push(
+      `<div class="verdict verdict--chosen"><strong>The human chose:</strong> ${esc2(chosenOption?.title ?? chosenId ?? "")}` + (record2.response.reasoning ? ` \u2014 \u201C${renderInline(record2.response.reasoning)}\u201D` : "") + `</div>`
+    );
+  } else {
+    parts.push(`<p class="pending">No answer recorded for this fork.</p>`);
+  }
+  return parts.join("");
+}
+function codeChangeBody(a, ctx) {
+  const content = coerceCodeChangeContent(a.content);
+  const path10 = sanitizePath(content.filePath, ctx.projectRoot);
+  const parts = [
+    `<div class="file-head"><code class="path">${esc2(path10)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
+  ];
+  if (content.reasoning) parts.push(`<p class="why">Why: ${renderInline(content.reasoning)}</p>`);
+  if (content.concept?.name) {
+    parts.push(
+      `<p class="concept">Pattern: <strong>${esc2(content.concept.name)}</strong>` + (content.concept.oneLineExplanation ? ` \u2014 ${renderInline(content.concept.oneLineExplanation)}` : "") + `</p>`
+    );
+  }
+  const after = codeBlock(content.after ?? "", {
+    includeCode: ctx.includeCode,
+    maxLines: MAX_CODE_LINES,
+    label: content.changeType === "delete" ? "Removed" : "After"
+  });
+  const beforeBody = content.before ? codeBlock(content.before, { includeCode: ctx.includeCode, maxLines: MAX_CODE_LINES, label: "Before" }) : "";
+  const beforeLines = String(content.before ?? "").split("\n").length;
+  parts.push(
+    beforeBody ? beforeLines > DIFF_COLLAPSE_THRESHOLD ? `<details><summary>Show the previous version (${plural(beforeLines, "line")})</summary>${beforeBody}</details>` : beforeBody : ""
+  );
+  parts.push(after);
+  return parts.join("");
+}
+function changesetBody(a, ctx, ownComments) {
+  const content = coerceChangesetContent(a.content);
+  const parts = [];
+  if (content.summary) parts.push(renderMarkdown(content.summary, 4, ctx.includeCode));
+  if (content.risks?.length) {
+    parts.push(`<div class="chips">${content.risks.map((r) => `<span class="chip chip--risk">${esc2(r)}</span>`).join("")}</div>`);
+  }
+  for (const file2 of content.files ?? []) {
+    const disposition = content.reviewState?.[file2.path];
+    const reason = content.reviewReasons?.[file2.path];
+    const dispHtml = disposition ? `<p class="disposition">Reviewed as <strong>${esc2(disposition)}</strong>${reason ? ` \u2014 ${renderInline(reason)}` : ""}</p>` : "";
+    const fileComments = ownComments.filter((c) => c.target?.filePath === file2.path);
+    for (const c of fileComments) {
+      const idx = ownComments.indexOf(c);
+      if (idx >= 0) ownComments.splice(idx, 1);
+    }
+    parts.push(
+      `<div class="file-wrap">${diffBlock(file2, ctx.includeCode, ctx.projectRoot)}${dispHtml}` + threadHtml(fileComments, ctx.includeCode, ctx.projectRoot, "On this file") + `</div>`
+    );
+  }
+  return parts.join("");
+}
+function debriefBody(a, ctx) {
+  const content = coerceDebriefContent(a.content);
+  const parts = [];
+  if (content.summary) parts.push(renderMarkdown(content.summary, 4, ctx.includeCode));
+  for (const s of content.sections ?? []) {
+    parts.push(
+      `<div class="walk-section"><h4>${esc2(s.title)}</h4>` + (s.body ? renderMarkdown(s.body, 5, ctx.includeCode) : "") + (s.concepts ?? []).map((c) => `<p class="concept">Pattern: <strong>${esc2(c.name)}</strong>${c.oneLineExplanation ? ` \u2014 ${renderInline(c.oneLineExplanation)}` : ""}</p>`).join("") + evidenceBlock(s.evidence, ctx.includeCode, ctx.projectRoot) + `</div>`
+    );
+  }
+  if (content.decisionsMade?.length) {
+    parts.push(
+      `<h4>Calls the agent made on its own</h4><ul>` + content.decisionsMade.map((d) => `<li><strong>${esc2(d.what)}</strong> \u2014 ${renderInline(d.why)}${d.alternative ? ` <em>(considered: ${esc2(d.alternative)})</em>` : ""}</li>`).join("") + `</ul>`
+    );
+  }
+  if (content.needsYourEyes?.length) {
+    parts.push(
+      `<div class="needs-eyes"><h4>Needs a human's eyes</h4><ul>` + content.needsYourEyes.map((n) => `<li><strong>${esc2(n.what)}</strong> \u2014 ${renderInline(n.why)}</li>`).join("") + `</ul></div>`
+    );
+  }
+  if (content.deferred?.length) {
+    parts.push(
+      `<h4>Deferred</h4><ul>` + content.deferred.map((d) => `<li><strong>${esc2(d.what)}</strong> \u2014 ${renderInline(d.why)}</li>`).join("") + `</ul>`
+    );
+  }
+  if (content.openQuestions?.length) {
+    parts.push(`<h4>Open questions</h4><ul>${content.openQuestions.map((q) => `<li>${renderInline(q)}</li>`).join("")}</ul>`);
+  }
+  return parts.join("");
+}
+function explainerBody(a, ctx) {
+  const content = coerceExplainerContent(a.content);
+  const parts = [];
+  if (content.overview) parts.push(renderMarkdown(content.overview, 4, ctx.includeCode));
+  (content.sections ?? []).forEach((s, i) => {
+    parts.push(
+      `<div class="walk-section"><h4>${i + 1}. ${esc2(s.heading ?? "")}</h4>` + (s.body ? renderMarkdown(s.body, 5, ctx.includeCode) : "") + evidenceBlock(s.evidence, ctx.includeCode, ctx.projectRoot) + `</div>`
+    );
+  });
+  return parts.join("");
+}
+function reasoningBody(a, includeCode) {
+  const content = coerceReasoningContent(a.content);
+  const concept = content.concept?.name ? `<p class="concept">Pattern: <strong>${esc2(content.concept.name)}</strong>${content.concept.oneLineExplanation ? ` \u2014 ${renderInline(content.concept.oneLineExplanation)}` : ""}</p>` : "";
+  return (content.action ? `<p class="kv"><span class="k">Action</span> ${renderInline(content.action)}</p>` : "") + (content.reasoning ? renderMarkdown(content.reasoning, 5, includeCode) : "") + (content.confidence ? `<p class="kv"><span class="k">Confidence</span> ${esc2(content.confidence)}</p>` : "") + concept;
+}
+function artifactBody(a, ctx, ownComments) {
+  switch (a.type) {
+    case "research":
+      return researchBody(a, ctx);
+    case "spec":
+      return specBody(a, ctx);
+    case "plan":
+      return planBody(a, ctx);
+    case "decision":
+      return decisionBody(a, ctx);
+    case "code_change":
+      return codeChangeBody(a, ctx);
+    case "changeset":
+      return changesetBody(a, ctx, ownComments);
+    case "debrief":
+      return debriefBody(a, ctx);
+    case "explainer":
+      return explainerBody(a, ctx);
+    case "reasoning":
+      return reasoningBody(a, ctx.includeCode);
+    default:
+      return `<p class="pending">This ${esc2(a.type)} has no renderer on the shareable page, so nothing is shown for it here \u2014 rather than something invented.</p>`;
+  }
+}
+var NOT_SHIPPED = /* @__PURE__ */ new Set(["rejected", "retracted", "superseded", "obsolete"]);
+function verdictLine(a, state) {
+  if (!NOT_SHIPPED.has(a.status)) return "";
+  const stances = state.sessionMemory?.rejectedApproaches ?? [];
+  const match = stances.find(
+    (r) => r.sourceArtifactId === a.id || r.description && r.description === a.title
+  );
+  const rawReason = match?.reason?.trim().replace(/[.!?]+$/, "");
+  const reason = rawReason ? ` \u2014 \u201C${esc2(rawReason)}\u201D` : "";
+  switch (a.status) {
+    case "rejected":
+      return `<p class="verdict verdict--rejected">rejected: the human declined this${reason}. It is here for the record, not as part of what shipped.</p>`;
+    case "retracted":
+      return `<p class="verdict verdict--rejected">retracted: the agent withdrew this${reason}.</p>`;
+    case "superseded":
+      return `<p class="verdict verdict--superseded">superseded: a later version replaced this one.</p>`;
+    default:
+      return `<p class="verdict verdict--superseded">obsolete: the discussion overtook this.</p>`;
+  }
+}
+function beat(at, seq, html) {
+  return { at: at ?? "", seq, html };
+}
+function artifactBeat(a, ctx, seq) {
+  const own = (ctx.commentsByArtifact.get(a.id) ?? []).slice();
+  const notShipped = NOT_SHIPPED.has(a.status);
+  const title = esc2(a.title || a.type);
+  const heading = notShipped ? `<s>${title}</s>` : title;
+  const version2 = a.version > 1 ? `<span class="chip">v${a.version}</span>` : "";
+  const body = artifactBody(a, ctx, own);
+  return beat(
+    a.createdAt,
+    seq,
+    `<li class="beat beat--artifact${notShipped ? " beat--not-shipped" : ""}" id="artifact-${esc2(a.id)}"><div class="beat-head"><time>${esc2(fmtTimestamp(a.createdAt))}</time><span class="chip chip--type">${esc2(a.type)}</span>${version2}</div><h3>${heading}</h3>${verdictLine(a, ctx.state)}<div class="beat-body">${body}</div>` + threadHtml(own, ctx.includeCode, ctx.projectRoot) + `</li>`
+  );
+}
+function statusBeat(event, seq) {
+  const status = String((event.payload ?? {}).status ?? "");
+  const cls = status === "approved" ? "ok" : status === "rejected" ? "bad" : "neutral";
+  return beat(
+    event.at,
+    seq,
+    `<li class="beat beat--status beat--${cls}"><time>${esc2(fmtTimestamp(event.at))}</time><span class="beat-line">${esc2(event.label)}</span></li>`
+  );
+}
+function decisionBeat(event, seq) {
+  const p = event.payload ?? {};
+  const rejectedTitles = Array.isArray(p.rejectedTitles) ? p.rejectedTitles : [];
+  const rejected = rejectedTitles.length ? `<p class="not-taken">Not taken: ${rejectedTitles.map((t) => esc2(t)).join(", ")}</p>` : "";
+  return beat(
+    event.at,
+    seq,
+    `<li class="beat beat--decided"><time>${esc2(fmtTimestamp(event.at))}</time><h3>Decided: ${esc2(p.chosenTitle ?? p.chosenOptionId ?? "")}</h3>` + (p.reasoning ? `<blockquote class="human-reason">${renderInline(String(p.reasoning))}</blockquote>` : "") + rejected + `</li>`
+  );
+}
+function planReviewBeat(event, seq) {
+  const p = event.payload ?? {};
+  return beat(
+    event.at,
+    seq,
+    `<li class="beat beat--review"><time>${esc2(fmtTimestamp(event.at))}</time><span class="beat-line">Plan review: <strong>${esc2(p.verdict ?? "")}</strong></span>` + (p.feedback ? `<blockquote class="human-reason">${renderInline(String(p.feedback))}</blockquote>` : "") + `</li>`
+  );
+}
+function looseCommentBeat(c, ctx, seq) {
+  return beat(
+    c.createdAt,
+    seq,
+    `<li class="beat beat--comment"><time>${esc2(fmtTimestamp(c.createdAt))}</time><ul class="thread-list">${commentHtml(c, ctx.includeCode, ctx.projectRoot)}</ul></li>`
+  );
+}
+function stanceBeat(r, seq) {
+  const reason = r.reason ? `<blockquote class="human-reason">${renderInline(r.reason)}</blockquote>` : "";
+  const concept = r.concept ? `<p class="gate-note">Recorded as the concept <code>${esc2(r.concept)}</code> \u2014 a paraphrase of the same idea is caught too.</p>` : "";
+  return beat(
+    r.rejectedAt ?? "",
+    seq,
+    `<li class="beat beat--gate"><time>${esc2(fmtTimestamp(r.rejectedAt))}</time><h3>${BLOCK_MARK}Rejected \u2014 and remembered: ${esc2(r.description)}</h3>` + reason + concept + `<p class="gate-note">From here on the agent is blocked from proposing this again.</p></li>`
+  );
+}
+function traceBeat(t, seq) {
+  if (t.decision === "blocked" && t.block) {
+    const reason = t.block.reason ? `<blockquote class="human-reason">${renderInline(t.block.reason)}</blockquote>` : "";
+    return beat(
+      t.at ?? "",
+      seq,
+      `<li class="beat beat--gate"><time>${esc2(fmtTimestamp(t.at))}</time><h3>${BLOCK_MARK}The gate refused ${esc2(t.toolName ?? "a proposal")}</h3><p>It matched a stance the human had already recorded${t.block.concept ? `: <code>${esc2(t.block.concept)}</code>` : ""}.</p>` + reason + `<p class="gate-note">Source: ${esc2(t.block.source ?? "session")} memory. The artifact was never created.</p></li>`
+    );
+  }
+  const near = (t.nearMisses ?? []).filter((n) => n?.concept);
+  if (near.length === 0) return null;
+  return beat(
+    t.at ?? "",
+    seq,
+    `<li class="beat beat--near"><time>${esc2(fmtTimestamp(t.at))}</time><span class="beat-line">The gate weighed ${plural(t.consideredCount ?? 0, "recorded stance")} before this and let it through \u2014 nearest call: ${near.map((n) => `<code>${esc2(n.concept)}</code>`).join(", ")}.</span></li>`
+  );
+}
+function guardrailBeat(f, seq) {
+  const reason = String(f.reason ?? "");
+  if (f.hook !== "preflight" || !reason.startsWith("guardrail:")) return null;
+  const category = reason.slice("guardrail:".length);
+  if (!category) return null;
+  return beat(
+    f.at ?? "",
+    seq,
+    `<li class="beat beat--guardrail"><time>${esc2(fmtTimestamp(f.at))}</time><h3>${SHIELD_MARK}Guardrail ask</h3><p>The hook stopped the run because the agent was about to touch <strong>${esc2(category)}</strong> work \u2014 the human had to confirm before it continued.</p></li>`
+  );
+}
+function sessionTitle(state) {
+  const liveDecision = state.decisions.find((d) => {
+    const owner = state.artifacts.find((a) => a.id === d.artifactId);
+    return !owner || !NOT_SHIPPED.has(owner.status);
+  });
+  if (liveDecision) return liveDecision.title?.trim() || liveDecision.context;
+  const anchorTypes = ["spec", "research", "debrief", "plan", "changeset"];
+  for (const type of anchorTypes) {
+    const hit = state.artifacts.find((a) => a.type === type && !NOT_SHIPPED.has(a.status));
+    if (hit?.title) return hit.title;
+  }
+  return `Session ${state.sessionId}`;
+}
+function autoSummary(state, span) {
+  const byType = /* @__PURE__ */ new Map();
+  for (const a of state.artifacts) byType.set(a.type, (byType.get(a.type) ?? 0) + 1);
+  const typeList = Array.from(byType.entries()).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([t, n]) => `${n} ${esc2(t)}${n === 1 ? "" : "s"}`).join(", ");
+  const resolved = state.decisions.filter((d) => d.response);
+  const decisionList = resolved.length ? `<ul>${resolved.map((d) => {
+    const chosen = d.options?.find?.((o) => o.id === d.response?.optionId);
+    return `<li><strong>${esc2(d.title?.trim() || d.context)}</strong> \u2192 ${esc2(chosen?.title ?? d.response?.optionId ?? "")}` + (d.response?.reasoning ? ` \u2014 \u201C${esc2(d.response.reasoning)}\u201D` : "") + `</li>`;
+  }).join("")}</ul>` : `<p>No fork was put to the human in this session.</p>`;
+  const spanLine = span.first ? `<p>The session runs from ${esc2(fmtTimestamp(span.first))} to ${esc2(fmtTimestamp(span.last))}.</p>` : "";
+  const stances = state.sessionMemory?.rejectedApproaches ?? [];
+  const stanceLine = stances.length ? `<p>${plural(stances.length, "approach was", "approaches were")} rejected and recorded \u2014 the gate blocks them from being re-proposed.</p>` : "";
+  return `<p class="auto-note">Auto-generated summary \u2014 no narrative was written for this export.</p><p>This session produced ${typeList || "no artifacts"}, ${plural(state.comments.length, "comment")} and ${plural(resolved.length, "resolved decision")}.</p>` + spanLine + `<h3>Decisions</h3>` + decisionList + stanceLine;
+}
+var STYLES = `
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff; --surface: #f7f8fa; --surface-2: #eef0f4; --border: #d8dce4;
+  --text: #14181f; --muted: #5a6373; --accent: #2f6feb; --accent-soft: #e6efff;
+  --ok: #1a7f4b; --bad: #b42318; --warn: #a05a00; --warn-soft: #fff4e0;
+  --add-bg: #e6f6ec; --del-bg: #fdecea; --code-bg: #f4f5f8;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1216; --surface: #161a21; --surface-2: #1d222b; --border: #2b323d;
+    --text: #e6e9ef; --muted: #9aa4b5; --accent: #6aa0ff; --accent-soft: #16233a;
+    --ok: #4cc38a; --bad: #f2726a; --warn: #e0a458; --warn-soft: #2a2115;
+    --add-bg: #10291c; --del-bg: #2d1614; --code-bg: #12161c;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+.page { max-width: 62rem; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+h1 { font-size: 1.9rem; line-height: 1.25; margin: .2rem 0 .6rem; }
+h2 { font-size: 1.3rem; margin: 2.4rem 0 .8rem; padding-bottom: .35rem; border-bottom: 1px solid var(--border); }
+h3 { font-size: 1.07rem; margin: .2rem 0 .5rem; }
+h4 { font-size: .96rem; margin: 1rem 0 .35rem; }
+p { margin: .5rem 0; }
+a { color: var(--accent); }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: .86em;
+  background: var(--code-bg); padding: .08em .34em; border-radius: 4px; }
+.masthead { border-bottom: 2px solid var(--border); padding-bottom: 1.1rem; }
+.eyebrow { text-transform: uppercase; letter-spacing: .09em; font-size: .7rem; color: var(--muted); margin: 0; }
+.meta { display: flex; flex-wrap: wrap; gap: .4rem .9rem; font-size: .8rem; color: var(--muted); margin: .5rem 0 0; }
+.meta span { white-space: nowrap; }
+.audience { font-size: .85rem; color: var(--muted); font-style: italic; }
+.story { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 1.1rem 1.3rem; margin-top: 1.4rem; }
+.story h2 { margin-top: 0; border: 0; }
+.auto-note { font-size: .8rem; color: var(--muted); font-style: italic; }
+.beats { list-style: none; margin: 0; padding: 0; }
+.beat { border-left: 2px solid var(--border); margin: 0 0 1.1rem; padding: .2rem 0 .2rem 1.1rem; position: relative; }
+.beat > time, .beat-head time { display: inline-block; font-size: .74rem; color: var(--muted); letter-spacing: .02em; }
+.beat--artifact { border-left-color: var(--accent); background: var(--surface);
+  border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: 10px; padding: .9rem 1.1rem; }
+.beat--not-shipped { border-left-color: var(--bad); opacity: .92; }
+.beat--gate { border-left: 3px solid var(--bad); background: var(--surface); border-radius: 10px;
+  padding: .8rem 1.1rem; border-top: 1px solid var(--border); border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border); }
+.beat--guardrail { border-left: 3px solid var(--warn); background: var(--warn-soft); border-radius: 10px; padding: .8rem 1.1rem; }
+.beat--near { border-left-color: var(--warn); }
+.beat--decided { border-left: 3px solid var(--ok); background: var(--surface); border-radius: 10px;
+  padding: .8rem 1.1rem; border-top: 1px solid var(--border); border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border); }
+.beat--ok { border-left-color: var(--ok); }
+.beat--bad { border-left-color: var(--bad); }
+.beat-line { display: block; font-size: .9rem; }
+.gate-mark { display: inline-flex; vertical-align: -.16em; margin-right: .4rem; color: var(--bad); }
+.beat--guardrail .gate-mark { color: var(--warn); }
+.gate-note { font-size: .82rem; color: var(--muted); }
+.chips { display: flex; flex-wrap: wrap; gap: .3rem; margin: .35rem 0; }
+.chip { display: inline-block; font-size: .68rem; text-transform: uppercase; letter-spacing: .05em;
+  background: var(--surface-2); color: var(--muted); border: 1px solid var(--border);
+  border-radius: 999px; padding: .08rem .5rem; margin-left: .35rem; white-space: nowrap; }
+.chip--chosen { background: var(--ok); color: #fff; border-color: transparent; }
+.chip--sig-high, .chip--sev-high, .chip--sev-critical { background: var(--bad); color: #fff; border-color: transparent; }
+.chip--question { background: var(--accent-soft); color: var(--accent); }
+.verdict { font-size: .86rem; padding: .45rem .7rem; border-radius: 6px; margin: .4rem 0; }
+.verdict--rejected { background: var(--del-bg); color: var(--bad); }
+.verdict--superseded { background: var(--surface-2); color: var(--muted); }
+.verdict--chosen { background: var(--add-bg); color: var(--ok); }
+.human-reason { margin: .5rem 0; padding: .35rem 0 .35rem .8rem; border-left: 3px solid var(--accent);
+  color: var(--text); font-style: italic; }
+.kv .k, p.k { font-weight: 600; color: var(--muted); font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; }
+.why { color: var(--muted); font-size: .9rem; }
+.finding { border-top: 1px solid var(--border); padding-top: .7rem; margin-top: .7rem; }
+.evidence { margin: .5rem 0; }
+.anchor { margin: .3rem 0 .2rem; font-size: .8rem; }
+.evidence-note { font-size: .88rem; color: var(--muted); }
+pre.code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: .7rem .85rem; overflow-x: auto; font-size: .8rem; line-height: 1.5; margin: .4rem 0; }
+pre.code code { background: none; padding: 0; font-size: inherit; }
+.code-label { font-size: .74rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: .5rem 0 .1rem; }
+.truncated { display: block; color: var(--muted); font-style: italic; }
+.redacted { font-size: .82rem; color: var(--muted); font-style: italic;
+  background: var(--surface-2); border: 1px dashed var(--border); border-radius: 6px; padding: .4rem .6rem; }
+.file { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin: .7rem 0; }
+.file-head { background: var(--surface-2); padding: .4rem .7rem; display: flex; flex-wrap: wrap;
+  align-items: center; gap: .4rem; font-size: .85rem; }
+.file-head .path { background: none; padding: 0; word-break: break-all; }
+.diffstat { font-size: .75rem; margin-left: auto; }
+.diffstat .add { color: var(--ok); } .diffstat .del { color: var(--bad); }
+.diff { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .78rem;
+  line-height: 1.5; overflow-x: auto; }
+.dl { display: flex; white-space: pre; }
+.dl--add { background: var(--add-bg); } .dl--del { background: var(--del-bg); }
+.dl--hunk { color: var(--muted); background: var(--surface-2); padding: .1rem .7rem; }
+.dl--trunc { color: var(--muted); font-style: italic; padding: .2rem .7rem; white-space: normal; }
+.ln { flex: 0 0 3.2rem; text-align: right; padding-right: .6rem; color: var(--muted); user-select: none; }
+.sign { flex: 0 0 1rem; color: var(--muted); }
+.src { flex: 1 1 auto; padding-right: .7rem; }
+details { margin: .4rem 0; }
+summary { cursor: pointer; font-size: .82rem; color: var(--accent); padding: .2rem 0; }
+.thread { margin-top: .8rem; border-top: 1px dashed var(--border); padding-top: .5rem; }
+.thread-head { font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 .3rem; }
+.thread-list { list-style: none; margin: 0; padding: 0; }
+.thread-item { background: var(--surface-2); border-radius: 8px; padding: .5rem .7rem; margin: .35rem 0; }
+.thread-item--agent { background: var(--surface); border: 1px solid var(--border); }
+.thread-meta { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; font-size: .74rem; color: var(--muted); }
+.thread-meta .who { font-weight: 600; color: var(--text); }
+.thread-anchor { font-style: italic; }
+.thread-body p { margin: .25rem 0; font-size: .92rem; }
+.option { border: 1px solid var(--border); border-radius: 8px; padding: .6rem .8rem; margin: .5rem 0; }
+.option--chosen { border-color: var(--ok); background: var(--add-bg); }
+.option-head { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+.option-head h4 { margin: 0; }
+.pros li::marker { color: var(--ok); } .cons li::marker { color: var(--bad); }
+.needs-eyes { background: var(--warn-soft); border: 1px solid var(--border); border-radius: 8px; padding: .5rem .8rem; }
+.req-list, .steps { padding-left: 1.2rem; }
+.req-head { display: flex; align-items: center; gap: .4rem; }
+.open-question { color: var(--muted); font-style: italic; }
+.stances li { margin: .4rem 0; }
+footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border);
+  font-size: .8rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: .5rem 1rem; }
+@media (max-width: 640px) {
+  .page { padding: 1.5rem .8rem 3rem; }
+  .ln { flex-basis: 2.2rem; }
+}
+@media print {
+  body { background: #fff; color: #000; }
+  .beat, .beat--artifact, .story { break-inside: avoid; }
+  details { display: block; }
+  details > summary { display: none; }
+  details > *:not(summary) { display: block !important; }
+  a::after { content: " (" attr(href) ")"; font-size: .7em; color: #555; }
+}
+`;
+function formatSessionHtml(state, options = {}) {
+  const includeCode = options.includeCode !== false;
+  const generatedAt = options.generatedAt ?? (/* @__PURE__ */ new Date()).toISOString();
+  const version2 = options.version ?? "";
+  const projectName = options.projectName ?? "";
+  const projectRoot2 = options.projectRoot;
+  const artifactIds = new Set(state.artifacts.map((a) => a.id));
+  const commentsByArtifact = /* @__PURE__ */ new Map();
+  const looseComments = [];
+  for (const c of state.comments ?? []) {
+    const id = c.target?.artifactId;
+    if (id && artifactIds.has(id)) {
+      const list = commentsByArtifact.get(id) ?? [];
+      list.push(c);
+      commentsByArtifact.set(id, list);
+    } else {
+      looseComments.push(c);
+    }
+  }
+  const ctx = { state, includeCode, projectRoot: projectRoot2, commentsByArtifact };
+  const events = buildTimeline({
+    artifacts: state.artifacts,
+    comments: state.comments,
+    decisions: state.decisions,
+    planReviews: state.planReviews
+  });
+  const artifactById = new Map(state.artifacts.map((a) => [a.id, a]));
+  const beats = [];
+  let seq = 0;
+  for (const event of events) {
+    switch (event.kind) {
+      case "artifact_created": {
+        const a = event.artifactId ? artifactById.get(event.artifactId) : void 0;
+        if (a) beats.push(artifactBeat(a, ctx, seq++));
+        break;
+      }
+      case "artifact_status_changed":
+        beats.push(statusBeat(event, seq++));
+        break;
+      case "decision_resolved":
+        beats.push(decisionBeat(event, seq++));
+        break;
+      case "plan_reviewed":
+        beats.push(planReviewBeat(event, seq++));
+        break;
+      case "comment_added":
+        break;
+      default:
+        break;
+    }
+  }
+  for (const c of looseComments) beats.push(looseCommentBeat(c, ctx, seq++));
+  const stances = state.sessionMemory?.rejectedApproaches ?? [];
+  const timedStances = stances.filter((r) => !!r.rejectedAt);
+  const untimedStances = stances.filter((r) => !r.rejectedAt);
+  for (const r of timedStances) beats.push(stanceBeat(r, seq++));
+  for (const t of state.preflightTraces ?? []) {
+    const b = traceBeat(t, seq++);
+    if (b) beats.push(b);
+  }
+  const stamps = beats.map((b) => b.at).filter(Boolean).sort();
+  const spanFirst = stamps[0];
+  const spanLast = stamps[stamps.length - 1];
+  for (const f of state.guardrailFires ?? []) {
+    if (!f.at) continue;
+    if (spanFirst && f.at < spanFirst) continue;
+    if (spanLast && f.at > spanLast) continue;
+    const gb = guardrailBeat(f, seq++);
+    if (gb) beats.push(gb);
+  }
+  beats.sort((a, b) => {
+    if (a.at && b.at && a.at !== b.at) return a.at.localeCompare(b.at);
+    if (!a.at && b.at) return 1;
+    if (a.at && !b.at) return -1;
+    return a.seq - b.seq;
+  });
+  const allStamps = beats.map((b) => b.at).filter(Boolean).sort();
+  const span = { first: allStamps[0], last: allStamps[allStamps.length - 1] };
+  const title = sessionTitle(state);
+  const story = options.narrative?.trim() ? renderMarkdown(options.narrative, 3, includeCode) : autoSummary(state, span);
+  const metaBits = [
+    projectName ? `<span>Project: ${esc2(projectName)}</span>` : "",
+    `<span>Session: <code>${esc2(state.sessionId)}</code></span>`,
+    span.first ? `<span>${esc2(fmtDay(span.first))} \u2192 ${esc2(fmtDay(span.last))}</span>` : "",
+    `<span>Exported ${esc2(fmtDay(generatedAt))}</span>`,
+    version2 ? `<span>deepPairing v${esc2(version2)}</span>` : "",
+    includeCode ? "" : `<span>code omitted</span>`
+  ].filter(Boolean).join("");
+  const audienceLine = options.audience?.trim() ? `<p class="audience">Written for ${esc2(options.audience.trim())}.</p>` : "";
+  const timeline = beats.length ? `<ol class="beats">${beats.map((b) => b.html).join("")}</ol>` : `<p class="open-question">Nothing was recorded in this session.</p>`;
+  const stancesSection = untimedStances.length ? `<section><h2>Standing stances</h2><p>Recorded without a timestamp, so they can't be placed on the timeline \u2014 but the gate enforces them all the same.</p><ul class="stances">${untimedStances.map((r) => `<li><strong>${esc2(r.description)}</strong>${r.reason ? ` \u2014 \u201C${esc2(r.reason)}\u201D` : ""}${r.concept ? ` <code>${esc2(r.concept)}</code>` : ""}</li>`).join("")}</ul></section>` : "";
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="light dark" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'" />
+<meta name="generator" content="deepPairing${version2 ? ` ${esc2(version2)}` : ""}" />
+<title>${esc2(title)} \u2014 deepPairing session</title>
+<style>${STYLES}</style>
+</head>
+<body>
+<main class="page">
+<header class="masthead">
+<p class="eyebrow">deepPairing session</p>
+<h1>${esc2(title)}</h1>
+${audienceLine}
+<div class="meta">${metaBits}</div>
+</header>
+
+<section class="story">
+<h2>What this was</h2>
+${story}
+</section>
+
+<section class="timeline">
+<h2>How it unfolded</h2>
+${timeline}
+</section>
+
+${stancesSection}
+
+<footer>
+<span>Generated by deepPairing${version2 ? ` v${esc2(version2)}` : ""} \u2014 ${esc2(fmtTimestamp(generatedAt))}</span>
+<span><a href="${REPO_URL}" rel="noopener noreferrer">github.com/mitchjablonski/deepPairing</a></span>
+</footer>
+</main>
+</body>
+</html>
+`;
+}
+
+// src/export/html-export.ts
+var MAX_TRACE_LOOKUPS = 200;
+async function gatherPreflightTraces(store, artifacts) {
+  if (!store?.getPreflightTrace) return [];
+  const ids = artifacts.slice(0, MAX_TRACE_LOOKUPS).map((a) => a.id);
+  const results = await Promise.all(
+    ids.map(async (id) => {
+      try {
+        return await store.getPreflightTrace(id);
+      } catch {
+        return null;
+      }
+    })
+  );
+  return results.filter((t) => !!t && typeof t === "object");
+}
+function readGuardrailFires(projectRoot2) {
+  if (!projectRoot2) return [];
+  try {
+    const p = path3.join(projectRoot2, ".deeppairing", "hooks-state.json");
+    const parsed = JSON.parse(fs4.readFileSync(p, "utf-8"));
+    const fires = Array.isArray(parsed?.fires) ? parsed.fires : [];
+    const out = [];
+    for (const raw of fires) {
+      if (!raw || typeof raw !== "object") continue;
+      const f = raw;
+      if (typeof f.at !== "string" || f.hook !== "preflight") continue;
+      if (typeof f.reason !== "string" || !/^guardrail:.+/.test(f.reason)) continue;
+      if (f.kind !== void 0 && f.kind !== "ask") continue;
+      out.push({ at: f.at, hook: f.hook, reason: f.reason });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+function secretWarningFor(state) {
+  let matches;
+  try {
+    matches = scanContentForSecrets(state);
+  } catch {
+    return null;
+  }
+  if (!matches.length) return null;
+  const shown = matches.slice(0, 3).map((m) => {
+    const where = m.field ? ` in \`${m.field}\`${m.line != null ? ` (line ${m.line})` : ""}` : "";
+    return `${m.label}${where}`;
+  });
+  const more = matches.length > shown.length ? ` (+${matches.length - shown.length} more)` : "";
+  return `\u26A0\uFE0F Possible secret in this export \u2014 review before sharing: ${shown.join("; ")}${more}. The value itself is not printed here. This page is meant to leave the building, so check it first.`;
+}
+async function assembleSessionHtml(state, options = {}) {
+  const { store, ...renderOptions } = options;
+  const projectRoot2 = renderOptions.projectRoot;
+  const enriched = {
+    ...state,
+    preflightTraces: state.preflightTraces ?? await gatherPreflightTraces(store, state.artifacts ?? []),
+    guardrailFires: state.guardrailFires ?? readGuardrailFires(projectRoot2)
+  };
+  return formatSessionHtml(enriched, {
+    ...renderOptions,
+    projectName: renderOptions.projectName ?? (projectRoot2 ? path3.basename(projectRoot2) : void 0)
+  });
+}
+function htmlExportFileName(sessionId, generatedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+  const safeId = String(sessionId).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 60) || "session";
+  const day = generatedAt.slice(0, 10);
+  return `session-${safeId}-${day}.html`;
+}
+function writeSessionHtml(projectRoot2, sessionId, html, generatedAt) {
+  const dir = path3.join(projectRoot2, ".deeppairing", "exports");
+  fs4.mkdirSync(dir, { recursive: true });
+  const file2 = path3.join(dir, htmlExportFileName(sessionId, generatedAt));
+  fs4.writeFileSync(file2, html, "utf-8");
+  return file2;
+}
+
 // src/mcp/tools/export-session.ts
+init_project_root();
+init_version();
 async function handleExportSession(ctx, args) {
+  const store = ctx.store;
   const format = args?.format ?? "full";
   const state = await ctx.store.getFullState();
-  if (format === "replay" && typeof ctx.store.getAnnotations === "function") {
-    state.annotations = await ctx.store.getAnnotations();
+  if (format === "replay" && typeof store.getAnnotations === "function") {
+    state.annotations = await store.getAnnotations();
   }
   if (format === "learnings") {
-    if (typeof ctx.store.getSessionMemory === "function") {
-      state.sessionMemory = await ctx.store.getSessionMemory();
+    if (typeof store.getSessionMemory === "function") {
+      state.sessionMemory = await store.getSessionMemory();
     }
+  }
+  if (format === "html") {
+    const generatedAt = (/* @__PURE__ */ new Date()).toISOString();
+    if (!state.sessionMemory && typeof store.getSessionMemory === "function") {
+      state.sessionMemory = await store.getSessionMemory();
+    }
+    const { projectRoot: projectRoot2 } = resolveProjectRoot();
+    const narrative = typeof args?.narrative === "string" ? args.narrative : void 0;
+    const audience = typeof args?.audience === "string" ? args.audience : void 0;
+    const includeCode = args?.includeCode !== false;
+    const html = await assembleSessionHtml(state, {
+      store: ctx.store,
+      narrative,
+      audience,
+      includeCode,
+      projectRoot: projectRoot2,
+      version: SERVER_VERSION,
+      generatedAt
+    });
+    const file2 = writeSessionHtml(projectRoot2, state.sessionId, html, generatedAt);
+    const relative = path5.relative(projectRoot2, file2) || path5.basename(file2);
+    const kb = Math.max(1, Math.round(Buffer.byteLength(html, "utf-8") / 1024));
+    const narrativeNote = narrative ? "Your narrative leads the page." : "No narrative was supplied, so the page opens with an auto-generated summary \u2014 compose one and re-export for a page a stranger can actually follow (see /deeppairing:share).";
+    const secretWarning = secretWarningFor(state);
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Shareable session page written (${kb} KB, self-contained \u2014 no network requests, opens from disk).
+
+Path: ${file2}
+Relative: ${relative}
+
+${narrativeNote}${includeCode ? "" : " Code bodies were omitted (includeCode: false)."}
+` + (secretWarning ? `
+${secretWarning}
+Tell the human this before they send the file.
+` : "") + `Give the human the path above and tell them they can open it in a browser or send the file to anyone.`
+        }
+      ]
+    };
   }
   const markdown = formatSessionMarkdown(state, format);
   return {
@@ -32680,22 +33832,22 @@ Read a full session via resource deeppairing://session/{id} or an artifact via d
 
 // src/daemon/status.ts
 init_project_root();
-import fs5 from "node:fs";
-import path4 from "node:path";
+import fs6 from "node:fs";
+import path6 from "node:path";
 function findDaemonJson(startDir) {
-  let dir = path4.resolve(startDir);
+  let dir = path6.resolve(startDir);
   for (; ; ) {
-    const candidate = path4.join(dir, ".deeppairing", "daemon.json");
-    if (fs5.existsSync(candidate)) {
+    const candidate = path6.join(dir, ".deeppairing", "daemon.json");
+    if (fs6.existsSync(candidate)) {
       try {
-        const parsed = JSON.parse(fs5.readFileSync(candidate, "utf-8"));
+        const parsed = JSON.parse(fs6.readFileSync(candidate, "utf-8"));
         const info = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
         return { dir, info };
       } catch {
         return { dir, info: {} };
       }
     }
-    const parent = path4.dirname(dir);
+    const parent = path6.dirname(dir);
     if (parent === dir) return null;
     dir = parent;
   }
@@ -33067,11 +34219,27 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "export_session",
         annotations: { title: "Export session", readOnlyHint: true, openWorldHint: false },
-        description: "Export the current session as markdown. Formats: 'pr-description' (PR body), 'pr-comments' (findings as file:line PR comments), 'adr' (architecture decision record), 'full' (complete session), 'replay' (chronological walkthrough), 'learnings' (teaching artifact \u2014 concepts named, approaches rejected).",
+        description: "Export the current session. Markdown formats: 'pr-description' (PR body), 'pr-comments' (findings as file:line PR comments), 'adr' (architecture decision record), 'full' (complete session), 'replay' (chronological walkthrough), 'learnings' (teaching artifact \u2014 concepts named, approaches rejected). 'html' is different: it WRITES a self-contained shareable page to .deeppairing/exports/ and returns the file path \u2014 the session story a colleague who wasn't there can read. Pass `narrative` with it (see the /deeppairing:share command).",
         inputSchema: {
           type: "object",
           properties: {
-            format: { type: "string", enum: ["pr-description", "pr-comments", "adr", "full", "replay", "learnings"], description: "Export format" }
+            format: { type: "string", enum: ["pr-description", "pr-comments", "adr", "full", "replay", "learnings", "html"], description: "Export format" },
+            // Q5 — the agentic narrative layer. The page is only comprehensible
+            // to an outsider if SOMEONE tells the story; the agent is the only
+            // party who saw all of it, so it composes the story and the renderer
+            // places it at the top. Ignored by the markdown formats.
+            narrative: {
+              type: "string",
+              description: "html only \u2014 the story of this session in markdown, written for a colleague who wasn't there: what we set out to do, the forks and why they went the way they did (quote the human's reasons), what was rejected, what shipped. No protocol jargon ('we decided', not 'the artifact was approved')."
+            },
+            audience: {
+              type: "string",
+              description: "html only \u2014 who this page is for (e.g. 'the backend team', 'a new contributor'). Shown under the title."
+            },
+            includeCode: {
+              type: "boolean",
+              description: "html only \u2014 include code bodies (diffs, snippets, before/after). Default true; set false for a sensitive repo (file names and shapes stay, bodies go)."
+            }
           }
         }
       },
@@ -33652,11 +34820,11 @@ var DaemonClient = class {
   async refreshAuthTokenFromDaemonInfo() {
     if (!this.projectRoot) return false;
     try {
-      const fs9 = await import("node:fs");
-      const path8 = await import("node:path");
-      const infoPath = path8.join(this.projectRoot, ".deeppairing", "daemon.json");
-      if (!fs9.existsSync(infoPath)) return false;
-      const raw = fs9.readFileSync(infoPath, "utf-8");
+      const fs10 = await import("node:fs");
+      const path10 = await import("node:path");
+      const infoPath = path10.join(this.projectRoot, ".deeppairing", "daemon.json");
+      if (!fs10.existsSync(infoPath)) return false;
+      const raw = fs10.readFileSync(infoPath, "utf-8");
       const info = JSON.parse(raw);
       if (typeof info.authToken !== "string" || !info.authToken) return false;
       if (info.authToken === this.authToken) return false;
@@ -33711,7 +34879,7 @@ var DaemonClient = class {
    * with the stored meta and retry the original call. Other non-2xx
    * statuses throw with a structured error so caller bugs surface.
    */
-  async request(path8, init, isRetry = false) {
+  async request(path10, init, isRetry = false) {
     const extraHeaders = {};
     if (this.projectHash) extraHeaders["X-Project-Hash"] = this.projectHash;
     if (this.authToken) extraHeaders["Authorization"] = `Bearer ${this.authToken}`;
@@ -33721,12 +34889,12 @@ var DaemonClient = class {
     };
     let res;
     try {
-      res = await fetch(`${this.baseUrl}${path8}`, initWithHash);
+      res = await fetch(`${this.baseUrl}${path10}`, initWithHash);
     } catch (err2) {
       if (err2?.name === "AbortError" || err2?.name === "TimeoutError") throw err2;
       if (!isRetry) {
         const recovered = await this.recoverDaemonConnection();
-        if (recovered) return this.request(path8, init, true);
+        if (recovered) return this.request(path10, init, true);
       }
       throw new Error(
         `[deepPairing] daemon connection lost (likely after host sleep). Reconnect failed \u2014 run \`${cliInvocation("doctor")}\` to diagnose, or restart Claude Code.`
@@ -33741,7 +34909,7 @@ var DaemonClient = class {
     if (res.status === 401 && body?.code === "daemon_auth_required" && !isRetry) {
       const rotated = await this.refreshAuthTokenFromDaemonInfo();
       if (rotated) {
-        return this.request(path8, init, true);
+        return this.request(path10, init, true);
       }
     }
     if (res.status === 404 && body?.code === "session_not_registered" && !isRetry) {
@@ -33753,7 +34921,7 @@ var DaemonClient = class {
       await this.register(this.lastRegisterMeta);
       void fetch(`${this.baseUrl}/recovered`, { method: "POST" }).catch(() => {
       });
-      return this.request(path8, init, true);
+      return this.request(path10, init, true);
     }
     const msg = body?.error ?? `request failed (${res.status})`;
     const err = new Error(`[deepPairing] ${msg}`);
@@ -33761,15 +34929,15 @@ var DaemonClient = class {
     if (typeof body?.code === "string") err.code = body.code;
     throw err;
   }
-  async post(path8, body) {
-    return this.request(path8, {
+  async post(path10, body) {
+    return this.request(path10, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: body != null ? JSON.stringify(body) : void 0
     });
   }
-  async get(path8) {
-    return this.request(path8, {});
+  async get(path10) {
+    return this.request(path10, {});
   }
   // --- Session lifecycle ---
   /**
@@ -34077,9 +35245,9 @@ var DaemonClient = class {
    * 5xx from the daemon used to flow back as `data.results === undefined`
    * and the caller fell back to `[]` silently. Now non-2xx throws.
    */
-  async requestPublic(path8) {
+  async requestPublic(path10) {
     const init = this.projectHash ? { headers: { "X-Project-Hash": this.projectHash } } : {};
-    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path8}`, init);
+    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path10}`, init);
     if (res.ok) return res.json();
     let body = {};
     try {
@@ -34126,17 +35294,17 @@ var DaemonClient = class {
 init_project_root();
 init_cli_invocation();
 import crypto3 from "node:crypto";
-import fs8 from "node:fs";
-import path7 from "node:path";
+import fs9 from "node:fs";
+import path9 from "node:path";
 var { projectRoot, source: projectRootSource } = resolveProjectRoot();
-var dpDir = path7.join(projectRoot, ".deeppairing");
-var logFile = path7.join(dpDir, "server.log");
+var dpDir = path9.join(projectRoot, ".deeppairing");
+var logFile = path9.join(dpDir, "server.log");
 function log(msg) {
   const line = `[${(/* @__PURE__ */ new Date()).toISOString()}] [mcp] ${msg}
 `;
   try {
-    fs8.mkdirSync(path7.dirname(logFile), { recursive: true });
-    fs8.appendFileSync(logFile, line);
+    fs9.mkdirSync(path9.dirname(logFile), { recursive: true });
+    fs9.appendFileSync(logFile, line);
   } catch {
   }
 }
@@ -34149,7 +35317,7 @@ async function main() {
     log(`WARN: daemon at port ${port} did not advertise authToken \u2014 internal calls will 401. Run \`${cliInvocation("doctor")}\` to refresh daemon.json.`);
   }
   log(`Daemon ready on port ${port}`);
-  const projectName = path7.basename(projectRoot);
+  const projectName = path9.basename(projectRoot);
   const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
   const projectHash = crypto3.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);
   const sessionId = `session_${safeProjectName}_${projectHash}`;
