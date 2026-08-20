@@ -387,8 +387,7 @@ the case for reconsidering.
 
 ## Guardrails
 
-Project guardrails are detected by filesystem, at the project root, in four
-classes:
+Project guardrails come in four classes:
 
 - **migrations** — `migrations/`, `db/migrate/`, `prisma/migrations/`,
   `supabase/migrations/`, `alembic/versions/`
@@ -399,6 +398,27 @@ classes:
 - **secrets** — `.env` and any `.env.*` that isn't a checked-in template
   (`.env.example` / `.env.sample` are exempt), `config/secrets*`,
   `config/credentials*`, `config/master.key`
+
+**Depth.** The backstop matches these at **any depth**, so a monorepo's
+`packages/api/migrations/002_drop_users.sql` or `services/web/Dockerfile` is
+guarded exactly like a root-level one. A file whose name merely CONTAINS a
+guardrail directory's name is not: `src/migrations.js`, `docs/migrations.md`
+and `lib/helm.ts` are ordinary code. (The test is on whole path segments, so
+an extension-less file whose entire name is `migrations` is indistinguishable
+from the directory and does fire — a deliberate, rare over-match.) The 🛡
+section of your first-call hint is narrower on purpose: it lists what it can
+SEE at the project root without walking the tree, so treat it as examples, not
+as the boundary.
+
+**Excluded trees.** Depth matching stops at code nobody edits deliberately:
+nothing under `node_modules/`, `vendor/`, `third_party/`, `.venv/`,
+`site-packages/`, `dist/`, `build/`, `out/`, `target/`, `coverage/`, `.next/`,
+`.turbo/`, `__pycache__/`, `fixtures/`, `__fixtures__/`, `testdata/`,
+`__snapshots__/`, `__mocks__/` or `examples/` ever asks. Without that, adding a
+migration-runner package with tests would fire on every fixture. The trade-off
+is stated rather than hidden: a REAL migration that lives under `examples/` or
+`fixtures/` goes unguarded — the same policy as the named-after exclusions
+above, because a spurious ask costs this mechanism more than a missed one.
 
 Even when autonomy is "autonomous", escalate to supervised for changes touching
 these paths — that's the Escalated class, and it's on you to recognize it.
@@ -424,8 +444,8 @@ does exactly this, no more:
   irreversible act — so a long arc isn't interrupted repeatedly, and it never
   fires for a non-guardrail path.
 - **What it is not.** It never `deny`s, it never blocks the edit outright, and
-  any error — including an unreadable session store — passes the edit through
-  (fail-open). It is local-only: it reads this project's `.deeppairing/` and
+  any error — including a missing, unreadable, or unparseable session store —
+  passes the edit through (fail-open). It is local-only: it reads this project's `.deeppairing/` and
   writes one small state file there. So it is a backstop for a *misclassified*
   edit, not a substitute for classifying correctly, and definitely not a
   security boundary. Your pair can switch it off entirely with
@@ -434,6 +454,15 @@ does exactly this, no more:
 
 A superseded/retracted/obsolete/**rejected** spec doesn't count as live — if
 your pair turned the proposal down, the backstop will still ask.
+
+**If your pair declines, act on it — the hook cannot re-ask.** A `PreToolUse`
+hook is never told the answer: allow and decline both reach it as silence, so
+the 30-minute dedup stamp is written when the prompt is RAISED, not when it is
+resolved. That means a retry of the same edit inside the window goes through
+with no prompt at all. Treat a decline as the instruction it is — present
+findings, options, a spec, or a plan before you touch that path again — and
+record the refusal (`reject_approach`) if it is a standing one, because the
+rejected-approach gate is the half that persists across sessions.
 
 ## Don't
 

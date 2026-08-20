@@ -19,7 +19,6 @@ import { cliInvocation } from "../cli-invocation.js";
 // copy share one definition by construction, not by hand-maintenance. F14 — it
 // lives in its own ~20-line module so this file (loaded on every CLI start)
 // doesn't pull the matcher core into the cold start.
-import { GUARDRAIL_PATH_PREFILTER } from "./guardrail-prefilter.js";
 
 export type SetupResult =
   | { ok: true; changed: boolean; message: string }
@@ -257,21 +256,69 @@ import path from "node:path";
 const HOOK_NAME = "stop";
 const STATE_PATH = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".deeppairing", "hooks-state.json");
 const STATE_CAP = 50;
+// Q1 — durable hooks-state writes, mirrored from preflight-hook-core's
+// readHookState / writeHookStateAtomic / acquireHookStateLock. Pre-Q1 every
+// writer of this file did a plain read-modify-writeFileSync: two hooks firing
+// at once could tear the JSON, and the next reader's catch reset it to
+// {version:1}, DISCARDING the whole fire log with no backup. Atomic rename
+// fixes the torn read but NOT the lost update (M1: 8 parallel invocations kept
+// only 4 records), so the whole read-modify-write runs under an O_EXCL
+// lockfile with a stale-breaker and a bounded spin. Failing to acquire proceeds
+// unsynchronized rather than dropping the record.
+function readState(statePath) {
+  let raw;
+  try { raw = fs.readFileSync(statePath, "utf-8"); } catch { return { version: 1 }; }
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+  } catch {}
+  try { fs.writeFileSync(statePath + ".corrupt-" + new Date().toISOString().replace(/[:.]/g, "-"), raw); } catch {}
+  return { version: 1 };
+}
+function writeStateAtomic(statePath, state) {
+  const tmp = statePath + ".tmp." + process.pid + "." + Date.now() + "." + Math.random().toString(16).slice(2, 10);
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(state));
+    fs.renameSync(tmp, statePath);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch {}
+    throw err;
+  }
+}
+function acquireLock(statePath) {
+  const lock = statePath + ".lock";
+  const deadline = Date.now() + 500;
+  for (;;) {
+    try {
+      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
+      return lock;
+    } catch {
+      try {
+        if (Date.now() - fs.statSync(lock).mtimeMs > 5000) { fs.unlinkSync(lock); continue; }
+      } catch { continue; }
+      if (Date.now() >= deadline) return null; // degraded beats dropping the record
+      try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2); } catch {}
+    }
+  }
+}
+function releaseLock(lock) { if (lock) { try { fs.unlinkSync(lock); } catch {} } }
 function recordFire(exitCode, reason) {
   try {
-    let state = {};
-    try { state = JSON.parse(fs.readFileSync(STATE_PATH, "utf-8")); } catch {}
-    state.version = 1;
-    state.fires = Array.isArray(state.fires) ? state.fires : [];
-    state.fires.push({
-      at: new Date().toISOString(),
-      hook: HOOK_NAME,
-      exitCode,
-      reason,
-    });
-    if (state.fires.length > STATE_CAP) state.fires = state.fires.slice(-STATE_CAP);
-    fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
-    fs.writeFileSync(STATE_PATH, JSON.stringify(state));
+    fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true }); // before O_EXCL
+    const lock = acquireLock(STATE_PATH);
+    try {
+      const state = readState(STATE_PATH);
+      state.version = 1;
+      state.fires = Array.isArray(state.fires) ? state.fires : [];
+      state.fires.push({
+        at: new Date().toISOString(),
+        hook: HOOK_NAME,
+        exitCode,
+        reason,
+      });
+      if (state.fires.length > STATE_CAP) state.fires = state.fires.slice(-STATE_CAP);
+      writeStateAtomic(STATE_PATH, state);
+    } finally { releaseLock(lock); }
   } catch {
     // Recording must never fail the hook itself.
   }
@@ -535,16 +582,64 @@ function isTrivialFile(filePath) {
 // X7 — record every fire to .deeppairing/hooks-state.json so the
 // companion UI's HookStatus can show "hook stack working" feedback.
 const STATE_PATH = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".deeppairing", "hooks-state.json");
+// Q1 — durable hooks-state writes, mirrored from preflight-hook-core's
+// readHookState / writeHookStateAtomic / acquireHookStateLock. Pre-Q1 every
+// writer of this file did a plain read-modify-writeFileSync: two hooks firing
+// at once could tear the JSON, and the next reader's catch reset it to
+// {version:1}, DISCARDING the whole fire log with no backup. Atomic rename
+// fixes the torn read but NOT the lost update (M1: 8 parallel invocations kept
+// only 4 records), so the whole read-modify-write runs under an O_EXCL
+// lockfile with a stale-breaker and a bounded spin. Failing to acquire proceeds
+// unsynchronized rather than dropping the record.
+function readState(statePath) {
+  let raw;
+  try { raw = fs.readFileSync(statePath, "utf-8"); } catch { return { version: 1 }; }
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+  } catch {}
+  try { fs.writeFileSync(statePath + ".corrupt-" + new Date().toISOString().replace(/[:.]/g, "-"), raw); } catch {}
+  return { version: 1 };
+}
+function writeStateAtomic(statePath, state) {
+  const tmp = statePath + ".tmp." + process.pid + "." + Date.now() + "." + Math.random().toString(16).slice(2, 10);
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(state));
+    fs.renameSync(tmp, statePath);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch {}
+    throw err;
+  }
+}
+function acquireLock(statePath) {
+  const lock = statePath + ".lock";
+  const deadline = Date.now() + 500;
+  for (;;) {
+    try {
+      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
+      return lock;
+    } catch {
+      try {
+        if (Date.now() - fs.statSync(lock).mtimeMs > 5000) { fs.unlinkSync(lock); continue; }
+      } catch { continue; }
+      if (Date.now() >= deadline) return null; // degraded beats dropping the record
+      try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2); } catch {}
+    }
+  }
+}
+function releaseLock(lock) { if (lock) { try { fs.unlinkSync(lock); } catch {} } }
 function recordFire(exitCode, reason) {
   try {
-    let state = {};
-    try { state = JSON.parse(fs.readFileSync(STATE_PATH, "utf-8")); } catch {}
-    state.version = 1;
-    state.fires = Array.isArray(state.fires) ? state.fires : [];
-    state.fires.push({ at: new Date().toISOString(), hook: "checkpoint", exitCode, reason });
-    if (state.fires.length > 50) state.fires = state.fires.slice(-50);
-    fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
-    fs.writeFileSync(STATE_PATH, JSON.stringify(state));
+    fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true }); // before O_EXCL
+    const lock = acquireLock(STATE_PATH);
+    try {
+      const state = readState(STATE_PATH);
+      state.version = 1;
+      state.fires = Array.isArray(state.fires) ? state.fires : [];
+      state.fires.push({ at: new Date().toISOString(), hook: "checkpoint", exitCode, reason });
+      if (state.fires.length > 50) state.fires = state.fires.slice(-50);
+      writeStateAtomic(STATE_PATH, state);
+    } finally { releaseLock(lock); }
   } catch { /* recording must never fail the hook itself */ }
 }
 function exit(code, reason) {
@@ -726,7 +821,30 @@ function resolvePreflightCoreUrl(): { url: string; exists: boolean } {
   return { url: pathToFileURL(found ?? distCandidate).href, exists: Boolean(found) };
 }
 
-function preflightHookScript(coreUrl: string): string {
+/** Q1 — absolute file URL of the built guardrail RULE TABLE (the leaf module),
+ *  so the generated hook's early exit can call the AUTHORITATIVE matcher
+ *  instead of a hand-written prefilter regex. Same stamping discipline as
+ *  resolvePreflightCoreUrl; the leaf sits one directory up from the core
+ *  (dist/guardrail-rules.js vs dist/cli/preflight-hook-core.js). */
+function resolveGuardrailRulesUrl(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  // Marketplace / --plugin-dir: bundle-plugin.mjs emits it BESIDE the entry,
+  // same as preflight-hook-core.js. Checked first for the same reason.
+  const besideEntry = path.join(here, "guardrail-rules.js");
+  const distCandidate = path.join(here, "..", "guardrail-rules.js"); // dist/cli → dist
+  const candidates = [
+    besideEntry,
+    distCandidate,
+    path.join(here, "../../dist/guardrail-rules.js"), // src/cli via tsx, after a build
+  ];
+  const found = candidates.find((c) => fs.existsSync(c));
+  // Stamp the best guess even when missing so a later build self-heals on the
+  // next re-stamp; the generated hook treats an import failure as "keep going"
+  // rather than "skip the backstop" (see targetsGuardrailPath).
+  return pathToFileURL(found ?? distCandidate).href;
+}
+
+function preflightHookScript(coreUrl: string, rulesUrl: string): string {
   return `#!/usr/bin/env node
 // deepPairing PreToolUse preflight hook — installed by ensurePreflightHook.
 // GENERATED, do not edit. ESM (.mjs): use import, not require.
@@ -745,6 +863,9 @@ import path from "node:path";
 
 // Built matcher core, stamped at install time (see resolvePreflightCoreUrl).
 const CORE_URL = ${JSON.stringify(coreUrl)};
+// Q1 — the guardrail RULE TABLE's leaf module (node:path only), stamped the
+// same way. See the guardrail note below the ledger pre-check.
+const RULES_URL = ${JSON.stringify(rulesUrl)};
 
 // F11 — the fire log + the guardrail dedup stamp are ONE read-modify-write, and
 // they live in the matcher core (mod.recordHookFire) so this generated copy and
@@ -766,18 +887,46 @@ function ledgersPresent(projectRoot) {
   return false;
 }
 
-// P1 — the GUARDRAIL BACKSTOP's zero-I/O prefilter. The regex literal below is
-// INTERPOLATED from preflight-hook-core's GUARDRAIL_PATH_PREFILTER at generation
-// time, so this copy can never drift from the plugin-bundled one. The backstop
-// has no ledger to be seeded, so the ledger fast-path above would otherwise hide
-// it entirely; a guardrail-looking path is the second reason to keep going.
-const GUARDRAIL_PATH_PREFILTER = ${String(GUARDRAIL_PATH_PREFILTER)};
-function looksLikeGuardrailPath(toolInput) {
+// Q1 — the GUARDRAIL BACKSTOP's early-exit test. The backstop has no ledger to
+// be seeded, so the ledger fast-path above would hide it entirely; a guardrail
+// path is the second reason to keep going.
+//
+// This used to be a hand-written "loose superset" regex INTERPOLATED from
+// preflight-hook-core, described as parity "by construction". It was not: its
+// trailing group rejected -/_ continuations, so Dockerfile-prod,
+// docker-compose-prod.yml, config/secrets_prod.yml and prod.tfvars.json failed
+// the prefilter while the rules guarded them — silently disabling the backstop
+// on those paths in every ledger-free project. It is DELETED. What runs now is
+// matchGuardrailPath itself, out of the leaf rule-table module: node:path and
+// nothing else.
+//
+// The honest end-to-end cost, since the deleted prefilter was zero-I/O and this
+// is not: a NET +1.4 ms (native FS) / +21 ms (WSL 9P mount) per hook
+// invocation, and ONLY on this path — the init-generated script in a project
+// with no ledger seeded. It is zero on the marketplace path (esbuild inlines
+// the matcher into preflight.mjs, so there is no import at all), and zero once
+// any ledger exists (ledgersPresent short-circuits before this runs). Component
+// numbers: leaf import 1.4 ms / 20 ms, match 0.0018 ms, versus the 7.8 ms /
+// 51 ms matcher-core import this fast path exists to avoid.
+//
+// That is the price of the early exit being the SAME function as the gate it
+// guards, so it cannot disagree with it — which is why the prefilter was
+// deleted outright rather than derived: a second definition, however generated,
+// is a second thing to get wrong.
+async function targetsGuardrailPath(projectRoot, toolInput) {
+  const fp = (toolInput && (toolInput.file_path || toolInput.filePath)) || "";
+  if (typeof fp !== "string" || !fp) return false;
   try {
-    const fp = (toolInput && (toolInput.file_path || toolInput.filePath)) || "";
-    if (typeof fp !== "string" || !fp) return false;
-    return GUARDRAIL_PATH_PREFILTER.test(fp.replace(/\\\\/g, "/"));
-  } catch { return false; }
+    const rules = await import(RULES_URL);
+    return rules.matchGuardrailPath(projectRoot, [fp]) !== null;
+  } catch {
+    // FAIL SAFE, not fail-silent: if the rule module can't be loaded (an
+    // unbuilt tree, a moved install), keep going and let the matcher core —
+    // which carries the same table — decide. A load error must never be the
+    // thing that quietly switches the backstop off; that is the exact failure
+    // this rewrite exists to remove. The hook as a whole still fails OPEN.
+    return true;
+  }
 }
 
 let input = "";
@@ -792,7 +941,7 @@ process.stdin.on("end", async () => {
     if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit") {
       process.exit(0);
     }
-    if (!ledgersPresent(projectRoot) && !looksLikeGuardrailPath(toolInput)) {
+    if (!ledgersPresent(projectRoot) && !(await targetsGuardrailPath(projectRoot, toolInput))) {
       process.exit(0); // nothing to match against — skip the matcher import
     }
     const mod = await import(CORE_URL);
@@ -828,7 +977,7 @@ export function ensurePreflightHook(projectRoot: string): SetupResult {
   try {
     const core = resolvePreflightCoreUrl();
     fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
-    fs.writeFileSync(scriptPath, preflightHookScript(core.url));
+    fs.writeFileSync(scriptPath, preflightHookScript(core.url, resolveGuardrailRulesUrl()));
     fs.chmodSync(scriptPath, 0o755);
     // Honest signal — if the matcher core isn't built, the hook installs but
     // fails open (gate inactive) until a build + re-stamp on next startup.

@@ -32,20 +32,83 @@ var BLOCKING_TYPES = ["research", "spec", "plan", "decision", "code_change", "ch
 function projectRoot() {
   return process.env.CLAUDE_PROJECT_DIR || process.cwd();
 }
+function readState(statePath) {
+  let raw;
+  try {
+    raw = fs.readFileSync(statePath, "utf-8");
+  } catch {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+  } catch {
+  }
+  try {
+    fs.writeFileSync(`${statePath}.corrupt-${(/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-")}`, raw);
+  } catch {
+  }
+  return {};
+}
+function writeStateAtomic(statePath, state) {
+  const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 10)}`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(state));
+    fs.renameSync(tmp, statePath);
+  } catch (err) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+    }
+    throw err;
+  }
+}
+function acquireLock(statePath) {
+  const lock = `${statePath}.lock`;
+  const deadline = Date.now() + 500;
+  for (; ; ) {
+    try {
+      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
+      return lock;
+    } catch {
+      try {
+        if (Date.now() - fs.statSync(lock).mtimeMs > 5e3) {
+          fs.unlinkSync(lock);
+          continue;
+        }
+      } catch {
+        continue;
+      }
+      if (Date.now() >= deadline) return null;
+      try {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2);
+      } catch {
+      }
+    }
+  }
+}
+function releaseLock(lock) {
+  if (!lock) return;
+  try {
+    fs.unlinkSync(lock);
+  } catch {
+  }
+}
 function recordFire(exitCode, reason) {
   try {
     const statePath = path.join(projectRoot(), ".deeppairing", "hooks-state.json");
-    let state = {};
-    try {
-      state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
-    } catch {
-    }
-    state.version = 1;
-    const fires = Array.isArray(state.fires) ? state.fires : [];
-    fires.push({ at: (/* @__PURE__ */ new Date()).toISOString(), hook: HOOK_NAME, exitCode, reason });
-    state.fires = fires.slice(-STATE_CAP);
     fs.mkdirSync(path.dirname(statePath), { recursive: true });
-    fs.writeFileSync(statePath, JSON.stringify(state));
+    const lock = acquireLock(statePath);
+    try {
+      const state = readState(statePath);
+      state.version = 1;
+      const fires = Array.isArray(state.fires) ? state.fires : [];
+      fires.push({ at: (/* @__PURE__ */ new Date()).toISOString(), hook: HOOK_NAME, exitCode, reason });
+      state.fires = fires.slice(-STATE_CAP);
+      writeStateAtomic(statePath, state);
+    } finally {
+      releaseLock(lock);
+    }
   } catch {
   }
 }

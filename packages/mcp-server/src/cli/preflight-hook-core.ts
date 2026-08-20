@@ -1,12 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 import { runPreflight } from "../mcp/preflight-validator.js";
 import { sessionHasLivePreWorkCeremony } from "../debrief-gate.js";
-// F14 — the prefilter lives in its own ~20-line module so setup-tasks.ts (CLI
-// cold start) can interpolate the literal without importing the matcher core.
-// Re-exported here so both hook entries keep a single import site.
-import { GUARDRAIL_PATH_PREFILTER, looksLikeGuardrailPath } from "./guardrail-prefilter.js";
-export { GUARDRAIL_PATH_PREFILTER, looksLikeGuardrailPath };
+// Q1 — the ONE guardrail rule table, in a Node-builtins-only leaf module that
+// store/project-signals.ts, setup-tasks.ts and both hook entries also import.
+// F14's hand-written "loose superset" prefilter is GONE: the hook entries call
+// matchGuardrailPath (the authoritative matcher) in their early exit instead,
+// so there is no second definition left to drift. See guardrail-rules.ts.
+import { GUARDRAIL_RULES, matchGuardrailPath, toolInputTargetsGuardrail } from "../guardrail-rules.js";
+import type { GuardrailMatch, GuardrailRule } from "../guardrail-rules.js";
+export { GUARDRAIL_RULES, matchGuardrailPath, toolInputTargetsGuardrail };
+export type { GuardrailMatch, GuardrailRule };
 import type { RejectedApproach } from "../store/store-interface.js";
 import type { TeamPreference } from "@deeppairing/shared";
 
@@ -225,6 +230,31 @@ export const CEREMONY_MAX_AGE_MS = 8 * 60 * 60 * 1000;
 export const GUARDRAIL_ASK_TTL_MS = 30 * 60 * 1000;
 
 /**
+ * Q1 item 2 — the LOWER bound both windows were missing.
+ *
+ * Every recency test here was `now - t <= MAX`, which is satisfied by any
+ * timestamp in the FUTURE, without limit. Two ways that disarms the gate, both
+ * reachable without malice (a container with a skewed clock, a restored backup,
+ * a hand-edited JSON):
+ *   - a ceremony artifact stamped 2030 is "live" FOREVER, so no guardrail edit
+ *     in this project ever asks again;
+ *   - a dedup stamp in the future suppresses the ask forever AND survives every
+ *     prune, because pruning used the same one-sided test.
+ * A timestamp more than this far ahead of `now` is therefore treated as NOT
+ * recent / NOT suppressing, and is pruned on the next write. The tolerance
+ * absorbs ordinary clock skew (NTP jitter, a VM resuming) without absorbing a
+ * wrong year.
+ */
+export const CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000;
+
+/** True when `t` is within [now - maxAgeMs, now + CLOCK_SKEW_TOLERANCE_MS]. */
+export function withinWindow(t: number, now: number, maxAgeMs: number): boolean {
+  if (!Number.isFinite(t)) return false;
+  const age = now - t;
+  return age <= maxAgeMs && age >= -CLOCK_SKEW_TOLERANCE_MS;
+}
+
+/**
  * F3 — classes deduped per matched FILE rather than per class.
  *
  * The hook cannot observe the human's answer: allow and decline are both
@@ -238,125 +268,13 @@ export const GUARDRAIL_ASK_TTL_MS = 30 * 60 * 1000;
  */
 export const PER_PATH_DEDUP_CLASSES = new Set(["migrations", "secrets"]);
 
-export interface GuardrailRule {
-  category: string;
-  /** Rationale rendered by the 🛡 first-call-hint section (full sentence). */
-  rationale: string;
-  /** Short lowercase clause for the human-facing ask ("hard to reverse"). */
-  note: string;
-  /** Root-relative directory prefixes. `rel === d` or `rel` under `d/`. */
-  dirs: string[];
-  /** Root-relative file predicate (posix separators, full relative path). */
-  file: (rel: string) => boolean;
-}
-
-/** Shared helper: a dotenv file that is NOT a checked-in template. */
-function isRealDotenv(name: string): boolean {
-  if (!/^\.env(\.[^/]+)?$/.test(name)) return false;
-  return !/\.(example|sample|template|dist)$/i.test(name);
-}
-
 /**
- * The guardrail class table. This is a hand-maintained MIRROR of
- * senseProjectGuardrails (store/project-signals.ts) — the set the 🛡 section of
- * the first-call hint renders — kept honest by
- * guardrail-backstop-parity.test.ts, which runs BOTH over one fixture matrix of
- * real filenames and asserts they agree class-for-class, in both directions.
- *
- * Why mirrored and not imported: this module is loaded by the init-generated
- * hook under plain `node` out of .deeppairing/hooks/, so it must stay
- * dependency-light (Node builtins only). project-signals imports
- * @deeppairing/shared. Same discipline as readTeamPreferences above, which
- * re-implements parseTeamPreferencesFile for the same reason.
- *
- * F6 — the rules are PREFIX/GLOB, not a fixed filename list. The first cut
- * matched only `.env`/`.env.local`/`.env.production`, `Dockerfile`,
- * `docker-compose.yml` and four migration dirs, so `.env.staging`,
- * `Dockerfile.prod`, `compose.yaml`, `terraform.tfvars`, `.gitlab-ci.yml`,
- * `Jenkinsfile`, `.circleci/config.yml`, `alembic/versions/*`,
- * `config/master.key` and `config/credentials.yml.enc` all sailed through — the
- * highest-consequence miss class for a backstop whose whole job is the
- * irreversible edit.
+ * The guardrail class table, the file-rule predicates and the authoritative
+ * matcher now live in ../guardrail-rules.ts — ONE definition shared by this
+ * core, both hook entries, setup-tasks' generated script, and
+ * senseProjectGuardrails. Re-exported at the top of this file so every existing
+ * import site (and both hook copies) keeps working unchanged.
  */
-export const GUARDRAIL_RULES: GuardrailRule[] = [
-  {
-    category: "migrations",
-    rationale: "Migrations are hard to reverse — escalate to supervised for changes here.",
-    note: "hard to reverse",
-    dirs: ["migrations", "db/migrate", "prisma/migrations", "supabase/migrations", "alembic/versions"],
-    file: () => false,
-  },
-  {
-    category: "workflows",
-    rationale: "CI workflows affect every future deploy — escalate for changes here.",
-    note: "it affects every future deploy",
-    dirs: [".github/workflows", ".circleci"],
-    file: (rel) => rel === ".gitlab-ci.yml" || rel === ".gitlab-ci.yaml" || rel === "Jenkinsfile",
-  },
-  {
-    category: "infrastructure",
-    rationale: "Infrastructure changes affect production surfaces — escalate here.",
-    note: "it affects production surfaces",
-    dirs: ["infrastructure", "terraform", "k8s", "kubernetes", "helm"],
-    file: (rel) =>
-      /^Dockerfile([.-][^/]*)?$/.test(rel) ||
-      /^(docker-)?compose[^/]*\.ya?ml$/.test(rel) ||
-      /^[^/]*\.tfvars(\.json)?$/.test(rel),
-  },
-  {
-    category: "secrets",
-    rationale: "Secret files must never leak into the session or a commit — escalate here.",
-    note: "secrets must never leak into a commit",
-    dirs: [],
-    file: (rel) =>
-      isRealDotenv(rel) ||
-      /^config\/secrets[^/]*$/.test(rel) ||
-      /^config\/credentials[^/]*$/.test(rel) ||
-      rel === "config/master.key",
-  },
-];
-
-export interface GuardrailMatch {
-  category: string;
-  /** The project-relative path that matched (what the human sees named). */
-  path: string;
-  /** Full-sentence rationale (the 🛡 wording). */
-  rationale: string;
-  /** Short clause for the ask. */
-  note: string;
-}
-
-/**
- * Authoritative match: is this edit's target under a guardrail rule of THIS
- * project? Root-relative, like senseProjectGuardrails — `packages/db/migrations`
- * does NOT match, exactly as the 🛡 section wouldn't list it. A path outside the
- * project root never matches.
- *
- * Deliberately NOT gated on fs.existsSync of the rule's root. senseProjectGuardrails
- * needs existsSync because it enumerates classes with no edit in hand; here the
- * EDITED PATH ITSELF is the evidence. The two sets therefore differ in exactly
- * one case — creating the FIRST file in a guardrail location (a project's first
- * migration, its first CI workflow) — which is guardrail work by definition and
- * is included on purpose. The divergence is pinned by the parity test.
- */
-export function matchGuardrailPath(projectRoot: string, paths: string[]): GuardrailMatch | null {
-  try {
-    for (const raw of paths) {
-      if (typeof raw !== "string" || !raw) continue;
-      const abs = path.resolve(projectRoot, raw);
-      const rel = path.relative(projectRoot, abs).replace(/\\/g, "/");
-      if (!rel || rel === ".." || rel.startsWith("../")) continue; // outside the project
-      for (const rule of GUARDRAIL_RULES) {
-        const hit =
-          rule.dirs.some((d) => rel === d || rel.startsWith(d + "/")) || rule.file(rel);
-        if (hit) return { category: rule.category, path: rel, rationale: rule.rationale, note: rule.note };
-      }
-    }
-    return null;
-  } catch {
-    return null; // FAIL OPEN
-  }
-}
 
 export interface CeremonyReadout {
   /** False when the session store could not be read at all — fail open. */
@@ -376,15 +294,21 @@ export interface CeremonyReadout {
  * "this project's recent sessions", never "this session".
  *
  * Three-way on purpose:
- *   - store UNREACHABLE (no .deeppairing/sessions, or an unreadable dir) →
- *     reachable:false → the caller FAILS OPEN and never asks. We cannot tell
+ *   - store UNREACHABLE (no .deeppairing/sessions, an unreadable dir, or —
+ *     Q1 item 3 — a dir whose every artifacts.json is present but unparseable)
+ *     → reachable:false → the caller FAILS OPEN and never asks. We cannot tell
  *     whether the ceremony happened, and a hook must not block on ignorance.
  *   - reachable, a LIVE research/decision/spec/plan within CEREMONY_MAX_AGE_MS
  *     → hasLiveCeremony:true → pass silently.
  *   - reachable, nothing live → the exact skip case → ask.
  *
  * An individual unparseable artifacts.json is skipped, not fatal — one corrupt
- * session must not suppress a real ceremony in another.
+ * session must not suppress a real ceremony in another, and a real SKIP beside
+ * a corrupt session still deserves the ask. But when EVERY store present is
+ * corrupt (Q1 item 3) there is no evidence either way, and SECURITY.md's stated
+ * contract is "missing or unreadable → stays silent" — so that case reports
+ * UNREACHABLE. Pre-Q1 the loop fell through to reachable:true and ASKED, i.e.
+ * the code did the opposite of what the doc promised.
  */
 export function readSessionCeremony(projectRoot: string, now: number = Date.now()): CeremonyReadout {
   const sessionsDir = path.join(projectRoot, ".deeppairing", "sessions");
@@ -398,21 +322,38 @@ export function readSessionCeremony(projectRoot: string, now: number = Date.now(
   // F9 — an artifact with a missing or unparseable createdAt is NOT treated as
   // eternally recent. Pre-F9 (`!t || …`) a single timestamp-less ceremony
   // artifact licensed guardrail edits forever.
-  const isRecent = (a: { createdAt?: string }) => {
-    const t = Date.parse(a?.createdAt ?? "");
-    return Number.isFinite(t) ? now - t <= CEREMONY_MAX_AGE_MS : false;
-  };
+  // F9 + Q1 item 2 — bounded on BOTH sides: a missing/unparseable createdAt is
+  // not eternally recent, and neither is a createdAt in the year 2030.
+  const isRecent = (a: { createdAt?: string }) =>
+    withinWindow(Date.parse(a?.createdAt ?? ""), now, CEREMONY_MAX_AGE_MS);
+  // Q1 item 3 — count what we could actually READ, so an all-corrupt store
+  // reports UNREACHABLE rather than "reachable, no ceremony" (see the header).
+  let storesSeen = 0;
+  let storesParsed = 0;
   for (const id of ids) {
+    let arr: unknown;
     try {
       const af = path.join(sessionsDir, id, "artifacts.json");
       if (!fs.existsSync(af)) continue;
-      const arr = JSON.parse(fs.readFileSync(af, "utf-8"));
-      if (!Array.isArray(arr)) continue;
-      if (sessionHasLivePreWorkCeremony(arr, isRecent)) return { reachable: true, hasLiveCeremony: true };
+      storesSeen++;
+      arr = JSON.parse(fs.readFileSync(af, "utf-8"));
+      if (!Array.isArray(arr)) continue; // present but not a session store
     } catch {
       continue; // one bad session file must not decide the whole answer
     }
+    storesParsed++;
+    try {
+      if (sessionHasLivePreWorkCeremony(arr as never[], isRecent)) {
+        return { reachable: true, hasLiveCeremony: true };
+      }
+    } catch {
+      continue;
+    }
   }
+  // Every artifacts.json present was unreadable → we cannot tell whether the
+  // ceremony happened. SECURITY.md's contract is "missing OR unreadable store →
+  // stays silent", so this is the fail-open case, not the ask case.
+  if (storesSeen > 0 && storesParsed === 0) return { reachable: false, hasLiveCeremony: false };
   return { reachable: true, hasLiveCeremony: false };
 }
 
@@ -451,9 +392,8 @@ export function guardrailAskSuppressed(
       ? (entry && typeof entry === "object" ? entry[matchedPath] : undefined)
       : entry;
     if (typeof at !== "string") return false;
-    const t = Date.parse(at);
-    if (!Number.isFinite(t)) return false;
-    return now - t < GUARDRAIL_ASK_TTL_MS;
+    // Q1 item 2 — a FUTURE stamp does not suppress (it would suppress forever).
+    return withinWindow(Date.parse(at), now, GUARDRAIL_ASK_TTL_MS - 1);
   } catch {
     return false;
   }
@@ -472,8 +412,10 @@ function stampGuardrailAsk(state: Record<string, unknown>, match: GuardrailMatch
     const byPath: Record<string, string> = {};
     if (prev && typeof prev === "object") {
       for (const [p, at] of Object.entries(prev as Record<string, unknown>)) {
+        // Q1 item 2 — the prune uses the SAME two-sided test as the suppression
+        // check, so a future-dated stamp is dropped instead of living forever.
         const t = typeof at === "string" ? Date.parse(at) : NaN;
-        if (Number.isFinite(t) && now - t < GUARDRAIL_ASK_TTL_MS) byPath[p] = at as string;
+        if (withinWindow(t, now, GUARDRAIL_ASK_TTL_MS - 1)) byPath[p] = at as string;
       }
     }
     byPath[match.path] = iso;
@@ -487,6 +429,131 @@ function stampGuardrailAsk(state: Record<string, unknown>, match: GuardrailMatch
 const FIRE_LOG_CAP = 50;
 
 /**
+ * Q1 item 4 — the atomic write, ported into the hook lane.
+ *
+ * hooks-state.json had FOUR unlocked read-modify-write writers — this one, both
+ * Stop copies (the plugin-bundled entry and setup-tasks' generated twin), and
+ * the generated checkpoint script — all ending in a plain `fs.writeFileSync`. Two hooks firing in the same instant could interleave a
+ * torn write, and the next reader's `JSON.parse` throws — at which point the
+ * catch below used to reset the file to `{version:1}`, DISCARDING every prior
+ * fire with no backup. That is the exact failure the project's own salvage rule
+ * forbids ("back up before any committing drop").
+ *
+ * Same tmp+rename guarantee as store/atomic-write.ts's writeStringAtomic, but
+ * re-implemented here in Node builtins only: this module is dynamically
+ * imported by the init-generated `.mjs` under plain `node`, so it cannot reach
+ * into the store layer. (Same discipline as readTeamPreferences above.)
+ */
+export function writeHookStateAtomic(statePath: string, state: unknown): void {
+  const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${randomBytes(4).toString("hex")}`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(state));
+    fs.renameSync(tmp, statePath);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch { /* never mask the real error */ }
+    throw err;
+  }
+}
+
+/**
+ * M1 (round-12 adversarial review) — the atomic write was necessary and NOT
+ * sufficient.
+ *
+ * tmp+rename guarantees no reader ever sees a torn file. It does NOT serialize
+ * read-modify-write: two hooks that both read state N and both rename their
+ * N+1 leave one of the two updates gone. Measured with 8 parallel invocations:
+ * 8 asks were emitted, but only 4 fire records and — the part that matters — 4
+ * DEDUP STAMPS survived. A dropped stamp means the same file asks again inside
+ * its 30-minute window, which is the spurious-ask failure H1 is about.
+ *
+ * So the whole RMW runs under an O_EXCL lockfile. Hooks are sub-100 ms
+ * processes, so a short spin is the right shape (no async, no dependency):
+ *   - O_EXCL create is the atomic test-and-set;
+ *   - a lock older than LOCK_STALE_MS is BROKEN, so a hook killed mid-write
+ *     cannot wedge every later one;
+ *   - failing to acquire within LOCK_MAX_WAIT_MS proceeds UNSYNCHRONIZED
+ *     rather than dropping the record — degraded beats silent, and a hook may
+ *     never fail the tool call it is gating.
+ */
+const LOCK_STALE_MS = 5_000;
+const LOCK_SPIN_MS = 2;
+const LOCK_MAX_WAIT_MS = 500;
+
+/** Synchronous sleep — the hook lane has no async seam to yield through. */
+function sleepSync(ms: number): void {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {
+    /* SharedArrayBuffer unavailable — spin-free fallback: just retry */
+  }
+}
+
+/** Returns the lock path on success, or null to proceed unsynchronized. */
+export function acquireHookStateLock(statePath: string, now: number = Date.now()): string | null {
+  const lock = `${statePath}.lock`;
+  const deadline = now + LOCK_MAX_WAIT_MS;
+  for (;;) {
+    try {
+      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
+      return lock;
+    } catch {
+      try {
+        if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {
+          fs.unlinkSync(lock); // a crashed hook must not wedge the next one
+          continue;
+        }
+      } catch {
+        continue; // the holder released it between our open and our stat
+      }
+      if (Date.now() >= deadline) return null;
+      sleepSync(LOCK_SPIN_MS);
+    }
+  }
+}
+
+export function releaseHookStateLock(lock: string | null): void {
+  if (!lock) return;
+  try {
+    fs.unlinkSync(lock);
+  } catch {
+    /* already gone */
+  }
+}
+
+/**
+ * Q1 item 4 — read hooks-state.json, and NEVER silently discard history.
+ *
+ * Three outcomes:
+ *   - absent            → a fresh `{version:1}`, no backup (nothing was lost);
+ *   - present + valid   → the parsed object;
+ *   - present + corrupt → a fresh object, but the bytes are first copied to
+ *     `hooks-state.json.corrupt-<ISO>` so the fire log is recoverable by hand.
+ *     The backup is best-effort: if it fails we still reset, because a hook may
+ *     never fail the tool call it is gating.
+ */
+export function readHookState(statePath: string): Record<string, unknown> {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(statePath, "utf-8");
+  } catch {
+    return { version: 1 }; // absent / unreadable — nothing to salvage
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  } catch {
+    /* fall through to the salvage copy */
+  }
+  try {
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    fs.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);
+  } catch {
+    /* best-effort */
+  }
+  return { version: 1 };
+}
+
+/**
  * The single hooks-state writer for the preflight lane (F11/F12). Appends the
  * fire to the capped `fires` log AND — when the fire came from the guardrail
  * backstop — stamps the dedup record, in ONE read-modify-write. Both
@@ -495,53 +562,76 @@ const FIRE_LOG_CAP = 50;
  *
  * The fire reason names the guardrail CLASS ("guardrail:migrations"), not a
  * bare "guardrail" — the companion UI's HookStatus renders these verbatim.
+ *
+ * Q1 item 5 — it also records `kind`. Pre-Q1 a preflight fire carried neither
+ * `exitCode` nor any other outcome marker, while the Stop/checkpoint hooks write
+ * `exitCode`; HookStatus keys on `exitCode === 2`, so EVERY guardrail ask and
+ * every rejected-approach block rendered as a green "pass" — the UI said the
+ * opposite of what happened. Every fire on this lane surfaces as
+ * permissionDecision "ask", so this lane always writes `"ask"`. The contract
+ * with the UI side (landed separately) is `kind?: "ask" | "pass"` — OPTIONAL,
+ * so a record written by an older build, or by the Stop/checkpoint hooks (which
+ * deliberately keep writing `exitCode` instead: a stderr nag that exits 0 is
+ * honestly neither), keeps rendering exactly as it does today. There is no
+ * `kind` declaration in this file to point at; the field is written here and
+ * typed where the fire log is read.
  */
 export function recordHookFire(projectRoot: string, decision: HookDecision, now: number = Date.now()): void {
   try {
     const sp = path.join(projectRoot, ".deeppairing", "hooks-state.json");
-    let state: Record<string, unknown> = { version: 1 };
-    try {
-      const parsed = JSON.parse(fs.readFileSync(sp, "utf-8"));
-      if (parsed && typeof parsed === "object") state = parsed;
-    } catch {
-      /* fresh file */
-    }
-    state.version = 1;
-    const fires = Array.isArray(state.fires) ? state.fires : [];
-    fires.push({
-      at: new Date(now).toISOString(),
-      hook: "preflight",
-      reason: decision.guardrail ? `guardrail:${decision.guardrail.category}` : decision.source || "blocked",
-    });
-    state.fires = fires.slice(-FIRE_LOG_CAP);
-    if (decision.guardrail) stampGuardrailAsk(state, decision.guardrail, now);
+    // Before the lock — O_EXCL needs the directory to exist.
     fs.mkdirSync(path.dirname(sp), { recursive: true });
-    fs.writeFileSync(sp, JSON.stringify(state));
+    const lock = acquireHookStateLock(sp);
+    try {
+      const state = readHookState(sp);
+      state.version = 1;
+      const fires = Array.isArray(state.fires) ? state.fires : [];
+      fires.push({
+        at: new Date(now).toISOString(),
+        hook: "preflight",
+        kind: "ask" as const,
+        reason: decision.guardrail ? `guardrail:${decision.guardrail.category}` : decision.source || "blocked",
+      });
+      state.fires = fires.slice(-FIRE_LOG_CAP);
+      if (decision.guardrail) stampGuardrailAsk(state, decision.guardrail, now);
+      writeHookStateAtomic(sp, state);
+    } finally {
+      releaseHookStateLock(lock);
+    }
   } catch {
     /* recording must never fail the hook itself */
   }
 }
 
 /**
- * The human-facing ask text (F4).
+ * The human-facing ask text (F4, restructured in Q1 item 6).
  *
  * The rejected-approach lane got stripArtifactClause (#169) and toHookReason
  * (F6) precisely because a message written FOR THE AGENT reads wrong in a
- * permission prompt. This lane is written for the prompt from the start: it
- * leads with the decision the human owns, names what makes the path load-bearing
- * and what is missing, and says what declining will do. The agent-facing
- * instruction follows in parentheses — the reason string is fed back to the
- * model when the human declines, so it has to serve both readers, in that order.
+ * permission prompt. This lane was written for the prompt from the start, but
+ * round-12 found it DOUBLE-ADDRESSED: it opened with a screaming machine token,
+ * embedded a parenthetical "(Agent: ...)" mid-paragraph inside the human's
+ * dialog, and said "your pair" in a sentence the pair was also reading.
  *
- * GUARDRAIL_ESCALATION stays as the greppable prefix, mirroring
- * REJECTED_APPROACH_BLOCKED on the other lane.
+ * The string still has to serve both readers — Claude Code feeds
+ * permissionDecisionReason back to the model when the human declines, so the
+ * agent instruction must stay. So it is SEQUENCED rather than deleted: the
+ * human's decision comes first, in plain prose, and the machine-greppable token
+ * plus the agent instruction ride together on a final bracketed line, visually
+ * subordinate but still `grep GUARDRAIL_ESCALATION`-able (mirroring
+ * REJECTED_APPROACH_BLOCKED on the other lane).
+ *
+ * The "what would make this stop" clause is kept — dogfood singled it out as
+ * the reason the ask doesn't feel like a nag.
  */
 export function guardrailReason(match: GuardrailMatch): string {
   return (
-    `GUARDRAIL_ESCALATION — Allow this edit to ${match.path}? ` +
+    `Allow this edit to ${match.path}? ` +
     `It's a guardrail path (${match.category} — ${match.note}), and no findings, options, spec, or plan ` +
-    `is live in this project's recent sessions. Decline to have your pair present it for review first. ` +
-    `(Agent: this is ESCALATED work — on a decline, present findings/options/a spec or plan before landing it.)`
+    `is live in this project's recent sessions. Decline to have it presented for review first — ` +
+    `presenting findings, options, a spec, or a plan is what makes this prompt stop.\n` +
+    `[GUARDRAIL_ESCALATION — agent: this is ESCALATED work. On a decline, present findings/options/a spec ` +
+    `or plan before landing it.]`
   );
 }
 

@@ -12,8 +12,10 @@
  * Contract, identical to the init-path script:
  *   - only Edit/Write/MultiEdit are considered; anything else exits 0;
  *   - a cheap ledger pre-check skips the matcher when nothing is seeded AND the
- *     path can't be a guardrail path (P1 — the guardrail backstop has no ledger
- *     to be seeded, so it needs its own zero-I/O prefilter here);
+ *     path is not a guardrail path (P1 — the guardrail backstop has no ledger to
+ *     be seeded, so the ledger check alone would hide it entirely). Q1 — that
+ *     second test is now the AUTHORITATIVE matcher, not a hand-written "loose
+ *     superset" regex that drifted out of superset-hood;
  *   - a match surfaces to the HUMAN as permissionDecision "ask" (recoverable
  *     pairing) rather than a hard deny — raw file content is noisier than the
  *     agent's prose, and an already-approved change must not be auto-blocked;
@@ -25,7 +27,7 @@ import path from "node:path";
 // capped `fires` entry AND stamps the guardrail dedup record in a single
 // read-modify-write, in the core, so the two hand-maintained hook copies can't
 // drift on the write shape. (This entry's own recordFire is gone.)
-import { evaluatePreflightHook, looksLikeGuardrailPath, recordHookFire } from "./preflight-hook-core.js";
+import { evaluatePreflightHook, recordHookFire, toolInputTargetsGuardrail } from "./preflight-hook-core.js";
 
 /** PP1 — cheap pre-check so the common case (no rejections, no team.json) skips
  *  the matcher entirely. Reading the small preferences.json is ms. */
@@ -58,12 +60,15 @@ process.stdin.on("end", () => {
     if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit") {
       process.exit(0);
     }
-    // P1 — the fast path now has TWO reasons to keep going: a seeded ledger
-    // (the rejected-approach matcher) OR a path that could be a guardrail (the
-    // backstop). looksLikeGuardrailPath is a single regex test against the
-    // file path — no I/O — so a non-guardrail edit in a ledger-free project
-    // still exits here, exactly as before.
-    if (!ledgersPresent(projectRoot) && !looksLikeGuardrailPath(toolInput)) {
+    // P1 — the fast path has TWO reasons to keep going: a seeded ledger (the
+    // rejected-approach matcher) OR a guardrail path (the backstop). Q1 —
+    // toolInputTargetsGuardrail IS matchGuardrailPath, the same function
+    // evaluateGuardrailBackstop uses, so the early exit can no longer disagree
+    // with the gate it guards. It is still I/O-free (two path calls + a handful
+    // of regex tests; measured at ~0.003 ms on a miss), and the whole matcher
+    // core is already inlined into this bundle by esbuild, so it costs nothing
+    // extra here.
+    if (!ledgersPresent(projectRoot) && !toolInputTargetsGuardrail(projectRoot, toolInput)) {
       process.exit(0); // nothing to match against — skip the matcher
     }
     const decision = evaluatePreflightHook({ toolName, toolInput, projectRoot });

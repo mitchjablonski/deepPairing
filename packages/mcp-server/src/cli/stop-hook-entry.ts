@@ -28,21 +28,97 @@ function projectRoot(): string {
   return process.env.CLAUDE_PROJECT_DIR || process.cwd();
 }
 
+// Q1 — durable hooks-state writes. The preflight lane's readHookState /
+// writeHookStateAtomic are the reference implementation; this copy stays inline
+// because this entry is deliberately import-free apart from the debrief gate
+// (esbuild emits it as a standalone .mjs beside daemon.js), and its init-path
+// twin in setup-tasks.ts carries the same pair verbatim.
+function readState(statePath: string): { version?: number; fires?: unknown[] } {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(statePath, "utf-8");
+  } catch {
+    return {}; // absent — nothing to salvage
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+  } catch {
+    /* corrupt — copy aside below rather than discarding the fire log */
+  }
+  try {
+    fs.writeFileSync(`${statePath}.corrupt-${new Date().toISOString().replace(/[:.]/g, "-")}`, raw);
+  } catch {
+    /* best-effort */
+  }
+  return {};
+}
+
+function writeStateAtomic(statePath: string, state: unknown): void {
+  const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 10)}`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(state));
+    fs.renameSync(tmp, statePath);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch { /* never mask the real error */ }
+    throw err;
+  }
+}
+
+// M1 — atomic rename stops torn reads, not lost updates. The whole
+// read-modify-write runs under an O_EXCL lockfile (stale-broken after 5 s,
+// bounded 500 ms spin); failing to acquire proceeds unsynchronized rather than
+// dropping the record. Mirrors preflight-hook-core's acquireHookStateLock.
+function acquireLock(statePath: string): string | null {
+  const lock = `${statePath}.lock`;
+  const deadline = Date.now() + 500;
+  for (;;) {
+    try {
+      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
+      return lock;
+    } catch {
+      try {
+        if (Date.now() - fs.statSync(lock).mtimeMs > 5000) {
+          fs.unlinkSync(lock);
+          continue;
+        }
+      } catch {
+        continue;
+      }
+      if (Date.now() >= deadline) return null;
+      try {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2);
+      } catch {
+        /* SharedArrayBuffer unavailable */
+      }
+    }
+  }
+}
+
+function releaseLock(lock: string | null): void {
+  if (!lock) return;
+  try {
+    fs.unlinkSync(lock);
+  } catch {
+    /* already gone */
+  }
+}
+
 function recordFire(exitCode: number, reason: string): void {
   try {
     const statePath = path.join(projectRoot(), ".deeppairing", "hooks-state.json");
-    let state: { version?: number; fires?: unknown[] } = {};
+    fs.mkdirSync(path.dirname(statePath), { recursive: true }); // before O_EXCL
+    const lock = acquireLock(statePath);
     try {
-      state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
-    } catch {
-      /* fresh file */
+      const state = readState(statePath);
+      state.version = 1;
+      const fires = Array.isArray(state.fires) ? state.fires : [];
+      fires.push({ at: new Date().toISOString(), hook: HOOK_NAME, exitCode, reason });
+      state.fires = fires.slice(-STATE_CAP);
+      writeStateAtomic(statePath, state);
+    } finally {
+      releaseLock(lock);
     }
-    state.version = 1;
-    const fires = Array.isArray(state.fires) ? state.fires : [];
-    fires.push({ at: new Date().toISOString(), hook: HOOK_NAME, exitCode, reason });
-    state.fires = fires.slice(-STATE_CAP);
-    fs.mkdirSync(path.dirname(statePath), { recursive: true });
-    fs.writeFileSync(statePath, JSON.stringify(state));
   } catch {
     /* recording must never fail the hook itself */
   }
