@@ -57,18 +57,20 @@ model assumes:
   store or mutates anything — and every WebSocket upgrade — requires the
   browser to send `X-Project-Hash` (or `?projectHash=` for WS). The daemon
   refuses requests for a different project's hash even from `localhost`.
-  Four exemptions, all of which the middleware in `src/http/routes.ts`
-  documents at its own definition, and none of which reads or writes a
-  session store:
+  Five exemptions, all of which the middleware in `src/http/routes.ts`
+  documents at its own definition:
   - `OPTIONS` (CORS preflight — browsers do not send custom headers on it);
   - any non-`/api` `GET` — the SPA document and `/assets/*`, fetched by plain
     navigation, which cannot carry a custom header;
-  - `GET /api/daemon-info` and `GET /api/projects` — read-only discovery. The
-    hash gate is chicken-and-egg here: the SPA asks these routes *for* the
-    hash, and the project switcher queries peers whose hash it does not hold;
-  - `POST /api/demo/run` — the scripted cold-clone demo entry point, which
-    only ever creates a throwaway `demo_<ts>` session. It is also the one
-    mutation route exempt from the bearer-token gate, deliberately.
+  - `GET /api/daemon-info` — read-only discovery. The hash gate is
+    chicken-and-egg here: the SPA asks this route *for* the hash;
+  - `GET /api/projects` — read-only cross-daemon discovery for the project
+    switcher, which queries peers whose hash it does not hold yet;
+  - `POST /api/demo/run` — the scripted cold-clone demo entry point. Unlike
+    the four above it DOES write: it creates a throwaway `demo_<ts>` session.
+    It never targets an existing store, which is why the wrong-store threat
+    model does not apply, and it is also the one mutation route deliberately
+    exempt from the bearer-token gate.
 - **Stale-tab routing**: a tab pinned to a daemon that has restarted
   on the same port (different project) gets a 403 on mutations
   rather than silently routing into the wrong store.
@@ -148,12 +150,26 @@ deepPairing installs two Claude Code hooks, both local-only, network-free, and f
     presented no findings, options, spec, or plan in this project's recent
     sessions. Those paths match at **any depth**, not only at the repository
     root, so `packages/api/migrations/002_drop_users.sql` in a
-    monorepo is guarded like a root-level one; a file merely *named* after a
-    guardrail directory (`src/migrations.js`, `docs/migrations.md`) is not.
+    monorepo is guarded like a root-level one; a file whose name merely
+    contains a guardrail directory's name (`src/migrations.js`,
+    `docs/migrations.md`) is not, though an extension-less file whose entire
+    name is `migrations` is indistinguishable from the directory and does
+    match. Depth matching explicitly stops at trees nobody edits deliberately:
+    nothing under `node_modules/`, `vendor/`, `third_party/`, `.venv/`,
+    `site-packages/`, `dist/`, `build/`, `out/`, `target/`, `coverage/`,
+    `.next/`, `.nuxt/`, `.output/`, `.turbo/`, `__pycache__/`, `fixtures/`,
+    `__fixtures__/`, `testdata/`, `test-data/`, `__snapshots__/`, `__mocks__/`
+    or `examples/` ever prompts. **The trade-off is deliberate:** a genuine
+    migration or secret file that lives under one of those paths goes
+    unguarded. Spurious prompts are the failure mode that gets a gate like this
+    switched off, and this is a protocol backstop rather than a security
+    boundary, so the exclusion is scoped for quiet rather than for coverage.
     It asks at most once per guardrail class per 30 minutes (per file for
     migrations and secrets). If the session store is missing, unreadable, or
-    present-but-unparseable it stays silent (fail-open), and it can be switched
-    off entirely with the environment variable
+    every session store present is unparseable, it stays silent (fail-open) —
+    a single corrupt session alongside a readable one is skipped, and the
+    readable one still decides. It can be switched off entirely with the
+    environment variable
     `DEEPPAIRING_GUARDRAIL_BACKSTOP=off`, which leaves the rejected-approach
     prompt untouched. It is a protocol backstop, **not a security boundary** —
     it cannot stop a determined agent or a direct shell write.
@@ -173,9 +189,13 @@ deepPairing installs two Claude Code hooks, both local-only, network-free, and f
 Both hooks read only local JSON under `.deeppairing/`. Their only write is
 `.deeppairing/hooks-state.json` — the small advisory log of hook fires the
 companion UI reads, which also carries the guardrail backstop's
-"already asked about this" timestamps — written temp-file-plus-rename, with a
-`hooks-state.json.corrupt-<timestamp>` salvage copy on the (rare) unparseable
-read. Timestamps in that file and in the session store are bounded on both
+"already asked about this" timestamps — written temp-file-plus-rename under a
+short-lived `hooks-state.json.lock` (so two hooks firing at once cannot lose
+each other's records), with a `hooks-state.json.corrupt-<timestamp>` salvage
+copy on the (rare) unparseable read. A lock older than five seconds is broken
+automatically, and a hook that cannot take it within half a second writes
+anyway rather than dropping the record — the hook never fails the tool call it
+is gating. Timestamps in that file and in the session store are bounded on both
 sides: a stamp more than five minutes in the future is treated as invalid and
 pruned, so a skewed clock or a hand-edited date cannot disarm either gate
 indefinitely. The hooks make no network calls and write no files outside the

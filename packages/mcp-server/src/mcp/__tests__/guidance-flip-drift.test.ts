@@ -21,6 +21,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { buildFirstCallHint } from "../first-call-hint.js";
 import { createMcpServer } from "../server.js";
 import { FileStore } from "../../store/file-store.js";
+import { matchGuardrailPath } from "../../guardrail-rules.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -206,6 +207,53 @@ describe("#190 — default-mode flip: guidance wording is consistent (drift guar
     expect(skill).toMatch(/DEEPPAIRING_GUARDRAIL_BACKSTOP=off/);
     // F8 — the staleness window is documented, not folklore.
     expect(skill).toMatch(/older\s*\n?\s*than ~8 hours no longer counts as live/);
+  });
+
+  /**
+   * M3 (round-12 adversarial review) — the guidance's DEPTH claims are
+   * checkable, so check them against the shipped matcher.
+   *
+   * Q1 added sentences to SKILL.md and the hint making three falsifiable
+   * promises: a monorepo path counts, a file merely named after a guardrail dir
+   * does not, and vendored/fixture/example trees are excluded. Asserting only
+   * that the SENTENCES exist is exactly the round-11 failure this file was
+   * built to prevent (guidance describing a mechanism that isn't there), so
+   * each claim is executed against matchGuardrailPath itself.
+   */
+  it("Q1/H1 — the depth + exclusion sentences are TRUE of the shipped matcher, not just present", async () => {
+    const skill = readSkill();
+    const hint = await assembleAllHints();
+    const root = "/proj";
+    const fires = (rel: string) => matchGuardrailPath(root, [`${root}/${rel}`]) !== null;
+
+    // Claim 1: "matched at ANY depth, so packages/api/migrations/ counts".
+    expect(skill).toMatch(/matches these at \*\*any depth\*\*/);
+    expect(hint).toMatch(/matched at ANY depth, so packages\/api\/migrations\/ in a monorepo counts/);
+    expect(fires("packages/api/migrations/002_drop_users.sql"), "the depth claim is false").toBe(true);
+    expect(fires("services/web/Dockerfile"), "the depth claim is false for file rules").toBe(true);
+
+    // Claim 2: "a file merely NAMED like one ... does not".
+    expect(hint).toMatch(/while a file merely NAMED like one, e\.g\. src\/migrations\.js, does not/);
+    expect(skill).toMatch(/`src\/migrations\.js`, `docs\/migrations\.md`/);
+    for (const rel of ["src/migrations.js", "docs/migrations.md", "lib/helm.ts"]) {
+      expect(fires(rel), `the named-after claim is false for ${rel}`).toBe(false);
+    }
+
+    // Claim 3 (H1): vendored / generated / fixture / example trees are excluded.
+    expect(skill).toMatch(/\*\*Excluded trees\.\*\*/);
+    expect(hint).toMatch(/vendored\/generated\/fixture\/example trees such as node_modules\/, dist\/, coverage\/, fixtures\/ and examples\/ are excluded entirely/);
+    for (const rel of [
+      "node_modules/somepkg/migrations/x.js",
+      "dist/migrations/bundle.js",
+      "coverage/lcov-report/.env",
+      "test/fixtures/migrations/seed.sql",
+      "examples/basic/docker-compose.yml",
+    ]) {
+      expect(fires(rel), `the exclusion claim is false for ${rel}`).toBe(false);
+    }
+    // …and the honest over-match the docs now admit to.
+    expect(skill).toMatch(/extension-less file whose entire name is `migrations`/);
+    expect(fires("packages/api/migrations")).toBe(true);
   });
 
   it("P1 (round-11) — both surfaces name the corrected touchpoint arithmetic (changeset + debrief, a decision makes 3)", async () => {

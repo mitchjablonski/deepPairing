@@ -25,7 +25,7 @@
  *     outcome — including the ask-never-deny contract from SECURITY.md.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -480,6 +480,99 @@ describe("the two hand-maintained hook copies agree on the guardrail matrix", ()
       // Q1 item 5 — and says it was an ASK, so the companion UI stops rendering
       // every guardrail block as a green "pass".
       expect(state.fires.at(-1).kind).toBe("ask");
+    } finally {
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * M1 (round-12 adversarial review) — CONCURRENCY, measured with real
+   * processes.
+   *
+   * The first cut of this pin was a sequential for-loop inside one process,
+   * which would have passed with the atomic write reverted — it proved nothing.
+   * Claude Code fires PreToolUse per tool call and an agent can have several in
+   * flight; tmp+rename stops a torn READ but not a lost UPDATE, and a lost
+   * update here is a lost DEDUP STAMP, i.e. the same migration asks again inside
+   * its 30-minute window. Measured pre-fix: 8 invocations → 8 asks, 4 records.
+   *
+   * So: spawn N real hook processes at once, against N distinct migration files
+   * (per-FILE dedup, so every one legitimately asks), and require every ask to
+   * leave both a fire record and a stamp behind.
+   */
+  it.skipIf(!bundleBuilt)("M1 — 8 PARALLEL hook processes leave 8 fires, 8 dedup stamps, and a parseable file", async () => {
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-gr-par-"));
+    try {
+      const sd = path.join(projectDir, ".deeppairing", "sessions", "s1");
+      fs.mkdirSync(sd, { recursive: true });
+      fs.writeFileSync(path.join(sd, "artifacts.json"), "[]");
+      const N = 8;
+      const rels = Array.from({ length: N }, (_, i) => `migrations/${i}_change.sql`);
+      const runs = rels.map(
+        (rel) =>
+          new Promise<string>((resolve, reject) => {
+            const child = spawn("node", [committedBundle], {
+              env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir, DEEPPAIRING_GUARDRAIL_BACKSTOP: "" },
+              stdio: ["pipe", "pipe", "inherit"],
+            });
+            let out = "";
+            child.stdout.on("data", (d) => (out += d));
+            child.on("error", reject);
+            child.on("close", () => resolve(out.trim()));
+            child.stdin.end(
+              JSON.stringify({
+                tool_name: "Edit",
+                tool_input: { file_path: path.join(projectDir, rel), new_string: "x" },
+              }),
+            );
+          }),
+      );
+      const outs = await Promise.all(runs);
+
+      // Every one of the N is a distinct irreversible file → all N must ask.
+      const asked = outs.filter((o) => o.includes("GUARDRAIL_ESCALATION"));
+      expect(asked, `only ${asked.length}/${N} asked`).toHaveLength(N);
+
+      const sp = path.join(projectDir, ".deeppairing", "hooks-state.json");
+      const state = JSON.parse(fs.readFileSync(sp, "utf-8")); // parseable = not torn
+      // …and every ask left a record. This is the assertion that fails without
+      // the lock (atomic rename alone drops roughly half).
+      expect(state.fires, "fire records were lost to a concurrent write").toHaveLength(N);
+      expect(Object.keys(state.guardrailAsks.migrations).sort(), "dedup stamps were lost").toEqual([...rels].sort());
+      // No lock or temp file survives a clean run.
+      expect(fs.readdirSync(path.join(projectDir, ".deeppairing")).filter((f) => f.includes(".lock") || f.includes(".tmp."))).toEqual([]);
+    } finally {
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it.skipIf(!bundleBuilt)("H1 — the shipped hook is SILENT on vendored / fixture trees (the spurious-ask frontier)", () => {
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-gr-excl-"));
+    try {
+      const sd = path.join(projectDir, ".deeppairing", "sessions", "s1");
+      fs.mkdirSync(sd, { recursive: true });
+      fs.writeFileSync(path.join(sd, "artifacts.json"), "[]");
+      const run = (rel: string) =>
+        execFileSync("node", [committedBundle], {
+          input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: path.join(projectDir, rel), content: "x" } }),
+          encoding: "utf-8",
+          env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir, DEEPPAIRING_GUARDRAIL_BACKSTOP: "" },
+        }).trim();
+      // The exact two the review executed, plus the shapes a real
+      // "add a migration-runner package with tests" session produces.
+      for (const rel of [
+        "node_modules/somepkg/migrations/x.js",
+        "test/fixtures/migrations/seed.sql",
+        "packages/runner/__fixtures__/migrations/001.sql",
+        "packages/runner/testdata/migrations/002.sql",
+        "dist/migrations/bundle.js",
+        "examples/basic/docker-compose.yml",
+        "coverage/lcov-report/.env",
+      ]) {
+        expect(run(rel), `SPURIOUS ask on ${rel}`).toBe("");
+      }
+      // …while the package's own real migration still asks.
+      expect(run("packages/runner/migrations/001_init.sql")).toContain("GUARDRAIL_ESCALATION");
     } finally {
       fs.rmSync(projectDir, { recursive: true, force: true });
     }

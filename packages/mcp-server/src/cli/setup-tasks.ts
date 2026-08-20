@@ -257,11 +257,14 @@ const HOOK_NAME = "stop";
 const STATE_PATH = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".deeppairing", "hooks-state.json");
 const STATE_CAP = 50;
 // Q1 — durable hooks-state writes, mirrored from preflight-hook-core's
-// readHookState/writeHookStateAtomic. Pre-Q1 every writer of this file did a
-// plain read-modify-writeFileSync: two hooks firing at once could tear the
-// JSON, and the next reader's catch reset it to {version:1}, DISCARDING the
-// whole fire log with no backup. Now: corrupt input is copied aside first, and
-// the write is tmp+rename (atomic).
+// readHookState / writeHookStateAtomic / acquireHookStateLock. Pre-Q1 every
+// writer of this file did a plain read-modify-writeFileSync: two hooks firing
+// at once could tear the JSON, and the next reader's catch reset it to
+// {version:1}, DISCARDING the whole fire log with no backup. Atomic rename
+// fixes the torn read but NOT the lost update (M1: 8 parallel invocations kept
+// only 4 records), so the whole read-modify-write runs under an O_EXCL
+// lockfile with a stale-breaker and a bounded spin. Failing to acquire proceeds
+// unsynchronized rather than dropping the record.
 function readState(statePath) {
   let raw;
   try { raw = fs.readFileSync(statePath, "utf-8"); } catch { return { version: 1 }; }
@@ -282,20 +285,40 @@ function writeStateAtomic(statePath, state) {
     throw err;
   }
 }
+function acquireLock(statePath) {
+  const lock = statePath + ".lock";
+  const deadline = Date.now() + 500;
+  for (;;) {
+    try {
+      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
+      return lock;
+    } catch {
+      try {
+        if (Date.now() - fs.statSync(lock).mtimeMs > 5000) { fs.unlinkSync(lock); continue; }
+      } catch { continue; }
+      if (Date.now() >= deadline) return null; // degraded beats dropping the record
+      try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2); } catch {}
+    }
+  }
+}
+function releaseLock(lock) { if (lock) { try { fs.unlinkSync(lock); } catch {} } }
 function recordFire(exitCode, reason) {
   try {
-    const state = readState(STATE_PATH);
-    state.version = 1;
-    state.fires = Array.isArray(state.fires) ? state.fires : [];
-    state.fires.push({
-      at: new Date().toISOString(),
-      hook: HOOK_NAME,
-      exitCode,
-      reason,
-    });
-    if (state.fires.length > STATE_CAP) state.fires = state.fires.slice(-STATE_CAP);
-    fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
-    writeStateAtomic(STATE_PATH, state);
+    fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true }); // before O_EXCL
+    const lock = acquireLock(STATE_PATH);
+    try {
+      const state = readState(STATE_PATH);
+      state.version = 1;
+      state.fires = Array.isArray(state.fires) ? state.fires : [];
+      state.fires.push({
+        at: new Date().toISOString(),
+        hook: HOOK_NAME,
+        exitCode,
+        reason,
+      });
+      if (state.fires.length > STATE_CAP) state.fires = state.fires.slice(-STATE_CAP);
+      writeStateAtomic(STATE_PATH, state);
+    } finally { releaseLock(lock); }
   } catch {
     // Recording must never fail the hook itself.
   }
@@ -560,11 +583,14 @@ function isTrivialFile(filePath) {
 // companion UI's HookStatus can show "hook stack working" feedback.
 const STATE_PATH = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".deeppairing", "hooks-state.json");
 // Q1 — durable hooks-state writes, mirrored from preflight-hook-core's
-// readHookState/writeHookStateAtomic. Pre-Q1 every writer of this file did a
-// plain read-modify-writeFileSync: two hooks firing at once could tear the
-// JSON, and the next reader's catch reset it to {version:1}, DISCARDING the
-// whole fire log with no backup. Now: corrupt input is copied aside first, and
-// the write is tmp+rename (atomic).
+// readHookState / writeHookStateAtomic / acquireHookStateLock. Pre-Q1 every
+// writer of this file did a plain read-modify-writeFileSync: two hooks firing
+// at once could tear the JSON, and the next reader's catch reset it to
+// {version:1}, DISCARDING the whole fire log with no backup. Atomic rename
+// fixes the torn read but NOT the lost update (M1: 8 parallel invocations kept
+// only 4 records), so the whole read-modify-write runs under an O_EXCL
+// lockfile with a stale-breaker and a bounded spin. Failing to acquire proceeds
+// unsynchronized rather than dropping the record.
 function readState(statePath) {
   let raw;
   try { raw = fs.readFileSync(statePath, "utf-8"); } catch { return { version: 1 }; }
@@ -585,15 +611,35 @@ function writeStateAtomic(statePath, state) {
     throw err;
   }
 }
+function acquireLock(statePath) {
+  const lock = statePath + ".lock";
+  const deadline = Date.now() + 500;
+  for (;;) {
+    try {
+      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
+      return lock;
+    } catch {
+      try {
+        if (Date.now() - fs.statSync(lock).mtimeMs > 5000) { fs.unlinkSync(lock); continue; }
+      } catch { continue; }
+      if (Date.now() >= deadline) return null; // degraded beats dropping the record
+      try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2); } catch {}
+    }
+  }
+}
+function releaseLock(lock) { if (lock) { try { fs.unlinkSync(lock); } catch {} } }
 function recordFire(exitCode, reason) {
   try {
-    const state = readState(STATE_PATH);
-    state.version = 1;
-    state.fires = Array.isArray(state.fires) ? state.fires : [];
-    state.fires.push({ at: new Date().toISOString(), hook: "checkpoint", exitCode, reason });
-    if (state.fires.length > 50) state.fires = state.fires.slice(-50);
-    fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
-    writeStateAtomic(STATE_PATH, state);
+    fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true }); // before O_EXCL
+    const lock = acquireLock(STATE_PATH);
+    try {
+      const state = readState(STATE_PATH);
+      state.version = 1;
+      state.fires = Array.isArray(state.fires) ? state.fires : [];
+      state.fires.push({ at: new Date().toISOString(), hook: "checkpoint", exitCode, reason });
+      if (state.fires.length > 50) state.fires = state.fires.slice(-50);
+      writeStateAtomic(STATE_PATH, state);
+    } finally { releaseLock(lock); }
   } catch { /* recording must never fail the hook itself */ }
 }
 function exit(code, reason) {
@@ -852,13 +898,21 @@ function ledgersPresent(projectRoot) {
 // the prefilter while the rules guarded them — silently disabling the backstop
 // on those paths in every ledger-free project. It is DELETED. What runs now is
 // matchGuardrailPath itself, out of the leaf rule-table module: node:path and
-// nothing else. Measured on a native FS: importing the leaf costs 1.4 ms and
-// the match itself 0.0018 ms, against the 7.8 ms matcher-core import this fast
-// path exists to avoid (20 ms / 51 ms respectively on a WSL 9P mount) — and
-// the early exit is now the SAME function as the gate it guards, so it cannot
-// disagree with it. That is why the prefilter could be deleted outright rather
-// than derived: a second definition, however generated, is a second thing to
-// get wrong.
+// nothing else.
+//
+// The honest end-to-end cost, since the deleted prefilter was zero-I/O and this
+// is not: a NET +1.4 ms (native FS) / +21 ms (WSL 9P mount) per hook
+// invocation, and ONLY on this path — the init-generated script in a project
+// with no ledger seeded. It is zero on the marketplace path (esbuild inlines
+// the matcher into preflight.mjs, so there is no import at all), and zero once
+// any ledger exists (ledgersPresent short-circuits before this runs). Component
+// numbers: leaf import 1.4 ms / 20 ms, match 0.0018 ms, versus the 7.8 ms /
+// 51 ms matcher-core import this fast path exists to avoid.
+//
+// That is the price of the early exit being the SAME function as the gate it
+// guards, so it cannot disagree with it — which is why the prefilter was
+// deleted outright rather than derived: a second definition, however generated,
+// is a second thing to get wrong.
 async function targetsGuardrailPath(projectRoot, toolInput) {
   const fp = (toolInput && (toolInput.file_path || toolInput.filePath)) || "";
   if (typeof fp !== "string" || !fp) return false;

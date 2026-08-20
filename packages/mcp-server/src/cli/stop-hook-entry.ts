@@ -65,16 +65,60 @@ function writeStateAtomic(statePath: string, state: unknown): void {
   }
 }
 
+// M1 — atomic rename stops torn reads, not lost updates. The whole
+// read-modify-write runs under an O_EXCL lockfile (stale-broken after 5 s,
+// bounded 500 ms spin); failing to acquire proceeds unsynchronized rather than
+// dropping the record. Mirrors preflight-hook-core's acquireHookStateLock.
+function acquireLock(statePath: string): string | null {
+  const lock = `${statePath}.lock`;
+  const deadline = Date.now() + 500;
+  for (;;) {
+    try {
+      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
+      return lock;
+    } catch {
+      try {
+        if (Date.now() - fs.statSync(lock).mtimeMs > 5000) {
+          fs.unlinkSync(lock);
+          continue;
+        }
+      } catch {
+        continue;
+      }
+      if (Date.now() >= deadline) return null;
+      try {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2);
+      } catch {
+        /* SharedArrayBuffer unavailable */
+      }
+    }
+  }
+}
+
+function releaseLock(lock: string | null): void {
+  if (!lock) return;
+  try {
+    fs.unlinkSync(lock);
+  } catch {
+    /* already gone */
+  }
+}
+
 function recordFire(exitCode: number, reason: string): void {
   try {
     const statePath = path.join(projectRoot(), ".deeppairing", "hooks-state.json");
-    const state = readState(statePath);
-    state.version = 1;
-    const fires = Array.isArray(state.fires) ? state.fires : [];
-    fires.push({ at: new Date().toISOString(), hook: HOOK_NAME, exitCode, reason });
-    state.fires = fires.slice(-STATE_CAP);
-    fs.mkdirSync(path.dirname(statePath), { recursive: true });
-    writeStateAtomic(statePath, state);
+    fs.mkdirSync(path.dirname(statePath), { recursive: true }); // before O_EXCL
+    const lock = acquireLock(statePath);
+    try {
+      const state = readState(statePath);
+      state.version = 1;
+      const fires = Array.isArray(state.fires) ? state.fires : [];
+      fires.push({ at: new Date().toISOString(), hook: HOOK_NAME, exitCode, reason });
+      state.fires = fires.slice(-STATE_CAP);
+      writeStateAtomic(statePath, state);
+    } finally {
+      releaseLock(lock);
+    }
   } catch {
     /* recording must never fail the hook itself */
   }

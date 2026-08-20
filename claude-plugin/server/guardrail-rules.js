@@ -46,6 +46,7 @@ var GUARDRAIL_RULES = [
     fileExclude: /\.(example|sample|template|dist)$/i
   }
 ];
+var GUARDRAIL_EXCLUDED_SEGMENTS = /(^|\/)(node_modules|bower_components|vendor|third_party|\.venv|venv|site-packages|dist|build|out|target|coverage|\.next|\.nuxt|\.output|\.turbo|__pycache__|fixtures|__fixtures__|testdata|test-data|__snapshots__|__mocks__|examples|example)(\/)/;
 function matchesGuardrailDir(rel, d) {
   return rel === d || rel.startsWith(d + "/") || rel.endsWith("/" + d) || rel.includes("/" + d + "/");
 }
@@ -54,6 +55,7 @@ function matchesGuardrailFile(rule, rel) {
   return !(rule.fileExclude && rule.fileExclude.test(rel));
 }
 function ruleForRelPath(rel) {
+  if (GUARDRAIL_EXCLUDED_SEGMENTS.test(rel)) return null;
   for (const rule of GUARDRAIL_RULES) {
     if (rule.dirs.some((d) => matchesGuardrailDir(rel, d)) || matchesGuardrailFile(rule, rel)) return rule;
   }
@@ -85,6 +87,7 @@ function toolInputTargetsGuardrail(projectRoot, toolInput) {
   }
 }
 export {
+  GUARDRAIL_EXCLUDED_SEGMENTS,
   GUARDRAIL_RULES,
   matchGuardrailPath,
   matchesGuardrailDir,

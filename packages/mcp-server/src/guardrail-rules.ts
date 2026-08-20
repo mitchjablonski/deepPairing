@@ -73,6 +73,9 @@ export interface GuardrailRule {
  * whole job is the irreversible edit cannot be blind to the layout its own
  * repo uses. Both dir rules and file rules now match at any depth.
  *
+ * Any-depth matching is paired with GUARDRAIL_EXCLUDED_SEGMENTS below — without
+ * it the widened set swallows node_modules, fixtures and build output (H1).
+ *
  * The near-miss silence list is UNAFFECTED and pinned: `src/migrations.js`,
  * `docs/migrations.md`, `src/k8s-helpers.ts`, `docs/terraform-notes.md`,
  * `compose.ts` are FILES NAMED LIKE guardrail dirs, not files INSIDE them —
@@ -130,6 +133,35 @@ export const GUARDRAIL_RULES: GuardrailRule[] = [
   },
 ];
 
+/**
+ * H1 (round-12 adversarial review) — THE EXCLUSION LIST, and why any-depth
+ * matching needs one.
+ *
+ * Extending the rules to any path-segment boundary (item 7, the monorepo fix)
+ * bought the guarded set a large amount of code nobody edits deliberately:
+ * vendored dependencies, test fixtures, build output, docs examples. Executed
+ * against the shipped marketplace hook, `node_modules/somepkg/migrations/x.js`
+ * and `test/fixtures/migrations/seed.sql` both ASKED; a realistic "add a
+ * migration-runner package with tests" session of 20 writes produced 9 asks, 8
+ * of them spurious — and the per-FILE dedup grain for migrations/secrets makes
+ * it WORSE, because every fixture asks separately rather than once for the
+ * class. This repository's own `node_modules` contains 20 newly-firing paths.
+ *
+ * Round-12's dogfood measured ZERO spurious asks and called the backstop
+ * something the user "would not turn off". Spurious asks are the failure mode
+ * that kills a gate like this, so the exclusion is checked BEFORE any rule.
+ *
+ * The trade-off, stated rather than hidden: a REAL migration that lives under
+ * `examples/` or `fixtures/` goes unguarded. That is the same policy the
+ * near-miss silence list already takes — the backstop is a protocol backstop,
+ * not a security boundary, and a false ask costs more than a missed one here.
+ *
+ * A segment only excludes when something follows it (the trailing `\/`), so a
+ * FILE named `dist` or `vendor` is untouched.
+ */
+export const GUARDRAIL_EXCLUDED_SEGMENTS =
+  /(^|\/)(node_modules|bower_components|vendor|third_party|\.venv|venv|site-packages|dist|build|out|target|coverage|\.next|\.nuxt|\.output|\.turbo|__pycache__|fixtures|__fixtures__|testdata|test-data|__snapshots__|__mocks__|examples|example)(\/)/;
+
 /** `rel` is, or is inside, directory `d` — at ANY segment boundary. */
 export function matchesGuardrailDir(rel: string, d: string): boolean {
   return rel === d || rel.startsWith(d + "/") || rel.endsWith("/" + d) || rel.includes("/" + d + "/");
@@ -143,6 +175,9 @@ export function matchesGuardrailFile(rule: GuardrailRule, rel: string): boolean 
 
 /** The rule a project-relative posix path falls under, or null. */
 export function ruleForRelPath(rel: string): GuardrailRule | null {
+  // H1 — vendored / generated / fixture / example trees are out of scope
+  // entirely. Checked first: it is the reason any-depth matching is safe.
+  if (GUARDRAIL_EXCLUDED_SEGMENTS.test(rel)) return null;
   for (const rule of GUARDRAIL_RULES) {
     if (rule.dirs.some((d) => matchesGuardrailDir(rel, d)) || matchesGuardrailFile(rule, rel)) return rule;
   }

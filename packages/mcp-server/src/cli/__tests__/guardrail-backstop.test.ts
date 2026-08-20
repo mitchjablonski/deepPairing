@@ -38,6 +38,7 @@ import {
   toolInputTargetsGuardrail,
 } from "../preflight-hook-core.js";
 import { sessionHasLivePreWorkCeremony } from "../../debrief-gate.js";
+import { GUARDRAIL_EXCLUDED_SEGMENTS } from "../../guardrail-rules.js";
 
 let dir: string;
 const NOW = Date.UTC(2026, 7, 15, 12, 0, 0);
@@ -204,6 +205,52 @@ describe("matchGuardrailPath — the trigger predicate (F6 sweep)", () => {
     expect(matchGuardrailPath(dir, [".github/workflows/ci.yml"])?.category).toBe("workflows");
   });
 
+  /**
+   * H1 — the false-positive frontier any-depth matching opened. Every probe is
+   * DERIVED from GUARDRAIL_EXCLUDED_SEGMENTS itself, so a segment removed from
+   * the table stops being asserted here rather than silently rotting.
+   */
+  it("H1 — vendored / generated / fixture / example trees never ask (derived from the exclusion table)", () => {
+    const segments = /\(([^)]*)\)\(\\\/\)/.exec(GUARDRAIL_EXCLUDED_SEGMENTS.source)![1]
+      .split("|")
+      .map((x) => x.replace(/\\/g, ""));
+    expect(segments.length).toBeGreaterThan(20);
+    const silent: string[] = [];
+    for (const seg of segments) {
+      // The two shapes the review executed against the shipped hook.
+      silent.push(`${seg}/somepkg/migrations/x.js`, `packages/api/${seg}/migrations/seed.sql`);
+      // …and a file rule inside the same tree.
+      silent.push(`${seg}/pkg/Dockerfile`, `${seg}/pkg/.env`);
+    }
+    for (const rel of silent) {
+      expect(matchGuardrailPath(dir, [path.join(dir, rel)]), `SPURIOUS ask on ${rel}`).toBeNull();
+      expect(toolInputTargetsGuardrail(dir, { file_path: path.join(dir, rel) }), `early exit fired on ${rel}`).toBe(false);
+    }
+    expect(silent.length).toBeGreaterThan(80);
+    // The two the review named, spelled out.
+    expect(matchGuardrailPath(dir, [path.join(dir, "node_modules/somepkg/migrations/x.js")])).toBeNull();
+    expect(matchGuardrailPath(dir, [path.join(dir, "test/fixtures/migrations/seed.sql")])).toBeNull();
+    // A segment NAME as the final component is untouched — only trees are
+    // excluded, so `vendor.ts` or a `dist` file can still be a guardrail path.
+    expect(matchGuardrailPath(dir, [path.join(dir, "migrations/dist")])?.category).toBe("migrations");
+  });
+
+  it("H1 — the exclusion does NOT eat the keeps: nested pins, root classes, and the round-12 misses all still fire", () => {
+    for (const [rel, category] of [...GUARDED, ...GUARDED_NESTED]) {
+      expect(matchGuardrailPath(dir, [path.join(dir, rel)])?.category, `exclusion swallowed ${rel}`).toBe(category);
+    }
+    for (const rel of [
+      "Dockerfile-prod",
+      "docker-compose-prod.yml",
+      "compose-prod.yml",
+      "config/secrets_prod.yml",
+      "config/credentials-dev.yml",
+      "prod.tfvars.json",
+    ]) {
+      expect(matchGuardrailPath(dir, [path.join(dir, rel)]), `round-12 miss regressed: ${rel}`).not.toBeNull();
+    }
+  });
+
   it("Q1 item 7 — nested (monorepo) guardrail paths fire; near-miss lookalikes stay silent", () => {
     for (const [rel, category] of GUARDED_NESTED) {
       const m = matchGuardrailPath(dir, [path.join(dir, rel)]);
@@ -229,26 +276,45 @@ describe("matchGuardrailPath — the trigger predicate (F6 sweep)", () => {
    */
   it("Q1 item 1 — the hook entries' early exit agrees with the matcher on every path DERIVED from GUARDRAIL_RULES", () => {
     const probes: string[] = [];
+    const lookalikes: string[] = [];
+    let filePatternProbes = 0;
     for (const rule of GUARDRAIL_RULES) {
       for (const d of rule.dirs) {
         probes.push(`${d}/f.txt`, `${d}/nested/f.txt`, `packages/a/${d}/f.txt`);
         // The continuations the drifted prefilter rejected, as SIBLING names —
         // these must NOT match (they are lookalikes, not guardrail dirs).
-        probes.push(`${d}-prod/f.txt`, `${d}_prod/f.txt`, `${d}.bak`);
+        lookalikes.push(`${d}-prod/f.txt`, `${d}_prod/f.txt`, `${d}.bak`);
       }
       for (const re of rule.filePatterns) {
+        // M2 — a filePattern with NO samples used to contribute ZERO probes and
+        // still pass (the dir probes alone cleared the count floor). Adding a
+        // pattern without a sample now FAILS here rather than going untested.
+        expect(
+          SAMPLES_BY_PATTERN[re.source]?.length,
+          `no SAMPLES_BY_PATTERN entry for ${rule.category} pattern ${re.source} — the derived-probe test would be blind to it`,
+        ).toBeGreaterThan(0);
         // Reconstruct concrete filenames the pattern accepts, at root and nested.
-        for (const sample of SAMPLES_BY_PATTERN[re.source] ?? []) {
+        for (const sample of SAMPLES_BY_PATTERN[re.source]) {
           probes.push(sample, `packages/api/${sample}`, `a/b/c/${sample}`);
+          filePatternProbes += 3;
         }
       }
     }
+    probes.push(...lookalikes);
     expect(probes.length).toBeGreaterThan(60);
+    expect(filePatternProbes, "file rules contributed no probes").toBeGreaterThan(40);
     for (const rel of probes) {
       const viaMatcher = matchGuardrailPath(dir, [path.join(dir, rel)]) !== null;
       const viaEarlyExit = toolInputTargetsGuardrail(dir, { file_path: path.join(dir, rel) });
       expect(viaEarlyExit, `early exit disagreed with the matcher on ${rel}`).toBe(viaMatcher);
     }
+    // M2 — the `-prod` / `_prod` / `.bak` siblings are generated as things that
+    // must NOT match. Asserting only "early exit === matcher" left that claim
+    // completely unchecked (both being `true` would have passed).
+    for (const rel of lookalikes) {
+      expect(matchGuardrailPath(dir, [path.join(dir, rel)]), `lookalike ${rel} must not match`).toBeNull();
+    }
+    expect(lookalikes.length).toBeGreaterThan(20);
     // The exact six paths round-12 named as silently unguarded.
     for (const rel of [
       "Dockerfile-prod",

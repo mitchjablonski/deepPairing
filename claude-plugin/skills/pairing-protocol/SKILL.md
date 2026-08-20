@@ -401,11 +401,24 @@ Project guardrails come in four classes:
 
 **Depth.** The backstop matches these at **any depth**, so a monorepo's
 `packages/api/migrations/002_drop_users.sql` or `services/web/Dockerfile` is
-guarded exactly like a root-level one. A file merely NAMED after a guardrail
-directory is not (`src/migrations.js`, `docs/migrations.md`, `lib/helm.ts` are
-all ordinary code). The 🛡 section of your first-call hint is narrower on
-purpose: it lists what it can SEE at the project root without walking the
-tree, so treat it as examples, not as the boundary.
+guarded exactly like a root-level one. A file whose name merely CONTAINS a
+guardrail directory's name is not: `src/migrations.js`, `docs/migrations.md`
+and `lib/helm.ts` are ordinary code. (The test is on whole path segments, so
+an extension-less file whose entire name is `migrations` is indistinguishable
+from the directory and does fire — a deliberate, rare over-match.) The 🛡
+section of your first-call hint is narrower on purpose: it lists what it can
+SEE at the project root without walking the tree, so treat it as examples, not
+as the boundary.
+
+**Excluded trees.** Depth matching stops at code nobody edits deliberately:
+nothing under `node_modules/`, `vendor/`, `third_party/`, `.venv/`,
+`site-packages/`, `dist/`, `build/`, `out/`, `target/`, `coverage/`, `.next/`,
+`.turbo/`, `__pycache__/`, `fixtures/`, `__fixtures__/`, `testdata/`,
+`__snapshots__/`, `__mocks__/` or `examples/` ever asks. Without that, adding a
+migration-runner package with tests would fire on every fixture. The trade-off
+is stated rather than hidden: a REAL migration that lives under `examples/` or
+`fixtures/` goes unguarded — the same policy as the named-after exclusions
+above, because a spurious ask costs this mechanism more than a missed one.
 
 Even when autonomy is "autonomous", escalate to supervised for changes touching
 these paths — that's the Escalated class, and it's on you to recognize it.

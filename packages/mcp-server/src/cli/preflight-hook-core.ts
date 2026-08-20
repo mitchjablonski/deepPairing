@@ -431,9 +431,9 @@ const FIRE_LOG_CAP = 50;
 /**
  * Q1 item 4 — the atomic write, ported into the hook lane.
  *
- * hooks-state.json had FIVE unlocked read-modify-write writers (this one, both
- * Stop copies, both checkpoint copies) all ending in a plain
- * `fs.writeFileSync`. Two hooks firing in the same instant could interleave a
+ * hooks-state.json had FOUR unlocked read-modify-write writers — this one, both
+ * Stop copies (the plugin-bundled entry and setup-tasks' generated twin), and
+ * the generated checkpoint script — all ending in a plain `fs.writeFileSync`. Two hooks firing in the same instant could interleave a
  * torn write, and the next reader's `JSON.parse` throws — at which point the
  * catch below used to reset the file to `{version:1}`, DISCARDING every prior
  * fire with no backup. That is the exact failure the project's own salvage rule
@@ -452,6 +452,71 @@ export function writeHookStateAtomic(statePath: string, state: unknown): void {
   } catch (err) {
     try { fs.unlinkSync(tmp); } catch { /* never mask the real error */ }
     throw err;
+  }
+}
+
+/**
+ * M1 (round-12 adversarial review) — the atomic write was necessary and NOT
+ * sufficient.
+ *
+ * tmp+rename guarantees no reader ever sees a torn file. It does NOT serialize
+ * read-modify-write: two hooks that both read state N and both rename their
+ * N+1 leave one of the two updates gone. Measured with 8 parallel invocations:
+ * 8 asks were emitted, but only 4 fire records and — the part that matters — 4
+ * DEDUP STAMPS survived. A dropped stamp means the same file asks again inside
+ * its 30-minute window, which is the spurious-ask failure H1 is about.
+ *
+ * So the whole RMW runs under an O_EXCL lockfile. Hooks are sub-100 ms
+ * processes, so a short spin is the right shape (no async, no dependency):
+ *   - O_EXCL create is the atomic test-and-set;
+ *   - a lock older than LOCK_STALE_MS is BROKEN, so a hook killed mid-write
+ *     cannot wedge every later one;
+ *   - failing to acquire within LOCK_MAX_WAIT_MS proceeds UNSYNCHRONIZED
+ *     rather than dropping the record — degraded beats silent, and a hook may
+ *     never fail the tool call it is gating.
+ */
+const LOCK_STALE_MS = 5_000;
+const LOCK_SPIN_MS = 2;
+const LOCK_MAX_WAIT_MS = 500;
+
+/** Synchronous sleep — the hook lane has no async seam to yield through. */
+function sleepSync(ms: number): void {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {
+    /* SharedArrayBuffer unavailable — spin-free fallback: just retry */
+  }
+}
+
+/** Returns the lock path on success, or null to proceed unsynchronized. */
+export function acquireHookStateLock(statePath: string, now: number = Date.now()): string | null {
+  const lock = `${statePath}.lock`;
+  const deadline = now + LOCK_MAX_WAIT_MS;
+  for (;;) {
+    try {
+      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
+      return lock;
+    } catch {
+      try {
+        if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {
+          fs.unlinkSync(lock); // a crashed hook must not wedge the next one
+          continue;
+        }
+      } catch {
+        continue; // the holder released it between our open and our stat
+      }
+      if (Date.now() >= deadline) return null;
+      sleepSync(LOCK_SPIN_MS);
+    }
+  }
+}
+
+export function releaseHookStateLock(lock: string | null): void {
+  if (!lock) return;
+  try {
+    fs.unlinkSync(lock);
+  } catch {
+    /* already gone */
   }
 }
 
@@ -503,26 +568,36 @@ export function readHookState(statePath: string): Record<string, unknown> {
  * `exitCode`; HookStatus keys on `exitCode === 2`, so EVERY guardrail ask and
  * every rejected-approach block rendered as a green "pass" — the UI said the
  * opposite of what happened. Every fire on this lane surfaces as
- * permissionDecision "ask", so `kind` is `"ask"` here; the field is typed
- * `"ask" | "pass"` for the other hooks and is OPTIONAL, so a record written by
- * an older build (no `kind`) keeps rendering exactly as it does today.
+ * permissionDecision "ask", so this lane always writes `"ask"`. The contract
+ * with the UI side (landed separately) is `kind?: "ask" | "pass"` — OPTIONAL,
+ * so a record written by an older build, or by the Stop/checkpoint hooks (which
+ * deliberately keep writing `exitCode` instead: a stderr nag that exits 0 is
+ * honestly neither), keeps rendering exactly as it does today. There is no
+ * `kind` declaration in this file to point at; the field is written here and
+ * typed where the fire log is read.
  */
 export function recordHookFire(projectRoot: string, decision: HookDecision, now: number = Date.now()): void {
   try {
     const sp = path.join(projectRoot, ".deeppairing", "hooks-state.json");
-    const state = readHookState(sp);
-    state.version = 1;
-    const fires = Array.isArray(state.fires) ? state.fires : [];
-    fires.push({
-      at: new Date(now).toISOString(),
-      hook: "preflight",
-      kind: "ask" as const,
-      reason: decision.guardrail ? `guardrail:${decision.guardrail.category}` : decision.source || "blocked",
-    });
-    state.fires = fires.slice(-FIRE_LOG_CAP);
-    if (decision.guardrail) stampGuardrailAsk(state, decision.guardrail, now);
+    // Before the lock — O_EXCL needs the directory to exist.
     fs.mkdirSync(path.dirname(sp), { recursive: true });
-    writeHookStateAtomic(sp, state);
+    const lock = acquireHookStateLock(sp);
+    try {
+      const state = readHookState(sp);
+      state.version = 1;
+      const fires = Array.isArray(state.fires) ? state.fires : [];
+      fires.push({
+        at: new Date(now).toISOString(),
+        hook: "preflight",
+        kind: "ask" as const,
+        reason: decision.guardrail ? `guardrail:${decision.guardrail.category}` : decision.source || "blocked",
+      });
+      state.fires = fires.slice(-FIRE_LOG_CAP);
+      if (decision.guardrail) stampGuardrailAsk(state, decision.guardrail, now);
+      writeHookStateAtomic(sp, state);
+    } finally {
+      releaseHookStateLock(lock);
+    }
   } catch {
     /* recording must never fail the hook itself */
   }

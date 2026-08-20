@@ -423,6 +423,7 @@ var GUARDRAIL_RULES = [
     fileExclude: /\.(example|sample|template|dist)$/i
   }
 ];
+var GUARDRAIL_EXCLUDED_SEGMENTS = /(^|\/)(node_modules|bower_components|vendor|third_party|\.venv|venv|site-packages|dist|build|out|target|coverage|\.next|\.nuxt|\.output|\.turbo|__pycache__|fixtures|__fixtures__|testdata|test-data|__snapshots__|__mocks__|examples|example)(\/)/;
 function matchesGuardrailDir(rel, d) {
   return rel === d || rel.startsWith(d + "/") || rel.endsWith("/" + d) || rel.includes("/" + d + "/");
 }
@@ -431,6 +432,7 @@ function matchesGuardrailFile(rule, rel) {
   return !(rule.fileExclude && rule.fileExclude.test(rel));
 }
 function ruleForRelPath(rel) {
+  if (GUARDRAIL_EXCLUDED_SEGMENTS.test(rel)) return null;
   for (const rule of GUARDRAIL_RULES) {
     if (rule.dirs.some((d) => matchesGuardrailDir(rel, d)) || matchesGuardrailFile(rule, rel)) return rule;
   }
@@ -616,6 +618,43 @@ function writeHookStateAtomic(statePath, state) {
     throw err;
   }
 }
+var LOCK_STALE_MS = 5e3;
+var LOCK_SPIN_MS = 2;
+var LOCK_MAX_WAIT_MS = 500;
+function sleepSync(ms) {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {
+  }
+}
+function acquireHookStateLock(statePath, now = Date.now()) {
+  const lock = `${statePath}.lock`;
+  const deadline = now + LOCK_MAX_WAIT_MS;
+  for (; ; ) {
+    try {
+      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
+      return lock;
+    } catch {
+      try {
+        if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {
+          fs.unlinkSync(lock);
+          continue;
+        }
+      } catch {
+        continue;
+      }
+      if (Date.now() >= deadline) return null;
+      sleepSync(LOCK_SPIN_MS);
+    }
+  }
+}
+function releaseHookStateLock(lock) {
+  if (!lock) return;
+  try {
+    fs.unlinkSync(lock);
+  } catch {
+  }
+}
 function readHookState(statePath) {
   let raw;
   try {
@@ -638,19 +677,24 @@ function readHookState(statePath) {
 function recordHookFire(projectRoot, decision, now = Date.now()) {
   try {
     const sp = path2.join(projectRoot, ".deeppairing", "hooks-state.json");
-    const state = readHookState(sp);
-    state.version = 1;
-    const fires = Array.isArray(state.fires) ? state.fires : [];
-    fires.push({
-      at: new Date(now).toISOString(),
-      hook: "preflight",
-      kind: "ask",
-      reason: decision.guardrail ? `guardrail:${decision.guardrail.category}` : decision.source || "blocked"
-    });
-    state.fires = fires.slice(-FIRE_LOG_CAP);
-    if (decision.guardrail) stampGuardrailAsk(state, decision.guardrail, now);
     fs.mkdirSync(path2.dirname(sp), { recursive: true });
-    writeHookStateAtomic(sp, state);
+    const lock = acquireHookStateLock(sp);
+    try {
+      const state = readHookState(sp);
+      state.version = 1;
+      const fires = Array.isArray(state.fires) ? state.fires : [];
+      fires.push({
+        at: new Date(now).toISOString(),
+        hook: "preflight",
+        kind: "ask",
+        reason: decision.guardrail ? `guardrail:${decision.guardrail.category}` : decision.source || "blocked"
+      });
+      state.fires = fires.slice(-FIRE_LOG_CAP);
+      if (decision.guardrail) stampGuardrailAsk(state, decision.guardrail, now);
+      writeHookStateAtomic(sp, state);
+    } finally {
+      releaseHookStateLock(lock);
+    }
   } catch {
   }
 }
@@ -700,6 +744,7 @@ export {
   GUARDRAIL_BACKSTOP_ENV,
   GUARDRAIL_RULES,
   PER_PATH_DEDUP_CLASSES,
+  acquireHookStateLock,
   buildProposals,
   evaluateGuardrailBackstop,
   evaluatePreflightHook,
@@ -712,6 +757,7 @@ export {
   readSessionCeremony,
   readTeamPreferences,
   recordHookFire,
+  releaseHookStateLock,
   stripArtifactClause,
   toHookReason,
   toolInputTargetsGuardrail,
