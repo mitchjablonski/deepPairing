@@ -5,14 +5,14 @@
     "url": "https://github.com/mitchjablonski"
   },
   "metadata": {
-    "description": "Pair with Claude Code instead of reviewing its output after the fact.",
+    "description": "Tell Claude Code \"no\" once and it sticks — it refuses to re-propose the approach and quotes your reason back.",
     "version": "0.1.0"
   },
   "plugins": [
     {
       "name": "deeppairing",
       "source": "./claude-plugin",
-      "description": "Turn Claude Code into a thinking partner: structured findings / specs / options / plans you shape in a local companion UI, concept-naming for learning, and a rejection gate that stops a concept you've turned down before the edit lands — in the project where you rejected it, with an advisory cross-project flag everywhere else — so your taste compounds.",
+      "description": "A rejection gate that stops a concept you've turned down before the edit lands: the tool call is refused and your own reason is quoted back, in the project where you rejected it — and, once you enable cross-project publishing, flagged (advisory) on your other projects too. Around it, a local companion UI where structured findings / specs / options / plans are shaped with you, with concept-naming for learning — so your taste compounds.",
       "homepage": "https://github.com/mitchjablonski/deepPairing",
       "license": "MIT",
       "keywords": [

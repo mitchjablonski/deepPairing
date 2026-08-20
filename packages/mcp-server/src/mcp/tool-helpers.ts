@@ -166,6 +166,19 @@ export async function preflightRejectedApproaches(
   // can surface a toast.
   broadcast(result.block.broadcastEvent);
 
+  // Q2 — ...except that in the PRODUCTION install path the line above reaches
+  // nobody: standalone.ts hands createMcpServer a `noop` broadcast (the daemon
+  // does its own broadcasting on mutations it owns), and a block is not a
+  // mutation the daemon ever sees. So the single most distinctive deepPairing
+  // moment fired invisibly for everyone except demo users — whose block IS
+  // daemon-side, and is even replayed to late joiners. Route it explicitly, on
+  // the same F1 seam the metric already uses: the daemon fans it to attached
+  // tabs (live toast) AND persists it to the project block log (durable, so a
+  // closed browser or a reload no longer erases the moment). Fire-and-forget:
+  // the refusal below is already correct; surfacing must never be able to
+  // break it.
+  void store.recordPreflightBlock?.(result.block.broadcastEvent);
+
   // F1 — record the preflight-block metric at its truth point. The broadcast
   // above is a no-op in standalone (the wrapper's broadcast), so the daemon's
   // tap never saw a real block; route it to the daemon explicitly instead.
@@ -179,7 +192,8 @@ export async function preflightRejectedApproaches(
   // ADMIT path so the agent narrates the moat on every successful
   // proposal, but on BLOCK — exactly when the moat is biting hardest —
   // the agent got the least context. formatPreflightTraceSummary is a
-  // no-op when consideredCount===0 so this can't add noise on bootstrap.
+  // no-op when there is nothing to report (no local stances considered AND
+  // no near-misses) so this can't add noise on bootstrap.
   const blockSummary = formatPreflightTraceSummary(result.trace);
   return {
     ok: false,
@@ -285,17 +299,60 @@ export function notifyResourcesListChanged(server: any): void {
  * to the user can acknowledge "considered 3 past stances; near-miss
  * on 'global mutable state'" without an extra round trip.
  *
- * Returns an empty string for the bootstrap case (no past stances yet)
- * so the very first artifact in a fresh project doesn't ship a noisy
- * "considered 0 past stance(s)" line.
+ * Returns an empty string for the bootstrap case (no past stances yet AND
+ * nothing to say) so the very first artifact in a fresh project doesn't
+ * ship a noisy "considered 0 past stance(s)" line.
+ *
+ * Q2 — THE CROSS-PROJECT NUDGE, DELIVERED. Pre-Q2 this bailed on
+ * `consideredCount === 0` alone. `consideredCount` counts LOCAL stances only
+ * (session rejections + team prefs — see runPreflight's `considered` list;
+ * cross-project advisory hits land in `nearMisses` with source "global" and
+ * are deliberately NOT counted there). So a FRESH project — zero local
+ * stances, which is EXACTLY the case the cross-project ledger exists for —
+ * computed the advisory near-miss into preflight-traces.json, broadcast it to
+ * the UI breadcrumb, and then returned "" to the agent. The promised sentence
+ * ("You avoided this in projA — still want it here?") never reached the model
+ * in its canonical scenario.
+ *
+ * The guard now keys on "is there anything to say" (a local count OR any
+ * near-miss), and the "considered N" clause is emitted only when N > 0 — the
+ * bootstrap quiet case is preserved for a genuinely empty consult (no local
+ * stances, no near-misses → still ""), while the noisy "considered 0" prefix
+ * never appears.
+ *
+ * Global near-misses additionally get the nudge spelled out (concept + which
+ * project + your reason) rather than only appearing as a bare quoted concept
+ * in the near-miss list: the whole value of an advisory is the question it
+ * asks, and it must be unmistakably NOT a block.
  */
 export function formatPreflightTraceSummary(trace: PreflightTracePartial): string {
-  if (!trace || trace.consideredCount === 0) return "";
+  if (!trace) return "";
   const nm = trace.nearMisses ?? [];
-  const nearMissText = nm.length
-    ? `; near-miss${nm.length === 1 ? "" : "es"}: ${nm.map((n) => `"${n.concept}"`).join(", ")}`
-    : "";
-  return ` Preflight: considered ${trace.consideredCount} past stance${trace.consideredCount === 1 ? "" : "s"}${nearMissText}.`;
+  // Nothing local considered AND nothing brushed → stay silent (bootstrap).
+  if (trace.consideredCount === 0 && nm.length === 0) return "";
+  const clauses: string[] = [];
+  if (trace.consideredCount > 0) {
+    clauses.push(
+      `considered ${trace.consideredCount} past stance${trace.consideredCount === 1 ? "" : "s"}`,
+    );
+  }
+  if (nm.length) {
+    clauses.push(
+      `near-miss${nm.length === 1 ? "" : "es"}: ${nm.map((n) => `"${n.concept}"`).join(", ")}`,
+    );
+  }
+  let out = ` Preflight: ${clauses.join("; ")}.`;
+  const nudges = nm
+    .filter((n) => n.source === "global")
+    .map((n) => {
+      const where = n.project ? `in "${n.project}"` : "in another project";
+      const because = n.reason ? ` (your reason: "${n.reason}")` : "";
+      return `You avoided "${n.concept}" ${where}${because} — still want it here?`;
+    });
+  if (nudges.length) {
+    out += ` Cross-project advisory (not a block, and you have no local stance on this here): ${nudges.join(" ")}`;
+  }
+  return out;
 }
 
 /**

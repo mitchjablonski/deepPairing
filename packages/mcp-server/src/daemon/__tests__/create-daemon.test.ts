@@ -406,3 +406,95 @@ describe("#152 / R4 — the auto-open and install-health-ping guard call sites",
     expect(logs.some((l) => l.includes("Install-health ping: skipped"))).toBe(false);
   });
 });
+
+/**
+ * Q2 — the broadcast tap persists a gate block.
+ *
+ * The daemon's `broadcast` is the one point every block passes through (the
+ * same reason the metrics tap lives there), so it is where durability belongs.
+ * Round 12's finding was that NOTHING persisted a real block: a 12s toast, an
+ * in-memory browser store, and a metrics counter with no detail. These drive
+ * the REAL factory's broadcast and read the file back off disk.
+ */
+describe("Q2 — createDaemon's broadcast tap writes the durable block log", () => {
+  const BLOCK_EVENT = {
+    type: "preflight_blocked",
+    toolName: "present_code_change",
+    source: "session",
+    match: {
+      concept: "global mutable state for config",
+      proposal: "add a global mutable config singleton",
+      reason: "it makes every test order-dependent",
+      via: "concept",
+    },
+  };
+
+  function readLog(tmpDir: string): Array<Record<string, unknown>> {
+    const file = path.join(tmpDir, ".deeppairing", "preflight-blocks.json");
+    if (!fs.existsSync(file)) return [];
+    return JSON.parse(fs.readFileSync(file, "utf-8")).blocks;
+  }
+
+  it("persists a block broadcast with NO WebSocket client attached — the case that used to vanish", async () => {
+    const { tmpDir, daemon } = makeDaemon();
+    expect(daemon.getClientCount()).toBe(0);
+    daemon.broadcast("session_alpha", BLOCK_EVENT);
+
+    const blocks = readLog(tmpDir);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.concept).toBe("global mutable state for config");
+    expect(blocks[0]!.sessionId).toBe("session_alpha");
+
+    // ...and it's served straight back for a later page load.
+    const res = await daemon.app.request("/api/preflight-blocks", {
+      headers: { "X-Project-Hash": projectHashOf(tmpDir) },
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).blocks).toHaveLength(1);
+  });
+
+  it("DEMO sessions leave the project log untouched — the replay path is unchanged", () => {
+    const { tmpDir, daemon } = makeDaemon();
+    daemon.broadcast(`demo_${Date.now()}`, BLOCK_EVENT);
+    expect(readLog(tmpDir)).toEqual([]);
+  });
+
+  it("ignores every other broadcast type (the tap sees them all)", () => {
+    const { tmpDir, daemon } = makeDaemon();
+    daemon.broadcast("session_alpha", { type: "artifact_created", artifact: { id: "a1" } });
+    daemon.broadcast("session_alpha", { type: "comment_added", comment: { id: "c1" } });
+    expect(readLog(tmpDir)).toEqual([]);
+  });
+
+  it("the internal sink broadcasts + persists a block routed from the MCP-server process", async () => {
+    const { tmpDir, daemon } = makeDaemon();
+    daemon.createSession("session_alpha");
+    const res = await daemon.app.request("/api/internal/sessions/session_alpha/preflight-block", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+        "X-Project-Hash": projectHashOf(tmpDir),
+      },
+      body: JSON.stringify(BLOCK_EVENT),
+    });
+    expect(res.status).toBe(200);
+    expect(readLog(tmpDir)).toHaveLength(1);
+  });
+
+  it("the internal sink refuses anything that is not a preflight block (no arbitrary WS injection)", async () => {
+    const { tmpDir, daemon } = makeDaemon();
+    daemon.createSession("session_alpha");
+    const res = await daemon.app.request("/api/internal/sessions/session_alpha/preflight-block", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer test-token",
+        "X-Project-Hash": projectHashOf(tmpDir),
+      },
+      body: JSON.stringify({ type: "session_renamed", title: "pwned" }),
+    });
+    expect(res.status).toBe(400);
+    expect(readLog(tmpDir)).toEqual([]);
+  });
+});

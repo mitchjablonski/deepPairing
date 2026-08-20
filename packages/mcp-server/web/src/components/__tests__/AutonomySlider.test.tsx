@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AutonomySlider } from "../AutonomySlider";
 import { useToastStore } from "../../stores/toast";
+import { useCrossProjectStore } from "../../stores/crossProject";
 
 function mockStateAutonomy(level: string) {
   return vi.fn((url: string, init?: any) => {
@@ -206,5 +207,124 @@ describe("F5 — unknown autonomy level from unvalidated /api/state (the crash c
     // Pre-F5: findIndex -1 → levels[-1].label → TypeError on every render.
     // Supervised maps to the 'Full' review label (the safe default).
     await waitFor(() => expect(screen.getByRole("button", { name: /autonomy:/i })).toHaveTextContent(/Autonomy: Full/i));
+  });
+});
+
+/**
+ * Q2 — the persistent home for cross-project publishing.
+ *
+ * Round 12: no web control existed at all (grep = 0); the only writer was the
+ * interactive `init` prompt, which the recommended marketplace install never
+ * runs. This is the affordance that survives someone answering "Not now" to
+ * the first-reject card, so it has to be findable, honest about state, and
+ * able to turn the setting back OFF.
+ */
+describe("Q2 — cross-project memory toggle", () => {
+  function mockPublishState(state: Record<string, unknown>) {
+    return vi.fn((url: string, init?: any) => {
+      if (String(url).endsWith("/api/state") && (!init || !init.method || init.method === "GET")) {
+        return Promise.resolve({ ok: true, json: async () => state });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ status: "updated" }) });
+    });
+  }
+  async function open() {
+    await waitFor(() => expect(screen.getByRole("button", { name: /autonomy:/i })).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /autonomy:/i }));
+  }
+
+  beforeEach(() => {
+    useCrossProjectStore.getState().reset();
+  });
+
+  it("shows the state honestly as OFF, with a one-line explanation of what turning it on does", async () => {
+    vi.stubGlobal("fetch", mockPublishState({ autonomyLevel: "supervised", globalLedgerPublish: false }));
+    render(<AutonomySlider />);
+    await open();
+    const toggle = await screen.findByRole("switch", { name: /cross-project memory/i });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText(/stances stay in this project/i)).toBeInTheDocument();
+    expect(screen.getByText(/~\/\.deeppairing/)).toBeInTheDocument();
+  });
+
+  it("clicking it POSTs globalLedgerPublish:true and flips to On", async () => {
+    const fetchMock = mockPublishState({ autonomyLevel: "supervised", globalLedgerPublish: false });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AutonomySlider />);
+    await open();
+    await userEvent.click(await screen.findByRole("switch", { name: /cross-project memory/i }));
+
+    const call = fetchMock.mock.calls.find(
+      (c: any[]) => String(c[0]).includes("/api/preferences") && c[1]?.method === "POST",
+    );
+    expect(JSON.parse(call![1].body)).toEqual({ globalLedgerPublish: true });
+    await waitFor(() =>
+      expect(screen.getByRole("switch", { name: /cross-project memory/i })).toHaveAttribute("aria-checked", "true"),
+    );
+  });
+
+  it("turns back OFF — a control that can only be switched on is a lie", async () => {
+    const fetchMock = mockPublishState({ autonomyLevel: "supervised", globalLedgerPublish: true });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AutonomySlider />);
+    await open();
+    const toggle = await screen.findByRole("switch", { name: /cross-project memory/i });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(toggle);
+    const call = fetchMock.mock.calls.find(
+      (c: any[]) => String(c[0]).includes("/api/preferences") && c[1]?.method === "POST",
+    );
+    expect(JSON.parse(call![1].body)).toEqual({ globalLedgerPublish: false });
+  });
+
+  it("stays hidden while the value is unknown — drawing 'Off' for a project that IS publishing would be worse than nothing", async () => {
+    vi.stubGlobal("fetch", mockPublishState({ autonomyLevel: "supervised" })); // no field
+    render(<AutonomySlider />);
+    await open();
+    expect(screen.queryByRole("switch", { name: /cross-project memory/i })).not.toBeInTheDocument();
+  });
+
+  it("does NOT couple to autonomy — flipping publish never POSTs an autonomyLevel or detailDensity", async () => {
+    const fetchMock = mockPublishState({ autonomyLevel: "supervised", globalLedgerPublish: false });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AutonomySlider />);
+    await open();
+    await userEvent.click(await screen.findByRole("switch", { name: /cross-project memory/i }));
+    const prefCalls = fetchMock.mock.calls.filter(
+      (c: any[]) => String(c[0]).includes("/api/preferences") && c[1]?.method === "POST",
+    );
+    for (const call of prefCalls) {
+      const body = JSON.parse(call[1].body);
+      expect(body).not.toHaveProperty("autonomyLevel");
+      expect(body).not.toHaveProperty("detailDensity");
+    }
+  });
+
+  it("reflects a flip made from the first-reject card without a reload (one preference, two surfaces)", async () => {
+    vi.stubGlobal("fetch", mockPublishState({ autonomyLevel: "supervised", globalLedgerPublish: false }));
+    render(<AutonomySlider />);
+    await open();
+    await screen.findByRole("switch", { name: /cross-project memory/i });
+    act(() => useCrossProjectStore.getState().hydratePublish(true));
+    await waitFor(() =>
+      expect(screen.getByRole("switch", { name: /cross-project memory/i })).toHaveAttribute("aria-checked", "true"),
+    );
+  });
+});
+
+/**
+ * Q2 — Minimal's blurb must agree with the README's "even Minimal stops at the
+ * architectural decisions". The old copy ("proceeds with its recommendations;
+ * you review after") described an autonomous agent with a post-hoc review,
+ * which is the one thing the product says it isn't.
+ */
+describe("Q2 — Minimal names the floor", () => {
+  it("says Minimal still stops at architectural forks", async () => {
+    vi.stubGlobal("fetch", mockStateAutonomy("supervised"));
+    render(<AutonomySlider />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /autonomy:/i })).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /autonomy:/i }));
+    expect(screen.getByText(/still stops at architectural forks/i)).toBeInTheDocument();
+    expect(screen.queryByText(/proceeds with its recommendations/i)).not.toBeInTheDocument();
   });
 });

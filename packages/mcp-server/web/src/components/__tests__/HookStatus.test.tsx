@@ -124,3 +124,53 @@ describe("HookStatus", () => {
     expect(useHookStatusStore.getState().fires[0]!.reason).toBe("first");
   });
 });
+
+/**
+ * Q2 — the chip stops lying about the guardrail lane.
+ *
+ * Round 12: every guardrail fire rendered as a GREEN "pass", because
+ * recordHookFire wrote no exitCode and this component keyed on
+ * `exitCode === 2` alone. A PreToolUse guardrail that stopped and ASKED about a
+ * write to `migrations/` looked exactly like a hook that did nothing — the one
+ * lane this chip exists to make legible.
+ *
+ * The `kind` field (stamped at the record site) is the first authority. Records
+ * WITHOUT it must keep their pre-Q2 rendering byte-for-byte: inferring "pass"
+ * from silence is what caused the bug, so absence is never widened.
+ */
+describe("Q2 — hook fires render honestly (kind: 'ask' | 'pass')", () => {
+  it("kind:'ask' renders as amber 'asked', NOT green 'pass' — even with exitCode 0", async () => {
+    const user = userEvent.setup();
+    useHookStatusStore.getState().pushFire(
+      fire({ hook: "checkpoint", exitCode: 0, kind: "ask", reason: "guardrail: migrations/002.sql" }),
+    );
+    render(<HookStatus />);
+    await user.click(screen.getByRole("button", { name: /show recent hook fires/i }));
+    const asked = screen.getByText("asked");
+    expect(asked).toBeInTheDocument();
+    expect(asked).toHaveClass("text-accent-amber");
+    expect(screen.queryByText("pass")).not.toBeInTheDocument();
+  });
+
+  it("kind:'pass' stays green", async () => {
+    const user = userEvent.setup();
+    useHookStatusStore.getState().pushFire(fire({ exitCode: 0, kind: "pass", reason: "nothing pending" }));
+    render(<HookStatus />);
+    await user.click(screen.getByRole("button", { name: /show recent hook fires/i }));
+    const pass = screen.getByText("pass");
+    expect(pass).toHaveClass("text-accent-green");
+  });
+
+  it("BACK-COMPAT: a record with NO kind keeps the pre-Q2 exitCode rendering exactly", async () => {
+    const user = userEvent.setup();
+    useHookStatusStore.getState().pushFire(fire({ at: new Date().toISOString(), exitCode: 0, reason: "old pass" }));
+    useHookStatusStore.getState().pushFire(
+      fire({ at: new Date(Date.now() - 1000).toISOString(), hook: "checkpoint", exitCode: 2, reason: "old nag" }),
+    );
+    render(<HookStatus />);
+    await user.click(screen.getByRole("button", { name: /show recent hook fires/i }));
+    expect(screen.getByText("pass")).toHaveClass("text-accent-green");
+    expect(screen.getByText("nag")).toHaveClass("text-accent-amber");
+    expect(screen.queryByText("asked")).not.toBeInTheDocument();
+  });
+});

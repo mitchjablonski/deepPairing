@@ -41,6 +41,7 @@ import { applyTopLevelGuards } from "../http/guards.js";
 import { runDemoScript } from "../demo-script.js";
 import { recordMetricEvent } from "../store/metrics-store.js";
 import { recordBroadcastMetric } from "../store/metrics-tap.js";
+import { recordPreflightBlock } from "../store/preflight-block-log.js";
 import { buildPingPayload, decidePing, sendPing } from "../ping.js";
 import { collectUnansweredQuestions } from "@deeppairing/shared";
 import { SERVER_VERSION } from "../version.js";
@@ -268,6 +269,16 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
       recordBroadcastMetric(projectRoot, sessionId, event);
     } catch {
       // Telemetry must never break a broadcast.
+    }
+
+    // Q2: the gate firing must OUTLIVE the toast. Same tap point, same reason
+    // (every block passes through here), same fail-soft posture. Demo sessions
+    // are refused inside recordPreflightBlock so the demo replay path above is
+    // untouched and a demo run still leaves project state byte-identical.
+    try {
+      recordPreflightBlock(projectRoot, sessionId, event);
+    } catch {
+      // Losing the record must never break a broadcast.
     }
   }
 

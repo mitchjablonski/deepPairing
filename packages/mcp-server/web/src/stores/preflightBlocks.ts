@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { apiBase, apiGet } from "../lib/api";
 
 /**
  * #169 — the gate-firing history surfaced to the companion UI.
@@ -6,14 +7,20 @@ import { create } from "zustand";
  * A `preflight_blocked` event (deepPairing refusing an agent proposal that
  * matches a prior rejection) previously produced only a 12s hero toast — the
  * single most distinctive deepPairing moment vanished after twelve seconds with
- * no record of what was blocked, why, or when. This store keeps each fire in
- * memory for the session so PreflightBlockLog can render it long after the toast
- * is gone: what was blocked, the concept, the prior reason, and when.
+ * no record of what was blocked, why, or when. This store keeps each fire so
+ * PreflightBlockLog can render it long after the toast is gone: what was
+ * blocked, the concept, the prior reason, and when.
  *
- * In-memory + session-scoped by design (mirrors hookStatus.ts). There is no
- * server endpoint for per-block detail — the metrics store keeps only the
- * aggregate count — so a page reload starts fresh; the toast + this log are the
- * live surfaces.
+ * Q2 — NO LONGER IN-MEMORY-ONLY. Round 12's finding: the demo stashed its
+ * synthetic block and replayed it to late joiners forever, while a REAL block
+ * lived only here, in one tab, until reload. The human whose browser wasn't
+ * attached when the gate fired — the normal case, since the agent works while
+ * the tab is closed — saw nothing at all, and the demo therefore taught an
+ * expectation production didn't keep. The daemon now persists every real block
+ * to `.deeppairing/preflight-blocks.json` and serves it at
+ * `/api/preflight-blocks`; `load()` hydrates from there on mount, for EVERY
+ * session (not just demo). Live events still arrive via the WS broadcast and
+ * merge on top, deduped against the hydrated set.
  *
  * F7 — this log captures MCP-lane blocks ONLY: a present_* preflight block
  * broadcasts a `preflight_blocked` WS event, which is what feeds this store.
@@ -24,9 +31,9 @@ import { create } from "zustand";
  */
 
 export interface PreflightBlockRecord {
-  /** Stable client id (the moment is the record — no server id exists). */
+  /** Stable id — server-assigned for hydrated blocks, client-minted for live ones. */
   id: string;
-  /** When the block fired, from the client's receipt of the event. */
+  /** When the block fired. */
   at: string;
   source: "session" | "team";
   /** The underlying concept/pattern that was blocked. */
@@ -41,19 +48,88 @@ export interface PreflightBlockRecord {
   rejectedAt?: string;
   addedBy?: string;
   projectCount?: number;
+  /** Q2 — which session the agent was in. Present on server-hydrated blocks. */
+  sessionId?: string;
 }
 
 interface PreflightBlockState {
   blocks: PreflightBlockRecord[];
+  loaded: boolean;
+  /**
+   * Q2 — the "you haven't looked at this yet" boundary, persisted so it
+   * survives the reload that used to erase the blocks themselves. Blocks with
+   * `at` newer than this are unread.
+   */
+  lastSeenAt: string | null;
+  /** Q2 — hydrate from the daemon's durable log. Call once on mount. */
+  load: () => Promise<void>;
   /** Merge a single block from a `preflight_blocked` broadcast event. */
   pushBlock: (block: Omit<PreflightBlockRecord, "id" | "at"> & { at?: string }) => void;
+  /** Q2 — mark everything currently held as seen (called when the log is opened). */
+  markSeen: () => void;
   clear: () => void;
 }
 
 const MAX_BLOCKS_KEPT = 25;
+const LAST_SEEN_KEY = "dp.gateBlocks.lastSeenAt";
+
+/** localStorage is unavailable in private modes / some jsdom configs — never throw. */
+function readLastSeen(): string | null {
+  try {
+    return typeof localStorage === "undefined" ? null : localStorage.getItem(LAST_SEEN_KEY);
+  } catch {
+    return null;
+  }
+}
+function writeLastSeen(at: string): void {
+  try {
+    if (typeof localStorage !== "undefined") localStorage.setItem(LAST_SEEN_KEY, at);
+  } catch {
+    // ignore
+  }
+}
+
+/** Identity for dedupe: the same firing re-delivered (WS replay, reconnect, or
+ *  a live event that the hydrate also carried) must not double-append. */
+function sameBlock(a: PreflightBlockRecord, b: { concept: string; proposal?: string; at?: string; rejectedAt?: string; id?: string }): boolean {
+  if (b.id && a.id === b.id) return true;
+  if (a.concept !== b.concept || a.proposal !== b.proposal) return false;
+  // Prefer the original-rejection timestamp when both have one (the #169 key);
+  // otherwise fall back to the firing timestamp, which the server now assigns.
+  if (a.rejectedAt || b.rejectedAt) return a.rejectedAt === b.rejectedAt;
+  return !!b.at && a.at === b.at;
+}
 
 export const usePreflightBlockStore = create<PreflightBlockState>((set, get) => ({
   blocks: [],
+  loaded: false,
+  lastSeenAt: readLastSeen(),
+
+  load: async () => {
+    try {
+      const res = await apiGet(`${apiBase()}/api/preflight-blocks`);
+      if (!res.ok) {
+        set({ loaded: true });
+        return;
+      }
+      const body = await res.json();
+      const raw: PreflightBlockRecord[] = Array.isArray(body?.blocks) ? body.blocks : [];
+      const hydrated = raw
+        .filter((b) => b && typeof b.concept === "string" && b.concept.length > 0)
+        .map((b) => ({ ...b, via: b.via ?? "surface", source: b.source === "team" ? "team" as const : "session" as const }));
+      // Merge UNDER anything already pushed live (a block that arrived on the
+      // socket while this fetch was in flight is the same firing).
+      const { blocks } = get();
+      const merged = [...blocks];
+      for (const h of hydrated) {
+        if (!merged.some((m) => sameBlock(m, h))) merged.push(h);
+      }
+      merged.sort((a, b) => b.at.localeCompare(a.at));
+      set({ blocks: merged.slice(0, MAX_BLOCKS_KEPT), loaded: true });
+    } catch {
+      set({ loaded: true });
+    }
+  },
 
   pushBlock: (block) => {
     if (!block || typeof block.concept !== "string" || block.concept.length === 0) return;
@@ -61,23 +137,33 @@ export const usePreflightBlockStore = create<PreflightBlockState>((set, get) => 
     const { blocks } = get();
     // F7 — dedupe a double-delivered event. The daemon fans `preflight_blocked`
     // out per session, and #194 replays events on reconnect, so the SAME block
-    // can arrive twice. Identity is (rejectedAt + concept + proposal): the
-    // original rejection's timestamp + what it blocked + what was proposed —
-    // stable across redeliveries of one firing (client `at`/`id` are not, so
-    // they can't be the key). Independent of #194's connection-layer dedupe:
+    // can arrive twice. Independent of #194's connection-layer dedupe:
     // belt-and-suspenders, so neither layer alone can double-append.
-    const isDup = blocks.some(
-      (b) =>
-        b.rejectedAt === block.rejectedAt &&
-        b.concept === block.concept &&
-        b.proposal === block.proposal,
-    );
-    if (isDup) return;
+    if (blocks.some((b) => sameBlock(b, { ...block, at }))) return;
     const id = `blk_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const record: PreflightBlockRecord = { ...block, id, at };
     const next = [record, ...blocks].slice(0, MAX_BLOCKS_KEPT);
     set({ blocks: next });
   },
 
-  clear: () => set({ blocks: [] }),
+  markSeen: () => {
+    const { blocks } = get();
+    // Newest block's timestamp, or now when the log is empty.
+    const newest = blocks.reduce<string | null>(
+      (acc, b) => (acc && acc.localeCompare(b.at) >= 0 ? acc : b.at),
+      null,
+    );
+    const at = newest ?? new Date().toISOString();
+    writeLastSeen(at);
+    set({ lastSeenAt: at });
+  },
+
+  clear: () => set({ blocks: [], loaded: false }),
 }));
+
+/** Q2 — how many held blocks fired after the human last looked. */
+export function unreadBlockCount(state: Pick<PreflightBlockState, "blocks" | "lastSeenAt">): number {
+  const { blocks, lastSeenAt } = state;
+  if (!lastSeenAt) return blocks.length;
+  return blocks.filter((b) => b.at.localeCompare(lastSeenAt) > 0).length;
+}

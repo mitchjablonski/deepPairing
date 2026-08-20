@@ -18,6 +18,7 @@ import { QuickAskModal } from "./components/QuickAskModal";
 import { SettingsSheet } from "./components/SettingsSheet";
 import { ReplayScrubber } from "./components/ReplayScrubber";
 import { ToastLayer } from "./components/ToastLayer";
+import { CrossProjectCard } from "./components/CrossProjectCard";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { LedgerDrawer } from "./components/LedgerDrawer";
 import { SessionBrowserModal } from "./components/SessionBrowserModal";
@@ -754,6 +755,11 @@ function App() {
 
       {/* Ephemeral toast stack — pre-flight blocks, etc. */}
       <ToastLayer />
+
+      {/* Q2 — one-time cross-project opt-in, offered immediately after the
+          first "Reject & remember" in this project (and never again). Renders
+          null unless that moment has just happened. */}
+      <CrossProjectCard />
     </div>
   );
 }

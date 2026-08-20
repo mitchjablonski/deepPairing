@@ -1897,6 +1897,11 @@ export class FileStore implements IStore {
       requests: this.requests,
       autonomyLevel: this.autonomyLevel,
       detailDensity: this.detailDensity,
+      // Q2 — the cross-project publish opt-in rides full-state hydration so
+      // the companion UI can SHOW it (and the first-reject card can decide
+      // whether to offer the enable). Reads from the global ledger are always
+      // on; this flag gates WRITES only.
+      globalLedgerPublish: this.globalLedgerPublishEnabled(),
       sessionMemory: this.getSessionMemory(),
       engagementMetrics: this.getEngagementMetrics(),
     };

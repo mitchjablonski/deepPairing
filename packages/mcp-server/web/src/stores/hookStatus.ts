@@ -16,6 +16,21 @@ export interface HookFire {
   hook: "stop" | "checkpoint" | string;
   exitCode: number;
   reason: string;
+  /**
+   * Q2/Q1 contract — what the hook actually DID, independent of exitCode.
+   *
+   * Round 12: every guardrail fire rendered as a green "pass" here, because
+   * recordHookFire wrote no exitCode and this UI keys on `exitCode === 2`. So
+   * the PreToolUse guardrail STOPPING AND ASKING you about a write to
+   * `migrations/` showed up as if nothing had happened — the chip lied about
+   * the one lane it exists to make legible. Q1 stamps this field at the record
+   * site; we render "ask" amber.
+   *
+   * OPTIONAL on purpose: records written before Q1 (and any hook lane that
+   * doesn't stamp it) carry no `kind`, and must keep their pre-Q2 rendering
+   * exactly — inferring "pass" from silence is what caused the bug.
+   */
+  kind?: "ask" | "pass" | string;
 }
 
 interface HookStatusState {

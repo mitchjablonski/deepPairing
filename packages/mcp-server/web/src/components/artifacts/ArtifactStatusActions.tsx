@@ -3,6 +3,7 @@ import type { Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../../stores/artifact";
 import { useConnectionStore } from "../../stores/connection";
 import { useReplayStore } from "../../stores/replay";
+import { useCrossProjectStore } from "../../stores/crossProject";
 import { useChainComments } from "../../hooks/useChainComments";
 import { summarizeOpenSuggestions, openSuggestionsConfirmLabel } from "../../lib/openSuggestions";
 
@@ -498,6 +499,15 @@ export function ArtifactStatusActions({
       // never send a concept; the server refuses it too, but don't even offer it.
       const concept = action === "rejected" && !suppressRejectConcept ? rejectConcept.trim() || undefined : undefined;
       await updateArtifactStatus(artifact.id, action, trimmedComment || undefined, concept);
+      // Q2 — a reject that CARRIED A CONCEPT is the moment a cross-project
+      // memory key was just created (and the human was just told so by the
+      // field's own label). Offer the cross-project opt-in here, once, and
+      // never again — see stores/crossProject.ts for why this is the only
+      // honest moment for it. Gated on `concept` so a debrief reject (which
+      // records no stance) can't trigger a card about stances.
+      if (action === "rejected" && concept) {
+        useCrossProjectStore.getState().noteStanceRecorded();
+      }
       dispatch({ type: "actionSucceeded" }); // only on success — a failed action keeps the text to retry
     } catch {
       // The store mutations re-throw AFTER toasting a user-facing error. Swallow

@@ -31,7 +31,24 @@ function formatRelative(at: string): string {
   return `${Math.round(delta / 3_600_000)}h ago`;
 }
 
-function fireKindLabel(fire: HookFire): { label: string; tone: "nag" | "pass" } {
+/**
+ * Q2 — honest per-fire rendering.
+ *
+ * Round 12: every guardrail fire showed as a green "pass" because
+ * recordHookFire wrote no exitCode and this keyed on `exitCode === 2` alone.
+ * A PreToolUse guardrail that STOPPED AND ASKED about a write to `migrations/`
+ * therefore looked identical to a hook that did nothing — the chip lied about
+ * the exact lane it exists to make legible.
+ *
+ * The `kind` field (stamped at the record site) is now the first authority:
+ * "ask" renders amber as "asked". Records WITHOUT a `kind` — everything
+ * written before the field existed, and any lane that doesn't stamp it — fall
+ * through to the pre-Q2 exitCode rule byte-for-byte. Treating absence as
+ * "pass" is precisely the inference that produced the bug, so we never widen
+ * this: only an explicit "ask" changes the outcome.
+ */
+export function fireKindLabel(fire: HookFire): { label: string; tone: "nag" | "pass" } {
+  if (fire.kind === "ask") return { label: "asked", tone: "nag" };
   if (fire.exitCode === 2) return { label: "nag", tone: "nag" };
   return { label: "pass", tone: "pass" };
 }

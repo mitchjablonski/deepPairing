@@ -26807,7 +26807,18 @@ var AutonomyLevelSchema = external_exports.enum(["supervised", "balanced", "auto
 var DetailDensitySchema = external_exports.enum(["rich", "terse"]);
 var PreferenceBodySchema = external_exports.object({
   autonomyLevel: AutonomyLevelSchema.optional(),
-  detailDensity: DetailDensitySchema.optional()
+  detailDensity: DetailDensitySchema.optional(),
+  /**
+   * Q2 — cross-project publish opt-in (`globalLedgerPublish` in
+   * preferences.json). Pre-Q2 the ONLY way to flip this was the interactive
+   * `init` prompt or `philosophy publish on|off` — neither of which the
+   * recommended marketplace install path ever runs, so the cross-project
+   * half of the product was structurally unreachable for those users while
+   * the README/plugin card claimed it unconditionally. Default stays FALSE
+   * (opt-in is the privacy posture: a malicious dep in one project must not
+   * be able to poison the global ledger for every other project).
+   */
+  globalLedgerPublish: external_exports.boolean().optional()
 });
 var RenderFailureBodySchema = external_exports.object({
   artifactId: external_exports.string().min(1),
@@ -27478,7 +27489,7 @@ function getGlobalStore() {
 // src/mcp/autonomy-policy.ts
 var AUTONOMY_POLICY_LINE = {
   balanced: "Skip findings for simple tasks. Present options only for genuine architectural choices.",
-  autonomous: "Proceed with recommended options. The human will review after. Only present decisions for high-risk or irreversible changes."
+  autonomous: "Proceed with your recommended approach on ordinary work \u2014 the human reviews after, so skip the findings/plan ceremony. The floor still holds: present_options for a genuine architectural fork (a choice that shapes the code written around it), and for anything high-risk or irreversible. Everything else, just do."
 };
 
 // src/mcp/tools/types.ts
@@ -28625,6 +28636,7 @@ async function preflightRejectedApproaches(store, broadcast, toolName, proposalS
     return { ok: true, trace: result.trace };
   }
   broadcast(result.block.broadcastEvent);
+  void store.recordPreflightBlock?.(result.block.broadcastEvent);
   void store.recordMetric?.({ kind: "preflight_block", source: result.block.source });
   const blockSummary = formatPreflightTraceSummary(result.trace);
   return {
@@ -28678,10 +28690,30 @@ function notifyResourcesListChanged(server) {
   }
 }
 function formatPreflightTraceSummary(trace) {
-  if (!trace || trace.consideredCount === 0) return "";
+  if (!trace) return "";
   const nm = trace.nearMisses ?? [];
-  const nearMissText = nm.length ? `; near-miss${nm.length === 1 ? "" : "es"}: ${nm.map((n) => `"${n.concept}"`).join(", ")}` : "";
-  return ` Preflight: considered ${trace.consideredCount} past stance${trace.consideredCount === 1 ? "" : "s"}${nearMissText}.`;
+  if (trace.consideredCount === 0 && nm.length === 0) return "";
+  const clauses = [];
+  if (trace.consideredCount > 0) {
+    clauses.push(
+      `considered ${trace.consideredCount} past stance${trace.consideredCount === 1 ? "" : "s"}`
+    );
+  }
+  if (nm.length) {
+    clauses.push(
+      `near-miss${nm.length === 1 ? "" : "es"}: ${nm.map((n) => `"${n.concept}"`).join(", ")}`
+    );
+  }
+  let out = ` Preflight: ${clauses.join("; ")}.`;
+  const nudges = nm.filter((n) => n.source === "global").map((n) => {
+    const where = n.project ? `in "${n.project}"` : "in another project";
+    const because = n.reason ? ` (your reason: "${n.reason}")` : "";
+    return `You avoided "${n.concept}" ${where}${because} \u2014 still want it here?`;
+  });
+  if (nudges.length) {
+    out += ` Cross-project advisory (not a block, and you have no local stance on this here): ${nudges.join(" ")}`;
+  }
+  return out;
 }
 function isObligationBearingComment(c) {
   return !!c.suggestion || c.intent === "question" && !c.answeredByCommentId;
@@ -28879,6 +28911,13 @@ var ERROR_CODES = {
   no_active_session: "no_active_session",
   /** Zod (or hand-rolled) validation failed on a request body. */
   validation_error: "validation_error",
+  /** Q2 — POST /api/preferences carried `globalLedgerPublish` but the bound
+   *  store has no project preferences file to write it to (a read-only replay
+   *  store; setGlobalLedgerPublish is optional on IStore). Refuse loudly rather
+   *  than 200 on a write that didn't land — the same posture as F6's
+   *  artifact_not_in_session: a preference this one governs whether the human's
+   *  stances leave the project, so a silent no-op would be a privacy lie. */
+  publish_toggle_unsupported: "publish_toggle_unsupported",
   /** C-4 — request arrived with a non-loopback Host header (DNS-rebinding guard). */
   forbidden_host: "forbidden_host",
   /** F6 — mutation targeted an artifact the bound session doesn't own (merged cross-session view). */
@@ -29298,9 +29337,12 @@ function admit(toolName, data) {
   if (echo) return { ok: false, error: echo };
   return { ok: true, data };
 }
-function formatTruncationError(toolName, missingArray, presentField) {
+var TRUNCATION_PLAUSIBLE_CHARS = 400;
+function formatTruncationError(toolName, missingArray, presentField, presentLength) {
   const code = TOOL_ERROR_CODES.TOOL_CALL_TRUNCATED;
-  const text = `${code}: ${toolName} refused \u2014 your tool call appears to have been TRUNCATED in transit: \`${missingArray}\` is missing while \`${presentField}\` is present. This usually means the arguments were cut off mid-message (more likely with a long ${presentField}). Retry with a shorter ${presentField} or split the call. Do NOT resubmit any example payload as your content. The artifact was NOT created.`;
+  const head = `${code}: ${toolName} refused \u2014 \`${missingArray}\` is missing while \`${presentField}\` is present. `;
+  const diagnosis = presentLength >= TRUNCATION_PLAUSIBLE_CHARS ? `Your tool call appears to have been TRUNCATED in transit: \`${presentField}\` is ${presentLength} characters, so the arguments were most likely cut off mid-message before \`${missingArray}\` was written. Retry with a shorter \`${presentField}\` (move detail into the ${missingArray} themselves) or split the call. ` : `\`${presentField}\` is only ${presentLength} characters, so a mid-message cutoff is unlikely \u2014 you probably just left the required \`${missingArray}\` array out. Resend the same call WITH \`${missingArray}\` populated. If it fails the same way again, the call really is being truncated in transit: shorten \`${presentField}\` or split the call. `;
+  const text = head + diagnosis + `Do NOT resubmit any example payload as your content. The artifact was NOT created.`;
   return {
     content: [{ type: "text", text }],
     isError: true,
@@ -29311,7 +29353,7 @@ function detectTruncatedCall(toolName, args, presentField, missingArray) {
   const present = prop(args, presentField);
   const missing = prop(args, missingArray);
   if (typeof present === "string" && present.length > 0 && missing === void 0) {
-    return formatTruncationError(toolName, missingArray, presentField);
+    return formatTruncationError(toolName, missingArray, presentField, present.length);
   }
   return null;
 }
@@ -33853,6 +33895,24 @@ var DaemonClient = class {
   async recordMetric(event) {
     try {
       await this.post(`/metrics`, event);
+    } catch {
+    }
+  }
+  /**
+   * Q2 — hand a REAL pre-flight block to the daemon. Same structural reason as
+   * recordMetric above: the MCP server's `broadcast` is a no-op in standalone
+   * (standalone.ts passes `noop`), so pre-Q2 a production block reached NO
+   * WebSocket client at all — the hero toast the demo teaches you to expect
+   * only ever fired for the demo. Routing it here makes the daemon fan the
+   * `preflight_blocked` event out to attached tabs AND persist it to the
+   * project block log, so the moment survives a closed browser and a reload.
+   *
+   * Fire-and-forget: a block is already correctly refused by the time we get
+   * here, and surfacing must never be able to fail the refusal.
+   */
+  async recordPreflightBlock(event) {
+    try {
+      await this.post(`/preflight-block`, event);
     } catch {
     }
   }

@@ -36,6 +36,13 @@ export const ERROR_CODES = {
   no_active_session: "no_active_session",
   /** Zod (or hand-rolled) validation failed on a request body. */
   validation_error: "validation_error",
+  /** Q2 — POST /api/preferences carried `globalLedgerPublish` but the bound
+   *  store has no project preferences file to write it to (a read-only replay
+   *  store; setGlobalLedgerPublish is optional on IStore). Refuse loudly rather
+   *  than 200 on a write that didn't land — the same posture as F6's
+   *  artifact_not_in_session: a preference this one governs whether the human's
+   *  stances leave the project, so a silent no-op would be a privacy lie. */
+  publish_toggle_unsupported: "publish_toggle_unsupported",
   /** C-4 — request arrived with a non-loopback Host header (DNS-rebinding guard). */
   forbidden_host: "forbidden_host",
   /** F6 — mutation targeted an artifact the bound session doesn't own (merged cross-session view). */

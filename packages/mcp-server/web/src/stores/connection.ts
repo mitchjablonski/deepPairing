@@ -363,6 +363,15 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           if (data.autonomyLevel) {
             set({ autonomyLevel: data.autonomyLevel });
           }
+          // Q2 — the cross-project publish opt-in can now be flipped from two
+          // surfaces (the Autonomy popover and the first-reject card) and from
+          // another tab. Mirror it so no surface shows a stale On/Off.
+          if (typeof data.globalLedgerPublish === "boolean") {
+            const value = data.globalLedgerPublish;
+            import("./crossProject").then(({ useCrossProjectStore }) => {
+              useCrossProjectStore.getState().hydratePublish(value);
+            });
+          }
           break;
 
         case "decision_resolved":

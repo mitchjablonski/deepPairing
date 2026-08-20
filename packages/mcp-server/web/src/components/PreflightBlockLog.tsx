@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { usePreflightBlockStore, type PreflightBlockRecord } from "../stores/preflightBlocks";
+import {
+  usePreflightBlockStore,
+  unreadBlockCount,
+  type PreflightBlockRecord,
+} from "../stores/preflightBlocks";
 import { useOverlayPresence } from "../stores/overlay";
 
 /**
@@ -8,13 +12,23 @@ import { useOverlayPresence } from "../stores/overlay";
  * When deepPairing refuses an agent proposal that matches a prior rejection, the
  * moment previously lived only in a 12s hero toast. That's the single most
  * distinctive thing the gate does — and it vanished. This chip persists each
- * block for the session so the firing survives the toast: what was blocked, the
- * concept, the prior reason, and when. Modeled on HookStatus (same a11y shape:
- * a read-only role="dialog" popover dismissed by Esc / outside-click).
+ * block so the firing survives the toast: what was blocked, the concept, the
+ * prior reason, and when. Modeled on HookStatus (same a11y shape: a read-only
+ * role="dialog" popover dismissed by Esc / outside-click).
+ *
+ * Q2 — DURABLE, AND HONEST ABOUT WHAT YOU MISSED. Round 12: the store was
+ * in-memory and session-scoped, so a block that fired while the tab was closed
+ * (the normal case — the agent works without a browser attached) left no trace
+ * anywhere, while the DEMO replayed its synthetic block to late joiners
+ * forever. We now hydrate from the daemon's durable project log on mount, and
+ * mark blocks that fired since you last looked as unread — the same
+ * "N waiting on you" grammar the rest of the UI uses for a signal that needs
+ * your eyes, rather than a count that just accumulates.
  *
  * Visual rules:
  * - Idle (no blocks): muted dot, just "gate".
- * - One or more blocks this session: amber dot (the gate has fired).
+ * - Blocks you've already read: amber dot (the gate has fired here).
+ * - Blocks since you last looked: amber dot + pulse + unread count.
  */
 
 const POPOVER_LIMIT = 6;
@@ -47,7 +61,24 @@ function matchDetail(via: PreflightBlockRecord["via"]): string {
 
 export function PreflightBlockLog() {
   const blocks = usePreflightBlockStore((s) => s.blocks);
+  const lastSeenAt = usePreflightBlockStore((s) => s.lastSeenAt);
+  const loaded = usePreflightBlockStore((s) => s.loaded);
+  const load = usePreflightBlockStore((s) => s.load);
+  const markSeen = usePreflightBlockStore((s) => s.markSeen);
   const [open, setOpen] = useState(false);
+
+  // Q2 — hydrate the durable log once. Fail-soft inside the store: a 404 or a
+  // dead daemon leaves the chip in its idle state rather than breaking the header.
+  useEffect(() => {
+    if (!loaded) void load();
+  }, [loaded, load]);
+
+  // Q2 — opening the popover IS reading it. Marking on open (not on hover, not
+  // on a timer) keeps the unread count honest: it only clears when the human
+  // actually looked at what fired.
+  useEffect(() => {
+    if (open) markSeen();
+  }, [open, markSeen]);
   useOverlayPresence(open); // UX4 — only while the popover is open (the chip is always mounted)
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -74,6 +105,7 @@ export function PreflightBlockLog() {
   }, [open]);
 
   const hasBlocks = blocks.length > 0;
+  const unread = unreadBlockCount({ blocks, lastSeenAt });
   const dotClass = hasBlocks ? "bg-accent-amber" : "bg-text-muted/60";
   const recent = blocks.slice(0, POPOVER_LIMIT);
 
@@ -83,17 +115,36 @@ export function PreflightBlockLog() {
         ref={triggerRef}
         onClick={() => setOpen((v) => !v)}
         className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
-        title="Recent pre-flight gate blocks"
-        aria-label={hasBlocks ? `Show recent gate blocks (${blocks.length})` : "Show recent gate blocks"}
+        title={
+          unread > 0
+            ? `${unread} gate block${unread === 1 ? "" : "s"} waiting on you`
+            : "Recent pre-flight gate blocks"
+        }
+        aria-label={
+          unread > 0
+            ? `Show recent gate blocks (${unread} waiting on you)`
+            : hasBlocks
+              ? `Show recent gate blocks (${blocks.length})`
+              : "Show recent gate blocks"
+        }
         aria-haspopup="dialog"
         aria-expanded={open}
       >
-        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotClass}`} />
+        <span
+          className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotClass} ${unread > 0 ? "animate-pulse" : ""}`}
+        />
         <span className="hidden min-[700px]:inline">gate</span>
-        {hasBlocks && (
-          <span className="min-[700px]:hidden text-[10px] font-semibold text-accent-amber">
-            {blocks.length}
-          </span>
+        {/* Q2 — the unread count is the signal; a total that never clears is
+            just a scoreboard. Falls back to the total on narrow widths where
+            the "gate" label is hidden and the chip would otherwise be a bare dot. */}
+        {unread > 0 ? (
+          <span className="text-[10px] font-semibold text-accent-amber">{unread}</span>
+        ) : (
+          hasBlocks && (
+            <span className="min-[700px]:hidden text-[10px] font-semibold text-accent-amber">
+              {blocks.length}
+            </span>
+          )
         )}
       </button>
 
@@ -108,14 +159,18 @@ export function PreflightBlockLog() {
             <span className="text-2xs font-medium text-text-secondary">
               Gate blocks
             </span>
+            {/* Q2 — "this project" is now the truth: the log is served from
+                .deeppairing/preflight-blocks.json, so it spans sessions and
+                survives a reload (and a closed browser at the moment it fired). */}
             <span className="text-[10px] text-text-muted">
-              this session
+              this project
             </span>
           </div>
           {recent.length === 0 ? (
             <div className="px-3 py-4 text-2xs text-text-muted">
               No blocks yet — when deepPairing refuses a proposal that matches a
-              stance you already rejected, it will appear here.
+              stance you already rejected, it will appear here. Blocks are kept
+              even if this tab wasn’t open when the gate fired.
             </div>
           ) : (
             <ul className="max-h-72 overflow-y-auto divide-y divide-border-default">

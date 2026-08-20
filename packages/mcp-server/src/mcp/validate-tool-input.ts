@@ -737,18 +737,66 @@ function admit<T>(toolName: string, data: T): ValidationResult<T> {
 // already surfaces as the title-missing path — and the echo guard still nets
 // any replay from it).
 
+/**
+ * Q2 — LENGTH-AWARE DIAGNOSIS.
+ *
+ * Round 12's cold journey hit this error on 2 of 3 artifact-creating calls and
+ * self-recovered on retry, which raised the question of whether the detector
+ * misfires. Investigated: it does NOT misfire on a "partially streamed" call —
+ * the MCP server never sees a stream. CallToolRequestSchema parses a COMPLETE
+ * JSON-RPC request before dispatch, and `args` is handed to the validator
+ * untouched, so `options === undefined` means the client genuinely delivered an
+ * arguments object without it. The advertised input schema marks the array
+ * required in every case this lane covers (verified: present_options
+ * required = ["context","options"], present_findings = ["summary","findings"]),
+ * so the model was told.
+ *
+ * What WAS wrong is the diagnosis. The old text asserted "TRUNCATED in transit"
+ * unconditionally and prescribed "retry with a shorter <field>" — advice that
+ * only makes sense when the earlier field is actually big. A cutoff after 60
+ * characters of `summary` would mean the turn ended almost immediately; far
+ * likelier is that the model simply omitted a required array, and telling it to
+ * shorten a 60-character summary sends it down a road that cannot fix
+ * anything. So we keep one machine code (pinned, retryable) and one shape
+ * clause, and let the LENGTH pick which cause to lead with — and, in the short
+ * case, give the instruction that actually resolves it: resend with the array.
+ *
+ * Both branches keep #184's crucial invariant: NO embedded example, so this
+ * path can never seed the example-echo it was built to stop.
+ *
+ * The threshold is deliberately BIASED toward the short branch, because the two
+ * pieces of advice are not symmetric in cost. "Resend with the array" is the
+ * right move whether the field was forgotten OR the call was truncated (a plain
+ * retry usually clears a transient cutoff). "Shorten your context" is only
+ * right if truncation is real, and is actively misleading otherwise. So the
+ * expensive claim has to earn its evidence: we only lead with truncation when
+ * the earlier field is big enough that running out of room is a real story.
+ */
+const TRUNCATION_PLAUSIBLE_CHARS = 400;
+
 function formatTruncationError(
   toolName: string,
   missingArray: string,
   presentField: string,
+  presentLength: number,
 ): ToolErrorResponse {
   const code = TOOL_ERROR_CODES.TOOL_CALL_TRUNCATED;
+  const head =
+    `${code}: ${toolName} refused — \`${missingArray}\` is missing while \`${presentField}\` is present. `;
+  const diagnosis =
+    presentLength >= TRUNCATION_PLAUSIBLE_CHARS
+      ? `Your tool call appears to have been TRUNCATED in transit: \`${presentField}\` is ` +
+        `${presentLength} characters, so the arguments were most likely cut off mid-message ` +
+        `before \`${missingArray}\` was written. Retry with a shorter \`${presentField}\` (move ` +
+        `detail into the ${missingArray} themselves) or split the call. `
+      : `\`${presentField}\` is only ${presentLength} characters, so a mid-message cutoff is ` +
+        `unlikely — you probably just left the required \`${missingArray}\` array out. Resend ` +
+        `the same call WITH \`${missingArray}\` populated. If it fails the same way again, the ` +
+        `call really is being truncated in transit: shorten \`${presentField}\` or split the call. `;
   const text =
-    `${code}: ${toolName} refused — your tool call appears to have been TRUNCATED in transit: ` +
-    `\`${missingArray}\` is missing while \`${presentField}\` is present. This usually means the ` +
-    `arguments were cut off mid-message (more likely with a long ${presentField}). Retry with a ` +
-    `shorter ${presentField} or split the call. Do NOT resubmit any example payload as your ` +
-    `content. The artifact was NOT created.`;
+    head +
+    diagnosis +
+    `Do NOT resubmit any example payload as your content. The artifact was NOT created.`;
   return {
     content: [{ type: "text", text }],
     isError: true as const,
@@ -770,7 +818,7 @@ function detectTruncatedCall(
   const present = prop(args, presentField);
   const missing = prop(args, missingArray);
   if (typeof present === "string" && present.length > 0 && missing === undefined) {
-    return formatTruncationError(toolName, missingArray, presentField);
+    return formatTruncationError(toolName, missingArray, presentField, present.length);
   }
   return null;
 }
