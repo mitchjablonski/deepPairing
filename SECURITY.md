@@ -33,8 +33,11 @@ model assumes:
 ### What deepPairing protects against
 
 - **Cross-LAN access**: the daemon binds explicitly to `127.0.0.1`
-  (see `src/daemon/index.ts` and `http/server.ts`). Sibling devices on the same
-  wifi cannot reach it.
+  (`src/daemon/index.ts`, the `serve({ hostname: "127.0.0.1" })` call; the
+  loopback predicates live in `src/http/guards.ts` and
+  `src/http/origin-policy.ts`). Sibling devices on the same wifi cannot reach
+  it. (This bullet used to cite `src/http/server.ts`, a file that has not
+  existed for several releases — the routes live in `src/http/routes.ts`.)
 - **Cross-Origin browser attacks** (tightened in D5): CORS allows
   cross-origin reads ONLY from `vscode-webview://` origins — a page on
   any other origin (including a different localhost port, e.g. a dev
@@ -50,16 +53,33 @@ model assumes:
   any-loopback CORS policy will no longer receive CORS headers; use a
   non-browser client (the token file grants local-process access) or the
   companion UI itself.
-- **Cross-project session bleed**: every HTTP route + WebSocket
-  upgrade requires the browser to send `X-Project-Hash` (or
-  `?projectHash=` for WS). The daemon refuses requests for a
-  different project's hash even from `localhost`.
+- **Cross-project session bleed**: every HTTP route that touches a session
+  store or mutates anything — and every WebSocket upgrade — requires the
+  browser to send `X-Project-Hash` (or `?projectHash=` for WS). The daemon
+  refuses requests for a different project's hash even from `localhost`.
+  Four exemptions, all of which the middleware in `src/http/routes.ts`
+  documents at its own definition, and none of which reads or writes a
+  session store:
+  - `OPTIONS` (CORS preflight — browsers do not send custom headers on it);
+  - any non-`/api` `GET` — the SPA document and `/assets/*`, fetched by plain
+    navigation, which cannot carry a custom header;
+  - `GET /api/daemon-info` and `GET /api/projects` — read-only discovery. The
+    hash gate is chicken-and-egg here: the SPA asks these routes *for* the
+    hash, and the project switcher queries peers whose hash it does not hold;
+  - `POST /api/demo/run` — the scripted cold-clone demo entry point, which
+    only ever creates a throwaway `demo_<ts>` session. It is also the one
+    mutation route exempt from the bearer-token gate, deliberately.
 - **Stale-tab routing**: a tab pinned to a daemon that has restarted
   on the same port (different project) gets a 403 on mutations
   rather than silently routing into the wrong store.
-- **Atomic writes**: all session and ledger writes go through
-  `writeJsonAtomic` (`.tmp.PID.TS.RAND` + `renameSync`) so a SIGKILL
-  mid-write cannot corrupt the JSON store.
+- **Atomic writes**: session and ledger writes go through `writeJsonAtomic`
+  (`.tmp.PID.TS.RAND` + `renameSync`, `src/store/atomic-write.ts`) so a
+  SIGKILL mid-write cannot corrupt the JSON store. This now also covers
+  `deeppairing sessions merge` (which had a hand-rolled fixed-name `.tmp`) and
+  `.deeppairing/hooks-state.json`, which the hooks write from separate
+  short-lived processes. A hooks-state file that is nonetheless found
+  unparseable is copied to `hooks-state.json.corrupt-<timestamp>` before the
+  log is reset, so a torn write can never silently erase hook history.
 
 ### What deepPairing does NOT protect against
 
@@ -83,7 +103,12 @@ model assumes:
   `/api/philosophy/seed` could plant `approved: use eval() everywhere`
   as a stance that surfaces in every future deepPairing session
   across every project. Mitigations:
-  - The seed route is rate-limited (≤50 lines + ≤16 KiB UTF-8 per POST).
+  - The seed route enforces a per-POST size cap — at most 50 lines and 16 KiB
+    of UTF-8 per request. It is **not** rate-limited: there is no per-IP or
+    per-window limiter, and `routes.ts` says so explicitly ("without needing a
+    per-IP rate limiter, which is overkill for a localhost-only daemon"). The
+    cap bounds the amplification of a single request, not the number of
+    requests a local process can make.
   - Manual seeds are tagged `project="manual"` and visually distinct
     in the LedgerPanel.
   - The ledger file is plain JSON — inspect with
@@ -117,17 +142,30 @@ deepPairing installs two Claude Code hooks, both local-only, network-free, and f
   - **Guardrail backstop.** The edit targets a guardrail path — a migration
     directory, CI config (`.github/workflows/`, `.gitlab-ci.yml`, `Jenkinsfile`,
     `.circleci/`), infrastructure (`Dockerfile*`, compose files, `terraform/`,
-    `k8s/`, `*.tfvars`), or a secret file (`.env*` other than
-    `.env.example`/`.env.sample`, `config/secrets*`, `config/credentials*`,
-    `config/master.key`) — at a moment when the agent has presented no findings,
-    options, spec, or plan in this project's recent sessions. It asks at most
-    once per guardrail class per 30 minutes (per file for migrations and
-    secrets). If the session store is missing or unreadable it stays silent
-    (fail-open), and it can be switched off entirely with the environment
-    variable `DEEPPAIRING_GUARDRAIL_BACKSTOP=off`, which leaves the
-    rejected-approach prompt untouched. It is a protocol backstop, **not a
-    security boundary** — it cannot stop a determined agent or a direct shell
-    write.
+    `k8s/`, `*.tfvars`), or a secret file (`.env*` other than checked-in
+    templates such as `.env.example`/`.env.sample`, `config/secrets*`,
+    `config/credentials*`, `config/master.key`) — at a moment when the agent has
+    presented no findings, options, spec, or plan in this project's recent
+    sessions. Those paths match at **any depth**, not only at the repository
+    root, so `packages/api/migrations/002_drop_users.sql` in a
+    monorepo is guarded like a root-level one; a file merely *named* after a
+    guardrail directory (`src/migrations.js`, `docs/migrations.md`) is not.
+    It asks at most once per guardrail class per 30 minutes (per file for
+    migrations and secrets). If the session store is missing, unreadable, or
+    present-but-unparseable it stays silent (fail-open), and it can be switched
+    off entirely with the environment variable
+    `DEEPPAIRING_GUARDRAIL_BACKSTOP=off`, which leaves the rejected-approach
+    prompt untouched. It is a protocol backstop, **not a security boundary** —
+    it cannot stop a determined agent or a direct shell write.
+
+    **Declining is not remembered.** A `PreToolUse` hook is never told how you
+    answered — allow and decline both come back to it as silence — so the
+    30-minute dedup stamp is written when the prompt is *raised*, not when it is
+    resolved. If you decline, tell the agent why in the same breath: the hook
+    will not ask again for that class (or that file) for 30 minutes, so an
+    immediate retry of the same edit goes through without a prompt. The
+    rejected-approach gate is the durable half of the mechanism — record the
+    rejection there and it sticks across sessions.
 - **Stop (`server/stop.mjs`)** runs when the agent finishes a turn. It only
   writes an advisory nudge to stderr (e.g. "pending artifacts need review") and
   always exits 0 — it can never trap the agent in a loop or block a stop.
@@ -135,8 +173,13 @@ deepPairing installs two Claude Code hooks, both local-only, network-free, and f
 Both hooks read only local JSON under `.deeppairing/`. Their only write is
 `.deeppairing/hooks-state.json` — the small advisory log of hook fires the
 companion UI reads, which also carries the guardrail backstop's
-"already asked about this" timestamps. They make no network calls and write no
-files outside the project's `.deeppairing/` directory.
+"already asked about this" timestamps — written temp-file-plus-rename, with a
+`hooks-state.json.corrupt-<timestamp>` salvage copy on the (rare) unparseable
+read. Timestamps in that file and in the session store are bounded on both
+sides: a stamp more than five minutes in the future is treated as invalid and
+pruned, so a skewed clock or a hand-edited date cannot disarm either gate
+indefinitely. The hooks make no network calls and write no files outside the
+project's `.deeppairing/` directory.
 
 ### The committed server bundle (`claude-plugin/server/`)
 

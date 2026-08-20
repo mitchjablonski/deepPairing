@@ -28,21 +28,53 @@ function projectRoot(): string {
   return process.env.CLAUDE_PROJECT_DIR || process.cwd();
 }
 
+// Q1 — durable hooks-state writes. The preflight lane's readHookState /
+// writeHookStateAtomic are the reference implementation; this copy stays inline
+// because this entry is deliberately import-free apart from the debrief gate
+// (esbuild emits it as a standalone .mjs beside daemon.js), and its init-path
+// twin in setup-tasks.ts carries the same pair verbatim.
+function readState(statePath: string): { version?: number; fires?: unknown[] } {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(statePath, "utf-8");
+  } catch {
+    return {}; // absent — nothing to salvage
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+  } catch {
+    /* corrupt — copy aside below rather than discarding the fire log */
+  }
+  try {
+    fs.writeFileSync(`${statePath}.corrupt-${new Date().toISOString().replace(/[:.]/g, "-")}`, raw);
+  } catch {
+    /* best-effort */
+  }
+  return {};
+}
+
+function writeStateAtomic(statePath: string, state: unknown): void {
+  const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 10)}`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(state));
+    fs.renameSync(tmp, statePath);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch { /* never mask the real error */ }
+    throw err;
+  }
+}
+
 function recordFire(exitCode: number, reason: string): void {
   try {
     const statePath = path.join(projectRoot(), ".deeppairing", "hooks-state.json");
-    let state: { version?: number; fires?: unknown[] } = {};
-    try {
-      state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
-    } catch {
-      /* fresh file */
-    }
+    const state = readState(statePath);
     state.version = 1;
     const fires = Array.isArray(state.fires) ? state.fires : [];
     fires.push({ at: new Date().toISOString(), hook: HOOK_NAME, exitCode, reason });
     state.fires = fires.slice(-STATE_CAP);
     fs.mkdirSync(path.dirname(statePath), { recursive: true });
-    fs.writeFileSync(statePath, JSON.stringify(state));
+    writeStateAtomic(statePath, state);
   } catch {
     /* recording must never fail the hook itself */
   }

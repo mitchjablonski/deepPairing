@@ -30,6 +30,7 @@ import { preferredPortFor, BASE_PORT, PORT_SPAN } from "../project-root.js";
 import { getGlobalStore } from "../store/global-store.js";
 import { buildLedgerHealthReport, shQuote } from "../store/ledger-health.js";
 import { cliInvocation, mcpServerConfigFor, isInstalledPackage } from "../cli-invocation.js";
+import { writeJsonAtomic } from "../store/atomic-write.js";
 
 const cwd = process.cwd();
 
@@ -1627,9 +1628,11 @@ async function sessionsCmd(sub: string | undefined, rest: string[]): Promise<voi
         if (a.sessionId) a.sessionId = intoId;
       }
       const merged = [...intoArr, ...additions];
-      const tmp = intoPath + ".tmp";
-      fs.writeFileSync(tmp, JSON.stringify(merged, null, 2));
-      fs.renameSync(tmp, intoPath);
+      // Q1 item 9 — SECURITY.md claims "all session and ledger writes go through
+      // writeJsonAtomic". This hand-rolled `+ ".tmp"` was the one exception: a
+      // FIXED tmp name, so two concurrent merges could truncate each other's
+      // temp file, and it left the claim false. Use the real writer.
+      writeJsonAtomic(intoPath, merged);
 
       summary[file] = { from: fromArr.length, into: intoArr.length, merged: additions.length };
     }

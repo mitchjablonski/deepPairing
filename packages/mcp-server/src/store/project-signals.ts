@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { TeamPreference } from "@deeppairing/shared";
 import { parseTeamPreferencesFile } from "@deeppairing/shared";
+import { GUARDRAIL_RULES, matchesGuardrailFile } from "../guardrail-rules.js";
 
 export interface ProjectGuardrail {
   /** Short identifier like "migrations" or "workflows". */
@@ -15,68 +16,24 @@ export interface ProjectGuardrail {
 /**
  * The sensed guardrail classes.
  *
- * P1 F6 (round-11 adversarial review) — these were a fixed filename list
- * (`.env`, `.env.local`, `.env.production`, `Dockerfile`, `docker-compose.yml`,
- * four migration dirs). That silently left `.env.staging`, `.env.production.local`,
- * `Dockerfile.prod`, `docker-compose.prod.yml`, `compose.yaml`,
- * `terraform.tfvars`, `.gitlab-ci.yml`, `Jenkinsfile`, `.circleci/config.yml`,
- * `alembic/versions/*`, `config/master.key` and `config/credentials.yml.enc`
- * unsensed — and, once the preflight backstop started keying off the same set,
- * unguarded. Prefix/glob rules instead of a filename list.
+ * Q1 (round-12) — this used to be `GUARDRAIL_SENSORS`, a byte-identical
+ * copy-paste of the hook's `GUARDRAIL_RULES`, kept honest by a parity test. The
+ * review's verdict was blunt: the two frank copies never drifted, but the copy
+ * count itself was the defect (the guardrail path set lived in five source
+ * locations). Both now IMPORT the one table in `../guardrail-rules.ts` — a
+ * Node-builtins-only leaf module, light enough for the hook's dependency
+ * contract and for the CLI cold start. What survives here is only what is
+ * genuinely different: the sensor ENUMERATES (it has no edit in hand, so it
+ * needs filesystem existence) while the matcher CLASSIFIES a given path.
  *
- * The preflight hook carries a hand-maintained MIRROR of these rules
- * (cli/preflight-hook-core.ts GUARDRAIL_RULES) because it must load under plain
- * `node` with no @deeppairing/shared. guardrail-backstop-parity.test.ts runs
- * BOTH over one fixture matrix of real filenames and fails if they disagree.
+ * The scope divergence is deliberate and documented: the matcher matches
+ * guardrail dirs at any depth (the monorepo fix — `packages/api/migrations/*`),
+ * this sensor stays ROOT-relative because walking a whole monorepo on every
+ * FileStore construction is not worth it. The divergence runs in the safe
+ * direction (everything rendered in the 🛡 section is something the hook asks
+ * about) and is pinned in both directions by
+ * cli/__tests__/guardrail-backstop-parity.test.ts.
  */
-interface GuardrailSensor {
-  category: string;
-  rationale: string;
-  /** Root-relative directory prefixes. */
-  dirs: string[];
-  /** Root-relative file predicate (posix separators, full relative path). */
-  file: (rel: string) => boolean;
-}
-
-/** A dotenv file that is NOT a checked-in template. */
-function isRealDotenv(name: string): boolean {
-  if (!/^\.env(\.[^/]+)?$/.test(name)) return false;
-  return !/\.(example|sample|template|dist)$/i.test(name);
-}
-
-const GUARDRAIL_SENSORS: GuardrailSensor[] = [
-  {
-    category: "migrations",
-    rationale: "Migrations are hard to reverse — escalate to supervised for changes here.",
-    dirs: ["migrations", "db/migrate", "prisma/migrations", "supabase/migrations", "alembic/versions"],
-    file: () => false,
-  },
-  {
-    category: "workflows",
-    rationale: "CI workflows affect every future deploy — escalate for changes here.",
-    dirs: [".github/workflows", ".circleci"],
-    file: (rel) => rel === ".gitlab-ci.yml" || rel === ".gitlab-ci.yaml" || rel === "Jenkinsfile",
-  },
-  {
-    category: "infrastructure",
-    rationale: "Infrastructure changes affect production surfaces — escalate here.",
-    dirs: ["infrastructure", "terraform", "k8s", "kubernetes", "helm"],
-    file: (rel) =>
-      /^Dockerfile([.-][^/]*)?$/.test(rel) ||
-      /^(docker-)?compose[^/]*\.ya?ml$/.test(rel) ||
-      /^[^/]*\.tfvars(\.json)?$/.test(rel),
-  },
-  {
-    category: "secrets",
-    rationale: "Secret files must never leak into the session or a commit — escalate here.",
-    dirs: [],
-    file: (rel) =>
-      isRealDotenv(rel) ||
-      /^config\/secrets[^/]*$/.test(rel) ||
-      /^config\/credentials[^/]*$/.test(rel) ||
-      rel === "config/master.key",
-  },
-];
 
 /** Directories whose entries can produce a file-rule hit. Root plus `config/`
  *  — every file rule above is rooted in one of the two. */
@@ -109,10 +66,10 @@ export function senseProjectGuardrails(projectRoot: string): ProjectGuardrail[] 
   }
 
   const guardrails: ProjectGuardrail[] = [];
-  for (const sensor of GUARDRAIL_SENSORS) {
+  for (const sensor of GUARDRAIL_RULES) {
     const paths = [
       ...sensor.dirs.filter(isDir),
-      ...candidates.filter((rel) => sensor.file(rel)),
+      ...candidates.filter((rel) => matchesGuardrailFile(sensor, rel)),
     ];
     if (paths.length > 0) {
       guardrails.push({ category: sensor.category, paths, rationale: sensor.rationale });

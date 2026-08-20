@@ -146,18 +146,22 @@ installed into `.claude/settings.local.json` by `src/cli/setup-tasks.ts`)
 now runs the *same* `runPreflight` matcher against the actual tool call
 and surfaces a match for the human's decision — so skipping the protocol
 no longer skips the gate. The hook fails open (a broken hook never blocks
-an edit) and short-circuits cheaply — one regex test on the file path —
+an edit) and short-circuits cheaply — no I/O beyond the small ledger read —
 when there are no rejections seeded and the path is not a guardrail path.
 
 That last clause is the hook's **second** prompt class, the *guardrail
-backstop*. Guardrail paths (migrations, CI config, infrastructure, secret
-files) are sensed from the filesystem by `store/project-signals.ts` and
-rendered into the first-call hint; the hook carries a mirror of the same
-rules (`GUARDRAIL_RULES`, kept honest by a parity test that runs both over
-one fixture matrix) and asks when a write lands on one of them while no
+backstop*. There is ONE definition of the guardrail path set —
+`src/guardrail-rules.ts`, a leaf module that imports nothing but `node:path` —
+and everything reads it: `store/project-signals.ts` for the 🛡 first-call-hint
+section, `cli/preflight-hook-core.ts` for the gate, and both hook copies for
+their early exit. (Round-12 found the earlier arrangement — two frank copies
+plus a hand-written "loose superset" regex — had drifted in exactly the
+generated place, silently disabling the backstop on six real path shapes in
+ledger-free projects; the regex was deleted rather than re-derived.) The gate
+asks when a write lands on a guardrail path, at any depth, while no
 `research`/`decision`/`spec`/`plan` artifact is live in the project's
 recent sessions — i.e. only when the agent skipped the pre-work ceremony
-entirely. A live ceremony, an unreadable session store, or
+entirely. A live ceremony, a missing/unreadable/unparseable session store, or
 `DEEPPAIRING_GUARDRAIL_BACKSTOP=off` all leave it silent. Liveness is
 project-scoped rather than session-scoped on purpose: a PreToolUse hook is
 handed no deepPairing session id, and guessing one would interrupt two

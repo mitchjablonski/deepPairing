@@ -1,17 +1,21 @@
 /**
- * P1 (round-11) — PARITY INSURANCE for the guardrail backstop.
- *
- * The backstop has to agree with TWO other things, and both agreements are the
- * kind that rot silently:
+ * P1 (round-11) / Q1 (round-12) — PARITY INSURANCE for the guardrail backstop.
  *
  *  1. THE SENSED SET. The guidance tells the agent the backstop covers "the
  *     guardrail paths" — the ones the 🛡 first-call-hint section lists, which
- *     come from senseProjectGuardrails (store/project-signals.ts). The hook
- *     cannot import that module (it must stay Node-builtins-only so the
- *     init-generated .mjs can load it under plain `node`), so it carries a
- *     hand-maintained MIRROR, GUARDRAIL_RULES. This runs both over ONE fixture
- *     matrix of real filenames (F6) and asserts they classify identically, in
- *     both directions.
+ *     come from senseProjectGuardrails (store/project-signals.ts).
+ *
+ *     Q1 changed the shape of this guarantee. Pre-Q1 the hook carried a
+ *     hand-maintained MIRROR of the sensor's table (plus a third hand-written
+ *     "loose superset" regex), and this file was the insurance against drift.
+ *     Now there is ONE table — src/guardrail-rules.ts — that both import, so
+ *     class-for-class agreement is true BY CONSTRUCTION and the interesting
+ *     question is the remaining, deliberate DIVERGENCE: the matcher classifies
+ *     a path handed to it (so it covers the first file in a guardrail location,
+ *     and nested/monorepo locations), while the sensor enumerates what exists at
+ *     the project ROOT. This asserts that divergence runs in the SAFE direction
+ *     only — everything the 🛡 section renders is something the hook asks about,
+ *     and the hook never matches outside the shared table.
  *
  *  2. THE TWO HOOK COPIES. Same shape as stop-hook-debrief-parity.test.ts: the
  *     committed plugin bundle (claude-plugin/server/preflight.mjs, what
@@ -26,7 +30,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { GUARDRAIL_PATH_PREFILTER, GUARDRAIL_RULES, matchGuardrailPath } from "../preflight-hook-core.js";
+import { GUARDRAIL_RULES, matchGuardrailPath, toolInputTargetsGuardrail } from "../preflight-hook-core.js";
 import { senseProjectGuardrails } from "../../store/project-signals.js";
 import { ensurePreflightHook } from "../setup-tasks.js";
 
@@ -82,13 +86,31 @@ const SWEEP: Array<{ rel: string; category: string | null }> = [
   { rel: "config/secrets.yml", category: "secrets" },
   { rel: "config/credentials.yml.enc", category: "secrets" },
   { rel: "config/master.key", category: "secrets" },
-  // NOT guardrails — checked-in templates and lookalikes.
+  // NOT guardrails — checked-in templates and lookalikes (files NAMED like
+  // guardrail dirs, which item 7's any-depth matching must keep silent).
   { rel: ".env.example", category: null },
   { rel: ".env.sample", category: null },
   { rel: "src/index.ts", category: null },
-  { rel: "packages/db/migrations/1.sql", category: null },
+  { rel: "src/migrations.js", category: null },
+  { rel: "docs/migrations.md", category: null },
   { rel: "src/k8s-helpers.ts", category: null },
   { rel: "compose.ts", category: null },
+];
+
+/**
+ * Q1 item 7 — paths the HOOK guards and the SENSOR does not: nested (monorepo)
+ * guardrail locations. The sensor stays root-relative on purpose (it enumerates
+ * with no edit in hand); the hook classifies the path it was handed. Listed
+ * separately so the "same classification" assertion above stays exact and this
+ * divergence is stated rather than smuggled.
+ */
+const NESTED_ONLY: Array<{ rel: string; category: string }> = [
+  { rel: "packages/api/migrations/002_drop_users.sql", category: "migrations" },
+  { rel: "services/billing/db/migrate/003.rb", category: "migrations" },
+  { rel: "packages/api/Dockerfile.prod", category: "infrastructure" },
+  { rel: "ops/terraform/main.tf", category: "infrastructure" },
+  { rel: "apps/web/.env.production", category: "secrets" },
+  { rel: "packages/api/.github/workflows/publish.yml", category: "workflows" },
 ];
 
 describe("GUARDRAIL_RULES mirrors senseProjectGuardrails (the 🛡 set the hint renders)", () => {
@@ -127,16 +149,6 @@ describe("GUARDRAIL_RULES mirrors senseProjectGuardrails (the 🛡 set the hint 
     }
   });
 
-  it("the sensor and the mirror name the same classes, with the same rationales", () => {
-    materializeAll();
-    const sensed = senseProjectGuardrails(dir);
-    expect(sensed.map((g) => g.category)).toEqual(GUARDRAIL_RULES.map((r) => r.category));
-    for (const g of sensed) {
-      const mirror = GUARDRAIL_RULES.find((r) => r.category === g.category)!;
-      expect(g.rationale, `rationale drifted for ${g.category}`).toBe(mirror.rationale);
-    }
-  });
-
   it("the 🛡 section stays honest: every path the sensor RENDERS is one the hook would ask about", () => {
     materializeAll();
     for (const g of senseProjectGuardrails(dir)) {
@@ -145,9 +157,42 @@ describe("GUARDRAIL_RULES mirrors senseProjectGuardrails (the 🛡 set the hint 
         const isDir = fs.statSync(path.join(dir, p)).isDirectory();
         const probe = isDir ? `${p}/whatever.txt` : p;
         expect(matchGuardrailPath(dir, [path.join(dir, probe)])?.category, `${probe} rendered but unguarded`).toBe(g.category);
-        expect(GUARDRAIL_PATH_PREFILTER.test(probe), `prefilter missed ${probe}`).toBe(true);
+        // Q1 — and the hook entries' EARLY EXIT agrees, because it is the same
+        // function. The deleted prefilter is exactly what used to be able to
+        // disagree here (and did, on six real paths).
+        expect(
+          toolInputTargetsGuardrail(dir, { file_path: path.join(dir, probe) }),
+          `early exit would have skipped ${probe}`,
+        ).toBe(true);
       }
     }
+  });
+
+  it("Q1 — the sensor and the hook read the SAME table object (one source, not two in sync)", () => {
+    // Not a value comparison: project-signals imports GUARDRAIL_RULES, so a rule
+    // added to the table reaches both surfaces without a second edit. This pins
+    // the property the old byte-identical copy could only approximate.
+    materializeAll();
+    const sensedCategories = senseProjectGuardrails(dir).map((g) => g.category);
+    expect(sensedCategories).toEqual(GUARDRAIL_RULES.map((r) => r.category));
+    for (const rule of GUARDRAIL_RULES) {
+      expect(rule.note.length, rule.category).toBeGreaterThan(0);
+      expect(rule.rationale).toMatch(/escalate/i);
+      // Machine-readable, which is what let the prefilter be deleted rather
+      // than hand-written: no opaque predicate functions in the table.
+      for (const re of rule.filePatterns) expect(re.source.startsWith("(^|\\/)"), re.source).toBe(true);
+    }
+  });
+
+  it("Q1 item 7 — DOCUMENTED divergence: the hook covers NESTED guardrail locations, the root-scanning sensor does not", () => {
+    for (const { rel, category } of NESTED_ONLY) {
+      const abs = path.join(dir, rel);
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, "");
+      expect(matchGuardrailPath(dir, [abs])?.category, `hook missed nested ${rel}`).toBe(category);
+    }
+    // The sensor sees none of them — it scans the root (plus config/) only.
+    expect(senseProjectGuardrails(dir)).toEqual([]);
   });
 
   it("DOCUMENTED divergence: the hook also covers creating the FIRST file in a guardrail location", () => {
@@ -174,8 +219,9 @@ const art = (id: string, type: string, status = "approved", createdAt = recent):
 
 interface Case {
   name: string;
-  /** artifacts.json content, or null to leave the session store ABSENT. */
-  artifacts: Art[] | null;
+  /** artifacts.json content, null to leave the session store ABSENT, or
+   *  "corrupt" to write an unparseable one (Q1 item 3). */
+  artifacts: Art[] | null | "corrupt";
   toolName: string;
   /** project-relative target path. */
   file: string;
@@ -191,7 +237,7 @@ const MATRIX: Case[] = [
     artifacts: [],
     toolName: "Edit",
     file: ".github/workflows/ci.yml",
-    expectAsk: "GUARDRAIL_ESCALATION — Allow this edit to .github/workflows/ci.yml?",
+    expectAsk: "Allow this edit to .github/workflows/ci.yml?",
   },
   {
     name: "(a2) round-11 repro: DROP TABLE migration Write, no ceremony → ask",
@@ -227,7 +273,55 @@ const MATRIX: Case[] = [
   { name: "(b4) F2: a DRAFT spec counts immediately → pass", artifacts: [art("sp1", "spec", "draft")], toolName: "Edit", file: "terraform/main.tf", expectAsk: null },
   { name: "(b5) guardrail Edit + REJECTED spec → ask (the ceremony isn't standing)", artifacts: [art("sp1", "spec", "rejected")], toolName: "Edit", file: "terraform/main.tf", expectAsk: "Allow this edit to terraform/main.tf?" },
   { name: "(c) non-guardrail Edit → pass (zero behaviour change)", artifacts: [], toolName: "Edit", file: "src/index.ts", expectAsk: null },
-  { name: "(c2) nested migrations/ (not root-relative) → pass", artifacts: [], toolName: "Edit", file: "packages/db/migrations/1.sql", expectAsk: null },
+  {
+    // Q1 item 7 — this case FLIPPED. deepPairing is a monorepo and so is the
+    // audience; a root-relative-only matcher was blind to the layout its own
+    // repo uses. Both copies must agree on the new answer.
+    name: "(c2) nested migrations/ in a monorepo → ASK (Q1 item 7)",
+    artifacts: [],
+    toolName: "Edit",
+    file: "packages/db/migrations/1.sql",
+    expectAsk: "Allow this edit to packages/db/migrations/1.sql?",
+  },
+  {
+    name: "(c4) near-miss: a file NAMED like a guardrail dir stays silent",
+    artifacts: [],
+    toolName: "Edit",
+    file: "src/migrations.js",
+    expectAsk: null,
+  },
+  {
+    // The exact class round-12 found silently unguarded in ledger-free projects:
+    // the deleted prefilter rejected `-` continuations, so this never reached
+    // the matcher at all.
+    name: "(a6) Q1 item 1 — Dockerfile-prod (prefilter miss) now asks on both copies",
+    artifacts: [],
+    toolName: "Write",
+    file: "Dockerfile-prod",
+    expectAsk: "(infrastructure — it affects production surfaces)",
+  },
+  {
+    name: "(a7) Q1 item 1 — prod.tfvars.json (prefilter miss) now asks on both copies",
+    artifacts: [],
+    toolName: "Write",
+    file: "prod.tfvars.json",
+    expectAsk: "Allow this edit to prod.tfvars.json?",
+  },
+  {
+    name: "(a8) Q1 item 1 — config/secrets_prod.yml (prefilter miss) now asks on both copies",
+    artifacts: [],
+    toolName: "Write",
+    file: "config/secrets_prod.yml",
+    expectAsk: "(secrets — secrets must never leak into a commit)",
+  },
+  {
+    // Q1 item 3 — the doc said an unreadable store stays silent; the code asked.
+    name: "(d2) Q1 item 3 — an ALL-CORRUPT session store → pass (silent, per SECURITY.md)",
+    artifacts: "corrupt",
+    toolName: "Edit",
+    file: "migrations/1.sql",
+    expectAsk: null,
+  },
   { name: "(c3) .env.example is a template, not a secret → pass", artifacts: [], toolName: "Write", file: ".env.example", expectAsk: null },
   { name: "(d) no session store at all → pass (FAIL OPEN)", artifacts: null, toolName: "Edit", file: ".github/workflows/ci.yml", expectAsk: null },
   {
@@ -247,7 +341,10 @@ function runCase(script: string, c: Case): { decision: string | null; reason: st
     if (c.artifacts !== null) {
       const sd = path.join(projectDir, ".deeppairing", "sessions", "s1");
       fs.mkdirSync(sd, { recursive: true });
-      fs.writeFileSync(path.join(sd, "artifacts.json"), JSON.stringify(c.artifacts));
+      fs.writeFileSync(
+        path.join(sd, "artifacts.json"),
+        c.artifacts === "corrupt" ? "{ not json" : JSON.stringify(c.artifacts),
+      );
     }
     if (c.rejected) {
       fs.mkdirSync(path.join(projectDir, ".deeppairing"), { recursive: true });
@@ -311,14 +408,38 @@ describe("the two hand-maintained hook copies agree on the guardrail matrix", ()
     });
   }
 
-  it.skipIf(!initCoreBuilt)("the init-generated script carries the SAME prefilter literal as the core (parity by construction)", () => {
+  it.skipIf(!initCoreBuilt)("Q1 — the init-generated script carries NO copy of the rule set: it imports the one table", () => {
     expect(initScript).not.toBeNull();
     const src = fs.readFileSync(initScript!, "utf-8");
-    expect(src).toContain(String(GUARDRAIL_PATH_PREFILTER));
-    expect(src).toContain("looksLikeGuardrailPath");
+    // The early exit calls the authoritative matcher out of the leaf module…
+    expect(src).toContain("rules.matchGuardrailPath");
+    expect(src).toContain("RULES_URL");
+    expect(src).toMatch(/guardrail-rules\.js/);
+    // …and carries no second definition of the path set to drift.
+    expect(src).not.toMatch(/GUARDRAIL_PATH_PREFILTER/);
+    expect(src).not.toMatch(/looksLikeGuardrailPath/);
+    expect(src, "an inlined rule literal reappeared").not.toContain("alembic/versions");
     // F11 — it must NOT carry its own fire-log writer any more.
     expect(src).toContain("mod.recordHookFire");
     expect(src).not.toMatch(/function recordFire/);
+  });
+
+  it.skipIf(!initCoreBuilt)("Q1 — the stamped RULES_URL actually RESOLVES (an unresolvable one would silently skip the backstop)", () => {
+    // The E1-review failure mode, one level down: setup-tasks resolves the rule
+    // module ON DISK beside the entry, so a layout it doesn't know about stamps
+    // a nonexistent URL. The generated hook fails SAFE on an import error
+    // (it keeps going), but the stamp must still be right in the layouts we own.
+    const src = fs.readFileSync(initScript!, "utf-8");
+    const stamped = /const RULES_URL = "([^"]+)"/.exec(src)?.[1];
+    expect(stamped, "no RULES_URL stamped").toBeTruthy();
+    expect(fs.existsSync(fileURLToPath(stamped!)), `stamped RULES_URL does not exist: ${stamped}`).toBe(true);
+  });
+
+  it.skipIf(!bundleBuilt)("Q1 — the plugin bundle ships the rule module beside the matcher core", () => {
+    // Marketplace installs run setup-tasks out of the bundled daemon, so both
+    // stamped URLs resolve to files in claude-plugin/server/.
+    expect(fs.existsSync(path.join(repoRoot, "claude-plugin", "server", "guardrail-rules.js"))).toBe(true);
+    expect(fs.existsSync(path.join(repoRoot, "claude-plugin", "server", "preflight-hook-core.js"))).toBe(true);
   });
 
   it.skipIf(!bundleBuilt)("NEITHER copy can ever emit permissionDecision 'deny' (SECURITY.md ask-never-deny)", () => {
@@ -356,6 +477,9 @@ describe("the two hand-maintained hook copies agree on the guardrail matrix", ()
       ]); // per-path
       // F12 — the fire log names the class.
       expect(state.fires.at(-1).reason).toBe("guardrail:migrations");
+      // Q1 item 5 — and says it was an ASK, so the companion UI stops rendering
+      // every guardrail block as a green "pass".
+      expect(state.fires.at(-1).kind).toBe("ask");
     } finally {
       fs.rmSync(projectDir, { recursive: true, force: true });
     }

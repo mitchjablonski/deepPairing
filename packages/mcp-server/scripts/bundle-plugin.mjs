@@ -78,6 +78,18 @@ await build({
   entryPoints: [resolve(pkgRoot, "src/cli/preflight-hook-core.ts")],
   outfile: resolve(pluginDir, "preflight-hook-core.js"),
 });
+// Q1 — same reason, one level cheaper. The init-generated hook's early exit
+// calls the AUTHORITATIVE guardrail matcher (the hand-written prefilter it used
+// to carry had drifted out of superset-hood and silently disabled the backstop
+// on six real path shapes). setup-tasks stamps this file's URL beside the
+// entry, exactly like the core above; without emitting it, a marketplace
+// install would stamp a nonexistent URL. It is a leaf (node:path only), so the
+// early exit pays ~1.4 ms instead of the core's ~7.8 ms.
+await build({
+  ...shared,
+  entryPoints: [resolve(pkgRoot, "src/guardrail-rules.ts")],
+  outfile: resolve(pluginDir, "guardrail-rules.js"),
+});
 
 // I6 — the plugin's hooks/hooks.json declares the Stop + PreToolUse preflight
 // hooks natively (`node "${CLAUDE_PLUGIN_ROOT}/server/{stop,preflight}.mjs"`),
