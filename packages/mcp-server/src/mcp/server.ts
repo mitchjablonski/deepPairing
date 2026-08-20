@@ -403,11 +403,30 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
       {
         name: "export_session",
         annotations: { title: "Export session", readOnlyHint: true, openWorldHint: false },
-        description: "Export the current session as markdown. Formats: 'pr-description' (PR body), 'pr-comments' (findings as file:line PR comments), 'adr' (architecture decision record), 'full' (complete session), 'replay' (chronological walkthrough), 'learnings' (teaching artifact — concepts named, approaches rejected).",
+        description:
+          "Export the current session. Markdown formats: 'pr-description' (PR body), 'pr-comments' (findings as file:line PR comments), 'adr' (architecture decision record), 'full' (complete session), 'replay' (chronological walkthrough), 'learnings' (teaching artifact — concepts named, approaches rejected). " +
+          "'html' is different: it WRITES a self-contained shareable page to .deeppairing/exports/ and returns the file path — the session story a colleague who wasn't there can read. Pass `narrative` with it (see the /deeppairing:share command).",
         inputSchema: {
           type: "object" as const,
           properties: {
-            format: { type: "string", enum: ["pr-description", "pr-comments", "adr", "full", "replay", "learnings"], description: "Export format" },
+            format: { type: "string", enum: ["pr-description", "pr-comments", "adr", "full", "replay", "learnings", "html"], description: "Export format" },
+            // Q5 — the agentic narrative layer. The page is only comprehensible
+            // to an outsider if SOMEONE tells the story; the agent is the only
+            // party who saw all of it, so it composes the story and the renderer
+            // places it at the top. Ignored by the markdown formats.
+            narrative: {
+              type: "string",
+              description:
+                "html only — the story of this session in markdown, written for a colleague who wasn't there: what we set out to do, the forks and why they went the way they did (quote the human's reasons), what was rejected, what shipped. No protocol jargon ('we decided', not 'the artifact was approved').",
+            },
+            audience: {
+              type: "string",
+              description: "html only — who this page is for (e.g. 'the backend team', 'a new contributor'). Shown under the title.",
+            },
+            includeCode: {
+              type: "boolean",
+              description: "html only — include code bodies (diffs, snippets, before/after). Default true; set false for a sensitive repo (file names and shapes stay, bodies go).",
+            },
           },
         },
       },

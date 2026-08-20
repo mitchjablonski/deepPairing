@@ -15,6 +15,9 @@ import {
   assignArtifactToFeature,
 } from "../store/feature-overrides.js";
 import { formatSessionMarkdown } from "../export/format-markdown.js";
+// Q5 MERGE SEAM — the shareable-page export (see /api/export.html below).
+import { assembleSessionHtml, htmlExportFileName } from "../export/html-export.js";
+import { SERVER_VERSION } from "../version.js";
 import {
   getGlobalStore,
   isSeededEntry,
@@ -1677,6 +1680,38 @@ export function createHttpRoutes(
     const markdown = formatSessionMarkdown(state, format);
     return c.text(markdown, 200, { "Content-Type": "text/markdown; charset=utf-8" });
   });
+
+  // ---- Q5 MERGE SEAM (self-contained block; flagged for the Q2 rebase) ----
+  // Export the session as the SHAREABLE PAGE: one self-contained HTML file
+  // (inline CSS, zero external requests) a colleague who wasn't there can read.
+  // Deliberately its OWN route rather than a `format=html` branch on
+  // /api/export: the content type, the download disposition and the option
+  // surface (includeCode) all differ, and a separate handler leaves the
+  // markdown route byte-identical.
+  //
+  // No `narrative` here — the composed story comes from the AGENT via the
+  // export_session tool (/deeppairing:share). A UI download renders the
+  // auto-generated summary, honestly labelled as such.
+  app.get("/api/export.html", async (c) => {
+    const store = getStore(getSessionId(c));
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const includeCodeParam = c.req.query("includeCode");
+    const includeCode = includeCodeParam !== "0" && includeCodeParam !== "false";
+    const state: any = await store.getFullState();
+    const generatedAt = new Date().toISOString();
+    const html = await assembleSessionHtml(state, {
+      store: store as any,
+      includeCode,
+      projectRoot: projectRoot ?? undefined,
+      version: SERVER_VERSION,
+      generatedAt,
+    });
+    return c.body(html, 200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Disposition": `attachment; filename="${htmlExportFileName(state.sessionId, generatedAt)}"`,
+    });
+  });
+  // ---- end Q5 MERGE SEAM ----
 
   // Set preferences (autonomy level, etc.)
   app.post("/api/preferences", async (c) => {

@@ -14,6 +14,9 @@ const formats = [
 export function ExportMenu() {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
+  // Q5 — code is INCLUDED by default (the diffs are the point of a shared
+  // page); the checkbox is the opt-out for a repo whose code shouldn't leave.
+  const [includeCode, setIncludeCode] = useState(true);
 
   const handleExport = async (format: string) => {
     try {
@@ -30,6 +33,33 @@ export function ExportMenu() {
     setOpen(false);
   };
 
+  // Q5 — the shareable page. Unlike the markdown formats (copied to the
+  // clipboard) this one DOWNLOADS a self-contained .html file: it's a document
+  // you send to someone, not text you paste.
+  const handleShareAsPage = async () => {
+    const url = `${apiBase()}/api/export.html?includeCode=${includeCode ? "1" : "0"}`;
+    try {
+      const res = await apiGet(url);
+      if (!res.ok) throw new Error(String(res.status));
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = "deeppairing-session.html";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+      setCopied("html");
+      setTimeout(() => setCopied(null), 2000);
+    } catch {
+      // Fallback: let the browser fetch it directly (the route sets
+      // Content-Disposition, so this still lands as a download).
+      window.open(url, "_blank");
+    }
+    setOpen(false);
+  };
+
   return (
     <div className="relative">
       <button
@@ -40,13 +70,34 @@ export function ExportMenu() {
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round">
           <path d="M6 1v7M3 5l3 3 3-3M2 10h8" />
         </svg>
-        {copied ? "Copied!" : "Export"}
+        {copied ? (copied === "html" ? "Downloaded!" : "Copied!") : "Export"}
       </button>
 
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-1 z-50 w-56 bg-surface-elevated border border-border-default rounded-lg shadow-xl overflow-hidden">
+          <div className="absolute right-0 top-full mt-1 z-50 w-64 bg-surface-elevated border border-border-default rounded-lg shadow-xl overflow-hidden">
+            <button
+              onClick={handleShareAsPage}
+              className="w-full text-left px-3 py-2 hover:bg-surface-hover transition-colors border-b border-border-default"
+            >
+              <div className="text-xs font-medium text-text-primary">Share as page (.html)</div>
+              <div className="text-2xs text-text-muted">
+                One self-contained file a colleague can read — the whole session story
+              </div>
+            </button>
+            <label
+              className="flex items-start gap-2 px-3 py-1.5 border-b border-border-default cursor-pointer"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={includeCode}
+                onChange={(e) => setIncludeCode(e.target.checked)}
+              />
+              <span className="text-2xs text-text-muted">Include code in the page (diffs + snippets)</span>
+            </label>
             {formats.map((fmt) => (
               <button
                 key={fmt.id}
