@@ -21,6 +21,27 @@ interface DecisionRecord {
   resolvedAt?: string;
 }
 
+/**
+ * Q5 — the exit rehydrate, made AWAITABLE.
+ *
+ * `exitReplay` fires a dynamic import (see below) to rehydrate the live stores
+ * without a static import cycle. It used to be a bare `void Promise.all(...)`:
+ * nothing could know when it finished, so a test (or a teardown) that ran out
+ * from under it left the module load in flight — under vitest that surfaces as
+ * `EnvironmentTeardownError: Cannot load .../hookStatus.ts ... after the
+ * environment was torn down`: a scheduling-sensitive flake that passes locally
+ * and fires on a loaded CI box (it appeared when an unrelated web-dom test file
+ * shifted the pool's scheduling). Keeping the handle costs nothing and makes
+ * the race observable instead of latent.
+ */
+let rehydrateInFlight: Promise<void> | null = null;
+
+/** Resolves once any in-flight `exitReplay` rehydrate has settled (immediately
+ *  when there is none). For tests, and for any caller that must not race it. */
+export function replayRehydrateSettled(): Promise<void> {
+  return rehydrateInFlight ?? Promise.resolve();
+}
+
 interface ReplayState {
   active: boolean;
   sessionId: string | null;
@@ -118,7 +139,7 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
     // tab re-binds (hydration resets then refills from live state); an
     // unbound one just resets. Dynamic imports keep this store cycle-free.
     if (!wasActive) return;
-    void Promise.all([import("./connection"), import("./artifact")]).then(
+    rehydrateInFlight = Promise.all([import("./connection"), import("./artifact")]).then(
       ([{ useConnectionStore }, { useArtifactStore }]) => {
         // Review — reset UNCONDITIONALLY first: the VS Code webview adapter
         // has no switchSession, so the rehydrate silently no-op'd there and
@@ -129,6 +150,7 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
         if (sid) useConnectionStore.getState().switchSession(sid);
       },
     );
+    void rehydrateInFlight;
   },
 
   setCursor: (cursor) => set({ cursor }),
