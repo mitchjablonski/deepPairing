@@ -23,6 +23,7 @@ import {
   type PhilosophyStance,
 } from "../store/global-store.js";
 import { recordRejectedOptionConcept } from "../store/rejected-option-recorder.js";
+import { stripLeadingPathToken } from "../store/concept-hygiene.js";
 import type { LedgerRejectionBroadcast } from "../store/rejected-option-recorder.js";
 import type { Artifact, DecisionOption } from "@deeppairing/shared";
 import { projectHashOf } from "../project-root.js";
@@ -959,7 +960,17 @@ export function createHttpRoutes(
         //      NO per-file fan-out, the exact over-block class #195's review
         //      killed; demo isolation is inherited via recordRejectedApproach.
         const artConcept: string | undefined = (artifact.content as any)?.concept?.name;
-        const changesetFallback = artifact.type === "changeset" ? artifact.title : undefined;
+        // Q2 review H2 — the changeset fallback is the ONE key here that no
+        // human ever authored: agents title changesets after the file they
+        // touch, so this used to publish "packages/api/src/auth/
+        // session-store.ts — swap Redis for a Map" verbatim into the shared
+        // ledger, from a UI promising no file paths leave the project. Strip
+        // the machine-generated path prefix (see concept-hygiene.ts for why
+        // this cannot cost recall — a path-laden key could never match another
+        // project's proposal in the first place). Applied ONLY here: a concept
+        // the human typed, or one the agent named via Y5, is kept verbatim.
+        const changesetFallback =
+          artifact.type === "changeset" ? stripLeadingPathToken(artifact.title) : undefined;
         const concept = humanConcept?.trim() || artConcept || changesetFallback || undefined;
         await store.recordRejectedApproach({
           description: artifact.title,
@@ -1696,6 +1707,25 @@ export function createHttpRoutes(
     // `!== undefined` (not truthiness): turning it back OFF is the whole point
     // of an honest toggle.
     if (parsed.data.globalLedgerPublish !== undefined) {
+      // Q2 review H3 — a DEMO session must never appear to accept this. A demo
+      // FileStore writes to its in-memory demoPreferences layer, so the flip
+      // returned 200 while preferences.json was never created and the real
+      // session still read false — and the one-time first-reject card had
+      // already burned itself on the "success". The demo is the recommended
+      // first-value path, so that silently spent the single best moment we get
+      // to offer cross-project memory. Refuse it loudly instead; the client
+      // also declines to offer the card in a demo (stores/crossProject.ts).
+      if (sid?.startsWith("demo_")) {
+        return c.json(
+          {
+            error: "publish_toggle_unsupported",
+            code: ERROR_CODES.publish_toggle_unsupported,
+            message:
+              "This is a demo session — it never writes to your real project or your cross-project ledger. Open a real session to turn cross-project memory on.",
+          },
+          409,
+        );
+      }
       if (!store.setGlobalLedgerPublish) {
         return c.json(
           {

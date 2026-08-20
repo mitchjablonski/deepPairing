@@ -254,10 +254,15 @@ export function AutonomySlider() {
                     {publish ? "On" : "Off"}
                   </span>
                 </button>
+                {/* Q2 review H2/13 — same disclosure discipline as the
+                    first-reject card: name the real payload (a stance is the
+                    human's own wording, so a path they typed travels with it),
+                    and say plainly that switching OFF stops future writes
+                    rather than withdrawing past ones. */}
                 <div className="text-[10px] text-text-muted mt-1 leading-relaxed">
                   {publish
-                    ? "Stances you record here are written to ~/.deeppairing, so your other projects flag this concept (advisory, never a block)."
-                    : "Off — stances stay in this project. Turn on to write concept titles and your reasons to ~/.deeppairing, where your other projects can read them."}
+                    ? "On — new stances go to ~/.deeppairing (the stance, your reason, this project’s folder name), so your other projects flag the concept as an advisory nudge, never a block. Turning this off stops future writes; it doesn’t withdraw what’s already there."
+                    : "Off — stances stay in this project. Turn on to write the stance, your reason, and this project’s folder name to ~/.deeppairing, where your other projects can read them. No code or diffs; a stance is your wording, so a file name you type into one travels with it."}
                 </div>
               </div>
             )}

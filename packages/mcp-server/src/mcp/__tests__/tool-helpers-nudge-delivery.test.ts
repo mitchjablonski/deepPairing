@@ -55,6 +55,13 @@ function seedGlobalAvoid(reason = "expensive at scale") {
 
 const noopBroadcast = () => {};
 
+/** A LOCAL stance strong enough to hard-block, for the H1 block+advisory pin. */
+const LOCAL_STANCE_FOR_BLOCK = {
+  description: "use a global mutable config singleton",
+  concept: "global mutable state for config",
+  reason: "test order-dependence",
+};
+
 describe("Q2 — the cross-project nudge is DELIVERED, not merely traced", () => {
   it("fresh project (0 local stances) + published global stance + adjacent proposal → the response carries the nudge sentence", async () => {
     seedGlobalAvoid();
@@ -162,6 +169,53 @@ describe("Q2 — the cross-project nudge is DELIVERED, not merely traced", () =>
     expect(text).toContain("Preflight: considered 1 past stance");
   });
 
+  /**
+   * Q2 review item 12 — the COMPREHENSION tools never draw a cross-project
+   * nudge. An explainer teaches how existing code works and a debrief accounts
+   * for work already done; neither proposes an approach, so "you avoided this
+   * in projA — still want it here?" is advising on a decision nobody is making.
+   * Mirrors LEDGER_EXEMPT_REJECT_TYPES on the write side.
+   */
+  it.each(["present_explainer", "present_debrief"])(
+    "item 12: %s draws NO cross-project nudge even on a matching proposal",
+    async (toolName) => {
+      seedGlobalAvoid();
+      const res = await preflightRejectedApproaches(
+        fakeStore({}),
+        noopBroadcast,
+        toolName,
+        [MATCHING_PROSE],
+      );
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.trace.nearMisses.filter((n) => n.source === "global")).toEqual([]);
+      expect(formatPreflightTraceSummary(res.trace)).toBe("");
+    },
+  );
+
+  it("item 12: the SAME proposal on a proposing tool still nudges (proves the exemption, not absence)", async () => {
+    seedGlobalAvoid();
+    const res = await preflightRejectedApproaches(
+      fakeStore({}),
+      noopBroadcast,
+      "present_plan",
+      [MATCHING_PROSE],
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.trace.nearMisses.some((n) => n.source === "global")).toBe(true);
+  });
+
+  it("item 12: a LOCAL stance still hard-blocks a comprehension tool (only the advisory lane is exempt)", async () => {
+    const res = await preflightRejectedApproaches(
+      fakeStore({ rejectedApproaches: [LOCAL_STANCE_FOR_BLOCK] }),
+      noopBroadcast,
+      "present_explainer",
+      ["add a global mutable state for config singleton"],
+    );
+    expect(res.ok).toBe(false);
+  });
+
   it("LOCAL-only consults keep their pre-Q2 wording byte-for-byte (no collateral drift)", () => {
     expect(
       formatPreflightTraceSummary({
@@ -245,6 +299,72 @@ describe("Q2 — a real block is routed to the daemon for broadcast + durable pe
     );
     expect(res.ok).toBe(true);
     expect(recorded).toEqual([]);
+  });
+
+  /**
+   * Q2 review H1 — the summary is appended to the BLOCK message too (the CC1
+   * lane), so a hardcoded "you have no local stance on this here" made a
+   * blocked call contradict itself in the same sentence: "which the user
+   * previously rejected" AND "you have no local stance". The reassurance is
+   * only true on an admit with nothing local considered, so it is derived now.
+   */
+  it("H1: a BLOCK that also brushed a cross-project stance never claims 'no local stance'", async () => {
+    seedGlobalAvoid();
+    const res = await preflightRejectedApproaches(
+      fakeStore({ rejectedApproaches: [LOCAL_STANCE_FOR_BLOCK] }),
+      noopBroadcast,
+      "present_code_change",
+      // Blocks on the LOCAL stance, and separately brushes the GLOBAL one.
+      ["add a global mutable state for config singleton using pay-per-request hosting"],
+    );
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    const text = res.response.content[0]?.text ?? "";
+    expect(text).toContain("REJECTED_APPROACH_BLOCKED");
+    expect(text).toContain("previously rejected");
+    // The advisory still says what it is...
+    expect(text).toContain("Cross-project advisory (not a block)");
+    // ...without the self-contradiction.
+    expect(text).not.toContain("you have no local stance");
+  });
+
+  it("H1: an ADMIT with local stances considered also drops the 'no local stance' clause", () => {
+    const summary = formatPreflightTraceSummary({
+      decision: "admitted",
+      consideredCount: 2,
+      consideredConcepts: [],
+      nearMisses: [{ source: "global", concept: "pay-per-request hosting", project: "project-a" }],
+    });
+    expect(summary).toContain("Cross-project advisory (not a block)");
+    expect(summary).not.toContain("no local stance");
+  });
+
+  it("H1: the reassurance IS kept where it's true — an admit with nothing local considered", () => {
+    const summary = formatPreflightTraceSummary({
+      decision: "admitted",
+      consideredCount: 0,
+      consideredConcepts: [],
+      nearMisses: [{ source: "global", concept: "pay-per-request hosting", project: "project-a" }],
+    });
+    expect(summary).toContain("not a block, and you have no local stance on this here");
+  });
+
+  it("LOW: the nudge concatenation is capped — 2 spelled out, the rest counted", () => {
+    const many = ["alpha beta", "gamma delta", "epsilon zeta", "eta theta"].map((concept) => ({
+      source: "global" as const,
+      concept,
+      project: "project-a",
+    }));
+    const summary = formatPreflightTraceSummary({
+      decision: "admitted",
+      consideredCount: 0,
+      consideredConcepts: [],
+      nearMisses: many,
+    });
+    expect(summary).toContain('You avoided "alpha beta"');
+    expect(summary).toContain('You avoided "gamma delta"');
+    expect(summary).not.toContain('You avoided "epsilon zeta"');
+    expect(summary).toContain("(and 2 more)");
   });
 
   it("a store WITHOUT the optional method still blocks cleanly (surfacing must never break the refusal)", async () => {

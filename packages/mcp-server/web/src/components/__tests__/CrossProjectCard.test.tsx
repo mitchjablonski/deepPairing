@@ -38,8 +38,9 @@ function publishingOff() {
   act(() => useCrossProjectStore.getState().hydratePublish(false));
 }
 
-function firstReject() {
-  act(() => useCrossProjectStore.getState().noteStanceRecorded());
+/** A reject in a REAL session (the demo case is pinned separately below). */
+function firstReject(sessionId = "session_myproj_abc123") {
+  act(() => useCrossProjectStore.getState().noteStanceRecorded(sessionId));
 }
 
 describe("CrossProjectCard (Q2)", () => {
@@ -60,8 +61,7 @@ describe("CrossProjectCard (Q2)", () => {
     // The privacy disclosure is not optional: name the destination, the payload,
     // and that it stays advisory.
     expect(screen.getByText(/~\/\.deeppairing/)).toBeInTheDocument();
-    expect(screen.getByText(/advisory nudge, never a block/i)).toBeInTheDocument();
-    expect(screen.getByText(/no code, diffs, or file paths leave this project/i)).toBeInTheDocument();
+    expect(screen.getByText(/advisory\s+nudge, never a block/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /enable cross-project/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /not now/i })).toBeInTheDocument();
   });
@@ -138,6 +138,47 @@ describe("CrossProjectCard (Q2)", () => {
     render(<CrossProjectCard />); // publish === null (never hydrated)
     firstReject();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("Q2 review H3 — a DEMO session never gets the card, so it can't burn the one-time offer", () => {
+    publishingOff();
+    render(<CrossProjectCard />);
+    // The demo is the recommended first-value path, and its store writes
+    // preferences to an in-memory layer the real session never reads — so
+    // enabling from a demo used to 200, change nothing, and permanently spend
+    // the single best moment we get to offer cross-project memory.
+    act(() => useCrossProjectStore.getState().noteStanceRecorded("demo_1700000000000"));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(useCrossProjectStore.getState().dismissed).toBe(false);
+
+    // ...and the offer is still intact for the real session that follows.
+    firstReject();
+    expect(screen.getByRole("dialog", { name: /cross-project memory/i })).toBeInTheDocument();
+  });
+
+  it("Q2 review H2 — the disclosure names the REAL payload and its one caveat, and doesn't over-promise", () => {
+    publishingOff();
+    render(<CrossProjectCard />);
+    firstReject();
+    const body = screen.getByText(/Publishing writes three things/i);
+    // What actually lands in the ledger.
+    expect(body).toHaveTextContent(/the stance itself/i);
+    expect(body).toHaveTextContent(/the reason you typed/i);
+    expect(body).toHaveTextContent(/this project’s folder name/i);
+    // The caveat the mechanism cannot remove: a stance is the human's wording.
+    expect(body).toHaveTextContent(/if you name\s+a file in it, that name travels with it/i);
+    // Item 13 — off is not a retraction.
+    expect(body).toHaveTextContent(/doesn’t withdraw ones already written/i);
+    // The promise the review falsified must NOT come back.
+    expect(body).not.toHaveTextContent(/no code, diffs, or file paths leave this project/i);
+  });
+
+  it("Q2 review item 9 — points at where the control actually lives (the ⋯ menu, not Settings)", () => {
+    publishingOff();
+    render(<CrossProjectCard />);
+    firstReject();
+    expect(screen.getByText(/⋯ → Autonomy/)).toBeInTheDocument();
+    expect(screen.queryByText(/Settings → Autonomy/)).not.toBeInTheDocument();
   });
 
   it("a FAILED save rolls the preference back and still closes the card (the toggle remains in settings)", async () => {

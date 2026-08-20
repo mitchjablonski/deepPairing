@@ -506,7 +506,12 @@ export function ArtifactStatusActions({
       // honest moment for it. Gated on `concept` so a debrief reject (which
       // records no stance) can't trigger a card about stances.
       if (action === "rejected" && concept) {
-        useCrossProjectStore.getState().noteStanceRecorded();
+        // Q2 review H3 — the sessionId rides along so the store can decline the
+        // offer in a DEMO session, where the preference write is a no-op the
+        // one-time card would otherwise burn itself on.
+        useCrossProjectStore
+          .getState()
+          .noteStanceRecorded(useConnectionStore.getState().sessionId);
       }
       dispatch({ type: "actionSucceeded" }); // only on success — a failed action keeps the text to retry
     } catch {

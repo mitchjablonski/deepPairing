@@ -129,11 +129,17 @@ function PreflightBlockHeroCard({ hero, onDismiss, action, onOverride }: {
               stance stops existing here. Round 12 flagged it; rather than
               build scoping under a shipped label, the label now says what the
               button does. (True scoping — "allow this concept under
-              packages/x/**" — is a real future feature, not this one.) */}
+              packages/x/**" — is a real future feature, not this one.)
+
+              Q2 review item 5 — the tooltip then over-corrected by promising it
+              "stays in your ledger history as an override". That write is gated
+              on cross-project publishing, which is OFF by default: on a default
+              install the entry is simply deleted and no history is kept. The
+              tooltip now claims only what is true in every install. */}
           {hero.source === "session" && onOverride && (
             <button
               onClick={() => { onOverride(); onDismiss(); }}
-              title="False positive? Drop this stance from the project so it stops blocking. It stays in your ledger history as an override, but it won't gate here again."
+              title="False positive? Delete this stance from the project so it stops blocking here. It's a delete, not a narrowing — reject the concept again if you want it back."
               className="text-2xs font-medium text-text-muted hover:text-text-secondary hover:underline"
             >
               Retire this stance

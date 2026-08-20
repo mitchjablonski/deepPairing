@@ -76,9 +76,18 @@ export function PreflightBlockLog() {
   // Q2 — opening the popover IS reading it. Marking on open (not on hover, not
   // on a timer) keeps the unread count honest: it only clears when the human
   // actually looked at what fired.
+  //
+  // Q2 review LOW — gated on `loaded`. Opening the chip WHILE hydration was in
+  // flight used to mark everything read: with `blocks` still empty, markSeen
+  // falls back to stamping "now", which is newer than every block about to
+  // arrive — so the durable blocks the human never saw landed pre-read, which
+  // is exactly the disappearance this whole feature exists to stop. Waiting for
+  // the hydrate means the boundary is always the real newest block; the effect
+  // re-runs when `loaded` flips, so a popover opened early still marks correctly
+  // the moment the list arrives.
   useEffect(() => {
-    if (open) markSeen();
-  }, [open, markSeen]);
+    if (open && loaded) markSeen();
+  }, [open, loaded, markSeen]);
   useOverlayPresence(open); // UX4 — only while the popover is open (the chip is always mounted)
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);

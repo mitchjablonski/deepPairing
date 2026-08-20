@@ -76,7 +76,7 @@ it in your own project: **[install in Claude Code ↓](#install-in-claude-code)*
 
 ![The project-wide decisions view — every choice made across every session of this project, what was chosen and why, searchable, with a jump back into the session where you made the call.](docs/assets/decisions-view.png)
 
-![The Autonomy dial with the Detail (Rich / Terse) toggle — how much prose rides inside each artifact, orthogonal to how much structured review the pair does.](docs/assets/detail-density.png)
+![The Autonomy dial with the Detail (Rich / Terse) toggle and the Cross-project memory switch — how much prose rides inside each artifact, orthogonal to how much structured review the pair does, plus whether stances you record here are published to your other projects (off by default).](docs/assets/detail-density.png)
 
 ![The end-of-run debrief — the narrative of what changed, the calls the agent made on its own (with the alternative it weighed), what needs your eyes, what was deferred, and an ask-anything thread.](docs/assets/debrief.png)
 
@@ -155,8 +155,8 @@ So you never have to make the same call twice:
   rejecting it locally. It's literal, not semantic — a true synonym that shares
   no words won't trip it — so name the concept for what it is and it generalizes
   across the instances that reuse it. **False positives are one click away:**
-  "Retire this stance" in the block card drops it from the ledger and lets the
-  proposal through. (Blocks from a committed **team rule** point you to
+  "Retire this stance" in the block card deletes it from this project's stances
+  and lets the proposal through. (Blocks from a committed **team rule** point you to
   `.deeppairing/team.json` instead.)
 - **A backstop on the paths you can't undo.** The same PreToolUse hook also
   watches your guardrail paths — migrations, CI config, infrastructure, `.env`

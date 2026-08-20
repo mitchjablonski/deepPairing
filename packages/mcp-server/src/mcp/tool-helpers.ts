@@ -59,6 +59,18 @@ export function terminalApproveEnabled(env: NodeJS.ProcessEnv): boolean {
 }
 
 /**
+ * Q2 review item 12 — the present_* tools that must NEVER draw a cross-project
+ * advisory nudge. The mirror of LEDGER_EXEMPT_REJECT_TYPES (file-store.ts) on
+ * the READ side: an explainer/debrief proposes no approach, so there is no
+ * stance to be advised about. Keep the two lists in sync — if a new read-only
+ * comprehension artifact type is added there, add its tool here.
+ */
+const ADVISORY_EXEMPT_TOOLS: ReadonlySet<string> = new Set([
+  "present_explainer",
+  "present_debrief",
+]);
+
+/**
  * Pre-flight: refuse to record an artifact whose content matches an
  * approach the human previously rejected (session-scoped) OR violates a
  * team-agreed avoid/require preference (committed to .deeppairing/team.json).
@@ -133,9 +145,19 @@ export async function preflightRejectedApproaches(
     const k = tokenSetKey(a);
     if (k) localKeys.add(k);
   }
-  const globalAdvisoryConcepts = getAdvisoryRecall().conceptsFor({
-    localConceptKeys: localKeys,
-  });
+  // Q2 review item 12 — NO cross-project nudge on the COMPREHENSION tools.
+  // present_explainer teaches how existing code works; present_debrief accounts
+  // for work already done. Neither proposes an approach, so there is no taste
+  // stance being weighed and nothing for a cross-project advisory to advise on
+  // — asking "you avoided this in projA, still want it here?" about a
+  // walk-through of code that already exists is noise at best and misleading at
+  // worst. This mirrors the store-authoritative LEDGER_EXEMPT_REJECT_TYPES
+  // guard on the WRITE side (#193 E2): the same two artifact kinds that can't
+  // record a stance shouldn't be nudged by one. Local session/team lanes are
+  // untouched — a committed team rule still applies to any tool.
+  const globalAdvisoryConcepts = ADVISORY_EXEMPT_TOOLS.has(toolName)
+    ? []
+    : getAdvisoryRecall().conceptsFor({ localConceptKeys: localKeys });
 
   const result = runPreflight({
     toolName,
@@ -286,6 +308,10 @@ export function notifyResourcesListChanged(server: any): void {
   }
 }
 
+/** Q2 review LOW — how many cross-project nudges get spelled out in full.
+ *  Beyond this the summary names the count instead of the sentences. */
+const MAX_NUDGES_SPELLED_OUT = 2;
+
 /**
  * BB5 — short, agent-facing summary of the preflight consult that just
  * fired. Couples to the trace persisted by persistPreflightTrace so the
@@ -342,15 +368,32 @@ export function formatPreflightTraceSummary(trace: PreflightTracePartial): strin
     );
   }
   let out = ` Preflight: ${clauses.join("; ")}.`;
-  const nudges = nm
-    .filter((n) => n.source === "global")
-    .map((n) => {
-      const where = n.project ? `in "${n.project}"` : "in another project";
-      const because = n.reason ? ` (your reason: "${n.reason}")` : "";
-      return `You avoided "${n.concept}" ${where}${because} — still want it here?`;
-    });
+  const globals = nm.filter((n) => n.source === "global");
+  // Q2 review LOW — cap the concatenation. Every additional nudge dilutes the
+  // ones the agent should actually weigh, and a ledger with many adjacent
+  // stances could otherwise append a paragraph to every tool return.
+  const shown = globals.slice(0, MAX_NUDGES_SPELLED_OUT);
+  const nudges = shown.map((n) => {
+    const where = n.project ? `in "${n.project}"` : "in another project";
+    const because = n.reason ? ` (your reason: "${n.reason}")` : "";
+    return `You avoided "${n.concept}" ${where}${because} — still want it here?`;
+  });
   if (nudges.length) {
-    out += ` Cross-project advisory (not a block, and you have no local stance on this here): ${nudges.join(" ")}`;
+    // Q2 review H1 — the parenthetical used to hardcode "and you have no local
+    // stance on this here", but this same summary is appended to the BLOCK
+    // message too (see preflightRejectedApproaches' CC1 lane). A blocked call
+    // that ALSO brushed a cross-project stance therefore shipped one message
+    // saying both "which the user previously rejected" and "you have no local
+    // stance" — a flat self-contradiction, in the message where clarity matters
+    // most. The reassurance is only TRUE on an admit with nothing local
+    // considered, so derive it instead of asserting it. "not a block" is
+    // unconditionally true of the advisory itself and always stays.
+    const noLocalStance = trace.block === undefined && trace.consideredCount === 0;
+    const qualifier = noLocalStance
+      ? "not a block, and you have no local stance on this here"
+      : "not a block";
+    const more = globals.length > shown.length ? ` (and ${globals.length - shown.length} more)` : "";
+    out += ` Cross-project advisory (${qualifier}): ${nudges.join(" ")}${more}`;
   }
   return out;
 }

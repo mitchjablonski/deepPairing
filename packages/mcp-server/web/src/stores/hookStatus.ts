@@ -13,8 +13,14 @@ import { apiBase, apiGet } from "../lib/api";
 
 export interface HookFire {
   at: string;        // ISO timestamp
-  hook: "stop" | "checkpoint" | string;
-  exitCode: number;
+  hook: "stop" | "checkpoint" | "preflight" | string;
+  /**
+   * Written by the Stop/checkpoint hooks only. The PREFLIGHT lane
+   * (recordHookFire in cli/preflight-hook-core.ts) writes no exitCode at all —
+   * it stamps `kind` instead — so this is OPTIONAL, and typing it as required
+   * was part of why the guardrail lane silently rendered as a green "pass".
+   */
+  exitCode?: number;
   reason: string;
   /**
    * Q2/Q1 contract — what the hook actually DID, independent of exitCode.

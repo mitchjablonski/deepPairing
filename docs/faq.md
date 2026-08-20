@@ -203,9 +203,19 @@ your machine. Default off. Turn it on wherever you are: **Autonomy →
 Cross-project memory** in the companion UI, the one-time card offered
 right after your first "Reject & remember" in a project, the prompt at
 `init`, or `deeppairing philosophy publish on|off` (bare `philosophy
-publish` shows the current state). Publishing writes the concept title
-and the reason you typed — no code, diffs, or file paths — to
-`~/.deeppairing`, and nothing leaves your machine either way.
+publish` shows the current state).
+
+What publishing actually writes to `~/.deeppairing`, per stance: the
+stance itself, the reason you typed, this project's folder name, and
+the session id. No code and no diffs — and nothing leaves your
+machine either way. One caveat worth stating plainly: a stance is
+*your* wording, so if you name a file in it, that name is part of the
+stance and travels with it. (We do strip a machine-generated path
+prefix from the one key nobody authors by hand — a changeset reject
+falls back to the changeset's title, and agents title those after the
+file they touched.) Turning publishing back off stops future writes;
+it does not withdraw stances already published — use `deeppairing
+philosophy remove <concept>` for that.
 
 The narrative trade-off: cross-project reads are a real advantage,
 but publishing is now opt-in. And to be precise about what's actually

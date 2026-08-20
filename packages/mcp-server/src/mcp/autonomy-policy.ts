@@ -41,10 +41,20 @@ export type AutonomyLevel = "supervised" | "balanced" | "autonomous";
  * that exempts architectural forks is not a floor. Minimal keeps its real
  * meaning: proceed by default on ordinary work, no findings/plan ceremony,
  * review after. It just stops pretending the fork itself is ordinary work.
+ *
+ * Q2 review item 10 — MONOTONICITY. Naming the floor in `autonomous` briefly
+ * INVERTED the dial: Minimal's options trigger became {architectural fork} ∪
+ * {high-risk / irreversible} while Light's was only {architectural choices} —
+ * making the QUIETER setting a strict superset of the louder one on this
+ * surface. `balanced` now names the same two triggers, so the two are EQUAL on
+ * options and Light stays strictly more talkative overall: it still posts
+ * findings for non-simple tasks and plans for multi-file changes, both of which
+ * Minimal skips. Read the ladder as Full ⊃ Light ⊃ Minimal, always. If you ever
+ * add a trigger to `autonomous`, add it to `balanced` first.
  */
 export const AUTONOMY_POLICY_LINE: Record<Exclude<AutonomyLevel, "supervised">, string> = {
   balanced:
-    "Skip findings for simple tasks. Present options only for genuine architectural choices.",
+    "Skip findings for simple tasks. Present options for any genuine architectural choice — and for anything high-risk or irreversible.",
   autonomous:
     "Proceed with your recommended approach on ordinary work — the human reviews after, so skip the findings/plan ceremony. The floor still holds: present_options for a genuine architectural fork (a choice that shapes the code written around it), and for anything high-risk or irreversible. Everything else, just do.",
 };

@@ -4,6 +4,7 @@ import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion
 import { suggestionSummary, isLateCommentableStatus } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
+import { capConceptLength } from "./concept-hygiene.js";
 import { writeJsonAtomic, writeStringAtomic } from "./atomic-write.js";
 import { salvageArray, salvageRecord, salvageLog } from "./salvage.js";
 import { senseProjectGuardrails, loadTeamPreferences } from "./project-signals.js";
@@ -1501,12 +1502,27 @@ export class FileStore implements IStore {
     const conceptKey = concept?.trim() || description.trim();
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
-        getGlobalStore().recordInstance(conceptKey, {
+        // Q2 review H2 — publish the MINIMUM that makes the stance usable
+        // elsewhere: the concept, the reason, and the attribution. `description`
+        // (the artifact TITLE) is deliberately NO LONGER published. It was a
+        // second unbounded agent-authored string riding into a shared file —
+        // and agents title artifacts after the file they touched, which is how
+        // "packages/api/src/auth/session-store.ts — swap Redis for a Map"
+        // reached the ledger from a UI promising no file paths leave the
+        // project. It also had no reader anywhere in the codebase: write-only
+        // data whose only effect was to widen the disclosure surface. Dropping
+        // it makes the consent copy true as written. The field stays on the
+        // TYPE so existing ledgers that carry it still parse.
+        //
+        // The cap is the other half: a ledger key is a short phrase you could
+        // say out loud, and an unbounded one published into a shared file is
+        // both a storage and a disclosure hazard. Applied at EVERY publish site
+        // or an approval and its rejection would bucket under different keys.
+        getGlobalStore().recordInstance(capConceptLength(conceptKey), {
           project: this.projectHint,
           sessionId: this.sessionId,
           verdict: "rejected",
           reason,
-          description,
         });
       } catch {
         // Non-fatal — losing a ledger append doesn't break the session.
@@ -1584,11 +1600,11 @@ export class FileStore implements IStore {
     const conceptKey = concept?.trim() || description.trim();
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
-        getGlobalStore().recordInstance(conceptKey, {
+        // Q2 review H2 — same minimum-payload + cap rule as the rejected path.
+        getGlobalStore().recordInstance(capConceptLength(conceptKey), {
           project: this.projectHint,
           sessionId: this.sessionId,
           verdict: "approved",
-          description,
         });
       } catch {
         // Non-fatal
@@ -1634,12 +1650,15 @@ export class FileStore implements IStore {
     const conceptKey = concept?.trim() || description?.trim() || "";
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
-        getGlobalStore().recordInstance(conceptKey, {
+        // Q2 review LOW — the stored reason said "not my taste", the label of a
+        // button that no longer exists. It is written into the user's own data
+        // and read back in the Ledger drawer, so it has to match what they
+        // clicked: "Retire this stance". Same minimum-payload + cap rule.
+        getGlobalStore().recordInstance(capConceptLength(conceptKey), {
           project: this.projectHint,
           sessionId: this.sessionId,
           verdict: "approved",
-          reason: "Overridden — not my taste (pre-flight false positive)",
-          description,
+          reason: "Retired by you — the gate was blocking something you wanted",
         });
       } catch {
         // Non-fatal — losing a ledger append doesn't break the override; the

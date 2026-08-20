@@ -25,10 +25,12 @@ On your first tool call, the response includes:
   such a rejection exists, `present_*` stops you re-attempting a proposal that
   matches it), approved patterns, and project guardrails (migrations, CI
   workflows, infra paths).
-- **Cross-project philosophy ledger** — the user's stances across every
-  deepPairing project they've used. 'Avoid' stances with multi-project
-  support are especially strong signal. These are advisory — a match nudges
-  you; only THIS project's rejections hard-block.
+- **Cross-project philosophy ledger** — the user's stances from any project
+  where they turned cross-project publishing ON (it is OFF by default, so this
+  may be empty even for a long-time user — say nothing about their other
+  projects unless a stance actually surfaces). 'Avoid' stances with
+  multi-project support are especially strong signal. These are advisory — a
+  match nudges you; only THIS project's rejections hard-block.
 
 ## Voice — write to your pair, not about them
 

@@ -27488,7 +27488,7 @@ function getGlobalStore() {
 
 // src/mcp/autonomy-policy.ts
 var AUTONOMY_POLICY_LINE = {
-  balanced: "Skip findings for simple tasks. Present options only for genuine architectural choices.",
+  balanced: "Skip findings for simple tasks. Present options for any genuine architectural choice \u2014 and for anything high-risk or irreversible.",
   autonomous: "Proceed with your recommended approach on ordinary work \u2014 the human reviews after, so skip the findings/plan ceremony. The floor still holds: present_options for a genuine architectural fork (a choice that shapes the code written around it), and for anything high-risk or irreversible. Everything else, just do."
 };
 
@@ -28603,6 +28603,10 @@ function terminalApproveEnabled(env) {
   const v = (env.DEEPPAIRING_TERMINAL_APPROVE ?? "").toLowerCase();
   return v === "1" || v === "true" || v === "yes";
 }
+var ADVISORY_EXEMPT_TOOLS = /* @__PURE__ */ new Set([
+  "present_explainer",
+  "present_debrief"
+]);
 async function preflightRejectedApproaches(store, broadcast, toolName, proposalStrings, proposalPaths = [], proposalConcepts = []) {
   const memory = await store.getSessionMemory();
   const teamPrefs = await store.getTeamPreferences?.() ?? [];
@@ -28615,9 +28619,7 @@ async function preflightRejectedApproaches(store, broadcast, toolName, proposalS
     const k = tokenSetKey(a);
     if (k) localKeys.add(k);
   }
-  const globalAdvisoryConcepts = getAdvisoryRecall().conceptsFor({
-    localConceptKeys: localKeys
-  });
+  const globalAdvisoryConcepts = ADVISORY_EXEMPT_TOOLS.has(toolName) ? [] : getAdvisoryRecall().conceptsFor({ localConceptKeys: localKeys });
   const result = runPreflight({
     toolName,
     proposalStrings,
@@ -28689,6 +28691,7 @@ function notifyResourcesListChanged(server) {
   } catch {
   }
 }
+var MAX_NUDGES_SPELLED_OUT = 2;
 function formatPreflightTraceSummary(trace) {
   if (!trace) return "";
   const nm = trace.nearMisses ?? [];
@@ -28705,13 +28708,18 @@ function formatPreflightTraceSummary(trace) {
     );
   }
   let out = ` Preflight: ${clauses.join("; ")}.`;
-  const nudges = nm.filter((n) => n.source === "global").map((n) => {
+  const globals = nm.filter((n) => n.source === "global");
+  const shown = globals.slice(0, MAX_NUDGES_SPELLED_OUT);
+  const nudges = shown.map((n) => {
     const where = n.project ? `in "${n.project}"` : "in another project";
     const because = n.reason ? ` (your reason: "${n.reason}")` : "";
     return `You avoided "${n.concept}" ${where}${because} \u2014 still want it here?`;
   });
   if (nudges.length) {
-    out += ` Cross-project advisory (not a block, and you have no local stance on this here): ${nudges.join(" ")}`;
+    const noLocalStance = trace.block === void 0 && trace.consideredCount === 0;
+    const qualifier = noLocalStance ? "not a block, and you have no local stance on this here" : "not a block";
+    const more = globals.length > shown.length ? ` (and ${globals.length - shown.length} more)` : "";
+    out += ` Cross-project advisory (${qualifier}): ${nudges.join(" ")}${more}`;
   }
   return out;
 }

@@ -69,23 +69,54 @@ function emptyLog(): PreflightBlockLogFile {
   return { version: VERSION, blocks: [] };
 }
 
-/** Read the log from disk. Missing, unparseable, or wrong-shaped → empty. */
+/**
+ * Read the log from disk. Missing, unparseable, or wrong-shaped → empty.
+ *
+ * Q2 review LOW — a corrupt log is COPIED ASIDE before it is discarded, to
+ * `preflight-blocks.json.corrupt-<ISO>`. This is the salvage rule ("back up
+ * before any committing drop") and the same convention Q1 landed for
+ * hooks-state.json. It matters more here than the empty return suggests: the
+ * next write rebuilds the file from what this read returned, so silently
+ * returning [] on a parse error is what ACTUALLY destroys the history — the
+ * bad bytes get overwritten by a one-entry file the moment the gate fires
+ * again. The copy makes that recoverable by hand.
+ */
 export function readPreflightBlocks(projectRoot: string): PreflightBlockEntry[] {
+  const file = logPath(projectRoot);
+  let raw: string;
   try {
-    const file = logPath(projectRoot);
     if (!fs.existsSync(file)) return [];
-    const parsed = JSON.parse(fs.readFileSync(file, "utf-8")) as Partial<PreflightBlockLogFile>;
-    if (parsed?.version !== VERSION || !Array.isArray(parsed.blocks)) return [];
-    // Defensive filter — a hand-edited file must not put junk on the UI.
-    return parsed.blocks
-      .filter(
-        (b): b is PreflightBlockEntry =>
-          !!b && typeof b.id === "string" && typeof b.concept === "string" && b.concept.length > 0,
-      )
-      .slice(0, MAX_BLOCKS);
+    raw = fs.readFileSync(file, "utf-8");
   } catch {
-    return [];
+    return []; // unreadable — nothing to salvage
   }
+  try {
+    const parsed = JSON.parse(raw) as Partial<PreflightBlockLogFile>;
+    if (parsed?.version === VERSION && Array.isArray(parsed.blocks)) {
+      // Defensive filter — a hand-edited file must not put junk on the UI.
+      return parsed.blocks
+        .filter(
+          (b): b is PreflightBlockEntry =>
+            !!b && typeof b.id === "string" && typeof b.concept === "string" && b.concept.length > 0,
+        )
+        .slice(0, MAX_BLOCKS);
+    }
+    // Parsed but wrong shape (a future/older version, or hand-mangled) — still
+    // a drop, so still worth a copy.
+  } catch {
+    /* fall through to the salvage copy */
+  }
+  // Empty file is not corrupt — there is nothing to preserve, and writing a
+  // zero-byte .corrupt- sibling on every read would be litter.
+  if (raw.trim().length > 0) {
+    try {
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      fs.writeFileSync(`${file}.corrupt-${stamp}`, raw);
+    } catch {
+      /* best-effort */
+    }
+  }
+  return [];
 }
 
 /**

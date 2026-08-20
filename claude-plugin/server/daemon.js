@@ -24963,6 +24963,20 @@ function getGlobalStore() {
   return _singleton;
 }
 
+// src/store/concept-hygiene.ts
+var LEADING_PATH_PREFIX = /^\s*([^\s:—–]*[/\\][^\s:—–]*|[^\s:—–]+\.[a-z0-9]{1,6})\s*(?:[—–:]|-\s)\s*/i;
+function stripLeadingPathToken(title) {
+  if (!title) return title;
+  const stripped = title.replace(LEADING_PATH_PREFIX, "").trim();
+  if (!stripped) return title;
+  return stripped;
+}
+var MAX_PUBLISHED_CONCEPT_CHARS = 500;
+function capConceptLength(concept) {
+  if (concept.length <= MAX_PUBLISHED_CONCEPT_CHARS) return concept;
+  return `${concept.slice(0, MAX_PUBLISHED_CONCEPT_CHARS - 1).trimEnd()}\u2026`;
+}
+
 // src/store/project-signals.ts
 import fs6 from "node:fs";
 import path5 from "node:path";
@@ -26984,12 +26998,11 @@ var FileStore = class _FileStore {
     const conceptKey = concept?.trim() || description.trim();
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
-        getGlobalStore().recordInstance(conceptKey, {
+        getGlobalStore().recordInstance(capConceptLength(conceptKey), {
           project: this.projectHint,
           sessionId: this.sessionId,
           verdict: "rejected",
-          reason,
-          description
+          reason
         });
       } catch {
       }
@@ -27050,11 +27063,10 @@ var FileStore = class _FileStore {
     const conceptKey = concept?.trim() || description.trim();
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
-        getGlobalStore().recordInstance(conceptKey, {
+        getGlobalStore().recordInstance(capConceptLength(conceptKey), {
           project: this.projectHint,
           sessionId: this.sessionId,
-          verdict: "approved",
-          description
+          verdict: "approved"
         });
       } catch {
       }
@@ -27096,12 +27108,11 @@ var FileStore = class _FileStore {
     const conceptKey = concept?.trim() || description?.trim() || "";
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
-        getGlobalStore().recordInstance(conceptKey, {
+        getGlobalStore().recordInstance(capConceptLength(conceptKey), {
           project: this.projectHint,
           sessionId: this.sessionId,
           verdict: "approved",
-          reason: "Overridden \u2014 not my taste (pre-flight false positive)",
-          description
+          reason: "Retired by you \u2014 the gate was blocking something you wanted"
         });
       } catch {
       }
@@ -28282,17 +28293,31 @@ function logPath(projectRoot2) {
   return path11.join(projectRoot2, ".deeppairing", "preflight-blocks.json");
 }
 function readPreflightBlocks(projectRoot2) {
+  const file2 = logPath(projectRoot2);
+  let raw2;
   try {
-    const file2 = logPath(projectRoot2);
     if (!fs12.existsSync(file2)) return [];
-    const parsed = JSON.parse(fs12.readFileSync(file2, "utf-8"));
-    if (parsed?.version !== VERSION3 || !Array.isArray(parsed.blocks)) return [];
-    return parsed.blocks.filter(
-      (b) => !!b && typeof b.id === "string" && typeof b.concept === "string" && b.concept.length > 0
-    ).slice(0, MAX_BLOCKS);
+    raw2 = fs12.readFileSync(file2, "utf-8");
   } catch {
     return [];
   }
+  try {
+    const parsed = JSON.parse(raw2);
+    if (parsed?.version === VERSION3 && Array.isArray(parsed.blocks)) {
+      return parsed.blocks.filter(
+        (b) => !!b && typeof b.id === "string" && typeof b.concept === "string" && b.concept.length > 0
+      ).slice(0, MAX_BLOCKS);
+    }
+  } catch {
+  }
+  if (raw2.trim().length > 0) {
+    try {
+      const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
+      fs12.writeFileSync(`${file2}.corrupt-${stamp}`, raw2);
+    } catch {
+    }
+  }
+  return [];
 }
 var VALID_VIA = /* @__PURE__ */ new Set(["surface", "concept", "avoid", "require"]);
 function blockEntryFromEvent(sessionId, event, now = () => (/* @__PURE__ */ new Date()).toISOString()) {
@@ -28945,7 +28970,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       if (artifact && LEDGER_EXEMPT_REJECT_TYPES.has(artifact.type)) {
       } else if (artifact && artifact.type !== "decision") {
         const artConcept = artifact.content?.concept?.name;
-        const changesetFallback = artifact.type === "changeset" ? artifact.title : void 0;
+        const changesetFallback = artifact.type === "changeset" ? stripLeadingPathToken(artifact.title) : void 0;
         const concept = humanConcept?.trim() || artConcept || changesetFallback || void 0;
         await store.recordRejectedApproach({
           description: artifact.title,
@@ -29442,6 +29467,16 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       broadcast({ type: "preference_changed", detailDensity: parsed.data.detailDensity }, sid);
     }
     if (parsed.data.globalLedgerPublish !== void 0) {
+      if (sid?.startsWith("demo_")) {
+        return c.json(
+          {
+            error: "publish_toggle_unsupported",
+            code: ERROR_CODES.publish_toggle_unsupported,
+            message: "This is a demo session \u2014 it never writes to your real project or your cross-project ledger. Open a real session to turn cross-project memory on."
+          },
+          409
+        );
+      }
       if (!store.setGlobalLedgerPublish) {
         return c.json(
           {
@@ -30893,10 +30928,16 @@ function createDaemon(deps) {
   const globalClients = /* @__PURE__ */ new Set();
   const demoReplayEvents = /* @__PURE__ */ new Map();
   function broadcast(sessionId, event) {
-    if (sessionId.startsWith("demo_") && event?.type === "preflight_blocked") {
-      demoReplayEvents.set(sessionId, event);
+    let outgoing = event;
+    try {
+      const entry = recordPreflightBlock(projectRoot2, sessionId, event);
+      if (entry) outgoing = { ...event, blockId: entry.id, at: entry.at };
+    } catch {
     }
-    const data = JSON.stringify({ ...event, sessionId });
+    if (sessionId.startsWith("demo_") && outgoing?.type === "preflight_blocked") {
+      demoReplayEvents.set(sessionId, outgoing);
+    }
+    const data = JSON.stringify({ ...outgoing, sessionId });
     const sessionClients = wsClients.get(sessionId);
     if (sessionClients) {
       for (const ws of sessionClients) {
@@ -30916,10 +30957,6 @@ function createDaemon(deps) {
     }
     try {
       recordBroadcastMetric(projectRoot2, sessionId, event);
-    } catch {
-    }
-    try {
-      recordPreflightBlock(projectRoot2, sessionId, event);
     } catch {
     }
   }

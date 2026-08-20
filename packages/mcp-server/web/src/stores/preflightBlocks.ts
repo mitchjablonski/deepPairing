@@ -50,6 +50,13 @@ export interface PreflightBlockRecord {
   projectCount?: number;
   /** Q2 — which session the agent was in. Present on server-hydrated blocks. */
   sessionId?: string;
+  /**
+   * Q2 review item 11 — the durable log entry's id, assigned by the daemon and
+   * carried on BOTH the live WS event and the hydrated row. This is the dedupe
+   * key; `id` remains the client-local React key. Absent for a demo replay
+   * (never persisted) and for a pre-Q2 daemon.
+   */
+  serverId?: string;
 }
 
 interface PreflightBlockState {
@@ -89,13 +96,33 @@ function writeLastSeen(at: string): void {
   }
 }
 
-/** Identity for dedupe: the same firing re-delivered (WS replay, reconnect, or
- *  a live event that the hydrate also carried) must not double-append. */
-function sameBlock(a: PreflightBlockRecord, b: { concept: string; proposal?: string; at?: string; rejectedAt?: string; id?: string }): boolean {
-  if (b.id && a.id === b.id) return true;
+/**
+ * Identity for dedupe: the same firing re-delivered (WS replay, reconnect, or a
+ * live event that hydrate() also carried) must not double-append.
+ *
+ * Q2 review item 11 — the SERVER ID is the real answer, and it exists now: the
+ * daemon persists the block before fanning out and stamps the durable entry's
+ * id onto the wire event, so the live delivery and the hydrated row carry the
+ * same `serverId`. The previous key was inert in the production shape — it
+ * preferred `rejectedAt`, which a real `preflight_blocked` payload never
+ * carries (it isn't part of the match shape), so identity fell through to
+ * client-vs-server timestamp equality and a block arriving DURING load()
+ * double-appended, inflating the unread count on the one signal that has to be
+ * trustworthy.
+ *
+ * The content key stays as the fallback for the two id-less cases: a demo
+ * replay (never persisted, so no id exists) and a pre-Q2 daemon.
+ */
+function sameBlock(
+  a: PreflightBlockRecord,
+  b: { concept: string; proposal?: string; at?: string; rejectedAt?: string; id?: string; serverId?: string },
+): boolean {
+  const bServer = b.serverId ?? b.id;
+  if (bServer && a.serverId) return a.serverId === bServer;
+  if (bServer && a.id === bServer) return true;
   if (a.concept !== b.concept || a.proposal !== b.proposal) return false;
   // Prefer the original-rejection timestamp when both have one (the #169 key);
-  // otherwise fall back to the firing timestamp, which the server now assigns.
+  // otherwise fall back to the firing timestamp.
   if (a.rejectedAt || b.rejectedAt) return a.rejectedAt === b.rejectedAt;
   return !!b.at && a.at === b.at;
 }
@@ -116,7 +143,13 @@ export const usePreflightBlockStore = create<PreflightBlockState>((set, get) => 
       const raw: PreflightBlockRecord[] = Array.isArray(body?.blocks) ? body.blocks : [];
       const hydrated = raw
         .filter((b) => b && typeof b.concept === "string" && b.concept.length > 0)
-        .map((b) => ({ ...b, via: b.via ?? "surface", source: b.source === "team" ? "team" as const : "session" as const }));
+        .map((b) => ({
+          ...b,
+          via: b.via ?? "surface",
+          source: b.source === "team" ? ("team" as const) : ("session" as const),
+          // The log entry's own id IS the server id (see item 11).
+          serverId: b.serverId ?? b.id,
+        }));
       // Merge UNDER anything already pushed live (a block that arrived on the
       // socket while this fetch was in flight is the same firing).
       const { blocks } = get();
@@ -140,7 +173,9 @@ export const usePreflightBlockStore = create<PreflightBlockState>((set, get) => 
     // can arrive twice. Independent of #194's connection-layer dedupe:
     // belt-and-suspenders, so neither layer alone can double-append.
     if (blocks.some((b) => sameBlock(b, { ...block, at }))) return;
-    const id = `blk_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    // The client id stays client-local (React key). Prefer the server's id for
+    // it too when we have one, so the two lanes also agree on the React key.
+    const id = block.serverId ?? `blk_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const record: PreflightBlockRecord = { ...block, id, at };
     const next = [record, ...blocks].slice(0, MAX_BLOCKS_KEPT);
     set({ blocks: next });

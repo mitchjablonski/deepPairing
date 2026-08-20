@@ -71,8 +71,10 @@ interface CrossProjectState {
   /**
    * Called after a reject that RECORDED A STANCE. Opens the card iff this
    * project has never answered it and publishing is currently off.
+   *
+   * `sessionId` is required so the DEMO can be excluded — see the guard below.
    */
-  noteStanceRecorded: () => void;
+  noteStanceRecorded: (sessionId: string | null | undefined) => void;
   /** "Not now" (or the ✕) — answered, never offered again in this project. */
   dismissCard: () => void;
   /** Test seam. */
@@ -113,9 +115,19 @@ export const useCrossProjectStore = create<CrossProjectState>((set, get) => ({
     }
   },
 
-  noteStanceRecorded: () => {
+  noteStanceRecorded: (sessionId) => {
     const { dismissed, publish, cardVisible } = get();
     if (dismissed || cardVisible) return;
+    // Q2 review H3 — NEVER offer this in a demo session. A demo store writes
+    // preferences to an in-memory layer that the real session never reads, so
+    // enabling from a demo returned success while changing nothing — and,
+    // because the card is deliberately one-time, it burned itself on that
+    // no-op. The demo IS the recommended first-value path, so this was
+    // spending the single best moment we get to offer cross-project memory on
+    // a session that structurally cannot accept it. The route refuses the
+    // write too (409); this is the half that keeps the offer intact for the
+    // real session.
+    if (sessionId?.startsWith("demo_")) return;
     // Already publishing → there is nothing to offer. `null` (not yet loaded)
     // is also a no-show: better to miss one prompt than to offer someone an
     // opt-in they already took.

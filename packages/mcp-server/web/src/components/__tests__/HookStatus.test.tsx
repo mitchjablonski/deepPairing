@@ -161,6 +161,25 @@ describe("Q2 — hook fires render honestly (kind: 'ask' | 'pass')", () => {
     expect(pass).toHaveClass("text-accent-green");
   });
 
+  it("END-TO-END with Q1's writer: the EXACT record recordHookFire emits renders amber 'asked'", async () => {
+    const user = userEvent.setup();
+    // Byte-for-byte the object cli/preflight-hook-core.ts pushes onto
+    // hooks-state.json for a guardrail fire: hook "preflight", kind "ask",
+    // a `guardrail:<category>` reason, and NO exitCode at all. That missing
+    // exitCode is precisely what made this render green before.
+    useHookStatusStore.getState().pushFire({
+      at: new Date().toISOString(),
+      hook: "preflight",
+      kind: "ask",
+      reason: "guardrail:migrations",
+    } as HookFire);
+    render(<HookStatus />);
+    await user.click(screen.getByRole("button", { name: /show recent hook fires/i }));
+    expect(screen.getByText("asked")).toHaveClass("text-accent-amber");
+    expect(screen.getByText("preflight")).toBeInTheDocument();
+    expect(screen.queryByText("pass")).not.toBeInTheDocument();
+  });
+
   it("BACK-COMPAT: a record with NO kind keeps the pre-Q2 exitCode rendering exactly", async () => {
     const user = userEvent.setup();
     useHookStatusStore.getState().pushFire(fire({ at: new Date().toISOString(), exitCode: 0, reason: "old pass" }));

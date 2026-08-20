@@ -120,6 +120,111 @@ describe("Q2 — cross-project publishing is reachable from the companion UI", (
     expect(entries[0]?.instances[0]?.reason).toBe("it makes every test order-dependent");
   });
 
+  it("Q2 review H3 — a DEMO session gets a 409, never a 200 on a write that can't land", async () => {
+    // A demo FileStore writes preferences to an in-memory layer the real
+    // session never reads, so the flip used to return 200 while
+    // preferences.json was never created — and the one-time first-reject card
+    // had already burned itself on that "success".
+    const res = await app.request("/api/preferences", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Session-Id": "demo_1700000000000" },
+      body: JSON.stringify({ globalLedgerPublish: true }),
+    });
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.code).toBe("publish_toggle_unsupported");
+    expect(body.message).toMatch(/demo session/i);
+
+    // The real session is untouched — the offer is still available there.
+    const state = await (await app.request("/api/state")).json();
+    expect(state.globalLedgerPublish).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, ".deeppairing", "preferences.json"))).toBe(false);
+  });
+
+  /**
+   * Q2 review H2 — THE COPY IS A CLAIM, SO EXECUTE IT.
+   *
+   * The consent surface (first-reject card, Autonomy switch, FAQ) tells the
+   * human what publishing sends. The review published for real and found a
+   * changeset-reject key of "packages/api/src/auth/session-store.ts — swap
+   * Redis for an in-memory Map" — a source path, from a UI that had just
+   * promised no file paths leave the project. This pins what a real publish
+   * actually writes, so the copy and the mechanism can't drift apart again.
+   */
+  it("H2: a real publish writes ONLY the stance, the reason, the project folder name, and the session id", async () => {
+    await app.request("/api/preferences", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ globalLedgerPublish: true }),
+    });
+    store.recordRejectedApproach({
+      description: "Cache backend: Redis",
+      concept: "external cache service",
+      reason: "one less thing to run in dev",
+    });
+
+    const entries = getGlobalStore().query({ limit: 50 });
+    expect(entries).toHaveLength(1);
+    const instance = entries[0]!.instances[0]!;
+    // Exactly the fields the copy names — nothing else carries content.
+    expect(Object.keys(instance).sort()).toEqual(["at", "project", "reason", "sessionId", "verdict"]);
+    expect(instance.reason).toBe("one less thing to run in dev");
+    expect(entries[0]!.concept).toBe("external cache service");
+    // No code, no diff, no description duplicating the key.
+    expect(instance.description).toBeUndefined();
+  });
+
+  it("H2: a changeset reject no longer publishes the file path the agent titled it with", async () => {
+    await app.request("/api/preferences", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ globalLedgerPublish: true }),
+    });
+    await store.createArtifact({
+      id: "art_cs_leak",
+      type: "changeset",
+      title: "packages/api/src/auth/session-store.ts — swap Redis for an in-memory Map",
+      content: {
+        files: [
+          {
+            path: "packages/api/src/auth/session-store.ts",
+            changeType: "modified",
+            hunks: [{ lines: [{ kind: "add", content: "const cache = new Map()", newLine: 12 }] }],
+          },
+        ],
+      },
+    } as any);
+
+    const res = await app.request(`/api/artifacts/art_cs_leak/status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "rejected", feedback: "keep Redis, dev parity matters" }),
+    });
+    expect(res.status).toBe(200);
+
+    const entries = getGlobalStore().query({ limit: 50 });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.concept).toBe("swap Redis for an in-memory Map");
+    // The claim under test: no source path reached the shared ledger.
+    expect(JSON.stringify(entries[0]!)).not.toContain("packages/api/src/auth/session-store.ts");
+  });
+
+  it("H2: a concept the HUMAN typed is kept verbatim — we never silently edit their words", async () => {
+    await app.request("/api/preferences", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ globalLedgerPublish: true }),
+    });
+    store.recordRejectedApproach({
+      description: "some artifact title",
+      // The human deliberately named a path in their stance.
+      concept: "src/legacy/** — no new code in the legacy tree",
+      reason: "it is being deleted next quarter",
+    });
+    const entries = getGlobalStore().query({ limit: 50 });
+    expect(entries[0]!.concept).toBe("src/legacy/** — no new code in the legacy tree");
+  });
+
   it("leaves autonomy + detail untouched when only the publish flag is sent", async () => {
     const before = await (await app.request("/api/state")).json();
     await app.request("/api/preferences", {
@@ -220,6 +325,33 @@ describe("Q2 — a preflight block is durable, not a 12-second toast", () => {
     });
     expect(entry?.concept).toBe("electron wrapper");
     expect(entry?.via).toBe("surface");
+  });
+
+  it("Q2 review LOW — a corrupt log is BACKED UP before it is discarded (the salvage rule)", () => {
+    const dir = path.join(tmpDir, ".deeppairing");
+    fs.mkdirSync(dir, { recursive: true });
+    const truncated = '{"version":1,"blocks":[{"id":"blk_1","conc';
+    fs.writeFileSync(path.join(dir, "preflight-blocks.json"), truncated, "utf-8");
+
+    expect(readPreflightBlocks(tmpDir)).toEqual([]);
+
+    // The empty read is what makes this lossy: the next write rebuilds the file
+    // from it, so without the copy the truncated bytes are gone for good.
+    const backups = fs.readdirSync(dir).filter((f) => f.startsWith("preflight-blocks.json.corrupt-"));
+    expect(backups).toHaveLength(1);
+    expect(fs.readFileSync(path.join(dir, backups[0]!), "utf-8")).toBe(truncated);
+
+    // ...and a subsequent block still lands normally.
+    recordPreflightBlock(tmpDir, "session_alpha", blockEvent());
+    expect(readPreflightBlocks(tmpDir)).toHaveLength(1);
+  });
+
+  it("an EMPTY log file is not corrupt — no backup litter", () => {
+    const dir = path.join(tmpDir, ".deeppairing");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "preflight-blocks.json"), "", "utf-8");
+    expect(readPreflightBlocks(tmpDir)).toEqual([]);
+    expect(fs.readdirSync(dir).filter((f) => f.includes(".corrupt-"))).toEqual([]);
   });
 
   it("degrades to an empty list on a corrupt log rather than breaking the page load", async () => {
