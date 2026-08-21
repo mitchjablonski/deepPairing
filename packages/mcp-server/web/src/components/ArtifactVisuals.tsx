@@ -56,9 +56,9 @@ export function ArtifactVisuals({
 
   return (
     <div className="space-y-3">
-      <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
+      <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
         Visuals ({visuals.length})
-      </h4>
+      </h3>
       {visuals.map((v) => {
         const existing = comments.filter((c) => c.target.visualId === v.id).length;
         const noun = kindNoun[v.kind] ?? "visual";

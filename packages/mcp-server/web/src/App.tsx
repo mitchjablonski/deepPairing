@@ -416,7 +416,11 @@ function App() {
       {/* Header — pared back to the essentials. Low-frequency chrome
           (theme, font size, content width, editor picker, export) lives in
           the Settings sheet (⌘,). Quick actions live in the Command palette (⌘K). */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-border-default bg-surface-secondary">
+      {/* Q4 (round-12 UX #4) — a real <header> (banner) landmark. <main> was
+          the ONLY landmark in the whole app, so the shell header, the session
+          bar and every banner strip sat outside the landmark structure
+          entirely. Element swap only — classes and layout are untouched. */}
+      <header className="flex items-center justify-between px-4 py-2 border-b border-border-default bg-surface-secondary">
         <div className="flex items-center gap-3 min-w-0">
           <h1 className="text-sm font-bold shrink-0">deepPairing</h1>
           <ProjectSwitcher />
@@ -547,10 +551,14 @@ function App() {
           {/* #189 — the demoted diagnostics: autonomy, gate, hooks, taste stats. */}
           <DiagnosticsMenu onOpenLedger={() => window.dispatchEvent(new CustomEvent("dp:open-your-taste"))} />
         </div>
-      </div>
+      </header>
 
-      {/* Session bar — always visible */}
-      <div className="flex items-center gap-1 px-3 py-1.5 border-b border-border-default bg-surface-secondary overflow-x-auto shrink-0">
+      {/* Session bar — always visible.
+          Q4 (round-12 UX #4) — a strip of buttons that switch what the whole
+          app is showing is navigation; as a bare div it was nameless and
+          landmark-less. <nav aria-label> makes it jumpable and distinguishable
+          from the Artifacts nav in the rail. */}
+      <nav aria-label="Sessions" className="flex items-center gap-1 px-3 py-1.5 border-b border-border-default bg-surface-secondary overflow-x-auto shrink-0">
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" className="shrink-0 text-text-muted mr-0.5">
           <rect x="1" y="2" width="4" height="3.5" rx="0.5" />
           <rect x="7" y="2" width="4" height="3.5" rx="0.5" />
@@ -591,7 +599,7 @@ function App() {
             );
           })
         )}
-      </div>
+      </nav>
 
       {/* Disconnected warning — escalates (D8/H4): a blip and a dead daemon
           looked identical forever; past 60s the pair needs to know to act. */}

@@ -128,6 +128,9 @@ export function MermaidDiagram({
 }) {
   const [svg, setSvg] = useState<string | null>(null);
   const hostRef = useRef<HTMLDivElement>(null);
+  // Q4 review (H1) — portal target for the region layer's flow chrome. State,
+  // not a ref, so the layer re-renders into it the moment the node is attached.
+  const [chromeHost, setChromeHost] = useState<HTMLDivElement | null>(null);
   const [error, setError] = useState<string | null>(null);
   // #189 — re-render the diagram when the app theme flips so mermaid re-themes
   // (dark fills on the dark surface, light fills on white cards). "system"
@@ -307,32 +310,13 @@ export function MermaidDiagram({
 
   return (
     <div className="space-y-1">
-      <div className="relative">
-        <div
-          ref={hostRef}
-          // Bounded "well" so the diagram — and with it the region-drag capture
-          // zone — reads as a distinct surface inside the bg-surface-secondary
-          // visual card ("can't tell where the diagram starts and ends, so
-          // selection might end early"). surface-primary + border-default are
-          // both theme-aware: dark = a visibly darker inset well, light = a
-          // white panel with a real gray border (white/[0.06] borders vanish
-          // in the light theme). Mermaid paints its own node fills/text, so
-          // the bg only shows through between nodes — legible on both.
-          className="dp-mermaid overflow-x-auto flex justify-center [&_svg]:max-w-full [&_svg]:h-auto bg-surface-primary border border-border-default rounded-md p-2"
-          // mermaid output is sanitized at securityLevel "strict".
-          dangerouslySetInnerHTML={{ __html: svg }}
-        />
-        {region && (
-          <DiagramRegionLayer
-            artifactId={region.artifactId}
-            visualId={region.visualId}
-            optionId={region.optionId}
-            svg={svg}
-            hostRef={hostRef}
-          />
-        )}
-      </div>
-      <div className="flex items-center gap-2">
+      {/* Q4 (round-12 UX #1) — the control row sits ABOVE the canvas. Measured
+          on a 13-node flowchart: the SVG rendered 718×1954px, so Expand and
+          View source — the two controls that FIX an oversized diagram — landed
+          1416px below the fold. You had to scroll past the problem to reach
+          its remedy. Controls first, canvas second: both are reachable without
+          scrolling regardless of how tall the diagram is. */}
+      <div className="dp-mermaid-controls flex items-center gap-2">
         <button
           onClick={() => setFullscreen(true)}
           className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-2xs font-medium text-text-secondary border border-white/10 hover:text-text-primary hover:bg-white/[0.06] hover:border-white/20 transition-colors"
@@ -358,6 +342,75 @@ export function MermaidDiagram({
           </span>
         )}
       </div>
+      {/* Q4 — max-h-[60vh] + overflow-auto. Before, the ONLY cap was
+          max-w-full: a 13-node flowchart grew its card to the SVG's natural
+          1954px and pushed every following section (IMPLEMENTATION STEPS et
+          al) three screens down. The diagram now scrolls INSIDE its well and
+          the page below stays where you left it; Expand (above) is the escape
+          hatch when 60vh isn't enough.
+
+          The SCROLL container is the outer box and the region overlay lives
+          INSIDE it, sharing one coordinate space with the canvas: the overlay
+          is absolutely positioned against the inner `relative` wrapper, which
+          is sized to the FULL diagram (not the 60vh viewport), so region
+          highlights and the drag capture zone scroll with the diagram instead
+          of drifting off it. Putting the cap on the host itself (with the
+          overlay outside) would have desynced them — DiagramRegionLayer
+          measures the SVG's rect against the overlay's parent and only
+          re-measures on resize, never on scroll.
+
+          The bounded "well" chrome (surface-primary + border-default) moves
+          out here with the scrollport so it still frames the diagram as a
+          distinct surface inside the bg-surface-secondary visual card ("can't
+          tell where the diagram starts and ends, so selection might end
+          early"). Both tokens are theme-aware: dark = a visibly darker inset
+          well, light = a white panel with a real gray border (white/[0.06]
+          borders vanish in the light theme). Mermaid paints its own node
+          fills/text, so the bg only shows through between nodes. */}
+      <div
+        // Q4 — a scrollable region must be reachable by keyboard (axe
+        // scrollable-region-focusable): the cap can hide diagram that a
+        // mouse-less reader would otherwise never reach. role=group (not
+        // region) keeps it OUT of the landmark set — one landmark per diagram
+        // would flood the rotor on a multi-visual artifact.
+        tabIndex={0}
+        role="group"
+        aria-label="Diagram — scrollable"
+        // Q4 review (H2) — marks this box as the clipping viewport for anything
+        // measuring against it (DiagramRegionLayer's popover clamp + scroll
+        // listener). Generic attribute, not a mermaid class, so a future capped
+        // host opts in the same way.
+        data-dp-scrollport=""
+        className="dp-mermaid-well overflow-auto max-h-[60vh] bg-surface-primary border border-border-default rounded-md"
+      >
+        <div className="relative">
+          <div
+            ref={hostRef}
+            className="dp-mermaid flex justify-center [&_svg]:max-w-full [&_svg]:h-auto p-2"
+            // mermaid output is sanitized at securityLevel "strict".
+            dangerouslySetInnerHTML={{ __html: svg }}
+          />
+          {region && (
+            <DiagramRegionLayer
+              artifactId={region.artifactId}
+              visualId={region.visualId}
+              optionId={region.optionId}
+              svg={svg}
+              hostRef={hostRef}
+              chromeHost={chromeHost}
+            />
+          )}
+        </div>
+      </div>
+      {/* Q4 review (H1/M3) — the region layer's FLOW chrome (the ⌨ keyboard
+          node-picker, the locator list, the narrow-viewport block composer)
+          lands here, OUTSIDE the capped scrollport. Inside it, all three were
+          clipped: measured 817-834px below the visible well at rest, and every
+          locator click scrolled the well — carrying the list you clicked out of
+          view, so navigating cost a scroll round-trip each time. Rendered
+          unconditionally (cheap empty div) so the portal target exists on the
+          first commit and the chrome never flashes in the wrong place. */}
+      {region && <div ref={setChromeHost} className="dp-mermaid-chrome" />}
       {showSource && (
         <pre className="text-2xs font-mono bg-surface-code rounded p-2 overflow-x-auto whitespace-pre text-text-secondary">
           {source}

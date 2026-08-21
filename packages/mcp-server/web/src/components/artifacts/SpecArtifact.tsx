@@ -54,9 +54,14 @@ export function SpecArtifact({ artifact }: Props) {
     <div className="space-y-4">
       {/* Objective — the pairing "why" */}
       <div className="px-4 py-3 bg-accent-blue-dim/20 border border-accent-blue/20 rounded-lg">
-        <div className="text-2xs font-semibold text-accent-blue/80 uppercase tracking-wide mb-1">
+        {/* Q4 review (L8) — the alpha class again, and the worst instance of
+            it: composited on its own blue-dim/20 wash this measured 3.57:1
+            light / 4.28:1 dark — sub-AA in BOTH themes, on the label naming
+            the spec's whole purpose (and now a real heading). Full strength =
+            5.16 light / 5.93 dark; the wash already does the de-emphasis. */}
+        <h3 className="text-2xs font-semibold text-accent-blue uppercase tracking-wide mb-1">
           Objective
-        </div>
+        </h3>
         <SimpleMarkdown
           text={spec.objective}
           className="text-sm text-text-primary font-medium space-y-1"
@@ -65,9 +70,9 @@ export function SpecArtifact({ artifact }: Props) {
 
       {spec.context && (
         <div>
-          <div className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-1.5">
+          <h3 className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-1.5">
             Context
-          </div>
+          </h3>
           <SimpleMarkdown text={spec.context} className="text-xs text-text-secondary space-y-1" />
         </div>
       )}
@@ -79,9 +84,9 @@ export function SpecArtifact({ artifact }: Props) {
       {/* Requirements — each is individually challengeable */}
       <div>
         <div className="flex items-center justify-between mb-2">
-          <div className="text-2xs font-semibold text-text-muted uppercase tracking-wide">
+          <h3 className="text-2xs font-semibold text-text-muted uppercase tracking-wide">
             Requirements ({requirements.length})
-          </div>
+          </h3>
           <div className="text-[9px] text-text-muted italic">
             Challenge rationales · verify acceptance criteria
           </div>
@@ -95,18 +100,18 @@ export function SpecArtifact({ artifact }: Props) {
 
       {spec.design && (
         <div>
-          <div className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-1.5">
+          <h3 className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-1.5">
             Design
-          </div>
+          </h3>
           <SimpleMarkdown text={spec.design} className="text-xs text-text-secondary space-y-1" />
         </div>
       )}
 
       {spec.tasks && spec.tasks.length > 0 && (
         <div>
-          <div className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-1.5">
+          <h3 className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-1.5">
             Tasks ({spec.tasks.length})
-          </div>
+          </h3>
           <div className="space-y-1.5">
             {spec.tasks.map((t, i) => (
               <TaskRow key={i} task={t} />
@@ -117,9 +122,9 @@ export function SpecArtifact({ artifact }: Props) {
 
       {spec.openQuestions && spec.openQuestions.length > 0 && (
         <div className="space-y-2">
-          <div className="text-2xs font-semibold text-accent-amber uppercase tracking-wide">
+          <h3 className="text-2xs font-semibold text-accent-amber uppercase tracking-wide">
             Open questions ({spec.openQuestions.length})
-          </div>
+          </h3>
           {/* #164 — open questions are the agent explicitly asking its pair for
               input. Each is its own bounded section with a prominent answer
               affordance + inline thread (shared with ResearchArtifact). D8 (H1)

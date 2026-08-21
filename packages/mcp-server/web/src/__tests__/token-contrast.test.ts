@@ -111,3 +111,99 @@ describe("#150 — LIGHT theme accent text on its own -dim pill keeps real AA ma
     expect(contrast(lightToken(fg), lightToken("surface-primary"))).toBeGreaterThanOrEqual(4.5);
   });
 });
+
+/**
+ * Q4 (round-12 UX #3) — the gap #149/#150 left open: both suites above measure
+ * OPAQUE token-on-token pairs, but almost nothing in the amber lane renders
+ * that way. The real markup composites: `text-accent-amber/70` on
+ * `bg-accent-amber-dim` on `bg-accent-amber-dim/50` on the page. Alpha is where
+ * the failures actually were —
+ *
+ *   PendingBanner dismiss chip   text-accent-amber/70   3.13 light / 3.58 dark
+ *   PreflightBreadcrumb list     text-accent-amber/80   3.94 light (dark passed)
+ *   FindingTriage active chip    text-white on amber    2.24 dark  (light passed)
+ *
+ * — none of which the opaque matrix can see. This section models the alpha and
+ * locks the composited results at the house 4.6 floor, so the next `/70` in the
+ * amber lane fails here rather than in a review six weeks later.
+ *
+ * Note the second failure mode: `text-white` is a LITERAL, so it cannot flip
+ * with the theme. On the plain accents (which, unlike blue/violet, never got a
+ * `-strong` variant tuned for white text) the theme-aware `--color-text-inverse`
+ * is the only correct choice; on `-strong` fills literal white IS correct.
+ * Both directions are pinned so a "consistency" sweep can't invert either one.
+ */
+function rgbOf(hex: string): [number, number, number] {
+  return [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)) as [number, number, number];
+}
+
+/** `fg` at `alpha` composited over opaque `bg` — what the eye (and axe) sees. */
+function over(fg: string, alpha: number, bg: string): string {
+  const f = rgbOf(fg);
+  const b = rgbOf(bg);
+  return (
+    "#" +
+    f
+      .map((v, i) => Math.round(alpha * v + (1 - alpha) * b[i]!))
+      .map((v) => v.toString(16).padStart(2, "0"))
+      .join("")
+  );
+}
+
+describe("Q4 — the amber lane, measured as it actually COMPOSITES", () => {
+  const themes: Array<[string, (n: string) => string]> = [
+    ["dark", token],
+    ["light", lightToken],
+  ];
+
+  for (const [theme, t] of themes) {
+    // The waiting strip: amber text on amber-dim/50 over the page surface.
+    it(`${theme}: the waiting strip's text on amber-dim/50 keeps AA margin`, () => {
+      const bg = over(t("accent-amber-dim"), 0.5, t("surface-primary"));
+      expect(contrast(t("accent-amber"), bg)).toBeGreaterThanOrEqual(4.6);
+    });
+
+    // Its chips sit on a SOLID amber-dim laid over that same wash. This is the
+    // pair the /70 broke.
+    it(`${theme}: the waiting strip's chip text on its amber-dim fill keeps AA margin (no alpha on the fg)`, () => {
+      const strip = over(t("accent-amber-dim"), 0.5, t("surface-primary"));
+      const chip = over(t("accent-amber-dim"), 1, strip);
+      expect(contrast(t("accent-amber"), chip)).toBeGreaterThanOrEqual(4.6);
+      // And prove the regression would be caught: the old /70 is well under AA.
+      expect(contrast(over(t("accent-amber"), 0.7, chip), chip)).toBeLessThan(4.5);
+    });
+
+    // Every amber-on-surface use the breadcrumb / block-log family renders.
+    it.each(["surface-primary", "surface-secondary", "surface-elevated", "surface-code"])(
+      `${theme}: accent-amber on %s keeps AA margin`,
+      (surface) => {
+        expect(contrast(t("accent-amber"), t(surface))).toBeGreaterThanOrEqual(4.6);
+      },
+    );
+
+    // Solid accent fills carry text-text-inverse, never literal white: the
+    // plain accents have no `-strong` variant, so the fg token is the whole
+    // defence — and in the dark theme white on them measures 1.77–3.35.
+    it.each(["accent-amber", "accent-green", "accent-red"])(
+      `${theme}: text-inverse on solid %s keeps AA margin`,
+      (accent) => {
+        expect(contrast(t("text-inverse"), t(accent))).toBeGreaterThanOrEqual(4.6);
+      },
+    );
+
+    // The `-strong` fills exist precisely to take literal white; keep them able
+    // to, so the swap above can't be over-applied.
+    it.each(["accent-blue-strong", "accent-violet-strong"])(
+      `${theme}: literal white on %s stays AA`,
+      (accent) => {
+        expect(contrast("#ffffff", t(accent))).toBeGreaterThanOrEqual(4.5);
+      },
+    );
+  }
+
+  it("dark: literal white on a plain accent is the trap this section exists for", () => {
+    // Documents WHY text-inverse is required. If this ever passes, dark's
+    // accents were lightened and the guidance above needs revisiting.
+    expect(contrast("#ffffff", token("accent-amber"))).toBeLessThan(4.5);
+  });
+});

@@ -1,7 +1,9 @@
+import type { ReactNode } from "react";
 import { useToastStore, type Toast, type PreflightBlockHero } from "../stores/toast";
 import { useLedgerStore } from "../stores/ledger";
+import { ShieldIcon } from "./icons/ArtifactIcons";
 
-const kindStyles: Record<Toast["kind"], { bg: string; border: string; accent: string; icon: string }> = {
+const kindStyles: Record<Toast["kind"], { bg: string; border: string; accent: string; icon: ReactNode }> = {
   info: {
     bg: "bg-accent-blue-dim/40",
     border: "border-accent-blue/30",
@@ -25,7 +27,11 @@ const kindStyles: Record<Toast["kind"], { bg: string; border: string; accent: st
     bg: "bg-accent-violet-dim/60",
     border: "border-accent-violet/60",
     accent: "text-accent-violet",
-    icon: "🛡",
+    // Q4 (round-12 UX #5) — was the 🛡 emoji, which renders as tofu wherever a
+    // colour-emoji font is missing. This is the hero of the block moment (the
+    // product's loudest claim); it can't be a blank square. Inline SVG,
+    // currentColor, so it takes the violet accent from its span.
+    icon: <ShieldIcon className="w-4 h-4" />,
   },
   error: {
     bg: "bg-accent-red-dim/40",
@@ -77,7 +83,7 @@ function PreflightBlockHeroCard({ hero, onDismiss, action, onOverride }: {
       aria-live="assertive"
     >
       <div className="flex items-start gap-2">
-        <span className="text-base shrink-0" aria-hidden="true">{style.icon}</span>
+        <span className={`flex items-center text-base shrink-0 ${style.accent}`} aria-hidden="true">{style.icon}</span>
         <div className="flex-1 min-w-0">
           <div className="text-xs font-bold text-text-primary">
             {hero.source === "team" ? "Blocked by team policy" : "Blocked by your taste"}
@@ -224,7 +230,9 @@ export function ToastLayer() {
             aria-live={assertive ? "assertive" : "polite"}
             className={`pointer-events-auto flex items-start gap-2 px-3 py-2.5 rounded-lg border shadow-lg backdrop-blur-sm animate-fade-in ${style.bg} ${style.border}`}
           >
-            <span className={`text-sm font-semibold shrink-0 ${style.accent}`}>{style.icon}</span>
+            {/* Q4 — decorative: the toast's title/body carry the message, and
+                the role=alert already announces them. */}
+            <span className={`flex items-center text-sm font-semibold shrink-0 ${style.accent}`} aria-hidden="true">{style.icon}</span>
             <div className="min-w-0 flex-1">
               <div className="text-xs font-semibold text-text-primary">{t.title}</div>
               {t.body && (

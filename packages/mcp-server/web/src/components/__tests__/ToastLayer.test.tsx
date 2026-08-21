@@ -79,6 +79,21 @@ describe("ToastLayer", () => {
   });
 
   describe("preflight-block hero (O2)", () => {
+    // Q4 review (L7) — the hero's 🛡 was the ONE tofu-prone glyph on the
+    // product's loudest moment: the block moment rendering as a blank square
+    // wherever no colour-emoji font is installed. It became an inline SVG; pin
+    // that, the way CompoundingBadge's ledger glyphs are pinned, so a future
+    // "just use the emoji, it's shorter" can't quietly undo it.
+    it("Q4 — the hero's shield is an inline SVG, not an emoji (tofu-proof)", () => {
+      push("preflight-block", { title: "x", hero: heroOf({ source: "session" }) });
+      render(<ToastLayer />);
+      const alert = screen.getByRole("alert");
+      expect(alert.querySelector("svg")).not.toBeNull();
+      expect(alert.textContent).not.toContain("🛡");
+      // Decorative: the card's own text is the message, and role=alert speaks it.
+      expect(alert.querySelector("svg")!.closest('[aria-hidden="true"]')).not.toBeNull();
+    });
+
     it("renders the hero card shape with concept, reason, and source attribution (session)", () => {
       push("preflight-block", { title: "x", hero: heroOf({ source: "session" }) });
       render(<ToastLayer />);

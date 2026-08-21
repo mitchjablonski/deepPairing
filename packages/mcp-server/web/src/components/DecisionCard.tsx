@@ -18,6 +18,7 @@ import { DecisionFooter } from "./decision/DecisionFooter";
 import { DecisionWorkbench, isGrainComment } from "./decision/DecisionWorkbench";
 import { useChainComments } from "../hooks/useChainComments";
 import type { InitialResolved } from "./decision/types";
+import { SpeechIcon } from "./icons/ArtifactIcons";
 
 interface DecisionCardProps {
   event: DecisionRequestEvent;
@@ -575,7 +576,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
             }
             className="ml-auto inline-flex items-center gap-1.5 text-2xs font-semibold text-accent-blue bg-accent-blue-dim border border-accent-blue/40 rounded px-2 py-1 hover:bg-accent-blue-dim/80 transition-colors press-scale"
           >
-            <span aria-hidden="true">💬</span> Discuss
+            <span aria-hidden="true" className="inline-flex items-center"><SpeechIcon className="w-3 h-3" /></span> Discuss
             {discussCount > 0 && (
               <span className="bg-accent-blue-strong text-white rounded-full text-[9px] font-bold px-1.5 py-px">
                 {discussCount}

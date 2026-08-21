@@ -667,7 +667,14 @@ export function ArtifactStatusActions({
               onClick={() => handleAction("approved", { bypassSuggestionGate: true })}
               disabled={submitting}
               data-testid="approve-anyway"
-              className="px-2.5 py-1 text-2xs font-medium text-white bg-accent-amber rounded
+              // Q4 (round-12 UX #3) — the amber lane's worst measured pair, and
+              // the only one that failed in the DARK theme: literal white on
+              // dark's #d4a72c is 2.24:1. `text-text-inverse` is the token the
+              // other four solid-amber buttons already use and it flips with
+              // the theme — 8.41:1 dark, 6.31:1 light. Amber never got the
+              // `-strong` role split blue/violet have, so the fg token is the
+              // whole defence here.
+              className="px-2.5 py-1 text-2xs font-medium text-text-inverse bg-accent-amber rounded
                          hover:bg-accent-amber/85 disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
               title="Approve even though your suggestions are still open"
             >

@@ -84,6 +84,40 @@ export function BookOpenIcon({ className = "" }: { className?: string }) {
   );
 }
 
+/**
+ * Q4 (round-12 UX #5) — tofu-proof replacements for the three emoji that carry
+ * PRIMARY signals. 🛡 (the pre-flight block hero), 🧭 (walk-me-through / ledger
+ * writes) and 💬 (comment affordances) render as boxes on any host without a
+ * colour-emoji font — which is exactly the moat's loudest moment showing up as
+ * a blank square. These are the same 14×14 currentColor strokes as the artifact
+ * icons above, so they inherit the accent colour they sit in and never fall
+ * back to a font.
+ */
+export function ShieldIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg {...defaultProps} viewBox="0 0 14 14" className={className}>
+      <path d="M7 1.2L2.2 3v4c0 2.6 1.9 4.8 4.8 5.8 2.9-1 4.8-3.2 4.8-5.8V3L7 1.2z" />
+    </svg>
+  );
+}
+
+export function CompassIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg {...defaultProps} viewBox="0 0 14 14" className={className}>
+      <circle cx="7" cy="7" r="5.6" />
+      <path d="M9.3 4.7L8.1 8.1 4.7 9.3 5.9 5.9z" />
+    </svg>
+  );
+}
+
+export function SpeechIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg {...defaultProps} viewBox="0 0 14 14" className={className}>
+      <path d="M12.2 8.2a1.2 1.2 0 01-1.2 1.2H4.4L2 11.8V3a1.2 1.2 0 011.2-1.2h7.8A1.2 1.2 0 0112.2 3v5.2z" />
+    </svg>
+  );
+}
+
 /** Get the icon component for an artifact type */
 export function ArtifactIcon({ type, className = "" }: { type: string; className?: string }) {
   switch (type) {

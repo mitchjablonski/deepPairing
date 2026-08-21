@@ -148,14 +148,28 @@ export function MessageInput() {
 
   if (replayActive) {
     return (
-      <div className="px-3 py-2 border-t border-border-default text-xs text-text-muted">
+      <div
+        role="region"
+        aria-label="Message the agent"
+        className="px-3 py-2 border-t border-border-default text-xs text-text-muted"
+      >
         ⏸ Replay — read-only. Exit replay (Esc) to message the agent.
       </div>
     );
   }
 
   return (
-    <div className="px-3 py-2 border-t border-border-default bg-surface-secondary">
+    // Q4 review (L5) — a named landmark. The composer is the app's primary
+    // input and it sat OUTSIDE every landmark, so axe's `region` rule (all
+    // content belongs to one) flagged both its body and its latency hint, and
+    // a screen-reader user had no way to jump to it. role=region rather than a
+    // <form>: this composer sends via a button + ⌘⏎, never a form submit, and
+    // an unsubmittable <form> is a worse lie than a generic region.
+    <div
+      role="region"
+      aria-label="Message the agent"
+      className="px-3 py-2 border-t border-border-default bg-surface-secondary"
+    >
       {/* Thread history — last 3 session messages */}
       {history.length > 0 && (
         <div className="space-y-1 mb-2 max-h-[140px] overflow-y-auto">

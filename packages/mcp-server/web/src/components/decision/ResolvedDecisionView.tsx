@@ -122,7 +122,7 @@ export function ResolvedDecisionView({
                   }`}
                 >
                   <div className="flex items-center gap-1.5 flex-wrap mb-1.5">
-                    <h4 className="text-sm font-semibold text-text-primary">{option.title}</h4>
+                    <h3 className="text-sm font-semibold text-text-primary">{option.title}</h3>
                     {isChosen ? (
                       <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-2xs font-semibold bg-accent-green text-white rounded">
                         ✓ Chosen

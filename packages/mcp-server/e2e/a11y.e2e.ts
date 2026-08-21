@@ -1351,6 +1351,77 @@ test("a11y: app shell (no session selected) has no serious/critical axe violatio
   expect(serious, `axe violations:\n${fmt(serious)}`).toEqual([]);
 });
 
+/**
+ * Q4 (round-12 UX #4) — the structural rules this whole suite was blind to.
+ *
+ * Every scan above filters on `withTags(["wcag2a","wcag2aa"])`, and axe files
+ * `heading-order`, `landmark-one-main`, `landmark-unique`,
+ * `page-has-heading-one` and `empty-heading` under `best-practice`/
+ * `cat.semantics` — NOT under a WCAG tag. So a suite that truthfully advertises
+ * "zero disabled rules" never once ran them, which is how the app shipped with
+ * a single landmark, an h1→h3 skip on the primary content path, and every
+ * section label (NEEDS YOUR EYES, FINDINGS, THE WALK-THROUGH, CHANGED FILES) as
+ * a styled <div>. Select the rules BY NAME so the tag filter can't hide them
+ * again, and assert on the violations themselves rather than on impact —
+ * best-practice rules are reported as "moderate", so an impact filter would
+ * silently pass whatever they find.
+ */
+const STRUCTURE_RULES = [
+  "heading-order",
+  "landmark-one-main",
+  "landmark-unique",
+  "page-has-heading-one",
+  "empty-heading",
+  // Q4 review (L5) — `region` (all page content belongs to a landmark) is the
+  // strictest of the family and the reason the landmark work is finishable at
+  // all: with it on, the scan enumerates every unlandmarked node instead of
+  // stopping at "there is one <main>". Turning it on flagged exactly three,
+  // in two components — the waiting strip's text and the composer's body +
+  // latency hint — both now named regions. It stays ON so the next stray
+  // top-level div fails here rather than in a review.
+  "region",
+];
+
+test("a11y: the app shell's landmark + heading structure passes axe's semantic rules", async ({ page }) => {
+  await page.goto(baseURL);
+  await page.waitForSelector("text=deepPairing", { timeout: 15000 });
+  await expect
+    .poll(
+      () => page.evaluate(() => (window as any).__dpConnectionStore?.getState?.()?.connected ?? false),
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+  await page.getByText("Draft, awaiting review").first().waitFor({ timeout: 15_000 });
+
+  // The structure these rules now have something to check.
+  await expect(page.locator("header").first()).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Sessions" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Artifacts" })).toBeVisible();
+  await expect(page.getByRole("main")).toBeAttached();
+
+  const results = await new AxeBuilder({ page }).withRules(STRUCTURE_RULES).analyze();
+  expect(results.violations, `axe structure violations:\n${fmt(results.violations)}`).toEqual([]);
+});
+
+test("a11y: an OPEN artifact's heading outline passes axe's semantic rules (the section labels are real headings now)", async ({ page }) => {
+  await page.goto(`${baseURL}/?session=a11y`);
+  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+
+  // The seeded research artifact: its FINDINGS section is now the h3 under the
+  // artifact-title h2 (before: an h4, under an h3 title, under the shell h1 —
+  // a skip at BOTH steps).
+  await openQuestionSections(page);
+  await expect(page.getByRole("heading", { name: /^Findings/i, level: 3 }).first()).toBeVisible();
+  const research = await new AxeBuilder({ page }).withRules(STRUCTURE_RULES).analyze();
+  expect(research.violations, `axe structure violations (research):\n${fmt(research.violations)}`).toEqual([]);
+
+  // …and the changeset, whose CHANGED FILES picker label was a styled div.
+  await openChangeset(page);
+  await expect(page.getByRole("heading", { name: /^Changed files$/i, level: 3 })).toBeVisible();
+  const changeset = await new AxeBuilder({ page }).withRules(STRUCTURE_RULES).analyze();
+  expect(changeset.violations, `axe structure violations (changeset):\n${fmt(changeset.violations)}`).toEqual([]);
+});
+
 test("a11y: the Ledger drawer with a stance row + armed remove confirm has no serious/critical axe violations", async ({ page }) => {
   // #193 — the per-stance remove affordance shipped into a surface no e2e
   // scan ever opened (the exact hollow-net shape #187 taught us about), so

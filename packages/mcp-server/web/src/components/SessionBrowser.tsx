@@ -210,9 +210,9 @@ export function SessionBrowser({ onPicked }: { onPicked?: () => void } = {}) {
         />
       ) : (
         <>
-          <h2 className="text-xs font-semibold text-text-muted uppercase tracking-wide mb-3">
+          <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wide mb-3">
             Past Sessions ({sessions.length})
-          </h2>
+          </h3>
 
           {sessions.map((session) => (
         <button

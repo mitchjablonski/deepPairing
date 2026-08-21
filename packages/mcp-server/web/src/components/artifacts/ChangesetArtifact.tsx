@@ -69,14 +69,67 @@ const changeMark: Record<ChangesetFile["changeType"], { letter: string; cls: str
  * reviewed became invisible without hovering. Split the path: the DIRECTORY
  * ellipsizes (it is the disposable half), the BASENAME never shrinks.
  */
-function FilePathLabel({ path }: { path: string }) {
+function FilePathLabel({
+  path,
+  testId = "changeset-file",
+  baseClassName = "text-text-primary",
+  dirClassName = "text-text-muted",
+  tight = false,
+}: {
+  path: string;
+  /**
+   * Q4 — testid stem, so the CHANGED FILES rail rows can carry the same
+   * structure without colliding with the header's `getByTestId` pins (one
+   * file renders BOTH a rail row and a header; a shared stem would make every
+   * existing single-element query throw "found multiple elements").
+   */
+  testId?: string;
+  /** Basename emphasis — the rail rows bold it against the dimmed directory. */
+  baseClassName?: string;
+  /**
+   * Q4 — the DIRECTORY's dim. Default `text-text-muted` is AA on every surface
+   * this label renders on EXCEPT `surface-active`, where dark measures 4.16:1
+   * (the a11y suite has carried a note about that pairing for exactly this
+   * reason). The rail's SELECTED row is `bg-surface-active`, so it passes
+   * `text-text-secondary` instead — still a clear step down from the bold
+   * basename, and 7.29:1.
+   */
+  dirClassName?: string;
+  /**
+   * Q4 — the 240px CHANGED FILES rail, where even a bare basename can be wider
+   * than the space left after the change mark, the stat bar and the disposition
+   * chip (`check-feedback-delivery.ts` is ~180px of 11.5px mono; the row leaves
+   * ~85px). A hard `shrink-0` basename there doesn't shrink — it OVERFLOWS,
+   * painting the filename straight over the stats. So in tight mode both halves
+   * can shrink, but the directory is weighted ~1000× so it collapses to nothing
+   * FIRST and the basename only starts losing characters once the directory is
+   * gone. Worst case reads "check-feedback-deliv…" instead of "packages/mc…" —
+   * still the half that identifies the file. The one-row HEADER (roomy, and
+   * pinned since P2) keeps the never-shrink basename.
+   */
+  tight?: boolean;
+}) {
   const cut = path.lastIndexOf("/");
   const dir = cut >= 0 ? path.slice(0, cut + 1) : "";
   const base = cut >= 0 ? path.slice(cut + 1) : path;
   return (
-    <span className="flex min-w-0 items-baseline" title={path} data-testid="changeset-file-path">
-      {dir && <span className="min-w-0 truncate text-text-muted">{dir}</span>}
-      <span className="shrink-0 text-text-primary" data-testid="changeset-file-basename">{base}</span>
+    <span className="flex min-w-0 items-baseline" title={path} data-testid={`${testId}-path`}>
+      {dir && (
+        <span
+          className={`min-w-0 truncate ${dirClassName}`}
+          style={tight ? { flexShrink: 1000 } : undefined}
+          data-testid={`${testId}-dir`}
+        >
+          {dir}
+        </span>
+      )}
+      <span
+        className={`${tight ? "min-w-0 truncate" : "shrink-0"} ${baseClassName}`}
+        style={tight ? { flexShrink: 1 } : undefined}
+        data-testid={`${testId}-basename`}
+      >
+        {base}
+      </span>
     </span>
   );
 }
@@ -906,7 +959,10 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
         <div className="grid grid-cols-1 min-[820px]:grid-cols-[240px_1fr] gap-3">
           {/* File rail */}
           <div className="border border-border-subtle rounded bg-surface-secondary py-2 self-start">
-            <div className="px-3 pb-1.5 text-2xs font-semibold uppercase tracking-wide text-text-muted">Changed files</div>
+            {/* Q4 (round-12 UX #4) — a real heading, same level as FINDINGS /
+                THE WALK-THROUGH / NEEDS YOUR EYES, so a screen reader can jump
+                to the file picker instead of arrowing to it. Classes verbatim. */}
+            <h3 className="px-3 pb-1.5 text-2xs font-semibold uppercase tracking-wide text-text-muted">Changed files</h3>
             <ul>
               {files.map((f, i) => {
                 const mark = changeMark[f.changeType];
@@ -930,7 +986,28 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                       title={`${mark.label} ${f.path}`}
                     >
                       <span className={`w-3 text-center font-bold text-2xs shrink-0 ${mark.cls}`} aria-label={mark.label}>{mark.letter}</span>
-                      <span className="flex-1 min-w-0 truncate">{f.path}</span>
+                      {/* Q4 (round-12 UX #2) — the picker used a plain
+                          `truncate`, which ellipsizes TAIL-first inside a fixed
+                          240px rail: every row in this repo's own changesets
+                          read "packages/mc…" and the rail lost the one thing it
+                          exists to tell you apart by. Reuse FilePathLabel — the
+                          same dimmed-directory-truncates / basename-never-
+                          shrinks split the file HEADERS have used since P2 —
+                          rather than re-deriving it. Own testid stem so the
+                          header's pins stay single-element. */}
+                      <span className="flex-1 min-w-0">
+                        <FilePathLabel
+                          path={f.path}
+                          testId="changeset-rail-file"
+                          tight
+                          baseClassName={`font-semibold ${isActive ? "text-text-primary" : "text-text-secondary"}`}
+                          // The SELECTED row is bg-surface-active, the one dark
+                          // surface where text-muted is 4.16:1 — step the dim up
+                          // to secondary there (7.29:1) rather than ship the
+                          // first sub-AA pairing this batch is here to remove.
+                          dirClassName={isActive ? "text-text-secondary" : "text-text-muted"}
+                        />
+                      </span>
                       <StatBar additions={s.additions} deletions={s.deletions} />
                       {fileOpenSug && fileOpenSug.total > 0 && (
                         <span
@@ -942,7 +1019,20 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                         </span>
                       )}
                       {disp === "pending" && openComments > 0 ? (
-                        <span className="shrink-0 text-2xs text-accent-blue font-sans font-bold" title={`${openComments} comment${openComments === 1 ? "" : "s"}`}>●{openComments}</span>
+                        /* Q4 (round-12 UX #5, a11y half) — the ● was a literal
+                           bullet character sitting in innerText, so the unread
+                           dot announced as "black circle 3". Hide the glyph and
+                           give the count a noun. sr-only rather than aria-label
+                           because a bare <span> has the generic role, where
+                           aria-label is prohibited and gets dropped. */
+                        <span
+                          className="shrink-0 text-2xs text-accent-blue font-sans font-bold"
+                          title={`${openComments} comment${openComments === 1 ? "" : "s"}`}
+                        >
+                          <span aria-hidden="true">●</span>
+                          {openComments}
+                          <span className="sr-only"> open comment{openComments === 1 ? "" : "s"}</span>
+                        </span>
                       ) : (
                         <DispChip disposition={disp} />
                       )}

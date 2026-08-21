@@ -5,6 +5,7 @@ import { useConnectionStore } from "../stores/connection";
 import { useReplayStore } from "../stores/replay";
 import { useToastStore } from "../stores/toast";
 import { noAgentLive } from "../lib/liveness";
+import { CompassIcon } from "./icons/ArtifactIcons";
 
 /**
  * O2 (#230) — the "Walk me through this" affordance. The round-10 review found
@@ -333,7 +334,13 @@ export function WalkMeThroughButton({
                   focus-visible:ring-1 focus-visible:ring-accent-blue rounded transition-colors
                   disabled:opacity-50 cursor-pointer ${compact ? "px-1" : "px-1 py-0.5"} ${className ?? ""}`}
     >
-      <span aria-hidden="true">{sent ? "✓" : "🧭"}</span>
+      {/* Q4 (round-12 UX #5) — the 🧭 was the last emoji on a primary control
+          and rendered as tofu without a colour-emoji font, turning the
+          walk-me-through affordance into "□ Explain this". Inline SVG in
+          currentColor, so it follows the button's muted→blue hover. */}
+      <span aria-hidden="true" className="flex items-center">
+        {sent ? "✓" : <CompassIcon className="w-3 h-3" />}
+      </span>
       <span>{sent ? "Sent — posting in the sidebar" : label}</span>
       {!sent && <span aria-hidden="true">▸</span>}
     </button>

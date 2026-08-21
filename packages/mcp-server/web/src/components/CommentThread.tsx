@@ -15,6 +15,7 @@ import { isSessionLive } from "../stores/connection";
 // type-only import (erased at build).
 import { CarryoverBadge } from "./decision/CarryoverBadge";
 import type { CarryoverState } from "./decision/carryover";
+import { SpeechIcon } from "./icons/ArtifactIcons";
 
 interface CommentThreadProps {
   artifactId: string;
@@ -473,7 +474,10 @@ export function AskTrigger({
         aria-label={unanswered > 0 ? `Ask the agent — ${unanswered} unanswered question` : "Ask the agent about this"}
         className={`${classes} ${tint}`}
       >
-        <span className="text-[10px] font-semibold">?</span>
+        {/* Q4 — decorative; the button's aria-label already says "Ask the
+            agent about this". Without aria-hidden a screen reader reads the
+            label and then a stray "question mark". */}
+        <span className="text-[10px] font-semibold" aria-hidden="true">?</span>
         {variant === "pill" && <span>{sent ? "Asked" : "Ask why"}</span>}
         {matching.length > 0 && <span>{matching.length}</span>}
       </button>
@@ -625,7 +629,11 @@ export function CommentTrigger({
         aria-label={label ?? "Add a comment"}
         className={`${classes} ${tint}`}
       >
-        <span className="text-[10px]">💬</span>
+        {/* Q4 (round-12 UX #5) — the inline variant is a glyph-ONLY control, so
+            this emoji was both the whole affordance and a tofu risk. Inline SVG
+            + aria-hidden: the button's own aria-label is the accessible name,
+            and the glyph no longer double-announces as "speech balloon". */}
+        <span className="inline-flex items-center text-[10px]" aria-hidden="true"><SpeechIcon className="w-3 h-3" /></span>
         {variant === "pill" && <span>{label ?? "Comment"}</span>}
         {existingCount > 0 && <span>{existingCount}</span>}
       </button>
