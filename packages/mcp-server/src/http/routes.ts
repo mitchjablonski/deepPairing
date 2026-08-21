@@ -16,7 +16,14 @@ import {
 } from "../store/feature-overrides.js";
 import { formatSessionMarkdown } from "../export/format-markdown.js";
 // Q5 MERGE SEAM — the shareable-page export (see /api/export.html below).
-import { assembleSessionHtml, htmlExportFileName } from "../export/html-export.js";
+import {
+  assembleSessionHtml,
+  htmlExportFileName,
+  scanExportForSecrets,
+  secretCountOf,
+  secretLabelsOf,
+  secretWarningHeader,
+} from "../export/html-export.js";
 import { SERVER_VERSION } from "../version.js";
 import {
   getGlobalStore,
@@ -1706,16 +1713,31 @@ export function createHttpRoutes(
     const includeCode = includeCodeParam !== "0" && includeCodeParam !== "false";
     const state: any = await store.getFullState();
     const generatedAt = new Date().toISOString();
+    // R3 — the last-moment secret scan, on the surface a HUMAN clicks. The MCP
+    // tool and the CLI have warned since F6; this route — the Export menu's
+    // "Share as page", i.e. the only one of the three with a person on the
+    // other end — warned nowhere. Same scan, three deliveries: a response
+    // header the Export menu raises as a toast, a banner rendered into the page
+    // itself (assembleSessionHtml runs the scan for that), and the MCP reply.
+    // Warn-only, never blocking: the download proceeds exactly as before.
+    const secretMatches = scanExportForSecrets(state);
     const html = await assembleSessionHtml(state, {
       store: store as any,
       includeCode,
       projectRoot: projectRoot ?? undefined,
       version: SERVER_VERSION,
       generatedAt,
+      secretLabels: secretLabelsOf(secretMatches),
+      secretCount: secretCountOf(secretMatches),
     });
+    const warningHeader = secretWarningHeader(secretMatches);
     return c.body(html, 200, {
       "Content-Type": "text/html; charset=utf-8",
       "Content-Disposition": `attachment; filename="${htmlExportFileName(state.sessionId, generatedAt)}"`,
+      // Exposed by name so a cross-origin fetch (the project switcher points
+      // the SPA at another daemon's port) can still read it.
+      "Access-Control-Expose-Headers": "Content-Disposition, X-DeepPairing-Secret-Warning",
+      ...(warningHeader ? { "X-DeepPairing-Secret-Warning": warningHeader } : {}),
     });
   });
   // ---- end Q5 MERGE SEAM ----

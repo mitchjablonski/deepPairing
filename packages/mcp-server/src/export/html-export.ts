@@ -16,10 +16,11 @@
  *   - `writeSessionHtml` — deterministic `.deeppairing/exports/` destination,
  *     so "tell the human the file path" is a real path every time.
  */
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { Artifact } from "@deeppairing/shared";
-import { scanContentForSecrets } from "../secret-scan.js";
+import { scanContentForSecrets, scanForSecrets, type SecretMatch } from "../secret-scan.js";
 import {
   formatSessionHtml,
   type HtmlExportOptions,
@@ -108,23 +109,134 @@ export function readGuardrailFires(projectRoot: string | undefined): HtmlGuardra
  *
  * Returns null when the export is clean, so a clean run's reply is unchanged.
  */
-export function secretWarningFor(state: unknown): string | null {
-  let matches;
+/**
+ * R3 — the scan walks the RENDERED-CONTENT GRAPH, not the raw state blob.
+ *
+ * F6's scan was blind twice over, and each blindness alone was enough to make
+ * it return a clean [] for a page carrying a live AWS key:
+ *
+ *   1. DEPTH. `scanContentForSecrets` defaulted to maxDepth 6. Rooted at the
+ *      whole session state, an evidence snippet sits at depth 8
+ *      (`artifacts[0].content.findings[0].evidence[0].snippet`) and a diff line
+ *      at depth 10. The walk stopped two levels above every string that
+ *      actually holds code. (Fixed at the source too — see DEFAULT_SCAN_DEPTH.)
+ *   2. ROOT. This function passed the whole `state`; the STORE scans each
+ *      artifact's `content`. So even where both could see a leaf, they reported
+ *      different field paths for it — one saying `artifacts[3].content.summary`
+ *      and the other `summary` — and no test could compare them.
+ *
+ * Both are fixed by naming what the page renders and scanning exactly that,
+ * artifact content rooted at `content` (parity with the store), plus the two
+ * things the store never sees at all: the COMMENT bodies and the agent's
+ * NARRATIVE — which is composed at export time, has no artifact, and is the
+ * single largest run of free text on the page.
+ */
+export interface ExportScanInput {
+  artifacts?: Array<{ id?: string; type?: string; title?: string; content?: unknown }>;
+  comments?: Array<{ content?: unknown }>;
+  sessionMemory?: unknown;
+}
+
+export interface ExportScanOptions {
+  /** The agent-composed narrative, which lives only in the export call. */
+  narrative?: string;
+}
+
+/** Every secret-shape match in what the page will actually render, deduped per
+ *  pattern (first field to hit a pattern wins, as everywhere else). */
+export function scanExportForSecrets(state: unknown, options: ExportScanOptions = {}): SecretMatch[] {
+  const s = (state ?? {}) as ExportScanInput;
+  const out: SecretMatch[] = [];
+  // R3 (adversarial F4) — NO global per-pattern dedup across sources. The old
+  // `seen` set collapsed 40 distinct AWS keys in 40 artifacts to ONE match, so
+  // the banner said "matched 1 credential-shaped value" while all 40 were on the
+  // page and a reader who fixed the one named field shipped the other 39.
+  // scanContentForSecrets still dedupes WITHIN one artifact's content (one
+  // warning per pattern per artifact — a repeated key isn't 5 warnings), but
+  // every artifact/comment/field that hits is its own entry now, and the field
+  // prefix names the artifact by INDEX + TITLE so each is findable.
+  const take = (matches: SecretMatch[], prefix: string): void => {
+    for (const m of matches) out.push({ ...m, field: m.field ? `${prefix}.${m.field}` : prefix });
+  };
   try {
-    matches = scanContentForSecrets(state);
+    (s.artifacts ?? []).forEach((a, i) => {
+      if (!a || typeof a !== "object") return;
+      const title = typeof a.title === "string" && a.title.trim() ? ` "${a.title.trim()}"` : "";
+      // Rooted at `content`, exactly as the store roots it, so a field path in
+      // an export warning and a field path in a stored SecretWarning name the
+      // same leaf. The `#n "title"` prefix makes 40 hits 40 findable places.
+      take(scanContentForSecrets(a.content), `${a.type ?? "artifact"} #${i + 1}${title}`);
+    });
+    (s.comments ?? []).forEach((c, i) => {
+      if (typeof c?.content === "string") take(scanForSecrets(c.content), `comment #${i + 1}`);
+    });
+    if (typeof options.narrative === "string" && options.narrative) {
+      take(scanForSecrets(options.narrative), "narrative");
+    }
+    if (s.sessionMemory) take(scanContentForSecrets(s.sessionMemory), "sessionMemory");
   } catch {
-    return null; // a scan failure must never fail the export
+    return out; // a scan failure must never fail the export
   }
+  return out;
+}
+
+/** R3 (adversarial F4) — the OCCURRENCE count, distinct from the label list.
+ *  The banner's headline number must count every place a secret appears (40),
+ *  while its list of names stays deduped by label (`secretLabelsOf`). */
+export function secretCountOf(matches: SecretMatch[]): number {
+  return matches.length;
+}
+
+/** R3 (adversarial F6) — a match whose ONLY home on the page is a code body
+ *  (an evidence snippet, a diff line, before/after). With `includeCode: false`
+ *  those bodies are dropped, so a "search the page for it" instruction would be
+ *  a lie — but a secret in the NARRATIVE or a COMMENT (prose, always rendered)
+ *  survives redaction and must still be listed. */
+export function isCodeBearingField(field: string | undefined): boolean {
+  if (!field) return false;
+  if (field.startsWith("narrative") || field.startsWith("comment")) return false;
+  return /\.(snippet|content|before|after|preview|replacementText|code)\b/.test(field) ||
+    /\.(snippet|content|before|after|preview|replacementText|code)$/.test(field);
+}
+
+/** The distinct human-readable labels of a scan, for the page banner and the
+ *  HTTP header. Labels only — never a value, never a line. */
+export function secretLabelsOf(matches: SecretMatch[]): string[] {
+  return Array.from(new Set(matches.map((m) => m.label)));
+}
+
+export function secretWarningFor(state: unknown, options: ExportScanOptions = {}): string | null {
+  const matches = scanExportForSecrets(state, options);
   if (!matches.length) return null;
-  const shown = matches.slice(0, 3).map((m) => {
+  const shown = matches.slice(0, 5).map((m) => {
     const where = m.field ? ` in \`${m.field}\`${m.line != null ? ` (line ${m.line})` : ""}` : "";
     return `${m.label}${where}`;
   });
   const more = matches.length > shown.length ? ` (+${matches.length - shown.length} more)` : "";
   return (
-    `⚠️ Possible secret in this export — review before sharing: ${shown.join("; ")}${more}. ` +
+    `⚠️ Possible secret in this export — ${matches.length} match${matches.length === 1 ? "" : "es"} found, review before sharing: ${shown.join("; ")}${more}. ` +
     `The value itself is not printed here. This page is meant to leave the building, so check it first.`
   );
+}
+
+/**
+ * R3 — the same warning as an ASCII-only, single-line HTTP header value.
+ *
+ * GET /api/export.html had no warning at all: the MCP tool and the CLI both
+ * warned, and the surface the human actually clicks (the Export menu) did not,
+ * so the one path with a person on the other end was the silent one. Header
+ * values must be ASCII and free of newlines, so this is built from the labels
+ * and field paths only (both ASCII by construction) and then defensively
+ * stripped — a header that throws on encode would take the whole export down,
+ * which is the opposite of warn-never-block.
+ */
+export function secretWarningHeader(matches: SecretMatch[]): string | null {
+  if (!matches.length) return null;
+  const parts = matches.slice(0, 8).map((m) => (m.field ? `${m.label} in ${m.field}` : m.label));
+  const more = matches.length > parts.length ? ` (+${matches.length - parts.length} more)` : "";
+  const raw = `Possible secret in this page - ${matches.length} match${matches.length === 1 ? "" : "es"} found, review before sharing: ${parts.join("; ")}${more}`;
+  const ascii = raw.replace(/[^\x20-\x7E]/g, " ").replace(/\s+/g, " ").trim();
+  return ascii.slice(0, 990) || null;
 }
 
 export interface AssembleHtmlOptions extends HtmlExportOptions {
@@ -145,8 +257,22 @@ export async function assembleSessionHtml(
     preflightTraces: state.preflightTraces ?? (await gatherPreflightTraces(store, state.artifacts ?? [])),
     guardrailFires: state.guardrailFires ?? readGuardrailFires(projectRoot),
   };
+  // R3 — the scan runs HERE, in the one function all three surfaces share, so
+  // the banner is a property of the PAGE rather than of whichever caller
+  // remembered to ask for it. `secretLabels` passed explicitly by a caller wins
+  // (the tool already has the matches in hand and needn't scan twice); its
+  // `secretCount` rides along so the headline number is the occurrence count.
+  let secretLabels = renderOptions.secretLabels;
+  let secretCount = renderOptions.secretCount;
+  if (secretLabels === undefined) {
+    const matches = scanExportForSecrets(enriched, { narrative: renderOptions.narrative });
+    secretLabels = secretLabelsOf(matches);
+    secretCount = secretCountOf(matches);
+  }
   return formatSessionHtml(enriched, {
     ...renderOptions,
+    secretLabels,
+    secretCount,
     projectName: renderOptions.projectName ?? (projectRoot ? path.basename(projectRoot) : undefined),
   });
 }
@@ -155,9 +281,20 @@ export async function assembleSessionHtml(
  *  re-exporting the same session on the same day overwrites rather than
  *  littering the directory. */
 export function htmlExportFileName(sessionId: string, generatedAt = new Date().toISOString()): string {
-  const safeId = String(sessionId).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 60) || "session";
+  // R3 (adversarial F7) — the filename must NOT carry the session id. The id is
+  // `session_<local folder name>_<hash>` — a directory off the exporter's disk —
+  // and this string becomes the browser's Content-Disposition, i.e. the name on
+  // the email attachment when the page leaves the building. R3 had already
+  // stripped the id from the page's masthead for exactly this reason, so echoing
+  // it in the download name would reopen the leak one layer down (worse than the
+  // pre-R3 anonymous `deeppairing-session.html`, which at least didn't leak).
+  //
+  // A short, one-way hash of the id keeps per-session uniqueness (so
+  // re-exporting overwrites rather than littering, and two sessions the same day
+  // don't collide) WITHOUT being reversible to the folder name.
+  const token = crypto.createHash("sha1").update(String(sessionId)).digest("hex").slice(0, 8);
   const day = generatedAt.slice(0, 10);
-  return `session-${safeId}-${day}.html`;
+  return `deeppairing-session-${day}-${token}.html`;
 }
 
 /** Write the page under `.deeppairing/exports/` and return its absolute path. */

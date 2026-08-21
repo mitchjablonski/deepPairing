@@ -116,6 +116,62 @@ export function isClosedArtifactStatus(status: ArtifactStatus | string | undefin
   return status !== undefined && CLOSED_ARTIFACT_STATUSES.has(status);
 }
 
+/**
+ * R3 — the EXPORT honesty question, which is a DIFFERENT question from
+ * `isClosedArtifactStatus` (that one asks "can the human still act on this?",
+ * and answers YES-it's-closed for `approved` — the happiest outcome there is).
+ * This one asks: **did this work ship?**
+ *
+ * Round-11 found "export ships rejected work unmarked"; round-13 found the
+ * other half — and found the answer expressed by hand in two exporters that
+ * disagreed. `format-markdown.isShippedArtifact` omitted `obsolete`, so work
+ * the discussion had overtaken went into a PR description and an ADR reading
+ * exactly like work that landed, while `format-html.NOT_SHIPPED` (the same
+ * question, four lines away in a sibling module) had it right. One predicate,
+ * one answer, both exporters import it.
+ *
+ * Membership rule: a status belongs here when the work behind it is NOT part
+ * of what stands at the end of the session. `approved` never joins. `draft` /
+ * `reviewing` / `revised` never join either — they are not-yet-shipped rather
+ * than not-shipped, which is a different mark on the page
+ * (`isNeverApprovedStatus`).
+ */
+const NOT_SHIPPED_ARTIFACT_STATUSES: ReadonlySet<string> = new Set<string>([
+  "rejected",
+  "retracted",
+  "superseded",
+  "obsolete",
+]);
+
+/** R3 — see NOT_SHIPPED_ARTIFACT_STATUSES. Unknown/undefined statuses are NOT
+ *  claimed as unshipped: an exporter must never strike work it can't classify. */
+export function isNotShippedStatus(status: ArtifactStatus | string | undefined): boolean {
+  return status !== undefined && NOT_SHIPPED_ARTIFACT_STATUSES.has(status);
+}
+
+/**
+ * R3 — work that is neither shipped NOR discarded: it never got a verdict.
+ *
+ * The share page used to render these EXACTLY like approved work — a stranger
+ * reading a `draft` finding or a `revised` plan had no way to know nobody had
+ * signed off on it. That is the quieter half of the round-11 finding: the loud
+ * half (rejected work shipped unmarked) was fixed with a strike-through, and
+ * this half was left rendering as consensus.
+ *
+ * Deliberately NOT folded into NOT_SHIPPED: a struck header says "we decided
+ * against this", which would be a lie about a draft nobody has read yet.
+ */
+const NEVER_APPROVED_ARTIFACT_STATUSES: ReadonlySet<string> = new Set<string>([
+  "draft",
+  "reviewing",
+  "revised",
+]);
+
+/** R3 — see NEVER_APPROVED_ARTIFACT_STATUSES. */
+export function isNeverApprovedStatus(status: ArtifactStatus | string | undefined): boolean {
+  return status !== undefined && NEVER_APPROVED_ARTIFACT_STATUSES.has(status);
+}
+
 export const ArtifactStatusHistoryEntrySchema = z.object({
   status: ArtifactStatusSchema,
   at: z.string().datetime(),

@@ -31,6 +31,13 @@ Tone rules:
   because …" — never "the artifact was approved".
 - No protocol jargon: no artifact ids, no tool names, no "present_options", no
   status enums. Say "the plan", "the change", "the call we made".
+- No ids of any kind in the narrative — not artifact ids, not the session id.
+  Neither the page nor the download filename prints them (the session id is a
+  folder name off my machine), so putting one in your prose would be the only
+  place it appears.
+- No absolute paths from my machine. Say `src/auth/hash.ts`, never
+  `/home/me/work/checkout/src/auth/hash.ts`. The exporter collapses what it can
+  find, but it is scrubbing your writing after the fact — don't write it.
 - Don't dress it up. If the session was three findings and one decision, that's
   a five-sentence story — write five sentences.
 - Never claim something happened that you can't point at in the session.
@@ -50,3 +57,10 @@ useful part of the page.
 page. If the tool's reply carries a possible-secret warning, relay it to me
 verbatim before anything else — the file is about to leave the building. The file is self-contained: no network requests, opens straight from
 disk, and can be sent to anyone as-is.
+
+**If this session reviewed someone else's pull request**, the page carries a
+provenance block naming that PR at the top, so the reader can't mistake our
+verdicts for an approval that landed. Confirm the PR number with me before I
+send the page anywhere — the block is built from what you recorded on the
+changeset, and a wrong number on a page going to the PR's author is worse than
+no number at all.

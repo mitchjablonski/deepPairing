@@ -72,6 +72,8 @@ export {
   parseArtifactContent,
   isLateCommentableStatus,
   isClosedArtifactStatus,
+  isNotShippedStatus,
+  isNeverApprovedStatus,
 } from "./schemas/artifact.js";
 
 export {

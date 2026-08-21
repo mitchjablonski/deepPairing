@@ -2,6 +2,30 @@ import { useState } from "react";
 import { apiGet, apiBase } from "../lib/api";
 
 
+/**
+ * R3 — the filename the SERVER chose, out of the Content-Disposition it already
+ * sends. Falls back to the old constant only when the header is missing or
+ * unparseable (a proxy stripped it, a test fake omitted it) — never to a name
+ * that silently collides with the last export.
+ */
+export function filenameFromDisposition(disposition: string | null | undefined): string {
+  const raw = String(disposition ?? "");
+  const star = raw.match(/filename\*=(?:UTF-8'')?"?([^";]+)"?/i);
+  const plain = raw.match(/filename="?([^";]+)"?/i);
+  const found = (star?.[1] ?? plain?.[1] ?? "").trim();
+  let name = found;
+  if (star?.[1]) {
+    try {
+      name = decodeURIComponent(found);
+    } catch {
+      name = found;
+    }
+  }
+  // Never let a server-supplied name escape the download directory.
+  name = name.replace(/[\\/]/g, "_").replace(/^\.+/, "");
+  return name && /\.html?$/i.test(name) ? name : "deeppairing-session.html";
+}
+
 const formats = [
   { id: "learnings", label: "Learnings", description: "Concepts named, approaches rejected" },
   { id: "pr-description", label: "PR Description", description: "Concise summary for pull requests" },
@@ -20,6 +44,10 @@ export function ExportMenu() {
   // reliably produced a 403 JSON page and looked like the export was broken in
   // a new and mysterious way. Better to say the export failed.
   const [error, setError] = useState<string | null>(null);
+  // R3 — the export-time secret warning, relayed from the response header. The
+  // MCP tool and the CLI have warned since F6; this menu — the surface with an
+  // actual person behind it — was the one that didn't.
+  const [warning, setWarning] = useState<string | null>(null);
   // Q5 — code is INCLUDED by default (the diffs are the point of a shared
   // page); the checkbox is the opt-out for a repo whose code shouldn't leave.
   const [includeCode, setIncludeCode] = useState(true);
@@ -46,6 +74,7 @@ export function ExportMenu() {
   // you send to someone, not text you paste.
   const handleShareAsPage = async () => {
     setError(null);
+    setWarning(null);
     const url = `${apiBase()}/api/export.html?includeCode=${includeCode ? "1" : "0"}`;
     try {
       const res = await apiGet(url);
@@ -54,11 +83,21 @@ export function ExportMenu() {
       const objectUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = objectUrl;
-      a.download = "deeppairing-session.html";
+      // R3 — the SERVER's filename. This hardcoded "deeppairing-session.html",
+      // so every page a human ever downloaded had the same name: exporting two
+      // sessions overwrote the first, and the deterministic session-stamped
+      // name the server had ALREADY computed (session-<id>-<date>.html — the
+      // same name the MCP tool and the CLI write to disk) was discarded on the
+      // one surface a human actually clicks.
+      a.download = filenameFromDisposition(res.headers?.get?.("Content-Disposition"));
       document.body.appendChild(a);
       a.click();
       a.remove();
       URL.revokeObjectURL(objectUrl);
+      // R3 — relay the export-time secret scan. Warn-only: the file has already
+      // downloaded, exactly as before.
+      const secretWarning = res.headers?.get?.("X-DeepPairing-Secret-Warning");
+      if (secretWarning) setWarning(secretWarning);
       setCopied("html");
       setTimeout(() => setCopied(null), 2000);
     } catch {
@@ -88,6 +127,23 @@ export function ExportMenu() {
                      bg-surface-elevated border border-border-default shadow-xl text-2xs text-text-secondary"
         >
           {error}
+        </div>
+      )}
+
+      {warning && (
+        <div
+          role="alert"
+          className="absolute right-0 top-full mt-1 z-50 w-80 px-3 py-2 rounded-lg
+                     bg-surface-elevated border border-amber-500/60 shadow-xl text-2xs text-text-secondary"
+        >
+          <div className="font-medium text-text-primary mb-0.5">Check the page before you send it</div>
+          {warning}
+          <button
+            onClick={() => setWarning(null)}
+            className="mt-1 block text-2xs text-text-muted hover:text-text-secondary underline"
+          >
+            Dismiss
+          </button>
         </div>
       )}
 
