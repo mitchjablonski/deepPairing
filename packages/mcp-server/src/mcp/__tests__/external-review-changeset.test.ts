@@ -162,8 +162,20 @@ describe("Q6 — the rejected-approach gate points OUTWARD, not inward", () => {
     });
 
     expect(res.isError).toBeFalsy();
-    expect(res.text).not.toContain("previously rejected");
     expect(theChangeset()).toBeDefined();
+
+    // R1 (#279) — the invariant above is unchanged: not refused, artifact
+    // created. What changed is what happens to the MATCH. Q6 implemented
+    // "must not block" as "must not run", which switched the human's taste gate
+    // off on the strength of one unverifiable flag in the agent's own tool
+    // call. Now the matcher runs and its result comes back as ADVICE, which the
+    // agent is told to raise WITH the human as an internal-audience finding —
+    // never on the PR.
+    expect(res.text).toContain("advisory, not a block");
+    expect(res.text).toContain("in-process rate limiting");
+    expect(res.text).toContain('audience: "internal"');
+    // And the advice is not dressed as a refusal anywhere.
+    expect(res.text).not.toMatch(/REJECTED_APPROACH_BLOCKED[\s\S]*Refusing/);
   });
 
   it("…and the IDENTICAL changeset as the agent's own proposal is still blocked", async () => {
@@ -181,12 +193,19 @@ describe("Q6 — the rejected-approach gate points OUTWARD, not inward", () => {
     expect(store.getArtifacts().filter((a) => a.type === "changeset")).toHaveLength(0);
   });
 
-  it("no preflight trace is recorded for an external review — nothing was weighed", async () => {
-    // A trace is a breadcrumb saying "a proposal was checked against your
-    // stances". Writing one here would be a false record: no proposal existed.
+  it("a preflight trace IS recorded for an external review — the stances were weighed", async () => {
+    // Q6 asserted the opposite here, on the reasoning that "no proposal was
+    // weighed, so a breadcrumb claiming otherwise would be a false record".
+    // R1 (#279) makes that premise false: the matcher now runs on external
+    // changesets (advisory), so the stances genuinely WERE weighed and the
+    // breadcrumb is the honest record of it. What the trace must never claim is
+    // that the call was REFUSED — see the advisory pin above.
     store.recordRejectedApproach({ description: "unrelated thing", reason: "no", concept: "unrelated thing" });
     await presentExternal();
-    expect(await store.getPreflightTrace?.(theChangeset().id)).toBeFalsy();
+    const trace = await store.getPreflightTrace?.(theChangeset().id);
+    expect(trace).toBeTruthy();
+    expect(trace!.consideredCount).toBe(1);
+    expect(trace!.decision).toBe("admitted");
   });
 
   it("CONTROL — a local changeset in the same store DOES get a trace", async () => {

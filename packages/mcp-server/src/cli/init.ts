@@ -26,13 +26,26 @@ import {
 } from "./setup-tasks.js";
 import readline from "node:readline";
 import { spawn } from "node:child_process";
-import { preferredPortFor, BASE_PORT, PORT_SPAN } from "../project-root.js";
+import { preferredPortFor, BASE_PORT, PORT_SPAN, resolveProjectRoot } from "../project-root.js";
 import { getGlobalStore } from "../store/global-store.js";
 import { buildLedgerHealthReport, shQuote } from "../store/ledger-health.js";
 import { cliInvocation, mcpServerConfigFor, isInstalledPackage } from "../cli-invocation.js";
 import { writeJsonAtomic } from "../store/atomic-write.js";
 
-const cwd = process.cwd();
+/**
+ * The project this CLI acts on.
+ *
+ * R1 (#279) — this was a bare `process.cwd()`, which IGNORED the two env vars
+ * the rest of the codebase documents as the project-root contract
+ * (project-root.ts: CLAUDE_PROJECT_DIR > DEEPPAIRING_PROJECT_ROOT > cwd). Every
+ * other entry point — the daemon, the MCP wrapper, the preflight hook — honours
+ * them; this one silently didn't, so `DEEPPAIRING_PROJECT_ROOT=/tmp/probe
+ * deeppairing doctor` read and wrote the CURRENT directory instead. In round 13
+ * that attached a throwaway review lens to the user's LIVE daemon and their real
+ * `.deeppairing/`. Resolution now goes through the same resolver as everything
+ * else; with neither env set it is still exactly `process.cwd()`.
+ */
+const cwd = resolveProjectRoot().projectRoot;
 
 /** Embedded protocol template — ensures CLAUDE.md injection never fails */
 const EMBEDDED_PROTOCOL = `# deepPairing Collaboration Protocol
@@ -1548,14 +1561,14 @@ async function demoCmd(): Promise<void> {
 }
 
 /**
- * `deeppairing post-pr-review <pr> [--session-id ID] [--event EVENT]`
+ * `deeppairing post-pr-review <pr> [--session-id ID] [--event EVENT] [--repost]`
  *  — post the current (or specified) pairing session's findings as inline
  *  comments on a GitHub PR. Uses the `gh` CLI.
  */
-async function postPrReviewCmd(ref: string, sessionId?: string, event?: string) {
+async function postPrReviewCmd(ref: string, sessionId?: string, event?: string, repost = false) {
   const { FileStore } = await import("../store/file-store.js");
   const { authorizeReviewPost } = await import("../github/review-authorization.js");
-  const { postPrReview, GhMissingError, GhNotAuthedError } = await import("../github/post-review.js");
+  const { postPrReview, parsePrRef, GhMissingError, GhNotAuthedError } = await import("../github/post-review.js");
 
   let chosenSessionId = sessionId;
   if (!chosenSessionId) {
@@ -1567,9 +1580,15 @@ async function postPrReviewCmd(ref: string, sessionId?: string, event?: string) 
     chosenSessionId = firstSession.id;
   }
 
+  // R1 (#279) — a live FileStore, not the static loadSession snapshot: this
+  // door must also STAMP the landed review (see below), and the stamp writes
+  // its own sidecar file. Nothing else about the session is mutated here, so
+  // sharing the directory with a running daemon stays safe.
+  let store: InstanceType<typeof FileStore>;
   let state: any;
   try {
-    state = FileStore.loadSession(cwd, chosenSessionId);
+    store = new FileStore(cwd, chosenSessionId);
+    state = store.getFullState();
   } catch (err: any) {
     console.error(`  ${red("✗")} Could not load session "${chosenSessionId}": ${err?.message ?? err}`);
     process.exit(1);
@@ -1577,9 +1596,16 @@ async function postPrReviewCmd(ref: string, sessionId?: string, event?: string) 
 
   // Q6 (#232) B1 — the SECOND door out of this machine. It runs the identical
   // authorization gate as the MCP tool (one function, two callers): only
-  // findings your pair approved in the companion UI may be posted, and a bare
+  // findings your pair approved in the companion UI may be posted, and an
   // APPROVE needs their approval on the external changeset. No --force.
-  const auth = authorizeReviewPost(state, { event: ((event as any) || "COMMENT") });
+  //
+  // R1 (#279) — the raw `--event` value goes in UNTOUCHED and the gate
+  // normalizes it. Pre-R1 this door cast the flag and defaulted it locally,
+  // which is how "bogus", "MERGE" and a lowercase "approve" all reached the
+  // gate from here — and "approve" then slipped past its uppercase comparison,
+  // skipping the very authorization the APPROVE event exists to require.
+  // (A parity test greps this function for that old shape; don't restore it.)
+  const auth = authorizeReviewPost(state, { event, pr: ref, repost });
   if (!auth.ok) {
     console.error(`  ${red("✗")} ${auth.reason}`);
     process.exit(1);
@@ -1590,6 +1616,25 @@ async function postPrReviewCmd(ref: string, sessionId?: string, event?: string) 
     const result = await postPrReview({ ref, payload });
     console.log(`  ${green("✓")} Posted ${payload.comments.length} inline comment${payload.comments.length === 1 ? "" : "s"} on PR ${ref}`);
     if (result.htmlUrl) console.log(`    ${dim(result.htmlUrl)}`);
+    // R1 (#279) — same stamp the MCP door writes, into the same sidecar, so a
+    // duplicate post is refused no matter which door it comes from.
+    try {
+      const parsed = parsePrRef(ref);
+      store.recordPostedReview({
+        pr: ref,
+        prNumber: parsed.number,
+        ...(parsed.owner ? { owner: parsed.owner } : {}),
+        ...(parsed.repo ? { repo: parsed.repo } : {}),
+        event: payload.event,
+        reviewId: result.id,
+        url: result.htmlUrl,
+        postedAt: new Date().toISOString(),
+        commentCount: payload.comments.length,
+      });
+      console.log(`    ${dim("Recorded — a second post to this PR needs --repost.")}`);
+    } catch (stampErr: any) {
+      console.error(`  ${red("!")} The review posted, but recording it locally failed: ${stampErr?.message ?? stampErr}`);
+    }
   } catch (err: any) {
     if (err instanceof GhMissingError || err instanceof GhNotAuthedError) {
       console.error(`  ${red("✗")} ${err.message}`);
@@ -2057,14 +2102,19 @@ ${helpInvocations}
     console.error(`  ${dim("   Example: " + cliInvocation("post-pr-review 42"))}`);
     process.exit(1);
   }
-  // Parse optional --session-id and --event flags
+  // Parse optional --session-id, --event and --repost flags
   let sessionId: string | undefined;
   let event: string | undefined;
+  let repost = false;
   for (let i = 2; i < args.length; i++) {
     if (args[i] === "--session-id" && args[i + 1]) { sessionId = args[i + 1]; i++; }
     else if (args[i] === "--event" && args[i + 1]) { event = args[i + 1]; i++; }
+    // R1 (#279) — re-post to a PR this session already posted to. NOT a
+    // --force: every human-verdict check still runs, this only clears the
+    // duplicate-post refusal.
+    else if (args[i] === "--repost") { repost = true; }
   }
-  postPrReviewCmd(ref, sessionId, event).catch((err) => {
+  postPrReviewCmd(ref, sessionId, event, repost).catch((err) => {
     console.error(`  ${red("✗")} post-pr-review failed: ${err?.message ?? err}`);
     process.exit(1);
   });

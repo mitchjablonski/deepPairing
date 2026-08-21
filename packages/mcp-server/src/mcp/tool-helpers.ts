@@ -95,7 +95,17 @@ const ADVISORY_EXEMPT_TOOLS: ReadonlySet<string> = new Set([
  * casting the block event, shaping the MCP tool-error response.
  */
 export type PreflightHelperResult =
-  | { ok: true; trace: PreflightTracePartial }
+  | {
+      ok: true;
+      trace: PreflightTracePartial;
+      /**
+       * R1 (#279) — ADVISORY MODE ONLY. The match that WOULD have blocked, for
+       * a caller that must not be blocked but must still be told. Present only
+       * when `opts.advisory` was set and the matcher fired; absent otherwise,
+       * so every existing caller is untouched.
+       */
+      advisory?: string;
+    }
   | {
       ok: false;
       response: {
@@ -116,6 +126,20 @@ export async function preflightRejectedApproaches(
   proposalStrings: string[],
   proposalPaths: string[] = [],
   proposalConcepts: string[] = [],
+  /**
+   * R1 (#279) — `advisory: true` runs the whole matcher but NEVER refuses:
+   * a fired match comes back as `{ ok: true, advisory }` instead of a block.
+   * Its one caller is present_changeset on an EXTERNAL review (see there for
+   * why a colleague's PR must be shown, not refused).
+   *
+   * The block SIDE EFFECTS are skipped with it — no toast, no entry in the
+   * project block log, no preflight_block metric. Nothing was blocked, and a
+   * surface that says otherwise is a false record: the block log is the
+   * product's own evidence that the moat bit, and filling it with
+   * advisories-that-read-as-refusals would corrupt exactly the surface round 13
+   * asked us to make durable.
+   */
+  opts: { advisory?: boolean } = {},
 ): Promise<PreflightHelperResult> {
   const memory = await store.getSessionMemory();
   // AA7b — typed optional method on IStore.
@@ -182,6 +206,15 @@ export async function preflightRejectedApproaches(
       }
     }
     return { ok: true, trace: result.trace };
+  }
+
+  // R1 (#279) — ADVISORY MODE: the matcher fired, but this caller does not get
+  // to be refused. Return the match as advice and take NONE of the block side
+  // effects below (see `opts.advisory`). The trace still carries
+  // decision: "blocked", which is the honest record of what the MATCHER
+  // decided; what the TOOL did with it is the caller's story to tell.
+  if (opts.advisory) {
+    return { ok: true, trace: result.trace, advisory: result.block.message };
   }
 
   // Make the invisible moat felt: broadcast the block so the companion UI

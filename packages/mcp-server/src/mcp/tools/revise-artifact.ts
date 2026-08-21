@@ -216,9 +216,40 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       isError: true,
     };
   }
-  if (artifact.status !== "draft" && artifact.status !== "reviewing") {
+  // R1 (#279) — THE UN-ARM EXIT, and its exact boundary.
+  //
+  // The hole: in an external-review session, approving a findings artifact ARMS
+  // it — it may be posted to a stranger's repository from then on, by either
+  // door, forever. There was no way back. `approved` is terminal for a reason
+  // (a human verdict must be sticky; see verdict-guard.ts) and both retract and
+  // withdraw refused on it, so "actually, don't send that one" had no
+  // expression at all: the human's only options were to leave a live payload
+  // armed or to have the agent post something they no longer wanted sent.
+  //
+  // THE EXIT, kept as narrow as it can be and still be an exit:
+  //   • retract ONLY (obsolete stays draft/reviewing-only — "overcome by new
+  //     information" is a queue gesture, not a disarm);
+  //   • research artifacts ONLY (they are what post; a changeset's approval is
+  //     the APPROVE authorization and disarming it is the human's own call in
+  //     the UI, not the agent's);
+  //   • and ONLY in a session that carries EXTERNAL review intent, i.e. one
+  //     where approval means "may leave the machine". In a local session,
+  //     approved still means approved and nothing changes.
+  // It is not a status-machine change: `agent_retract` is already a non-human
+  // reason, so the cross-terminal verdict guard was never going to fire on it,
+  // and every other terminal status still refuses.
+  const isDisarm =
+    mode === "retract" && artifact.status === "approved" && artifact.type === "research" &&
+    artifacts.some((a) => a.type === "changeset" && (a.content as { reviewIntent?: string } | null)?.reviewIntent === "external");
+  if (artifact.status !== "draft" && artifact.status !== "reviewing" && !isDisarm) {
     return {
-      content: [{ type: "text", text: `revise_artifact: ${artifactId} is ${artifact.status}, too late to ${mode}. Use check_feedback instead.` }],
+      content: [{
+        type: "text",
+        text: `revise_artifact: ${artifactId} is ${artifact.status}, too late to ${mode}. Use check_feedback instead.` +
+          (artifact.status === "approved" && artifact.type === "research"
+            ? ` (An approved findings artifact can be retracted — "un-armed", so it can no longer be posted — only in an external PR-review session. This one has no external changeset, so approval here doesn't arm anything outbound.)`
+            : ""),
+      }],
       isError: true,
     };
   }
@@ -229,11 +260,18 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
   await store.addComment({
     id: `cmt_${nanoid(10)}`,
     artifactId,
-    content: `${isObsolete ? "Overcome by new information" : "Retracted"}: ${reason}`,
+    content: `${isObsolete ? "Overcome by new information" : isDisarm ? "Un-armed (retracted after approval, so it can no longer be posted)" : "Retracted"}: ${reason}`,
     author: "agent",
   });
   broadcast({ type: "artifact_updated", artifactId, status: newStatus });
   return {
-    content: [{ type: "text", text: `${isObsolete ? `Marked ${artifactId} obsolete (overcome by new information) — it's off the human's review queue` : `Retracted ${artifactId}`}. Continue your workflow — call check_feedback or present a revised artifact.${await ctx.helpers.getPassiveFeedback()}` }],
+    content: [{
+      type: "text",
+      text: `${isObsolete
+        ? `Marked ${artifactId} obsolete (overcome by new information) — it's off the human's review queue`
+        : isDisarm
+          ? `Un-armed ${artifactId}: it was approved, it is now retracted, and post_pr_review will exclude it. Tell your pair it will not be posted`
+          : `Retracted ${artifactId}`}. Continue your workflow — call check_feedback or present a revised artifact.${await ctx.helpers.getPassiveFeedback()}`,
+    }],
   };
 }

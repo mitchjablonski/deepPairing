@@ -254,7 +254,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const HOOK_NAME = "stop";
-const STATE_PATH = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".deeppairing", "hooks-state.json");
+const STATE_PATH = path.join(process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || process.cwd(), ".deeppairing", "hooks-state.json");
 const STATE_CAP = 50;
 // Q1 — durable hooks-state writes, mirrored from preflight-hook-core's
 // readHookState / writeHookStateAtomic / acquireHookStateLock. Pre-Q1 every
@@ -329,7 +329,7 @@ function exit(code, reason) {
 }
 
 try {
-  const sessionsDir = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".deeppairing", "sessions");
+  const sessionsDir = path.join(process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || process.cwd(), ".deeppairing", "sessions");
   if (!fs.existsSync(sessionsDir)) exit(0, "no sessions dir");
 
   const MAX_AGE_MS = 30 * 60 * 1000;
@@ -588,7 +588,7 @@ function isTrivialFile(filePath) {
 
 // X7 — record every fire to .deeppairing/hooks-state.json so the
 // companion UI's HookStatus can show "hook stack working" feedback.
-const STATE_PATH = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".deeppairing", "hooks-state.json");
+const STATE_PATH = path.join(process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || process.cwd(), ".deeppairing", "hooks-state.json");
 // Q1 — durable hooks-state writes, mirrored from preflight-hook-core's
 // readHookState / writeHookStateAtomic / acquireHookStateLock. Pre-Q1 every
 // writer of this file did a plain read-modify-writeFileSync: two hooks firing
@@ -670,7 +670,7 @@ process.stdin.on("end", () => {
     // V2.1 — trivial files (gitignore, lockfiles, generated paths) auto-pass.
     if (isTrivialFile(filePath)) exit(0, "skip: trivial file " + filePath);
 
-    const dpDir = path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".deeppairing");
+    const dpDir = path.join(process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || process.cwd(), ".deeppairing");
     if (!fs.existsSync(path.join(dpDir, "sessions"))) exit(0, "skip: no sessions dir");
 
     // PP1 — read the most-recent code_change timestamp from a tiny marker the
@@ -944,7 +944,9 @@ process.stdin.on("end", async () => {
     const ev = JSON.parse(input || "{}");
     const toolName = ev.tool_name || "";
     const toolInput = ev.tool_input || ev.input || {};
-    const projectRoot = process.env.CLAUDE_PROJECT_DIR || ev.cwd || process.cwd();
+    // R1 (#279) — one documented precedence in every hook lane:
+    // CLAUDE_PROJECT_DIR > DEEPPAIRING_PROJECT_ROOT > the event's cwd > ours.
+    const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || ev.cwd || process.cwd();
     if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit") {
       process.exit(0);
     }

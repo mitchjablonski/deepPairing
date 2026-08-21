@@ -31,10 +31,42 @@
  * override, no "the human said so in chat" bypass. If the store does not carry
  * the verdict, the post does not happen. A force flag would recreate the exact
  * hole this closes, because the agent is the one who would pass it.
+ *
+ * ---------------------------------------------------------------------------
+ * R1 (#279) — WHAT ROUND 13 FOUND STILL OPEN, all of it by execution:
+ *
+ *  1. THE APPROVE HOLE. The external-changeset requirement lived INSIDE
+ *     `if (payload.comments.length === 0)`, so an APPROVE carrying one approved
+ *     finding skipped it entirely — an approving review was posted with both
+ *     changesets still in draft, and again on a PR the human had REJECTED.
+ *     The requirement is now unconditional for APPROVE, and a rejected external
+ *     changeset refuses outright instead of being quietly excluded.
+ *  2. ONE-OF-N. `externals.find(status === "approved")` authorized a whole-PR
+ *     APPROVE off one approved chunk of a split PR. ALL live external
+ *     changesets must now be approved.
+ *  3. EVENT NORMALIZATION AT BOTH DOORS. The MCP tool whitelisted; the CLI
+ *     passed `(event as any) || "COMMENT"` straight through, so "bogus",
+ *     "MERGE" and lowercase "approve" all reached this function — and
+ *     "approve" slipped past the `event === "APPROVE"` comparison, taking the
+ *     APPROVE authorization with it. Normalization lives HERE now, in the one
+ *     place both doors share, and an unknown event is refused rather than
+ *     silently downgraded.
+ *  4. THE PRIVATE-STANCE LEAK. See isPostableFinding / `audience` in the shared
+ *     Finding schema — internal findings are excluded from the payload here and
+ *     in buildGitHubReviewPayload, and cannot make an artifact's status
+ *     load-bearing either.
+ *  6. IDEMPOTENCY. Five calls posted five reviews. A post is recorded in the
+ *     session store on success and a second post to the same PR refuses unless
+ *     the human explicitly said "post again" (`repost`).
+ *  7. THE SEVERITY GATE. "REQUEST_CHANGES only if high/critical" was prose in
+ *     two command files — and a low/style finding duly posted a blocking review
+ *     on someone's PR. It is a check now.
  */
-import type { Artifact } from "@deeppairing/shared";
-import { coerceResearchContent, coerceChangesetContent } from "@deeppairing/shared";
+import type { Artifact, Finding } from "@deeppairing/shared";
+import { coerceResearchContent, coerceChangesetContent, isPostableFinding } from "@deeppairing/shared";
 import { buildGitHubReviewPayload, type GitHubReviewPayload, type GitHubReviewEvent } from "../export/format-markdown.js";
+import type { PostedReviewRecord } from "../store/posted-reviews.js";
+import { samePrTarget } from "../store/posted-reviews.js";
 
 /** The minimum of a session this gate reads. Structural, so both callers'
  *  slightly different state shapes (store.getFullState vs FileStore.loadSession)
@@ -42,12 +74,22 @@ import { buildGitHubReviewPayload, type GitHubReviewPayload, type GitHubReviewEv
 export interface AuthorizableSession {
   sessionId: string;
   artifacts: Artifact[];
+  /** R1 (#279) — reviews already posted FROM this session. Rides getFullState
+   *  on both stores (absent on sessions that never posted), so both doors read
+   *  the same record with no extra round-trip. */
+  postedReviews?: PostedReviewRecord[];
   [k: string]: unknown;
 }
 
 export type ReviewAuthorization =
-  | { ok: true; payload: GitHubReviewPayload }
+  | { ok: true; payload: GitHubReviewPayload; event: GitHubReviewEvent }
   | { ok: false; reason: string };
+
+/** R1 (#279) — the three events GitHub's review API accepts, and the ONLY three
+ *  this product will send. `PENDING` (save a draft review) is deliberately not
+ *  offered: it would be a post the human never asked for, sitting on their
+ *  colleague's PR under their name. */
+const ALLOWED_EVENTS: readonly GitHubReviewEvent[] = ["COMMENT", "REQUEST_CHANGES", "APPROVE"] as const;
 
 /**
  * Statuses meaning THE HUMAN HAS NOT RULED on this artifact.
@@ -73,21 +115,43 @@ const UNDECIDED_STATUSES = new Set(["draft", "reviewing", "revised"]);
  */
 const DECIDED_EXCLUDED_STATUSES = new Set(["rejected", "superseded", "retracted", "obsolete"]);
 
-/** Does this findings artifact carry at least one finding that would become an
- *  inline PR comment? Mirrors buildGitHubReviewPayload's own predicate
- *  (structured evidence with filePath + numeric lineStart). A findings artifact
- *  with only prose evidence posts nothing, so its status is not load-bearing
- *  and must not be able to block an otherwise-authorized post. */
-function hasPostableEvidence(artifact: Artifact): boolean {
+/** Severity ordering for the REQUEST_CHANGES gate. Absent severity reads as
+ *  "info" — the same default buildGitHubReviewPayload renders. */
+const SEVERITY_RANK: Record<string, number> = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
+
+/** Does this evidence entry anchor to a real diff coordinate? Mirrors
+ *  buildGitHubReviewPayload's own predicate (structured evidence with filePath
+ *  + numeric lineStart). */
+function isAnchored(e: unknown): boolean {
+  return (
+    !!e && typeof e === "object" &&
+    !!(e as { filePath?: unknown }).filePath &&
+    typeof (e as { lineStart?: unknown }).lineStart === "number"
+  );
+}
+
+/**
+ * The findings on this artifact that WOULD become inline PR comments: postable
+ * audience (R1) AND anchored to a diff coordinate.
+ *
+ * Both filters must match buildGitHubReviewPayload exactly, or the gate and the
+ * payload disagree about what is being posted — which is how a "no findings to
+ * post" refusal and a review carrying findings can both be true at once.
+ */
+function outboundFindings(artifact: Artifact): Finding[] {
   const findings = coerceResearchContent(artifact.content).findings;
-  if (!Array.isArray(findings)) return false;
-  return findings.some((f) => {
-    const evidence = Array.isArray(f.evidence) ? f.evidence : [];
-    return evidence.some(
-      (e) => !!e && typeof e === "object" && !!(e as { filePath?: unknown }).filePath &&
-        typeof (e as { lineStart?: unknown }).lineStart === "number",
-    );
-  });
+  if (!Array.isArray(findings)) return [];
+  return findings.filter(
+    (f) => isPostableFinding(f) && (Array.isArray(f.evidence) ? f.evidence : []).some(isAnchored),
+  );
+}
+
+/** Does this findings artifact carry at least one finding that would become an
+ *  inline PR comment? A findings artifact with only prose evidence — or, since
+ *  R1, only INTERNAL findings — posts nothing, so its status is not
+ *  load-bearing and must not be able to block an otherwise-authorized post. */
+function hasPostableEvidence(artifact: Artifact): boolean {
+  return outboundFindings(artifact).length > 0;
 }
 
 /** The session's external-review changesets — a colleague's PR on the review
@@ -99,6 +163,50 @@ function externalChangesets(artifacts: Artifact[]): Artifact[] {
 }
 
 /**
+ * R1 (#279) fix 3 — normalize the event at the ONE door both callers share.
+ *
+ * Accepts absent/empty as COMMENT (the documented default at both doors) and
+ * uppercases before comparing, so "approve" is APPROVE and gets the APPROVE
+ * authorization instead of sliding past a `=== "APPROVE"` test into a
+ * no-questions-asked post. Anything else is REFUSED, not coerced: "MERGE" is
+ * not a review event, and quietly turning it into a COMMENT would post
+ * something nobody asked for.
+ *
+ * R1 F2 — a non-STRING event is refused before it is ever stringified. The
+ * contract is a string enum; `["approve"]` and `{ toString: () => "approve" }`
+ * both String()-coerce to "approve", and while the full APPROVE authorization
+ * would still run on the result (so this is a contract violation, not a
+ * bypass), the honest answer to "the event isn't a string" is to say so, not to
+ * silently accept whatever its coercion happens to spell.
+ */
+function normalizeEvent(raw: unknown): { ok: true; event: GitHubReviewEvent } | { ok: false; reason: string } {
+  if (raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "")) {
+    return { ok: true, event: "COMMENT" };
+  }
+  if (typeof raw !== "string") {
+    return {
+      ok: false,
+      reason:
+        `Refusing to post: the review event must be a string (one of COMMENT, REQUEST_CHANGES, APPROVE), ` +
+        `not a ${Array.isArray(raw) ? "array" : typeof raw}. Pass the event as a plain string.`,
+    };
+  }
+  const normalized = raw.trim().toUpperCase();
+  const match = ALLOWED_EVENTS.find((e) => e === normalized);
+  if (!match) {
+    return {
+      ok: false,
+      reason:
+        `Refusing to post: "${raw}" is not a review event. GitHub reviews are one of ` +
+        `COMMENT, REQUEST_CHANGES, APPROVE — and each means something different on someone else's PR, ` +
+        `so this is not guessed at. Re-issue the call with the one you meant ` +
+        `(REQUEST_CHANGES only when a surviving finding is high or critical; APPROVE only when your pair approved the PR changeset).`,
+    };
+  }
+  return { ok: true, event: match };
+}
+
+/**
  * Decide whether this session authorizes posting a review, and if so build the
  * payload from ONLY what the human approved.
  *
@@ -107,9 +215,43 @@ function externalChangesets(artifacts: Artifact[]): Artifact[] {
  */
 export function authorizeReviewPost(
   state: AuthorizableSession,
-  opts: { event: GitHubReviewEvent },
+  opts: {
+    /** RAW, straight off either door — normalized and whitelisted in here. */
+    event: unknown;
+    /** The PR this post targets ("42", "#42", or a URL). Enables the
+     *  already-posted check; omitted only by callers with no ref to give. */
+    pr?: string;
+    /** The human said "post it again". The agent must never set this on its
+     *  own initiative — see post-pr.md / review-pr.md. */
+    repost?: boolean;
+  },
 ): ReviewAuthorization {
-  const { event } = opts;
+  // (0) THE EVENT ITSELF. Before any verdict is read: an event this product
+  // does not send cannot be authorized by anything.
+  const normalized = normalizeEvent(opts.event);
+  if (!normalized.ok) return { ok: false, reason: normalized.reason };
+  const event = normalized.event;
+
+  // (0b) R1 fix 6 — ALREADY POSTED. Round 13 called post_pr_review five times
+  // and got five separate reviews on the same PR, each notifying the author.
+  // A review is not idempotent on GitHub's side and nothing here made it so.
+  // The record is the session store's, written on success by whichever door
+  // posted, so a retry from the OTHER door sees it too.
+  const alreadyPosted = opts.pr && !opts.repost
+    ? (state.postedReviews ?? []).find((r) => samePrTarget(r, opts.pr!))
+    : undefined;
+  if (alreadyPosted) {
+    return {
+      ok: false,
+      reason:
+        `Refusing to post: this session already posted a ${alreadyPosted.event} review on ${alreadyPosted.pr}` +
+        (alreadyPosted.url ? ` — ${alreadyPosted.url}` : "") +
+        ` (${alreadyPosted.postedAt}). Posting again would notify the author a second time with a second review. ` +
+        `Tell your pair it is already up and link them to it. If they say "post again", re-issue this call with repost: true — ` +
+        `that flag is THEIR word, never your own initiative.`,
+    };
+  }
+
   const findingsArtifacts = state.artifacts.filter((a) => a.type === "research" && hasPostableEvidence(a));
 
   // (a) NOTHING UNRULED MAY POST. One unreviewed findings artifact refuses the
@@ -133,6 +275,59 @@ export function authorizeReviewPost(
   const approved = findingsArtifacts.filter((a) => a.status === "approved");
   const decidedNo = findingsArtifacts.filter((a) => DECIDED_EXCLUDED_STATUSES.has(a.status));
 
+  // (c) A BARE APPROVE IS A REAL VERDICT ON SOMEONE ELSE'S PR — and so is an
+  // APPROVE that happens to carry inline comments.
+  //
+  // R1 fix 1 — THIS CHECK USED TO LIVE INSIDE the zero-comments branch below,
+  // which meant one approved finding was enough to skip it: round 13 posted an
+  // approving review with both external changesets still in DRAFT, and then
+  // posted another on a PR the human had explicitly REJECTED. The event is what
+  // makes this a verdict, not the comment count, so the event is what gates it.
+  if (event === "APPROVE") {
+    const externals = externalChangesets(state.artifacts);
+
+    // The human's "no" on the PR itself is not an exclusion — it is the
+    // opposite verdict, and an APPROVE contradicts it outright.
+    const refused = externals.filter((a) => a.status === "rejected" || a.status === "revised");
+    if (refused.length > 0) {
+      const first = refused[0]!;
+      return {
+        ok: false,
+        reason:
+          `Refusing to post an APPROVE: your pair ${first.status === "rejected" ? "REJECTED" : "sent back for changes"} ` +
+          `"${first.title}" (${first.id}) — that is their verdict on this PR, recorded in the companion UI. ` +
+          `An approving review would publish the opposite of what they decided. ` +
+          `If they have changed their mind, they re-approve the changeset in the UI first; nothing else counts.`,
+      };
+    }
+
+    // R1 fix 2 — ALL of them, not `find(...)`. A PR split across three
+    // changesets had one approved chunk authorize the whole-PR APPROVE; the
+    // human had approved a third of the diff and GitHub was told they approved
+    // all of it. (One changeset per PR is still the right default — see
+    // review-pr.md — but the gate must not depend on the agent honouring it.)
+    const live = externals.filter((a) => !DECIDED_EXCLUDED_STATUSES.has(a.status));
+    const unapproved = live.filter((a) => a.status !== "approved");
+    if (live.length === 0 || unapproved.length > 0) {
+      const pending = unapproved[0];
+      return {
+        ok: false,
+        reason: externals.length === 0
+          ? `Refusing to post an APPROVE: nothing in this session records your pair approving this PR. ` +
+            `An APPROVE is a real approving review on someone else's repository, and the agent cannot authorize it. ` +
+            `Put the PR's diff on the review surface first (present_changeset with reviewIntent: "external") and let them approve it there — that approval IS the authorization.`
+          : live.length === 0
+            ? `Refusing to post an APPROVE: every external changeset in this session is closed (superseded/retracted/obsolete), so nothing standing records your pair approving this PR. ` +
+              `Put the current diff on the review surface and let them approve it there — that approval IS the authorization.`
+            : `Refusing to post an APPROVE: your pair has not approved the PR changeset — they have ` +
+              `approved ${live.length - unapproved.length} of ${live.length} changeset${live.length === 1 ? "" : "s"} for this PR` +
+              (pending ? ` ("${pending.title}" (${pending.id}) is ${pending.status})` : "") +
+              `. An APPROVE covers the WHOLE pull request, so every part of it they are reviewing has to carry their approval. ` +
+              `Get their verdict on the rest first — their approval in the companion UI is what authorizes an approving review on someone else's PR.`,
+      };
+    }
+  }
+
   // (b) THE EXCLUSION, stated honestly. This product has NO per-finding verdict:
   // a comment can TARGET a findingIndex but carries no accept/reject state
   // (verified — the schema has no per-finding verdict field at all). So the
@@ -151,30 +346,9 @@ export function authorizeReviewPost(
   const payload = buildGitHubReviewPayload({ ...state, artifacts: approved } as never, { event });
 
   if (payload.comments.length === 0) {
-    if (event === "APPROVE") {
-      // (c) A BARE APPROVE IS A REAL VERDICT ON SOMEONE ELSE'S PR. With no
-      // inline comments there is no approved findings artifact carrying the
-      // human's authorization, so it must come from the other artifact this flow
-      // produces: the external changeset — which IS the PR on the review
-      // surface. Approving it in the UI is precisely the human act of saying
-      // "this PR is good", so that is exactly what we require.
-      const externals = externalChangesets(state.artifacts);
-      const approvedExternal = externals.find((a) => a.status === "approved");
-      if (!approvedExternal) {
-        const pending = externals.filter((a) => !DECIDED_EXCLUDED_STATUSES.has(a.status));
-        return {
-          ok: false,
-          reason: externals.length === 0
-            ? `Refusing to post an APPROVE: nothing in this session records your pair approving this PR. ` +
-              `An APPROVE with no inline comments is a real approving review on someone else's repository, and the agent cannot authorize it. ` +
-              `Put the PR's diff on the review surface first (present_changeset with reviewIntent: "external") and let them approve it there — that approval IS the authorization.`
-            : `Refusing to post an APPROVE: your pair has not approved the PR changeset yet` +
-              (pending.length > 0 ? ` ("${pending[0]!.title}" is ${pending[0]!.status})` : "") +
-              `. Get your pair's verdict on the changeset first — their approval in the companion UI is what authorizes an approving review on someone else's PR.`,
-        };
-      }
-      return { ok: true, payload };
-    }
+    // An APPROVE got here only by passing the authorization above, and a bare
+    // APPROVE (no inline comments) is its normal, commonest shape.
+    if (event === "APPROVE") return { ok: true, payload, event };
 
     // Zero comments on a non-APPROVE event. As in the first Q6 cut, except it
     // now also names an EXCLUDED artifact rather than looking like the findings
@@ -193,5 +367,30 @@ export function authorizeReviewPost(
     };
   }
 
-  return { ok: true, payload };
+  // R1 fix 7 — THE SEVERITY GATE, mechanical at last.
+  //
+  // "REQUEST_CHANGES only if a surviving finding is high/critical" was written
+  // in review-pr.md, in post-pr.md, and in SKILL.md — three copies of a rule
+  // nothing enforced — and round 13 duly posted a BLOCKING review on a
+  // colleague's PR off a single low-severity style nit. REQUEST_CHANGES is the
+  // one event that stops a merge; it needs a finding that earns it.
+  if (event === "REQUEST_CHANGES") {
+    const outbound = approved.flatMap(outboundFindings);
+    const blocking = outbound.filter((f) => SEVERITY_RANK[f.severity ?? "info"]! >= SEVERITY_RANK.high!);
+    if (blocking.length === 0) {
+      const highest = outbound.reduce(
+        (acc, f) => (SEVERITY_RANK[f.severity ?? "info"]! > SEVERITY_RANK[acc]! ? (f.severity ?? "info") : acc),
+        "info" as string,
+      );
+      return {
+        ok: false,
+        reason:
+          `Refusing to post a REQUEST_CHANGES: the highest severity your pair approved is "${highest}", and REQUEST_CHANGES blocks the author's merge. ` +
+          `Post these as event: "COMMENT" instead — the findings land as the same inline comments, without holding up their PR. ` +
+          `If something here really is high or critical, say so to your pair, raise the severity in a revision, and get their verdict on that.`,
+      };
+    }
+  }
+
+  return { ok: true, payload, event };
 }

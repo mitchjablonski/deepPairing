@@ -15,6 +15,7 @@ import { listSessions, searchAll, listAllDecisions, groupByFeature, normalizeFea
 import { ledgerDigest, invalidateLedgerDigestCache } from "./ledger-digest.js";
 import { detectAndRecordGateEscape } from "./preflight-residual.js";
 import { isCrossTerminalVerdictFlip } from "./verdict-guard.js";
+import { readPostedReviews, appendPostedReview, type PostedReviewRecord } from "./posted-reviews.js";
 import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, RenderFailureRecord, StatusTransitionReason , RecordDecisionParams } from "./store-interface.js";
 
 export type { DecisionRecord, PlanReviewRecord };
@@ -59,6 +60,11 @@ export class FileStore implements IStore {
   // (written only when non-empty, like render-failures.json). Session-scoped and
   // reloaded across runs so a request survives a daemon restart.
   private requests: Request[] = [];
+  // R1 (#279) — reviews this session has already POSTED to GitHub, backed by
+  // posted-reviews.json (written only on the first post, so a session that
+  // never posted has a byte-unchanged directory). Read by the authorization
+  // gate to refuse a duplicate post; never sent anywhere.
+  private postedReviews: PostedReviewRecord[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private sessionId: string;
   /**
@@ -215,6 +221,10 @@ export class FileStore implements IStore {
     // G1 (#198b) — rehydrate human-initiated requests (id-keyed, salvage-tolerant).
     this.requests = FileStore.salvageArray<Request>(
       `${this.sessionId}:requests.json`, this.loadJsonFile<unknown>(path.join(dir, "requests.json"), []), "id");
+    // R1 (#279) — rehydrate the posted-review record so the duplicate-post
+    // refusal survives a daemon restart (the round-13 repeat was five calls in
+    // one session, but a restart between them must not re-arm the post).
+    this.postedReviews = readPostedReviews(this.projectRoot, this.sessionId);
     // AA3 — rehydrate reviewLatencies. Pre-AA3 they were in-memory only,
     // dropped on every daemon idle-shutdown — review-latency metrics
     // would silently reset to zero and the engagement view in YourTaste
@@ -1774,6 +1784,43 @@ export class FileStore implements IStore {
     return true;
   }
 
+  // --- Posted reviews (R1 #279) ---
+
+  /**
+   * R1 (#279) — record that a review LANDED on a PR. Called only after `gh`
+   * returned success, by whichever door posted; the authorization gate reads
+   * it back through getFullState and refuses a second post to the same PR
+   * unless the human said "post again".
+   *
+   * Written straight through (writeJsonAtomic) rather than via the debounced
+   * flush, like annotations: the fact it records already happened in the
+   * outside world, so it must be on disk before the tool returns — a crash
+   * between the post and the flush would re-arm a duplicate.
+   */
+  recordPostedReview(record: PostedReviewRecord): void {
+    this.postedReviews = appendPostedReview(this.projectRoot, this.sessionId, record);
+  }
+
+  /**
+   * R1 (#279) F1 — RE-READ the sidecar, don't trust the cache.
+   *
+   * The idempotency store is shared by TWO processes with TWO separate
+   * FileStore instances over the same directory: the daemon holds a long-lived
+   * per-session FileStore (daemon/routes.ts), while `deeppairing post-pr-review`
+   * runs in its own process and constructs its own. When the CLI door posts, it
+   * appends to posted-reviews.json — but the daemon's in-memory `postedReviews`,
+   * loaded once at hydration, never learns of it, so a subsequent MCP post to
+   * the same PR would be authorized as a first post (a duplicate). The sidecar
+   * IS the shared source of truth the design intends; this makes the read honour
+   * that. Cheap (one small JSON read per authorize), and fail-open: a missing or
+   * unreadable file returns [], which can only ALLOW a duplicate, never refuse a
+   * legitimate post — while the verdict checks it feeds stay fail-closed.
+   */
+  getPostedReviews(): PostedReviewRecord[] {
+    this.postedReviews = readPostedReviews(this.projectRoot, this.sessionId);
+    return this.postedReviews;
+  }
+
   // --- Ledger digest (BB4) ---
 
   /**
@@ -1927,6 +1974,15 @@ export class FileStore implements IStore {
       // read them the same way. Empty by default → byte-compatible for sessions
       // that never used the composer.
       requests: this.requests,
+      // R1 (#279) — the posted-review record rides full-state hydration so BOTH
+      // doors (the MCP tool via getFullState, the CLI via loadSession) see the
+      // same "already posted" fact with no extra round-trip. Spread-when-present
+      // keeps the payload byte-identical for every session that never posted.
+      // Read through getPostedReviews (NOT the cached field): the daemon holds
+      // one long-lived FileStore per session, so a post made by the CLI's OWN
+      // separate FileStore lands in the sidecar the daemon's in-memory copy
+      // never saw — getPostedReviews re-reads it (R1 F1 cross-door fix).
+      ...(() => { const pr = this.getPostedReviews(); return pr.length > 0 ? { postedReviews: pr } : {}; })(),
       autonomyLevel: this.autonomyLevel,
       detailDensity: this.detailDensity,
       // Q2 — the cross-project publish opt-in rides full-state hydration so

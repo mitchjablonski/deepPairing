@@ -307,7 +307,13 @@ one case that closes without a *separate* debrief — its self-summarizing
   a complete review, and the commonest one); default `COMMENT`. It posts
   ONLY findings the human APPROVED, and refuses when their verdict isn't
   on record — the approval in the companion UI is the authorization, and
-  there is no flag that bypasses it.
+  there is no flag that bypasses it. Three of those rules are CHECKED, not
+  trusted: REQUEST_CHANGES requires a high/critical approved finding,
+  APPROVE requires their approval on every live external changeset (and is
+  refused outright if they rejected one), and a second post to the same PR
+  is refused with the first one's URL unless they ask for a re-post
+  (`repost: true`). Findings marked `audience: "internal"` never leave the
+  machine.
 - **`answer_question`** — when `check_feedback` surfaces a ❓QUESTION, use
   this tool (not a plain comment) so the reply gets linked to the original
   question.
@@ -349,8 +355,12 @@ Run the `/deeppairing:review-pr` arc (that command carries the detail):
    **Then sweep the ledger:** `recall` the PR's key concepts, and where a
    recorded stance matches something the PR introduces, say it outright —
    "this PR introduces <concept>, which you rejected on <date>:
-   '<reason>'". Quote the human's words; let them decide if it still
-   applies to someone else's codebase.
+   '<reason>'". Quote the human's words TO THE HUMAN, and mark that
+   finding `audience: "internal"`: their ledger is their private history
+   and must never reach a stranger's PR (internal findings are excluded
+   from every posted payload). If they decide the point still stands,
+   argue it afresh from the author's own code as a normal postable
+   finding.
 5. **Discuss — poll `check_feedback` in a loop.** This is the work, not a
    formality. When the human comments on a hunk or asks a question, go
    and LOOK: trace callers, read the surrounding code, run a cheap safe
@@ -367,9 +377,10 @@ Run the `/deeppairing:review-pr` arc (that command carries the detail):
    `/deeppairing:share` as a review record.
    The tool verifies the human's recorded verdicts before it calls GitHub
    and refuses otherwise — an unruled findings artifact blocks the post
-   (it names which), rejected findings are excluded, and a bare `APPROVE`
-   needs their approval on the external changeset. There is no override:
-   if it refuses, go and get the verdict.
+   (it names which), rejected and internal-audience findings are excluded,
+   an `APPROVE` needs their approval on every live external changeset, and
+   the same PR is never posted to twice. There is no override: if it
+   refuses, go and get the verdict.
 
 The human never needs to know the tool names. The outcome is:
 *understand the PR together → decide together → post what you both

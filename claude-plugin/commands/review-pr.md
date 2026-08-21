@@ -66,10 +66,23 @@ takes. (`mode: "any"` searches my cross-project stances *and* this project's
 past sessions; both branches return the stance with its verdict and date.)
 
 If something in this PR matches a stance I've already recorded, that is a
-finding, and say it *explicitly* rather than paraphrasing it as your own
-opinion:
+finding **for me, not for them** — `audience: "internal"`, always. My ledger is
+my own history: what I turned down in my codebase last March is nobody else's
+business, and it has no place on a stranger's PR. Findings marked internal show
+up on the review surface for me and are excluded from anything posted, so mark
+it and then say it *explicitly* rather than paraphrasing it as your own opinion:
 
 > This PR introduces **<concept>**, which you rejected on <date>: "<my reason>".
+
+Quote my stances **to me, never to the PR**. If I decide the point still stands
+here, we make it in the author's terms — a fresh `postable` finding that argues
+it from *their* code, with no reference to my ledger, my dates, or my other
+projects.
+
+If `present_changeset` came back with an advisory (it weighs my recorded taste
+against the PR's diff now, without ever blocking the display of someone else's
+code), that is the same thing arriving from the other direction — same rule,
+same `audience: "internal"`.
 
 Copy the verdict and the date **straight from what `recall` returned** — it
 gives you `rejected on 2026-05-01: "…"` or `approved on 2026-08-11: "…"`. Never
@@ -119,16 +132,29 @@ calls out to GitHub and refuses if they aren't there, so:
 - a findings artifact I never ruled on **blocks the post** — the tool names it;
   go get my verdict rather than trying to route around it;
 - findings I rejected are excluded automatically;
+- findings marked `audience: "internal"` never post — not as comments, not in
+  the body;
 - to drop one finding but keep the rest, `revise_artifact` — rejection is
   per-artifact, so a dead finding sitting in a live artifact still posts;
-- an `APPROVE` with no comments needs me to have approved the PR changeset in
-  the UI. That approval *is* the authorization.
+- if I change my mind about a whole findings artifact I already approved, say
+  so and `revise_artifact` it with `mode: "retract"` — in a PR-review session
+  that un-arms it, and it can't be posted after that;
+- an `APPROVE` needs me to have approved the PR changeset in the UI — **every**
+  changeset for this PR if you split it, and not if I rejected one. That
+  approval *is* the authorization.
 
-Event mapping:
-- `REQUEST_CHANGES` — only if a surviving finding is **high or critical**.
+Event mapping (the first two are enforced, not advisory):
+- `REQUEST_CHANGES` — only if a surviving finding is **high or critical**. The
+  tool refuses otherwise and tells you the highest severity I approved; don't
+  re-rate a finding to get past it, just post a `COMMENT`.
 - `APPROVE` — if I read it and had nothing to flag. That's a real outcome; don't
   invent findings to avoid it.
 - `COMMENT` — everything else.
+
+**It posts once.** A landed review is recorded, and a second call for the same
+PR refuses with the URL of the first — re-posting notifies the author again.
+Give me the URL instead. If I say "post it again" in as many words, re-issue
+with `repost: true`; my word is the only thing that sets it.
 
 Report the review URL. Then offer `/deeppairing:share` — the session makes a
 decent review record for the author or for me later, and it's one call.

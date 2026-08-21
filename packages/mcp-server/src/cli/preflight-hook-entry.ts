@@ -56,7 +56,9 @@ process.stdin.on("end", () => {
     const ev = JSON.parse(input || "{}");
     const toolName = ev.tool_name || "";
     const toolInput = ev.tool_input || ev.input || {};
-    const projectRoot = process.env.CLAUDE_PROJECT_DIR || ev.cwd || process.cwd();
+    // R1 (#279) — one documented precedence in every hook lane:
+    // CLAUDE_PROJECT_DIR > DEEPPAIRING_PROJECT_ROOT > the event's cwd > ours.
+    const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || ev.cwd || process.cwd();
     if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit") {
       process.exit(0);
     }
