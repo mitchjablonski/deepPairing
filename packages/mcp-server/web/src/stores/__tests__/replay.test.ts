@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { useReplayStore } from "../replay";
+import { useReplayStore, replayRehydrateSettled } from "../replay";
 import type { Artifact, Comment } from "@deeppairing/shared";
 
 function artifact(id: string, createdAt: string, overrides: Partial<Artifact> = {}): Artifact {
@@ -43,16 +43,21 @@ const sessionState = {
   ],
 };
 
-beforeEach(() => {
+beforeEach(async () => {
   // The replay store's initial state is re-seeded per test.
   useReplayStore.getState().exitReplay();
+  // exitReplay's store rehydrate is a dynamic import; let it settle before the
+  // test body runs, so it can never still be loading when the environment is
+  // torn down (EnvironmentTeardownError — a CI-only, scheduling-sensitive flake).
+  await replayRehydrateSettled();
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
     ok: true,
     json: async () => ({ annotations: [] }),
   }));
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await replayRehydrateSettled();
   vi.unstubAllGlobals();
 });
 
@@ -141,6 +146,7 @@ describe("replay store — exitReplay", () => {
   it("clears all replay state", async () => {
     await useReplayStore.getState().enterReplay("past_session", sessionState);
     useReplayStore.getState().exitReplay();
+    await replayRehydrateSettled();
     const s = useReplayStore.getState();
     expect(s.active).toBe(false);
     expect(s.sessionId).toBeNull();

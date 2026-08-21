@@ -1125,11 +1125,16 @@ function confirmPrompt(question: string, defaultYes = false): Promise<boolean> {
 /**
  * `deeppairing export <format> [sessionId]` — print a session export to
  * stdout so users can pipe it into clipboard / file / PR tooling.
- *   format: full | pr-description | pr-comments | adr | replay | learnings
+ *   format: full | pr-description | pr-comments | adr | replay | learnings | html
  *   sessionId: defaults to the most recent session in this project
+ *
+ * Q5 — `html` is the odd one out and deliberately so: it WRITES a
+ * self-contained shareable page to `.deeppairing/exports/` and prints the
+ * path, because a whole HTML page on stdout is not something anyone wants to
+ * pipe. `--redact-code` drops the code bodies (file names + shapes stay).
  */
-async function exportCmd(format: string, sessionId?: string) {
-  const validFormats = ["full", "pr-description", "pr-comments", "adr", "replay", "learnings"];
+async function exportCmd(format: string, sessionId?: string, opts: { redactCode?: boolean } = {}) {
+  const validFormats = ["full", "pr-description", "pr-comments", "adr", "replay", "learnings", "html"];
   if (!validFormats.includes(format)) {
     console.error(`  ${red("✗")} Unknown format "${format}". Valid: ${validFormats.join(", ")}`);
     process.exit(1);
@@ -1166,6 +1171,57 @@ async function exportCmd(format: string, sessionId?: string) {
   if (!chosenSessionId) {
     console.error(`  ${red("✗")} No sessionId provided and no sessions found. Start a deepPairing session first.`);
     process.exit(1);
+  }
+
+  // Q5 — the shareable page. Same daemon-first / filesystem-fallback shape as
+  // the markdown formats; the difference is the delivery (a file + its path).
+  if (format === "html") {
+    const includeCode = !opts.redactCode;
+    const { writeSessionHtml } = await import("../export/html-export.js");
+    const generatedAt = new Date().toISOString();
+    let html: string | null = null;
+    try {
+      const res = await fetch(
+        `http://localhost:${port}/api/export.html?includeCode=${includeCode ? "1" : "0"}`,
+        { signal: AbortSignal.timeout(5000), headers: { "X-Session-Id": chosenSessionId } },
+      );
+      if (res.ok) html = await res.text();
+    } catch {
+      // daemon unreachable — assemble it locally below
+    }
+    if (html === null) {
+      const { FileStore } = await import("../store/file-store.js");
+      const { assembleSessionHtml } = await import("../export/html-export.js");
+      try {
+        const state = FileStore.loadSession(cwd, chosenSessionId);
+        html = await assembleSessionHtml(state as any, {
+          includeCode,
+          projectRoot: cwd,
+          version: SERVER_VERSION,
+          generatedAt,
+        });
+      } catch (err: any) {
+        console.error(`  ${red("✗")} Failed to load session "${chosenSessionId}": ${err?.message ?? err}`);
+        process.exit(1);
+      }
+    }
+    const file = writeSessionHtml(cwd, chosenSessionId, html!, generatedAt);
+    console.log(file);
+    // F6 — warn-only secret check. stdout stays JUST the path (it is piped);
+    // the warning goes to stderr where a human reads it.
+    try {
+      const { FileStore: FS } = await import("../store/file-store.js");
+      const { secretWarningFor } = await import("../export/html-export.js");
+      const warning = secretWarningFor(FS.loadSession(cwd, chosenSessionId));
+      if (warning) console.error(`  ${yellow("⚠")} ${warning}`);
+    } catch {
+      /* the check must never fail the export */
+    }
+    console.error(
+      `  ${dim("Self-contained page — open it in a browser or send the file to anyone.")}\n` +
+      `  ${dim("For a page a stranger can follow, ask Claude to run /deeppairing:share (it composes the narrative).")}`,
+    );
+    return;
   }
 
   try {
@@ -1893,6 +1949,8 @@ ${helpInvocations}
     dp list                                List every live deepPairing daemon (project ↔ URL)
     dp export <format>                     Print a session as markdown
                                            (format: full | pr-description | pr-comments | adr | replay | learnings)
+    dp export html [--redact-code]         Write a self-contained shareable HTML page to .deeppairing/exports/
+                                           and print its path (--redact-code drops the code bodies)
     dp post-pr-review <pr>                 Post the pairing session's findings as inline comments
                                            on a GitHub PR. Requires \`gh\` CLI installed + authed.
     dp --help                              Show this help message
@@ -1927,12 +1985,15 @@ ${helpInvocations}
   });
 } else if (cmd === "export") {
   const format = args[1];
-  const sessionId = args[2];
+  // Q5 — `--redact-code` is html-only (the other formats never carried code
+  // bodies through this path); positional sessionId skips any flag.
+  const redactCode = args.includes("--redact-code");
+  const sessionId = args.slice(2).find((a) => !a.startsWith("-"));
   if (!format) {
     console.error(`  ${red("✗")} export requires a format. Run '${cliInvocation("--help")}'.`);
     process.exit(1);
   }
-  exportCmd(format, sessionId).catch((err) => {
+  exportCmd(format, sessionId, { redactCode }).catch((err) => {
     console.error(`  ${red("✗")} export failed: ${err?.message ?? err}`);
     process.exit(1);
   });
