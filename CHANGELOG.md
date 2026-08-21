@@ -1,5 +1,144 @@
 # Changelog
 
+## v0.1.35 — 2026-08-21
+
+The trustworthy release. Round 12 asked one question — **do we deliver what we claim?** — and
+the answer came back uneven. The guardrail table said it was derived and wasn't, so the backstop
+was silently off for the paths people actually write. The cross-project nudge computed its
+advisory and then returned an empty string to the agent. A real preflight block reached **no
+client at all**. `check_feedback` printed a send-back, printed an unanswered question, and then
+said "you may proceed." The PR-review post gate was **a sentence in a markdown file** guarding a
+write into someone else's repo. Every one of those is the same defect: a promise the code didn't
+keep. So this release makes the guarantees **mechanical** — one rule table, a store-verified post
+gate, nudges that arrive, blocks that persist — and adds the two things your pair asked for
+directly: **a session story you can hand a colleague**, and **PR review in tandem**. The Q-batch
+is six.
+
+### Added
+- **Share the session — a self-contained page a colleague can read.** `html` joins the export
+  formats: **one file, no server, no account**, that opens off `file://` with **zero external
+  requests**. The **narrative leads** — `/deeppairing:share` has your pair compose the story for
+  someone who wasn't there, quoting your reasons and naming what you rejected — and the timeline
+  runs beneath it with findings and their `file:line` evidence, decision cards carrying **every
+  option** and your reason on the chosen one, spec requirements, plan steps, and changeset diffs
+  with the comment threads anchored under the file they landed on. **Gate moments render only
+  what the store actually records** — no invented beats. **Rejected work is struck through with
+  its verdict and reason**, never silently shipped and never silently dropped. Sharing hygiene:
+  home directories collapse to `~/` **wherever they sit** (WSL paths included), `--redact-code`
+  strips code bodies out of diffs *and* out of comments and narratives, a **meta CSP** states the
+  no-network property in the document itself, and a **warn-only secret scan** names the shape and
+  the field before you send it — never the value, never blocking (PR #273).
+- **Review a PR in tandem — their diff on the rich surface, your taste on their code.**
+  `/deeppairing:review-pr` runs the arc you asked for: **orient** (what it does, how it fits,
+  blast radius) → **the PR's diff as an external changeset** on the real review surface, with
+  walk-me-through per hunk → **findings with evidence**, plus a **ledger sweep** against the PR
+  ("this introduces X, which you rejected on `<date>`") → **discuss** → post **only on your
+  word**. `reviewIntent: "external"` changes three things in code, not in prose: the debrief gate
+  stops demanding a walk-through of code you never wrote, the rejected-approach block can no
+  longer refuse to *display* a colleague's PR (the stance surfaces **outward, as a finding**
+  instead), and the UI banners the artifact so "Approve" can't read as "ship it" (PR #276).
+
+### Changed
+- **The post gate is code, not prose.** Posting a review is authorized by **your recorded
+  verdicts in the store**: a findings artifact still in draft/reviewing/revised **refuses the
+  whole post and names itself** (a concern that never left your laptop is the worse failure),
+  rejected and superseded findings are dropped silently because that *is* your verdict, and a
+  bare **APPROVE requires that you approved the external changeset** — the PR on the review
+  surface. Fail closed, no force flag, no env bypass, and **both doors** (the MCP tool and the
+  CLI) go through the one authorization. Proved by mutation: strip every gate sentence out of the
+  command file and the post is still impossible (PR #276).
+- **The moat is visible and reachable.** The **cross-project nudge now reaches the agent** — the
+  bootstrap guard keyed on local stance count, so a fresh project (exactly the cross-project
+  case) computed the advisory and swallowed it. Cross-project publishing gets a **first-reject
+  card and a settings switch** (default still **off**), with consent copy that names the **real
+  payload** — the stance, your reason, this project's folder name — and discloses the caveat the
+  mechanism can't remove. Guardrail asks render **amber "asked"**, not green "passed". Minimal
+  mode's policy string now names the architectural floor the README promises, the README hero
+  shows the gate, and every cross-project claim in the docs is **conditional-honest** (PR #274).
+- **The ask is written in your voice.** Guardrail asks lead with a human sentence and put the
+  greppable escalation token and the agent instruction on a final bracketed line. Decline-then-
+  retry **can't** be mechanized — PreToolUse never learns the answer — so `SECURITY.md`,
+  `SKILL.md` and the hint say so plainly instead of implying a guarantee (PR #272).
+- **`SECURITY.md` truth pass.** "Rate-limited" became the per-POST size cap it actually is, the
+  stale `src/http/server.ts` citation is gone, the `X-Project-Hash` exemptions are **enumerated
+  (five, not four)**, and the atomic-write claim was made true by fixing `init.ts`'s hand-rolled
+  fixed-name `.tmp` (PR #272).
+
+### Fixed
+- **One rule table — the guardrail drift class is structurally gone.** The interpolated
+  `GUARDRAIL_PATH_PREFILTER` claimed to be derived "by construction" and wasn't:
+  `Dockerfile-prod`, `docker-compose-prod.yml`, `config/credentials-dev.yml` and
+  `prod.tfvars.json` failed the prefilter while the rules guarded them — and because the hook's
+  early exit **was** the prefilter, the backstop was **silently off** for those paths in every
+  ledger-free project. The prefilter is **deleted**, not re-derived; one table
+  (`src/guardrail-rules.ts`) now serves the hook core, both hook entries, project-signals and
+  setup. Guardrail paths match at **any depth** (`packages/api/migrations/*` never fired before)
+  with a **vendored/fixture/build-output exclusion list** — measured on a hostile 20-write
+  session: **9 asks with 8 spurious → 2 asks, 0 spurious, 0 real ones missed**. Both recency
+  windows are **bounded on both sides** with 5-minute skew tolerance, so a future-dated artifact
+  can't license forever. An **all-corrupt** session store reports unreachable → silent, exactly as
+  `SECURITY.md` always promised (corrupt beside healthy still asks). And `hooks-state.json` writes
+  are **atomic and lock-serialized** across all four writers — 8 real concurrent hook processes are
+  pinned — with a corrupt read **copied aside before reset** rather than discarding your fire log
+  (PR #272).
+- **A real block persists, and reaches a client at all.** Preflight blocks are written to
+  `.deeppairing/preflight-blocks.json`, served over the API, and **hydrate the block log on page
+  load** with an unread marker. Production blocks previously reached **no client** — standalone's
+  broadcast is a no-op — and are now routed to the daemon explicitly. Also: the block message no
+  longer contradicts itself by saying both "you previously rejected this" and "you have no local
+  stance", and a **demo session can't burn** your one-time consent card (PR #274).
+- **The payload agrees with itself.** `check_feedback`'s suggested action is now assembled at the
+  **bottom** of the handler from the same state as its body — send-backs, carried-over questions,
+  not-approved plan verdicts, still-open decisions, session directives, suggested edits and render
+  failures all contribute a clause, and **"you may proceed" is a fallback, never a base string**
+  obligations get bolted onto. `structuredContent.status` derives from that same predicate, so the
+  contradiction can't hide inside one object. Obligations **decay**: a plan verdict speaks only
+  while its artifact is open (the old clause blocked **forever** after any request-changes), and a
+  send-back reads durable **state** rather than a one-poll event. TO READ, plan verdicts and
+  pending decisions get **structured mirrors**; the plan-verdict **N+1 is gone** (3 reads → 0, flat
+  as N grows, capped by a test parameterized on plan count); and one shared
+  `isClosedArtifactStatus` replaces three divergent copies (PR #275).
+- **The citation dates are honest.** "You rejected this on `<date>`" now dates from the **instance
+  that grounds the stance** — `lastSeenAt` advanced on *any* touch, so the sweep could cite the day
+  you **approved** something as the day you rejected it. A genuinely mixed history shows both sides
+  in order; a malformed timestamp degrades to "recorded earlier" rather than asserting a date. The
+  same bug had a third renderer — the first-call hint quoted your **approval** as the reason to
+  avoid something, in the surface the agent reads first every session (PR #276).
+- **`post_pr_review`, executed for the first time.** Against a real fake `gh` on PATH: an
+  **uncaught EPIPE crashed the MCP server** on every `gh` failure path (the symptom was your pair
+  losing its connection, not a failed post), a **bare APPROVE was refused** by the empty-comments
+  guard — the commonest outcome of being pinged on a PR — and `401 Bad credentials` fell through
+  as a raw HTTP error instead of "run `gh auth login`" (PR #276).
+- **The diagram well stops swallowing the page — and the composer.** A 13-node flowchart rendered
+  a 1954px SVG with only a max-*width* cap, so IMPLEMENTATION STEPS started three screens down and
+  the two controls that fix an oversized diagram sat **1416px below the fold**. The well is capped
+  at **60vh** with internal scroll and the controls moved **above** the canvas (well 1353 → 540px;
+  Expand/View source 1619 → 262px). Region commenting is fully functional inside the scrollport:
+  the canvas-anchored overlay stays in the well while the **chrome portals below it**, the popover
+  is clamped to the **scrollport** rather than the content box, and `scroll` joins the measure
+  listeners — the ≤900px block composer went from **0% visible while holding focus** (#185's
+  founding bug, re-created worse) to **100%, with Send and Cancel in view** (PR #277).
+- **File basenames survive truncation.** A plain tail-first `truncate` in a 240px rail made every
+  row read "packages/mc…" — 18–29% of each path. The picker reuses `FilePathLabel`, so the file's
+  **own name leads every row** instead of the prefix all three shared (PR #277).
+- **Real contrast fixes — the readings that mattered were the alpha ones.** Round 12's token
+  measurements were an **instrument artefact** (sampled mid-entrance-fade); recomputed with alpha
+  compositing, the base tokens pass and the defects are the **alpha modifiers** plus one literal
+  `text-white`: the amber dismiss chip (3.13 → 5.85), the preflight breadcrumb (3.94 → 5.99), the
+  active triage chip (2.24 → 6.31, via a token that flips with the theme), plus the CRITICAL badge
+  and the spec Objective heading, sub-AA in **both** themes. `token-contrast.test.ts` gains an
+  alpha-compositing section — the old matrix only ever measured opaque pairs, which is why a lane
+  made of `/50` washes was never audited (PR #277).
+- **Real headings and landmarks, now actually enforced.** `<main>` was the app's only landmark and
+  the heading outline skipped from h1 to h3 with section labels as styled divs. Fixed additively
+  (every className byte-identical) — and the reason the suite couldn't see any of it: axe files
+  `heading-order`, `landmark-one-main`, `landmark-unique`, `page-has-heading-one` and `region`
+  under **best-practice**, not under a WCAG tag, so the "zero disabled rules" net had a hole in it.
+  Those rules are now selected **by name** and asserted on violations, not impact. The block hero's
+  🛡, walk-me-through's 🧭 and the comment 💬 become **inline SVG** — tofu on the block moment is
+  the product's loudest claim rendering as a blank square — and the unlabeled glyph controls get
+  accessible names (PR #277).
+
 ## v0.1.34 — 2026-08-17
 
 The kept-promises release. Round 11 went looking for the middle gear v0.1.33 promised and
