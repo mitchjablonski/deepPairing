@@ -37,7 +37,11 @@ describe("GET /api/export.html", () => {
     const res = await app.request("/api/export.html");
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toContain("text/html");
-    expect(res.headers.get("Content-Disposition")).toMatch(/attachment; filename="session-test_session-\d{4}-\d{2}-\d{2}\.html"/);
+    // R3 (adversarial F7) — the download name must NOT carry the session id
+    // (= the exporter's local folder name), because that name travels on the
+    // email attachment. A one-way hash keeps per-session uniqueness.
+    expect(res.headers.get("Content-Disposition")).toMatch(/attachment; filename="deeppairing-session-\d{4}-\d{2}-\d{2}-[0-9a-f]{8}\.html"/);
+    expect(res.headers.get("Content-Disposition")).not.toContain("test_session");
     const html = await res.text();
     expect(html.startsWith("<!doctype html>")).toBe(true);
     expect(html).toContain("Queue audit");
@@ -117,7 +121,10 @@ describe("R3 — GET /api/export.html warns about secrets", () => {
     const warning = res.headers.get("X-DeepPairing-Secret-Warning") ?? "";
     expect(warning).toContain("AWS access key id");
     expect(warning).toContain("GitHub personal access token");
+    // R3 (adversarial F4) — the field prefix names the artifact + the leaf.
     expect(warning).toContain("findings[0].evidence[0].snippet");
+    // R3 (adversarial F4) — the OCCURRENCE count (two distinct leaks here).
+    expect(warning).toContain("2 matches found");
     expect(warning).not.toContain("AKIAIOSFODNN7EXAMPLE");
     expect(warning).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz012345");
     expect(warning).toMatch(/^[\x20-\x7E]+$/);
@@ -301,8 +308,17 @@ describe("readGuardrailFires", () => {
 });
 
 describe("htmlExportFileName", () => {
-  it("is stable per session per day and filesystem-safe", () => {
-    expect(htmlExportFileName("s_1", "2026-08-19T12:00:00.000Z")).toBe("session-s_1-2026-08-19.html");
-    expect(htmlExportFileName("a/../b", "2026-08-19T12:00:00.000Z")).toBe("session-a____b-2026-08-19.html");
+  // R3 (adversarial F7) — non-identifying, stable per session per day.
+  it("carries no session id, is stable per session per day, and is filesystem-safe", () => {
+    const a = htmlExportFileName("session_myfolder_ab12cd34", "2026-08-19T12:00:00.000Z");
+    expect(a).toMatch(/^deeppairing-session-2026-08-19-[0-9a-f]{8}\.html$/);
+    expect(a).not.toContain("myfolder");
+    expect(a).not.toContain("session_");
+    // Same session + day → same name (overwrite, not litter).
+    expect(htmlExportFileName("session_myfolder_ab12cd34", "2026-08-19T23:00:00.000Z")).toBe(a);
+    // Different session → different token.
+    expect(htmlExportFileName("session_other_zz99", "2026-08-19T12:00:00.000Z")).not.toBe(a);
+    // No path separators can survive into the name.
+    expect(htmlExportFileName("a/../b", "2026-08-19T12:00:00.000Z")).toMatch(/^deeppairing-session-2026-08-19-[0-9a-f]{8}\.html$/);
   });
 });

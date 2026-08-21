@@ -16,6 +16,7 @@
  *   - `writeSessionHtml` — deterministic `.deeppairing/exports/` destination,
  *     so "tell the human the file path" is a real path every time.
  */
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { Artifact } from "@deeppairing/shared";
@@ -145,25 +146,29 @@ export interface ExportScanOptions {
  *  pattern (first field to hit a pattern wins, as everywhere else). */
 export function scanExportForSecrets(state: unknown, options: ExportScanOptions = {}): SecretMatch[] {
   const s = (state ?? {}) as ExportScanInput;
-  const seen = new Set<string>();
   const out: SecretMatch[] = [];
+  // R3 (adversarial F4) — NO global per-pattern dedup across sources. The old
+  // `seen` set collapsed 40 distinct AWS keys in 40 artifacts to ONE match, so
+  // the banner said "matched 1 credential-shaped value" while all 40 were on the
+  // page and a reader who fixed the one named field shipped the other 39.
+  // scanContentForSecrets still dedupes WITHIN one artifact's content (one
+  // warning per pattern per artifact — a repeated key isn't 5 warnings), but
+  // every artifact/comment/field that hits is its own entry now, and the field
+  // prefix names the artifact by INDEX + TITLE so each is findable.
   const take = (matches: SecretMatch[], prefix: string): void => {
-    for (const m of matches) {
-      if (seen.has(m.pattern)) continue;
-      seen.add(m.pattern);
-      out.push({ ...m, field: m.field ? `${prefix}.${m.field}` : prefix });
-    }
+    for (const m of matches) out.push({ ...m, field: m.field ? `${prefix}.${m.field}` : prefix });
   };
   try {
-    for (const a of s.artifacts ?? []) {
-      if (!a || typeof a !== "object") continue;
+    (s.artifacts ?? []).forEach((a, i) => {
+      if (!a || typeof a !== "object") return;
+      const title = typeof a.title === "string" && a.title.trim() ? ` "${a.title.trim()}"` : "";
       // Rooted at `content`, exactly as the store roots it, so a field path in
       // an export warning and a field path in a stored SecretWarning name the
-      // same thing.
-      take(scanContentForSecrets(a.content), String(a.type ?? "artifact"));
-    }
+      // same leaf. The `#n "title"` prefix makes 40 hits 40 findable places.
+      take(scanContentForSecrets(a.content), `${a.type ?? "artifact"} #${i + 1}${title}`);
+    });
     (s.comments ?? []).forEach((c, i) => {
-      if (typeof c?.content === "string") take(scanForSecrets(c.content), `comment[${i}]`);
+      if (typeof c?.content === "string") take(scanForSecrets(c.content), `comment #${i + 1}`);
     });
     if (typeof options.narrative === "string" && options.narrative) {
       take(scanForSecrets(options.narrative), "narrative");
@@ -175,6 +180,25 @@ export function scanExportForSecrets(state: unknown, options: ExportScanOptions 
   return out;
 }
 
+/** R3 (adversarial F4) — the OCCURRENCE count, distinct from the label list.
+ *  The banner's headline number must count every place a secret appears (40),
+ *  while its list of names stays deduped by label (`secretLabelsOf`). */
+export function secretCountOf(matches: SecretMatch[]): number {
+  return matches.length;
+}
+
+/** R3 (adversarial F6) — a match whose ONLY home on the page is a code body
+ *  (an evidence snippet, a diff line, before/after). With `includeCode: false`
+ *  those bodies are dropped, so a "search the page for it" instruction would be
+ *  a lie — but a secret in the NARRATIVE or a COMMENT (prose, always rendered)
+ *  survives redaction and must still be listed. */
+export function isCodeBearingField(field: string | undefined): boolean {
+  if (!field) return false;
+  if (field.startsWith("narrative") || field.startsWith("comment")) return false;
+  return /\.(snippet|content|before|after|preview|replacementText|code)\b/.test(field) ||
+    /\.(snippet|content|before|after|preview|replacementText|code)$/.test(field);
+}
+
 /** The distinct human-readable labels of a scan, for the page banner and the
  *  HTTP header. Labels only — never a value, never a line. */
 export function secretLabelsOf(matches: SecretMatch[]): string[] {
@@ -184,13 +208,13 @@ export function secretLabelsOf(matches: SecretMatch[]): string[] {
 export function secretWarningFor(state: unknown, options: ExportScanOptions = {}): string | null {
   const matches = scanExportForSecrets(state, options);
   if (!matches.length) return null;
-  const shown = matches.slice(0, 3).map((m) => {
+  const shown = matches.slice(0, 5).map((m) => {
     const where = m.field ? ` in \`${m.field}\`${m.line != null ? ` (line ${m.line})` : ""}` : "";
     return `${m.label}${where}`;
   });
   const more = matches.length > shown.length ? ` (+${matches.length - shown.length} more)` : "";
   return (
-    `⚠️ Possible secret in this export — review before sharing: ${shown.join("; ")}${more}. ` +
+    `⚠️ Possible secret in this export — ${matches.length} match${matches.length === 1 ? "" : "es"} found, review before sharing: ${shown.join("; ")}${more}. ` +
     `The value itself is not printed here. This page is meant to leave the building, so check it first.`
   );
 }
@@ -208,11 +232,11 @@ export function secretWarningFor(state: unknown, options: ExportScanOptions = {}
  */
 export function secretWarningHeader(matches: SecretMatch[]): string | null {
   if (!matches.length) return null;
-  const parts = matches.slice(0, 5).map((m) => (m.field ? `${m.label} in ${m.field}` : m.label));
+  const parts = matches.slice(0, 8).map((m) => (m.field ? `${m.label} in ${m.field}` : m.label));
   const more = matches.length > parts.length ? ` (+${matches.length - parts.length} more)` : "";
-  const raw = `Possible secret in this page - review before sharing: ${parts.join("; ")}${more}`;
+  const raw = `Possible secret in this page - ${matches.length} match${matches.length === 1 ? "" : "es"} found, review before sharing: ${parts.join("; ")}${more}`;
   const ascii = raw.replace(/[^\x20-\x7E]/g, " ").replace(/\s+/g, " ").trim();
-  return ascii.slice(0, 900) || null;
+  return ascii.slice(0, 990) || null;
 }
 
 export interface AssembleHtmlOptions extends HtmlExportOptions {
@@ -236,13 +260,19 @@ export async function assembleSessionHtml(
   // R3 — the scan runs HERE, in the one function all three surfaces share, so
   // the banner is a property of the PAGE rather than of whichever caller
   // remembered to ask for it. `secretLabels` passed explicitly by a caller wins
-  // (the tool already has the matches in hand and needn't scan twice).
-  const secretLabels =
-    renderOptions.secretLabels ??
-    secretLabelsOf(scanExportForSecrets(enriched, { narrative: renderOptions.narrative }));
+  // (the tool already has the matches in hand and needn't scan twice); its
+  // `secretCount` rides along so the headline number is the occurrence count.
+  let secretLabels = renderOptions.secretLabels;
+  let secretCount = renderOptions.secretCount;
+  if (secretLabels === undefined) {
+    const matches = scanExportForSecrets(enriched, { narrative: renderOptions.narrative });
+    secretLabels = secretLabelsOf(matches);
+    secretCount = secretCountOf(matches);
+  }
   return formatSessionHtml(enriched, {
     ...renderOptions,
     secretLabels,
+    secretCount,
     projectName: renderOptions.projectName ?? (projectRoot ? path.basename(projectRoot) : undefined),
   });
 }
@@ -251,9 +281,20 @@ export async function assembleSessionHtml(
  *  re-exporting the same session on the same day overwrites rather than
  *  littering the directory. */
 export function htmlExportFileName(sessionId: string, generatedAt = new Date().toISOString()): string {
-  const safeId = String(sessionId).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 60) || "session";
+  // R3 (adversarial F7) — the filename must NOT carry the session id. The id is
+  // `session_<local folder name>_<hash>` — a directory off the exporter's disk —
+  // and this string becomes the browser's Content-Disposition, i.e. the name on
+  // the email attachment when the page leaves the building. R3 had already
+  // stripped the id from the page's masthead for exactly this reason, so echoing
+  // it in the download name would reopen the leak one layer down (worse than the
+  // pre-R3 anonymous `deeppairing-session.html`, which at least didn't leak).
+  //
+  // A short, one-way hash of the id keeps per-session uniqueness (so
+  // re-exporting overwrites rather than littering, and two sessions the same day
+  // don't collide) WITHOUT being reversible to the folder name.
+  const token = crypto.createHash("sha1").update(String(sessionId)).digest("hex").slice(0, 8);
   const day = generatedAt.slice(0, 10);
-  return `session-${safeId}-${day}.html`;
+  return `deeppairing-session-${day}-${token}.html`;
 }
 
 /** Write the page under `.deeppairing/exports/` and return its absolute path. */

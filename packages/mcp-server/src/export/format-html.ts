@@ -58,6 +58,7 @@ import {
   coerceCodeChangeContent,
 } from "@deeppairing/shared";
 import { isNeverApprovedStatus, isNotShippedStatus } from "@deeppairing/shared";
+import { DEFAULT_SCAN_DEPTH } from "../secret-scan.js";
 import { buildTimeline, type TimelineEvent } from "../replay/timeline.js";
 import type { DecisionRecord, PlanReviewRecord } from "../store/store-interface.js";
 
@@ -144,6 +145,10 @@ export interface HtmlExportOptions {
    * Absent/empty → no banner, and the page is byte-identical to a clean run.
    */
   secretLabels?: string[];
+  /** R3 (adversarial F4) — the OCCURRENCE count for the banner headline (every
+   *  place a secret appears), distinct from the deduped `secretLabels` list.
+   *  Defaults to `secretLabels.length` when absent. */
+  secretCount?: number;
 }
 
 // --- Size sanity ------------------------------------------------------------
@@ -219,17 +224,48 @@ export function sanitizePath(raw: unknown, projectRoot?: string): string {
   return p;
 }
 
-/** The absolute-path shapes whose leading segments carry a username. Anchored
- *  (see sanitizePath) so a relative path containing a `home/` directory is
- *  left exactly as the author wrote it. */
-const HOME_PREFIX = /^(?:[A-Za-z]:)?(?:\/(?:mnt|cygdrive)\/[A-Za-z])?\/(?:home|Users)\/[^/]+\//i;
+/** The absolute-path shapes whose leading segments carry a username, for a
+ *  path FIELD. sanitizePath normalizes backslashes to `/` before this runs, so
+ *  it only ever sees forward slashes. Anchored, so a RELATIVE path containing a
+ *  `home/` directory — `app/views/home/partials/index.erb` — is left exactly as
+ *  written.
+ *
+ *  R3 (adversarial F2) — the prefix now covers every absolute shape, not just
+ *  unix/mount: a drive letter (`C:/Users/<u>/`), and a UNC authority
+ *  (`//fileserver/share/Users/<u>/`, `//wsl$/Ubuntu/home/<u>/`) — the latter
+ *  leaked the internal HOSTNAME as well as the username. The home/Users segment
+ *  must still sit at a KNOWN root position (directly after root, a drive, a
+ *  mount, or a UNC host/share) so `/opt/build/home/<u>/` is deliberately NOT
+ *  collapsed. */
+const HOME_PREFIX =
+  /^(?:[A-Za-z]:|\/\/[^/]+(?:\/[^/]+)?|(?:[A-Za-z]:)?\/(?:mnt|cygdrive)\/[A-Za-z])?\/(?:home|Users)\/[^/]+\//i;
 
-/** The same shapes, found ANYWHERE in a run of prose rather than anchored at
- *  the start of a path field. The lookbehind is what keeps it honest: `/home/`
- *  only counts when nothing path-like precedes it, so `views/home/partials`
- *  and `https://x.com/home/y` are prose, not leaks. */
-const HOME_PREFIX_IN_PROSE =
-  /(?<![\w~.\-/])(?:[A-Za-z]:)?(?:\/(?:mnt|cygdrive)\/[A-Za-z])?\/(?:home|Users)\/[^/\s"'`)\]]+\//gi;
+// R3 (adversarial F2) — the PROSE scrubber is separator-agnostic: prose is not
+// normalized, so a Windows path arrives with its backslashes intact. Built from
+// named parts because a single literal of this is unreadable and unmaintainable.
+//   - drive        `C:` (a `/Users` or `\Users` follows)
+//   - backslash UNC `\\host` or `\\host\share` (covers `\\wsl$\Ubuntu` too)
+//   - forward wsl   `//wsl$/distro` — the ONE forward-`//` form accepted, so a
+//                   protocol-relative URL `//cdn/home/x` is never mistaken for
+//                   a UNC authority
+//   - mount         `/mnt/c`, `C:/cygdrive/c`
+// then the `home|Users` segment. The leading lookbehind (excluding `\` too)
+// keeps `views/home`, `https://x.com/home` and `/opt/build/home/<u>` as prose.
+const _SEP = "[\\\\/]"; // one path separator, either kind
+const _NOTSEG = "[^\\\\/\\s\"'`)\\]]"; // a char that can't be inside a path segment we scrub
+const _HOME_PROSE_PREFIX =
+  "(?:" +
+  "[A-Za-z]:" +
+  "|\\\\\\\\[^\\\\/\\s]+(?:\\\\[^\\\\/\\s]+)?" +
+  "|//wsl\\$(?:/[^/\\s]+)?" +
+  "|(?:[A-Za-z]:)?" + _SEP + "(?:mnt|cygdrive)" + _SEP + "[A-Za-z]" +
+  ")?";
+const HOME_PREFIX_IN_PROSE = new RegExp(
+  "(?<![\\w~.\\-\\\\/])" +
+    _HOME_PROSE_PREFIX +
+    _SEP + "(?:home|Users)" + _SEP + _NOTSEG + "+" + _SEP,
+  "gi",
+);
 
 // R3 — the project root for the page currently being rendered.
 //
@@ -265,11 +301,15 @@ export function scrubProse(text: unknown, projectRoot = activeProjectRoot): stri
     const root = projectRoot.replace(/\\/g, "/").replace(/\/+$/, "");
     if (root) {
       // Literal split/join — a project root is a path, not a pattern, and
-      // regex-escaping one is a bug waiting to happen.
-      if (s.includes(root + "/")) s = s.split(root + "/").join("");
-      if (s.includes(root)) s = s.split(root).join(".");
+      // regex-escaping one is a bug waiting to happen. R3 (adversarial F2) —
+      // strip BOTH the forward-slash form and the exporter's native backslash
+      // form (`C:\proj\...`), since prose carries the path as the OS wrote it.
       const win = root.replace(/\//g, "\\");
-      if (win !== root && s.includes(win + "\\")) s = s.split(win + "\\").join("");
+      for (const r of win !== root ? [root, win] : [root]) {
+        const sep = r === win ? "\\" : "/";
+        if (s.includes(r + sep)) s = s.split(r + sep).join("");
+        if (s.includes(r)) s = s.split(r).join(".");
+      }
     }
   }
   return s.replace(HOME_PREFIX_IN_PROSE, "~/");
@@ -346,10 +386,24 @@ const SAFE_URL = /^(?:https?:\/\/|mailto:|#|\/(?!\/)|\.{1,2}\/)/i;
 const MAX_LINK_TEXT = 512;
 const MAX_LINK_URL = 2048;
 
+/** Bounded search for `ch` in `s` starting at `from`, giving up after `window`
+ *  characters. R3 (adversarial F5) — a bare `s.indexOf(ch, from)` scans to the
+ *  end of the string on every miss, which is the quadratic trap: `"[]("` * 400k
+ *  has a `](` at every unit and NO `)` after it, so an unbounded search for the
+ *  closing paren re-walked the whole tail 400k times (2.0s). The URL can't be
+ *  longer than MAX_LINK_URL anyway, so there is nothing past the window worth
+ *  finding. */
+function indexOfWithin(s: string, ch: number, from: number, window: number): number {
+  const limit = Math.min(s.length, from + window);
+  for (let k = from; k < limit; k++) if (s.charCodeAt(k) === ch) return k;
+  return -1;
+}
+
 function renderLinks(out: string): string {
-  // A link REQUIRES the `](` seam. One linear scan rules out every string that
-  // doesn't have one — including the 200k-`[` comment that used to cost 8s.
-  if (out.indexOf("](") < 0) return out;
+  // A link REQUIRES a `](` seam AND a closing `)`. Two O(n) existence checks
+  // rule out every string that can't contain a link — the 200k-`[` comment and
+  // the 400k-`[](` comment (no `)` anywhere) both bail here in one pass.
+  if (out.indexOf("](") < 0 || out.indexOf(")") < 0) return out;
   const parts: string[] = [];
   let pos = 0;
   while (pos < out.length) {
@@ -374,8 +428,10 @@ function renderLinks(out: string): string {
       pos = close + 1;
       continue;
     }
-    const urlEnd = out.indexOf(")", close + 2);
-    if (urlEnd < 0 || urlEnd - close - 2 > MAX_LINK_URL) {
+    // Bounded — see indexOfWithin. `+ 1` so a URL of exactly MAX_LINK_URL still
+    // finds its closing paren.
+    const urlEnd = indexOfWithin(out, 41 /* ) */, close + 2, MAX_LINK_URL + 1);
+    if (urlEnd < 0) {
       parts.push(out.slice(pos, close + 1));
       pos = close + 1;
       continue;
@@ -445,8 +501,20 @@ export function renderMarkdown(md: string, baseHeading = 3, includeCode = true, 
   // page loses the feature.
   try {
     return renderMarkdownBlocks(md, baseHeading, includeCode, depth);
-  } catch {
-    return `<p class="render-fallback">${escText(md)}</p>`;
+  } catch (err) {
+    // R3 (adversarial F10) — a real renderer bug must not vanish silently, and
+    // the fallback itself must not re-throw. escText runs the scrub regex, which
+    // in principle can throw, so it is guarded; if even esc fails the block is
+    // dropped rather than propagated. The tell (a console.warn + a visible
+    // labelled block) means "the export renderer hit a bug here" reaches a
+    // developer instead of looking like ordinary prose.
+    try {
+      // eslint-disable-next-line no-console
+      console.warn("[deepPairing] renderMarkdown fell back to plain text:", (err as Error)?.message ?? err);
+    } catch { /* logging must never fail the export */ }
+    let safe = "";
+    try { safe = escText(md); } catch { try { safe = esc(md); } catch { safe = ""; } }
+    return `<p class="render-fallback" data-render-error="1">${safe}</p>`;
   }
 }
 
@@ -605,10 +673,21 @@ interface CodeBlockOptions {
  */
 const SOFT_PAGE_CAP_BYTES = 5 * 1024 * 1024;
 
+// R3 (adversarial F3) — a per-BODY hard cap and a per-LINE cap, because the
+// original bound was per-file-LINE-COUNT and checked `remaining > 0` (any
+// positive amount) then charged AFTER emitting. A single 20 MB minified diff
+// line — a `min.js` in a changeset is Tuesday — passed the `remaining > 0`
+// gate, emitted its whole 20 MB, THEN drove remaining negative, so the page was
+// 20 MB and, adding insult, rendered the honest-truncation note as if it had
+// protected anything. Now a body is truncated to fit BEFORE it is emitted, and
+// no single line may exceed MAX_LINE_LEN.
+const HARD_BODY_CAP = 256 * 1024;
+const MAX_LINE_LEN = 4 * 1024;
+
 interface RenderBudget {
   /** Characters of code body left to spend on this page. */
   remaining: number;
-  /** How many bodies were collapsed because it ran out. */
+  /** How many bodies were collapsed because a cap (page or per-body) hit. */
   truncated: number;
 }
 
@@ -616,8 +695,28 @@ interface RenderBudget {
 // finally-restored discipline as activeProjectRoot above.
 let activeBudget: RenderBudget | undefined;
 
-/** Is there room left for another code body? Counts the refusal when there
- *  isn't, so the page can report how much it dropped. */
+/** Cap one already-escaped body to what the page can still afford AND to the
+ *  per-body ceiling, BEFORE it is emitted. Returns the (possibly clipped) text
+ *  and whether anything was dropped — the caller appends the size note only
+ *  when `sizeTruncated`, so a page that never hit a cap carries no note. */
+function fitBody(body: string): { text: string; sizeTruncated: boolean } {
+  if (!activeBudget) return { text: body, sizeTruncated: false };
+  if (activeBudget.remaining <= 0) {
+    activeBudget.truncated++;
+    return { text: "", sizeTruncated: true };
+  }
+  const cap = Math.min(activeBudget.remaining, HARD_BODY_CAP);
+  if (body.length > cap) {
+    activeBudget.remaining -= cap;
+    activeBudget.truncated++;
+    return { text: body.slice(0, cap), sizeTruncated: true };
+  }
+  activeBudget.remaining -= body.length;
+  return { text: body, sizeTruncated: false };
+}
+
+/** Is there any page budget left at all? (The cheap pre-check a diff runs
+ *  before building rows.) Counts the refusal so the page can report it. */
 function budgetHasRoom(): boolean {
   if (!activeBudget) return true;
   if (activeBudget.remaining <= 0) {
@@ -627,25 +726,19 @@ function budgetHasRoom(): boolean {
   return true;
 }
 
-/** Charge what was ACTUALLY emitted. Estimates drift (the first cut charged 80
- *  bytes for a diff row that renders as ~140), and an estimate that undershoots
- *  is a cap that doesn't cap. */
-function spendBudget(emitted: number): void {
-  if (activeBudget) activeBudget.remaining -= emitted;
-}
-
-/** budgetHasRoom + spendBudget for a body whose size is known before it is
- *  emitted. Returns false when the page is full. */
-function chargeBudget(cost: number): boolean {
-  if (!budgetHasRoom()) return false;
-  spendBudget(cost);
-  return true;
+/** Clip one line to MAX_LINE_LEN so a single pathological line can't blow the
+ *  per-body cap in one go (and can't force horizontal scroll to Kansas). */
+function clipLine(text: string): string {
+  return text.length > MAX_LINE_LEN ? text.slice(0, MAX_LINE_LEN) : text;
 }
 
 const SIZE_TRUNCATED_NOTE =
   `<p class="redacted">Truncated for size — this page had already reached its ` +
   `${Math.round(SOFT_PAGE_CAP_BYTES / (1024 * 1024))} MB budget when this block was reached. ` +
   `The full record is in the session itself.</p>`;
+
+const SIZE_CLIPPED_NOTE =
+  `<span class="truncated">… truncated for size — the rest of this block is in the session itself.</span>`;
 
 /** A legible, syntax-highlight-free pre/mono block with an honest truncation
  *  marker. `includeCode: false` keeps the shape, drops the body. */
@@ -660,14 +753,19 @@ function codeBlock(text: string, opts: CodeBlockOptions = {}): string {
   const shown = all.slice(0, maxLines);
   const omitted = all.length - shown.length;
   // R3 — scrubbed, not just escaped: a snippet lifted out of a file on the
-  // exporter's disk carries that disk's paths in its own text.
-  const body = escText(shown.join("\n"));
-  if (!chargeBudget(body.length)) return `${head}${SIZE_TRUNCATED_NOTE}`;
+  // exporter's disk carries that disk's paths in its own text. Each line is
+  // clipped (F3) so one pathological line can't blow the body cap — and a clip
+  // is a truncation, so it must show the honest note too.
+  const lineClipped = shown.some((l) => l.length > MAX_LINE_LEN);
+  const body = escText(shown.map(clipLine).join("\n"));
+  const fitted = fitBody(body);
+  if (fitted.text === "" && fitted.sizeTruncated) return `${head}${SIZE_TRUNCATED_NOTE}`;
   const trunc = omitted > 0
     ? `\n<span class="truncated">… truncated — ${plural(omitted, "more line")} not shown</span>`
     : "";
+  const sizeTrunc = fitted.sizeTruncated || lineClipped ? `\n${SIZE_CLIPPED_NOTE}` : "";
   const langAttr = language ? ` data-language="${esc(language)}"` : "";
-  return `${head}<pre class="code"${langAttr}><code>${body}${trunc}</code></pre>`;
+  return `${head}<pre class="code"${langAttr}><code>${fitted.text}${trunc}${sizeTrunc}</code></pre>`;
 }
 
 /** Per-file unified diff. Long diffs collapse behind <details> rather than
@@ -707,31 +805,49 @@ function diffBlock(file: ChangesetFile, includeCode: boolean, projectRoot?: stri
     return `<div class="file">${header}${SIZE_TRUNCATED_NOTE}</div>`;
   }
 
+  // R3 (F3) — the per-file char budget: the smaller of what the page can still
+  // afford and the per-body ceiling. Rows stop the moment the running total
+  // crosses it, so a `min.js` diff with one 20 MB line can't blow the page.
+  const charCap = activeBudget ? Math.min(activeBudget.remaining, HARD_BODY_CAP) : Infinity;
   const rows: string[] = [];
   let emitted = 0;
   let dropped = 0;
-  for (const hunk of hunks) {
+  let chars = 0;
+  let sizeTruncated = false;
+  outer: for (const hunk of hunks) {
     if (hunk?.header) {
-      rows.push(`<div class="dl dl--hunk">${escText(hunk.header)}</div>`);
+      rows.push(`<div class="dl dl--hunk">${escText(clipLine(hunk.header))}</div>`);
     }
     for (const line of hunk?.lines ?? []) {
       if (emitted >= MAX_DIFF_LINES_PER_FILE) { dropped++; continue; }
       const kind = line?.kind === "add" ? "add" : line?.kind === "del" ? "del" : "ctx";
       const sign = kind === "add" ? "+" : kind === "del" ? "-" : " ";
       const num = kind === "del" ? line?.oldLine : line?.newLine;
-      rows.push(
+      const raw = line?.content ?? "";
+      if (raw.length > MAX_LINE_LEN) sizeTruncated = true; // a clipped line is a truncation
+      const row =
         `<div class="dl dl--${kind}"><span class="ln">${num == null ? "" : esc(num)}</span>` +
-        `<span class="sign">${sign}</span><span class="src">${escText(line?.content ?? "")}</span></div>`,
-      );
+        `<span class="sign">${sign}</span><span class="src">${escText(clipLine(raw))}</span></div>`;
+      if (chars + row.length > charCap) { sizeTruncated = true; break outer; }
+      rows.push(row);
+      chars += row.length;
       emitted++;
     }
   }
   if (dropped > 0) {
     rows.push(`<div class="dl dl--trunc">… truncated — ${plural(dropped, "more diff line")} not shown</div>`);
   }
+  if (sizeTruncated) {
+    rows.push(`<div class="dl dl--trunc">… truncated for size — the rest of this diff is in the session itself.</div>`);
+  }
 
   const diff = `<div class="diff">${rows.join("")}</div>`;
-  spendBudget(diff.length);
+  // Charge what was actually emitted; a wholly-dropped diff still counts as a
+  // truncation for the page's honest note.
+  if (activeBudget) {
+    activeBudget.remaining -= chars;
+    if (sizeTruncated) activeBudget.truncated++;
+  }
   const body = emitted > DIFF_COLLAPSE_THRESHOLD
     ? `<details><summary>Show the diff (${plural(emitted, "line")})</summary>${diff}</details>`
     : diff;
@@ -1754,7 +1870,10 @@ code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, mo
 .visual-caption, .visual-note { font-size: .85rem; color: var(--muted); }
 .visual-files, .visual-annotations { font-size: .88rem; padding-left: 1.1rem; margin: .3rem 0; }
 .quote-deep { color: var(--muted); }
+.scan-note { flex-basis: 100%; font-size: .72rem; color: var(--muted); }
 .render-fallback { white-space: pre-wrap; }
+.render-fallback[data-render-error] { border-left: 3px solid var(--warn); padding-left: .7rem; }
+.render-fallback[data-render-error]::before { content: "shown as plain text — the renderer hit a snag here"; display: block; font-size: .74rem; text-transform: uppercase; letter-spacing: .05em; color: var(--warn); margin-bottom: .2rem; }
 .chip--sig-high, .chip--sev-high, .chip--sev-critical { background: var(--bad); color: #fff; border-color: transparent; }
 .chip--question { background: var(--accent-soft); color: var(--accent); }
 .verdict { font-size: .86rem; padding: .45rem .7rem; border-radius: 6px; margin: .4rem 0; }
@@ -1943,8 +2062,13 @@ function renderSessionPage(state: HtmlSessionState, options: HtmlExportOptions):
 
   // R3 — the NARRATIVE's own first heading wins the title when the agent wrote
   // one (see narrativeTitle); sessionTitle's decision-first heuristic is the
-  // fallback.
-  const title = narrativeTitle(options.narrative) ?? sessionTitle(state);
+  // fallback. R3 (adversarial F1) — the fallback MUST scrub: GET
+  // /api/export.html passes no narrative, so on the Export-menu surface (a human
+  // on the other end) sessionTitle always wins, and a decision context or spec
+  // title carrying an absolute path would otherwise land in the tab, the
+  // bookmark, the <h1> and the print header verbatim. narrativeTitle already
+  // scrubs; the fallback did not.
+  const title = narrativeTitle(options.narrative) ?? scrubProse(sessionTitle(state));
   const story = options.narrative?.trim()
     ? renderMarkdown(options.narrative, 3, includeCode)
     : autoSummary(state, span);
@@ -1993,14 +2117,34 @@ function renderSessionPage(state: HtmlSessionState, options: HtmlExportOptions):
   // own session because a fixture contains AKIA… would be the tool overruling
   // the human on their own repo.
   const secretLabels = (options.secretLabels ?? []).filter((l) => typeof l === "string" && l.trim());
+  // R3 (adversarial F4) — the headline number is the OCCURRENCE count, not the
+  // deduped label list, so 40 keys read as 40, not 1. The label list stays
+  // deduped for legibility.
+  const secretCount = options.secretCount ?? secretLabels.length;
+  // R3 (adversarial F6) — with code omitted, the "search the page for them"
+  // instruction is a lie about anything that lived only in a code body; those
+  // aren't on the page. Reword rather than mislead. A secret in the narrative or
+  // a comment (prose, always rendered) survives redaction, so the list stays.
   const secretBanner = secretLabels.length
     ? `<div class="secret-banner" role="note">${SHIELD_MARK}` +
       `<p><strong>Check this page before you send it.</strong> The export scan matched ` +
-      `${plural(secretLabels.length, "credential-shaped value")} in this session's material: ` +
+      `${plural(secretCount, "credential-shaped value")} in this session's material: ` +
       `${secretLabels.map((l) => esc(l)).join(", ")}. ` +
-      `The values are not repeated here — search the page for them, and re-export with code omitted ` +
-      `if they are real.</p></div>`
+      (includeCode
+        ? `The values are not repeated here — search the page for them, and re-export with code omitted if they are real.`
+        : `Code bodies were omitted from this page, so any secret that lived only in code isn't shown here — but check the prose (summaries, comments, the narrative) before sending.`) +
+      `</p></div>`
     : "";
+
+  // R3 (adversarial F11) — a clean page must not read as PROOF of no secrets.
+  // When the scan ran (secretLabels is defined — [] means "scanned, clean";
+  // undefined means "no scan wired", e.g. a raw formatSessionHtml test call)
+  // state so, with the depth, so absence of a banner isn't mistaken for a
+  // guarantee. Nothing shown when no scan ran, keeping those callers unchanged.
+  const scanFootnote =
+    options.secretLabels !== undefined
+      ? `<span class="scan-note">Secret-shape scan ran before export (depth ${DEFAULT_SCAN_DEPTH}, heuristic — not a guarantee).</span>`
+      : "";
 
   const stancesSection = untimedStances.length
     ? `<section><h2>Standing stances</h2>` +
@@ -2048,6 +2192,7 @@ ${stancesSection}
 <footer>
 <span>Generated by deepPairing${version ? ` v${esc(version)}` : ""} — ${esc(fmtTimestamp(generatedAt))}</span>
 <span><a href="${REPO_URL}" rel="noopener noreferrer">github.com/mitchjablonski/deepPairing</a></span>
+${scanFootnote}
 </footer>
 </main>
 </body>

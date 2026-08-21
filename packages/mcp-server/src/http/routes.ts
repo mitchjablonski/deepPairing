@@ -20,6 +20,7 @@ import {
   assembleSessionHtml,
   htmlExportFileName,
   scanExportForSecrets,
+  secretCountOf,
   secretLabelsOf,
   secretWarningHeader,
 } from "../export/html-export.js";
@@ -1720,6 +1721,7 @@ export function createHttpRoutes(
       version: SERVER_VERSION,
       generatedAt,
       secretLabels: secretLabelsOf(secretMatches),
+      secretCount: secretCountOf(secretMatches),
     });
     const warningHeader = secretWarningHeader(secretMatches);
     return c.body(html, 200, {

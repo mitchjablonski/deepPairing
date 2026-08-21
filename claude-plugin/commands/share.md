@@ -32,8 +32,9 @@ Tone rules:
 - No protocol jargon: no artifact ids, no tool names, no "present_options", no
   status enums. Say "the plan", "the change", "the call we made".
 - No ids of any kind in the narrative — not artifact ids, not the session id.
-  The page itself no longer prints them (the session id is a folder name off my
-  machine), so putting one in your prose would be the only place it appears.
+  Neither the page nor the download filename prints them (the session id is a
+  folder name off my machine), so putting one in your prose would be the only
+  place it appears.
 - No absolute paths from my machine. Say `src/auth/hash.ts`, never
   `/home/me/work/checkout/src/auth/hash.ts`. The exporter collapses what it can
   find, but it is scrubbing your writing after the fact — don't write it.

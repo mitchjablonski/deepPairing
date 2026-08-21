@@ -6854,9 +6854,9 @@ var init_cli_invocation = __esm({
 // src/project-root.ts
 import path4 from "node:path";
 import fs5 from "node:fs";
-import crypto2 from "node:crypto";
+import crypto3 from "node:crypto";
 function projectHashOf(projectRoot2) {
-  return crypto2.createHash("sha256").update(projectRoot2).digest("hex").slice(0, 8);
+  return crypto3.createHash("sha256").update(projectRoot2).digest("hex").slice(0, 8);
 }
 function resolvePortWindow(env = process.env, warn = (msg) => {
   try {
@@ -29986,6 +29986,11 @@ function formatSessionMarkdown(state, format = "full") {
 function isShippedArtifact(a) {
   return !isNotShippedStatus(a.status);
 }
+function unapprovedMdMarker(a) {
+  if (!isNeverApprovedStatus(a.status)) return "";
+  const which = a.status === "revised" ? "sent back for changes" : a.status === "reviewing" ? "still under review" : "still a draft";
+  return ` _(not approved \u2014 ${which})_`;
+}
 function rejectionNote(a) {
   if (a.status !== "rejected" && a.status !== "retracted") return null;
   const verb = a.status === "rejected" ? "rejected" : "retracted";
@@ -30081,7 +30086,7 @@ function formatPrDescription(state) {
   for (const plan of plans) {
     const steps = coercePlanContent(plan.content).steps;
     if (steps.length > 0) {
-      sections.push(`### Changes (${plan.title})
+      sections.push(`### Changes (${plan.title})${unapprovedMdMarker(plan)}
 `);
       for (const step of steps) {
         const files = Array.isArray(step.files) ? step.files.map((f) => typeof f === "string" ? f : f.filePath).join(", ") : "";
@@ -30523,7 +30528,12 @@ function buildGitHubReviewPayload(state, opts = {}) {
   const comments = [];
   const findingTitles2 = [];
   const researchArtifacts = state.artifacts.filter(
-    (a) => a.type === "research" && a.status !== "rejected" && a.status !== "retracted" && a.status !== "superseded"
+    // R3 (adversarial F8) — the shared shipped-status predicate, which drops
+    // `obsolete` too. This is the path that POSTS findings to a stranger's PR;
+    // the hand-copy here omitted `obsolete`, so overtaken findings could be
+    // posted as live review comments. SEAM: R1 also edits this function (session
+    // -id scrub) — this hunk is the filter predicate only.
+    (a) => a.type === "research" && isShippedArtifact(a)
   );
   for (const artifact of researchArtifacts) {
     const findings = coerceResearchContent(artifact.content).findings;
@@ -30598,7 +30608,9 @@ function formatPrComments(state) {
   sections.push(`## deepPairing notes \u2014 ${title}`);
   sections.push("");
   const researchArtifacts = state.artifacts.filter(
-    (a) => a.type === "research" && a.status !== "rejected" && a.status !== "retracted" && a.status !== "superseded"
+    // R3 (adversarial F8) — shared predicate; drops `obsolete` too (pr-comments
+    // is pasted onto a PR, so an overtaken finding must not read as live).
+    (a) => a.type === "research" && isShippedArtifact(a)
   );
   const allFindings = [];
   for (const artifact of researchArtifacts) {
@@ -30785,6 +30797,7 @@ function formatLearnings(state) {
 }
 
 // src/export/html-export.ts
+import crypto2 from "node:crypto";
 import fs4 from "node:fs";
 import path3 from "node:path";
 
@@ -30894,8 +30907,14 @@ function sanitizePath(raw, projectRoot2) {
   p = p.replace(HOME_PREFIX, "~/");
   return p;
 }
-var HOME_PREFIX = /^(?:[A-Za-z]:)?(?:\/(?:mnt|cygdrive)\/[A-Za-z])?\/(?:home|Users)\/[^/]+\//i;
-var HOME_PREFIX_IN_PROSE = /(?<![\w~.\-/])(?:[A-Za-z]:)?(?:\/(?:mnt|cygdrive)\/[A-Za-z])?\/(?:home|Users)\/[^/\s"'`)\]]+\//gi;
+var HOME_PREFIX = /^(?:[A-Za-z]:|\/\/[^/]+(?:\/[^/]+)?|(?:[A-Za-z]:)?\/(?:mnt|cygdrive)\/[A-Za-z])?\/(?:home|Users)\/[^/]+\//i;
+var _SEP = "[\\\\/]";
+var _NOTSEG = "[^\\\\/\\s\"'`)\\]]";
+var _HOME_PROSE_PREFIX = "(?:[A-Za-z]:|\\\\\\\\[^\\\\/\\s]+(?:\\\\[^\\\\/\\s]+)?|//wsl\\$(?:/[^/\\s]+)?|(?:[A-Za-z]:)?" + _SEP + "(?:mnt|cygdrive)" + _SEP + "[A-Za-z])?";
+var HOME_PREFIX_IN_PROSE = new RegExp(
+  "(?<![\\w~.\\-\\\\/])" + _HOME_PROSE_PREFIX + _SEP + "(?:home|Users)" + _SEP + _NOTSEG + "+" + _SEP,
+  "gi"
+);
 var activeProjectRoot;
 function scrubProse(text, projectRoot2 = activeProjectRoot) {
   let s = typeof text === "string" ? text : text == null ? "" : String(text);
@@ -30903,10 +30922,12 @@ function scrubProse(text, projectRoot2 = activeProjectRoot) {
   if (projectRoot2) {
     const root = projectRoot2.replace(/\\/g, "/").replace(/\/+$/, "");
     if (root) {
-      if (s.includes(root + "/")) s = s.split(root + "/").join("");
-      if (s.includes(root)) s = s.split(root).join(".");
       const win = root.replace(/\//g, "\\");
-      if (win !== root && s.includes(win + "\\")) s = s.split(win + "\\").join("");
+      for (const r of win !== root ? [root, win] : [root]) {
+        const sep = r === win ? "\\" : "/";
+        if (s.includes(r + sep)) s = s.split(r + sep).join("");
+        if (s.includes(r)) s = s.split(r).join(".");
+      }
     }
   }
   return s.replace(HOME_PREFIX_IN_PROSE, "~/");
@@ -30934,8 +30955,13 @@ var FENCE_CLOSE = /^\s*(?:`{3,}|~{3,})\s*$/;
 var SAFE_URL = /^(?:https?:\/\/|mailto:|#|\/(?!\/)|\.{1,2}\/)/i;
 var MAX_LINK_TEXT = 512;
 var MAX_LINK_URL = 2048;
+function indexOfWithin(s, ch, from, window) {
+  const limit = Math.min(s.length, from + window);
+  for (let k = from; k < limit; k++) if (s.charCodeAt(k) === ch) return k;
+  return -1;
+}
 function renderLinks(out) {
-  if (out.indexOf("](") < 0) return out;
+  if (out.indexOf("](") < 0 || out.indexOf(")") < 0) return out;
   const parts = [];
   let pos = 0;
   while (pos < out.length) {
@@ -30954,8 +30980,8 @@ function renderLinks(out) {
       pos = close + 1;
       continue;
     }
-    const urlEnd = out.indexOf(")", close + 2);
-    if (urlEnd < 0 || urlEnd - close - 2 > MAX_LINK_URL) {
+    const urlEnd = indexOfWithin(out, 41, close + 2, MAX_LINK_URL + 1);
+    if (urlEnd < 0) {
       parts.push(out.slice(pos, close + 1));
       pos = close + 1;
       continue;
@@ -30994,8 +31020,22 @@ function renderInline(text) {
 function renderMarkdown(md, baseHeading = 3, includeCode = true, depth = 0) {
   try {
     return renderMarkdownBlocks(md, baseHeading, includeCode, depth);
-  } catch {
-    return `<p class="render-fallback">${escText(md)}</p>`;
+  } catch (err) {
+    try {
+      console.warn("[deepPairing] renderMarkdown fell back to plain text:", err?.message ?? err);
+    } catch {
+    }
+    let safe = "";
+    try {
+      safe = escText(md);
+    } catch {
+      try {
+        safe = esc2(md);
+      } catch {
+        safe = "";
+      }
+    }
+    return `<p class="render-fallback" data-render-error="1">${safe}</p>`;
   }
 }
 var MAX_QUOTE_DEPTH = 8;
@@ -31088,7 +31128,24 @@ function renderMarkdownBlocks(md, baseHeading, includeCode, depth) {
   return out.join("\n");
 }
 var SOFT_PAGE_CAP_BYTES = 5 * 1024 * 1024;
+var HARD_BODY_CAP = 256 * 1024;
+var MAX_LINE_LEN = 4 * 1024;
 var activeBudget;
+function fitBody(body) {
+  if (!activeBudget) return { text: body, sizeTruncated: false };
+  if (activeBudget.remaining <= 0) {
+    activeBudget.truncated++;
+    return { text: "", sizeTruncated: true };
+  }
+  const cap = Math.min(activeBudget.remaining, HARD_BODY_CAP);
+  if (body.length > cap) {
+    activeBudget.remaining -= cap;
+    activeBudget.truncated++;
+    return { text: body.slice(0, cap), sizeTruncated: true };
+  }
+  activeBudget.remaining -= body.length;
+  return { text: body, sizeTruncated: false };
+}
 function budgetHasRoom() {
   if (!activeBudget) return true;
   if (activeBudget.remaining <= 0) {
@@ -31097,15 +31154,11 @@ function budgetHasRoom() {
   }
   return true;
 }
-function spendBudget(emitted) {
-  if (activeBudget) activeBudget.remaining -= emitted;
-}
-function chargeBudget(cost) {
-  if (!budgetHasRoom()) return false;
-  spendBudget(cost);
-  return true;
+function clipLine(text) {
+  return text.length > MAX_LINE_LEN ? text.slice(0, MAX_LINE_LEN) : text;
 }
 var SIZE_TRUNCATED_NOTE = `<p class="redacted">Truncated for size \u2014 this page had already reached its ${Math.round(SOFT_PAGE_CAP_BYTES / (1024 * 1024))} MB budget when this block was reached. The full record is in the session itself.</p>`;
+var SIZE_CLIPPED_NOTE = `<span class="truncated">\u2026 truncated for size \u2014 the rest of this block is in the session itself.</span>`;
 function codeBlock(text, opts = {}) {
   const { language, maxLines = MAX_CODE_LINES, includeCode = true, label } = opts;
   const head = label ? `<p class="code-label">${escText(label)}</p>` : "";
@@ -31116,12 +31169,16 @@ function codeBlock(text, opts = {}) {
   const all = String(text ?? "").replace(/\r\n?/g, "\n").split("\n");
   const shown = all.slice(0, maxLines);
   const omitted = all.length - shown.length;
-  const body = escText(shown.join("\n"));
-  if (!chargeBudget(body.length)) return `${head}${SIZE_TRUNCATED_NOTE}`;
+  const lineClipped = shown.some((l) => l.length > MAX_LINE_LEN);
+  const body = escText(shown.map(clipLine).join("\n"));
+  const fitted = fitBody(body);
+  if (fitted.text === "" && fitted.sizeTruncated) return `${head}${SIZE_TRUNCATED_NOTE}`;
   const trunc = omitted > 0 ? `
 <span class="truncated">\u2026 truncated \u2014 ${plural(omitted, "more line")} not shown</span>` : "";
+  const sizeTrunc = fitted.sizeTruncated || lineClipped ? `
+${SIZE_CLIPPED_NOTE}` : "";
   const langAttr = language ? ` data-language="${esc2(language)}"` : "";
-  return `${head}<pre class="code"${langAttr}><code>${body}${trunc}</code></pre>`;
+  return `${head}<pre class="code"${langAttr}><code>${fitted.text}${trunc}${sizeTrunc}</code></pre>`;
 }
 function diffBlock(file2, includeCode, projectRoot2) {
   const path10 = sanitizePath(file2.path, projectRoot2);
@@ -31148,12 +31205,15 @@ function diffBlock(file2, includeCode, projectRoot2) {
   if (!budgetHasRoom()) {
     return `<div class="file">${header}${SIZE_TRUNCATED_NOTE}</div>`;
   }
+  const charCap = activeBudget ? Math.min(activeBudget.remaining, HARD_BODY_CAP) : Infinity;
   const rows = [];
   let emitted = 0;
   let dropped = 0;
-  for (const hunk of hunks) {
+  let chars = 0;
+  let sizeTruncated = false;
+  outer: for (const hunk of hunks) {
     if (hunk?.header) {
-      rows.push(`<div class="dl dl--hunk">${escText(hunk.header)}</div>`);
+      rows.push(`<div class="dl dl--hunk">${escText(clipLine(hunk.header))}</div>`);
     }
     for (const line of hunk?.lines ?? []) {
       if (emitted >= MAX_DIFF_LINES_PER_FILE) {
@@ -31163,17 +31223,29 @@ function diffBlock(file2, includeCode, projectRoot2) {
       const kind = line?.kind === "add" ? "add" : line?.kind === "del" ? "del" : "ctx";
       const sign = kind === "add" ? "+" : kind === "del" ? "-" : " ";
       const num2 = kind === "del" ? line?.oldLine : line?.newLine;
-      rows.push(
-        `<div class="dl dl--${kind}"><span class="ln">${num2 == null ? "" : esc2(num2)}</span><span class="sign">${sign}</span><span class="src">${escText(line?.content ?? "")}</span></div>`
-      );
+      const raw = line?.content ?? "";
+      if (raw.length > MAX_LINE_LEN) sizeTruncated = true;
+      const row = `<div class="dl dl--${kind}"><span class="ln">${num2 == null ? "" : esc2(num2)}</span><span class="sign">${sign}</span><span class="src">${escText(clipLine(raw))}</span></div>`;
+      if (chars + row.length > charCap) {
+        sizeTruncated = true;
+        break outer;
+      }
+      rows.push(row);
+      chars += row.length;
       emitted++;
     }
   }
   if (dropped > 0) {
     rows.push(`<div class="dl dl--trunc">\u2026 truncated \u2014 ${plural(dropped, "more diff line")} not shown</div>`);
   }
+  if (sizeTruncated) {
+    rows.push(`<div class="dl dl--trunc">\u2026 truncated for size \u2014 the rest of this diff is in the session itself.</div>`);
+  }
   const diff = `<div class="diff">${rows.join("")}</div>`;
-  spendBudget(diff.length);
+  if (activeBudget) {
+    activeBudget.remaining -= chars;
+    if (sizeTruncated) activeBudget.truncated++;
+  }
   const body = emitted > DIFF_COLLAPSE_THRESHOLD ? `<details><summary>Show the diff (${plural(emitted, "line")})</summary>${diff}</details>` : diff;
   return `<div class="file">${header}${body}</div>`;
 }
@@ -31826,7 +31898,10 @@ code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, mo
 .visual-caption, .visual-note { font-size: .85rem; color: var(--muted); }
 .visual-files, .visual-annotations { font-size: .88rem; padding-left: 1.1rem; margin: .3rem 0; }
 .quote-deep { color: var(--muted); }
+.scan-note { flex-basis: 100%; font-size: .72rem; color: var(--muted); }
 .render-fallback { white-space: pre-wrap; }
+.render-fallback[data-render-error] { border-left: 3px solid var(--warn); padding-left: .7rem; }
+.render-fallback[data-render-error]::before { content: "shown as plain text \u2014 the renderer hit a snag here"; display: block; font-size: .74rem; text-transform: uppercase; letter-spacing: .05em; color: var(--warn); margin-bottom: .2rem; }
 .chip--sig-high, .chip--sev-high, .chip--sev-critical { background: var(--bad); color: #fff; border-color: transparent; }
 .chip--question { background: var(--accent-soft); color: var(--accent); }
 .verdict { font-size: .86rem; padding: .45rem .7rem; border-radius: 6px; margin: .4rem 0; }
@@ -31989,7 +32064,7 @@ function renderSessionPage(state, options) {
   });
   const allStamps = beats.map((b) => b.at).filter(Boolean).sort();
   const span = { first: allStamps[0], last: allStamps[allStamps.length - 1] };
-  const title = narrativeTitle(options.narrative) ?? sessionTitle(state);
+  const title = narrativeTitle(options.narrative) ?? scrubProse(sessionTitle(state));
   const story = options.narrative?.trim() ? renderMarkdown(options.narrative, 3, includeCode) : autoSummary(state, span);
   const metaBits = [
     projectName ? `<span>Project: ${esc2(projectName)}</span>` : "",
@@ -32013,7 +32088,9 @@ function renderSessionPage(state, options) {
   }
   const provenance = provenanceBlock(externals);
   const secretLabels = (options.secretLabels ?? []).filter((l) => typeof l === "string" && l.trim());
-  const secretBanner = secretLabels.length ? `<div class="secret-banner" role="note">${SHIELD_MARK}<p><strong>Check this page before you send it.</strong> The export scan matched ${plural(secretLabels.length, "credential-shaped value")} in this session's material: ${secretLabels.map((l) => esc2(l)).join(", ")}. The values are not repeated here \u2014 search the page for them, and re-export with code omitted if they are real.</p></div>` : "";
+  const secretCount = options.secretCount ?? secretLabels.length;
+  const secretBanner = secretLabels.length ? `<div class="secret-banner" role="note">${SHIELD_MARK}<p><strong>Check this page before you send it.</strong> The export scan matched ${plural(secretCount, "credential-shaped value")} in this session's material: ${secretLabels.map((l) => esc2(l)).join(", ")}. ` + (includeCode ? `The values are not repeated here \u2014 search the page for them, and re-export with code omitted if they are real.` : `Code bodies were omitted from this page, so any secret that lived only in code isn't shown here \u2014 but check the prose (summaries, comments, the narrative) before sending.`) + `</p></div>` : "";
+  const scanFootnote = options.secretLabels !== void 0 ? `<span class="scan-note">Secret-shape scan ran before export (depth ${DEFAULT_SCAN_DEPTH}, heuristic \u2014 not a guarantee).</span>` : "";
   const stancesSection = untimedStances.length ? `<section><h2>Standing stances</h2><p>Recorded without a timestamp, so they can't be placed on the timeline \u2014 but the gate enforces them all the same.</p><ul class="stances">${untimedStances.map((r) => `<li><strong>${escText(r.description)}</strong>${r.reason ? ` \u2014 \u201C${escText(r.reason)}\u201D` : ""}${r.concept ? ` <code>${esc2(r.concept)}</code>` : ""}</li>`).join("")}</ul></section>` : "";
   return `<!doctype html>
 <html lang="en">
@@ -32053,6 +32130,7 @@ ${stancesSection}
 <footer>
 <span>Generated by deepPairing${version2 ? ` v${esc2(version2)}` : ""} \u2014 ${esc2(fmtTimestamp(generatedAt))}</span>
 <span><a href="${REPO_URL}" rel="noopener noreferrer">github.com/mitchjablonski/deepPairing</a></span>
+${scanFootnote}
 </footer>
 </main>
 </body>
@@ -32098,22 +32176,18 @@ function readGuardrailFires(projectRoot2) {
 }
 function scanExportForSecrets(state, options = {}) {
   const s = state ?? {};
-  const seen = /* @__PURE__ */ new Set();
   const out = [];
   const take = (matches, prefix) => {
-    for (const m of matches) {
-      if (seen.has(m.pattern)) continue;
-      seen.add(m.pattern);
-      out.push({ ...m, field: m.field ? `${prefix}.${m.field}` : prefix });
-    }
+    for (const m of matches) out.push({ ...m, field: m.field ? `${prefix}.${m.field}` : prefix });
   };
   try {
-    for (const a of s.artifacts ?? []) {
-      if (!a || typeof a !== "object") continue;
-      take(scanContentForSecrets(a.content), String(a.type ?? "artifact"));
-    }
+    (s.artifacts ?? []).forEach((a, i) => {
+      if (!a || typeof a !== "object") return;
+      const title = typeof a.title === "string" && a.title.trim() ? ` "${a.title.trim()}"` : "";
+      take(scanContentForSecrets(a.content), `${a.type ?? "artifact"} #${i + 1}${title}`);
+    });
     (s.comments ?? []).forEach((c, i) => {
-      if (typeof c?.content === "string") take(scanForSecrets(c.content), `comment[${i}]`);
+      if (typeof c?.content === "string") take(scanForSecrets(c.content), `comment #${i + 1}`);
     });
     if (typeof options.narrative === "string" && options.narrative) {
       take(scanForSecrets(options.narrative), "narrative");
@@ -32124,18 +32198,21 @@ function scanExportForSecrets(state, options = {}) {
   }
   return out;
 }
+function secretCountOf(matches) {
+  return matches.length;
+}
 function secretLabelsOf(matches) {
   return Array.from(new Set(matches.map((m) => m.label)));
 }
 function secretWarningFor(state, options = {}) {
   const matches = scanExportForSecrets(state, options);
   if (!matches.length) return null;
-  const shown = matches.slice(0, 3).map((m) => {
+  const shown = matches.slice(0, 5).map((m) => {
     const where = m.field ? ` in \`${m.field}\`${m.line != null ? ` (line ${m.line})` : ""}` : "";
     return `${m.label}${where}`;
   });
   const more = matches.length > shown.length ? ` (+${matches.length - shown.length} more)` : "";
-  return `\u26A0\uFE0F Possible secret in this export \u2014 review before sharing: ${shown.join("; ")}${more}. The value itself is not printed here. This page is meant to leave the building, so check it first.`;
+  return `\u26A0\uFE0F Possible secret in this export \u2014 ${matches.length} match${matches.length === 1 ? "" : "es"} found, review before sharing: ${shown.join("; ")}${more}. The value itself is not printed here. This page is meant to leave the building, so check it first.`;
 }
 async function assembleSessionHtml(state, options = {}) {
   const { store, ...renderOptions } = options;
@@ -32145,17 +32222,24 @@ async function assembleSessionHtml(state, options = {}) {
     preflightTraces: state.preflightTraces ?? await gatherPreflightTraces(store, state.artifacts ?? []),
     guardrailFires: state.guardrailFires ?? readGuardrailFires(projectRoot2)
   };
-  const secretLabels = renderOptions.secretLabels ?? secretLabelsOf(scanExportForSecrets(enriched, { narrative: renderOptions.narrative }));
+  let secretLabels = renderOptions.secretLabels;
+  let secretCount = renderOptions.secretCount;
+  if (secretLabels === void 0) {
+    const matches = scanExportForSecrets(enriched, { narrative: renderOptions.narrative });
+    secretLabels = secretLabelsOf(matches);
+    secretCount = secretCountOf(matches);
+  }
   return formatSessionHtml(enriched, {
     ...renderOptions,
     secretLabels,
+    secretCount,
     projectName: renderOptions.projectName ?? (projectRoot2 ? path3.basename(projectRoot2) : void 0)
   });
 }
 function htmlExportFileName(sessionId, generatedAt = (/* @__PURE__ */ new Date()).toISOString()) {
-  const safeId = String(sessionId).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 60) || "session";
+  const token = crypto2.createHash("sha1").update(String(sessionId)).digest("hex").slice(0, 8);
   const day = generatedAt.slice(0, 10);
-  return `session-${safeId}-${day}.html`;
+  return `deeppairing-session-${day}-${token}.html`;
 }
 function writeSessionHtml(projectRoot2, sessionId, html, generatedAt) {
   const dir = path3.join(projectRoot2, ".deeppairing", "exports");
@@ -32198,7 +32282,8 @@ async function handleExportSession(ctx, args) {
       projectRoot: projectRoot2,
       version: SERVER_VERSION,
       generatedAt,
-      secretLabels: secretLabelsOf(secretMatches)
+      secretLabels: secretLabelsOf(secretMatches),
+      secretCount: secretCountOf(secretMatches)
     });
     const file2 = writeSessionHtml(projectRoot2, state.sessionId, html, generatedAt);
     const relative = path5.relative(projectRoot2, file2) || path5.basename(file2);
@@ -35892,7 +35977,7 @@ var DaemonClient = class {
 // src/standalone.ts
 init_project_root();
 init_cli_invocation();
-import crypto3 from "node:crypto";
+import crypto4 from "node:crypto";
 import fs9 from "node:fs";
 import path9 from "node:path";
 var { projectRoot, source: projectRootSource } = resolveProjectRoot();
@@ -35918,7 +36003,7 @@ async function main() {
   log(`Daemon ready on port ${port}`);
   const projectName = path9.basename(projectRoot);
   const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
-  const projectHash = crypto3.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);
+  const projectHash = crypto4.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);
   const sessionId = `session_${safeProjectName}_${projectHash}`;
   const client = new DaemonClient(port, sessionId, projectRoot, daemonInfo.authToken);
   await client.register({
