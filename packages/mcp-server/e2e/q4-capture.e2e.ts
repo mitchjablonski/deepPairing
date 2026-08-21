@@ -323,14 +323,253 @@ for (const theme of ["dark", "light"] as const) {
         clipped.every((c) => c.overflowed),
         `rail rows must overflow when tail-truncated: ${JSON.stringify(clipped)}`,
       ).toBe(true);
+
+      // Q4 review (M6) — report the MEASURED comparison, never a hardcoded
+      // sentence. The first version of this log asserted "100% of every
+      // basename" beside numbers that contradicted it: a 240px rail gives the
+      // label ~88-96px (~11-12 mono chars), so a long basename still clips its
+      // own tail. What actually changed is WHICH HALF survives — the file's
+      // name instead of the directory prefix every row shared.
+      const after = geom.map((g) => g.baseWidth);
+      const beforePathPct = clipped.map((c) => c.visibleFraction * 100);
       // eslint-disable-next-line no-console
       console.log(
-        `[q4 picker ${theme} ${width}] tail-truncate showed ` +
-          clipped.map((c) => `${(c.visibleFraction * 100).toFixed(0)}%`).join(" / ") +
-          " of each path; head-truncate shows 100% of every basename",
+        `[q4 picker ${theme} ${width}] tail-truncate: ${beforePathPct.map((p) => `${p.toFixed(0)}%`).join(" / ")} ` +
+          `of each path visible, all of it the shared "packages/mcp-server/…" prefix. ` +
+          `head-truncate: the directory collapses and the basename gets ` +
+          `${after.map((w) => `${w.toFixed(0)}px`).join(" / ")} ` +
+          `(dir ${geom.map((g) => `${g.dirWidth.toFixed(0)}px`).join(" / ")}), ` +
+          `so the file's own name leads every row — long ones still clip their tail.`,
       );
 
       await context.close();
     });
   }
 }
+
+/* ===========================================================================
+ * Q4 REVIEW (H1 / H2 / M3) — the three executed repros, pinned.
+ *
+ * The 60vh cap turned the diagram well into a SCROLLPORT, and DiagramRegionLayer
+ * was emitting two very different kinds of UI into it: canvas-anchored overlay
+ * (fine — it should scroll with the diagram) and ordinary FLOW chrome (the ⌨
+ * keyboard node-picker, the locator list, the narrow-viewport block composer),
+ * which the cap then swallowed. The review measured all three:
+ *
+ *   (a) ≤900px: a drag opened the block composer INSIDE the scrollport at 0%
+ *       visibility WITH FOCUS INSIDE IT — no textarea, Send or Cancel anywhere
+ *       on screen. #185's founding bug, re-created worse. VS Code webviews
+ *       commonly sit at these widths.
+ *   (b) mid-scroll: the popover clamped to the CONTENT box, not the scrollport,
+ *       so a "below" placement landed outside the visible 540px — 17.8%
+ *       visible, Send unreachable.
+ *   (c) the ⌨ path and the locator list sat 817-834px below the visible well at
+ *       rest, and every locator click scrolled the well, carrying the list you
+ *       clicked out of view — a scroll round-trip per use.
+ *
+ * The fix splits the layer into an overlay slot (stays in the well) and a chrome
+ * slot (portalled to a sibling AFTER the well), and clamps the popover to the
+ * scrollport with the anchor rect translated by the scroll offset. These tests
+ * measure the three repros directly rather than asserting on the structure.
+ * ========================================================================= */
+
+/** Fraction of `el` that falls inside `port`'s visible box (0..1). */
+async function visibleFractionIn(
+  page: import("@playwright/test").Page,
+  elSel: string,
+  portSel: string,
+): Promise<number> {
+  return page.evaluate(
+    ([e, p]) => {
+      const el = document.querySelector(e as string);
+      const port = document.querySelector(p as string);
+      if (!el || !port) return -1;
+      const a = el.getBoundingClientRect();
+      const b = port.getBoundingClientRect();
+      const w = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
+      const h = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+      return a.width * a.height === 0 ? 0 : (w * h) / (a.width * a.height);
+    },
+    [elSel, portSel] as const,
+  );
+}
+
+/** Fraction of `el` inside the browser viewport (0..1). */
+async function visibleInViewport(page: import("@playwright/test").Page, sel: string): Promise<number> {
+  return page.evaluate((s) => {
+    const el = document.querySelector(s as string);
+    if (!el) return -1;
+    const a = el.getBoundingClientRect();
+    const w = Math.max(0, Math.min(a.right, window.innerWidth) - Math.max(a.left, 0));
+    const h = Math.max(0, Math.min(a.bottom, window.innerHeight) - Math.max(a.top, 0));
+    return a.width * a.height === 0 ? 0 : (w * h) / (a.width * a.height);
+  }, sel);
+}
+
+async function dragOn(
+  page: import("@playwright/test").Page,
+  box: { x: number; y: number; width: number; height: number },
+) {
+  await page.mouse.move(box.x + 6, box.y + 6);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width - 6, box.y + box.height - 6, { steps: 10 });
+  await page.mouse.up();
+}
+
+/** The first diagram node whose box is inside the well's VISIBLE area. */
+async function firstVisibleNode(page: import("@playwright/test").Page) {
+  const well = (await page.locator(".dp-mermaid-well").first().boundingBox())!;
+  const nodes = page.locator(".dp-mermaid svg g.node");
+  const n = await nodes.count();
+  for (let i = 0; i < n; i++) {
+    const b = await nodes.nth(i).boundingBox();
+    if (b && b.y >= well.y && b.y + b.height <= well.y + well.height && b.width > 20 && b.height > 12) return b;
+  }
+  return null;
+}
+
+test("Q4 review (H1) — at 900px the region composer opens ON SCREEN with its focus (was: 0% visible, focus inside it)", async ({ browser }) => {
+  // 900px is the narrow branch (NARROW_VIEWPORT_QUERY = max-width: 900px), so
+  // this is the BLOCK composer — the placement that broke worst under the cap.
+  const { context, page } = await newPage(browser, "dark", 900);
+  await open(page, "plan_q4");
+  await page.waitForSelector(".dp-mermaid svg g.node", { timeout: 30000 });
+
+  const node = await firstVisibleNode(page);
+  expect(node, "a diagram node is visible inside the capped well").toBeTruthy();
+  await dragOn(page, node!);
+
+  const block = page.getByTestId("dp-region-composer-block");
+  await block.waitFor({ timeout: 15000 });
+
+  // 1. It is NOT inside the scrollport any more — that containment is the bug.
+  expect(
+    await page.evaluate(() => {
+      const b = document.querySelector('[data-testid="dp-region-composer-block"]');
+      return !!b?.closest(".dp-mermaid-well");
+    }),
+    "the composer must not live inside the capped well",
+  ).toBe(false);
+
+  // 2. It is actually on screen — the measurement the review made (0%).
+  const vis = await visibleInViewport(page, '[data-testid="dp-region-composer-block"]');
+  // eslint-disable-next-line no-console
+  console.log(`[q4 review H1] 900px block composer visibility: ${(vis * 100).toFixed(1)}% (was 0.0%)`);
+  expect(vis, "the composer must be fully on screen at 900px").toBeGreaterThan(0.99);
+
+  // 3. Focus is inside it AND the focused control is visible — the specific
+  //    horror was focus living in an element nobody could see.
+  await expect(block.locator("textarea")).toBeFocused();
+  await expect(block.locator("textarea")).toBeInViewport();
+  await expect(block.getByRole("button", { name: "Cancel region comment" })).toBeInViewport();
+  await expect(block.getByRole("button", { name: /^Send/ })).toBeInViewport();
+
+  await shot(page, "region-composer-900-after.png");
+  await context.close();
+});
+
+test("Q4 review (H2) — a popover anchored MID-SCROLL stays inside the visible well (was: 17.8% visible, Send unreachable)", async ({ browser }) => {
+  const { context, page } = await newPage(browser, "dark", 1440);
+  await open(page, "plan_q4");
+  await page.waitForSelector(".dp-mermaid svg g.node", { timeout: 30000 });
+
+  // Scroll the WELL (not the page) into its middle — the state the old math
+  // never re-measured, because measure() listened to resize + svg only.
+  await page.evaluate(() => {
+    const w = document.querySelector(".dp-mermaid-well") as HTMLElement;
+    w.scrollTop = Math.round((w.scrollHeight - w.clientHeight) / 2);
+  });
+  await page.waitForTimeout(150);
+  const scrollTop = await page.evaluate(() => (document.querySelector(".dp-mermaid-well") as HTMLElement).scrollTop);
+  expect(scrollTop, "the well really is mid-scroll").toBeGreaterThan(100);
+
+  const node = await firstVisibleNode(page);
+  expect(node, "a node is visible at this scroll position").toBeTruthy();
+  await dragOn(page, node!);
+
+  const pop = page.getByTestId("dp-region-popover");
+  await pop.waitFor({ timeout: 15000 });
+  const vis = await visibleFractionIn(page, '[data-testid="dp-region-popover"]', ".dp-mermaid-well");
+  // eslint-disable-next-line no-console
+  console.log(`[q4 review H2] mid-scroll popover visibility inside the well: ${(vis * 100).toFixed(1)}% (was 17.8%)`);
+  expect(vis, "the popover must clamp to the SCROLLPORT, not the full-height wrapper").toBeGreaterThan(0.9);
+
+  // The control the review found unreachable.
+  await expect(pop.getByRole("button", { name: /^Send/ })).toBeInViewport();
+  await shot(page, "region-popover-midscroll-after.png");
+  await context.close();
+});
+
+test("Q4 review (M3) — the keyboard path and the locator list are reachable without scrolling the well", async ({ browser }) => {
+  const { context, page } = await newPage(browser, "dark", 1440);
+  await open(page, "plan_q4");
+  await page.waitForSelector(".dp-mermaid svg g.node", { timeout: 30000 });
+
+  // The bar this test holds the fix to is "reachable WITHOUT scrolling the
+  // well". Ordinary page scroll is not a defect — being trapped inside a 540px
+  // scrollport, 817-834px down, is: reaching it meant scrolling the well, which
+  // moved the diagram out from under the thing you were about to use.
+  const keyboardPath = page.getByText("Comment on a node");
+  await expect(keyboardPath).toBeVisible();
+  expect(
+    await page.evaluate(() => {
+      const d = [...document.querySelectorAll("summary")].find((s) => s.textContent?.includes("Comment on a node"));
+      return !!d?.closest(".dp-mermaid-well");
+    }),
+    "the keyboard path must not live inside the capped well",
+  ).toBe(false);
+  // And it needs NO well scroll to reach: the well's own scrollTop is untouched.
+  expect(
+    await page.evaluate(() => (document.querySelector(".dp-mermaid-well") as HTMLElement).scrollTop),
+    "reaching the keyboard path must not require scrolling the well",
+  ).toBe(0);
+  // eslint-disable-next-line no-console
+  console.log(
+    `[q4 review M3] keyboard path offset below the well: ` +
+      (await page.evaluate(() => {
+        const w = document.querySelector(".dp-mermaid-well")!.getBoundingClientRect();
+        const s = [...document.querySelectorAll("summary")].find((x) => x.textContent?.includes("Comment on a node"))!;
+        return `${Math.round(s.getBoundingClientRect().top - w.bottom)}px (was 817-834px INSIDE the 540px scrollport)`;
+      })),
+  );
+
+  // Post a region comment so the locator list exists, via the real composer.
+  const node = await firstVisibleNode(page);
+  expect(node).toBeTruthy();
+  await dragOn(page, node!);
+  const composer = page.locator("textarea:focus");
+  await composer.waitFor({ timeout: 15000 });
+  await composer.fill("Does this branch need an audit line?");
+  await composer.press("ControlOrMeta+Enter");
+
+  const row = page.getByTestId("dp-region-thread-anchor").first();
+  await row.waitFor({ timeout: 15000 });
+  await expect(row).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => !!document.querySelector('[data-testid="dp-region-thread-anchor"]')?.closest(".dp-mermaid-well"),
+    ),
+    "the locator list must not live inside the capped well",
+  ).toBe(false);
+
+  // …and using it no longer costs a scroll round-trip. Reverse-nav scrolls the
+  // WELL to bring the region into view; because the list now sits OUTSIDE the
+  // well, the row you clicked doesn't ride away with it — it is still exactly
+  // where it was, ready for the next one.
+  const rowYBefore = await row.evaluate((el) => el.getBoundingClientRect().top);
+  const wellBefore = await page.evaluate(() => (document.querySelector(".dp-mermaid-well") as HTMLElement).scrollTop);
+  await row.click();
+  await page.waitForTimeout(900);
+  const wellAfter = await page.evaluate(() => (document.querySelector(".dp-mermaid-well") as HTMLElement).scrollTop);
+  const rowYAfter = await row.evaluate((el) => el.getBoundingClientRect().top);
+  await expect(row).toBeVisible();
+  expect(Math.abs(rowYAfter - rowYBefore), "the locator row must not move when it scrolls the well").toBeLessThan(4);
+  // eslint-disable-next-line no-console
+  console.log(
+    `[q4 review M3] locator click moved the well ${wellBefore} → ${wellAfter}; ` +
+      `the row itself stayed put (${rowYBefore.toFixed(0)} → ${rowYAfter.toFixed(0)}px)`,
+  );
+
+  await shot(page, "region-chrome-after.png");
+  await context.close();
+});

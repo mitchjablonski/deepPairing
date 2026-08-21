@@ -128,6 +128,9 @@ export function MermaidDiagram({
 }) {
   const [svg, setSvg] = useState<string | null>(null);
   const hostRef = useRef<HTMLDivElement>(null);
+  // Q4 review (H1) — portal target for the region layer's flow chrome. State,
+  // not a ref, so the layer re-renders into it the moment the node is attached.
+  const [chromeHost, setChromeHost] = useState<HTMLDivElement | null>(null);
   const [error, setError] = useState<string | null>(null);
   // #189 — re-render the diagram when the app theme flips so mermaid re-themes
   // (dark fills on the dark surface, light fills on white cards). "system"
@@ -373,6 +376,11 @@ export function MermaidDiagram({
         tabIndex={0}
         role="group"
         aria-label="Diagram — scrollable"
+        // Q4 review (H2) — marks this box as the clipping viewport for anything
+        // measuring against it (DiagramRegionLayer's popover clamp + scroll
+        // listener). Generic attribute, not a mermaid class, so a future capped
+        // host opts in the same way.
+        data-dp-scrollport=""
         className="dp-mermaid-well overflow-auto max-h-[60vh] bg-surface-primary border border-border-default rounded-md"
       >
         <div className="relative">
@@ -389,10 +397,20 @@ export function MermaidDiagram({
               optionId={region.optionId}
               svg={svg}
               hostRef={hostRef}
+              chromeHost={chromeHost}
             />
           )}
         </div>
       </div>
+      {/* Q4 review (H1/M3) — the region layer's FLOW chrome (the ⌨ keyboard
+          node-picker, the locator list, the narrow-viewport block composer)
+          lands here, OUTSIDE the capped scrollport. Inside it, all three were
+          clipped: measured 817-834px below the visible well at rest, and every
+          locator click scrolled the well — carrying the list you clicked out of
+          view, so navigating cost a scroll round-trip each time. Rendered
+          unconditionally (cheap empty div) so the portal target exists on the
+          first commit and the chrome never flashes in the wrong place. */}
+      {region && <div ref={setChromeHost} className="dp-mermaid-chrome" />}
       {showSource && (
         <pre className="text-2xs font-mono bg-surface-code rounded p-2 overflow-x-auto whitespace-pre text-text-secondary">
           {source}

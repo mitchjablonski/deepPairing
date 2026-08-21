@@ -34,7 +34,13 @@ const severityStyles: Record<string, string> = {
   low: "bg-accent-green-dim text-accent-green",
   medium: "bg-accent-amber-dim text-accent-amber",
   high: "bg-accent-red-dim text-accent-red",
-  critical: "bg-accent-red text-white",
+  // Q4 review (L8) — the CRITICAL badge sits in the same finding row as the
+  // verdict chips fixed above, on the same solid-accent fill, with the same
+  // 3.35:1 literal white in the dark theme. Fixing the chips and leaving the
+  // loudest badge in the row broken made the row inconsistent with itself.
+  // (The remaining ~8 solid-accent `text-white` sites outside this row are
+  // still deferred — same one-token fix, named in the PR.)
+  critical: "bg-accent-red text-text-inverse",
 };
 
 const severityLabels: Record<string, string> = {

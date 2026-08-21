@@ -47,7 +47,16 @@ export function PendingBanner() {
   if (total === 0 || suppressed) return null;
 
   return (
-    <div className="px-3 py-1.5 bg-accent-amber-dim/50 border-b border-accent-amber/15 flex items-center gap-2">
+    // Q4 review (L5) — a named landmark. This strip is the app's "what needs
+    // you" summary and its chips jump straight to those drafts, but it sat
+    // outside every landmark, so axe's `region` rule flagged its text and a
+    // screen-reader user could not jump to the one surface that says what to
+    // do next.
+    <div
+      role="region"
+      aria-label="Waiting for you"
+      className="px-3 py-1.5 bg-accent-amber-dim/50 border-b border-accent-amber/15 flex items-center gap-2"
+    >
       <span className="w-1.5 h-1.5 rounded-full bg-accent-amber animate-pulse shrink-0" />
       <span className="text-2xs text-accent-amber font-medium shrink-0">
         {total} item{total > 1 ? "s" : ""} waiting for you

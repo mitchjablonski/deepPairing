@@ -1372,6 +1372,14 @@ const STRUCTURE_RULES = [
   "landmark-unique",
   "page-has-heading-one",
   "empty-heading",
+  // Q4 review (L5) — `region` (all page content belongs to a landmark) is the
+  // strictest of the family and the reason the landmark work is finishable at
+  // all: with it on, the scan enumerates every unlandmarked node instead of
+  // stopping at "there is one <main>". Turning it on flagged exactly three,
+  // in two components — the waiting strip's text and the composer's body +
+  // latency hint — both now named regions. It stays ON so the next stray
+  // top-level div fails here rather than in a review.
+  "region",
 ];
 
 test("a11y: the app shell's landmark + heading structure passes axe's semantic rules", async ({ page }) => {

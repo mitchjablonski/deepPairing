@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Comment } from "@deeppairing/shared";
 import { useChainComments } from "../hooks/useChainComments";
 import { useMediaQuery, useIsNarrowViewport } from "../hooks/useMediaQuery";
@@ -55,6 +56,7 @@ export function DiagramRegionLayer({
   optionId,
   svg,
   hostRef,
+  chromeHost,
 }: {
   artifactId: string;
   visualId: string;
@@ -68,6 +70,26 @@ export function DiagramRegionLayer({
   svg: string;
   /** The div that hosts the injected diagram SVG. */
   hostRef: React.RefObject<HTMLDivElement | null>;
+  /**
+   * Q4 review (H1/H2/M3) — where the FLOW chrome goes.
+   *
+   * This layer emits two very different kinds of UI. The OVERLAY (highlights,
+   * marquee, anchored popover) is canvas-anchored and must stay inside the
+   * diagram's positioned wrapper. The CHROME (the ⌨ keyboard node-picker, the
+   * locator list, the narrow-viewport block composer) is ordinary flow content
+   * that belongs BELOW the diagram.
+   *
+   * Once MermaidDiagram capped the well at 60vh with internal scroll, the
+   * chrome — being a sibling inside that wrapper — got swallowed by the
+   * scrollport: at ≤900px a drag opened the block composer 817-834px below the
+   * visible area at 0% visibility WITH FOCUS INSIDE IT, exactly #185's founding
+   * bug in a worse form. Passing a host element portals the chrome OUT of the
+   * scrollport to a sibling after the well, so it is always on screen.
+   *
+   * Omit it (DecisionDiagramFocus, tests) and the chrome renders inline exactly
+   * as before — there is no scrollport there to escape.
+   */
+  chromeHost?: HTMLElement | null;
 }) {
   const [nodes, setNodes] = useState<DiagramNode[]>([]);
   // Placement of the diagram SVG within this layer's positioned wrapper, so
@@ -82,6 +104,21 @@ export function DiagramRegionLayer({
   // #185 — the WELL's own size (the positioned wrapper, overlay inset-0), so the
   // popover math clamps to the well the pins are drawn in. jsdom returns zeros.
   const [wellSize, setWellSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  /**
+   * Q4 review (H2) — the VISIBLE window onto the well.
+   *
+   * `wellSize` is the positioned wrapper, which after the 60vh cap is sized to
+   * the WHOLE diagram, not to what you can see. Clamping the popover to it put
+   * a mid-scroll "below" placement outside the visible 540px — measured 17.8%
+   * visible, Send unreachable. The popover math now clamps to the scrollport
+   * (clientWidth/Height) with the anchor rect translated into scrollport
+   * coordinates and the scroll offset added back to the result.
+   *
+   * `scrollTop`/`scrollLeft` are 0 and the size equals `wellSize` whenever
+   * there is no scrollport (every non-capped host), so the math degrades to
+   * exactly what it was.
+   */
+  const [port, setPort] = useState<{ width: number; height: number; scrollTop: number; scrollLeft: number } | null>(null);
   // The region being commented on (from a drag or a node pick). Null = idle.
   const [active, setActive] = useState<RegionTarget | null>(null);
   // Live drag rectangle in wrapper-local px, for the marquee outline.
@@ -96,6 +133,31 @@ export function DiagramRegionLayer({
   // Recompute the node list + SVG placement. Cheap; runs on mount, when the
   // diagram source changes (revision), and on resize (placement only needs it,
   // but node normalized rects are resize-invariant so recomputing is harmless).
+  /** The scrolling ancestor the diagram is clipped by, if any (MermaidDiagram's
+   *  capped well marks itself). Generic attribute, not a mermaid class, so any
+   *  future capped host opts in the same way. */
+  const scrollPortEl = useCallback(
+    () => (overlayRef.current?.parentElement?.closest("[data-dp-scrollport]") as HTMLElement | null) ?? null,
+    [],
+  );
+
+  /** Q4 review (H2) — cheap, scroll-frequency update: offsets only. Deliberately
+   *  NOT `measure()`, which re-walks every `g.node` in the diagram; that ran per
+   *  scroll frame would be the expensive kind of correct. */
+  const syncScroll = useCallback(() => {
+    const p = scrollPortEl();
+    if (!p) return;
+    setPort((prev) =>
+      prev &&
+      prev.width === p.clientWidth &&
+      prev.height === p.clientHeight &&
+      prev.scrollTop === p.scrollTop &&
+      prev.scrollLeft === p.scrollLeft
+        ? prev
+        : { width: p.clientWidth, height: p.clientHeight, scrollTop: p.scrollTop, scrollLeft: p.scrollLeft },
+    );
+  }, [scrollPortEl]);
+
   const measure = useCallback(() => {
     const el = svgEl();
     setNodes(collectDiagramNodes(el));
@@ -108,7 +170,8 @@ export function DiagramRegionLayer({
         setBox({ left: s.left - w.left, top: s.top - w.top, width: s.width, height: s.height });
       }
     }
-  }, [svgEl]);
+    syncScroll();
+  }, [svgEl, syncScroll]);
 
   useLayoutEffect(() => {
     measure();
@@ -125,6 +188,15 @@ export function DiagramRegionLayer({
     if (overlayRef.current?.parentElement) ro.observe(overlayRef.current.parentElement);
     return () => ro.disconnect();
   }, [measure, svgEl, svg]);
+
+  // Q4 review (H2) — measure() listened to resize + a new svg only, so a popover
+  // anchored before a scroll kept its pre-scroll clamp. Track the scrollport.
+  useEffect(() => {
+    const p = scrollPortEl();
+    if (!p) return;
+    p.addEventListener("scroll", syncScroll, { passive: true });
+    return () => p.removeEventListener("scroll", syncScroll);
+  }, [scrollPortEl, syncScroll, svg]);
 
   const comments = useChainComments(artifactId);
   const regionComments = comments.filter(
@@ -169,6 +241,13 @@ export function DiagramRegionLayer({
     },
     [closeRegion],
   );
+  // Q4 review (H1) — hoisted above the focus effect below, which now reads
+  // `narrow` in its dependency array: leaving the declaration further down
+  // put it in the temporal dead zone at render time (a ReferenceError, not a
+  // lint nit). Same values, same hook order, declared before first use.
+  const narrow = useIsNarrowViewport();
+  const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+
   useEffect(() => {
     if (!active) return;
     // Move focus to the composer's textarea once it mounts. #185 — preventScroll:
@@ -177,16 +256,29 @@ export function DiagramRegionLayer({
     // below-diagram block, focused, scrolled a large diagram to the bottom and
     // away from the region you just drew). Belt-and-braces even if the popover
     // is partially offscreen.
+    //
+    // Q4 review (H1) — but preventScroll alone is only half the contract when
+    // the composer is the narrow BLOCK: it sits in flow below the diagram, so
+    // at 900px it opened 30% visible (measured) while holding focus — better
+    // than the 0% the review found, still a control you can't see. Bring it
+    // into view FIRST, minimally (`block: "nearest"`), then focus without
+    // scrolling again.
+    //
+    // This does not re-create #185's yank: that bug existed because the block
+    // sat below an UNCAPPED 1954px diagram, so reaching it pushed the diagram
+    // off screen entirely. The 60vh cap is what makes scrolling to the
+    // composer cheap — at most ~540px of diagram is above it. The popover
+    // placement (wide viewports) still never scrolls at all.
+    // scrollIntoView?.() — optional chain for jsdom (no layout engine).
+    if (narrow) composerRef.current?.scrollIntoView?.({ block: "nearest", behavior: "auto" });
     composerRef.current?.querySelector("textarea")?.focus({ preventScroll: true });
-  }, [active]);
+  }, [active, narrow]);
 
   // --- #185 popover placement -------------------------------------------------
   // The composer opens as a floating popover anchored to the selection rect,
   // EXCEPT on genuinely narrow (mobile-ish) widths, where there's no room for a
   // sane popover and we degrade to the legacy below-diagram block. Reduced
   // motion is honoured for the smooth-scroll of reverse-nav (below).
-  const narrow = useIsNarrowViewport();
-  const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   // Measured popover size (for the flip/clamp math). Estimate until it mounts;
   // the layout effect corrects it, and the position recomputes on the next pass.
   const [popoverSize, setPopoverSize] = useState<{ width: number; height: number }>({
@@ -217,11 +309,29 @@ export function DiagramRegionLayer({
         height: active.h * box.height,
       }
     : null;
-  const popoverWidth = Math.min(POPOVER_WIDTH, wellSize.width || POPOVER_WIDTH);
-  const anchoredPos =
-    activePxRect && !narrow
-      ? positionPopover(activePxRect, wellSize, { width: popoverWidth, height: popoverSize.height })
-      : null;
+  // Q4 review (H2) — the bounds the popover must fit inside. With a capped well
+  // that is the SCROLLPORT (what you can see), not the full-height wrapper;
+  // without one the two are the same box and this is a no-op.
+  const viewBounds = port
+    ? { width: port.width || wellSize.width, height: port.height || wellSize.height }
+    : wellSize;
+  const scrollTop = port?.scrollTop ?? 0;
+  const scrollLeft = port?.scrollLeft ?? 0;
+  const popoverWidth = Math.min(POPOVER_WIDTH, viewBounds.width || POPOVER_WIDTH);
+  const anchoredPos = (() => {
+    if (!activePxRect || narrow) return null;
+    // Into scrollport coordinates, place, then back into content coordinates
+    // (the popover is positioned inside the scrolling wrapper, so it must be
+    // expressed in the same space as the highlights it sits beside).
+    const rectInView = {
+      left: activePxRect.left - scrollLeft,
+      top: activePxRect.top - scrollTop,
+      width: activePxRect.width,
+      height: activePxRect.height,
+    };
+    const p = positionPopover(rectInView, viewBounds, { width: popoverWidth, height: popoverSize.height });
+    return { ...p, left: p.left + scrollLeft, top: p.top + scrollTop };
+  })();
 
   // #185 feel round — the popover is user-draggable by its header (the flip
   // heuristic can't always pick the spot the human wants on a busy diagram).
@@ -279,14 +389,20 @@ export function DiagramRegionLayer({
   // the sides — as long as enough of the header stays reachable to drag back.
   const DRAG_BELOW = 320;
   const DRAG_EDGE = 64; // px of the box that must remain inside horizontally
+  // Q4 review (H2) — the drag bounds follow the popover into scrollport space:
+  // clamped relative to what's VISIBLE (scroll offset + viewport), not to the
+  // full-height wrapper, so dragging can't park the box off-screen either.
   const popoverPos = anchoredPos
     ? {
         ...anchoredPos,
         left: Math.max(
-          -(popoverWidth - DRAG_EDGE),
-          Math.min(anchoredPos.left + dragOffset.dx, Math.max(0, wellSize.width - DRAG_EDGE)),
+          scrollLeft - (popoverWidth - DRAG_EDGE),
+          Math.min(anchoredPos.left + dragOffset.dx, Math.max(scrollLeft, scrollLeft + viewBounds.width - DRAG_EDGE)),
         ),
-        top: Math.max(0, Math.min(anchoredPos.top + dragOffset.dy, wellSize.height + DRAG_BELOW)),
+        top: Math.max(
+          scrollTop,
+          Math.min(anchoredPos.top + dragOffset.dy, scrollTop + viewBounds.height + DRAG_BELOW),
+        ),
       }
     : null;
 
@@ -494,7 +610,12 @@ export function DiagramRegionLayer({
     </>
   ) : null;
 
-  return (
+  /**
+   * Q4 review (H1/H2/M3) — SLOT 1: canvas-anchored. Everything here is
+   * positioned against the diagram and therefore has to live inside the
+   * scrolling wrapper, scrolling WITH the diagram it annotates.
+   */
+  const overlaySlot = (
     <>
       {/* Pointer drag-capture surface over the diagram. Presentational — the
           keyboard path below is the accessible equivalent, so this is hidden
@@ -552,6 +673,40 @@ export function DiagramRegionLayer({
         )}
       </div>
 
+      {/* #185 — Composer for the active region. It reuses the SAME CommentThread
+          / submitComment path as every other comment (so the human's note flows
+          through check_feedback → revise_artifact unchanged) and the SAME focus
+          contract (focus moves into the textarea on open, Esc/Cancel restores).
+          Only the PLACEMENT changed: a floating popover ANCHORED to the selection
+          rect inside the well (positioned below the rect, flipping above/beside
+          when there's no room, clamped to the VISIBLE well, never occluding the
+          rect), so composing happens at the point of action instead of yanking a
+          large diagram to a below-the-fold block. On genuinely narrow
+          (mobile-ish) widths there's no room for a sane popover, so we degrade
+          to the block placement — which lives in the chrome slot below, OUTSIDE
+          the scrollport. */}
+      {active && !narrow && popoverPos && (
+        <div
+          ref={composerRef}
+          data-testid="dp-region-popover"
+          data-placement={popoverPos.placement}
+          onKeyDown={onComposerKeyDown}
+          className="absolute z-[3] p-2.5 bg-surface-elevated border border-accent-blue/30 rounded-lg shadow-lg space-y-2"
+          style={{ left: popoverPos.left, top: popoverPos.top, width: popoverWidth }}
+        >
+          {renderComposerInner(true)}
+        </div>
+      )}
+    </>
+  );
+
+  /**
+   * Q4 review (H1/H2/M3) — SLOT 2: ordinary FLOW content that belongs BELOW the
+   * diagram and must never be clipped by it. MermaidDiagram portals this out of
+   * the capped well; hosts without a scrollport render it inline, unchanged.
+   */
+  const chromeSlot = (
+    <>
       {/* Accessible, keyboard-first path: comment on a specific node without a
           mouse. Native <details> → focusable summary + real buttons. */}
       {nodes.length > 0 && (
@@ -578,29 +733,12 @@ export function DiagramRegionLayer({
         </details>
       )}
 
-      {/* #185 — Composer for the active region. It reuses the SAME CommentThread
-          / submitComment path as every other comment (so the human's note flows
-          through check_feedback → revise_artifact unchanged) and the SAME focus
-          contract (focus moves into the textarea on open, Esc/Cancel restores).
-          Only the PLACEMENT changed: a floating popover ANCHORED to the selection
-          rect inside the well (positioned below the rect, flipping above/beside
-          when there's no room, clamped to the well, never occluding the rect),
-          so composing happens at the point of action instead of yanking a large
-          diagram to a below-the-fold block. On genuinely narrow (mobile-ish)
-          widths there's no room for a sane popover, so we degrade to the legacy
-          below-diagram placement. */}
-      {active && !narrow && popoverPos && (
-        <div
-          ref={composerRef}
-          data-testid="dp-region-popover"
-          data-placement={popoverPos.placement}
-          onKeyDown={onComposerKeyDown}
-          className="absolute z-[3] p-2.5 bg-surface-elevated border border-accent-blue/30 rounded-lg shadow-lg space-y-2"
-          style={{ left: popoverPos.left, top: popoverPos.top, width: popoverWidth }}
-        >
-          {renderComposerInner(true)}
-        </div>
-      )}
+      {/* The narrow-viewport composer. Q4 review (H1) — this is the placement
+          that broke worst under the 60vh cap: at ≤900px (VS Code webviews
+          commonly sit there) a drag opened it inside the scrollport, 817-834px
+          below the visible area, at 0% visibility, WITH FOCUS INSIDE IT — no
+          textarea, no Send, no Cancel anywhere on screen. In the chrome slot it
+          is always in flow below the diagram. */}
       {active && narrow && (
         <div
           ref={composerRef}
@@ -642,6 +780,13 @@ export function DiagramRegionLayer({
           })}
         </ul>
       )}
+    </>
+  );
+
+  return (
+    <>
+      {overlaySlot}
+      {chromeHost ? createPortal(chromeSlot, chromeHost) : chromeHost === undefined ? chromeSlot : null}
     </>
   );
 }

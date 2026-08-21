@@ -226,7 +226,13 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, read
     >
       <div
         {...dialogProps}
-        aria-label="Discuss this decision"
+        // Q4 review (M4) — the dialog is named by its own question rather than
+        // the generic "Discuss this decision", and that name is a real h2 (see
+        // below), so the workbench's outline is self-contained: h2 question →
+        // h3 option titles. Before the fix its first heading was an h2 SIBLING
+        // of the artifact title, and option titles announced at two different
+        // levels (h3 in the compare grid, h2 once popped out).
+        aria-labelledby={`dp-workbench-heading-${event.decisionId}`}
         data-testid="decision-workbench"
         className="relative w-full max-w-[1280px] bg-surface-primary border border-border-default rounded-lg shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
         onKeyDown={(e) => {
@@ -246,6 +252,16 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, read
         }}
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Q4 review (M4) — the dialog's own h2. The question is ALREADY on
+            screen a few lines below (as commentable markdown, which can't be a
+            heading without swallowing its comment button into the heading's
+            accessible name), so this is sr-only: it gives the outline its
+            top level and the dialog its accessible name without drawing a
+            second copy. */}
+        <h2 id={`dp-workbench-heading-${event.decisionId}`} className="sr-only">
+          {event.context}
+        </h2>
+
         {/* Breadcrumb header — Decision ▸ Discuss + the question (commentable). */}
         <div className="flex items-start gap-2 px-4 py-2.5 border-b border-border-subtle bg-surface-secondary">
           <span className="mt-0.5 text-2xs font-bold tracking-wide text-accent-amber bg-accent-amber-dim rounded px-1.5 py-0.5 shrink-0">
@@ -548,7 +564,7 @@ function WorkbenchColumn({
       {/* Column head — name, recommended chip, per-option comment count, chips. */}
       <div className="px-3.5 pt-3 pb-2.5 border-b border-border-subtle">
         <div className="flex items-center gap-2 min-w-0">
-          <h2 className="flex-1 min-w-0 text-sm font-semibold text-text-primary truncate">{title}</h2>
+          <h3 className="flex-1 min-w-0 text-sm font-semibold text-text-primary truncate">{title}</h3>
           {option.recommendation && (
             <span
               className="text-2xs font-bold tracking-wide text-accent-violet bg-accent-violet-dim rounded px-1.5 py-0.5 shrink-0"

@@ -54,7 +54,12 @@ export function SpecArtifact({ artifact }: Props) {
     <div className="space-y-4">
       {/* Objective — the pairing "why" */}
       <div className="px-4 py-3 bg-accent-blue-dim/20 border border-accent-blue/20 rounded-lg">
-        <h3 className="text-2xs font-semibold text-accent-blue/80 uppercase tracking-wide mb-1">
+        {/* Q4 review (L8) — the alpha class again, and the worst instance of
+            it: composited on its own blue-dim/20 wash this measured 3.57:1
+            light / 4.28:1 dark — sub-AA in BOTH themes, on the label naming
+            the spec's whole purpose (and now a real heading). Full strength =
+            5.16 light / 5.93 dark; the wash already does the de-emphasis. */}
+        <h3 className="text-2xs font-semibold text-accent-blue uppercase tracking-wide mb-1">
           Objective
         </h3>
         <SimpleMarkdown

@@ -85,6 +85,29 @@ describe("Q4 #1 — the diagram well is capped and its controls sit ABOVE it", (
     expect(well.contains(host.parentElement!)).toBe(true);
   });
 
+  it("Q4 review (H1/M3) — the region layer's FLOW chrome is portalled OUT of the capped well", async () => {
+    render(<MermaidDiagram source="graph TD; A-->B" region={{ artifactId: "art_1", visualId: "v1" }} />);
+    await waitFor(() => expect(document.querySelector(".dp-mermaid svg")).not.toBeNull());
+    const well = document.querySelector(".dp-mermaid-well") as HTMLElement;
+    const chrome = document.querySelector(".dp-mermaid-chrome") as HTMLElement;
+    expect(chrome).not.toBeNull();
+    // The chrome host is a SIBLING AFTER the well, never inside it: anything
+    // inside gets clipped by the 60vh cap (the ⌨ path, the locator list and the
+    // narrow block composer all measured 817-834px below the visible area).
+    expect(well.contains(chrome)).toBe(false);
+    expect(well.compareDocumentPosition(chrome) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // …and the canvas-anchored overlay stays INSIDE, scrolling with the diagram.
+    const overlay = document.querySelector('[data-testid="dp-region-overlay"]') as HTMLElement;
+    expect(well.contains(overlay)).toBe(true);
+  });
+
+  it("Q4 review (H2) — the well marks itself as the scrollport the popover must clamp to", async () => {
+    render(<MermaidDiagram source="graph TD; A-->B" />);
+    await waitFor(() => expect(document.querySelector(".dp-mermaid svg")).not.toBeNull());
+    const well = document.querySelector(".dp-mermaid-well") as HTMLElement;
+    expect(well.hasAttribute("data-dp-scrollport")).toBe(true);
+  });
+
   it("leaves the Q5 skeleton and the broken-diagram degrade untouched", async () => {
     renderMock.mockRejectedValue(new Error("Parse error on line 1"));
     render(<MermaidDiagram source="not a diagram" />);
@@ -141,7 +164,11 @@ describe("Q4 #2 — the CHANGED FILES picker keeps the basename", () => {
     return art;
   }
 
-  it("shows every row's FILENAME (was: a plain tail-first `truncate` in a 240px rail, so all three rows read 'packages/mc…')", () => {
+  // Q4 review (M6) — the honest claim. A 240px rail leaves the label ~88-96px
+  // (~11-12 mono chars, measured in q4-capture.e2e.ts), so a long basename
+  // still clips its own tail. What changed is WHICH HALF survives: the file's
+  // own name instead of the "packages/mcp-server/…" prefix every row shared.
+  it("leads every row with the FILENAME (was: a tail-first `truncate` in a 240px rail, so all three read 'packages/mc…')", () => {
     renderRail();
     const basenames = screen.getAllByTestId("changeset-rail-file-basename").map((n) => n.textContent);
     expect(basenames).toEqual([
