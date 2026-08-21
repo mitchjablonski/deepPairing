@@ -23224,6 +23224,16 @@ var ArtifactStatusSchema = external_exports.enum([
 function isLateCommentableStatus(status) {
   return status === "approved";
 }
+var CLOSED_ARTIFACT_STATUSES = /* @__PURE__ */ new Set([
+  "superseded",
+  "retracted",
+  "rejected",
+  "obsolete",
+  "approved"
+]);
+function isClosedArtifactStatus(status) {
+  return status !== void 0 && CLOSED_ARTIFACT_STATUSES.has(status);
+}
 var ArtifactStatusHistoryEntrySchema = external_exports.object({
   status: ArtifactStatusSchema,
   at: external_exports.string().datetime()
@@ -25363,16 +25373,6 @@ function searchAll(projectRoot2, query, limit = 50) {
   }
   return results.sort((a, b) => b.score - a.score).slice(0, limit);
 }
-var CLOSED_ARTIFACT_STATUSES = /* @__PURE__ */ new Set([
-  "superseded",
-  "retracted",
-  "rejected",
-  "obsolete",
-  "approved"
-]);
-function isClosedArtifactStatus(status) {
-  return status !== void 0 && CLOSED_ARTIFACT_STATUSES.has(status);
-}
 function resolveLiveArtifact(artifacts, id) {
   let current = artifacts.find((a) => a.id === id);
   const seen = /* @__PURE__ */ new Set();
@@ -26915,13 +26915,17 @@ var FileStore = class _FileStore {
    *  legitimately-open is dropped here — only genuine orphans, whose artifact
    *  went terminal by another path (the /api/decisions no-record fallback, a
    *  straight Approve on the card) and which the human can no longer act on.
-   *  MIRRORED by CLOSED_ARTIFACT_STATUSES in session-scan.ts — THE TWO MUST
-   *  AGREE (session-scan is store-less so it can't reuse this private method);
-   *  the parity is pinned in list-all-decisions.test.ts. */
+   *  Q3 — the status SET itself no longer lives here. It was expressed THREE
+   *  times (here; CLOSED_ARTIFACT_STATUSES in session-scan.ts; and — disagreeing
+   *  on `revised` — check_feedback's `openArtifactIds`, which read openness as
+   *  `draft || reviewing` and so DROPPED a pending decision this method kept).
+   *  All three now call the ONE shared `isClosedArtifactStatus`
+   *  (@deeppairing/shared). The session-scan parity pin in
+   *  list-all-decisions.test.ts stays as the guard. */
   isArtifactClosed(artifactId) {
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (!art) return false;
-    return art.status === "superseded" || art.status === "retracted" || art.status === "rejected" || art.status === "obsolete" || art.status === "approved";
+    return isClosedArtifactStatus(art.status);
   }
   getPendingDecisions() {
     return Array.from(this.decisions.values()).filter(

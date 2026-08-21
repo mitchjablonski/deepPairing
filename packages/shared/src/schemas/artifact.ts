@@ -66,6 +66,49 @@ export function isLateCommentableStatus(status: ArtifactStatus | string): boolea
   return status === "approved";
 }
 
+/**
+ * Q3 — the ONE closed-artifact status set. An artifact in one of these has
+ * reached a terminal state the human can no longer act on, so anything hanging
+ * off it (a response-less decision record, an unresolved plan review, a
+ * "still open?" nag) is an ORPHAN, not a live obligation.
+ *
+ * This USED to be expressed three times, and the third copy disagreed:
+ *   1. FileStore.isArtifactClosed (private) — the store's pending-decision /
+ *      pending-plan-review filters,
+ *   2. CLOSED_ARTIFACT_STATUSES in session-scan.ts (store-less mirror, kept in
+ *      sync by a parity test in list-all-decisions.test.ts),
+ *   3. check_feedback's `openArtifactIds` — which expressed OPEN-ness as
+ *      `draft || reviewing` and therefore DROPPED a pending decision whose
+ *      backing artifact had been SENT BACK (`revised`), while the store that
+ *      produced the record still considered it live. One payload, two answers.
+ * All three now import this. Add a status here only when the human genuinely
+ * can never act on it again.
+ *
+ * NOT closed, deliberately: "draft" (the open review lane), "revised" (sent
+ * back — the successor work is still owed, so the record stays live) and
+ * "reviewing". A note on "reviewing": as of Q3 NOTHING writes it. The status
+ * schema declares it and five sites READ it, but zero code paths set it
+ * (StatusUpdateBodySchema admits only approved/revised/rejected/obsolete, and
+ * createArtifact always starts at "draft"). It stays in the OPEN set as
+ * defensive handling of a schema-valid value — flagged, not built.
+ */
+const CLOSED_ARTIFACT_STATUSES: ReadonlySet<string> = new Set<string>([
+  "superseded",
+  "retracted",
+  "rejected",
+  "obsolete",
+  "approved",
+]);
+
+/**
+ * Q3 — see CLOSED_ARTIFACT_STATUSES. `undefined` (an artifact the caller's
+ * session doesn't carry at all) is NOT closed: unknown ids stay live, mirroring
+ * the store's own "unknown ids stay pending" stance.
+ */
+export function isClosedArtifactStatus(status: ArtifactStatus | string | undefined): boolean {
+  return status !== undefined && CLOSED_ARTIFACT_STATUSES.has(status);
+}
+
 export const ArtifactStatusHistoryEntrySchema = z.object({
   status: ArtifactStatusSchema,
   at: z.string().datetime(),

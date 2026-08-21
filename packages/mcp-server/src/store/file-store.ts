@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
-import { suggestionSummary, isLateCommentableStatus } from "@deeppairing/shared";
+import { suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { capConceptLength } from "./concept-hygiene.js";
@@ -1285,19 +1285,17 @@ export class FileStore implements IStore {
    *  legitimately-open is dropped here — only genuine orphans, whose artifact
    *  went terminal by another path (the /api/decisions no-record fallback, a
    *  straight Approve on the card) and which the human can no longer act on.
-   *  MIRRORED by CLOSED_ARTIFACT_STATUSES in session-scan.ts — THE TWO MUST
-   *  AGREE (session-scan is store-less so it can't reuse this private method);
-   *  the parity is pinned in list-all-decisions.test.ts. */
+   *  Q3 — the status SET itself no longer lives here. It was expressed THREE
+   *  times (here; CLOSED_ARTIFACT_STATUSES in session-scan.ts; and — disagreeing
+   *  on `revised` — check_feedback's `openArtifactIds`, which read openness as
+   *  `draft || reviewing` and so DROPPED a pending decision this method kept).
+   *  All three now call the ONE shared `isClosedArtifactStatus`
+   *  (@deeppairing/shared). The session-scan parity pin in
+   *  list-all-decisions.test.ts stays as the guard. */
   private isArtifactClosed(artifactId: string): boolean {
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (!art) return false;
-    return (
-      art.status === "superseded" ||
-      art.status === "retracted" ||
-      art.status === "rejected" ||
-      art.status === "obsolete" ||
-      art.status === "approved"
-    );
+    return isClosedArtifactStatus(art.status);
   }
 
   getPendingDecisions(): DecisionRecord[] {

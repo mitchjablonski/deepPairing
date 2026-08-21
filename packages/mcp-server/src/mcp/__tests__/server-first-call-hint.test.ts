@@ -1038,3 +1038,33 @@ describe("MCP Tool Handlers — firstCallHint", () => {
     });
   });
 });
+
+/**
+ * Q3 — the wiring end of the stale-nag fix. first-call-hint.test.ts pins the
+ * predicate; this pins that the DISPATCH actually hands it the commentId, on the
+ * one call shape that hits it: `answer_question` as the session's FIRST tool
+ * call (the hint is built before the handler runs and attached after).
+ */
+describe("firstCallHint — Q3: answering the only open question doesn't nag about it", () => {
+  it("answer_question as the first call reports no unanswered-question debt", async () => {
+    store.createArtifact({ id: "art_q", type: "plan", title: "Rollout", content: { steps: [] } });
+    store.addComment({
+      id: "cmt_only_q",
+      artifactId: "art_q",
+      content: "why a sliding window?",
+      author: "human",
+      intent: "question",
+      target: { artifactId: "art_q" },
+    });
+
+    const { text } = await callTool("answer_question", {
+      commentId: "cmt_only_q",
+      answer: "so an active session never expires mid-request.",
+    });
+    expect(text).toContain("Answered cmt_only_q");
+    // The whole reply (tool result + the appended hint block) must not tell the
+    // agent to drain a queue it just drained.
+    expect(text).not.toContain("unanswered human question");
+    expect(text).not.toContain("Drain these before new work");
+  });
+});

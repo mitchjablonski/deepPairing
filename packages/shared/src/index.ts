@@ -71,6 +71,7 @@ export {
   type CodeChangeContent,
   parseArtifactContent,
   isLateCommentableStatus,
+  isClosedArtifactStatus,
 } from "./schemas/artifact.js";
 
 export {

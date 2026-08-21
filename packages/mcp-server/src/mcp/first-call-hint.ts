@@ -192,7 +192,24 @@ export function autonomyHintFor(level: AutonomyLevel): string {
       : AUTONOMY_HINT_SUPERVISED;
 }
 
-export async function buildFirstCallHint(store: IStore, port: number): Promise<string> {
+export async function buildFirstCallHint(
+  store: IStore,
+  port: number,
+  /**
+   * Q3 — comment ids this call is ABOUT TO answer. The hint is assembled BEFORE
+   * the tool handler runs (server.ts builds it, then attaches it to the
+   * successful result), so a first call of `answer_question` sees a snapshot
+   * that still contains the very comment it is answering — and the reply came
+   * back carrying "1 unanswered human question awaits… Drain these before new
+   * work." for a queue the agent had just drained. Every obligation lane that
+   * keys on `!answeredByCommentId` (questions, follow-up replies, plain
+   * comments needing a mirror) skips these ids: on a SUCCESSFUL answer_question
+   * — the only case the hint is attached at all — the agent has replied to that
+   * comment, whichever lane it sat in.
+   */
+  answeredCommentIds: readonly string[] = [],
+): Promise<string> {
+  const answeringCommentIds = new Set(answeredCommentIds.filter((id) => typeof id === "string" && id.length > 0));
   // EE1 — three-tier ordering for assembly:
   //   1. obligationsParts: real this-turn obligations (Q4 follow-ups,
   //      plain comments needing mirror, decision revisions). Uncapped —
@@ -555,8 +572,22 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
     // #192 — also exclude humanResolvedAt (a question the human marked done):
     // the tail-walk predicate this queue's other surfaces use treats a
     // human-resolved question as closed, so the preamble must not nag about it.
+    //
+    // Q3 — and exclude `answeringCommentIds`: the STALE NAG. This hint is built
+    // BEFORE the tool handler runs (server.ts builds it, then attaches it to the
+    // successful result), so when the session's first call is `answer_question`
+    // the snapshot still shows the question it is about to answer. The observed
+    // symptom: answering the ONLY open question came back with "1 unanswered
+    // human question awaits… Drain these before new work." Nothing was owed. The
+    // handler's own commentId is passed in so the count reflects the state the
+    // agent is being handed, not the one it just left.
     const unanswered = allComments.filter(
-      (c: any) => c.author === "human" && c.intent === "question" && !c.answeredByCommentId && !c.humanResolvedAt,
+      (c: any) =>
+        c.author === "human" &&
+        c.intent === "question" &&
+        !c.answeredByCommentId &&
+        !c.humanResolvedAt &&
+        !answeringCommentIds.has(c.id),
     );
     const revisionRequested = unanswered.filter(
       (c: any) => typeof c.target?.sectionId === "string" && c.target.sectionId.startsWith("decision_revision_requested"),
@@ -618,7 +649,9 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
         c.author === "human" &&
         c.parentCommentId &&
         agentCommentIds.has(c.parentCommentId) &&
-        !c.answeredByCommentId,
+        !c.answeredByCommentId &&
+        // Q3 — same stale-snapshot exclusion as the question lane above.
+        !answeringCommentIds.has(c.id),
     );
     if (followUps.length > 0) {
       const lines = followUps.map((c: any) => {
@@ -656,7 +689,12 @@ export async function buildFirstCallHint(store: IStore, port: number): Promise<s
         !followUpIds.has(c.id) &&
         c.target?.artifactId &&
         c.target.artifactId !== "__session__" &&
-        !approvedArtifactIds.has(c.target.artifactId),
+        !approvedArtifactIds.has(c.target.artifactId) &&
+        // Q3 — same stale-snapshot exclusion as the question lane above. A
+        // SUCCESSFUL answer_question posted a reply on this comment (the plain
+        // path also stamps answeredByCommentId; the suggestion path stamps the
+        // suggestion state), so "needs a mirror" is already false.
+        !answeringCommentIds.has(c.id),
     );
     if (plainCommentsNeedingMirror.length > 0) {
       blockingParts.push(

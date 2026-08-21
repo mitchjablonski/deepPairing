@@ -997,7 +997,19 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
       // X4 — full assembly lives in mcp/first-call-hint.ts; the BLOCKING +
       // CONTEXTUAL tiering, the HINT_BUDGET_CHARS cap, and the recall
       // pointer all moved with it. The handler here just dispatches.
-      firstCallHint = await buildFirstCallHint(store, port);
+      // Q3 — hand the hint the comment id this call is about to answer. The
+      // hint is built HERE, before the handler runs, so an opening
+      // `answer_question` would otherwise be told to "drain" the very question
+      // it is answering (round-12: answering the only open question came back
+      // with "1 unanswered human question awaits…"). The hint only ever
+      // attaches to a SUCCESSFUL result, so by the time the agent reads it the
+      // reply is posted. Non-answer_question calls pass nothing and are
+      // byte-for-byte unchanged.
+      const answeringCommentIds =
+        name === "answer_question" && typeof args?.commentId === "string" && args.commentId.trim()
+          ? [args.commentId.trim()]
+          : [];
+      firstCallHint = await buildFirstCallHint(store, port, answeringCommentIds);
     }
 
     // X4 — per-call helpers extracted to mcp/tool-helpers.ts. These thin
