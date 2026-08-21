@@ -27586,6 +27586,35 @@ function getGlobalStore() {
   return _singleton;
 }
 
+// src/store/philosophy-citation.ts
+function groundingInstance(entry, stance) {
+  const withReason = entry.instances.filter((i) => i.reason);
+  const latestOf = (verdict) => [...withReason].reverse().find((i) => i.verdict === verdict);
+  if (stance === "avoid") return latestOf("rejected") ?? latestOf("approved");
+  if (stance === "prefer") return latestOf("approved") ?? latestOf("rejected");
+  return [...withReason].reverse()[0];
+}
+function formatInstance(i) {
+  const day = typeof i.at === "string" && /^\d{4}-\d{2}-\d{2}/.test(i.at) ? i.at.slice(0, 10) : "";
+  const when = day ? `${i.verdict === "rejected" ? "rejected" : "approved"} on ${day}` : "recorded earlier";
+  return `${when}: "${i.reason}"`;
+}
+function formatStanceCitation(entry, stance) {
+  if (stance === "mixed") {
+    const withReason = entry.instances.filter((i) => i.reason);
+    const latestOf = (verdict) => [...withReason].reverse().find((i) => i.verdict === verdict);
+    const rejection = latestOf("rejected");
+    const approval = latestOf("approved");
+    if (rejection && approval) {
+      const rejectedFirst = String(rejection.at ?? "") <= String(approval.at ?? "");
+      const [first, second] = rejectedFirst ? [rejection, approval] : [approval, rejection];
+      return `${formatInstance(first)} \u2014 later ${formatInstance(second)}`;
+    }
+  }
+  const chosen = groundingInstance(entry, stance);
+  return chosen?.reason ? formatInstance(chosen) : "";
+}
+
 // src/mcp/autonomy-policy.ts
 var AUTONOMY_POLICY_LINE = {
   balanced: "Skip findings for simple tasks. Present options for any genuine architectural choice \u2014 and for anything high-risk or irreversible.",
@@ -28036,9 +28065,9 @@ ${preferred.join("\n")}`
       philosophyParts.push(
         `Strong 'avoid' stances (multi-project):
 ${avoidList.map((e) => {
-          const latestReason = [...e.instances].reverse().find((i) => i.reason)?.reason;
+          const grounding = groundingInstance(e, e.stance);
           const projects = new Set(e.instances.map((i) => i.project)).size;
-          return `  - "${e.concept}"${latestReason ? ` \u2014 "${latestReason}"` : ""}${projects > 1 ? ` (${projects} projects)` : ""}`;
+          return `  - "${e.concept}"${grounding?.reason ? ` \u2014 "${grounding.reason}"` : ""}${projects > 1 ? ` (${projects} projects)` : ""}`;
         }).join("\n")}`
       );
     }
@@ -33310,6 +33339,60 @@ async function postPrReview(opts) {
   }
 }
 
+// src/github/review-authorization.ts
+var UNDECIDED_STATUSES = /* @__PURE__ */ new Set(["draft", "reviewing", "revised"]);
+var DECIDED_EXCLUDED_STATUSES = /* @__PURE__ */ new Set(["rejected", "superseded", "retracted", "obsolete"]);
+function hasPostableEvidence(artifact) {
+  const findings = coerceResearchContent(artifact.content).findings;
+  if (!Array.isArray(findings)) return false;
+  return findings.some((f) => {
+    const evidence = Array.isArray(f.evidence) ? f.evidence : [];
+    return evidence.some(
+      (e) => !!e && typeof e === "object" && !!e.filePath && typeof e.lineStart === "number"
+    );
+  });
+}
+function externalChangesets(artifacts) {
+  return artifacts.filter(
+    (a) => a.type === "changeset" && coerceChangesetContent(a.content).reviewIntent === "external"
+  );
+}
+function authorizeReviewPost(state, opts) {
+  const { event } = opts;
+  const findingsArtifacts = state.artifacts.filter((a) => a.type === "research" && hasPostableEvidence(a));
+  const unruled = findingsArtifacts.filter((a) => UNDECIDED_STATUSES.has(a.status));
+  if (unruled.length > 0) {
+    const names = unruled.map((a) => `"${a.title}" (${a.id}, ${a.status})`).join(", ");
+    return {
+      ok: false,
+      reason: `Refusing to post: your pair has not given a verdict on ${unruled.length === 1 ? "this findings artifact" : "these findings artifacts"} yet \u2014 ${names}. Posting now would put un-reviewed findings on someone else's PR under their name. Wait for them to approve it in the companion UI (or reject it, or send it back), then call post_pr_review again. Keep polling check_feedback until then.`
+    };
+  }
+  const approved = findingsArtifacts.filter((a) => a.status === "approved");
+  const decidedNo = findingsArtifacts.filter((a) => DECIDED_EXCLUDED_STATUSES.has(a.status));
+  const payload = buildGitHubReviewPayload({ ...state, artifacts: approved }, { event });
+  if (payload.comments.length === 0) {
+    if (event === "APPROVE") {
+      const externals = externalChangesets(state.artifacts);
+      const approvedExternal = externals.find((a) => a.status === "approved");
+      if (!approvedExternal) {
+        const pending = externals.filter((a) => !DECIDED_EXCLUDED_STATUSES.has(a.status));
+        return {
+          ok: false,
+          reason: externals.length === 0 ? `Refusing to post an APPROVE: nothing in this session records your pair approving this PR. An APPROVE with no inline comments is a real approving review on someone else's repository, and the agent cannot authorize it. Put the PR's diff on the review surface first (present_changeset with reviewIntent: "external") and let them approve it there \u2014 that approval IS the authorization.` : `Refusing to post an APPROVE: your pair has not approved the PR changeset yet` + (pending.length > 0 ? ` ("${pending[0].title}" is ${pending[0].status})` : "") + `. Get your pair's verdict on the changeset first \u2014 their approval in the companion UI is what authorizes an approving review on someone else's PR.`
+        };
+      }
+      return { ok: true, payload };
+    }
+    const excludedNote = decidedNo.length > 0 ? ` (${decidedNo.length} findings artifact${decidedNo.length === 1 ? " was" : "s were"} excluded \u2014 ${decidedNo.map((a) => `"${a.title}" is ${a.status}`).join(", ")})` : "";
+    return {
+      ok: false,
+      reason: `No approved findings with structured evidence (filePath + lineStart) in this session \u2014 nothing to post as ${event === "REQUEST_CHANGES" ? "the inline comments a REQUEST_CHANGES owes the author" : "inline review comments"}${excludedNote}. Use present_findings with structured Evidence objects and let your pair approve them` + (event === "REQUEST_CHANGES" ? "" : `, or pass event: "APPROVE" once they've approved the PR changeset`) + `.`
+    };
+  }
+  return { ok: true, payload };
+}
+
 // src/mcp/tools/post-pr-review.ts
 async function handlePostPrReview(ctx, args) {
   const { store } = ctx;
@@ -33322,16 +33405,11 @@ async function handlePostPrReview(ctx, args) {
   }
   const event = ["COMMENT", "REQUEST_CHANGES", "APPROVE"].includes(args?.event) ? args.event : "COMMENT";
   const state = await store.getFullState();
-  const payload = buildGitHubReviewPayload(state, { event });
-  if (payload.comments.length === 0 && payload.event !== "APPROVE") {
-    return {
-      content: [{
-        type: "text",
-        text: `No findings with structured evidence (filePath + lineStart) in this session \u2014 nothing to post as ${payload.event === "REQUEST_CHANGES" ? "the inline comments a REQUEST_CHANGES owes the author" : "inline review comments"}. Use present_findings with structured Evidence objects to enable this` + (payload.event === "REQUEST_CHANGES" ? "" : ', or pass event: "APPROVE" if the human read it and had nothing to flag') + "."
-      }],
-      isError: true
-    };
+  const auth = authorizeReviewPost(state, { event });
+  if (!auth.ok) {
+    return { content: [{ type: "text", text: auth.reason }], isError: true };
   }
+  const { payload } = auth;
   try {
     const result = await postPrReview({
       ref,
@@ -33343,7 +33421,7 @@ async function handlePostPrReview(ctx, args) {
       content: [{
         type: "text",
         // Q6 — "Posted 0 inline comments" is a nonsense sentence for the bare
-        // APPROVE the guard above now allows; say what actually happened.
+        // APPROVE the gate above allows; say what actually happened.
         text: payload.comments.length === 0 ? `Posted a review on PR ${ref} as ${payload.event} with no inline comments: ${result.htmlUrl}` : `Posted ${payload.comments.length} inline comment${payload.comments.length === 1 ? "" : "s"} on PR ${ref} as ${payload.event}: ${result.htmlUrl}`
       }]
     };
@@ -33913,11 +33991,9 @@ Respect these stances \u2014 especially TEAM-source, high-citation, and SEED ent
       const rejections = e.instances.filter((i) => i.verdict === "rejected").length;
       const approvals = e.instances.filter((i) => i.verdict === "approved").length;
       const projects = new Set(e.instances.map((i) => i.project)).size;
-      const latestReason = [...e.instances].reverse().find((i) => i.reason)?.reason;
-      const lastSeenDate = typeof e.lastSeenAt === "string" ? e.lastSeenAt.slice(0, 10) : "";
-      const seenPart = lastSeenDate ? `, last on ${lastSeenDate}` : "";
-      const reasonLine = latestReason ? `
-    latest reason${seenPart}: "${latestReason}"` : "";
+      const citation = formatStanceCitation(e, e.stance);
+      const reasonLine = citation ? `
+    ${citation}` : "";
       return `- [${e.stance.toUpperCase()}] "${e.concept}" \u2014 ${rejections} reject${rejections !== 1 ? "s" : ""}, ${approvals} approval${approvals !== 1 ? "s" : ""} across ${projects} project${projects !== 1 ? "s" : ""}${reasonLine}`;
     });
     const trailer = entries.length > 10 ? `
@@ -33986,8 +34062,8 @@ Read a full session via resource deeppairing://session/{id} or an artifact via d
   if (philosophyHits.length > 0) {
     lines.push(`## Philosophy ledger (cross-project stances)`);
     for (const e of philosophyHits) {
-      const latestReason = [...e.instances].reverse().find((i) => i.reason)?.reason;
-      lines.push(`- [${e.stance.toUpperCase()}] "${e.concept}" \xD7 ${e.instances.length}${latestReason ? ` \u2014 "${latestReason}"` : ""}`);
+      const citation = formatStanceCitation(e, e.stance);
+      lines.push(`- [${e.stance.toUpperCase()}] "${e.concept}" \xD7 ${e.instances.length}${citation ? ` \u2014 ${citation}` : ""}`);
     }
   }
   if (sessionHits.length > 0) {
@@ -34367,7 +34443,11 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "post_pr_review",
         annotations: { title: "Post PR review", readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-        description: "Post this session's approved findings as inline comments on a GitHub PR via the `gh` CLI. Only findings with structured evidence (filePath + lineStart) anchor as inline comments; rejected / retracted / superseded artifacts are omitted.",
+        description: `Post this session's approved findings as inline comments on a GitHub PR via the \`gh\` CLI. Only findings with structured evidence (filePath + lineStart) anchor as inline comments; rejected / retracted / superseded artifacts are omitted.
+
+Call this ONLY when the human has explicitly told you to post ("post the review", "ship the review"). "We're done here" ends the discussion, NOT the review \u2014 it is not permission to write into someone else's repository. If it is ambiguous, ask them.
+
+AUTHORIZATION IS CHECKED, not assumed: before anything reaches GitHub the tool verifies the human's recorded verdicts in the session store. A findings artifact they never ruled on (draft/reviewing/revised) REFUSES the whole post and is named in the error \u2014 go and get their verdict, don't try to route around it. Findings they rejected are excluded automatically. An APPROVE with no inline comments additionally requires them to have APPROVED the external changeset (the PR on the review surface) \u2014 that approval is what authorizes an approving review on someone else's code. There is no force flag and no bypass; if it refuses, the answer is a human verdict, not a retry.`,
         inputSchema: {
           type: "object",
           properties: {

@@ -382,7 +382,9 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
         name: "post_pr_review",
         annotations: { title: "Post PR review", readOnlyHint: false, destructiveHint: false, openWorldHint: true },
         description:
-          "Post this session's approved findings as inline comments on a GitHub PR via the `gh` CLI. Only findings with structured evidence (filePath + lineStart) anchor as inline comments; rejected / retracted / superseded artifacts are omitted.",
+          "Post this session's approved findings as inline comments on a GitHub PR via the `gh` CLI. Only findings with structured evidence (filePath + lineStart) anchor as inline comments; rejected / retracted / superseded artifacts are omitted." +
+          "\n\nCall this ONLY when the human has explicitly told you to post (\"post the review\", \"ship the review\"). \"We're done here\" ends the discussion, NOT the review — it is not permission to write into someone else's repository. If it is ambiguous, ask them." +
+          "\n\nAUTHORIZATION IS CHECKED, not assumed: before anything reaches GitHub the tool verifies the human's recorded verdicts in the session store. A findings artifact they never ruled on (draft/reviewing/revised) REFUSES the whole post and is named in the error — go and get their verdict, don't try to route around it. Findings they rejected are excluded automatically. An APPROVE with no inline comments additionally requires them to have APPROVED the external changeset (the PR on the review surface) — that approval is what authorizes an approving review on someone else's code. There is no force flag and no bypass; if it refuses, the answer is a human verdict, not a retry.",
         inputSchema: {
           type: "object" as const,
           properties: {

@@ -1,6 +1,7 @@
 import type { IStore } from "../store/store-interface.js";
 import type { RequestScope, RequestSource } from "@deeppairing/shared";
 import { getGlobalStore } from "../store/global-store.js";
+import { groundingInstance } from "../store/philosophy-citation.js";
 import { AUTONOMY_POLICY_LINE, type AutonomyLevel } from "./autonomy-policy.js";
 import { PENDING_DRAFT_TYPES } from "./tools/types.js";
 import { requestSecretNote, requestScopeNote } from "./tools/check-feedback-delivery.js";
@@ -407,9 +408,15 @@ export async function buildFirstCallHint(
       philosophyParts.push(
         `Strong 'avoid' stances (multi-project):\n${avoidList
           .map((e) => {
-            const latestReason = [...e.instances].reverse().find((i) => i.reason)?.reason;
+            // Q6 (#232) B3 — quote the REJECTION that grounds the avoid stance,
+            // not "the latest reason of any verdict". On a concept the human
+            // rejected twice and later approved once, the old code printed their
+            // APPROVAL's words as the reason to avoid it — under a heading that
+            // says "Strong 'avoid' stances". Shared with recall's two modes so
+            // all three surfaces cite the same instance (philosophy-citation.ts).
+            const grounding = groundingInstance(e, e.stance);
             const projects = new Set(e.instances.map((i) => i.project)).size;
-            return `  - "${e.concept}"${latestReason ? ` — "${latestReason}"` : ""}${projects > 1 ? ` (${projects} projects)` : ""}`;
+            return `  - "${e.concept}"${grounding?.reason ? ` — "${grounding.reason}"` : ""}${projects > 1 ? ` (${projects} projects)` : ""}`;
           })
           .join("\n")}`,
       );

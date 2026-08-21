@@ -141,7 +141,11 @@ function coercePlanStep(v: unknown): PlanStep {
     reasoning: str(s.reasoning),
   };
   const files = coerceFiles(s.files);
-  if (files) out.files = files as any;
+  // Q6 — was `as any`. The cast is real (coerceFiles keeps loose objects on the
+  // never-drop-data contract, so it cannot prove the FileChange branch), but a
+  // NAMED cast says exactly what is being asserted and where to look when the
+  // schema moves; `any` would also have swallowed a genuine type error here.
+  if (files) out.files = files as PlanStep["files"];
   if (Array.isArray(s.motivatedBy)) out.motivatedBy = strArr(s.motivatedBy);
   if (isObj(s.preview)) {
     out.preview = {

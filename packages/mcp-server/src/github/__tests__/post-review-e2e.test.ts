@@ -192,6 +192,20 @@ const LOW_FINDING = {
   evidence: [{ filePath: "auth/middleware.ts", lineStart: 8, lineEnd: 8, snippet: "const s = ...", explanation: "shadows the import" }],
 };
 
+/** Q6 B1(c) — the human's approval of the PR on the review surface, which is
+ *  what authorizes a bare APPROVE. */
+function approvedExternalChangeset(): Artifact {
+  return {
+    id: "art_cs", sessionId: "s_review", type: "changeset", version: 1, parentId: null,
+    title: "PR #42 — rate limiting", status: "approved",
+    content: {
+      files: [{ path: "auth/session.ts", changeType: "modified", hunks: [] }],
+      reviewIntent: "external", source: { kind: "github-pr", number: 42 },
+    },
+    agentReasoning: null, createdAt: "2026-08-20T10:00:00.000Z", updatedAt: "2026-08-20T10:00:00.000Z",
+  } as Artifact;
+}
+
 function sessionState(artifacts: Artifact[]) {
   return { sessionId: "s_review", artifacts, comments: [], decisions: [], planReviews: [] };
 }
@@ -421,14 +435,17 @@ describe("Q6 — handlePostPrReview (the MCP tool) end to end", () => {
       { pr: "42" },
     );
     expect(res.isError).toBe(true);
-    expect(res.content[0]!.text).toContain("No findings with structured evidence");
+    expect(res.content[0]!.text).toContain("No approved findings with structured evidence");
     expect(calls()).toHaveLength(0);
   });
 
-  it("a bare APPROVE with no findings POSTS — 'I read it, it's fine' is a complete review", async () => {
+  it("a bare APPROVE with no findings POSTS — once the human approved the PR changeset", async () => {
     // The commonest real outcome of being pinged on a PR. The old guard refused
     // every zero-comment post and told the reviewer to go write findings first.
-    const res = await handlePostPrReview(fakeCtx([]), { pr: "42", event: "APPROVE" });
+    // Q6 B1(c): it is allowed now, but only on the human's recorded approval of
+    // the external changeset — see review-authorization.test.ts for that gate's
+    // own branches.
+    const res = await handlePostPrReview(fakeCtx([approvedExternalChangeset()]), { pr: "42", event: "APPROVE" });
     expect(res.isError).toBeFalsy();
     expect(res.content[0]!.text).toContain("no inline comments");
     expect(res.content[0]!.text).not.toContain("Posted 0 inline comments");

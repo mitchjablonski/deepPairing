@@ -8,16 +8,28 @@ Post our review on PR $ARGUMENTS.
 Call `post_pr_review` with `pr: "$ARGUMENTS"`.
 
 **What posts.** Findings that carry structured evidence (`filePath` +
-`lineStart`), from artifacts I didn't reject. Those coordinates become the
-inline comments — a finding without them has nowhere to land on the diff and
-won't post. If I dismissed something during the review, take it out of the
-artifact with `revise_artifact` before posting: rejection is per-artifact, so a
-finding I waved off will still go to the PR if it's sitting in a live one.
+`lineStart`) from artifacts **I approved**. Those coordinates become the inline
+comments — a finding without them has nowhere to land on the diff and won't
+post.
+
+The tool checks my recorded verdicts against the session store before it calls
+out to GitHub, and refuses if they aren't there. So if it comes back refusing:
+
+- **"has not given a verdict on…"** — I never ruled on that findings artifact.
+  Go and get my verdict; don't try to route around it. There is no override
+  flag, and asking me in chat is not the same as me approving it in the UI.
+- **findings I rejected** are excluded on their own — you don't need to do
+  anything.
+- To drop one finding and keep the rest, `revise_artifact` first: rejection is
+  per-artifact, so a finding I waved off still posts if it's sitting inside a
+  live artifact.
 
 **Which event.**
 - `REQUEST_CHANGES` — only if a surviving finding is **high or critical**.
 - `APPROVE` — if I read it and had nothing to flag. That is a complete review;
-  it posts with no inline comments and you don't need findings to use it.
+  it posts with no inline comments and you don't need findings to use it. It
+  does need me to have **approved the PR changeset** in the UI — that approval
+  is what authorizes an approving review on someone else's repo.
 - `COMMENT` — everything else, and the default.
 
 **Requires `gh` installed and authenticated.** If the tool comes back saying gh

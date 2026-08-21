@@ -17,7 +17,7 @@
  *      Until Q6 it returned the reason alone, so half the promised sentence was
  *      unwritable and the agent would have had to invent or omit it.
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -146,6 +146,44 @@ describe("Q6 — review-pr.md carries the whole in-tandem arc, in order", () => 
     expect(flat(text)).toMatch(/don.t manufacture|do not manufacture/i);
   });
 
+  it("C2 — 'we're done here' ends the POLLING, and has its own explicit don't-post branch", () => {
+    // The trigger phrase for posting was lexically identical to the phrase that
+    // ends the discussion loop, with no branch for "done, but don't post". So
+    // the likeliest way to end a review — saying "we're done here" — read as
+    // consent to publish to someone else's repository.
+    const text = flat(reviewPr());
+    // The post triggers are now explicit ASKS to post.
+    expect(text).toMatch(/"post the review"/);
+    expect(text).toMatch(/"ship the review"/);
+    // …and "we're done here" is explicitly routed to the NON-posting path.
+    expect(text).toMatch(/"we're done here"[^.]*the \*polling\* stops/);
+    expect(text).toMatch(/Do not post\./);
+    // Ambiguity resolves to not-posting, and to asking.
+    expect(text).toMatch(/Anything ambiguous — or silence — is a no/);
+  });
+
+  it("C2 — the post step cannot be read as part of the discussion loop", () => {
+    const text = reviewPr();
+    const at = (needle: string) => {
+      const i = text.indexOf(needle);
+      expect(i, `missing: ${needle}`).toBeGreaterThan(-1);
+      return i;
+    };
+    // The loop's own "post nothing" instruction, then the separate
+    // end-the-discussion section, and only then the publishing step.
+    expect(at("Post nothing during this phase")).toBeLessThan(at("**Ending the discussion.**"));
+    expect(at("**Ending the discussion.**")).toBeLessThan(at("only on an explicit instruction to post"));
+  });
+
+  it("C2/B1 — the command tells the truth about the mechanical gate", () => {
+    const text = flat(reviewPr());
+    expect(text).toMatch(/checks my recorded verdicts/i);
+    expect(text).toMatch(/blocks the post/i);
+    expect(text).toMatch(/approved the PR changeset/i);
+    // And post-pr.md says there is no way around it.
+    expect(flat(postPr())).toMatch(/no override flag/i);
+  });
+
   it("APPROVE is offered as a real outcome, not a hole in the flow", () => {
     // The commonest result of being pinged on a PR. Both PR commands must say so,
     // and neither may push the agent toward inventing findings to avoid it.
@@ -203,39 +241,160 @@ describe("Q6 — SKILL.md's PR section agrees with the command", () => {
 const ctx = setupServerTest();
 const callTool = makeCallTool(ctx);
 
-describe("Q6 — the ledger sweep is WRITABLE: recall returns the reason AND the date", () => {
-  beforeEach(() => {
-    // A stance the human recorded a while back, exactly as a reject-and-remember
-    // cycle in another project would have left it.
-    getGlobalStore().recordInstance("in-process rate limiting", {
-      project: "gateway",
-      sessionId: "s_old",
-      verdict: "rejected",
-      reason: "we standardised on the edge limiter; in-process drifts per instance",
-      at: "2026-06-14T09:30:00.000Z",
-    });
-  });
+describe("Q6 B2/B3 — the ledger sweep's citation is writable, and TRUE", () => {
+  const REASON = "we standardised on the edge limiter; in-process drifts per instance";
 
-  it("recall gives the agent every fragment the promised finding sentence needs", async () => {
+  function seedRejection(at = "2026-05-01T09:30:00.000Z") {
+    getGlobalStore().recordInstance("in-process rate limiting", {
+      project: "gateway", sessionId: "s_old", verdict: "rejected", reason: REASON, at,
+    });
+  }
+
+  it("mode='philosophy' gives every fragment the promised sentence needs", async () => {
     // "This PR introduces <concept>, which you rejected on <date>: '<reason>'."
+    seedRejection();
     const res = await callTool("recall", { mode: "philosophy", query: "in-process rate limiting" });
     expect(res.isError).toBeFalsy();
-    expect(res.text).toContain("in-process rate limiting");      // <concept>
-    expect(res.text).toContain("2026-06-14");                     // <date>  ← added by Q6
-    expect(res.text).toContain("we standardised on the edge limiter"); // <reason>
-    expect(res.text).toContain("[AVOID]");                        // the stance itself
+    expect(res.text).toContain("in-process rate limiting");   // <concept>
+    expect(res.text).toContain("rejected on 2026-05-01");     // <verdict> + <date>
+    expect(res.text).toContain(REASON);                       // <reason>
+    expect(res.text).toContain("[AVOID]");
   });
 
-  it("the date is a DATE, not a timestamp — a review comment shouldn't quote milliseconds", () => {
-    // (Asserted on the formatted text produced above.)
-    return callTool("recall", { mode: "philosophy", query: "in-process rate limiting" }).then((res) => {
-      expect(res.text).toMatch(/last on 2026-06-14/);
-      expect(res.text).not.toContain("2026-06-14T09:30");
+  it("B2 — mode='any' (the mode the COMMAND instructs) carries the date too", async () => {
+    // The B2 bug: the date landed only in the philosophy branch, while
+    // review-pr.md tells the agent to call mode:"any" — which rendered the
+    // stance and its reason with no date at all, leaving half the promised
+    // sentence unwritable at exactly the call site that needed it.
+    seedRejection();
+    const res = await callTool("recall", { mode: "any", query: "in-process rate limiting" });
+    expect(res.isError).toBeFalsy();
+    expect(res.text).toContain("rejected on 2026-05-01");
+    expect(res.text).toContain(REASON);
+  });
+
+  it("B2 — the command instructs the mode that actually serves the sweep", () => {
+    // Guidance and mechanism pinned to each other: whatever invocation the
+    // command names must be one whose output carries the citation.
+    expect(flat(reviewPr())).toContain('recall(mode: "any", query: "<concept>")');
+  });
+
+  it("B3 — a later APPROVAL cannot re-date the rejection", async () => {
+    // THE BUG: `lastSeenAt` advances on ANY touch, so a concept rejected on
+    // 05-01 and approved on 08-11 rendered "last on 2026-08-11" beside the
+    // 05-01 rejection reason — the agent would cite the day the human said YES
+    // as the day they said no, on someone else's PR.
+    seedRejection("2026-05-01T09:30:00.000Z");
+    getGlobalStore().recordInstance("in-process rate limiting", {
+      project: "gateway", sessionId: "s_new", verdict: "approved",
+      reason: "fine for the single-instance worker", at: "2026-08-11T12:00:00.000Z",
     });
+
+    for (const mode of ["philosophy", "any"]) {
+      const res = await callTool("recall", { mode, query: "in-process rate limiting" });
+      // Whatever it cites, it must never claim the approval date was a rejection.
+      expect(res.text, `mode=${mode}`).not.toContain("rejected on 2026-08-11");
+      // A date only ever appears next to the verdict it belongs to.
+      if (res.text.includes("2026-08-11")) {
+        expect(res.text, `mode=${mode}`).toContain("approved on 2026-08-11");
+      }
+      if (res.text.includes("2026-05-01")) {
+        expect(res.text, `mode=${mode}`).toContain("rejected on 2026-05-01");
+      }
+    }
+  });
+
+  it("B3 — an AVOID stance quotes the rejection, never the stray approval", async () => {
+    // 3 rejections vs 1 approval clears deriveStance's 2x bar, so the stance is
+    // AVOID and rests on the rejections. The approval's words must never be
+    // presented as the grounds for avoiding something.
+    seedRejection("2026-05-01T09:30:00.000Z");
+    for (const [proj, at] of [["billing", "2026-07-02T09:30:00.000Z"], ["web", "2026-07-20T09:30:00.000Z"]] as const) {
+      getGlobalStore().recordInstance("in-process rate limiting", {
+        project: proj, sessionId: `s_${proj}`, verdict: "rejected",
+        reason: "same drift problem here", at,
+      });
+    }
+    getGlobalStore().recordInstance("in-process rate limiting", {
+      project: "gateway", sessionId: "s_new", verdict: "approved",
+      reason: "fine for the single-instance worker", at: "2026-08-11T12:00:00.000Z",
+    });
+
+    const res = await callTool("recall", { mode: "any", query: "in-process rate limiting" });
+    expect(res.text).toContain("[AVOID]");
+    expect(res.text).toContain("rejected on 2026-07-20");
+    expect(res.text).toContain("same drift problem here");
+    expect(res.text).not.toContain("fine for the single-instance worker");
+  });
+
+  it("B3 — a genuinely MIXED history shows BOTH sides, in order, each with its own date", async () => {
+    // 2 rejections + 1 approval derives MIXED (neither side is 2x the other).
+    // Quoting only the latest word would be the B3 bug in another costume — the
+    // human would never learn they had rejected it twice. Quoting only the
+    // rejection would hide that they later came round. So: both, in order.
+    seedRejection("2026-05-01T09:30:00.000Z");
+    getGlobalStore().recordInstance("in-process rate limiting", {
+      project: "billing", sessionId: "s_b", verdict: "rejected",
+      reason: "same drift problem here", at: "2026-07-02T09:30:00.000Z",
+    });
+    getGlobalStore().recordInstance("in-process rate limiting", {
+      project: "gateway", sessionId: "s_new", verdict: "approved",
+      reason: "fine for the single-instance worker", at: "2026-08-11T12:00:00.000Z",
+    });
+
+    const res = await callTool("recall", { mode: "any", query: "in-process rate limiting" });
+    expect(res.text).toContain("[MIXED]");
+    expect(res.text).toContain('rejected on 2026-07-02: "same drift problem here"');
+    expect(res.text).toContain('later approved on 2026-08-11: "fine for the single-instance worker"');
+    // The ordering claim must itself be true: the rejection genuinely came first.
+    expect(res.text.indexOf("rejected on 2026-07-02")).toBeLessThan(res.text.indexOf("approved on 2026-08-11"));
+  });
+
+  it("B3 — an instance with no usable timestamp degrades HONESTLY, claiming no date", async () => {
+    getGlobalStore().recordInstance("hand written ledger entry", {
+      project: "legacy", sessionId: "s_x", verdict: "rejected",
+      reason: "too clever by half", at: "not-a-date",
+    });
+    const res = await callTool("recall", { mode: "philosophy", query: "hand written ledger entry" });
+    expect(res.text).toContain("recorded earlier");
+    expect(res.text).toContain("too clever by half");
+    // It must not manufacture a day, nor claim a rejection date it doesn't have.
+    expect(res.text).not.toMatch(/rejected on \d{4}-\d{2}-\d{2}/);
+  });
+
+  it("the date is a DATE, not a timestamp — a review comment shouldn't quote milliseconds", async () => {
+    seedRejection();
+    const res = await callTool("recall", { mode: "philosophy", query: "in-process rate limiting" });
+    expect(res.text).not.toContain("2026-05-01T09:30");
   });
 
   it("no match → recall says so plainly, so the agent has nothing to fabricate from", async () => {
     const res = await callTool("recall", { mode: "philosophy", query: "kubernetes operators" });
     expect(res.text).toMatch(/No philosophy-ledger entries match/);
+  });
+
+  it("B3 — the FIRST-CALL HINT's \"Strong 'avoid' stances\" quotes the rejection too", async () => {
+    // The third renderer of the same bug, found by this suite's own output: the
+    // hint listed the concept under "Strong 'avoid' stances" while quoting the
+    // human's APPROVAL as the reason. It is the surface the agent reads FIRST
+    // every session, so a wrong quote there colours everything after it.
+    seedRejection("2026-05-01T09:30:00.000Z");
+    for (const [proj, at] of [["billing", "2026-07-02T09:30:00.000Z"], ["web", "2026-07-20T09:30:00.000Z"]] as const) {
+      getGlobalStore().recordInstance("in-process rate limiting", {
+        project: proj, sessionId: `s_${proj}`, verdict: "rejected",
+        reason: "same drift problem here", at,
+      });
+    }
+    getGlobalStore().recordInstance("in-process rate limiting", {
+      project: "gateway", sessionId: "s_new", verdict: "approved",
+      reason: "fine for the single-instance worker", at: "2026-08-11T12:00:00.000Z",
+    });
+
+    // Any tool call carries the first-call hint on the session's first use.
+    const res = await callTool("recall", { mode: "philosophy", query: "in-process rate limiting" });
+    expect(res.text).toContain("Strong 'avoid' stances");
+    const hint = res.text.slice(res.text.indexOf("Strong 'avoid' stances"));
+    expect(hint).toContain("same drift problem here");
+    expect(hint).not.toContain("fine for the single-instance worker");
   });
 });

@@ -59,13 +59,24 @@ concept via `log_reasoning` so I learn the pattern, not just this instance.
 Include what's *good* too, briefly. A review that only lists objections is a
 worse review, and I have to send this to a colleague.
 
-**Then sweep my ledger — this is the part only we can do.** Call `recall` on the
-PR's key concepts (`mode: "any"`, one call per real concept — the pattern the
-change introduces, the library it reaches for, the approach it takes). If
-something in this PR matches a stance I've already recorded, that is a finding,
-and say it *explicitly* rather than paraphrasing it as your own opinion:
+**Then sweep my ledger — this is the part only we can do.** Call
+`recall(mode: "any", query: "<concept>")` once per real concept in the PR — the
+pattern the change introduces, the library it reaches for, the approach it
+takes. (`mode: "any"` searches my cross-project stances *and* this project's
+past sessions; both branches return the stance with its verdict and date.)
+
+If something in this PR matches a stance I've already recorded, that is a
+finding, and say it *explicitly* rather than paraphrasing it as your own
+opinion:
 
 > This PR introduces **<concept>**, which you rejected on <date>: "<my reason>".
+
+Copy the verdict and the date **straight from what `recall` returned** — it
+gives you `rejected on 2026-05-01: "…"` or `approved on 2026-08-11: "…"`. Never
+convert one into the other and never date a rejection from an approval: I may
+have rejected something once and come round to it later, and the ledger line
+tells you which. If `recall` says `recorded earlier` instead of a date, say
+"recorded earlier" — don't invent one.
 
 Quote my words, cite the date, and let me decide whether it still applies —
 their codebase, their call, and I may well say it's fine here. Your job is to
@@ -86,14 +97,32 @@ with findings, and ask you things. When I do:
 - If I convince you a concern is real that you'd rated low, say so and revise
   the artifact. Changing your mind out loud is useful to me.
 
-Keep polling until I tell you we're done. Don't post anything in this phase.
+Post nothing during this phase, whatever I say. Ending the discussion and
+publishing to someone else's repository are two separate decisions, and I only
+ever make the second one out loud (see below).
 
-**(f) Post it, on my word.** When I say "post it" / "ship what we found" /
-"we're done here" — `post_pr_review` with `pr: "$ARGUMENTS"`. What posts is what
-survived: findings in artifacts I didn't reject. If I dismissed something, take
-it out of the artifact (`revise_artifact`) before posting rather than hoping it
-gets filtered — rejection works at the artifact level, so a dead finding sitting
-in a live artifact will go to the PR.
+**Ending the discussion.** When I say "we're done here", "that's enough", "ok
+good" or similar, the *polling* stops — that is all it means. Approve or reject
+each findings artifact in the UI so the record is clean, tell me the review is
+ready to post whenever I want it, and **stop there**. Do not post. If I want
+the session written up instead, `/deeppairing:share`.
+
+**(f) Publishing to the PR — only on an explicit instruction to post.** The
+trigger is me actually asking for it: **"post the review"**, **"post it to the
+PR"**, **"ship the review"**, **"send it to them"**. Anything ambiguous — or
+silence — is a no. If you think I meant post and I only said we're done, ask.
+
+Then call `post_pr_review` with `pr: "$ARGUMENTS"`.
+
+What posts is what I approved. The tool checks my recorded verdicts before it
+calls out to GitHub and refuses if they aren't there, so:
+- a findings artifact I never ruled on **blocks the post** — the tool names it;
+  go get my verdict rather than trying to route around it;
+- findings I rejected are excluded automatically;
+- to drop one finding but keep the rest, `revise_artifact` — rejection is
+  per-artifact, so a dead finding sitting in a live artifact still posts;
+- an `APPROVE` with no comments needs me to have approved the PR changeset in
+  the UI. That approval *is* the authorization.
 
 Event mapping:
 - `REQUEST_CHANGES` — only if a surviving finding is **high or critical**.
@@ -106,4 +135,4 @@ decent review record for the author or for me later, and it's one call.
 
 Two things to hold onto: their code is theirs, so findings are *observations for
 the author*, not orders. And I am the reviewer of record — everything you surface
-is for my judgement, and nothing reaches the PR until I say it does.
+is for my judgement, and nothing reaches the PR until I ask you to send it.

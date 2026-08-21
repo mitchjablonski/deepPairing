@@ -1,5 +1,15 @@
 import { getGlobalStore } from "../../store/global-store.js";
+import { formatStanceCitation } from "../../store/philosophy-citation.js";
 import type { ToolContext, ToolResult } from "./types.js";
+
+/**
+ * Q6 (#232) B2/B3 — the stance citation. The logic lives in
+ * store/philosophy-citation.ts because THREE surfaces quote a stance's reason
+ * back to the human (this tool's two modes plus the first-call hint) and all
+ * three had independently grabbed "the latest reason of any verdict", which on
+ * a contested concept quotes an APPROVAL as the grounds for an 'avoid'. See
+ * that module's header for the full account.
+ */
 
 /**
  * CC10 — extracted from server.ts case "recall". server.ts had grown to
@@ -178,23 +188,9 @@ export async function handleRecall(ctx: ToolContext, args: any): Promise<ToolRes
       const rejections = e.instances.filter((i) => i.verdict === "rejected").length;
       const approvals = e.instances.filter((i) => i.verdict === "approved").length;
       const projects = new Set(e.instances.map((i) => i.project)).size;
-      const latestReason = [...e.instances].reverse().find((i) => i.reason)?.reason;
-      // Q6 (#232) — WHEN the stance was last expressed, not just what it was.
-      //
-      // The PR-review ledger sweep (see claude-plugin/commands/review-pr.md)
-      // asks the agent to say, on someone else's PR, "this introduces <concept>,
-      // which you rejected on <date>: '<reason>'". The reason was already here;
-      // the date was not, so half of that sentence was unwritable from what this
-      // tool returned and the agent would have had to invent or omit it. Cheap
-      // to add (the entry already carries lastSeenAt), and it is the half that
-      // makes the citation checkable — a dated stance is a receipt, an undated
-      // one is a claim.
-      //
-      // Date only, no clock time: the useful granularity for "when did I decide
-      // this" is the day, and a timestamp would bloat every line of the list.
-      const lastSeenDate = typeof e.lastSeenAt === "string" ? e.lastSeenAt.slice(0, 10) : "";
-      const seenPart = lastSeenDate ? `, last on ${lastSeenDate}` : "";
-      const reasonLine = latestReason ? `\n    latest reason${seenPart}: "${latestReason}"` : "";
+      // Q6 (#232) B2/B3 — the verdict-dated citation (see stanceCitation).
+      const citation = formatStanceCitation(e, e.stance);
+      const reasonLine = citation ? `\n    ${citation}` : "";
       return `- [${e.stance.toUpperCase()}] "${e.concept}" — ${rejections} reject${rejections !== 1 ? "s" : ""}, ${approvals} approval${approvals !== 1 ? "s" : ""} across ${projects} project${projects !== 1 ? "s" : ""}${reasonLine}`;
     });
     const trailer = entries.length > 10 ? `\n…${entries.length - 10} more entries.` : "";
@@ -259,8 +255,11 @@ export async function handleRecall(ctx: ToolContext, args: any): Promise<ToolRes
   if (philosophyHits.length > 0) {
     lines.push(`## Philosophy ledger (cross-project stances)`);
     for (const e of philosophyHits) {
-      const latestReason = [...e.instances].reverse().find((i) => i.reason)?.reason;
-      lines.push(`- [${e.stance.toUpperCase()}] "${e.concept}" × ${e.instances.length}${latestReason ? ` — "${latestReason}"` : ""}`);
+      // Q6 (#232) B2 — mode='any' is the mode the PR-review ledger sweep
+      // actually calls, and it was the one branch rendering a stance with NO
+      // date. Same citation as mode='philosophy' now, from the same function.
+      const citation = formatStanceCitation(e, e.stance);
+      lines.push(`- [${e.stance.toUpperCase()}] "${e.concept}" × ${e.instances.length}${citation ? ` — ${citation}` : ""}`);
     }
   }
   if (sessionHits.length > 0) {
