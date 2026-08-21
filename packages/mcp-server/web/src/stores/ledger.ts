@@ -54,6 +54,43 @@ export interface LedgerDigest {
   globalLedger: { concepts: number; projects: number; multiProjectConcepts: number };
 }
 
+/**
+ * R2 — "does this human actually have a ledger?", in ONE place.
+ *
+ * Round 13 (cold-journey lens) caught the companion UI telling the user "Your
+ * philosophy ledger is empty" on a page where the block card beside it was
+ * quoting one of their stances back at them and the durable log held nine
+ * firings. Two surfaces were answering the same question from different
+ * evidence: LedgerPanel tested `shaped === 0 && globalConcepts === 0 &&
+ * seeds === 0`, while PreflightBreadcrumb didn't test the ledger at all — it
+ * read ONE ARTIFACT's preflight trace and reported `consideredCount === 0` as
+ * "your ledger is empty". Those are different claims: an artifact can be
+ * preflighted against nothing relevant while the ledger is full.
+ *
+ * Both now call this predicate, so the drift can't reopen — and it counts the
+ * two signals the old test missed: stances that have FIRED (blocks/near-misses
+ * in this project) and stances that have accumulated CITATIONS. A local ledger
+ * with publishing off contributes nothing to `globalLedger.concepts`, which is
+ * exactly the shape the round-13 repro was in.
+ *
+ * Deliberately positive-only: every clause requires a POSITIVE number, so a
+ * malformed or partially-shaped digest reads as "don't know" (false) rather
+ * than as proof of a ledger. Callers treat `null` (not loaded) as "don't know"
+ * too.
+ */
+export function ledgerHasStances(digest: LedgerDigest | null | undefined): boolean {
+  if (!digest) return false;
+  const pos = (n: unknown): boolean => typeof n === "number" && n > 0;
+  return (
+    pos(digest.shapedThisProject) ||
+    pos(digest.nearMissesThisProject) ||
+    pos(digest.blockedThisProject) ||
+    pos(digest.globalLedger?.concepts) ||
+    (digest.topCitedStances?.length ?? 0) > 0 ||
+    (digest.seededStances?.length ?? 0) > 0
+  );
+}
+
 interface LedgerState {
   digest: LedgerDigest | null;
   error: string | null;
@@ -164,7 +201,10 @@ export const useLedgerStore = create<LedgerState>((set, get) => ({
       }
       useToastStore.getState().push({
         kind: "success",
-        title: "🧭 Overridden — won't block this again",
+        // R2 — same tofu class as the ledger-write toast: the compass was a
+        // literal emoji in the title string. Named SVG mark instead.
+        icon: "compass",
+        title: "Overridden — won't block this again",
         body: `"${label}" scoped down in your Ledger.`,
         ttl: 5000,
       });

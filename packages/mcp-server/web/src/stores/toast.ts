@@ -39,6 +39,15 @@ export interface Toast {
   body?: string;
   /** Rich payload for kind: "preflight-block". Ignored for other kinds. */
   hero?: PreflightBlockHero;
+  /**
+   * R2 — override the kind's default glyph with one of the app's inline SVG
+   * marks. Named rather than a ReactNode so this store (and the connection
+   * store that pushes most toasts) stays JSX-free; ToastLayer resolves the
+   * name. Exists because the ledger toasts shipped a literal 🧭 in their TITLE
+   * STRING, which renders as tofu wherever a colour-emoji font is missing —
+   * the same defect Q4 fixed for the preflight hero's 🛡.
+   */
+  icon?: "compass" | "shield";
   /** Milliseconds before auto-dismiss. 0 = sticky (user must dismiss). */
   ttl?: number;
   /** Optional action label + handler (e.g. "Open Memory"). */

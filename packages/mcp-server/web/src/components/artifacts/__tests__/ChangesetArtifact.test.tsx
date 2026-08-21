@@ -97,13 +97,21 @@ afterEach(() => {
 });
 
 describe("ChangesetArtifact — per-file disposition (#175)", () => {
-  it("rail shows a disposition chip per file (✓ ok / ↻ changes / — review)", () => {
+  it("rail shows a disposition chip per file (✓ ok / ↻ changes / the pending dash)", () => {
     const art = changeset({ reviewState: { "auth/middleware.ts": "reviewed", "auth/session.ts": "needs_changes" } });
     seed(art);
     render(<ChangesetArtifact artifact={art} />);
     expect(within(screen.getByTitle("modified auth/middleware.ts")).getByText("✓ ok")).toBeInTheDocument();
     expect(within(screen.getByTitle("modified auth/session.ts")).getByText("↻ changes")).toBeInTheDocument();
-    expect(within(screen.getByTitle("added auth/session.test.ts")).getByText("— review")).toBeInTheDocument();
+    // R2 — the pending chip lost the word "— review": it is the DEFAULT state
+    // of every row, so it printed 58px of non-information on every file while
+    // the 240px rail's label was fighting for space. The state is still stated
+    // — tooltip for sighted users, sr-only noun for screen readers — just not
+    // in the pixels the filename needs.
+    const pending = within(screen.getByTitle("added auth/session.test.ts")).getByTitle("Not reviewed yet");
+    expect(pending).toBeInTheDocument();
+    expect(pending.textContent).not.toContain("review ");
+    expect(within(pending).getByText("not reviewed yet")).toHaveClass("sr-only");
   });
 
   it("'Looks right' POSTs the reviewed disposition", async () => {

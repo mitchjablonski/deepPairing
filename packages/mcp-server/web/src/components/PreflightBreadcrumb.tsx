@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useLedgerStore, ensureLedgerSubscriptions } from "../stores/ledger";
+import { useLedgerStore, ensureLedgerSubscriptions, ledgerHasStances } from "../stores/ledger";
 import type { PreflightTrace } from "@deeppairing/shared";
 import { apiBase, sessionHeaders } from "../lib/api";
 
@@ -203,6 +203,22 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
     ensureLedgerSubscriptions();
   }, []);
   const topCitedStances = useLedgerStore((s) => s.digest?.topCitedStances);
+  /**
+   * R2 — THE FALSE BREADCRUMB. Round 13 photographed this component saying
+   * "Your philosophy ledger is empty" on a page whose gate-block card was
+   * quoting one of the user's own stances, with six stances and nine blocks in
+   * the store. The bug is a category error, not a hydration gap: the bootstrap
+   * tier fires on `trace.consideredCount === 0`, which is a fact about ONE
+   * ARTIFACT's preflight, and the copy states it as a fact about the LEDGER.
+   * An artifact preflighted against nothing relevant is ordinary.
+   *
+   * So the onboarding copy is now gated on the ledger actually being empty,
+   * asked through the shared predicate LedgerPanel uses. Positive-knowledge
+   * only: if the digest hasn't loaded (or failed), we don't claim anything —
+   * we just don't render the empty-ledger card, which is the safe direction for
+   * a claim about the user's own history.
+   */
+  const ledgerNonEmpty = useLedgerStore((s) => ledgerHasStances(s.digest));
   const citationCounts = useMemo<Record<string, ConceptCitationCount>>(() => {
     const map: Record<string, ConceptCitationCount> = {};
     for (const s of topCitedStances ?? []) {
@@ -240,6 +256,8 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
   // Bootstrap — empty-ledger onboarding (Z3 + AA6.5 copy + dismiss flow).
   if (tier === "bootstrap") {
     if (bootstrapDismissed) return null;
+    // R2 — never claim an empty ledger to someone who has one (see above).
+    if (ledgerNonEmpty) return null;
     return (
       <div
         role="status"

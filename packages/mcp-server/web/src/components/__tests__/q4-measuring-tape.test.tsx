@@ -262,6 +262,82 @@ describe("Q4 #2 — the CHANGED FILES picker keeps the basename", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 2b. R2 — the index.ts×N degenerate case (round 13's regression on Q4 #2)
+// ---------------------------------------------------------------------------
+
+describe("R2 — the picker survives identical basenames", () => {
+  const indexPaths = [
+    "packages/mcp-server/src/http/index.ts",
+    "packages/mcp-server/src/store/index.ts",
+    "packages/shared/src/index.ts",
+  ];
+
+  function renderIndexRail() {
+    const art = deepChangeset(indexPaths);
+    useArtifactStore.setState({ artifacts: [art], comments: {}, selectedArtifactId: art.id });
+    render(<ChangesetArtifact artifact={art} />);
+  }
+
+  /**
+   * Q4 made the DIRECTORY the disposable half — correct when basenames differ,
+   * and a total loss when they don't: three rows of `index.ts` under three
+   * different directories collapsed to three identical labels, in the one
+   * control whose whole job is telling rows apart. R2 splits the directory so
+   * the IMMEDIATE PARENT (the disambiguating token, and the cheapest one)
+   * survives while the shared ancestors collapse first.
+   */
+  it("three index.ts rows under different directories render three DISTINCT labels", () => {
+    renderIndexRail();
+    const labels = screen.getAllByTestId("changeset-rail-file-path").map((n) => n.textContent);
+    expect(labels).toEqual(["packages/mcp-server/src/http/index.ts", "packages/mcp-server/src/store/index.ts", "packages/shared/src/index.ts"]);
+    // …and they stay distinct after the ancestors collapse — which is the
+    // state the 240px rail actually renders.
+    const parents = screen.getAllByTestId("changeset-rail-file-dir").map((n) => n.textContent);
+    expect(parents).toEqual(["http/", "store/", "src/"]);
+    expect(new Set(parents).size).toBe(3);
+  });
+
+  it("the ancestors are the first flex item and the most willing to shrink", () => {
+    renderIndexRail();
+    const ancestors = screen.getAllByTestId("changeset-rail-file-ancestors");
+    const parents = screen.getAllByTestId("changeset-rail-file-dir");
+    const bases = screen.getAllByTestId("changeset-rail-file-basename");
+    expect(ancestors.map((n) => n.textContent)).toEqual([
+      "packages/mcp-server/src/", "packages/mcp-server/src/", "packages/shared/",
+    ]);
+    for (let i = 0; i < 3; i++) {
+      const a = Number(ancestors[i]!.style.flexShrink);
+      const p = Number(parents[i]!.style.flexShrink);
+      const b = Number(bases[i]!.style.flexShrink);
+      // Collapse order: ancestors ≫ parent > basename.
+      expect(a).toBeGreaterThan(p * 10);
+      expect(p).toBeGreaterThan(b);
+      expect(b).toBeGreaterThan(0);
+    }
+  });
+
+  it("the pending chip no longer spends the row's width on the word 'review'", () => {
+    renderIndexRail();
+    for (const chip of screen.getAllByTitle("Not reviewed yet")) {
+      // Visible text is the dash alone; the state is carried by tooltip +
+      // sr-only noun. Round 13 measured "— review" at 58px of a 238px row.
+      const visible = [...chip.querySelectorAll("span")]
+        .filter((s) => !s.className.includes("sr-only"))
+        .map((s) => s.textContent)
+        .join("");
+      expect(visible.trim()).toBe("—");
+      expect(chip.textContent).toContain("not reviewed yet");
+    }
+  });
+
+  it("the file HEADER keeps the undivided directory (the roomy, P2-pinned surface)", () => {
+    renderIndexRail();
+    expect(screen.queryByTestId("changeset-file-ancestors")).toBeNull();
+    expect(screen.getByTestId("changeset-file-dir").textContent).toBe("packages/mcp-server/src/http/");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 4. Semantic structure — landmarks + heading levels
 // ---------------------------------------------------------------------------
 

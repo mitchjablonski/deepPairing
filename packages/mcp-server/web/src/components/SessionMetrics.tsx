@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { apiGet, apiBase } from "../lib/api";
+import { ShieldIcon, CompassIcon } from "./icons/ArtifactIcons";
 import { useArtifactStore } from "../stores/artifact";
 import { normalizeConceptKey } from "@deeppairing/shared";
 
@@ -198,7 +199,14 @@ export function SessionMetrics() {
           <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-2xs">
             <MetricRow label="Sessions" value={metrics.sessions} />
             <MetricRow
-              label="🛡 Pre-flight blocks"
+              label={
+                <span className="inline-flex items-baseline gap-1">
+                  <span aria-hidden="true" className="self-center shrink-0 inline-flex">
+                    <ShieldIcon className="w-3 h-3" />
+                  </span>
+                  Pre-flight blocks
+                </span>
+              }
               value={metrics.counts.preflightBlocks.total}
               detail={
                 metrics.counts.preflightBlocks.total > 0
@@ -207,7 +215,14 @@ export function SessionMetrics() {
               }
             />
             <MetricRow
-              label="🧭 Ledger writes"
+              label={
+                <span className="inline-flex items-baseline gap-1">
+                  <span aria-hidden="true" className="self-center shrink-0 inline-flex">
+                    <CompassIcon className="w-3 h-3" />
+                  </span>
+                  Ledger writes
+                </span>
+              }
               value={metrics.counts.ledgerWrites.total}
               detail={
                 metrics.counts.ledgerWrites.total > 0
@@ -243,7 +258,15 @@ export function SessionMetrics() {
   );
 }
 
-function MetricRow({ label, value, detail }: { label: string; value: number; detail?: string }) {
+/**
+ * R2 — `label` widened from `string` to ReactNode so the two rows that named
+ * deepPairing's own mechanics could stop doing it with literal emoji (🛡 / 🧭),
+ * which render as tofu wherever a colour-emoji font is missing. Same treatment
+ * Q4 gave the preflight hero toast: inline SVG on currentColor. The remaining
+ * emoji on this grid (❓ 📦 💬) are generic category marks with no SVG in the
+ * set — deliberately left alone rather than half-converted.
+ */
+function MetricRow({ label, value, detail }: { label: ReactNode; value: number; detail?: string }) {
   return (
     <div className="flex items-baseline justify-between gap-2">
       <span className="text-text-muted">{label}</span>

@@ -465,6 +465,77 @@ describe("PreflightBreadcrumb tier render (AA8)", () => {
     expect((container.firstChild as HTMLElement)?.className).toMatch(/border-accent-violet/);
   });
 
+  /**
+   * R2 — THE FALSE BREADCRUMB. Round 13 photographed this component telling a
+   * user "Your philosophy ledger is empty" on a page whose gate-block card was
+   * quoting one of their own stances back at them, with six stances and nine
+   * blocks in the store. The bug is a category error: the bootstrap tier fires
+   * on `trace.consideredCount === 0` — a fact about ONE ARTIFACT's preflight —
+   * and the copy states it as a fact about the LEDGER.
+   */
+  describe("R2 — never claims an empty ledger to someone who has one", () => {
+    function seedDigestAwareFetch(digest: any, t = trace({ consideredCount: 0 })) {
+      return async () => {
+        const { useLedgerStore } = await import("../../stores/ledger");
+        vi.stubGlobal("fetch", vi.fn((url: string) => {
+          if (url.includes("/preflight-trace")) {
+            return Promise.resolve({ ok: true, json: async () => ({ trace: t }) });
+          }
+          if (url.includes("/api/ledger/digest")) {
+            return Promise.resolve({ ok: true, json: async () => useLedgerStore.getState().digest });
+          }
+          return Promise.resolve({ ok: true, json: async () => ({}) });
+        }));
+        act(() => {
+          useLedgerStore.setState({ digest, error: null, loading: false, version: 1 });
+        });
+      };
+    }
+
+    const populated = {
+      // The exact shape of the repro: a LOCAL ledger with publishing off, so
+      // globalLedger.concepts is 0 and shapedThisProject is 0 — the two fields
+      // the old empty-test looked at — while nine blocks have fired.
+      shapedThisProject: 0,
+      nearMissesThisProject: 0,
+      blockedThisProject: 9,
+      sessionsTouched: 3,
+      topCitedStances: [{ concept: "in-memory session store", source: "session" as const, citationCount: 4 }],
+      seededStances: [],
+      globalLedger: { concepts: 0, projects: 0, multiProjectConcepts: 0 },
+    };
+
+    it("a zero-considered trace renders NOTHING when the ledger holds stances", async () => {
+      await seedDigestAwareFetch(populated)();
+      const { container } = render(<PreflightBreadcrumb artifactId="art_false" />);
+      await waitFor(() => expect(container.firstChild).toBeNull());
+      expect(screen.queryByText(/Your philosophy ledger is empty/)).not.toBeInTheDocument();
+    });
+
+    it("a genuinely empty ledger still gets the onboarding card (the Z3 behaviour is intact)", async () => {
+      await seedDigestAwareFetch({
+        shapedThisProject: 0, nearMissesThisProject: 0, blockedThisProject: 0, sessionsTouched: 0,
+        topCitedStances: [], seededStances: [], globalLedger: { concepts: 0, projects: 0, multiProjectConcepts: 0 },
+      })();
+      render(<PreflightBreadcrumb artifactId="art_true_empty" />);
+      await waitFor(() => screen.getByText(/Your philosophy ledger is empty/));
+    });
+
+    it("an unloaded digest is 'don't know', not 'empty' — the card still shows (fail-open onboarding)", async () => {
+      // Positive-knowledge only: we suppress on POSITIVE evidence of a ledger.
+      // A null digest (dead daemon, first paint) keeps the pre-R2 behaviour so
+      // a first-time user isn't silently denied the onboarding moment.
+      vi.stubGlobal("fetch", vi.fn((url: string) => {
+        if (url.includes("/preflight-trace")) {
+          return Promise.resolve({ ok: true, json: async () => ({ trace: trace({ consideredCount: 0 }) }) });
+        }
+        return Promise.resolve({ ok: false, status: 500, json: async () => ({}) });
+      }));
+      render(<PreflightBreadcrumb artifactId="art_unknown" />);
+      await waitFor(() => screen.getByText(/Your philosophy ledger is empty/));
+    });
+  });
+
   it("ambient tier still expands considered concepts on click", async () => {
     const user = userEvent.setup();
     vi.stubGlobal("fetch", mockFetchTrace(trace({

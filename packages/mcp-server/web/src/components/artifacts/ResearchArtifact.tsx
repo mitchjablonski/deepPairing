@@ -742,7 +742,11 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
         {finding.impact && (
           <div className="mt-3 p-2.5 bg-accent-red-dim/50 border-l-2 border-accent-red rounded-r">
             <span className={`font-semibold text-accent-red block mb-0.5 ${focusMode ? "text-sm" : "text-xs"}`}>Impact</span>
-            <SimpleMarkdown text={finding.impact} className={`text-accent-red/80 ${focusMode ? "text-sm" : "text-xs"}`} />
+            {/* R2 (contrast) — `text-accent-red/80` on the red-dim/50 wash
+                measured 3.81:1 dark / 4.14:1 light. The label above it is
+                already the solid token; the alpha bought nothing but a sub-AA
+                body. Solid: 5.27 / 5.56. */}
+            <SimpleMarkdown text={finding.impact} className={`text-accent-red ${focusMode ? "text-sm" : "text-xs"}`} />
           </div>
         )}
 
@@ -750,7 +754,10 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
         {finding.recommendation && (
           <div className="mt-2 p-2.5 bg-accent-green-dim/50 border-l-2 border-accent-green rounded-r">
             <span className={`font-semibold text-accent-green block mb-0.5 ${focusMode ? "text-sm" : "text-xs"}`}>Recommendation</span>
-            <SimpleMarkdown text={finding.recommendation} className={`text-accent-green/80 ${focusMode ? "text-sm" : "text-xs"}`} />
+            {/* R2 (contrast) — same class as Impact above: `text-accent-green/80`
+                measured 4.45:1 dark / 3.67:1 light on the green-dim/50 wash.
+                Solid: 6.15 / 5.39. */}
+            <SimpleMarkdown text={finding.recommendation} className={`text-accent-green ${focusMode ? "text-sm" : "text-xs"}`} />
           </div>
         )}
       </div>

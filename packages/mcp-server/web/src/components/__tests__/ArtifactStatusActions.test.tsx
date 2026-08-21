@@ -184,3 +184,60 @@ describe("F10 (G5) — the a-shortcut never drops a typed note", () => {
     expect(screen.getByText(/auto-approve in/i)).toBeInTheDocument();
   });
 });
+
+/**
+ * R2 — the reject composer stopped advertising the opposite verdict.
+ *
+ * Reject reuses the SHARED response textarea for its reason, so a human who
+ * armed Reject and then cleared what they had typed was shown, in two places at
+ * once, "empty ⌘⏎ = approve" — inside an open reject composer, one keystroke
+ * from the verdict they had just decided against.
+ */
+describe("R2 — the reject-composer hints split by armed intent", () => {
+  async function armReject() {
+    const user = userEvent.setup();
+    render(<ArtifactStatusActions artifact={artifact as any} />);
+    const ta = screen.getByPlaceholderText(/respond to the agent/i);
+    // The Reject trigger needs a reason before it will arm.
+    fireEvent.change(ta, { target: { value: "no — measure first" } });
+    await user.click(screen.getByRole("button", { name: /^reject$/i }));
+    await screen.findByLabelText(/what pattern are you rejecting/i);
+    // …then the human clears the reason. This is the reported state.
+    fireEvent.change(ta, { target: { value: "" } });
+    return { user, ta };
+  }
+
+  it("the placeholder asks for a reason instead of promising an approve", async () => {
+    await armReject();
+    expect(screen.queryByPlaceholderText(/empty ⌘⏎ = approve/i)).toBeNull();
+    expect(screen.getByPlaceholderText(/why are you rejecting this/i)).toBeInTheDocument();
+  });
+
+  it("the footer hint says what ⌘⏎ actually does while a reject is armed", async () => {
+    await armReject();
+    expect(screen.queryByText(/⌘⏎ on empty input approves/i)).toBeNull();
+    expect(screen.getByText(/won't approve while a reject is armed/i)).toBeInTheDocument();
+  });
+
+  it("and an empty ⌘⏎ does NOT approve out from under the armed reject", async () => {
+    const { ta } = await armReject();
+    (fetch as any).mockClear();
+    fireEvent.keyDown(ta, { key: "Enter", metaKey: true });
+    const statusCalls = (fetch as any).mock.calls.filter(([u]: any[]) =>
+      String(u).includes("/api/artifacts/a1/status"),
+    );
+    expect(statusCalls).toHaveLength(0);
+  });
+
+  it("with no reject armed, the approve fast-path is untouched", async () => {
+    render(<ArtifactStatusActions artifact={artifact as any} />);
+    const ta = screen.getByPlaceholderText(/empty ⌘⏎ = approve/i);
+    fireEvent.keyDown(ta, { key: "Enter", metaKey: true });
+    await waitFor(() => {
+      const calls = (fetch as any).mock.calls.filter(([u]: any[]) =>
+        String(u).includes("/api/artifacts/a1/status"),
+      );
+      expect(calls.length).toBeGreaterThan(0);
+    });
+  });
+});

@@ -474,6 +474,118 @@ test.beforeAll(async () => {
       },
     }),
   }).then((r) => { if (!r.ok) throw new Error(`seed explainer failed: ${r.status}`); });
+
+  // -------------------------------------------------------------------------
+  // R2 — THE FIXTURE RATCHET: seed the NEWEST surfaces, always.
+  //
+  // Round 13's process verdict named this as one of three standing ratchets,
+  // and named this file as the miss: the a11y session seeded only a LOCAL
+  // changeset, so Q6's external-review banner — the newest review surface in
+  // the product — had ZERO axe coverage, and five of the six contrast failures
+  // that shipped were on surfaces this net had never mounted. A net that only
+  // covers last release's UI reports green about code it never looked at.
+  //
+  // Three seeds below, one per uncovered surface, each with the #187
+  // hollow-net discipline (a helper that actually MOUNTS the state before
+  // analyzing, not a seed that merely exists on disk):
+  //   1. an EXTERNAL changeset  → ExternalReviewBanner
+  //   2. a persisted gate BLOCK → PreflightBlockLog, reachable from a cold load
+  //   3. a rejectable finding   → the first-reject CrossProjectCard
+  // -------------------------------------------------------------------------
+
+  // 1. Q6's external-review banner, in its OWN session so the local-changeset
+  //    scans above keep measuring the LOCAL semantics (the two states differ
+  //    precisely in what the banner says about whose code this is).
+  const regExt = await fetch(`${baseURL}/api/internal/sessions/a11yexternal/register`, { method: "POST", headers: h, body: "{}" });
+  if (!regExt.ok) throw new Error(`seed external register failed: ${regExt.status}`);
+  await fetch(`${baseURL}/api/internal/sessions/a11yexternal/artifacts`, {
+    method: "POST", headers: h,
+    body: JSON.stringify({
+      id: "cs_external", type: "changeset", title: "Rate-limit the login endpoint",
+      content: {
+        summary: "A colleague's PR, pulled onto the review surface. Your verdicts stay local until you post them.",
+        risks: ["touches auth"],
+        // Every optional provenance field is populated: the banner degrades
+        // per-field, so a scan of the FULL shape is the one that measures the
+        // link, the author dangle and the branch-ref pair together.
+        reviewIntent: "external",
+        source: {
+          kind: "github-pr", number: 482, url: "https://github.com/example/app/pull/482",
+          headRef: "priya/rate-limit-login", baseRef: "main", author: "priya",
+        },
+        files: [
+          {
+            path: "auth/login.ts", changeType: "modified", stats: { additions: 4, deletions: 1 },
+            hunks: [{
+              header: "@@ -12,4 +12,7 @@ export async function login(req: Request) {",
+              lines: [
+                { kind: "ctx", content: "  const { email, password } = req.body;", oldLine: 13, newLine: 13 },
+                { kind: "del", content: "  const user = await users.findByEmail(email);", oldLine: 14 },
+                { kind: "add", content: "  if (!(await limiter.take(req.ip))) return res.status(429).end(); // 5/min", newLine: 14 },
+                { kind: "add", content: "  const user = await users.findByEmail(email);", newLine: 15 },
+              ],
+            }],
+          },
+        ],
+      },
+    }),
+  }).then((r) => { if (!r.ok) throw new Error(`seed external changeset failed: ${r.status}`); });
+
+  // 2. A REAL, persisted gate block. Q2 made the log durable
+  //    (.deeppairing/preflight-blocks.json, served at /api/preflight-blocks)
+  //    and R2 made a cold page load hydrate it — so writing the file is enough
+  //    for the chip to carry blocks with no agent in the loop. The route reads
+  //    from disk per request, so this needs no daemon restart.
+  fs.mkdirSync(path.join(projectRoot, ".deeppairing"), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectRoot, ".deeppairing", "preflight-blocks.json"),
+    JSON.stringify({
+      version: 1,
+      blocks: [
+        {
+          id: "blk_a11y_1", at: new Date(Date.now() - 90_000).toISOString(), sessionId: "a11y",
+          source: "session", via: "concept",
+          concept: "in-memory session store",
+          proposal: "swap the Redis session store for an in-process Map",
+          reason: "we lose every logged-in user on deploy — you said never again",
+        },
+        {
+          id: "blk_a11y_2", at: new Date(Date.now() - 3_600_000).toISOString(), sessionId: "a11y",
+          source: "team", via: "avoid", addedBy: "priya",
+          concept: "raw SQL in route handlers",
+          proposal: "inline a SELECT in the /orders handler",
+          reason: "team rule: queries live in the repository layer",
+        },
+      ],
+    }),
+  );
+
+  // 3. A findings artifact whose reject flow OPENS the first-reject
+  //    cross-project card — the consent surface Q2 shipped and nothing ever
+  //    scanned. Its own session, because the scan REJECTS it for real.
+  const regCross = await fetch(`${baseURL}/api/internal/sessions/a11ycross/register`, { method: "POST", headers: h, body: "{}" });
+  if (!regCross.ok) throw new Error(`seed cross register failed: ${regCross.status}`);
+  // TWO of them: the scan REJECTS the artifact for real (a reject is terminal,
+  // so a second scan of the same id would meet a "Rejected" chip and no
+  // composer), and the dark + light variants each need their own.
+  for (const id of ["res_cross_dark", "res_cross_light"]) {
+    await fetch(`${baseURL}/api/internal/sessions/a11ycross/artifacts`, {
+      method: "POST", headers: h,
+      body: JSON.stringify({
+        id, type: "research", title: "Config loading audit",
+        content: {
+          summary: "Where configuration is read, and what that costs at test time.",
+          findings: [{
+            category: "Design", title: "Module-level mutable config",
+            detail: "Settings are hoisted to a module-level object every importer mutates.",
+            significance: "high",
+            evidence: "export const settings = {}; // mutated by 4 modules at import time",
+            recommendation: "Pass config explicitly through the composition root.",
+          }],
+        },
+      }),
+    }).then((r) => { if (!r.ok) throw new Error(`seed cross findings failed: ${r.status}`); });
+  }
 });
 
 test.afterAll(async () => {
@@ -488,6 +600,35 @@ test.afterAll(async () => {
   // K2 — drop the isolated HOME once the daemon is provably down.
   try { fs.rmSync(home, { recursive: true, force: true }); } catch {}
 });
+
+/**
+ * R2 — select an artifact from the rail, unfolding "Show N older" when the row
+ * has aged out of it.
+ *
+ * The rail renders only the 10 most-recent artifacts (SIDEBAR_RECENT_LIMIT) and
+ * folds the rest — and it aggregates every session in the project, so its
+ * budget is shared by the WHOLE fixture, not by one session. This file was
+ * already sitting exactly at the limit, so the R2 seeds (an external changeset
+ * plus two rejectable findings) pushed `res_a11y` and `cc_a11y` under the fold
+ * and three long-standing scans began timing out on locators that had simply
+ * been folded away — a fixture-capacity failure that reads exactly like a
+ * product regression.
+ *
+ * Unfolding first decouples every helper from how many surfaces the fixture
+ * seeds, which is the precondition for the "fixtures always seed the newest
+ * surfaces" ratchet actually being sustainable.
+ */
+async function selectSidebarArtifact(
+  page: import("@playwright/test").Page,
+  artifactId: string,
+): Promise<void> {
+  const row = page.locator(`[data-artifact-item="${artifactId}"]`);
+  if ((await row.count()) === 0) {
+    const showOlder = page.getByRole("button", { name: /Show \d+ older/i });
+    if (await showOlder.count()) await showOlder.first().click();
+  }
+  await row.first().click({ timeout: 15000 });
+}
 
 function fmt(violations: Array<{ id: string; impact?: string | null; nodes: Array<{ target: unknown[] }> }>): string {
   return violations
@@ -504,7 +645,7 @@ function fmt(violations: Array<{ id: string; impact?: string | null; nodes: Arra
 async function openQuestionSections(page: import("@playwright/test").Page): Promise<void> {
   // The sidebar row's data attribute — the title alone ("Audit") also matches
   // the flow-group header + type chip (strict-mode ambiguity).
-  await page.click('[data-artifact-item="res_a11y"]');
+  await selectSidebarArtifact(page, "res_a11y");
   await page.waitForSelector('[data-artifact-id="res_a11y"]', { timeout: 15000 });
   await page.getByLabel("Answer question 1").waitFor({ timeout: 15000 });
   // #166 — shiki highlights asynchronously (lazy wasm + grammar chunks): wait
@@ -531,7 +672,7 @@ async function openQuestionSections(page: import("@playwright/test").Page): Prom
 /** #172 — mount the code_change with its two SuggestionCards (pending +
  *  countered) so axe scans the pills, mini-diff, and action row for real. */
 async function openSuggestionArtifact(page: import("@playwright/test").Page): Promise<void> {
-  await page.click('[data-artifact-item="cc_a11y"]');
+  await selectSidebarArtifact(page, "cc_a11y");
   await page.waitForSelector('[data-artifact-id="cc_a11y"]', { timeout: 15000 });
   // Both cards must be mounted (pending + countered) before analyzing.
   await page.waitForSelector('[data-testid="suggestion-card"][data-state="pending"]', { timeout: 15000 });
@@ -549,7 +690,7 @@ async function openSuggestionArtifact(page: import("@playwright/test").Page): Pr
  *  chip, activates the flagged file so its needs-changes reason box mounts, then
  *  settles finite animations so axe never samples a mid-fade frame. */
 async function openChangeset(page: import("@playwright/test").Page): Promise<void> {
-  await page.click('[data-artifact-item="cs_a11y"]');
+  await selectSidebarArtifact(page, "cs_a11y");
   await page.waitForSelector('[data-artifact-id="cs_a11y"]', { timeout: 15000 });
   // #175 — the DERIVED action (one file flagged → Send back) proves the refined
   // action bar mounted. The rail carries both disposition chips.
@@ -1056,7 +1197,7 @@ test("a11y: session view in the LIGHT theme has no serious/critical axe violatio
  *  the grain-thread surface is scanned too, then settles finite animations so axe
  *  never samples a mid-fade frame. */
 async function openDebrief(page: import("@playwright/test").Page): Promise<void> {
-  await page.click('[data-artifact-item="debrief_a11y"]');
+  await selectSidebarArtifact(page, "debrief_a11y");
   await page.waitForSelector('[data-artifact-id="debrief_a11y"]', { timeout: 15000 });
   // The accountability + review blocks prove the full renderer mounted.
   await page.getByTestId("debrief-decision").first().waitFor({ timeout: 15000 });
@@ -1108,7 +1249,7 @@ test("a11y (#190): the DEBRIEF surface (ask-anything thread open) has no serious
  *  overview grain composer so its scoped thread is scanned too, waits for the shiki
  *  syntax palette on the evidence, then settles finite animations. */
 async function openExplainer(page: import("@playwright/test").Page): Promise<void> {
-  await page.click('[data-artifact-item="explainer_a11y"]');
+  await selectSidebarArtifact(page, "explainer_a11y");
   await page.waitForSelector('[data-artifact-id="explainer_a11y"]', { timeout: 15000 });
   // The ordered sections prove the full renderer mounted.
   await page.getByTestId("explainer-section").first().waitFor({ timeout: 15000 });
@@ -1177,7 +1318,12 @@ test("a11y: the Autonomy popover (with the #139 detail-density toggle) has no se
   // #189 — autonomy was demoted into the Diagnostics (⋯) overflow menu; open
   // that first, then the autonomy popover.
   await page.goto(`${baseURL}/?session=a11y`);
-  const diagBtn = page.getByRole("button", { name: /open diagnostics menu/i });
+  // R2 — matched on /diagnostics/i, not the exact idle label: the trigger
+  // RENAMES itself to "Diagnostics — attention needed" whenever a gate block or
+  // hook nag is live, and this project's fixture now carries persisted blocks
+  // that a cold page load surfaces. Pinning the idle wording would make this
+  // scan depend on the gate never having fired.
+  const diagBtn = page.getByRole("button", { name: /diagnostics/i });
   await diagBtn.waitFor({ timeout: 15000 });
   await diagBtn.click();
   const autonomyBtn = page.getByRole("button", { name: /autonomy:/i });
@@ -1554,6 +1700,154 @@ test("a11y (#187): the approved-changeset late follow-up composer has no serious
   const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
   const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(serious, `axe violations (late follow-up composer, dark):\n${fmt(serious)}`).toEqual([]);
+});
+
+// ---------------------------------------------------------------------------
+// R2 — the three newest surfaces, now permanently inside the net.
+// ---------------------------------------------------------------------------
+
+/** Mount Q6's EXTERNAL-review banner for real (the #187 hollow-net rule). */
+async function openExternalChangeset(page: import("@playwright/test").Page): Promise<void> {
+  await selectSidebarArtifact(page, "cs_external");
+  await page.waitForSelector('[data-artifact-id="cs_external"]', { timeout: 15000 });
+  // The banner IS the new surface — never analyze before it exists.
+  await page.waitForSelector('[data-testid="external-review-banner"]', { timeout: 15000 });
+  await page.evaluate(() =>
+    Promise.all(
+      document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Infinity).map((a) => a.finished.catch(() => undefined)),
+    ),
+  );
+}
+
+/** Open the ⋯ menu and the populated gate BLOCK LOG inside it. */
+async function openGateBlockLog(page: import("@playwright/test").Page): Promise<void> {
+  const diagBtn = page.getByRole("button", { name: /diagnostics/i });
+  await diagBtn.waitFor({ timeout: 15000 });
+  // R2 — the trigger carries the attention dot BEFORE the menu is opened,
+  // because App's bootstrap hydrated the durable log on page load. That is the
+  // cold-path fix, asserted here as a precondition of the scan.
+  await page.waitForSelector('[data-testid="diagnostics-attention-dot"]', { timeout: 15000 });
+  await diagBtn.click();
+  await page.getByRole("button", { name: /show recent gate blocks/i }).click();
+  await page.waitForSelector('[data-testid="gate-block-log"]', { timeout: 15000 });
+  await page.evaluate(() =>
+    Promise.all(
+      document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Infinity).map((a) => a.finished.catch(() => undefined)),
+    ),
+  );
+}
+
+/** Reject a finding WITH a named concept — the one moment the first-reject
+ *  cross-project consent card is offered. */
+async function openCrossProjectCard(page: import("@playwright/test").Page, artifactId: string): Promise<void> {
+  await selectSidebarArtifact(page, artifactId);
+  await page.waitForSelector(`[data-artifact-id="${artifactId}"]`, { timeout: 15000 });
+  // B6 — the footer floats as a slim bar until the human reaches the artifact's
+  // end; the reason textarea only exists in the expanded panel. On a short
+  // artifact the IntersectionObserver expands it on its own within a frame or
+  // two, so WAIT for that first and only click the expander if it never comes:
+  // racing the click against the auto-expand detaches the compact bar mid-click
+  // ("element is not stable" → "element was detached from the DOM").
+  const composer = page.getByPlaceholder(/respond to the agent/i);
+  try {
+    await composer.waitFor({ timeout: 4000 });
+  } catch {
+    await page
+      .getByRole("button", { name: /Respond \/ Request changes \/ Reject/i })
+      .first()
+      .click({ timeout: 10000 });
+    await composer.waitFor({ timeout: 15000 });
+  }
+  await composer.fill("we don't want config passed around by hand either — this is the wrong cut");
+  await page.getByRole("button", { name: /^reject$/i }).click();
+  const conceptField = page.getByLabel(/what pattern are you rejecting/i);
+  await conceptField.waitFor({ timeout: 15000 });
+  await conceptField.fill("global mutable state for config");
+  await page.getByRole("button", { name: /reject & remember/i }).click();
+  await page.waitForSelector('[data-testid="cross-project-card"]', { timeout: 15000 });
+  await page.evaluate(() =>
+    Promise.all(
+      document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Infinity).map((a) => a.finished.catch(() => undefined)),
+    ),
+  );
+}
+
+for (const theme of ["dark", "light"] as const) {
+  test(`a11y (R2): the EXTERNAL PR review banner has no serious/critical axe violations — ${theme}`, async ({ page }) => {
+    if (theme === "light") await page.addInitScript(() => localStorage.setItem("dp-theme", "light"));
+    await page.goto(`${baseURL}/?session=a11yexternal`);
+    await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+    if (theme === "light") await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await openExternalChangeset(page);
+    const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+    const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+    expect(serious, `axe violations (external review banner, ${theme}):\n${fmt(serious)}`).toEqual([]);
+  });
+
+  test(`a11y (R2): the populated gate BLOCK LOG has no serious/critical axe violations — ${theme}`, async ({ page }) => {
+    if (theme === "light") await page.addInitScript(() => localStorage.setItem("dp-theme", "light"));
+    await page.goto(`${baseURL}/?session=a11y`);
+    if (theme === "light") await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await openGateBlockLog(page);
+    const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+    const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+    expect(serious, `axe violations (gate block log, ${theme}):\n${fmt(serious)}`).toEqual([]);
+  });
+
+  test(`a11y (R2): the first-reject CROSS-PROJECT consent card has no serious/critical axe violations — ${theme}`, async ({ page }) => {
+    if (theme === "light") await page.addInitScript(() => localStorage.setItem("dp-theme", "light"));
+    await page.goto(`${baseURL}/?session=a11ycross`);
+    await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+    if (theme === "light") await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await openCrossProjectCard(page, `res_cross_${theme}`);
+    const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]).analyze();
+    const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+    expect(serious, `axe violations (cross-project card, ${theme}):\n${fmt(serious)}`).toEqual([]);
+  });
+}
+
+/**
+ * R2 — the COLD-PATH repro, run in a real browser against a real daemon. The
+ * unit pins prove the wiring; this proves the whole path: a block that the
+ * daemon persisted while no browser was attached is visible, unprompted, on a
+ * page the human has just opened.
+ */
+test("R2: a block persisted server-side is visible on a COLD page load (no menu opened)", async ({ page }) => {
+  await page.goto(`${baseURL}/?session=a11y`);
+  // The attention dot is the only thing on screen before any interaction —
+  // and it is driven by the very data that used to require opening the menu.
+  await page.waitForSelector('[data-testid="diagnostics-attention-dot"]', { timeout: 15000 });
+  await page.getByRole("button", { name: /diagnostics/i }).click();
+  await page.getByRole("button", { name: /show recent gate blocks/i }).click();
+  const log = page.getByTestId("gate-block-log");
+  await expect(log).toContainText("in-memory session store");
+  await expect(log).toContainText("raw SQL in route handlers");
+});
+
+/**
+ * R2 — the gate log stopped occluding its siblings. Round 13 measured the
+ * "hooks" chip at hookCoveredFraction 1.0 (entirely painted over) while the
+ * block log was open. Playwright's actionability check is the honest test:
+ * click the sibling with the panel open and see whether the click lands.
+ */
+test("R2: the sibling 'hooks' chip stays clickable while the gate block log is open", async ({ page }) => {
+  await page.goto(`${baseURL}/?session=a11y`);
+  await page.getByRole("button", { name: /diagnostics/i }).click();
+  await page.getByRole("button", { name: /show recent gate blocks/i }).click();
+  await page.waitForSelector('[data-testid="gate-block-log"]', { timeout: 15000 });
+
+  const hooks = page.getByRole("button", { name: /hook/i }).first();
+  const box = await hooks.boundingBox();
+  expect(box, "the hooks chip must have a box while the log is open").not.toBeNull();
+  // elementFromPoint at the chip's centre: pre-R2 this returned the block-log
+  // panel. Playwright's click() enforces the same rule and would time out.
+  const topmostIsSelf = await hooks.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return !!hit && (el.contains(hit) || hit === el);
+  });
+  expect(topmostIsSelf, "the block log must not paint over the hooks chip").toBe(true);
+  await hooks.click({ timeout: 5000 });
 });
 
 test("a11y (#187): the approved-changeset late follow-up composer has no serious/critical axe violations — light", async ({ page }) => {

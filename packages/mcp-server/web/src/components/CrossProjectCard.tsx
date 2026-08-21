@@ -1,3 +1,4 @@
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { useCrossProjectStore } from "../stores/crossProject";
 import { useToastStore } from "../stores/toast";
 
@@ -25,6 +26,25 @@ export function CrossProjectCard() {
   const saving = useCrossProjectStore((s) => s.saving);
   const setPublish = useCrossProjectStore((s) => s.setPublish);
   const dismissCard = useCrossProjectStore((s) => s.dismissCard);
+  const setCardHeight = useCrossProjectStore((s) => s.setCardHeight);
+  const cardRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * R2 — publish the card's rendered height so ToastLayer can lift its column
+   * clear of it. See the z-index note on the element below for why the card,
+   * not the toasts, owns the corner.
+   *
+   * offsetHeight is 0 in jsdom, and the store clamps non-positive values to 0,
+   * so tests (and any headless host) simply fall back to the toasts' normal
+   * bottom-4 placement rather than reading a bogus offset.
+   */
+  useLayoutEffect(() => {
+    // The card is always MOUNTED (App renders it unconditionally); `visible`
+    // is what gates the render — so the "gone" case has to zero the height
+    // here, not in an unmount cleanup that never runs.
+    setCardHeight(visible ? (cardRef.current?.offsetHeight ?? 0) : 0);
+  }, [visible, setCardHeight]);
+  useEffect(() => () => setCardHeight(0), [setCardHeight]);
 
   if (!visible) return null;
 
@@ -45,9 +65,23 @@ export function CrossProjectCard() {
 
   return (
     <div
+      ref={cardRef}
       role="dialog"
       aria-label="Enable cross-project memory"
-      className="fixed bottom-4 right-4 z-40 w-[22rem] max-w-[calc(100vw-2rem)]
+      data-testid="cross-project-card"
+      /* R2 — the card OWNS the bottom-right corner while it is open.
+         Round 13 (screenshot-verified): the card shipped at z-40 and the toast
+         stack sits at z-[60] in the same fixed corner, so at the exact moment
+         of consent BOTH buttons were painted over — and click-intercepted — by
+         the ledger-write and "sent" toasts for the ~5-6s they live. A consent
+         prompt you can't click is worse than no prompt.
+         Judged in the card's favour: it is the rarer and more consequential
+         surface (offered once per project, and it governs whether your stances
+         leave this machine's project boundary), while a ledger toast is
+         informational and repeats. So the card goes ABOVE the toasts — and,
+         rather than simply burying them, it publishes its height so ToastLayer
+         lifts its column clear and both stay readable. */
+      className="fixed bottom-4 right-4 z-[70] w-[22rem] max-w-[calc(100vw-2rem)]
                  rounded-lg border border-accent-blue/30 bg-surface-elevated shadow-2xl
                  overflow-hidden"
     >

@@ -753,7 +753,18 @@ export function ArtifactStatusActions({
           when the field is empty (fast-path for "looks good"). */}
       <textarea
         ref={commentRef}
-        placeholder="Respond to the agent…  (⌘⏎ to send · empty ⌘⏎ = approve)"
+        /* R2 — the hint splits by ARMED INTENT. The reject flow reuses this
+           same textarea for its reason, so while the "what pattern are you
+           rejecting?" panel was open the placeholder still advertised
+           "empty ⌘⏎ = approve" — the opposite verdict, one keystroke away,
+           printed inside the reject composer. The shortcut itself is disarmed
+           below too: an empty ⌘⏎ with Reject armed does nothing rather than
+           approving the thing you were mid-way through rejecting. */
+        placeholder={
+          rejecting
+            ? "Why are you rejecting this?…  (⌘⏎ to send)"
+            : "Respond to the agent…  (⌘⏎ to send · empty ⌘⏎ = approve)"
+        }
         value={comment}
         // B6 review — once the user engages the panel, latch it open:
         // otherwise select-all-delete while scrolled mid-artifact flipped
@@ -765,7 +776,9 @@ export function ArtifactStatusActions({
             e.preventDefault();
             if (comment.trim()) {
               handleRespond();
-            } else if (!hideApprove) {
+            } else if (!hideApprove && !rejecting) {
+              // R2 — never approve out from under an armed Reject (see the
+              // placeholder note above).
               handleAction("approved");
             }
           }
@@ -912,9 +925,17 @@ export function ArtifactStatusActions({
 
       {!comment.trim() && (
         <div className="text-2xs text-text-muted">
-          {suppressRejectConcept
-            ? "⌘⏎ on empty input approves · Reject / Request changes need a reason (redo the digest)"
-            : "⌘⏎ on empty input approves · Reject / Revise need a reason (remembered across sessions)"}
+          {/* R2 — split by ARMED INTENT, same as the textarea placeholder above.
+              Clearing the reason while the reject panel is open used to leave
+              BOTH hints advertising "⌘⏎ on empty input approves" — the opposite
+              verdict, one keystroke away, printed underneath an open reject
+              composer. With Reject armed the shortcut is disarmed, so the hint
+              now says what the keystroke actually does. */}
+          {rejecting
+            ? "Reject needs a reason — ⌘⏎ won't approve while a reject is armed"
+            : suppressRejectConcept
+              ? "⌘⏎ on empty input approves · Reject / Request changes need a reason (redo the digest)"
+              : "⌘⏎ on empty input approves · Reject / Revise need a reason (remembered across sessions)"}
         </div>
       )}
       </>

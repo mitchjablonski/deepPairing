@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { apiBase, sessionHeaders } from "../lib/api";
+import { apiBase, apiGet, sessionHeaders } from "../lib/api";
 import { useToastStore } from "./toast";
 
 /**
@@ -59,8 +59,33 @@ interface CrossProjectState {
   /** A save is in flight (both surfaces disable while it runs). */
   saving: boolean;
 
+  /**
+   * R2 — the measured height of the first-reject card while it is on screen
+   * (0 when it isn't). ToastLayer lifts its column above this so the toast
+   * stack and the consent card stop fighting over the bottom-right corner.
+   */
+  cardHeight: number;
+
   /** Seed from /api/state's `globalLedgerPublish` (or a `preference_changed` event). */
   hydratePublish: (value: boolean) => void;
+  /**
+   * R2 — COLD-PATH HYDRATION. Round 13 (cold-journey lens): `hydratePublish`
+   * was only ever called from AutonomySlider's mount effect, and AutonomySlider
+   * only mounts when the ⋯ diagnostics popover is OPENED. So on a cold page
+   * load `publish` stayed `null` — and `noteStanceRecorded` bails on
+   * `publish !== false`. The whole first-reject card was therefore unreachable
+   * for anyone who rejected something before opening a menu they had no reason
+   * to open, which is everyone on their first session.
+   *
+   * This action is the hydration the cold path needs: one GET, fail-soft (a
+   * dead daemon leaves `publish` null, which only suppresses an offer — never
+   * claims a privacy setting we haven't read). Called once per page load from
+   * App's bootstrap. AutonomySlider still hydrates on its own mount; both write
+   * the same store field, so the popover toggle and the card cannot disagree.
+   */
+  hydrateFromServer: () => Promise<void>;
+  /** R2 — report the card's rendered height (px) so the toasts can clear it. */
+  setCardHeight: (px: number) => void;
   /**
    * Flip the preference. Optimistic + rolls back and toasts on failure —
    * silently keeping an optimistic `true` would tell the human their taste is
@@ -86,8 +111,24 @@ export const useCrossProjectStore = create<CrossProjectState>((set, get) => ({
   cardVisible: false,
   dismissed: readDismissed(),
   saving: false,
+  cardHeight: 0,
 
   hydratePublish: (value) => set({ publish: value }),
+
+  hydrateFromServer: async () => {
+    try {
+      const res = await apiGet(`${apiBase()}/api/state`);
+      if (!res.ok) return;
+      const state = await res.json();
+      if (typeof state?.globalLedgerPublish === "boolean") {
+        set({ publish: state.globalLedgerPublish });
+      }
+    } catch {
+      // Fail-soft — see the interface note.
+    }
+  },
+
+  setCardHeight: (px) => set({ cardHeight: Number.isFinite(px) && px > 0 ? px : 0 }),
 
   setPublish: async (next) => {
     const prev = get().publish;
@@ -140,5 +181,5 @@ export const useCrossProjectStore = create<CrossProjectState>((set, get) => ({
     set({ cardVisible: false, dismissed: true });
   },
 
-  reset: () => set({ publish: null, cardVisible: false, dismissed: false, saving: false }),
+  reset: () => set({ publish: null, cardVisible: false, dismissed: false, saving: false, cardHeight: 0 }),
 }));
