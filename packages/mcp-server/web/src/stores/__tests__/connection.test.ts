@@ -392,7 +392,7 @@ describe("connection store — handleMessage dispatch", () => {
       expect(useConnectionStore.getState().connected).toBe(false);
     });
 
-    it("pushes an info toast on `ledger_write` with the truncated description", async () => {
+    it("pushes an info toast on `ledger_write` naming the CONCEPT, with the reason as the body", async () => {
       const { useToastStore } = await import("../toast");
       useToastStore.getState().dismissAll();
 
@@ -401,6 +401,7 @@ describe("connection store — handleMessage dispatch", () => {
         type: "ledger_write",
         kind: "rejected",
         description: "Auth refactor: rolling your own JWT signing",
+        concept: "hand-rolled JWT signing",
         reason: "maintenance overhead",
       });
       await flush();
@@ -408,8 +409,29 @@ describe("connection store — handleMessage dispatch", () => {
       const toasts = useToastStore.getState().toasts;
       expect(toasts).toHaveLength(1);
       expect(toasts[0]!.kind).toBe("info");
-      expect(toasts[0]!.title).toContain("+ avoid");
-      expect(toasts[0]!.body).toContain("Auth refactor");
+      // R2 — the toast names the cross-project memory KEY the human typed, not
+      // the artifact title the agent minted. Pre-R2 this quoted `description`,
+      // so a changeset reject told the user their new stance was
+      // "packages/api/src/…ts — hoist the settings object".
+      expect(toasts[0]!.title).toBe("Added to your Ledger: avoid — hand-rolled JWT signing");
+      expect(toasts[0]!.title).not.toContain("Auth refactor");
+      expect(toasts[0]!.body).toContain("maintenance overhead");
+      // R2 — the 🧭 moved out of the title string into a named SVG mark.
+      expect(toasts[0]!.title).not.toContain("🧭");
+      expect(toasts[0]!.icon).toBe("compass");
+    });
+
+    it("falls back to the description when a ledger_write carries no concept", async () => {
+      const { useToastStore } = await import("../toast");
+      useToastStore.getState().dismissAll();
+      useConnectionStore.getState().connect();
+      activeAdapter.emit({
+        type: "ledger_write",
+        kind: "rejected",
+        description: "Auth refactor: rolling your own JWT signing",
+      });
+      await flush();
+      expect(useToastStore.getState().toasts[0]!.title).toContain("Auth refactor");
     });
 
     it("differentiates approved vs rejected in the ledger-write title", async () => {
@@ -418,7 +440,7 @@ describe("connection store — handleMessage dispatch", () => {
       useConnectionStore.getState().connect();
       activeAdapter.emit({ type: "ledger_write", kind: "approved", description: "Service layer" });
       await flush();
-      expect(useToastStore.getState().toasts[0]!.title).toContain("+ prefer");
+      expect(useToastStore.getState().toasts[0]!.title).toContain("prefer — Service layer");
     });
 
     it("pushes a success toast on `question_answered` with a jump-to-answer action", async () => {

@@ -11,6 +11,8 @@ import { RepairDecisionModal } from "./RepairDecisionModal";
 import { VisualBody } from "./ArtifactVisuals";
 import { DecisionDiagramFocus } from "./DecisionDiagramFocus";
 import { useReplayStore } from "../stores/replay";
+import { useCrossProjectStore } from "../stores/crossProject";
+import { useConnectionStore } from "../stores/connection";
 import { useWriteLock } from "../hooks/useWriteLock";
 import { OptionCard } from "./decision/OptionCard";
 import { ResolvedDecisionView } from "./decision/ResolvedDecisionView";
@@ -421,8 +423,27 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     if (writeLocked) return;
     if (!artifactId || !text || phase.kind !== "idle" || inFlightRef.current) return;
     inFlightRef.current = true;
+    // R2 — hoisted out of the call so the cross-project offer below reads the
+    // SAME key that was sent (they can't drift).
+    const concept = rejectConcept.trim() || undefined;
     try {
-      await updateArtifactStatus(artifactId, "rejected", text, rejectConcept.trim() || undefined);
+      await updateArtifactStatus(artifactId, "rejected", text, concept);
+      // R2 — the first-reject CROSS-PROJECT card, wired to the artifact type
+      // the product actually teaches with. Q2 built this offer and hung it off
+      // ArtifactStatusActions only; a DECISION reject — the demo, the hero
+      // image and the README all use decisions — recorded the stance and
+      // offered nothing, so the one honest moment to ask "want this on your
+      // other projects too?" was spent silently on the most common path.
+      // Same shape as ArtifactStatusActions: only when the human NAMED the
+      // pattern (the field that just told them it's a cross-project memory
+      // key), and the sessionId rides along so the store can decline in a DEMO
+      // session, where the preference write is a no-op this one-time card would
+      // otherwise burn itself on.
+      if (concept) {
+        useCrossProjectStore
+          .getState()
+          .noteStanceRecorded(useConnectionStore.getState().sessionId);
+      }
       setRejectSent(true);
       setShowReject(false);
       setRejectText("");

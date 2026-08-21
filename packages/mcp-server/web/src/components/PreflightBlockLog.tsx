@@ -162,7 +162,22 @@ export function PreflightBlockLog() {
           ref={popoverRef}
           role="dialog"
           aria-label="Recent gate blocks"
-          className="absolute right-0 mt-1 w-80 max-w-[calc(100vw-2rem)] rounded-md border border-border-default bg-surface-elevated shadow-lg z-50 overflow-hidden"
+          data-testid="gate-block-log"
+          /* R2 — IN FLOW, not floating. Round 13: this panel was
+             `absolute right-0 mt-1 w-80 z-50`, and since #189 demoted the chip
+             into the ⋯ diagnostics menu its siblings ("hooks", the Ledger pill)
+             sit directly BELOW it in the same 240px column — so opening the
+             gate log painted a 320px card straight over them and the hooks chip
+             measured 1.0 hookCoveredFraction: completely unclickable while the
+             moat's own log was open. Exactly the occlusion class Q4 fixed for
+             diagram composers, and it took the same fix: render in the flow of
+             the menu (DiagramRegionLayer's `relative z-[2] mt-2` block
+             placement) so the panel PUSHES its siblings down instead of
+             covering them. Occlusion then becomes impossible by construction at
+             every viewport width — which the alternative (flipping the float to
+             the left of the menu) is not, since a narrow window has no room on
+             that side either. */
+          className="relative z-[1] mt-1 w-full rounded-md border border-border-default bg-surface-elevated overflow-hidden"
         >
           <div className="px-3 py-2 border-b border-border-default flex items-center justify-between">
             <span className="text-2xs font-medium text-text-secondary">
@@ -195,7 +210,16 @@ export function PreflightBlockLog() {
                   </div>
                   {block.proposal && block.proposal !== block.concept && (
                     <div className="mt-0.5 text-text-muted break-words">
-                      <span className="text-text-muted/70">Proposed:</span> "{block.proposal}"
+                      {/* R2 (contrast) — was `text-text-muted/70`: 3.02:1 dark
+                          / 2.95:1 light on surface-elevated, the worst pairing
+                          in the batch and, of all places, in the moat's own
+                          panel. The alpha modifier was doing the job a token
+                          should do (PendingBanner:113-117 documents this exact
+                          class). A LABEL should read stronger than its value
+                          anyway, so it steps UP to the solid secondary token:
+                          8.29:1 dark / 8.77:1 light, and the row still reads as
+                          label + quote because the value stays muted. */}
+                      <span className="text-text-secondary">Proposed:</span> "{block.proposal}"
                     </div>
                   )}
                   {block.reason && (

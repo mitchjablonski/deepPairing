@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { sessionHeaders, apiBase } from "../../lib/api";
-import { useLedgerStore } from "../../stores/ledger";
+import { useLedgerStore, ledgerHasStances } from "../../stores/ledger";
 import { normalizeConceptKey } from "@deeppairing/shared";
 import type { LedgerDigest, PhilosophyEntry } from "./types";
 
@@ -37,7 +37,13 @@ export function LedgerPanel({
   // DD1 — empty test still requires no seeds either, so a fresh project
   // with one paste doesn't show the bootstrap copy underneath the seeded
   // section.
-  const empty = shapedThisProject === 0 && globalLedger.concepts === 0 && seededStances.length === 0;
+  // R2 — the test moved into stores/ledger.ts (`ledgerHasStances`) so this
+  // panel and PreflightBreadcrumb answer "is the ledger empty?" from ONE
+  // predicate. It also now counts stances that have FIRED (blocks/near-misses)
+  // or accumulated citations — round 13 found this copy on screen while nine
+  // blocks sat in the durable log, because a local-only ledger with publishing
+  // off contributes nothing to globalLedger.concepts.
+  const empty = !ledgerHasStances(data);
   // CC2 — when the user deep-linked into the ledger from a PreflightBreadcrumb
   // concept, the matching row may not be in topCitedStances (the digest caps
   // at the top 10 by citation count, so a concept that fired once is invisible

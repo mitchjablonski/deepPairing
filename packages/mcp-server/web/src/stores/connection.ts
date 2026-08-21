@@ -489,14 +489,35 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           // the Philosophy Ledger stops being "visible on demand" and
           // becomes felt in the moment it grows.
           import("./toast").then(({ useToastStore }) => {
-            const kind = data.kind === "approved" ? "approved" : "rejected";
-            const desc = String(data.description ?? "this approach");
-            const trimmed = desc.length > 60 ? desc.slice(0, 57) + "…" : desc;
-            const icon = kind === "approved" ? "+ prefer" : "+ avoid";
+            const verb = data.kind === "approved" ? "prefer" : "avoid";
+            /**
+             * R2 — name the KEY, not the artifact title. Every `ledger_write`
+             * carries both: `concept` is the cross-project memory key (the one
+             * the human typed into the field that told them it was one), and
+             * `description` is the artifact's title, which for a changeset is
+             * whatever the agent named after the file it touched. The toast
+             * quoted `description`, so the human who had just typed "global
+             * mutable state for config" was shown "packages/api/src/config.ts
+             * — hoist the settings object" and told THAT was now their stance.
+             * Prefer the concept; fall back to the description only when a
+             * write carries no concept at all.
+             */
+            const key = String(
+              (typeof data.concept === "string" && data.concept.trim()) ||
+                data.description ||
+                "this approach",
+            );
+            const trimmed = key.length > 60 ? key.slice(0, 57) + "…" : key;
             useToastStore.getState().push({
               kind: "info",
-              title: `🧭 Added to your Ledger: ${icon}`,
-              body: `"${trimmed}"`,
+              // R2 — the 🧭 lived in this string and rendered as tofu wherever a
+              // colour-emoji font is missing (Q4 fixed the same defect on the
+              // preflight hero's 🛡). Named SVG mark instead.
+              icon: "compass",
+              title: `Added to your Ledger: ${verb} — ${trimmed}`,
+              body: typeof data.reason === "string" && data.reason.trim()
+                ? `"${data.reason.trim()}"`
+                : undefined,
               ttl: 5000,
               action: {
                 label: "Open the Ledger",

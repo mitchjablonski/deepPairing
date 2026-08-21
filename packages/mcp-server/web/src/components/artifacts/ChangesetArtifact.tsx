@@ -112,15 +112,46 @@ function FilePathLabel({
   const cut = path.lastIndexOf("/");
   const dir = cut >= 0 ? path.slice(0, cut + 1) : "";
   const base = cut >= 0 ? path.slice(cut + 1) : path;
+  /**
+   * R2 — the index.ts×N degenerate case. Q4 made the DIRECTORY the disposable
+   * half, which is right when basenames differ — but a rail of
+   * `src/http/index.ts`, `src/store/index.ts` and `web/index.ts` under a shared
+   * prefix is three identical labels once the directory collapses,
+   * and the picker exists precisely to tell rows apart. The disambiguating
+   * token is the IMMEDIATE PARENT (`http/`, `store/`, `web/`), which is also
+   * the cheapest one — while the ancestors it shares with every sibling row are
+   * the expensive, uninformative half.
+   *
+   * So in tight mode the directory splits in two: ancestors collapse first
+   * (flexShrink 1000, as before), the parent segment is 250× more reluctant
+   * (4), and the basename never gives up characters until both are gone (1).
+   * The one-row HEADER is roomy and pinned since P2 — it keeps the single
+   * undivided directory span.
+   */
+  const parentCut = tight && dir.length > 1 ? dir.lastIndexOf("/", dir.length - 2) : -1;
+  const ancestors = parentCut >= 0 ? dir.slice(0, parentCut + 1) : "";
+  const parentDir = parentCut >= 0 ? dir.slice(parentCut + 1) : dir;
   return (
     <span className="flex min-w-0 items-baseline" title={path} data-testid={`${testId}-path`}>
+      {dir && tight && (
+        // Rendered even when empty (a one-segment directory) so the ancestors
+        // span is ALWAYS the first flex item — the collapse-order invariant the
+        // Q4 tests measure stays a property of position, not of path depth.
+        <span
+          className={`min-w-0 truncate ${dirClassName}`}
+          style={{ flexShrink: 1000 }}
+          data-testid={`${testId}-ancestors`}
+        >
+          {ancestors}
+        </span>
+      )}
       {dir && (
         <span
           className={`min-w-0 truncate ${dirClassName}`}
-          style={tight ? { flexShrink: 1000 } : undefined}
+          style={tight ? { flexShrink: 4 } : undefined}
           data-testid={`${testId}-dir`}
         >
-          {dir}
+          {tight ? parentDir : dir}
         </span>
       )}
       <span
@@ -192,8 +223,17 @@ function DispChip({ disposition }: { disposition: ChangesetDisposition }) {
     // clears AA for muted text (same combo as the decision "Not chosen" chip).
     // Surfaced by the approved-changeset a11y scan, where every file reads
     // "pending" (no persisted reviewState), so the chip is on screen for real.
-    <span className="shrink-0 text-2xs font-bold font-sans rounded-full px-1.5 py-0.5 text-text-muted bg-surface-elevated" title="Not reviewed yet">
-      — review
+    //
+    // R2 — the word is gone. "— review" is the DEFAULT state of every row, so
+    // it printed the same 58px of non-information on every file while the 240px
+    // rail's label was fighting for 88px — round 13 measured it eating a
+    // quarter of the row that the disambiguating directory segment needed. The
+    // ✓/↻ chips still carry words because they report something that HAPPENED;
+    // "not yet" is carried by the dash, the tooltip, and an sr-only noun (a
+    // bare "—" would announce as "dash" or as nothing at all).
+    <span className="shrink-0 text-2xs font-bold font-sans rounded-full px-1 py-0.5 text-text-muted bg-surface-elevated" title="Not reviewed yet">
+      <span aria-hidden="true">—</span>
+      <span className="sr-only">not reviewed yet</span>
     </span>
   );
 }
@@ -251,11 +291,18 @@ function ExternalReviewBanner({ source }: { source?: ChangesetSource }) {
         )}
         {who}
         {source?.headRef && source?.baseRef ? (
-          <span className="font-mono text-2xs opacity-80"> ({source.headRef} → {source.baseRef})</span>
+          /* R2 (contrast) — `opacity-80` measured 3.90:1 dark / 3.39:1 light
+             for accent-blue on accent-blue-dim. The dim was already carrying
+             the "quieter" job; the alpha only pushed a passing 5.26/4.83 pair
+             under AA. Differentiation now comes from font-mono + text-2xs. */
+          <span className="font-mono text-2xs"> ({source.headRef} → {source.baseRef})</span>
         ) : null}
       </span>
       <span aria-hidden="true" className="opacity-60">·</span>
-      <span className="opacity-90">your verdicts stay local until you post them</span>
+      {/* R2 (contrast) — `opacity-90` measured 4.54:1 dark / 4.05:1 light; the
+          light theme failed AA outright. This is the ONE sentence the banner
+          exists to state, so it gets the solid token: 5.26 / 4.83. */}
+      <span>your verdicts stay local until you post them</span>
     </div>
   );
 }

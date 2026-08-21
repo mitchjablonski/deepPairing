@@ -30,6 +30,8 @@ import { SkillLoadBanner } from "./components/SkillLoadBanner";
 import { useArtifactStore } from "./stores/artifact";
 import { useReplayStore } from "./stores/replay";
 import { useConnectionStore } from "./stores/connection";
+import { usePreflightBlockStore } from "./stores/preflightBlocks";
+import { useCrossProjectStore } from "./stores/crossProject";
 import { scrollToAnchor } from "./lib/comment-anchor";
 import { reviewLifecycle } from "./lib/reviewLifecycle";
 import { countUnansweredQuestions } from "./lib/unanswered";
@@ -207,6 +209,47 @@ function App() {
     init();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only bind: connect/refreshSessions are stable store actions; re-binding on their identity would re-run the session bootstrap
   }, []);
+
+  /**
+   * R2 — COLD-PATH HYDRATION. Round 13's cold-journey lens found both of Q2's
+   * flagship fixes inert on a cold page load, for the same structural reason:
+   * each was hydrated by a component that only mounts INSIDE the ⋯ diagnostics
+   * popover.
+   *
+   *  - `usePreflightBlockStore.load()` ran from PreflightBlockLog's mount —
+   *    but PreflightBlockLog is only mounted while the ⋯ menu is open, and the
+   *    menu's own attention dot is driven by `blocks.length`. Circular: the dot
+   *    that exists to make you open the menu needed data that only loaded once
+   *    you opened it. A real gate block persisted server-side was invisible
+   *    after reload, while the DEMO's replayed block survived — round 12's
+   *    "the demo teaches what production doesn't keep", one layer down.
+   *  - `hydratePublish()` ran from AutonomySlider's mount, same popover. With
+   *    `publish` left null, `noteStanceRecorded` bails, so the first-reject
+   *    cross-project card could never fire on a cold page.
+   *
+   * Both hydrations belong at the page's own bootstrap, and this is that site:
+   * it runs on mount, after `projectHash` is known — the daemon injects
+   * `window.__dpProjectHash` into the served HTML and stores/connection.ts
+   * seeds it synchronously at store creation, so the fail-closed
+   * X-Project-Hash gate is satisfied on the very first fetch.
+   *
+   * Keyed on `sessionId` rather than `[]` for one reason: /api/preflight-blocks
+   * is PROJECT-scoped and answers at mount regardless, but /api/state is
+   * SESSION-scoped and returns the no-session EMPTY_STATE (which carries no
+   * `globalLedgerPublish`) until this tab has bound. Binding is async — the
+   * bootstrap above fetches /api/active-sessions first — so a mount-only effect
+   * would leave `publish` null on exactly the cold load this exists to fix,
+   * whenever the browser opened before the tab bound. Re-running when the
+   * binding lands closes that; both calls are idempotent (the block store
+   * dedupes and merges; hydrateFromServer only writes a real boolean), so the
+   * extra pass costs two cheap GETs and cannot clobber a known value with an
+   * unknown one. Both are fail-soft inside their stores — a dead daemon leaves
+   * the chip idle and the offer unoffered, never a broken shell.
+   */
+  useEffect(() => {
+    void usePreflightBlockStore.getState().load();
+    void useCrossProjectStore.getState().hydrateFromServer();
+  }, [sessionId]);
 
   // PP3 — poll for new sessions only while the tab is visible AND connected
   // (was a bare 10s setInterval that fired forever, even hidden/disconnected).
@@ -593,7 +636,13 @@ function App() {
                 <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${s.live === false ? "bg-text-muted/50" : isActive ? "bg-accent-blue-strong animate-pulse" : "bg-accent-green"}`} />
                 <span className="truncate max-w-40">{label}</span>
                 {s.artifactCount > 0 && (
-                  <span className="text-[9px] bg-surface-elevated px-1 py-0.5 rounded opacity-70">{s.artifactCount}</span>
+                  /* R2 (contrast) — `opacity-70` on 9px text: 4.77:1 dark /
+                     3.91:1 light on the inactive row, and 3.45 / 3.10 on the
+                     SELECTED row where the count inherits accent-blue. At 9px
+                     it is the smallest text in the shell, so it needed the
+                     opposite of a dimmer. Solid: 8.29 / 8.77 inactive,
+                     5.60 / 5.53 selected. */
+                  <span className="text-[9px] bg-surface-elevated px-1 py-0.5 rounded">{s.artifactCount}</span>
                 )}
               </button>
             );

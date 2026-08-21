@@ -1,7 +1,18 @@
 import type { ReactNode } from "react";
 import { useToastStore, type Toast, type PreflightBlockHero } from "../stores/toast";
 import { useLedgerStore } from "../stores/ledger";
-import { ShieldIcon } from "./icons/ArtifactIcons";
+import { useCrossProjectStore } from "../stores/crossProject";
+import { ShieldIcon, CompassIcon } from "./icons/ArtifactIcons";
+
+/**
+ * R2 — the SVG marks a toast can name via `Toast.icon`, so a store that can't
+ * hold JSX (stores/connection.ts, stores/ledger.ts) can still ask for one
+ * instead of pasting an emoji into the title string.
+ */
+const NAMED_ICONS: Record<NonNullable<Toast["icon"]>, ReactNode> = {
+  compass: <CompassIcon className="w-4 h-4" />,
+  shield: <ShieldIcon className="w-4 h-4" />,
+};
 
 const kindStyles: Record<Toast["kind"], { bg: string; border: string; accent: string; icon: ReactNode }> = {
   info: {
@@ -179,6 +190,16 @@ function PreflightBlockHeroCard({ hero, onDismiss, action, onOverride }: {
  */
 export function ToastLayer() {
   const { toasts, dismiss } = useToastStore();
+  /**
+   * R2 — the first-reject cross-project card shares this exact corner and now
+   * sits ABOVE this layer (z-[70] vs z-[60]) because it is the rarer, more
+   * consequential surface. Burying the toasts under it would only move the
+   * occlusion, so the stack lifts by the card's measured height instead and
+   * both stay readable. 0 when the card isn't on screen (and in jsdom, where
+   * offsetHeight is always 0) → the normal bottom-4 placement, unchanged.
+   */
+  const cardHeight = useCrossProjectStore((s) => (s.cardVisible ? s.cardHeight : 0));
+  const liftPx = cardHeight > 0 ? cardHeight + 24 : undefined;
 
   // U1 — announcement is per-toast, NOT via an outer live region: error/block/
   // preflight toasts are role=alert (assertive, announced on insertion); the
@@ -195,6 +216,7 @@ export function ToastLayer() {
     <div
       data-testid="toast-region"
       className="fixed bottom-4 right-4 z-[60] flex flex-col gap-2 max-w-[420px] w-[calc(100vw-2rem)] pointer-events-none"
+      style={liftPx ? { bottom: liftPx } : undefined}
     >
       {toasts.map((t) => {
         // error / blocked are assertive — they interrupt rather than queue
@@ -223,6 +245,9 @@ export function ToastLayer() {
           );
         }
         const style = kindStyles[t.kind];
+        // R2 — a named SVG mark overrides the kind's default glyph. See the
+        // `icon` field on Toast for why the ledger toasts needed one.
+        const icon = t.icon ? NAMED_ICONS[t.icon] : style.icon;
         return (
           <div
             key={t.id}
@@ -232,7 +257,7 @@ export function ToastLayer() {
           >
             {/* Q4 — decorative: the toast's title/body carry the message, and
                 the role=alert already announces them. */}
-            <span className={`flex items-center text-sm font-semibold shrink-0 ${style.accent}`} aria-hidden="true">{style.icon}</span>
+            <span className={`flex items-center text-sm font-semibold shrink-0 ${style.accent}`} aria-hidden="true">{icon}</span>
             <div className="min-w-0 flex-1">
               <div className="text-xs font-semibold text-text-primary">{t.title}</div>
               {t.body && (
