@@ -110,6 +110,15 @@ function coerceFinding(v: unknown): Finding {
   if (Array.isArray(f.relatedFindings)) out.relatedFindings = strArr(f.relatedFindings);
   const confidence = optOneOf(f.confidence, LMH);
   if (confidence) out.confidence = confidence;
+  // R1 (#279) — `audience` MUST survive coercion. Every outbound path
+  // (buildGitHubReviewPayload, the authorization gate) reads findings through
+  // coerceResearchContent, so a field dropped here is a field that silently
+  // reverts to postable — i.e. the private-stance leak reopening through the
+  // back door. An unrecognized value falls back to undefined === postable,
+  // which is the pre-R1 meaning; the WRITE side (Zod at the tool boundary)
+  // is what guarantees only the two legal values ever land on disk.
+  const audience = optOneOf(f.audience, ["internal", "postable"] as const);
+  if (audience) out.audience = audience;
   return out;
 }
 

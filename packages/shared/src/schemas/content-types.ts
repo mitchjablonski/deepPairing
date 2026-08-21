@@ -31,9 +31,39 @@ export const FindingSchema = z.object({
   impact: z.string().optional().describe("What happens if this is not addressed"),
   recommendation: z.string().optional().describe("What should be done"),
   relatedFindings: z.array(z.string()).optional(),
+  /**
+   * R1 (#279) — WHO IS THIS FINDING FOR?
+   *
+   * The privacy hole it closes: /deeppairing:review-pr instructs the agent to
+   * sweep the human's philosophy ledger and turn every hit into a finding
+   * ("this PR introduces X, which you rejected on 2026-03-04: '<your reason>'").
+   * Findings the human approves post VERBATIM as inline comments on someone
+   * else's pull request — so in round 13 a stranger's PR received the
+   * reviewer's private cross-project stances, dates and all.
+   *
+   * `internal` means: show it to my pair on the review surface, and NEVER put
+   * it in an outbound payload — not as an inline comment, not in the review
+   * body. `postable` (the default, and what every finding written before this
+   * field existed means) is the old behaviour, unchanged.
+   *
+   * Optional with a postable default is deliberate back-compat: absent === the
+   * pre-R1 meaning, so no stored artifact changes shape or behaviour.
+   */
+  audience: z.enum(["internal", "postable"]).optional()
+    .describe("'internal' = for your pair's eyes only; NEVER posted to a PR — use it for anything read out of their philosophy ledger or private history. 'postable' (the default) = may become an inline PR comment once they approve it."),
 });
 
 export type Finding = z.infer<typeof FindingSchema>;
+
+/**
+ * R1 (#279) — may this finding leave the machine? The ONE predicate every
+ * outbound path consults (the GitHub payload builder and the authorization
+ * gate's postable-evidence probe), so "internal" can never come to mean two
+ * different things in two places. Absent audience === postable (back-compat).
+ */
+export function isPostableFinding(finding: { audience?: string } | null | undefined): boolean {
+  return !!finding && finding.audience !== "internal";
+}
 
 export const ResearchContentSchema = z.object({
   summary: z.string(),

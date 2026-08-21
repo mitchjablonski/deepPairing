@@ -65,6 +65,23 @@ const AddCommentBody = z
   })
   .passthrough();
 const RecordDecisionBody = z.record(z.string(), z.unknown()); // must be an object; shape is the store's concern
+// R1 (#279) — the landed-review stamp. Mirrors PostedReviewRecord; `.strict()`
+// is deliberate here (unlike the .passthrough() bodies above) because this
+// record exists only to be MATCHED later — an unknown key is a caller bug, not
+// a forward-compatible extension.
+const PostedReviewBody = z
+  .object({
+    pr: z.string().min(1),
+    prNumber: z.number().int().nonnegative(),
+    owner: z.string().optional(),
+    repo: z.string().optional(),
+    event: z.enum(["COMMENT", "REQUEST_CHANGES", "APPROVE"]),
+    reviewId: z.number(),
+    url: z.string(),
+    postedAt: z.string().min(1),
+    commentCount: z.number().int().nonnegative(),
+  })
+  .strict();
 // Preference-setter bodies — validated against the SHARED enum schemas so the
 // internal route rejects a poison value the same way /api/preferences does.
 const AutonomyPostBody = z.object({ level: AutonomyLevelSchema });
@@ -578,6 +595,20 @@ export function createDaemonRoutes(
     const art = r.store.getArtifacts().find((a) => a.id === c.req.param("artifactId"));
     if (art) broadcast(sessionId, { type: "artifact_content_updated", artifact: art });
     return c.json({ status: "stamped" });
+  });
+
+  // R1 (#279) — stamp a LANDED GitHub review into the session's posted-review
+  // sidecar, so the authorization gate can refuse a duplicate post (round 13:
+  // five calls, five reviews on one PR). Write-only; the read rides /state.
+  // Zod-validated like every sibling internal route — a malformed body must
+  // 400, not write a record the gate then can't match.
+  app.post("/api/internal/sessions/:sessionId/posted-reviews", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const parsed = await parseJsonBody(c, PostedReviewBody);
+    if (!parsed.ok) return parsed.res;
+    r.store.recordPostedReview(parsed.data as Parameters<typeof r.store.recordPostedReview>[0]);
+    return c.json({ status: "recorded" });
   });
 
   // --- Comments ---

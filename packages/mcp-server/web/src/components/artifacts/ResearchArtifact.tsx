@@ -27,6 +27,8 @@ interface RichFinding {
   confidence?: "low" | "medium" | "high";
   impact?: string;
   recommendation?: string;
+  /** R1 (#279) — "internal" means this one is for you, never for the PR. */
+  audience?: "internal" | "postable";
 }
 
 const severityStyles: Record<string, string> = {
@@ -701,6 +703,19 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
                   : "bg-accent-green-dim text-accent-green"
               }`}>
                 {finding.confidence === "low" ? "? uncertain" : "✓ confident"}
+              </span>
+            )}
+            {/* R1 (#279) — the quiet promise. Approving a finding in a
+                PR-review session arms it for someone else's repository, so a
+                finding that is NOT going there has to say so where the verdict
+                is given. Deliberately understated (muted, dashed) — it is a
+                reassurance, not a warning. */}
+            {finding.audience === "internal" && (
+              <span
+                className="shrink-0 px-1.5 py-0.5 rounded text-2xs font-medium bg-surface-elevated text-text-muted border border-dashed border-white/[0.14]"
+                title="Internal — for you only. This finding is never posted to the PR, even if you approve the artifact."
+              >
+                internal — won't be posted
               </span>
             )}
           </div>

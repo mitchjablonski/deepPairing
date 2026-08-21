@@ -257,6 +257,8 @@ export {
   type ChangesetDisposition,
 } from "./changeset-review.js";
 export { DecisionOptionBaseSchema, DecisionOptionConceptSchema } from "./schemas/content-types.js";
+/** R1 (#279) — the one "may this finding leave the machine?" predicate. */
+export { isPostableFinding } from "./schemas/content-types.js";
 export { normalizeConceptKey } from "./normalize.js";
 export {
   threadRootId,

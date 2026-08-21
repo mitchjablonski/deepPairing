@@ -1,5 +1,7 @@
 import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SuggestionState, SuggestionCounter, DecisionOption, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
 
+import type { PostedReviewRecord } from "./posted-reviews.js";
+
 /** Allows both sync (FileStore) and async (DaemonClient) implementations */
 type MaybePromise<T> = T | Promise<T>;
 
@@ -549,6 +551,18 @@ export interface IStore {
    */
   recordPreflightTrace?(artifactId: string, trace: PreflightTrace): MaybePromise<void>;
   getPreflightTrace?(artifactId: string): MaybePromise<PreflightTrace | null>;
+
+  /**
+   * R1 (#279) — record that a GitHub review LANDED, so a second
+   * `post_pr_review` for the same PR can refuse instead of notifying the
+   * author twice (round 13: five calls, five reviews). Write-only on the
+   * interface; the READ rides `getFullState().postedReviews`, which both
+   * stores already serve, so there is no second round-trip on the hot path.
+   *
+   * REQUIRED, not optional: a store that silently no-op'd this would re-arm
+   * the duplicate post — exactly the Z1 failure mode called out above.
+   */
+  recordPostedReview(record: PostedReviewRecord): MaybePromise<void>;
 
   /**
    * #176 (Option A) — client-reported Mermaid render failures.

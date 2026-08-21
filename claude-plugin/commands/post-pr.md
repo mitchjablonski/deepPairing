@@ -20,17 +20,32 @@ out to GitHub, and refuses if they aren't there. So if it comes back refusing:
   flag, and asking me in chat is not the same as me approving it in the UI.
 - **findings I rejected** are excluded on their own — you don't need to do
   anything.
+- **findings marked `audience: "internal"`** never post either. Anything read
+  out of my ledger or my past sessions is mine, not the author's business.
 - To drop one finding and keep the rest, `revise_artifact` first: rejection is
   per-artifact, so a finding I waved off still posts if it's sitting inside a
   live artifact.
+- **"actually, don't send that one"** on a whole artifact I already approved:
+  `revise_artifact` with `mode: "retract"`. In a PR-review session that un-arms
+  it — approval is what armed it — and it can't be posted afterwards.
 
-**Which event.**
-- `REQUEST_CHANGES` — only if a surviving finding is **high or critical**.
+**Which event.** The first two are checked in code, not taken on trust.
+- `REQUEST_CHANGES` — only if a surviving finding is **high or critical**. It
+  blocks the author's merge, so the tool requires one and names the highest
+  severity I approved when it refuses. Post a `COMMENT` instead; don't re-rate a
+  finding to clear the gate.
 - `APPROVE` — if I read it and had nothing to flag. That is a complete review;
   it posts with no inline comments and you don't need findings to use it. It
-  does need me to have **approved the PR changeset** in the UI — that approval
-  is what authorizes an approving review on someone else's repo.
-- `COMMENT` — everything else, and the default.
+  does need me to have **approved every live PR changeset** in the UI — and it
+  is refused outright if I rejected one. That approval is what authorizes an
+  approving review on someone else's repo.
+- `COMMENT` — everything else, and the default. Anything that isn't one of these
+  three is refused rather than guessed at.
+
+**It posts once.** The tool records a landed review and refuses a second post to
+the same PR, with the URL of the first — a re-post notifies the author all over
+again. Give me that URL. Only if I actually say "post it again" do you re-issue
+with `repost: true`.
 
 **Requires `gh` installed and authenticated.** If the tool comes back saying gh
 is missing or not authenticated, tell me clearly and stop — don't work around

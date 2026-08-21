@@ -317,7 +317,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
           "Present a change that spans 2+ FILES as ONE reviewable artifact — unified diffs per file, per-file review state, and comments that can anchor across files. Use this for multi-file changes (a refactor, a feature touching several modules); a SINGLE-file change stays present_code_change." +
           "\n\nSchema note: `files` is an array; each file has `path`, `changeType` ('modified'|'added'|'deleted'), and `hunks` (unified-diff shaped: an optional `header` plus `lines`, each `{ kind: 'ctx'|'add'|'del', content, oldLine?, newLine? }`). Optional `summary`, `risks[]` (e.g. 'touches auth'), and per-file `stats` ({additions, deletions}). INPUT_VALIDATION_FAILED on mismatch." +
           "\n\nWorkflow: SINGLE REVIEW SURFACE — the human dispositions each file (looks-right, or needs-changes with a reason) and the whole-changeset verdict is DERIVED (all look-right → approve; any flagged → send those files back for revision). Review happens in the companion UI; don't paste diffs in chat. Non-blocking: it records + returns immediately. Call check_feedback for their per-file disposition, reasons, comments, and verdict — a send-back arrives as a `revised` status with feedback naming which files to revise and why." +
-          "\n\nREVIEWING SOMEONE ELSE'S PR (`reviewIntent: 'external'`): when the human was pinged to review a GitHub PR, feed THE PR'S DIFF in here — one changeset file per changed file, hunks straight from `gh pr diff <N>` — and set `reviewIntent: 'external'` plus `source: { kind: 'github-pr', number, url, headRef, baseRef, author }`. That is what puts their colleague's diff on the rich surface: per-hunk comments, walk-me-through per hunk, findings anchored to real lines. Semantics change with the flag and you must honour them: the verdict is the HUMAN'S REVIEW OPINION, not a landing gate — it stays LOCAL until they tell you to post it (post_pr_review), nothing here is on their disk, and you must NOT apply, revise, or 'fix' these files or send yourself back to redraft them. No closing present_debrief is owed for code the pair did not write; the session's output is the posted review. Omit `reviewIntent` for your own work — absent means local, exactly as before.",
+          "\n\nREVIEWING SOMEONE ELSE'S PR (`reviewIntent: 'external'`): when the human was pinged to review a GitHub PR, feed THE PR'S DIFF in here — one changeset file per changed file, hunks straight from `gh pr diff <N>` — and set `reviewIntent: 'external'` plus `source: { kind: 'github-pr', number, url, headRef, baseRef, author }`. That is what puts their colleague's diff on the rich surface: per-hunk comments, walk-me-through per hunk, findings anchored to real lines. Semantics change with the flag and you must honour them: the verdict is the HUMAN'S REVIEW OPINION, not a landing gate — it stays LOCAL until they tell you to post it (post_pr_review), nothing here is on their disk, and you must NOT apply, revise, or 'fix' these files or send yourself back to redraft them. No closing present_debrief is owed for code the pair did not write; the session's output is the posted review. Omit `reviewIntent` for your own work — absent means local, exactly as before." +
+          "\n\n`reviewIntent: 'external'` IS AN ASSERTION WITH CONSEQUENCES, and nothing can verify it from here: it exempts the session from the closing-debrief gate and it is what lets post_pr_review send an APPROVE. Set it ONLY for code your pair genuinely did not write (a colleague's PR you fetched with `gh`). Their recorded stances are still weighed against an external diff — you get them back as an ADVISORY on this call rather than a refusal, because a stance about their codebase must not stop you SHOWING them someone else's. Raise any such match with them as a finding with `audience: 'internal'`; it is their private history and it must never be quoted to the PR author.",
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_changeset),
@@ -384,7 +385,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
         description:
           "Post this session's approved findings as inline comments on a GitHub PR via the `gh` CLI. Only findings with structured evidence (filePath + lineStart) anchor as inline comments; rejected / retracted / superseded artifacts are omitted." +
           "\n\nCall this ONLY when the human has explicitly told you to post (\"post the review\", \"ship the review\"). \"We're done here\" ends the discussion, NOT the review — it is not permission to write into someone else's repository. If it is ambiguous, ask them." +
-          "\n\nAUTHORIZATION IS CHECKED, not assumed: before anything reaches GitHub the tool verifies the human's recorded verdicts in the session store. A findings artifact they never ruled on (draft/reviewing/revised) REFUSES the whole post and is named in the error — go and get their verdict, don't try to route around it. Findings they rejected are excluded automatically. An APPROVE with no inline comments additionally requires them to have APPROVED the external changeset (the PR on the review surface) — that approval is what authorizes an approving review on someone else's code. There is no force flag and no bypass; if it refuses, the answer is a human verdict, not a retry.",
+          "\n\nAUTHORIZATION IS CHECKED, not assumed: before anything reaches GitHub the tool verifies the human's recorded verdicts in the session store. A findings artifact they never ruled on (draft/reviewing/revised) REFUSES the whole post and is named in the error — go and get their verdict, don't try to route around it. Findings they rejected are excluded automatically, and findings marked `audience: \"internal\"` NEVER post at all. An APPROVE — with or without inline comments — requires them to have APPROVED every live external changeset for this PR (the PR on the review surface); if they REJECTED it, the APPROVE is refused outright. There is no force flag and no bypass; if it refuses, the answer is a human verdict, not a retry." +
+          "\n\nPOSTS ONCE. A landed review is recorded in the session, and a second call for the same PR refuses with the URL of the first — a re-post notifies the author again. If the human explicitly asks you to post again, pass `repost: true`.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -395,10 +397,14 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
             event: {
               type: "string",
               enum: ["COMMENT", "REQUEST_CHANGES", "APPROVE"],
-              description: "The review event type. Default: COMMENT. Use REQUEST_CHANGES when findings are severe.",
+              description: "The review event type. Default: COMMENT. REQUEST_CHANGES is CHECKED, not trusted: it requires at least one approved finding at severity high or critical, because it blocks the author's merge. Anything outside these three values is refused, not guessed at.",
             },
             owner: { type: "string", description: "Override repo owner (when pr is just a number and you're not in the repo)" },
             repo: { type: "string", description: "Override repo name" },
+            repost: {
+              type: "boolean",
+              description: "Post AGAIN to a PR this session already posted to. Set it ONLY when the human said so in as many words (\"post it again\", \"re-post it\") — a second review notifies the author a second time. Never set it to clear a refusal on your own initiative.",
+            },
           },
           required: ["pr"],
         },
@@ -537,7 +543,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
         name: "revise_artifact",
         annotations: { title: "Revise artifact", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         description:
-          "Revise a prior artifact. `mode: 'supersede'` creates a v(N+1) draft linked via parentId (requires new `content`); the old flips to 'superseded'. `mode: 'retract'` marks the artifact 'retracted' with the reason.",
+          "Revise a prior artifact. `mode: 'supersede'` creates a v(N+1) draft linked via parentId (requires new `content`); the old flips to 'superseded'. `mode: 'retract'` marks the artifact 'retracted' with the reason." +
+          "\n\nUN-ARMING A REVIEW (R1): normally only a draft/reviewing artifact can be retracted — an approved one is the human's standing verdict. The one exception is a PR-review session (a changeset with reviewIntent: 'external' present): there, `mode: 'retract'` on an APPROVED findings artifact is how the human's \"actually, don't send that one\" gets expressed, because approval in that session is what ARMS the findings for posting. Use it when they say so; the artifact then cannot be posted.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -1024,7 +1031,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
       proposalStrings: string[],
       proposalPaths: string[] = [],
       proposalConcepts: string[] = [],
-    ) => preflightHelper(store, broadcast, toolName, proposalStrings, proposalPaths, proposalConcepts);
+      opts: { advisory?: boolean } = {},
+    ) => preflightHelper(store, broadcast, toolName, proposalStrings, proposalPaths, proposalConcepts, opts);
     const autoNameSession = (title: string) => sessionNameLatch.maybeName(title);
 
     // X4 — ToolContext for handlers extracted to tools/. Cases that still
