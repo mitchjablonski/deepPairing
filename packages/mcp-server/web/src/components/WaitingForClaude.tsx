@@ -75,9 +75,9 @@ export function WaitingForClaude({ variant = "no-session" }: { variant?: "no-ses
           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent-blue opacity-70" />
           <span className="relative inline-flex rounded-full h-2 w-2 bg-accent-blue-strong" />
         </span>
-        <h3 className="text-sm font-semibold text-text-primary">
+        <h2 className="text-sm font-semibold text-text-primary">
           {drafting ? "Claude is connected" : "Waiting for Claude"}
-        </h3>
+        </h2>
       </div>
 
       <p className="text-xs text-text-secondary leading-relaxed">

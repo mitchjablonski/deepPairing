@@ -219,10 +219,18 @@ function FindingTriage({
   const chipClass = (active: boolean, tone: "green" | "amber" | "red") => {
     const base = "w-5 h-5 flex items-center justify-center rounded text-[10px] font-semibold transition-colors press-scale";
     if (active) {
+      // Q4 (round-12 UX #3/#5) — the ACTIVE verdict chip is the one place the
+      // finding row states your decision, and it stated it in literal white on
+      // a saturated fill: 2.54:1 green, 2.24:1 amber, 3.35:1 red in the dark
+      // theme (light was fine, which is how it survived). `text-text-inverse`
+      // is the token the other solid-accent buttons already use and it flips
+      // with the theme — 7.43 / 8.41 / 5.63 dark, 5.80 / 6.31 / 6.19 light.
+      // (The plain accents have no `-strong` variant; on `-strong` fills
+      // literal white IS correct and must stay — see blue/violet-strong.)
       return `${base} ${
-        tone === "green" ? "bg-accent-green text-white" :
-        tone === "amber" ? "bg-accent-amber text-white" :
-        "bg-accent-red text-white"
+        tone === "green" ? "bg-accent-green text-text-inverse" :
+        tone === "amber" ? "bg-accent-amber text-text-inverse" :
+        "bg-accent-red text-text-inverse"
       }`;
     }
     return `${base} text-text-muted hover:text-text-primary ${
@@ -235,6 +243,15 @@ function FindingTriage({
   return (
     <div
       className={`relative flex items-center gap-0.5 ${locked ? "opacity-40" : ""}`}
+      // Q4 (round-12 UX #5) — the three chips are glyph-only (✓ ↻ ✗) and each
+      // one already names ITSELF, but nothing named the SET, so a screen reader
+      // met three unexplained buttons with no clue they were one choice. A
+      // group + a name is the whole fix; visible labels would triple the width
+      // of a row that already carries severity, confidence, Ask and Comment.
+      // (role=group, not a bare aria-label: aria-label on a generic <div> is
+      // prohibited and gets dropped.)
+      role="group"
+      aria-label={`Your verdict on finding ${findingIndex + 1}`}
       // #204 (UX L2) — dim + inert on a closed/frozen artifact. aria-disabled +
       // per-button disabled keeps keyboard users out too (opacity alone wouldn't).
       aria-disabled={locked || undefined}
@@ -307,7 +324,9 @@ function FindingTriage({
             <button
               onClick={() => submit(promptVerdict, reason)}
               disabled={!reason.trim() || submitting}
-              className={`px-2 py-1 text-2xs text-white rounded press-scale disabled:opacity-50 ${
+              // Q4 — same pair as the verdict chips above (2.24:1 amber /
+              // 3.35:1 red on dark); text-text-inverse is theme-aware.
+              className={`px-2 py-1 text-2xs text-text-inverse rounded press-scale disabled:opacity-50 ${
                 promptVerdict === "revised" ? "bg-accent-amber hover:bg-accent-amber/80" : "bg-accent-red hover:bg-accent-red/80"
               }`}
             >
@@ -743,9 +762,9 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
           {/* Header with view toggle and color mode */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
+              <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
                 Findings ({findings.length})
-              </h4>
+              </h3>
               <div className="flex items-center gap-2">
                 {/* Color by toggle */}
                 <div className="flex items-center gap-0.5 bg-surface-elevated rounded p-0.5">
@@ -839,12 +858,20 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
 
               {focusedFinding && renderFinding(focusedFinding, focusIndex)}
 
-              {/* Dot indicators */}
-              <div className="flex items-center justify-center gap-1.5">
-                {findings.map((_, i) => (
+              {/* Dot indicators.
+                  Q4 (round-12 UX #5) — these are 6px buttons with NO text, no
+                  title and no label: a screen reader announced N nameless
+                  buttons, and a pointer user got no hint of where each one
+                  goes. Name them (the same shape the triage strip above
+                  already uses) and mark the current one. */}
+              <div className="flex items-center justify-center gap-1.5" role="group" aria-label="Jump to finding">
+                {findings.map((f, i) => (
                   <button
                     key={i}
                     onClick={() => setFocusIndex(i)}
+                    title={`Finding ${i + 1}${f.title ? `: ${f.title}` : ""}`}
+                    aria-label={`Go to finding ${i + 1} of ${findings.length}`}
+                    aria-current={i === focusIndex ? "true" : undefined}
                     className={`w-1.5 h-1.5 rounded-full transition-colors ${
                       i === focusIndex ? "bg-accent-blue-strong" : "bg-surface-hover"
                     }`}
@@ -863,9 +890,9 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
 
       {content.openQuestions && content.openQuestions.length > 0 && (
         <div className="space-y-2">
-          <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
+          <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
             Open Questions ({content.openQuestions.length})
-          </h4>
+          </h3>
           {/* #164 — each question is its own bounded section with a prominent
               answer affordance + inline thread (was a cramped list row). D8
               (H1) targeting per question (questionIndex) is preserved inside

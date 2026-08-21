@@ -381,7 +381,13 @@ export function PreflightBreadcrumb({ artifactId }: PreflightBreadcrumbProps) {
           <div className="text-accent-amber mb-1">Other near-misses:</div>
           <ul className="space-y-0.5">
             {trace.nearMisses.slice(1).map((n, i) => (
-              <li key={`n${i}`} className="font-mono text-accent-amber/80">
+              // Q4 (round-12 UX #3) — /80 composites to #9a7732 on the light
+              // surface-secondary: 3.94:1, under AA (dark was fine at 5.46:1,
+              // which is why it was never caught — the amber lane was only
+              // ever eyeballed in the dark theme). Full strength = 5.99:1
+              // light / 7.90:1 dark; the "other near-misses" list is already
+              // de-emphasised by size and indent without borrowing alpha.
+              <li key={`n${i}`} className="font-mono text-accent-amber">
                 <button
                   type="button"
                   onClick={() => openLedgerForConcept(n.concept)}

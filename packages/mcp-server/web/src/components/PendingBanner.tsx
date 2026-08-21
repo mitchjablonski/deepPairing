@@ -76,10 +76,18 @@ export function PendingBanner() {
                 }
               }}
               onBlur={() => setConfirmingId((id) => (id === a.id ? null : id))}
+              // Q4 (round-12 UX #3) — the waiting strip's measured AA failure.
+              // The sibling "+N more" comment below already names this class,
+              // but the dismiss chip kept its /70: composited it lands at
+              // #a88743 on the chip's own amber-dim fill = 3.13:1 light /
+              // 3.58:1 dark, both under AA, on the control that DESTROYS a
+              // draft. The /70 only bought a rest-vs-hover distinction the
+              // hover BACKGROUND already carries — drop it and the same chip
+              // reads 5.85:1 light / 5.61:1 dark.
               className={`px-1.5 py-0.5 rounded-r text-2xs border-l border-accent-amber/20 transition-colors ${
                 confirmingId === a.id
                   ? "text-accent-amber font-semibold bg-accent-amber-dim"
-                  : "text-accent-amber/70 hover:text-accent-amber hover:bg-accent-amber-dim/80"
+                  : "text-accent-amber hover:bg-accent-amber-dim/80"
               }`}
               title={confirmingId === a.id ? "Click again to dismiss (can't be undone)" : "Dismiss — overcome by new information"}
               aria-label={confirmingId === a.id ? `Confirm dismiss ${a.title}` : `Dismiss ${a.title}`}

@@ -1,6 +1,7 @@
 import { apiGet, apiBase } from "../lib/api";
 import { useLedgerStore } from "../stores/ledger";
 import { useAbortableFetch } from "../hooks/useAbortableFetch";
+import { CompassIcon, ShieldIcon } from "./icons/ArtifactIcons";
 
 /**
  * Compact "look how much you've taught it" stat — the felt proof that the moat
@@ -56,13 +57,24 @@ export function CompoundingBadge({ onOpen }: { onOpen: () => void }) {
           stat. The cumulative counts trail inline once there's something to show
           (F1 — muted is the AA floor, no opacity stacking; E3 — a labelled
           zero-state still teaches the affordance instead of self-hiding). */}
-      <span>🧭 Ledger</span>
+      {/* Q4 (round-12 UX #5) — 🧭/🛡 were emoji on the SINGLE door to the
+          ledger; tofu here hides the drawer's affordance entirely. Inline SVG
+          in currentColor keeps the muted→secondary hover intact, and the
+          counts stay plain text so the button's accessible name still reads
+          "Open the Ledger" rather than a pile of glyph names. */}
+      <span className="inline-flex items-center gap-1">
+        <CompassIcon className="w-3 h-3" /> Ledger
+      </span>
       {!isZero && (
         <>
           <span className="text-border-default">·</span>
-          <span>🛡 {stat.blocks}</span>
+          <span className="inline-flex items-center gap-1" title="Pre-flight blocks">
+            <ShieldIcon className="w-3 h-3" /> {stat.blocks}
+          </span>
           <span className="text-border-default">·</span>
-          <span>🧭 {stat.writes}</span>
+          <span className="inline-flex items-center gap-1" title="Ledger writes">
+            <CompassIcon className="w-3 h-3" /> {stat.writes}
+          </span>
         </>
       )}
     </button>

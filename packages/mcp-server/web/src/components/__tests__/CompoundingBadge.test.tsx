@@ -22,9 +22,25 @@ describe("CompoundingBadge", () => {
     vi.stubGlobal("fetch", mockMetrics(0, 0));
     render(<CompoundingBadge onOpen={() => {}} />);
     // #212 (J4) — the single ledger entry leads with the word "Ledger".
-    expect(await screen.findByText(/🧭 Ledger/)).toBeInTheDocument();
+    // Q4 — the leading glyph is an inline SVG compass now (it was a 🧭 emoji,
+    // which is tofu wherever no colour-emoji font is installed), so match the
+    // WORD and assert the icon separately rather than pinning an emoji.
+    const btn = await screen.findByRole("button", { name: /open the ledger/i });
+    expect(btn.textContent).toContain("Ledger");
+    expect(btn.querySelectorAll("svg").length).toBe(1); // compass only — no counts yet
     // The counts only render once there's real signal.
-    expect(screen.queryByText("🛡 0")).toBeNull();
+    expect(btn.textContent).not.toContain("0");
+  });
+
+  it("Q4 — the ledger door's glyphs are inline SVG, not emoji (tofu-proof)", async () => {
+    vi.stubGlobal("fetch", mockMetrics(14, 23));
+    render(<CompoundingBadge onOpen={() => {}} />);
+    const btn = await screen.findByRole("button", { name: /open the ledger/i });
+    // compass (label) + shield (blocks) + compass (writes)
+    expect(btn.querySelectorAll("svg").length).toBe(3);
+    for (const glyph of ["🧭", "🛡"]) {
+      expect(btn.textContent).not.toContain(glyph);
+    }
   });
 
   it("surfaces the cumulative blocks · writes and opens the Ledger on click", async () => {

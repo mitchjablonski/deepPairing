@@ -87,7 +87,7 @@ export function OptionCard({ option, index, focused, submitting, locked = false,
       {/* Title + badges */}
       <div className="flex items-start justify-between gap-2 mb-1.5">
         <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
-          <h4 className="text-sm font-semibold text-text-primary">{option.title}</h4>
+          <h3 className="text-sm font-semibold text-text-primary">{option.title}</h3>
           {option.recommendation && (
             <span
               // #209 (J1, L-6) — a locked card dims the pill too (muted, not the

@@ -232,9 +232,9 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
       {steps.length > 0 && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
+            <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
               Implementation Steps ({steps.length})
-            </h4>
+            </h3>
             {/* M1.3 — estimatedChanges is number|string. A number renders as
                 "~N file changes"; a non-empty string (agents pass prose) renders
                 verbatim. Empty/zero renders nothing. */}

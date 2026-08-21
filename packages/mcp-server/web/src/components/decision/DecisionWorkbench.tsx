@@ -18,6 +18,7 @@ import { badgeColors, type DecisionOption } from "./types";
 // test) keep resolving them from here.
 import { computeCarryover, isGrainComment, orphanGrainLabel, type CarryoverState } from "./carryover";
 import { CarryoverBadge } from "./CarryoverBadge";
+import { SpeechIcon } from "../icons/ArtifactIcons";
 export { computeCarryover, isGrainComment, CarryoverBadge, type CarryoverState };
 
 /**
@@ -481,7 +482,7 @@ function WorkbenchGrainButton({
             : "text-text-muted opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:bg-surface-hover hover:text-accent-blue"
       } ${className ?? ""}`}
     >
-      <span aria-hidden="true">💬</span>
+      <span aria-hidden="true" className="inline-flex items-center"><SpeechIcon className="w-3 h-3" /></span>
       {count > 0 && <span>{count}</span>}
     </button>
   );
@@ -547,7 +548,7 @@ function WorkbenchColumn({
       {/* Column head — name, recommended chip, per-option comment count, chips. */}
       <div className="px-3.5 pt-3 pb-2.5 border-b border-border-subtle">
         <div className="flex items-center gap-2 min-w-0">
-          <h4 className="flex-1 min-w-0 text-sm font-semibold text-text-primary truncate">{title}</h4>
+          <h2 className="flex-1 min-w-0 text-sm font-semibold text-text-primary truncate">{title}</h2>
           {option.recommendation && (
             <span
               className="text-2xs font-bold tracking-wide text-accent-violet bg-accent-violet-dim rounded px-1.5 py-0.5 shrink-0"
@@ -558,11 +559,18 @@ function WorkbenchColumn({
           )}
           {commentCount > 0 && (
             <span
-              className="text-2xs font-semibold text-accent-blue bg-accent-blue-dim rounded px-1.5 py-0.5 shrink-0"
+              className="inline-flex items-center gap-1 text-2xs font-semibold text-accent-blue bg-accent-blue-dim rounded px-1.5 py-0.5 shrink-0"
               title={`${commentCount} comment${commentCount === 1 ? "" : "s"} on this option`}
               data-testid="option-comment-count"
             >
-              {commentCount} 💬
+              {/* Q4 (round-12 UX #5) — the badge announced as "3 speech
+                  balloon". The glyph is decoration (and tofu-prone), so it
+                  becomes an aria-hidden SVG and an sr-only noun carries the
+                  meaning. Not aria-label: a bare <span> has the generic role,
+                  where aria-label is prohibited and silently dropped. */}
+              {commentCount}
+              <span className="sr-only"> comment{commentCount === 1 ? "" : "s"} on this option</span>
+              <span aria-hidden="true" className="inline-flex items-center"><SpeechIcon className="w-3 h-3" /></span>
             </span>
           )}
           {onFocus && (

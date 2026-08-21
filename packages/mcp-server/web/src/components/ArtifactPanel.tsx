@@ -184,13 +184,18 @@ function EditableTitle({ artifact }: { artifact: Artifact }) {
   }
 
   return (
-    <h3
+    // Q4 (round-12 UX #4) — h2, not h3. The app's only h1 is "deepPairing" in
+    // the shell header, so the artifact title (the top of the detail pane, and
+    // the thing a screen-reader user jumps to) sat at h1→h3: a level skip on
+    // the PRIMARY content path. The classes are untouched — the level is the
+    // whole change, and the artifact's own section headings step to h3 below it.
+    <h2
       className="text-sm font-semibold text-text-primary leading-[1.2] cursor-pointer hover:text-accent-blue transition-colors"
       onClick={() => { setDraft(artifact.title); setEditing(true); }}
       title="Click to rename"
     >
       {artifact.title}
-    </h3>
+    </h2>
   );
 }
 
@@ -397,9 +402,10 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
           keeps this thread byte-for-byte unchanged. */}
       {artifact.type !== "debrief" && artifact.type !== "explainer" && (
       <div className="pt-3 border-t border-border-default">
-        <h4 className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-2">
+        {/* Q4 — artifact section headings step to h3 under the h2 title. */}
+        <h3 className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-2">
           Comments
-        </h4>
+        </h3>
         {/* #180 — for a DECISION artifact, the flat thread's grain comments get
             the carryover marker (CARRIED / STALE / ORPHAN) instead of the bare
             "from vN" chip. Lazy + decision-only so non-decision types keep the
@@ -796,7 +802,13 @@ function ArtifactSidebar({
   }, [groups, showAllOlder, olderCount, recentIds]);
 
   return (
-    <div
+    // Q4 (round-12 UX #4) — the artifact rail IS navigation: a list of links to
+    // the things under review. As a bare <div> it was outside every landmark,
+    // so the whole left column was unreachable by landmark jump and the
+    // "skip to the list of artifacts" move didn't exist. <nav> + a name;
+    // the classes and the layout are untouched.
+    <nav
+      aria-label="Artifacts"
       className={`relative shrink-0 border-r border-border-default bg-surface-secondary transition-all duration-[180ms] ease-out ${
         collapsed ? "w-12" : ""
       }`}
@@ -865,7 +877,10 @@ function ArtifactSidebar({
               items). Type/Timeline headers name the bucket (a type or a date),
               not the artifact, so they stay even for a single item. */}
           {!collapsed && (grouping !== "flow" || items.length >= 2) && (
-            <div data-testid="sidebar-group-header" className="flex items-center gap-1.5 px-3 py-1 text-2xs font-semibold text-text-muted uppercase tracking-wide">
+            // Q4 (round-12 UX #4) — a real h2 inside the artifacts nav. It was
+            // a styled div, so a screen reader could see the artifact list but
+            // not the buckets it is grouped into. Classes unchanged.
+            <h2 data-testid="sidebar-group-header" className="flex items-center gap-1.5 px-3 py-1 text-2xs font-semibold text-text-muted uppercase tracking-wide">
               {grouping === "type" && <ArtifactIcon type={label} className="w-3 h-3" />}
               {/* Bug4 — flow groups are keyed by root id; the header shows the
                   root artifact's (display-only) title, not the raw id. */}
@@ -875,7 +890,7 @@ function ArtifactSidebar({
                   ? flowGroupLabel(items, label)
                   : label}
               <span className="opacity-50">{items.length}</span>
-            </div>
+            </h2>
           )}
 
           {/* Items */}
@@ -919,8 +934,14 @@ function ArtifactSidebar({
                 {collapsed ? (
                   <div className="relative">
                     <ArtifactIcon type={a.type} className={`w-4 h-4 ${isSelected ? "text-accent-blue" : "text-text-muted"}`} />
+                    {/* Q4 (round-12 UX #5) — the unread dot was pure colour: no
+                        name, no tooltip, invisible to a screen reader and
+                        meaningless to anyone who can't pick blue out of the
+                        rail. Title for the pointer, sr-only text for AT. */}
                     {isUnread && (
-                      <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-accent-blue" />
+                      <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-accent-blue" title="Unread">
+                        <span className="sr-only">Unread</span>
+                      </span>
                     )}
                     <span
                       aria-label={statusLabels[a.status]}
@@ -958,8 +979,11 @@ function ArtifactSidebar({
                     >
                       {statusGlyph[a.status] ?? "•"}
                     </span>
+                    {/* Q4 — same unread dot, expanded-rail variant. */}
                     {isUnread && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-accent-blue shrink-0" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-accent-blue shrink-0" title="Unread">
+                        <span className="sr-only">Unread</span>
+                      </span>
                     )}
                   </>
                 )}
@@ -998,7 +1022,7 @@ function ArtifactSidebar({
           <span>{pip.count > 1 ? `${pip.count} new` : "new"}</span>
         </button>
       )}
-    </div>
+    </nav>
   );
 }
 

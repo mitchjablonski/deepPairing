@@ -8,6 +8,7 @@ import { CommentThread } from "../CommentThread";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { renderEvidence } from "./ResearchArtifact";
 import { useWriteLock } from "../../hooks/useWriteLock";
+import { SpeechIcon } from "../icons/ArtifactIcons";
 
 /**
  * #190 A2 — the read-only EXPLAINER renderer (the comprehension surface for how
@@ -105,7 +106,7 @@ function BlockGrain({
           aria-label={`Comment on ${label}`}
           className="inline-flex items-center gap-1 text-2xs text-text-muted hover:text-accent-blue transition-colors press-scale"
         >
-          <span aria-hidden="true">💬</span> Comment
+          <span aria-hidden="true" className="inline-flex items-center"><SpeechIcon className="w-3 h-3" /></span> Comment
         </button>
       )}
       {show && (
@@ -148,7 +149,7 @@ function ExplainerBlock({
 }) {
   return (
     <section className="bg-surface-secondary rounded-lg border border-white/[0.06] p-3.5 space-y-2">
-      <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide">{title}</h4>
+      <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wide">{title}</h3>
       {children}
       <BlockGrain artifactId={artifactId} sectionId={sectionId} label={title} comments={comments} readOnly={readOnly} />
     </section>
@@ -203,9 +204,9 @@ export function ExplainerArtifact({ artifact }: ExplainerArtifactProps) {
       {/* The ordered walk-through — numbered progression, read top to bottom. */}
       {sections.length > 0 && (
         <div className="space-y-3">
-          <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
+          <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
             The walk-through ({sections.length})
-          </h4>
+          </h3>
           {sections.map((section, i) => {
             const sectionId = `explainer:${i}`;
             const grain = comments.filter((c) => c.target.sectionId === sectionId);
@@ -269,9 +270,9 @@ export function ExplainerArtifact({ artifact }: ExplainerArtifactProps) {
           ArtifactPanel folds its separate "Comments" thread away for this type,
           so the reader has ONE conversational composer, not two. */}
       <div className="pt-3 border-t-2 border-accent-blue/20 space-y-2" data-testid="explainer-ask-anything">
-        <h4 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
+        <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
           Ask me anything
-        </h4>
+        </h3>
         <p className="text-2xs text-text-muted">
           {writeLocked
             ? "This explainer is read-only — the earlier conversation is preserved below."
@@ -291,7 +292,7 @@ export function ExplainerArtifact({ artifact }: ExplainerArtifactProps) {
                            hover:text-accent-blue transition-colors press-scale text-left"
                 title="Click to ask this — it fills the box below"
               >
-                <span aria-hidden="true">💬</span>
+                <span aria-hidden="true" className="inline-flex items-center"><SpeechIcon className="w-3 h-3" /></span>
                 {q}
               </button>
             ))}
