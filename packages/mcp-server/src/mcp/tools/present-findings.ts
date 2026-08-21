@@ -84,6 +84,19 @@ export async function handlePresentFindings(ctx: ToolContext, args: any): Promis
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   await ctx.helpers.autoNameSession(artifact.title);
 
+  // R1 (#279) — in a PR-review session these findings have an OUTWARD audience,
+  // and the agent's success message is the only place that ever said so. What
+  // approval MEANS changes here (it arms the finding for someone else's
+  // repository), so the sentence that follows an approval has to change with
+  // it. Derived from the session's own artifacts — an external changeset is on
+  // the surface — never from a flag the agent passes itself.
+  const externalReview = (await ctx.store.getArtifacts()).some(
+    (a) => a.type === "changeset" && (a.content as { reviewIntent?: string } | null)?.reviewIntent === "external",
+  );
+  const outwardNote = externalReview
+    ? ` These are findings on someone else's PR: once your pair approves them they MAY be posted to it on their word — and nothing posts without it. Anything drawn from their own ledger or private history goes in with audience: "internal" and never leaves the machine.`
+    : "";
+
   // Try elicitation for quick approval
   const elicitAction = await ctx.helpers.tryElicit(
     `Findings: "${artifact.title}"\n\n` +
@@ -95,11 +108,11 @@ export async function handlePresentFindings(ctx: ToolContext, args: any): Promis
     await ctx.store.updateArtifactStatus(id, "approved", "elicit_accept");
     await maybeUpdateTaskStatus(ctx.server, id, ctx.store);
     return {
-      content: [{ type: "text", text: `Findings recorded and approved (${id}).${traceSummary}${await ctx.helpers.getPassiveFeedback()}` }],
+      content: [{ type: "text", text: `Findings recorded and approved (${id}).${outwardNote}${traceSummary}${await ctx.helpers.getPassiveFeedback()}` }],
     };
   }
 
   return {
-    content: [{ type: "text", text: `Findings recorded (${id}). Human can review at localhost:${reviewPort}. Call check_feedback for their response.${traceSummary}${await ctx.helpers.getPassiveFeedback()}` }],
+    content: [{ type: "text", text: `Findings recorded (${id}). Human can review at localhost:${reviewPort}. Call check_feedback for their response.${outwardNote}${traceSummary}${await ctx.helpers.getPassiveFeedback()}` }],
   };
 }

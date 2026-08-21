@@ -220,8 +220,17 @@ function payloadFor(findings: unknown[], event?: GitHubReviewPayload["event"]): 
 /** The one method handlePostPrReview touches. A fake, not a mock: it answers
  *  getFullState() from real artifacts, exactly as FileStore would. */
 function fakeCtx(artifacts: Artifact[]) {
+  const postedReviews: unknown[] = [];
   return {
-    store: { getFullState: async () => sessionState(artifacts) },
+    store: {
+      getFullState: async () => ({
+        ...sessionState(artifacts),
+        // R1 (#279) — the posted-review record rides full state; the fake keeps
+        // what it was given, like FileStore's sidecar.
+        ...(postedReviews.length ? { postedReviews } : {}),
+      }),
+      recordPostedReview: async (r: unknown) => { postedReviews.push(r); },
+    },
   } as never;
 }
 
@@ -410,8 +419,16 @@ describe("Q6 — handlePostPrReview (the MCP tool) end to end", () => {
     expect(JSON.parse(calls()[0]!.stdin).event).toBe("REQUEST_CHANGES");
   });
 
-  it("event mapping: unknown/absent events fall back to COMMENT rather than erroring", async () => {
-    for (const [given, expected] of [[undefined, "COMMENT"], ["comment", "COMMENT"], ["LGTM", "COMMENT"], ["APPROVE", "APPROVE"], ["COMMENT", "COMMENT"]] as const) {
+  it("event mapping: absent and case-variant events resolve; an UNKNOWN one is refused", async () => {
+    // R1 (#279) — this test used to assert that "LGTM" fell back to COMMENT.
+    // Falling back is the wrong shape for a write into someone else's
+    // repository: the agent asked for something this product does not send, and
+    // quietly posting a different review instead is a post nobody requested.
+    // Absent still means COMMENT (the documented default at both doors), and a
+    // case variant resolves to the event it names — which is the half of this
+    // that was a real bug, since lowercase "approve" used to slip past the
+    // APPROVE authorization entirely.
+    for (const [given, expected] of [[undefined, "COMMENT"], ["comment", "COMMENT"], ["COMMENT", "COMMENT"]] as const) {
       fs.writeFileSync(logPath, "");
       const res = await handlePostPrReview(fakeCtx([researchArtifact([LOW_FINDING])]), {
         pr: "https://github.com/acme/widgets/pull/42",
@@ -420,6 +437,23 @@ describe("Q6 — handlePostPrReview (the MCP tool) end to end", () => {
       expect(res.isError, `event=${given}`).toBeFalsy();
       expect(JSON.parse(calls()[0]!.stdin).event, `event=${given}`).toBe(expected);
     }
+
+    // APPROVE needs the human's approval of the PR itself, so it is exercised
+    // with the changeset that authorizes it (and posts with no comments).
+    fs.writeFileSync(logPath, "");
+    const approve = await handlePostPrReview(fakeCtx([approvedExternalChangeset()]), {
+      pr: "https://github.com/acme/widgets/pull/42", event: "approve",
+    });
+    expect(approve.isError).toBeFalsy();
+    expect(JSON.parse(calls()[0]!.stdin).event).toBe("APPROVE");
+
+    fs.writeFileSync(logPath, "");
+    const unknown = await handlePostPrReview(fakeCtx([researchArtifact([LOW_FINDING])]), {
+      pr: "https://github.com/acme/widgets/pull/42", event: "LGTM",
+    });
+    expect(unknown.isError).toBe(true);
+    expect(unknown.content[0]!.text).toContain("is not a review event");
+    expect(calls()).toHaveLength(0);
   });
 
   it("a missing `pr` argument is refused before any process is spawned", async () => {

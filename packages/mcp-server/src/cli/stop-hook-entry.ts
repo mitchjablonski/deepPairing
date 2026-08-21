@@ -24,8 +24,18 @@ const MAX_AGE_MS = 30 * 60 * 1000;
 // awaiting review is exactly the "don't declare done" case the hook guards.
 const BLOCKING_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset"];
 
+/**
+ * R1 (#279) — DEEPPAIRING_PROJECT_ROOT joins the chain, for parity with the
+ * preflight hook entry (`CLAUDE_PROJECT_DIR || ev.cwd || process.cwd()`) and
+ * with project-root.ts's documented precedence. Same order everywhere:
+ * CLAUDE_PROJECT_DIR wins (Claude Code sets it for hooks), the deepPairing
+ * escape hatch next, cwd last. Pre-R1 this hook read only the first, so a
+ * process deliberately pointed at another project by the documented env still
+ * nagged about — and wrote hooks-state into — whatever directory it happened
+ * to be launched from.
+ */
 function projectRoot(): string {
-  return process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  return process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || process.cwd();
 }
 
 // Q1 — durable hooks-state writes. The preflight lane's readHookState /

@@ -268,6 +268,13 @@ export function createHttpRoutes(
   // / prompt is &lt; 4 KiB; the ceiling allows for verbose markdown
   // pastes without permitting flood. Reads are uncapped (they're
   // bounded by the on-disk state).
+  //
+  // R1 (#279) — this copy STAYS at 64 KiB, deliberately. The artifact-creation
+  // route that needed headroom for a real pull request's diff is an INTERNAL,
+  // bearer-gated route and is not mounted in this sub-app; its raised ceiling
+  // lives in http/guards.ts (ARTIFACT_CREATE_MAX_BODY_BYTES +
+  // isArtifactCreateRoute), applied once on the root app. Nothing a browser can
+  // reach got a larger body allowance.
   const MAX_BODY_BYTES = 64 * 1024;
   app.use("*", async (c, next) => {
     if (c.req.method === "OPTIONS" || c.req.method === "GET" || c.req.method === "HEAD") {

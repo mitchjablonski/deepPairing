@@ -765,7 +765,7 @@ process.stdin.on("end", () => {
     const ev = JSON.parse(input || "{}");
     const toolName = ev.tool_name || "";
     const toolInput = ev.tool_input || ev.input || {};
-    const projectRoot = process.env.CLAUDE_PROJECT_DIR || ev.cwd || process.cwd();
+    const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || ev.cwd || process.cwd();
     if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit") {
       process.exit(0);
     }

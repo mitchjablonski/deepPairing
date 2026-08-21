@@ -52,6 +52,12 @@ export async function handleLogReasoning(ctx: ToolContext, args: any): Promise<T
     ? ""
     : "\n(Pairing nudge: name the underlying concept via `concept` so the human learns the pattern, not just the fix.)";
   return {
-    content: [{ type: "text", text: `Reasoning logged. Proceed with code changes.${nudge}${await ctx.helpers.getPassiveFeedback()}` }],
+    // R1 (#279) — MODE-NEUTRAL. "Proceed with code changes" is wrong wherever
+    // the session isn't about to write code — most sharply when the human is
+    // REVIEWING someone else's PR, where the correct next move is to keep
+    // reading and polling, and "proceed with code changes" is an instruction to
+    // do the one thing that flow forbids (touching a colleague's files).
+    // log_reasoning names a concept; it does not license an edit.
+    content: [{ type: "text", text: `Reasoning logged.${nudge}${await ctx.helpers.getPassiveFeedback()}` }],
   };
 }

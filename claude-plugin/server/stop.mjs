@@ -35,7 +35,7 @@ var STATE_CAP = 50;
 var MAX_AGE_MS = 30 * 60 * 1e3;
 var BLOCKING_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset"];
 function projectRoot() {
-  return process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  return process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || process.cwd();
 }
 function readState(statePath) {
   let raw;

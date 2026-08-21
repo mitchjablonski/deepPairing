@@ -81,6 +81,11 @@ export interface ToolHelpers {
     proposalPaths?: string[],
     /** (A) The proposal's own named concept(s) for the concept↔concept lane. */
     proposalConcepts?: string[],
+    /** R1 (#279) — `{ advisory: true }` never refuses: a match comes back as
+     *  `{ ok: true, advisory }` with no block toast, block-log entry, or block
+     *  metric. For the one caller that must SHOW what it matched rather than
+     *  refuse it (an external PR on the review surface). */
+    opts?: { advisory?: boolean },
   ) => Promise<PreflightHelperResult>;
   /** Idempotently rename the session from the first meaningful artifact title. */
   autoNameSession: (title: string) => Promise<void>;
