@@ -617,17 +617,38 @@ test.afterAll(async () => {
  * Unfolding first decouples every helper from how many surfaces the fixture
  * seeds, which is the precondition for the "fixtures always seed the newest
  * surfaces" ratchet actually being sustainable.
+ *
+ * Why a RETRY LOOP and not a one-shot "is it folded? unfold once, then click":
+ * the rail hydrates in STAGES on a cold load. The bound session's own artifacts
+ * arrive first (the target row renders, unfolded, with NO "Show older" button
+ * yet), and only a few frames later does the async cross-session backfill
+ * (MultiAgentSync) push the project past SIDEBAR_RECENT_LIMIT — which folds the
+ * older rows away. A one-shot helper decides against whichever stage it happens
+ * to observe: caught in the pre-backfill window it sees the row visible, skips
+ * the unfold, and begins clicking — then the backfill lands and FOLDS the row
+ * out from under the click, which then retries forever against a row that is
+ * now behind the fold (deterministic on fast CI, where the window is ~90ms and
+ * the click reliably starts inside it; invisible on slow WSL, where the helper
+ * only runs after the backfill has already settled the fold). Re-asserting the
+ * unfold and re-attempting the click on EVERY pass converges regardless of
+ * which hydration stage we start in. The "Show N older" label matches only the
+ * FOLDED state (unfolded reads "Show fewer"), so this only ever unfolds — it
+ * never toggles a row back under the fold.
  */
 async function selectSidebarArtifact(
   page: import("@playwright/test").Page,
   artifactId: string,
 ): Promise<void> {
   const row = page.locator(`[data-artifact-item="${artifactId}"]`);
-  if ((await row.count()) === 0) {
+  await expect(async () => {
     const showOlder = page.getByRole("button", { name: /Show \d+ older/i });
     if (await showOlder.count()) await showOlder.first().click();
-  }
-  await row.first().click({ timeout: 15000 });
+    // Short per-attempt timeouts: a stale (mid-fold) observation should fail
+    // THIS pass fast and re-unfold on the next, not burn the whole budget
+    // waiting on a row the backfill is about to detach.
+    await expect(row.first()).toBeVisible({ timeout: 1000 });
+    await row.first().click({ timeout: 2000 });
+  }).toPass({ timeout: 20000, intervals: [100, 200, 300, 500] });
 }
 
 function fmt(violations: Array<{ id: string; impact?: string | null; nodes: Array<{ target: unknown[] }> }>): string {
