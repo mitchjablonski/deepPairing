@@ -623,11 +623,32 @@ async function selectSidebarArtifact(
   artifactId: string,
 ): Promise<void> {
   const row = page.locator(`[data-artifact-item="${artifactId}"]`);
-  if ((await row.count()) === 0) {
+  // The rail keeps only the 10 most-recent artifacts (a PROJECT-WIDE budget)
+  // and folds the rest behind "Show N older". A richer fixture — the newest
+  // surfaces the ratchet seeds — can push a target under the fold, so unfold
+  // until it is present (one click reveals all older; loop defensively in case
+  // a re-render swallows the first click).
+  for (let i = 0; i < 4 && (await row.count()) === 0; i++) {
     const showOlder = page.getByRole("button", { name: /Show \d+ older/i });
-    if (await showOlder.count()) await showOlder.first().click();
+    if ((await showOlder.count()) === 0) break;
+    await showOlder.first().click().catch(() => {});
+    await page.waitForTimeout(50);
   }
-  await row.first().click({ timeout: 15000 });
+  // The rail re-renders on cold-load hydration (blocks/publish) and WS updates,
+  // which can detach the row mid-click and starve Playwright's auto-retry.
+  // Settle the target, then retry the click across a few re-render cycles.
+  const target = row.first();
+  await target.waitFor({ state: "visible", timeout: 15000 });
+  await target.scrollIntoViewIfNeeded().catch(() => {});
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await target.click({ timeout: 5000 });
+      return;
+    } catch (err) {
+      if (attempt >= 2) throw err;
+      await page.waitForTimeout(150);
+    }
+  }
 }
 
 function fmt(violations: Array<{ id: string; impact?: string | null; nodes: Array<{ target: unknown[] }> }>): string {
