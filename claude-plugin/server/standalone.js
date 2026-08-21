@@ -25456,8 +25456,30 @@ var FindingSchema = external_exports.object({
   confidence: external_exports.enum(["low", "medium", "high"]).optional().describe("How confident are you in this finding?"),
   impact: external_exports.string().optional().describe("What happens if this is not addressed"),
   recommendation: external_exports.string().optional().describe("What should be done"),
-  relatedFindings: external_exports.array(external_exports.string()).optional()
+  relatedFindings: external_exports.array(external_exports.string()).optional(),
+  /**
+   * R1 (#279) — WHO IS THIS FINDING FOR?
+   *
+   * The privacy hole it closes: /deeppairing:review-pr instructs the agent to
+   * sweep the human's philosophy ledger and turn every hit into a finding
+   * ("this PR introduces X, which you rejected on 2026-03-04: '<your reason>'").
+   * Findings the human approves post VERBATIM as inline comments on someone
+   * else's pull request — so in round 13 a stranger's PR received the
+   * reviewer's private cross-project stances, dates and all.
+   *
+   * `internal` means: show it to my pair on the review surface, and NEVER put
+   * it in an outbound payload — not as an inline comment, not in the review
+   * body. `postable` (the default, and what every finding written before this
+   * field existed means) is the old behaviour, unchanged.
+   *
+   * Optional with a postable default is deliberate back-compat: absent === the
+   * pre-R1 meaning, so no stored artifact changes shape or behaviour.
+   */
+  audience: external_exports.enum(["internal", "postable"]).optional().describe("'internal' = for your pair's eyes only; NEVER posted to a PR \u2014 use it for anything read out of their philosophy ledger or private history. 'postable' (the default) = may become an inline PR comment once they approve it.")
 });
+function isPostableFinding(finding) {
+  return !!finding && finding.audience !== "internal";
+}
 var ResearchContentSchema = external_exports.object({
   summary: external_exports.string(),
   findings: external_exports.array(FindingSchema),
@@ -26278,6 +26300,9 @@ function coerceFinding(v) {
   const confidence = optOneOf(f.confidence, LMH);
   if (confidence)
     out.confidence = confidence;
+  const audience = optOneOf(f.audience, ["internal", "postable"]);
+  if (audience)
+    out.audience = audience;
   return out;
 }
 function coerceResearchContent(raw) {
@@ -28742,7 +28767,7 @@ var ADVISORY_EXEMPT_TOOLS = /* @__PURE__ */ new Set([
   "present_explainer",
   "present_debrief"
 ]);
-async function preflightRejectedApproaches(store, broadcast, toolName, proposalStrings, proposalPaths = [], proposalConcepts = []) {
+async function preflightRejectedApproaches(store, broadcast, toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], opts = {}) {
   const memory = await store.getSessionMemory();
   const teamPrefs = await store.getTeamPreferences?.() ?? [];
   const localKeys = /* @__PURE__ */ new Set();
@@ -28771,6 +28796,9 @@ async function preflightRejectedApproaches(store, broadcast, toolName, proposalS
       }
     }
     return { ok: true, trace: result.trace };
+  }
+  if (opts.advisory) {
+    return { ok: true, trace: result.trace, advisory: result.block.message };
   }
   broadcast(result.block.broadcastEvent);
   void store.recordPreflightBlock?.(result.block.broadcastEvent);
@@ -29857,7 +29885,13 @@ async function handleLogReasoning(ctx, args) {
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   const nudge = args?.concept?.name ? "" : "\n(Pairing nudge: name the underlying concept via `concept` so the human learns the pattern, not just the fix.)";
   return {
-    content: [{ type: "text", text: `Reasoning logged. Proceed with code changes.${nudge}${await ctx.helpers.getPassiveFeedback()}` }]
+    // R1 (#279) — MODE-NEUTRAL. "Proceed with code changes" is wrong wherever
+    // the session isn't about to write code — most sharply when the human is
+    // REVIEWING someone else's PR, where the correct next move is to keep
+    // reading and polling, and "proceed with code changes" is an instruction to
+    // do the one thing that flow forbids (touching a colleague's files).
+    // log_reasoning names a concept; it does not license an edit.
+    content: [{ type: "text", text: `Reasoning logged.${nudge}${await ctx.helpers.getPassiveFeedback()}` }]
   };
 }
 
@@ -30512,6 +30546,7 @@ function buildGitHubReviewPayload(state, opts = {}) {
     const findings = coerceResearchContent(artifact.content).findings;
     if (!Array.isArray(findings)) continue;
     for (const finding of findings) {
+      if (!isPostableFinding(finding)) continue;
       const evidence = Array.isArray(finding.evidence) ? finding.evidence : [];
       const structured = evidence.filter(
         (e) => !!e && typeof e === "object" && !!e.filePath && typeof e.lineStart === "number"
@@ -30552,9 +30587,10 @@ function buildGitHubReviewPayload(state, opts = {}) {
       }
     }
   }
-  const title = getSessionTitle(state);
+  const derivedTitle = getSessionTitle(state);
+  const title = derivedTitle.startsWith("Session ") ? null : derivedTitle;
   const bodyParts = [
-    `## deepPairing notes \u2014 ${title}`,
+    `## deepPairing notes${title ? ` \u2014 ${title}` : ""}`,
     ""
   ];
   if (comments.length === 0) {
@@ -30568,7 +30604,7 @@ function buildGitHubReviewPayload(state, opts = {}) {
     }
   }
   bodyParts.push("");
-  bodyParts.push(`*Generated by [deepPairing](https://github.com/deeppairing). Session: ${state.sessionId}*`);
+  bodyParts.push(`*Generated with [deepPairing](https://github.com/deeppairing).*`);
   return {
     body: bodyParts.join("\n"),
     event: opts.event ?? "COMMENT",
@@ -31936,6 +31972,10 @@ async function handlePresentFindings(ctx, args) {
   notifyResourcesListChanged(ctx.server);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   await ctx.helpers.autoNameSession(artifact.title);
+  const externalReview = (await ctx.store.getArtifacts()).some(
+    (a) => a.type === "changeset" && a.content?.reviewIntent === "external"
+  );
+  const outwardNote = externalReview ? ` These are findings on someone else's PR: once your pair approves them they MAY be posted to it on their word \u2014 and nothing posts without it. Anything drawn from their own ledger or private history goes in with audience: "internal" and never leaves the machine.` : "";
   const elicitAction = await ctx.helpers.tryElicit(
     `Findings: "${artifact.title}"
 
@@ -31947,11 +31987,11 @@ Decline to review in detail at http://localhost:${reviewPort}`
     await ctx.store.updateArtifactStatus(id, "approved", "elicit_accept");
     await maybeUpdateTaskStatus(ctx.server, id, ctx.store);
     return {
-      content: [{ type: "text", text: `Findings recorded and approved (${id}).${traceSummary}${await ctx.helpers.getPassiveFeedback()}` }]
+      content: [{ type: "text", text: `Findings recorded and approved (${id}).${outwardNote}${traceSummary}${await ctx.helpers.getPassiveFeedback()}` }]
     };
   }
   return {
-    content: [{ type: "text", text: `Findings recorded (${id}). Human can review at localhost:${reviewPort}. Call check_feedback for their response.${traceSummary}${await ctx.helpers.getPassiveFeedback()}` }]
+    content: [{ type: "text", text: `Findings recorded (${id}). Human can review at localhost:${reviewPort}. Call check_feedback for their response.${outwardNote}${traceSummary}${await ctx.helpers.getPassiveFeedback()}` }]
   };
 }
 
@@ -33122,9 +33162,13 @@ async function handleReviseArtifact(ctx, args) {
       isError: true
     };
   }
-  if (artifact.status !== "draft" && artifact.status !== "reviewing") {
+  const isDisarm = mode === "retract" && artifact.status === "approved" && artifact.type === "research" && artifacts.some((a) => a.type === "changeset" && a.content?.reviewIntent === "external");
+  if (artifact.status !== "draft" && artifact.status !== "reviewing" && !isDisarm) {
     return {
-      content: [{ type: "text", text: `revise_artifact: ${artifactId} is ${artifact.status}, too late to ${mode}. Use check_feedback instead.` }],
+      content: [{
+        type: "text",
+        text: `revise_artifact: ${artifactId} is ${artifact.status}, too late to ${mode}. Use check_feedback instead.` + (artifact.status === "approved" && artifact.type === "research" ? ` (An approved findings artifact can be retracted \u2014 "un-armed", so it can no longer be posted \u2014 only in an external PR-review session. This one has no external changeset, so approval here doesn't arm anything outbound.)` : "")
+      }],
       isError: true
     };
   }
@@ -33135,12 +33179,15 @@ async function handleReviseArtifact(ctx, args) {
   await store.addComment({
     id: `cmt_${nanoid3(10)}`,
     artifactId,
-    content: `${isObsolete ? "Overcome by new information" : "Retracted"}: ${reason}`,
+    content: `${isObsolete ? "Overcome by new information" : isDisarm ? "Un-armed (retracted after approval, so it can no longer be posted)" : "Retracted"}: ${reason}`,
     author: "agent"
   });
   broadcast({ type: "artifact_updated", artifactId, status: newStatus });
   return {
-    content: [{ type: "text", text: `${isObsolete ? `Marked ${artifactId} obsolete (overcome by new information) \u2014 it's off the human's review queue` : `Retracted ${artifactId}`}. Continue your workflow \u2014 call check_feedback or present a revised artifact.${await ctx.helpers.getPassiveFeedback()}` }]
+    content: [{
+      type: "text",
+      text: `${isObsolete ? `Marked ${artifactId} obsolete (overcome by new information) \u2014 it's off the human's review queue` : isDisarm ? `Un-armed ${artifactId}: it was approved, it is now retracted, and post_pr_review will exclude it. Tell your pair it will not be posted` : `Retracted ${artifactId}`}. Continue your workflow \u2014 call check_feedback or present a revised artifact.${await ctx.helpers.getPassiveFeedback()}`
+    }]
   };
 }
 
@@ -33339,26 +33386,77 @@ async function postPrReview(opts) {
   }
 }
 
+// src/store/posted-reviews.ts
+function samePrTarget(record2, ref) {
+  const parsed = parsePrNumber(ref);
+  if (parsed === null || parsed.number !== record2.prNumber) return false;
+  if (parsed.owner && parsed.repo && record2.owner && record2.repo) {
+    return parsed.owner === record2.owner && parsed.repo === record2.repo;
+  }
+  return true;
+}
+function parsePrNumber(ref) {
+  const urlMatch = ref.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
+  if (urlMatch) return { owner: urlMatch[1], repo: urlMatch[2], number: parseInt(urlMatch[3], 10) };
+  const numMatch = ref.replace(/^#/, "").trim().match(/^(\d+)$/);
+  if (numMatch) return { number: parseInt(numMatch[1], 10) };
+  return null;
+}
+
 // src/github/review-authorization.ts
+var ALLOWED_EVENTS = ["COMMENT", "REQUEST_CHANGES", "APPROVE"];
 var UNDECIDED_STATUSES = /* @__PURE__ */ new Set(["draft", "reviewing", "revised"]);
 var DECIDED_EXCLUDED_STATUSES = /* @__PURE__ */ new Set(["rejected", "superseded", "retracted", "obsolete"]);
-function hasPostableEvidence(artifact) {
+var SEVERITY_RANK = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
+function isAnchored(e) {
+  return !!e && typeof e === "object" && !!e.filePath && typeof e.lineStart === "number";
+}
+function outboundFindings(artifact) {
   const findings = coerceResearchContent(artifact.content).findings;
-  if (!Array.isArray(findings)) return false;
-  return findings.some((f) => {
-    const evidence = Array.isArray(f.evidence) ? f.evidence : [];
-    return evidence.some(
-      (e) => !!e && typeof e === "object" && !!e.filePath && typeof e.lineStart === "number"
-    );
-  });
+  if (!Array.isArray(findings)) return [];
+  return findings.filter(
+    (f) => isPostableFinding(f) && (Array.isArray(f.evidence) ? f.evidence : []).some(isAnchored)
+  );
+}
+function hasPostableEvidence(artifact) {
+  return outboundFindings(artifact).length > 0;
 }
 function externalChangesets(artifacts) {
   return artifacts.filter(
     (a) => a.type === "changeset" && coerceChangesetContent(a.content).reviewIntent === "external"
   );
 }
+function normalizeEvent(raw) {
+  if (raw === void 0 || raw === null || typeof raw === "string" && raw.trim() === "") {
+    return { ok: true, event: "COMMENT" };
+  }
+  if (typeof raw !== "string") {
+    return {
+      ok: false,
+      reason: `Refusing to post: the review event must be a string (one of COMMENT, REQUEST_CHANGES, APPROVE), not a ${Array.isArray(raw) ? "array" : typeof raw}. Pass the event as a plain string.`
+    };
+  }
+  const normalized = raw.trim().toUpperCase();
+  const match = ALLOWED_EVENTS.find((e) => e === normalized);
+  if (!match) {
+    return {
+      ok: false,
+      reason: `Refusing to post: "${raw}" is not a review event. GitHub reviews are one of COMMENT, REQUEST_CHANGES, APPROVE \u2014 and each means something different on someone else's PR, so this is not guessed at. Re-issue the call with the one you meant (REQUEST_CHANGES only when a surviving finding is high or critical; APPROVE only when your pair approved the PR changeset).`
+    };
+  }
+  return { ok: true, event: match };
+}
 function authorizeReviewPost(state, opts) {
-  const { event } = opts;
+  const normalized = normalizeEvent(opts.event);
+  if (!normalized.ok) return { ok: false, reason: normalized.reason };
+  const event = normalized.event;
+  const alreadyPosted = opts.pr && !opts.repost ? (state.postedReviews ?? []).find((r) => samePrTarget(r, opts.pr)) : void 0;
+  if (alreadyPosted) {
+    return {
+      ok: false,
+      reason: `Refusing to post: this session already posted a ${alreadyPosted.event} review on ${alreadyPosted.pr}` + (alreadyPosted.url ? ` \u2014 ${alreadyPosted.url}` : "") + ` (${alreadyPosted.postedAt}). Posting again would notify the author a second time with a second review. Tell your pair it is already up and link them to it. If they say "post again", re-issue this call with repost: true \u2014 that flag is THEIR word, never your own initiative.`
+    };
+  }
   const findingsArtifacts = state.artifacts.filter((a) => a.type === "research" && hasPostableEvidence(a));
   const unruled = findingsArtifacts.filter((a) => UNDECIDED_STATUSES.has(a.status));
   if (unruled.length > 0) {
@@ -33370,27 +33468,50 @@ function authorizeReviewPost(state, opts) {
   }
   const approved = findingsArtifacts.filter((a) => a.status === "approved");
   const decidedNo = findingsArtifacts.filter((a) => DECIDED_EXCLUDED_STATUSES.has(a.status));
+  if (event === "APPROVE") {
+    const externals = externalChangesets(state.artifacts);
+    const refused = externals.filter((a) => a.status === "rejected" || a.status === "revised");
+    if (refused.length > 0) {
+      const first = refused[0];
+      return {
+        ok: false,
+        reason: `Refusing to post an APPROVE: your pair ${first.status === "rejected" ? "REJECTED" : "sent back for changes"} "${first.title}" (${first.id}) \u2014 that is their verdict on this PR, recorded in the companion UI. An approving review would publish the opposite of what they decided. If they have changed their mind, they re-approve the changeset in the UI first; nothing else counts.`
+      };
+    }
+    const live = externals.filter((a) => !DECIDED_EXCLUDED_STATUSES.has(a.status));
+    const unapproved = live.filter((a) => a.status !== "approved");
+    if (live.length === 0 || unapproved.length > 0) {
+      const pending = unapproved[0];
+      return {
+        ok: false,
+        reason: externals.length === 0 ? `Refusing to post an APPROVE: nothing in this session records your pair approving this PR. An APPROVE is a real approving review on someone else's repository, and the agent cannot authorize it. Put the PR's diff on the review surface first (present_changeset with reviewIntent: "external") and let them approve it there \u2014 that approval IS the authorization.` : live.length === 0 ? `Refusing to post an APPROVE: every external changeset in this session is closed (superseded/retracted/obsolete), so nothing standing records your pair approving this PR. Put the current diff on the review surface and let them approve it there \u2014 that approval IS the authorization.` : `Refusing to post an APPROVE: your pair has not approved the PR changeset \u2014 they have approved ${live.length - unapproved.length} of ${live.length} changeset${live.length === 1 ? "" : "s"} for this PR` + (pending ? ` ("${pending.title}" (${pending.id}) is ${pending.status})` : "") + `. An APPROVE covers the WHOLE pull request, so every part of it they are reviewing has to carry their approval. Get their verdict on the rest first \u2014 their approval in the companion UI is what authorizes an approving review on someone else's PR.`
+      };
+    }
+  }
   const payload = buildGitHubReviewPayload({ ...state, artifacts: approved }, { event });
   if (payload.comments.length === 0) {
-    if (event === "APPROVE") {
-      const externals = externalChangesets(state.artifacts);
-      const approvedExternal = externals.find((a) => a.status === "approved");
-      if (!approvedExternal) {
-        const pending = externals.filter((a) => !DECIDED_EXCLUDED_STATUSES.has(a.status));
-        return {
-          ok: false,
-          reason: externals.length === 0 ? `Refusing to post an APPROVE: nothing in this session records your pair approving this PR. An APPROVE with no inline comments is a real approving review on someone else's repository, and the agent cannot authorize it. Put the PR's diff on the review surface first (present_changeset with reviewIntent: "external") and let them approve it there \u2014 that approval IS the authorization.` : `Refusing to post an APPROVE: your pair has not approved the PR changeset yet` + (pending.length > 0 ? ` ("${pending[0].title}" is ${pending[0].status})` : "") + `. Get your pair's verdict on the changeset first \u2014 their approval in the companion UI is what authorizes an approving review on someone else's PR.`
-        };
-      }
-      return { ok: true, payload };
-    }
+    if (event === "APPROVE") return { ok: true, payload, event };
     const excludedNote = decidedNo.length > 0 ? ` (${decidedNo.length} findings artifact${decidedNo.length === 1 ? " was" : "s were"} excluded \u2014 ${decidedNo.map((a) => `"${a.title}" is ${a.status}`).join(", ")})` : "";
     return {
       ok: false,
       reason: `No approved findings with structured evidence (filePath + lineStart) in this session \u2014 nothing to post as ${event === "REQUEST_CHANGES" ? "the inline comments a REQUEST_CHANGES owes the author" : "inline review comments"}${excludedNote}. Use present_findings with structured Evidence objects and let your pair approve them` + (event === "REQUEST_CHANGES" ? "" : `, or pass event: "APPROVE" once they've approved the PR changeset`) + `.`
     };
   }
-  return { ok: true, payload };
+  if (event === "REQUEST_CHANGES") {
+    const outbound = approved.flatMap(outboundFindings);
+    const blocking = outbound.filter((f) => SEVERITY_RANK[f.severity ?? "info"] >= SEVERITY_RANK.high);
+    if (blocking.length === 0) {
+      const highest = outbound.reduce(
+        (acc, f) => SEVERITY_RANK[f.severity ?? "info"] > SEVERITY_RANK[acc] ? f.severity ?? "info" : acc,
+        "info"
+      );
+      return {
+        ok: false,
+        reason: `Refusing to post a REQUEST_CHANGES: the highest severity your pair approved is "${highest}", and REQUEST_CHANGES blocks the author's merge. Post these as event: "COMMENT" instead \u2014 the findings land as the same inline comments, without holding up their PR. If something here really is high or critical, say so to your pair, raise the severity in a revision, and get their verdict on that.`
+      };
+    }
+  }
+  return { ok: true, payload, event };
 }
 
 // src/mcp/tools/post-pr-review.ts
@@ -33403,9 +33524,12 @@ async function handlePostPrReview(ctx, args) {
       isError: true
     };
   }
-  const event = ["COMMENT", "REQUEST_CHANGES", "APPROVE"].includes(args?.event) ? args.event : "COMMENT";
   const state = await store.getFullState();
-  const auth = authorizeReviewPost(state, { event });
+  const auth = authorizeReviewPost(state, {
+    event: args?.event,
+    pr: ref,
+    repost: args?.repost === true
+  });
   if (!auth.ok) {
     return { content: [{ type: "text", text: auth.reason }], isError: true };
   }
@@ -33417,12 +33541,31 @@ async function handlePostPrReview(ctx, args) {
       owner: typeof args?.owner === "string" ? args.owner : void 0,
       repo: typeof args?.repo === "string" ? args.repo : void 0
     });
+    let stampNote = "";
+    try {
+      const parsed = parsePrRef(ref);
+      const owner = typeof args?.owner === "string" ? args.owner : parsed.owner;
+      const repo = typeof args?.repo === "string" ? args.repo : parsed.repo;
+      await store.recordPostedReview({
+        pr: ref,
+        prNumber: parsed.number,
+        ...owner ? { owner } : {},
+        ...repo ? { repo } : {},
+        event: payload.event,
+        reviewId: result.id,
+        url: result.htmlUrl,
+        postedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        commentCount: payload.comments.length
+      });
+    } catch (stampErr) {
+      stampNote = ` (note: the review posted, but recording it locally failed \u2014 ${stampErr?.message ?? stampErr}. Do NOT call post_pr_review again for this PR unless your pair asks.)`;
+    }
     return {
       content: [{
         type: "text",
         // Q6 — "Posted 0 inline comments" is a nonsense sentence for the bare
         // APPROVE the gate above allows; say what actually happened.
-        text: payload.comments.length === 0 ? `Posted a review on PR ${ref} as ${payload.event} with no inline comments: ${result.htmlUrl}` : `Posted ${payload.comments.length} inline comment${payload.comments.length === 1 ? "" : "s"} on PR ${ref} as ${payload.event}: ${result.htmlUrl}`
+        text: (payload.comments.length === 0 ? `Posted a review on PR ${ref} as ${payload.event} with no inline comments: ${result.htmlUrl}` : `Posted ${payload.comments.length} inline comment${payload.comments.length === 1 ? "" : "s"} on PR ${ref} as ${payload.event}: ${result.htmlUrl}`) + ` Give your pair the URL. This session will refuse a second post to this PR unless they ask you to post again.` + stampNote
       }]
     };
   } catch (err) {
@@ -33687,12 +33830,14 @@ async function handlePresentChangeset(ctx, args) {
   if (!validated.ok) return validated.error;
   const { title, summary, files, risks, reviewIntent, source } = validated.data;
   const isExternal = reviewIntent === "external";
-  const pre = isExternal ? null : await ctx.helpers.preflightRejectedApproaches(
+  const pre = await ctx.helpers.preflightRejectedApproaches(
     "present_changeset",
     [title, summary ?? "", ...risks ?? []].filter(Boolean),
-    files.map((f) => f.path).filter(Boolean)
+    files.map((f) => f.path).filter(Boolean),
+    [],
+    { advisory: isExternal }
   );
-  if (pre && !pre.ok) return pre.response;
+  if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_changeset", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
   const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
@@ -33724,7 +33869,7 @@ async function handlePresentChangeset(ctx, args) {
   }
   dedup.commit?.(id);
   const secretMatches = artifact.secretWarnings ?? [];
-  if (pre) await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_changeset", pre.trace);
+  await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_changeset", pre.trace);
   ctx.broadcast({ type: "artifact_created", artifact });
   if (secretMatches.length > 0) {
     ctx.broadcast({
@@ -33737,15 +33882,19 @@ async function handlePresentChangeset(ctx, args) {
   notifyResourcesListChanged(ctx.server);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   await ctx.helpers.autoNameSession(artifact.title);
-  const traceSummary = pre ? formatPreflightTraceSummary(pre.trace) : "";
+  const traceSummary = formatPreflightTraceSummary(pre.trace);
+  const advisory = pre.advisory ? `
+
+\u26A0 YOUR PAIR'S RECORDED TASTE TOUCHES THIS PR \u2014 advisory, not a block (they did not write this code, and there is no revision that could unblock someone else's PR): ${pre.advisory}
+Raise it WITH THEM, not on the PR: one present_findings entry with audience: "internal", quoting their stance and its date, and let them decide whether it still applies in someone else's codebase. Never quote their ledger to the PR author \u2014 internal findings are excluded from every posted payload.` : "";
   const nudge = await revisionNudge(ctx.store, "changeset", title, id);
   const fileCount = files.length;
   const prLabel = source?.number ? `PR #${source.number}` : "the PR";
-  const closing = isExternal ? `This is an EXTERNAL review \u2014 ${prLabel}${source?.author ? ` by ${source.author}` : ""} is someone else's code. Their per-file verdicts are their REVIEW OPINION and stay LOCAL: nothing is posted and nothing lands until they say to post it. Do NOT apply, revise, or "fix" these files. Keep polling check_feedback and answer what they ask \u2014 trace callers, read the surrounding code, run a safe test \u2014 and when they say to post it, call post_pr_review (REQUEST_CHANGES only if a surviving finding is high/critical, else COMMENT). No present_debrief is owed for a review of code you did not write.` : `When the feature wraps, end with present_debrief.`;
+  const closing = isExternal ? `This is an EXTERNAL review \u2014 ${prLabel}${source?.author ? ` by ${source.author}` : ""} is someone else's code. Their per-file verdicts are their REVIEW OPINION and stay LOCAL: nothing is posted and nothing lands until they say to post it. Do NOT apply, revise, or "fix" these files. Keep polling check_feedback and answer what they ask \u2014 trace callers, read the surrounding code, run a safe test \u2014 and when they say to post it, call post_pr_review (REQUEST_CHANGES only if a surviving finding is high/critical \u2014 the tool CHECKS this now and refuses otherwise \u2014 else COMMENT). No present_debrief is owed for a review of code you did not write.` : `When the feature wraps, end with present_debrief.`;
   return {
     content: [{
       type: "text",
-      text: `Changeset "${artifact.title}" presented for review (${id}) \u2014 ${fileCount} file${fileCount === 1 ? "" : "s"}. The human reviews each file (and can comment across files) at localhost:${reviewPort}. Call check_feedback for their per-file review state, comments, and verdict. ${closing}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`
+      text: `Changeset "${artifact.title}" presented for review (${id}) \u2014 ${fileCount} file${fileCount === 1 ? "" : "s"}. The human reviews each file (and can comment across files) at localhost:${reviewPort}. Call check_feedback for their per-file review state, comments, and verdict. ${closing}${traceSummary}${advisory}${nudge}${await ctx.helpers.getPassiveFeedback()}`
     }]
   };
 }
@@ -34392,7 +34541,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "present_changeset",
         annotations: { title: "Present changeset", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-        description: "Present a change that spans 2+ FILES as ONE reviewable artifact \u2014 unified diffs per file, per-file review state, and comments that can anchor across files. Use this for multi-file changes (a refactor, a feature touching several modules); a SINGLE-file change stays present_code_change.\n\nSchema note: `files` is an array; each file has `path`, `changeType` ('modified'|'added'|'deleted'), and `hunks` (unified-diff shaped: an optional `header` plus `lines`, each `{ kind: 'ctx'|'add'|'del', content, oldLine?, newLine? }`). Optional `summary`, `risks[]` (e.g. 'touches auth'), and per-file `stats` ({additions, deletions}). INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: SINGLE REVIEW SURFACE \u2014 the human dispositions each file (looks-right, or needs-changes with a reason) and the whole-changeset verdict is DERIVED (all look-right \u2192 approve; any flagged \u2192 send those files back for revision). Review happens in the companion UI; don't paste diffs in chat. Non-blocking: it records + returns immediately. Call check_feedback for their per-file disposition, reasons, comments, and verdict \u2014 a send-back arrives as a `revised` status with feedback naming which files to revise and why.\n\nREVIEWING SOMEONE ELSE'S PR (`reviewIntent: 'external'`): when the human was pinged to review a GitHub PR, feed THE PR'S DIFF in here \u2014 one changeset file per changed file, hunks straight from `gh pr diff <N>` \u2014 and set `reviewIntent: 'external'` plus `source: { kind: 'github-pr', number, url, headRef, baseRef, author }`. That is what puts their colleague's diff on the rich surface: per-hunk comments, walk-me-through per hunk, findings anchored to real lines. Semantics change with the flag and you must honour them: the verdict is the HUMAN'S REVIEW OPINION, not a landing gate \u2014 it stays LOCAL until they tell you to post it (post_pr_review), nothing here is on their disk, and you must NOT apply, revise, or 'fix' these files or send yourself back to redraft them. No closing present_debrief is owed for code the pair did not write; the session's output is the posted review. Omit `reviewIntent` for your own work \u2014 absent means local, exactly as before.",
+        description: "Present a change that spans 2+ FILES as ONE reviewable artifact \u2014 unified diffs per file, per-file review state, and comments that can anchor across files. Use this for multi-file changes (a refactor, a feature touching several modules); a SINGLE-file change stays present_code_change.\n\nSchema note: `files` is an array; each file has `path`, `changeType` ('modified'|'added'|'deleted'), and `hunks` (unified-diff shaped: an optional `header` plus `lines`, each `{ kind: 'ctx'|'add'|'del', content, oldLine?, newLine? }`). Optional `summary`, `risks[]` (e.g. 'touches auth'), and per-file `stats` ({additions, deletions}). INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: SINGLE REVIEW SURFACE \u2014 the human dispositions each file (looks-right, or needs-changes with a reason) and the whole-changeset verdict is DERIVED (all look-right \u2192 approve; any flagged \u2192 send those files back for revision). Review happens in the companion UI; don't paste diffs in chat. Non-blocking: it records + returns immediately. Call check_feedback for their per-file disposition, reasons, comments, and verdict \u2014 a send-back arrives as a `revised` status with feedback naming which files to revise and why.\n\nREVIEWING SOMEONE ELSE'S PR (`reviewIntent: 'external'`): when the human was pinged to review a GitHub PR, feed THE PR'S DIFF in here \u2014 one changeset file per changed file, hunks straight from `gh pr diff <N>` \u2014 and set `reviewIntent: 'external'` plus `source: { kind: 'github-pr', number, url, headRef, baseRef, author }`. That is what puts their colleague's diff on the rich surface: per-hunk comments, walk-me-through per hunk, findings anchored to real lines. Semantics change with the flag and you must honour them: the verdict is the HUMAN'S REVIEW OPINION, not a landing gate \u2014 it stays LOCAL until they tell you to post it (post_pr_review), nothing here is on their disk, and you must NOT apply, revise, or 'fix' these files or send yourself back to redraft them. No closing present_debrief is owed for code the pair did not write; the session's output is the posted review. Omit `reviewIntent` for your own work \u2014 absent means local, exactly as before.\n\n`reviewIntent: 'external'` IS AN ASSERTION WITH CONSEQUENCES, and nothing can verify it from here: it exempts the session from the closing-debrief gate and it is what lets post_pr_review send an APPROVE. Set it ONLY for code your pair genuinely did not write (a colleague's PR you fetched with `gh`). Their recorded stances are still weighed against an external diff \u2014 you get them back as an ADVISORY on this call rather than a refusal, because a stance about their codebase must not stop you SHOWING them someone else's. Raise any such match with them as a finding with `audience: 'internal'`; it is their private history and it must never be quoted to the PR author.",
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_changeset)
@@ -34443,11 +34592,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "post_pr_review",
         annotations: { title: "Post PR review", readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-        description: `Post this session's approved findings as inline comments on a GitHub PR via the \`gh\` CLI. Only findings with structured evidence (filePath + lineStart) anchor as inline comments; rejected / retracted / superseded artifacts are omitted.
-
-Call this ONLY when the human has explicitly told you to post ("post the review", "ship the review"). "We're done here" ends the discussion, NOT the review \u2014 it is not permission to write into someone else's repository. If it is ambiguous, ask them.
-
-AUTHORIZATION IS CHECKED, not assumed: before anything reaches GitHub the tool verifies the human's recorded verdicts in the session store. A findings artifact they never ruled on (draft/reviewing/revised) REFUSES the whole post and is named in the error \u2014 go and get their verdict, don't try to route around it. Findings they rejected are excluded automatically. An APPROVE with no inline comments additionally requires them to have APPROVED the external changeset (the PR on the review surface) \u2014 that approval is what authorizes an approving review on someone else's code. There is no force flag and no bypass; if it refuses, the answer is a human verdict, not a retry.`,
+        description: 'Post this session\'s approved findings as inline comments on a GitHub PR via the `gh` CLI. Only findings with structured evidence (filePath + lineStart) anchor as inline comments; rejected / retracted / superseded artifacts are omitted.\n\nCall this ONLY when the human has explicitly told you to post ("post the review", "ship the review"). "We\'re done here" ends the discussion, NOT the review \u2014 it is not permission to write into someone else\'s repository. If it is ambiguous, ask them.\n\nAUTHORIZATION IS CHECKED, not assumed: before anything reaches GitHub the tool verifies the human\'s recorded verdicts in the session store. A findings artifact they never ruled on (draft/reviewing/revised) REFUSES the whole post and is named in the error \u2014 go and get their verdict, don\'t try to route around it. Findings they rejected are excluded automatically, and findings marked `audience: "internal"` NEVER post at all. An APPROVE \u2014 with or without inline comments \u2014 requires them to have APPROVED every live external changeset for this PR (the PR on the review surface); if they REJECTED it, the APPROVE is refused outright. There is no force flag and no bypass; if it refuses, the answer is a human verdict, not a retry.\n\nPOSTS ONCE. A landed review is recorded in the session, and a second call for the same PR refuses with the URL of the first \u2014 a re-post notifies the author again. If the human explicitly asks you to post again, pass `repost: true`.',
         inputSchema: {
           type: "object",
           properties: {
@@ -34458,10 +34603,14 @@ AUTHORIZATION IS CHECKED, not assumed: before anything reaches GitHub the tool v
             event: {
               type: "string",
               enum: ["COMMENT", "REQUEST_CHANGES", "APPROVE"],
-              description: "The review event type. Default: COMMENT. Use REQUEST_CHANGES when findings are severe."
+              description: "The review event type. Default: COMMENT. REQUEST_CHANGES is CHECKED, not trusted: it requires at least one approved finding at severity high or critical, because it blocks the author's merge. Anything outside these three values is refused, not guessed at."
             },
             owner: { type: "string", description: "Override repo owner (when pr is just a number and you're not in the repo)" },
-            repo: { type: "string", description: "Override repo name" }
+            repo: { type: "string", description: "Override repo name" },
+            repost: {
+              type: "boolean",
+              description: 'Post AGAIN to a PR this session already posted to. Set it ONLY when the human said so in as many words ("post it again", "re-post it") \u2014 a second review notifies the author a second time. Never set it to clear a refusal on your own initiative.'
+            }
           },
           required: ["pr"]
         }
@@ -34593,7 +34742,7 @@ AUTHORIZATION IS CHECKED, not assumed: before anything reaches GitHub the tool v
       {
         name: "revise_artifact",
         annotations: { title: "Revise artifact", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-        description: "Revise a prior artifact. `mode: 'supersede'` creates a v(N+1) draft linked via parentId (requires new `content`); the old flips to 'superseded'. `mode: 'retract'` marks the artifact 'retracted' with the reason.",
+        description: "Revise a prior artifact. `mode: 'supersede'` creates a v(N+1) draft linked via parentId (requires new `content`); the old flips to 'superseded'. `mode: 'retract'` marks the artifact 'retracted' with the reason.\n\nUN-ARMING A REVIEW (R1): normally only a draft/reviewing artifact can be retracted \u2014 an approved one is the human's standing verdict. The one exception is a PR-review session (a changeset with reviewIntent: 'external' present): there, `mode: 'retract'` on an APPROVED findings artifact is how the human's \"actually, don't send that one\" gets expressed, because approval in that session is what ARMS the findings for posting. Use it when they say so; the artifact then cannot be posted.",
         inputSchema: {
           type: "object",
           properties: {
@@ -34876,7 +35025,7 @@ AUTHORIZATION IS CHECKED, not assumed: before anything reaches GitHub the tool v
       firstCallHint = await buildFirstCallHint(store, port, answeringCommentIds);
     }
     const tryElicit2 = (message) => tryElicit(server, message);
-    const preflightRejectedApproaches2 = (toolName, proposalStrings, proposalPaths = [], proposalConcepts = []) => preflightRejectedApproaches(store, broadcast, toolName, proposalStrings, proposalPaths, proposalConcepts);
+    const preflightRejectedApproaches2 = (toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], opts = {}) => preflightRejectedApproaches(store, broadcast, toolName, proposalStrings, proposalPaths, proposalConcepts, opts);
     const autoNameSession = (title) => sessionNameLatch.maybeName(title);
     const ctx = {
       server,
@@ -35483,6 +35632,13 @@ var DaemonClient = class {
   // --- Full state ---
   async getFullState() {
     return this.get("/state");
+  }
+  /** R1 (#279) — proxy the posted-review stamp to the daemon's FileStore. The
+   *  READ needs no proxy: the record rides getFullState above. NOT
+   *  fire-and-forget — a swallowed failure here re-arms a duplicate post, so
+   *  the caller awaits it before reporting success. */
+  async recordPostedReview(record2) {
+    await this.post("/posted-reviews", record2);
   }
   async forceFlush() {
     await this.post("/flush");

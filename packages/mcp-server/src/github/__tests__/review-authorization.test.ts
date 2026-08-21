@@ -430,6 +430,19 @@ describe("R1 (#279) fix 3 — the event is normalized and whitelisted in ONE pla
     }
   });
 
+  it("R1 F2 — a NON-STRING event is refused before it is ever stringified", () => {
+    // ["approve"] and { toString: () => "approve" } both String()-coerce to
+    // "approve". Accepting whatever a value's coercion spells is not the enum
+    // contract; the honest answer is "the event must be a string".
+    const hostile: unknown[] = [["approve"], { toString: () => "approve" }, 42, true, { event: "APPROVE" }];
+    for (const value of hostile) {
+      const auth = authorizeReviewPost(session([changeset("cs_1", "approved", true)]), { event: value });
+      expect(auth.ok).toBe(false);
+      if (auth.ok) throw new Error("unreachable");
+      expect(auth.reason).toContain("must be a string");
+    }
+  });
+
   it("the MCP door spawns no gh for a hostile event", async () => {
     for (const value of HOSTILE) {
       const res = await handlePostPrReview(ctxFor([findings("art_1", "approved")]), { pr: "42", event: value });

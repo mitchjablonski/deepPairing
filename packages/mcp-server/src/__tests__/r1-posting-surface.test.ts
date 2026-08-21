@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { coerceResearchContent, isPostableFinding } from "@deeppairing/shared";
 import { FileStore } from "../store/file-store.js";
 import { readPostedReviews, samePrTarget, type PostedReviewRecord } from "../store/posted-reviews.js";
+import { authorizeReviewPost } from "../github/review-authorization.js";
 import { isArtifactCreateRoute, ARTIFACT_CREATE_MAX_BODY_BYTES } from "../http/guards.js";
 import { buildGitHubReviewPayload } from "../export/format-markdown.js";
 import { createDaemon } from "../daemon/create-daemon.js";
@@ -159,6 +160,68 @@ describe("R1 fix 6 — a landed review is recorded, reloaded, and matched", () =
     expect(samePrTarget(owned, "https://github.com/acme/widgets/pull/42")).toBe(true);
     // Same number, different repo — a genuinely different PR.
     expect(samePrTarget(owned, "https://github.com/other/thing/pull/42")).toBe(false);
+  });
+});
+
+// --- fix 6 / F1: the sidecar is the SHARED source of truth across doors ------
+
+describe("R1 F1 — a WARM daemon store sees a post the CLI's separate store made", () => {
+  /** One findings artifact, approved, so a post is authorized on the merits. */
+  function seedApproved(store: FileStore) {
+    store.createArtifact({
+      id: "art_1", type: "research", title: "Review",
+      content: {
+        summary: "s",
+        findings: [{
+          category: "c", title: "A finding", detail: "d", significance: "high",
+          evidence: [{ filePath: "src/a.ts", lineStart: 1, lineEnd: 2, snippet: "x", explanation: "y" }],
+        }],
+      },
+    });
+    store.updateArtifactStatus("art_1", "approved", "ui_approve_button");
+    store.forceFlush?.();
+  }
+
+  it("CLI-post → MCP-authorize on the SAME warm store → REFUSED as a duplicate", () => {
+    // The daemon holds ONE long-lived FileStore per session; the CLI runs in its
+    // own process with its OWN FileStore. Model both over one directory.
+    const warm = fx.track(new FileStore(fx.dir, "s_cross")); // the daemon's persistent store
+    seedApproved(warm);
+
+    // Before F1 this passed the pre-flight; the daemon's stale in-memory copy
+    // showed zero posted reviews. Now getFullState re-reads the sidecar.
+    const first = authorizeReviewPost(warm.getFullState() as never, { event: "COMMENT", pr: "42" });
+    expect(first.ok).toBe(true);
+
+    // The CLI process posts through a DIFFERENT FileStore instance.
+    const cliStore = fx.track(new FileStore(fx.dir, "s_cross"));
+    cliStore.recordPostedReview({
+      pr: "42", prNumber: 42, event: "COMMENT", reviewId: 9,
+      url: "https://github.com/acme/widgets/pull/42#pullrequestreview-9",
+      postedAt: new Date().toISOString(), commentCount: 1,
+    });
+
+    // The WARM daemon store — never re-hydrated — must now refuse a second post.
+    const second = authorizeReviewPost(warm.getFullState() as never, { event: "COMMENT", pr: "42" });
+    expect(second.ok).toBe(false);
+    if (second.ok) throw new Error("unreachable");
+    expect(second.reason).toContain("already posted");
+    expect(second.reason).toContain("pullrequestreview-9");
+
+    // …and repost: true still clears exactly that refusal (not a general force).
+    expect(authorizeReviewPost(warm.getFullState() as never, { event: "COMMENT", pr: "42", repost: true }).ok).toBe(true);
+  });
+
+  it("the same refusal holds MCP→MCP and CLI→CLI (one store, warm)", () => {
+    const store = fx.track(new FileStore(fx.dir, "s_same"));
+    seedApproved(store);
+    store.recordPostedReview({
+      pr: "42", prNumber: 42, event: "COMMENT", reviewId: 1, url: "u",
+      postedAt: new Date().toISOString(), commentCount: 1,
+    });
+    expect(authorizeReviewPost(store.getFullState() as never, { event: "COMMENT", pr: "42" }).ok).toBe(false);
+    // A different PR from the same warm store still posts.
+    expect(authorizeReviewPost(store.getFullState() as never, { event: "COMMENT", pr: "43" }).ok).toBe(true);
   });
 });
 
