@@ -18,6 +18,7 @@ import type {
   ChangesetHunk,
   ChangesetHunkLine,
   ChangesetReviewState,
+  ChangesetSource,
   DebriefContent,
   DebriefSection,
   DebriefDecision,
@@ -441,6 +442,23 @@ function coerceReviewReasons(v: unknown): Record<string, string> | undefined {
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+/** Q6 (#232) — the external changeset's provenance. Only `kind: "github-pr"`
+ *  is recognized (the one shape the schema declares); everything else is
+ *  optional and kept only when the right primitive type. A source object with
+ *  an unknown kind yields undefined rather than a half-shaped record — the
+ *  banner would have nothing true to say about it. */
+function coerceChangesetSource(v: unknown): ChangesetSource | undefined {
+  if (!isObj(v)) return undefined;
+  if (v.kind !== "github-pr") return undefined;
+  const out: ChangesetSource = { kind: "github-pr" };
+  if (typeof v.number === "number" && Number.isInteger(v.number) && v.number > 0) out.number = v.number;
+  if (typeof v.url === "string" && v.url.length > 0) out.url = v.url;
+  if (typeof v.headRef === "string" && v.headRef.length > 0) out.headRef = v.headRef;
+  if (typeof v.baseRef === "string" && v.baseRef.length > 0) out.baseRef = v.baseRef;
+  if (typeof v.author === "string" && v.author.length > 0) out.author = v.author;
+  return out;
+}
+
 export function coerceChangesetContent(raw: unknown): ChangesetContent {
   const c = obj(raw);
   const out: ChangesetContent = {
@@ -452,6 +470,14 @@ export function coerceChangesetContent(raw: unknown): ChangesetContent {
   if (reviewState) out.reviewState = reviewState;
   const reviewReasons = coerceReviewReasons(c.reviewReasons);
   if (reviewReasons) out.reviewReasons = reviewReasons;
+  // Q6 (#232) — reviewIntent/source are ADDITIVE: a changeset written before
+  // they existed carries neither key, and this coercer must leave it
+  // byte-identical (pinned by the back-compat test). "local" is never
+  // materialized on read either — absent already MEANS local, and writing it
+  // in would change the on-disk shape of every legacy artifact that round-trips.
+  if (c.reviewIntent === "local" || c.reviewIntent === "external") out.reviewIntent = c.reviewIntent;
+  const source = coerceChangesetSource(c.source);
+  if (source) out.source = source;
   return out;
 }
 

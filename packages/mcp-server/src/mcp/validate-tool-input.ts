@@ -997,6 +997,11 @@ export function validatePresentChangesetInput(args: any): ValidationResult<z.inf
     risks: args?.risks,
     // reviewState is HUMAN-driven (set via the review route), never taken from
     // agent input — deliberately not read here.
+    // Q6 (#232) — reviewIntent/source ARE agent-supplied: only the agent knows
+    // whether it is proposing this diff or showing someone else's PR. Both
+    // optional; absent reviewIntent means "local", the pre-Q6 meaning.
+    reviewIntent: args?.reviewIntent,
+    source: args?.source,
   });
   if (!contentParse.success) {
     return { ok: false, error: formatValidationError("present_changeset", contentParse.error, EXAMPLE_CHANGESET, args) };

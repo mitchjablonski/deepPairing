@@ -398,6 +398,44 @@ export type ChangesetReviewState = z.infer<typeof ChangesetReviewStateSchema>;
 export const ChangesetReviewReasonsSchema = z.record(z.string(), z.string());
 export type ChangesetReviewReasons = z.infer<typeof ChangesetReviewReasonsSchema>;
 
+/** Q6 (#232) — WHOSE code is under review, and what a verdict MEANS.
+ *
+ *  Absent (or "local") = the default, and everything that shipped before this
+ *  field existed: the agent wrote this change, it is on disk (or about to be),
+ *  and approve/send-back is the LANDING gate — the review floor.
+ *
+ *  "external" = the changeset is SOMEONE ELSE'S code, pulled onto the rich
+ *  surface so the human can read it properly (the canonical case: a GitHub PR
+ *  they were pinged to review, fed in as per-file diffs from `gh pr diff`).
+ *  Nothing here lands on their disk and nothing is theirs to ship, so the
+ *  verdict is their REVIEW OPINION and it stays local until they choose to post
+ *  it (post_pr_review). Three consequences, each enforced in code rather than
+ *  left to prose:
+ *    • the debrief gate does NOT count an external changeset as "code was
+ *      presented" (debrief-gate.ts) — a session whose output is a posted PR
+ *      review owes no walk-through of code the pair never wrote;
+ *    • present_changeset skips the rejected-approach BLOCK for it — the agent
+ *      is not proposing this code, and refusing to DISPLAY a colleague's PR
+ *      because it brushes your stance would be absurd. The stance still bites,
+ *      pointed outward: it surfaces as a finding on their PR;
+ *    • the UI banners the artifact so "Approve" cannot be misread as "ship it".
+ */
+export const ChangesetReviewIntentSchema = z.enum(["local", "external"]);
+export type ChangesetReviewIntent = z.infer<typeof ChangesetReviewIntentSchema>;
+
+/** Q6 (#232) — provenance for an external changeset: where the diff came from,
+ *  so the banner can name the PR and link it. Every field but `kind` optional —
+ *  the agent fills in whatever `gh pr view` gave it. */
+export const ChangesetSourceSchema = z.object({
+  kind: z.literal("github-pr").describe("Provenance kind. Today only 'github-pr'."),
+  number: z.number().int().positive().optional().describe("PR number, e.g. 123"),
+  url: z.string().optional().describe("Full PR URL — the banner links it"),
+  headRef: z.string().optional().describe("Source branch, e.g. 'feat/rate-limit'"),
+  baseRef: z.string().optional().describe("Target branch, e.g. 'main'"),
+  author: z.string().optional().describe("PR author's GitHub login"),
+});
+export type ChangesetSource = z.infer<typeof ChangesetSourceSchema>;
+
 export const ChangesetContentSchema = z.object({
   summary: z.string().optional(),
   files: z.array(ChangesetFileSchema),
@@ -409,6 +447,14 @@ export const ChangesetContentSchema = z.object({
   /** #175 — per-file "needs changes" reasons (set post-creation via the
    *  changeset-review route), keyed by file path. */
   reviewReasons: ChangesetReviewReasonsSchema.optional(),
+  /** Q6 (#232) — whose code this is. Absent = "local" (the pre-Q6 meaning: the
+   *  agent's own change, awaiting the landing gate). See
+   *  ChangesetReviewIntentSchema for exactly what "external" changes. */
+  reviewIntent: ChangesetReviewIntentSchema.optional()
+    .describe("Set to 'external' when this diff is SOMEONE ELSE'S code you are reviewing (a GitHub PR you were pinged on), not a change you are proposing. Omit for your own work. An external changeset's approve/needs-changes is the human's REVIEW VERDICT — it stays local until they say to post it, and it never means 'this code lands'."),
+  /** Q6 (#232) — where an external changeset came from (the PR). */
+  source: ChangesetSourceSchema.optional()
+    .describe("Provenance of an external changeset — the PR it was pulled from: { kind: 'github-pr', number, url, headRef, baseRef, author }. Fill in whatever `gh pr view` gave you; the review surface names and links it."),
 });
 export type ChangesetContent = z.infer<typeof ChangesetContentSchema>;
 

@@ -365,12 +365,19 @@ try {
     // OR a dead-but-attempted debrief is feature-shaping ceremony that escalates
     // even a single-file fix. research/findings is NOT ceremony. Trivial: exactly
     // one live single-file code_change, no changeset, no ceremony.
+    // Q6 (#232) — a changeset with content.reviewIntent === "external" is a
+    // colleague's PR on the review surface, not code the pair wrote: it is
+    // skipped entirely (never counted as "code was presented").
     if (owesDebriefSession === null) {
       const CODE_CLOSED = ["superseded", "retracted", "obsolete"];
       const DEBRIEF_DEAD = ["superseded", "retracted", "obsolete", "rejected"];
+      const isExternalReview = (x) =>
+        x.type === "changeset" && !!x.content && typeof x.content === "object" &&
+        x.content.reviewIntent === "external";
       const hasLiveDebrief = arr.some((x) => x.type === "debrief" && !DEBRIEF_DEAD.includes(x.status));
       const recentCode = arr.filter((x) => {
         if (!["code_change", "changeset"].includes(x.type)) return false;
+        if (isExternalReview(x)) return false;
         if (CODE_CLOSED.includes(x.status)) return false;
         const t = x.createdAt ? new Date(x.createdAt).getTime() : 0;
         return !t || now - t <= MAX_AGE_MS;

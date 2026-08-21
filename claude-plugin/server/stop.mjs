@@ -8,13 +8,18 @@ import path from "node:path";
 var CODE_CLOSED_STATUSES = ["superseded", "retracted", "obsolete"];
 var DEBRIEF_DEAD_STATUSES = ["superseded", "retracted", "obsolete", "rejected"];
 var CEREMONY_TYPES = ["decision", "spec", "plan"];
+function isExternalReview(a) {
+  if (a?.type !== "changeset") return false;
+  const content = a?.content;
+  return !!content && typeof content === "object" && content.reviewIntent === "external";
+}
 function sessionOwesDebrief(artifacts, isRecent = () => true) {
   const hasLiveDebrief = artifacts.some(
     (a) => a?.type === "debrief" && !DEBRIEF_DEAD_STATUSES.includes(a?.status ?? "")
   );
   if (hasLiveDebrief) return false;
   const recentCode = artifacts.filter(
-    (a) => (a?.type === "code_change" || a?.type === "changeset") && !CODE_CLOSED_STATUSES.includes(a?.status ?? "") && isRecent(a)
+    (a) => (a?.type === "code_change" || a?.type === "changeset") && !isExternalReview(a) && !CODE_CLOSED_STATUSES.includes(a?.status ?? "") && isRecent(a)
   );
   if (recentCode.length === 0) return false;
   const changesets = recentCode.filter((a) => a?.type === "changeset").length;

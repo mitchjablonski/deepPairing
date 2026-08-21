@@ -25658,6 +25658,15 @@ var ChangesetFileSchema = external_exports.object({
 });
 var ChangesetReviewStateSchema = external_exports.record(external_exports.string(), external_exports.enum(["reviewed", "needs_changes", "skipped"]));
 var ChangesetReviewReasonsSchema = external_exports.record(external_exports.string(), external_exports.string());
+var ChangesetReviewIntentSchema = external_exports.enum(["local", "external"]);
+var ChangesetSourceSchema = external_exports.object({
+  kind: external_exports.literal("github-pr").describe("Provenance kind. Today only 'github-pr'."),
+  number: external_exports.number().int().positive().optional().describe("PR number, e.g. 123"),
+  url: external_exports.string().optional().describe("Full PR URL \u2014 the banner links it"),
+  headRef: external_exports.string().optional().describe("Source branch, e.g. 'feat/rate-limit'"),
+  baseRef: external_exports.string().optional().describe("Target branch, e.g. 'main'"),
+  author: external_exports.string().optional().describe("PR author's GitHub login")
+});
 var ChangesetContentSchema = external_exports.object({
   summary: external_exports.string().optional(),
   files: external_exports.array(ChangesetFileSchema),
@@ -25668,7 +25677,13 @@ var ChangesetContentSchema = external_exports.object({
   reviewState: ChangesetReviewStateSchema.optional(),
   /** #175 — per-file "needs changes" reasons (set post-creation via the
    *  changeset-review route), keyed by file path. */
-  reviewReasons: ChangesetReviewReasonsSchema.optional()
+  reviewReasons: ChangesetReviewReasonsSchema.optional(),
+  /** Q6 (#232) — whose code this is. Absent = "local" (the pre-Q6 meaning: the
+   *  agent's own change, awaiting the landing gate). See
+   *  ChangesetReviewIntentSchema for exactly what "external" changes. */
+  reviewIntent: ChangesetReviewIntentSchema.optional().describe("Set to 'external' when this diff is SOMEONE ELSE'S code you are reviewing (a GitHub PR you were pinged on), not a change you are proposing. Omit for your own work. An external changeset's approve/needs-changes is the human's REVIEW VERDICT \u2014 it stays local until they say to post it, and it never means 'this code lands'."),
+  /** Q6 (#232) — where an external changeset came from (the PR). */
+  source: ChangesetSourceSchema.optional().describe("Provenance of an external changeset \u2014 the PR it was pulled from: { kind: 'github-pr', number, url, headRef, baseRef, author }. Fill in whatever `gh pr view` gave you; the review surface names and links it.")
 });
 var DebriefSectionSchema = external_exports.object({
   title: external_exports.string(),
@@ -26564,6 +26579,24 @@ function coerceReviewReasons(v) {
   }
   return Object.keys(out).length > 0 ? out : void 0;
 }
+function coerceChangesetSource(v) {
+  if (!isObj(v))
+    return void 0;
+  if (v.kind !== "github-pr")
+    return void 0;
+  const out = { kind: "github-pr" };
+  if (typeof v.number === "number" && Number.isInteger(v.number) && v.number > 0)
+    out.number = v.number;
+  if (typeof v.url === "string" && v.url.length > 0)
+    out.url = v.url;
+  if (typeof v.headRef === "string" && v.headRef.length > 0)
+    out.headRef = v.headRef;
+  if (typeof v.baseRef === "string" && v.baseRef.length > 0)
+    out.baseRef = v.baseRef;
+  if (typeof v.author === "string" && v.author.length > 0)
+    out.author = v.author;
+  return out;
+}
 function coerceChangesetContent(raw) {
   const c = obj(raw);
   const out = {
@@ -26579,6 +26612,11 @@ function coerceChangesetContent(raw) {
   const reviewReasons = coerceReviewReasons(c.reviewReasons);
   if (reviewReasons)
     out.reviewReasons = reviewReasons;
+  if (c.reviewIntent === "local" || c.reviewIntent === "external")
+    out.reviewIntent = c.reviewIntent;
+  const source = coerceChangesetSource(c.source);
+  if (source)
+    out.source = source;
   return out;
 }
 function coerceConcepts(v) {
@@ -29555,9 +29593,14 @@ function validatePresentChangesetInput(args) {
     summary: args?.summary,
     // M1.2 — accept the code_change family (create/modify/delete) on each file.
     files: aliasFileArray(args?.files, TO_CHANGESET_FILE_KIND),
-    risks: args?.risks
+    risks: args?.risks,
     // reviewState is HUMAN-driven (set via the review route), never taken from
     // agent input — deliberately not read here.
+    // Q6 (#232) — reviewIntent/source ARE agent-supplied: only the agent knows
+    // whether it is proposing this diff or showing someone else's PR. Both
+    // optional; absent reviewIntent means "local", the pre-Q6 meaning.
+    reviewIntent: args?.reviewIntent,
+    source: args?.source
   });
   if (!contentParse.success) {
     return { ok: false, error: formatValidationError("present_changeset", contentParse.error, EXAMPLE_CHANGESET, args) };
@@ -31991,13 +32034,18 @@ async function recordRejectedOption(store, broadcast, params) {
 var CODE_CLOSED_STATUSES = ["superseded", "retracted", "obsolete"];
 var DEBRIEF_DEAD_STATUSES = ["superseded", "retracted", "obsolete", "rejected"];
 var CEREMONY_TYPES = ["decision", "spec", "plan"];
+function isExternalReview(a) {
+  if (a?.type !== "changeset") return false;
+  const content = a?.content;
+  return !!content && typeof content === "object" && content.reviewIntent === "external";
+}
 function sessionOwesDebrief(artifacts, isRecent = () => true) {
   const hasLiveDebrief = artifacts.some(
     (a) => a?.type === "debrief" && !DEBRIEF_DEAD_STATUSES.includes(a?.status ?? "")
   );
   if (hasLiveDebrief) return false;
   const recentCode = artifacts.filter(
-    (a) => (a?.type === "code_change" || a?.type === "changeset") && !CODE_CLOSED_STATUSES.includes(a?.status ?? "") && isRecent(a)
+    (a) => (a?.type === "code_change" || a?.type === "changeset") && !isExternalReview(a) && !CODE_CLOSED_STATUSES.includes(a?.status ?? "") && isRecent(a)
   );
   if (recentCode.length === 0) return false;
   const changesets = recentCode.filter((a) => a?.type === "changeset").length;
@@ -33152,6 +33200,10 @@ var GhNotAuthedError = class extends Error {
     this.name = "GhNotAuthedError";
   }
 };
+function looksUnauthenticated(stderr) {
+  const lower = stderr.toLowerCase();
+  return lower.includes("not logged into") || lower.includes("authentication token") || lower.includes("bad credentials") || lower.includes("requires authentication");
+}
 function parsePrRef(ref) {
   const urlMatch = ref.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
   if (urlMatch) {
@@ -33201,6 +33253,8 @@ function run(cmd, args, stdin) {
     child.on("close", (code) => {
       finish(() => resolve({ code: code ?? 1, stdout, stderr }));
     });
+    child.stdin.on("error", () => {
+    });
     if (stdin) {
       child.stdin.write(stdin);
       child.stdin.end();
@@ -33212,10 +33266,7 @@ function run(cmd, args, stdin) {
 async function detectRepo() {
   const res = await run("gh", ["repo", "view", "--json", "nameWithOwner"]);
   if (res.code !== 0) {
-    const lower = res.stderr.toLowerCase();
-    if (lower.includes("not logged into") || lower.includes("authentication token")) {
-      throw new GhNotAuthedError();
-    }
+    if (looksUnauthenticated(res.stderr)) throw new GhNotAuthedError();
     throw new Error(`gh repo view failed: ${res.stderr.trim() || res.stdout.trim()}`);
   }
   try {
@@ -33244,10 +33295,7 @@ async function postPrReview(opts) {
     body
   );
   if (res.code !== 0) {
-    const lower = res.stderr.toLowerCase();
-    if (lower.includes("not logged into") || lower.includes("authentication token")) {
-      throw new GhNotAuthedError();
-    }
+    if (looksUnauthenticated(res.stderr)) throw new GhNotAuthedError();
     throw new Error(`gh api failed (exit ${res.code}): ${res.stderr.trim() || res.stdout.trim()}`);
   }
   try {
@@ -33275,11 +33323,11 @@ async function handlePostPrReview(ctx, args) {
   const event = ["COMMENT", "REQUEST_CHANGES", "APPROVE"].includes(args?.event) ? args.event : "COMMENT";
   const state = await store.getFullState();
   const payload = buildGitHubReviewPayload(state, { event });
-  if (payload.comments.length === 0) {
+  if (payload.comments.length === 0 && payload.event !== "APPROVE") {
     return {
       content: [{
         type: "text",
-        text: "No findings with structured evidence (filePath + lineStart) in this session \u2014 nothing to post as inline review comments. Use present_findings with structured Evidence objects to enable this."
+        text: `No findings with structured evidence (filePath + lineStart) in this session \u2014 nothing to post as ${payload.event === "REQUEST_CHANGES" ? "the inline comments a REQUEST_CHANGES owes the author" : "inline review comments"}. Use present_findings with structured Evidence objects to enable this` + (payload.event === "REQUEST_CHANGES" ? "" : ', or pass event: "APPROVE" if the human read it and had nothing to flag') + "."
       }],
       isError: true
     };
@@ -33294,7 +33342,9 @@ async function handlePostPrReview(ctx, args) {
     return {
       content: [{
         type: "text",
-        text: `Posted ${payload.comments.length} inline comment${payload.comments.length === 1 ? "" : "s"} on PR ${ref} as ${payload.event}: ${result.htmlUrl}`
+        // Q6 — "Posted 0 inline comments" is a nonsense sentence for the bare
+        // APPROVE the guard above now allows; say what actually happened.
+        text: payload.comments.length === 0 ? `Posted a review on PR ${ref} as ${payload.event} with no inline comments: ${result.htmlUrl}` : `Posted ${payload.comments.length} inline comment${payload.comments.length === 1 ? "" : "s"} on PR ${ref} as ${payload.event}: ${result.htmlUrl}`
       }]
     };
   } catch (err) {
@@ -33557,11 +33607,14 @@ Decline to review the diff at http://localhost:${reviewPort}`
 async function handlePresentChangeset(ctx, args) {
   const validated = validatePresentChangesetInput(args);
   if (!validated.ok) return validated.error;
-  const { title, summary, files, risks } = validated.data;
-  const proposals = [title, summary ?? "", ...risks ?? []].filter(Boolean);
-  const proposalPaths = files.map((f) => f.path).filter(Boolean);
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_changeset", proposals, proposalPaths);
-  if (!pre.ok) return pre.response;
+  const { title, summary, files, risks, reviewIntent, source } = validated.data;
+  const isExternal = reviewIntent === "external";
+  const pre = isExternal ? null : await ctx.helpers.preflightRejectedApproaches(
+    "present_changeset",
+    [title, summary ?? "", ...risks ?? []].filter(Boolean),
+    files.map((f) => f.path).filter(Boolean)
+  );
+  if (pre && !pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_changeset", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
   const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
@@ -33569,7 +33622,13 @@ async function handlePresentChangeset(ctx, args) {
   const content = {
     ...summary ? { summary } : {},
     files,
-    ...risks && risks.length > 0 ? { risks } : {}
+    ...risks && risks.length > 0 ? { risks } : {},
+    // Q6 (#232) — spread-when-present, never defaulted in. A local changeset's
+    // content stays byte-identical to every changeset written before Q6 existed
+    // (absent reviewIntent already MEANS local), so nothing downstream — the
+    // store, the exporter, the goldens — sees a shape it didn't see yesterday.
+    ...reviewIntent ? { reviewIntent } : {},
+    ...source ? { source } : {}
   };
   let artifact;
   try {
@@ -33587,7 +33646,7 @@ async function handlePresentChangeset(ctx, args) {
   }
   dedup.commit?.(id);
   const secretMatches = artifact.secretWarnings ?? [];
-  await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_changeset", pre.trace);
+  if (pre) await persistPreflightTrace(ctx.store, ctx.broadcast, artifact, "present_changeset", pre.trace);
   ctx.broadcast({ type: "artifact_created", artifact });
   if (secretMatches.length > 0) {
     ctx.broadcast({
@@ -33600,13 +33659,15 @@ async function handlePresentChangeset(ctx, args) {
   notifyResourcesListChanged(ctx.server);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   await ctx.helpers.autoNameSession(artifact.title);
-  const traceSummary = formatPreflightTraceSummary(pre.trace);
+  const traceSummary = pre ? formatPreflightTraceSummary(pre.trace) : "";
   const nudge = await revisionNudge(ctx.store, "changeset", title, id);
   const fileCount = files.length;
+  const prLabel = source?.number ? `PR #${source.number}` : "the PR";
+  const closing = isExternal ? `This is an EXTERNAL review \u2014 ${prLabel}${source?.author ? ` by ${source.author}` : ""} is someone else's code. Their per-file verdicts are their REVIEW OPINION and stay LOCAL: nothing is posted and nothing lands until they say to post it. Do NOT apply, revise, or "fix" these files. Keep polling check_feedback and answer what they ask \u2014 trace callers, read the surrounding code, run a safe test \u2014 and when they say to post it, call post_pr_review (REQUEST_CHANGES only if a surviving finding is high/critical, else COMMENT). No present_debrief is owed for a review of code you did not write.` : `When the feature wraps, end with present_debrief.`;
   return {
     content: [{
       type: "text",
-      text: `Changeset "${artifact.title}" presented for review (${id}) \u2014 ${fileCount} file${fileCount === 1 ? "" : "s"}. The human reviews each file (and can comment across files) at localhost:${reviewPort}. Call check_feedback for their per-file review state, comments, and verdict. When the feature wraps, end with present_debrief.${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`
+      text: `Changeset "${artifact.title}" presented for review (${id}) \u2014 ${fileCount} file${fileCount === 1 ? "" : "s"}. The human reviews each file (and can comment across files) at localhost:${reviewPort}. Call check_feedback for their per-file review state, comments, and verdict. ${closing}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`
     }]
   };
 }
@@ -33853,8 +33914,10 @@ Respect these stances \u2014 especially TEAM-source, high-citation, and SEED ent
       const approvals = e.instances.filter((i) => i.verdict === "approved").length;
       const projects = new Set(e.instances.map((i) => i.project)).size;
       const latestReason = [...e.instances].reverse().find((i) => i.reason)?.reason;
+      const lastSeenDate = typeof e.lastSeenAt === "string" ? e.lastSeenAt.slice(0, 10) : "";
+      const seenPart = lastSeenDate ? `, last on ${lastSeenDate}` : "";
       const reasonLine = latestReason ? `
-    latest reason: "${latestReason}"` : "";
+    latest reason${seenPart}: "${latestReason}"` : "";
       return `- [${e.stance.toUpperCase()}] "${e.concept}" \u2014 ${rejections} reject${rejections !== 1 ? "s" : ""}, ${approvals} approval${approvals !== 1 ? "s" : ""} across ${projects} project${projects !== 1 ? "s" : ""}${reasonLine}`;
     });
     const trailer = entries.length > 10 ? `
@@ -34253,7 +34316,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "present_changeset",
         annotations: { title: "Present changeset", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-        description: "Present a change that spans 2+ FILES as ONE reviewable artifact \u2014 unified diffs per file, per-file review state, and comments that can anchor across files. Use this for multi-file changes (a refactor, a feature touching several modules); a SINGLE-file change stays present_code_change.\n\nSchema note: `files` is an array; each file has `path`, `changeType` ('modified'|'added'|'deleted'), and `hunks` (unified-diff shaped: an optional `header` plus `lines`, each `{ kind: 'ctx'|'add'|'del', content, oldLine?, newLine? }`). Optional `summary`, `risks[]` (e.g. 'touches auth'), and per-file `stats` ({additions, deletions}). INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: SINGLE REVIEW SURFACE \u2014 the human dispositions each file (looks-right, or needs-changes with a reason) and the whole-changeset verdict is DERIVED (all look-right \u2192 approve; any flagged \u2192 send those files back for revision). Review happens in the companion UI; don't paste diffs in chat. Non-blocking: it records + returns immediately. Call check_feedback for their per-file disposition, reasons, comments, and verdict \u2014 a send-back arrives as a `revised` status with feedback naming which files to revise and why.",
+        description: "Present a change that spans 2+ FILES as ONE reviewable artifact \u2014 unified diffs per file, per-file review state, and comments that can anchor across files. Use this for multi-file changes (a refactor, a feature touching several modules); a SINGLE-file change stays present_code_change.\n\nSchema note: `files` is an array; each file has `path`, `changeType` ('modified'|'added'|'deleted'), and `hunks` (unified-diff shaped: an optional `header` plus `lines`, each `{ kind: 'ctx'|'add'|'del', content, oldLine?, newLine? }`). Optional `summary`, `risks[]` (e.g. 'touches auth'), and per-file `stats` ({additions, deletions}). INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: SINGLE REVIEW SURFACE \u2014 the human dispositions each file (looks-right, or needs-changes with a reason) and the whole-changeset verdict is DERIVED (all look-right \u2192 approve; any flagged \u2192 send those files back for revision). Review happens in the companion UI; don't paste diffs in chat. Non-blocking: it records + returns immediately. Call check_feedback for their per-file disposition, reasons, comments, and verdict \u2014 a send-back arrives as a `revised` status with feedback naming which files to revise and why.\n\nREVIEWING SOMEONE ELSE'S PR (`reviewIntent: 'external'`): when the human was pinged to review a GitHub PR, feed THE PR'S DIFF in here \u2014 one changeset file per changed file, hunks straight from `gh pr diff <N>` \u2014 and set `reviewIntent: 'external'` plus `source: { kind: 'github-pr', number, url, headRef, baseRef, author }`. That is what puts their colleague's diff on the rich surface: per-hunk comments, walk-me-through per hunk, findings anchored to real lines. Semantics change with the flag and you must honour them: the verdict is the HUMAN'S REVIEW OPINION, not a landing gate \u2014 it stays LOCAL until they tell you to post it (post_pr_review), nothing here is on their disk, and you must NOT apply, revise, or 'fix' these files or send yourself back to redraft them. No closing present_debrief is owed for code the pair did not write; the session's output is the posted review. Omit `reviewIntent` for your own work \u2014 absent means local, exactly as before.",
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_changeset)

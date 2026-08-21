@@ -24,6 +24,10 @@
  *       obsolete/rejected) — the close was started and isn't standing, so it's
  *       still owed (F2 / the retracted-debrief hole).
  *
+ *   NOT CODE WORK AT ALL (Q6): a changeset whose content carries
+ *   `reviewIntent: "external"` — a colleague's GitHub PR on the review surface.
+ *   It is skipped before any of the above is evaluated. See isExternalReview.
+ *
  * The floor is untouched: code is ALWAYS presented for review before it lands,
  * at every size — this predicate governs only the SEPARATE closing debrief.
  *
@@ -69,10 +73,49 @@ const DEBRIEF_DEAD_STATUSES = ["superseded", "retracted", "obsolete", "rejected"
 /** Feature-shaping ceremony — presence escalates regardless of status. */
 const CEREMONY_TYPES = ["decision", "spec", "plan"];
 
+/**
+ * Q6 (#232) — the EXTERNAL-REVIEW carve-out.
+ *
+ * The debrief obligation exists because the pair BUILT something and the human
+ * deserves a walk-through of it ("code was presented but no present_debrief
+ * yet"). A changeset carrying `content.reviewIntent === "external"` is the
+ * opposite situation: it is a colleague's GitHub PR, pulled onto the review
+ * surface so the human can read the diff properly. Nothing was written, nothing
+ * lands, and the session's real output is the review that gets posted back to
+ * the PR. Nagging "end the run with a debrief so your pair gets the
+ * walk-through" there is a category error — the artifact IS the walk-through of
+ * someone else's work, and the human was the reviewer, not the reviewed.
+ *
+ * So: an external changeset is INVISIBLE to this gate. Not "off the table like
+ * a superseded artifact" — it never enters the count at all. Consequences we
+ * accept deliberately:
+ *   • a session that ONLY reviews a PR owes no debrief (the intended case);
+ *   • a session that reviews a PR AND writes one code_change of its own is
+ *     still TRIVIAL — the external changeset does not escalate it. Correct: the
+ *     colleague's diff says nothing about how big the pair's own fix was;
+ *   • the moment the pair writes real code (2+ code_changes, a LOCAL changeset,
+ *     or any decision/spec/plan), the ordinary rules apply untouched.
+ *
+ * Deliberately NOT carved out: the Stop hook's separate BLOCKING-draft check
+ * (an external changeset in `draft` genuinely is a thing awaiting the human's
+ * eyes, so "pending artifacts need review" stays true and useful).
+ */
+function isExternalReview(a: DebriefGateArtifact): boolean {
+  if (a?.type !== "changeset") return false;
+  const content = a?.content;
+  return !!content && typeof content === "object" &&
+    (content as { reviewIntent?: unknown }).reviewIntent === "external";
+}
+
 export interface DebriefGateArtifact {
   type?: string;
   createdAt?: string;
   status?: string;
+  /** Q6 (#232) — only `content.reviewIntent` is read, and only for changesets
+   *  (see isExternalReview). Loosely typed on purpose: this module is
+   *  import-free so the bundled Stop hook can pull it in without dragging
+   *  @deeppairing/shared along. */
+  content?: unknown;
 }
 
 /**
@@ -95,10 +138,12 @@ export function sessionOwesDebrief(
   if (hasLiveDebrief) return false;
 
   // Code work counts only LIVE artifacts (superseded/retracted/obsolete off the
-  // table; rejected kept).
+  // table; rejected kept) — and only the pair's OWN work (Q6: an external PR
+  // review is never "code was presented"; see isExternalReview).
   const recentCode = artifacts.filter(
     (a) =>
       (a?.type === "code_change" || a?.type === "changeset") &&
+      !isExternalReview(a) &&
       !CODE_CLOSED_STATUSES.includes(a?.status ?? "") &&
       isRecent(a),
   );

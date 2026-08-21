@@ -179,7 +179,22 @@ export async function handleRecall(ctx: ToolContext, args: any): Promise<ToolRes
       const approvals = e.instances.filter((i) => i.verdict === "approved").length;
       const projects = new Set(e.instances.map((i) => i.project)).size;
       const latestReason = [...e.instances].reverse().find((i) => i.reason)?.reason;
-      const reasonLine = latestReason ? `\n    latest reason: "${latestReason}"` : "";
+      // Q6 (#232) — WHEN the stance was last expressed, not just what it was.
+      //
+      // The PR-review ledger sweep (see claude-plugin/commands/review-pr.md)
+      // asks the agent to say, on someone else's PR, "this introduces <concept>,
+      // which you rejected on <date>: '<reason>'". The reason was already here;
+      // the date was not, so half of that sentence was unwritable from what this
+      // tool returned and the agent would have had to invent or omit it. Cheap
+      // to add (the entry already carries lastSeenAt), and it is the half that
+      // makes the citation checkable — a dated stance is a receipt, an undated
+      // one is a claim.
+      //
+      // Date only, no clock time: the useful granularity for "when did I decide
+      // this" is the day, and a timestamp would bloat every line of the list.
+      const lastSeenDate = typeof e.lastSeenAt === "string" ? e.lastSeenAt.slice(0, 10) : "";
+      const seenPart = lastSeenDate ? `, last on ${lastSeenDate}` : "";
+      const reasonLine = latestReason ? `\n    latest reason${seenPart}: "${latestReason}"` : "";
       return `- [${e.stance.toUpperCase()}] "${e.concept}" — ${rejections} reject${rejections !== 1 ? "s" : ""}, ${approvals} approval${approvals !== 1 ? "s" : ""} across ${projects} project${projects !== 1 ? "s" : ""}${reasonLine}`;
     });
     const trailer = entries.length > 10 ? `\n…${entries.length - 10} more entries.` : "";

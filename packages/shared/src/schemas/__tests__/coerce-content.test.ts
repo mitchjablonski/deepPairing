@@ -270,6 +270,63 @@ describe("coerceChangesetContent (#171)", () => {
     });
     expect(out.reviewReasons).toBeUndefined();
   });
+
+  // --- Q6 (#232): reviewIntent + source -------------------------------------
+
+  it("Q6 — a PRE-Q6 changeset round-trips BYTE-IDENTICAL: no reviewIntent, no source, not even defaulted", () => {
+    // The back-compat contract in one assertion. Absent reviewIntent already
+    // MEANS "local", so materializing it on read would rewrite the on-disk
+    // shape of every changeset written before Q6 existed — and every golden,
+    // export, and equality check that touches one.
+    const legacy = {
+      summary: "Move TTL refresh into middleware",
+      risks: ["touches auth"],
+      files: [{ path: "auth/session.ts", changeType: "modified", hunks: [{ header: "@@", lines: [{ kind: "add", content: "x", newLine: 26 }] }] }],
+      reviewState: { "auth/session.ts": "reviewed" },
+      reviewReasons: { "auth/session.ts": "fine" },
+    };
+    const out = coerceChangesetContent(legacy);
+    expect(out).toEqual(legacy);
+    expect(Object.keys(out).sort()).toEqual(["files", "reviewReasons", "reviewState", "risks", "summary"]);
+    expect("reviewIntent" in out).toBe(false);
+    expect("source" in out).toBe(false);
+  });
+
+  it("Q6 — keeps reviewIntent 'external'/'local' and drops anything else", () => {
+    const files = [{ path: "a.ts", changeType: "modified" as const, hunks: [] }];
+    expect(coerceChangesetContent({ files, reviewIntent: "external" }).reviewIntent).toBe("external");
+    expect(coerceChangesetContent({ files, reviewIntent: "local" }).reviewIntent).toBe("local");
+    expect(coerceChangesetContent({ files, reviewIntent: "EXTERNAL" }).reviewIntent).toBeUndefined();
+    expect(coerceChangesetContent({ files, reviewIntent: true }).reviewIntent).toBeUndefined();
+  });
+
+  it("Q6 — a github-pr source passes through, field by field", () => {
+    const out = coerceChangesetContent({
+      files: [],
+      reviewIntent: "external",
+      source: { kind: "github-pr", number: 123, url: "https://github.com/acme/w/pull/123", headRef: "feat/x", baseRef: "main", author: "dana" },
+    });
+    expect(out.source).toEqual({
+      kind: "github-pr", number: 123, url: "https://github.com/acme/w/pull/123",
+      headRef: "feat/x", baseRef: "main", author: "dana",
+    });
+  });
+
+  it("Q6 — a partial source keeps what it has; junk fields are dropped, not defaulted", () => {
+    const out = coerceChangesetContent({
+      files: [],
+      source: { kind: "github-pr", number: "123", url: "", author: "dana", headRef: 7 },
+    });
+    // number-as-string, empty url and non-string headRef are all dropped —
+    // the banner must never render a fabricated PR identity.
+    expect(out.source).toEqual({ kind: "github-pr", author: "dana" });
+  });
+
+  it("Q6 — an unknown source kind yields NO source at all (never a half-shaped record)", () => {
+    expect(coerceChangesetContent({ files: [], source: { kind: "gitlab-mr", number: 9 } }).source).toBeUndefined();
+    expect(coerceChangesetContent({ files: [], source: "PR 123" }).source).toBeUndefined();
+    expect(coerceChangesetContent({ files: [], source: { number: 9 } }).source).toBeUndefined();
+  });
 });
 
 describe("coerceDebriefContent (#190)", () => {

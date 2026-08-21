@@ -21,11 +21,28 @@ export async function handlePostPrReview(ctx: ToolContext, args: any): Promise<T
   const state = await store.getFullState();
   const payload = buildGitHubReviewPayload(state as any, { event });
 
-  if (payload.comments.length === 0) {
+  // Q6 (#232) — the empty-comments guard, narrowed to the cases where it is
+  // actually right.
+  //
+  // Refusing every zero-comment post made the MOST COMMON outcome of a real PR
+  // review impossible: reading a colleague's change, finding nothing wrong, and
+  // approving it. "I looked, it's fine" is a complete review — GitHub treats a
+  // bare APPROVE as a first-class verdict, and it is the one the reviewer is
+  // asked for. The tool refused it and told them to go write findings.
+  //
+  // The guard stays for the other two events, where it is still correct: a
+  // COMMENT review with nothing to say posts noise, and REQUEST_CHANGES with no
+  // comment blocks a colleague without telling them what to change. Those are
+  // genuine mistakes, and the message names the fix.
+  if (payload.comments.length === 0 && payload.event !== "APPROVE") {
     return {
       content: [{
         type: "text",
-        text: "No findings with structured evidence (filePath + lineStart) in this session — nothing to post as inline review comments. Use present_findings with structured Evidence objects to enable this.",
+        text:
+          `No findings with structured evidence (filePath + lineStart) in this session — nothing to post as ${payload.event === "REQUEST_CHANGES" ? "the inline comments a REQUEST_CHANGES owes the author" : "inline review comments"}. ` +
+          "Use present_findings with structured Evidence objects to enable this" +
+          (payload.event === "REQUEST_CHANGES" ? "" : ", or pass event: \"APPROVE\" if the human read it and had nothing to flag") +
+          ".",
       }],
       isError: true,
     };
@@ -41,7 +58,11 @@ export async function handlePostPrReview(ctx: ToolContext, args: any): Promise<T
     return {
       content: [{
         type: "text",
-        text: `Posted ${payload.comments.length} inline comment${payload.comments.length === 1 ? "" : "s"} on PR ${ref} as ${payload.event}: ${result.htmlUrl}`,
+        // Q6 — "Posted 0 inline comments" is a nonsense sentence for the bare
+        // APPROVE the guard above now allows; say what actually happened.
+        text: payload.comments.length === 0
+          ? `Posted a review on PR ${ref} as ${payload.event} with no inline comments: ${result.htmlUrl}`
+          : `Posted ${payload.comments.length} inline comment${payload.comments.length === 1 ? "" : "s"} on PR ${ref} as ${payload.event}: ${result.htmlUrl}`,
       }],
     };
   } catch (err: any) {

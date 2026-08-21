@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Artifact, Comment, ChangesetFile } from "@deeppairing/shared";
+import type { Artifact, Comment, ChangesetFile, ChangesetSource } from "@deeppairing/shared";
 import {
   coerceChangesetContent,
   composeSendBackFeedback,
@@ -142,6 +142,68 @@ function DispChip({ disposition }: { disposition: ChangesetDisposition }) {
     <span className="shrink-0 text-2xs font-bold font-sans rounded-full px-1.5 py-0.5 text-text-muted bg-surface-elevated" title="Not reviewed yet">
       — review
     </span>
+  );
+}
+
+/**
+ * Q6 (#232) — the EXTERNAL-REVIEW banner.
+ *
+ * A changeset normally means "the agent wrote this and it is waiting on your
+ * yes to land". With `reviewIntent: "external"` it means the opposite: this is
+ * a colleague's GitHub PR, pulled onto the rich surface so you can actually
+ * READ it — per-hunk comments, walk-me-through, findings anchored to real
+ * lines. Same controls, different stakes, and nothing on screen said so.
+ *
+ * The verdict buttons deliberately keep their labels ("Approve", "Send back").
+ * Renaming them per-intent would fork the keymap, the derived-disposition
+ * copy, the send-back composer and every test that reads them, to fix a problem
+ * that is really one of CONTEXT, not vocabulary — "approve" is exactly the word
+ * GitHub uses for a review verdict too. So the semantics live here, once, in a
+ * sentence stated before you touch anything: your verdicts stay local until you
+ * post them.
+ *
+ * Q4 SEAM: this is an ARTIFACT-LEVEL banner. It sits above the summary strip
+ * and touches none of the per-file header / picker internals (path truncation,
+ * stats, actions) that the round-11 UX rider owns.
+ */
+function ExternalReviewBanner({ source }: { source?: ChangesetSource }) {
+  // `source` is optional on the schema, so every field here degrades: no
+  // number → "this PR", no url → plain text (never a dead link), no author →
+  // no " by " dangle. The one thing that must ALWAYS render is the semantics
+  // sentence — that is the whole reason the banner exists.
+  const num = typeof source?.number === "number" ? `#${source.number}` : null;
+  const who = source?.author ? ` by ${source.author}` : "";
+  const label = num ?? "this PR";
+  return (
+    <div
+      data-testid="external-review-banner"
+      className="flex items-baseline gap-x-2 gap-y-1 flex-wrap px-3 py-2 rounded border border-accent-blue-dim bg-accent-blue-dim text-xs text-accent-blue"
+      role="note"
+      aria-label="External PR review"
+    >
+      <span className="font-semibold shrink-0">External PR review</span>
+      <span aria-hidden="true" className="opacity-60">·</span>
+      <span>
+        {source?.url ? (
+          <a
+            href={source.url}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="underline underline-offset-2 font-semibold hover:opacity-80"
+          >
+            {label}
+          </a>
+        ) : (
+          <span className="font-semibold">{label}</span>
+        )}
+        {who}
+        {source?.headRef && source?.baseRef ? (
+          <span className="font-mono text-2xs opacity-80"> ({source.headRef} → {source.baseRef})</span>
+        ) : null}
+      </span>
+      <span aria-hidden="true" className="opacity-60">·</span>
+      <span className="opacity-90">your verdicts stay local until you post them</span>
+    </div>
   );
 }
 
@@ -760,6 +822,10 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
 
   return (
     <div className="space-y-3" data-changeset-focused={isFocused ? "true" : undefined}>
+      {/* Q6 (#232) — external-review banner, ABOVE everything: the reader must
+          know whose code this is before they read a line of it. Artifact-level
+          only; the per-file headers below are untouched. */}
+      {content.reviewIntent === "external" && <ExternalReviewBanner source={content.source} />}
       {/* Summary strip */}
       <div
         className="flex items-center gap-4 flex-wrap px-3 py-2 bg-surface-secondary border border-border-subtle rounded text-xs text-text-secondary"
