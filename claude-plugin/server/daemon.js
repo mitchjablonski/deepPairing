@@ -26915,13 +26915,20 @@ var FileStore = class _FileStore {
    *  legitimately-open is dropped here — only genuine orphans, whose artifact
    *  went terminal by another path (the /api/decisions no-record fallback, a
    *  straight Approve on the card) and which the human can no longer act on.
-   *  Q3 — the status SET itself no longer lives here. It was expressed THREE
-   *  times (here; CLOSED_ARTIFACT_STATUSES in session-scan.ts; and — disagreeing
-   *  on `revised` — check_feedback's `openArtifactIds`, which read openness as
-   *  `draft || reviewing` and so DROPPED a pending decision this method kept).
-   *  All three now call the ONE shared `isClosedArtifactStatus`
-   *  (@deeppairing/shared). The session-scan parity pin in
-   *  list-all-decisions.test.ts stays as the guard. */
+   *  Q3 — the status SET itself no longer lives here. THIS QUESTION ("can the
+   *  human still act on the record hanging off this artifact?") was expressed
+   *  three times (here; CLOSED_ARTIFACT_STATUSES in session-scan.ts; and —
+   *  disagreeing on `revised` — check_feedback's `openArtifactIds`, which read
+   *  openness as `draft || reviewing` and so DROPPED a pending decision this
+   *  method kept). Those three now call the ONE shared `isClosedArtifactStatus`
+   *  (@deeppairing/shared); the session-scan parity pin in
+   *  list-all-decisions.test.ts stays as the guard.
+   *
+   *  Q3 review (LOW 11) — scoped claim, deliberately. `draft || reviewing` also
+   *  appears in resolveDecision above, and that one is a DIFFERENT semantic —
+   *  "may I advance this artifact to approved right now?", which excludes
+   *  `revised` on purpose. It is not a fourth copy and must not be folded in;
+   *  see the note at that call site. */
   isArtifactClosed(artifactId) {
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (!art) return false;

@@ -32406,7 +32406,7 @@ ${formattedDecisions.join("\n")}`);
       verdict: verdict.verdict,
       ...verdict.feedback ? { feedback: verdict.feedback } : {}
     });
-    if (verdict.verdict !== "approved") {
+    if (verdict.verdict !== "approved" && !isClosedArtifactStatus(a.status)) {
       sentBackPlans.push({ id: a.id, title: a.title, verdict: verdict.verdict });
     }
     if (!ctx.state.reportedPlanVerdicts.has(a.id)) {
@@ -32423,7 +32423,10 @@ ${reviewedPlans.join("\n")}`);
     const { previousStatus, at } = deriveTransition(a);
     return { id: a.id, type: a.type, title: a.title, status: a.status, previousStatus, at };
   });
-  const sentBackArtifacts = changed.filter((a) => a.status === "revised");
+  const sentBackById = /* @__PURE__ */ new Map();
+  for (const a of postWakeArtifacts) if (a.status === "revised") sentBackById.set(a.id, a);
+  for (const a of changed) if (a.status === "revised") sentBackById.set(a.id, a);
+  const sentBackArtifacts = Array.from(sentBackById.values());
   if (changed.length > 0) {
     await store.acknowledgeStatusChanges(changed.map((a) => a.id));
     const lines = structuredStatusChanges.map((s) => {
@@ -32525,8 +32528,10 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
   const blockingClauses = [];
   const advisoryClauses = [];
   let baseClause = null;
+  let safetyClause = null;
   if (freshlyRejected.length > 0) {
     baseClause = `Do NOT apply \u2014 the human REJECTED ${freshlyRejected.map((a) => `"${a.title}"`).join(", ")}. Revise the approach or propose an alternative.`;
+    safetyClause = baseClause;
   } else if (pendingArts.some((a) => a.type === "code_change")) {
     baseClause = "Wait for the code change review before applying the edit.";
   } else if (pendingArts.some((a) => a.type === "changeset")) {
@@ -32541,8 +32546,11 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
     baseClause = "Wait for findings review before proposing solutions.";
   } else if (pendingArts.some((a) => a.type === "debrief")) {
     baseClause = "The debrief is presented \u2014 the human is reading it. Answer any questions they raise, then continue polling.";
-  } else if (pendingArts.some((a) => a.type === "explainer")) {
-    baseClause = "The explainer is presented \u2014 the human is reading the walk-through. Answer any questions they raise, then continue polling.";
+  }
+  if (structuredSuggestions.length > 0) {
+    blockingClauses.push(
+      `Respond to the ${structuredSuggestions.length} suggested edit${structuredSuggestions.length === 1 ? "" : "s"} below (answer_question with suggestionState "applied" + appliedInVersion, or "countered") \u2014 an unanswered suggestion stays PENDING in the UI as visible debt.`
+    );
   }
   if (sentBackArtifacts.length > 0) {
     const named = sentBackArtifacts.map((a) => `"${a.title}" (${a.type})`).join(", ");
@@ -32588,6 +32596,11 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
   if (openQuestionCount > 0) {
     leadingClauses.unshift(`Answer the ${openQuestionCount} open question${openQuestionCount === 1 ? "" : "s"} first (reply with answer_question).`);
   }
+  if (sessionMessages.length > 0) {
+    leadingClauses.unshift(
+      `The human sent ${sessionMessages.length === 1 ? "a directive" : `${sessionMessages.length} directives`} (\u{1F3AF} above) \u2014 re-read ${sessionMessages.length === 1 ? "it" : "them"} and adjust your approach before anything else.`
+    );
+  }
   const orderedClauses = [
     ...leadingClauses,
     ...baseClause ? [baseClause] : [],
@@ -32595,7 +32608,17 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
     ...advisoryClauses
   ];
   const hasBlocking = leadingClauses.length > 0 || baseClause !== null || blockingClauses.length > 0;
-  const suggestedAction = hasBlocking ? orderedClauses.join(" ") : ["You may proceed with implementation.", ...advisoryClauses].join(" ");
+  const SUGGESTION_CLAUSE_CAP = 3;
+  let cappedClauses = orderedClauses;
+  if (orderedClauses.length > SUGGESTION_CLAUSE_CAP) {
+    let kept = orderedClauses.slice(0, SUGGESTION_CLAUSE_CAP);
+    if (safetyClause && !kept.includes(safetyClause)) {
+      kept = [...orderedClauses.slice(0, SUGGESTION_CLAUSE_CAP - 1), safetyClause];
+    }
+    const remaining = orderedClauses.length - kept.length;
+    cappedClauses = remaining > 0 ? [...kept, `(+${remaining} more below.)`] : kept;
+  }
+  const suggestedAction = hasBlocking ? cappedClauses.join(" ") : ["You may proceed with implementation.", ...advisoryClauses].join(" ");
   parts.unshift(`Session: ${totalArtifacts} artifact${totalArtifacts !== 1 ? "s" : ""} (${approvedCount} approved, ${pendingCount} pending) | ${totalComments} new comment${totalComments !== 1 ? "s" : ""} | ${autonomyLabel} mode | deepPairing v${SERVER_VERSION}${oldestPendingAge ? `
 Oldest pending: ${oldestPendingAge}` : ""}
 Suggested action: ${suggestedAction}`);
@@ -32603,7 +32626,7 @@ Suggested action: ${suggestedAction}`);
   // should fix + re-present, not sit in 'waiting'.
   renderFailures.length > 0 || // G1 (#198b) — a pending human request is something to act on (serve it).
   pendingRequests.length > 0;
-  const status = hasActionableFeedback ? "feedback" : pendingCount > 0 ? "waiting" : "proceed";
+  const status = hasActionableFeedback ? "feedback" : hasBlocking || pendingCount > 0 ? "waiting" : "proceed";
   const portNote = portRecoveryNote();
   const structuredContent = {
     status,

@@ -20,12 +20,24 @@ export type CheckFeedbackGolden = { prose: string; struct: string };
 
 export const CHECK_FEEDBACK_GOLDENS: Record<string, CheckFeedbackGolden> = {
   healthy_proceed: { prose: "8b519f1b41c0dd6d65a0a092bd981e011cb48e90d827b736ce6ad78a6a6ccf48", struct: "e2bd0b9559c88cb3a4a6bb303b4b3ce005fdc806e14b52880423527d5ec83736" },
-  session_directive_plus_secret_comment: { prose: "3c067c69713b33cc6da5303c3ed93b500c65017ee3aacc48638e65a30acd536c", struct: "81948426b3d8f4463ba562c3a32e4fe7018fdac8b3260df8400b5f1925e75327" },
+  // Q3 review (MED 5) — DELIBERATE re-pin, PROSE only. The 🎯 session-directive
+  // lane now contributes a clause ("The human sent a directive … adjust your
+  // approach before anything else"), leading the suggestion. Executed
+  // counter-example that forced it: a directive of "stop — do not touch auth"
+  // arrived beside "You may proceed with implementation." A __session__ comment
+  // drains after one poll, so that payload was the only chance to say it.
+  session_directive_plus_secret_comment: { prose: "2475ecbe579112b9d90c83a3161f59cdb55310996a7056e680190f0cbcd2a5df", struct: "81948426b3d8f4463ba562c3a32e4fe7018fdac8b3260df8400b5f1925e75327" },
   spec_questions_and_comments_lanes: { prose: "7724d7ea67ed5e897a3381026641f3f03862fbf908a5f8698fb1054b0401fd74", struct: "970844716010909a4d1ca4db8dc5f01bf0d8b9e4615f39695a1aadba10d54629" },
   changeset_delline_crossfile_review: { prose: "177b5f2e9d46cbaf13a578d0a3a456e09072d3fc997c57db57873e48282236f6", struct: "47cdd41db83a4f65bfddb273f4fa15d870c7bb1d0244b7be30c3e0487a85ca5e" },
   decision_grain_lanes: { prose: "47142a2cbf1bc293b48a63875d81db0080ec1822a4e5c2ec95ea32b5a9030819", struct: "280ce1a9f29e3188a685a2e5c04baed19c94285b4366d718065aa3109c80fd4b" },
   decision_region_optionId: { prose: "162a7e68d53e4e7e2e7f1ba22827cec76f4dc9679447b2914cdf42dd3a0c2bbd", struct: "76cd0c12cdd435c9c222617bcb371b44e36d3fc5a5ce441d44dbb7d7dfbb9754" },
-  suggestion_state_machine: { prose: "39ebef78697961ab901ba3dea151657bbf7b6dfd9fafdc0df92d570ba06af62f", struct: "d20ab0f846f419450309357d1b30844e32a40b3f03e1e105ccdac5aabd10db08" },
+  // Q3 review (Q3-2) — DELIBERATE re-pin, PROSE only. The 🔧 suggested-edits
+  // lane now contributes a blocking clause. It is the strongest obligation any
+  // body block states ("you MUST respond to each … visible debt") and it had no
+  // clause at all; executed, the INSISTED case printed that paragraph beside
+  // "You may proceed with implementation." Like the directive it drains after
+  // one poll, so the ONE payload carrying it was the contradicting one.
+  suggestion_state_machine: { prose: "951f6666d4a2ea7333ba63e919b672161349e573d89a591296e2cc2de3432133", struct: "d20ab0f846f419450309357d1b30844e32a40b3f03e1e105ccdac5aabd10db08" },
   // Q3 — DELIBERATE re-pin, PROSE only (the struct drops `suggestedAction` on a
   // busy poll, so it is untouched). This scenario is the round-12
   // self-contradiction in miniature: an approved changeset carrying a late

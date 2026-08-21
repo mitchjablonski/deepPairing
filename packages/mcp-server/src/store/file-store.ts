@@ -1254,6 +1254,14 @@ export class FileStore implements IStore {
     // never clobber one already closed (retracted/superseded/…) or already
     // approved. updateArtifactStatus schedules the SAME debounced flush, so the
     // response and the status persist together (atomic to any on-disk reader).
+    // Q3 review (LOW 11) — this `draft || reviewing` test is NOT the closed-set
+    // predicate wearing a different hat, and must not be "unified" into it. The
+    // closed set answers "can the human still act on this record?"; this answers
+    // the narrower "may I ADVANCE this artifact to approved right now?", for
+    // which `revised` is deliberately excluded — a sent-back artifact is still
+    // OPEN (isClosedArtifactStatus says so, correctly) but resolving a decision
+    // must not silently overwrite the human's request-changes verdict with an
+    // approval. Different question, different answer, on purpose.
     const backing = this.artifacts.find((a) => a.id === dec.artifactId);
     if (backing && (backing.status === "draft" || backing.status === "reviewing")) {
       this.updateArtifactStatus(dec.artifactId, "approved", "ui_decision_resolve");
@@ -1285,13 +1293,20 @@ export class FileStore implements IStore {
    *  legitimately-open is dropped here — only genuine orphans, whose artifact
    *  went terminal by another path (the /api/decisions no-record fallback, a
    *  straight Approve on the card) and which the human can no longer act on.
-   *  Q3 — the status SET itself no longer lives here. It was expressed THREE
-   *  times (here; CLOSED_ARTIFACT_STATUSES in session-scan.ts; and — disagreeing
-   *  on `revised` — check_feedback's `openArtifactIds`, which read openness as
-   *  `draft || reviewing` and so DROPPED a pending decision this method kept).
-   *  All three now call the ONE shared `isClosedArtifactStatus`
-   *  (@deeppairing/shared). The session-scan parity pin in
-   *  list-all-decisions.test.ts stays as the guard. */
+   *  Q3 — the status SET itself no longer lives here. THIS QUESTION ("can the
+   *  human still act on the record hanging off this artifact?") was expressed
+   *  three times (here; CLOSED_ARTIFACT_STATUSES in session-scan.ts; and —
+   *  disagreeing on `revised` — check_feedback's `openArtifactIds`, which read
+   *  openness as `draft || reviewing` and so DROPPED a pending decision this
+   *  method kept). Those three now call the ONE shared `isClosedArtifactStatus`
+   *  (@deeppairing/shared); the session-scan parity pin in
+   *  list-all-decisions.test.ts stays as the guard.
+   *
+   *  Q3 review (LOW 11) — scoped claim, deliberately. `draft || reviewing` also
+   *  appears in resolveDecision above, and that one is a DIFFERENT semantic —
+   *  "may I advance this artifact to approved right now?", which excludes
+   *  `revised` on purpose. It is not a fourth copy and must not be folded in;
+   *  see the note at that call site. */
   private isArtifactClosed(artifactId: string): boolean {
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (!art) return false;

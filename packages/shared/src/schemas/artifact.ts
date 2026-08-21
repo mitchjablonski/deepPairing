@@ -81,8 +81,15 @@ export function isLateCommentableStatus(status: ArtifactStatus | string): boolea
  *      `draft || reviewing` and therefore DROPPED a pending decision whose
  *      backing artifact had been SENT BACK (`revised`), while the store that
  *      produced the record still considered it live. One payload, two answers.
- * All three now import this. Add a status here only when the human genuinely
- * can never act on it again.
+ * All three consumers of THAT question import this. Add a status here only when
+ * the human genuinely can never act on it again.
+ *
+ * Q3 review — the claim is scoped ON PURPOSE. `draft || reviewing` also appears
+ * in FileStore.resolveDecision, and that is NOT a fourth copy of this predicate:
+ * it answers "may I advance this artifact to approved right now?", which
+ * excludes `revised` deliberately (a sent-back artifact is open, but resolving a
+ * decision must not overwrite the human's request-changes verdict). Same
+ * literal, different question — do not unify it into this one.
  *
  * NOT closed, deliberately: "draft" (the open review lane), "revised" (sent
  * back — the successor work is still owed, so the record stays live) and
