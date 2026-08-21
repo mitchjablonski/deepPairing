@@ -27368,7 +27368,23 @@ var FileStore = class _FileStore {
   recordPostedReview(record2) {
     this.postedReviews = appendPostedReview(this.projectRoot, this.sessionId, record2);
   }
+  /**
+   * R1 (#279) F1 — RE-READ the sidecar, don't trust the cache.
+   *
+   * The idempotency store is shared by TWO processes with TWO separate
+   * FileStore instances over the same directory: the daemon holds a long-lived
+   * per-session FileStore (daemon/routes.ts), while `deeppairing post-pr-review`
+   * runs in its own process and constructs its own. When the CLI door posts, it
+   * appends to posted-reviews.json — but the daemon's in-memory `postedReviews`,
+   * loaded once at hydration, never learns of it, so a subsequent MCP post to
+   * the same PR would be authorized as a first post (a duplicate). The sidecar
+   * IS the shared source of truth the design intends; this makes the read honour
+   * that. Cheap (one small JSON read per authorize), and fail-open: a missing or
+   * unreadable file returns [], which can only ALLOW a duplicate, never refuse a
+   * legitimate post — while the verdict checks it feeds stay fail-closed.
+   */
   getPostedReviews() {
+    this.postedReviews = readPostedReviews(this.projectRoot, this.sessionId);
     return this.postedReviews;
   }
   // --- Ledger digest (BB4) ---
@@ -27496,7 +27512,14 @@ var FileStore = class _FileStore {
       // doors (the MCP tool via getFullState, the CLI via loadSession) see the
       // same "already posted" fact with no extra round-trip. Spread-when-present
       // keeps the payload byte-identical for every session that never posted.
-      ...this.postedReviews.length > 0 ? { postedReviews: this.postedReviews } : {},
+      // Read through getPostedReviews (NOT the cached field): the daemon holds
+      // one long-lived FileStore per session, so a post made by the CLI's OWN
+      // separate FileStore lands in the sidecar the daemon's in-memory copy
+      // never saw — getPostedReviews re-reads it (R1 F1 cross-door fix).
+      ...(() => {
+        const pr = this.getPostedReviews();
+        return pr.length > 0 ? { postedReviews: pr } : {};
+      })(),
       autonomyLevel: this.autonomyLevel,
       detailDensity: this.detailDensity,
       // Q2 — the cross-project publish opt-in rides full-state hydration so

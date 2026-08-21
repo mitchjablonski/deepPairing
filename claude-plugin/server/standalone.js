@@ -33430,12 +33430,18 @@ function normalizeEvent(raw) {
   if (raw === void 0 || raw === null || typeof raw === "string" && raw.trim() === "") {
     return { ok: true, event: "COMMENT" };
   }
-  const normalized = String(raw).trim().toUpperCase();
+  if (typeof raw !== "string") {
+    return {
+      ok: false,
+      reason: `Refusing to post: the review event must be a string (one of COMMENT, REQUEST_CHANGES, APPROVE), not a ${Array.isArray(raw) ? "array" : typeof raw}. Pass the event as a plain string.`
+    };
+  }
+  const normalized = raw.trim().toUpperCase();
   const match = ALLOWED_EVENTS.find((e) => e === normalized);
   if (!match) {
     return {
       ok: false,
-      reason: `Refusing to post: "${String(raw)}" is not a review event. GitHub reviews are one of COMMENT, REQUEST_CHANGES, APPROVE \u2014 and each means something different on someone else's PR, so this is not guessed at. Re-issue the call with the one you meant (REQUEST_CHANGES only when a surviving finding is high or critical; APPROVE only when your pair approved the PR changeset).`
+      reason: `Refusing to post: "${raw}" is not a review event. GitHub reviews are one of COMMENT, REQUEST_CHANGES, APPROVE \u2014 and each means something different on someone else's PR, so this is not guessed at. Re-issue the call with the one you meant (REQUEST_CHANGES only when a surviving finding is high or critical; APPROVE only when your pair approved the PR changeset).`
     };
   }
   return { ok: true, event: match };
