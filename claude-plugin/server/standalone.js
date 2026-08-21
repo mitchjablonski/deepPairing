@@ -25808,6 +25808,23 @@ var CLOSED_ARTIFACT_STATUSES = /* @__PURE__ */ new Set([
 function isClosedArtifactStatus(status) {
   return status !== void 0 && CLOSED_ARTIFACT_STATUSES.has(status);
 }
+var NOT_SHIPPED_ARTIFACT_STATUSES = /* @__PURE__ */ new Set([
+  "rejected",
+  "retracted",
+  "superseded",
+  "obsolete"
+]);
+function isNotShippedStatus(status) {
+  return status !== void 0 && NOT_SHIPPED_ARTIFACT_STATUSES.has(status);
+}
+var NEVER_APPROVED_ARTIFACT_STATUSES = /* @__PURE__ */ new Set([
+  "draft",
+  "reviewing",
+  "revised"
+]);
+function isNeverApprovedStatus(status) {
+  return status !== void 0 && NEVER_APPROVED_ARTIFACT_STATUSES.has(status);
+}
 var ArtifactStatusHistoryEntrySchema = external_exports.object({
   status: ArtifactStatusSchema,
   at: external_exports.string().datetime()
@@ -29967,7 +29984,7 @@ function formatSessionMarkdown(state, format = "full") {
   }
 }
 function isShippedArtifact(a) {
-  return a.status !== "superseded" && a.status !== "rejected" && a.status !== "retracted";
+  return !isNotShippedStatus(a.status);
 }
 function rejectionNote(a) {
   if (a.status !== "rejected" && a.status !== "retracted") return null;
@@ -30824,7 +30841,8 @@ function scanForSecrets(text) {
   }
   return matches;
 }
-function scanContentForSecrets(content, maxDepth = 6) {
+var DEFAULT_SCAN_DEPTH = 14;
+function scanContentForSecrets(content, maxDepth = DEFAULT_SCAN_DEPTH) {
   const seen = /* @__PURE__ */ new Set();
   const out = [];
   const walk = (value, fieldPath, depth) => {
@@ -30873,8 +30891,28 @@ function sanitizePath(raw, projectRoot2) {
     if (root && normalized === root) return ".";
   }
   p = normalized;
-  p = p.replace(/^.*?\/(?:home|Users)\/[^/]+\//i, "~/");
+  p = p.replace(HOME_PREFIX, "~/");
   return p;
+}
+var HOME_PREFIX = /^(?:[A-Za-z]:)?(?:\/(?:mnt|cygdrive)\/[A-Za-z])?\/(?:home|Users)\/[^/]+\//i;
+var HOME_PREFIX_IN_PROSE = /(?<![\w~.\-/])(?:[A-Za-z]:)?(?:\/(?:mnt|cygdrive)\/[A-Za-z])?\/(?:home|Users)\/[^/\s"'`)\]]+\//gi;
+var activeProjectRoot;
+function scrubProse(text, projectRoot2 = activeProjectRoot) {
+  let s = typeof text === "string" ? text : text == null ? "" : String(text);
+  if (!s) return s;
+  if (projectRoot2) {
+    const root = projectRoot2.replace(/\\/g, "/").replace(/\/+$/, "");
+    if (root) {
+      if (s.includes(root + "/")) s = s.split(root + "/").join("");
+      if (s.includes(root)) s = s.split(root).join(".");
+      const win = root.replace(/\//g, "\\");
+      if (win !== root && s.includes(win + "\\")) s = s.split(win + "\\").join("");
+    }
+  }
+  return s.replace(HOME_PREFIX_IN_PROSE, "~/");
+}
+function escText(value) {
+  return esc2(scrubProse(value));
 }
 function fmtTimestamp(iso) {
   if (!iso) return "";
@@ -30894,25 +30932,74 @@ function plural(n, one, many = one + "s") {
 var FENCE_OPEN = /^\s*(?:`{3,}|~{3,})\s*([^\s`~]*)/;
 var FENCE_CLOSE = /^\s*(?:`{3,}|~{3,})\s*$/;
 var SAFE_URL = /^(?:https?:\/\/|mailto:|#|\/(?!\/)|\.{1,2}\/)/i;
+var MAX_LINK_TEXT = 512;
+var MAX_LINK_URL = 2048;
+function renderLinks(out) {
+  if (out.indexOf("](") < 0) return out;
+  const parts = [];
+  let pos = 0;
+  while (pos < out.length) {
+    const open = out.indexOf("[", pos);
+    if (open < 0) break;
+    const close = out.indexOf("]", open + 1);
+    if (close < 0) break;
+    if (close - open - 1 > MAX_LINK_TEXT) {
+      const jump = Math.max(open + 1, close - MAX_LINK_TEXT);
+      parts.push(out.slice(pos, jump));
+      pos = jump;
+      continue;
+    }
+    if (out.charCodeAt(close + 1) !== 40) {
+      parts.push(out.slice(pos, close + 1));
+      pos = close + 1;
+      continue;
+    }
+    const urlEnd = out.indexOf(")", close + 2);
+    if (urlEnd < 0 || urlEnd - close - 2 > MAX_LINK_URL) {
+      parts.push(out.slice(pos, close + 1));
+      pos = close + 1;
+      continue;
+    }
+    const label = out.slice(open + 1, close);
+    const url2 = out.slice(close + 2, urlEnd);
+    if (url2.length === 0 || /\s/.test(url2)) {
+      parts.push(out.slice(pos, close + 1));
+      pos = close + 1;
+      continue;
+    }
+    const raw = url2.replace(/&amp;/g, "&");
+    parts.push(out.slice(pos, open));
+    parts.push(
+      SAFE_URL.test(raw) ? `<a href="${esc2(raw)}" rel="noopener noreferrer">${label}</a>` : label
+    );
+    pos = urlEnd + 1;
+  }
+  parts.push(out.slice(pos));
+  return parts.join("");
+}
 function renderInline(text) {
-  let out = esc2(text);
+  let out = escText(text);
   const codeSpans = [];
   out = out.replace(/`([^`]+)`/g, (_m, code) => {
     codeSpans.push(`<code>${code}</code>`);
     return `\0CODE${codeSpans.length - 1}\0`;
   });
-  out = out.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, label, url2) => {
-    const raw = url2.replace(/&amp;/g, "&");
-    if (!SAFE_URL.test(raw)) return label;
-    return `<a href="${esc2(raw)}" rel="noopener noreferrer">${label}</a>`;
-  });
+  out = renderLinks(out);
   out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   out = out.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
   out = out.replace(/(^|[^_\w])_([^_\n]+)_(?![\w_])/g, "$1<em>$2</em>");
   out = out.replace(/\u0000CODE(\d+)\u0000/g, (_m, i) => codeSpans[Number(i)] ?? "");
   return out;
 }
-function renderMarkdown(md, baseHeading = 3, includeCode = true) {
+function renderMarkdown(md, baseHeading = 3, includeCode = true, depth = 0) {
+  try {
+    return renderMarkdownBlocks(md, baseHeading, includeCode, depth);
+  } catch {
+    return `<p class="render-fallback">${escText(md)}</p>`;
+  }
+}
+var MAX_QUOTE_DEPTH = 8;
+function renderMarkdownBlocks(md, baseHeading, includeCode, depth) {
   const lines = String(md ?? "").replace(/\r\n?/g, "\n").split("\n");
   const at = (k) => lines[k] ?? "";
   const out = [];
@@ -30960,7 +31047,13 @@ function renderMarkdown(md, baseHeading = 3, includeCode = true) {
         body.push(at(i).replace(/^\s*>\s?/, ""));
         i++;
       }
-      out.push(`<blockquote>${renderMarkdown(body.join("\n"), baseHeading, includeCode)}</blockquote>`);
+      if (depth >= MAX_QUOTE_DEPTH) {
+        out.push(`<blockquote class="quote-deep"><p>${escText(body.join("\n"))}</p></blockquote>`);
+        continue;
+      }
+      out.push(
+        `<blockquote>${renderMarkdown(body.join("\n"), baseHeading, includeCode, depth + 1)}</blockquote>`
+      );
       continue;
     }
     if (/^\s*[-*+]\s+/.test(line)) {
@@ -30994,9 +31087,28 @@ function renderMarkdown(md, baseHeading = 3, includeCode = true) {
   }
   return out.join("\n");
 }
+var SOFT_PAGE_CAP_BYTES = 5 * 1024 * 1024;
+var activeBudget;
+function budgetHasRoom() {
+  if (!activeBudget) return true;
+  if (activeBudget.remaining <= 0) {
+    activeBudget.truncated++;
+    return false;
+  }
+  return true;
+}
+function spendBudget(emitted) {
+  if (activeBudget) activeBudget.remaining -= emitted;
+}
+function chargeBudget(cost) {
+  if (!budgetHasRoom()) return false;
+  spendBudget(cost);
+  return true;
+}
+var SIZE_TRUNCATED_NOTE = `<p class="redacted">Truncated for size \u2014 this page had already reached its ${Math.round(SOFT_PAGE_CAP_BYTES / (1024 * 1024))} MB budget when this block was reached. The full record is in the session itself.</p>`;
 function codeBlock(text, opts = {}) {
   const { language, maxLines = MAX_CODE_LINES, includeCode = true, label } = opts;
-  const head = label ? `<p class="code-label">${esc2(label)}</p>` : "";
+  const head = label ? `<p class="code-label">${escText(label)}</p>` : "";
   if (includeCode === false) {
     const lineCount = String(text ?? "").split("\n").length;
     return `${head}<p class="redacted">Code omitted from this export (${plural(lineCount, "line")}).</p>`;
@@ -31004,7 +31116,8 @@ function codeBlock(text, opts = {}) {
   const all = String(text ?? "").replace(/\r\n?/g, "\n").split("\n");
   const shown = all.slice(0, maxLines);
   const omitted = all.length - shown.length;
-  const body = esc2(shown.join("\n"));
+  const body = escText(shown.join("\n"));
+  if (!chargeBudget(body.length)) return `${head}${SIZE_TRUNCATED_NOTE}`;
   const trunc = omitted > 0 ? `
 <span class="truncated">\u2026 truncated \u2014 ${plural(omitted, "more line")} not shown</span>` : "";
   const langAttr = language ? ` data-language="${esc2(language)}"` : "";
@@ -31032,12 +31145,15 @@ function diffBlock(file2, includeCode, projectRoot2) {
   if (!includeCode) {
     return `<div class="file">${header}<p class="redacted">Diff omitted from this export.</p></div>`;
   }
+  if (!budgetHasRoom()) {
+    return `<div class="file">${header}${SIZE_TRUNCATED_NOTE}</div>`;
+  }
   const rows = [];
   let emitted = 0;
   let dropped = 0;
   for (const hunk of hunks) {
     if (hunk?.header) {
-      rows.push(`<div class="dl dl--hunk">${esc2(hunk.header)}</div>`);
+      rows.push(`<div class="dl dl--hunk">${escText(hunk.header)}</div>`);
     }
     for (const line of hunk?.lines ?? []) {
       if (emitted >= MAX_DIFF_LINES_PER_FILE) {
@@ -31048,7 +31164,7 @@ function diffBlock(file2, includeCode, projectRoot2) {
       const sign = kind === "add" ? "+" : kind === "del" ? "-" : " ";
       const num2 = kind === "del" ? line?.oldLine : line?.newLine;
       rows.push(
-        `<div class="dl dl--${kind}"><span class="ln">${num2 == null ? "" : esc2(num2)}</span><span class="sign">${sign}</span><span class="src">${esc2(line?.content ?? "")}</span></div>`
+        `<div class="dl dl--${kind}"><span class="ln">${num2 == null ? "" : esc2(num2)}</span><span class="sign">${sign}</span><span class="src">${escText(line?.content ?? "")}</span></div>`
       );
       emitted++;
     }
@@ -31057,8 +31173,62 @@ function diffBlock(file2, includeCode, projectRoot2) {
     rows.push(`<div class="dl dl--trunc">\u2026 truncated \u2014 ${plural(dropped, "more diff line")} not shown</div>`);
   }
   const diff = `<div class="diff">${rows.join("")}</div>`;
+  spendBudget(diff.length);
   const body = emitted > DIFF_COLLAPSE_THRESHOLD ? `<details><summary>Show the diff (${plural(emitted, "line")})</summary>${diff}</details>` : diff;
   return `<div class="file">${header}${body}</div>`;
+}
+function visualsBlock(visuals, ctx) {
+  if (!Array.isArray(visuals) || visuals.length === 0) return "";
+  const parts = [];
+  for (const raw of visuals) {
+    if (!raw || typeof raw !== "object") continue;
+    const v = raw;
+    const title = v.title ? escText(v.title) : "";
+    const caption = v.caption ? `<p class="visual-caption">${renderInline(v.caption)}</p>` : "";
+    let body = "";
+    let kindLabel = "";
+    switch (v.kind) {
+      case "diagram": {
+        kindLabel = "Diagram";
+        const src = String(v.source ?? "").trim();
+        body = src ? `<p class="visual-note">A diagram the pair drew and discussed. It is drawn in deepPairing; this page carries the source it was drawn from.</p><details class="visual-source"><summary>Show the diagram source (Mermaid)</summary><pre class="code" data-language="mermaid"><code>${escText(src)}</code></pre></details>` : `<p class="visual-note">A diagram was attached here, but its source was not recorded.</p>`;
+        break;
+      }
+      case "file_map": {
+        kindLabel = "File map";
+        const rows = (v.files ?? []).map((f) => {
+          const p = sanitizePath(f?.path, ctx.projectRoot);
+          if (!p) return "";
+          const change = f?.change ? `<span class="chip chip--${esc2(f.change)}">${esc2(f.change)}</span>` : "";
+          const note = f?.note ? ` \u2014 ${renderInline(f.note)}` : "";
+          return `<li><code>${esc2(p)}</code>${change}${note}</li>`;
+        }).filter(Boolean).join("");
+        body = rows ? `<ul class="visual-files">${rows}</ul>` : "";
+        break;
+      }
+      case "annotated_code": {
+        kindLabel = "Annotated code";
+        const p = sanitizePath(v.filePath, ctx.projectRoot);
+        body = (p ? `<p class="anchor"><code>${esc2(p)}</code></p>` : "") + codeBlock(v.code ?? "", {
+          language: v.language,
+          maxLines: MAX_SNIPPET_LINES,
+          includeCode: ctx.includeCode
+        }) + ((v.annotations ?? []).length ? `<ul class="visual-annotations">${(v.annotations ?? []).map((n) => `<li><code>line ${esc2(n?.line ?? "?")}</code> ${renderInline(n?.note ?? "")}</li>`).join("")}</ul>` : "");
+        break;
+      }
+      case "prototype":
+        kindLabel = "Prototype";
+        body = `<p class="visual-note">An interactive prototype was attached here. It is not embedded \u2014 this page deliberately runs no scripts and makes no requests \u2014 so view it in deepPairing.</p>`;
+        break;
+      default:
+        continue;
+    }
+    if (!body) continue;
+    parts.push(
+      `<div class="visual"><p class="visual-head"><span class="visual-kind">${esc2(kindLabel)}</span>` + (title ? ` ${title}` : "") + `</p>${caption}${body}</div>`
+    );
+  }
+  return parts.join("");
 }
 function evidenceBlock(evidence, includeCode, projectRoot2) {
   if (!Array.isArray(evidence)) {
@@ -31135,7 +31305,7 @@ function researchBody(a, ctx) {
     const sev = f.severity ? `<span class="chip chip--sev-${esc2(f.severity)}">${esc2(f.severity)} severity</span>` : "";
     const cat = f.category ? `<span class="chip">${esc2(f.category)}</span>` : "";
     parts.push(
-      `<div class="finding"><h4>${esc2(f.title ?? f.category ?? "Finding")}</h4><div class="chips">${sig}${sev}${cat}</div>` + renderMarkdown(f.detail ?? "", 5, ctx.includeCode) + evidenceBlock(f.evidence, ctx.includeCode, ctx.projectRoot) + (f.impact ? `<p class="kv"><span class="k">Impact</span> ${renderInline(f.impact)}</p>` : "") + (f.recommendation ? `<p class="kv"><span class="k">Recommendation</span> ${renderInline(f.recommendation)}</p>` : "") + `</div>`
+      `<div class="finding"><h4>${escText(f.title ?? f.category ?? "Finding")}</h4><div class="chips">${sig}${sev}${cat}</div>` + renderMarkdown(f.detail ?? "", 5, ctx.includeCode) + evidenceBlock(f.evidence, ctx.includeCode, ctx.projectRoot) + (f.impact ? `<p class="kv"><span class="k">Impact</span> ${renderInline(f.impact)}</p>` : "") + (f.recommendation ? `<p class="kv"><span class="k">Recommendation</span> ${renderInline(f.recommendation)}</p>` : "") + `</div>`
     );
   }
   for (const q of content.openQuestions ?? []) {
@@ -31160,6 +31330,7 @@ function specBody(a, ctx) {
     }
     parts.push(`</ul>`);
   }
+  parts.push(visualsBlock(content.visuals, ctx));
   if (content.design) parts.push(`<h4>Design</h4>${renderMarkdown(content.design, 5, ctx.includeCode)}`);
   if (content.tasks?.length) {
     parts.push(`<h4>Tasks</h4><ul>${content.tasks.map((t) => `<li>${renderInline(t.description)}</li>`).join("")}</ul>`);
@@ -31173,8 +31344,9 @@ function planBody(a, ctx) {
   const content = coercePlanContent(a.content);
   const parts = [];
   if (content.estimatedChanges != null && content.estimatedChanges !== "") {
-    parts.push(`<p class="kv"><span class="k">Estimated size</span> ${esc2(content.estimatedChanges)}</p>`);
+    parts.push(`<p class="kv"><span class="k">Estimated size</span> ${escText(content.estimatedChanges)}</p>`);
   }
+  parts.push(visualsBlock(content.visuals, ctx));
   parts.push(`<ol class="steps">`);
   for (const step of content.steps ?? []) {
     const files = Array.isArray(step.files) ? step.files.map((f) => sanitizePath(typeof f === "string" ? f : f.filePath, ctx.projectRoot)).filter(Boolean) : [];
@@ -31209,14 +31381,14 @@ function decisionBody(a, ctx) {
     const cons = (o.cons ?? []).map((p) => `<li>${renderInline(p)}</li>`).join("");
     const concept = o.concept?.name ? `<p class="concept">Pattern: <strong>${esc2(o.concept.name)}</strong>` + (o.concept.oneLineExplanation ? ` \u2014 ${renderInline(o.concept.oneLineExplanation)}` : "") + `</p>` : "";
     parts.push(
-      `<div class="option${chosen ? " option--chosen" : ""}"><div class="option-head"><h4>${esc2(o.title ?? o.id)}</h4>${badge}${rec}</div><div class="chips"><span class="chip">effort: ${esc2(o.effort ?? "?")}</span><span class="chip">risk: ${esc2(o.risk ?? "?")}</span></div>` + (o.description ? `<p>${renderInline(o.description)}</p>` : "") + concept + (pros ? `<p class="k">Pros</p><ul class="pros">${pros}</ul>` : "") + (cons ? `<p class="k">Cons</p><ul class="cons">${cons}</ul>` : "") + `</div>`
+      `<div class="option${chosen ? " option--chosen" : ""}"><div class="option-head"><h4>${escText(o.title ?? o.id)}</h4>${badge}${rec}</div><div class="chips"><span class="chip">effort: ${esc2(o.effort ?? "?")}</span><span class="chip">risk: ${esc2(o.risk ?? "?")}</span></div>` + (o.description ? `<p>${renderInline(o.description)}</p>` : "") + concept + visualsBlock(o.visuals, ctx) + (pros ? `<p class="k">Pros</p><ul class="pros">${pros}</ul>` : "") + (cons ? `<p class="k">Cons</p><ul class="cons">${cons}</ul>` : "") + `</div>`
     );
   }
   parts.push(`</div>`);
   if (record2?.response) {
     const chosenOption = (content.options ?? []).find((o) => o.id === chosenId);
     parts.push(
-      `<div class="verdict verdict--chosen"><strong>The human chose:</strong> ${esc2(chosenOption?.title ?? chosenId ?? "")}` + (record2.response.reasoning ? ` \u2014 \u201C${renderInline(record2.response.reasoning)}\u201D` : "") + `</div>`
+      `<div class="verdict verdict--chosen"><strong>The human chose:</strong> ${escText(chosenOption?.title ?? chosenId ?? "")}` + (record2.response.reasoning ? ` \u2014 \u201C${renderInline(record2.response.reasoning)}\u201D` : "") + `</div>`
     );
   } else {
     parts.push(`<p class="pending">No answer recorded for this fork.</p>`);
@@ -31253,7 +31425,9 @@ function changesetBody(a, ctx, ownComments) {
   const parts = [];
   if (content.summary) parts.push(renderMarkdown(content.summary, 4, ctx.includeCode));
   if (content.risks?.length) {
-    parts.push(`<div class="chips">${content.risks.map((r) => `<span class="chip chip--risk">${esc2(r)}</span>`).join("")}</div>`);
+    parts.push(
+      `<div class="chips chips--risk">${content.risks.map((r) => `<span class="chip chip--risk">${escText(String(r).replace(/`/g, ""))}</span>`).join("")}</div>`
+    );
   }
   for (const file2 of content.files ?? []) {
     const disposition = content.reviewState?.[file2.path];
@@ -31276,22 +31450,22 @@ function debriefBody(a, ctx) {
   if (content.summary) parts.push(renderMarkdown(content.summary, 4, ctx.includeCode));
   for (const s of content.sections ?? []) {
     parts.push(
-      `<div class="walk-section"><h4>${esc2(s.title)}</h4>` + (s.body ? renderMarkdown(s.body, 5, ctx.includeCode) : "") + (s.concepts ?? []).map((c) => `<p class="concept">Pattern: <strong>${esc2(c.name)}</strong>${c.oneLineExplanation ? ` \u2014 ${renderInline(c.oneLineExplanation)}` : ""}</p>`).join("") + evidenceBlock(s.evidence, ctx.includeCode, ctx.projectRoot) + `</div>`
+      `<div class="walk-section"><h4>${escText(s.title)}</h4>` + (s.body ? renderMarkdown(s.body, 5, ctx.includeCode) : "") + (s.concepts ?? []).map((c) => `<p class="concept">Pattern: <strong>${esc2(c.name)}</strong>${c.oneLineExplanation ? ` \u2014 ${renderInline(c.oneLineExplanation)}` : ""}</p>`).join("") + evidenceBlock(s.evidence, ctx.includeCode, ctx.projectRoot) + `</div>`
     );
   }
   if (content.decisionsMade?.length) {
     parts.push(
-      `<h4>Calls the agent made on its own</h4><ul>` + content.decisionsMade.map((d) => `<li><strong>${esc2(d.what)}</strong> \u2014 ${renderInline(d.why)}${d.alternative ? ` <em>(considered: ${esc2(d.alternative)})</em>` : ""}</li>`).join("") + `</ul>`
+      `<h4>Calls the agent made on its own</h4><ul>` + content.decisionsMade.map((d) => `<li><strong>${escText(d.what)}</strong> \u2014 ${renderInline(d.why)}${d.alternative ? ` <em>(considered: ${escText(d.alternative)})</em>` : ""}</li>`).join("") + `</ul>`
     );
   }
   if (content.needsYourEyes?.length) {
     parts.push(
-      `<div class="needs-eyes"><h4>Needs a human's eyes</h4><ul>` + content.needsYourEyes.map((n) => `<li><strong>${esc2(n.what)}</strong> \u2014 ${renderInline(n.why)}</li>`).join("") + `</ul></div>`
+      `<div class="needs-eyes"><h4>Needs a human's eyes</h4><ul>` + content.needsYourEyes.map((n) => `<li><strong>${escText(n.what)}</strong> \u2014 ${renderInline(n.why)}</li>`).join("") + `</ul></div>`
     );
   }
   if (content.deferred?.length) {
     parts.push(
-      `<h4>Deferred</h4><ul>` + content.deferred.map((d) => `<li><strong>${esc2(d.what)}</strong> \u2014 ${renderInline(d.why)}</li>`).join("") + `</ul>`
+      `<h4>Deferred</h4><ul>` + content.deferred.map((d) => `<li><strong>${escText(d.what)}</strong> \u2014 ${renderInline(d.why)}</li>`).join("") + `</ul>`
     );
   }
   if (content.openQuestions?.length) {
@@ -31305,7 +31479,7 @@ function explainerBody(a, ctx) {
   if (content.overview) parts.push(renderMarkdown(content.overview, 4, ctx.includeCode));
   (content.sections ?? []).forEach((s, i) => {
     parts.push(
-      `<div class="walk-section"><h4>${i + 1}. ${esc2(s.heading ?? "")}</h4>` + (s.body ? renderMarkdown(s.body, 5, ctx.includeCode) : "") + evidenceBlock(s.evidence, ctx.includeCode, ctx.projectRoot) + `</div>`
+      `<div class="walk-section"><h4>${i + 1}. ${escText(s.heading ?? "")}</h4>` + (s.body ? renderMarkdown(s.body, 5, ctx.includeCode) : "") + evidenceBlock(s.evidence, ctx.includeCode, ctx.projectRoot) + `</div>`
     );
   });
   return parts.join("");
@@ -31339,15 +31513,37 @@ function artifactBody(a, ctx, ownComments) {
       return `<p class="pending">This ${esc2(a.type)} has no renderer on the shareable page, so nothing is shown for it here \u2014 rather than something invented.</p>`;
   }
 }
-var NOT_SHIPPED = /* @__PURE__ */ new Set(["rejected", "retracted", "superseded", "obsolete"]);
+var NOT_SHIPPED = { has: (s) => isNotShippedStatus(s) };
+function unapprovedNote(status) {
+  if (!isNeverApprovedStatus(status)) return null;
+  switch (status) {
+    case "revised":
+      return {
+        badge: "sent back",
+        line: "not approved \u2014 the human asked for changes on this version, so it is not what stands. It is here because the discussion happened on it."
+      };
+    case "reviewing":
+      return {
+        badge: "under review",
+        line: "not approved \u2014 this was still under review when the page was exported. Nobody has signed off on it."
+      };
+    default:
+      return {
+        badge: "draft",
+        line: "not approved \u2014 this was still a draft when the page was exported. Nobody has signed off on it."
+      };
+  }
+}
 function verdictLine(a, state) {
+  const unapproved = unapprovedNote(a.status);
+  if (unapproved) return `<p class="verdict verdict--unapproved">${esc2(unapproved.line)}</p>`;
   if (!NOT_SHIPPED.has(a.status)) return "";
   const stances = state.sessionMemory?.rejectedApproaches ?? [];
   const match = stances.find(
     (r) => r.sourceArtifactId === a.id || r.description && r.description === a.title
   );
   const rawReason = match?.reason?.trim().replace(/[.!?]+$/, "");
-  const reason = rawReason ? ` \u2014 \u201C${esc2(rawReason)}\u201D` : "";
+  const reason = rawReason ? ` \u2014 \u201C${escText(rawReason)}\u201D` : "";
   switch (a.status) {
     case "rejected":
       return `<p class="verdict verdict--rejected">rejected: the human declined this${reason}. It is here for the record, not as part of what shipped.</p>`;
@@ -31365,14 +31561,19 @@ function beat(at, seq, html) {
 function artifactBeat(a, ctx, seq) {
   const own = (ctx.commentsByArtifact.get(a.id) ?? []).slice();
   const notShipped = NOT_SHIPPED.has(a.status);
-  const title = esc2(a.title || a.type);
+  const unapproved = unapprovedNote(a.status);
+  const title = escText(a.title || a.type);
   const heading = notShipped ? `<s>${title}</s>` : title;
   const version2 = a.version > 1 ? `<span class="chip">v${a.version}</span>` : "";
+  const unapprovedChip = unapproved ? `<span class="chip chip--unapproved">${esc2(unapproved.badge)}</span>` : "";
+  const external = externalSourceOf(a);
+  const externalBanner = external ? `<p class="external-note">External review \u2014 this is <strong>${esc2(prLabel(external))}</strong>, someone else's code read on this surface. Any verdict below was the reviewer's opinion, recorded locally; it did not land, merge or post anything unless it was posted to the PR separately.</p>` : "";
   const body = artifactBody(a, ctx, own);
+  const classes = `beat beat--artifact${notShipped ? " beat--not-shipped" : ""}${unapproved ? " beat--unapproved" : ""}${external ? " beat--external" : ""}`;
   return beat(
     a.createdAt,
     seq,
-    `<li class="beat beat--artifact${notShipped ? " beat--not-shipped" : ""}" id="artifact-${esc2(a.id)}"><div class="beat-head"><time>${esc2(fmtTimestamp(a.createdAt))}</time><span class="chip chip--type">${esc2(a.type)}</span>${version2}</div><h3>${heading}</h3>${verdictLine(a, ctx.state)}<div class="beat-body">${body}</div>` + threadHtml(own, ctx.includeCode, ctx.projectRoot) + `</li>`
+    `<li class="${classes}" id="artifact-${esc2(a.id)}"><div class="beat-head"><time>${esc2(fmtTimestamp(a.createdAt))}</time><span class="chip chip--type">${esc2(a.type)}</span>${version2}${unapprovedChip}${external ? `<span class="chip chip--external">external review</span>` : ""}</div><h3>${heading}</h3>${verdictLine(a, ctx.state)}${externalBanner}<div class="beat-body">${body}</div>` + threadHtml(own, ctx.includeCode, ctx.projectRoot) + `</li>`
   );
 }
 function statusBeat(event, seq) {
@@ -31381,17 +31582,17 @@ function statusBeat(event, seq) {
   return beat(
     event.at,
     seq,
-    `<li class="beat beat--status beat--${cls}"><time>${esc2(fmtTimestamp(event.at))}</time><span class="beat-line">${esc2(event.label)}</span></li>`
+    `<li class="beat beat--status beat--${cls}"><time>${esc2(fmtTimestamp(event.at))}</time><span class="beat-line">${escText(event.label)}</span></li>`
   );
 }
 function decisionBeat(event, seq) {
   const p = event.payload ?? {};
   const rejectedTitles = Array.isArray(p.rejectedTitles) ? p.rejectedTitles : [];
-  const rejected = rejectedTitles.length ? `<p class="not-taken">Not taken: ${rejectedTitles.map((t) => esc2(t)).join(", ")}</p>` : "";
+  const rejected = rejectedTitles.length ? `<p class="not-taken">Not taken: ${rejectedTitles.map((t) => escText(t)).join(", ")}</p>` : "";
   return beat(
     event.at,
     seq,
-    `<li class="beat beat--decided"><time>${esc2(fmtTimestamp(event.at))}</time><h3>Decided: ${esc2(p.chosenTitle ?? p.chosenOptionId ?? "")}</h3>` + (p.reasoning ? `<blockquote class="human-reason">${renderInline(String(p.reasoning))}</blockquote>` : "") + rejected + `</li>`
+    `<li class="beat beat--decided"><time>${esc2(fmtTimestamp(event.at))}</time><h3>Decided: ${escText(p.chosenTitle ?? p.chosenOptionId ?? "")}</h3>` + (p.reasoning ? `<blockquote class="human-reason">${renderInline(String(p.reasoning))}</blockquote>` : "") + rejected + `</li>`
   );
 }
 function planReviewBeat(event, seq) {
@@ -31415,7 +31616,7 @@ function stanceBeat(r, seq) {
   return beat(
     r.rejectedAt ?? "",
     seq,
-    `<li class="beat beat--gate"><time>${esc2(fmtTimestamp(r.rejectedAt))}</time><h3>${BLOCK_MARK}Rejected \u2014 and remembered: ${esc2(r.description)}</h3>` + reason + concept + `<p class="gate-note">From here on the agent is blocked from proposing this again.</p></li>`
+    `<li class="beat beat--gate"><time>${esc2(fmtTimestamp(r.rejectedAt))}</time><h3>${BLOCK_MARK}Rejected \u2014 and remembered: ${escText(r.description)}</h3>` + reason + concept + `<p class="gate-note">From here on the agent is blocked from proposing this again.</p></li>`
   );
 }
 function traceBeat(t, seq) {
@@ -31429,10 +31630,22 @@ function traceBeat(t, seq) {
   }
   const near = (t.nearMisses ?? []).filter((n) => n?.concept);
   if (near.length === 0) return null;
+  const globalNear = near.filter((n) => n.source === "global");
+  const localCount = t.consideredCount ?? 0;
+  let weighed;
+  if (localCount > 0 && globalNear.length > 0) {
+    weighed = `weighed ${plural(localCount, "stance")} recorded in this session, plus ${plural(globalNear.length, "more")} carried over from another project,`;
+  } else if (localCount > 0) {
+    weighed = `weighed ${plural(localCount, "recorded stance")}`;
+  } else if (globalNear.length > 0) {
+    weighed = `weighed ${plural(globalNear.length, "stance")} carried over from another project`;
+  } else {
+    weighed = "weighed the stances on record";
+  }
   return beat(
     t.at ?? "",
     seq,
-    `<li class="beat beat--near"><time>${esc2(fmtTimestamp(t.at))}</time><span class="beat-line">The gate weighed ${plural(t.consideredCount ?? 0, "recorded stance")} before this and let it through \u2014 nearest call: ${near.map((n) => `<code>${esc2(n.concept)}</code>`).join(", ")}.</span></li>`
+    `<li class="beat beat--near"><time>${esc2(fmtTimestamp(t.at))}</time><span class="beat-line">The gate ${weighed} before this and let it through \u2014 nearest call: ${near.map((n) => `<code>${esc2(n.concept)}</code>`).join(", ")}.</span></li>`
   );
 }
 function guardrailBeat(f, seq) {
@@ -31446,6 +31659,48 @@ function guardrailBeat(f, seq) {
     `<li class="beat beat--guardrail"><time>${esc2(fmtTimestamp(f.at))}</time><h3>${SHIELD_MARK}Guardrail ask</h3><p>The hook stopped the run because the agent was about to touch <strong>${esc2(category)}</strong> work \u2014 the human had to confirm before it continued.</p></li>`
   );
 }
+function externalSourceOf(a) {
+  if (a.type !== "changeset") return null;
+  const content = a.content;
+  if (!content || typeof content !== "object") return null;
+  if (content.reviewIntent !== "external") return null;
+  const src = content.source;
+  if (!src || typeof src !== "object") return {};
+  const s = src;
+  return {
+    number: typeof s.number === "number" ? s.number : void 0,
+    url: typeof s.url === "string" ? s.url : void 0,
+    headRef: typeof s.headRef === "string" ? s.headRef : void 0,
+    baseRef: typeof s.baseRef === "string" ? s.baseRef : void 0,
+    author: typeof s.author === "string" ? s.author : void 0
+  };
+}
+function prLabel(p) {
+  return p.number != null ? `pull request #${p.number}` : "a pull request from another author";
+}
+function provenanceBlock(externals) {
+  if (externals.length === 0) return "";
+  const items = externals.map(({ source }) => {
+    const label = esc2(prLabel(source));
+    const link = source.url && SAFE_URL.test(source.url) ? `<a href="${esc2(source.url)}" rel="noopener noreferrer">${label}</a>` : label;
+    const by = source.author ? ` by ${esc2(source.author)}` : "";
+    const branches = source.headRef ? ` (<code>${esc2(source.headRef)}</code>${source.baseRef ? ` \u2192 <code>${esc2(source.baseRef)}</code>` : ""})` : "";
+    return `<li>${link}${by}${branches}</li>`;
+  }).join("");
+  return `<div class="provenance"><p class="provenance-head">This session was a <strong>review of someone else's code</strong>.</p><ul class="provenance-list">${items}</ul><p class="provenance-note">Every verdict below was the reviewer's opinion, recorded locally. Nothing on this page merged, landed or approved anything on the pull request itself.</p></div>`;
+}
+function narrativeTitle(narrative) {
+  if (!narrative) return null;
+  for (const raw of narrative.replace(/\r\n?/g, "\n").split("\n").slice(0, 40)) {
+    const h = raw.match(/^\s*#{1,6}\s+(.+?)\s*#*\s*$/);
+    if (h) {
+      const text = scrubProse((h[1] ?? "").trim()).replace(/[*_`]/g, "").trim();
+      if (text) return text.slice(0, 200);
+    }
+    if (raw.trim()) break;
+  }
+  return null;
+}
 function sessionTitle(state) {
   const liveDecision = state.decisions.find((d) => {
     const owner = state.artifacts.find((a) => a.id === d.artifactId);
@@ -31457,7 +31712,7 @@ function sessionTitle(state) {
     const hit = state.artifacts.find((a) => a.type === type && !NOT_SHIPPED.has(a.status));
     if (hit?.title) return hit.title;
   }
-  return `Session ${state.sessionId}`;
+  return "deepPairing session";
 }
 function autoSummary(state, span) {
   const byType = /* @__PURE__ */ new Map();
@@ -31466,7 +31721,7 @@ function autoSummary(state, span) {
   const resolved = state.decisions.filter((d) => d.response);
   const decisionList = resolved.length ? `<ul>${resolved.map((d) => {
     const chosen = d.options?.find?.((o) => o.id === d.response?.optionId);
-    return `<li><strong>${esc2(d.title?.trim() || d.context)}</strong> \u2192 ${esc2(chosen?.title ?? d.response?.optionId ?? "")}` + (d.response?.reasoning ? ` \u2014 \u201C${esc2(d.response.reasoning)}\u201D` : "") + `</li>`;
+    return `<li><strong>${escText(d.title?.trim() || d.context)}</strong> \u2192 ${escText(chosen?.title ?? d.response?.optionId ?? "")}` + (d.response?.reasoning ? ` \u2014 \u201C${escText(d.response.reasoning)}\u201D` : "") + `</li>`;
   }).join("")}</ul>` : `<p>No fork was put to the human in this session.</p>`;
   const spanLine = span.first ? `<p>The session runs from ${esc2(fmtTimestamp(span.first))} to ${esc2(fmtTimestamp(span.last))}.</p>` : "";
   const stances = state.sessionMemory?.rejectedApproaches ?? [];
@@ -31537,7 +31792,41 @@ code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, mo
 .chip { display: inline-block; font-size: .68rem; text-transform: uppercase; letter-spacing: .05em;
   background: var(--surface-2); color: var(--muted); border: 1px solid var(--border);
   border-radius: 999px; padding: .08rem .5rem; margin-left: .35rem; white-space: nowrap; }
+/* R3 \u2014 a risk annotation is a sentence, not a tag. Left as a nowrap .chip it
+   became an 860px pill and forced the whole page to scroll sideways on a phone,
+   which is where a link you were sent gets opened. */
+.chips--risk { gap: .35rem; }
+.chip--risk { white-space: normal; text-transform: none; letter-spacing: 0;
+  font-size: .78rem; line-height: 1.45; text-align: left; max-width: 100%;
+  padding: .2rem .6rem; border-radius: 10px; margin-left: 0; }
 .chip--chosen { background: var(--ok); color: #fff; border-color: transparent; }
+.chip--unapproved { background: var(--warn-soft); color: var(--warn); border-color: var(--warn); }
+.chip--external { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.beat--unapproved { border-left-color: var(--warn); }
+.beat--external { border-left-color: var(--accent); }
+.verdict--unapproved { background: var(--warn-soft); color: var(--warn); }
+.external-note { font-size: .86rem; background: var(--accent-soft); border-radius: 6px;
+  padding: .45rem .7rem; margin: .4rem 0; }
+.provenance { margin-top: .9rem; padding: .7rem .9rem; border: 1px solid var(--accent);
+  background: var(--accent-soft); border-radius: 8px; }
+.provenance-head { margin: 0 0 .3rem; font-size: .92rem; }
+.provenance-list { margin: .2rem 0; padding-left: 1.1rem; font-size: .9rem; }
+.provenance-note { margin: .3rem 0 0; font-size: .82rem; color: var(--muted); }
+.secret-banner { display: flex; gap: .5rem; align-items: flex-start; margin: 1.2rem 0 0;
+  padding: .7rem .9rem; border: 1px solid var(--warn); background: var(--warn-soft);
+  border-radius: 8px; font-size: .88rem; }
+.secret-banner p { margin: 0; }
+.secret-banner .gate-mark { color: var(--warn); flex: 0 0 auto; margin-top: .15rem; }
+.size-note { font-size: .82rem; color: var(--muted); font-style: italic;
+  border-top: 1px dashed var(--border); padding-top: .5rem; }
+.visual { border: 1px solid var(--border); border-radius: 8px; padding: .55rem .8rem; margin: .6rem 0; }
+.visual-head { margin: 0 0 .25rem; font-size: .92rem; font-weight: 600; }
+.visual-kind { font-size: .68rem; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); font-weight: 600; margin-right: .35rem; }
+.visual-caption, .visual-note { font-size: .85rem; color: var(--muted); }
+.visual-files, .visual-annotations { font-size: .88rem; padding-left: 1.1rem; margin: .3rem 0; }
+.quote-deep { color: var(--muted); }
+.render-fallback { white-space: pre-wrap; }
 .chip--sig-high, .chip--sev-high, .chip--sev-critical { background: var(--bad); color: #fff; border-color: transparent; }
 .chip--question { background: var(--accent-soft); color: var(--accent); }
 .verdict { font-size: .86rem; padding: .45rem .7rem; border-radius: 6px; margin: .4rem 0; }
@@ -31611,6 +31900,18 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
 }
 `;
 function formatSessionHtml(state, options = {}) {
+  const previousRoot = activeProjectRoot;
+  const previousBudget = activeBudget;
+  activeProjectRoot = options.projectRoot;
+  activeBudget = { remaining: SOFT_PAGE_CAP_BYTES, truncated: 0 };
+  try {
+    return renderSessionPage(state, options);
+  } finally {
+    activeProjectRoot = previousRoot;
+    activeBudget = previousBudget;
+  }
+}
+function renderSessionPage(state, options) {
   const includeCode = options.includeCode !== false;
   const generatedAt = options.generatedAt ?? (/* @__PURE__ */ new Date()).toISOString();
   const version2 = options.version ?? "";
@@ -31688,11 +31989,14 @@ function formatSessionHtml(state, options = {}) {
   });
   const allStamps = beats.map((b) => b.at).filter(Boolean).sort();
   const span = { first: allStamps[0], last: allStamps[allStamps.length - 1] };
-  const title = sessionTitle(state);
+  const title = narrativeTitle(options.narrative) ?? sessionTitle(state);
   const story = options.narrative?.trim() ? renderMarkdown(options.narrative, 3, includeCode) : autoSummary(state, span);
   const metaBits = [
     projectName ? `<span>Project: ${esc2(projectName)}</span>` : "",
-    `<span>Session: <code>${esc2(state.sessionId)}</code></span>`,
+    // R3 — the session id is GONE from the masthead. It is
+    // `session_<local folder name>_<hash>`: a directory off the exporter's
+    // machine, printed on a page whose entire purpose is to be handed to
+    // someone outside it, and useless to every reader who isn't the exporter.
     span.first ? `<span>${esc2(fmtDay(span.first))} \u2192 ${esc2(fmtDay(span.last))}</span>` : "",
     `<span>Exported ${esc2(fmtDay(generatedAt))}</span>`,
     version2 ? `<span>deepPairing v${esc2(version2)}</span>` : "",
@@ -31700,7 +32004,17 @@ function formatSessionHtml(state, options = {}) {
   ].filter(Boolean).join("");
   const audienceLine = options.audience?.trim() ? `<p class="audience">Written for ${esc2(options.audience.trim())}.</p>` : "";
   const timeline = beats.length ? `<ol class="beats">${beats.map((b) => b.html).join("")}</ol>` : `<p class="open-question">Nothing was recorded in this session.</p>`;
-  const stancesSection = untimedStances.length ? `<section><h2>Standing stances</h2><p>Recorded without a timestamp, so they can't be placed on the timeline \u2014 but the gate enforces them all the same.</p><ul class="stances">${untimedStances.map((r) => `<li><strong>${esc2(r.description)}</strong>${r.reason ? ` \u2014 \u201C${esc2(r.reason)}\u201D` : ""}${r.concept ? ` <code>${esc2(r.concept)}</code>` : ""}</li>`).join("")}</ul></section>` : "";
+  const truncatedCount = activeBudget?.truncated ?? 0;
+  const sizeNote = truncatedCount > 0 ? `<p class="size-note">${plural(truncatedCount, "section was", "sections were")} truncated to keep this page a size a mail client and a browser can actually handle. Nothing was removed from the record itself \u2014 the session still has all of it.</p>` : "";
+  const externals = [];
+  for (const a of state.artifacts ?? []) {
+    const src = externalSourceOf(a);
+    if (src) externals.push({ artifact: a, source: src });
+  }
+  const provenance = provenanceBlock(externals);
+  const secretLabels = (options.secretLabels ?? []).filter((l) => typeof l === "string" && l.trim());
+  const secretBanner = secretLabels.length ? `<div class="secret-banner" role="note">${SHIELD_MARK}<p><strong>Check this page before you send it.</strong> The export scan matched ${plural(secretLabels.length, "credential-shaped value")} in this session's material: ${secretLabels.map((l) => esc2(l)).join(", ")}. The values are not repeated here \u2014 search the page for them, and re-export with code omitted if they are real.</p></div>` : "";
+  const stancesSection = untimedStances.length ? `<section><h2>Standing stances</h2><p>Recorded without a timestamp, so they can't be placed on the timeline \u2014 but the gate enforces them all the same.</p><ul class="stances">${untimedStances.map((r) => `<li><strong>${escText(r.description)}</strong>${r.reason ? ` \u2014 \u201C${escText(r.reason)}\u201D` : ""}${r.concept ? ` <code>${esc2(r.concept)}</code>` : ""}</li>`).join("")}</ul></section>` : "";
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -31719,7 +32033,9 @@ function formatSessionHtml(state, options = {}) {
 <h1>${esc2(title)}</h1>
 ${audienceLine}
 <div class="meta">${metaBits}</div>
+${provenance}
 </header>
+${secretBanner}
 
 <section class="story">
 <h2>What this was</h2>
@@ -31729,6 +32045,7 @@ ${story}
 <section class="timeline">
 <h2>How it unfolded</h2>
 ${timeline}
+${sizeNote}
 </section>
 
 ${stancesSection}
@@ -31779,13 +32096,39 @@ function readGuardrailFires(projectRoot2) {
     return [];
   }
 }
-function secretWarningFor(state) {
-  let matches;
+function scanExportForSecrets(state, options = {}) {
+  const s = state ?? {};
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  const take = (matches, prefix) => {
+    for (const m of matches) {
+      if (seen.has(m.pattern)) continue;
+      seen.add(m.pattern);
+      out.push({ ...m, field: m.field ? `${prefix}.${m.field}` : prefix });
+    }
+  };
   try {
-    matches = scanContentForSecrets(state);
+    for (const a of s.artifacts ?? []) {
+      if (!a || typeof a !== "object") continue;
+      take(scanContentForSecrets(a.content), String(a.type ?? "artifact"));
+    }
+    (s.comments ?? []).forEach((c, i) => {
+      if (typeof c?.content === "string") take(scanForSecrets(c.content), `comment[${i}]`);
+    });
+    if (typeof options.narrative === "string" && options.narrative) {
+      take(scanForSecrets(options.narrative), "narrative");
+    }
+    if (s.sessionMemory) take(scanContentForSecrets(s.sessionMemory), "sessionMemory");
   } catch {
-    return null;
+    return out;
   }
+  return out;
+}
+function secretLabelsOf(matches) {
+  return Array.from(new Set(matches.map((m) => m.label)));
+}
+function secretWarningFor(state, options = {}) {
+  const matches = scanExportForSecrets(state, options);
   if (!matches.length) return null;
   const shown = matches.slice(0, 3).map((m) => {
     const where = m.field ? ` in \`${m.field}\`${m.line != null ? ` (line ${m.line})` : ""}` : "";
@@ -31802,8 +32145,10 @@ async function assembleSessionHtml(state, options = {}) {
     preflightTraces: state.preflightTraces ?? await gatherPreflightTraces(store, state.artifacts ?? []),
     guardrailFires: state.guardrailFires ?? readGuardrailFires(projectRoot2)
   };
+  const secretLabels = renderOptions.secretLabels ?? secretLabelsOf(scanExportForSecrets(enriched, { narrative: renderOptions.narrative }));
   return formatSessionHtml(enriched, {
     ...renderOptions,
+    secretLabels,
     projectName: renderOptions.projectName ?? (projectRoot2 ? path3.basename(projectRoot2) : void 0)
   });
 }
@@ -31844,6 +32189,7 @@ async function handleExportSession(ctx, args) {
     const narrative = typeof args?.narrative === "string" ? args.narrative : void 0;
     const audience = typeof args?.audience === "string" ? args.audience : void 0;
     const includeCode = args?.includeCode !== false;
+    const secretMatches = scanExportForSecrets(state, { narrative });
     const html = await assembleSessionHtml(state, {
       store: ctx.store,
       narrative,
@@ -31851,13 +32197,14 @@ async function handleExportSession(ctx, args) {
       includeCode,
       projectRoot: projectRoot2,
       version: SERVER_VERSION,
-      generatedAt
+      generatedAt,
+      secretLabels: secretLabelsOf(secretMatches)
     });
     const file2 = writeSessionHtml(projectRoot2, state.sessionId, html, generatedAt);
     const relative = path5.relative(projectRoot2, file2) || path5.basename(file2);
     const kb = Math.max(1, Math.round(Buffer.byteLength(html, "utf-8") / 1024));
     const narrativeNote = narrative ? "Your narrative leads the page." : "No narrative was supplied, so the page opens with an auto-generated summary \u2014 compose one and re-export for a page a stranger can actually follow (see /deeppairing:share).";
-    const secretWarning = secretWarningFor(state);
+    const secretWarning = secretMatches.length ? secretWarningFor(state, { narrative }) : null;
     return {
       content: [
         {
@@ -31870,7 +32217,8 @@ Relative: ${relative}
 ${narrativeNote}${includeCode ? "" : " Code bodies were omitted (includeCode: false)."}
 ` + (secretWarning ? `
 ${secretWarning}
-Tell the human this before they send the file.
+The page itself carries the same warning as a banner, so they will see it when they open the file.
+Tell the human this before they send it.
 ` : "") + `Give the human the path above and tell them they can open it in a browser or send the file to anyone.`
         }
       ]
@@ -33740,8 +34088,8 @@ async function handlePresentChangeset(ctx, args) {
   const traceSummary = pre ? formatPreflightTraceSummary(pre.trace) : "";
   const nudge = await revisionNudge(ctx.store, "changeset", title, id);
   const fileCount = files.length;
-  const prLabel = source?.number ? `PR #${source.number}` : "the PR";
-  const closing = isExternal ? `This is an EXTERNAL review \u2014 ${prLabel}${source?.author ? ` by ${source.author}` : ""} is someone else's code. Their per-file verdicts are their REVIEW OPINION and stay LOCAL: nothing is posted and nothing lands until they say to post it. Do NOT apply, revise, or "fix" these files. Keep polling check_feedback and answer what they ask \u2014 trace callers, read the surrounding code, run a safe test \u2014 and when they say to post it, call post_pr_review (REQUEST_CHANGES only if a surviving finding is high/critical, else COMMENT). No present_debrief is owed for a review of code you did not write.` : `When the feature wraps, end with present_debrief.`;
+  const prLabel2 = source?.number ? `PR #${source.number}` : "the PR";
+  const closing = isExternal ? `This is an EXTERNAL review \u2014 ${prLabel2}${source?.author ? ` by ${source.author}` : ""} is someone else's code. Their per-file verdicts are their REVIEW OPINION and stay LOCAL: nothing is posted and nothing lands until they say to post it. Do NOT apply, revise, or "fix" these files. Keep polling check_feedback and answer what they ask \u2014 trace callers, read the surrounding code, run a safe test \u2014 and when they say to post it, call post_pr_review (REQUEST_CHANGES only if a surviving finding is high/critical, else COMMENT). No present_debrief is owed for a review of code you did not write.` : `When the feature wraps, end with present_debrief.`;
   return {
     content: [{
       type: "text",

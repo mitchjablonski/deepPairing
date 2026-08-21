@@ -5,19 +5,29 @@
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { ExportMenu } from "../ExportMenu";
+import { ExportMenu, filenameFromDisposition } from "../ExportMenu";
 
 const fetchMock = vi.fn();
+
+/** A response whose headers behave like a real Headers object — R3 reads two
+ *  of them (the filename and the secret warning). */
+function fakeResponse(headers: Record<string, string> = {}, over: Record<string, unknown> = {}) {
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers(headers),
+    text: async () => "# md",
+    blob: async () => new Blob(["<!doctype html>"], { type: "text/html" }),
+    ...over,
+  };
+}
 
 beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
   fetchMock.mockReset();
-  fetchMock.mockResolvedValue({
-    ok: true,
-    status: 200,
-    text: async () => "# md",
-    blob: async () => new Blob(["<!doctype html>"], { type: "text/html" }),
-  });
+  fetchMock.mockResolvedValue(
+    fakeResponse({ "Content-Disposition": 'attachment; filename="session-s_queue-2026-08-21.html"' }),
+  );
   // jsdom implements neither of these.
   (URL as any).createObjectURL = vi.fn(() => "blob:fake");
   (URL as any).revokeObjectURL = vi.fn();
@@ -60,12 +70,72 @@ describe("ExportMenu — share as page", () => {
   it("surfaces an honest error instead of opening a tab that would 403", async () => {
     const openSpy = vi.fn();
     vi.stubGlobal("open", openSpy);
-    fetchMock.mockResolvedValueOnce({ ok: false, status: 409, text: async () => "", blob: async () => new Blob([]) });
+    fetchMock.mockResolvedValueOnce(fakeResponse({}, { ok: false, status: 409 }));
     openMenu();
     fireEvent.click(screen.getByText("Share as page (.html)"));
     await waitFor(() => expect(screen.getByRole("status")).toBeTruthy());
     expect(screen.getByRole("status").textContent).toMatch(/daemon/i);
     expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  // R3 — the download used to be hardcoded "deeppairing-session.html", so every
+  // page a human ever downloaded had the same name and the second export
+  // overwrote the first. The server already computes a session-stamped name.
+  it("uses the server's session-stamped filename", async () => {
+    const anchors: HTMLAnchorElement[] = [];
+    const realCreate = document.createElement.bind(document);
+    vi.spyOn(document, "createElement").mockImplementation((tag: string) => {
+      const el = realCreate(tag);
+      if (tag === "a") anchors.push(el as HTMLAnchorElement);
+      return el;
+    });
+    openMenu();
+    fireEvent.click(screen.getByText("Share as page (.html)"));
+    await waitFor(() => expect(anchors.length).toBeGreaterThan(0));
+    expect(anchors[0]!.download).toBe("session-s_queue-2026-08-21.html");
+    vi.restoreAllMocks();
+  });
+
+  it("parses the disposition defensively, and never lets it escape the folder", () => {
+    expect(filenameFromDisposition('attachment; filename="session-a-2026-08-21.html"')).toBe(
+      "session-a-2026-08-21.html",
+    );
+    expect(filenameFromDisposition("attachment; filename*=UTF-8''session-b-2026-08-21.html")).toBe(
+      "session-b-2026-08-21.html",
+    );
+    const traversal = filenameFromDisposition('attachment; filename="../../etc/evil.html"');
+    expect(traversal).not.toContain("/");
+    expect(traversal.startsWith(".")).toBe(false);
+    expect(traversal).toBe("_.._etc_evil.html");
+    expect(filenameFromDisposition(null)).toBe("deeppairing-session.html");
+    expect(filenameFromDisposition("attachment")).toBe("deeppairing-session.html");
+    expect(filenameFromDisposition('attachment; filename="notes.txt"')).toBe("deeppairing-session.html");
+  });
+
+  // R3 — the MCP tool and the CLI have warned since F6; this menu is the
+  // surface with a person behind it, and it was the silent one.
+  it("relays the daemon's secret warning as a dismissible alert — without blocking the download", async () => {
+    fetchMock.mockResolvedValueOnce(
+      fakeResponse({
+        "Content-Disposition": 'attachment; filename="session-s_queue-2026-08-21.html"',
+        "X-DeepPairing-Secret-Warning": "Possible secret in this page - review before sharing: AWS access key id in research.findings[0].evidence[0].snippet",
+      }),
+    );
+    openMenu();
+    fireEvent.click(screen.getByText("Share as page (.html)"));
+    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+    expect(screen.getByRole("alert").textContent).toContain("AWS access key id");
+    // Warn-only: the file downloaded exactly as before.
+    expect((URL as any).createObjectURL).toHaveBeenCalled();
+    fireEvent.click(screen.getByText("Dismiss"));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+
+  it("shows no alert for a clean export", async () => {
+    openMenu();
+    fireEvent.click(screen.getByText("Share as page (.html)"));
+    await waitFor(() => expect((URL as any).createObjectURL).toHaveBeenCalled());
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("still copies markdown for the other formats", async () => {

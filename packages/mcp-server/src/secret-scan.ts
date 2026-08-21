@@ -137,7 +137,28 @@ export function scanManyForSecrets(blobs: ReadonlyArray<string | undefined | nul
  * lists could never report. Dedupe stays per-pattern — the first field to hit
  * a pattern wins and keeps its `field` + `line`.
  */
-export function scanContentForSecrets(content: unknown, maxDepth = 6): SecretMatch[] {
+/**
+ * R3 — the default depth, raised from 6 to 14 because 6 could not reach the
+ * two places secrets actually live.
+ *
+ * Measured on the real content shapes (rooted at `content`, which is how the
+ * store calls this):
+ *   findings[0].evidence[0].snippet          → depth 5   (reachable at 6)
+ *   files[0].hunks[0].lines[0].content       → depth 7   (NOT reachable at 6)
+ * and rooted at the whole session state (how the EXPORT called it), both sit
+ * at depth 8 and 10. So a `ghp_…` pasted into a diff line was scanned by
+ * nothing, at creation OR at export: the walk stopped two levels short and
+ * returned a clean [] — the most dangerous possible answer, because every
+ * caller reads "no matches" as "checked and clean".
+ *
+ * 14 covers every shape in content-types.ts with room for the nesting a future
+ * field adds, and costs nothing: artifact content is a small object graph and
+ * the walk is a single pass over its string leaves. There is no precision
+ * tradeoff here — the patterns are unchanged, they just get READ.
+ */
+export const DEFAULT_SCAN_DEPTH = 14;
+
+export function scanContentForSecrets(content: unknown, maxDepth = DEFAULT_SCAN_DEPTH): SecretMatch[] {
   const seen = new Set<string>();
   const out: SecretMatch[] = [];
   const walk = (value: unknown, fieldPath: string, depth: number): void => {

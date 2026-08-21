@@ -1,6 +1,12 @@
 import path from "node:path";
 import { formatSessionMarkdown } from "../../export/format-markdown.js";
-import { assembleSessionHtml, secretWarningFor, writeSessionHtml } from "../../export/html-export.js";
+import {
+  assembleSessionHtml,
+  scanExportForSecrets,
+  secretLabelsOf,
+  secretWarningFor,
+  writeSessionHtml,
+} from "../../export/html-export.js";
 import { resolveProjectRoot } from "../../project-root.js";
 import { SERVER_VERSION } from "../../version.js";
 import type { ToolContext, ToolResult } from "./types.js";
@@ -52,6 +58,12 @@ export async function handleExportSession(ctx: ToolContext, args: Record<string,
     // Default INCLUDE — the diffs are the point. `includeCode: false` is the
     // opt-out for a repo whose code shouldn't leave the building.
     const includeCode = args?.includeCode !== false;
+    // F6/R3 — warn-only secret check on what is about to leave the building.
+    // Scanned ONCE, here: the labels ride onto the page as its banner and the
+    // sentence goes back to the agent, so the two can never disagree about what
+    // was found. The narrative is included because it is composed at export
+    // time — no artifact holds it, so no create-time scan has ever seen it.
+    const secretMatches = scanExportForSecrets(state, { narrative });
     const html = await assembleSessionHtml(state, {
       store: ctx.store as any,
       narrative,
@@ -60,6 +72,7 @@ export async function handleExportSession(ctx: ToolContext, args: Record<string,
       projectRoot,
       version: SERVER_VERSION,
       generatedAt,
+      secretLabels: secretLabelsOf(secretMatches),
     });
     const file = writeSessionHtml(projectRoot, state.sessionId, html, generatedAt);
     const relative = path.relative(projectRoot, file) || path.basename(file);
@@ -67,8 +80,7 @@ export async function handleExportSession(ctx: ToolContext, args: Record<string,
     const narrativeNote = narrative
       ? "Your narrative leads the page."
       : "No narrative was supplied, so the page opens with an auto-generated summary — compose one and re-export for a page a stranger can actually follow (see /deeppairing:share).";
-    // F6 — warn-only secret check on what is about to leave the building.
-    const secretWarning = secretWarningFor(state);
+    const secretWarning = secretMatches.length ? secretWarningFor(state, { narrative }) : null;
     return {
       content: [
         {
@@ -78,7 +90,9 @@ export async function handleExportSession(ctx: ToolContext, args: Record<string,
             `Path: ${file}\n` +
             `Relative: ${relative}\n\n` +
             `${narrativeNote}${includeCode ? "" : " Code bodies were omitted (includeCode: false)."}\n` +
-            (secretWarning ? `\n${secretWarning}\nTell the human this before they send the file.\n` : "") +
+            (secretWarning
+              ? `\n${secretWarning}\nThe page itself carries the same warning as a banner, so they will see it when they open the file.\nTell the human this before they send it.\n`
+              : "") +
             `Give the human the path above and tell them they can open it in a browser or send the file to anyone.`,
         },
       ],

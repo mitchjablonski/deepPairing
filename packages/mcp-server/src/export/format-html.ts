@@ -57,6 +57,7 @@ import {
   coerceDecisionContent,
   coerceCodeChangeContent,
 } from "@deeppairing/shared";
+import { isNeverApprovedStatus, isNotShippedStatus } from "@deeppairing/shared";
 import { buildTimeline, type TimelineEvent } from "../replay/timeline.js";
 import type { DecisionRecord, PlanReviewRecord } from "../store/store-interface.js";
 
@@ -79,7 +80,9 @@ export interface HtmlPreflightTrace {
   toolName?: string;
   decision?: "admitted" | "blocked" | string;
   consideredCount?: number;
-  nearMisses?: Array<{ concept?: string; source?: string; coverage?: number }>;
+  /** `source: "global"` marks a CROSS-PROJECT advisory match (the ledger),
+   *  which `consideredCount` deliberately does not count — see traceBeat. */
+  nearMisses?: Array<{ concept?: string; source?: string; coverage?: number; project?: string }>;
   block?: { source?: string; concept?: string; reason?: string; via?: string };
 }
 
@@ -134,6 +137,13 @@ export interface HtmlExportOptions {
   version?: string;
   /** ISO export timestamp. Injectable so tests are deterministic. */
   generatedAt?: string;
+  /**
+   * R3 — the export-time secret scan's result, rendered as a banner at the top
+   * of the page. Carries the LABELS only, never a value or a line of context:
+   * a warning that reprints the secret to warn about it has leaked it again.
+   * Absent/empty → no banner, and the page is byte-identical to a clean run.
+   */
+  secretLabels?: string[];
 }
 
 // --- Size sanity ------------------------------------------------------------
@@ -194,10 +204,82 @@ export function sanitizePath(raw: unknown, projectRoot?: string): string {
   // layout this project is DEVELOPED on: WSL's /mnt/c/Users/<u>/... sailed
   // through verbatim, putting the exporter's username in a page written to be
   // sent to strangers — and --redact-code cannot help, because the path IS the
-  // leak. Non-greedy prefix + case-insensitive covers /mnt/c/Users/<u>/,
-  // /cygdrive/c/Users/<u>/, C:/Users/<u>/ and plain /home/<u>/ alike.
-  p = p.replace(/^.*?\/(?:home|Users)\/[^/]+\//i, "~/");
+  // leak. It covers /mnt/c/Users/<u>/, /cygdrive/c/Users/<u>/, C:/Users/<u>/
+  // and plain /home/<u>/ alike.
+  //
+  // R3 — but F2's fix was `^.*?/(home|Users)/[^/]+/`, whose `.*?` matched ANY
+  // prefix, including no prefix at all in a RELATIVE path. So a real repo path
+  // — `app/views/home/partials/index.erb`, which every Rails app has — came
+  // out of the sharing-hygiene helper as `~/index.erb`: three directories
+  // deleted and a home directory invented, on the page a colleague reads to
+  // find the file. The leak this collapses is only ever in an ABSOLUTE path,
+  // so the pattern now names the absolute shapes it accepts (bare `/`, a
+  // drive letter, a WSL/cygwin mount) instead of accepting anything.
+  p = p.replace(HOME_PREFIX, "~/");
   return p;
+}
+
+/** The absolute-path shapes whose leading segments carry a username. Anchored
+ *  (see sanitizePath) so a relative path containing a `home/` directory is
+ *  left exactly as the author wrote it. */
+const HOME_PREFIX = /^(?:[A-Za-z]:)?(?:\/(?:mnt|cygdrive)\/[A-Za-z])?\/(?:home|Users)\/[^/]+\//i;
+
+/** The same shapes, found ANYWHERE in a run of prose rather than anchored at
+ *  the start of a path field. The lookbehind is what keeps it honest: `/home/`
+ *  only counts when nothing path-like precedes it, so `views/home/partials`
+ *  and `https://x.com/home/y` are prose, not leaks. */
+const HOME_PREFIX_IN_PROSE =
+  /(?<![\w~.\-/])(?:[A-Za-z]:)?(?:\/(?:mnt|cygdrive)\/[A-Za-z])?\/(?:home|Users)\/[^/\s"'`)\]]+\//gi;
+
+// R3 — the project root for the page currently being rendered.
+//
+// Path FIELDS were scrubbed from the day this exporter shipped; PROSE was not.
+// So `evidence.filePath` came out as `src/auth/hash.ts` while the narrative
+// three inches above it — the agent's own writing, the part of the page a
+// stranger actually reads — said "I traced it through
+// /home/<username>/work/checkout/src/auth/hash.ts", shipping the exporter's
+// username and machine layout into the artifact the whole feature exists to
+// send out of the building.
+//
+// Every prose path funnels through renderInline / codeBlock / diff lines, none
+// of which take a projectRoot argument (renderMarkdown is exported and widely
+// called). Rather than thread a parameter through nine call sites and rely on
+// nobody forgetting it at the tenth, the root is set once for the duration of
+// one page render. formatSessionHtml is synchronous end to end — no await, no
+// interleaving — and restores the previous value in a finally, so a nested
+// render can never leak its root to the caller.
+let activeProjectRoot: string | undefined;
+
+/**
+ * Collapse machine-identifying absolute paths out of PROSE.
+ *
+ * Same contract as sanitizePath, applied to free text: strip the project root
+ * (the reader doesn't have it and it names the exporter's disk), then collapse
+ * a home directory to `~/`. Everything else — relative paths, URLs, ordinary
+ * sentences — is returned byte-identical.
+ */
+export function scrubProse(text: unknown, projectRoot = activeProjectRoot): string {
+  let s = typeof text === "string" ? text : text == null ? "" : String(text);
+  if (!s) return s;
+  if (projectRoot) {
+    const root = projectRoot.replace(/\\/g, "/").replace(/\/+$/, "");
+    if (root) {
+      // Literal split/join — a project root is a path, not a pattern, and
+      // regex-escaping one is a bug waiting to happen.
+      if (s.includes(root + "/")) s = s.split(root + "/").join("");
+      if (s.includes(root)) s = s.split(root).join(".");
+      const win = root.replace(/\//g, "\\");
+      if (win !== root && s.includes(win + "\\")) s = s.split(win + "\\").join("");
+    }
+  }
+  return s.replace(HOME_PREFIX_IN_PROSE, "~/");
+}
+
+/** esc() for text that may carry a machine path — the scrub runs first so the
+ *  escape sees the collapsed form. Used for every rendered body of prose or
+ *  code; `esc` alone stays for ids, enums and chips. */
+function escText(value: unknown): string {
+  return esc(scrubProse(value));
 }
 
 function fmtTimestamp(iso?: string): string {
@@ -245,20 +327,91 @@ const FENCE_CLOSE = /^\s*(?:`{3,}|~{3,})\s*$/;
 // a narrative are still allowed (the author meant them).
 const SAFE_URL = /^(?:https?:\/\/|mailto:|#|\/(?!\/)|\.{1,2}\/)/i;
 
+/**
+ * R3 — links are found by a LINEAR SCAN, not a regex.
+ *
+ * The pattern this replaces — `/\[([^\]]+)\]\(([^)\s]+)\)/g` — is quadratic on
+ * a run of `[`. At every one of the n opening brackets the engine scans the
+ * whole remaining string for a `]` that isn't there, so the cost is n²/2:
+ * measured at 8.0s of BLOCKED EVENT LOOP for a 120k-character comment (0.5s at
+ * 30k — it degrades quietly, then falls off a cliff). The export runs
+ * in-process in the daemon, so those seconds are the whole server: no UI, no
+ * WebSocket, no other session, for as long as one pasted comment takes.
+ *
+ * Nobody writes a 120k-character link text, so the scan refuses to look for
+ * one. The bail-out on the first line is what makes the pathological case
+ * free: a string with no `](` in it cannot contain a link, and one indexOf
+ * settles that in a single pass.
+ */
+const MAX_LINK_TEXT = 512;
+const MAX_LINK_URL = 2048;
+
+function renderLinks(out: string): string {
+  // A link REQUIRES the `](` seam. One linear scan rules out every string that
+  // doesn't have one — including the 200k-`[` comment that used to cost 8s.
+  if (out.indexOf("](") < 0) return out;
+  const parts: string[] = [];
+  let pos = 0;
+  while (pos < out.length) {
+    const open = out.indexOf("[", pos);
+    if (open < 0) break;
+    const close = out.indexOf("]", open + 1);
+    // No closing bracket anywhere ahead → no link can exist in the rest of the
+    // string. Stop, rather than re-scanning the same tail for every `[` left.
+    if (close < 0) break;
+    if (close - open - 1 > MAX_LINK_TEXT) {
+      // This `]` is too far to be this `[`'s partner, and it is the FIRST one
+      // ahead, so every `[` before `close - MAX_LINK_TEXT` is equally hopeless.
+      // Jump the cursor past them instead of retrying one character at a time —
+      // that retry IS the quadratic term.
+      const jump = Math.max(open + 1, close - MAX_LINK_TEXT);
+      parts.push(out.slice(pos, jump));
+      pos = jump;
+      continue;
+    }
+    if (out.charCodeAt(close + 1) !== 40 /* ( */) {
+      parts.push(out.slice(pos, close + 1));
+      pos = close + 1;
+      continue;
+    }
+    const urlEnd = out.indexOf(")", close + 2);
+    if (urlEnd < 0 || urlEnd - close - 2 > MAX_LINK_URL) {
+      parts.push(out.slice(pos, close + 1));
+      pos = close + 1;
+      continue;
+    }
+    const label = out.slice(open + 1, close);
+    const url = out.slice(close + 2, urlEnd);
+    // Whitespace inside the target is not a URL (the old character class said
+    // the same thing) — fall through and leave it as literal text.
+    if (url.length === 0 || /\s/.test(url)) {
+      parts.push(out.slice(pos, close + 1));
+      pos = close + 1;
+      continue;
+    }
+    const raw = url.replace(/&amp;/g, "&");
+    parts.push(out.slice(pos, open));
+    parts.push(
+      SAFE_URL.test(raw) ? `<a href="${esc(raw)}" rel="noopener noreferrer">${label}</a>` : label,
+    );
+    pos = urlEnd + 1;
+  }
+  parts.push(out.slice(pos));
+  return parts.join("");
+}
+
 function renderInline(text: string): string {
   // Escape first — every transform below operates on already-safe text.
-  let out = esc(text);
+  // R3 — the machine-path scrub runs BEFORE the escape, so the escape sees the
+  // collapsed form and the two can never disagree about where the text ends.
+  let out = escText(text);
   // Protect code spans from the emphasis passes.
   const codeSpans: string[] = [];
   out = out.replace(/`([^`]+)`/g, (_m, code: string) => {
     codeSpans.push(`<code>${code}</code>`);
     return `\u0000CODE${codeSpans.length - 1}\u0000`;
   });
-  out = out.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, label: string, url: string) => {
-    const raw = url.replace(/&amp;/g, "&");
-    if (!SAFE_URL.test(raw)) return label;
-    return `<a href="${esc(raw)}" rel="noopener noreferrer">${label}</a>`;
-  });
+  out = renderLinks(out);
   out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   out = out.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
   out = out.replace(/(^|[^_\w])_([^_\n]+)_(?![\w_])/g, "$1<em>$2</em>");
@@ -277,7 +430,42 @@ function renderInline(text: string): string {
  * body") has to cover. Inline `code spans` stay: they are prose — identifiers
  * and flags, not bodies.
  */
-export function renderMarkdown(md: string, baseHeading = 3, includeCode = true): string {
+export function renderMarkdown(md: string, baseHeading = 3, includeCode = true, depth = 0): string {
+  // R3 — the LAST-RESORT guard. Every known way this renderer could blow up is
+  // fixed below (the fence loop in F1, the blockquote recursion and the link
+  // scan here), but the failure MODE is what makes a guard worth having: this
+  // function runs in-process in the daemon, on text a human pasted, for a route
+  // that has no other error path. When it threw, GET /api/export.html returned
+  // 500 — and kept returning 500, because the comment that caused it is
+  // persisted. The session's shareable page was dead permanently, and the UI
+  // blamed the daemon ("is the daemon still running?"), so the one thing the
+  // human could act on was the one thing they were never told.
+  //
+  // Degrading to escaped plain text loses formatting for one block. Losing the
+  // page loses the feature.
+  try {
+    return renderMarkdownBlocks(md, baseHeading, includeCode, depth);
+  } catch {
+    return `<p class="render-fallback">${escText(md)}</p>`;
+  }
+}
+
+/**
+ * R3 — how deep blockquotes may nest before the rest is shown literally.
+ *
+ * The blockquote branch recurses once per leading `>`, so a comment that is a
+ * run of `>` characters recurses once per CHARACTER. At 4,096 of them — a
+ * plausible paste, and trivial to type — V8 threw RangeError: Maximum call
+ * stack size exceeded, which is not catchable-and-forgettable when it happens
+ * mid-page: the whole export died.
+ *
+ * 8 is well past any real quoting depth (a quote of a quote of a quote is
+ * already unusual); beyond it the remaining `>` characters are rendered as
+ * what they are — text — with no claim that they were anything else.
+ */
+const MAX_QUOTE_DEPTH = 8;
+
+function renderMarkdownBlocks(md: string, baseHeading: number, includeCode: boolean, depth: number): string {
   const lines = String(md ?? "").replace(/\r\n?/g, "\n").split("\n");
   // noUncheckedIndexedAccess is on repo-wide: read every line through `at`.
   const at = (k: number): string => lines[k] ?? "";
@@ -330,7 +518,16 @@ export function renderMarkdown(md: string, baseHeading = 3, includeCode = true):
         body.push(at(i).replace(/^\s*>\s?/, ""));
         i++;
       }
-      out.push(`<blockquote>${renderMarkdown(body.join("\n"), baseHeading, includeCode)}</blockquote>`);
+      // R3 — depth-capped (see MAX_QUOTE_DEPTH). At the cap the remainder is
+      // rendered LITERALLY rather than dropped: the reader still sees every
+      // character the author typed, just not as more nesting.
+      if (depth >= MAX_QUOTE_DEPTH) {
+        out.push(`<blockquote class="quote-deep"><p>${escText(body.join("\n"))}</p></blockquote>`);
+        continue;
+      }
+      out.push(
+        `<blockquote>${renderMarkdown(body.join("\n"), baseHeading, includeCode, depth + 1)}</blockquote>`,
+      );
       continue;
     }
 
@@ -390,11 +587,71 @@ interface CodeBlockOptions {
   label?: string;
 }
 
+/**
+ * R3 — the WHOLE-PAGE size bound.
+ *
+ * Every cap in this file was per-thing (40 snippet lines, 400 diff lines per
+ * file) and none of them multiplied: 60 changesets × 40 files × 500 diff lines
+ * produced a 210 MB single HTML file. That isn't a big page, it's an
+ * unopenable one — and the daemon builds it in memory, in-process, before it
+ * can find out how big it got.
+ *
+ * So the code bodies (which are where essentially all the bytes are) draw from
+ * one shared budget for the page. When it runs out, further bodies are replaced
+ * by an explicit note and COUNTED, so the page can say how much it dropped
+ * instead of quietly ending. Structure — every artifact, every file name, every
+ * comment, the whole timeline — is never charged and never dropped: the record
+ * of what happened survives at full fidelity, only the code inside it collapses.
+ */
+const SOFT_PAGE_CAP_BYTES = 5 * 1024 * 1024;
+
+interface RenderBudget {
+  /** Characters of code body left to spend on this page. */
+  remaining: number;
+  /** How many bodies were collapsed because it ran out. */
+  truncated: number;
+}
+
+// Set for the duration of one formatSessionHtml call — same single-threaded,
+// finally-restored discipline as activeProjectRoot above.
+let activeBudget: RenderBudget | undefined;
+
+/** Is there room left for another code body? Counts the refusal when there
+ *  isn't, so the page can report how much it dropped. */
+function budgetHasRoom(): boolean {
+  if (!activeBudget) return true;
+  if (activeBudget.remaining <= 0) {
+    activeBudget.truncated++;
+    return false;
+  }
+  return true;
+}
+
+/** Charge what was ACTUALLY emitted. Estimates drift (the first cut charged 80
+ *  bytes for a diff row that renders as ~140), and an estimate that undershoots
+ *  is a cap that doesn't cap. */
+function spendBudget(emitted: number): void {
+  if (activeBudget) activeBudget.remaining -= emitted;
+}
+
+/** budgetHasRoom + spendBudget for a body whose size is known before it is
+ *  emitted. Returns false when the page is full. */
+function chargeBudget(cost: number): boolean {
+  if (!budgetHasRoom()) return false;
+  spendBudget(cost);
+  return true;
+}
+
+const SIZE_TRUNCATED_NOTE =
+  `<p class="redacted">Truncated for size — this page had already reached its ` +
+  `${Math.round(SOFT_PAGE_CAP_BYTES / (1024 * 1024))} MB budget when this block was reached. ` +
+  `The full record is in the session itself.</p>`;
+
 /** A legible, syntax-highlight-free pre/mono block with an honest truncation
  *  marker. `includeCode: false` keeps the shape, drops the body. */
 function codeBlock(text: string, opts: CodeBlockOptions = {}): string {
   const { language, maxLines = MAX_CODE_LINES, includeCode = true, label } = opts;
-  const head = label ? `<p class="code-label">${esc(label)}</p>` : "";
+  const head = label ? `<p class="code-label">${escText(label)}</p>` : "";
   if (includeCode === false) {
     const lineCount = String(text ?? "").split("\n").length;
     return `${head}<p class="redacted">Code omitted from this export (${plural(lineCount, "line")}).</p>`;
@@ -402,7 +659,10 @@ function codeBlock(text: string, opts: CodeBlockOptions = {}): string {
   const all = String(text ?? "").replace(/\r\n?/g, "\n").split("\n");
   const shown = all.slice(0, maxLines);
   const omitted = all.length - shown.length;
-  const body = esc(shown.join("\n"));
+  // R3 — scrubbed, not just escaped: a snippet lifted out of a file on the
+  // exporter's disk carries that disk's paths in its own text.
+  const body = escText(shown.join("\n"));
+  if (!chargeBudget(body.length)) return `${head}${SIZE_TRUNCATED_NOTE}`;
   const trunc = omitted > 0
     ? `\n<span class="truncated">… truncated — ${plural(omitted, "more line")} not shown</span>`
     : "";
@@ -440,12 +700,19 @@ function diffBlock(file: ChangesetFile, includeCode: boolean, projectRoot?: stri
     return `<div class="file">${header}<p class="redacted">Diff omitted from this export.</p></div>`;
   }
 
+  // R3 — a diff is the single biggest thing this page renders, so it asks the
+  // page budget BEFORE building 400 rows it may not be able to keep, then
+  // charges what it actually emitted.
+  if (!budgetHasRoom()) {
+    return `<div class="file">${header}${SIZE_TRUNCATED_NOTE}</div>`;
+  }
+
   const rows: string[] = [];
   let emitted = 0;
   let dropped = 0;
   for (const hunk of hunks) {
     if (hunk?.header) {
-      rows.push(`<div class="dl dl--hunk">${esc(hunk.header)}</div>`);
+      rows.push(`<div class="dl dl--hunk">${escText(hunk.header)}</div>`);
     }
     for (const line of hunk?.lines ?? []) {
       if (emitted >= MAX_DIFF_LINES_PER_FILE) { dropped++; continue; }
@@ -454,7 +721,7 @@ function diffBlock(file: ChangesetFile, includeCode: boolean, projectRoot?: stri
       const num = kind === "del" ? line?.oldLine : line?.newLine;
       rows.push(
         `<div class="dl dl--${kind}"><span class="ln">${num == null ? "" : esc(num)}</span>` +
-        `<span class="sign">${sign}</span><span class="src">${esc(line?.content ?? "")}</span></div>`,
+        `<span class="sign">${sign}</span><span class="src">${escText(line?.content ?? "")}</span></div>`,
       );
       emitted++;
     }
@@ -464,10 +731,107 @@ function diffBlock(file: ChangesetFile, includeCode: boolean, projectRoot?: stri
   }
 
   const diff = `<div class="diff">${rows.join("")}</div>`;
+  spendBudget(diff.length);
   const body = emitted > DIFF_COLLAPSE_THRESHOLD
     ? `<details><summary>Show the diff (${plural(emitted, "line")})</summary>${diff}</details>`
     : diff;
   return `<div class="file">${header}${body}</div>`;
+}
+
+// --- Visuals ----------------------------------------------------------------
+//
+// R3 (the round-13 rider) — format-html rendered NO visuals for ANY type. A
+// pair spends a session drawing a diagram, comments on regions of it, decides
+// on the strength of it — and the page written to explain that session to
+// someone who wasn't there dropped the picture entirely, silently. Round 13
+// measured diagrams as the ONE comprehension instrument with proven organic
+// engagement, which makes it the worst possible thing to drop.
+//
+// THE MINIMUM HONEST FIX, deliberately chosen over server-side Mermaid
+// rendering: rendering Mermaid here means either shipping a renderer into a
+// page that promises zero external requests and no scripts, or running Mermaid
+// server-side (a headless browser in the daemon's export path). Both are real
+// projects. What ships now is the diagram's SOURCE in a labelled collapsible
+// block, plus a line saying what it is and where to see it drawn — the picture
+// is PRESENT and named instead of absent and unmentioned. R4 can upgrade the
+// diagram case in place; every other kind below is already fully rendered.
+function visualsBlock(visuals: unknown, ctx: RenderCtx): string {
+  if (!Array.isArray(visuals) || visuals.length === 0) return "";
+  const parts: string[] = [];
+  for (const raw of visuals) {
+    if (!raw || typeof raw !== "object") continue;
+    const v = raw as {
+      kind?: string; title?: string; caption?: string; source?: string;
+      files?: Array<{ path?: string; change?: string; note?: string }>;
+      code?: string; filePath?: string; language?: string; lineStart?: number;
+      annotations?: Array<{ line?: number; note?: string }>;
+    };
+    const title = v.title ? escText(v.title) : "";
+    const caption = v.caption ? `<p class="visual-caption">${renderInline(v.caption)}</p>` : "";
+    let body = "";
+    let kindLabel = "";
+    switch (v.kind) {
+      case "diagram": {
+        kindLabel = "Diagram";
+        const src = String(v.source ?? "").trim();
+        body = src
+          ? `<p class="visual-note">A diagram the pair drew and discussed. It is drawn in deepPairing; ` +
+            `this page carries the source it was drawn from.</p>` +
+            `<details class="visual-source"><summary>Show the diagram source (Mermaid)</summary>` +
+            `<pre class="code" data-language="mermaid"><code>${escText(src)}</code></pre></details>`
+          : `<p class="visual-note">A diagram was attached here, but its source was not recorded.</p>`;
+        break;
+      }
+      case "file_map": {
+        kindLabel = "File map";
+        const rows = (v.files ?? [])
+          .map((f) => {
+            const p = sanitizePath(f?.path, ctx.projectRoot);
+            if (!p) return "";
+            const change = f?.change ? `<span class="chip chip--${esc(f.change)}">${esc(f.change)}</span>` : "";
+            const note = f?.note ? ` — ${renderInline(f.note)}` : "";
+            return `<li><code>${esc(p)}</code>${change}${note}</li>`;
+          })
+          .filter(Boolean)
+          .join("");
+        body = rows ? `<ul class="visual-files">${rows}</ul>` : "";
+        break;
+      }
+      case "annotated_code": {
+        kindLabel = "Annotated code";
+        const p = sanitizePath(v.filePath, ctx.projectRoot);
+        body =
+          (p ? `<p class="anchor"><code>${esc(p)}</code></p>` : "") +
+          codeBlock(v.code ?? "", {
+            language: v.language,
+            maxLines: MAX_SNIPPET_LINES,
+            includeCode: ctx.includeCode,
+          }) +
+          ((v.annotations ?? []).length
+            ? `<ul class="visual-annotations">${(v.annotations ?? [])
+                .map((n) => `<li><code>line ${esc(n?.line ?? "?")}</code> ${renderInline(n?.note ?? "")}</li>`)
+                .join("")}</ul>`
+            : "");
+        break;
+      }
+      case "prototype":
+        kindLabel = "Prototype";
+        // Never embedded: the prototype is arbitrary HTML, and this page's whole
+        // promise is that it runs nothing and fetches nothing.
+        body =
+          `<p class="visual-note">An interactive prototype was attached here. It is not embedded — ` +
+          `this page deliberately runs no scripts and makes no requests — so view it in deepPairing.</p>`;
+        break;
+      default:
+        continue;
+    }
+    if (!body) continue;
+    parts.push(
+      `<div class="visual"><p class="visual-head"><span class="visual-kind">${esc(kindLabel)}</span>` +
+      (title ? ` ${title}` : "") + `</p>${caption}${body}</div>`,
+    );
+  }
+  return parts.join("");
 }
 
 // --- Evidence ---------------------------------------------------------------
@@ -586,7 +950,7 @@ function researchBody(a: Artifact, ctx: RenderCtx): string {
     const sev = f.severity ? `<span class="chip chip--sev-${esc(f.severity)}">${esc(f.severity)} severity</span>` : "";
     const cat = f.category ? `<span class="chip">${esc(f.category)}</span>` : "";
     parts.push(
-      `<div class="finding"><h4>${esc(f.title ?? f.category ?? "Finding")}</h4>` +
+      `<div class="finding"><h4>${escText(f.title ?? f.category ?? "Finding")}</h4>` +
       `<div class="chips">${sig}${sev}${cat}</div>` +
       renderMarkdown(f.detail ?? "", 5, ctx.includeCode) +
       evidenceBlock(f.evidence, ctx.includeCode, ctx.projectRoot) +
@@ -620,6 +984,8 @@ function specBody(a: Artifact, ctx: RenderCtx): string {
     }
     parts.push(`</ul>`);
   }
+  // R3 — the visuals the spec was framed by (see visualsBlock).
+  parts.push(visualsBlock(content.visuals, ctx));
   if (content.design) parts.push(`<h4>Design</h4>${renderMarkdown(content.design, 5, ctx.includeCode)}`);
   if (content.tasks?.length) {
     parts.push(`<h4>Tasks</h4><ul>${content.tasks.map((t) => `<li>${renderInline(t.description)}</li>`).join("")}</ul>`);
@@ -634,8 +1000,10 @@ function planBody(a: Artifact, ctx: RenderCtx): string {
   const content = coercePlanContent(a.content);
   const parts: string[] = [];
   if (content.estimatedChanges != null && content.estimatedChanges !== "") {
-    parts.push(`<p class="kv"><span class="k">Estimated size</span> ${esc(content.estimatedChanges)}</p>`);
+    parts.push(`<p class="kv"><span class="k">Estimated size</span> ${escText(content.estimatedChanges)}</p>`);
   }
+  // R3 — the visuals the plan was framed by, before the step list they explain.
+  parts.push(visualsBlock(content.visuals, ctx));
   parts.push(`<ol class="steps">`);
   for (const step of content.steps ?? []) {
     const files = Array.isArray(step.files)
@@ -690,9 +1058,10 @@ function decisionBody(a: Artifact, ctx: RenderCtx): string {
       : "";
     parts.push(
       `<div class="option${chosen ? " option--chosen" : ""}">` +
-      `<div class="option-head"><h4>${esc(o.title ?? o.id)}</h4>${badge}${rec}</div>` +
+      `<div class="option-head"><h4>${escText(o.title ?? o.id)}</h4>${badge}${rec}</div>` +
       `<div class="chips"><span class="chip">effort: ${esc(o.effort ?? "?")}</span><span class="chip">risk: ${esc(o.risk ?? "?")}</span></div>` +
       (o.description ? `<p>${renderInline(o.description)}</p>` : "") + concept +
+      visualsBlock((o as { visuals?: unknown }).visuals, ctx) +
       (pros ? `<p class="k">Pros</p><ul class="pros">${pros}</ul>` : "") +
       (cons ? `<p class="k">Cons</p><ul class="cons">${cons}</ul>` : "") +
       `</div>`,
@@ -702,7 +1071,7 @@ function decisionBody(a: Artifact, ctx: RenderCtx): string {
   if (record?.response) {
     const chosenOption = (content.options ?? []).find((o) => o.id === chosenId);
     parts.push(
-      `<div class="verdict verdict--chosen"><strong>The human chose:</strong> ${esc(chosenOption?.title ?? chosenId ?? "")}` +
+      `<div class="verdict verdict--chosen"><strong>The human chose:</strong> ${escText(chosenOption?.title ?? chosenId ?? "")}` +
       (record.response.reasoning ? ` — “${renderInline(record.response.reasoning)}”` : "") +
       `</div>`,
     );
@@ -752,7 +1121,17 @@ function changesetBody(a: Artifact, ctx: RenderCtx, ownComments: Comment[]): str
   const parts: string[] = [];
   if (content.summary) parts.push(renderMarkdown(content.summary, 4, ctx.includeCode));
   if (content.risks?.length) {
-    parts.push(`<div class="chips">${content.risks.map((r) => `<span class="chip chip--risk">${esc(r)}</span>`).join("")}</div>`);
+    // R3 — risks are SENTENCES ("touches the auth path; the session cookie is
+    // re-signed"), not one-word tags, and .chip is `white-space: nowrap`. An
+    // 860px-wide pill forced the whole page into horizontal scroll on a phone —
+    // the page most likely to be opened on one, since it arrives as a link in a
+    // message. They render as wrapping pills instead, and the agent's markdown
+    // backticks are stripped rather than printed as literal ` characters.
+    parts.push(
+      `<div class="chips chips--risk">${content.risks
+        .map((r) => `<span class="chip chip--risk">${escText(String(r).replace(/`/g, ""))}</span>`)
+        .join("")}</div>`,
+    );
   }
   for (const file of content.files ?? []) {
     const disposition = content.reviewState?.[file.path];
@@ -781,7 +1160,7 @@ function debriefBody(a: Artifact, ctx: RenderCtx): string {
   if (content.summary) parts.push(renderMarkdown(content.summary, 4, ctx.includeCode));
   for (const s of content.sections ?? []) {
     parts.push(
-      `<div class="walk-section"><h4>${esc(s.title)}</h4>` +
+      `<div class="walk-section"><h4>${escText(s.title)}</h4>` +
       (s.body ? renderMarkdown(s.body, 5, ctx.includeCode) : "") +
       (s.concepts ?? [])
         .map((c) => `<p class="concept">Pattern: <strong>${esc(c.name)}</strong>${c.oneLineExplanation ? ` — ${renderInline(c.oneLineExplanation)}` : ""}</p>`)
@@ -793,21 +1172,21 @@ function debriefBody(a: Artifact, ctx: RenderCtx): string {
     parts.push(
       `<h4>Calls the agent made on its own</h4><ul>` +
       content.decisionsMade
-        .map((d) => `<li><strong>${esc(d.what)}</strong> — ${renderInline(d.why)}${d.alternative ? ` <em>(considered: ${esc(d.alternative)})</em>` : ""}</li>`)
+        .map((d) => `<li><strong>${escText(d.what)}</strong> — ${renderInline(d.why)}${d.alternative ? ` <em>(considered: ${escText(d.alternative)})</em>` : ""}</li>`)
         .join("") + `</ul>`,
     );
   }
   if (content.needsYourEyes?.length) {
     parts.push(
       `<div class="needs-eyes"><h4>Needs a human's eyes</h4><ul>` +
-      content.needsYourEyes.map((n) => `<li><strong>${esc(n.what)}</strong> — ${renderInline(n.why)}</li>`).join("") +
+      content.needsYourEyes.map((n) => `<li><strong>${escText(n.what)}</strong> — ${renderInline(n.why)}</li>`).join("") +
       `</ul></div>`,
     );
   }
   if (content.deferred?.length) {
     parts.push(
       `<h4>Deferred</h4><ul>` +
-      content.deferred.map((d) => `<li><strong>${esc(d.what)}</strong> — ${renderInline(d.why)}</li>`).join("") + `</ul>`,
+      content.deferred.map((d) => `<li><strong>${escText(d.what)}</strong> — ${renderInline(d.why)}</li>`).join("") + `</ul>`,
     );
   }
   if (content.openQuestions?.length) {
@@ -822,7 +1201,7 @@ function explainerBody(a: Artifact, ctx: RenderCtx): string {
   if (content.overview) parts.push(renderMarkdown(content.overview, 4, ctx.includeCode));
   (content.sections ?? []).forEach((s, i) => {
     parts.push(
-      `<div class="walk-section"><h4>${i + 1}. ${esc(s.heading ?? "")}</h4>` +
+      `<div class="walk-section"><h4>${i + 1}. ${escText(s.heading ?? "")}</h4>` +
       (s.body ? renderMarkdown(s.body, 5, ctx.includeCode) : "") +
       evidenceBlock(s.evidence, ctx.includeCode, ctx.projectRoot) + `</div>`,
     );
@@ -861,11 +1240,56 @@ function artifactBody(a: Artifact, ctx: RenderCtx, ownComments: Comment[]): stri
 
 // --- Honesty markers --------------------------------------------------------
 
-const NOT_SHIPPED = new Set(["rejected", "retracted", "superseded", "obsolete"]);
+// R3 — the closed-set question is answered ONCE, in @deeppairing/shared, and
+// imported by both exporters. It used to be a hand-copy here and a DIFFERENT
+// hand-copy in format-markdown (which omitted `obsolete` and therefore shipped
+// overtaken work into PR descriptions as if it had landed). See
+// isNotShippedStatus for why this is a different question from
+// isClosedArtifactStatus, which counts `approved` as closed.
+const NOT_SHIPPED = { has: (s: string) => isNotShippedStatus(s) };
+
+/**
+ * R3 — the OTHER half of round-11's "export ships rejected work unmarked".
+ *
+ * Rejected work has been struck through since Q5. Work that never got a
+ * verdict at all — still a draft, still under review, or sent back for changes
+ * — rendered byte-identical to work the human had approved. A stranger reading
+ * the page had no way to tell a proposal nobody has looked at from a decision
+ * the pair made together, which is precisely the distinction the page exists to
+ * carry.
+ *
+ * A strike-through would be the wrong mark (it claims a verdict that was never
+ * given), so this is its own treatment: an amber badge and a plain sentence
+ * saying which of the three it is.
+ */
+function unapprovedNote(status: string): { badge: string; line: string } | null {
+  if (!isNeverApprovedStatus(status)) return null;
+  switch (status) {
+    case "revised":
+      return {
+        badge: "sent back",
+        line:
+          "not approved — the human asked for changes on this version, so it is not what stands. " +
+          "It is here because the discussion happened on it.",
+      };
+    case "reviewing":
+      return {
+        badge: "under review",
+        line: "not approved — this was still under review when the page was exported. Nobody has signed off on it.",
+      };
+    default:
+      return {
+        badge: "draft",
+        line: "not approved — this was still a draft when the page was exported. Nobody has signed off on it.",
+      };
+  }
+}
 
 /** The verdict line for work that did NOT ship — struck header + why, joined to
  *  the recorded rejection reason when session memory carries one. */
 function verdictLine(a: Artifact, state: HtmlSessionState): string {
+  const unapproved = unapprovedNote(a.status);
+  if (unapproved) return `<p class="verdict verdict--unapproved">${esc(unapproved.line)}</p>`;
   if (!NOT_SHIPPED.has(a.status)) return "";
   const stances = state.sessionMemory?.rejectedApproaches ?? [];
   const match = stances.find(
@@ -875,7 +1299,7 @@ function verdictLine(a: Artifact, state: HtmlSessionState): string {
   // carries it supplies its own, and `... — “we run three replicas.”.` reads
   // like a typo on a page someone else is reading.
   const rawReason = match?.reason?.trim().replace(/[.!?]+$/, "");
-  const reason = rawReason ? ` — “${esc(rawReason)}”` : "";
+  const reason = rawReason ? ` — “${escText(rawReason)}”` : "";
   switch (a.status) {
     case "rejected":
       return `<p class="verdict verdict--rejected">rejected: the human declined this${reason}. It is here for the record, not as part of what shipped.</p>`;
@@ -904,19 +1328,37 @@ function beat(at: string, seq: number, html: string): Beat {
 function artifactBeat(a: Artifact, ctx: RenderCtx, seq: number): Beat {
   const own = (ctx.commentsByArtifact.get(a.id) ?? []).slice();
   const notShipped = NOT_SHIPPED.has(a.status);
-  const title = esc(a.title || a.type);
+  const unapproved = unapprovedNote(a.status);
+  const title = escText(a.title || a.type);
   const heading = notShipped ? `<s>${title}</s>` : title;
   const version = a.version > 1 ? `<span class="chip">v${a.version}</span>` : "";
+  const unapprovedChip = unapproved
+    ? `<span class="chip chip--unapproved">${esc(unapproved.badge)}</span>`
+    : "";
+  // Q6×Q5 (R3) — an EXTERNAL changeset is somebody else's pull request pulled
+  // onto the review surface. Rendered plain it is indistinguishable from the
+  // pair's own work, and the human's verdict on it reads to the PR author as
+  // "they approved and merged my change". It gets said outright, on the block.
+  const external = externalSourceOf(a);
+  const externalBanner = external
+    ? `<p class="external-note">External review — this is <strong>${esc(prLabel(external))}</strong>, ` +
+      `someone else's code read on this surface. Any verdict below was the reviewer's opinion, ` +
+      `recorded locally; it did not land, merge or post anything unless it was posted to the PR separately.</p>`
+    : "";
   // changesetBody consumes the per-file comments out of `own`, so render the
   // body BEFORE the leftover Discussion block.
   const body = artifactBody(a, ctx, own);
+  const classes =
+    `beat beat--artifact${notShipped ? " beat--not-shipped" : ""}` +
+    `${unapproved ? " beat--unapproved" : ""}${external ? " beat--external" : ""}`;
   return beat(
     a.createdAt,
     seq,
-    `<li class="beat beat--artifact${notShipped ? " beat--not-shipped" : ""}" id="artifact-${esc(a.id)}">` +
+    `<li class="${classes}" id="artifact-${esc(a.id)}">` +
     `<div class="beat-head"><time>${esc(fmtTimestamp(a.createdAt))}</time>` +
-    `<span class="chip chip--type">${esc(a.type)}</span>${version}</div>` +
-    `<h3>${heading}</h3>${verdictLine(a, ctx.state)}` +
+    `<span class="chip chip--type">${esc(a.type)}</span>${version}${unapprovedChip}` +
+    `${external ? `<span class="chip chip--external">external review</span>` : ""}</div>` +
+    `<h3>${heading}</h3>${verdictLine(a, ctx.state)}${externalBanner}` +
     `<div class="beat-body">${body}</div>` +
     threadHtml(own, ctx.includeCode, ctx.projectRoot) +
     `</li>`,
@@ -930,7 +1372,7 @@ function statusBeat(event: TimelineEvent, seq: number): Beat {
     event.at,
     seq,
     `<li class="beat beat--status beat--${cls}"><time>${esc(fmtTimestamp(event.at))}</time>` +
-    `<span class="beat-line">${esc(event.label)}</span></li>`,
+    `<span class="beat-line">${escText(event.label)}</span></li>`,
   );
 }
 
@@ -938,13 +1380,13 @@ function decisionBeat(event: TimelineEvent, seq: number): Beat {
   const p = event.payload ?? {};
   const rejectedTitles = Array.isArray(p.rejectedTitles) ? (p.rejectedTitles as unknown[]) : [];
   const rejected = rejectedTitles.length
-    ? `<p class="not-taken">Not taken: ${rejectedTitles.map((t) => esc(t)).join(", ")}</p>`
+    ? `<p class="not-taken">Not taken: ${rejectedTitles.map((t) => escText(t)).join(", ")}</p>`
     : "";
   return beat(
     event.at,
     seq,
     `<li class="beat beat--decided"><time>${esc(fmtTimestamp(event.at))}</time>` +
-    `<h3>Decided: ${esc(p.chosenTitle ?? p.chosenOptionId ?? "")}</h3>` +
+    `<h3>Decided: ${escText(p.chosenTitle ?? p.chosenOptionId ?? "")}</h3>` +
     (p.reasoning ? `<blockquote class="human-reason">${renderInline(String(p.reasoning))}</blockquote>` : "") +
     rejected + `</li>`,
   );
@@ -984,7 +1426,7 @@ function stanceBeat(r: HtmlRejectedApproach, seq: number): Beat {
     r.rejectedAt ?? "",
     seq,
     `<li class="beat beat--gate"><time>${esc(fmtTimestamp(r.rejectedAt))}</time>` +
-    `<h3>${BLOCK_MARK}Rejected — and remembered: ${esc(r.description)}</h3>` +
+    `<h3>${BLOCK_MARK}Rejected — and remembered: ${escText(r.description)}</h3>` +
     reason + concept +
     `<p class="gate-note">From here on the agent is blocked from proposing this again.</p></li>`,
   );
@@ -1008,11 +1450,30 @@ function traceBeat(t: HtmlPreflightTrace, seq: number): Beat | null {
   }
   const near = (t.nearMisses ?? []).filter((n) => n?.concept);
   if (near.length === 0) return null;
+  // R3 — `consideredCount` counts LOCAL stances only. The cross-project ledger
+  // is advisory and lives outside it, so a trace whose near-miss came from
+  // another project rendered as "The gate weighed 0 recorded stances" — at the
+  // exact moment the gate had weighed something and said so. Zero is a claim,
+  // and it was the wrong one. Count both sources, name each honestly.
+  const globalNear = near.filter((n) => n.source === "global");
+  const localCount = t.consideredCount ?? 0;
+  let weighed: string;
+  if (localCount > 0 && globalNear.length > 0) {
+    weighed =
+      `weighed ${plural(localCount, "stance")} recorded in this session, plus ` +
+      `${plural(globalNear.length, "more")} carried over from another project,`;
+  } else if (localCount > 0) {
+    weighed = `weighed ${plural(localCount, "recorded stance")}`;
+  } else if (globalNear.length > 0) {
+    weighed = `weighed ${plural(globalNear.length, "stance")} carried over from another project`;
+  } else {
+    weighed = "weighed the stances on record";
+  }
   return beat(
     t.at ?? "",
     seq,
     `<li class="beat beat--near"><time>${esc(fmtTimestamp(t.at))}</time>` +
-    `<span class="beat-line">The gate weighed ${plural(t.consideredCount ?? 0, "recorded stance")} before this and let it through — ` +
+    `<span class="beat-line">The gate ${weighed} before this and let it through — ` +
     `nearest call: ${near.map((n) => `<code>${esc(n.concept)}</code>`).join(", ")}.</span></li>`,
   );
 }
@@ -1045,6 +1506,98 @@ function guardrailBeat(f: HtmlGuardrailFire, seq: number): Beat | null {
 
 // --- Story ------------------------------------------------------------------
 
+// --- Review provenance (Q5 × Q6, R3) ----------------------------------------
+//
+// Q6 taught the product to review SOMEONE ELSE'S pull request. Q5 built the page
+// that leaves the building. Neither knew about the other: format-html had zero
+// handling of `reviewIntent` or `source`, so a session whose entire content was
+// an opinion about a colleague's PR exported as a page that looked exactly like
+// a page about the pair's own shipped work — same "approved" marks, same
+// timeline, no mention of a PR anywhere. Sent to the PR author, it reads as
+// "they approved and merged my change".
+
+interface PrProvenance {
+  number?: number;
+  url?: string;
+  headRef?: string;
+  baseRef?: string;
+  author?: string;
+}
+
+/** The PR an EXTERNAL changeset came from, or null for the pair's own work. */
+function externalSourceOf(a: Artifact): PrProvenance | null {
+  if (a.type !== "changeset") return null;
+  const content = a.content as { reviewIntent?: unknown; source?: unknown } | null | undefined;
+  if (!content || typeof content !== "object") return null;
+  if (content.reviewIntent !== "external") return null;
+  const src = content.source;
+  if (!src || typeof src !== "object") return {};
+  const s = src as Record<string, unknown>;
+  return {
+    number: typeof s.number === "number" ? s.number : undefined,
+    url: typeof s.url === "string" ? s.url : undefined,
+    headRef: typeof s.headRef === "string" ? s.headRef : undefined,
+    baseRef: typeof s.baseRef === "string" ? s.baseRef : undefined,
+    author: typeof s.author === "string" ? s.author : undefined,
+  };
+}
+
+/** "PR #123" when the number is known, and an honest fallback when it isn't —
+ *  a session can carry an external changeset with no provenance filled in. */
+function prLabel(p: PrProvenance): string {
+  return p.number != null ? `pull request #${p.number}` : "a pull request from another author";
+}
+
+/** The masthead provenance block for a session that reviewed external code.
+ *  Renders only what the record actually carries. */
+function provenanceBlock(externals: Array<{ artifact: Artifact; source: PrProvenance }>): string {
+  if (externals.length === 0) return "";
+  const items = externals
+    .map(({ source }) => {
+      const label = esc(prLabel(source));
+      const link = source.url && SAFE_URL.test(source.url)
+        ? `<a href="${esc(source.url)}" rel="noopener noreferrer">${label}</a>`
+        : label;
+      const by = source.author ? ` by ${esc(source.author)}` : "";
+      const branches = source.headRef
+        ? ` (<code>${esc(source.headRef)}</code>${source.baseRef ? ` → <code>${esc(source.baseRef)}</code>` : ""})`
+        : "";
+      return `<li>${link}${by}${branches}</li>`;
+    })
+    .join("");
+  return (
+    `<div class="provenance">` +
+    `<p class="provenance-head">This session was a <strong>review of someone else's code</strong>.</p>` +
+    `<ul class="provenance-list">${items}</ul>` +
+    `<p class="provenance-note">Every verdict below was the reviewer's opinion, recorded locally. ` +
+    `Nothing on this page merged, landed or approved anything on the pull request itself.</p>` +
+    `</div>`
+  );
+}
+
+/** R3 — the page's title, taken from the NARRATIVE's first heading when the
+ *  agent wrote one. The narrative is the only thing on the page that was
+ *  composed FOR a reader; its own first heading is the name the author chose.
+ *  sessionTitle's decision-first heuristic is right for the pair's own work and
+ *  badly wrong for a review session, where the first decision is some internal
+ *  fork ("Which lens first?") and the page is actually about a colleague's PR. */
+function narrativeTitle(narrative: string | undefined): string | null {
+  if (!narrative) return null;
+  for (const raw of narrative.replace(/\r\n?/g, "\n").split("\n").slice(0, 40)) {
+    const h = raw.match(/^\s*#{1,6}\s+(.+?)\s*#*\s*$/);
+    if (h) {
+      const text = scrubProse((h[1] ?? "").trim())
+        // Strip the inline markdown the heading may carry — it's a <title>, and
+        // a browser tab reading "**Rate limiting**" is worse than plain text.
+        .replace(/[*_`]/g, "")
+        .trim();
+      if (text) return text.slice(0, 200);
+    }
+    if (raw.trim()) break; // prose before any heading — the author didn't title it
+  }
+  return null;
+}
+
 function sessionTitle(state: HtmlSessionState): string {
   const liveDecision = state.decisions.find((d) => {
     const owner = state.artifacts.find((a) => a.id === d.artifactId);
@@ -1056,7 +1609,11 @@ function sessionTitle(state: HtmlSessionState): string {
     const hit = state.artifacts.find((a) => a.type === type && !NOT_SHIPPED.has(a.status));
     if (hit?.title) return hit.title;
   }
-  return `Session ${state.sessionId}`;
+  // R3 — NOT `Session ${sessionId}`. The session id is `session_<folder name>_
+  // <hash>`, i.e. a directory name off the exporter's disk, and this string is
+  // the <title>: it becomes the browser tab, the bookmark and the filename a
+  // stranger sees. Nothing on this page needs it (see the masthead).
+  return "deepPairing session";
 }
 
 /** The fallback story when the agent supplied no narrative: counts, the
@@ -1074,8 +1631,8 @@ function autoSummary(state: HtmlSessionState, span: { first?: string; last?: str
     ? `<ul>${resolved
         .map((d) => {
           const chosen = d.options?.find?.((o) => o.id === d.response?.optionId);
-          return `<li><strong>${esc(d.title?.trim() || d.context)}</strong> → ${esc(chosen?.title ?? d.response?.optionId ?? "")}` +
-            (d.response?.reasoning ? ` — “${esc(d.response.reasoning)}”` : "") + `</li>`;
+          return `<li><strong>${escText(d.title?.trim() || d.context)}</strong> → ${escText(chosen?.title ?? d.response?.optionId ?? "")}` +
+            (d.response?.reasoning ? ` — “${escText(d.response.reasoning)}”` : "") + `</li>`;
         })
         .join("")}</ul>`
     : `<p>No fork was put to the human in this session.</p>`;
@@ -1163,7 +1720,41 @@ code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, mo
 .chip { display: inline-block; font-size: .68rem; text-transform: uppercase; letter-spacing: .05em;
   background: var(--surface-2); color: var(--muted); border: 1px solid var(--border);
   border-radius: 999px; padding: .08rem .5rem; margin-left: .35rem; white-space: nowrap; }
+/* R3 — a risk annotation is a sentence, not a tag. Left as a nowrap .chip it
+   became an 860px pill and forced the whole page to scroll sideways on a phone,
+   which is where a link you were sent gets opened. */
+.chips--risk { gap: .35rem; }
+.chip--risk { white-space: normal; text-transform: none; letter-spacing: 0;
+  font-size: .78rem; line-height: 1.45; text-align: left; max-width: 100%;
+  padding: .2rem .6rem; border-radius: 10px; margin-left: 0; }
 .chip--chosen { background: var(--ok); color: #fff; border-color: transparent; }
+.chip--unapproved { background: var(--warn-soft); color: var(--warn); border-color: var(--warn); }
+.chip--external { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.beat--unapproved { border-left-color: var(--warn); }
+.beat--external { border-left-color: var(--accent); }
+.verdict--unapproved { background: var(--warn-soft); color: var(--warn); }
+.external-note { font-size: .86rem; background: var(--accent-soft); border-radius: 6px;
+  padding: .45rem .7rem; margin: .4rem 0; }
+.provenance { margin-top: .9rem; padding: .7rem .9rem; border: 1px solid var(--accent);
+  background: var(--accent-soft); border-radius: 8px; }
+.provenance-head { margin: 0 0 .3rem; font-size: .92rem; }
+.provenance-list { margin: .2rem 0; padding-left: 1.1rem; font-size: .9rem; }
+.provenance-note { margin: .3rem 0 0; font-size: .82rem; color: var(--muted); }
+.secret-banner { display: flex; gap: .5rem; align-items: flex-start; margin: 1.2rem 0 0;
+  padding: .7rem .9rem; border: 1px solid var(--warn); background: var(--warn-soft);
+  border-radius: 8px; font-size: .88rem; }
+.secret-banner p { margin: 0; }
+.secret-banner .gate-mark { color: var(--warn); flex: 0 0 auto; margin-top: .15rem; }
+.size-note { font-size: .82rem; color: var(--muted); font-style: italic;
+  border-top: 1px dashed var(--border); padding-top: .5rem; }
+.visual { border: 1px solid var(--border); border-radius: 8px; padding: .55rem .8rem; margin: .6rem 0; }
+.visual-head { margin: 0 0 .25rem; font-size: .92rem; font-weight: 600; }
+.visual-kind { font-size: .68rem; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); font-weight: 600; margin-right: .35rem; }
+.visual-caption, .visual-note { font-size: .85rem; color: var(--muted); }
+.visual-files, .visual-annotations { font-size: .88rem; padding-left: 1.1rem; margin: .3rem 0; }
+.quote-deep { color: var(--muted); }
+.render-fallback { white-space: pre-wrap; }
 .chip--sig-high, .chip--sev-high, .chip--sev-critical { background: var(--bad); color: #fff; border-color: transparent; }
 .chip--question { background: var(--accent-soft); color: var(--accent); }
 .verdict { font-size: .86rem; padding: .45rem .7rem; border-radius: 6px; margin: .4rem 0; }
@@ -1240,6 +1831,22 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
 // --- The page ---------------------------------------------------------------
 
 export function formatSessionHtml(state: HtmlSessionState, options: HtmlExportOptions = {}): string {
+  // R3 — the page-scoped render context (machine-path scrub + total size
+  // budget). Set here, restored in the finally below, so a nested or
+  // concurrent-looking call can never inherit or leak another page's settings.
+  const previousRoot = activeProjectRoot;
+  const previousBudget = activeBudget;
+  activeProjectRoot = options.projectRoot;
+  activeBudget = { remaining: SOFT_PAGE_CAP_BYTES, truncated: 0 };
+  try {
+    return renderSessionPage(state, options);
+  } finally {
+    activeProjectRoot = previousRoot;
+    activeBudget = previousBudget;
+  }
+}
+
+function renderSessionPage(state: HtmlSessionState, options: HtmlExportOptions): string {
   const includeCode = options.includeCode !== false;
   const generatedAt = options.generatedAt ?? new Date().toISOString();
   const version = options.version ?? "";
@@ -1334,14 +1941,20 @@ export function formatSessionHtml(state: HtmlSessionState, options: HtmlExportOp
   const allStamps = beats.map((b) => b.at).filter(Boolean).sort();
   const span = { first: allStamps[0], last: allStamps[allStamps.length - 1] };
 
-  const title = sessionTitle(state);
+  // R3 — the NARRATIVE's own first heading wins the title when the agent wrote
+  // one (see narrativeTitle); sessionTitle's decision-first heuristic is the
+  // fallback.
+  const title = narrativeTitle(options.narrative) ?? sessionTitle(state);
   const story = options.narrative?.trim()
     ? renderMarkdown(options.narrative, 3, includeCode)
     : autoSummary(state, span);
 
   const metaBits = [
     projectName ? `<span>Project: ${esc(projectName)}</span>` : "",
-    `<span>Session: <code>${esc(state.sessionId)}</code></span>`,
+    // R3 — the session id is GONE from the masthead. It is
+    // `session_<local folder name>_<hash>`: a directory off the exporter's
+    // machine, printed on a page whose entire purpose is to be handed to
+    // someone outside it, and useless to every reader who isn't the exporter.
     span.first ? `<span>${esc(fmtDay(span.first))} → ${esc(fmtDay(span.last))}</span>` : "",
     `<span>Exported ${esc(fmtDay(generatedAt))}</span>`,
     version ? `<span>deepPairing v${esc(version)}</span>` : "",
@@ -1356,11 +1969,44 @@ export function formatSessionHtml(state: HtmlSessionState, options: HtmlExportOp
     ? `<ol class="beats">${beats.map((b) => b.html).join("")}</ol>`
     : `<p class="open-question">Nothing was recorded in this session.</p>`;
 
+  // R3 — the size bound's honest footnote. Rendered only when the page actually
+  // hit the cap, so a normal export is byte-identical to before.
+  const truncatedCount = activeBudget?.truncated ?? 0;
+  const sizeNote = truncatedCount > 0
+    ? `<p class="size-note">${plural(truncatedCount, "section was", "sections were")} truncated to keep this ` +
+      `page a size a mail client and a browser can actually handle. Nothing was removed from the record ` +
+      `itself — the session still has all of it.</p>`
+    : "";
+
+  // R3 — external-review provenance for the masthead (see provenanceBlock).
+  const externals: Array<{ artifact: Artifact; source: PrProvenance }> = [];
+  for (const a of state.artifacts ?? []) {
+    const src = externalSourceOf(a);
+    if (src) externals.push({ artifact: a, source: src });
+  }
+  const provenance = provenanceBlock(externals);
+
+  // R3 — the last-moment secret warning, on the page itself. The MCP reply
+  // reaches the agent and the toast reaches whoever clicked Export; NEITHER
+  // reaches the person who opens the downloaded file an hour later and is about
+  // to attach it to an email. Warn-only, always: refusing to render someone's
+  // own session because a fixture contains AKIA… would be the tool overruling
+  // the human on their own repo.
+  const secretLabels = (options.secretLabels ?? []).filter((l) => typeof l === "string" && l.trim());
+  const secretBanner = secretLabels.length
+    ? `<div class="secret-banner" role="note">${SHIELD_MARK}` +
+      `<p><strong>Check this page before you send it.</strong> The export scan matched ` +
+      `${plural(secretLabels.length, "credential-shaped value")} in this session's material: ` +
+      `${secretLabels.map((l) => esc(l)).join(", ")}. ` +
+      `The values are not repeated here — search the page for them, and re-export with code omitted ` +
+      `if they are real.</p></div>`
+    : "";
+
   const stancesSection = untimedStances.length
     ? `<section><h2>Standing stances</h2>` +
       `<p>Recorded without a timestamp, so they can't be placed on the timeline — but the gate enforces them all the same.</p>` +
       `<ul class="stances">${untimedStances
-        .map((r) => `<li><strong>${esc(r.description)}</strong>${r.reason ? ` — “${esc(r.reason)}”` : ""}${r.concept ? ` <code>${esc(r.concept)}</code>` : ""}</li>`)
+        .map((r) => `<li><strong>${escText(r.description)}</strong>${r.reason ? ` — “${escText(r.reason)}”` : ""}${r.concept ? ` <code>${esc(r.concept)}</code>` : ""}</li>`)
         .join("")}</ul></section>`
     : "";
 
@@ -1382,7 +2028,9 @@ export function formatSessionHtml(state: HtmlSessionState, options: HtmlExportOp
 <h1>${esc(title)}</h1>
 ${audienceLine}
 <div class="meta">${metaBits}</div>
+${provenance}
 </header>
+${secretBanner}
 
 <section class="story">
 <h2>What this was</h2>
@@ -1392,6 +2040,7 @@ ${story}
 <section class="timeline">
 <h2>How it unfolded</h2>
 ${timeline}
+${sizeNote}
 </section>
 
 ${stancesSection}

@@ -1181,9 +1181,21 @@ async function exportCmd(format: string, sessionId?: string, opts: { redactCode?
     const generatedAt = new Date().toISOString();
     let html: string | null = null;
     try {
+      // R3 (SURGICAL HUNK — R1 owns the rest of this file) — the CLI's daemon
+      // fetch sent only X-Session-Id. II2 made the daemon fail-closed on a
+      // missing X-Project-Hash, so this request had been 403ing SILENTLY since
+      // that flip: `res.ok` was false, the catch-free branch fell through, and
+      // `deeppairing export --format html` quietly produced the LOCAL fallback
+      // page instead — a different page, missing the gate breadcrumbs, from the
+      // command whose whole job is to produce the same artifact as the UI.
+      // Authenticate the way the browser does.
+      const { projectHashOf } = await import("../project-root.js");
       const res = await fetch(
         `http://localhost:${port}/api/export.html?includeCode=${includeCode ? "1" : "0"}`,
-        { signal: AbortSignal.timeout(5000), headers: { "X-Session-Id": chosenSessionId } },
+        {
+          signal: AbortSignal.timeout(5000),
+          headers: { "X-Session-Id": chosenSessionId, "X-Project-Hash": projectHashOf(cwd) },
+        },
       );
       if (res.ok) html = await res.text();
     } catch {
@@ -1199,6 +1211,12 @@ async function exportCmd(format: string, sessionId?: string, opts: { redactCode?
           projectRoot: cwd,
           version: SERVER_VERSION,
           generatedAt,
+          // R3 — the OTHER half of the parity fix. With no store the fallback
+          // gathered no preflight traces, so a page built with the daemon down
+          // was missing the gate breadcrumbs a page built with it up carries.
+          // A FileStore opened on the same session reads them off disk, so both
+          // paths render the same beats.
+          store: new FileStore(cwd, chosenSessionId) as any,
         });
       } catch (err: any) {
         console.error(`  ${red("✗")} Failed to load session "${chosenSessionId}": ${err?.message ?? err}`);

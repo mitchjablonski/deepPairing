@@ -1,4 +1,5 @@
 import type { Artifact, Comment, SessionAnnotation } from "@deeppairing/shared";
+import { isNotShippedStatus } from "@deeppairing/shared";
 import { buildTimeline } from "../replay/timeline.js";
 import type { DecisionRecord, PlanReviewRecord } from "../store/store-interface.js";
 import {
@@ -74,11 +75,20 @@ export function formatSessionMarkdown(
 // newer one); we fold rejected + retracted into the same "not shipped" bucket
 // for the external formats.
 
-/** True when the artifact represents work that actually shipped (for the
- *  external pr-description / adr formats). Excludes superseded (old version),
- *  rejected, and retracted. */
+/**
+ * True when the artifact represents work that actually shipped (for the
+ * external pr-description / adr formats).
+ *
+ * R3 — this was a hand-copy that OMITTED `obsolete`, while format-html's copy
+ * of the same predicate four files away had it. So work the discussion had
+ * overtaken — a valid plan the pair moved past — went into a PR description and
+ * an ADR reading exactly like work that landed, on the two formats that leave
+ * the building. One predicate now, in @deeppairing/shared, imported by both
+ * exporters; see isNotShippedStatus for why it is a different question from
+ * isClosedArtifactStatus (which counts `approved` as closed).
+ */
 function isShippedArtifact(a: Artifact): boolean {
-  return a.status !== "superseded" && a.status !== "rejected" && a.status !== "retracted";
+  return !isNotShippedStatus(a.status);
 }
 
 /** The blockquote marker the FULL export prepends to a rejected/retracted
