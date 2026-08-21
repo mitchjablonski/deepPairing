@@ -206,8 +206,10 @@ describe("R3 — the export-time secret scan actually reads what the page render
     const gh = matches.find((m) => m.pattern === "ghp_");
     // Not `artifacts[0].content.findings[0]...` — the store says
     // `findings[0].evidence[0].snippet` and now so does the export.
-    expect(aws?.field).toBe("research.findings[0].evidence[0].snippet");
-    expect(gh?.field).toBe("changeset.files[0].hunks[0].lines[0].content");
+    // R3 (adversarial F4) — the prefix now names the artifact by index + title
+    // so 40 hits are 40 findable places; the store-rooted tail is unchanged.
+    expect(aws?.field).toBe('research #1 "Audit".findings[0].evidence[0].snippet');
+    expect(gh?.field).toBe('changeset #2 "CI tokens".files[0].hunks[0].lines[0].content');
   });
 
   it("names the field and NEVER the value — on all three surfaces", () => {
@@ -238,10 +240,17 @@ describe("R3 — the export-time secret scan actually reads what the page render
     });
     expect(scanExportForSecrets(clean)).toEqual([]);
     expect(secretWarningHeader([])).toBeNull();
-    const withOption = formatSessionHtml(clean, { ...OPTS, secretLabels: [] });
-    const without = formatSessionHtml(clean, OPTS);
-    expect(withOption).toBe(without);
-    expect(without).not.toContain('<div class="secret-banner"');
+    // A clean scan renders NO banner and is deterministic. (It DOES add the
+    // F11 "scan ran" footnote when secretLabels is defined — [] means
+    // scanned-clean — so it is no longer byte-identical to a call that wired no
+    // scan at all; that difference is the point of F11.)
+    const cleanA = formatSessionHtml(clean, { ...OPTS, secretLabels: [] });
+    const cleanB = formatSessionHtml(clean, { ...OPTS, secretLabels: [] });
+    expect(cleanA).toBe(cleanB);
+    expect(cleanA).not.toContain('<div class="secret-banner"');
+    expect(cleanA).toContain("Secret-shape scan ran before export");
+    // A call that wires no scan says nothing about scanning.
+    expect(formatSessionHtml(clean, OPTS)).not.toContain("Secret-shape scan ran");
   });
 
   it("warns, never blocks — the page still renders every finding", () => {
@@ -562,7 +571,7 @@ describe("R3 — the whole page has a size bound", () => {
     const html = formatSessionHtml(baseState({ artifacts }), OPTS);
     const megabytes = Buffer.byteLength(html, "utf-8") / (1024 * 1024);
     expect(megabytes).toBeLessThan(8);
-    expect(html).toContain("Truncated for size");
+    expect(html.toLowerCase()).toContain("truncated for size");
     expect(html).toMatch(/sections were truncated to keep this/);
     // The RECORD survives at full fidelity — only the code inside it collapses.
     expect(html).toContain("Changeset 59");
@@ -574,7 +583,7 @@ describe("R3 — the whole page has a size bound", () => {
       baseState({ artifacts: [artifact({ id: "a1", type: "research", title: "Audit", content: { findings: [] } })] }),
       OPTS,
     );
-    expect(html).not.toContain("Truncated for size");
+    expect(html.toLowerCase()).not.toContain("truncated for size");
     expect(html).not.toContain('<p class="size-note">');
   });
 });

@@ -3,6 +3,7 @@ import { formatSessionMarkdown } from "../../export/format-markdown.js";
 import {
   assembleSessionHtml,
   scanExportForSecrets,
+  secretCountOf,
   secretLabelsOf,
   secretWarningFor,
   writeSessionHtml,
@@ -73,6 +74,7 @@ export async function handleExportSession(ctx: ToolContext, args: Record<string,
       version: SERVER_VERSION,
       generatedAt,
       secretLabels: secretLabelsOf(secretMatches),
+      secretCount: secretCountOf(secretMatches),
     });
     const file = writeSessionHtml(projectRoot, state.sessionId, html, generatedAt);
     const relative = path.relative(projectRoot, file) || path.basename(file);

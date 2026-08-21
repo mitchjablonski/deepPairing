@@ -1,5 +1,5 @@
 import type { Artifact, Comment, SessionAnnotation } from "@deeppairing/shared";
-import { isNotShippedStatus } from "@deeppairing/shared";
+import { isNeverApprovedStatus, isNotShippedStatus } from "@deeppairing/shared";
 import { buildTimeline } from "../replay/timeline.js";
 import type { DecisionRecord, PlanReviewRecord } from "../store/store-interface.js";
 import {
@@ -90,6 +90,24 @@ export function formatSessionMarkdown(
  */
 function isShippedArtifact(a: Artifact): boolean {
   return !isNotShippedStatus(a.status);
+}
+
+/**
+ * R3 (adversarial F8) — the inline "not approved" marker for pr-description /
+ * adr. isShippedArtifact lets a `draft`/`reviewing`/`revised` artifact through
+ * (it isn't rejected, just not signed off), so a draft plan landed in a PR
+ * description reading exactly like approved work. These formats describe what
+ * shipped; an un-approved artifact is marked here rather than silently
+ * presented as consensus. Returns "" for approved/shipped work (byte-identical
+ * output for a clean run).
+ */
+function unapprovedMdMarker(a: Artifact): string {
+  if (!isNeverApprovedStatus(a.status)) return "";
+  const which =
+    a.status === "revised" ? "sent back for changes"
+    : a.status === "reviewing" ? "still under review"
+    : "still a draft";
+  return ` _(not approved — ${which})_`;
 }
 
 /** The blockquote marker the FULL export prepends to a rejected/retracted
@@ -246,7 +264,7 @@ function formatPrDescription(state: SessionState): string {
   for (const plan of plans) {
     const steps = coercePlanContent(plan.content).steps;
     if (steps.length > 0) {
-      sections.push(`### Changes (${plan.title})\n`);
+      sections.push(`### Changes (${plan.title})${unapprovedMdMarker(plan)}\n`);
       for (const step of steps) {
         const files = Array.isArray(step.files)
           ? step.files.map((f: any) => typeof f === "string" ? f : f.filePath).join(", ")
@@ -805,8 +823,12 @@ export function buildGitHubReviewPayload(
   const findingTitles: string[] = [];
 
   const researchArtifacts = state.artifacts.filter(
-    (a) => a.type === "research" &&
-      a.status !== "rejected" && a.status !== "retracted" && a.status !== "superseded",
+    // R3 (adversarial F8) — the shared shipped-status predicate, which drops
+    // `obsolete` too. This is the path that POSTS findings to a stranger's PR;
+    // the hand-copy here omitted `obsolete`, so overtaken findings could be
+    // posted as live review comments. SEAM: R1 also edits this function (session
+    // -id scrub) — this hunk is the filter predicate only.
+    (a) => a.type === "research" && isShippedArtifact(a),
   );
 
   for (const artifact of researchArtifacts) {
@@ -922,7 +944,9 @@ function formatPrComments(state: SessionState): string {
   // Only include findings that weren't rejected — a reviewer doesn't want
   // to paste their own rejected concerns.
   const researchArtifacts = state.artifacts.filter(
-    (a) => a.type === "research" && a.status !== "rejected" && a.status !== "retracted" && a.status !== "superseded",
+    // R3 (adversarial F8) — shared predicate; drops `obsolete` too (pr-comments
+    // is pasted onto a PR, so an overtaken finding must not read as live).
+    (a) => a.type === "research" && isShippedArtifact(a),
   );
 
   const allFindings: Array<{
