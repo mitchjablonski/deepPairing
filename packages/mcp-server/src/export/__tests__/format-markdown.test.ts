@@ -425,6 +425,36 @@ describe("formatSessionMarkdown", () => {
       expect(full).toContain("Rejected (not built)");
     });
 
+    // R3 — the hand-copy that got it wrong. `isShippedArtifact` listed
+    // superseded/rejected/retracted and OMITTED `obsolete`, while
+    // format-html's copy of the same predicate had it — so work the discussion
+    // had overtaken went into a PR description and an ADR reading exactly like
+    // work that landed. Both exporters now import the one predicate from
+    // @deeppairing/shared.
+    it("an OBSOLETE artifact is dropped from the external formats, not shipped as built", () => {
+      const obsoletePlan = makeArtifact("plan", "Superseded approach", {
+        steps: [{ description: "Poll the queue every second", reasoning: "simplest" }],
+      }, "obsolete");
+      const pr = formatSessionMarkdown(makeState({ artifacts: [obsoletePlan] }), "pr-description");
+      expect(pr).not.toContain("Poll the queue every second");
+      const adr = formatSessionMarkdown(makeState({ artifacts: [obsoletePlan] }), "adr");
+      expect(adr).not.toContain("Poll the queue every second");
+      // The FULL export is the faithful record and still keeps it.
+      expect(formatSessionMarkdown(makeState({ artifacts: [obsoletePlan] }), "full")).toContain(
+        "Poll the queue every second",
+      );
+    });
+
+    it("an obsolete research finding is dropped from pr-description too", () => {
+      const obsoleteResearch = makeArtifact("research", "Old audit", {
+        summary: "Overtaken.",
+        findings: [{ category: "Perf", title: "Batch size is wrong", detail: "d", significance: "high" }],
+      }, "obsolete");
+      expect(formatSessionMarkdown(makeState({ artifacts: [obsoleteResearch] }), "pr-description")).not.toContain(
+        "Batch size is wrong",
+      );
+    });
+
     it("approved work still ships clean (no marker leaks onto a normal run)", () => {
       const approved = makeArtifact("research", "Audit", {
         summary: "Clean.",

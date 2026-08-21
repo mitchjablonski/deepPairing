@@ -261,5 +261,45 @@ describe("V4 — secret-shape scan", () => {
         { pattern: "AKIA", label: "AWS access key id", field: "note", line: 1 },
       ]);
     });
+
+    /**
+     * R3 — the default depth reached findings but not DIFF LINES, which is the
+     * other half of where code lives. A `ghp_…` pasted into a changeset hunk
+     * sits at depth 7 rooted at `content`; the old default of 6 stopped one
+     * level above it and returned [] — at creation AND at export — so every
+     * caller read "no matches" as "checked and clean".
+     */
+    it("reaches a secret in a changeset hunk LINE, not just a finding's evidence", () => {
+      const content = {
+        summary: "CI tokens",
+        files: [
+          {
+            path: ".github/workflows/ci.yml",
+            hunks: [
+              {
+                header: "@@ -1 +1 @@",
+                lines: [{ kind: "add", content: "  token: ghp_abcdefghijklmnopqrstuvwxyz012345", newLine: 1 }],
+              },
+            ],
+          },
+        ],
+      };
+      expect(scanContentForSecrets(content)).toEqual([
+        {
+          pattern: "ghp_",
+          label: "GitHub personal access token",
+          field: "files[0].hunks[0].lines[0].content",
+          line: 1,
+        },
+      ]);
+    });
+
+    it("would have missed that line at the old depth of 6 — the regression this pins", () => {
+      const content = {
+        files: [{ hunks: [{ lines: [{ content: "ghp_abcdefghijklmnopqrstuvwxyz012345" }] }] }],
+      };
+      expect(scanContentForSecrets(content, 6)).toEqual([]);
+      expect(scanContentForSecrets(content)).toHaveLength(1);
+    });
   });
 });

@@ -8,8 +8,10 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { FileStore } from "../../store/file-store.js";
+import { createHttpRoutes } from "../routes.js";
+import { SERVER_VERSION } from "../../version.js";
 import { createRoutesTestContext, destroyRoutesTestContext, type RoutesApp } from "./routes.harness.js";
-import { readGuardrailFires, htmlExportFileName } from "../../export/html-export.js";
+import { assembleSessionHtml, readGuardrailFires, htmlExportFileName } from "../../export/html-export.js";
 
 let tmpDir: string;
 let store: FileStore;
@@ -65,6 +67,158 @@ describe("GET /api/export.html", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toContain("text/markdown");
     expect(await res.text()).toContain("# deepPairing Session Report");
+  });
+});
+
+/**
+ * R3 — the route was the ONE surface with a human behind it, and the one that
+ * never warned. The MCP tool has warned since F6 (the agent reads it); the CLI
+ * has warned since F6 (stderr); "Share as page" in the Export menu — the button
+ * a person clicks right before they attach the file to an email — said nothing.
+ */
+describe("R3 — GET /api/export.html warns about secrets", () => {
+  function seedLeak(): void {
+    store.createArtifact({
+      id: "art_leak",
+      type: "research",
+      title: "Key audit",
+      content: {
+        summary: "Found it.",
+        findings: [
+          {
+            category: "Security",
+            detail: "Inlined credential.",
+            significance: "high",
+            evidence: [{ filePath: "src/aws.ts", snippet: 'const id = "AKIAIOSFODNN7EXAMPLE";' }],
+          },
+        ],
+      },
+    });
+    store.createArtifact({
+      id: "art_leak_diff",
+      type: "changeset",
+      title: "CI",
+      content: {
+        files: [
+          {
+            path: ".github/workflows/ci.yml",
+            changeType: "modified",
+            hunks: [{ header: "@@ -1 +1 @@", lines: [{ kind: "add", content: "  token: ghp_abcdefghijklmnopqrstuvwxyz012345", newLine: 1 }] }],
+          },
+        ],
+      },
+    });
+    store.forceFlush();
+  }
+
+  it("sets an ASCII header naming the FIELD, never the value", async () => {
+    seedLeak();
+    const res = await app.request("/api/export.html");
+    const warning = res.headers.get("X-DeepPairing-Secret-Warning") ?? "";
+    expect(warning).toContain("AWS access key id");
+    expect(warning).toContain("GitHub personal access token");
+    expect(warning).toContain("findings[0].evidence[0].snippet");
+    expect(warning).not.toContain("AKIAIOSFODNN7EXAMPLE");
+    expect(warning).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz012345");
+    expect(warning).toMatch(/^[\x20-\x7E]+$/);
+  });
+
+  it("exposes the header so a cross-origin fetch can read it", async () => {
+    seedLeak();
+    const res = await app.request("/api/export.html");
+    expect(res.headers.get("Access-Control-Expose-Headers")).toContain("X-DeepPairing-Secret-Warning");
+    expect(res.headers.get("Access-Control-Expose-Headers")).toContain("Content-Disposition");
+  });
+
+  it("puts the same warning on the page itself, as a banner", async () => {
+    seedLeak();
+    const html = await (await app.request("/api/export.html")).text();
+    expect(html).toContain('<div class="secret-banner"');
+    expect(html).toContain("Check this page before you send it");
+    expect(html).toContain("AWS access key id");
+  });
+
+  it("warns, never blocks — the page is still a 200 with the whole session on it", async () => {
+    seedLeak();
+    const res = await app.request("/api/export.html");
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("Inlined credential.");
+    expect(html).toContain("Queue audit");
+  });
+
+  it("sets no header and renders no banner for a clean session", async () => {
+    const res = await app.request("/api/export.html");
+    expect(res.headers.get("X-DeepPairing-Secret-Warning")).toBeNull();
+    expect(await res.text()).not.toContain('<div class="secret-banner"');
+  });
+});
+
+/**
+ * R3 — SURFACE PARITY. Three surfaces produce this page: the MCP tool
+ * (export_session format:"html"), this route (the Export menu), and the CLI
+ * (`deeppairing export --format html`). Round 13 found the CLI silently 403ing
+ * against the daemon — it sent only X-Session-Id, and II2 made the daemon
+ * fail-closed without X-Project-Hash — and falling back to a LOCAL page that
+ * carried no gate breadcrumbs. Same session, two different documents, no error
+ * anywhere.
+ */
+describe("R3 — surface parity", () => {
+  /** Timestamps are the only legitimate difference between two renders of the
+   *  same session, so normalize them and compare the rest byte for byte. */
+  function normalize(html: string): string {
+    return html
+      .replace(/\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d+)?Z?)?/g, "<TS>")
+      .replace(/\d{4}-\d{2}-\d{2}/g, "<DAY>");
+  }
+
+  it("the route and a direct assembly agree for the same session", async () => {
+    const routeHtml = await (await app.request("/api/export.html")).text();
+    const direct = await assembleSessionHtml((await store.getFullState()) as any, {
+      store: store as any,
+      includeCode: true,
+      projectRoot: tmpDir,
+      version: SERVER_VERSION,
+    });
+    expect(normalize(direct)).toBe(normalize(routeHtml));
+  });
+
+  it("the CLI's local fallback carries the gate breadcrumbs the daemon path carries", async () => {
+    // A persisted preflight trace is exactly what the store-less fallback used
+    // to drop on the floor.
+    store.recordPreflightTrace("art_1", {
+      version: 1,
+      at: new Date().toISOString(),
+      artifactId: "art_1",
+      toolName: "present_findings",
+      decision: "admitted",
+      consideredCount: 2,
+      consideredConcepts: [],
+      nearMisses: [{ source: "session", concept: "polling the queue" }],
+    } as any);
+    store.forceFlush();
+
+    const routeHtml = await (await app.request("/api/export.html")).text();
+    // The CLI fallback path, verbatim: FileStore.loadSession for the state, a
+    // FileStore instance for the traces.
+    const cliStore = new FileStore(tmpDir, "test_session");
+    const cliHtml = await assembleSessionHtml(FileStore.loadSession(tmpDir, "test_session") as any, {
+      store: cliStore as any,
+      includeCode: true,
+      projectRoot: tmpDir,
+      version: SERVER_VERSION,
+    });
+    expect(routeHtml).toContain("polling the queue");
+    expect(cliHtml).toContain("polling the queue");
+    expect(normalize(cliHtml)).toBe(normalize(routeHtml));
+  });
+
+  it("the daemon 403s a request with no X-Project-Hash — which is what the CLI used to send", async () => {
+    // The bug, pinned: the CLI's old headers ({ X-Session-Id } only) do not get
+    // a page. So the fix has to be sending the hash, not hoping for the best.
+    const bare = createHttpRoutes(store, tmpDir, () => {});
+    const res = await bare.request("/api/export.html", { headers: { "X-Session-Id": "test_session" } });
+    expect(res.status).toBe(403);
   });
 });
 

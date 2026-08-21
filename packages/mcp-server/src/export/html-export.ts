@@ -19,7 +19,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Artifact } from "@deeppairing/shared";
-import { scanContentForSecrets } from "../secret-scan.js";
+import { scanContentForSecrets, scanForSecrets, type SecretMatch } from "../secret-scan.js";
 import {
   formatSessionHtml,
   type HtmlExportOptions,
@@ -108,13 +108,81 @@ export function readGuardrailFires(projectRoot: string | undefined): HtmlGuardra
  *
  * Returns null when the export is clean, so a clean run's reply is unchanged.
  */
-export function secretWarningFor(state: unknown): string | null {
-  let matches;
+/**
+ * R3 — the scan walks the RENDERED-CONTENT GRAPH, not the raw state blob.
+ *
+ * F6's scan was blind twice over, and each blindness alone was enough to make
+ * it return a clean [] for a page carrying a live AWS key:
+ *
+ *   1. DEPTH. `scanContentForSecrets` defaulted to maxDepth 6. Rooted at the
+ *      whole session state, an evidence snippet sits at depth 8
+ *      (`artifacts[0].content.findings[0].evidence[0].snippet`) and a diff line
+ *      at depth 10. The walk stopped two levels above every string that
+ *      actually holds code. (Fixed at the source too — see DEFAULT_SCAN_DEPTH.)
+ *   2. ROOT. This function passed the whole `state`; the STORE scans each
+ *      artifact's `content`. So even where both could see a leaf, they reported
+ *      different field paths for it — one saying `artifacts[3].content.summary`
+ *      and the other `summary` — and no test could compare them.
+ *
+ * Both are fixed by naming what the page renders and scanning exactly that,
+ * artifact content rooted at `content` (parity with the store), plus the two
+ * things the store never sees at all: the COMMENT bodies and the agent's
+ * NARRATIVE — which is composed at export time, has no artifact, and is the
+ * single largest run of free text on the page.
+ */
+export interface ExportScanInput {
+  artifacts?: Array<{ id?: string; type?: string; title?: string; content?: unknown }>;
+  comments?: Array<{ content?: unknown }>;
+  sessionMemory?: unknown;
+}
+
+export interface ExportScanOptions {
+  /** The agent-composed narrative, which lives only in the export call. */
+  narrative?: string;
+}
+
+/** Every secret-shape match in what the page will actually render, deduped per
+ *  pattern (first field to hit a pattern wins, as everywhere else). */
+export function scanExportForSecrets(state: unknown, options: ExportScanOptions = {}): SecretMatch[] {
+  const s = (state ?? {}) as ExportScanInput;
+  const seen = new Set<string>();
+  const out: SecretMatch[] = [];
+  const take = (matches: SecretMatch[], prefix: string): void => {
+    for (const m of matches) {
+      if (seen.has(m.pattern)) continue;
+      seen.add(m.pattern);
+      out.push({ ...m, field: m.field ? `${prefix}.${m.field}` : prefix });
+    }
+  };
   try {
-    matches = scanContentForSecrets(state);
+    for (const a of s.artifacts ?? []) {
+      if (!a || typeof a !== "object") continue;
+      // Rooted at `content`, exactly as the store roots it, so a field path in
+      // an export warning and a field path in a stored SecretWarning name the
+      // same thing.
+      take(scanContentForSecrets(a.content), String(a.type ?? "artifact"));
+    }
+    (s.comments ?? []).forEach((c, i) => {
+      if (typeof c?.content === "string") take(scanForSecrets(c.content), `comment[${i}]`);
+    });
+    if (typeof options.narrative === "string" && options.narrative) {
+      take(scanForSecrets(options.narrative), "narrative");
+    }
+    if (s.sessionMemory) take(scanContentForSecrets(s.sessionMemory), "sessionMemory");
   } catch {
-    return null; // a scan failure must never fail the export
+    return out; // a scan failure must never fail the export
   }
+  return out;
+}
+
+/** The distinct human-readable labels of a scan, for the page banner and the
+ *  HTTP header. Labels only — never a value, never a line. */
+export function secretLabelsOf(matches: SecretMatch[]): string[] {
+  return Array.from(new Set(matches.map((m) => m.label)));
+}
+
+export function secretWarningFor(state: unknown, options: ExportScanOptions = {}): string | null {
+  const matches = scanExportForSecrets(state, options);
   if (!matches.length) return null;
   const shown = matches.slice(0, 3).map((m) => {
     const where = m.field ? ` in \`${m.field}\`${m.line != null ? ` (line ${m.line})` : ""}` : "";
@@ -125,6 +193,26 @@ export function secretWarningFor(state: unknown): string | null {
     `⚠️ Possible secret in this export — review before sharing: ${shown.join("; ")}${more}. ` +
     `The value itself is not printed here. This page is meant to leave the building, so check it first.`
   );
+}
+
+/**
+ * R3 — the same warning as an ASCII-only, single-line HTTP header value.
+ *
+ * GET /api/export.html had no warning at all: the MCP tool and the CLI both
+ * warned, and the surface the human actually clicks (the Export menu) did not,
+ * so the one path with a person on the other end was the silent one. Header
+ * values must be ASCII and free of newlines, so this is built from the labels
+ * and field paths only (both ASCII by construction) and then defensively
+ * stripped — a header that throws on encode would take the whole export down,
+ * which is the opposite of warn-never-block.
+ */
+export function secretWarningHeader(matches: SecretMatch[]): string | null {
+  if (!matches.length) return null;
+  const parts = matches.slice(0, 5).map((m) => (m.field ? `${m.label} in ${m.field}` : m.label));
+  const more = matches.length > parts.length ? ` (+${matches.length - parts.length} more)` : "";
+  const raw = `Possible secret in this page - review before sharing: ${parts.join("; ")}${more}`;
+  const ascii = raw.replace(/[^\x20-\x7E]/g, " ").replace(/\s+/g, " ").trim();
+  return ascii.slice(0, 900) || null;
 }
 
 export interface AssembleHtmlOptions extends HtmlExportOptions {
@@ -145,8 +233,16 @@ export async function assembleSessionHtml(
     preflightTraces: state.preflightTraces ?? (await gatherPreflightTraces(store, state.artifacts ?? [])),
     guardrailFires: state.guardrailFires ?? readGuardrailFires(projectRoot),
   };
+  // R3 — the scan runs HERE, in the one function all three surfaces share, so
+  // the banner is a property of the PAGE rather than of whichever caller
+  // remembered to ask for it. `secretLabels` passed explicitly by a caller wins
+  // (the tool already has the matches in hand and needn't scan twice).
+  const secretLabels =
+    renderOptions.secretLabels ??
+    secretLabelsOf(scanExportForSecrets(enriched, { narrative: renderOptions.narrative }));
   return formatSessionHtml(enriched, {
     ...renderOptions,
+    secretLabels,
     projectName: renderOptions.projectName ?? (projectRoot ? path.basename(projectRoot) : undefined),
   });
 }
