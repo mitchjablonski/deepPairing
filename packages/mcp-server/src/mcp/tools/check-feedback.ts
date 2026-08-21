@@ -3,7 +3,7 @@ import { PENDING_DRAFT_TYPES, WAITING_DRAFT_TYPES, ACKNOWLEDGE_ONLY_DRAFT_TYPES 
 import type { Artifact, Request } from "@deeppairing/shared";
 import { deliverComment, commentSecretNote, requestSecretNote, requestScopeNote } from "./check-feedback-delivery.js";
 import { SERVER_VERSION } from "../../version.js";
-import { collectUnansweredQuestions, describeRequestIntent } from "@deeppairing/shared";
+import { collectUnansweredQuestions, describeRequestIntent, isClosedArtifactStatus } from "@deeppairing/shared";
 import { getGlobalStore } from "../../store/global-store.js";
 import { composeOptionRejectReason, recordRejectedOption } from "../../store/rejected-option-recorder.js";
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
@@ -429,97 +429,14 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     oldestPendingAge = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
   }
 
-  // Determine suggested action
-  let suggestedAction = "You may proceed with implementation.";
-  if (freshlyRejected.length > 0) {
-    suggestedAction = `Do NOT apply — the human REJECTED ${freshlyRejected.map((a) => `"${a.title}"`).join(", ")}. Revise the approach or propose an alternative.`;
-  } else if (pendingArts.some((a) => a.type === "code_change")) {
-    suggestedAction = "Wait for the code change review before applying the edit.";
-  } else if (pendingArts.some((a) => a.type === "changeset")) {
-    suggestedAction = "Wait for the changeset review — the human is reviewing each file — before applying the edits.";
-  } else if (pendingArts.some((a) => a.type === "decision")) {
-    suggestedAction = "Wait for decision selection before proceeding.";
-  } else if (pendingArts.some((a) => a.type === "plan")) {
-    suggestedAction = "Wait for plan approval before implementing.";
-  } else if (pendingArts.some((a) => a.type === "spec")) {
-    suggestedAction = "Wait for spec approval before planning implementation.";
-  } else if (pendingArts.some((a) => a.type === "research")) {
-    suggestedAction = "Wait for findings review before proposing solutions.";
-  } else if (pendingArts.some((a) => a.type === "debrief")) {
-    // #190 — a debrief is the end-of-run comprehension surface; the human reads
-    // it and may ask questions. Answer any questions (answer_question) and keep
-    // polling until they close it out.
-    suggestedAction = "The debrief is presented — the human is reading it. Answer any questions they raise, then continue polling.";
-  } else if (pendingArts.some((a) => a.type === "explainer")) {
-    // #190 A2 — an explainer is a read-only walk-through; the human reads it and
-    // may ask questions. Answer any questions (answer_question) and keep polling.
-    suggestedAction = "The explainer is presented — the human is reading the walk-through. Answer any questions they raise, then continue polling.";
-  }
-
-  // GH#152 — when the human COMMENTED while an artifact is still awaiting its
-  // verdict (e.g. commented on a decision instead of picking an option), the
-  // suggestedAction must carry BOTH signals: act on the comment AND keep
-  // waiting for the pending verdict. Append rather than replace so the pending
-  // guidance above ("Wait for decision selection…") survives verbatim — the
-  // human's comment itself is reported in the "Human comments"/"Human
-  // questions" block below.
-  if (newComments.length > 0 && pendingArts.length > 0) {
-    suggestedAction = `${suggestedAction} The human also left a comment — read it below and consider replying (answer_question or a reply comment), then call check_feedback again.`;
-  }
-
-  // H1 — debrief-owed reinforcement. Heuristic (documented): nag ONLY when the
-  // run is WINDING DOWN — no pending drafts to review, nothing freshly rejected
-  // to revise, and NO question the agent still owes an answer on — AND the
-  // session presented substantive code work (a changeset/code_change) but has
-  // no debrief yet. This keeps it off the mid-flight path (where suggestedAction
-  // is a "wait for review" instruction) and only fires at the natural
-  // end-of-run moment the debrief rule targets.
-  //
-  // The "no unanswered question" gate is on PERSISTED state, not this poll's
-  // `openQuestionCount` (which counts UNACKNOWLEDGED questions — those drain
-  // after one poll even if never answered, so a stale-but-open question would
-  // wrongly let the nag fire on the next poll). We use the same
-  // collectUnansweredQuestions tail-walk (answeredByCommentId) every other
-  // surface uses, so the nag genuinely waits until questions are ANSWERED.
-  // J2a (#210) — ceremony scales with task size. The nag fires only when the
-  // session SHAPE owes a debrief: a changeset, 2+ code_changes, or a decision
-  // moment. A trivial single-file surgical fix (exactly one code_change, no
-  // changeset, no decision) closes with its own self-summarizing code_change —
-  // no separate debrief owed, so no nag. Same predicate the Stop hook applies
-  // (debrief-gate.ts). This subsumes the old hasCodeWork + !hasDebrief gate.
-  const shapeOwesDebrief = sessionOwesDebrief(allArtifacts);
-  // O3 — reuse the single fullState snapshot; fall back to this-poll's
-  // unacknowledged count when full state was unavailable.
-  const hasUnansweredQuestions = fullState
-    ? collectUnansweredQuestions(fullState.comments ?? []).length > 0
-    : openQuestionCount > 0;
-  const owesDebrief =
-    pendingArts.length === 0 &&
-    freshlyRejected.length === 0 &&
-    !hasUnansweredQuestions &&
-    shapeOwesDebrief;
-  if (owesDebrief) {
-    suggestedAction = `${suggestedAction} You presented code this run but no present_debrief yet — when the feature wraps, end with ONE present_debrief so your pair gets the walk-through.`;
-  }
-
-  // G1 (#198b) — pending human requests. Ordering (documented + pinned by
-  // check-feedback-request.test.ts): a request ranks AFTER unanswered questions
-  // AND AFTER freshlyRejected's safety-critical "Do NOT apply" posture. Append
-  // here (the openQuestionCount prepend below still leads, and the freshlyRejected
-  // base is already in `suggestedAction`), so the final order is
-  // questions → rejected/pending-review → requests.
-  if (pendingRequests.length > 0) {
-    suggestedAction = `${suggestedAction} The human sent ${pendingRequests.length} request${pendingRequests.length === 1 ? "" : "s"} — serve ${pendingRequests.length === 1 ? "it" : "them"} (see "Human requests" below) with the matching present_* artifact.`;
-  }
-
-  // M2 — questions LEAD the suggestedAction: when the human left open questions,
-  // answering them comes before any rejection/comment guidance (which stays,
-  // just after). Prepend last so it sits at the very front.
-  if (openQuestionCount > 0) {
-    suggestedAction = `Answer the ${openQuestionCount} open question${openQuestionCount === 1 ? "" : "s"} first (reply with answer_question). ${suggestedAction}`;
-  }
-
-  parts.push(`Session: ${totalArtifacts} artifact${totalArtifacts !== 1 ? "s" : ""} (${approvedCount} approved, ${pendingCount} pending) | ${totalComments} new comment${totalComments !== 1 ? "s" : ""} | ${autonomyLabel} mode | deepPairing v${SERVER_VERSION}${oldestPendingAge ? `\nOldest pending: ${oldestPendingAge}` : ""}\nSuggested action: ${suggestedAction}`);
+  // Q3 — the SUGGESTED ACTION is assembled at the BOTTOM of this handler, not
+  // here. It used to be computed at this point, before most of the body's own
+  // state existed, which is how the round-12 self-contradiction happened: with
+  // a sent-back changeset (status `revised`) plus a carried-over question in the
+  // same payload the prose reported both — and then "Suggested action: You may
+  // proceed with implementation." A selector that cannot see the body it
+  // summarizes will eventually disagree with it. See the assembly block below;
+  // the preamble is `unshift`ed so the emitted prose ORDER is unchanged.
 
   // B3 — structured mirrors of the blocks below, populated as we format.
   const structuredQuestions: Array<Record<string, unknown>> = [];
@@ -806,14 +723,58 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   // O3 — reuse the post-wake artifact snapshot (was a redundant getArtifacts).
   const planArtifacts = postWakeArtifacts.filter((a) => a.type === "plan");
   const reviewedPlans: string[] = [];
+  // Q3 — TO READ / PLAN VERDICTS get structuredContent mirrors (the N1 class:
+  // a prose-only line is invisible to a client that branches on the structured
+  // payload). Spread only when non-empty, so the healthy payload's top-level key
+  // set is byte-for-byte unchanged.
+  const structuredPlanVerdicts: Array<Record<string, unknown>> = [];
+  // Q3 — plan verdicts the human returned as NOT-approved. Feeds the suggested
+  // action so a sent-back plan can never coexist with "you may proceed".
+  const sentBackPlans: Array<{ id: string; title: string; verdict: string }> = [];
   // B3 — only verdicts NOT yet counted flip structuredContent.status to
   // 'feedback'; the prose below still repeats every verdict (pre-existing
   // behavior, kept), but the machine-readable status decays after one report.
   let freshPlanVerdicts = 0;
+  // Q3 (N+1) — read the verdicts OFF THE SNAPSHOT. This loop used to call
+  // store.getPlanReviewVerdict(a.id) once per plan artifact — every revision
+  // INCLUDING superseded ones — and in production the store is a DaemonClient,
+  // so each of those was its own HTTP round-trip (`GET /plan-reviews/:id/
+  // verdict`). getFullState() already returns `planReviews` and we captured it
+  // above, so the whole lane is now ONE read regardless of plan count. The
+  // per-artifact reads survive ONLY as the degraded path for when the snapshot
+  // was unavailable (fullState === null), so behavior is identical either way.
+  // Measured by check-feedback-read-amplification.test.ts (N=3 plans, so an
+  // N+1 shape can't hide behind a single-plan fixture again).
+  const planVerdictFromSnapshot = fullState
+    ? new Map((fullState.planReviews ?? []).map((p) => [p.artifactId, p]))
+    : null;
   for (const a of planArtifacts) {
-    const verdict = await store.getPlanReviewVerdict(a.id);
+    const verdict = planVerdictFromSnapshot
+      ? (() => {
+          const rec = planVerdictFromSnapshot.get(a.id);
+          // Same shape getPlanReviewVerdict returns: null unless a verdict landed.
+          return rec?.verdict ? { verdict: rec.verdict as string, feedback: rec.feedback } : null;
+        })()
+      : await store.getPlanReviewVerdict(a.id);
     if (!verdict) continue;
     reviewedPlans.push(`- Plan "${a.title}": ${verdict.verdict}${verdict.feedback ? ` (feedback: ${verdict.feedback})` : ""}`);
+    structuredPlanVerdicts.push({
+      artifactId: a.id,
+      title: a.title,
+      verdict: verdict.verdict,
+      ...(verdict.feedback ? { feedback: verdict.feedback } : {}),
+    });
+    // Q3 review (Q3-1) — the clause must DECAY. `planArtifacts` includes
+    // SUPERSEDED revisions and plan-review records never clear, so the
+    // commonest plan flow (request-changes on v1 → revise → v2 approved) left
+    // v1's `revised` verdict re-asserting "NOT an approval, re-present before
+    // implementing" on EVERY subsequent poll — forever, and blocking every other
+    // suggestion behind it. A verdict only speaks while its artifact is still
+    // OPEN: once v1 is superseded (or otherwise closed) the obligation moved to
+    // the successor. Same shared predicate as everywhere else in this handler.
+    if (verdict.verdict !== "approved" && !isClosedArtifactStatus(a.status)) {
+      sentBackPlans.push({ id: a.id, title: a.title, verdict: verdict.verdict });
+    }
     if (!ctx.state.reportedPlanVerdicts.has(a.id)) {
       ctx.state.reportedPlanVerdicts.add(a.id);
       freshPlanVerdicts++;
@@ -837,6 +798,27 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     const { previousStatus, at } = deriveTransition(a);
     return { id: a.id, type: a.type, title: a.title, status: a.status, previousStatus, at };
   });
+  // Q3 — the SEND-BACK. "Request changes" in the companion UI POSTs status
+  // `revised` (+ the composed feedback as a verdict comment), which is the door
+  // the round-12 self-contradiction came through: `revised` is neither `draft`
+  // (so it left pendingArts) nor `rejected` (so it missed freshlyRejected), and
+  // the suggested action fell all the way back to "You may proceed with
+  // implementation." while the very same payload printed the human's send-back
+  // note.
+  //
+  // Q3 review (MED 4) — and the obligation is DURABLE, not one-poll. Deriving it
+  // from the DRAINED status-change lane meant poll 1 said "address the
+  // send-back" and poll 2 said "you may proceed" while the changeset still sat
+  // there `revised` — the same one-poll hole the carried-over question path
+  // exists to close. So the clause reads the STATE (`status === "revised"` on
+  // the post-wake snapshot), not the event. It self-clears without a drain:
+  // revise_artifact(supersede) flips the parent to `superseded`, which is closed.
+  // Union with the drained set so a status change reported this poll can never
+  // fall between the two reads.
+  const sentBackById = new Map<string, Artifact>();
+  for (const a of postWakeArtifacts) if (a.status === "revised") sentBackById.set(a.id, a);
+  for (const a of changed) if (a.status === "revised") sentBackById.set(a.id, a);
+  const sentBackArtifacts = Array.from(sentBackById.values());
   if (changed.length > 0) {
     await store.acknowledgeStatusChanges(changed.map((a) => a.id));
     const lines = structuredStatusChanges.map((s) => {
@@ -907,6 +889,18 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     const waiting = verdictDrafts.map(nameDraft).join(", ");
     parts.push(`⏳ WAITING: ${verdictDrafts.length} artifact(s) still under review: ${waiting}\nThe human is reviewing in the companion UI. Call check_feedback again to pick up their response.`);
   }
+  // Q3 (the N1 class, re-opened by P3) — the 📖 TO READ line was PROSE-ONLY, so
+  // a structured-only client (one that branches on structuredContent and never
+  // prose-parses — the whole point of B3's mirror) could not see that an
+  // explainer was sitting unread. It leaves PENDING_DRAFT_TYPES by design, so
+  // `pendingArtifacts` will never carry it; it needs a lane of its own. Spread
+  // only when non-empty → the healthy payload's key set is unchanged.
+  const structuredToRead = readOnlyDrafts.map((a) => ({
+    id: a.id,
+    type: a.type,
+    title: a.title,
+    ...(a.secretWarnings?.length ? { secretWarnings: a.secretWarnings.map((w) => w.label) } : {}),
+  }));
   if (readOnlyDrafts.length > 0) {
     const toRead = readOnlyDrafts.map(nameDraft).join(", ");
     parts.push(`📖 TO READ: ${readOnlyDrafts.length} read-only artifact(s) the human hasn't acknowledged yet: ${toRead}\nThese await no verdict — they're explanations, not proposals. The human clicks "Got it" (or asks a follow-up) when they've read them. Don't block on these.`);
@@ -931,25 +925,38 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   //       longer open, so a delivered selection can never also be counted
   //       pending.
   // `resolved` is this poll's delivered set (drained + acknowledged above).
+  //
+  // Q3 — (c) the THIRD expression of "open artifact". This filter read openness
+  // as `draft || reviewing`, which DISAGREED with the store that produced the
+  // record: FileStore.isArtifactClosed treats `revised` as still open (a
+  // sent-back artifact is live work), so getPendingDecisions handed back a
+  // record that this line then silently dropped. One payload, two notions of
+  // "pending decision". Both now call the ONE shared `isClosedArtifactStatus`
+  // (@deeppairing/shared), so the store, the cross-session scanner and this
+  // handler are literally the same predicate. `undefined` (an artifact this
+  // session doesn't carry) is not closed — unknown ids stay pending, exactly as
+  // the store's own stance says.
+  //
+  // Q3 — and the RESULT is computed ONCE, then fed to all three consumers: this
+  // prose line, `structuredContent.pendingDecisions`, and the suggested action.
+  // The prose and the count can no longer disagree because there is nothing left
+  // to disagree with.
   const deliveredDecisionIds = new Set(resolved.map((d) => d.decisionId));
-  const openArtifactIds = new Set(
-    postWakeArtifacts.filter((a) => a.status === "draft" || a.status === "reviewing").map((a) => a.id),
-  );
+  const statusById = new Map(postWakeArtifacts.map((a) => [a.id, a.status]));
   const pendingDec = (await store.getPendingDecisions()).filter(
-    (d) =>
-      !deliveredDecisionIds.has(d.decisionId) &&
-      // A record whose artifact this session doesn't carry at all stays pending
-      // (mirrors the store's own "unknown ids stay pending" stance).
-      (!postWakeArtifacts.some((a) => a.id === d.artifactId) || openArtifactIds.has(d.artifactId)),
+    (d) => !deliveredDecisionIds.has(d.decisionId) && !isClosedArtifactStatus(statusById.get(d.artifactId)),
   );
+  const decisionLabelOf = (d: { title?: string; context: string }): string => {
+    const label = d.title?.trim() || d.context;
+    return label.length > 80 ? `${label.slice(0, 79)}…` : label;
+  };
+  const structuredPendingDecisions = pendingDec.map((d) => ({
+    decisionId: d.decisionId,
+    artifactId: d.artifactId,
+    title: decisionLabelOf(d),
+  }));
   if (pendingDec.length > 0) {
-    const named = pendingDec
-      .map((d) => {
-        const label = d.title?.trim() || d.context;
-        const short = label.length > 80 ? `${label.slice(0, 79)}…` : label;
-        return `"${short}" (${d.decisionId})`;
-      })
-      .join(", ");
+    const named = pendingDec.map((d) => `"${decisionLabelOf(d)}" (${d.decisionId})`).join(", ");
     parts.push(`⏳ WAITING: ${pendingDec.length} decision(s) pending: ${named}. The human will select in the companion UI. Call check_feedback again to pick up their choice.`);
   }
   if (pendingPlans.length > 0) {
@@ -1009,6 +1016,269 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     parts.push(`🛑 After ${ctx.state.checkFeedbackPollCount} empty polls you don't have to keep spinning. It's fine to STOP here: summarize what's still pending (the ${pendingCount} artifact${pendingCount === 1 ? "" : "s"} under review) in your reply and end the run. Nothing is lost — the artifacts persist and any unanswered questions carry over to your NEXT run (they resurface on your first check_feedback and in the first-call hint). Keep polling only if you'd rather wait.`);
   }
 
+  // ------------------------------------------------------------------
+  // Q3 — SUGGESTED ACTION. Assembled HERE, at the bottom, from the SAME
+  // computed state the prose blocks above were built from.
+  //
+  // The bug this replaces (round-12, executed repro): the selector ran near the
+  // top of the handler off `pendingArts`/`freshlyRejected` alone, so anything
+  // discovered later in the body was invisible to it. Send the changeset back
+  // ("Request changes" → status `revised`) and the payload printed the human's
+  // send-back note AND "1 unanswered question carried over … answer before new
+  // work" AND "Suggested action: You may proceed with implementation."
+  //
+  // The rule now, and the thing to preserve if you edit this: EVERY prose lane
+  // that states an obligation must contribute a clause here, or be named in the
+  // documented EXEMPT SET below with the reason. "You may proceed" is a
+  // FALLBACK — emitted only when nothing blocking was found — never a base
+  // string that riders get bolted onto.
+  //
+  // BLOCKING lanes (the full audit; three of these came out of the Q3 review):
+  //   session directives · fresh questions · carried-over questions ·
+  //   freshly-rejected artifacts · pending drafts by type · SUGGESTED EDITS ·
+  //   SEND-BACKS (artifact `revised`) · NOT-approved plan verdicts ·
+  //   still-pending decision records · render failures.
+  // ADVISORY lanes (TRUE alongside "you may proceed", so they do NOT suppress
+  // it): the owes-debrief nudge, pending human requests, the "human also
+  // commented" note.
+  //
+  // Two properties every blocking clause must have, both learned the hard way:
+  //   DECAY — it must clear when the obligation is discharged. A clause that
+  //     can't clear pins `hasBlocking` true forever and queues every other
+  //     suggestion behind it (Q3-1: a superseded plan's old `revised` verdict).
+  //   DURABILITY — it must survive past the poll that discovered it, if the
+  //     obligation does. Deriving a clause from a DRAINED event gives a
+  //     one-poll truth (MED 4: the send-back). Prefer reading STATE.
+  //
+  // Final order (the pre-Q3 order, with the new lanes slotted by priority):
+  //   [directive] [questions] [carried] [base] [suggested edits] [send-back]
+  //   [plan send-back] [pending-decisions] [render]
+  //   [comment rider] [debrief rider] [request rider]
+  const leadingClauses: string[] = [];
+  const blockingClauses: string[] = [];
+  const advisoryClauses: string[] = [];
+
+  // The pending/rejected cascade — the primary posture, unchanged.
+  let baseClause: string | null = null;
+  // Q3 review (LOW 8) — the SAFETY-CRITICAL clause, tracked separately so the
+  // felt-weight cap below can never truncate it. Everything else in the list is
+  // "here is work you owe"; this one is "do not ship the thing you were about
+  // to ship", and it must survive any amount of competing noise.
+  let safetyClause: string | null = null;
+  if (freshlyRejected.length > 0) {
+    baseClause = `Do NOT apply — the human REJECTED ${freshlyRejected.map((a) => `"${a.title}"`).join(", ")}. Revise the approach or propose an alternative.`;
+    safetyClause = baseClause;
+  } else if (pendingArts.some((a) => a.type === "code_change")) {
+    baseClause = "Wait for the code change review before applying the edit.";
+  } else if (pendingArts.some((a) => a.type === "changeset")) {
+    baseClause = "Wait for the changeset review — the human is reviewing each file — before applying the edits.";
+  } else if (pendingArts.some((a) => a.type === "decision")) {
+    baseClause = "Wait for decision selection before proceeding.";
+  } else if (pendingArts.some((a) => a.type === "plan")) {
+    baseClause = "Wait for plan approval before implementing.";
+  } else if (pendingArts.some((a) => a.type === "spec")) {
+    baseClause = "Wait for spec approval before planning implementation.";
+  } else if (pendingArts.some((a) => a.type === "research")) {
+    baseClause = "Wait for findings review before proposing solutions.";
+  } else if (pendingArts.some((a) => a.type === "debrief")) {
+    // #190 — a debrief is the end-of-run comprehension surface; the human reads
+    // it and may ask questions. Answer any questions (answer_question) and keep
+    // polling until they close it out.
+    baseClause = "The debrief is presented — the human is reading it. Answer any questions they raise, then continue polling.";
+  }
+  // Q3 review (LOW 7) — there was an `explainer` branch here. It has been dead
+  // since P3 pulled `explainer` out of PENDING_DRAFT_TYPES: `pendingArts` filters
+  // on that set, so the predicate can never be true. A draft explainer is
+  // reported by the 📖 TO READ line (and now `structuredContent.toRead`), which
+  // is deliberately NOT an obligation — "Don't block on these." Deleted rather
+  // than left as a comment that looks live.
+
+  // Q3 review (Q3-2) — SUGGESTED EDITS. The body says "you MUST respond to each
+  // … an unanswered suggestion stays PENDING in the UI as visible debt", which
+  // is the strongest obligation any lane states, and the selector had no branch
+  // for it: the executed INSISTED case printed that paragraph beside "You may
+  // proceed with implementation." It drains after one poll, so the ONE payload
+  // that carries it is the contradicting one — there is no second chance. Ranked
+  // first among the blocking clauses, mirroring the body order (questions →
+  // suggested edits → comments).
+  if (structuredSuggestions.length > 0) {
+    blockingClauses.push(
+      `Respond to the ${structuredSuggestions.length} suggested edit${structuredSuggestions.length === 1 ? "" : "s"} below (answer_question with suggestionState "applied" + appliedInVersion, or "countered") — an unanswered suggestion stays PENDING in the UI as visible debt.`,
+    );
+  }
+
+  // Q3 — the send-back lane the old selector had no branch for at all.
+  if (sentBackArtifacts.length > 0) {
+    const named = sentBackArtifacts.map((a) => `"${a.title}" (${a.type})`).join(", ");
+    blockingClauses.push(
+      `The human SENT BACK ${named} for changes — read their feedback above and present a revision (revise_artifact), do NOT treat this as approved.`,
+    );
+  }
+  // Q3 — a plan the human returned as revised/rejected. Deduped against the
+  // send-back lane: the /status route flips the artifact AND resolves the plan
+  // review in one call, so both lanes see the same event; only one clause ships.
+  const sentBackArtifactIds = new Set(sentBackArtifacts.map((a) => a.id));
+  const planOnlySendBacks = sentBackPlans.filter((p) => !sentBackArtifactIds.has(p.id));
+  if (planOnlySendBacks.length > 0) {
+    const named = planOnlySendBacks.map((p) => `"${p.title}" (${p.verdict})`).join(", ");
+    blockingClauses.push(
+      `The human returned ${named} — the plan review above is NOT an approval. Address the feedback and re-present before implementing.`,
+    );
+  }
+  // Q3 — a still-open decision record. Same predicate as the ⏳ WAITING line
+  // above; a payload can no longer say "1 decision(s) pending" and "you may
+  // proceed" in the same breath. Skipped when the base clause already says it.
+  if (pendingDec.length > 0 && baseClause !== "Wait for decision selection before proceeding.") {
+    blockingClauses.push(
+      `${pendingDec.length} decision${pendingDec.length === 1 ? " is" : "s are"} still awaiting your pair's selection (see the ⏳ WAITING line) — don't build on an unpicked option.`,
+    );
+  }
+  // Q3 — a diagram the human is staring at, broken. The body already says "fix
+  // the Mermaid source and re-present"; the suggestion said "proceed".
+  if (renderFailures.length > 0) {
+    blockingClauses.push(
+      `${renderFailures.length} diagram${renderFailures.length === 1 ? "" : "s"} failed to render for the human — fix the Mermaid source and re-present (revise_artifact).`,
+    );
+  }
+
+  // GH#152 — when the human COMMENTED while an artifact is still awaiting its
+  // verdict (e.g. commented on a decision instead of picking an option), the
+  // suggestedAction must carry BOTH signals: act on the comment AND keep
+  // waiting for the pending verdict. An ADVISORY rider: it never stands alone
+  // (it only fires with pendingArts, which already set a base clause).
+  if (newComments.length > 0 && pendingArts.length > 0) {
+    advisoryClauses.push("The human also left a comment — read it below and consider replying (answer_question or a reply comment), then call check_feedback again.");
+  }
+
+  // H1 — debrief-owed reinforcement. Heuristic (documented): nag ONLY when the
+  // run is WINDING DOWN — no pending drafts to review, nothing freshly rejected
+  // to revise, and NO question the agent still owes an answer on — AND the
+  // session presented substantive code work (a changeset/code_change) but has
+  // no debrief yet. This keeps it off the mid-flight path (where the base clause
+  // is a "wait for review" instruction) and only fires at the natural end-of-run
+  // moment the debrief rule targets.
+  //
+  // The "no unanswered question" gate is on PERSISTED state, not this poll's
+  // `openQuestionCount` (which counts UNACKNOWLEDGED questions — those drain
+  // after one poll even if never answered, so a stale-but-open question would
+  // wrongly let the nag fire on the next poll). We use the same
+  // collectUnansweredQuestions tail-walk (answeredByCommentId) every other
+  // surface uses, so the nag genuinely waits until questions are ANSWERED.
+  // J2a (#210) — ceremony scales with task size. The nag fires only when the
+  // session SHAPE owes a debrief: a changeset, 2+ code_changes, or a decision
+  // moment. A trivial single-file surgical fix (exactly one code_change, no
+  // changeset, no decision) closes with its own self-summarizing code_change —
+  // no separate debrief owed, so no nag. Same predicate the Stop hook applies
+  // (debrief-gate.ts). This subsumes the old hasCodeWork + !hasDebrief gate.
+  // ADVISORY: "wrap up with a debrief" is true alongside "you may proceed".
+  const shapeOwesDebrief = sessionOwesDebrief(allArtifacts);
+  // O3 — reuse the single fullState snapshot; fall back to this-poll's
+  // unacknowledged count when full state was unavailable.
+  const hasUnansweredQuestions = fullState
+    ? collectUnansweredQuestions(fullState.comments ?? []).length > 0
+    : openQuestionCount > 0;
+  const owesDebrief =
+    pendingArts.length === 0 &&
+    freshlyRejected.length === 0 &&
+    !hasUnansweredQuestions &&
+    shapeOwesDebrief;
+  if (owesDebrief) {
+    advisoryClauses.push("You presented code this run but no present_debrief yet — when the feature wraps, end with ONE present_debrief so your pair gets the walk-through.");
+  }
+
+  // G1 (#198b) — pending human requests. Ordering (documented + pinned by
+  // check-feedback-request.test.ts): a request ranks AFTER unanswered questions
+  // AND AFTER freshlyRejected's safety-critical "Do NOT apply" posture, so it
+  // rides last among the advisory clauses.
+  if (pendingRequests.length > 0) {
+    advisoryClauses.push(`The human sent ${pendingRequests.length} request${pendingRequests.length === 1 ? "" : "s"} — serve ${pendingRequests.length === 1 ? "it" : "them"} (see "Human requests" below) with the matching present_* artifact.`);
+  }
+
+  // #192 / Q3 — questions carried over from an EARLIER run are the same
+  // answer_question obligation as a fresh one, and the body already tells the
+  // agent to "answer each … before new work". The selector never saw them: this
+  // is the other half of the round-12 repro (the poll printed the carried
+  // question and then "You may proceed with implementation.").
+  if (structuredCarryover.length > 0) {
+    leadingClauses.push(
+      `Answer the ${structuredCarryover.length} question${structuredCarryover.length === 1 ? "" : "s"} carried over from earlier (answer_question with the commentId in the "↩️ carried over" block below) before new work.`,
+    );
+  }
+
+  // M2 — questions LEAD the suggestedAction: when the human left open questions,
+  // answering them comes before any rejection/comment guidance (which stays,
+  // just after). Unshifted so it sits at the very front, ahead of carryover.
+  if (openQuestionCount > 0) {
+    leadingClauses.unshift(`Answer the ${openQuestionCount} open question${openQuestionCount === 1 ? "" : "s"} first (reply with answer_question).`);
+  }
+
+  // Q3 review (MED 5) — the 🎯 SESSION DIRECTIVE. The body says "Adjust your
+  // approach based on this guidance"; executed, a directive of "stop — do not
+  // touch auth" arrived beside "You may proceed with implementation." A
+  // session-level directive re-steers the WHOLE run rather than answering one
+  // artifact, so it outranks even the question queue — unshifted last, to the
+  // very front. It drains after one poll (same as any __session__ comment), so
+  // like the suggested-edits lane there is exactly one payload in which the
+  // agent can be told; getting it wrong there is getting it wrong permanently.
+  if (sessionMessages.length > 0) {
+    leadingClauses.unshift(
+      `The human sent ${sessionMessages.length === 1 ? "a directive" : `${sessionMessages.length} directives`} (🎯 above) — re-read ${sessionMessages.length === 1 ? "it" : "them"} and adjust your approach before anything else.`,
+    );
+  }
+
+  // The FALLBACK, not a base: "proceed" ships only when no lane above owed
+  // anything. Advisory clauses keep it (they're compatible with proceeding).
+  //
+  // Q3 review (LOW 6) — the DOCUMENTED EXEMPT SET: prose lanes that deliberately
+  // contribute NO clause, so a future audit doesn't have to re-derive why.
+  //   - "⏳ WAITING: N plan review(s) pending" (getPendingPlanReviews). It is
+  //     redundant with the `plan` base clause in every reachable state: a plan
+  //     review record is minted by present_plan alongside a DRAFT plan artifact,
+  //     and the record only clears when the /status route resolves it — which it
+  //     does in the same call that moves the artifact out of draft. There is no
+  //     production path that leaves a pending review without a pending draft, so
+  //     a clause here could only ever duplicate "Wait for plan approval before
+  //     implementing." (An orphaned record whose artifact went closed is already
+  //     filtered by the store's isArtifactClosed.)
+  //   - "📖 TO READ" (acknowledge-only drafts). Not an obligation by
+  //     construction — the line itself says "Don't block on these."
+  //   - the ledger-health / port-recovery / escalation / give-up notices, which
+  //     are operational notices about the TOOLING, not work the human is owed.
+  const orderedClauses = [
+    ...leadingClauses,
+    ...(baseClause ? [baseClause] : []),
+    ...blockingClauses,
+    ...advisoryClauses,
+  ];
+  const hasBlocking = leadingClauses.length > 0 || baseClause !== null || blockingClauses.length > 0;
+  // Q3 review (LOW 8) — FELT WEIGHT. A payload can now legitimately owe five or
+  // six things at once, and a six-sentence "Suggested action:" reads like the
+  // enterprise review board round 5 warned about. Keep the top THREE (the list
+  // is already in priority order) and point at the body for the rest — every
+  // clause's full text is in a prose block below, so nothing is lost, and the
+  // agent's FIRST move is still the highest-priority one.
+  const SUGGESTION_CLAUSE_CAP = 3;
+  let cappedClauses = orderedClauses;
+  if (orderedClauses.length > SUGGESTION_CLAUSE_CAP) {
+    let kept = orderedClauses.slice(0, SUGGESTION_CLAUSE_CAP);
+    // The "Do NOT apply — the human REJECTED …" posture is never truncated: a
+    // directive + a question + a carried question could otherwise push it past
+    // the cap, which is the one trade this cap must not make. It takes the last
+    // kept slot when it would have fallen off.
+    if (safetyClause && !kept.includes(safetyClause)) {
+      kept = [...orderedClauses.slice(0, SUGGESTION_CLAUSE_CAP - 1), safetyClause];
+    }
+    const remaining = orderedClauses.length - kept.length;
+    cappedClauses = remaining > 0 ? [...kept, `(+${remaining} more below.)`] : kept;
+  }
+  const suggestedAction = hasBlocking
+    ? cappedClauses.join(" ")
+    : ["You may proceed with implementation.", ...advisoryClauses].join(" ");
+
+  // The preamble is UNSHIFTED (it used to be the first push): the emitted prose
+  // order is identical, the state it summarizes is now complete.
+  parts.unshift(`Session: ${totalArtifacts} artifact${totalArtifacts !== 1 ? "s" : ""} (${approvedCount} approved, ${pendingCount} pending) | ${totalComments} new comment${totalComments !== 1 ? "s" : ""} | ${autonomyLabel} mode | deepPairing v${SERVER_VERSION}${oldestPendingAge ? `\nOldest pending: ${oldestPendingAge}` : ""}\nSuggested action: ${suggestedAction}`);
+
   // B3 — the machine-readable mirror. status: feedback (something to act on),
   // waiting (drafts/decisions/plans pending), or proceed.
   // V-fix — a HUMAN status change (e.g. approving a v2 draft) IS actionable:
@@ -1022,7 +1292,17 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     renderFailures.length > 0 ||
     // G1 (#198b) — a pending human request is something to act on (serve it).
     pendingRequests.length > 0;
-  const status = hasActionableFeedback ? "feedback" : pendingCount > 0 ? "waiting" : "proceed";
+  // Q3 review (Q3-3) — `status` is part of the audit, not outside it. It derived
+  // from the narrow `hasActionableFeedback` alone (which knows nothing about
+  // carried-over questions, still-open decision records, durable send-backs or
+  // suggested edits), and M3 spreads `suggestedAction` into structuredContent
+  // ONLY when status === "proceed" — so the two guaranteed each other's worst
+  // case: a payload could carry status:"proceed" AND, in the same object, a
+  // suggestedAction full of blocking obligations. Executed in three states.
+  // `hasBlocking` is the SAME boolean the prose clause list is built from, so
+  // the structured status and the suggested action can no longer disagree: if
+  // anything is owed, this is not "proceed".
+  const status = hasActionableFeedback ? "feedback" : hasBlocking || pendingCount > 0 ? "waiting" : "proceed";
   // N2 (#226 scope 5) — reflect any mid-call daemon self-heal to a new port in
   // companionUrl (below) and capture the one-line prose nudge for the text.
   // No-op (empty string, companionUrl unchanged) unless the port actually moved.
@@ -1081,6 +1361,18 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     // poll payload's top-level key set stays byte-for-byte (contract lock in
     // check-feedback-ledger-health.test.ts). Never carries source or a secret.
     ...(structuredRenderFailures.length > 0 ? { renderFailures: structuredRenderFailures } : {}),
+    // Q3 — the three PROSE-ONLY lanes get their structured mirrors (the N1 class:
+    // a client that branches on structuredContent instead of prose-parsing was
+    // blind to all three). Same only-when-present spread discipline as every key
+    // above, so the healthy payload is byte-for-byte unchanged:
+    //   toRead        — the 📖 TO READ line (acknowledge-only drafts; these are
+    //                   deliberately absent from `pendingArtifacts`),
+    //   planVerdicts  — the "Plan reviews:" block,
+    //   pendingDecisions — the ⏳ WAITING decision line, from the SAME computed
+    //                   `pendingDec` the prose and the suggested action use.
+    ...(structuredToRead.length > 0 ? { toRead: structuredToRead } : {}),
+    ...(structuredPlanVerdicts.length > 0 ? { planVerdicts: structuredPlanVerdicts } : {}),
+    ...(structuredPendingDecisions.length > 0 ? { pendingDecisions: structuredPendingDecisions } : {}),
     // G1 (#198b) — spread `requests` ONLY when the human has an unserved request,
     // so the healthy poll payload's top-level key set stays byte-for-byte (same
     // contract lock as renderFailures/unansweredCarryover above).
@@ -1104,15 +1396,9 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     ...ledgerHealthField(),
   };
 
-  // If only the preamble exists (no feedback, no waits), give a clean proceed signal
-  const [preamble] = parts;
-  if (parts.length === 1 && preamble !== undefined) {
-    return {
-      content: [{ type: "text", text: `${preamble}${portNote}` }],
-      structuredContent,
-    };
-  }
-
+  // Q3 (dead weight) — there used to be a `parts.length === 1` special case here
+  // returning `${preamble}${portNote}`. `["x"].join("\n\n") === "x"`, so it was
+  // byte-identical to the fallthrough below and only existed to say so. Deleted.
   return {
     content: [{ type: "text", text: `${parts.join("\n\n")}${portNote}` }],
     structuredContent,

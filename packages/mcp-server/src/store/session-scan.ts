@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Artifact, Comment } from "@deeppairing/shared";
-import { collectUnansweredQuestions } from "@deeppairing/shared";
+import { collectUnansweredQuestions, isClosedArtifactStatus } from "@deeppairing/shared";
 import { salvageArray } from "./salvage.js";
 import type { DecisionRecord } from "./store-interface.js";
 
@@ -274,18 +274,13 @@ export interface ProjectDecision {
  * open-items count. Only UNRESOLVED records reach this check, and every normal
  * path writes the resolution alongside the status, so this drops orphans only.
  * Parity with FileStore.isArtifactClosed is pinned in list-all-decisions.test.ts.
+ *
+ * Q3 — the SET moved to @deeppairing/shared (`isClosedArtifactStatus`) so the
+ * store, this scanner and check_feedback are literally the same predicate rather
+ * than three hand-kept copies (the third disagreed on `revised`). Re-exported
+ * here under the historical name so existing importers/tests keep working.
  */
-const CLOSED_ARTIFACT_STATUSES: ReadonlySet<Artifact["status"]> = new Set([
-  "superseded",
-  "retracted",
-  "rejected",
-  "obsolete",
-  "approved",
-]);
-
-function isClosedArtifactStatus(status: Artifact["status"] | undefined): boolean {
-  return status !== undefined && CLOSED_ARTIFACT_STATUSES.has(status);
-}
+export { isClosedArtifactStatus };
 
 export interface ProjectDecisionsResult {
   /** Newest-first (by resolvedAt ?? createdAt). */

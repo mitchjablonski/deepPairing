@@ -360,3 +360,62 @@ describe("first-call hint — S2: terse/autonomy division of labor", () => {
     expect(hint).toMatch(/Skip the opening findings\/options ceremony/);
   });
 });
+
+/**
+ * Q3 — THE STALE NAG. The hint is assembled BEFORE the tool handler runs
+ * (server.ts builds it, dispatches, then attaches it to a SUCCESSFUL result), so
+ * a session whose first call is `answer_question` used to be handed a snapshot
+ * that still contained the very comment it was answering. Round 12's observed
+ * symptom: answering the ONLY open question came back with "1 unanswered human
+ * question awaits… Drain these before new work." — a queue the agent had just
+ * drained. Every obligation lane that keys on `!answeredByCommentId` now skips
+ * the ids being answered.
+ */
+describe("first-call hint — Q3: the answer_question snapshot is not stale", () => {
+  it("does NOT nag about the question this call is answering", async () => {
+    store.createArtifact({ id: "art_1", type: "plan", title: "Plan", content: { steps: [] } });
+    store.addComment({
+      id: "cmt_q",
+      artifactId: "art_1",
+      content: "why a sliding window?",
+      author: "human",
+      intent: "question",
+      target: { artifactId: "art_1" },
+    });
+
+    // Control: with nothing excluded the nag fires (the instrument works).
+    expect(await buildFirstCallHint(store, 4000)).toContain("unanswered human question");
+    // The answer_question path excludes its own commentId.
+    expect(await buildFirstCallHint(store, 4000, ["cmt_q"])).not.toContain("unanswered human question");
+  });
+
+  it("still nags about the OTHER questions the agent isn't answering", async () => {
+    store.createArtifact({ id: "art_1", type: "plan", title: "Plan", content: { steps: [] } });
+    for (const id of ["cmt_a", "cmt_b"]) {
+      store.addComment({
+        id,
+        artifactId: "art_1",
+        content: `q ${id}`,
+        author: "human",
+        intent: "question",
+        target: { artifactId: "art_1" },
+      });
+    }
+    const hint = await buildFirstCallHint(store, 4000, ["cmt_a"]);
+    expect(hint).toContain("1 unanswered human question awaits");
+    expect(hint).not.toContain("2 unanswered human questions");
+  });
+
+  it("excludes the id from the plain-comment mirror lane too (same predicate)", async () => {
+    store.createArtifact({ id: "art_1", type: "plan", title: "Plan", content: { steps: [] } });
+    store.addComment({
+      id: "cmt_plain",
+      artifactId: "art_1",
+      content: "this needs a rollback story",
+      author: "human",
+      target: { artifactId: "art_1" },
+    });
+    expect(await buildFirstCallHint(store, 4000)).toContain("without an agent reply");
+    expect(await buildFirstCallHint(store, 4000, ["cmt_plain"])).not.toContain("without an agent reply");
+  });
+});

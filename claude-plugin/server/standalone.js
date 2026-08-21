@@ -25783,6 +25783,16 @@ var ArtifactStatusSchema = external_exports.enum([
   // drops out of "waiting for review".
   "obsolete"
 ]);
+var CLOSED_ARTIFACT_STATUSES = /* @__PURE__ */ new Set([
+  "superseded",
+  "retracted",
+  "rejected",
+  "obsolete",
+  "approved"
+]);
+function isClosedArtifactStatus(status) {
+  return status !== void 0 && CLOSED_ARTIFACT_STATUSES.has(status);
+}
 var ArtifactStatusHistoryEntrySchema = external_exports.object({
   status: ArtifactStatusSchema,
   at: external_exports.string().datetime()
@@ -27875,7 +27885,8 @@ var AUTONOMY_HINT_AUTONOMOUS = [
 function autonomyHintFor(level) {
   return level === "balanced" ? AUTONOMY_HINT_BALANCED : level === "autonomous" ? AUTONOMY_HINT_AUTONOMOUS : AUTONOMY_HINT_SUPERVISED;
 }
-async function buildFirstCallHint(store, port) {
+async function buildFirstCallHint(store, port, answeredCommentIds = []) {
+  const answeringCommentIds = new Set(answeredCommentIds.filter((id) => typeof id === "string" && id.length > 0));
   const obligationsParts = [];
   const policyParts = [];
   const contextualParts = [];
@@ -28089,7 +28100,7 @@ ${philosophyParts.join("\n")}`
       );
     }
     const unanswered = allComments.filter(
-      (c) => c.author === "human" && c.intent === "question" && !c.answeredByCommentId && !c.humanResolvedAt
+      (c) => c.author === "human" && c.intent === "question" && !c.answeredByCommentId && !c.humanResolvedAt && !answeringCommentIds.has(c.id)
     );
     const revisionRequested = unanswered.filter(
       (c) => typeof c.target?.sectionId === "string" && c.target.sectionId.startsWith("decision_revision_requested")
@@ -28130,7 +28141,8 @@ Serve each with the matching present_* tool, passing servedRequestId so it links
       allComments.filter((c) => c.author === "agent").map((c) => c.id)
     );
     const followUps = allComments.filter(
-      (c) => c.author === "human" && c.parentCommentId && agentCommentIds.has(c.parentCommentId) && !c.answeredByCommentId
+      (c) => c.author === "human" && c.parentCommentId && agentCommentIds.has(c.parentCommentId) && !c.answeredByCommentId && // Q3 — same stale-snapshot exclusion as the question lane above.
+      !answeringCommentIds.has(c.id)
     );
     if (followUps.length > 0) {
       const lines = followUps.map((c) => {
@@ -28150,7 +28162,11 @@ Each is a continuation of an existing thread (parentCommentId points at one of y
       (fullState.artifacts ?? []).filter((a) => a.status === "approved").map((a) => a.id)
     );
     const plainCommentsNeedingMirror = allComments.filter(
-      (c) => c.author === "human" && c.intent !== "question" && !c.answeredByCommentId && !followUpIds.has(c.id) && c.target?.artifactId && c.target.artifactId !== "__session__" && !approvedArtifactIds.has(c.target.artifactId)
+      (c) => c.author === "human" && c.intent !== "question" && !c.answeredByCommentId && !followUpIds.has(c.id) && c.target?.artifactId && c.target.artifactId !== "__session__" && !approvedArtifactIds.has(c.target.artifactId) && // Q3 — same stale-snapshot exclusion as the question lane above. A
+      // SUCCESSFUL answer_question posted a reply on this comment (the plain
+      // path also stamps answeredByCommentId; the suggestion path stamps the
+      // suggestion state), so "needs a mirror" is already false.
+      !answeringCommentIds.has(c.id)
     );
     if (plainCommentsNeedingMirror.length > 0) {
       blockingParts.push(
@@ -32200,44 +32216,6 @@ async function handleCheckFeedback(ctx, args) {
     const secs = Math.floor(oldestMs % 6e4 / 1e3);
     oldestPendingAge = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
   }
-  let suggestedAction = "You may proceed with implementation.";
-  if (freshlyRejected.length > 0) {
-    suggestedAction = `Do NOT apply \u2014 the human REJECTED ${freshlyRejected.map((a) => `"${a.title}"`).join(", ")}. Revise the approach or propose an alternative.`;
-  } else if (pendingArts.some((a) => a.type === "code_change")) {
-    suggestedAction = "Wait for the code change review before applying the edit.";
-  } else if (pendingArts.some((a) => a.type === "changeset")) {
-    suggestedAction = "Wait for the changeset review \u2014 the human is reviewing each file \u2014 before applying the edits.";
-  } else if (pendingArts.some((a) => a.type === "decision")) {
-    suggestedAction = "Wait for decision selection before proceeding.";
-  } else if (pendingArts.some((a) => a.type === "plan")) {
-    suggestedAction = "Wait for plan approval before implementing.";
-  } else if (pendingArts.some((a) => a.type === "spec")) {
-    suggestedAction = "Wait for spec approval before planning implementation.";
-  } else if (pendingArts.some((a) => a.type === "research")) {
-    suggestedAction = "Wait for findings review before proposing solutions.";
-  } else if (pendingArts.some((a) => a.type === "debrief")) {
-    suggestedAction = "The debrief is presented \u2014 the human is reading it. Answer any questions they raise, then continue polling.";
-  } else if (pendingArts.some((a) => a.type === "explainer")) {
-    suggestedAction = "The explainer is presented \u2014 the human is reading the walk-through. Answer any questions they raise, then continue polling.";
-  }
-  if (newComments.length > 0 && pendingArts.length > 0) {
-    suggestedAction = `${suggestedAction} The human also left a comment \u2014 read it below and consider replying (answer_question or a reply comment), then call check_feedback again.`;
-  }
-  const shapeOwesDebrief = sessionOwesDebrief(allArtifacts);
-  const hasUnansweredQuestions = fullState ? collectUnansweredQuestions(fullState.comments ?? []).length > 0 : openQuestionCount > 0;
-  const owesDebrief = pendingArts.length === 0 && freshlyRejected.length === 0 && !hasUnansweredQuestions && shapeOwesDebrief;
-  if (owesDebrief) {
-    suggestedAction = `${suggestedAction} You presented code this run but no present_debrief yet \u2014 when the feature wraps, end with ONE present_debrief so your pair gets the walk-through.`;
-  }
-  if (pendingRequests.length > 0) {
-    suggestedAction = `${suggestedAction} The human sent ${pendingRequests.length} request${pendingRequests.length === 1 ? "" : "s"} \u2014 serve ${pendingRequests.length === 1 ? "it" : "them"} (see "Human requests" below) with the matching present_* artifact.`;
-  }
-  if (openQuestionCount > 0) {
-    suggestedAction = `Answer the ${openQuestionCount} open question${openQuestionCount === 1 ? "" : "s"} first (reply with answer_question). ${suggestedAction}`;
-  }
-  parts.push(`Session: ${totalArtifacts} artifact${totalArtifacts !== 1 ? "s" : ""} (${approvedCount} approved, ${pendingCount} pending) | ${totalComments} new comment${totalComments !== 1 ? "s" : ""} | ${autonomyLabel} mode | deepPairing v${SERVER_VERSION}${oldestPendingAge ? `
-Oldest pending: ${oldestPendingAge}` : ""}
-Suggested action: ${suggestedAction}`);
   const structuredQuestions = [];
   const structuredComments = [];
   const structuredDecisions = [];
@@ -32411,11 +32389,26 @@ ${formattedDecisions.join("\n")}`);
   const pendingPlans = await store.getPendingPlanReviews();
   const planArtifacts = postWakeArtifacts.filter((a) => a.type === "plan");
   const reviewedPlans = [];
+  const structuredPlanVerdicts = [];
+  const sentBackPlans = [];
   let freshPlanVerdicts = 0;
+  const planVerdictFromSnapshot = fullState ? new Map((fullState.planReviews ?? []).map((p) => [p.artifactId, p])) : null;
   for (const a of planArtifacts) {
-    const verdict = await store.getPlanReviewVerdict(a.id);
+    const verdict = planVerdictFromSnapshot ? (() => {
+      const rec = planVerdictFromSnapshot.get(a.id);
+      return rec?.verdict ? { verdict: rec.verdict, feedback: rec.feedback } : null;
+    })() : await store.getPlanReviewVerdict(a.id);
     if (!verdict) continue;
     reviewedPlans.push(`- Plan "${a.title}": ${verdict.verdict}${verdict.feedback ? ` (feedback: ${verdict.feedback})` : ""}`);
+    structuredPlanVerdicts.push({
+      artifactId: a.id,
+      title: a.title,
+      verdict: verdict.verdict,
+      ...verdict.feedback ? { feedback: verdict.feedback } : {}
+    });
+    if (verdict.verdict !== "approved" && !isClosedArtifactStatus(a.status)) {
+      sentBackPlans.push({ id: a.id, title: a.title, verdict: verdict.verdict });
+    }
     if (!ctx.state.reportedPlanVerdicts.has(a.id)) {
       ctx.state.reportedPlanVerdicts.add(a.id);
       freshPlanVerdicts++;
@@ -32430,6 +32423,10 @@ ${reviewedPlans.join("\n")}`);
     const { previousStatus, at } = deriveTransition(a);
     return { id: a.id, type: a.type, title: a.title, status: a.status, previousStatus, at };
   });
+  const sentBackById = /* @__PURE__ */ new Map();
+  for (const a of postWakeArtifacts) if (a.status === "revised") sentBackById.set(a.id, a);
+  for (const a of changed) if (a.status === "revised") sentBackById.set(a.id, a);
+  const sentBackArtifacts = Array.from(sentBackById.values());
   if (changed.length > 0) {
     await store.acknowledgeStatusChanges(changed.map((a) => a.id));
     const lines = structuredStatusChanges.map((s) => {
@@ -32476,26 +32473,33 @@ Fix the Mermaid source and re-present the affected visual (revise_artifact).`
     parts.push(`\u23F3 WAITING: ${verdictDrafts.length} artifact(s) still under review: ${waiting}
 The human is reviewing in the companion UI. Call check_feedback again to pick up their response.`);
   }
+  const structuredToRead = readOnlyDrafts.map((a) => ({
+    id: a.id,
+    type: a.type,
+    title: a.title,
+    ...a.secretWarnings?.length ? { secretWarnings: a.secretWarnings.map((w) => w.label) } : {}
+  }));
   if (readOnlyDrafts.length > 0) {
     const toRead = readOnlyDrafts.map(nameDraft).join(", ");
     parts.push(`\u{1F4D6} TO READ: ${readOnlyDrafts.length} read-only artifact(s) the human hasn't acknowledged yet: ${toRead}
 These await no verdict \u2014 they're explanations, not proposals. The human clicks "Got it" (or asks a follow-up) when they've read them. Don't block on these.`);
   }
   const deliveredDecisionIds = new Set(resolved.map((d) => d.decisionId));
-  const openArtifactIds = new Set(
-    postWakeArtifacts.filter((a) => a.status === "draft" || a.status === "reviewing").map((a) => a.id)
-  );
+  const statusById = new Map(postWakeArtifacts.map((a) => [a.id, a.status]));
   const pendingDec = (await store.getPendingDecisions()).filter(
-    (d) => !deliveredDecisionIds.has(d.decisionId) && // A record whose artifact this session doesn't carry at all stays pending
-    // (mirrors the store's own "unknown ids stay pending" stance).
-    (!postWakeArtifacts.some((a) => a.id === d.artifactId) || openArtifactIds.has(d.artifactId))
+    (d) => !deliveredDecisionIds.has(d.decisionId) && !isClosedArtifactStatus(statusById.get(d.artifactId))
   );
+  const decisionLabelOf = (d) => {
+    const label = d.title?.trim() || d.context;
+    return label.length > 80 ? `${label.slice(0, 79)}\u2026` : label;
+  };
+  const structuredPendingDecisions = pendingDec.map((d) => ({
+    decisionId: d.decisionId,
+    artifactId: d.artifactId,
+    title: decisionLabelOf(d)
+  }));
   if (pendingDec.length > 0) {
-    const named = pendingDec.map((d) => {
-      const label = d.title?.trim() || d.context;
-      const short = label.length > 80 ? `${label.slice(0, 79)}\u2026` : label;
-      return `"${short}" (${d.decisionId})`;
-    }).join(", ");
+    const named = pendingDec.map((d) => `"${decisionLabelOf(d)}" (${d.decisionId})`).join(", ");
     parts.push(`\u23F3 WAITING: ${pendingDec.length} decision(s) pending: ${named}. The human will select in the companion UI. Call check_feedback again to pick up their choice.`);
   }
   if (pendingPlans.length > 0) {
@@ -32520,11 +32524,109 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
   if (ctx.state.checkFeedbackPollCount >= 6 && pendingCount > 0) {
     parts.push(`\u{1F6D1} After ${ctx.state.checkFeedbackPollCount} empty polls you don't have to keep spinning. It's fine to STOP here: summarize what's still pending (the ${pendingCount} artifact${pendingCount === 1 ? "" : "s"} under review) in your reply and end the run. Nothing is lost \u2014 the artifacts persist and any unanswered questions carry over to your NEXT run (they resurface on your first check_feedback and in the first-call hint). Keep polling only if you'd rather wait.`);
   }
+  const leadingClauses = [];
+  const blockingClauses = [];
+  const advisoryClauses = [];
+  let baseClause = null;
+  let safetyClause = null;
+  if (freshlyRejected.length > 0) {
+    baseClause = `Do NOT apply \u2014 the human REJECTED ${freshlyRejected.map((a) => `"${a.title}"`).join(", ")}. Revise the approach or propose an alternative.`;
+    safetyClause = baseClause;
+  } else if (pendingArts.some((a) => a.type === "code_change")) {
+    baseClause = "Wait for the code change review before applying the edit.";
+  } else if (pendingArts.some((a) => a.type === "changeset")) {
+    baseClause = "Wait for the changeset review \u2014 the human is reviewing each file \u2014 before applying the edits.";
+  } else if (pendingArts.some((a) => a.type === "decision")) {
+    baseClause = "Wait for decision selection before proceeding.";
+  } else if (pendingArts.some((a) => a.type === "plan")) {
+    baseClause = "Wait for plan approval before implementing.";
+  } else if (pendingArts.some((a) => a.type === "spec")) {
+    baseClause = "Wait for spec approval before planning implementation.";
+  } else if (pendingArts.some((a) => a.type === "research")) {
+    baseClause = "Wait for findings review before proposing solutions.";
+  } else if (pendingArts.some((a) => a.type === "debrief")) {
+    baseClause = "The debrief is presented \u2014 the human is reading it. Answer any questions they raise, then continue polling.";
+  }
+  if (structuredSuggestions.length > 0) {
+    blockingClauses.push(
+      `Respond to the ${structuredSuggestions.length} suggested edit${structuredSuggestions.length === 1 ? "" : "s"} below (answer_question with suggestionState "applied" + appliedInVersion, or "countered") \u2014 an unanswered suggestion stays PENDING in the UI as visible debt.`
+    );
+  }
+  if (sentBackArtifacts.length > 0) {
+    const named = sentBackArtifacts.map((a) => `"${a.title}" (${a.type})`).join(", ");
+    blockingClauses.push(
+      `The human SENT BACK ${named} for changes \u2014 read their feedback above and present a revision (revise_artifact), do NOT treat this as approved.`
+    );
+  }
+  const sentBackArtifactIds = new Set(sentBackArtifacts.map((a) => a.id));
+  const planOnlySendBacks = sentBackPlans.filter((p) => !sentBackArtifactIds.has(p.id));
+  if (planOnlySendBacks.length > 0) {
+    const named = planOnlySendBacks.map((p) => `"${p.title}" (${p.verdict})`).join(", ");
+    blockingClauses.push(
+      `The human returned ${named} \u2014 the plan review above is NOT an approval. Address the feedback and re-present before implementing.`
+    );
+  }
+  if (pendingDec.length > 0 && baseClause !== "Wait for decision selection before proceeding.") {
+    blockingClauses.push(
+      `${pendingDec.length} decision${pendingDec.length === 1 ? " is" : "s are"} still awaiting your pair's selection (see the \u23F3 WAITING line) \u2014 don't build on an unpicked option.`
+    );
+  }
+  if (renderFailures.length > 0) {
+    blockingClauses.push(
+      `${renderFailures.length} diagram${renderFailures.length === 1 ? "" : "s"} failed to render for the human \u2014 fix the Mermaid source and re-present (revise_artifact).`
+    );
+  }
+  if (newComments.length > 0 && pendingArts.length > 0) {
+    advisoryClauses.push("The human also left a comment \u2014 read it below and consider replying (answer_question or a reply comment), then call check_feedback again.");
+  }
+  const shapeOwesDebrief = sessionOwesDebrief(allArtifacts);
+  const hasUnansweredQuestions = fullState ? collectUnansweredQuestions(fullState.comments ?? []).length > 0 : openQuestionCount > 0;
+  const owesDebrief = pendingArts.length === 0 && freshlyRejected.length === 0 && !hasUnansweredQuestions && shapeOwesDebrief;
+  if (owesDebrief) {
+    advisoryClauses.push("You presented code this run but no present_debrief yet \u2014 when the feature wraps, end with ONE present_debrief so your pair gets the walk-through.");
+  }
+  if (pendingRequests.length > 0) {
+    advisoryClauses.push(`The human sent ${pendingRequests.length} request${pendingRequests.length === 1 ? "" : "s"} \u2014 serve ${pendingRequests.length === 1 ? "it" : "them"} (see "Human requests" below) with the matching present_* artifact.`);
+  }
+  if (structuredCarryover.length > 0) {
+    leadingClauses.push(
+      `Answer the ${structuredCarryover.length} question${structuredCarryover.length === 1 ? "" : "s"} carried over from earlier (answer_question with the commentId in the "\u21A9\uFE0F carried over" block below) before new work.`
+    );
+  }
+  if (openQuestionCount > 0) {
+    leadingClauses.unshift(`Answer the ${openQuestionCount} open question${openQuestionCount === 1 ? "" : "s"} first (reply with answer_question).`);
+  }
+  if (sessionMessages.length > 0) {
+    leadingClauses.unshift(
+      `The human sent ${sessionMessages.length === 1 ? "a directive" : `${sessionMessages.length} directives`} (\u{1F3AF} above) \u2014 re-read ${sessionMessages.length === 1 ? "it" : "them"} and adjust your approach before anything else.`
+    );
+  }
+  const orderedClauses = [
+    ...leadingClauses,
+    ...baseClause ? [baseClause] : [],
+    ...blockingClauses,
+    ...advisoryClauses
+  ];
+  const hasBlocking = leadingClauses.length > 0 || baseClause !== null || blockingClauses.length > 0;
+  const SUGGESTION_CLAUSE_CAP = 3;
+  let cappedClauses = orderedClauses;
+  if (orderedClauses.length > SUGGESTION_CLAUSE_CAP) {
+    let kept = orderedClauses.slice(0, SUGGESTION_CLAUSE_CAP);
+    if (safetyClause && !kept.includes(safetyClause)) {
+      kept = [...orderedClauses.slice(0, SUGGESTION_CLAUSE_CAP - 1), safetyClause];
+    }
+    const remaining = orderedClauses.length - kept.length;
+    cappedClauses = remaining > 0 ? [...kept, `(+${remaining} more below.)`] : kept;
+  }
+  const suggestedAction = hasBlocking ? cappedClauses.join(" ") : ["You may proceed with implementation.", ...advisoryClauses].join(" ");
+  parts.unshift(`Session: ${totalArtifacts} artifact${totalArtifacts !== 1 ? "s" : ""} (${approvedCount} approved, ${pendingCount} pending) | ${totalComments} new comment${totalComments !== 1 ? "s" : ""} | ${autonomyLabel} mode | deepPairing v${SERVER_VERSION}${oldestPendingAge ? `
+Oldest pending: ${oldestPendingAge}` : ""}
+Suggested action: ${suggestedAction}`);
   const hasActionableFeedback = hasNewFeedback || freshlyRejected.length > 0 || freshPlanVerdicts > 0 || changed.length > 0 || // #176 — a broken diagram the human is staring at is actionable: the agent
   // should fix + re-present, not sit in 'waiting'.
   renderFailures.length > 0 || // G1 (#198b) — a pending human request is something to act on (serve it).
   pendingRequests.length > 0;
-  const status = hasActionableFeedback ? "feedback" : pendingCount > 0 ? "waiting" : "proceed";
+  const status = hasActionableFeedback ? "feedback" : hasBlocking || pendingCount > 0 ? "waiting" : "proceed";
   const portNote = portRecoveryNote();
   const structuredContent = {
     status,
@@ -32578,6 +32680,18 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
     // poll payload's top-level key set stays byte-for-byte (contract lock in
     // check-feedback-ledger-health.test.ts). Never carries source or a secret.
     ...structuredRenderFailures.length > 0 ? { renderFailures: structuredRenderFailures } : {},
+    // Q3 — the three PROSE-ONLY lanes get their structured mirrors (the N1 class:
+    // a client that branches on structuredContent instead of prose-parsing was
+    // blind to all three). Same only-when-present spread discipline as every key
+    // above, so the healthy payload is byte-for-byte unchanged:
+    //   toRead        — the 📖 TO READ line (acknowledge-only drafts; these are
+    //                   deliberately absent from `pendingArtifacts`),
+    //   planVerdicts  — the "Plan reviews:" block,
+    //   pendingDecisions — the ⏳ WAITING decision line, from the SAME computed
+    //                   `pendingDec` the prose and the suggested action use.
+    ...structuredToRead.length > 0 ? { toRead: structuredToRead } : {},
+    ...structuredPlanVerdicts.length > 0 ? { planVerdicts: structuredPlanVerdicts } : {},
+    ...structuredPendingDecisions.length > 0 ? { pendingDecisions: structuredPendingDecisions } : {},
     // G1 (#198b) — spread `requests` ONLY when the human has an unserved request,
     // so the healthy poll payload's top-level key set stays byte-for-byte (same
     // contract lock as renderFailures/unansweredCarryover above).
@@ -32598,13 +32712,6 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
     // spreads nothing (byte-for-byte-unchanged payload) when healthy.
     ...ledgerHealthField()
   };
-  const [preamble] = parts;
-  if (parts.length === 1 && preamble !== void 0) {
-    return {
-      content: [{ type: "text", text: `${preamble}${portNote}` }],
-      structuredContent
-    };
-  }
   return {
     content: [{ type: "text", text: `${parts.join("\n\n")}${portNote}` }],
     structuredContent
@@ -34622,7 +34729,8 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
     const args = rawArgs ?? {};
     let firstCallHint = "";
     if (firstToolCall && carriesFirstCallHint(name)) {
-      firstCallHint = await buildFirstCallHint(store, port);
+      const answeringCommentIds = name === "answer_question" && typeof args?.commentId === "string" && args.commentId.trim() ? [args.commentId.trim()] : [];
+      firstCallHint = await buildFirstCallHint(store, port, answeringCommentIds);
     }
     const tryElicit2 = (message) => tryElicit(server, message);
     const preflightRejectedApproaches2 = (toolName, proposalStrings, proposalPaths = [], proposalConcepts = []) => preflightRejectedApproaches(store, broadcast, toolName, proposalStrings, proposalPaths, proposalConcepts);
