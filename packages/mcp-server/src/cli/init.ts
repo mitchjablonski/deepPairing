@@ -1554,7 +1554,7 @@ async function demoCmd(): Promise<void> {
  */
 async function postPrReviewCmd(ref: string, sessionId?: string, event?: string) {
   const { FileStore } = await import("../store/file-store.js");
-  const { buildGitHubReviewPayload } = await import("../export/format-markdown.js");
+  const { authorizeReviewPost } = await import("../github/review-authorization.js");
   const { postPrReview, GhMissingError, GhNotAuthedError } = await import("../github/post-review.js");
 
   let chosenSessionId = sessionId;
@@ -1575,15 +1575,16 @@ async function postPrReviewCmd(ref: string, sessionId?: string, event?: string) 
     process.exit(1);
   }
 
-  const payload = buildGitHubReviewPayload(state, {
-    event: (event as any) || "COMMENT",
-  });
-
-  if (payload.comments.length === 0) {
-    console.error(`  ${red("✗")} No findings with structured evidence (filePath + lineStart) in this session.`);
-    console.error(`  ${dim("   Use present_findings with structured Evidence objects to enable inline review comments.")}`);
+  // Q6 (#232) B1 — the SECOND door out of this machine. It runs the identical
+  // authorization gate as the MCP tool (one function, two callers): only
+  // findings your pair approved in the companion UI may be posted, and a bare
+  // APPROVE needs their approval on the external changeset. No --force.
+  const auth = authorizeReviewPost(state, { event: ((event as any) || "COMMENT") });
+  if (!auth.ok) {
+    console.error(`  ${red("✗")} ${auth.reason}`);
     process.exit(1);
   }
+  const { payload } = auth;
 
   try {
     const result = await postPrReview({ ref, payload });

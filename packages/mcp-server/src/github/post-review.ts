@@ -32,6 +32,28 @@ export class GhNotAuthedError extends Error {
   }
 }
 
+/**
+ * Q6 (#232) — does this `gh` failure mean "you are not authenticated"?
+ *
+ * Both failure sites string-matched two phrases inline. That covered the
+ * no-host-configured case ("not logged into any GitHub hosts") but missed the
+ * one a real reviewer is at least as likely to hit: a token that EXISTS and is
+ * expired, revoked, or missing the `repo` scope, where gh relays GitHub's
+ * "Bad credentials (HTTP 401)" / "Requires authentication" instead. Those fell
+ * through to the generic branch, so the human got a raw HTTP error where the
+ * fix ("run gh auth login") is the same one sentence. One predicate, both
+ * sites, all four shapes.
+ */
+function looksUnauthenticated(stderr: string): boolean {
+  const lower = stderr.toLowerCase();
+  return (
+    lower.includes("not logged into") ||
+    lower.includes("authentication token") ||
+    lower.includes("bad credentials") ||
+    lower.includes("requires authentication")
+  );
+}
+
 /** Parse a PR reference: "42", "#42", or a full URL → { owner?, repo?, number }. */
 export function parsePrRef(ref: string): { owner?: string; repo?: string; number: number } {
   const urlMatch = ref.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
@@ -82,6 +104,25 @@ function run(
     child.on("close", (code) => {
       finish(() => resolve({ code: code ?? 1, stdout, stderr }));
     });
+    // Q6 (#232) — EPIPE on the child's stdin must never escape.
+    //
+    // A review payload is easily hundreds of KB (one comment body per evidence
+    // location), which is far past the ~64KB pipe buffer, so `write` completes
+    // ASYNCHRONOUSLY. Every failure mode of `gh` exits BEFORE draining that
+    // pipe — unauthenticated, a 422 on a closed PR, or our own SIGKILL on the
+    // timeout above — and the kernel then answers the in-flight write with
+    // EPIPE. An 'error' event on a stream with no listener is an UNCAUGHT
+    // EXCEPTION, and this code runs inside a long-lived stdio MCP server: the
+    // observable failure was not "the post failed", it was the whole server
+    // going down and the agent losing its connection mid-session. Executed and
+    // reproduced in post-review-e2e.test.ts ("a gh that exits without draining
+    // stdin"), which fails with an unhandled error if this listener is removed.
+    //
+    // Swallowing is the correct response, not a papering-over: the child's own
+    // 'close'/'error' handler above is already the authority on what went
+    // wrong, and it reports GitHub's real message. A broken pipe here is a
+    // SYMPTOM of that failure, never independent news.
+    child.stdin.on("error", () => { /* see above — the child’s exit is the real story */ });
     if (stdin) {
       child.stdin.write(stdin);
       child.stdin.end();
@@ -95,10 +136,7 @@ function run(
 async function detectRepo(): Promise<{ owner: string; repo: string }> {
   const res = await run("gh", ["repo", "view", "--json", "nameWithOwner"]);
   if (res.code !== 0) {
-    const lower = res.stderr.toLowerCase();
-    if (lower.includes("not logged into") || lower.includes("authentication token")) {
-      throw new GhNotAuthedError();
-    }
+    if (looksUnauthenticated(res.stderr)) throw new GhNotAuthedError();
     throw new Error(`gh repo view failed: ${res.stderr.trim() || res.stdout.trim()}`);
   }
   try {
@@ -142,10 +180,7 @@ export async function postPrReview(opts: {
   );
 
   if (res.code !== 0) {
-    const lower = res.stderr.toLowerCase();
-    if (lower.includes("not logged into") || lower.includes("authentication token")) {
-      throw new GhNotAuthedError();
-    }
+    if (looksUnauthenticated(res.stderr)) throw new GhNotAuthedError();
     throw new Error(`gh api failed (exit ${res.code}): ${res.stderr.trim() || res.stdout.trim()}`);
   }
 

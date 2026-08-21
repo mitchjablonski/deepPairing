@@ -38,9 +38,23 @@ const NOW = Date.now();
 const recent = new Date(NOW - 60 * 1000).toISOString();
 const ancient = new Date(NOW - 45 * 60 * 1000).toISOString(); // > 30-min age guard
 
-type Art = { id: string; type: string; status: string; createdAt: string };
+type Art = { id: string; type: string; status: string; createdAt: string; content?: unknown };
 const cc = (id: string, createdAt = recent): Art => ({ id, type: "code_change", status: "approved", createdAt });
 const cs = (id: string, createdAt = recent): Art => ({ id, type: "changeset", status: "approved", createdAt });
+/** Q6 (#232) — a changeset that is somebody ELSE'S code (a GitHub PR on the
+ *  review surface). Invisible to the debrief gate: the pair reviewed it, they
+ *  did not write it, and the session's output is the review they post back. */
+const csExternal = (id: string, createdAt = recent): Art => ({
+  id, type: "changeset", status: "approved", createdAt,
+  content: { files: [], reviewIntent: "external", source: { kind: "github-pr", number: 123 } },
+});
+/** The control: a changeset that carries content but is explicitly LOCAL. Guards
+ *  against a carve-out that accidentally keys on "has content" or "has a
+ *  reviewIntent key at all" rather than on the value. */
+const csLocal = (id: string, createdAt = recent): Art => ({
+  id, type: "changeset", status: "approved", createdAt,
+  content: { files: [], reviewIntent: "local" },
+});
 const dec = (id: string): Art => ({ id, type: "decision", status: "approved", createdAt: recent });
 const dbf = (id: string): Art => ({ id, type: "debrief", status: "approved", createdAt: recent });
 const plan = (id: string): Art => ({ id, type: "plan", status: "approved", createdAt: recent });
@@ -72,6 +86,24 @@ const MATRIX: Case[] = [
   // F2 — a RETRACTED debrief no longer satisfies the obligation; the close was
   // attempted but isn't standing, so it's still owed.
   { name: "code_change + retracted debrief (F2)", artifacts: [cc("c1"), dbfRetracted("b0")], owesDebrief: true },
+  // Q6 (#232) — the EXTERNAL-REVIEW carve-out. A changeset carrying
+  // reviewIntent:"external" is a colleague's PR pulled onto the review surface;
+  // it is never "code was presented", so it never puts the session in
+  // debrief-owed territory. Five cases pin the whole shape of the decision.
+  //
+  // (a) the intended case: a session whose entire output is a PR review.
+  { name: "single EXTERNAL changeset (Q6 carve-out)", artifacts: [csExternal("x1")], owesDebrief: false },
+  // (b) the control — an explicitly LOCAL changeset with content still owes, so
+  //     the carve-out keys on the VALUE, not on the presence of content.
+  { name: "single LOCAL changeset with content (Q6 control)", artifacts: [csLocal("s1")], owesDebrief: true },
+  // (c) reviewing a PR does NOT escalate the pair's own trivial fix: the
+  //     colleague's diff says nothing about how big your own one-file change was.
+  { name: "EXTERNAL changeset + one code_change stays TRIVIAL (Q6)", artifacts: [csExternal("x1"), cc("c1")], owesDebrief: false },
+  // (d) the carve-out is scoped: real local work alongside a PR review still owes.
+  { name: "EXTERNAL changeset + LOCAL changeset (Q6 scope)", artifacts: [csExternal("x1"), cs("s1")], owesDebrief: true },
+  // (e) …and ceremony still escalates over the top of it (a decision means the
+  //     pair shaped something of their own, whatever else the session read).
+  { name: "EXTERNAL changeset + code_change + decision (Q6 scope)", artifacts: [csExternal("x1"), cc("c1"), dec("d1")], owesDebrief: true },
 ];
 
 /** Runs a stop script against a project dir seeded with `artifacts`, returns

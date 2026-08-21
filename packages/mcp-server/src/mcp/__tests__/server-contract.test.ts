@@ -207,10 +207,13 @@ describe("MCP Tool Handlers — protocol contract", () => {
     });
 
     it("returns error when no findings have structured evidence", async () => {
-      // Session has no research findings — payload.comments will be empty
+      // Session has no research findings — payload.comments will be empty.
+      // Q6 B1 — the wording gained "approved": the gate posts only what the
+      // human ruled on, so "no findings" and "no APPROVED findings" are now
+      // different sentences and the error says which one it means.
       const { text, isError } = await callTool("post_pr_review", { pr: "42" });
       expect(isError).toBe(true);
-      expect(text).toContain("No findings with structured evidence");
+      expect(text).toContain("No approved findings with structured evidence");
     });
 
     it("surfaces gh-missing errors clearly when gh is unavailable", async () => {
@@ -225,6 +228,12 @@ describe("MCP Tool Handlers — protocol contract", () => {
           evidence: [{ filePath: "a.ts", lineStart: 1, lineEnd: 1, snippet: "x", explanation: "x" }],
         }],
       });
+      // Q6 B1 — present_findings creates a DRAFT, and a draft the human never
+      // ruled on cannot post at all now: without this approval the gate refuses
+      // before `gh` is ever spawned, and this test would be asserting on the
+      // authorization error instead of the gh-missing one it is named for.
+      const seeded = ctx.store.getArtifacts().find((a) => a.type === "research")!;
+      await ctx.store.updateArtifactStatus(seeded.id, "approved", "ui_approve_button" as never);
 
       // Force the gh-MISSING path deterministically rather than depending on the
       // runner: a CI box HAS gh installed + authed (GITHUB_TOKEN), so the real

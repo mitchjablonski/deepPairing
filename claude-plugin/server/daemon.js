@@ -5287,12 +5287,19 @@ try {
     // OR a dead-but-attempted debrief is feature-shaping ceremony that escalates
     // even a single-file fix. research/findings is NOT ceremony. Trivial: exactly
     // one live single-file code_change, no changeset, no ceremony.
+    // Q6 (#232) \u2014 a changeset with content.reviewIntent === "external" is a
+    // colleague's PR on the review surface, not code the pair wrote: it is
+    // skipped entirely (never counted as "code was presented").
     if (owesDebriefSession === null) {
       const CODE_CLOSED = ["superseded", "retracted", "obsolete"];
       const DEBRIEF_DEAD = ["superseded", "retracted", "obsolete", "rejected"];
+      const isExternalReview = (x) =>
+        x.type === "changeset" && !!x.content && typeof x.content === "object" &&
+        x.content.reviewIntent === "external";
       const hasLiveDebrief = arr.some((x) => x.type === "debrief" && !DEBRIEF_DEAD.includes(x.status));
       const recentCode = arr.filter((x) => {
         if (!["code_change", "changeset"].includes(x.type)) return false;
+        if (isExternalReview(x)) return false;
         if (CODE_CLOSED.includes(x.status)) return false;
         const t = x.createdAt ? new Date(x.createdAt).getTime() : 0;
         return !t || now - t <= MAX_AGE_MS;
@@ -23096,6 +23103,15 @@ var ChangesetFileSchema = external_exports.object({
 });
 var ChangesetReviewStateSchema = external_exports.record(external_exports.string(), external_exports.enum(["reviewed", "needs_changes", "skipped"]));
 var ChangesetReviewReasonsSchema = external_exports.record(external_exports.string(), external_exports.string());
+var ChangesetReviewIntentSchema = external_exports.enum(["local", "external"]);
+var ChangesetSourceSchema = external_exports.object({
+  kind: external_exports.literal("github-pr").describe("Provenance kind. Today only 'github-pr'."),
+  number: external_exports.number().int().positive().optional().describe("PR number, e.g. 123"),
+  url: external_exports.string().optional().describe("Full PR URL \u2014 the banner links it"),
+  headRef: external_exports.string().optional().describe("Source branch, e.g. 'feat/rate-limit'"),
+  baseRef: external_exports.string().optional().describe("Target branch, e.g. 'main'"),
+  author: external_exports.string().optional().describe("PR author's GitHub login")
+});
 var ChangesetContentSchema = external_exports.object({
   summary: external_exports.string().optional(),
   files: external_exports.array(ChangesetFileSchema),
@@ -23106,7 +23122,13 @@ var ChangesetContentSchema = external_exports.object({
   reviewState: ChangesetReviewStateSchema.optional(),
   /** #175 — per-file "needs changes" reasons (set post-creation via the
    *  changeset-review route), keyed by file path. */
-  reviewReasons: ChangesetReviewReasonsSchema.optional()
+  reviewReasons: ChangesetReviewReasonsSchema.optional(),
+  /** Q6 (#232) — whose code this is. Absent = "local" (the pre-Q6 meaning: the
+   *  agent's own change, awaiting the landing gate). See
+   *  ChangesetReviewIntentSchema for exactly what "external" changes. */
+  reviewIntent: ChangesetReviewIntentSchema.optional().describe("Set to 'external' when this diff is SOMEONE ELSE'S code you are reviewing (a GitHub PR you were pinged on), not a change you are proposing. Omit for your own work. An external changeset's approve/needs-changes is the human's REVIEW VERDICT \u2014 it stays local until they say to post it, and it never means 'this code lands'."),
+  /** Q6 (#232) — where an external changeset came from (the PR). */
+  source: ChangesetSourceSchema.optional().describe("Provenance of an external changeset \u2014 the PR it was pulled from: { kind: 'github-pr', number, url, headRef, baseRef, author }. Fill in whatever `gh pr view` gave you; the review surface names and links it.")
 });
 var DebriefSectionSchema = external_exports.object({
   title: external_exports.string(),
@@ -24005,6 +24027,24 @@ function coerceReviewReasons(v) {
   }
   return Object.keys(out).length > 0 ? out : void 0;
 }
+function coerceChangesetSource(v) {
+  if (!isObj(v))
+    return void 0;
+  if (v.kind !== "github-pr")
+    return void 0;
+  const out = { kind: "github-pr" };
+  if (typeof v.number === "number" && Number.isInteger(v.number) && v.number > 0)
+    out.number = v.number;
+  if (typeof v.url === "string" && v.url.length > 0)
+    out.url = v.url;
+  if (typeof v.headRef === "string" && v.headRef.length > 0)
+    out.headRef = v.headRef;
+  if (typeof v.baseRef === "string" && v.baseRef.length > 0)
+    out.baseRef = v.baseRef;
+  if (typeof v.author === "string" && v.author.length > 0)
+    out.author = v.author;
+  return out;
+}
 function coerceChangesetContent(raw2) {
   const c = obj(raw2);
   const out = {
@@ -24020,6 +24060,11 @@ function coerceChangesetContent(raw2) {
   const reviewReasons = coerceReviewReasons(c.reviewReasons);
   if (reviewReasons)
     out.reviewReasons = reviewReasons;
+  if (c.reviewIntent === "local" || c.reviewIntent === "external")
+    out.reviewIntent = c.reviewIntent;
+  const source = coerceChangesetSource(c.source);
+  if (source)
+    out.source = source;
   return out;
 }
 function coerceConcepts(v) {

@@ -303,7 +303,11 @@ one case that closes without a *separate* debrief — its self-summarizing
   outside. Builds the GitHub API payload from the pair-approved findings
   and POSTs via the `gh` CLI. Requires gh installed + authenticated. Use
   `event: "REQUEST_CHANGES"` only if a surviving finding is high/critical;
-  default `COMMENT`.
+  `APPROVE` for "read it, nothing to flag" (posts with no inline comments —
+  a complete review, and the commonest one); default `COMMENT`. It posts
+  ONLY findings the human APPROVED, and refuses when their verdict isn't
+  on record — the approval in the companion UI is the authorization, and
+  there is no flag that bypasses it.
 - **`answer_question`** — when `check_feedback` surfaces a ❓QUESTION, use
   this tool (not a plain comment) so the reply gets linked to the original
   question.
@@ -322,27 +326,54 @@ not a review target. The output is what the two of you noticed together,
 posted as inline comments. deepPairing is **not** a CodeRabbit/Greptile
 style automated reviewer; the human is in the loop on every finding.
 
-Run this pattern:
+Run the `/deeppairing:review-pr` arc (that command carries the detail):
 
-1. **Fetch context.** `gh pr diff <N>` (or read the changed files
-   directly) so you can pair on what actually changed.
-2. **`present_findings`** — one call with everything that surfaced, each
-   with structured `Evidence` (filePath + lineStart + lineEnd + snippet +
-   explanation) and a `severity` (info / low / medium / high / critical).
-   Group by file when there are many. NEVER list findings as plain chat
-   text — the inline-triage affordance only works on structured artifacts.
-3. **Poll `check_feedback` in a loop** while the human triages each
-   finding in the companion UI (✓ / ↻ / ✗). Rejected findings get a
-   reason that flows into session memory so you don't re-propose them.
-   The pair decides together what's load-bearing — your job is not to
-   "be right," it's to surface what's worth talking about.
-4. **When the human says to post it** ("ship it", "post what we found",
-   "we're done here") — call `post_pr_review` with the PR number. Only
-   the surviving findings post. Use `event: "REQUEST_CHANGES"` only when
-   a surviving finding is critical/high; `COMMENT` otherwise.
+1. **Ingest.** `gh pr view <N>` (title, body, comments, checks) and
+   `gh pr diff <N>`, plus the surrounding code — most real risks live in
+   what the diff *doesn't* show.
+2. **Orient FIRST — `present_explainer`.** Before any finding: what this
+   PR does, how the pieces fit, what its blast radius is. Audience is the
+   human as reviewer; scope is this PR, not the repo.
+3. **The diff onto the surface — `present_changeset` with
+   `reviewIntent: "external"`** and `source: { kind: "github-pr", … }`.
+   One changeset file per changed file, hunks from `gh pr diff`. This is
+   what makes it readable: per-hunk comments and walk-me-through. The
+   flag changes the semantics and you must honour them — the verdict is
+   the human's REVIEW OPINION, it stays local until they say to post,
+   and you never apply, revise, or redraft someone else's files.
+4. **`present_findings`** — one call, each finding with structured
+   `Evidence` (filePath + lineStart + lineEnd + snippet + explanation)
+   and a `severity` (info / low / medium / high / critical). Those
+   coordinates become the inline PR comments, so a finding without them
+   cannot be posted. NEVER list findings as plain chat text.
+   **Then sweep the ledger:** `recall` the PR's key concepts, and where a
+   recorded stance matches something the PR introduces, say it outright —
+   "this PR introduces <concept>, which you rejected on <date>:
+   '<reason>'". Quote the human's words; let them decide if it still
+   applies to someone else's codebase.
+5. **Discuss — poll `check_feedback` in a loop.** This is the work, not a
+   formality. When the human comments on a hunk or asks a question, go
+   and LOOK: trace callers, read the surrounding code, run a cheap safe
+   test, then answer (`answer_question` for questions). Rejected findings
+   carry a reason into session memory — drop them for good.
+6. **Only when the human explicitly asks you to POST** ("post the review",
+   "post it to the PR", "ship the review", "send it to them") —
+   `post_pr_review` with the PR number. "We're done here" ends the
+   POLLING, not the review: it is not permission to publish to someone
+   else's repository. If it's ambiguous, ask.
+   `REQUEST_CHANGES` only when a surviving finding is critical/high;
+   `APPROVE` when they read it and had nothing to flag (a complete review
+   — never invent findings to avoid it); `COMMENT` otherwise. Then offer
+   `/deeppairing:share` as a review record.
+   The tool verifies the human's recorded verdicts before it calls GitHub
+   and refuses otherwise — an unruled findings artifact blocks the post
+   (it names which), rejected findings are excluded, and a bare `APPROVE`
+   needs their approval on the external changeset. There is no override:
+   if it refuses, go and get the verdict.
 
 The human never needs to know the tool names. The outcome is:
-*pair on the PR → post what you both landed on*.
+*understand the PR together → decide together → post what you both
+landed on*.
 
 ## Debugging & incident cadence
 

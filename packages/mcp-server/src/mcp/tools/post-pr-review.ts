@@ -1,8 +1,11 @@
 import type { ToolContext, ToolResult } from "./types.js";
-import { buildGitHubReviewPayload } from "../../export/format-markdown.js";
 import { postPrReview, GhMissingError, GhNotAuthedError } from "../../github/post-review.js";
+import { authorizeReviewPost } from "../../github/review-authorization.js";
 
-/** B3 — post_pr_review, extracted verbatim from the server.ts switch. */
+/** B3 — post_pr_review, extracted verbatim from the server.ts switch.
+ *  Q6 (#232) B1 — the payload is no longer built here: it comes from
+ *  authorizeReviewPost, which refuses unless the human's recorded verdicts in
+ *  the session store authorize the post. Same gate the CLI door uses. */
 export async function handlePostPrReview(ctx: ToolContext, args: any): Promise<ToolResult> {
   const { store } = ctx;
 
@@ -17,19 +20,14 @@ export async function handlePostPrReview(ctx: ToolContext, args: any): Promise<T
     ? (args.event as "COMMENT" | "REQUEST_CHANGES" | "APPROVE")
     : "COMMENT";
 
-  // Build the payload from the current session.
+  // Q6 B1 — authorize BEFORE anything leaves the machine. The human's approvals
+  // in the store are the permission; there is no flag that bypasses this.
   const state = await store.getFullState();
-  const payload = buildGitHubReviewPayload(state as any, { event });
-
-  if (payload.comments.length === 0) {
-    return {
-      content: [{
-        type: "text",
-        text: "No findings with structured evidence (filePath + lineStart) in this session — nothing to post as inline review comments. Use present_findings with structured Evidence objects to enable this.",
-      }],
-      isError: true,
-    };
+  const auth = authorizeReviewPost(state as never, { event });
+  if (!auth.ok) {
+    return { content: [{ type: "text", text: auth.reason }], isError: true };
   }
+  const { payload } = auth;
 
   try {
     const result = await postPrReview({
@@ -41,7 +39,11 @@ export async function handlePostPrReview(ctx: ToolContext, args: any): Promise<T
     return {
       content: [{
         type: "text",
-        text: `Posted ${payload.comments.length} inline comment${payload.comments.length === 1 ? "" : "s"} on PR ${ref} as ${payload.event}: ${result.htmlUrl}`,
+        // Q6 — "Posted 0 inline comments" is a nonsense sentence for the bare
+        // APPROVE the gate above allows; say what actually happened.
+        text: payload.comments.length === 0
+          ? `Posted a review on PR ${ref} as ${payload.event} with no inline comments: ${result.htmlUrl}`
+          : `Posted ${payload.comments.length} inline comment${payload.comments.length === 1 ? "" : "s"} on PR ${ref} as ${payload.event}: ${result.htmlUrl}`,
       }],
     };
   } catch (err: any) {
