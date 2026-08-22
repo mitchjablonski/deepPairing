@@ -132,10 +132,13 @@ test("item 5 (M4) — banner-soup dedup: header pills collapse to counts, both t
   await page.goto(`${soup.baseURL}/?session=s`);
   await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
   await page.waitForTimeout(1200);
-  // Header pending pill collapsed to a count, NOT the verbatim breakdown.
-  await expect(page.getByText(/for you/i).first()).toBeVisible();
+  // S2 (round-14) — the dedup deepened: the header pending pill drops the number
+  // entirely (the waiting banner OWNS the one authoritative count) and collapses
+  // to a bare "Your turn" jump affordance — NOT the verbatim breakdown, NOT a
+  // count.
+  await expect(page.getByRole("button", { name: /your turn/i })).toBeVisible();
   await expect(page.getByText(/Your turn — /i)).toHaveCount(0);
-  // The acting banners carry the labels once each.
+  // The acting banners carry the labels (and the count) once each.
   await expect(page.getByText(/waiting for you/i)).toBeVisible();
   await expect(page.getByText(/waiting for Claude/i)).toBeVisible();
 });
