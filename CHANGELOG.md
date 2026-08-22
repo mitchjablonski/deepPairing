@@ -1,5 +1,60 @@
 # Changelog
 
+## v0.1.36 — 2026-08-21
+
+The connected release. Round 13 asked whether we **deliver what we claim** — and found the
+mechanisms were right but not *connected*. The first-reject card, the persisted preflight blocks
+and the publish toggle were all built, and all inert behind a `⋯` menu on a cold page load. The
+post gate keyed on your recorded verdict — but internal ledger-sweep findings still rode outbound,
+and the session id and local folder name leaked into the bodies. The shareable page could wedge on
+a 4KB comment, scanned secrets too shallow, and exported a colleague's PR review as your own merged
+work. Diagrams and visuals were carried on Findings and then **silently stripped** off explainers,
+changesets and debriefs — the mental-model fields the whole surface exists to show. And the
+cross-batch seam nobody owned — a diagram's source surviving `--redact-code` — leaked. So this
+release **connects** what round 12 built: the cold path fires, the post fails closed *and* clean,
+the page holds and tells the truth, the model fields survive to the surface you read them on — and
+it adds the **cold-integration ratchet** that caught its own R3×R4 leak. The R-batch is seven.
+
+### Added
+- **The mental-model fields — pull the world model, not just the prose.** A `Finding` can carry a
+  named **concept**, so the ledger badge rides the surface you actually read instead of a separate
+  panel. Diagrams and visuals now **survive** on explainers, changesets, debriefs and research
+  artifacts — they were accepted into the schema and then silently stripped on the way to those
+  surfaces. And an explainer can say what it's **unsure about** — the `unknowns` an agent will
+  otherwise round off to false confidence (PR #288).
+- **The cold-integration ratchet.** A11y fixtures seed the newest surfaces so the cold-page audit
+  can't go blind to a type it never learned about — the ratchet that caught this release's own
+  cross-batch leak (PRs #281, #283).
+
+### Changed
+- **The cold path fires.** The first-reject card, the persisted preflight blocks and the publish
+  toggle were built but **inert on a cold page load** — reachable only after a `⋯` menu had
+  hydrated. They now wire straight through on first paint. Six light-theme contrast fixes ride
+  along (PR #281).
+- **Honest docs, an agent budget, and instruments against drift.** The guardrail exclusion list
+  and **every tool named in guidance** now **fail CI** if they drift from the code — the honesty
+  is mechanical, not remembered. An **agent-context budget** owns the first-call preamble so it
+  can't bloat unwatched. And `check_feedback` stops telling you to "apply" someone *else's* PR and
+  stops printing "proceed" beside a comment you haven't answered (PR #287).
+
+### Fixed
+- **Nothing posts that you didn't approve — and nothing of yours leaks when it does.** The post
+  gate keys on your **recorded verdict**, not prose: internal **ledger-sweep findings never post**,
+  the **session id and local folder name are scrubbed** from every outbound body, `APPROVE`
+  requires your approval of the PR (**all chunks**, refused outright if you rejected it),
+  `REQUEST_CHANGES` needs a **real high/critical finding**, duplicate posts are refused, and the
+  payload cap fits a real PR (PR #284).
+- **The shareable page hardened.** A **4KB comment** no longer wedges the export, secrets are
+  scanned to **real depth** across evidence, diffs and narrative, **home / Windows / UNC paths** are
+  scrubbed, **unapproved work is marked honestly**, and a PR review exports **as a review**
+  (provenance + external badge) — not as your own merged work (PR #285).
+- **The a11y staged-hydration race.** The e2e sidebar-select was hardened against a fold race in
+  staged hydration — the merged-main regression the cold-integration ratchet now guards against
+  (PR #283).
+- **The R3×R4 cross-batch seam.** A diagram's **source is redacted under `--redact-code`** — the
+  cross-batch leak (R3's redaction seam met R4's surviving diagrams) that the cold integration pass
+  caught before it shipped (PR #289).
+
 ## v0.1.35 — 2026-08-21
 
 The trustworthy release. Round 12 asked one question — **do we deliver what we claim?** — and
