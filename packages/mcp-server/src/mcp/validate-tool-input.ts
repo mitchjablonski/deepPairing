@@ -387,7 +387,9 @@ const EXAMPLE_FINDINGS = `{
       "detail": "bcrypt rounds=4 is too low",
       "evidence": "auth.ts L23 uses bcrypt.hash(pw, 4)",
       "significance": "high",
-      "recommendation": "raise to 12+"
+      "recommendation": "raise to 12+",
+      "concept": { "name": "password-hash work factor tuning",
+        "oneLineExplanation": "the cost should make brute-force impractical at today's hardware" }
     }
   ]
 }`;
@@ -875,6 +877,47 @@ function aliasPlanVisuals(visuals: unknown): unknown {
   });
 }
 
+// ---------------------------------------------------------------------------
+// S1 — FIELD-NAME ALIASES (the near-miss vocab split the dogfood hit).
+//
+// The same slot is spelled differently across sibling tools, and an agent that
+// carried one spelling to the other got a HARD schema reject on a perfectly
+// reasonable near-miss:
+//   - a walk-through section's name: explainer uses `heading`, debrief uses `title`
+//   - present_options' background prose: the field is `context`, but `question`
+//     is the word an agent reaches for
+// We normalize HERE — the same validation choke point as the M1.2 file-kind
+// aliases above — so each field ACCEPTS the near-miss alias but STORES its own
+// canonical spelling. Stored bytes are unchanged (UI/delivery/export goldens
+// hold); only the previously-rejected near-miss now succeeds instead of failing
+// the agent on a synonym. The advertised schemas keep their canonical field
+// names (the agent is taught one spelling; the alias is a lenient safety net).
+// Aliasing is copy-only and NON-destructive: it fills the canonical field ONLY
+// when it is absent/empty AND the alias carries a non-empty string, so a real
+// canonical value is never overwritten.
+
+/** Copy `from`→`to` on a shallow clone of `o`, but ONLY when `to` is
+ *  absent/empty and `from` is a non-empty string. Otherwise returns `o`
+ *  untouched. Non-object inputs pass through. */
+function aliasField(o: unknown, from: string, to: string): unknown {
+  if (!o || typeof o !== "object" || Array.isArray(o)) return o;
+  const rec = o as Record<string, unknown>;
+  const toVal = rec[to];
+  const toEmpty = toVal === undefined || toVal === null || (typeof toVal === "string" && toVal.length === 0);
+  const fromVal = rec[from];
+  if (toEmpty && typeof fromVal === "string" && fromVal.length > 0) {
+    return { ...rec, [to]: fromVal };
+  }
+  return o;
+}
+
+/** Apply aliasField to every element of a sections array (returns a new array;
+ *  non-array / non-object elements pass through untouched). */
+function aliasSectionField(sections: unknown, from: string, to: string): unknown {
+  if (!Array.isArray(sections)) return sections;
+  return sections.map((s) => aliasField(s, from, to));
+}
+
 // Per-tool input adapters: pull the relevant args fields, run the matching
 // content schema. The schemas live in @deeppairing/shared and are already
 // the source of truth for what the daemon stores.
@@ -918,11 +961,16 @@ const PresentOptionsInputSchema = z.object({
 });
 
 export function validatePresentOptionsInput(args: any): ValidationResult<z.infer<typeof PresentOptionsInputSchema>> {
-  const result = PresentOptionsInputSchema.safeParse(args);
+  // S1 — accept the `question` near-miss for `context` (fills context only when
+  // absent/empty), so an agent that reached for the natural word doesn't fail.
+  const aliased = aliasField(args, "question", "context");
+  const result = PresentOptionsInputSchema.safeParse(aliased);
   if (result.success) return admit("present_options", result.data);
   // #184 — the exact field bug: context streamed, options truncated away.
   // Return the truncation error (no embedded example) BEFORE the generic one.
-  const truncated = detectTruncatedCall("present_options", args, "context", "options");
+  // Check the aliased args so a `question`-only call isn't misread as a
+  // context-missing truncation.
+  const truncated = detectTruncatedCall("present_options", aliased, "context", "options");
   if (truncated) return { ok: false, error: truncated };
   return { ok: false, error: formatValidationError("present_options", result.error, EXAMPLE_OPTIONS, args) };
 }
@@ -1028,7 +1076,10 @@ export function validatePresentDebriefInput(args: any): ValidationResult<z.infer
   }
   const contentParse = DebriefContentSchema.safeParse({
     summary: args?.summary,
-    sections: args?.sections,
+    // S1 — accept the explainer's `heading` spelling on a debrief section and
+    // normalize it to this type's canonical `title` (fills title only when
+    // absent), so switching between the two walk-through types doesn't reject.
+    sections: aliasSectionField(args?.sections, "heading", "title"),
     decisionsMade: args?.decisionsMade,
     needsYourEyes: args?.needsYourEyes,
     deferred: args?.deferred,
@@ -1055,7 +1106,11 @@ export function validatePresentExplainerInput(args: Record<string, unknown> | nu
   const result = ExplainerContentSchema.safeParse({
     title: args?.title,
     overview: args?.overview,
-    sections: args?.sections,
+    // S1 — accept the debrief's `title` spelling on an explainer section and
+    // normalize it to this type's canonical `heading` (fills heading only when
+    // absent), so switching between the two walk-through types doesn't reject.
+    // The artifact-level `title` above is a separate top-level field, untouched.
+    sections: aliasSectionField(args?.sections, "title", "heading"),
     relatedArtifactIds: args?.relatedArtifactIds,
     suggestedQuestions: args?.suggestedQuestions,
     // R4 P-B — the explainer's visuals (the round-13 headline: "draw me the

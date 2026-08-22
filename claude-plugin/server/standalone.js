@@ -28032,14 +28032,14 @@ var PROTOCOL_PREAMBLE = [
   // the taxonomy instead of quietly overriding it.
   "Happy path, in order \u2014 this is the ESCALATED arc in full. Steps tagged [ESCALATED ONLY] are the pre-work gates the TRIVIAL and LOW-RISK-FEATURE classes skip; everything else applies at every class:",
   "  1. recall (mode='any', query='<the concept you're about to propose>') \u2014 check prior stances/decisions before proposing. mode='any' REQUIRES a query; to browse the whole ledger instead, call mode='philosophy' with an empty query.",
-  "  2. present_findings \u2014 [ESCALATED ONLY] after researching; structured Evidence (filePath, lineStart, lineEnd, snippet), not plain-text bullets.",
+  "  2. present_findings \u2014 [ESCALATED ONLY] after researching; structured Evidence (filePath, lineStart, lineEnd, snippet), not plain-text bullets. Name each finding's `concept` \u2014 the preferred place to name a pattern.",
   "  3. check_feedback \u2014 poll in a loop (~30s; on WAITING, call again). Don't ask in the terminal.",
   "  4. present_options \u2014 each choice as its OWN card (2-4 options + a `concept`); stakes='high' for hard-to-reverse calls (schema/auth/infra). Never bury or interleave a decision inside a plan (skips the pros/cons review; the ledger never learns your pick).",
   "  5. present_spec and/or present_plan \u2014 [ESCALATED ONLY] for small multi-file work (one changeset, no architectural decision beyond the options card) present just ONE: spec when the WHAT needs agreement, plan when the HOW/sequence does. Stack BOTH (spec before the plan) only for genuinely large features. LEAD WITH A VISUAL, not prose: attach `visuals[]` (stable `id` + `kind`) \u2014 'diagram' (Mermaid: flowchart=architecture, erDiagram=schema, sequenceDiagram=flow; quote labels with punctuation like ()#: and use `<br/>` not `\\n`); 'file_map' (create/modify/delete set); 'annotated_code' (real `code`+`filePath`, line-anchored `annotations[]` at the exact lines changing and why); 'prototype' (sandboxed `html`). Each visual is its own commentable surface.",
-  "  6. Present code as it lands \u2014 the DEFAULT is a batched present_changeset at each feature boundary (per-file diffs + review state). present_code_change is the EXCEPTION \u2014 a single-file surgical change, or when the human asks first; and when that single-file, no-decision fix IS the whole task, it self-summarizes and closes it (fold the what-changed-and-why into its reasoning \u2014 no separate debrief). Don't stream a log_reasoning card per step \u2014 name concepts in the debrief.",
+  "  6. Present code as it lands \u2014 the DEFAULT is a batched present_changeset at each feature boundary (per-file diffs + review state). present_code_change is the EXCEPTION \u2014 a single-file surgical change, or when the human asks first; and when that single-file, no-decision fix IS the whole task, it self-summarizes and closes it (fold the what-changed-and-why into its reasoning \u2014 no separate debrief). Don't stream a log_reasoning card per step \u2014 name the concept on the finding; a `visuals[]` diagram on the changeset/debrief shows the blast radius.",
   "  7. present_debrief \u2014 END every feature/autonomous run with exactly ONE (carve-out: a single-file, no-decision surgical fix closes with its own self-summarizing present_code_change instead): what changed + why, the decisions you made WITHOUT the human, what needs their eyes, what you deferred, an ask-anything thread \u2014 the primary comprehension surface. Put the full story IN it, never 'details in chat'.",
   "  8. check_feedback again \u2014 let your pair review in the UI.",
-  "Explaining how existing code WORKS (onboarding, 'how does auth work here?', a spike), not reporting problems or digesting a change? Use present_explainer \u2014 a read-only walk-through: overview + sections[] anchored to real Evidence + an ask-anything thread. Not present_findings (problems) or present_debrief (a change you made).",
+  "Explaining how existing code WORKS (onboarding, 'how does auth work here?', a spike), not reporting problems or digesting a change? Use present_explainer \u2014 a read-only walk-through: overview + sections[] anchored to real Evidence + an ask-anything thread. Not present_findings (problems) or present_debrief (a change you made). Attach `visuals[]` (a diagram transfers best) and `unknowns[]` \u2014 the gaps you couldn't check.",
   "REVISING a plan/spec/decision you already presented? Call revise_artifact (mode='supersede') with its id + new content \u2014 don't re-post a fresh present_*. Re-posting orphans the thread; superseding links versions with a clean before/after diff.",
   "Pull the full protocol from deeppairing://onboarding. present_* refuse proposals matching a past rejected approach."
 ].join("\n");
@@ -29426,7 +29426,9 @@ var EXAMPLE_FINDINGS = `{
       "detail": "bcrypt rounds=4 is too low",
       "evidence": "auth.ts L23 uses bcrypt.hash(pw, 4)",
       "significance": "high",
-      "recommendation": "raise to 12+"
+      "recommendation": "raise to 12+",
+      "concept": { "name": "password-hash work factor tuning",
+        "oneLineExplanation": "the cost should make brute-force impractical at today's hardware" }
     }
   ]
 }`;
@@ -29656,6 +29658,21 @@ function aliasPlanVisuals(visuals) {
     return { ...v, files };
   });
 }
+function aliasField(o, from, to) {
+  if (!o || typeof o !== "object" || Array.isArray(o)) return o;
+  const rec = o;
+  const toVal = rec[to];
+  const toEmpty = toVal === void 0 || toVal === null || typeof toVal === "string" && toVal.length === 0;
+  const fromVal = rec[from];
+  if (toEmpty && typeof fromVal === "string" && fromVal.length > 0) {
+    return { ...rec, [to]: fromVal };
+  }
+  return o;
+}
+function aliasSectionField(sections, from, to) {
+  if (!Array.isArray(sections)) return sections;
+  return sections.map((s) => aliasField(s, from, to));
+}
 function validatePresentFindingsInput(args) {
   const result = ResearchContentSchema.safeParse({
     summary: args?.summary,
@@ -29685,9 +29702,10 @@ var PresentOptionsInputSchema = external_exports.object({
   stakes: external_exports.enum(["low", "medium", "high"]).optional()
 });
 function validatePresentOptionsInput(args) {
-  const result = PresentOptionsInputSchema.safeParse(args);
+  const aliased = aliasField(args, "question", "context");
+  const result = PresentOptionsInputSchema.safeParse(aliased);
   if (result.success) return admit("present_options", result.data);
-  const truncated = detectTruncatedCall("present_options", args, "context", "options");
+  const truncated = detectTruncatedCall("present_options", aliased, "context", "options");
   if (truncated) return { ok: false, error: truncated };
   return { ok: false, error: formatValidationError("present_options", result.error, EXAMPLE_OPTIONS, args) };
 }
@@ -29777,7 +29795,10 @@ function validatePresentDebriefInput(args) {
   }
   const contentParse = DebriefContentSchema.safeParse({
     summary: args?.summary,
-    sections: args?.sections,
+    // S1 — accept the explainer's `heading` spelling on a debrief section and
+    // normalize it to this type's canonical `title` (fills title only when
+    // absent), so switching between the two walk-through types doesn't reject.
+    sections: aliasSectionField(args?.sections, "heading", "title"),
     decisionsMade: args?.decisionsMade,
     needsYourEyes: args?.needsYourEyes,
     deferred: args?.deferred,
@@ -29794,7 +29815,11 @@ function validatePresentExplainerInput(args) {
   const result = ExplainerContentSchema.safeParse({
     title: args?.title,
     overview: args?.overview,
-    sections: args?.sections,
+    // S1 — accept the debrief's `title` spelling on an explainer section and
+    // normalize it to this type's canonical `heading` (fills heading only when
+    // absent), so switching between the two walk-through types doesn't reject.
+    // The artifact-level `title` above is a separate top-level field, untouched.
+    sections: aliasSectionField(args?.sections, "title", "heading"),
     relatedArtifactIds: args?.relatedArtifactIds,
     suggestedQuestions: args?.suggestedQuestions,
     // R4 P-B — the explainer's visuals (the round-13 headline: "draw me the
@@ -34941,9 +34966,9 @@ function createMcpServer(store, broadcast, port = BASE_PORT) {
       {
         name: "present_findings",
         annotations: { title: "Present findings", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-        description: `Present research findings as a structured artifact in the companion UI (${port ? `localhost:${port}` : ""}). Each finding carries evidence, category, significance, severity.
+        description: `Present research findings as a structured artifact in the companion UI (${port ? `localhost:${port}` : ""}). Each finding carries evidence, category, significance, severity, a \`concept\` (the pattern), and optional \`visuals[]\`.
 
-Schema note: \`findings\` is an array of objects (NOT a string). Required per-finding: category, detail, significance. Validation runs at the boundary; mismatch returns INPUT_VALIDATION_FAILED with the bad path + an example.
+Schema note: \`findings\` is an array of objects (NOT a string). Required per-finding: category, detail, significance. Name each finding's \`concept\` ({name, oneLineExplanation?}) \u2014 the PREFERRED place to name a pattern (ahead of log_reasoning); it renders as a ledger-aware badge. INPUT_VALIDATION_FAILED on mismatch (bad path + example).
 
 Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surface. Don't paste findings in chat; call check_feedback for the verdict.`,
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
@@ -35132,7 +35157,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "present_changeset",
         annotations: { title: "Present changeset", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-        description: "Present a change that spans 2+ FILES as ONE reviewable artifact \u2014 unified diffs per file, per-file review state, and comments that can anchor across files. Use this for multi-file changes (a refactor, a feature touching several modules); a SINGLE-file change stays present_code_change.\n\nSchema note: `files` is an array; each file has `path`, `changeType` ('modified'|'added'|'deleted'), and `hunks` (unified-diff shaped: an optional `header` plus `lines`, each `{ kind: 'ctx'|'add'|'del', content, oldLine?, newLine? }`). Optional `summary`, `risks[]` (e.g. 'touches auth'), and per-file `stats` ({additions, deletions}). INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: SINGLE REVIEW SURFACE \u2014 the human dispositions each file (looks-right, or needs-changes with a reason) and the whole-changeset verdict is DERIVED (all look-right \u2192 approve; any flagged \u2192 send those files back for revision). Review happens in the companion UI; don't paste diffs in chat. Non-blocking: it records + returns immediately. Call check_feedback for their per-file disposition, reasons, comments, and verdict \u2014 a send-back arrives as a `revised` status with feedback naming which files to revise and why.\n\nREVIEWING SOMEONE ELSE'S PR (`reviewIntent: 'external'`): when the human was pinged to review a GitHub PR, feed THE PR'S DIFF in here \u2014 one changeset file per changed file, hunks straight from `gh pr diff <N>` \u2014 and set `reviewIntent: 'external'` plus `source: { kind: 'github-pr', number, url, headRef, baseRef, author }`. That is what puts their colleague's diff on the rich surface: per-hunk comments, walk-me-through per hunk, findings anchored to real lines. Semantics change with the flag and you must honour them: the verdict is the HUMAN'S REVIEW OPINION, not a landing gate \u2014 it stays LOCAL until they tell you to post it (post_pr_review), nothing here is on their disk, and you must NOT apply, revise, or 'fix' these files or send yourself back to redraft them. No closing present_debrief is owed for code the pair did not write; the session's output is the posted review. Omit `reviewIntent` for your own work \u2014 absent means local, exactly as before.\n\n`reviewIntent: 'external'` IS AN ASSERTION WITH CONSEQUENCES, and nothing can verify it from here: it exempts the session from the closing-debrief gate and it is what lets post_pr_review send an APPROVE. Set it ONLY for code your pair genuinely did not write (a colleague's PR you fetched with `gh`). Their recorded stances are still weighed against an external diff \u2014 you get them back as an ADVISORY on this call rather than a refusal, because a stance about their codebase must not stop you SHOWING them someone else's. Raise any such match with them as a finding with `audience: 'internal'`; it is their private history and it must never be quoted to the PR author.",
+        description: "Present a change that spans 2+ FILES as ONE reviewable artifact \u2014 unified diffs per file, per-file review state, and comments that can anchor across files. Use this for multi-file changes (a refactor, a feature touching several modules); a SINGLE-file change stays present_code_change.\n\nSchema note: `title` (artifact-level) and `files` are REQUIRED. Each file has `path`, `changeType` ('modified'|'added'|'deleted'), and `hunks` (unified-diff shaped: an optional `header` plus `lines`, each `{ kind: 'ctx'|'add'|'del', content, oldLine?, newLine? }`). Give it a one-line `summary` \u2014 what changed, in a sentence \u2014 it is the human's WHAT-at-a-glance, rendered above the diff. Also optional: `risks[]` (e.g. 'touches auth') and per-file `stats` ({additions, deletions}). Optional `visuals[]` \u2014 DRAW THE BLAST RADIUS: a diagram or file_map of the shape of what this change touches, rendered above the file rail so the human sees the scope before diving into hunks. INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: SINGLE REVIEW SURFACE \u2014 the human dispositions each file (looks-right, or needs-changes with a reason) and the whole-changeset verdict is DERIVED (all look-right \u2192 approve; any flagged \u2192 send those files back for revision). Review happens in the companion UI; don't paste diffs in chat. Non-blocking: it records + returns immediately. Call check_feedback for their per-file disposition, reasons, comments, and verdict \u2014 a send-back arrives as a `revised` status with feedback naming which files to revise and why.\n\nREVIEWING SOMEONE ELSE'S PR (`reviewIntent: 'external'`): when the human was pinged to review a GitHub PR, feed THE PR'S DIFF in here \u2014 one changeset file per changed file, hunks straight from `gh pr diff <N>` \u2014 and set `reviewIntent: 'external'` plus `source: { kind: 'github-pr', number, url, headRef, baseRef, author }`. That is what puts their colleague's diff on the rich surface: per-hunk comments, walk-me-through per hunk, findings anchored to real lines. Semantics change with the flag and you must honour them: the verdict is the HUMAN'S REVIEW OPINION, not a landing gate \u2014 it stays LOCAL until they tell you to post it (post_pr_review), nothing here is on their disk, and you must NOT apply, revise, or 'fix' these files or send yourself back to redraft them. No closing present_debrief is owed for code the pair did not write; the session's output is the posted review. Omit `reviewIntent` for your own work \u2014 absent means local, exactly as before.\n\n`reviewIntent: 'external'` IS AN ASSERTION WITH CONSEQUENCES, and nothing can verify it from here: it exempts the session from the closing-debrief gate and it is what lets post_pr_review send an APPROVE. Set it ONLY for code your pair genuinely did not write (a colleague's PR you fetched with `gh`). Their recorded stances are still weighed against an external diff \u2014 you get them back as an ADVISORY on this call rather than a refusal, because a stance about their codebase must not stop you SHOWING them someone else's. Raise any such match with them as a finding with `audience: 'internal'`; it is their private history and it must never be quoted to the PR author.",
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_changeset)
@@ -35140,7 +35165,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "present_debrief",
         annotations: { title: "Present debrief", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-        description: 'At the end of a feature or autonomous run (with one size carve-out \u2014 see Workflow), present ONE debrief summarizing what changed and why \u2014 this is the primary comprehension surface. It carries the narrative `summary`, an ordered `sections[]` walk (each with `body`, optional named `concepts[]`, `evidence[]`, and `changesetRef`/`artifactRefs` linking the underlying artifacts), `decisionsMade[]` (the calls you made WITHOUT the human \u2014 the accountability block), `needsYourEyes[]` (the prioritized review list), `deferred[]` (what you left undone and why), and optional `openQuestions[]`. The human reads it and can ask ANYTHING in the thread.\n\nSchema note: only `summary` is required; everything else is optional-tolerant. Put the FULL deliberation IN the content \u2014 writing "details in chat" is a protocol violation. INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: END EVERY feature/autonomous-run with exactly one present_debrief (revise_artifact to supersede if it changes) \u2014 exception: a single-file, no-decision surgical fix closes with its own self-summarizing present_code_change (no separate debrief). SINGLE REVIEW SURFACE \u2014 don\'t re-summarize in chat. Non-blocking: it records + returns immediately. Call check_feedback for their questions, comments, and verdict.',
+        description: 'At the end of a feature or autonomous run (with one size carve-out \u2014 see Workflow), present ONE debrief summarizing what changed and why \u2014 this is the primary comprehension surface. It carries the narrative `summary`, an ordered `sections[]` walk (each with a `title`, `body`, optional named `concepts[]`, `evidence[]`, and `changesetRef`/`artifactRefs` linking the underlying artifacts), optional `visuals[]` (the shape of what you built \u2014 a diagram carries it faster than prose), `decisionsMade[]` (the calls you made WITHOUT the human \u2014 the accountability block), `needsYourEyes[]` (the prioritized review list), `deferred[]` (what you left undone and why), and optional `openQuestions[]`. The human reads it and can ask ANYTHING in the thread.\n\nSchema note: `title` (artifact-level) and `summary` are REQUIRED; each `sections[]` entry needs a `title`; everything else is optional-tolerant. Put the FULL deliberation IN the content \u2014 writing "details in chat" is a protocol violation. INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: END EVERY feature/autonomous-run with exactly one present_debrief (revise_artifact to supersede if it changes) \u2014 exception: a single-file, no-decision surgical fix closes with its own self-summarizing present_code_change (no separate debrief). SINGLE REVIEW SURFACE \u2014 don\'t re-summarize in chat. Non-blocking: it records + returns immediately. Call check_feedback for their questions, comments, and verdict.',
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_debrief)
@@ -35148,7 +35173,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "present_explainer",
         annotations: { title: "Present explainer", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-        description: "Present a read-only EXPLAINER: a narrated, ordered walk-through of how something WORKS. Reach for it when the human wants to UNDERSTAND existing code \u2014 code archaeology (\"how does auth work here?\"), onboarding a new area, or a spike readout \u2014 NOT when you have problems to report (that's present_findings) and NOT to digest a change you just made (that's present_debrief). It carries a `title`, a one-paragraph `overview` (\"what you're about to read\"), an ordered `sections[]` walk (each with a `heading`, markdown `body`, and optional `evidence[]` anchored to real code \u2014 filePath/lineStart/lineEnd/snippet/explanation, rendered with per-line commenting), optional `relatedArtifactIds[]` to drill into, and optional `suggestedQuestions[]` that become one-click chips. Deliberately NO problem-framing \u2014 no severity, significance, or recommendations; it explains, it doesn't flag.\n\nSchema note: required: `title`, `overview`, and a non-empty `sections[]` (each section needs a `heading`). Put the FULL explanation IN the content \u2014 \"details in chat\" is a protocol violation. INPUT_VALIDATION_FAILED on mismatch.\n\nScoped drill-in (O1 #229): when check_feedback delivers an explain-intent request raised from the UI's Explain / walk-me-through affordance \u2014 the human pointed at a specific changeset hunk, file, or needs-your-eyes item \u2014 it carries that scope. Read the scope the request names and scope the explainer to THAT hunk/file/item (a focused walk of just those lines, anchored to that Evidence), NOT a whole-codebase tour. Recognize it by the explain INTENT of the request, not by the button's label (that's UI copy and it moves). The request may carry a structured scope (the artifact, file, and line range the human pointed at) alongside the prose \u2014 read it when present, and link relatedArtifactIds from the artifact it names. Pass servedRequestId so it links back and clears. Still pull-first: the human asked; answer exactly what they pointed at, at that grain.\n\nWorkflow: SINGLE REVIEW SURFACE \u2014 the walk-through lives in the companion UI, don't re-narrate it in chat. Non-blocking: it records + returns immediately. The human reads it and can ask ANYTHING in the thread; call check_feedback for their questions and comments.",
+        description: "Present a read-only EXPLAINER: a narrated, ordered walk-through of how something WORKS. Reach for it when the human wants to UNDERSTAND existing code \u2014 code archaeology (\"how does auth work here?\"), onboarding a new area, or a spike readout \u2014 NOT when you have problems to report (that's present_findings) and NOT to digest a change you just made (that's present_debrief). It carries a `title`, a one-paragraph `overview` (\"what you're about to read\"), an ordered `sections[]` walk (each with a `heading`, markdown `body`, and optional `evidence[]` anchored to real code \u2014 filePath/lineStart/lineEnd/snippet/explanation, rendered with per-line commenting), optional `relatedArtifactIds[]` to drill into, and optional `suggestedQuestions[]` that become one-click chips. It also carries optional `visuals[]` (a diagram of the flow you're narrating \u2014 the strongest transfer on the surface built to move the world model) and `unknowns[]` (the gaps you could NOT determine, e.g. \"I couldn't tell whether the CLI path is covered \u2014 I didn't read cli/init.ts\", each rendered above the fold with a one-click Ask). Deliberately NO problem-framing \u2014 no severity, significance, or recommendations; it explains, it doesn't flag.\n\nSchema note: required: `title`, `overview`, and a non-empty `sections[]` (each section needs a `heading`). Reach for `visuals[]` (a diagram beats paragraphs here) and `unknowns[]` (name what you couldn't verify). Put the FULL explanation IN the content \u2014 \"details in chat\" is a protocol violation. INPUT_VALIDATION_FAILED on mismatch.\n\nScoped drill-in (O1 #229): when check_feedback delivers an explain-intent request raised from the UI's Explain / walk-me-through affordance \u2014 the human pointed at a specific changeset hunk, file, or needs-your-eyes item \u2014 it carries that scope. Read the scope the request names and scope the explainer to THAT hunk/file/item (a focused walk of just those lines, anchored to that Evidence), NOT a whole-codebase tour. Recognize it by the explain INTENT of the request, not by the button's label (that's UI copy and it moves). The request may carry a structured scope (the artifact, file, and line range the human pointed at) alongside the prose \u2014 read it when present, and link relatedArtifactIds from the artifact it names. Pass servedRequestId so it links back and clears. Still pull-first: the human asked; answer exactly what they pointed at, at that grain.\n\nWorkflow: SINGLE REVIEW SURFACE \u2014 the walk-through lives in the companion UI, don't re-narrate it in chat. Non-blocking: it records + returns immediately. The human reads it and can ask ANYTHING in the thread; call check_feedback for their questions and comments.",
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_explainer)

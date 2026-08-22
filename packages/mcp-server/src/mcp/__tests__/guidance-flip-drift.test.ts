@@ -326,3 +326,100 @@ describe("#190 — default-mode flip: guidance wording is consistent (drift guar
     }
   });
 });
+
+/**
+ * S1 (round-14) — THE PULL, pinned so it can't silently regress to the dead
+ * routing. Round-14's dogfood verdict: v0.1.36 shipped concept/visuals/unknowns
+ * but the guidance never told the agent to reach for them — SKILL.md mentioned
+ * `unknowns` 0×, scoped `visuals` to plan/spec only, and routed concept-naming
+ * to log_reasoning instead of finding.concept (the explainer death pattern). S1
+ * rewired the guidance; these pins assert the LIVE routing is present across all
+ * three guidance surfaces (SKILL.md, the tool descriptions, the flagship
+ * review-pr command) and that the dead routing is gone, so a future prose-trim
+ * can't reopen the graveyard.
+ */
+describe("S1 — the field-pull routes concept / visuals / unknowns to their live surfaces", () => {
+  const flat = (s: string) => s.replace(/\s+/g, " ");
+  const readCommand = (name: string): string => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const repoRoot = path.resolve(here, "../../../../..");
+    return fs.readFileSync(path.join(repoRoot, "claude-plugin/commands", name), "utf-8");
+  };
+
+  it("SKILL.md names finding.concept as the PREFERRED place to name a pattern (ahead of log_reasoning)", () => {
+    const skill = flat(readSkill());
+    expect(skill).toContain("Name the `concept` on the finding");
+    expect(skill).toMatch(/PREFERRED place to name a pattern, ahead of `log_reasoning`/);
+  });
+
+  it("SKILL.md broadens `visuals` beyond plan/spec — to explainer, changeset, debrief, and findings", () => {
+    const skill = flat(readSkill());
+    // The broadening thesis sentence.
+    expect(skill).toContain("when explaining how something works or reviewing a change, a picture is the strongest transfer");
+    // …and each live surface is named as a visuals host.
+    expect(skill).toMatch(/attach\s+`visuals\[\]`\s+to `present_explainer`/);
+    expect(skill).toContain("`present_changeset` (the blast radius / the shape of what this touches)");
+    expect(skill).toMatch(/`present_debrief`.*and `present_findings`/);
+  });
+
+  it("SKILL.md teaches `unknowns` on the explainer (it appeared 0× before S1)", () => {
+    const skill = flat(readSkill());
+    expect(skill).toContain("unknowns[]");
+    expect(skill).toContain("say what you're NOT sure about");
+  });
+
+  it("SKILL.md's log_reasoning entry redirects concept-naming AWAY from itself to the alive surfaces", () => {
+    const skill = flat(readSkill());
+    expect(skill).toContain("Concept-naming does NOT live here");
+    expect(skill).toMatch(/`finding\.concept`.*the preferred place/);
+    // The demotion phrasing the flip-drift net already pins stays intact.
+    expect(readSkill()).toMatch(/\*\*sparingly\.\*\*/);
+  });
+
+  it("the tool descriptions carry the same routing (the highest-visibility surface)", async () => {
+    const d = await readToolDescriptions();
+    // findings — concept, preferred over log_reasoning; visuals for consistency (F2).
+    expect(d["present_findings"]).toMatch(/PREFERRED place to name a pattern/);
+    expect(d["present_findings"]).toContain("concept");
+    expect(d["present_findings"]).toContain("visuals");
+    // explainer — visuals + unknowns.
+    expect(d["present_explainer"]).toContain("visuals");
+    expect(d["present_explainer"]).toContain("unknowns");
+    // changeset — the blast-radius visual.
+    expect(d["present_changeset"]).toMatch(/BLAST RADIUS/i);
+    expect(d["present_changeset"]).toContain("visuals");
+    // debrief — visuals, AND the required-field claim is now TRUE (not "only summary").
+    expect(d["present_debrief"]).toContain("visuals");
+    expect(flat(d["present_debrief"]!)).toMatch(/`title` \(artifact-level\) and `summary` are REQUIRED/);
+    expect(d["present_debrief"]).not.toContain("only `summary` is required");
+  });
+
+  it("changeset + debrief descriptions state their required fields TRUTHFULLY (doc↔schema drift the dogfood found)", async () => {
+    const d = await readToolDescriptions();
+    // changeset: title IS required — the description must say so.
+    expect(flat(d["present_changeset"]!)).toMatch(/`title` \(artifact-level\) and `files` are REQUIRED/);
+  });
+
+  it("F3 — changeset.summary now has a PULL (it was rendered by S2 but nothing told the agent to populate it)", async () => {
+    // The exact dormant-field trap this round exists to escape: S2 renders
+    // changeset.summary, so the guidance must tell the agent to WRITE it.
+    const d = await readToolDescriptions();
+    const skill = flat(readSkill());
+    // Tool description: a one-line summary, the WHAT-at-a-glance.
+    expect(flat(d["present_changeset"]!)).toMatch(/one-line `summary`.*WHAT-at-a-glance/);
+    // SKILL's changeset guidance carries the same pull.
+    expect(skill).toMatch(/Give it a one-line `summary`.*WHAT-at-a-glance/);
+  });
+
+  it("review-pr.md routes concept to finding.concept, blast-radius to visuals, and gaps to unknowns", () => {
+    const cmd = flat(readCommand("review-pr.md"));
+    // concept → the finding's own field, not a log_reasoning card.
+    expect(cmd).toContain("each finding's own `concept` field");
+    expect(cmd).toContain("not a separate `log_reasoning`");
+    // blast radius → a visuals diagram on the changeset.
+    expect(cmd).toContain("Draw the blast radius on it");
+    expect(cmd).toMatch(/`visuals` diagram or `file_map`/);
+    // what-you-couldn't-verify → unknowns.
+    expect(cmd).toMatch(/record what you could NOT verify in `unknowns`/);
+  });
+});
