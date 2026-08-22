@@ -627,7 +627,7 @@ describe("formatSessionHtml — the redact option", () => {
     const html = formatSessionHtml(diagramState(), OPTS);
     expect(html).toContain("flowchart TD");
     expect(html).toContain(diagramSecret);
-    expect(html).toContain("Show the diagram source (Mermaid)");
+    expect(html).toContain("Diagram source (Mermaid)");
     expect(html).not.toContain("Diagram source omitted from this export.");
   });
 });

@@ -1,6 +1,7 @@
 import type { Artifact, Comment, SessionAnnotation } from "@deeppairing/shared";
 import { isNeverApprovedStatus, isNotShippedStatus } from "@deeppairing/shared";
 import { buildTimeline } from "../replay/timeline.js";
+import { scrubProse } from "./format-html.js";
 import type { DecisionRecord, PlanReviewRecord } from "../store/store-interface.js";
 import {
   normalizeConceptKey,
@@ -854,27 +855,36 @@ export function buildGitHubReviewPayload(
 
       const sev = finding.severity ?? "info";
       const chip = severityEmoji[sev] ?? "⚪";
-      const title = finding.title ? `**${finding.title}**` : `**${finding.category ?? "Finding"}**`;
-      if (finding.title) findingTitles.push(finding.title);
+      const title = finding.title ? `**${scrubProse(finding.title)}**` : `**${finding.category ?? "Finding"}**`;
+      if (finding.title) findingTitles.push(scrubProse(finding.title));
 
       for (const ev of structured) {
         const bodyLines: string[] = [];
+        // R3 scrubbed the session id off the outbound body; S4 (round-14)
+        // closes the last outbound-leak asymmetry — the finding BODIES. These
+        // are free text the agent typed, and an absolute path in one
+        // ("/home/<user>/…", "C:\Users\…") posts verbatim to a stranger's PR.
+        // scrubProse collapses the machine-identifying prefix (same contract
+        // the share page's prose already gets); it is a no-op for ordinary
+        // sentences. No projectRoot in scope here → the module default
+        // (undefined outside a page render) still collapses the home prefix,
+        // which is the leak that matters on an outbound audience.
         bodyLines.push(`${chip} ${title} — ${sev.toUpperCase()}${finding.category ? ` · ${finding.category}` : ""}`);
         if (finding.detail) {
           bodyLines.push("");
-          bodyLines.push(finding.detail);
+          bodyLines.push(scrubProse(finding.detail));
         }
         if (ev.explanation) {
           bodyLines.push("");
-          bodyLines.push(`_${ev.explanation}_`);
+          bodyLines.push(`_${scrubProse(ev.explanation)}_`);
         }
         if (finding.impact) {
           bodyLines.push("");
-          bodyLines.push(`**Impact:** ${finding.impact}`);
+          bodyLines.push(`**Impact:** ${scrubProse(finding.impact)}`);
         }
         if (finding.recommendation) {
           bodyLines.push("");
-          bodyLines.push(`**Recommendation:** ${finding.recommendation}`);
+          bodyLines.push(`**Recommendation:** ${scrubProse(finding.recommendation)}`);
         }
 
         comments.push({

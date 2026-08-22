@@ -159,3 +159,51 @@ describe("R5 — doc-parity instruments (prose → code)", () => {
     expect(Number(m![1])).toBe(registered.size);
   });
 });
+
+// S4 (round-14) — the ENUMERATION→CLAIM extension.
+//
+// The R5 instruments above parse LISTS out of prose (exclusion segments, tool
+// names, a count) and compare them to code constants. They are enumeration-
+// scoped, and they caught nothing when a BEHAVIORAL claim drifted in the same
+// release: README:73 said the shared page carries "no code or diffs" while the
+// export default (export-session.ts) has shipped `includeCode` as default-
+// INCLUDE since it was written — the diffs ARE the point. A false claim on the
+// top of the funnel, invisible to a list-parity net.
+//
+// This pins the one high-value behavioral claim that is cheaply checkable: the
+// README's share-page code/diff claim must agree with the export default. Broad
+// prose parsing is out of reach; a single load-bearing claim tied to a single
+// code default is not.
+describe("S4 — behavioral-claim parity (README ↔ export default)", () => {
+  const README = () => readDoc("README.md");
+  const EXPORT_SESSION = () =>
+    readDoc("packages/mcp-server/src/mcp/tools/export-session.ts");
+
+  it("the export default is INCLUDE (includeCode defaults to not-false)", () => {
+    // The default lives inline in the tool handler. If someone flips it to
+    // opt-in (`=== true`, or any other predicate), this pin breaks and forces
+    // the README claim below to be revisited in the same change.
+    expect(EXPORT_SESSION()).toMatch(
+      /includeCode\s*=\s*args\?\.includeCode\s*!==\s*false/,
+    );
+  });
+
+  it("README does NOT repeat the retired 'no code or diffs' share-page claim", () => {
+    // The exact false phrase from README:73. It described the opt-OUT as the
+    // default. Its return would re-open the drift.
+    expect(README()).not.toMatch(/no code or diffs/i);
+  });
+
+  it("README states the share page carries diffs by default (matches the code)", () => {
+    // The claim must be present AND true: the page includes the diffs by
+    // default. Pins direction, not exact wording.
+    expect(README()).toMatch(/diffs by default/i);
+  });
+
+  // FOLLOW-UP (S1 seam): a description↔schema required-field parity test —
+  // assert each tool description's stated "required" fields match the Zod
+  // schema's required set (present_debrief / changeset title-required drift).
+  // Deliberately NOT added here: it is coupled to S1's in-flight edits to the
+  // tool descriptions; adding it on this branch would gate S4's CI on S1's
+  // uncommitted work. Land it with (or after) S1.
+});

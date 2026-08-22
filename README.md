@@ -1,7 +1,8 @@
 # deepPairing
 
-**Tell Claude Code "no" once and it sticks — the agent refuses to re-propose
-the approach, and quotes your reason back.**
+**Block Claude Code from re-proposing an approach you rejected — it refuses and
+quotes your reason back — then pair on findings, options, and plans in a rich
+local review UI.**
 
 Reject an approach with your reason and deepPairing turns it into a gate: the
 next time the agent reaches for that concept — even paraphrased — the tool call
@@ -70,10 +71,12 @@ it in your own project: **[install in Claude Code ↓](#install-in-claude-code)*
 - **Multi-project switcher.** One companion UI aggregates every project you're
   pairing on, with a "waiting on you" badge when it's your move.
 - **Share the session.** Export any session as a single self-contained web page
-  — the narrative, decisions, and debrief, no code or diffs — from the companion
-  UI's **Share as page (.html)** menu or `/deeppairing:share`. It travels to
-  teammates who never install deepPairing, and it warns before it ships anything
-  that looks like a secret.
+  — the narrative, decisions, debrief, and the diffs by default — from the
+  companion UI's **Share as page (.html)** menu or `/deeppairing:share`. It
+  travels to teammates who never install deepPairing, and it warns before it
+  ships anything that looks like a secret. Pass `--redact-code` (or
+  `includeCode: false`) to strip every code body and diff when the code
+  shouldn't leave the building.
   <!-- user-field: a `docs/assets/share-page.png` crop of the rendered page header would go here -->
 - **Review a PR in tandem.** `/deeppairing:review-pr <N>` pulls a colleague's
   GitHub PR onto the review surface — the diff per hunk, walk-me-through, and

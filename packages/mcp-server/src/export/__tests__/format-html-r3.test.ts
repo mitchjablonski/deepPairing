@@ -634,9 +634,47 @@ describe("R3 — visuals reach the page", () => {
     const html = formatSessionHtml(state, OPTS);
     expect(html).toContain("Token refresh");
     expect(html).toContain("How the refresh races.");
-    expect(html).toContain("Show the diagram source (Mermaid)");
+    // S4 (round-14) — the source is now labelled honestly + prominently and
+    // the note names where to render it.
+    expect(html).toContain("Diagram source (Mermaid)");
     expect(html).toContain("flowchart TD");
-    expect(html).toContain("view in deepPairing".replace("view in ", "drawn in "));
+    expect(html).toContain("Paste it into deepPairing");
+  });
+
+  // S4 (round-14) — the diagram ships as an honest source-note (server-side
+  // Mermaid→SVG was investigated and rejected: mermaid@11 needs a real browser
+  // DOM; happy-dom yields an empty svg and a faithful render needs a headless
+  // Chromium the daemon export path can't take). The pins the fallback must
+  // keep: the source is XSS-safe (a hostile diagram body does NOT execute) and
+  // the block makes ZERO external requests.
+  it("a hostile diagram source is escaped, not executed (XSS-safe)", () => {
+    const evil = {
+      id: "vx",
+      kind: "diagram",
+      title: "Evil",
+      source: 'graph TD\n  A["</code></pre><script>alert(1)</script>"] --> B',
+    };
+    const state = baseState({
+      artifacts: [artifact({ id: "a1", type: "plan", title: "P", content: { steps: [], visuals: [evil] } })],
+    });
+    const html = formatSessionHtml(state, OPTS);
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).toContain("&lt;script&gt;");
+  });
+
+  it("the diagram block is self-contained — no external subresource requests", () => {
+    const state = baseState({
+      artifacts: [artifact({ id: "a1", type: "plan", title: "P", content: { steps: [], visuals: [diagram] } })],
+    });
+    const html = formatSessionHtml(state, OPTS);
+    // Isolate the diagram block (head → the </details> that closes its source)
+    // and prove it pulls nothing off the network. A plain-text mention of
+    // "mermaid.live" in the note is prose, not a request; there must be no
+    // src=/href= to an http(s) origin and no active subresource element.
+    const start = html.indexOf('class="visual"');
+    const block = html.slice(start, html.indexOf("</details>", start));
+    expect(block).not.toMatch(/(?:src|href)\s*=\s*["']https?:/i);
+    expect(block).not.toMatch(/<(?:script|iframe|img|link|object|embed)\b/i);
   });
 
   it("renders a spec's visuals and a decision option's visuals too", () => {

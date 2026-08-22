@@ -27826,764 +27826,6 @@ function buildTimeline(state) {
   });
 }
 
-// src/export/format-markdown.ts
-function formatSessionMarkdown(state, format = "full") {
-  switch (format) {
-    case "pr-description":
-      return formatPrDescription(state);
-    case "adr":
-      return formatAdr(state);
-    case "replay":
-      return formatReplay(state);
-    case "pr-comments":
-      return formatPrComments(state);
-    case "learnings":
-      return formatLearnings(state);
-    case "full":
-    default:
-      return formatFull(state);
-  }
-}
-function isShippedArtifact(a) {
-  return !isNotShippedStatus(a.status);
-}
-function unapprovedMdMarker(a) {
-  if (!isNeverApprovedStatus(a.status)) return "";
-  const which = a.status === "revised" ? "sent back for changes" : a.status === "reviewing" ? "still under review" : "still a draft";
-  return ` _(not approved \u2014 ${which})_`;
-}
-function rejectionNote(a) {
-  if (a.status !== "rejected" && a.status !== "retracted") return null;
-  const verb = a.status === "rejected" ? "rejected" : "retracted";
-  return `> \u26A0\uFE0F **Rejected (not built)** \u2014 this was proposed then ${verb} during review; kept here for the full record, not part of what shipped.
-`;
-}
-function decisionOwningArtifact(state, d) {
-  if (!d.artifactId) return void 0;
-  return state.artifacts.find((a) => a.id === d.artifactId);
-}
-function decisionIsRejected(state, d) {
-  const a = decisionOwningArtifact(state, d);
-  return !!a && (a.status === "rejected" || a.status === "retracted");
-}
-var VOICE_RULES = [
-  // --- you (contractions first, then possessive, then bare) ---
-  [/\byou['’]re\b/gi, "the reviewer is"],
-  [/\byou['’]ll\b/gi, "the reviewer will"],
-  [/\byou['’]ve\b/gi, "the reviewer has"],
-  [/\byou['’]d\b/gi, "the reviewer would"],
-  [/\byour\b/gi, "the reviewer's"],
-  [/\byou\b/gi, "the reviewer"],
-  // --- we ---
-  [/\bwe['’]re\b/gi, "the pair is"],
-  [/\bwe['’]ll\b/gi, "the pair will"],
-  [/\bwe['’]ve\b/gi, "the pair has"],
-  [/\bwe['’]d\b/gi, "the pair would"],
-  [/\bour\b/gi, "the pair's"],
-  [/\bwe\b/gi, "the pair"],
-  // --- I (capital only; the standalone rule excludes \w AND / so "I/O",
-  //     "I18n" etc. never match) ---
-  [/\bI['’]ve\b/g, "the agent has"],
-  [/\bI['’]m\b/g, "the agent is"],
-  [/\bI['’]ll\b/g, "the agent will"],
-  [/\bI['’]d\b/g, "the agent would"],
-  [/(?<![\w/])I(?![\w/])/g, "the agent"],
-  [/\bmy\b/gi, "the agent's"]
-];
-var CODE_SEGMENT = /```[\s\S]*?```|`[^`]*`/g;
-function transformProse(seg, atTextStart) {
-  let out = seg;
-  for (const [re, rep] of VOICE_RULES) out = out.replace(re, rep);
-  const boundary = atTextStart ? /(^|[.!?]\s+|\n\s*)([a-z])/g : /([.!?]\s+|\n\s*)([a-z])/g;
-  return out.replace(boundary, (_m, pre, ch) => pre + ch.toUpperCase());
-}
-function neutralizeVoice(text) {
-  if (!text) return text ?? "";
-  let result = "";
-  let lastIndex = 0;
-  let atTextStart = true;
-  for (const m of text.matchAll(CODE_SEGMENT)) {
-    const idx = m.index ?? 0;
-    const prose = text.slice(lastIndex, idx);
-    if (prose) {
-      result += transformProse(prose, atTextStart);
-      atTextStart = false;
-    }
-    result += m[0];
-    atTextStart = false;
-    lastIndex = idx + m[0].length;
-  }
-  const tail = text.slice(lastIndex);
-  if (tail) result += transformProse(tail, atTextStart);
-  return result;
-}
-function formatPrDescription(state) {
-  const sections = [];
-  sections.push("## Summary\n");
-  const debriefs = state.artifacts.filter((a) => a.type === "debrief" && isShippedArtifact(a));
-  for (const d of debriefs) {
-    const content = coerceDebriefContent(d.content);
-    if (content.summary) sections.push(`${neutralizeVoice(content.summary)}
-`);
-    if (content.needsYourEyes?.length) {
-      sections.push("**What needs review:**");
-      for (const n of content.needsYourEyes) sections.push(`- ${neutralizeVoice(n.what)} \u2014 ${neutralizeVoice(n.why)}`);
-      sections.push("");
-    }
-  }
-  const resolved = state.decisions.filter((d) => d.response && !decisionIsRejected(state, d));
-  if (resolved.length > 0) {
-    sections.push("### Decisions\n");
-    for (const d of resolved) {
-      const option = d.options.find((o) => o.id === d.response?.optionId);
-      sections.push(`- **${d.title?.trim() || d.context}**: ${option?.title ?? d.response?.optionId}`);
-      if (d.response?.reasoning) {
-        sections.push(`  - *Reasoning*: ${d.response.reasoning}`);
-      }
-    }
-    sections.push("");
-  }
-  const plans = state.artifacts.filter((a) => a.type === "plan" && isShippedArtifact(a));
-  for (const plan of plans) {
-    const steps = coercePlanContent(plan.content).steps;
-    if (steps.length > 0) {
-      sections.push(`### Changes (${plan.title})${unapprovedMdMarker(plan)}
-`);
-      for (const step of steps) {
-        const files = Array.isArray(step.files) ? step.files.map((f) => typeof f === "string" ? f : f.filePath).join(", ") : "";
-        sections.push(`- ${step.description}${files ? ` (${files})` : ""}`);
-      }
-      sections.push("");
-    }
-  }
-  const research = state.artifacts.filter((a) => a.type === "research" && isShippedArtifact(a));
-  if (research.length > 0) {
-    const findings = research.flatMap((r) => coerceResearchContent(r.content).findings);
-    const highFindings = findings.filter((f) => f.significance === "high");
-    if (highFindings.length > 0) {
-      sections.push("### Key Findings\n");
-      for (const f of highFindings) {
-        sections.push(`- **${f.title ?? f.category}**: ${f.detail}`);
-      }
-      sections.push("");
-    }
-  }
-  sections.push("\n---\n*Generated by [deepPairing](https://github.com/deeppairing)*");
-  return sections.join("\n");
-}
-function formatAdr(state) {
-  const sections = [];
-  const date5 = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
-  sections.push(`# ADR: ${getSessionTitle(state)}
-`);
-  sections.push(`**Date**: ${date5}`);
-  sections.push(`**Status**: Accepted
-`);
-  const research = state.artifacts.filter((a) => a.type === "research" && isShippedArtifact(a));
-  if (research.length > 0) {
-    sections.push("## Context\n");
-    for (const r of research) {
-      const content = coerceResearchContent(r.content);
-      if (content.summary) sections.push(neutralizeVoice(content.summary) + "\n");
-      for (const f of content.findings ?? []) {
-        sections.push(`### ${f.title ?? f.category}
-`);
-        sections.push(neutralizeVoice(f.detail));
-        if (f.impact) sections.push(`
-**Impact**: ${neutralizeVoice(f.impact)}`);
-        sections.push("");
-      }
-    }
-  }
-  const resolved = state.decisions.filter((d) => d.response && !decisionIsRejected(state, d));
-  if (resolved.length > 0) {
-    sections.push("## Decision\n");
-    for (const d of resolved) {
-      const chosen = d.options.find((o) => o.id === d.response?.optionId);
-      const rejected = d.options.filter((o) => o.id !== d.response?.optionId);
-      sections.push(`**${d.context}**
-`);
-      sections.push(`Chosen: **${chosen?.title}** \u2014 ${chosen?.description ?? ""}`);
-      if (d.response?.reasoning) {
-        sections.push(`
-Reasoning: ${neutralizeVoice(d.response.reasoning)}`);
-      }
-      if (rejected.length > 0) {
-        sections.push("\nRejected alternatives:");
-        for (const r of rejected) {
-          sections.push(`- ${r.title}: ${r.description ?? ""}`);
-        }
-      }
-      sections.push("");
-    }
-  }
-  const plans = state.artifacts.filter((a) => a.type === "plan" && isShippedArtifact(a));
-  if (plans.length > 0) {
-    sections.push("## Consequences\n");
-    for (const plan of plans) {
-      for (const step of coercePlanContent(plan.content).steps) {
-        sections.push(`- ${step.description}: ${step.reasoning}`);
-      }
-    }
-    sections.push("");
-  }
-  return sections.join("\n");
-}
-function pushEvidenceLines(sections, evidence) {
-  if (!Array.isArray(evidence)) return;
-  for (const ev of evidence) {
-    if (typeof ev === "string") {
-      sections.push(`> ${ev}`);
-      sections.push("");
-      continue;
-    }
-    if (!ev || typeof ev !== "object") continue;
-    const e = ev;
-    if (e.filePath) sections.push(`\`${e.filePath}${e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null ? `-${e.lineEnd}` : ""}` : ""}\``);
-    if (e.snippet) {
-      sections.push("```" + (e.language ?? ""));
-      sections.push(e.snippet);
-      sections.push("```");
-    }
-    if (e.explanation) sections.push(`> ${e.explanation}`);
-    sections.push("");
-  }
-}
-function formatDebriefSections(state) {
-  const sections = [];
-  const debriefs = state.artifacts.filter((a) => a.type === "debrief" && a.status !== "superseded");
-  for (const d of debriefs) {
-    const content = coerceDebriefContent(d.content);
-    const t = (d.title ?? "").trim();
-    const heading = /^debrief\b/i.test(t) ? t : `Debrief \u2014 ${t || "Session"}`;
-    sections.push(`## ${heading}
-`);
-    const note = rejectionNote(d);
-    if (note) sections.push(note);
-    if (content.summary) sections.push(`${content.summary}
-`);
-    if (content.sections?.length) {
-      sections.push("### Walkthrough\n");
-      for (const s of content.sections) {
-        sections.push(`#### ${s.title}
-`);
-        if (s.body) sections.push(`${s.body}
-`);
-        if (s.concepts?.length) {
-          for (const c of s.concepts) {
-            sections.push(`- *Concept*: **${c.name}**${c.oneLineExplanation ? ` \u2014 ${c.oneLineExplanation}` : ""}`);
-          }
-          sections.push("");
-        }
-        pushEvidenceLines(sections, s.evidence);
-      }
-    }
-    if (content.decisionsMade?.length) {
-      sections.push("### Decisions I made without you\n");
-      for (const dm of content.decisionsMade) {
-        sections.push(`- **${dm.what}** \u2014 ${dm.why}${dm.alternative ? ` *(considered but not taken: ${dm.alternative})*` : ""}`);
-      }
-      sections.push("");
-    }
-    if (content.needsYourEyes?.length) {
-      sections.push("### Needs your eyes\n");
-      for (const n of content.needsYourEyes) {
-        sections.push(`- **${n.what}** \u2014 ${n.why}`);
-      }
-      sections.push("");
-    }
-    if (content.deferred?.length) {
-      sections.push("### Deferred\n");
-      for (const df of content.deferred) {
-        sections.push(`- **${df.what}** \u2014 ${df.why}`);
-      }
-      sections.push("");
-    }
-    if (content.openQuestions?.length) {
-      sections.push("### Open questions\n");
-      for (const q of content.openQuestions) sections.push(`- ${q}`);
-      sections.push("");
-    }
-  }
-  return sections;
-}
-function formatExplainerSections(state) {
-  const sections = [];
-  const explainers = state.artifacts.filter((a) => a.type === "explainer" && a.status !== "superseded");
-  for (const ex of explainers) {
-    const content = coerceExplainerContent(ex.content);
-    sections.push(`## Explainer \u2014 ${content.title || ex.title}
-`);
-    const note = rejectionNote(ex);
-    if (note) sections.push(note);
-    if (content.overview) sections.push(`${content.overview}
-`);
-    content.sections?.forEach((s, i) => {
-      sections.push(`### ${i + 1}. ${s.heading}
-`);
-      if (s.body) sections.push(`${s.body}
-`);
-      pushEvidenceLines(sections, s.evidence);
-    });
-  }
-  return sections;
-}
-function formatSpecSections(state) {
-  const sections = [];
-  const specs = state.artifacts.filter((a) => a.type === "spec" && a.status !== "superseded");
-  for (const sp of specs) {
-    const content = coerceSpecContent(sp.content);
-    sections.push(`## Spec \u2014 ${sp.title}
-`);
-    const note = rejectionNote(sp);
-    if (note) sections.push(note);
-    if (content.objective) sections.push(`**Objective**: ${content.objective}
-`);
-    if (content.context) sections.push(`${content.context}
-`);
-    if (content.requirements?.length) {
-      sections.push("### Requirements\n");
-      for (const r of content.requirements) {
-        sections.push(`- **${r.id}**${r.priority ? ` _(${r.priority})_` : ""}: ${r.statement}`);
-        if (r.rationale) sections.push(`  - *Why*: ${r.rationale}`);
-        for (const ac of r.acceptanceCriteria ?? []) sections.push(`  - \u2713 ${ac}`);
-      }
-      sections.push("");
-    }
-  }
-  return sections;
-}
-function formatChangesetSections(state) {
-  const sections = [];
-  const changesets = state.artifacts.filter((a) => a.type === "changeset" && a.status !== "superseded");
-  for (const cs of changesets) {
-    const content = coerceChangesetContent(cs.content);
-    sections.push(`## Changeset \u2014 ${cs.title}
-`);
-    const note = rejectionNote(cs);
-    if (note) sections.push(note);
-    if (content.summary) sections.push(`${content.summary}
-`);
-    for (const file2 of content.files ?? []) {
-      sections.push(`### \`${file2.path}\` (${file2.changeType})
-`);
-      if (file2.hunks?.length) {
-        sections.push("```diff");
-        for (const hunk of file2.hunks) {
-          if (hunk.header) sections.push(hunk.header);
-          for (const line of hunk.lines ?? []) {
-            const prefix = line.kind === "add" ? "+" : line.kind === "del" ? "-" : " ";
-            sections.push(`${prefix}${line.content}`);
-          }
-        }
-        sections.push("```");
-      }
-      sections.push("");
-    }
-  }
-  return sections;
-}
-function formatFull(state) {
-  const sections = [];
-  sections.push(`# deepPairing Session Report
-`);
-  sections.push(`**Session**: ${state.sessionId}`);
-  sections.push(`**Date**: ${(/* @__PURE__ */ new Date()).toISOString().split("T")[0]}
-`);
-  sections.push("---\n");
-  const research = state.artifacts.filter((a) => a.type === "research" && a.status !== "superseded");
-  if (research.length > 0) {
-    sections.push("## Findings\n");
-    for (const r of research) {
-      const content = coerceResearchContent(r.content);
-      const note = rejectionNote(r);
-      if (note) sections.push(note);
-      if (content.summary) sections.push(`${content.summary}
-`);
-      for (const f of content.findings ?? []) {
-        sections.push(`### ${f.title ?? f.category} (${f.significance})
-`);
-        sections.push(f.detail + "\n");
-        if (Array.isArray(f.evidence)) {
-          for (const ev of f.evidence) {
-            if (typeof ev === "string") {
-              sections.push(`> ${ev}`);
-              sections.push("");
-              continue;
-            }
-            sections.push(`\`${ev.filePath}:${ev.lineStart}-${ev.lineEnd}\``);
-            if (ev.snippet) {
-              sections.push("```" + (ev.language ?? ""));
-              sections.push(ev.snippet);
-              sections.push("```");
-            }
-            if (ev.explanation) sections.push(`> ${ev.explanation}`);
-            sections.push("");
-          }
-        } else if (typeof f.evidence === "string") {
-          sections.push(`Evidence: ${f.evidence}
-`);
-        }
-        if (f.impact) sections.push(`**Impact**: ${f.impact}
-`);
-        if (f.recommendation) sections.push(`**Recommendation**: ${f.recommendation}
-`);
-      }
-      const artComments = state.comments.filter((c) => c.target.artifactId === r.id);
-      if (artComments.length > 0) {
-        sections.push("**Comments:**");
-        for (const c of artComments) {
-          sections.push(`- *${c.author}*: ${c.content}`);
-        }
-        sections.push("");
-      }
-    }
-  }
-  sections.push(...formatSpecSections(state));
-  const resolved = state.decisions.filter((d) => d.response);
-  if (resolved.length > 0) {
-    sections.push("## Decisions\n");
-    for (const d of resolved) {
-      const chosen = d.options.find((o) => o.id === d.response?.optionId);
-      sections.push(`### ${d.context}
-`);
-      const dNote = decisionIsRejected(state, d) ? rejectionNote(decisionOwningArtifact(state, d)) : null;
-      if (dNote) sections.push(dNote);
-      sections.push(`**Selected**: ${chosen?.title ?? d.response?.optionId}`);
-      if (d.response?.reasoning) sections.push(`**Reasoning**: ${d.response.reasoning}`);
-      sections.push("\nOptions considered:");
-      for (const o of d.options) {
-        const marker = o.id === d.response?.optionId ? "\u2713" : "\u2717";
-        sections.push(`- ${marker} **${o.title}** (${o.effort} effort, ${o.risk} risk): ${o.description ?? ""}`);
-      }
-      sections.push("");
-    }
-  }
-  const plans = state.artifacts.filter((a) => a.type === "plan" && a.status !== "superseded");
-  if (plans.length > 0) {
-    sections.push("## Implementation Plan\n");
-    for (const plan of plans) {
-      sections.push(`### ${plan.title}
-`);
-      const rejNote = rejectionNote(plan);
-      if (rejNote) sections.push(rejNote);
-      const review = state.planReviews.find((p) => p.artifactId === plan.id);
-      if (review?.verdict) sections.push(`**Status**: ${review.verdict}
-`);
-      for (const [i, step] of coercePlanContent(plan.content).steps.entries()) {
-        sections.push(`${i + 1}. **${step.description}** \u2014 ${step.reasoning}`);
-        if (step.motivatedBy?.length) {
-          sections.push(`   *Motivated by*: ${step.motivatedBy.join(", ")}`);
-        }
-      }
-      sections.push("");
-    }
-  }
-  sections.push(...formatChangesetSections(state));
-  sections.push(...formatDebriefSections(state));
-  sections.push(...formatExplainerSections(state));
-  const reasoning = state.artifacts.filter((a) => a.type === "reasoning");
-  if (reasoning.length > 0) {
-    sections.push("<details><summary>Reasoning Log</summary>\n");
-    for (const r of reasoning) {
-      const content = coerceReasoningContent(r.content);
-      sections.push(`- **${content.action}** (${content.confidence}): ${content.reasoning}`);
-    }
-    sections.push("\n</details>\n");
-  }
-  sections.push("---\n*Generated by [deepPairing](https://github.com/deeppairing)*");
-  return sections.join("\n");
-}
-function getSessionTitle(state) {
-  const firstDecision = state.decisions.find((d) => !decisionIsRejected(state, d));
-  if (firstDecision) return firstDecision.title?.trim() || firstDecision.context;
-  const firstResearch = state.artifacts.find((a) => a.type === "research" && isShippedArtifact(a));
-  if (firstResearch) return firstResearch.title;
-  return "Session " + state.sessionId;
-}
-function formatReplay(state) {
-  const title = getSessionTitle(state);
-  const sections = [];
-  sections.push(`# Replay: ${title}
-`);
-  sections.push(`*Chronological walkthrough for learning re-read.*
-`);
-  const events = buildTimeline({
-    artifacts: state.artifacts,
-    comments: state.comments,
-    decisions: state.decisions,
-    planReviews: state.planReviews
-  });
-  const annotationsByEvent = /* @__PURE__ */ new Map();
-  for (const ann of state.annotations ?? []) {
-    const list = annotationsByEvent.get(ann.targetEventId) ?? [];
-    list.push(ann);
-    annotationsByEvent.set(ann.targetEventId, list);
-  }
-  if (events.length === 0) {
-    sections.push("_No events recorded in this session._");
-    return sections.join("\n");
-  }
-  sections.push("## Timeline\n");
-  for (const event of events) {
-    const when = formatTime(event.at);
-    const icon = replayIcon(event.kind);
-    sections.push(`### ${icon} ${when} \u2014 ${event.label}`);
-    if (event.kind === "decision_resolved") {
-      const p = event.payload ?? {};
-      if (p.reasoning) sections.push(`Reasoning: ${p.reasoning}`);
-      if (Array.isArray(p.rejectedTitles) && p.rejectedTitles.length > 0) {
-        sections.push(`_Rejected:_ ${p.rejectedTitles.join(", ")}`);
-      }
-    } else if (event.kind === "comment_added") {
-      const p = event.payload ?? {};
-      const who = p.author === "agent" ? "Agent" : p.intent === "question" ? "You asked" : "You";
-      sections.push(`${who}: ${p.content}`);
-    } else if (event.kind === "plan_reviewed") {
-      const p = event.payload ?? {};
-      if (p.feedback) sections.push(`Feedback: ${p.feedback}`);
-    }
-    const anns = annotationsByEvent.get(event.id);
-    if (anns && anns.length > 0) {
-      for (const ann of anns) {
-        sections.push(`> \u{1F4DD} **note:** ${ann.note}${ann.tags?.length ? ` \`[${ann.tags.join(", ")}]\`` : ""}`);
-      }
-    }
-    sections.push("");
-  }
-  sections.push("---\n*Generated by [deepPairing](https://github.com/deeppairing)*");
-  return sections.join("\n");
-}
-function replayIcon(kind) {
-  switch (kind) {
-    case "artifact_created":
-      return "\u2795";
-    case "artifact_status_changed":
-      return "\u{1F504}";
-    case "comment_added":
-      return "\u{1F4AC}";
-    case "decision_resolved":
-      return "\u2696\uFE0F";
-    case "plan_reviewed":
-      return "\u{1F4CB}";
-    default:
-      return "\u2022";
-  }
-}
-function formatTime(iso) {
-  try {
-    const d = new Date(iso);
-    return d.toISOString().replace("T", " ").slice(0, 19);
-  } catch {
-    return iso;
-  }
-}
-var severityEmoji = {
-  critical: "\u{1F534}",
-  high: "\u{1F7E0}",
-  medium: "\u{1F7E1}",
-  low: "\u{1F7E2}",
-  info: "\u26AA"
-};
-function formatPrComments(state) {
-  const sections = [];
-  const title = getSessionTitle(state);
-  sections.push(`## deepPairing notes \u2014 ${title}`);
-  sections.push("");
-  const researchArtifacts = state.artifacts.filter(
-    // R3 (adversarial F8) — shared predicate; drops `obsolete` too (pr-comments
-    // is pasted onto a PR, so an overtaken finding must not read as live).
-    (a) => a.type === "research" && isShippedArtifact(a)
-  );
-  const allFindings = [];
-  for (const artifact of researchArtifacts) {
-    const findings = coerceResearchContent(artifact.content).findings;
-    if (!Array.isArray(findings)) continue;
-    findings.forEach((f, i) => {
-      allFindings.push({ artifact, finding: f, index: i });
-    });
-  }
-  if (allFindings.length === 0) {
-    sections.push("_No findings from this pairing session._");
-    sections.push("");
-    return sections.join("\n");
-  }
-  const byFile = /* @__PURE__ */ new Map();
-  for (const entry of allFindings) {
-    const evidence = entry.finding.evidence;
-    const firstPath = Array.isArray(evidence) && evidence[0] && typeof evidence[0] === "object" ? evidence[0].filePath : void 0;
-    const key = firstPath ?? "General";
-    const list = byFile.get(key) ?? [];
-    list.push(entry);
-    byFile.set(key, list);
-  }
-  for (const [filePath, entries] of byFile.entries()) {
-    sections.push(`### ${filePath}`);
-    sections.push("");
-    for (const { finding } of entries) {
-      const sev = finding.severity ?? "info";
-      const chip = `${severityEmoji[sev] ?? "\u26AA"} **${sev.toUpperCase()}**`;
-      const category = finding.category ? ` \xB7 ${finding.category}` : "";
-      const title2 = finding.title ? ` \u2014 ${finding.title}` : "";
-      sections.push(`${chip}${category}${title2}`);
-      sections.push("");
-      const evidenceList = Array.isArray(finding.evidence) ? finding.evidence : [];
-      for (const ev of evidenceList) {
-        if (typeof ev !== "object" || !ev.filePath) continue;
-        const linePart = ev.lineEnd && ev.lineEnd !== ev.lineStart ? `L${ev.lineStart}-L${ev.lineEnd}` : `L${ev.lineStart}`;
-        sections.push(`> \`${ev.filePath}:${linePart}\``);
-        if (ev.snippet) {
-          const lang = ev.language ?? "";
-          sections.push("> ```" + lang);
-          for (const line of ev.snippet.split("\n")) {
-            sections.push("> " + line);
-          }
-          sections.push("> ```");
-        }
-        if (ev.explanation) {
-          sections.push(`> ${ev.explanation}`);
-        }
-      }
-      if (finding.detail) {
-        sections.push("");
-        sections.push(finding.detail);
-      }
-      if (finding.impact) {
-        sections.push("");
-        sections.push(`**Impact:** ${finding.impact}`);
-      }
-      if (finding.recommendation) {
-        sections.push("");
-        sections.push(`**Recommendation:** ${finding.recommendation}`);
-      }
-      sections.push("");
-      sections.push("---");
-      sections.push("");
-    }
-  }
-  sections.push("*Output from a [deepPairing](https://github.com/deeppairing) session \u2014 paste into a PR comment.*");
-  return sections.join("\n");
-}
-function formatLearnings(state) {
-  const sections = [];
-  const title = getSessionTitle(state);
-  sections.push(`# Learnings \u2014 ${title}`);
-  sections.push("");
-  sections.push(
-    "*Teaching artifact: concepts named and approaches you won't re-propose.*"
-  );
-  sections.push("");
-  const reasoningArtifacts = state.artifacts.filter(
-    (a) => a.type === "reasoning" && a.status !== "superseded" && a.status !== "retracted"
-  );
-  const conceptCounts = /* @__PURE__ */ new Map();
-  for (const a of reasoningArtifacts) {
-    const content = coerceReasoningContent(a.content);
-    const concept = content.concept;
-    if (!concept?.name) continue;
-    const key = normalizeConceptKey(concept.name);
-    if (!key) continue;
-    const existing = conceptCounts.get(key);
-    const action = content.action || null;
-    if (existing) {
-      existing.count += 1;
-      if (action && !existing.actions.includes(action)) existing.actions.push(action);
-    } else {
-      conceptCounts.set(key, {
-        name: String(concept.name).trim(),
-        explanation: concept.oneLineExplanation ? String(concept.oneLineExplanation) : void 0,
-        count: 1,
-        actions: action ? [action] : []
-      });
-    }
-  }
-  if (conceptCounts.size > 0) {
-    sections.push("## Concepts the pair named");
-    sections.push("");
-    const sorted = Array.from(conceptCounts.values()).sort(
-      (a, b) => b.count - a.count || a.name.localeCompare(b.name)
-    );
-    for (const c of sorted) {
-      const countLabel = c.count > 1 ? ` _(\xD7${c.count})_` : "";
-      sections.push(`- **${c.name}**${countLabel}`);
-      if (c.explanation) sections.push(`  > ${c.explanation}`);
-      if (c.actions.length > 0) {
-        const shown = c.actions.slice(0, 3);
-        for (const act of shown) sections.push(`  - applied to: ${act}`);
-      }
-    }
-    sections.push("");
-  }
-  const rejectedFromStatus = state.artifacts.filter(
-    (a) => a.status === "rejected" && a.type !== "reasoning"
-  );
-  const rejectedApproaches = state.sessionMemory?.rejectedApproaches;
-  const seenReasons = /* @__PURE__ */ new Set();
-  const rows = [];
-  if (rejectedApproaches) {
-    for (const r of rejectedApproaches) {
-      const key = r.description;
-      if (seenReasons.has(key)) continue;
-      seenReasons.add(key);
-      rows.push(
-        `- **${r.description}**${r.concept ? ` _(concept: ${r.concept})_` : ""}${r.reason ? ` \u2014 "${r.reason}"` : ""}`
-      );
-    }
-  } else {
-    for (const a of rejectedFromStatus) {
-      if (seenReasons.has(a.title)) continue;
-      seenReasons.add(a.title);
-      rows.push(`- **${a.title}**`);
-    }
-  }
-  if (rows.length > 0) {
-    sections.push("## Approaches you won't re-propose");
-    sections.push("");
-    rows.forEach((r) => sections.push(r));
-    sections.push("");
-  }
-  const debriefs = state.artifacts.filter((a) => a.type === "debrief" && a.status !== "superseded");
-  const debriefDecisions = debriefs.flatMap((d) => coerceDebriefContent(d.content).decisionsMade ?? []);
-  const debriefDeferred = debriefs.flatMap((d) => coerceDebriefContent(d.content).deferred ?? []);
-  const debriefOpen = debriefs.flatMap((d) => coerceDebriefContent(d.content).openQuestions ?? []);
-  const hasDebriefLearnings = debriefDecisions.length > 0 || debriefDeferred.length > 0 || debriefOpen.length > 0;
-  if (hasDebriefLearnings) {
-    sections.push("## From the debrief");
-    sections.push("");
-    if (debriefDecisions.length > 0) {
-      sections.push("### Calls the agent made on its own");
-      sections.push("");
-      for (const dm of debriefDecisions) {
-        sections.push(`- **${dm.what}** \u2014 ${dm.why}${dm.alternative ? ` _(considered: ${dm.alternative})_` : ""}`);
-      }
-      sections.push("");
-    }
-    if (debriefDeferred.length > 0) {
-      sections.push("### Deferred");
-      sections.push("");
-      for (const df of debriefDeferred) sections.push(`- **${df.what}** \u2014 ${df.why}`);
-      sections.push("");
-    }
-    if (debriefOpen.length > 0) {
-      sections.push("### Still open");
-      sections.push("");
-      for (const q of debriefOpen) sections.push(`- ${q}`);
-      sections.push("");
-    }
-  }
-  if (conceptCounts.size === 0 && rows.length === 0 && !hasDebriefLearnings) {
-    sections.push("_Nothing crystallized yet. Keep pairing \u2014 the agent's `log_reasoning.concept` field and your rejection reasons become the material here._");
-    sections.push("");
-  }
-  sections.push(`*Generated from session ${state.sessionId} \u2014 [deepPairing](https://github.com/deeppairing).*`);
-  return sections.join("\n");
-}
-
-// src/export/html-export.ts
-import crypto4 from "node:crypto";
-import fs13 from "node:fs";
-import path12 from "node:path";
-
 // src/export/format-html.ts
 var MAX_SNIPPET_LINES = 40;
 var MAX_CODE_LINES = 120;
@@ -28965,7 +28207,7 @@ function visualsBlock(visuals, ctx) {
       case "diagram": {
         kindLabel = "Diagram";
         const src = String(v.source ?? "").trim();
-        body = src ? ctx.includeCode ? `<p class="visual-note">A diagram the pair drew and discussed. It is drawn in deepPairing; this page carries the source it was drawn from.</p><details class="visual-source"><summary>Show the diagram source (Mermaid)</summary><pre class="code" data-language="mermaid"><code>${escText(src)}</code></pre></details>` : `<p class="visual-note">A diagram the pair drew and discussed. It is drawn in deepPairing.</p><p class="redacted">Diagram source omitted from this export.</p>` : `<p class="visual-note">A diagram was attached here, but its source was not recorded.</p>`;
+        body = src ? ctx.includeCode ? `<p class="visual-note">A diagram the pair drew and discussed. This page runs no scripts, so it can't draw the picture here \u2014 the Mermaid source it was drawn from is below. Paste it into deepPairing, or any Mermaid viewer (e.g. mermaid.live), to see it rendered.</p><details class="visual-source" open><summary>Diagram source (Mermaid)</summary><pre class="code" data-language="mermaid"><code>${escText(src)}</code></pre></details>` : `<p class="visual-note">A diagram the pair drew and discussed. It is drawn in deepPairing.</p><p class="redacted">Diagram source omitted from this export.</p>` : `<p class="visual-note">A diagram was attached here, but its source was not recorded.</p>`;
         break;
       }
       case "file_map": {
@@ -29850,7 +29092,763 @@ ${scanFootnote}
 `;
 }
 
+// src/export/format-markdown.ts
+function formatSessionMarkdown(state, format = "full") {
+  switch (format) {
+    case "pr-description":
+      return formatPrDescription(state);
+    case "adr":
+      return formatAdr(state);
+    case "replay":
+      return formatReplay(state);
+    case "pr-comments":
+      return formatPrComments(state);
+    case "learnings":
+      return formatLearnings(state);
+    case "full":
+    default:
+      return formatFull(state);
+  }
+}
+function isShippedArtifact(a) {
+  return !isNotShippedStatus(a.status);
+}
+function unapprovedMdMarker(a) {
+  if (!isNeverApprovedStatus(a.status)) return "";
+  const which = a.status === "revised" ? "sent back for changes" : a.status === "reviewing" ? "still under review" : "still a draft";
+  return ` _(not approved \u2014 ${which})_`;
+}
+function rejectionNote(a) {
+  if (a.status !== "rejected" && a.status !== "retracted") return null;
+  const verb = a.status === "rejected" ? "rejected" : "retracted";
+  return `> \u26A0\uFE0F **Rejected (not built)** \u2014 this was proposed then ${verb} during review; kept here for the full record, not part of what shipped.
+`;
+}
+function decisionOwningArtifact(state, d) {
+  if (!d.artifactId) return void 0;
+  return state.artifacts.find((a) => a.id === d.artifactId);
+}
+function decisionIsRejected(state, d) {
+  const a = decisionOwningArtifact(state, d);
+  return !!a && (a.status === "rejected" || a.status === "retracted");
+}
+var VOICE_RULES = [
+  // --- you (contractions first, then possessive, then bare) ---
+  [/\byou['’]re\b/gi, "the reviewer is"],
+  [/\byou['’]ll\b/gi, "the reviewer will"],
+  [/\byou['’]ve\b/gi, "the reviewer has"],
+  [/\byou['’]d\b/gi, "the reviewer would"],
+  [/\byour\b/gi, "the reviewer's"],
+  [/\byou\b/gi, "the reviewer"],
+  // --- we ---
+  [/\bwe['’]re\b/gi, "the pair is"],
+  [/\bwe['’]ll\b/gi, "the pair will"],
+  [/\bwe['’]ve\b/gi, "the pair has"],
+  [/\bwe['’]d\b/gi, "the pair would"],
+  [/\bour\b/gi, "the pair's"],
+  [/\bwe\b/gi, "the pair"],
+  // --- I (capital only; the standalone rule excludes \w AND / so "I/O",
+  //     "I18n" etc. never match) ---
+  [/\bI['’]ve\b/g, "the agent has"],
+  [/\bI['’]m\b/g, "the agent is"],
+  [/\bI['’]ll\b/g, "the agent will"],
+  [/\bI['’]d\b/g, "the agent would"],
+  [/(?<![\w/])I(?![\w/])/g, "the agent"],
+  [/\bmy\b/gi, "the agent's"]
+];
+var CODE_SEGMENT = /```[\s\S]*?```|`[^`]*`/g;
+function transformProse(seg, atTextStart) {
+  let out = seg;
+  for (const [re, rep] of VOICE_RULES) out = out.replace(re, rep);
+  const boundary = atTextStart ? /(^|[.!?]\s+|\n\s*)([a-z])/g : /([.!?]\s+|\n\s*)([a-z])/g;
+  return out.replace(boundary, (_m, pre, ch) => pre + ch.toUpperCase());
+}
+function neutralizeVoice(text) {
+  if (!text) return text ?? "";
+  let result = "";
+  let lastIndex = 0;
+  let atTextStart = true;
+  for (const m of text.matchAll(CODE_SEGMENT)) {
+    const idx = m.index ?? 0;
+    const prose = text.slice(lastIndex, idx);
+    if (prose) {
+      result += transformProse(prose, atTextStart);
+      atTextStart = false;
+    }
+    result += m[0];
+    atTextStart = false;
+    lastIndex = idx + m[0].length;
+  }
+  const tail = text.slice(lastIndex);
+  if (tail) result += transformProse(tail, atTextStart);
+  return result;
+}
+function formatPrDescription(state) {
+  const sections = [];
+  sections.push("## Summary\n");
+  const debriefs = state.artifacts.filter((a) => a.type === "debrief" && isShippedArtifact(a));
+  for (const d of debriefs) {
+    const content = coerceDebriefContent(d.content);
+    if (content.summary) sections.push(`${neutralizeVoice(content.summary)}
+`);
+    if (content.needsYourEyes?.length) {
+      sections.push("**What needs review:**");
+      for (const n of content.needsYourEyes) sections.push(`- ${neutralizeVoice(n.what)} \u2014 ${neutralizeVoice(n.why)}`);
+      sections.push("");
+    }
+  }
+  const resolved = state.decisions.filter((d) => d.response && !decisionIsRejected(state, d));
+  if (resolved.length > 0) {
+    sections.push("### Decisions\n");
+    for (const d of resolved) {
+      const option = d.options.find((o) => o.id === d.response?.optionId);
+      sections.push(`- **${d.title?.trim() || d.context}**: ${option?.title ?? d.response?.optionId}`);
+      if (d.response?.reasoning) {
+        sections.push(`  - *Reasoning*: ${d.response.reasoning}`);
+      }
+    }
+    sections.push("");
+  }
+  const plans = state.artifacts.filter((a) => a.type === "plan" && isShippedArtifact(a));
+  for (const plan of plans) {
+    const steps = coercePlanContent(plan.content).steps;
+    if (steps.length > 0) {
+      sections.push(`### Changes (${plan.title})${unapprovedMdMarker(plan)}
+`);
+      for (const step of steps) {
+        const files = Array.isArray(step.files) ? step.files.map((f) => typeof f === "string" ? f : f.filePath).join(", ") : "";
+        sections.push(`- ${step.description}${files ? ` (${files})` : ""}`);
+      }
+      sections.push("");
+    }
+  }
+  const research = state.artifacts.filter((a) => a.type === "research" && isShippedArtifact(a));
+  if (research.length > 0) {
+    const findings = research.flatMap((r) => coerceResearchContent(r.content).findings);
+    const highFindings = findings.filter((f) => f.significance === "high");
+    if (highFindings.length > 0) {
+      sections.push("### Key Findings\n");
+      for (const f of highFindings) {
+        sections.push(`- **${f.title ?? f.category}**: ${f.detail}`);
+      }
+      sections.push("");
+    }
+  }
+  sections.push("\n---\n*Generated by [deepPairing](https://github.com/deeppairing)*");
+  return sections.join("\n");
+}
+function formatAdr(state) {
+  const sections = [];
+  const date5 = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
+  sections.push(`# ADR: ${getSessionTitle(state)}
+`);
+  sections.push(`**Date**: ${date5}`);
+  sections.push(`**Status**: Accepted
+`);
+  const research = state.artifacts.filter((a) => a.type === "research" && isShippedArtifact(a));
+  if (research.length > 0) {
+    sections.push("## Context\n");
+    for (const r of research) {
+      const content = coerceResearchContent(r.content);
+      if (content.summary) sections.push(neutralizeVoice(content.summary) + "\n");
+      for (const f of content.findings ?? []) {
+        sections.push(`### ${f.title ?? f.category}
+`);
+        sections.push(neutralizeVoice(f.detail));
+        if (f.impact) sections.push(`
+**Impact**: ${neutralizeVoice(f.impact)}`);
+        sections.push("");
+      }
+    }
+  }
+  const resolved = state.decisions.filter((d) => d.response && !decisionIsRejected(state, d));
+  if (resolved.length > 0) {
+    sections.push("## Decision\n");
+    for (const d of resolved) {
+      const chosen = d.options.find((o) => o.id === d.response?.optionId);
+      const rejected = d.options.filter((o) => o.id !== d.response?.optionId);
+      sections.push(`**${d.context}**
+`);
+      sections.push(`Chosen: **${chosen?.title}** \u2014 ${chosen?.description ?? ""}`);
+      if (d.response?.reasoning) {
+        sections.push(`
+Reasoning: ${neutralizeVoice(d.response.reasoning)}`);
+      }
+      if (rejected.length > 0) {
+        sections.push("\nRejected alternatives:");
+        for (const r of rejected) {
+          sections.push(`- ${r.title}: ${r.description ?? ""}`);
+        }
+      }
+      sections.push("");
+    }
+  }
+  const plans = state.artifacts.filter((a) => a.type === "plan" && isShippedArtifact(a));
+  if (plans.length > 0) {
+    sections.push("## Consequences\n");
+    for (const plan of plans) {
+      for (const step of coercePlanContent(plan.content).steps) {
+        sections.push(`- ${step.description}: ${step.reasoning}`);
+      }
+    }
+    sections.push("");
+  }
+  return sections.join("\n");
+}
+function pushEvidenceLines(sections, evidence) {
+  if (!Array.isArray(evidence)) return;
+  for (const ev of evidence) {
+    if (typeof ev === "string") {
+      sections.push(`> ${ev}`);
+      sections.push("");
+      continue;
+    }
+    if (!ev || typeof ev !== "object") continue;
+    const e = ev;
+    if (e.filePath) sections.push(`\`${e.filePath}${e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null ? `-${e.lineEnd}` : ""}` : ""}\``);
+    if (e.snippet) {
+      sections.push("```" + (e.language ?? ""));
+      sections.push(e.snippet);
+      sections.push("```");
+    }
+    if (e.explanation) sections.push(`> ${e.explanation}`);
+    sections.push("");
+  }
+}
+function formatDebriefSections(state) {
+  const sections = [];
+  const debriefs = state.artifacts.filter((a) => a.type === "debrief" && a.status !== "superseded");
+  for (const d of debriefs) {
+    const content = coerceDebriefContent(d.content);
+    const t = (d.title ?? "").trim();
+    const heading = /^debrief\b/i.test(t) ? t : `Debrief \u2014 ${t || "Session"}`;
+    sections.push(`## ${heading}
+`);
+    const note = rejectionNote(d);
+    if (note) sections.push(note);
+    if (content.summary) sections.push(`${content.summary}
+`);
+    if (content.sections?.length) {
+      sections.push("### Walkthrough\n");
+      for (const s of content.sections) {
+        sections.push(`#### ${s.title}
+`);
+        if (s.body) sections.push(`${s.body}
+`);
+        if (s.concepts?.length) {
+          for (const c of s.concepts) {
+            sections.push(`- *Concept*: **${c.name}**${c.oneLineExplanation ? ` \u2014 ${c.oneLineExplanation}` : ""}`);
+          }
+          sections.push("");
+        }
+        pushEvidenceLines(sections, s.evidence);
+      }
+    }
+    if (content.decisionsMade?.length) {
+      sections.push("### Decisions I made without you\n");
+      for (const dm of content.decisionsMade) {
+        sections.push(`- **${dm.what}** \u2014 ${dm.why}${dm.alternative ? ` *(considered but not taken: ${dm.alternative})*` : ""}`);
+      }
+      sections.push("");
+    }
+    if (content.needsYourEyes?.length) {
+      sections.push("### Needs your eyes\n");
+      for (const n of content.needsYourEyes) {
+        sections.push(`- **${n.what}** \u2014 ${n.why}`);
+      }
+      sections.push("");
+    }
+    if (content.deferred?.length) {
+      sections.push("### Deferred\n");
+      for (const df of content.deferred) {
+        sections.push(`- **${df.what}** \u2014 ${df.why}`);
+      }
+      sections.push("");
+    }
+    if (content.openQuestions?.length) {
+      sections.push("### Open questions\n");
+      for (const q of content.openQuestions) sections.push(`- ${q}`);
+      sections.push("");
+    }
+  }
+  return sections;
+}
+function formatExplainerSections(state) {
+  const sections = [];
+  const explainers = state.artifacts.filter((a) => a.type === "explainer" && a.status !== "superseded");
+  for (const ex of explainers) {
+    const content = coerceExplainerContent(ex.content);
+    sections.push(`## Explainer \u2014 ${content.title || ex.title}
+`);
+    const note = rejectionNote(ex);
+    if (note) sections.push(note);
+    if (content.overview) sections.push(`${content.overview}
+`);
+    content.sections?.forEach((s, i) => {
+      sections.push(`### ${i + 1}. ${s.heading}
+`);
+      if (s.body) sections.push(`${s.body}
+`);
+      pushEvidenceLines(sections, s.evidence);
+    });
+  }
+  return sections;
+}
+function formatSpecSections(state) {
+  const sections = [];
+  const specs = state.artifacts.filter((a) => a.type === "spec" && a.status !== "superseded");
+  for (const sp of specs) {
+    const content = coerceSpecContent(sp.content);
+    sections.push(`## Spec \u2014 ${sp.title}
+`);
+    const note = rejectionNote(sp);
+    if (note) sections.push(note);
+    if (content.objective) sections.push(`**Objective**: ${content.objective}
+`);
+    if (content.context) sections.push(`${content.context}
+`);
+    if (content.requirements?.length) {
+      sections.push("### Requirements\n");
+      for (const r of content.requirements) {
+        sections.push(`- **${r.id}**${r.priority ? ` _(${r.priority})_` : ""}: ${r.statement}`);
+        if (r.rationale) sections.push(`  - *Why*: ${r.rationale}`);
+        for (const ac of r.acceptanceCriteria ?? []) sections.push(`  - \u2713 ${ac}`);
+      }
+      sections.push("");
+    }
+  }
+  return sections;
+}
+function formatChangesetSections(state) {
+  const sections = [];
+  const changesets = state.artifacts.filter((a) => a.type === "changeset" && a.status !== "superseded");
+  for (const cs of changesets) {
+    const content = coerceChangesetContent(cs.content);
+    sections.push(`## Changeset \u2014 ${cs.title}
+`);
+    const note = rejectionNote(cs);
+    if (note) sections.push(note);
+    if (content.summary) sections.push(`${content.summary}
+`);
+    for (const file2 of content.files ?? []) {
+      sections.push(`### \`${file2.path}\` (${file2.changeType})
+`);
+      if (file2.hunks?.length) {
+        sections.push("```diff");
+        for (const hunk of file2.hunks) {
+          if (hunk.header) sections.push(hunk.header);
+          for (const line of hunk.lines ?? []) {
+            const prefix = line.kind === "add" ? "+" : line.kind === "del" ? "-" : " ";
+            sections.push(`${prefix}${line.content}`);
+          }
+        }
+        sections.push("```");
+      }
+      sections.push("");
+    }
+  }
+  return sections;
+}
+function formatFull(state) {
+  const sections = [];
+  sections.push(`# deepPairing Session Report
+`);
+  sections.push(`**Session**: ${state.sessionId}`);
+  sections.push(`**Date**: ${(/* @__PURE__ */ new Date()).toISOString().split("T")[0]}
+`);
+  sections.push("---\n");
+  const research = state.artifacts.filter((a) => a.type === "research" && a.status !== "superseded");
+  if (research.length > 0) {
+    sections.push("## Findings\n");
+    for (const r of research) {
+      const content = coerceResearchContent(r.content);
+      const note = rejectionNote(r);
+      if (note) sections.push(note);
+      if (content.summary) sections.push(`${content.summary}
+`);
+      for (const f of content.findings ?? []) {
+        sections.push(`### ${f.title ?? f.category} (${f.significance})
+`);
+        sections.push(f.detail + "\n");
+        if (Array.isArray(f.evidence)) {
+          for (const ev of f.evidence) {
+            if (typeof ev === "string") {
+              sections.push(`> ${ev}`);
+              sections.push("");
+              continue;
+            }
+            sections.push(`\`${ev.filePath}:${ev.lineStart}-${ev.lineEnd}\``);
+            if (ev.snippet) {
+              sections.push("```" + (ev.language ?? ""));
+              sections.push(ev.snippet);
+              sections.push("```");
+            }
+            if (ev.explanation) sections.push(`> ${ev.explanation}`);
+            sections.push("");
+          }
+        } else if (typeof f.evidence === "string") {
+          sections.push(`Evidence: ${f.evidence}
+`);
+        }
+        if (f.impact) sections.push(`**Impact**: ${f.impact}
+`);
+        if (f.recommendation) sections.push(`**Recommendation**: ${f.recommendation}
+`);
+      }
+      const artComments = state.comments.filter((c) => c.target.artifactId === r.id);
+      if (artComments.length > 0) {
+        sections.push("**Comments:**");
+        for (const c of artComments) {
+          sections.push(`- *${c.author}*: ${c.content}`);
+        }
+        sections.push("");
+      }
+    }
+  }
+  sections.push(...formatSpecSections(state));
+  const resolved = state.decisions.filter((d) => d.response);
+  if (resolved.length > 0) {
+    sections.push("## Decisions\n");
+    for (const d of resolved) {
+      const chosen = d.options.find((o) => o.id === d.response?.optionId);
+      sections.push(`### ${d.context}
+`);
+      const dNote = decisionIsRejected(state, d) ? rejectionNote(decisionOwningArtifact(state, d)) : null;
+      if (dNote) sections.push(dNote);
+      sections.push(`**Selected**: ${chosen?.title ?? d.response?.optionId}`);
+      if (d.response?.reasoning) sections.push(`**Reasoning**: ${d.response.reasoning}`);
+      sections.push("\nOptions considered:");
+      for (const o of d.options) {
+        const marker = o.id === d.response?.optionId ? "\u2713" : "\u2717";
+        sections.push(`- ${marker} **${o.title}** (${o.effort} effort, ${o.risk} risk): ${o.description ?? ""}`);
+      }
+      sections.push("");
+    }
+  }
+  const plans = state.artifacts.filter((a) => a.type === "plan" && a.status !== "superseded");
+  if (plans.length > 0) {
+    sections.push("## Implementation Plan\n");
+    for (const plan of plans) {
+      sections.push(`### ${plan.title}
+`);
+      const rejNote = rejectionNote(plan);
+      if (rejNote) sections.push(rejNote);
+      const review = state.planReviews.find((p) => p.artifactId === plan.id);
+      if (review?.verdict) sections.push(`**Status**: ${review.verdict}
+`);
+      for (const [i, step] of coercePlanContent(plan.content).steps.entries()) {
+        sections.push(`${i + 1}. **${step.description}** \u2014 ${step.reasoning}`);
+        if (step.motivatedBy?.length) {
+          sections.push(`   *Motivated by*: ${step.motivatedBy.join(", ")}`);
+        }
+      }
+      sections.push("");
+    }
+  }
+  sections.push(...formatChangesetSections(state));
+  sections.push(...formatDebriefSections(state));
+  sections.push(...formatExplainerSections(state));
+  const reasoning = state.artifacts.filter((a) => a.type === "reasoning");
+  if (reasoning.length > 0) {
+    sections.push("<details><summary>Reasoning Log</summary>\n");
+    for (const r of reasoning) {
+      const content = coerceReasoningContent(r.content);
+      sections.push(`- **${content.action}** (${content.confidence}): ${content.reasoning}`);
+    }
+    sections.push("\n</details>\n");
+  }
+  sections.push("---\n*Generated by [deepPairing](https://github.com/deeppairing)*");
+  return sections.join("\n");
+}
+function getSessionTitle(state) {
+  const firstDecision = state.decisions.find((d) => !decisionIsRejected(state, d));
+  if (firstDecision) return firstDecision.title?.trim() || firstDecision.context;
+  const firstResearch = state.artifacts.find((a) => a.type === "research" && isShippedArtifact(a));
+  if (firstResearch) return firstResearch.title;
+  return "Session " + state.sessionId;
+}
+function formatReplay(state) {
+  const title = getSessionTitle(state);
+  const sections = [];
+  sections.push(`# Replay: ${title}
+`);
+  sections.push(`*Chronological walkthrough for learning re-read.*
+`);
+  const events = buildTimeline({
+    artifacts: state.artifacts,
+    comments: state.comments,
+    decisions: state.decisions,
+    planReviews: state.planReviews
+  });
+  const annotationsByEvent = /* @__PURE__ */ new Map();
+  for (const ann of state.annotations ?? []) {
+    const list = annotationsByEvent.get(ann.targetEventId) ?? [];
+    list.push(ann);
+    annotationsByEvent.set(ann.targetEventId, list);
+  }
+  if (events.length === 0) {
+    sections.push("_No events recorded in this session._");
+    return sections.join("\n");
+  }
+  sections.push("## Timeline\n");
+  for (const event of events) {
+    const when = formatTime(event.at);
+    const icon = replayIcon(event.kind);
+    sections.push(`### ${icon} ${when} \u2014 ${event.label}`);
+    if (event.kind === "decision_resolved") {
+      const p = event.payload ?? {};
+      if (p.reasoning) sections.push(`Reasoning: ${p.reasoning}`);
+      if (Array.isArray(p.rejectedTitles) && p.rejectedTitles.length > 0) {
+        sections.push(`_Rejected:_ ${p.rejectedTitles.join(", ")}`);
+      }
+    } else if (event.kind === "comment_added") {
+      const p = event.payload ?? {};
+      const who = p.author === "agent" ? "Agent" : p.intent === "question" ? "You asked" : "You";
+      sections.push(`${who}: ${p.content}`);
+    } else if (event.kind === "plan_reviewed") {
+      const p = event.payload ?? {};
+      if (p.feedback) sections.push(`Feedback: ${p.feedback}`);
+    }
+    const anns = annotationsByEvent.get(event.id);
+    if (anns && anns.length > 0) {
+      for (const ann of anns) {
+        sections.push(`> \u{1F4DD} **note:** ${ann.note}${ann.tags?.length ? ` \`[${ann.tags.join(", ")}]\`` : ""}`);
+      }
+    }
+    sections.push("");
+  }
+  sections.push("---\n*Generated by [deepPairing](https://github.com/deeppairing)*");
+  return sections.join("\n");
+}
+function replayIcon(kind) {
+  switch (kind) {
+    case "artifact_created":
+      return "\u2795";
+    case "artifact_status_changed":
+      return "\u{1F504}";
+    case "comment_added":
+      return "\u{1F4AC}";
+    case "decision_resolved":
+      return "\u2696\uFE0F";
+    case "plan_reviewed":
+      return "\u{1F4CB}";
+    default:
+      return "\u2022";
+  }
+}
+function formatTime(iso) {
+  try {
+    const d = new Date(iso);
+    return d.toISOString().replace("T", " ").slice(0, 19);
+  } catch {
+    return iso;
+  }
+}
+var severityEmoji = {
+  critical: "\u{1F534}",
+  high: "\u{1F7E0}",
+  medium: "\u{1F7E1}",
+  low: "\u{1F7E2}",
+  info: "\u26AA"
+};
+function formatPrComments(state) {
+  const sections = [];
+  const title = getSessionTitle(state);
+  sections.push(`## deepPairing notes \u2014 ${title}`);
+  sections.push("");
+  const researchArtifacts = state.artifacts.filter(
+    // R3 (adversarial F8) — shared predicate; drops `obsolete` too (pr-comments
+    // is pasted onto a PR, so an overtaken finding must not read as live).
+    (a) => a.type === "research" && isShippedArtifact(a)
+  );
+  const allFindings = [];
+  for (const artifact of researchArtifacts) {
+    const findings = coerceResearchContent(artifact.content).findings;
+    if (!Array.isArray(findings)) continue;
+    findings.forEach((f, i) => {
+      allFindings.push({ artifact, finding: f, index: i });
+    });
+  }
+  if (allFindings.length === 0) {
+    sections.push("_No findings from this pairing session._");
+    sections.push("");
+    return sections.join("\n");
+  }
+  const byFile = /* @__PURE__ */ new Map();
+  for (const entry of allFindings) {
+    const evidence = entry.finding.evidence;
+    const firstPath = Array.isArray(evidence) && evidence[0] && typeof evidence[0] === "object" ? evidence[0].filePath : void 0;
+    const key = firstPath ?? "General";
+    const list = byFile.get(key) ?? [];
+    list.push(entry);
+    byFile.set(key, list);
+  }
+  for (const [filePath, entries] of byFile.entries()) {
+    sections.push(`### ${filePath}`);
+    sections.push("");
+    for (const { finding } of entries) {
+      const sev = finding.severity ?? "info";
+      const chip = `${severityEmoji[sev] ?? "\u26AA"} **${sev.toUpperCase()}**`;
+      const category = finding.category ? ` \xB7 ${finding.category}` : "";
+      const title2 = finding.title ? ` \u2014 ${finding.title}` : "";
+      sections.push(`${chip}${category}${title2}`);
+      sections.push("");
+      const evidenceList = Array.isArray(finding.evidence) ? finding.evidence : [];
+      for (const ev of evidenceList) {
+        if (typeof ev !== "object" || !ev.filePath) continue;
+        const linePart = ev.lineEnd && ev.lineEnd !== ev.lineStart ? `L${ev.lineStart}-L${ev.lineEnd}` : `L${ev.lineStart}`;
+        sections.push(`> \`${ev.filePath}:${linePart}\``);
+        if (ev.snippet) {
+          const lang = ev.language ?? "";
+          sections.push("> ```" + lang);
+          for (const line of ev.snippet.split("\n")) {
+            sections.push("> " + line);
+          }
+          sections.push("> ```");
+        }
+        if (ev.explanation) {
+          sections.push(`> ${ev.explanation}`);
+        }
+      }
+      if (finding.detail) {
+        sections.push("");
+        sections.push(finding.detail);
+      }
+      if (finding.impact) {
+        sections.push("");
+        sections.push(`**Impact:** ${finding.impact}`);
+      }
+      if (finding.recommendation) {
+        sections.push("");
+        sections.push(`**Recommendation:** ${finding.recommendation}`);
+      }
+      sections.push("");
+      sections.push("---");
+      sections.push("");
+    }
+  }
+  sections.push("*Output from a [deepPairing](https://github.com/deeppairing) session \u2014 paste into a PR comment.*");
+  return sections.join("\n");
+}
+function formatLearnings(state) {
+  const sections = [];
+  const title = getSessionTitle(state);
+  sections.push(`# Learnings \u2014 ${title}`);
+  sections.push("");
+  sections.push(
+    "*Teaching artifact: concepts named and approaches you won't re-propose.*"
+  );
+  sections.push("");
+  const reasoningArtifacts = state.artifacts.filter(
+    (a) => a.type === "reasoning" && a.status !== "superseded" && a.status !== "retracted"
+  );
+  const conceptCounts = /* @__PURE__ */ new Map();
+  for (const a of reasoningArtifacts) {
+    const content = coerceReasoningContent(a.content);
+    const concept = content.concept;
+    if (!concept?.name) continue;
+    const key = normalizeConceptKey(concept.name);
+    if (!key) continue;
+    const existing = conceptCounts.get(key);
+    const action = content.action || null;
+    if (existing) {
+      existing.count += 1;
+      if (action && !existing.actions.includes(action)) existing.actions.push(action);
+    } else {
+      conceptCounts.set(key, {
+        name: String(concept.name).trim(),
+        explanation: concept.oneLineExplanation ? String(concept.oneLineExplanation) : void 0,
+        count: 1,
+        actions: action ? [action] : []
+      });
+    }
+  }
+  if (conceptCounts.size > 0) {
+    sections.push("## Concepts the pair named");
+    sections.push("");
+    const sorted = Array.from(conceptCounts.values()).sort(
+      (a, b) => b.count - a.count || a.name.localeCompare(b.name)
+    );
+    for (const c of sorted) {
+      const countLabel = c.count > 1 ? ` _(\xD7${c.count})_` : "";
+      sections.push(`- **${c.name}**${countLabel}`);
+      if (c.explanation) sections.push(`  > ${c.explanation}`);
+      if (c.actions.length > 0) {
+        const shown = c.actions.slice(0, 3);
+        for (const act of shown) sections.push(`  - applied to: ${act}`);
+      }
+    }
+    sections.push("");
+  }
+  const rejectedFromStatus = state.artifacts.filter(
+    (a) => a.status === "rejected" && a.type !== "reasoning"
+  );
+  const rejectedApproaches = state.sessionMemory?.rejectedApproaches;
+  const seenReasons = /* @__PURE__ */ new Set();
+  const rows = [];
+  if (rejectedApproaches) {
+    for (const r of rejectedApproaches) {
+      const key = r.description;
+      if (seenReasons.has(key)) continue;
+      seenReasons.add(key);
+      rows.push(
+        `- **${r.description}**${r.concept ? ` _(concept: ${r.concept})_` : ""}${r.reason ? ` \u2014 "${r.reason}"` : ""}`
+      );
+    }
+  } else {
+    for (const a of rejectedFromStatus) {
+      if (seenReasons.has(a.title)) continue;
+      seenReasons.add(a.title);
+      rows.push(`- **${a.title}**`);
+    }
+  }
+  if (rows.length > 0) {
+    sections.push("## Approaches you won't re-propose");
+    sections.push("");
+    rows.forEach((r) => sections.push(r));
+    sections.push("");
+  }
+  const debriefs = state.artifacts.filter((a) => a.type === "debrief" && a.status !== "superseded");
+  const debriefDecisions = debriefs.flatMap((d) => coerceDebriefContent(d.content).decisionsMade ?? []);
+  const debriefDeferred = debriefs.flatMap((d) => coerceDebriefContent(d.content).deferred ?? []);
+  const debriefOpen = debriefs.flatMap((d) => coerceDebriefContent(d.content).openQuestions ?? []);
+  const hasDebriefLearnings = debriefDecisions.length > 0 || debriefDeferred.length > 0 || debriefOpen.length > 0;
+  if (hasDebriefLearnings) {
+    sections.push("## From the debrief");
+    sections.push("");
+    if (debriefDecisions.length > 0) {
+      sections.push("### Calls the agent made on its own");
+      sections.push("");
+      for (const dm of debriefDecisions) {
+        sections.push(`- **${dm.what}** \u2014 ${dm.why}${dm.alternative ? ` _(considered: ${dm.alternative})_` : ""}`);
+      }
+      sections.push("");
+    }
+    if (debriefDeferred.length > 0) {
+      sections.push("### Deferred");
+      sections.push("");
+      for (const df of debriefDeferred) sections.push(`- **${df.what}** \u2014 ${df.why}`);
+      sections.push("");
+    }
+    if (debriefOpen.length > 0) {
+      sections.push("### Still open");
+      sections.push("");
+      for (const q of debriefOpen) sections.push(`- ${q}`);
+      sections.push("");
+    }
+  }
+  if (conceptCounts.size === 0 && rows.length === 0 && !hasDebriefLearnings) {
+    sections.push("_Nothing crystallized yet. Keep pairing \u2014 the agent's `log_reasoning.concept` field and your rejection reasons become the material here._");
+    sections.push("");
+  }
+  sections.push(`*Generated from session ${state.sessionId} \u2014 [deepPairing](https://github.com/deeppairing).*`);
+  return sections.join("\n");
+}
+
 // src/export/html-export.ts
+import crypto4 from "node:crypto";
+import fs13 from "node:fs";
+import path12 from "node:path";
 var MAX_TRACE_LOOKUPS = 200;
 async function gatherPreflightTraces(store, artifacts) {
   if (!store?.getPreflightTrace) return [];
