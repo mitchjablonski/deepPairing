@@ -55,7 +55,7 @@ export function PendingBanner() {
     <div
       role="region"
       aria-label="Waiting for you"
-      className="px-3 py-1.5 bg-accent-amber-dim/50 border-b border-accent-amber/15 flex items-center gap-2"
+      className="px-3 py-1 bg-accent-amber-dim/50 border-b border-accent-amber/15 flex items-center gap-2"
     >
       <span className="w-1.5 h-1.5 rounded-full bg-accent-amber animate-pulse shrink-0" />
       <span className="text-2xs text-accent-amber font-medium shrink-0">

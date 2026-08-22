@@ -191,83 +191,59 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
   const deferred = content.deferred ?? [];
   const openQuestions = content.openQuestions ?? [];
 
-  // O2 (#230) — progressive disclosure. DebriefArtifact already front-loads
-  // needs-your-eyes + summary (the 30-second view); the ordered "walk" used to
-  // render fully expanded below them, forcing the skimmer to scroll past every
-  // section. It now collapses behind a single disclosure so one artifact serves
-  // both the skimmer and the deep-diver — needs-your-eyes + summary stay ALWAYS
-  // visible above it. A section carrying a live grain thread defaults the walk
-  // EXPANDED so an unresolved comment is never hidden; an explicit toggle still
-  // wins either way (walkOpen === null means "use the thread-derived default").
+  // S2 (round-14 "THE DEFAULTS") — DEEP-BY-DEFAULT. The debrief is the
+  // comprehension surface, so it now leads with the story and OPENS the walk:
+  // summary → diagrams → walk (EXPANDED) → decisionsMade → needs-your-eyes →
+  // deferred. A human reading TO UNDERSTAND gets story → picture → deep walk
+  // above the fold instead of an action queue.
+  //
+  // O2 (#230) shipped the collapse deliberately for the SKIMMER — that stays:
+  // the toggle still fully collapses the walk (walkOpen === false hides it), so
+  // a skimmer is one click from the 30-second view. We only flip the DEFAULT.
+  // A section carrying a live grain thread ALSO defaults expanded (unchanged —
+  // now subsumed by the open default, but preserved so it can never regress):
+  // walkOpen === null means "use the derived default", which is `walkHasThread
+  // || true` === always open; an explicit toggle wins either way.
   const walkHasThread = useMemo(
     () => sections.some((_, i) => comments.some((c) => c.target.sectionId === `debrief:${i}`)),
     [sections, comments],
   );
+  const walkDefaultOpen = walkHasThread || true;
   const [walkOpen, setWalkOpen] = useState<boolean | null>(null);
-  const walkExpanded = walkOpen ?? walkHasThread;
+  const walkExpanded = walkOpen ?? walkDefaultOpen;
+
+  // S2 — the needs-your-eyes lane moved BELOW the walk (comprehension-first), so
+  // a reader reviewing-TO-ACT keeps a compact, prominent "N need your eyes ▾"
+  // jump affordance at the very top that scrolls straight to the action layer.
+  // Both flows are served: understand (top-down) and act (one jump).
+  const needsEyesSectionId = "debrief-needs-your-eyes-section";
 
   return (
     <div className="space-y-4">
-      {/* #193 E2 (usability M4) — "Needs your eyes" renders ABOVE the fold, before
-          the narrative and the walk. "What do I actually have to look at?" must
-          not require scrolling past everything the agent already handled. Each
-          item carries its OWN per-item grain (`debrief:needs-your-eyes:<i>`) so a
-          comment anchors to the specific flagged item, not the whole lane. */}
+      {/* S2 — the ACT-flow affordance. needs-your-eyes now lives below the walk
+          (comprehension-first), so a reader reviewing to ACT gets a compact,
+          prominent count-pill at the very top that jumps straight to it. The
+          understand-flow reads top-down; the act-flow is one click. Kept out of
+          the way of the story but visually distinct (accent-blue, the "look here"
+          tone the full lane carries). */}
       {needsYourEyes.length > 0 && (
-        <section
-          data-comment-anchor="debrief:needs-your-eyes"
-          className="bg-surface-secondary rounded-lg border border-accent-blue/25 p-3.5 space-y-2"
+        <button
+          type="button"
+          data-testid="debrief-needs-eyes-jump"
+          onClick={() =>
+            document.getElementById(needsEyesSectionId)?.scrollIntoView?.({ behavior: "smooth", block: "start" })
+          }
+          aria-label={`${needsYourEyes.length} item${needsYourEyes.length === 1 ? "" : "s"} need your eyes — jump to them`}
+          className="inline-flex items-center gap-1.5 rounded-full border border-accent-blue/30 bg-accent-blue-dim/20
+                     px-2.5 py-1 text-2xs font-medium text-accent-blue hover:bg-accent-blue-dim/40
+                     focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-blue transition-colors press-scale"
         >
-          <h3 className="text-xs font-semibold text-accent-blue uppercase tracking-wide">Needs your eyes</h3>
-          <ol className="space-y-2 list-none">
-            {needsYourEyes.map((item, i) => (
-              <li
-                key={i}
-                data-testid="debrief-needs-eyes"
-                className="rounded-md border-l-2 border-accent-blue bg-accent-blue-dim/15 p-2.5 space-y-1"
-              >
-                <div className="flex items-start gap-2">
-                  <span className="text-2xs font-bold text-accent-blue mt-0.5 shrink-0">{i + 1}</span>
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <div className="text-xs font-medium text-text-primary">{item.what}</div>
-                    <div className="text-2xs text-text-secondary">
-                      <span className="text-text-muted">Why: </span>
-                      {item.why}
-                    </div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {item.artifactRef && (
-                        <ArtifactRefLink id={item.artifactRef} label="Open to review →" />
-                      )}
-                      {/* P2 fix 2 (round-11 MED) — the REF TRAVELS. O2 passed a
-                          BOOLEAN `hasArtifactRef`, so the emitted text claimed
-                          "scoped to the linked artifact" while the id itself never
-                          left the browser. Pass the ref (plus the debrief and the
-                          per-item anchor) and the button puts it in both the prose
-                          and the structured scope. */}
-                      <WalkMeThroughButton
-                        target={{
-                          kind: "needs-eyes",
-                          what: item.what,
-                          why: item.why,
-                          artifactRef: item.artifactRef,
-                          artifactId: artifact.id,
-                          itemRef: `debrief:needs-your-eyes:${i}`,
-                        }}
-                      />
-                    </div>
-                    <BlockGrain
-                      artifactId={artifact.id}
-                      sectionId={`debrief:needs-your-eyes:${i}`}
-                      label={item.what || `needs-your-eyes item ${i + 1}`}
-                      comments={comments}
-                      readOnly={writeLocked}
-                    />
-                  </div>
-                </div>
-              </li>
-            ))}
-          </ol>
-        </section>
+          <span className="w-1.5 h-1.5 rounded-full bg-accent-blue shrink-0" aria-hidden="true" />
+          <span>
+            {needsYourEyes.length} need{needsYourEyes.length === 1 ? "s" : ""} your eyes
+          </span>
+          <span aria-hidden="true">▾</span>
+        </button>
       )}
 
       {/* Summary — the narrative headline, always present. */}
@@ -300,7 +276,7 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
         <div className="space-y-3">
           <button
             type="button"
-            onClick={() => setWalkOpen((v) => !(v ?? walkHasThread))}
+            onClick={() => setWalkOpen((v) => !(v ?? walkDefaultOpen))}
             aria-expanded={walkExpanded}
             data-testid="debrief-walk-toggle"
             className="group inline-flex items-center gap-1.5 cursor-pointer rounded-md border border-border-default
@@ -415,6 +391,72 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
               </div>
             ))}
           </div>
+        </section>
+      )}
+
+      {/* Needs your eyes — the ACTION layer. S2 (round-14) moved this BELOW the
+          comprehension flow (summary → diagrams → walk → decisions) so a reader
+          understanding-to-learn isn't handed an action queue first — but it stays
+          visually prominent (accent-blue, its own bordered lane) and reachable in
+          one click from the top jump-pill, so a reader reviewing-to-act is served
+          too. Each item carries its OWN per-item grain
+          (`debrief:needs-your-eyes:<i>`) so a comment anchors to the specific
+          flagged item, not the whole lane. */}
+      {needsYourEyes.length > 0 && (
+        <section
+          id={needsEyesSectionId}
+          data-comment-anchor="debrief:needs-your-eyes"
+          className="bg-surface-secondary rounded-lg border border-accent-blue/25 p-3.5 space-y-2 scroll-mt-2"
+        >
+          <h3 className="text-xs font-semibold text-accent-blue uppercase tracking-wide">Needs your eyes</h3>
+          <ol className="space-y-2 list-none">
+            {needsYourEyes.map((item, i) => (
+              <li
+                key={i}
+                data-testid="debrief-needs-eyes"
+                className="rounded-md border-l-2 border-accent-blue bg-accent-blue-dim/15 p-2.5 space-y-1"
+              >
+                <div className="flex items-start gap-2">
+                  <span className="text-2xs font-bold text-accent-blue mt-0.5 shrink-0">{i + 1}</span>
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="text-xs font-medium text-text-primary">{item.what}</div>
+                    <div className="text-2xs text-text-secondary">
+                      <span className="text-text-muted">Why: </span>
+                      {item.why}
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {item.artifactRef && (
+                        <ArtifactRefLink id={item.artifactRef} label="Open to review →" />
+                      )}
+                      {/* P2 fix 2 (round-11 MED) — the REF TRAVELS. O2 passed a
+                          BOOLEAN `hasArtifactRef`, so the emitted text claimed
+                          "scoped to the linked artifact" while the id itself never
+                          left the browser. Pass the ref (plus the debrief and the
+                          per-item anchor) and the button puts it in both the prose
+                          and the structured scope. */}
+                      <WalkMeThroughButton
+                        target={{
+                          kind: "needs-eyes",
+                          what: item.what,
+                          why: item.why,
+                          artifactRef: item.artifactRef,
+                          artifactId: artifact.id,
+                          itemRef: `debrief:needs-your-eyes:${i}`,
+                        }}
+                      />
+                    </div>
+                    <BlockGrain
+                      artifactId={artifact.id}
+                      sectionId={`debrief:needs-your-eyes:${i}`}
+                      label={item.what || `needs-your-eyes item ${i + 1}`}
+                      comments={comments}
+                      readOnly={writeLocked}
+                    />
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ol>
         </section>
       )}
 

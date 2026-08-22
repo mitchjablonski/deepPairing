@@ -298,15 +298,21 @@ describe("F8 (M6) — the questions badge stops promising check-ins from dead se
 });
 
 describe("#196 F2 — banner-soup dedup (M4)", () => {
-  it("collapses the 'Your turn' pill to a count when PendingBanner is visible", () => {
+  it("S2 — drops the pending COUNT (not just the breakdown) when the PendingBanner owns it", () => {
     seedConnected();
     seedArtifact({ id: "d1", type: "code_change", status: "draft" });
     render(<TurnIndicator pendingBannerVisible />);
-    // The verbatim breakdown moves to the banner; the header keeps a count.
-    expect(screen.getByText(/1 for you/i)).toBeInTheDocument();
+    // S2 dedup: the banner is the ONE authoritative pending-count signal, so the
+    // header pill shows NEITHER the breakdown NOR the number — a bare "Your turn"
+    // jump affordance. The number no longer renders twice one band apart.
+    expect(screen.queryByText(/for you/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Your turn — 1 change/i)).not.toBeInTheDocument();
-    // The affordance survives: still a jump button by accessible name.
-    expect(screen.getByRole("button", { name: /your turn/i })).toBeInTheDocument();
+    // The affordance survives: still a jump button, and it visibly says "Your turn".
+    const pill = screen.getByRole("button", { name: /your turn/i });
+    expect(pill).toBeInTheDocument();
+    expect(pill).toHaveTextContent(/^Your turn$/);
+    // The full breakdown is preserved in the accessible name (title/aria).
+    expect(pill).toHaveAttribute("aria-label", expect.stringMatching(/Your turn — 1 change/i));
   });
 
   it("keeps the full 'Your turn' pill when the banner is absent (default)", () => {

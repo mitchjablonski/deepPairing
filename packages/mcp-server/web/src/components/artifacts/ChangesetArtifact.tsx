@@ -927,6 +927,21 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
           know whose code this is before they read a line of it. Artifact-level
           only; the per-file headers below are untouched. */}
       {content.reviewIntent === "external" && <ExternalReviewBanner source={content.source} />}
+      {/* S2 (round-14 "THE DEFAULTS") — the WHAT-in-prose. `content.summary` has
+          existed on ChangesetContent since #171 but was rendered NOWHERE, so the
+          "what changed, in one sentence" the agent wrote was stored and shown to
+          no one. Render it as the purpose line at the very top — above the file
+          list, right by the risk chips — so the reader knows what this change is
+          FOR before scanning file counts and diffs. Optional field: renders only
+          when present; absent leaves today's layout byte-identical. */}
+      {content.summary && content.summary.trim() && (
+        <p
+          data-testid="changeset-summary"
+          className="text-sm text-text-secondary leading-snug px-1"
+        >
+          {content.summary}
+        </p>
+      )}
       {/* Summary strip */}
       <div
         className="flex items-center gap-4 flex-wrap px-3 py-2 bg-surface-secondary border border-border-subtle rounded text-xs text-text-secondary"
