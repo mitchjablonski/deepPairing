@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.1.37 — 2026-08-22
+
+The activation release. Round 13 **built** the mental-model depth — the `concept` on a finding, the
+`visuals`/diagrams on explainers and changesets and debriefs, the `unknowns` an explainer can own —
+and round 14 found it all **dormant**: the fields were in the schema and on the surfaces, but the
+agent never reached for them and the deep layers rendered collapsed, dropped, or below the fold. So
+this release does the one thing a built-but-unused feature needs — it turns it on. It supplies the
+**pull** (the guidance now routes the agent to the fields it was skipping — not asserted, *confirmed*
+by a re-dogfood in which all four fields fired organically after a round-14 baseline of zero) and it
+flips the **defaults to depth** (the debrief now reads story → picture → the walk expanded, the
+changeset leads with its one-line summary, the first screen carries a third less chrome). The honesty
+riders ride along: the README stops claiming the shared page omits diffs, the shared-page diagram is
+XSS-safe and self-contained, outbound PR findings scrub local paths, and the anti-drift net now
+covers behavioral claims, not just enumerations. The S-batch is three.
+
+### Added
+- **The pull — route the agent to the fields it wasn't using.** The guidance (SKILL.md, tool
+  descriptions, first-call preamble, review-pr.md) now names `finding.concept` as the **preferred**
+  place to name a pattern (ahead of the dead `log_reasoning`, whose entry now redirects to the alive
+  surfaces), broadens `visuals`/diagrams from plan/spec to explainers, changesets ("draw the blast
+  radius") and debriefs, teaches the explainer's `unknowns`, and gives `changeset.summary` a pull so
+  every changeset gets a one-line what-at-a-glance. Additive near-miss field aliases (debrief section
+  `heading`→`title`, explainer section `title`→`heading`, options `question`→`context`) forgive the
+  near-miss at the validate choke point without renames. Drift pins keep the routing from silently
+  regressing to the graveyard, and the tool descriptions now tell the truth about which fields are
+  required (PR #294).
+
+### Changed
+- **Deep by default.** The debrief is reordered comprehension-first — summary → diagrams → the walk
+  **expanded by default** → decisions → needs-your-eyes — so a human reading to *understand* gets
+  story, picture, then the deep walk above the fold, with a one-click "N need your eyes ▾" jump-pill
+  keeping the act-flow one tap away and the O2 collapse toggle still serving the skimmer. The
+  changeset `summary` (carried since #171, shown nowhere) now renders as a prose purpose line above
+  the diff. And the first screen sheds ~a third of its always-present chrome, with the pending
+  "waiting" count deduped from four places down to one authoritative signal (PR #295).
+
+### Fixed
+- **Honest docs and no leaks on the way out.** The README/marketplace copy no longer claims the
+  shared page omits code or diffs (it includes them by default; `--redact-code` / `includeCode:false`
+  opts out). The shared-page diagram keeps its Mermaid source but renders XSS-safe (escaped) with
+  zero external requests. `scrubProse` now runs over outbound finding bodies (detail/explanation/
+  impact/recommendation/title) in the GitHub review payload, so a `/home` or `C:\Users` path no
+  longer posts verbatim to a PR. The doc-parity net is extended from enumeration- to
+  behavioral-claim scope — the export `includeCode` default is now pinned to the README's
+  diffs-by-default claim (PR #291).
+
 ## v0.1.36 — 2026-08-21
 
 The connected release. Round 13 asked whether we **deliver what we claim** — and found the
