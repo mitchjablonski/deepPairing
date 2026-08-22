@@ -18,7 +18,7 @@ import type { ToolContext, ToolResult } from "./types.js";
 export async function handlePresentChangeset(ctx: ToolContext, args: any): Promise<ToolResult> {
   const validated = validatePresentChangesetInput(args);
   if (!validated.ok) return validated.error;
-  const { title, summary, files, risks, reviewIntent, source } = validated.data;
+  const { title, summary, files, risks, reviewIntent, source, visuals } = validated.data;
   // Q6 (#232) — is this the pair's own change, or a colleague's PR pulled onto
   // the review surface? Absent reviewIntent means "local" (every pre-Q6 call).
   const isExternal = reviewIntent === "external";
@@ -70,6 +70,9 @@ export async function handlePresentChangeset(ctx: ToolContext, args: any): Promi
     // store, the exporter, the goldens — sees a shape it didn't see yesterday.
     ...(reviewIntent ? { reviewIntent } : {}),
     ...(source ? { source } : {}),
+    // R4 P-B (#284) — the changeset-level visual ("the shape of what this PR
+    // touches"); thread to the store, omitted-when-absent (legacy shape intact).
+    ...(visuals && visuals.length > 0 ? { visuals } : {}),
   };
   // #162 — the secret scan runs INSIDE createArtifact (parity with the other
   // present_* tools): a diff hunk is a high-risk surface for a pasted key.

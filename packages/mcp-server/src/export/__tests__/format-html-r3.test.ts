@@ -700,4 +700,55 @@ describe("R3 — visuals reach the page", () => {
     expect(html).not.toContain("<script>alert(1)</script>");
     expect(html).not.toContain("<iframe");
   });
+
+  // R4 (#284) — the strip fix reaches the share page too: research / explainer /
+  // changeset / debrief visuals now survive schema→store→render→EXPORT.
+  const r4diagram = { id: "r4v", kind: "diagram", title: "The shape", source: "graph LR; A to B" };
+
+  it("R4 P-B — a research artifact's visuals reach the page", () => {
+    const state = baseState({
+      artifacts: [artifact({ id: "a1", type: "research", title: "R", content: { summary: "s", findings: [], visuals: [r4diagram] } })],
+    });
+    const html = formatSessionHtml(state, OPTS);
+    expect(html).toContain("The shape");
+    expect(html).toContain("graph LR; A to B");
+  });
+
+  it("R4 P-B — an EXPLAINER's visuals reach the page (the round-13 headline, end-to-end)", () => {
+    const state = baseState({
+      artifacts: [artifact({ id: "a1", type: "explainer", title: "How it works", content: { title: "How it works", overview: "o", sections: [{ heading: "1", body: "b" }], visuals: [r4diagram] } })],
+    });
+    const html = formatSessionHtml(state, OPTS);
+    expect(html).toContain("The shape");
+    expect(html).toContain("graph LR; A to B");
+  });
+
+  it("R4 P-B — changeset + debrief visuals reach the page", () => {
+    const cs = baseState({
+      artifacts: [artifact({ id: "a1", type: "changeset", title: "CS", content: { files: [], visuals: [r4diagram] } })],
+    });
+    expect(formatSessionHtml(cs, OPTS)).toContain("graph LR; A to B");
+    const db = baseState({
+      artifacts: [artifact({ id: "a2", type: "debrief", title: "DB", content: { summary: "we built it", visuals: [r4diagram] } })],
+    });
+    expect(formatSessionHtml(db, OPTS)).toContain("graph LR; A to B");
+  });
+
+  it("R4 P-C — an explainer's unknowns reach the page", () => {
+    const state = baseState({
+      artifacts: [artifact({ id: "a1", type: "explainer", title: "How it works", content: { title: "How it works", overview: "o", sections: [{ heading: "1", body: "b" }], unknowns: ["I did not read cli/init.ts"] } })],
+    });
+    const html = formatSessionHtml(state, OPTS);
+    expect(html).toContain("What the agent wasn't sure about");
+    expect(html).toContain("I did not read cli/init.ts");
+  });
+
+  it("R4 P-A — a finding's concept reaches the page as a named pattern", () => {
+    const state = baseState({
+      artifacts: [artifact({ id: "a1", type: "research", title: "R", content: { summary: "s", findings: [{ category: "security", detail: "d", significance: "high", concept: { name: "parameterized queries", oneLineExplanation: "bind, don't concatenate" } }] } })],
+    });
+    const html = formatSessionHtml(state, OPTS);
+    expect(html).toContain("parameterized queries");
+    expect(html).toContain("Pattern:");
+  });
 });

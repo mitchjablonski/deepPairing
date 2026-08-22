@@ -1058,6 +1058,8 @@ function researchBody(a: Artifact, ctx: RenderCtx): string {
   const content = coerceResearchContent(a.content);
   const parts: string[] = [];
   if (content.summary) parts.push(renderMarkdown(content.summary, 4, ctx.includeCode));
+  // R4 P-B (#284) — the visuals the research was framed by (see visualsBlock).
+  parts.push(visualsBlock(content.visuals, ctx));
   for (const f of content.findings ?? []) {
     // significance (note-worthiness) and severity (risk) are DIFFERENT axes
     // that often carry the same word — name each so two "HIGH" chips beside
@@ -1065,10 +1067,17 @@ function researchBody(a: Artifact, ctx: RenderCtx): string {
     const sig = f.significance ? `<span class="chip chip--sig-${esc(f.significance)}">${esc(f.significance)} significance</span>` : "";
     const sev = f.severity ? `<span class="chip chip--sev-${esc(f.severity)}">${esc(f.severity)} severity</span>` : "";
     const cat = f.category ? `<span class="chip">${esc(f.category)}</span>` : "";
+    // R4 P-A (#284) — the named pattern behind this finding travels to the share
+    // page too (same "Pattern:" treatment as decision options / debrief sections).
+    const concept = f.concept?.name
+      ? `<p class="concept">Pattern: <strong>${esc(f.concept.name)}</strong>` +
+        (f.concept.oneLineExplanation ? ` — ${renderInline(f.concept.oneLineExplanation)}` : "") +
+        `</p>`
+      : "";
     parts.push(
       `<div class="finding"><h4>${escText(f.title ?? f.category ?? "Finding")}</h4>` +
       `<div class="chips">${sig}${sev}${cat}</div>` +
-      renderMarkdown(f.detail ?? "", 5, ctx.includeCode) +
+      renderMarkdown(f.detail ?? "", 5, ctx.includeCode) + concept +
       evidenceBlock(f.evidence, ctx.includeCode, ctx.projectRoot) +
       (f.impact ? `<p class="kv"><span class="k">Impact</span> ${renderInline(f.impact)}</p>` : "") +
       (f.recommendation ? `<p class="kv"><span class="k">Recommendation</span> ${renderInline(f.recommendation)}</p>` : "") +
@@ -1249,6 +1258,9 @@ function changesetBody(a: Artifact, ctx: RenderCtx, ownComments: Comment[]): str
         .join("")}</div>`,
     );
   }
+  // R4 P-B (#284) — a changeset-level visual ("the shape of what this PR
+  // touches"), before the per-file diffs it frames.
+  parts.push(visualsBlock(content.visuals, ctx));
   for (const file of content.files ?? []) {
     const disposition = content.reviewState?.[file.path];
     const reason = content.reviewReasons?.[file.path];
@@ -1274,6 +1286,8 @@ function debriefBody(a: Artifact, ctx: RenderCtx): string {
   const content = coerceDebriefContent(a.content);
   const parts: string[] = [];
   if (content.summary) parts.push(renderMarkdown(content.summary, 4, ctx.includeCode));
+  // R4 P-B (#284) — visuals framing the debrief ("the shape of what we built").
+  parts.push(visualsBlock(content.visuals, ctx));
   for (const s of content.sections ?? []) {
     parts.push(
       `<div class="walk-section"><h4>${escText(s.title)}</h4>` +
@@ -1315,6 +1329,17 @@ function explainerBody(a: Artifact, ctx: RenderCtx): string {
   const content = coerceExplainerContent(a.content);
   const parts: string[] = [];
   if (content.overview) parts.push(renderMarkdown(content.overview, 4, ctx.includeCode));
+  // R4 P-C (#284) — the honest-gaps list, above the walk (as in the companion UI).
+  if (content.unknowns?.length) {
+    parts.push(
+      `<div class="needs-eyes"><h4>What the agent wasn't sure about</h4><ul>` +
+      content.unknowns.map((u: string) => `<li>${renderInline(u)}</li>`).join("") +
+      `</ul></div>`,
+    );
+  }
+  // R4 P-B (#284) — the walk-through's visuals (the round-13 headline: these were
+  // silently stripped before R4). Present on the shared page, named + collapsible.
+  parts.push(visualsBlock(content.visuals, ctx));
   (content.sections ?? []).forEach((s, i) => {
     parts.push(
       `<div class="walk-section"><h4>${i + 1}. ${escText(s.heading ?? "")}</h4>` +

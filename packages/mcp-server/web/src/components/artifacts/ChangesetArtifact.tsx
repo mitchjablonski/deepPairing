@@ -20,6 +20,7 @@ import {
   openSuggestionsConfirmLabel,
 } from "../../lib/openSuggestions";
 import { OpenInEditorLink } from "../OpenInEditor";
+import { ArtifactVisuals } from "../ArtifactVisuals";
 import { LineGutter, LineComposer, type LineMode } from "../LineComments";
 import { SuggestionLineFeedback } from "../SuggestionLineFeedback";
 import { WalkMeThroughButton, hunkLineRange } from "../WalkMeThrough";
@@ -974,6 +975,14 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
           </span>
         </span>
       </div>
+
+      {/* R4 P-B (#284) — a changeset-level visual: "the shape of what this PR
+          touches" — a diagram or file map that frames the whole diff before the
+          reader dives into hunks. Sits above the file rail; self-hides when the
+          changeset carries none. Composers follow the comment-lock (draft or
+          approved live; terminal / replay read-only). Before R4 these were
+          silently stripped at schema parse. */}
+      <ArtifactVisuals artifactId={artifact.id} visuals={content.visuals ?? []} readOnly={!commentsUnlocked} />
 
       {reviewAll ? (
         /* --- Review-all: every file's diff stacked in one scroll ------------ */

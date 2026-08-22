@@ -20,7 +20,7 @@ import type { ToolContext, ToolResult } from "./types.js";
 export async function handlePresentDebrief(ctx: ToolContext, args: any): Promise<ToolResult> {
   const validated = validatePresentDebriefInput(args);
   if (!validated.ok) return validated.error;
-  const { title, summary, sections, decisionsMade, needsYourEyes, deferred, openQuestions } = validated.data;
+  const { title, summary, sections, decisionsMade, needsYourEyes, deferred, openQuestions, visuals } = validated.data;
 
   // Preflight against rejected approaches. Feed the title, the narrative
   // summary, the section titles, and any named concepts so a debrief re-proposing
@@ -53,6 +53,8 @@ export async function handlePresentDebrief(ctx: ToolContext, args: any): Promise
     ...(needsYourEyes && needsYourEyes.length > 0 ? { needsYourEyes } : {}),
     ...(deferred && deferred.length > 0 ? { deferred } : {}),
     ...(openQuestions && openQuestions.length > 0 ? { openQuestions } : {}),
+    // R4 P-B (#284) — visuals framing the debrief; thread to the store.
+    ...(visuals && visuals.length > 0 ? { visuals } : {}),
   };
   // #162 parity — the secret scan runs INSIDE createArtifact; a debrief narrates
   // real code and may inline a snippet, so it's a scan surface like the others.

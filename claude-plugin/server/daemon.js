@@ -22922,12 +22922,27 @@ var FindingSchema = external_exports.object({
    * Optional with a postable default is deliberate back-compat: absent === the
    * pre-R1 meaning, so no stored artifact changes shape or behaviour.
    */
-  audience: external_exports.enum(["internal", "postable"]).optional().describe("'internal' = for your pair's eyes only; NEVER posted to a PR \u2014 use it for anything read out of their philosophy ledger or private history. 'postable' (the default) = may become an inline PR comment once they approve it.")
-});
-var ResearchContentSchema = external_exports.object({
-  summary: external_exports.string(),
-  findings: external_exports.array(FindingSchema),
-  openQuestions: external_exports.array(external_exports.string()).optional()
+  audience: external_exports.enum(["internal", "postable"]).optional().describe("'internal' = for your pair's eyes only; NEVER posted to a PR \u2014 use it for anything read out of their philosophy ledger or private history. 'postable' (the default) = may become an inline PR comment once they approve it."),
+  /**
+   * R4 P-A (#284) — THE NAMED CONCEPT behind this finding — the pairing-learning
+   * hook, finally reachable from the corpus's healthiest surface. Findings are
+   * 50% human-commented yet were concept-BLIND: the cross-project ledger was
+   * unreachable from the type people actually read, so /review-pr's ledger sweep
+   * had to route its learning moment through log_reasoning (the deadest type).
+   *
+   * Same `{ name, oneLineExplanation? }` shape ConceptBadge already consumes on
+   * reasoning / decision options / debrief sections, so the badge renders inline
+   * with ZERO new UI — and it is LEDGER-AWARE (recurrence count + your stance,
+   * click → the ledger drawer at the matching row). `name` is `.min(1)` (an
+   * empty concept is worse than none — it pollutes the ledger with an
+   * unmatchable row); defined inline rather than referencing
+   * DecisionOptionConceptSchema, which is declared later in this module.
+   * Optional for back-compat: absent === today's render, exactly.
+   */
+  concept: external_exports.object({
+    name: external_exports.string().min(1).describe("The underlying pattern (e.g. 'argon2id for password hashing', 'optimistic UI')"),
+    oneLineExplanation: external_exports.string().optional().describe("Plain-English so the human learns the pattern, not just the finding")
+  }).optional().describe("The named pattern behind this finding \u2014 surfaces as a ledger-aware ConceptBadge the human clicks to see recurrence + their cross-project stance. Name the concept and they learn the pattern, not just the fix.")
 });
 var FileChangeSchema = external_exports.object({
   filePath: external_exports.string(),
@@ -23001,6 +23016,24 @@ var PlanVisualSchema = external_exports.object({
   lineStart: external_exports.number().optional(),
   /** kind="annotated_code": line-anchored explanations. */
   annotations: external_exports.array(PlanVisualAnnotationSchema).optional()
+});
+var ResearchContentSchema = external_exports.object({
+  summary: external_exports.string(),
+  findings: external_exports.array(FindingSchema),
+  openQuestions: external_exports.array(external_exports.string()).optional(),
+  /**
+   * R4 P-B (#284) — visuals attached to a research readout (an architecture
+   * diagram, a "shape of the system" file map). Reuses the EXISTING
+   * PlanVisualSchema so the whole render + region-comment stack applies, and
+   * renders through the shared <ArtifactVisuals>. Optional for back-compat.
+   *
+   * The strip fix: before R4 `visuals` existed ONLY on plan/spec/decision, so a
+   * research artifact passing visuals had them SILENTLY STRIPPED at schema parse
+   * — the diagram vanished between the agent drawing it and the human seeing it.
+   * Diagrams are the one comprehension instrument with proven organic engagement,
+   * which made that the worst possible field to drop.
+   */
+  visuals: external_exports.array(PlanVisualSchema).optional()
 });
 var PlanContentSchema = external_exports.object({
   steps: external_exports.array(PlanStepSchema),
@@ -23149,7 +23182,15 @@ var ChangesetContentSchema = external_exports.object({
    *  ChangesetReviewIntentSchema for exactly what "external" changes. */
   reviewIntent: ChangesetReviewIntentSchema.optional().describe("Set to 'external' when this diff is SOMEONE ELSE'S code you are reviewing (a GitHub PR you were pinged on), not a change you are proposing. Omit for your own work. An external changeset's approve/needs-changes is the human's REVIEW VERDICT \u2014 it stays local until they say to post it, and it never means 'this code lands'."),
   /** Q6 (#232) — where an external changeset came from (the PR). */
-  source: ChangesetSourceSchema.optional().describe("Provenance of an external changeset \u2014 the PR it was pulled from: { kind: 'github-pr', number, url, headRef, baseRef, author }. Fill in whatever `gh pr view` gave you; the review surface names and links it.")
+  source: ChangesetSourceSchema.optional().describe("Provenance of an external changeset \u2014 the PR it was pulled from: { kind: 'github-pr', number, url, headRef, baseRef, author }. Fill in whatever `gh pr view` gave you; the review surface names and links it."),
+  /**
+   * R4 P-B (#284) — a changeset-level visual: "the shape of what this PR
+   * touches" — a diagram or file map that frames the whole diff before the
+   * reader dives into hunks. Reuses PlanVisualSchema (render + region-comment
+   * stack) via the shared <ArtifactVisuals>; rendered above the file rail.
+   * Optional; before R4 it was silently stripped at parse (the round-13 class).
+   */
+  visuals: external_exports.array(PlanVisualSchema).optional()
 });
 var DebriefSectionSchema = external_exports.object({
   title: external_exports.string(),
@@ -23199,7 +23240,13 @@ var DebriefContentSchema = external_exports.object({
   /** Reuses the existing open-question machinery (spec/plan host these the same
    *  way) — questions the agent wants the human to weigh in on, threaded through
    *  the same questionIndex comment lane. */
-  openQuestions: external_exports.array(external_exports.string()).optional()
+  openQuestions: external_exports.array(external_exports.string()).optional(),
+  /**
+   * R4 P-B (#284) — visuals framing the debrief (e.g. "here's the shape of what
+   * we built"). Reuses PlanVisualSchema via the shared <ArtifactVisuals> so
+   * region-comments work. Optional; before R4 it was silently stripped at parse.
+   */
+  visuals: external_exports.array(PlanVisualSchema).optional()
 });
 var ExplainerSectionSchema = external_exports.object({
   // `.min(1)` — an untitled section in an ordered reading-list is degenerate
@@ -23227,7 +23274,29 @@ var ExplainerContentSchema = external_exports.object({
   relatedArtifactIds: external_exports.array(external_exports.string()).optional(),
   /** Seed questions for the ask-anything thread — rendered as one-click chips
    *  that prefill the composer. Optional per the backcompat convention. */
-  suggestedQuestions: external_exports.array(external_exports.string()).optional()
+  suggestedQuestions: external_exports.array(external_exports.string()).optional(),
+  /**
+   * R4 P-B (#284) — visuals for the walk-through (e.g. a sequence diagram of the
+   * request path the explainer narrates). Reuses PlanVisualSchema via the shared
+   * <ArtifactVisuals> so region-comments work. Optional; before R4, an explainer
+   * passing visuals had them SILENTLY STRIPPED at parse ("draw me the shape" was
+   * impossible on the very surface built to transfer the world model). This is
+   * the round-13 headline fix.
+   */
+  visuals: external_exports.array(PlanVisualSchema).optional(),
+  /**
+   * R4 P-C (#284) — WHAT I'M NOT SURE ABOUT. The orientation artifact could not
+   * admit uncertainty, yet "I could not tell whether the CLI door is covered — I
+   * didn't read cli/init.ts" is the sentence a PR reviewer needs most. Each entry
+   * renders above the fold with a one-click Ask on the existing thread (that CTA
+   * is what keeps it out of the graveyard). Optional per the backcompat convention.
+   *
+   * FALSIFICATION NOTE: the explainer is a currently-zero-organic-use type. P-C
+   * only earns its place if P-B (visuals) changes that — next round's dogfood
+   * must check whether the explainer gets invoked at all; if still zero, the
+   * recommendation is to STOP investing in the type.
+   */
+  unknowns: external_exports.array(external_exports.string()).optional().describe("Honest gaps: what you could NOT determine and why (e.g. 'I couldn't tell whether the CLI path is covered \u2014 I didn't read cli/init.ts'). Renders above the fold with a one-click Ask.")
 });
 
 // ../shared/dist/schemas/artifact.js
@@ -23767,6 +23836,9 @@ function coerceFinding(v) {
   const audience = optOneOf(f.audience, ["internal", "postable"]);
   if (audience)
     out.audience = audience;
+  const concept = coerceConcept(f.concept);
+  if (concept)
+    out.concept = concept;
   return out;
 }
 function coerceResearchContent(raw2) {
@@ -23777,6 +23849,8 @@ function coerceResearchContent(raw2) {
   };
   if (Array.isArray(c.openQuestions))
     out.openQuestions = strArr(c.openQuestions);
+  if (Array.isArray(c.visuals))
+    out.visuals = c.visuals.map((v, i) => coerceVisual(v, `visual_${i}`));
   return out;
 }
 function coerceFiles(v) {
@@ -24106,6 +24180,8 @@ function coerceChangesetContent(raw2) {
   const source = coerceChangesetSource(c.source);
   if (source)
     out.source = source;
+  if (Array.isArray(c.visuals))
+    out.visuals = c.visuals.map((v, i) => coerceVisual(v, `visual_${i}`));
   return out;
 }
 function coerceConcepts(v) {
@@ -24168,6 +24244,8 @@ function coerceDebriefContent(raw2) {
     out.deferred = c.deferred.map(coerceDebriefDeferred);
   if (Array.isArray(c.openQuestions))
     out.openQuestions = strArr(c.openQuestions);
+  if (Array.isArray(c.visuals))
+    out.visuals = c.visuals.map((v, i) => coerceVisual(v, `visual_${i}`));
   return out;
 }
 function coerceExplainerSection(v) {
@@ -24194,6 +24272,10 @@ function coerceExplainerContent(raw2) {
     out.relatedArtifactIds = strArr(c.relatedArtifactIds);
   if (Array.isArray(c.suggestedQuestions))
     out.suggestedQuestions = strArr(c.suggestedQuestions);
+  if (Array.isArray(c.visuals))
+    out.visuals = c.visuals.map((v, i) => coerceVisual(v, `visual_${i}`));
+  if (Array.isArray(c.unknowns))
+    out.unknowns = strArr(c.unknowns);
   return out;
 }
 
@@ -28992,12 +29074,14 @@ function researchBody(a, ctx) {
   const content = coerceResearchContent(a.content);
   const parts = [];
   if (content.summary) parts.push(renderMarkdown(content.summary, 4, ctx.includeCode));
+  parts.push(visualsBlock(content.visuals, ctx));
   for (const f of content.findings ?? []) {
     const sig = f.significance ? `<span class="chip chip--sig-${esc2(f.significance)}">${esc2(f.significance)} significance</span>` : "";
     const sev = f.severity ? `<span class="chip chip--sev-${esc2(f.severity)}">${esc2(f.severity)} severity</span>` : "";
     const cat = f.category ? `<span class="chip">${esc2(f.category)}</span>` : "";
+    const concept = f.concept?.name ? `<p class="concept">Pattern: <strong>${esc2(f.concept.name)}</strong>` + (f.concept.oneLineExplanation ? ` \u2014 ${renderInline(f.concept.oneLineExplanation)}` : "") + `</p>` : "";
     parts.push(
-      `<div class="finding"><h4>${escText(f.title ?? f.category ?? "Finding")}</h4><div class="chips">${sig}${sev}${cat}</div>` + renderMarkdown(f.detail ?? "", 5, ctx.includeCode) + evidenceBlock(f.evidence, ctx.includeCode, ctx.projectRoot) + (f.impact ? `<p class="kv"><span class="k">Impact</span> ${renderInline(f.impact)}</p>` : "") + (f.recommendation ? `<p class="kv"><span class="k">Recommendation</span> ${renderInline(f.recommendation)}</p>` : "") + `</div>`
+      `<div class="finding"><h4>${escText(f.title ?? f.category ?? "Finding")}</h4><div class="chips">${sig}${sev}${cat}</div>` + renderMarkdown(f.detail ?? "", 5, ctx.includeCode) + concept + evidenceBlock(f.evidence, ctx.includeCode, ctx.projectRoot) + (f.impact ? `<p class="kv"><span class="k">Impact</span> ${renderInline(f.impact)}</p>` : "") + (f.recommendation ? `<p class="kv"><span class="k">Recommendation</span> ${renderInline(f.recommendation)}</p>` : "") + `</div>`
     );
   }
   for (const q of content.openQuestions ?? []) {
@@ -29121,6 +29205,7 @@ function changesetBody(a, ctx, ownComments) {
       `<div class="chips chips--risk">${content.risks.map((r) => `<span class="chip chip--risk">${escText(String(r).replace(/`/g, ""))}</span>`).join("")}</div>`
     );
   }
+  parts.push(visualsBlock(content.visuals, ctx));
   for (const file2 of content.files ?? []) {
     const disposition = content.reviewState?.[file2.path];
     const reason = content.reviewReasons?.[file2.path];
@@ -29140,6 +29225,7 @@ function debriefBody(a, ctx) {
   const content = coerceDebriefContent(a.content);
   const parts = [];
   if (content.summary) parts.push(renderMarkdown(content.summary, 4, ctx.includeCode));
+  parts.push(visualsBlock(content.visuals, ctx));
   for (const s of content.sections ?? []) {
     parts.push(
       `<div class="walk-section"><h4>${escText(s.title)}</h4>` + (s.body ? renderMarkdown(s.body, 5, ctx.includeCode) : "") + (s.concepts ?? []).map((c) => `<p class="concept">Pattern: <strong>${esc2(c.name)}</strong>${c.oneLineExplanation ? ` \u2014 ${renderInline(c.oneLineExplanation)}` : ""}</p>`).join("") + evidenceBlock(s.evidence, ctx.includeCode, ctx.projectRoot) + `</div>`
@@ -29169,6 +29255,12 @@ function explainerBody(a, ctx) {
   const content = coerceExplainerContent(a.content);
   const parts = [];
   if (content.overview) parts.push(renderMarkdown(content.overview, 4, ctx.includeCode));
+  if (content.unknowns?.length) {
+    parts.push(
+      `<div class="needs-eyes"><h4>What the agent wasn't sure about</h4><ul>` + content.unknowns.map((u) => `<li>${renderInline(u)}</li>`).join("") + `</ul></div>`
+    );
+  }
+  parts.push(visualsBlock(content.visuals, ctx));
   (content.sections ?? []).forEach((s, i) => {
     parts.push(
       `<div class="walk-section"><h4>${i + 1}. ${escText(s.heading ?? "")}</h4>` + (s.body ? renderMarkdown(s.body, 5, ctx.includeCode) : "") + evidenceBlock(s.evidence, ctx.includeCode, ctx.projectRoot) + `</div>`

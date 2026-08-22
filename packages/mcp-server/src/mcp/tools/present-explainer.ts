@@ -20,7 +20,7 @@ import type { ToolContext, ToolResult } from "./types.js";
 export async function handlePresentExplainer(ctx: ToolContext, args: Record<string, unknown> | null | undefined): Promise<ToolResult> {
   const validated = validatePresentExplainerInput(args);
   if (!validated.ok) return validated.error;
-  const { title, overview, sections, relatedArtifactIds, suggestedQuestions } = validated.data;
+  const { title, overview, sections, relatedArtifactIds, suggestedQuestions, visuals, unknowns } = validated.data;
 
   // Preflight against rejected approaches. Feed the title, the overview, and the
   // section headings so an explainer re-narrating a rejected approach is caught.
@@ -48,6 +48,11 @@ export async function handlePresentExplainer(ctx: ToolContext, args: Record<stri
     sections,
     ...(relatedArtifactIds && relatedArtifactIds.length > 0 ? { relatedArtifactIds } : {}),
     ...(suggestedQuestions && suggestedQuestions.length > 0 ? { suggestedQuestions } : {}),
+    // R4 P-B (#284) — the round-13 headline: visuals must survive the handler
+    // (schema→STORE→render). Omitted-when-absent keeps legacy shape byte-identical.
+    ...(visuals && visuals.length > 0 ? { visuals } : {}),
+    // R4 P-C (#284) — the honest-gaps list, likewise threaded to the store.
+    ...(unknowns && unknowns.length > 0 ? { unknowns } : {}),
   };
   // #162 parity — the secret scan runs INSIDE createArtifact; an explainer inlines
   // real code snippets as evidence, so it's a scan surface like the others.

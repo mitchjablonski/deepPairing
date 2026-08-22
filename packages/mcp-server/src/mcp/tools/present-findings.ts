@@ -47,6 +47,10 @@ export async function handlePresentFindings(ctx: ToolContext, args: any): Promis
     summary: validated.data.summary,
     findings: validated.data.findings,
     openQuestions: validated.data.openQuestions ?? [],
+    // R4 P-B (#284) — visuals must survive the HANDLER too (this object is what
+    // gets persisted). Omitted-when-absent so a legacy findings artifact's stored
+    // shape is byte-unchanged. (Per-finding `concept` rides inside `findings`.)
+    ...(validated.data.visuals && validated.data.visuals.length > 0 ? { visuals: validated.data.visuals } : {}),
   };
   const id = `art_${nanoid(10)}`;
   let artifact: Awaited<ReturnType<typeof ctx.store.createArtifact>>;
