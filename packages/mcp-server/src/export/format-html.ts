@@ -890,11 +890,21 @@ function visualsBlock(visuals: unknown, ctx: RenderCtx): string {
       case "diagram": {
         kindLabel = "Diagram";
         const src = String(v.source ?? "").trim();
+        // R3×R4 seam — the Mermaid source is a code body like any other, so it
+        // must obey `includeCode: false` (`--redact-code`). Otherwise a secret
+        // that lived only in a diagram's source survives redaction while the
+        // secret banner promises the opposite ("any secret that lived only in
+        // code isn't shown here"). Keep the diagram PRESENT and named — its
+        // title/caption already render above — but drop the source, mirroring
+        // the annotated_code branch's redaction note.
         body = src
-          ? `<p class="visual-note">A diagram the pair drew and discussed. It is drawn in deepPairing; ` +
-            `this page carries the source it was drawn from.</p>` +
-            `<details class="visual-source"><summary>Show the diagram source (Mermaid)</summary>` +
-            `<pre class="code" data-language="mermaid"><code>${escText(src)}</code></pre></details>`
+          ? ctx.includeCode
+            ? `<p class="visual-note">A diagram the pair drew and discussed. It is drawn in deepPairing; ` +
+              `this page carries the source it was drawn from.</p>` +
+              `<details class="visual-source"><summary>Show the diagram source (Mermaid)</summary>` +
+              `<pre class="code" data-language="mermaid"><code>${escText(src)}</code></pre></details>`
+            : `<p class="visual-note">A diagram the pair drew and discussed. It is drawn in deepPairing.</p>` +
+              `<p class="redacted">Diagram source omitted from this export.</p>`
           : `<p class="visual-note">A diagram was attached here, but its source was not recorded.</p>`;
         break;
       }
