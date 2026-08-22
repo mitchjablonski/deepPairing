@@ -5,6 +5,7 @@ import { useArtifactStore } from "../../stores/artifact";
 import { useChainComments } from "../../hooks/useChainComments";
 import { SimpleMarkdown } from "../SimpleMarkdown";
 import { ConceptBadge } from "../ConceptBadge";
+import { ArtifactVisuals } from "../ArtifactVisuals";
 import { CommentThread } from "../CommentThread";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { renderEvidence } from "./ResearchArtifact";
@@ -279,6 +280,11 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
       >
         <SimpleMarkdown text={content.summary} className="text-sm text-text-secondary space-y-2" />
       </DebriefBlock>
+
+      {/* R4 P-B (#284) — visuals framing the debrief ("here's the shape of what
+          we built"). Self-hides when absent; the shared component carries
+          region-comments. Before R4 these were silently stripped at parse. */}
+      <ArtifactVisuals artifactId={artifact.id} visuals={content.visuals ?? []} readOnly={writeLocked} />
 
       {/* The ordered walk of what changed — collapsed behind a disclosure (O2).
           Skimmers keep needs-your-eyes + summary above; deep readers are one

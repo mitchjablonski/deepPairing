@@ -882,8 +882,13 @@ function aliasPlanVisuals(visuals: unknown): unknown {
 export function validatePresentFindingsInput(args: any): ValidationResult<z.infer<typeof ResearchContentSchema>> {
   const result = ResearchContentSchema.safeParse({
     summary: args?.summary,
+    // `findings` carries per-finding `concept` (R4 P-A) — passed whole, so the
+    // schema validates + preserves it; a malformed concept errors loudly here.
     findings: args?.findings,
     openQuestions: args?.openQuestions,
+    // R4 P-B — visuals must reach the schema to survive to disk. aliasPlanVisuals
+    // normalizes a file_map visual's cross-family change kind (added→create).
+    visuals: aliasPlanVisuals(args?.visuals),
   });
   if (result.success) return admit("present_findings", result.data);
   // #184 — truncation preempts the example-bearing generic error.
@@ -1002,6 +1007,8 @@ export function validatePresentChangesetInput(args: any): ValidationResult<z.inf
     // optional; absent reviewIntent means "local", the pre-Q6 meaning.
     reviewIntent: args?.reviewIntent,
     source: args?.source,
+    // R4 P-B — changeset-level visuals ("the shape of what this PR touches").
+    visuals: aliasPlanVisuals(args?.visuals),
   });
   if (!contentParse.success) {
     return { ok: false, error: formatValidationError("present_changeset", contentParse.error, EXAMPLE_CHANGESET, args) };
@@ -1026,6 +1033,8 @@ export function validatePresentDebriefInput(args: any): ValidationResult<z.infer
     needsYourEyes: args?.needsYourEyes,
     deferred: args?.deferred,
     openQuestions: args?.openQuestions,
+    // R4 P-B — visuals framing the debrief.
+    visuals: aliasPlanVisuals(args?.visuals),
   });
   if (!contentParse.success) {
     return { ok: false, error: formatValidationError("present_debrief", contentParse.error, EXAMPLE_DEBRIEF, args) };
@@ -1049,6 +1058,11 @@ export function validatePresentExplainerInput(args: Record<string, unknown> | nu
     sections: args?.sections,
     relatedArtifactIds: args?.relatedArtifactIds,
     suggestedQuestions: args?.suggestedQuestions,
+    // R4 P-B — the explainer's visuals (the round-13 headline: "draw me the
+    // shape"). Must reach the schema or they are silently stripped.
+    visuals: aliasPlanVisuals(args?.visuals),
+    // R4 P-C — the honest-gaps list.
+    unknowns: args?.unknowns,
   });
   if (result.success) return admit("present_explainer", result.data);
   const truncated = detectTruncatedCall("present_explainer", args, "overview", "sections");

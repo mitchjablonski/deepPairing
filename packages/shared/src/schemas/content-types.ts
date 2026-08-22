@@ -51,6 +51,28 @@ export const FindingSchema = z.object({
    */
   audience: z.enum(["internal", "postable"]).optional()
     .describe("'internal' = for your pair's eyes only; NEVER posted to a PR — use it for anything read out of their philosophy ledger or private history. 'postable' (the default) = may become an inline PR comment once they approve it."),
+  /**
+   * R4 P-A (#284) — THE NAMED CONCEPT behind this finding — the pairing-learning
+   * hook, finally reachable from the corpus's healthiest surface. Findings are
+   * 50% human-commented yet were concept-BLIND: the cross-project ledger was
+   * unreachable from the type people actually read, so /review-pr's ledger sweep
+   * had to route its learning moment through log_reasoning (the deadest type).
+   *
+   * Same `{ name, oneLineExplanation? }` shape ConceptBadge already consumes on
+   * reasoning / decision options / debrief sections, so the badge renders inline
+   * with ZERO new UI — and it is LEDGER-AWARE (recurrence count + your stance,
+   * click → the ledger drawer at the matching row). `name` is `.min(1)` (an
+   * empty concept is worse than none — it pollutes the ledger with an
+   * unmatchable row); defined inline rather than referencing
+   * DecisionOptionConceptSchema, which is declared later in this module.
+   * Optional for back-compat: absent === today's render, exactly.
+   */
+  concept: z.object({
+    name: z.string().min(1).describe("The underlying pattern (e.g. 'argon2id for password hashing', 'optimistic UI')"),
+    oneLineExplanation: z.string().optional()
+      .describe("Plain-English so the human learns the pattern, not just the finding"),
+  }).optional()
+    .describe("The named pattern behind this finding — surfaces as a ledger-aware ConceptBadge the human clicks to see recurrence + their cross-project stance. Name the concept and they learn the pattern, not just the fix."),
 });
 
 export type Finding = z.infer<typeof FindingSchema>;
@@ -65,13 +87,8 @@ export function isPostableFinding(finding: { audience?: string } | null | undefi
   return !!finding && finding.audience !== "internal";
 }
 
-export const ResearchContentSchema = z.object({
-  summary: z.string(),
-  findings: z.array(FindingSchema),
-  openQuestions: z.array(z.string()).optional(),
-});
-
-export type ResearchContent = z.infer<typeof ResearchContentSchema>;
+// ResearchContentSchema is defined below PlanVisualSchema (it references it for
+// the R4 `visuals` field) — see the "// --- research content ---" marker.
 
 export const FileChangeSchema = z.object({
   filePath: z.string(),
@@ -196,6 +213,31 @@ export const PlanVisualSchema = z.object({
 });
 
 export type PlanVisual = z.infer<typeof PlanVisualSchema>;
+
+// --- research content ---------------------------------------------------------
+// Defined here (not up by FindingSchema) so it can reference PlanVisualSchema
+// for the R4 `visuals` field without a use-before-declaration (TDZ) error.
+
+export const ResearchContentSchema = z.object({
+  summary: z.string(),
+  findings: z.array(FindingSchema),
+  openQuestions: z.array(z.string()).optional(),
+  /**
+   * R4 P-B (#284) — visuals attached to a research readout (an architecture
+   * diagram, a "shape of the system" file map). Reuses the EXISTING
+   * PlanVisualSchema so the whole render + region-comment stack applies, and
+   * renders through the shared <ArtifactVisuals>. Optional for back-compat.
+   *
+   * The strip fix: before R4 `visuals` existed ONLY on plan/spec/decision, so a
+   * research artifact passing visuals had them SILENTLY STRIPPED at schema parse
+   * — the diagram vanished between the agent drawing it and the human seeing it.
+   * Diagrams are the one comprehension instrument with proven organic engagement,
+   * which made that the worst possible field to drop.
+   */
+  visuals: z.array(PlanVisualSchema).optional(),
+});
+
+export type ResearchContent = z.infer<typeof ResearchContentSchema>;
 
 export const PlanContentSchema = z.object({
   steps: z.array(PlanStepSchema),
@@ -485,6 +527,14 @@ export const ChangesetContentSchema = z.object({
   /** Q6 (#232) — where an external changeset came from (the PR). */
   source: ChangesetSourceSchema.optional()
     .describe("Provenance of an external changeset — the PR it was pulled from: { kind: 'github-pr', number, url, headRef, baseRef, author }. Fill in whatever `gh pr view` gave you; the review surface names and links it."),
+  /**
+   * R4 P-B (#284) — a changeset-level visual: "the shape of what this PR
+   * touches" — a diagram or file map that frames the whole diff before the
+   * reader dives into hunks. Reuses PlanVisualSchema (render + region-comment
+   * stack) via the shared <ArtifactVisuals>; rendered above the file rail.
+   * Optional; before R4 it was silently stripped at parse (the round-13 class).
+   */
+  visuals: z.array(PlanVisualSchema).optional(),
 });
 export type ChangesetContent = z.infer<typeof ChangesetContentSchema>;
 
@@ -569,6 +619,12 @@ export const DebriefContentSchema = z.object({
    *  way) — questions the agent wants the human to weigh in on, threaded through
    *  the same questionIndex comment lane. */
   openQuestions: z.array(z.string()).optional(),
+  /**
+   * R4 P-B (#284) — visuals framing the debrief (e.g. "here's the shape of what
+   * we built"). Reuses PlanVisualSchema via the shared <ArtifactVisuals> so
+   * region-comments work. Optional; before R4 it was silently stripped at parse.
+   */
+  visuals: z.array(PlanVisualSchema).optional(),
 });
 export type DebriefContent = z.infer<typeof DebriefContentSchema>;
 
@@ -621,5 +677,28 @@ export const ExplainerContentSchema = z.object({
   /** Seed questions for the ask-anything thread — rendered as one-click chips
    *  that prefill the composer. Optional per the backcompat convention. */
   suggestedQuestions: z.array(z.string()).optional(),
+  /**
+   * R4 P-B (#284) — visuals for the walk-through (e.g. a sequence diagram of the
+   * request path the explainer narrates). Reuses PlanVisualSchema via the shared
+   * <ArtifactVisuals> so region-comments work. Optional; before R4, an explainer
+   * passing visuals had them SILENTLY STRIPPED at parse ("draw me the shape" was
+   * impossible on the very surface built to transfer the world model). This is
+   * the round-13 headline fix.
+   */
+  visuals: z.array(PlanVisualSchema).optional(),
+  /**
+   * R4 P-C (#284) — WHAT I'M NOT SURE ABOUT. The orientation artifact could not
+   * admit uncertainty, yet "I could not tell whether the CLI door is covered — I
+   * didn't read cli/init.ts" is the sentence a PR reviewer needs most. Each entry
+   * renders above the fold with a one-click Ask on the existing thread (that CTA
+   * is what keeps it out of the graveyard). Optional per the backcompat convention.
+   *
+   * FALSIFICATION NOTE: the explainer is a currently-zero-organic-use type. P-C
+   * only earns its place if P-B (visuals) changes that — next round's dogfood
+   * must check whether the explainer gets invoked at all; if still zero, the
+   * recommendation is to STOP investing in the type.
+   */
+  unknowns: z.array(z.string()).optional()
+    .describe("Honest gaps: what you could NOT determine and why (e.g. 'I couldn't tell whether the CLI path is covered — I didn't read cli/init.ts'). Renders above the fold with a one-click Ask."),
 });
 export type ExplainerContent = z.infer<typeof ExplainerContentSchema>;

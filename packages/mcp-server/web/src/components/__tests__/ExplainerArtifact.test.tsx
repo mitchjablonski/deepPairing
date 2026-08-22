@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { Artifact } from "@deeppairing/shared";
 import { ExplainerArtifact } from "../artifacts/ExplainerArtifact";
 import { explainerArtifact } from "@deeppairing/shared/__fixtures__/artifacts";
 import { useArtifactStore } from "../../stores/artifact";
@@ -214,6 +215,71 @@ describe("ExplainerArtifact — grain comments", () => {
     await waitFor(() => {
       const body = lastCommentPost();
       expect(body.target.sectionId).toBe("explainer:2");
+    });
+  });
+});
+
+// --- R4 (#284) — visuals (P-B) + unknowns (P-C) on the explainer ------------
+
+/** The fixture explainer plus R4 fields, for the P-B / P-C renderer pins. */
+const explainerWithR4: Artifact = {
+  ...explainerArtifact,
+  id: "art_explainer_r4",
+  content: {
+    ...(explainerArtifact.content as Record<string, unknown>),
+    visuals: [
+      { id: "seq", kind: "diagram", title: "Request path", source: "sequenceDiagram; Client->>API: GET /me" },
+    ],
+    unknowns: [
+      "I couldn't tell whether the CLI login path is covered — I didn't read cli/init.ts",
+    ],
+  },
+};
+
+describe("ExplainerArtifact — R4 P-B visuals", () => {
+  beforeEach(() => {
+    useArtifactStore.getState().reset();
+    useArtifactStore.getState().addArtifact(explainerWithR4);
+  });
+
+  it("renders an attached diagram visual through the shared ArtifactVisuals block", () => {
+    render(<ExplainerArtifact artifact={explainerWithR4} />);
+    expect(screen.getByText(/Visuals \(1\)/i)).toBeInTheDocument();
+    // "Request path" is the visual title (it may also appear in the diagram
+    // fallback render), so assert at least one occurrence rather than uniqueness.
+    expect(screen.getAllByText(/Request path/i).length).toBeGreaterThan(0);
+    // The per-visual comment affordance (region-commentable diagram) is present.
+    expect(screen.getByRole("button", { name: /Comment on this diagram/i })).toBeInTheDocument();
+  });
+});
+
+describe("ExplainerArtifact — R4 P-C unknowns", () => {
+  beforeEach(() => {
+    useArtifactStore.getState().reset();
+    useArtifactStore.getState().addArtifact(explainerWithR4);
+    stubIO(true);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ comment: null }) }),
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("renders the 'What I'm not sure about' block above the fold with each gap", () => {
+    render(<ExplainerArtifact artifact={explainerWithR4} />);
+    expect(screen.getByTestId("explainer-unknowns")).toBeInTheDocument();
+    expect(screen.getByText(/What I'm not sure about \(1\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/didn't read cli\/init\.ts/i)).toBeInTheDocument();
+  });
+
+  it("each gap carries a one-click Ask that prefills the ask-anything composer (the CTA)", async () => {
+    const user = userEvent.setup();
+    render(<ExplainerArtifact artifact={explainerWithR4} />);
+    const unknown = screen.getByTestId("explainer-unknown");
+    await user.click(within(unknown).getByTestId("explainer-unknown-ask"));
+    const ask = within(screen.getByTestId("explainer-ask-anything")).getByRole("textbox");
+    await waitFor(() => {
+      expect((ask as HTMLTextAreaElement).value).toMatch(/didn't read cli\/init\.ts/i);
     });
   });
 });

@@ -5,6 +5,7 @@ import { useArtifactStore } from "../../stores/artifact";
 import { useChainComments } from "../../hooks/useChainComments";
 import { SimpleMarkdown } from "../SimpleMarkdown";
 import { CommentThread } from "../CommentThread";
+import { ArtifactVisuals } from "../ArtifactVisuals";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { renderEvidence } from "./ResearchArtifact";
 import { useWriteLock } from "../../hooks/useWriteLock";
@@ -176,6 +177,7 @@ export function ExplainerArtifact({ artifact }: ExplainerArtifactProps) {
   const sections = content.sections ?? [];
   const relatedArtifactIds = content.relatedArtifactIds ?? [];
   const suggestedQuestions = content.suggestedQuestions ?? [];
+  const unknowns = content.unknowns ?? [];
 
   // #190 A2 — one-click question chips prefill the ask-anything composer. Bump a
   // nonce on each click so CommentThread's prefill effect fires per click.
@@ -200,6 +202,60 @@ export function ExplainerArtifact({ artifact }: ExplainerArtifactProps) {
         )}
         <SimpleMarkdown text={content.overview} className="text-sm text-text-secondary space-y-2" />
       </ExplainerBlock>
+
+      {/* R4 P-C (#284) — WHAT I'M NOT SURE ABOUT, above the fold. The orientation
+          artifact can now admit uncertainty — "I couldn't tell whether the CLI
+          door is covered; I didn't read cli/init.ts" is the sentence a reviewer
+          needs most. Each gap carries a one-click Ask that prefills + focuses the
+          ask-anything composer below (the CTA — no CTA = graveyard). Withheld on
+          a read-only explainer (nothing to ask an artifact you took back). */}
+      {unknowns.length > 0 && (
+        <section
+          data-testid="explainer-unknowns"
+          data-comment-anchor="explainer:unknowns"
+          className="bg-surface-secondary rounded-lg border border-accent-amber/25 p-3.5 space-y-2"
+        >
+          <h3 className="text-xs font-semibold text-accent-amber uppercase tracking-wide">
+            What I'm not sure about ({unknowns.length})
+          </h3>
+          <ul className="space-y-1.5">
+            {unknowns.map((u, i) => (
+              <li
+                key={i}
+                data-testid="explainer-unknown"
+                className="flex items-start gap-2 rounded-md border-l-2 border-accent-amber bg-accent-amber-dim/15 p-2.5"
+              >
+                <span aria-hidden="true" className="text-accent-amber mt-0.5 shrink-0 text-2xs font-bold">?</span>
+                <span className="min-w-0 flex-1 text-xs text-text-secondary">{u}</span>
+                {!writeLocked && (
+                  <button
+                    type="button"
+                    data-testid="explainer-unknown-ask"
+                    onClick={() => {
+                      setPrefill({ text: `About "${u}" — `, nonce: prefill.nonce + 1 });
+                      setAskFocus((n) => n + 1);
+                    }}
+                    className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full border border-border-subtle
+                               bg-surface-elevated text-2xs text-text-secondary hover:border-accent-blue
+                               hover:text-accent-blue transition-colors press-scale"
+                    title="Ask the agent about this — fills the box below"
+                  >
+                    <span aria-hidden="true" className="inline-flex items-center"><SpeechIcon className="w-3 h-3" /></span>
+                    Ask
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* R4 P-B (#284) — the walk-through's visuals (e.g. a sequence diagram of
+          the request path being narrated). THE round-13 headline: before R4 an
+          explainer passing visuals had them silently stripped at parse, so "draw
+          me the shape" was impossible on the one surface built to transfer the
+          world model. Self-hides when absent; carries region-comments. */}
+      <ArtifactVisuals artifactId={artifact.id} visuals={content.visuals ?? []} readOnly={writeLocked} />
 
       {/* The ordered walk-through — numbered progression, read top to bottom. */}
       {sections.length > 0 && (

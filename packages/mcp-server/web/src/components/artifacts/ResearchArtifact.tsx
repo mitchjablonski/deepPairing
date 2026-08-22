@@ -1,9 +1,11 @@
-import type { Artifact, Evidence, Comment } from "@deeppairing/shared";
+import type { Artifact, Evidence, Comment, PlanVisual } from "@deeppairing/shared";
 import { coerceResearchContent } from "@deeppairing/shared";
 import { useArtifactStore } from "../../stores/artifact";
 import { useChainComments } from "../../hooks/useChainComments";
 import { scrollToAnchor } from "../../lib/comment-anchor";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
+import { ArtifactVisuals } from "../ArtifactVisuals";
+import { ConceptBadge } from "../ConceptBadge";
 import { FileViewer } from "./FileViewer";
 import { CommentableCode } from "../CommentableCode";
 import { CommentTrigger, AskTrigger } from "../CommentThread";
@@ -29,6 +31,8 @@ interface RichFinding {
   recommendation?: string;
   /** R1 (#279) — "internal" means this one is for you, never for the PR. */
   audience?: "internal" | "postable";
+  /** R4 P-A (#284) — the named pattern behind this finding → ledger-aware badge. */
+  concept?: { name: string; oneLineExplanation?: string };
 }
 
 const severityStyles: Record<string, string> = {
@@ -621,6 +625,7 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
         summary: string;
         findings: RichFinding[];
         openQuestions?: string[];
+        visuals?: PlanVisual[];
       },
     [artifact.content],
   );
@@ -749,6 +754,17 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
         {/* Detail */}
         <SimpleMarkdown text={finding.detail} className={`text-text-secondary mt-2 space-y-2 ${focusMode ? "text-sm leading-relaxed" : "text-xs"}`} />
 
+        {/* R4 P-A (#284) — the named pattern behind this finding. The badge is
+            the CTA: it is ledger-aware (recurrence count + your stance) and
+            clicking it opens the ledger drawer at the matching row — the learning
+            moment that /review-pr's ledger sweep used to route through the deadest
+            type (log_reasoning), now on the surface people actually read. */}
+        {finding.concept?.name && (
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            <ConceptBadge name={finding.concept.name} explanation={finding.concept.oneLineExplanation} size="md" />
+          </div>
+        )}
+
         {/* Evidence — now with inline commenting on code lines (read-only when the
             artifact is retracted/terminal or being replayed). */}
         {renderEvidence(finding.evidence, artifact.id, i, comments, writeLocked)}
@@ -784,6 +800,12 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
       {content.summary && (
         <SimpleMarkdown text={content.summary} className="text-sm text-text-secondary space-y-2" />
       )}
+
+      {/* R4 P-B (#284) — visuals framing the research (an architecture diagram,
+          a "shape of the system" file map). Self-hides when there are none; the
+          shared component gives region-comments for free. Before R4 these were
+          silently stripped at schema parse. */}
+      <ArtifactVisuals artifactId={artifact.id} visuals={content.visuals ?? []} readOnly={writeLocked} />
 
       {findings.length > 0 && (
         <div className="space-y-3">

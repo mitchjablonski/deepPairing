@@ -37,6 +37,24 @@ describe("coerceResearchContent", () => {
     const bad = coerceResearchContent({ findings: [{ category: "c", detail: "d", confidence: "sorta" }] });
     expect((bad.findings[0] as { confidence?: string }).confidence).toBeUndefined();
   });
+  it("R4 P-A — preserves a finding's `concept` (the ledger-badge hook); empty-name concept is dropped", () => {
+    const r = coerceResearchContent({
+      findings: [{ category: "c", detail: "d", concept: { name: "optimistic UI", oneLineExplanation: "update now, reconcile later" } }],
+    });
+    expect(r.findings[0]!.concept).toEqual({ name: "optimistic UI", oneLineExplanation: "update now, reconcile later" });
+    const empty = coerceResearchContent({ findings: [{ category: "c", detail: "d", concept: { name: "" } }] });
+    expect(empty.findings[0]!.concept).toBeUndefined();
+  });
+  it("R4 P-B — preserves research `visuals` (was silently stripped before R4)", () => {
+    const r = coerceResearchContent({
+      summary: "s", findings: [],
+      visuals: [{ id: "sys", kind: "diagram", source: "graph TD; A-->B" }],
+    });
+    expect(r.visuals?.[0]).toMatchObject({ id: "sys", kind: "diagram", source: "graph TD; A-->B" });
+    // A visual missing an id gets a stable content-derived fallback (never dropped).
+    const noId = coerceResearchContent({ findings: [], visuals: [{ kind: "diagram", source: "graph TD; X" }] });
+    expect(noId.visuals?.[0]?.id).toBeTruthy();
+  });
 });
 
 describe("coercePlanContent", () => {
@@ -327,6 +345,15 @@ describe("coerceChangesetContent (#171)", () => {
     expect(coerceChangesetContent({ files: [], source: "PR 123" }).source).toBeUndefined();
     expect(coerceChangesetContent({ files: [], source: { number: 9 } }).source).toBeUndefined();
   });
+
+  it("R4 P-B — preserves changeset `visuals` ('the shape of what this PR touches')", () => {
+    const out = coerceChangesetContent({
+      files: [],
+      visuals: [{ id: "touch", kind: "file_map", files: [{ path: "auth/middleware.ts", change: "modify" }] }],
+    });
+    expect(out.visuals?.[0]).toMatchObject({ id: "touch", kind: "file_map" });
+    expect(out.visuals?.[0]?.files?.[0]).toMatchObject({ path: "auth/middleware.ts", change: "modify" });
+  });
 });
 
 describe("coerceDebriefContent (#190)", () => {
@@ -375,6 +402,13 @@ describe("coerceDebriefContent (#190)", () => {
     expect(out.deferred).toEqual([{ what: "later", why: "scope" }]);
     expect(out.openQuestions).toEqual(["Q1?"]); // non-string dropped
   });
+  it("R4 P-B — preserves debrief `visuals`", () => {
+    const out = coerceDebriefContent({
+      summary: "s",
+      visuals: [{ id: "shape", kind: "diagram", source: "graph LR; a-->b" }],
+    });
+    expect(out.visuals?.[0]).toMatchObject({ id: "shape", kind: "diagram", source: "graph LR; a-->b" });
+  });
 });
 
 describe("coerceExplainerContent (#190 A2)", () => {
@@ -409,6 +443,22 @@ describe("coerceExplainerContent (#190 A2)", () => {
     expect(out.sections[1]!.body).toBe(""); // lenient default
     expect(out.relatedArtifactIds).toEqual(["art_1"]); // non-string dropped
     expect(out.suggestedQuestions).toEqual(["Q1?"]); // non-string dropped
+  });
+  it("R4 P-B — preserves explainer `visuals` (the strip fix)", () => {
+    const out = coerceExplainerContent({
+      title: "t", overview: "o", sections: [{ heading: "1", body: "b" }],
+      visuals: [{ id: "seq", kind: "diagram", source: "sequenceDiagram; C->>A: go" }],
+    });
+    expect(out.visuals?.[0]).toMatchObject({ id: "seq", kind: "diagram", source: "sequenceDiagram; C->>A: go" });
+  });
+  it("R4 P-C — preserves explainer `unknowns` (strings only; junk dropped)", () => {
+    const out = coerceExplainerContent({
+      title: "t", overview: "o", sections: [{ heading: "1", body: "b" }],
+      unknowns: ["I didn't read cli/init.ts", 42, null],
+    });
+    expect(out.unknowns).toEqual(["I didn't read cli/init.ts"]);
+    // non-array → omitted, never crashed
+    expect(coerceExplainerContent({ title: "t", overview: "o", sections: [{ heading: "1", body: "b" }], unknowns: "nope" }).unknowns).toBeUndefined();
   });
 });
 
