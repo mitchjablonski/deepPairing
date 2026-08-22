@@ -191,7 +191,7 @@ test("O2 changeset — affordance at 900px (dark)", async ({ browser }) => {
   await context.close();
 });
 
-test("O2 debrief — collapsed at 900px (dark)", async ({ browser }) => {
+test("O2 debrief — expanded-default walk at 900px (dark)", async ({ browser }) => {
   const { context, page } = await newPage(browser, "dark", 900);
   await open900(page, "debrief_o2");
   await page.getByTestId("debrief-walk-toggle").waitFor({ timeout: 15000 });

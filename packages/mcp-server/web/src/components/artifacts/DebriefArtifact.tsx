@@ -208,7 +208,7 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
     () => sections.some((_, i) => comments.some((c) => c.target.sectionId === `debrief:${i}`)),
     [sections, comments],
   );
-  const walkDefaultOpen = walkHasThread || true;
+  const walkDefaultOpen = true;
   const [walkOpen, setWalkOpen] = useState<boolean | null>(null);
   const walkExpanded = walkOpen ?? walkDefaultOpen;
 
