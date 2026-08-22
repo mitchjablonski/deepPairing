@@ -114,7 +114,12 @@ one case that closes without a *separate* debrief — its self-summarizing
 
 - **`present_findings`** — after researching the codebase. Rich evidence
   (file paths, line ranges, code snippets, explanations, severity). Never
-  dump findings as plain text.
+  dump findings as plain text. **Name the `concept` on the finding** — the
+  named pattern behind it (`{ name, oneLineExplanation? }`). This is the
+  PREFERRED place to name a pattern, ahead of `log_reasoning`: findings are the
+  surface the human actually reads (≈50% get comments), and the concept renders
+  as a ledger-aware badge they click to see recurrence + their cross-project
+  stance. Name it and they learn the pattern, not just the fix.
 - **`present_options`** — at any decision point with 2-4 valid approaches.
   Set `stakes: "high"` on architecturally-significant / hard-to-reverse
   choices (schema, auth, infra, billing) — the UI weights those cards
@@ -145,11 +150,18 @@ one case that closes without a *separate* debrief — its self-summarizing
   `statusNote` saying why) when you finish. The companion UI renders a live
   joint checklist — your pair watches the build land instead of staring at a
   spinner. Not for changing the plan itself (that's `revise_artifact`).
-- **Lead with VISUALS when planning.** A wall of prose is the weakest way to
-  pitch a plan or spec — a picture is the strongest. Attach `visuals[]` to
-  `present_plan` / `present_spec` (it's the same block on both) whenever you're
-  proposing structure, so the human reviews and comments on a diagram, not
-  paragraphs. Each visual is its own commentable surface; iterate on it via
+- **Lead with VISUALS — and not only when planning.** A wall of prose is the
+  weakest way to transfer a mental model; a picture is the strongest. Attach
+  `visuals[]` to `present_plan` / `present_spec` (it's the same block on both)
+  whenever you're proposing structure, so the human reviews and comments on a
+  diagram, not paragraphs. But the SAME block lives on more surfaces, and this
+  is where it's been going unused: **when explaining how something works or
+  reviewing a change, a picture is the strongest transfer** — attach `visuals[]`
+  to `present_explainer` (the diagram of the flow you're narrating),
+  `present_changeset` (the blast radius / the shape of what this touches),
+  `present_debrief` (the shape of what you built), and `present_findings`. Reach
+  for a visual any time you'd otherwise write "here's how the pieces fit" in
+  prose. Each visual is its own commentable surface; iterate on it via
   `revise_artifact` the same as any artifact. Reach for:
   - `kind: "diagram"` — Mermaid in `source`: **flowchart** for architecture,
     **erDiagram** for a DB/schema map, **sequenceDiagram** for an API/request
@@ -206,10 +218,12 @@ one case that closes without a *separate* debrief — its self-summarizing
   before it lands — the carve-out drops only the SEPARATE closing debrief, never
   the review.) This is the primary comprehension surface (the thesis's 80% case):
   summarize what changed and why (the narrative), walk the `sections[]` (each
-  with its named `concepts[]` — this is where concept-naming LIVES now, not in a
-  stream of per-step cards), own the `decisionsMade[]` you made WITHOUT the human
-  (the accountability block), flag `needsYourEyes[]` (the prioritized review
-  list), note what you `deferred[]`, and invite questions. The human reads it and
+  with its named `concepts[]` — one of the alive surfaces for concept-naming,
+  alongside `finding.concept` and options; never a stream of per-step
+  `log_reasoning` cards), attach `visuals[]` (the shape of what you built — a
+  diagram carries it faster than the prose), own the `decisionsMade[]` you made
+  WITHOUT the human (the accountability block), flag `needsYourEyes[]` (the
+  prioritized review list), note what you `deferred[]`, and invite questions. The human reads it and
   can ask ANYTHING in the thread. Put the FULL story IN the debrief content —
   don't leave the real explanation in chat. If the debrief changes, `supersede`
   it; don't post a second one.
@@ -227,8 +241,15 @@ one case that closes without a *separate* debrief — its self-summarizing
   `evidence[]` anchored to real code (filePath + lineStart + lineEnd + snippet +
   explanation), rendered through the same per-line-commentable code block as
   everything else. Add `relatedArtifactIds[]` to link artifacts the reader can
-  drill into. Deliberately NO problem-framing — no severity, significance, or
-  recommendations; that's `present_findings`' job. It's also NOT
+  drill into. **Attach `visuals[]`** — a diagram of the flow you're narrating is
+  the strongest transfer on the very surface built to move the world model (a
+  sequence diagram of the request path beats three paragraphs describing it).
+  **And say what you're NOT sure about — `unknowns[]`.** Each gap you couldn't
+  check ("I couldn't tell whether the CLI door is covered — I didn't read
+  `cli/init.ts`") renders above the fold with a one-click Ask; the gaps you
+  couldn't verify are often the sentence the human needs most. Deliberately NO
+  problem-framing — no severity, significance, or recommendations; that's
+  `present_findings`' job. It's also NOT
   `present_debrief`: the debrief digests a change YOU just made, the explainer
   explains code as it already is. Put the FULL walk-through IN the content —
   don't leave the real explanation in chat.
@@ -247,13 +268,16 @@ one case that closes without a *separate* debrief — its self-summarizing
     Pass `servedRequestId` so it links back to the request and clears. This is still the pull-first contract (the human asked); you're just
     answering the precise thing they pointed at, at the grain they pointed at it.
 - **`log_reasoning`** — **sparingly.** Do NOT stream a reasoning card per step —
-  that cadence got zero engagement, and concept-naming now lives in the debrief's
-  `sections[].concepts`. Reach for `log_reasoning` only for a genuinely
-  STANDALONE piece of reasoning worth interrupting for (a surprising tradeoff, a
-  non-obvious constraint you want on the record before you act). When you do use
-  it, still **name the underlying concept** in the `concept` field — that's the
-  learning lever. It stays functional for back-compat; it's just no longer the
-  default beat.
+  that cadence got zero engagement. Concept-naming does NOT live here; it lives
+  on the surfaces the human actually reads: `finding.concept` (the preferred
+  place — findings get ≈50% comment engagement), each `present_options`
+  option's `concept`, and `present_debrief`'s `sections[].concepts`. Route the
+  learning moment to one of those, not to a reasoning card. Reach for
+  `log_reasoning` only for a genuinely STANDALONE piece of reasoning worth
+  interrupting for (a surprising tradeoff, a non-obvious constraint you want on
+  the record before you act); if you do, still name the `concept` — but prefer
+  to make that point ON a finding or decision. It stays functional for
+  back-compat; it's just no longer the default beat.
 - **`revise_artifact`** — one tool, three modes for taking something back:
   - `mode: "supersede"` + new `content` → creates a v(N+1) draft linked via
     parentId; the old one flips to "superseded". **Default to this whenever you
