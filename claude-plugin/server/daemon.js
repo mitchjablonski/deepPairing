@@ -28965,7 +28965,7 @@ function visualsBlock(visuals, ctx) {
       case "diagram": {
         kindLabel = "Diagram";
         const src = String(v.source ?? "").trim();
-        body = src ? `<p class="visual-note">A diagram the pair drew and discussed. It is drawn in deepPairing; this page carries the source it was drawn from.</p><details class="visual-source"><summary>Show the diagram source (Mermaid)</summary><pre class="code" data-language="mermaid"><code>${escText(src)}</code></pre></details>` : `<p class="visual-note">A diagram was attached here, but its source was not recorded.</p>`;
+        body = src ? ctx.includeCode ? `<p class="visual-note">A diagram the pair drew and discussed. It is drawn in deepPairing; this page carries the source it was drawn from.</p><details class="visual-source"><summary>Show the diagram source (Mermaid)</summary><pre class="code" data-language="mermaid"><code>${escText(src)}</code></pre></details>` : `<p class="visual-note">A diagram the pair drew and discussed. It is drawn in deepPairing.</p><p class="redacted">Diagram source omitted from this export.</p>` : `<p class="visual-note">A diagram was attached here, but its source was not recorded.</p>`;
         break;
       }
       case "file_map": {

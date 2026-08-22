@@ -578,6 +578,58 @@ describe("formatSessionHtml — the redact option", () => {
     });
     expect(html).toContain("narrativeOnlyToken");
   });
+
+  // R3×R4 cold-pass seam — the Mermaid `source` of a diagram visual is a code
+  // body too, so `includeCode: false` must strip it. Before the fix it rode out
+  // ungated, so a secret that lived only in a diagram source survived redaction
+  // while the secret banner promised it hadn't ("any secret that lived only in
+  // code isn't shown here"). This pins the source to the same redaction the
+  // annotated_code branch already obeyed.
+  const diagramSecret = "ghp_" + "A".repeat(36);
+  function diagramState(): HtmlSessionState {
+    return {
+      sessionId: "s_share",
+      artifacts: [
+        artifact({
+          id: "a_diag",
+          type: "plan",
+          title: "Refresh plan",
+          content: {
+            steps: [],
+            visuals: [
+              {
+                id: "v_diag",
+                kind: "diagram",
+                title: "Auth flow",
+                source: `flowchart TD\n  A[Client] -->|${diagramSecret}| B[Auth]`,
+              },
+            ],
+          },
+        }),
+      ],
+      comments: [],
+      decisions: [],
+      planReviews: [],
+    };
+  }
+
+  it("redacts a diagram's source under includeCode:false — the secret is absent, a note stands in", () => {
+    const html = formatSessionHtml(diagramState(), { ...OPTS, includeCode: false });
+    expect(html).not.toContain(diagramSecret);
+    expect(html).not.toContain("flowchart TD");
+    expect(html).toContain("Diagram source omitted from this export.");
+    // The diagram is still PRESENT and named — only its body is dropped.
+    expect(html).toContain("Auth flow");
+    expect(html).toContain("Diagram");
+  });
+
+  it("keeps a diagram's source when code is included (the control)", () => {
+    const html = formatSessionHtml(diagramState(), OPTS);
+    expect(html).toContain("flowchart TD");
+    expect(html).toContain(diagramSecret);
+    expect(html).toContain("Show the diagram source (Mermaid)");
+    expect(html).not.toContain("Diagram source omitted from this export.");
+  });
 });
 
 describe("formatSessionHtml — degenerate input", () => {
