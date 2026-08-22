@@ -203,16 +203,20 @@ for (const theme of ["dark", "light"] as const) {
       await open(page, "debrief_p2");
       const toggle = page.getByTestId("debrief-walk-toggle");
       await toggle.waitFor({ timeout: 15000 });
-      await expect(toggle).toHaveText(/Show the full walk-through \(3 sections\)/);
-      // It reads as interactive: pointer cursor + a visible border box.
+      // S2 (round-14) — deep-by-default: the walk is EXPANDED by default, so the
+      // control offers to HIDE it and the sections are already on screen.
+      await expect(toggle).toHaveText(/Hide the walk \(3 sections\)/);
+      await page.getByText("Scope rides the request as data").waitFor({ timeout: 15000 });
+      // It still reads as interactive: pointer cursor + a visible border box.
       expect(await toggle.evaluate((el) => getComputedStyle(el).cursor)).toBe("pointer");
       expect(await toggle.evaluate((el) => getComputedStyle(el).borderTopWidth)).not.toBe("0px");
       // It is NOT the uppercase heading treatment any more.
       expect(await toggle.evaluate((el) => getComputedStyle(el).textTransform)).toBe("none");
-      await shot(page, `debrief-disclosure-collapsed-${theme}-${width}.png`);
-      await toggle.click();
-      await page.getByText("Scope rides the request as data").waitFor({ timeout: 15000 });
       await shot(page, `debrief-disclosure-expanded-${theme}-${width}.png`);
+      // The O2 collapse still works — one click hides the walk.
+      await toggle.click();
+      await page.getByText("Scope rides the request as data").waitFor({ state: "hidden", timeout: 15000 });
+      await shot(page, `debrief-disclosure-collapsed-${theme}-${width}.png`);
       await context.close();
     });
 
