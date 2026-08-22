@@ -627,14 +627,12 @@ export interface IStore {
   setDetailDensity(density: "rich" | "terse"): MaybePromise<void>;
   getDetailDensity(): MaybePromise<"rich" | "terse">;
 
-  /**
-   * Q2 — cross-project publish opt-in. Optional on the interface because only
-   * the project-backed FileStore owns preferences.json; a replay/read-only
-   * store has no such notion. Reads from the global ledger are ALWAYS on —
-   * this gates WRITES only (see FileStore.globalLedgerPublishEnabled).
-   */
-  setGlobalLedgerPublish?(enabled: boolean): MaybePromise<void>;
-  getGlobalLedgerPublish?(): MaybePromise<boolean>;
+  // R5 (round-13 LOW) — the cross-project publish opt-in (setGlobalLedgerPublish/
+  // getGlobalLedgerPublish) is declared ONCE, above with the III8 doc comment;
+  // TypeScript silently accepted a second identical declaration re-added here by
+  // Q2, so the two disagreeing doc comments both compiled. Deduped: the III8
+  // comment (which also documents the always-unfiltered READ path and the
+  // test-fake compile-vs-implement contract) is the surviving one.
 
   // Feedback polling
   waitForFeedback(timeoutMs?: number): Promise<void>;

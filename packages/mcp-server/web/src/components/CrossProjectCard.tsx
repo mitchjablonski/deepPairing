@@ -105,10 +105,10 @@ export function CrossProjectCard() {
             Item 13: turning it back off is also not a retraction, and saying so
             here is cheaper than a surprise later. */}
         <div className="text-[10px] text-text-muted leading-relaxed">
-          Publishing writes three things to
+          Publishing writes four things to
           <code className="mx-1 px-1 rounded bg-surface-secondary">~/.deeppairing</code>
           where your other projects can read them: the stance itself, the reason you
-          typed, and this project’s folder name. No code, no diffs, and nothing
+          typed, this project’s folder name, and an internal session id. No code, no diffs, and nothing
           leaves your machine — but a stance is <em>your</em> wording, so if you name
           a file in it, that name travels with it. Elsewhere it’s only an advisory
           nudge, never a block. You can turn this off later; that stops new stances

@@ -455,10 +455,11 @@ SEE at the project root without walking the tree, so treat it as examples, not
 as the boundary.
 
 **Excluded trees.** Depth matching stops at code nobody edits deliberately:
-nothing under `node_modules/`, `vendor/`, `third_party/`, `.venv/`,
-`site-packages/`, `dist/`, `build/`, `out/`, `target/`, `coverage/`, `.next/`,
-`.turbo/`, `__pycache__/`, `fixtures/`, `__fixtures__/`, `testdata/`,
-`__snapshots__/`, `__mocks__/` or `examples/` ever asks. Without that, adding a
+nothing under `node_modules/`, `bower_components/`, `vendor/`, `third_party/`,
+`.venv/`, `venv/`, `site-packages/`, `dist/`, `build/`, `out/`, `target/`,
+`coverage/`, `.next/`, `.nuxt/`, `.output/`, `.turbo/`, `__pycache__/`,
+`fixtures/`, `__fixtures__/`, `testdata/`, `test-data/`, `__snapshots__/`,
+`__mocks__/`, `examples/` or `example/` ever asks. Without that, adding a
 migration-runner package with tests would fire on every fixture. The trade-off
 is stated rather than hidden: a REAL migration that lives under `examples/` or
 `fixtures/` goes unguarded — the same policy as the named-after exclusions
@@ -504,9 +505,13 @@ hook is never told the answer: allow and decline both reach it as silence, so
 the 30-minute dedup stamp is written when the prompt is RAISED, not when it is
 resolved. That means a retry of the same edit inside the window goes through
 with no prompt at all. Treat a decline as the instruction it is — present
-findings, options, a spec, or a plan before you touch that path again — and
-record the refusal (`reject_approach`) if it is a standing one, because the
-rejected-approach gate is the half that persists across sessions.
+findings, options, a spec, or a plan before you touch that path again. If the
+decline reflects a standing preference, surface the approach as a
+`present_options` card (or a decision) so your pair can reject it in the UI:
+their rejection there is what writes the cross-project stance that makes the
+`present_*` tools refuse the re-proposal in future sessions. There is no
+agent-side "record a refusal" call — the human's rejection is the half that
+persists across sessions.
 
 ## Don't
 

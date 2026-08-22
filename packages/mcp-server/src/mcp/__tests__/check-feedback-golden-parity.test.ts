@@ -595,6 +595,60 @@ const scenarios: Scenario[] = [
       });
     },
   },
+  {
+    // R5 (round-13 MED) — THE COMMENT-ONLY LANE, the exact re-found repro. A
+    // fresh human comment on an APPROVED artifact with NOTHING else pending used
+    // to fall through to "You may proceed with implementation." printed beside
+    // the comment itself ("redo before merge"). The suggested action must now be
+    // the non-proceed comment-only clause; "proceed" must be ABSENT.
+    name: "comment_only_on_approved",
+    seed: (store) => {
+      store.createArtifact({
+        id: "art_ok",
+        type: "changeset",
+        title: "Add rate limiter",
+        content: { files: [{ path: "api/limit.ts", changeType: "modified", hunks: [{ lines: [{ kind: "add", content: "x", newLine: 1 }] }] }] },
+      });
+      store.updateArtifactStatus("art_ok", "approved", "ui_approve_button");
+      store.addComment({
+        id: "cmt_only",
+        artifactId: "art_ok",
+        content: "this needs a jitter — please redo before merge",
+        author: "human",
+        target: { artifactId: "art_ok", filePath: "api/limit.ts", lineStart: 1 },
+      });
+    },
+  },
+  {
+    // R5 (round-13 MED) — EXTERNAL-REVIEW-AWARE check_feedback. A pending
+    // changeset carrying reviewIntent:"external" (Q6 #232) is a colleague's PR on
+    // the review surface: "applying the edits" is wrong — the base clause must say
+    // "your pair is reviewing PR #N; nothing to apply", and the structured
+    // pendingArtifacts entry must carry {reviewIntent:"external", pr}. A benign
+    // human comment supplies the immediate feedback so the handler never enters
+    // the 30s long-poll (same discipline as the other draft-bearing scenarios).
+    name: "external_changeset_pending",
+    seed: (store) => {
+      store.createArtifact({
+        id: "art_ext",
+        type: "changeset",
+        title: "PR #4213 — add retry backoff",
+        content: {
+          summary: "colleague's change",
+          reviewIntent: "external",
+          source: { kind: "github-pr", number: 4213, url: "https://github.com/o/r/pull/4213", author: "priya" },
+          files: [{ path: "svc/retry.ts", changeType: "modified", hunks: [{ lines: [{ kind: "add", content: "await backoff()", newLine: 10 }] }] }],
+        },
+      });
+      store.addComment({
+        id: "cmt_ext",
+        artifactId: "art_ext",
+        content: "why retry on 400s?",
+        author: "human",
+        target: { artifactId: "art_ext", filePath: "svc/retry.ts", lineStart: 10 },
+      });
+    },
+  },
 ];
 
 describe("#188 — check_feedback byte-parity golden pins", () => {

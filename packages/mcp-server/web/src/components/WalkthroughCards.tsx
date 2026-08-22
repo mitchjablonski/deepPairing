@@ -29,7 +29,7 @@ export function WalkthroughCards({ compact = false }: { compact?: boolean }) {
       <div className="p-3 bg-accent-green-dim/20 border border-accent-green/20 rounded-lg">
         <div className="text-2xs font-semibold text-accent-green mb-1">③ Memory that works for you</div>
         <p className="text-2xs text-text-secondary leading-relaxed">
-          Reject something once (with a reason). Next session, the agent can't re-propose it — by name or by the underlying pattern.
+          Reject something once (with a reason). Next session, the agent can't re-propose it — the match is literal, not semantic, so name the concept for what it is and it catches the re-proposals that reuse those words.
         </p>
       </div>
     </div>

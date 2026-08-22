@@ -261,8 +261,8 @@ export function AutonomySlider() {
                     rather than withdrawing past ones. */}
                 <div className="text-[10px] text-text-muted mt-1 leading-relaxed">
                   {publish
-                    ? "On — new stances go to ~/.deeppairing (the stance, your reason, this project’s folder name), so your other projects flag the concept as an advisory nudge, never a block. Turning this off stops future writes; it doesn’t withdraw what’s already there."
-                    : "Off — stances stay in this project. Turn on to write the stance, your reason, and this project’s folder name to ~/.deeppairing, where your other projects can read them. No code or diffs; a stance is your wording, so a file name you type into one travels with it."}
+                    ? "On — new stances go to ~/.deeppairing (the stance, your reason, this project’s folder name, and an internal session id), so your other projects flag the concept as an advisory nudge, never a block. Turning this off stops future writes; it doesn’t withdraw what’s already there."
+                    : "Off — stances stay in this project. Turn on to write the stance, your reason, this project’s folder name, and an internal session id to ~/.deeppairing, where your other projects can read them. No code or diffs; a stance is your wording, so a file name you type into one travels with it."}
                 </div>
               </div>
             )}

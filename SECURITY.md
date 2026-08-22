@@ -155,11 +155,11 @@ deepPairing installs two Claude Code hooks, both local-only, network-free, and f
     `docs/migrations.md`) is not, though an extension-less file whose entire
     name is `migrations` is indistinguishable from the directory and does
     match. Depth matching explicitly stops at trees nobody edits deliberately:
-    nothing under `node_modules/`, `vendor/`, `third_party/`, `.venv/`,
-    `site-packages/`, `dist/`, `build/`, `out/`, `target/`, `coverage/`,
-    `.next/`, `.nuxt/`, `.output/`, `.turbo/`, `__pycache__/`, `fixtures/`,
-    `__fixtures__/`, `testdata/`, `test-data/`, `__snapshots__/`, `__mocks__/`
-    or `examples/` ever prompts. **The trade-off is deliberate:** a genuine
+    nothing under `node_modules/`, `bower_components/`, `vendor/`,
+    `third_party/`, `.venv/`, `venv/`, `site-packages/`, `dist/`, `build/`,
+    `out/`, `target/`, `coverage/`, `.next/`, `.nuxt/`, `.output/`, `.turbo/`,
+    `__pycache__/`, `fixtures/`, `__fixtures__/`, `testdata/`, `test-data/`,
+    `__snapshots__/`, `__mocks__/`, `examples/` or `example/` ever prompts. **The trade-off is deliberate:** a genuine
     migration or secret file that lives under one of those paths goes
     unguarded. Spurious prompts are the failure mode that gets a gate like this
     switched off, and this is a protocol backstop rather than a security
