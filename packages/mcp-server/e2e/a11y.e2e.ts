@@ -131,7 +131,11 @@ test.beforeAll(async () => {
         // or comment — the seed must exercise the token families for the scans
         // to mean anything. Both the dark and light session scans select this
         // artifact and wait for shiki's colored spans before analyzing.
-        findings: [{ category: "Security", title: "F1", detail: "d", significance: "high", evidence: [{ filePath: "src/x.ts", lineStart: 1, lineEnd: 2, snippet: 'const label = "cache me"; // pick a cache\nexport function pick(n: number) { return n ?? 42; }', explanation: "why" }] }],
+        // R4 P-A — the finding carries a `concept` so the ledger-aware
+        // ConceptBadge (the new R4 surface) mounts under the axe net + reaches
+        // the export in BOTH themes (the round-13 fixture ratchet: seed the
+        // newest surfaces, not just last release's).
+        findings: [{ category: "Security", title: "F1", detail: "d", significance: "high", concept: { name: "parameterized queries", oneLineExplanation: "bind values, never concatenate them into SQL" }, evidence: [{ filePath: "src/x.ts", lineStart: 1, lineEnd: 2, snippet: 'const label = "cache me"; // pick a cache\nexport function pick(n: number) { return n ?? 42; }', explanation: "why" }] }],
         // #164 — open-question SECTIONS (the redesign, round 2: no disclosure
         // — the composer is always visible). Two questions feed the
         // openQuestionSections() helper below: the dark + light session tests
@@ -242,6 +246,10 @@ test.beforeAll(async () => {
         // (✓ ok / ↻ changes) and the derived "Send back" action for real.
         reviewState: { "auth/middleware.ts": "reviewed", "auth/session.ts": "needs_changes" },
         reviewReasons: { "auth/session.ts": "Keep the sliding-window bump on the login path too — OAuth callbacks skip this middleware." },
+        // R4 P-B — a changeset-level visual ("the shape of what this PR
+        // touches") so the ArtifactVisuals block mounts above the file rail
+        // under the axe net in both themes.
+        visuals: [{ id: "vis_cs_shape", kind: "file_map", title: "The shape", files: [{ path: "auth/middleware.ts", change: "modify" }, { path: "auth/session.ts", change: "modify" }] }],
       },
     }),
   }).then((r) => { if (!r.ok) throw new Error(`seed changeset failed: ${r.status}`); });
@@ -471,6 +479,13 @@ test.beforeAll(async () => {
         ],
         relatedArtifactIds: ["cs_explainer_ref"],
         suggestedQuestions: ["Where does the session get created in the first place?"],
+        // R4 P-B — a diagram visual so the shared ArtifactVisuals block (the
+        // round-13 headline: previously stripped on explainers) mounts under the
+        // axe net + reaches the export. R4 P-C — an `unknowns` entry so the
+        // above-the-fold "What I'm not sure about" list + its one-click Ask
+        // affordance are axe-covered too.
+        visuals: [{ id: "vis_auth_seq", kind: "diagram", title: "Request path", source: "sequenceDiagram; Client->>API: GET /me\n  API->>Store: getAndTouch(sid)" }],
+        unknowns: ["I couldn't tell whether the CLI login path is covered — I didn't read cli/init.ts"],
       },
     }),
   }).then((r) => { if (!r.ok) throw new Error(`seed explainer failed: ${r.status}`); });

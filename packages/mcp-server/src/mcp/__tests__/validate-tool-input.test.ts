@@ -315,6 +315,103 @@ describe("Tool-input validation at the write boundary", () => {
     const content = store.getArtifacts()[0].content as { visuals?: Array<{ id: string; source?: string }> };
     expect(content.visuals?.[0]).toMatchObject({ id: "flow", source: "sequenceDiagram; Client->>API: login" });
   });
+
+  // --- R4 (#284) — the mental-model fields at the write boundary --------------
+
+  it("R4 P-A — present_findings PERSISTS a finding's `concept` (the ledger-badge hook)", async () => {
+    const { isError } = await call("present_findings", {
+      summary: "s",
+      findings: [{
+        category: "security", detail: "raw SQL string interpolation", significance: "high",
+        concept: { name: "parameterized queries", oneLineExplanation: "bind values, never concatenate them into SQL" },
+      }],
+    });
+    expect(isError).toBeFalsy();
+    const content = store.getArtifacts()[0].content as { findings: Array<{ concept?: { name: string; oneLineExplanation?: string } }> };
+    expect(content.findings[0].concept).toMatchObject({ name: "parameterized queries", oneLineExplanation: "bind values, never concatenate them into SQL" });
+  });
+
+  it("R4 P-A — an empty-name `concept` on a finding is REJECTED loudly (empty concept pollutes the ledger)", async () => {
+    const { text, isError } = await call("present_findings", {
+      summary: "s",
+      findings: [{ category: "x", detail: "y", significance: "low", concept: { name: "" } }],
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("INPUT_VALIDATION_FAILED");
+    expect(text).toMatch(/concept/);
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("R4 P-B — present_findings PERSISTS `visuals` (research was concept/diagram-blind before)", async () => {
+    const { isError } = await call("present_findings", {
+      summary: "s",
+      findings: [{ category: "architecture", detail: "d", significance: "medium" }],
+      visuals: [{ id: "sys", kind: "diagram", title: "The system", source: "graph TD; A-->B" }],
+    });
+    expect(isError).toBeFalsy();
+    const content = store.getArtifacts()[0].content as { visuals?: Array<{ id: string; source?: string }> };
+    expect(content.visuals?.[0]).toMatchObject({ id: "sys", source: "graph TD; A-->B" });
+  });
+
+  it("R4 P-B — present_explainer PERSISTS `visuals` end-to-end (the round-13 headline: 'draw me the shape')", async () => {
+    const { isError } = await call("present_explainer", {
+      title: "How auth works here",
+      overview: "A walk of the request path, top to bottom.",
+      sections: [{ heading: "1. The cookie is read", body: "requireSession pulls the session id." }],
+      visuals: [{ id: "seq", kind: "diagram", title: "Request path", source: "sequenceDiagram; Client->>API: GET /me" }],
+    });
+    expect(isError).toBeFalsy();
+    const content = store.getArtifacts()[0].content as { visuals?: Array<{ id: string; source?: string }> };
+    expect(content.visuals?.[0]).toMatchObject({ id: "seq", source: "sequenceDiagram; Client->>API: GET /me" });
+  });
+
+  it("R4 P-B — a MALFORMED explainer visual errors LOUDLY at the boundary (never a silent drop)", async () => {
+    const { text, isError } = await call("present_explainer", {
+      title: "How auth works here",
+      overview: "A walk of the request path.",
+      sections: [{ heading: "1. Step", body: "b" }],
+      // `visuals` is a bare string, not an array of visual objects.
+      visuals: "please draw the request path as a diagram",
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("INPUT_VALIDATION_FAILED");
+    expect(text).toMatch(/visuals/);
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("R4 P-C — present_explainer PERSISTS `unknowns` (the artifact can finally admit uncertainty)", async () => {
+    const { isError } = await call("present_explainer", {
+      title: "How auth works here",
+      overview: "A walk of the request path.",
+      sections: [{ heading: "1. Step", body: "b" }],
+      unknowns: ["I couldn't tell whether the CLI path is covered — I didn't read cli/init.ts"],
+    });
+    expect(isError).toBeFalsy();
+    const content = store.getArtifacts()[0].content as { unknowns?: string[] };
+    expect(content.unknowns).toEqual(["I couldn't tell whether the CLI path is covered — I didn't read cli/init.ts"]);
+  });
+
+  it("R4 P-B — present_debrief PERSISTS `visuals`", async () => {
+    const { isError } = await call("present_debrief", {
+      title: "Debrief",
+      summary: "We shipped the rate limiter. Here's the shape of it.",
+      visuals: [{ id: "shape", kind: "diagram", source: "graph LR; req-->limiter-->route" }],
+    });
+    expect(isError).toBeFalsy();
+    const content = store.getArtifacts()[0].content as { visuals?: Array<{ id: string; source?: string }> };
+    expect(content.visuals?.[0]).toMatchObject({ id: "shape", source: "graph LR; req-->limiter-->route" });
+  });
+
+  it("R4 P-B — present_changeset PERSISTS `visuals` ('the shape of what this PR touches')", async () => {
+    const { isError } = await call("present_changeset", {
+      title: "Move TTL refresh into middleware",
+      files: [{ path: "auth/middleware.ts", changeType: "modified", hunks: [{ lines: [{ kind: "add", content: "x", newLine: 1 }] }] }],
+      visuals: [{ id: "touch", kind: "file_map", files: [{ path: "auth/middleware.ts", change: "modify" }] }],
+    });
+    expect(isError).toBeFalsy();
+    const content = store.getArtifacts()[0].content as { visuals?: Array<{ id: string; files?: Array<{ path: string }> }> };
+    expect(content.visuals?.[0]?.files?.[0]).toMatchObject({ path: "auth/middleware.ts" });
+  });
 });
 
 // ---------------------------------------------------------------------------

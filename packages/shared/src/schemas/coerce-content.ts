@@ -119,6 +119,13 @@ function coerceFinding(v: unknown): Finding {
   // is what guarantees only the two legal values ever land on disk.
   const audience = optOneOf(f.audience, ["internal", "postable"] as const);
   if (audience) out.audience = audience;
+  // R4 P-A (#284) — `concept` MUST survive coercion. ResearchArtifact renders a
+  // ledger-aware ConceptBadge from it, and a field dropped here is the feature
+  // silently gone (the round-13 class: the badge just never appears). Reuse the
+  // shared coerceConcept — empty-name concepts drop to undefined (matches the
+  // schema's `.min(1)`), so a coerce round-trip is stable.
+  const concept = coerceConcept(f.concept);
+  if (concept) out.concept = concept;
   return out;
 }
 
@@ -129,6 +136,10 @@ export function coerceResearchContent(raw: unknown): ResearchContent {
     findings: arr(c.findings).map(coerceFinding),
   };
   if (Array.isArray(c.openQuestions)) out.openQuestions = strArr(c.openQuestions);
+  // R4 P-B (#284) — visuals must survive schema→store→render. coerceVisual is
+  // hoisted (function declaration), so calling it here (before its definition
+  // below) is fine.
+  if (Array.isArray(c.visuals)) out.visuals = c.visuals.map((v, i) => coerceVisual(v, `visual_${i}`));
   return out;
 }
 
@@ -491,6 +502,9 @@ export function coerceChangesetContent(raw: unknown): ChangesetContent {
   if (c.reviewIntent === "local" || c.reviewIntent === "external") out.reviewIntent = c.reviewIntent;
   const source = coerceChangesetSource(c.source);
   if (source) out.source = source;
+  // R4 P-B (#284) — changeset-level visuals ("the shape of what this PR
+  // touches"); preserve them through the coercer or the diagram is silently gone.
+  if (Array.isArray(c.visuals)) out.visuals = c.visuals.map((v, i) => coerceVisual(v, `visual_${i}`));
   return out;
 }
 
@@ -553,6 +567,8 @@ export function coerceDebriefContent(raw: unknown): DebriefContent {
   if (Array.isArray(c.needsYourEyes)) out.needsYourEyes = c.needsYourEyes.map(coerceDebriefReviewItem);
   if (Array.isArray(c.deferred)) out.deferred = c.deferred.map(coerceDebriefDeferred);
   if (Array.isArray(c.openQuestions)) out.openQuestions = strArr(c.openQuestions);
+  // R4 P-B (#284) — visuals framing the debrief; preserve through the coercer.
+  if (Array.isArray(c.visuals)) out.visuals = c.visuals.map((v, i) => coerceVisual(v, `visual_${i}`));
   return out;
 }
 
@@ -582,6 +598,11 @@ export function coerceExplainerContent(raw: unknown): ExplainerContent {
   };
   if (Array.isArray(c.relatedArtifactIds)) out.relatedArtifactIds = strArr(c.relatedArtifactIds);
   if (Array.isArray(c.suggestedQuestions)) out.suggestedQuestions = strArr(c.suggestedQuestions);
+  // R4 P-B (#284) — the explainer's visuals (the round-13 headline: "draw me the
+  // shape" was impossible because these were stripped). Preserve them.
+  if (Array.isArray(c.visuals)) out.visuals = c.visuals.map((v, i) => coerceVisual(v, `visual_${i}`));
+  // R4 P-C (#284) — the honest-gaps list. Strings only (strArr drops junk).
+  if (Array.isArray(c.unknowns)) out.unknowns = strArr(c.unknowns);
   return out;
 }
 
