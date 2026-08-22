@@ -65,11 +65,13 @@ const HINT_BUDGET_CHARS = 1500;
 // backstop, the carve-out) is pinned independently by guidance-flip-drift.test.ts;
 // this budget governs SIZE, that test governs CONTENT — the two are orthogonal.
 //
-// Measured at install: PROTOCOL_PREAMBLE is 6,545 chars and the assembled
-// vanilla hint (header + preamble, supervised/rich, no memory/guardrails/seeds)
-// is 6,878. The ceiling sits ~320 chars above that — enough for a small honest
-// clarification, tight enough that another wave of paragraph accretion trips
-// here. (The round-13 census cited ~8,135; that figure counts the source
+// Measured after S1 (round-14, the field-pull cues): PROTOCOL_PREAMBLE is 6,784
+// chars and the assembled vanilla hint (header + preamble, supervised/rich, no
+// memory/guardrails/seeds) is ~7,117. The ceiling sits only ~16 chars above the
+// preamble's own 6,800 sub-cap and ~83 above the assembled hint — the headroom
+// is now TIGHT (S1 spent most of it routing the agent to concept/visuals/
+// unknowns), so any further preamble prose must trim redundancy elsewhere to
+// stay under. (The round-13 census cited ~8,135; that figure counts the source
 // comments and the per-dial blocks, not the emitted PROTOCOL_PREAMBLE string.)
 export const VANILLA_FIRST_CALL_BUDGET_CHARS = 7200;
 // EE1 — dedicated cap for the user-policy tier (seeds). Pre-EE1, seeds
@@ -114,14 +116,14 @@ export const PROTOCOL_PREAMBLE = [
   // the taxonomy instead of quietly overriding it.
   "Happy path, in order — this is the ESCALATED arc in full. Steps tagged [ESCALATED ONLY] are the pre-work gates the TRIVIAL and LOW-RISK-FEATURE classes skip; everything else applies at every class:",
   "  1. recall (mode='any', query='<the concept you're about to propose>') — check prior stances/decisions before proposing. mode='any' REQUIRES a query; to browse the whole ledger instead, call mode='philosophy' with an empty query.",
-  "  2. present_findings — [ESCALATED ONLY] after researching; structured Evidence (filePath, lineStart, lineEnd, snippet), not plain-text bullets.",
+  "  2. present_findings — [ESCALATED ONLY] after researching; structured Evidence (filePath, lineStart, lineEnd, snippet), not plain-text bullets. Name each finding's `concept` — the preferred place to name a pattern.",
   "  3. check_feedback — poll in a loop (~30s; on WAITING, call again). Don't ask in the terminal.",
   "  4. present_options — each choice as its OWN card (2-4 options + a `concept`); stakes='high' for hard-to-reverse calls (schema/auth/infra). Never bury or interleave a decision inside a plan (skips the pros/cons review; the ledger never learns your pick).",
   "  5. present_spec and/or present_plan — [ESCALATED ONLY] for small multi-file work (one changeset, no architectural decision beyond the options card) present just ONE: spec when the WHAT needs agreement, plan when the HOW/sequence does. Stack BOTH (spec before the plan) only for genuinely large features. LEAD WITH A VISUAL, not prose: attach `visuals[]` (stable `id` + `kind`) — 'diagram' (Mermaid: flowchart=architecture, erDiagram=schema, sequenceDiagram=flow; quote labels with punctuation like ()#: and use `<br/>` not `\\n`); 'file_map' (create/modify/delete set); 'annotated_code' (real `code`+`filePath`, line-anchored `annotations[]` at the exact lines changing and why); 'prototype' (sandboxed `html`). Each visual is its own commentable surface.",
-  "  6. Present code as it lands — the DEFAULT is a batched present_changeset at each feature boundary (per-file diffs + review state). present_code_change is the EXCEPTION — a single-file surgical change, or when the human asks first; and when that single-file, no-decision fix IS the whole task, it self-summarizes and closes it (fold the what-changed-and-why into its reasoning — no separate debrief). Don't stream a log_reasoning card per step — name concepts in the debrief.",
+  "  6. Present code as it lands — the DEFAULT is a batched present_changeset at each feature boundary (per-file diffs + review state). present_code_change is the EXCEPTION — a single-file surgical change, or when the human asks first; and when that single-file, no-decision fix IS the whole task, it self-summarizes and closes it (fold the what-changed-and-why into its reasoning — no separate debrief). Don't stream a log_reasoning card per step — name the concept on the finding; a `visuals[]` diagram on the changeset/debrief shows the blast radius.",
   "  7. present_debrief — END every feature/autonomous run with exactly ONE (carve-out: a single-file, no-decision surgical fix closes with its own self-summarizing present_code_change instead): what changed + why, the decisions you made WITHOUT the human, what needs their eyes, what you deferred, an ask-anything thread — the primary comprehension surface. Put the full story IN it, never 'details in chat'.",
   "  8. check_feedback again — let your pair review in the UI.",
-  "Explaining how existing code WORKS (onboarding, 'how does auth work here?', a spike), not reporting problems or digesting a change? Use present_explainer — a read-only walk-through: overview + sections[] anchored to real Evidence + an ask-anything thread. Not present_findings (problems) or present_debrief (a change you made).",
+  "Explaining how existing code WORKS (onboarding, 'how does auth work here?', a spike), not reporting problems or digesting a change? Use present_explainer — a read-only walk-through: overview + sections[] anchored to real Evidence + an ask-anything thread. Not present_findings (problems) or present_debrief (a change you made). Attach `visuals[]` (a diagram transfers best) and `unknowns[]` — the gaps you couldn't check.",
   "REVISING a plan/spec/decision you already presented? Call revise_artifact (mode='supersede') with its id + new content — don't re-post a fresh present_*. Re-posting orphans the thread; superseding links versions with a clean before/after diff.",
   "Pull the full protocol from deeppairing://onboarding. present_* refuse proposals matching a past rejected approach.",
 ].join("\n");

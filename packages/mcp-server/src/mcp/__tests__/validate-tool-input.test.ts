@@ -1220,3 +1220,77 @@ describe("#220 M1.4 — per-option recommendation is optional", () => {
     expect(store.getArtifacts()).toHaveLength(1);
   });
 });
+
+describe("S1 — field-name near-miss aliases (the vocab-split the dogfood hit)", () => {
+  it("present_debrief ACCEPTS a section spelled `heading` (explainer's word) and stores canonical `title`", async () => {
+    // The dogfood's exact reject: switching from an explainer to a debrief, the
+    // agent carried `heading` onto a debrief section and got a hard schema fail.
+    const { isError } = await call("present_debrief", {
+      title: "Debrief — tags feature",
+      summary: "We added tag support across the CLI and store.",
+      sections: [{ heading: "The store change", body: "tags persist alongside items" }],
+    });
+    expect(isError).toBeFalsy();
+    const content = store.getArtifacts()[0].content as { sections?: Array<{ title?: string; heading?: string }> };
+    expect(content.sections?.[0].title).toBe("The store change");
+    // …and the alias key does not leak through as an extra field.
+    expect(content.sections?.[0].heading).toBeUndefined();
+  });
+
+  it("present_explainer ACCEPTS a section spelled `title` (debrief's word) and stores canonical `heading`", async () => {
+    const { isError } = await call("present_explainer", {
+      title: "How tagging works",
+      overview: "A short walk of the tag read/write path, top to bottom.",
+      sections: [{ title: "Where tags are read", body: "the loader pulls them off the row" }],
+    });
+    expect(isError).toBeFalsy();
+    const content = store.getArtifacts()[0].content as {
+      title?: string;
+      sections?: Array<{ heading?: string; title?: string }>;
+    };
+    // The artifact-level title is a SEPARATE top-level field — untouched.
+    expect(content.title).toBe("How tagging works");
+    expect(content.sections?.[0].heading).toBe("Where tags are read");
+    expect(content.sections?.[0].title).toBeUndefined();
+  });
+
+  it("present_options ACCEPTS `question` (the natural word) and stores canonical `context`", async () => {
+    const { isError } = await call("present_options", {
+      title: "Which storage?",
+      question: "Where should tags live?",
+      options: [
+        { id: "a", title: "Column", description: "x", pros: ["p"], cons: ["c"], effort: "low", risk: "low" },
+        { id: "b", title: "Join table", description: "y", pros: ["p"], cons: ["c"], effort: "low", risk: "low" },
+      ],
+    });
+    expect(isError).toBeFalsy();
+    const content = store.getArtifacts()[0].content as { context?: string };
+    expect(content.context).toBe("Where should tags live?");
+  });
+
+  it("a REAL canonical value is never overwritten by the alias (both present → canonical wins)", async () => {
+    const { isError } = await call("present_options", {
+      title: "Which storage?",
+      context: "the real background",
+      question: "a stray synonym that must not win",
+      options: [
+        { id: "a", title: "Column", description: "x", pros: ["p"], cons: ["c"], effort: "low", risk: "low" },
+        { id: "b", title: "Join table", description: "y", pros: ["p"], cons: ["c"], effort: "low", risk: "low" },
+      ],
+    });
+    expect(isError).toBeFalsy();
+    const content = store.getArtifacts()[0].content as { context?: string };
+    expect(content.context).toBe("the real background");
+  });
+
+  it("the canonical spelling still works byte-identically (no regression for the taught word)", async () => {
+    const { isError } = await call("present_debrief", {
+      title: "Debrief",
+      summary: "s",
+      sections: [{ title: "canonical section", body: "b" }],
+    });
+    expect(isError).toBeFalsy();
+    const content = store.getArtifacts()[0].content as { sections?: Array<{ title?: string }> };
+    expect(content.sections?.[0].title).toBe("canonical section");
+  });
+});

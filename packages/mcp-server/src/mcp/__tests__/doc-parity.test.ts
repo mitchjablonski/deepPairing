@@ -200,10 +200,68 @@ describe("S4 — behavioral-claim parity (README ↔ export default)", () => {
     expect(README()).toMatch(/diffs by default/i);
   });
 
-  // FOLLOW-UP (S1 seam): a description↔schema required-field parity test —
-  // assert each tool description's stated "required" fields match the Zod
-  // schema's required set (present_debrief / changeset title-required drift).
-  // Deliberately NOT added here: it is coupled to S1's in-flight edits to the
-  // tool descriptions; adding it on this branch would gate S4's CI on S1's
-  // uncommitted work. Land it with (or after) S1.
+  // S1 seam RESOLVED: the description↔schema required-field parity test lands in
+  // the "S1 — description ↔ schema required-field parity" describe block below,
+  // now that S1's required-field description fixes (present_debrief/changeset
+  // title-required) are in this branch.
+});
+
+// S1 (round-14) — DESCRIPTION ↔ SCHEMA required-field parity (the seam S4
+// deferred). The dogfood found the tool descriptions LYING about required
+// fields: present_debrief said "only `summary` is required" while `title` (and
+// each section's `title`) is required; present_changeset never stated `title` is
+// required. S1 rewrote both descriptions to be TRUE. This instrument keeps them
+// true against the schema, in the same enumeration→claim spirit as the R5/S4
+// nets above: parse the fields a description CLAIMS are required out of its
+// "… is/are REQUIRED" clause, and assert that set EQUALS the advertised schema's
+// own top-level required set. Over-claim (naming an optional field required) and
+// under-claim (a schema-required field the description forgot) both fail here.
+describe("S1 — description ↔ schema required-field parity (the seam S4 deferred)", () => {
+  const flatten = (s: string) => s.replace(/\s+/g, " ");
+
+  /** The fields a description CLAIMS are required — the backticked tokens inside
+   *  its "… is/are REQUIRED" clause (the clause can't cross a sentence period). */
+  function declaredRequired(desc: string): string[] {
+    const m = flatten(desc).match(/([^.]*?)\s+(?:is|are) REQUIRED/);
+    if (!m) return [];
+    return [...new Set([...m[1]!.matchAll(/`([a-zA-Z_]+)`/g)].map((t) => t[1]!))].sort();
+  }
+
+  /** The advertised schema's own top-level required set (from ListTools). */
+  async function toolsWithSchema(): Promise<Record<string, { description: string; required: string[] }>> {
+    const { server } = createMcpServer(store, () => {}, 4000);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    const client = new Client({ name: "doc-parity-required", version: "1.0" });
+    await client.connect(clientTransport);
+    const { tools } = await client.listTools();
+    await client.close();
+    const out: Record<string, { description: string; required: string[] }> = {};
+    for (const t of tools) {
+      const req = Array.isArray((t.inputSchema as { required?: unknown })?.required)
+        ? ((t.inputSchema as { required: string[] }).required).slice().sort()
+        : [];
+      out[t.name] = { description: t.description ?? "", required: req };
+    }
+    return out;
+  }
+
+  for (const tool of ["present_debrief", "present_changeset"] as const) {
+    it(`${tool}'s description names exactly the schema's required fields`, async () => {
+      const info = (await toolsWithSchema())[tool]!;
+      // The description must actually make a required-field claim…
+      const declared = declaredRequired(info.description);
+      expect(declared.length, `${tool} description makes no "… REQUIRED" claim`).toBeGreaterThan(0);
+      // …and every field it claims required is genuinely required in the schema,
+      // and no schema-required field is left unclaimed. Set equality both ways.
+      expect(declared, `${tool}: declared=${declared} vs schema.required=${info.required}`).toEqual(info.required);
+    });
+  }
+
+  it("present_debrief no longer carries the false 'only summary is required' claim", async () => {
+    const info = (await toolsWithSchema())["present_debrief"]!;
+    expect(info.description).not.toContain("only `summary` is required");
+    // title is genuinely required in the schema (the drift the dogfood found).
+    expect(info.required).toContain("title");
+  });
 });

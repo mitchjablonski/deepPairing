@@ -31,8 +31,13 @@ is me-as-reviewer, scope is this PR — not a tour of the whole repo. Say what
 problem the author was solving, name the mechanism they chose, and be explicit
 about what it touches that isn't in the diff (callers, migrations, config,
 anything with a runtime coupling). Anchor sections to real code with `evidence`
-so I can click through. If the PR description already explains it well, say so
-and be short — don't pad.
+so I can click through. **Lead with a `visuals` diagram** — a sequence or flow
+diagram of how the pieces fit orients me faster than any paragraph. **And record
+what you could NOT verify in `unknowns`** — the file you didn't get to, the
+caller you couldn't trace, the config you couldn't see. The gaps you couldn't
+check are the sentence I need most before I sign off; don't bury them or omit
+them. If the PR description already explains it well, say so and be short — don't
+pad.
 
 **(c) Put the diff on the surface — `present_changeset` with
 `reviewIntent: "external"`.** One changeset file per changed file, hunks
@@ -41,6 +46,10 @@ straight from `gh pr diff`. Also pass:
 ```
 source: { kind: "github-pr", number: <N>, url: <url>, headRef: <head>, baseRef: <base>, author: <login> }
 ```
+
+**Draw the blast radius on it** — attach a `visuals` diagram or `file_map` of
+the shape of what this PR touches, including what it reaches *outside* the diff,
+rendered above the file rail so I see the scope before diving into hunks.
 
 This is what lets me *read* it properly: comment on any hunk, hit "Explain this"
 on the confusing one, and get a per-file sense of where the weight is. Because
@@ -53,8 +62,11 @@ something to say about their code.
 structured `evidence` (`filePath`, `lineStart`, `lineEnd`, `snippet`,
 `explanation`) and a `severity` (info / low / medium / high / critical).
 Anchoring matters twice over here: those coordinates are what become inline
-comments on the PR later, so a finding without them can't be posted. Name the
-concept via `log_reasoning` so I learn the pattern, not just this instance.
+comments on the PR later, so a finding without them can't be posted. **Name the
+pattern in each finding's own `concept` field** — not a separate `log_reasoning`
+card. Findings are the surface I actually read, and the concept renders as a
+ledger-aware badge I click to see recurrence and my own stance, so I learn the
+pattern, not just this instance.
 
 Include what's *good* too, briefly. A review that only lists objections is a
 worse review, and I have to send this to a colleague.
