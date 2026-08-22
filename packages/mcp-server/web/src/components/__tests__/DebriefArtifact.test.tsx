@@ -48,9 +48,9 @@ describe("DebriefArtifact — renders every block", () => {
 
     // Summary narrative.
     expect(screen.getByText(/moved the sliding-window session-TTL refresh/i)).toBeInTheDocument();
-    // O2 (#230) — "The walk" is collapsed behind a disclosure; expand it to read
-    // its sections (the summary + needs-your-eyes stay above, always visible).
-    await userEvent.click(screen.getByTestId("debrief-walk-toggle"));
+    // S2 (round-14) — deep-by-default: "The walk" now renders EXPANDED, so its
+    // sections are on screen with no click (the O2 toggle still collapses it — see
+    // the progressive-disclosure describe below).
     // Section title + body.
     expect(screen.getByText("Centralized the TTL refresh in middleware")).toBeInTheDocument();
     // Concept (ConceptBadge) — the learning lever.
@@ -167,10 +167,9 @@ describe("DebriefArtifact — #207 (I2) write-axis lock", () => {
     useArtifactStore.getState().reset();
     useArtifactStore.getState().addArtifact(retracted);
     render(<DebriefArtifact artifact={retracted} />);
-    // Expand the walk (O2 disclosure) so the section grain-affordance count below
-    // is measured with the sections in the DOM — a retracted walk still renders
-    // its sections read-only (no grain composers), which is the point.
-    await userEvent.click(screen.getByTestId("debrief-walk-toggle"));
+    // S2 — the walk is EXPANDED by default, so the section grain-affordance count
+    // below is measured with the sections in the DOM without a click — a retracted
+    // walk still renders its sections read-only (no grain composers), the point.
 
     // Ask-anything composer gone (its labelled textarea is withheld read-only).
     expect(screen.queryByLabelText("Comment on this debrief")).not.toBeInTheDocument();
@@ -227,12 +226,50 @@ describe("DebriefArtifact — #207 (I2) write-axis lock", () => {
 });
 
 describe("DebriefArtifact — #193 E2 lifecycle", () => {
-  it("renders 'Needs your eyes' ABOVE the narrative (what must I look at, first)", () => {
+  it("S2 — comprehension-first DOM order: summary → walk → decisions → needs-your-eyes", () => {
     render(<DebriefArtifact artifact={debriefArtifact} />);
-    const eyes = screen.getByText("Needs your eyes");
+    // The round-14 flip: a reader understanding-to-learn gets story → deep walk →
+    // the calls I made → then the action layer, NOT an action queue first.
     const summary = screen.getByText("What we built");
-    // Node order: needs-your-eyes precedes the summary block in the DOM.
-    expect(eyes.compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const walkToggle = screen.getByTestId("debrief-walk-toggle");
+    const decisions = screen.getByText("Calls I made on my own");
+    const eyes = screen.getByText("Needs your eyes");
+    const FOLLOWING = Node.DOCUMENT_POSITION_FOLLOWING;
+    expect(summary.compareDocumentPosition(walkToggle) & FOLLOWING).toBeTruthy();
+    expect(walkToggle.compareDocumentPosition(decisions) & FOLLOWING).toBeTruthy();
+    expect(decisions.compareDocumentPosition(eyes) & FOLLOWING).toBeTruthy();
+  });
+
+  it("S2 — diagrams sit between the summary and the walk (story → picture → deep walk)", () => {
+    const withVisual = {
+      ...debriefArtifact,
+      content: {
+        ...(debriefArtifact.content as Record<string, unknown>),
+        visuals: [{ id: "v1", kind: "mermaid", title: "The shape", spec: "flowchart LR\n a-->b" }],
+      },
+    };
+    render(<DebriefArtifact artifact={withVisual} />);
+    const summary = screen.getByText("What we built");
+    const visuals = screen.getByText(/^Visuals \(1\)$/);
+    const walkToggle = screen.getByTestId("debrief-walk-toggle");
+    const FOLLOWING = Node.DOCUMENT_POSITION_FOLLOWING;
+    expect(summary.compareDocumentPosition(visuals) & FOLLOWING).toBeTruthy();
+    expect(visuals.compareDocumentPosition(walkToggle) & FOLLOWING).toBeTruthy();
+  });
+
+  it("S2 — the act-flow stays served: a top jump-pill targets the needs-your-eyes section", () => {
+    render(<DebriefArtifact artifact={debriefArtifact} />);
+    const jump = screen.getByTestId("debrief-needs-eyes-jump");
+    // The pill sits at the TOP (before the summary), so a reader reviewing-to-act
+    // reaches the relocated action layer in one click.
+    const summary = screen.getByText("What we built");
+    expect(jump.compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // It jumps to the needs-your-eyes SECTION (which carries that id), so the
+    // relocated lane is genuinely reachable, not just present.
+    const eyesHeading = screen.getByText("Needs your eyes");
+    const section = eyesHeading.closest("section")!;
+    expect(section.id).toBe("debrief-needs-your-eyes-section");
+    expect(jump).toHaveAttribute("aria-label", expect.stringMatching(/need your eyes/i));
   });
 
   it("Reject is de-fanged — one step, no 'name the pattern' field, no concept sent", async () => {
@@ -258,29 +295,34 @@ describe("DebriefArtifact — #193 E2 lifecycle", () => {
   });
 });
 
-describe("DebriefArtifact — progressive disclosure of 'The walk' (O2 #230)", () => {
-  it("collapses the walk by default; needs-your-eyes + summary stay above the fold", () => {
+describe("DebriefArtifact — progressive disclosure of 'The walk' (O2 #230 / S2 default flip)", () => {
+  it("S2 — EXPANDS the walk by default (deep-by-default); the toggle offers to hide it", () => {
     render(<DebriefArtifact artifact={debriefArtifact} />);
-    // The disclosure toggle is present, labelled with the section count…
+    // S2 (round-14) flips the DEFAULT to open — a reader understanding-to-learn
+    // gets the deep walk above the fold without a click.
     const toggle = screen.getByTestId("debrief-walk-toggle");
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-    expect(toggle).toHaveTextContent(/Full walk-through \(2 sections\)/i);
-    // …but the walk's section content is NOT rendered while collapsed.
-    expect(screen.queryByText("Centralized the TTL refresh in middleware")).not.toBeInTheDocument();
-    // The 30-second view stays visible: needs-your-eyes + summary.
-    expect(screen.getByText("Needs your eyes")).toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    // The section content is on screen…
+    expect(screen.getByText("Centralized the TTL refresh in middleware")).toBeInTheDocument();
+    // …and the toggle now offers to HIDE it (the skimmer's escape hatch survives).
+    expect(toggle).toHaveTextContent(/Hide the walk \(2 sections\)/i);
+    // The story stays above the walk: summary present.
     expect(screen.getByText("What we built")).toBeInTheDocument();
   });
 
-  it("expands on click and collapses again", async () => {
+  it("S2 — the O2 toggle STILL fully collapses the walk (the skimmer is served)", async () => {
     render(<DebriefArtifact artifact={debriefArtifact} />);
     const toggle = screen.getByTestId("debrief-walk-toggle");
-    await userEvent.click(toggle);
+    // Starts expanded (S2 default)…
     expect(toggle).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByText("Centralized the TTL refresh in middleware")).toBeInTheDocument();
+    // …one click collapses it — the O2 progressive-disclosure affordance is intact.
     await userEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText("Centralized the TTL refresh in middleware")).not.toBeInTheDocument();
+    // …and clicking again re-expands.
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Centralized the TTL refresh in middleware")).toBeInTheDocument();
   });
 
   it("a section carrying a live comment thread starts EXPANDED (unresolved comment never hidden)", () => {
@@ -380,19 +422,19 @@ describe("DebriefArtifact — the disclosure reads as a CONTROL, not a heading (
     expect(toggle.className).toContain("cursor-pointer");
     expect(toggle.className).toMatch(/\bborder\b/);
     expect(toggle.className).toMatch(/hover:bg-/);
-    // The chevron rotates with the expanded state (collapsed = not rotated).
+    // The chevron rotates with the expanded state. S2 — expanded by default, so
+    // it starts rotated; collapsing removes the rotation.
     const chevron = toggle.querySelector("[aria-hidden='true']")!;
     expect(chevron.className).toContain("transition-transform");
-    expect(chevron.className).not.toContain("rotate-90");
+    expect(chevron.className).toContain("rotate-90");
   });
 
-  it("keeps the 'has your comments' hint when collapsed over a live thread", () => {
+  it("S2 — the default label reads as the deep-by-default HIDE action, sentence case", () => {
     useArtifactStore.getState().reset();
     useArtifactStore.getState().addArtifact(debriefArtifact);
     render(<DebriefArtifact artifact={debriefArtifact} />);
-    // No thread in the base fixture → no hint; the hint's own test lives in the
-    // auto-expand case above. Here we only pin that the label is a plain,
-    // sentence-case action string.
-    expect(screen.getByTestId("debrief-walk-toggle")).toHaveTextContent(/Show the full walk-through/i);
+    // Expanded by default → the control offers to hide, in plain sentence case
+    // (never the uppercase heading mimicry P2 killed).
+    expect(screen.getByTestId("debrief-walk-toggle")).toHaveTextContent(/Hide the walk/i);
   });
 });

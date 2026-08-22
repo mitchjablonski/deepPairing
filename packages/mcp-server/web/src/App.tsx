@@ -463,7 +463,11 @@ function App() {
           the ONLY landmark in the whole app, so the shell header, the session
           bar and every banner strip sat outside the landmark structure
           entirely. Element swap only — classes and layout are untouched. */}
-      <header className="flex items-center justify-between px-4 py-2 border-b border-border-default bg-surface-secondary">
+      {/* S2 (round-14) — chrome trim. ~50% of the first screen was chrome before
+          a line of code, so the always-present bands (header, session nav, the
+          waiting banner) each shed vertical padding WITHOUT losing function —
+          every control, count and jump affordance stays. */}
+      <header className="flex items-center justify-between px-4 py-1.5 border-b border-border-default bg-surface-secondary">
         <div className="flex items-center gap-3 min-w-0">
           <h1 className="text-sm font-bold shrink-0">deepPairing</h1>
           <ProjectSwitcher />
@@ -601,7 +605,7 @@ function App() {
           app is showing is navigation; as a bare div it was nameless and
           landmark-less. <nav aria-label> makes it jumpable and distinguishable
           from the Artifacts nav in the rail. */}
-      <nav aria-label="Sessions" className="flex items-center gap-1 px-3 py-1.5 border-b border-border-default bg-surface-secondary overflow-x-auto shrink-0">
+      <nav aria-label="Sessions" className="flex items-center gap-1 px-3 py-1 border-b border-border-default bg-surface-secondary overflow-x-auto shrink-0">
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" className="shrink-0 text-text-muted mr-0.5">
           <rect x="1" y="2" width="4" height="3.5" rx="0.5" />
           <rect x="7" y="2" width="4" height="3.5" rx="0.5" />

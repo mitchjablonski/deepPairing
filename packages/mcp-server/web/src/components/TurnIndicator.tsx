@@ -257,13 +257,23 @@ export function TurnIndicator({
           <span className="w-1.5 h-1.5 rounded-full bg-accent-amber animate-pulse shrink-0" />
           {/* M4 — PendingBanner (right below the header) lists these items with
               jump + dismiss chips, so when it's visible the header pill drops
-              its verbatim "1 finding, 1 decision" breakdown to a count summary;
-              the full text stays in the title + aria-label.
-              J2b (#212) — likewise when the banner is SUPPRESSED because the one
-              pending draft is the card in view: the visible card is the detail,
-              so the pill stays a count summary rather than restating it. */}
+              its verbatim "1 finding, 1 decision" breakdown; the full text stays
+              in the title + aria-label.
+              S2 (round-14) — the pending TOTAL is the ONE authoritative signal,
+              and the visible banner OWNS it ("N items waiting for you" + chips +
+              jump). So when the banner is up the header pill drops the number
+              entirely — a bare "Your turn" jump affordance — instead of
+              restating the same count one band above the banner (the round-14
+              "pending count drawn 4×" dedup). J2b (#212) — when the banner is
+              SUPPRESSED because the one pending draft is the card in view, the
+              banner is gone, so the header becomes the count source: it keeps
+              "N for you". */}
           <span className="truncate">
-            {pendingBannerVisible || pendingCardInView ? `${totalPending} for you` : `Your turn — ${parts.join(", ")}`}
+            {pendingBannerVisible
+              ? "Your turn"
+              : pendingCardInView
+                ? `${totalPending} for you`
+                : `Your turn — ${parts.join(", ")}`}
           </span>
         </button>
         {questionsBadge}

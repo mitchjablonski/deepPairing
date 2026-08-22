@@ -890,3 +890,37 @@ describe("ChangesetArtifact — the 'Explain this' affordance (O2 #230, P2 truth
     expect(screen.getByTestId("walk-me-through-file")).toBeInTheDocument();
   });
 });
+
+/**
+ * S2 (round-14 "THE DEFAULTS") — the WHAT-in-prose. `ChangesetContent.summary`
+ * has existed since #171 but was rendered NOWHERE (verified: content-types.ts:512
+ * holds it; the renderer showed it nowhere). It now renders as a purpose line at
+ * the top, above the file list — and only when present.
+ */
+describe("ChangesetArtifact — the summary purpose line (S2)", () => {
+  it("renders content.summary as a prose line above the file list", () => {
+    const art = changeset({ summary: "Centralize the sliding-window refresh so every route inherits it." });
+    seed(art);
+    render(<ChangesetArtifact artifact={art} />);
+    const summary = screen.getByTestId("changeset-summary");
+    expect(summary).toHaveTextContent("Centralize the sliding-window refresh so every route inherits it.");
+    // It sits ABOVE the file rail (the "Changed files" heading) — the reader
+    // learns what the change is FOR before scanning files.
+    const filesHeading = screen.getByText("Changed files");
+    expect(summary.compareDocumentPosition(filesHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("renders nothing when summary is absent (today's layout unchanged)", () => {
+    const art = changeset({ summary: undefined });
+    seed(art);
+    render(<ChangesetArtifact artifact={art} />);
+    expect(screen.queryByTestId("changeset-summary")).not.toBeInTheDocument();
+  });
+
+  it("renders nothing for a blank/whitespace-only summary", () => {
+    const art = changeset({ summary: "   " });
+    seed(art);
+    render(<ChangesetArtifact artifact={art} />);
+    expect(screen.queryByTestId("changeset-summary")).not.toBeInTheDocument();
+  });
+});

@@ -154,21 +154,23 @@ for (const theme of ["dark", "light"] as const) {
     await context.close();
   });
 
-  test(`O2 debrief — collapsed then expanded walk (${theme})`, async ({ browser }) => {
+  test(`O2 debrief — expanded by default then collapsible walk (${theme})`, async ({ browser }) => {
     const { context, page } = await newPage(browser, theme);
     await page.goto(`${baseURL}/?session=o2`);
     await page.click('[data-artifact-item="debrief_o2"]');
     await page.waitForSelector('[data-artifact-id="debrief_o2"]', { timeout: 15000 });
-    // Collapsed by default — the toggle is present, the walk sections are not.
+    // S2 (round-14) — EXPANDED by default: the toggle is present AND the walk
+    // sections are already on screen (deep-by-default).
     const toggle = page.getByTestId("debrief-walk-toggle");
     await toggle.waitFor({ timeout: 15000 });
+    await page.getByText("Centralized the TTL refresh in middleware").waitFor({ timeout: 15000 });
     await page.getByTestId("debrief-needs-eyes").first().waitFor({ timeout: 15000 });
     await page.locator("[data-walk-grain]").first().waitFor({ timeout: 15000 });
-    await shot(page, `debrief-collapsed-${theme}.png`);
-    // Expand it.
-    await toggle.click();
-    await page.getByText("Centralized the TTL refresh in middleware").waitFor({ timeout: 15000 });
     await shot(page, `debrief-expanded-${theme}.png`);
+    // The O2 toggle still collapses it (the skimmer's escape hatch survives).
+    await toggle.click();
+    await page.getByText("Centralized the TTL refresh in middleware").waitFor({ state: "hidden", timeout: 15000 });
+    await shot(page, `debrief-collapsed-${theme}.png`);
     await context.close();
   });
 }
