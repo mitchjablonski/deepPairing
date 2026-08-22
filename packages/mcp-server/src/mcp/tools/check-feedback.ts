@@ -3,7 +3,7 @@ import { PENDING_DRAFT_TYPES, WAITING_DRAFT_TYPES, ACKNOWLEDGE_ONLY_DRAFT_TYPES 
 import type { Artifact, Request } from "@deeppairing/shared";
 import { deliverComment, commentSecretNote, requestSecretNote, requestScopeNote } from "./check-feedback-delivery.js";
 import { SERVER_VERSION } from "../../version.js";
-import { collectUnansweredQuestions, describeRequestIntent, isClosedArtifactStatus } from "@deeppairing/shared";
+import { collectUnansweredQuestions, describeRequestIntent, isClosedArtifactStatus, coerceChangesetContent } from "@deeppairing/shared";
 import { getGlobalStore } from "../../store/global-store.js";
 import { composeOptionRejectReason, recordRejectedOption } from "../../store/rejected-option-recorder.js";
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
@@ -88,6 +88,45 @@ function changesetReviewField(a: Artifact): {
   } = { reviewState, filesReviewed, filesTotal: files.length };
   if (Object.keys(reviewReasons).length > 0) out.reviewReasons = reviewReasons;
   return out;
+}
+
+/**
+ * R5 (round-13 MED) — an EXTERNAL changeset's provenance, surfaced on the
+ * pending-artifact entry so a structured-only client can tell "your pair is
+ * reviewing a colleague's PR" (nothing to apply) apart from "your pair is
+ * reviewing YOUR change" (wait for the landing gate). Returns `{ reviewIntent:
+ * "external", pr? }` ONLY for a changeset whose content.reviewIntent === "external"
+ * (Q6 #232); `{}` for every other artifact, so the healthy / local-changeset
+ * pending entry stays byte-for-byte unchanged (same only-when-present spread
+ * discipline every other structured key uses). Never carries diff text.
+ */
+function changesetExternalField(a: Artifact): {
+  reviewIntent?: "external";
+  pr?: { number?: number; url?: string };
+} {
+  if (a.type !== "changeset") return {};
+  const content = coerceChangesetContent(a.content);
+  if (content.reviewIntent !== "external") return {};
+  const pr: { number?: number; url?: string } = {};
+  if (typeof content.source?.number === "number") pr.number = content.source.number;
+  if (typeof content.source?.url === "string") pr.url = content.source.url;
+  return { reviewIntent: "external", ...(Object.keys(pr).length > 0 ? { pr } : {}) };
+}
+
+/** R5 — a human-readable "your pair is reviewing PR #N" label for the pending
+ *  external changeset(s). Dedupes PR numbers off content.source; degrades to a
+ *  generic phrase when the agent didn't supply a number. */
+function externalReviewLabel(changesets: Artifact[]): string {
+  const numbers = Array.from(
+    new Set(
+      changesets
+        .map((a) => coerceChangesetContent(a.content).source?.number)
+        .filter((n): n is number => typeof n === "number"),
+    ),
+  );
+  if (numbers.length === 1) return `Your pair is reviewing PR #${numbers[0]}`;
+  if (numbers.length > 1) return `Your pair is reviewing PRs ${numbers.map((n) => `#${n}`).join(", ")}`;
+  return "Your pair is reviewing a colleague's PR";
 }
 
 /**
@@ -444,6 +483,15 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   const structuredDecisions: Array<Record<string, unknown>> = [];
   // #172 — suggested edits the agent owes a response on.
   const structuredSuggestions: Array<Record<string, unknown>> = [];
+  // R5 (round-13 MED) — the COMMENT-ONLY lane. Fresh human comments (not
+  // questions, not suggestions) delivered this poll on an artifact whose verdict
+  // already STANDS (closed/approved). The suggested-action assembly reads this to
+  // avoid the self-contradiction the round-13 audit re-found: a comment on an
+  // APPROVED artifact ("this needs a jitter, redo before merge") printed verbatim
+  // beside "You may proceed with implementation." Derived from the SAME delivered
+  // set the "Human comments (N)" prose block renders, so the payload agrees with
+  // itself (Q3's invariant).
+  const commentOnlyOnClosed: Array<{ id: string; artifactId: string }> = [];
 
   // Unacknowledged comments (reuse the single drain snapshot fetched above)
   const sessionMessages = allComments.filter((c) => c.target.artifactId === "__session__");
@@ -500,6 +548,18 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
         case "comment":
           otherLines.push(delivery.prose);
           structuredComments.push(delivery.structured);
+          // R5 — a fresh HUMAN comment on an artifact whose verdict already
+          // stands (closed/approved) is the comment-only lane's input. It must
+          // stop "you may proceed" from riding alongside it. isClosedArtifactStatus
+          // includes `approved`, so a follow-up on an approved changeset counts;
+          // an unknown/absent target status (undefined) does not (unknown ids stay
+          // live). Agent-authored replies never contribute (author gate).
+          if (c.author === "human") {
+            const targetStatus = artsForTargets.find((x) => x.id === c.target.artifactId)?.status;
+            if (isClosedArtifactStatus(targetStatus)) {
+              commentOnlyOnClosed.push({ id: c.id, artifactId: c.target.artifactId });
+            }
+          }
           break;
       }
     }
@@ -1071,7 +1131,22 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   } else if (pendingArts.some((a) => a.type === "code_change")) {
     baseClause = "Wait for the code change review before applying the edit.";
   } else if (pendingArts.some((a) => a.type === "changeset")) {
-    baseClause = "Wait for the changeset review — the human is reviewing each file — before applying the edits.";
+    // R5 (round-13 MED) — external-review-aware. When EVERY pending changeset is
+    // a colleague's PR on the review surface (Q6 reviewIntent:"external"),
+    // "applying the edits" is wrong: the human is REVIEWING someone else's code,
+    // nothing here is on their disk, and the agent must NOT edit/revise/"fix"
+    // these files. The mode itself forbids it (server.ts:320) — the suggested
+    // action was contradicting the tool contract. A MIXED set (some external,
+    // some local) keeps the local "wait to apply" posture, since local edits
+    // genuinely await the landing gate.
+    const pendingChangesets = pendingArts.filter((a) => a.type === "changeset");
+    const externalPending = pendingChangesets.filter(
+      (a) => coerceChangesetContent(a.content).reviewIntent === "external",
+    );
+    baseClause =
+      externalPending.length > 0 && externalPending.length === pendingChangesets.length
+        ? `${externalReviewLabel(externalPending)} — this is someone else's code, so there is nothing to apply. Wait for their per-file verdict; do NOT edit, revise, or "fix" these files. The session's output is a posted review (post_pr_review), not a code change.`
+        : "Wait for the changeset review — the human is reviewing each file — before applying the edits.";
   } else if (pendingArts.some((a) => a.type === "decision")) {
     baseClause = "Wait for decision selection before proceeding.";
   } else if (pendingArts.some((a) => a.type === "plan")) {
@@ -1148,6 +1223,18 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   // (it only fires with pendingArts, which already set a base clause).
   if (newComments.length > 0 && pendingArts.length > 0) {
     advisoryClauses.push("The human also left a comment — read it below and consider replying (answer_question or a reply comment), then call check_feedback again.");
+  } else if (commentOnlyOnClosed.length > 0) {
+    // R5 (round-13 MED) — the COMMENT-ONLY lane. With nothing pending, a fresh
+    // human comment on an already-approved artifact used to fall through to the
+    // "You may proceed" fallback — printed beside the comment itself. It is a
+    // BLOCKING clause so `hasBlocking` flips and "proceed" is suppressed: the
+    // payload can no longer show the remark and "ship it" in one breath. Framed
+    // as follow-up input (matching the #187 guidance below), NOT a reopened
+    // review — the verdict stands, but "proceed" must not.
+    const n = commentOnlyOnClosed.length;
+    blockingClauses.push(
+      `The human left ${n === 1 ? "a comment" : `${n} comments`} on an already-approved artifact (see "Human comments" below) — read ${n === 1 ? "it" : "them"} and address as new input (answer_question, or present a revision if it genuinely warrants one) before treating this as done. This is follow-up feedback, not a reopened review.`,
+    );
   }
 
   // H1 — debrief-owed reinforcement. Heuristic (documented): nag ONLY when the
@@ -1343,6 +1430,11 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
       // concentrate). Spread only for changesets that carry state, so every
       // other pending entry stays byte-for-byte unchanged.
       ...changesetReviewField(a),
+      // R5 (round-13 MED) — external-review provenance (reviewIntent + PR),
+      // spread only for a Q6 external changeset so a local/other pending entry
+      // stays byte-for-byte unchanged. Lets a structured-only client render the
+      // "reviewing a colleague's PR — nothing to apply" posture.
+      ...changesetExternalField(a),
     })),
     questions: structuredQuestions,
     comments: structuredComments,

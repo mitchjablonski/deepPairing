@@ -46,7 +46,24 @@ export const CHECK_FEEDBACK_GOLDENS: Record<string, CheckFeedbackGolden> = {
   // obligation and its own negation in one sentence. "You may proceed" is now a
   // FALLBACK emitted only when no lane owes anything, so the trailing clause is
   // gone and the question stands alone.
-  followup_on_approved: { prose: "c9ccdce587617acbb657522779842ddd7870441b1d2dff06e240272b98082bd1", struct: "6a2e15c5b446c698ce5d7c65b501615ce3b9e003da405b96e965fe7e18b2ec66" },
+  // R5 (round-13 MED) — DELIBERATE re-pin, PROSE only (busy poll → the struct
+  // carries no `suggestedAction`, so it is byte-identical). The COMMENT-ONLY lane
+  // now contributes a clause: this scenario's plain follow-up comment on the
+  // APPROVED changeset ("one more thought on the sliding window") used to be
+  // reported in the body but IGNORED by the suggested action, which named only
+  // the question. The suggested action now names BOTH — the question leads, the
+  // comment-only clause follows — so the payload and the body agree.
+  followup_on_approved: { prose: "9fbbb9b0e76432bb0451d251e355bd68e2e00b9bc36e8aaa56b068494438da8a", struct: "6a2e15c5b446c698ce5d7c65b501615ce3b9e003da405b96e965fe7e18b2ec66" },
+  // R5 (round-13 MED) — NEW pin: the comment-only lane's exact repro. A fresh
+  // human comment on an APPROVED artifact with nothing else pending. The
+  // suggested action is the non-proceed comment-only clause; "You may proceed"
+  // is absent (busy poll → the struct carries no suggestedAction).
+  comment_only_on_approved: { prose: "70459bc5bb6320dee25a52e36219dcfa414fad2e9415f81a5b640f8bd77ac8df", struct: "b651cca8e4543ab5cec7ffdd8e0367004a3c45dd1631e8e103eb22ea697babf4" },
+  // R5 (round-13 MED) — NEW pin: external-review-aware base clause + structured
+  // provenance. A pending changeset with reviewIntent:"external" says "your pair
+  // is reviewing PR #4213; nothing to apply" and the pendingArtifacts entry
+  // carries {reviewIntent:"external", pr:{number,url}}.
+  external_changeset_pending: { prose: "854c781728cb031dc057317142b0f42877458c36e8b68703b71d895720bc7444", struct: "d00eaca03d3c55f424a24a551bf175ea5367dabe3231075f9f863afc4da02ef2" },
   // #209 (J1) — DELIBERATE re-pin. Resolving a decision now advances its
   // backing artifact draft→approved store-side (the human PICKED an option =
   // approval), so check_feedback honestly reports the status change alongside

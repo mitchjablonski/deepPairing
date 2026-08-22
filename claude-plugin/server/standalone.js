@@ -27942,7 +27942,7 @@ var PROTOCOL_PREAMBLE = [
   // trigger, the silence condition, the dedup, and the never-denies contract are
   // all pinned by guidance-flip-drift.test.ts against the shipped hook.
   "  BACKSTOP for that last class: if you Write/Edit a guardrail path (migrations/ and friends, CI config like .github/workflows/ or .gitlab-ci.yml, infra like Dockerfile* / compose files / terraform / k8s, and secret files like .env* \u2014 matched at ANY depth, so packages/api/migrations/ in a monorepo counts, while a file merely NAMED like one, e.g. src/migrations.js, does not; vendored/generated/fixture/example trees such as node_modules/, dist/, coverage/, fixtures/ and examples/ are excluded entirely) while NO findings, options, spec, or plan is live in this project's recent sessions, the preflight hook pauses the edit and asks your pair to confirm, naming the class and the path. It stays SILENT once that pre-work arc is in flight \u2014 a spec you JUST presented counts immediately, you don't have to wait for review. It asks at most once per guardrail class per 30 minutes (per FILE for migrations and secrets, where each file is separately irreversible), it never blocks the edit outright, and it fails open (a missing, unreadable, or unparseable session store stays silent). If your pair DECLINES, that decline is the instruction: the hook is never told their answer, so it cannot re-ask for 30 minutes \u2014 do the pre-work before touching that path again rather than retrying the same edit. It is a safety net for a misclassified edit \u2014 not a substitute for classifying correctly.",
-  "THE FLOOR IS ABSOLUTE at every class: code is presented for review before it lands \u2014 the present_changeset is that surface, always. The low-risk-feature license trims PRE-WORK ceremony, never the review of the code and never the debrief.",
+  "THE FLOOR IS ABSOLUTE at every class: code is presented for review via present_changeset before it lands. The low-risk-feature license trims PRE-WORK ceremony only \u2014 never the code review, never the debrief.",
   // P1 (round-11) — this list is the ESCALATED arc written out in full. Pre-P1 it
   // read as THE default sequence, contradicting the three-class block directly
   // above it (which licenses trivial/low-risk work to skip the pre-work gates).
@@ -32598,6 +32598,25 @@ function changesetReviewField(a) {
   if (Object.keys(reviewReasons).length > 0) out.reviewReasons = reviewReasons;
   return out;
 }
+function changesetExternalField(a) {
+  if (a.type !== "changeset") return {};
+  const content = coerceChangesetContent(a.content);
+  if (content.reviewIntent !== "external") return {};
+  const pr = {};
+  if (typeof content.source?.number === "number") pr.number = content.source.number;
+  if (typeof content.source?.url === "string") pr.url = content.source.url;
+  return { reviewIntent: "external", ...Object.keys(pr).length > 0 ? { pr } : {} };
+}
+function externalReviewLabel(changesets) {
+  const numbers = Array.from(
+    new Set(
+      changesets.map((a) => coerceChangesetContent(a.content).source?.number).filter((n) => typeof n === "number")
+    )
+  );
+  if (numbers.length === 1) return `Your pair is reviewing PR #${numbers[0]}`;
+  if (numbers.length > 1) return `Your pair is reviewing PRs ${numbers.map((n) => `#${n}`).join(", ")}`;
+  return "Your pair is reviewing a colleague's PR";
+}
 function deriveTransition(a) {
   const history = a.statusHistory;
   if (!Array.isArray(history) || history.length === 0) {
@@ -32770,6 +32789,7 @@ async function handleCheckFeedback(ctx, args) {
   const structuredComments = [];
   const structuredDecisions = [];
   const structuredSuggestions = [];
+  const commentOnlyOnClosed = [];
   const sessionMessages = allComments.filter((c) => c.target.artifactId === "__session__");
   const artifactComments = allComments.filter((c) => c.target.artifactId !== "__session__");
   if (sessionMessages.length > 0) {
@@ -32810,6 +32830,12 @@ Adjust your approach based on this guidance.`);
         case "comment":
           otherLines.push(delivery.prose);
           structuredComments.push(delivery.structured);
+          if (c.author === "human") {
+            const targetStatus = artsForTargets.find((x) => x.id === c.target.artifactId)?.status;
+            if (isClosedArtifactStatus(targetStatus)) {
+              commentOnlyOnClosed.push({ id: c.id, artifactId: c.target.artifactId });
+            }
+          }
           break;
       }
     }
@@ -33085,7 +33111,11 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
   } else if (pendingArts.some((a) => a.type === "code_change")) {
     baseClause = "Wait for the code change review before applying the edit.";
   } else if (pendingArts.some((a) => a.type === "changeset")) {
-    baseClause = "Wait for the changeset review \u2014 the human is reviewing each file \u2014 before applying the edits.";
+    const pendingChangesets = pendingArts.filter((a) => a.type === "changeset");
+    const externalPending = pendingChangesets.filter(
+      (a) => coerceChangesetContent(a.content).reviewIntent === "external"
+    );
+    baseClause = externalPending.length > 0 && externalPending.length === pendingChangesets.length ? `${externalReviewLabel(externalPending)} \u2014 this is someone else's code, so there is nothing to apply. Wait for their per-file verdict; do NOT edit, revise, or "fix" these files. The session's output is a posted review (post_pr_review), not a code change.` : "Wait for the changeset review \u2014 the human is reviewing each file \u2014 before applying the edits.";
   } else if (pendingArts.some((a) => a.type === "decision")) {
     baseClause = "Wait for decision selection before proceeding.";
   } else if (pendingArts.some((a) => a.type === "plan")) {
@@ -33128,6 +33158,11 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
   }
   if (newComments.length > 0 && pendingArts.length > 0) {
     advisoryClauses.push("The human also left a comment \u2014 read it below and consider replying (answer_question or a reply comment), then call check_feedback again.");
+  } else if (commentOnlyOnClosed.length > 0) {
+    const n = commentOnlyOnClosed.length;
+    blockingClauses.push(
+      `The human left ${n === 1 ? "a comment" : `${n} comments`} on an already-approved artifact (see "Human comments" below) \u2014 read ${n === 1 ? "it" : "them"} and address as new input (answer_question, or present a revision if it genuinely warrants one) before treating this as done. This is follow-up feedback, not a reopened review.`
+    );
   }
   const shapeOwesDebrief = sessionOwesDebrief(allArtifacts);
   const hasUnansweredQuestions = fullState ? collectUnansweredQuestions(fullState.comments ?? []).length > 0 : openQuestionCount > 0;
@@ -33211,7 +33246,12 @@ Suggested action: ${suggestedAction}`);
       // see which files the human has reviewed/skipped (and where your comments
       // concentrate). Spread only for changesets that carry state, so every
       // other pending entry stays byte-for-byte unchanged.
-      ...changesetReviewField(a)
+      ...changesetReviewField(a),
+      // R5 (round-13 MED) — external-review provenance (reviewIntent + PR),
+      // spread only for a Q6 external changeset so a local/other pending entry
+      // stays byte-for-byte unchanged. Lets a structured-only client render the
+      // "reviewing a colleague's PR — nothing to apply" posture.
+      ...changesetExternalField(a)
     })),
     questions: structuredQuestions,
     comments: structuredComments,

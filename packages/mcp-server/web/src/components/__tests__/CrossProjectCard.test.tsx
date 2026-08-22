@@ -160,11 +160,13 @@ describe("CrossProjectCard (Q2)", () => {
     publishingOff();
     render(<CrossProjectCard />);
     firstReject();
-    const body = screen.getByText(/Publishing writes three things/i);
-    // What actually lands in the ledger.
+    const body = screen.getByText(/Publishing writes four things/i);
+    // What actually lands in the ledger — R5 (round-13): reconciled the count to
+    // FOUR, since the ledger instance also records the session id (global-store.ts).
     expect(body).toHaveTextContent(/the stance itself/i);
     expect(body).toHaveTextContent(/the reason you typed/i);
     expect(body).toHaveTextContent(/this project’s folder name/i);
+    expect(body).toHaveTextContent(/an internal session id/i);
     // The caveat the mechanism cannot remove: a stance is the human's wording.
     expect(body).toHaveTextContent(/if you name\s+a file in it, that name travels with it/i);
     // Item 13 — off is not a retraction.

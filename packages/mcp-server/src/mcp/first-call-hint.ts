@@ -52,6 +52,26 @@ function humanizeAge(ms: number): string {
  * string. No closure references back into server.ts.
  */
 const HINT_BUDGET_CHARS = 1500;
+// R5 (round-13 MED) — THE AGENT-CONTEXT BUDGET OWNER. Round 5's felt-weight
+// discipline was applied to the human's per-poll payload but never to the
+// agent's first-call context: PROTOCOL_PREAMBLE grew +111% across four releases
+// (round-13 census) as pure paragraph accretion, and it is EXEMPT from
+// HINT_BUDGET_CHARS (it rides the uncapped prefix — see contextualCap below), so
+// nothing bounded it. This ceiling is that bound: a test asserts the assembled
+// VANILLA first-call hint (headerLine + PROTOCOL_PREAMBLE, the supervised/rich
+// default every session pays) stays under it, so the preamble can't silently
+// regrow. Raise it ONLY with a deliberate, reviewed reason — never to make a red
+// test green. Every load-bearing rule (the floor, the three risk classes, the
+// backstop, the carve-out) is pinned independently by guidance-flip-drift.test.ts;
+// this budget governs SIZE, that test governs CONTENT — the two are orthogonal.
+//
+// Measured at install: PROTOCOL_PREAMBLE is 6,545 chars and the assembled
+// vanilla hint (header + preamble, supervised/rich, no memory/guardrails/seeds)
+// is 6,878. The ceiling sits ~320 chars above that — enough for a small honest
+// clarification, tight enough that another wave of paragraph accretion trips
+// here. (The round-13 census cited ~8,135; that figure counts the source
+// comments and the per-dial blocks, not the emitted PROTOCOL_PREAMBLE string.)
+export const VANILLA_FIRST_CALL_BUDGET_CHARS = 7200;
 // EE1 — dedicated cap for the user-policy tier (seeds). Pre-EE1, seeds
 // were appended to blockingParts which was concatenated unconditionally,
 // blowing past HINT_BUDGET_CHARS for a vanilla session and outranking
@@ -65,7 +85,7 @@ const POLICY_BUDGET_CHARS = 600;
 // plus the two rules that keep the dialogue in the companion UI. It's
 // fixed-size and essential, so it rides in the uncapped prefix and is NOT
 // charged against the contextual budget below. Faithful to SKILL.md.
-const PROTOCOL_PREAMBLE = [
+export const PROTOCOL_PREAMBLE = [
   "[deepPairing protocol] You're pairing — route findings/options/plans/answers through the MCP tools into the companion UI as artifacts, not plain terminal text.",
   "Voice: write TO your pair in second person (\"which fits?\"), not ABOUT them (\"User asked X\") — a conversation, not an audit log.",
   // L2 — close-the-loop headline: the two highest-value rules, up top where they
@@ -86,7 +106,7 @@ const PROTOCOL_PREAMBLE = [
   // trigger, the silence condition, the dedup, and the never-denies contract are
   // all pinned by guidance-flip-drift.test.ts against the shipped hook.
   "  BACKSTOP for that last class: if you Write/Edit a guardrail path (migrations/ and friends, CI config like .github/workflows/ or .gitlab-ci.yml, infra like Dockerfile* / compose files / terraform / k8s, and secret files like .env* — matched at ANY depth, so packages/api/migrations/ in a monorepo counts, while a file merely NAMED like one, e.g. src/migrations.js, does not; vendored/generated/fixture/example trees such as node_modules/, dist/, coverage/, fixtures/ and examples/ are excluded entirely) while NO findings, options, spec, or plan is live in this project's recent sessions, the preflight hook pauses the edit and asks your pair to confirm, naming the class and the path. It stays SILENT once that pre-work arc is in flight — a spec you JUST presented counts immediately, you don't have to wait for review. It asks at most once per guardrail class per 30 minutes (per FILE for migrations and secrets, where each file is separately irreversible), it never blocks the edit outright, and it fails open (a missing, unreadable, or unparseable session store stays silent). If your pair DECLINES, that decline is the instruction: the hook is never told their answer, so it cannot re-ask for 30 minutes — do the pre-work before touching that path again rather than retrying the same edit. It is a safety net for a misclassified edit — not a substitute for classifying correctly.",
-  "THE FLOOR IS ABSOLUTE at every class: code is presented for review before it lands — the present_changeset is that surface, always. The low-risk-feature license trims PRE-WORK ceremony, never the review of the code and never the debrief.",
+  "THE FLOOR IS ABSOLUTE at every class: code is presented for review via present_changeset before it lands. The low-risk-feature license trims PRE-WORK ceremony only — never the code review, never the debrief.",
   // P1 (round-11) — this list is the ESCALATED arc written out in full. Pre-P1 it
   // read as THE default sequence, contradicting the three-class block directly
   // above it (which licenses trivial/low-risk work to skip the pre-work gates).

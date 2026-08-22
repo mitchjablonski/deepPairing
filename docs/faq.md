@@ -55,9 +55,11 @@ level. We don't have a defensible number for how often the gate
 fires after that — it depends entirely on how many stances you've
 recorded and how broadly you worded them — so we're not going to
 quote one. What we can say is what the mechanism does: it fires
-only on a lexical match against a concept *you* named, every fire
-is one click from an override, and each override narrows the next
-match.
+only on a lexical match against a concept *you* named, and every
+fire is one click from an override — which retires that stance
+wholesale (see above), so the concept won't gate here again until
+you reject it anew. It does not narrow the stance to "everywhere
+except this path."
 
 ## "Why MCP and not a Cursor / Continue / editor extension?"
 

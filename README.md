@@ -69,6 +69,17 @@ it in your own project: **[install in Claude Code ↓](#install-in-claude-code)*
   comments, and decisions in order.
 - **Multi-project switcher.** One companion UI aggregates every project you're
   pairing on, with a "waiting on you" badge when it's your move.
+- **Share the session.** Export any session as a single self-contained web page
+  — the narrative, decisions, and debrief, no code or diffs — from the companion
+  UI's **Share as page (.html)** menu or `/deeppairing:share`. It travels to
+  teammates who never install deepPairing, and it warns before it ships anything
+  that looks like a secret.
+  <!-- user-field: a `docs/assets/share-page.png` crop of the rendered page header would go here -->
+- **Review a PR in tandem.** `/deeppairing:review-pr <N>` pulls a colleague's
+  GitHub PR onto the review surface — the diff per hunk, walk-me-through, and
+  findings anchored to real lines. Your verdict stays local until you send it:
+  `/deeppairing:post-pr` posts it back as a PR review only when you say so.
+  <!-- user-field: a short GIF of a PR landing on the review surface would go here -->
 - **Keyboard-first review.** Navigate artifacts, comment, pick options, and ask
   "why" without leaving the keyboard.
 
