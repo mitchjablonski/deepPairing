@@ -5,7 +5,7 @@
     "url": "https://github.com/mitchjablonski"
   },
   "metadata": {
-    "description": "Tell Claude Code \"no\" once and it sticks — it refuses to re-propose the approach and quotes your reason back.",
+    "description": "Block Claude Code from re-proposing an approach you rejected — it refuses and quotes your reason back — then pair on findings, options, and plans in a rich local review UI.",
     "version": "0.1.0"
   },
   "plugins": [

@@ -59,6 +59,59 @@ describe("F8 — obsolete work is dropped from the POST paths", () => {
   });
 });
 
+// S4 (round-14) — the last outbound-leak asymmetry. R1 scrubbed the session id
+// off the posted body and R3 scrubs the share page's prose, but the finding
+// BODIES posted to a stranger's PR were verbatim. An absolute path the agent
+// typed into a detail/explanation/recommendation named the reviewer's disk to a
+// third party. scrubProse now runs over each body field on the outbound path.
+describe("S4 — outbound finding bodies are scrubbed of machine paths", () => {
+  const leaky = () =>
+    art("research", "Path leak audit", {
+      summary: "Live.",
+      findings: [
+        {
+          category: "Sec",
+          title: "Token stored in /home/mitch/dev/app/secrets.json",
+          detail: "The path /home/mitch/dev/app/secrets.json is read at boot.",
+          significance: "high",
+          impact: "Anyone with C:\\Users\\mitch\\dev\\app can read it.",
+          recommendation: "Move it out of /home/mitch/dev/app entirely.",
+          evidence: [
+            {
+              filePath: "app/boot.ts",
+              lineStart: 12,
+              snippet: "read()",
+              explanation: "Traced through /home/mitch/dev/app/boot.ts.",
+            },
+          ],
+        },
+      ],
+    });
+
+  it("a /home/<user> or C:\\Users path in a finding body is collapsed in the posted body", () => {
+    const payload = buildGitHubReviewPayload(state([leaky()]) as any);
+    const serialized = JSON.stringify(payload);
+    // The leak is gone from every outbound field...
+    expect(serialized).not.toContain("/home/mitch");
+    expect(serialized).not.toContain("C:\\\\Users\\\\mitch");
+    expect(serialized).not.toContain("Users\\\\mitch");
+    // ...but the finding still posts, collapsed to the home marker.
+    expect(payload.comments.length).toBe(1);
+    expect(serialized).toContain("~/");
+  });
+
+  it("ordinary finding prose is posted byte-identical (scrub is a no-op for it)", () => {
+    const clean = art("research", "Clean audit", {
+      summary: "Live.",
+      findings: [{ category: "Perf", title: "N+1 in the list view", detail: "The loop issues one query per row.", significance: "high", evidence: [{ filePath: "list.ts", lineStart: 4, snippet: "q()" }] }],
+    });
+    const payload = buildGitHubReviewPayload(state([clean]) as any);
+    const serialized = JSON.stringify(payload);
+    expect(serialized).toContain("The loop issues one query per row.");
+    expect(serialized).toContain("N+1 in the list view");
+  });
+});
+
 describe("F8 — never-approved work is marked, not presented as shipped", () => {
   it("a draft plan is marked '(not approved …)' in pr-description", () => {
     const draftPlan = art("plan", "Rate limiter rollout", { steps: [{ description: "Add a token bucket", reasoning: "burst control" }] }, "draft");

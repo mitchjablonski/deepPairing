@@ -863,14 +863,19 @@ function diffBlock(file: ChangesetFile, includeCode: boolean, projectRoot?: stri
 // measured diagrams as the ONE comprehension instrument with proven organic
 // engagement, which makes it the worst possible thing to drop.
 //
-// THE MINIMUM HONEST FIX, deliberately chosen over server-side Mermaid
-// rendering: rendering Mermaid here means either shipping a renderer into a
-// page that promises zero external requests and no scripts, or running Mermaid
-// server-side (a headless browser in the daemon's export path). Both are real
-// projects. What ships now is the diagram's SOURCE in a labelled collapsible
-// block, plus a line saying what it is and where to see it drawn — the picture
-// is PRESENT and named instead of absent and unmentioned. R4 can upgrade the
-// diagram case in place; every other kind below is already fully rendered.
+// S4 (round-14) REVISITED whether to render Mermaid to a static inline SVG at
+// export time (the picture, not its source) — the preferred outcome. It does
+// not hold up: mermaid@11's `render()` needs a real browser DOM. Driven with
+// happy-dom (the only DOM lib in the tree) it returns an EMPTY svg — the
+// SVG-namespace serialization and zero text metrics (getBBox → 0) produce
+// nothing usable — and a faithful render needs a headless Chromium (puppeteer /
+// mermaid-cli) which is an unacceptably heavy+fragile dependency to launch
+// inside the daemon's export path on arbitrary (possibly hostile) diagram
+// source. So we keep the SOURCE — but make the framing honest and PROMINENT: a
+// line that names it as source and says exactly where to see it drawn, plus the
+// Mermaid source in a labelled block. The picture is PRESENT and named instead
+// of absent and unmentioned, and the page keeps its promise (zero requests, no
+// scripts, XSS-safe — escText escapes the source).
 function visualsBlock(visuals: unknown, ctx: RenderCtx): string {
   if (!Array.isArray(visuals) || visuals.length === 0) return "";
   const parts: string[] = [];
@@ -899,9 +904,11 @@ function visualsBlock(visuals: unknown, ctx: RenderCtx): string {
         // the annotated_code branch's redaction note.
         body = src
           ? ctx.includeCode
-            ? `<p class="visual-note">A diagram the pair drew and discussed. It is drawn in deepPairing; ` +
-              `this page carries the source it was drawn from.</p>` +
-              `<details class="visual-source"><summary>Show the diagram source (Mermaid)</summary>` +
+            ? `<p class="visual-note">A diagram the pair drew and discussed. This page runs no ` +
+              `scripts, so it can't draw the picture here — the Mermaid source it was drawn from ` +
+              `is below. Paste it into deepPairing, or any Mermaid viewer (e.g. mermaid.live), to ` +
+              `see it rendered.</p>` +
+              `<details class="visual-source" open><summary>Diagram source (Mermaid)</summary>` +
               `<pre class="code" data-language="mermaid"><code>${escText(src)}</code></pre></details>`
             : `<p class="visual-note">A diagram the pair drew and discussed. It is drawn in deepPairing.</p>` +
               `<p class="redacted">Diagram source omitted from this export.</p>`
