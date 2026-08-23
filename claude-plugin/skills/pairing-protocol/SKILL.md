@@ -169,6 +169,12 @@ one case that closes without a *separate* debrief — its self-summarizing
     leverage one — default to it any time you're describing how pieces fit.
   - `kind: "file_map"` — `files[]` ({ path, change: create|modify|delete, note })
     for a clear map of what the change touches (scope at a glance).
+  - `kind: "doc_map"` — the NON-CODE sibling of file_map: `sections[]` ({ label,
+    note, risk: low|medium|high }) mapping a document/contract/message's
+    sections or clauses, each with an optional risk chip. Reach for it to answer
+    "where in the document the key clause lives / where the risk concentrates"
+    (e.g. `{ label: "§5 — Burst limits", risk: "high", note: "undefined burst cap" }`)
+    — the WHERE-locative for docs, when you're understanding a non-code artifact.
   - `kind: "annotated_code"` — a real snippet (`code` + `filePath`, optional
     `lineStart`) with line-anchored `annotations[]` ({ line, note, kind:
     add|change|remove|context }). Reach for it when the plan hinges on *specific
@@ -179,7 +185,8 @@ one case that closes without a *separate* debrief — its self-summarizing
   - `kind: "prototype"` — self-contained HTML in `html` for a clickable
     wireframe / interactive mock (runs in a sandboxed frame; no network).
   Quick picker: **diagram** = how pieces fit · **file_map** = what's touched ·
-  **annotated_code** = the exact lines changing · **prototype** = how it feels.
+  **doc_map** = where the clauses/risk sit in a document · **annotated_code** =
+  the exact lines changing · **prototype** = how it feels.
   Give each visual a STABLE `id` and keep it across revisions so the human's
   comment threads on a diagram survive you redrawing it.
 - **`present_changeset`** — **the DEFAULT for presenting code.** When a piece of
@@ -270,6 +277,31 @@ one case that closes without a *separate* debrief — its self-summarizing
     when it's there, and link `relatedArtifactIds` from the artifact it names.
     Pass `servedRequestId` so it links back to the request and clears. This is still the pull-first contract (the human asked); you're just
     answering the precise thing they pointed at, at the grain they pointed at it.
+- **Understanding a NON-CODE thing — route through the DECISION, not a read-only
+  walk.** When the human asks you to understand a DOCUMENT, a REQUEST, a MESSAGE,
+  or a DESIGN — a contract, a spec someone sent, a PRD, a Slack thread, a
+  wireframe — the pull is the same "help me understand X faster", but the surface
+  is NOT `present_explainer`. The law is content-independent: understanding
+  without a decision dies as optional narration; understanding that rides a
+  decision the human must make gets consumed. So model the reading, don't narrate
+  it:
+  - **Each interpretation or ambiguity is a `present_options` decision.** "How
+    should we read the burst-cap clause — hard ceiling or advisory?" "Which of
+    these two things does this request actually ask for?" The fork the human must
+    resolve IS the forcing surface — it makes them engage with the text to choose.
+  - **Surface risks/gaps as `present_findings`, anchored to the passage.** A
+    finding's `evidence[]` now anchors to non-code text via a `locator`
+    ({ kind: "quote" | "heading" | "charRange" | "url", value }) with NO
+    file:line — it renders as a quoted, per-passage-commentable block, so the
+    human comments on the exact clause, not a paraphrase. (Code still uses
+    filePath + lineStart; the locator is the non-code path.)
+  - **Draw the structure as a visual** — a `doc_map` (the sections/clauses with
+    risk chips: where the risk concentrates) or a `diagram` (how the parts relate).
+  - **Close with the DECISION the human must rule on** — "which reading do we
+    adopt?", "do we accept these terms or push back on §5?" — a `present_options`
+    card that turns "I read your document" into a call they make. Do NOT end a
+    non-code understanding pass on a read-only explainer walk with no
+    call-to-action; the decision is what keeps the understanding alive.
 - **`log_reasoning`** — **sparingly.** Do NOT stream a reasoning card per step —
   that cadence got zero engagement. Concept-naming does NOT live here; it lives
   on the surfaces the human actually reads: `finding.concept` (the preferred
@@ -363,7 +395,9 @@ Run the `/deeppairing:review-pr` arc (that command carries the detail):
 
 1. **Ingest.** `gh pr view <N>` (title, body, comments, checks) and
    `gh pr diff <N>`, plus the surrounding code — most real risks live in
-   what the diff *doesn't* show.
+   what the diff *doesn't* show. The `/deeppairing:review-pr` command
+   materializes the PR head into a scratch git worktree for exactly this, so
+   you can trace callers and read the surrounding code the diff omits.
 2. **Orient FIRST — `present_explainer`.** Before any finding: what this
    PR does, how the pieces fit, what its blast radius is. Audience is the
    human as reviewer; scope is this PR, not the repo.

@@ -22864,15 +22864,41 @@ var CreateSessionResponseSchema = external_exports.object({
 });
 
 // ../shared/dist/schemas/evidence.js
+var EvidenceLocatorSchema = external_exports.object({
+  kind: external_exports.enum(["quote", "heading", "charRange", "url"]).describe("How this non-code passage is pointed at: a verbatim 'quote', a 'heading' path (e.g. '\xA75 \xB63'), a 'charRange' offset span, or a 'url' link/anchor"),
+  value: external_exports.string().min(1).describe("The anchor itself: the quoted passage, the heading path, a 'start-end' char range, or the URL/anchor text"),
+  /** kind=url: the resolvable link the anchor chip opens. */
+  href: external_exports.string().optional().describe("kind=url: the link the passage anchor opens"),
+  /** kind=charRange: the parsed offsets (value carries the display 'start-end'). */
+  charStart: external_exports.number().int().nonnegative().optional(),
+  charEnd: external_exports.number().int().nonnegative().optional()
+}).describe("Anchors this evidence to a non-code passage (doc/message/design) when there is no file:line \u2014 so it renders as a quoted, per-passage-commentable block instead of degrading to prose");
 var EvidenceSchema = external_exports.object({
-  filePath: external_exports.string(),
-  lineStart: external_exports.number().int().positive(),
-  lineEnd: external_exports.number().int().positive(),
-  snippet: external_exports.string().describe("The actual code at this location"),
+  /**
+   * U2 — OPTIONAL so a non-code passage (a pasted Slack message, a PDF with no
+   * on-disk path) can anchor via `locator` instead. Code evidence STILL passes
+   * filePath exactly as before; this only widens what is accepted, so every
+   * existing finding validates + renders byte-identical (back-compat gate).
+   */
+  filePath: external_exports.string().optional(),
+  /**
+   * U2 — OPTIONAL line grain. Kept a positive int WHEN PRESENT (the exact old
+   * constraint), but a doc/message passage has no lines: it anchors via
+   * `locator`. Absent line grain routes the renderer to the quoted-passage
+   * block; present line grain renders the unchanged line-numbered code gutter.
+   */
+  lineStart: external_exports.number().int().positive().optional(),
+  lineEnd: external_exports.number().int().positive().optional(),
+  snippet: external_exports.string().describe("The actual code \u2014 or, for a non-code passage, the excerpt \u2014 at this location"),
   context: external_exports.string().optional().describe("Surrounding code for understanding"),
   language: external_exports.string().optional().describe("Language for syntax highlighting"),
   explanation: external_exports.string().describe("Why this code is relevant"),
-  relatedPaths: external_exports.array(external_exports.string()).optional().describe("Other codebase locations affected")
+  relatedPaths: external_exports.array(external_exports.string()).optional().describe("Other codebase locations affected"),
+  /**
+   * U2 — anchor to a non-code passage when there is no file:line. Absent for
+   * every code finding (back-compat: absent === today's file:line render).
+   */
+  locator: EvidenceLocatorSchema.optional()
 });
 var EvidenceInputSchema = external_exports.union([external_exports.string(), EvidenceSchema]);
 
@@ -22997,15 +23023,21 @@ var PlanVisualAnnotationSchema = external_exports.object({
   /** Semantic tag for styling the marker; purely presentational. */
   kind: external_exports.enum(["add", "change", "remove", "context"]).optional()
 });
+var PlanVisualDocSectionSchema = external_exports.object({
+  label: external_exports.string().min(1).describe("Where in the document this is, e.g. '\xA75 \u2014 Burst limits' or 'Terms > 5.2'"),
+  note: external_exports.string().optional().describe("What the section/clause says or why it matters"),
+  risk: external_exports.enum(["low", "medium", "high"]).optional().describe("Optional risk chip concentrating WHERE the danger lives, e.g. 'high' on '\xA75 \u2014 undefined burst cap'")
+});
 var PlanVisualSchema = external_exports.object({
   /** Stable id — comments anchor to it. Keep it across revisions so a comment
    *  thread on a diagram survives the agent redrawing it. */
   id: external_exports.string().describe("Stable id \u2014 comments anchor to it; KEEP IT ACROSS REVISIONS so a comment thread on a diagram survives the agent redrawing it"),
-  kind: external_exports.enum(["diagram", "file_map", "prototype", "annotated_code"]),
+  kind: external_exports.enum(["diagram", "file_map", "doc_map", "prototype", "annotated_code"]),
   title: external_exports.string().optional(),
   caption: external_exports.string().optional(),
   source: external_exports.string().optional().describe("kind=diagram: Mermaid source"),
   files: external_exports.array(PlanVisualFileSchema).optional().describe("kind=file_map: the planned file operations"),
+  sections: external_exports.array(PlanVisualDocSectionSchema).optional().describe("kind=doc_map: the document's sections/clauses, each with an optional risk chip"),
   html: external_exports.string().optional().describe("kind=prototype: a self-contained HTML document (rendered sandboxed)"),
   code: external_exports.string().optional().describe("kind=annotated_code: the code snippet to render + annotate"),
   filePath: external_exports.string().optional().describe("kind=annotated_code: source path (drives syntax highlighting + the per-line comment anchor)"),
@@ -23918,7 +23950,7 @@ function hashStr(s) {
 }
 function visualFallbackId(o, indexFallback) {
   const kind = typeof o.kind === "string" ? o.kind : "visual";
-  const parts = [o.title, o.source, o.html, o.code, o.filePath, o.files, o.annotations];
+  const parts = [o.title, o.source, o.html, o.code, o.filePath, o.files, o.sections, o.annotations];
   const hasContent = parts.some((p) => p != null && (typeof p !== "string" || p.length > 0) && (!Array.isArray(p) || p.length > 0));
   return hasContent ? `${kind}_${hashStr(JSON.stringify(parts))}` : indexFallback;
 }
@@ -23926,7 +23958,7 @@ function coerceVisual(v, fallbackId) {
   const o = obj(v);
   const out = {
     id: str(o.id) || visualFallbackId(o, fallbackId),
-    kind: oneOf(o.kind, ["diagram", "file_map", "prototype", "annotated_code"], "diagram")
+    kind: oneOf(o.kind, ["diagram", "file_map", "doc_map", "prototype", "annotated_code"], "diagram")
   };
   if (typeof o.title === "string")
     out.title = o.title;
@@ -23946,6 +23978,17 @@ function coerceVisual(v, fallbackId) {
         file2.note = f.note;
       return file2;
     });
+  }
+  if (Array.isArray(o.sections)) {
+    out.sections = o.sections.filter(isObj).map((s) => {
+      const section = { label: str(s.label) };
+      if (typeof s.note === "string")
+        section.note = s.note;
+      const risk = optOneOf(s.risk, LMH);
+      if (risk)
+        section.risk = risk;
+      return section;
+    }).filter((s) => s.label.length > 0);
   }
   if (typeof o.code === "string")
     out.code = o.code;
@@ -28271,7 +28314,12 @@ function evidenceBlock(evidence, includeCode, projectRoot2) {
     const e = ev;
     const path20 = sanitizePath(e.filePath, projectRoot2);
     const range = e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null && e.lineEnd !== e.lineStart ? `-${e.lineEnd}` : ""}` : "";
-    const anchor = path20 ? `<p class="anchor"><code>${esc2(path20 + range)}</code></p>` : "";
+    let anchor = path20 ? `<p class="anchor"><code>${esc2(path20 + range)}</code></p>` : "";
+    if (!anchor && e.locator && typeof e.locator.value === "string" && e.locator.value.length > 0) {
+      const loc = e.locator;
+      const label = loc.kind === "url" ? loc.href && loc.href.length > 0 ? `${loc.value} (${loc.href})` : loc.value : loc.kind === "charRange" ? `chars ${loc.value}` : loc.kind === "quote" ? `\u201C${loc.value}\u201D` : loc.value;
+      anchor = `<p class="anchor"><code>${esc2(label)}</code></p>`;
+    }
     const snippet = e.snippet ? codeBlock(e.snippet, { language: e.language, maxLines: MAX_SNIPPET_LINES, includeCode }) : "";
     const explanation = e.explanation ? `<p class="evidence-note">${renderInline(e.explanation)}</p>` : "";
     parts.push(`<div class="evidence">${anchor}${snippet}${explanation}</div>`);
@@ -29303,6 +29351,19 @@ Reasoning: ${neutralizeVoice(d.response.reasoning)}`);
   }
   return sections.join("\n");
 }
+function evidenceAnchorLabel(e) {
+  if (e.filePath) {
+    return `${e.filePath}${e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null ? `-${e.lineEnd}` : ""}` : ""}`;
+  }
+  const loc = e.locator;
+  if (loc && typeof loc.value === "string" && loc.value.length > 0) {
+    if (loc.kind === "url") return loc.href && loc.href.length > 0 ? `${loc.value} (${loc.href})` : loc.value;
+    if (loc.kind === "charRange") return `chars ${loc.value}`;
+    if (loc.kind === "quote") return `\u201C${loc.value}\u201D`;
+    return loc.value;
+  }
+  return "";
+}
 function pushEvidenceLines(sections, evidence) {
   if (!Array.isArray(evidence)) return;
   for (const ev of evidence) {
@@ -29313,7 +29374,8 @@ function pushEvidenceLines(sections, evidence) {
     }
     if (!ev || typeof ev !== "object") continue;
     const e = ev;
-    if (e.filePath) sections.push(`\`${e.filePath}${e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null ? `-${e.lineEnd}` : ""}` : ""}\``);
+    const anchor = evidenceAnchorLabel(e);
+    if (anchor) sections.push(`\`${anchor}\``);
     if (e.snippet) {
       sections.push("```" + (e.language ?? ""));
       sections.push(e.snippet);
@@ -29485,7 +29547,8 @@ function formatFull(state) {
               sections.push("");
               continue;
             }
-            sections.push(`\`${ev.filePath}:${ev.lineStart}-${ev.lineEnd}\``);
+            const anchor = evidenceAnchorLabel(ev);
+            if (anchor) sections.push(`\`${anchor}\``);
             if (ev.snippet) {
               sections.push("```" + (ev.language ?? ""));
               sections.push(ev.snippet);

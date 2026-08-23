@@ -479,6 +479,49 @@ describe("formatSessionHtml — the timeline", () => {
     expect(html).toContain("The memory cost");
   });
 
+  it("U2 F3 — a doc-anchored finding renders its locator anchor on the SHARED page (escaped, XSS-safe)", () => {
+    const docState: HtmlSessionState = {
+      sessionId: "s_doc",
+      artifacts: [
+        artifact({
+          id: "art_doc",
+          type: "research",
+          title: "Contract review",
+          content: {
+            summary: "Terms risk",
+            findings: [
+              {
+                category: "risk",
+                title: "Undefined cap",
+                detail: "open ceiling",
+                significance: "high",
+                evidence: [
+                  { snippet: "the burst cap is undefined", explanation: "open", locator: { kind: "heading", value: "§5 ¶3" } },
+                  { snippet: "hostile", explanation: "y", locator: { kind: "quote", value: "<img src=x onerror=alert(1)>" } },
+                ],
+              },
+            ],
+          },
+        }),
+      ],
+      comments: [],
+      decisions: [],
+      planReviews: [],
+      sessionMemory: { rejectedApproaches: [] },
+      preflightTraces: [],
+      guardrailFires: [],
+    };
+    const html = formatSessionHtml(docState, OPTS);
+    // the locator "where" survives instead of being dropped…
+    expect(html).toContain("§5 ¶3");
+    expect(html).toContain("the burst cap is undefined");
+    // …no `undefined:undefined` from the missing file:line…
+    expect(html).not.toMatch(/undefined:undefined|undefined-undefined/);
+    // …and a hostile locator value is ESCAPED, never a live <img>.
+    expect(html).not.toContain("<img src=x onerror=alert(1)>");
+    expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+  });
+
   it("anchors comment threads where they happened", () => {
     const html = formatSessionHtml(richState(), OPTS);
     // Anchored to a finding on the research card.

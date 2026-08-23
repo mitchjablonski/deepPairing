@@ -266,17 +266,34 @@ function EvidenceChip({ evidence }: { evidence: Evidence | string }) {
       </div>
     );
   }
+  // U2 — filePath/lineStart are optional now (docs anchor via `locator`), so the
+  // label must not render `undefined:undefined`. Show the code file:line when
+  // present, else the locator "where" (§heading / char range / url / quote).
+  const loc = evidence.locator;
+  const anchorLabel = evidence.filePath
+    ? `${evidence.filePath}${evidence.lineStart != null ? `:${evidence.lineStart}${evidence.lineEnd != null && evidence.lineEnd !== evidence.lineStart ? `-${evidence.lineEnd}` : ""}` : ""}`
+    : loc && typeof loc.value === "string" && loc.value.length > 0
+      ? loc.kind === "url"
+        ? (loc.href && loc.href.length > 0 ? loc.href : loc.value)
+        : loc.kind === "charRange"
+          ? `chars ${loc.value}`
+          : loc.kind === "quote"
+            ? `“${loc.value}”`
+            : loc.value
+      : "";
   return (
     <div className="rounded border border-border-default overflow-hidden">
-      <div className="flex items-center justify-between px-2 py-1 bg-surface-elevated text-2xs">
-        <span className="font-mono text-text-secondary flex items-center gap-1.5 truncate">
-          <span className="truncate">
-            {evidence.filePath}:{evidence.lineStart}
-            {evidence.lineEnd !== evidence.lineStart ? `-${evidence.lineEnd}` : ""}
+      {anchorLabel && (
+        <div className="flex items-center justify-between px-2 py-1 bg-surface-elevated text-2xs">
+          <span className="font-mono text-text-secondary flex items-center gap-1.5 truncate">
+            <span className="truncate">{anchorLabel}</span>
+            {/* The editor link only makes sense for a real file:line. */}
+            {evidence.filePath && typeof evidence.lineStart === "number" && (
+              <OpenInEditorLink filePath={evidence.filePath} line={evidence.lineStart} />
+            )}
           </span>
-          <OpenInEditorLink filePath={evidence.filePath} line={evidence.lineStart} />
-        </span>
-      </div>
+        </div>
+      )}
       {evidence.snippet && (
         <pre className="px-2 py-1 text-2xs text-text-secondary bg-surface-primary overflow-x-auto font-mono whitespace-pre">
           {evidence.snippet}

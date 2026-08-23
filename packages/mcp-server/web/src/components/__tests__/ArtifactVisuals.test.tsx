@@ -72,6 +72,49 @@ describe("ArtifactVisuals", () => {
     expect(screen.getAllByRole("button").length).toBeGreaterThan(0);
   });
 
+  it("U2 — renders a doc_map: the document's sections/clauses with risk chips + a comment affordance", () => {
+    render(
+      <ArtifactVisuals
+        artifactId="a"
+        visuals={[
+          {
+            id: "dm",
+            kind: "doc_map",
+            title: "The vendor contract",
+            sections: [
+              { label: "§5 — Burst limits", risk: "high", note: "undefined burst cap" },
+              { label: "§2 — Definitions" },
+            ],
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByText("Document map")).toBeInTheDocument();
+    expect(screen.getByText("The vendor contract")).toBeInTheDocument();
+    expect(screen.getByText("§5 — Burst limits")).toBeInTheDocument();
+    expect(screen.getByText("§2 — Definitions")).toBeInTheDocument();
+    expect(screen.getByText(/undefined burst cap/)).toBeInTheDocument();
+    // the risk chip renders (where the risk concentrates).
+    expect(screen.getByText("high")).toBeInTheDocument();
+    // and it's a first-class commentable block (the doc WHERE-overlay rides the
+    // same comment loop as every visual).
+    expect(screen.getByRole("button", { name: /Comment on this document map/i })).toBeInTheDocument();
+  });
+
+  it("U2 — a doc_map section label is rendered as TEXT (XSS: a hostile label never injects markup)", () => {
+    const hostile = "<img src=x onerror=alert(1)>";
+    render(
+      <ArtifactVisuals
+        artifactId="a"
+        visuals={[{ id: "dm", kind: "doc_map", sections: [{ label: hostile }] }]}
+      />,
+    );
+    // React renders it as a text node — the literal string is present and no
+    // <img> element was created from it.
+    expect(screen.getByText(hostile)).toBeInTheDocument();
+    expect(document.querySelector("img")).toBeNull();
+  });
+
   it("renders a prototype as a click-to-run sandboxed frame (html not injected into the page)", () => {
     render(<ArtifactVisuals artifactId="a" visuals={[{ id: "p", kind: "prototype", html: "<button>hi</button>" }]} />);
     expect(screen.getByText(/sandboxed . no network/i)).toBeInTheDocument();

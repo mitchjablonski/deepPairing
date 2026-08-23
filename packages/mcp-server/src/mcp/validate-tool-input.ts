@@ -385,7 +385,14 @@ const EXAMPLE_FINDINGS = `{
       "category": "security",
       "title": "Weak password hash",
       "detail": "bcrypt rounds=4 is too low",
-      "evidence": "auth.ts L23 uses bcrypt.hash(pw, 4)",
+      "evidence": [
+        { "filePath": "auth.ts", "lineStart": 23, "lineEnd": 23,
+          "snippet": "const hash = bcrypt.hash(pw, 4);",
+          "explanation": "Code path uses the weak cost factor." },
+        { "locator": { "kind": "quote", "value": "passwords are hashed with 4 rounds" },
+          "snippet": "passwords are hashed with 4 rounds",
+          "explanation": "The security policy doc mandates the weak factor — anchor a doc/message passage with locator (kind: quote | heading | charRange | url) and NO file:line when it isn't code." }
+      ],
       "significance": "high",
       "recommendation": "raise to 12+",
       "concept": { "name": "password-hash work factor tuning",

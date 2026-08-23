@@ -371,6 +371,31 @@ function formatAdr(state: SessionState): string {
 // export. Each helper renders ONLY when its artifact type is present, so a
 // session without the new types produces byte-identical output.
 
+/** U2 — the "WHERE" label for one evidence object: a code file:line anchor, or,
+ *  for a non-code passage (doc/message/design), the `locator` (a heading path
+ *  like §5 ¶3, a char range, a url, or a quote). Returns "" when there is
+ *  nothing to anchor. Byte-identical to the old inline `filePath:lineStart-
+ *  lineEnd` for code evidence; the locator branch is what keeps the "where" from
+ *  being lost (or emitted as `undefined:undefined-undefined`) on the export. */
+function evidenceAnchorLabel(e: {
+  filePath?: string;
+  lineStart?: number;
+  lineEnd?: number;
+  locator?: { kind?: string; value?: string; href?: string };
+}): string {
+  if (e.filePath) {
+    return `${e.filePath}${e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null ? `-${e.lineEnd}` : ""}` : ""}`;
+  }
+  const loc = e.locator;
+  if (loc && typeof loc.value === "string" && loc.value.length > 0) {
+    if (loc.kind === "url") return loc.href && loc.href.length > 0 ? `${loc.value} (${loc.href})` : loc.value;
+    if (loc.kind === "charRange") return `chars ${loc.value}`;
+    if (loc.kind === "quote") return `“${loc.value}”`;
+    return loc.value; // heading path (§5 ¶3) or any other kind → verbatim
+  }
+  return "";
+}
+
 /** Push evidence lines (file:line anchor + fenced snippet + explanation) for a
  *  list of EvidenceInput (string | Evidence object) — the same shape debrief and
  *  explainer sections carry. Mirrors formatFull's findings-evidence rendering so
@@ -384,8 +409,9 @@ function pushEvidenceLines(sections: string[], evidence: unknown): void {
       continue;
     }
     if (!ev || typeof ev !== "object") continue;
-    const e = ev as { filePath?: string; lineStart?: number; lineEnd?: number; snippet?: string; language?: string; explanation?: string };
-    if (e.filePath) sections.push(`\`${e.filePath}${e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null ? `-${e.lineEnd}` : ""}` : ""}\``);
+    const e = ev as { filePath?: string; lineStart?: number; lineEnd?: number; snippet?: string; language?: string; explanation?: string; locator?: { kind?: string; value?: string; href?: string } };
+    const anchor = evidenceAnchorLabel(e);
+    if (anchor) sections.push(`\`${anchor}\``);
     if (e.snippet) {
       sections.push("```" + (e.language ?? ""));
       sections.push(e.snippet);
@@ -578,7 +604,13 @@ function formatFull(state: SessionState): string {
               sections.push("");
               continue;
             }
-            sections.push(`\`${ev.filePath}:${ev.lineStart}-${ev.lineEnd}\``);
+            // U2 — DEFAULT export path (format ?? "full"). Was unguarded and
+            // emitted `undefined:undefined-undefined` for a doc-anchored finding
+            // (no filePath/lineStart) while dropping the locator. The shared
+            // helper renders the code file:line byte-identically AND folds in the
+            // locator "where" (§5 / heading / url / quote) so it survives here.
+            const anchor = evidenceAnchorLabel(ev);
+            if (anchor) sections.push(`\`${anchor}\``);
             if (ev.snippet) {
               sections.push("```" + (ev.language ?? ""));
               sections.push(ev.snippet);
@@ -847,8 +879,14 @@ export function buildGitHubReviewPayload(
       const evidence = Array.isArray(finding.evidence) ? finding.evidence : [];
       // D7 — the runtime narrowing existed; the predicate is now a TYPE guard
       // so the loop below reads typed evidence instead of any.
+      // U2 — Evidence.filePath/lineStart are now OPTIONAL (a non-code passage
+      // anchors via `locator` instead). An inline PR comment REQUIRES a
+      // file:line anchor, so the guard narrows to the file-anchored subset —
+      // doc/message-anchored evidence simply can't post as an inline comment and
+      // is dropped from this outbound payload (the runtime check was already
+      // this strict; the guard's return type now says so).
       const structured = evidence.filter(
-        (e): e is Exclude<typeof e, string> =>
+        (e): e is Exclude<typeof e, string> & { filePath: string; lineStart: number } =>
           !!e && typeof e === "object" && !!e.filePath && typeof e.lineStart === "number",
       );
       if (structured.length === 0) continue;

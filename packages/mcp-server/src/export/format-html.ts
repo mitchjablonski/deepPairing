@@ -1047,7 +1047,20 @@ function evidenceBlock(evidence: unknown, includeCode: boolean, projectRoot?: st
     const range = e.lineStart != null
       ? `:${e.lineStart}${e.lineEnd != null && e.lineEnd !== e.lineStart ? `-${e.lineEnd}` : ""}`
       : "";
-    const anchor = path ? `<p class="anchor"><code>${esc(path + range)}</code></p>` : "";
+    // U2 — code evidence anchors on file:line; a non-code passage anchors on its
+    // `locator` (§heading / char range / url / quote). Render the locator "where"
+    // too (escaped — same XSS discipline as the path anchor) so the SHARED page
+    // keeps it instead of dropping it for doc/message/design findings.
+    let anchor = path ? `<p class="anchor"><code>${esc(path + range)}</code></p>` : "";
+    if (!anchor && e.locator && typeof e.locator.value === "string" && e.locator.value.length > 0) {
+      const loc = e.locator;
+      const label =
+        loc.kind === "url" ? (loc.href && loc.href.length > 0 ? `${loc.value} (${loc.href})` : loc.value)
+        : loc.kind === "charRange" ? `chars ${loc.value}`
+        : loc.kind === "quote" ? `“${loc.value}”`
+        : loc.value;
+      anchor = `<p class="anchor"><code>${esc(label)}</code></p>`;
+    }
     const snippet = e.snippet
       ? codeBlock(e.snippet, { language: e.language, maxLines: MAX_SNIPPET_LINES, includeCode })
       : "";
