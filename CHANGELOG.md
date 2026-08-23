@@ -1,5 +1,50 @@
 # Changelog
 
+## v0.1.38 — 2026-08-22
+
+The clean-surfaces release. This is a surface-cleanliness pass over everything deepPairing posts
+and displays. The surfaces now read clean: a bare APPROVE posts a genuine approval line instead of
+internal empty-state boilerplate; drive-root paths (`D:\…`), UNC file-server hostnames
+(`\\srv\share\…`), and the review title are all scrubbed before they leave — on the posted PR body
+*and* the exported page; the amber "risk" chip is now a distinct solid warning instead of blending
+into the four-way amber "waiting/status" lane; changeset diagrams and visuals are height-capped like
+the plan/debrief well so a tall file map can't bury the diff rail; and the first-call preamble was
+trimmed to restore ~380 chars of headroom (was ~16) without dropping a single rule, so there's room
+to keep routing the agent to comprehension fields. The T-batch is three.
+
+### Added
+- **A real approve message.** A bare APPROVE with no inline comments — the commonest approve shape —
+  used to post the internal empty-state string ("No reviewable findings with structured evidence…")
+  onto a colleague's PR. It now carries a genuine approval line: "Reviewed with deepPairing — no
+  blocking findings." The mechanical post-gate (`authorizeReviewPost`) is unchanged — this is body
+  copy, not authorization (PR #300).
+
+### Changed
+- **A distinct risk color and capped visuals.** The changeset RISK chip moves off the dim-amber
+  "your-turn / waiting / draft-status" lane onto a solid amber warning fill (AA-pinned: 8.41:1 dark /
+  6.31:1 light) and keeps the ⚠, so dim-amber now reads as one lane ("needs you") and solid amber
+  reads as "caution" — no palette repaint. Changeset diagrams and visuals are height-capped at 60vh
+  with internal scroll (the `diagram` kind excluded — MermaidDiagram already owns the identical well)
+  so a tall file_map or annotated_code can't run unbounded and bury the file-diff rail. The two-level
+  per-file → whole-changeset review flow is now spelled out in the idle action cue, and the plugin
+  README converges on the one canonical gate-first one-liner the other product surfaces use (PR #301).
+- **Preamble headroom.** The first-call `PROTOCOL_PREAMBLE` was trimmed by compression only — no
+  load-bearing rule dropped, every pinned substring still green in guidance-flip-drift.test.ts —
+  taking it from 6,784 → 6,420 chars (headroom under its 6,800 sub-cap: 16 → 380). The headroom *is*
+  the budget for the next field-routing edit that keeps steering the agent to comprehension fields
+  (PR #297).
+
+### Fixed
+- **No path or hostname leaks on the way out.** `scrubProse` (which feeds both the posted PR body and
+  the exported share page) now collapses a bare drive/mount root (`D:\`, `C:/work`, `/mnt/d/`,
+  `/cygdrive/e/`) and a bare UNC authority (`\\srv\share\…`, `//wsl$/distro/…`) to `~/`, keeping the
+  repo-relative tail — legit relative paths, POSIX system paths, and protocol-relative URLs are
+  untouched. The outbound "## deepPairing notes — <title>" heading, derived from a decision/research
+  title, now runs through `scrubProse` like every other outbound string instead of posting an
+  absolute path verbatim. And the share-page Mermaid diagram keeps its honest, XSS-safe, 0-request
+  source framing — a faithful server-side render needs a headless browser the self-contained export
+  can't take over hostile source, a known constraint (PR #300).
+
 ## v0.1.37 — 2026-08-22
 
 The activation release. Round 13 **built** the mental-model depth — the `concept` on a finding, the
