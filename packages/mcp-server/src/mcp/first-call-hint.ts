@@ -65,14 +65,18 @@ const HINT_BUDGET_CHARS = 1500;
 // backstop, the carve-out) is pinned independently by guidance-flip-drift.test.ts;
 // this budget governs SIZE, that test governs CONTENT — the two are orthogonal.
 //
-// Measured after S1 (round-14, the field-pull cues): PROTOCOL_PREAMBLE is 6,784
-// chars and the assembled vanilla hint (header + preamble, supervised/rich, no
-// memory/guardrails/seeds) is ~7,117. The ceiling sits only ~16 chars above the
-// preamble's own 6,800 sub-cap and ~83 above the assembled hint — the headroom
-// is now TIGHT (S1 spent most of it routing the agent to concept/visuals/
-// unknowns), so any further preamble prose must trim redundancy elsewhere to
-// stay under. (The round-13 census cited ~8,135; that figure counts the source
-// comments and the per-dial blocks, not the emitted PROTOCOL_PREAMBLE string.)
+// Measured after T2 (round-14, the preamble compression pass): PROTOCOL_PREAMBLE
+// is 6,420 chars and the assembled vanilla hint (header + preamble, supervised/
+// rich, no memory/guardrails/seeds) is ~6,753. That leaves ~380 chars of headroom
+// under the preamble's own 6,800 sub-cap and ~447 under the assembled ceiling —
+// deliberately opened (T2 folded the redundant floor restatements and the
+// backstop filler WITHOUT dropping a load-bearing rule; every rule stays pinned
+// by guidance-flip-drift.test.ts) so the next field-routing guidance edit has
+// room. The ceilings themselves were NOT raised or lowered — the headroom IS the
+// budget for the next comprehension-lever change; spend it on routing the agent
+// to more fields, not on prose accretion. (S1 had squeezed this to ~16 chars;
+// the round-13 census cited ~8,135, but that counts source comments + per-dial
+// blocks, not the emitted PROTOCOL_PREAMBLE string.)
 export const VANILLA_FIRST_CALL_BUDGET_CHARS = 7200;
 // EE1 — dedicated cap for the user-policy tier (seeds). Pre-EE1, seeds
 // were appended to blockingParts which was concatenated unconditionally,
@@ -92,7 +96,7 @@ export const PROTOCOL_PREAMBLE = [
   "Voice: write TO your pair in second person (\"which fits?\"), not ABOUT them (\"User asked X\") — a conversation, not an audit log.",
   // L2 — close-the-loop headline: the two highest-value rules, up top where they
   // won't lose the reading lottery to the visuals paragraph below.
-  "Close the loop — two rules above all: PRESENT code for review before it lands (batched present_changeset by default), and END every run with exactly ONE present_debrief (carve-out: a single-file, no-decision surgical fix closes with its own self-summarizing present_code_change instead — no separate debrief).",
+  "Close the loop — two rules above all: present code for review before it lands (batched present_changeset by default), and END every run with exactly ONE present_debrief (the trivial-fix carve-out below is the only exception).",
   // O1 (#229) — ceremony scales with RISK, not size. Three classes, always-on so
   // the risk-adaptive floor reaches the model on its FIRST artifact regardless of
   // the autonomy/detail dials. The FLOOR (present_changeset before code lands) is
@@ -100,14 +104,14 @@ export const PROTOCOL_PREAMBLE = [
   // ceremony only, never the review of the code or the closing debrief.
   "Ceremony scales with RISK, not size — three classes:",
   "  • TRIVIAL — a single-file, no-decision surgical fix: skip straight to the self-summarizing present_code_change that presents it for review AND closes it; no findings, no separate debrief.",
-  "  • LOW-RISK FEATURE — multi-file/multi-step work that touches NO guardrail path (migrations, CI/workflows, secrets, auth, infra), carries NO stakes:'high' decision, and has no genuine architectural fork: you MAY skip the synchronous pre-work gates (present_findings and the spec/plan gate) and go build. Still KEEP: real-time present_options the moment a genuine decision arises, the present_changeset review surface (NEVER skipped — the floor), and exactly ONE present_debrief. Net: ~2 touchpoints — the changeset (the never-skipped floor) and the debrief; a decision, if one comes up, makes 3 — instead of 4-5.",
+  "  • LOW-RISK FEATURE — multi-file/multi-step work that touches NO guardrail path (migrations, CI/workflows, secrets, auth, infra), carries NO stakes:'high' decision, and has no genuine architectural fork: you MAY skip the synchronous pre-work gates (present_findings and the spec/plan gate) and go build. Still KEEP: real-time present_options the moment a genuine decision arises, the present_changeset review surface, and exactly ONE present_debrief. Net: ~2 touchpoints — the changeset (the never-skipped floor) and the debrief; a decision, if one comes up, makes 3 — instead of 4-5.",
   "  • ESCALATED — anything touching a guardrail path, any stakes:'high' decision, or a genuine architectural fork: the full arc — findings → options → spec/plan → changeset → debrief.",
   // P1 (round-11) — describe the backstop EXACTLY as built. The pre-P1 text ("the
   // preflight gate escalates guardrail-path edits regardless") promised a
   // mechanism that did not exist; round-11 caught it. Never over-claim here: the
   // trigger, the silence condition, the dedup, and the never-denies contract are
   // all pinned by guidance-flip-drift.test.ts against the shipped hook.
-  "  BACKSTOP for that last class: if you Write/Edit a guardrail path (migrations/ and friends, CI config like .github/workflows/ or .gitlab-ci.yml, infra like Dockerfile* / compose files / terraform / k8s, and secret files like .env* — matched at ANY depth, so packages/api/migrations/ in a monorepo counts, while a file merely NAMED like one, e.g. src/migrations.js, does not; vendored/generated/fixture/example trees such as node_modules/, dist/, coverage/, fixtures/ and examples/ are excluded entirely) while NO findings, options, spec, or plan is live in this project's recent sessions, the preflight hook pauses the edit and asks your pair to confirm, naming the class and the path. It stays SILENT once that pre-work arc is in flight — a spec you JUST presented counts immediately, you don't have to wait for review. It asks at most once per guardrail class per 30 minutes (per FILE for migrations and secrets, where each file is separately irreversible), it never blocks the edit outright, and it fails open (a missing, unreadable, or unparseable session store stays silent). If your pair DECLINES, that decline is the instruction: the hook is never told their answer, so it cannot re-ask for 30 minutes — do the pre-work before touching that path again rather than retrying the same edit. It is a safety net for a misclassified edit — not a substitute for classifying correctly.",
+  "  BACKSTOP for that last class: if you Write/Edit a guardrail path (migrations/, CI config like .github/workflows/, infra like Dockerfiles/terraform/k8s, and secret files like .env* — matched at ANY depth, so packages/api/migrations/ in a monorepo counts, while a file merely NAMED like one, e.g. src/migrations.js, does not; vendored/generated/fixture/example trees such as node_modules/, dist/, coverage/, fixtures/ and examples/ are excluded entirely) while NO findings, options, spec, or plan is live in this project's recent sessions, the preflight hook pauses the edit and asks your pair to confirm, naming the class and the path. It stays SILENT once that pre-work arc is in flight — a spec you JUST presented counts immediately. It asks at most once per guardrail class per 30 minutes (per FILE for migrations and secrets), it never blocks the edit outright, and it fails open (a missing or unreadable session store stays silent). If your pair DECLINES, that's the instruction: do the pre-work before touching that path again rather than retrying (the hook can't re-ask for 30 minutes). A safety net for a misclassified edit, not a substitute for classifying correctly.",
   "THE FLOOR IS ABSOLUTE at every class: code is presented for review via present_changeset before it lands. The low-risk-feature license trims PRE-WORK ceremony only — never the code review, never the debrief.",
   // P1 (round-11) — this list is the ESCALATED arc written out in full. Pre-P1 it
   // read as THE default sequence, contradicting the three-class block directly
@@ -119,7 +123,7 @@ export const PROTOCOL_PREAMBLE = [
   "  2. present_findings — [ESCALATED ONLY] after researching; structured Evidence (filePath, lineStart, lineEnd, snippet), not plain-text bullets. Name each finding's `concept` — the preferred place to name a pattern.",
   "  3. check_feedback — poll in a loop (~30s; on WAITING, call again). Don't ask in the terminal.",
   "  4. present_options — each choice as its OWN card (2-4 options + a `concept`); stakes='high' for hard-to-reverse calls (schema/auth/infra). Never bury or interleave a decision inside a plan (skips the pros/cons review; the ledger never learns your pick).",
-  "  5. present_spec and/or present_plan — [ESCALATED ONLY] for small multi-file work (one changeset, no architectural decision beyond the options card) present just ONE: spec when the WHAT needs agreement, plan when the HOW/sequence does. Stack BOTH (spec before the plan) only for genuinely large features. LEAD WITH A VISUAL, not prose: attach `visuals[]` (stable `id` + `kind`) — 'diagram' (Mermaid: flowchart=architecture, erDiagram=schema, sequenceDiagram=flow; quote labels with punctuation like ()#: and use `<br/>` not `\\n`); 'file_map' (create/modify/delete set); 'annotated_code' (real `code`+`filePath`, line-anchored `annotations[]` at the exact lines changing and why); 'prototype' (sandboxed `html`). Each visual is its own commentable surface.",
+  "  5. present_spec and/or present_plan — [ESCALATED ONLY] for small multi-file work (one changeset, no architectural decision beyond the options card) present just ONE: spec when the WHAT needs agreement, plan when the HOW/sequence does. Stack BOTH (spec before the plan) only for genuinely large features. LEAD WITH A VISUAL, not prose: attach `visuals[]` (stable `id` + `kind`) — 'diagram' (Mermaid: flowchart=architecture, erDiagram=schema, sequenceDiagram=flow; quote labels with punctuation like ()#: and use `<br/>` not `\\n`); 'file_map' (create/modify/delete set); 'annotated_code' (real `code`+`filePath`, line-anchored `annotations[]` at the exact lines changing and why); 'prototype' (sandboxed `html`).",
   "  6. Present code as it lands — the DEFAULT is a batched present_changeset at each feature boundary (per-file diffs + review state). present_code_change is the EXCEPTION — a single-file surgical change, or when the human asks first; and when that single-file, no-decision fix IS the whole task, it self-summarizes and closes it (fold the what-changed-and-why into its reasoning — no separate debrief). Don't stream a log_reasoning card per step — name the concept on the finding; a `visuals[]` diagram on the changeset/debrief shows the blast radius.",
   "  7. present_debrief — END every feature/autonomous run with exactly ONE (carve-out: a single-file, no-decision surgical fix closes with its own self-summarizing present_code_change instead): what changed + why, the decisions you made WITHOUT the human, what needs their eyes, what you deferred, an ask-anything thread — the primary comprehension surface. Put the full story IN it, never 'details in chat'.",
   "  8. check_feedback again — let your pair review in the UI.",
