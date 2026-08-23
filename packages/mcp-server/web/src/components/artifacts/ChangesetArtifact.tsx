@@ -957,7 +957,17 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
         {content.risks && content.risks.length > 0 && (
           <span className="flex items-center gap-1.5">
             {content.risks.map((r) => (
-              <span key={r} className="inline-flex items-center gap-1 text-2xs font-bold tracking-wide uppercase text-accent-amber bg-accent-amber-dim rounded px-1.5 py-0.5">
+              // T3 (round-14 LOW) — the amber-token overload: the SAME dim-amber
+              // rendered "N waiting" (act), "N for you" (count), "Draft, awaiting
+              // review" (status) AND "⚠ RISK" (warning) — four meanings, one color,
+              // at 10px. A risk is a WARNING about the code, NOT a your-turn signal,
+              // so it leaves the dim-amber "needs you" family and takes a SOLID
+              // amber warning fill (text-text-inverse on bg-accent-amber — the same
+              // AA-pinned pairing the solid-amber Send-back / Approve-anyway buttons
+              // use: 8.41:1 dark / 6.31:1 light). Dim-amber now reads as one lane
+              // ("needs you"); solid amber + ⚠ reads as "caution" — distinct at a
+              // glance without repainting the palette.
+              <span key={r} className="inline-flex items-center gap-1 text-2xs font-bold tracking-wide uppercase text-text-inverse bg-accent-amber rounded px-1.5 py-0.5">
                 ⚠ {r}
               </span>
             ))}
@@ -997,7 +1007,7 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
           changeset carries none. Composers follow the comment-lock (draft or
           approved live; terminal / replay read-only). Before R4 these were
           silently stripped at schema parse. */}
-      <ArtifactVisuals artifactId={artifact.id} visuals={content.visuals ?? []} readOnly={!commentsUnlocked} />
+      <ArtifactVisuals artifactId={artifact.id} visuals={content.visuals ?? []} readOnly={!commentsUnlocked} cap />
 
       {reviewAll ? (
         /* --- Review-all: every file's diff stacked in one scroll ------------ */
@@ -1238,7 +1248,14 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
               ) : allLookRight ? (
                 <><b className="text-accent-green">All {files.length} files look right.</b> Approving with a short window to add a comment.</>
               ) : (
-                <>Skim file-by-file, or trust it at a glance with <b className="text-text-primary">Approve all</b>.</>
+                /* T3 (round-14 LOW) — the changeset is a TWO-LEVEL model
+                   (per-file disposition → whole-changeset verdict), distinct by
+                   design from the single Respond/Approve/Reject bar every other
+                   artifact uses. A first-timer's confusion is "is per-file enough,
+                   or is there a final step?" — so the idle cue now names the
+                   sequence explicitly (review each file → then the changeset-level
+                   action here) instead of the terse "Skim file-by-file". */
+                <>Review each file above, then approve the whole changeset here — or trust it at a glance with <b className="text-text-primary">Approve all</b>.</>
               )}
             </span>
 
