@@ -30235,7 +30235,10 @@ var HOME_PREFIX_IN_PROSE = new RegExp(
   "gi"
 );
 var DRIVE_ROOT_IN_PROSE = new RegExp(
-  "(?<![\\w~.\\-\\\\/])(?:[A-Za-z]:" + _SEP + "|(?:[A-Za-z]:)?" + _SEP + "(?:mnt|cygdrive)" + _SEP + "[A-Za-z]" + _SEP + ")",
+  "(?<![\\w~.\\-\\\\/])(?:[A-Za-z]:" + _SEP + // WSL / cygwin mount root:  /mnt/c/ , C:/cygdrive/c/
+  "|(?:[A-Za-z]:)?" + _SEP + "(?:mnt|cygdrive)" + _SEP + "[A-Za-z]" + _SEP + // Backslash UNC authority root:  \\host\  or  \\host\share\  (redacts host+share)
+  "|\\\\\\\\[^\\\\/\\s]+(?:\\\\[^\\\\/\\s]+)?" + _SEP + // Forward WSL UNC root:  //wsl$/distro/  (the ONLY // form accepted)
+  "|//wsl\\$(?:/[^/\\s]+)?" + _SEP + ")",
   "gi"
 );
 var activeProjectRoot;
@@ -32088,7 +32091,7 @@ function buildGitHubReviewPayload(state, opts = {}) {
     }
   }
   const derivedTitle = getSessionTitle(state);
-  const title = derivedTitle.startsWith("Session ") ? null : derivedTitle;
+  const title = derivedTitle.startsWith("Session ") ? null : scrubProse(derivedTitle);
   const event = opts.event ?? "COMMENT";
   const bodyParts = [
     `## deepPairing notes${title ? ` \u2014 ${title}` : ""}`,
