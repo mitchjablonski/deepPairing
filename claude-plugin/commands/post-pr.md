@@ -38,7 +38,9 @@ out to GitHub, and refuses if they aren't there. So if it comes back refusing:
   it posts with no inline comments and you don't need findings to use it. It
   does need me to have **approved every live PR changeset** in the UI — and it
   is refused outright if I rejected one. That approval is what authorizes an
-  approving review on someone else's repo.
+  approving review on someone else's repo. A bare approve carries a genuine
+  approval line for the author automatically ("Reviewed with deepPairing — no
+  blocking findings") — you don't compose the body.
 - `COMMENT` — everything else, and the default. Anything that isn't one of these
   three is refused rather than guessed at.
 

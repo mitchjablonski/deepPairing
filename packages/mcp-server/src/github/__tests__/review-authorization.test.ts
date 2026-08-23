@@ -274,6 +274,31 @@ describe("Q6 B1(c) — a bare APPROVE is a real verdict and needs real authoriza
     expect(auth.payload.comments).toEqual([]);
   });
 
+  // T1 (round-15) — THE BARE-APPROVE BODY. What lands on the colleague's PR must
+  // read like a human approval, not the internal empty-state string round 12
+  // flagged unfit to send.
+  it("a bare APPROVE carries a human-readable approval body, not the empty-state string", () => {
+    const auth = authorizeReviewPost(session([changeset("cs_1", "approved", true)]), { event: "APPROVE" });
+    expect(auth.ok).toBe(true);
+    if (!auth.ok) throw new Error("unreachable");
+    expect(auth.payload.body).toContain("Reviewed with deepPairing");
+    expect(auth.payload.body).toContain("no blocking findings");
+    expect(auth.payload.body).not.toContain("No reviewable findings with structured evidence");
+  });
+
+  // R1 non-regression — the reviewer's local folder name (the session id) must
+  // never ride the outbound body, bare-APPROVE included.
+  it("the bare-APPROVE body never leaks the session id / folder name", () => {
+    const leaky = session([changeset("cs_1", "approved", true)], {
+      sessionId: "session_my-secret-client-project_ab12cd",
+    });
+    const auth = authorizeReviewPost(leaky, { event: "APPROVE" });
+    expect(auth.ok).toBe(true);
+    if (!auth.ok) throw new Error("unreachable");
+    expect(auth.payload.body).not.toContain("my-secret-client-project");
+    expect(auth.payload.body).not.toContain("Session ");
+  });
+
   it("an approved LOCAL changeset does NOT authorize it — it isn't the PR", () => {
     // The control that keeps (c) meaningful: approving your own work must never
     // be mistaken for approving a colleague's pull request.

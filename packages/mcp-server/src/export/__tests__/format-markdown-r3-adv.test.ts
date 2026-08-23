@@ -88,6 +88,20 @@ describe("S4 — outbound finding bodies are scrubbed of machine paths", () => {
       ],
     });
 
+  // T1 review F2 — the outbound h2 title (## deepPairing notes — <title>) derives
+  // from the session's decision/research title and used to skip scrubProse, so a
+  // path in the title posted to the stranger's PR verbatim.
+  it("an absolute path in the derived h2 title is collapsed in the posted body", () => {
+    const titled = art("research", "Fix leak in /home/mitch/dev/app/secrets.json", {
+      summary: "Live.",
+      findings: [{ category: "Sec", title: "Rate limit", detail: "d", significance: "high", evidence: [{ filePath: "a.ts", lineStart: 1, snippet: "x" }] }],
+    });
+    const payload = buildGitHubReviewPayload(state([titled]) as any);
+    expect(payload.body).toContain("## deepPairing notes");
+    expect(payload.body).not.toContain("/home/mitch");
+    expect(payload.body).toContain("~/dev/app/secrets.json");
+  });
+
   it("a /home/<user> or C:\\Users path in a finding body is collapsed in the posted body", () => {
     const payload = buildGitHubReviewPayload(state([leaky()]) as any);
     const serialized = JSON.stringify(payload);

@@ -129,6 +129,15 @@ describe("buildGitHubReviewPayload", () => {
     expect(payload.body).toContain("No reviewable findings");
   });
 
+  // T1 (round-15) — but a zero-comment APPROVE carries a REAL approval line, not
+  // the internal empty-state string (round 12 flagged that unfit to send).
+  it("a zero-comment APPROVE body reads like a human approval, not the empty-state string", () => {
+    const payload = buildGitHubReviewPayload(state(), { event: "APPROVE" });
+    expect(payload.event).toBe("APPROVE");
+    expect(payload.body).toContain("Reviewed with deepPairing");
+    expect(payload.body).not.toContain("No reviewable findings");
+  });
+
   it("body lists finding titles when present", () => {
     const payload = buildGitHubReviewPayload(state([
       researchArtifact("a1", [
