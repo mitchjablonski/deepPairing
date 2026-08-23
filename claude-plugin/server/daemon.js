@@ -28314,7 +28314,12 @@ function evidenceBlock(evidence, includeCode, projectRoot2) {
     const e = ev;
     const path20 = sanitizePath(e.filePath, projectRoot2);
     const range = e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null && e.lineEnd !== e.lineStart ? `-${e.lineEnd}` : ""}` : "";
-    const anchor = path20 ? `<p class="anchor"><code>${esc2(path20 + range)}</code></p>` : "";
+    let anchor = path20 ? `<p class="anchor"><code>${esc2(path20 + range)}</code></p>` : "";
+    if (!anchor && e.locator && typeof e.locator.value === "string" && e.locator.value.length > 0) {
+      const loc = e.locator;
+      const label = loc.kind === "url" ? loc.href && loc.href.length > 0 ? `${loc.value} (${loc.href})` : loc.value : loc.kind === "charRange" ? `chars ${loc.value}` : loc.kind === "quote" ? `\u201C${loc.value}\u201D` : loc.value;
+      anchor = `<p class="anchor"><code>${esc2(label)}</code></p>`;
+    }
     const snippet = e.snippet ? codeBlock(e.snippet, { language: e.language, maxLines: MAX_SNIPPET_LINES, includeCode }) : "";
     const explanation = e.explanation ? `<p class="evidence-note">${renderInline(e.explanation)}</p>` : "";
     parts.push(`<div class="evidence">${anchor}${snippet}${explanation}</div>`);
@@ -29346,6 +29351,19 @@ Reasoning: ${neutralizeVoice(d.response.reasoning)}`);
   }
   return sections.join("\n");
 }
+function evidenceAnchorLabel(e) {
+  if (e.filePath) {
+    return `${e.filePath}${e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null ? `-${e.lineEnd}` : ""}` : ""}`;
+  }
+  const loc = e.locator;
+  if (loc && typeof loc.value === "string" && loc.value.length > 0) {
+    if (loc.kind === "url") return loc.href && loc.href.length > 0 ? `${loc.value} (${loc.href})` : loc.value;
+    if (loc.kind === "charRange") return `chars ${loc.value}`;
+    if (loc.kind === "quote") return `\u201C${loc.value}\u201D`;
+    return loc.value;
+  }
+  return "";
+}
 function pushEvidenceLines(sections, evidence) {
   if (!Array.isArray(evidence)) return;
   for (const ev of evidence) {
@@ -29356,7 +29374,8 @@ function pushEvidenceLines(sections, evidence) {
     }
     if (!ev || typeof ev !== "object") continue;
     const e = ev;
-    if (e.filePath) sections.push(`\`${e.filePath}${e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null ? `-${e.lineEnd}` : ""}` : ""}\``);
+    const anchor = evidenceAnchorLabel(e);
+    if (anchor) sections.push(`\`${anchor}\``);
     if (e.snippet) {
       sections.push("```" + (e.language ?? ""));
       sections.push(e.snippet);
@@ -29528,7 +29547,8 @@ function formatFull(state) {
               sections.push("");
               continue;
             }
-            sections.push(`\`${ev.filePath}:${ev.lineStart}-${ev.lineEnd}\``);
+            const anchor = evidenceAnchorLabel(ev);
+            if (anchor) sections.push(`\`${anchor}\``);
             if (ev.snippet) {
               sections.push("```" + (ev.language ?? ""));
               sections.push(ev.snippet);
