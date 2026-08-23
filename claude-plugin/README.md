@@ -1,9 +1,9 @@
 # deepPairing — Claude Code plugin
 
-Tell Claude Code "no" once and it sticks. Reject an approach with your reason
-and a gate stops the agent from re-proposing that concept before the edit lands
-— the tool call is refused and your reason is quoted back. Around that gate,
-structured artifacts (findings, specs, decisions, plans) and a companion web UI
+Block Claude Code from re-proposing an approach you rejected — it refuses and
+quotes your reason back — then pair on findings, options, and plans in a rich
+local review UI. Around that gate, structured artifacts (findings, specs,
+decisions, plans) and a companion web UI
 (on a deterministic per-project port in `3847-3974`, derived from the project
 path — check `.deeppairing/daemon.json` for the actual one) for inline review and
 commenting. The block is hard in the project where you rejected it; once you

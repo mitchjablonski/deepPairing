@@ -169,6 +169,44 @@ describe("ArtifactVisuals", () => {
     expect(screen.getByText(/No code provided/i)).toBeInTheDocument();
   });
 
+  describe("T3 (round-14 LOW) — cap: bound a tall visual so it can't run unbounded", () => {
+    it("cap wraps a NON-diagram body in a 60vh internal-scroll well", () => {
+      const { container } = render(
+        <ArtifactVisuals
+          artifactId="a"
+          cap
+          visuals={[{ id: "fm", kind: "file_map", title: "Files", files: [{ path: "a.ts", change: "create" }] }]}
+        />,
+      );
+      const well = container.querySelector('[data-dp-visual-cap="true"]');
+      expect(well).not.toBeNull();
+      expect(well?.className).toContain("max-h-[60vh]");
+      expect(well?.className).toContain("overflow-auto");
+      // The visual still renders inside the well.
+      expect(screen.getByText("Files")).toBeInTheDocument();
+    });
+
+    it("cap does NOT wrap a diagram (MermaidDiagram owns its own Q4 well + region overlay — region-comments keep working)", async () => {
+      const { container } = render(
+        <ArtifactVisuals artifactId="a" cap visuals={[{ id: "d", kind: "diagram", title: "Arch", source: "graph TD; A-->B" }]} />,
+      );
+      await waitFor(() => expect(document.querySelector(".dp-mermaid svg")).not.toBeNull());
+      // No outer cap well around the diagram: its own scrollport (data-dp-scrollport)
+      // stays the single coordinate space the region layer measures against.
+      expect(container.querySelector('[data-dp-visual-cap="true"]')).toBeNull();
+    });
+
+    it("without cap (the default), NO body is wrapped — byte-unchanged for plan/spec/debrief/research", () => {
+      const { container } = render(
+        <ArtifactVisuals
+          artifactId="a"
+          visuals={[{ id: "fm", kind: "file_map", title: "Files", files: [{ path: "a.ts", change: "create" }] }]}
+        />,
+      );
+      expect(container.querySelector('[data-dp-visual-cap="true"]')).toBeNull();
+    });
+  });
+
   describe("adversarial / partial visuals never crash", () => {
     const cases: Array<[string, PlanVisual]> = [
       ["empty diagram source", { id: "d", kind: "diagram", source: "" }],

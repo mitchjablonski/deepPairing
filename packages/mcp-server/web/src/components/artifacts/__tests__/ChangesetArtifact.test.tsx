@@ -924,3 +924,39 @@ describe("ChangesetArtifact — the summary purpose line (S2)", () => {
     expect(screen.queryByTestId("changeset-summary")).not.toBeInTheDocument();
   });
 });
+
+describe("ChangesetArtifact — T3 (round-14 LOW display riders)", () => {
+  it("item 1: threads cap → a tall file_map visual is bounded in a 60vh well (can't bury the diff)", () => {
+    const art = changeset({
+      visuals: [{ id: "fm", kind: "file_map", title: "What this PR touches", files: [{ path: "a.ts", change: "create" }] }],
+    });
+    seed(art);
+    const { container } = render(<Harness id="art_cs" />);
+    const well = container.querySelector('[data-dp-visual-cap="true"]');
+    expect(well).not.toBeNull();
+    expect(well?.className).toContain("max-h-[60vh]");
+    // The visual BODY (the file tree) lives inside the capped well.
+    expect(within(well as HTMLElement).getByText("a.ts")).toBeInTheDocument();
+  });
+
+  it("item 2: the RISK chip is a SOLID-amber warning (text-inverse on amber), NOT the dim-amber your-turn family", () => {
+    const art = changeset({ risks: ["touches auth"] });
+    seed(art);
+    render(<Harness id="art_cs" />);
+    const chip = screen.getByText(/touches auth/).closest("span")!;
+    // Distinct warning treatment: solid amber fill + inverse text (the AA-pinned
+    // solid-amber pairing) — not the dim-amber the waiting/count/status lane uses.
+    expect(chip.className).toContain("bg-accent-amber");
+    expect(chip.className).toContain("text-text-inverse");
+    expect(chip.className).not.toContain("bg-accent-amber-dim");
+    expect(chip.className).not.toContain("text-accent-amber");
+  });
+
+  it("item 3: the idle action cue names the two-level sequence (review each file → then the changeset)", () => {
+    const art = changeset({ reviewState: {} }); // all pending → the first-timer idle state
+    seed(art);
+    render(<Harness id="art_cs" />);
+    const status = screen.getByTestId("action-status");
+    expect(status).toHaveTextContent(/review each file above, then approve the whole changeset/i);
+  });
+});

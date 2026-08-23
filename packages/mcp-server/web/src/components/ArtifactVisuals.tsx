@@ -37,6 +37,7 @@ export function ArtifactVisuals({
   artifactId,
   visuals,
   readOnly = false,
+  cap = false,
 }: {
   artifactId: string;
   visuals: PlanVisual[];
@@ -47,6 +48,16 @@ export function ArtifactVisuals({
    *  existing anchored comments stay readable. Defaults false (byte-unchanged for
    *  every existing caller). */
   readOnly?: boolean;
+  /** T3 (round-14 LOW) — cap each visual BODY at 60vh with internal scroll so a
+   *  tall visual can't run unbounded and bury the content below it. Threaded true
+   *  from the changeset, where the visuals sit ABOVE the file-diff rail (an
+   *  unbounded file_map / annotated_code pushed the whole diff off screen). The
+   *  `diagram` kind is EXCLUDED — MermaidDiagram already owns the identical Q4
+   *  60vh well + its region-comment overlay/chrome split lives inside its own
+   *  scrollport (`data-dp-scrollport`); an outer cap would nest a second scroll
+   *  and desync the region layer's measurements. Defaults false → byte-unchanged
+   *  for plan / spec / debrief / research / explainer. */
+  cap?: boolean;
 }) {
   // Bug2 — aggregate the version chain so a visual-anchored (visualId) comment
   // posted on v1 still surfaces on v2 (same data-loss class as the other
@@ -77,7 +88,17 @@ export function ArtifactVisuals({
               )}
             </div>
 
-            <VisualBody artifactId={artifactId} visual={v} readOnly={readOnly} />
+            {cap && v.kind !== "diagram" ? (
+              // T3 — bound the non-diagram body so a tall file_map / annotated_code
+              // / prototype can't run unbounded on the changeset (diagram self-caps
+              // via MermaidDiagram's own well). max-h + overflow-auto only scroll
+              // when the content actually exceeds 60vh; short visuals are untouched.
+              <div data-dp-visual-cap="true" className="max-h-[60vh] overflow-auto rounded-md">
+                <VisualBody artifactId={artifactId} visual={v} readOnly={readOnly} />
+              </div>
+            ) : (
+              <VisualBody artifactId={artifactId} visual={v} readOnly={readOnly} />
+            )}
 
             {v.caption && <div className="text-2xs text-text-secondary leading-relaxed">{v.caption}</div>}
 
