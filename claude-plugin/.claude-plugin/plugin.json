@@ -1,7 +1,7 @@
 {
   "name": "deeppairing",
   "displayName": "deepPairing",
-  "version": "0.1.38",
+  "version": "0.1.39",
   "description": "Block Claude Code from re-proposing an approach you rejected — it refuses and quotes your reason back — then pair on findings, options, and plans in a rich local review UI.",
   "author": {
     "name": "deepPairing"
