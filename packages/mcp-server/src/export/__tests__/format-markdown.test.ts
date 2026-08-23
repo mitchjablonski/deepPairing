@@ -163,6 +163,59 @@ describe("formatSessionMarkdown", () => {
       expect(md).toContain("```typescript");
       expect(md).toContain("**Impact**: Crackable");
       expect(md).toContain("Reasoning Log");
+      // U2 F1 back-compat: the code file:line anchor is byte-identical.
+      expect(md).toContain("`/src/auth.ts:5-8`");
+      expect(md).not.toMatch(/undefined:undefined/);
+    });
+
+    it("U2 F1 — a DOC-anchored finding exports its locator label on the DEFAULT full format (no undefined:undefined)", () => {
+      const state = makeState({
+        artifacts: [
+          makeArtifact("research", "Contract review", {
+            summary: "Terms risk",
+            findings: [{
+              category: "risk",
+              title: "Undefined burst cap",
+              detail: "§5 leaves the ceiling open",
+              significance: "high",
+              evidence: [{
+                snippet: "the burst cap is undefined",
+                explanation: "Open ceiling — the vendor can throttle at will.",
+                locator: { kind: "heading", value: "§5 ¶3" },
+              }],
+            }],
+          }),
+        ],
+      });
+      const md = formatSessionMarkdown(state, "full");
+      // the "where" survives as the locator label…
+      expect(md).toContain("`§5 ¶3`");
+      expect(md).toContain("the burst cap is undefined");
+      // …and NOT as `undefined:undefined-undefined` garbage.
+      expect(md).not.toMatch(/undefined:undefined|undefined-undefined/);
+    });
+
+    it("U2 F1 — a url locator exports its href; a quote/charRange export their labels", () => {
+      const state = makeState({
+        artifacts: [
+          makeArtifact("research", "Doc review", {
+            summary: "s",
+            findings: [{
+              category: "risk", detail: "d", significance: "high",
+              evidence: [
+                { snippet: "a", explanation: "e", locator: { kind: "url", value: "the terms", href: "https://ex.com/terms#5" } },
+                { snippet: "b", explanation: "e", locator: { kind: "charRange", value: "10-42" } },
+                { snippet: "c", explanation: "e", locator: { kind: "quote", value: "no warranty" } },
+              ],
+            }],
+          }),
+        ],
+      });
+      const md = formatSessionMarkdown(state, "full");
+      expect(md).toContain("https://ex.com/terms#5");
+      expect(md).toContain("`chars 10-42`");
+      expect(md).toContain("no warranty");
+      expect(md).not.toMatch(/undefined/);
     });
   });
 

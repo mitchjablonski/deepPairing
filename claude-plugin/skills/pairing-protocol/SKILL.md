@@ -395,7 +395,9 @@ Run the `/deeppairing:review-pr` arc (that command carries the detail):
 
 1. **Ingest.** `gh pr view <N>` (title, body, comments, checks) and
    `gh pr diff <N>`, plus the surrounding code — most real risks live in
-   what the diff *doesn't* show.
+   what the diff *doesn't* show. The `/deeppairing:review-pr` command
+   materializes the PR head into a scratch git worktree for exactly this, so
+   you can trace callers and read the surrounding code the diff omits.
 2. **Orient FIRST — `present_explainer`.** Before any finding: what this
    PR does, how the pieces fit, what its blast radius is. Audience is the
    human as reviewer; scope is this PR, not the repo.
