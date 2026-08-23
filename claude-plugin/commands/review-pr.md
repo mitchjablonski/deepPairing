@@ -20,10 +20,40 @@ gh pr checks $ARGUMENTS                 # what CI thinks
 gh pr diff $ARGUMENTS                   # the change itself
 ```
 
-Read the surrounding code too — a diff is not a codebase, and most real risks
-live in the code the diff *doesn't* show. If any of these fail (no `gh`, not
-authenticated, PR not found), tell me plainly and stop. Don't guess at the
-contents of a PR you couldn't fetch.
+Then **materialize the PR head into a scratch checkout** so you can read the
+code the diff *doesn't* show — a diff is not a codebase, and most real risks
+live in the callers, the tests, and the config the hunks never touch. Trace them
+from a real tree, not from the patch. **Never disturb my working tree to do it**
+— don't `gh pr checkout` in place, don't switch my branch, don't stash or
+force-checkout over my uncommitted work. Use an isolated, ephemeral scratch tree:
+
+```
+# If we're inside a clone of the PR's repo (the usual case), a linked git
+# worktree is lightest — it never moves my branch or touches my files:
+git worktree add --detach .deeppairing/pr-review/$ARGUMENTS
+( cd .deeppairing/pr-review/$ARGUMENTS && gh pr checkout $ARGUMENTS --branch pr-$ARGUMENTS )
+#   (gh pr checkout acts on its cwd's repo, so run it *inside* that worktree —
+#    only the worktree's HEAD moves, never mine; gh resolves fork PRs for you.
+#    `.deeppairing/` is gitignored, so the scratch tree is invisible to my repo
+#    and safe to leave or delete.)
+
+# If we're NOT inside the target repo (a cross-repo review, no local clone),
+# shallow-clone into a temp dir instead and check the PR out there:
+#   dir="$(mktemp -d)"; gh repo clone <owner/repo> "$dir" -- --depth 50
+#   ( cd "$dir" && gh pr checkout $ARGUMENTS )
+```
+
+Read surrounding code from that scratch tree for the orientation and
+blast-radius work below, then clean it up when we're done
+(`git worktree remove .deeppairing/pr-review/$ARGUMENTS` or delete the temp dir).
+
+If `gh` or `git` isn't available, isn't authenticated, or the PR isn't found,
+**tell me plainly and stop** — don't guess at the contents of a PR you couldn't
+fetch. If the fetch worked but the scratch checkout *doesn't* (a worktree
+already there, a detached-fetch failure, a shallow clone that won't resolve),
+don't force it and don't touch my tree: fall back to reviewing from the diff
+alone, tell me surrounding-code tracing is limited this pass, and record the
+files you therefore couldn't trace in `unknowns` (step b).
 
 **(b) Orient me first — `present_explainer`.** Before a single finding: what
 does this PR *do*, how do the pieces fit, and what is the blast radius? Audience
