@@ -960,3 +960,127 @@ describe("ChangesetArtifact — T3 (round-14 LOW display riders)", () => {
     expect(status).toHaveTextContent(/mark each file above Looks right . Needs changes and the changeset verdict follows/i);
   });
 });
+
+describe("ChangesetArtifact — U1 the WHERE-overlay (findings pinned to the file rail)", () => {
+  /** A findings ("research") artifact in the same session (s1) as the changeset. */
+  function findings(findingList: Array<Record<string, unknown>>, over: Partial<Artifact> = {}): Artifact {
+    return {
+      id: "art_findings",
+      sessionId: "s1",
+      type: "research",
+      version: 1,
+      parentId: null,
+      title: "What I found",
+      status: "draft",
+      content: { summary: "review", findings: findingList },
+      agentReasoning: null,
+      createdAt: "2026-08-23T10:00:00.000Z",
+      updatedAt: "2026-08-23T10:00:00.000Z",
+      ...over,
+    } as Artifact;
+  }
+
+  function ev(filePath: string, lineStart = 26) {
+    return { filePath, lineStart, lineEnd: lineStart, snippet: "code", explanation: "why" };
+  }
+
+  it("badges a changed file with the count + severity of the findings that anchor to it", () => {
+    const art = changeset({ reviewState: {} });
+    seed(art, [], [
+      findings([
+        { category: "security", title: "Session fixation", detail: "d", significance: "high", severity: "high", evidence: [ev("auth/middleware.ts")] },
+        { category: "style", title: "Naming", detail: "d", significance: "low", severity: "low", evidence: [ev("auth/middleware.ts", 40)] },
+      ]),
+    ]);
+    render(<Harness id="art_cs" />);
+    const badge = screen.getByTestId("finding-overlay-badge");
+    expect(badge).toHaveTextContent("2");
+    // Accessible name spells out the severity — the signal is NOT color-only.
+    expect(badge).toHaveAttribute("aria-label", expect.stringContaining("high risk"));
+    expect(badge).toHaveAttribute("aria-label", expect.stringContaining("Session fixation"));
+  });
+
+  it("a finding matching no changed file paints NO badge", () => {
+    const art = changeset({ reviewState: {} });
+    seed(art, [], [
+      findings([
+        { category: "perf", title: "N+1", detail: "d", significance: "high", severity: "high", evidence: [ev("api/other.ts")] },
+      ]),
+    ]);
+    render(<Harness id="art_cs" />);
+    expect(screen.queryByTestId("finding-overlay-badge")).not.toBeInTheDocument();
+  });
+
+  it("THE U2 SEAM — a finding whose evidence has NO filePath badges nothing and does not crash", () => {
+    const art = changeset({ reviewState: {} });
+    seed(art, [], [
+      findings([
+        // U2 makes filePath optional (doc-anchored). No filePath → no code badge.
+        { category: "contract", title: "Ambiguous clause", detail: "d", significance: "high", evidence: [{ lineStart: 3, snippet: "clause", explanation: "why" }] },
+      ]),
+    ]);
+    expect(() => render(<Harness id="art_cs" />)).not.toThrow();
+    expect(screen.queryByTestId("finding-overlay-badge")).not.toBeInTheDocument();
+  });
+
+  it("the badge navigates to the pinned finding (dp:focus-artifact + finding anchor)", async () => {
+    const art = changeset({ reviewState: {} });
+    seed(art, [], [
+      findings([
+        { category: "security", title: "Session fixation", detail: "d", significance: "high", severity: "high", evidence: [ev("auth/middleware.ts")] },
+      ]),
+    ]);
+    render(<Harness id="art_cs" />);
+    const events: Array<{ artifactId?: string; anchorKey?: string }> = [];
+    const listener = (e: Event) => events.push((e as CustomEvent).detail);
+    window.addEventListener("dp:focus-artifact", listener);
+    try {
+      await userEvent.click(screen.getByTestId("finding-overlay-badge"));
+    } finally {
+      window.removeEventListener("dp:focus-artifact", listener);
+    }
+    expect(events).toContainEqual({ artifactId: "art_findings", anchorKey: "finding:0" });
+  });
+
+  it("the badge is a real button, a SIBLING of the file-select button (never nested — no nested-interactive a11y break)", () => {
+    const art = changeset({ reviewState: {} });
+    seed(art, [], [
+      findings([
+        { category: "security", title: "Session fixation", detail: "d", significance: "high", severity: "high", evidence: [ev("auth/middleware.ts")] },
+      ]),
+    ]);
+    render(<Harness id="art_cs" />);
+    const badge = screen.getByTestId("finding-overlay-badge");
+    expect(badge.tagName).toBe("BUTTON");
+    // The file-select button carries the row title; the badge must not live inside it.
+    const fileSelect = screen.getByTitle("modified auth/middleware.ts");
+    expect(fileSelect.contains(badge)).toBe(false);
+  });
+
+  it("renders in both themes (light + dark) without crashing", () => {
+    const art = changeset({ reviewState: {} });
+    for (const theme of ["light", "dark"] as const) {
+      document.documentElement.setAttribute("data-theme", theme);
+      seed(art, [], [
+        findings([
+          { category: "security", title: "Session fixation", detail: "d", significance: "high", severity: "high", evidence: [ev("auth/middleware.ts")] },
+        ]),
+      ]);
+      const { unmount } = render(<Harness id="art_cs" />);
+      expect(screen.getByTestId("finding-overlay-badge")).toHaveTextContent("1");
+      unmount();
+    }
+    document.documentElement.removeAttribute("data-theme");
+  });
+
+  it("ignores findings from a DIFFERENT session", () => {
+    const art = changeset({ reviewState: {} });
+    seed(art, [], [
+      findings([
+        { category: "security", title: "Foreign", detail: "d", significance: "high", severity: "high", evidence: [ev("auth/middleware.ts")] },
+      ], { id: "art_foreign", sessionId: "s2" }),
+    ]);
+    render(<Harness id="art_cs" />);
+    expect(screen.queryByTestId("finding-overlay-badge")).not.toBeInTheDocument();
+  });
+});

@@ -15,6 +15,14 @@ import { computePending } from "../../lib/pending";
 import { resolveChangesetKey, type ChangesetIntent } from "../../lib/changesetKeymap";
 import { reviewLifecycle } from "../../lib/reviewLifecycle";
 import {
+  computeFileFindingOverlay,
+  sessionFindingsArtifacts,
+  describeFileFindingOverlay,
+  type FileFindingOverlay,
+  type FileFindingRef,
+  type OverlaySeverity,
+} from "../../lib/findingFileOverlay";
+import {
   summarizeOpenSuggestions,
   describeOpenStates,
   openSuggestionsConfirmLabel,
@@ -240,6 +248,59 @@ function DispChip({ disposition }: { disposition: ChangesetDisposition }) {
 }
 
 /**
+ * U1 (round-15) — THE WHERE-OVERLAY badge on a changed-file rail row.
+ *
+ * The derived join (lib/findingFileOverlay) pins the session's open findings
+ * onto the file they anchor to; this renders that as a quiet, right-aligned
+ * badge — a severity dot + the finding count — so a reviewer dispositioning
+ * files sees "where the risk lives" without cross-referencing three surfaces in
+ * their head. It's a real <button> (a SIBLING of the file-select button, never
+ * nested inside it) so a click can jump to the finding without a nested-
+ * interactive a11y violation; the severity is spelled out in the accessible
+ * name so the signal is never carried by color alone.
+ */
+const overlaySevBadge: Record<OverlaySeverity, string> = {
+  // Mirrors ResearchArtifact.severityStyles (AA-verified pairings) so the file
+  // rail and the findings list speak the same severity language.
+  info: "bg-surface-elevated text-text-muted",
+  low: "bg-accent-green-dim text-accent-green",
+  medium: "bg-accent-amber-dim text-accent-amber",
+  high: "bg-accent-red-dim text-accent-red",
+  critical: "bg-accent-red text-text-inverse",
+};
+const overlaySevDot: Record<OverlaySeverity, string> = {
+  info: "bg-text-muted",
+  low: "bg-accent-green",
+  medium: "bg-accent-amber",
+  high: "bg-accent-red",
+  critical: "bg-text-inverse",
+};
+
+function FileFindingBadge({
+  overlay,
+  onJump,
+}: {
+  overlay: FileFindingOverlay;
+  onJump: (ref: FileFindingRef | undefined) => void;
+}) {
+  const label = describeFileFindingOverlay(overlay);
+  return (
+    <button
+      type="button"
+      data-testid="finding-overlay-badge"
+      // refs are highest-severity-first, so a click lands on the scariest one.
+      onClick={() => onJump(overlay.refs[0])}
+      aria-label={label}
+      title={label}
+      className={`shrink-0 self-center mr-2 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-2xs font-bold font-sans hover:opacity-80 focus:outline-none focus:ring-1 focus:ring-border-focus ${overlaySevBadge[overlay.maxSeverity]}`}
+    >
+      <span aria-hidden="true" className={`inline-block w-1.5 h-1.5 rounded-full ${overlaySevDot[overlay.maxSeverity]}`} />
+      {overlay.count}
+    </button>
+  );
+}
+
+/**
  * Q6 (#232) — the EXTERNAL-REVIEW banner.
  *
  * A changeset normally means "the agent wrote this and it is waiting on your
@@ -414,6 +475,30 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
     }
     return counts;
   }, [allComments]);
+
+  // U1 (round-15) — THE WHERE-OVERLAY. A DERIVED read-model, zero agent burden:
+  // cross-reference the session's open findings (present_findings → "research"
+  // artifacts) against the files THIS changeset touches, so each file's rail row
+  // can badge "N findings (M high) live here". Reads only data that already
+  // exists (finding.evidence[].filePath × changeset.files) — no new schema
+  // field, no new agent instruction. Robust to U2 relaxing filePath to optional:
+  // a locator-only / filePath-less evidence item simply badges nothing.
+  const allArtifacts = useArtifactStore((s) => s.artifacts);
+  const findingOverlayByFile = useMemo(
+    () => computeFileFindingOverlay(files, sessionFindingsArtifacts(allArtifacts, artifact.sessionId)),
+    [files, allArtifacts, artifact.sessionId],
+  );
+  // Jump to a pinned finding — reuse the rail's own `dp:focus-artifact` +
+  // `finding:${i}` anchor dispatch (App.tsx selects the research artifact and
+  // scrolls the finding into view). No new navigation machinery.
+  const jumpToFinding = useCallback((ref: FileFindingRef | undefined) => {
+    if (!ref) return;
+    window.dispatchEvent(
+      new CustomEvent("dp:focus-artifact", {
+        detail: { artifactId: ref.artifactId, anchorKey: `finding:${ref.findingIndex}` },
+      }),
+    );
+  }, []);
 
   const totals = useMemo(() => {
     let additions = 0;
@@ -1025,6 +1110,11 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                 <FilePathLabel path={f.path} />
                 <OpenInEditorLink filePath={f.path} line={1} />
                 <span className="ml-auto flex items-center gap-2 shrink-0">
+                  {/* U1 — the WHERE-overlay also rides the stacked review-all
+                      header (this is a <div>, so the badge sits inline). */}
+                  {findingOverlayByFile[f.path] && (
+                    <FileFindingBadge overlay={findingOverlayByFile[f.path]!} onJump={jumpToFinding} />
+                  )}
                   <WalkMeThroughButton target={{ kind: "file", filePath: f.path, artifactId: artifact.id }} />
                   {renderDispositionControls(f)}
                 </span>
@@ -1054,15 +1144,25 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                 // is a live negotiation, not an old comment: give it a DISTINCT
                 // amber badge so it can't hide behind an undifferentiated count.
                 const fileOpenSug = openSug.byFile[f.path];
+                // U1 — the WHERE-overlay for this file (findings anchored to it).
+                const findingOverlay = findingOverlayByFile[f.path];
                 const isActive = i === clampedIdx;
                 return (
-                  <li key={`${f.path}-${i}`}>
+                  // U1 — the row background/border move to the <li> so the whole
+                  // row (including the findings badge, a SIBLING of the file-
+                  // select button — never nested inside it) shares one highlight.
+                  <li
+                    key={`${f.path}-${i}`}
+                    className={`flex items-stretch border-l-2 ${
+                      isActive ? "bg-surface-active border-accent-blue" : "border-transparent hover:bg-surface-hover"
+                    }`}
+                  >
                     <button
                       type="button"
                       onClick={() => { setActiveIdx(i); setActiveAnchor(null); }}
                       aria-current={isActive ? "true" : undefined}
-                      className={`w-full flex items-center gap-2 px-3 py-1.5 font-mono text-[11.5px] border-l-2 text-left ${
-                        isActive ? "bg-surface-active border-accent-blue text-text-primary" : "border-transparent text-text-secondary hover:bg-surface-hover"
+                      className={`min-w-0 flex-1 flex items-center gap-2 px-3 py-1.5 font-mono text-[11.5px] text-left ${
+                        isActive ? "text-text-primary" : "text-text-secondary"
                       }`}
                       title={`${mark.label} ${f.path}`}
                     >
@@ -1118,6 +1218,10 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                         <DispChip disposition={disp} />
                       )}
                     </button>
+                    {/* U1 — the WHERE-overlay badge: a SIBLING button (never
+                        nested in the file-select button) so a click jumps to the
+                        pinned finding without a nested-interactive a11y break. */}
+                    {findingOverlay && <FileFindingBadge overlay={findingOverlay} onJump={jumpToFinding} />}
                   </li>
                 );
               })}
