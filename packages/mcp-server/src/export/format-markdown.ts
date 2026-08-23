@@ -911,8 +911,14 @@ export function buildGitHubReviewPayload(
   // This is the ONLY exporter with an outbound audience, so the scrub is local
   // to it rather than a change to getSessionTitle (the share page and the
   // markdown exports are the human's own record and are R3's surface).
+  // T1 review F2 — the h2 title is OUTBOUND too. getSessionTitle derives it from a
+  // decision/research title, and R1 only stripped the "Session <id>" fallback — so a
+  // title carrying an absolute path (a decision named "fix /home/<user>/x" or
+  // "D:\proj\y") posted to the stranger's PR unscrubbed, the one prose field on the
+  // body that skipped scrubProse. It gets the same collapse as every other outbound
+  // string now.
   const derivedTitle = getSessionTitle(state);
-  const title = derivedTitle.startsWith("Session ") ? null : derivedTitle;
+  const title = derivedTitle.startsWith("Session ") ? null : scrubProse(derivedTitle);
   const event = opts.event ?? "COMMENT";
   const bodyParts: string[] = [
     `## deepPairing notes${title ? ` — ${title}` : ""}`,

@@ -134,19 +134,38 @@ describe("R3/adv F2 — Windows/UNC path shapes are scrubbed, both directions", 
     });
   }
 
+  // T1 review F1 — a bare UNC authority (no home segment) leaked the internal
+  // hostname + share layout. The host+share root collapses; a legit protocol-
+  // relative URL is left alone.
+  const uncLeaks: ReadonlyArray<readonly [string, string]> = [
+    ["see \\\\srv\\share\\proj\\x.ts end", "see ~/proj\\x.ts end"],
+    ["wsl \\\\wsl$\\Ubuntu\\proj\\x.ts end", "wsl ~/proj\\x.ts end"],
+    ["fwd //wsl$/Ubuntu/proj/x.ts end", "fwd ~/proj/x.ts end"],
+    // UNC + home still handled by the home pass (username gone) — no regression
+    ["home \\\\srv\\share\\Users\\bob\\x.ts end", "home ~/x.ts end"],
+  ];
+  for (const [input, want] of uncLeaks) {
+    it(`scrubProse (UNC-root collapsed): ${JSON.stringify(input)}`, () => {
+      expect(scrubProse(input, undefined)).toBe(want);
+      expect(scrubProse(input, undefined)).not.toMatch(/srv|fileserver/);
+    });
+  }
+
   // over-scrub protection — legit relative paths + standard POSIX system paths
-  // + colon-bearing prose are returned byte-identical.
+  // + protocol-relative URLs + colon-bearing prose are returned byte-identical.
   const drivePreserved: readonly string[] = [
     "rel app/home/x untouched",
     "sys /usr/lib/node/x.ts untouched",
     "sys /opt/build/y.ts untouched",
     "url visit http://x.com/mnt/c/foo ok",
+    "proto //cdn.com/home/x/y ok",
+    "cdn //cdn.com/assets/app.js ok",
     "time ratio 3:30 done",
     "clock at 12:00 later",
     "plain src/auth/hash.ts kept",
   ];
   for (const input of drivePreserved) {
-    it(`scrubProse (drive-root preserved): ${JSON.stringify(input)}`, () => {
+    it(`scrubProse (drive/UNC-root preserved): ${JSON.stringify(input)}`, () => {
       expect(scrubProse(input, undefined)).toBe(input);
     });
   }

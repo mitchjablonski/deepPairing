@@ -275,14 +275,27 @@ const HOME_PREFIX_IN_PROSE = new RegExp(
 // so this one anchored pass closes both.
 //
 // It runs AFTER the home pass (so `C:\Users\<u>\` has already collapsed to `~/` and
-// this never sees the username), and it matches ONLY an UNAMBIGUOUS drive/mount ROOT
-// DESIGNATOR — a drive letter directly followed by a separator, or a
-// `/mnt|/cygdrive/<letter>/` mount root. It replaces just that root designator with
-// `~/`, keeping the trailing path (a repo-relative-looking tail the reviewer can use)
-// exactly as written. The anchored-regex discipline (round-13) holds:
+// this never sees the username), and it matches ONLY an UNAMBIGUOUS drive/mount/UNC
+// ROOT DESIGNATOR — a drive letter directly followed by a separator, a
+// `/mnt|/cygdrive/<letter>/` mount root, or (T1 review F1) a UNC AUTHORITY root. It
+// replaces just that root designator with `~/`, keeping the trailing path (a
+// repo-relative-looking tail the reviewer can use) exactly as written.
+//
+// T1 REVIEW F1 — the UNC-authority residual. A bare UNC path with no home segment —
+// `\\srv\share\proj\x` (backslash) or `//wsl$/distro/proj/x` (forward WSL) — sailed
+// through, posting the internal file-server HOSTNAME + share layout verbatim to a
+// stranger's PR and into the share page. R3 treated a leaked UNC hostname as serious;
+// the home pass only collapsed a UNC authority when a `home|Users` segment followed
+// it. This collapses `\\host\share\` → `~/` (host AND share are the machine locator;
+// a UNC path's first two components are always authority) and the same `//wsl$/…`
+// form the home pass whitelists.
+//
+// The anchored-regex discipline (round-13) holds:
 //   - the leading lookbehind excludes path/word chars, so `https://x`, `.com/mnt/x`
 //     and mid-word `http:` are prose, not a drive root;
 //   - a drive letter is `[A-Za-z]:` + separator, which no ordinary sentence spells;
+//   - only `//wsl$` is accepted for the forward-`//` form, so a protocol-relative URL
+//     (`//cdn.com/assets/app.js`, `//cdn/home/x`) is NEVER mistaken for a UNC root;
 //   - a BARE POSIX absolute (`/usr/lib/x`, `/opt/build/y`) is deliberately NOT matched
 //     — those name standard system locations the reader may want, not the user's disk
 //     layout, and the only username leak they can carry (`/home`, `/Users`) the home
@@ -290,8 +303,14 @@ const HOME_PREFIX_IN_PROSE = new RegExp(
 const DRIVE_ROOT_IN_PROSE = new RegExp(
   "(?<![\\w~.\\-\\\\/])" +
     "(?:" +
+    // Windows drive letter:  C:\  or  C:/
     "[A-Za-z]:" + _SEP +
+    // WSL / cygwin mount root:  /mnt/c/ , C:/cygdrive/c/
     "|(?:[A-Za-z]:)?" + _SEP + "(?:mnt|cygdrive)" + _SEP + "[A-Za-z]" + _SEP +
+    // Backslash UNC authority root:  \\host\  or  \\host\share\  (redacts host+share)
+    "|\\\\\\\\[^\\\\/\\s]+(?:\\\\[^\\\\/\\s]+)?" + _SEP +
+    // Forward WSL UNC root:  //wsl$/distro/  (the ONLY // form accepted)
+    "|//wsl\\$(?:/[^/\\s]+)?" + _SEP +
     ")",
   "gi",
 );
