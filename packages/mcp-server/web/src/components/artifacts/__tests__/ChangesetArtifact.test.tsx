@@ -957,6 +957,6 @@ describe("ChangesetArtifact — T3 (round-14 LOW display riders)", () => {
     seed(art);
     render(<Harness id="art_cs" />);
     const status = screen.getByTestId("action-status");
-    expect(status).toHaveTextContent(/review each file above, then approve the whole changeset/i);
+    expect(status).toHaveTextContent(/mark each file above Looks right . Needs changes and the changeset verdict follows/i);
   });
 });

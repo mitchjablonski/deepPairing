@@ -1252,10 +1252,13 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                    (per-file disposition → whole-changeset verdict), distinct by
                    design from the single Respond/Approve/Reject bar every other
                    artifact uses. A first-timer's confusion is "is per-file enough,
-                   or is there a final step?" — so the idle cue now names the
-                   sequence explicitly (review each file → then the changeset-level
-                   action here) instead of the terse "Skim file-by-file". */
-                <>Review each file above, then approve the whole changeset here — or trust it at a glance with <b className="text-text-primary">Approve all</b>.</>
+                   or is there a final step?" — so the idle cue names how the
+                   levels relate: mark each file, and the changeset verdict follows.
+                   It references ONLY controls visible in THIS state (the per-file
+                   Looks-right/Needs-changes buttons + Approve all) — the whole-
+                   "Approve changeset" button doesn't materialize until every file
+                   is look-right, so naming it here would point at a hidden control. */
+                <>Mark each file above Looks right / Needs changes and the changeset verdict follows — or trust it at a glance with <b className="text-text-primary">Approve all</b>.</>
               )}
             </span>
 
