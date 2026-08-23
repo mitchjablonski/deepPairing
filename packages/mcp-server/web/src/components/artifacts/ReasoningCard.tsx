@@ -274,7 +274,11 @@ function EvidenceChip({ evidence }: { evidence: Evidence | string }) {
             {evidence.filePath}:{evidence.lineStart}
             {evidence.lineEnd !== evidence.lineStart ? `-${evidence.lineEnd}` : ""}
           </span>
-          <OpenInEditorLink filePath={evidence.filePath} line={evidence.lineStart} />
+          {/* U2 — filePath/lineStart are optional now (docs anchor via locator);
+              the editor link only makes sense for a real file:line. */}
+          {evidence.filePath && typeof evidence.lineStart === "number" && (
+            <OpenInEditorLink filePath={evidence.filePath} line={evidence.lineStart} />
+          )}
         </span>
       </div>
       {evidence.snippet && (

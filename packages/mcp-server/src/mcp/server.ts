@@ -107,8 +107,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
         name: "present_findings",
         annotations: { title: "Present findings", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         description:
-          `Present research findings as a structured artifact in the companion UI (${port ? `localhost:${port}` : ""}). Each finding carries evidence, category, significance, severity, a \`concept\` (the pattern), and optional \`visuals[]\`.` +
-          `\n\nSchema note: \`findings\` is an array of objects (NOT a string). Required per-finding: category, detail, significance. Name each finding's \`concept\` ({name, oneLineExplanation?}) — the PREFERRED place to name a pattern (ahead of log_reasoning); it renders as a ledger-aware badge. INPUT_VALIDATION_FAILED on mismatch (bad path + example).` +
+          `Present research findings as a structured artifact in the companion UI (${port ? `localhost:${port}` : ""}). Each finding carries evidence, category, significance, severity, a \`concept\`, and optional \`visuals[]\`.` +
+          `\n\nSchema note: \`findings\` is an array of objects (NOT a string). Required per-finding: category, detail, significance. Name each finding's \`concept\` ({name, oneLineExplanation?}) — the PREFERRED place to name a pattern (ahead of log_reasoning). Non-code passages (no file:line) anchor via a \`locator\`. INPUT_VALIDATION_FAILED on mismatch (bad path + example).` +
           `\n\nWorkflow: SINGLE REVIEW SURFACE — the companion UI is the only review surface. Don't paste findings in chat; call check_feedback for the verdict.`,
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
@@ -130,7 +130,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
         annotations: { title: "Present spec", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         description:
           "Present a feature spec — objective, requirements (each with rationale + acceptance criteria), optional design notes and tasks. For non-trivial work that'd otherwise skip straight to code without agreement on what's being built." +
-          "\n\nSchema note: `requirements` is a non-empty array of objects with `id`, `statement`, `rationale`, `acceptanceCriteria`. VISUALS (encouraged): attach `visuals[]` — each a stable `id`, a `kind` (diagram/file_map/prototype/annotated_code; see inputSchema), and `title`. INPUT_VALIDATION_FAILED on mismatch." +
+          "\n\nSchema note: `requirements` is a non-empty array of objects with `id`, `statement`, `rationale`, `acceptanceCriteria`. VISUALS (encouraged): attach `visuals[]` — each a stable `id`, a `kind` (diagram/file_map/doc_map/prototype/annotated_code; see inputSchema), and `title`. INPUT_VALIDATION_FAILED on mismatch." +
           "\n\nWorkflow: SINGLE REVIEW SURFACE — the companion UI is where the human reviews requirements. Don't re-paste in chat. Call check_feedback for the verdict.",
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
@@ -141,7 +141,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
         annotations: { title: "Present plan", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         description:
           "Present an implementation plan as steps with file changes and before/after previews." +
-          "\n\nSchema note: `steps` needs `description` + `reasoning` each. VISUALS (encouraged): attach `visuals[]` so the human reviews a picture — each a stable `id` (keep across revisions), a `kind` (diagram/file_map/prototype/annotated_code; see inputSchema), and `title`. INPUT_VALIDATION_FAILED on mismatch." +
+          "\n\nSchema note: `steps` needs `description` + `reasoning` each. VISUALS (encouraged): attach `visuals[]` so the human reviews a picture — each a stable `id` (keep across revisions), a `kind` (diagram/file_map/doc_map/prototype/annotated_code; see inputSchema), and `title`. INPUT_VALIDATION_FAILED on mismatch." +
           "\n\nWorkflow: SINGLE REVIEW SURFACE — this REPLACES Claude Code's native plan-approval flow. Do NOT call ExitPlanMode after present_plan. The companion UI is the only approval surface; call check_feedback for the verdict.",
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.

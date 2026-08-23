@@ -8,6 +8,7 @@ import type {
   PlanBranch,
   PlanVisual,
   PlanVisualFile,
+  PlanVisualDocSection,
   PlanVisualAnnotation,
   SpecContent,
   SpecRequirement,
@@ -232,7 +233,9 @@ function hashStr(s: string): string {
  */
 function visualFallbackId(o: Record<string, unknown>, indexFallback: string): string {
   const kind = typeof o.kind === "string" ? o.kind : "visual";
-  const parts = [o.title, o.source, o.html, o.code, o.filePath, o.files, o.annotations];
+  // U2 — `sections` (doc_map payload) joins the content-hash parts so a doc_map
+  // with ONLY sections still gets a content-stable id (not a positional one).
+  const parts = [o.title, o.source, o.html, o.code, o.filePath, o.files, o.sections, o.annotations];
   const hasContent = parts.some(
     (p) => p != null && (typeof p !== "string" || p.length > 0) && (!Array.isArray(p) || p.length > 0),
   );
@@ -245,7 +248,7 @@ function coerceVisual(v: unknown, fallbackId: string): PlanVisual {
   const o = obj(v);
   const out: PlanVisual = {
     id: str(o.id) || visualFallbackId(o, fallbackId),
-    kind: oneOf(o.kind, ["diagram", "file_map", "prototype", "annotated_code"] as const, "diagram"),
+    kind: oneOf(o.kind, ["diagram", "file_map", "doc_map", "prototype", "annotated_code"] as const, "diagram"),
   };
   if (typeof o.title === "string") out.title = o.title;
   if (typeof o.caption === "string") out.caption = o.caption;
@@ -259,6 +262,21 @@ function coerceVisual(v: unknown, fallbackId: string): PlanVisual {
       if (typeof f.note === "string") file.note = f.note;
       return file;
     });
+  }
+  // U2 — doc_map payload: the document's sections/clauses. Drop empty-label rows
+  // (matches the schema's `.min(1)` — a row that points at nothing is degenerate)
+  // so a coerce round-trip is stable, and keep a valid risk chip only.
+  if (Array.isArray(o.sections)) {
+    out.sections = o.sections
+      .filter(isObj)
+      .map((s): PlanVisualDocSection => {
+        const section: PlanVisualDocSection = { label: str(s.label) };
+        if (typeof s.note === "string") section.note = s.note;
+        const risk = optOneOf(s.risk, LMH);
+        if (risk) section.risk = risk;
+        return section;
+      })
+      .filter((s) => s.label.length > 0);
   }
   // annotated_code payload
   if (typeof o.code === "string") out.code = o.code;

@@ -174,6 +174,23 @@ export const PlanVisualAnnotationSchema = z.object({
 
 export type PlanVisualAnnotation = z.infer<typeof PlanVisualAnnotationSchema>;
 
+/** U2 (round-15 generalization) — one section/clause of a `doc_map` visual: the
+ *  non-code sibling of a `file_map` entry. `label` names the location in the
+ *  document ("§5 — Burst limits"), `note` describes it, and the optional `risk`
+ *  chip concentrates WHERE the danger lives ("§5 — high: undefined burst cap").
+ *  This serves the code-only WHERE-locative gap (file_map/relatedPaths have no
+ *  non-code analog) — "where in the document the key clause lives / where the
+ *  risk concentrates". All-optional except `label` (an unlabeled row in a
+ *  structural map is degenerate — nothing to point the reader at). */
+export const PlanVisualDocSectionSchema = z.object({
+  label: z.string().min(1).describe("Where in the document this is, e.g. '§5 — Burst limits' or 'Terms > 5.2'"),
+  note: z.string().optional().describe("What the section/clause says or why it matters"),
+  risk: z.enum(["low", "medium", "high"]).optional()
+    .describe("Optional risk chip concentrating WHERE the danger lives, e.g. 'high' on '§5 — undefined burst cap'"),
+});
+
+export type PlanVisualDocSection = z.infer<typeof PlanVisualDocSectionSchema>;
+
 /**
  * A visual attached to a plan (or spec) — rendered as a first-class,
  * commentable block alongside the explicit steps so the planning phase isn't a
@@ -183,6 +200,10 @@ export type PlanVisualAnnotation = z.infer<typeof PlanVisualAnnotationSchema>;
  *                        fuzzy-safe: invalid Mermaid shows the source + an
  *                        error, never crashes.
  *   - "file_map"       — structured list of planned create/modify/delete ops.
+ *   - "doc_map"        — U2: the non-code sibling of file_map — a structured list
+ *                        of a document's sections/clauses, each with an optional
+ *                        risk chip. Serves "where in the document the key clause
+ *                        lives / where the risk concentrates".
  *   - "prototype"      — self-contained HTML/CSS rendered in a SANDBOXED iframe.
  *   - "annotated_code" — a real code snippet with line-anchored annotations,
  *                        rendered through the per-line-commentable code block so
@@ -195,11 +216,12 @@ export const PlanVisualSchema = z.object({
   /** Stable id — comments anchor to it. Keep it across revisions so a comment
    *  thread on a diagram survives the agent redrawing it. */
   id: z.string().describe("Stable id — comments anchor to it; KEEP IT ACROSS REVISIONS so a comment thread on a diagram survives the agent redrawing it"),
-  kind: z.enum(["diagram", "file_map", "prototype", "annotated_code"]),
+  kind: z.enum(["diagram", "file_map", "doc_map", "prototype", "annotated_code"]),
   title: z.string().optional(),
   caption: z.string().optional(),
   source: z.string().optional().describe("kind=diagram: Mermaid source"),
   files: z.array(PlanVisualFileSchema).optional().describe("kind=file_map: the planned file operations"),
+  sections: z.array(PlanVisualDocSectionSchema).optional().describe("kind=doc_map: the document's sections/clauses, each with an optional risk chip"),
   html: z.string().optional().describe("kind=prototype: a self-contained HTML document (rendered sandboxed)"),
   code: z.string().optional().describe("kind=annotated_code: the code snippet to render + annotate"),
   filePath: z.string().optional().describe("kind=annotated_code: source path (drives syntax highlighting + the per-line comment anchor)"),
