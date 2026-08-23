@@ -27859,6 +27859,10 @@ var HOME_PREFIX_IN_PROSE = new RegExp(
   "(?<![\\w~.\\-\\\\/])" + _HOME_PROSE_PREFIX + _SEP + "(?:home|Users)" + _SEP + _NOTSEG + "+" + _SEP,
   "gi"
 );
+var DRIVE_ROOT_IN_PROSE = new RegExp(
+  "(?<![\\w~.\\-\\\\/])(?:[A-Za-z]:" + _SEP + "|(?:[A-Za-z]:)?" + _SEP + "(?:mnt|cygdrive)" + _SEP + "[A-Za-z]" + _SEP + ")",
+  "gi"
+);
 var activeProjectRoot;
 function scrubProse(text, projectRoot2 = activeProjectRoot) {
   let s = typeof text === "string" ? text : text == null ? "" : String(text);
@@ -27874,7 +27878,8 @@ function scrubProse(text, projectRoot2 = activeProjectRoot) {
       }
     }
   }
-  return s.replace(HOME_PREFIX_IN_PROSE, "~/");
+  s = s.replace(HOME_PREFIX_IN_PROSE, "~/");
+  return s.replace(DRIVE_ROOT_IN_PROSE, "~/");
 }
 function escText(value) {
   return esc2(scrubProse(value));
@@ -28207,7 +28212,7 @@ function visualsBlock(visuals, ctx) {
       case "diagram": {
         kindLabel = "Diagram";
         const src = String(v.source ?? "").trim();
-        body = src ? ctx.includeCode ? `<p class="visual-note">A diagram the pair drew and discussed. This page runs no scripts, so it can't draw the picture here \u2014 the Mermaid source it was drawn from is below. Paste it into deepPairing, or any Mermaid viewer (e.g. mermaid.live), to see it rendered.</p><details class="visual-source" open><summary>Diagram source (Mermaid)</summary><pre class="code" data-language="mermaid"><code>${escText(src)}</code></pre></details>` : `<p class="visual-note">A diagram the pair drew and discussed. It is drawn in deepPairing.</p><p class="redacted">Diagram source omitted from this export.</p>` : `<p class="visual-note">A diagram was attached here, but its source was not recorded.</p>`;
+        body = src ? ctx.includeCode ? `<p class="visual-note">A diagram, rendered in deepPairing. This page is fully self-contained \u2014 it runs no scripts and makes no network requests \u2014 so the picture isn't drawn inline; the Mermaid source it was rendered from is below. Open it in deepPairing, or paste it into any Mermaid viewer (e.g. mermaid.live), to see the diagram.</p><details class="visual-source" open><summary>Diagram source (Mermaid)</summary><pre class="code" data-language="mermaid"><code>${escText(src)}</code></pre></details>` : `<p class="visual-note">A diagram the pair drew and discussed. It is drawn in deepPairing.</p><p class="redacted">Diagram source omitted from this export.</p>` : `<p class="visual-note">A diagram was attached here, but its source was not recorded.</p>`;
         break;
       }
       case "file_map": {
