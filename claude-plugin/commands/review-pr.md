@@ -20,10 +20,49 @@ gh pr checks $ARGUMENTS                 # what CI thinks
 gh pr diff $ARGUMENTS                   # the change itself
 ```
 
-Read the surrounding code too — a diff is not a codebase, and most real risks
-live in the code the diff *doesn't* show. If any of these fail (no `gh`, not
-authenticated, PR not found), tell me plainly and stop. Don't guess at the
-contents of a PR you couldn't fetch.
+Then **materialize the PR head into a scratch checkout** so you can read the
+code the diff *doesn't* show — a diff is not a codebase, and most real risks
+live in the callers, the tests, and the config the hunks never touch. Trace them
+from a real tree, not from the patch. **Never disturb my working tree to do it**
+— don't `gh pr checkout` in place, don't switch my branch, don't stash or
+force-checkout over my uncommitted work. Use an isolated, ephemeral scratch tree.
+
+First, let **N** be the PR *number* from $ARGUMENTS — $ARGUMENTS may be a URL, so
+strip it to the trailing number; a bare number is already N. Use `$N` (never the
+raw `$ARGUMENTS`) for the scratch path and branch name — a URL interpolated into
+either makes a junk nested tree and an invalid branch name, and the checkout
+fails silently:
+
+```
+# If we're inside a clone of the PR's repo (the usual case), a linked git
+# worktree is lightest — it never moves my branch or touches my files:
+git worktree add --detach .deeppairing/pr-review/$N
+( cd .deeppairing/pr-review/$N && gh pr checkout $N --branch pr-$N )
+#   (gh pr checkout acts on its cwd's repo, so run it *inside* that worktree —
+#    only the worktree's HEAD moves, never mine; gh resolves fork PRs for you.
+#    Where `.deeppairing/` is gitignored — as it is in a deepPairing repo — the
+#    scratch tree is invisible to my repo; otherwise it shows as an untracked
+#    `.deeppairing/` dir in my `git status` that you can delete when done.)
+
+# If we're NOT inside the target repo (a cross-repo review, no local clone),
+# shallow-clone into a temp dir instead and check the PR out there:
+#   dir="$(mktemp -d)"; gh repo clone <owner/repo> "$dir" -- --depth 50
+#   ( cd "$dir" && gh pr checkout $N )
+```
+
+Read surrounding code from that scratch tree for the orientation and
+blast-radius work below, then clean it up when we're done
+(`git worktree remove .deeppairing/pr-review/$N` or delete the temp dir).
+
+If `gh` or `git` isn't available, isn't authenticated, or the PR isn't found,
+**tell me plainly and stop** — don't guess at the contents of a PR you couldn't
+fetch. If the fetch worked but the scratch checkout *doesn't* (a worktree
+already there, a detached-fetch failure, a shallow clone that won't resolve),
+don't force it and don't touch my tree: remove any half-created worktree or temp
+dir (`git worktree remove --force .deeppairing/pr-review/$N` / delete the mktemp
+dir) so nothing dangles in `git worktree list`, then fall back to reviewing from
+the diff alone, tell me surrounding-code tracing is limited this pass, and record
+the files you therefore couldn't trace in `unknowns` (step b).
 
 **(b) Orient me first — `present_explainer`.** Before a single finding: what
 does this PR *do*, how do the pieces fit, and what is the blast radius? Audience
