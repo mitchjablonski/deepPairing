@@ -913,12 +913,32 @@ export function buildGitHubReviewPayload(
   // markdown exports are the human's own record and are R3's surface).
   const derivedTitle = getSessionTitle(state);
   const title = derivedTitle.startsWith("Session ") ? null : derivedTitle;
+  const event = opts.event ?? "COMMENT";
   const bodyParts: string[] = [
     `## deepPairing notes${title ? ` — ${title}` : ""}`,
     "",
   ];
   if (comments.length === 0) {
-    bodyParts.push("_No reviewable findings with structured evidence in this pairing session._");
+    // T1 (round-15) — THE BARE-APPROVE BODY. An APPROVE with no inline comments is
+    // the commonest approve shape, and it posts a REAL approving review on a
+    // colleague's PR — where a human writes "looks good to me". The old body was
+    // internal empty-state phrasing ("No reviewable findings with structured
+    // evidence…") — round 12 flagged it "unfit to send" and it never changed. A
+    // bare APPROVE now carries a genuine approval line instead of protocol
+    // boilerplate. A bare APPROVE only reaches this exporter because the human
+    // approved the PR changeset (authorizeReviewPost is the mechanical gate and is
+    // UNCHANGED — this is body copy, not authorization). R1 stays intact: the
+    // header still drops a "Session <id>" title, so the reviewer's folder name
+    // never leaves the machine.
+    //
+    // A zero-comment NON-approve (COMMENT/REQUEST_CHANGES) is refused upstream and
+    // never sent; the informative empty-state string is kept for that path (and any
+    // direct caller) so the sentence still says what happened.
+    bodyParts.push(
+      event === "APPROVE"
+        ? "Reviewed with deepPairing — no blocking findings."
+        : "_No reviewable findings with structured evidence in this pairing session._",
+    );
   } else {
     bodyParts.push(`${comments.length} inline comment${comments.length === 1 ? "" : "s"} from this pairing session.`);
     if (findingTitles.length > 0) {
@@ -932,7 +952,7 @@ export function buildGitHubReviewPayload(
 
   return {
     body: bodyParts.join("\n"),
-    event: opts.event ?? "COMMENT",
+    event,
     comments,
   };
 }

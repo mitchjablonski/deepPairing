@@ -634,19 +634,22 @@ describe("R3 — visuals reach the page", () => {
     const html = formatSessionHtml(state, OPTS);
     expect(html).toContain("Token refresh");
     expect(html).toContain("How the refresh races.");
-    // S4 (round-14) — the source is now labelled honestly + prominently and
-    // the note names where to render it.
+    // T1 (round-15) — the source is labelled honestly + prominently, framed as a
+    // diagram rendered in deepPairing, and the note names where to see it drawn.
     expect(html).toContain("Diagram source (Mermaid)");
     expect(html).toContain("flowchart TD");
-    expect(html).toContain("Paste it into deepPairing");
+    expect(html).toContain("rendered in deepPairing");
+    expect(html).toContain("mermaid.live");
   });
 
-  // S4 (round-14) — the diagram ships as an honest source-note (server-side
-  // Mermaid→SVG was investigated and rejected: mermaid@11 needs a real browser
-  // DOM; happy-dom yields an empty svg and a faithful render needs a headless
-  // Chromium the daemon export path can't take). The pins the fallback must
-  // keep: the source is XSS-safe (a hostile diagram body does NOT execute) and
-  // the block makes ZERO external requests.
+  // S4 (round-14) + T1 (round-15) — the diagram ships as an honest source-note.
+  // Server-side Mermaid→SVG was investigated AGAIN and rejected: mermaid@11 needs
+  // a real browser DOM; driven headless against happy-dom it throws in edge
+  // geometry (getPointAtLength / getTotalLength are a browser engine, not a shim),
+  // and a faithful render needs a headless Chromium the daemon export path can't
+  // take over arbitrary/hostile source. The pins the fallback must keep: the
+  // source is XSS-safe (a hostile diagram body does NOT execute), the block makes
+  // ZERO external requests, and malformed/huge source degrades gracefully.
   it("a hostile diagram source is escaped, not executed (XSS-safe)", () => {
     const evil = {
       id: "vx",
@@ -675,6 +678,53 @@ describe("R3 — visuals reach the page", () => {
     const block = html.slice(start, html.indexOf("</details>", start));
     expect(block).not.toMatch(/(?:src|href)\s*=\s*["']https?:/i);
     expect(block).not.toMatch(/<(?:script|iframe|img|link|object|embed)\b/i);
+  });
+
+  // T1 (round-15) — a fuller hostile-source matrix: an escaped diagram body must
+  // never introduce an active element or an event-handler attribute, whatever the
+  // agent (or an attacker who fed the agent) put in the source.
+  it("a diagram source with img/svg/handler payloads stays inert (XSS matrix)", () => {
+    const evil = {
+      id: "vx2",
+      kind: "diagram",
+      title: "Evil2",
+      source:
+        'graph TD\n  A["</code></pre><img src=x onerror=alert(1)>"] --> B\n' +
+        '  B["<svg onload=alert(2)></svg>"] --> C\n' +
+        '  C["<iframe src=javascript:alert(3)></iframe>"]',
+    };
+    const html = formatSessionHtml(
+      baseState({ artifacts: [artifact({ id: "a1", type: "plan", title: "P", content: { steps: [], visuals: [evil] } })] }),
+      OPTS,
+    );
+    const start = html.indexOf('class="visual"');
+    const block = html.slice(start, html.indexOf("</details>", start) + 10);
+    // No LIVE element survives — the payloads exist only as escaped text, so an
+    // `onerror=` substring inside `&lt;img …&gt;` is inert and expected.
+    expect(block).not.toMatch(/<(?:script|iframe|img|svg|link|object|embed)\b/i);
+    expect(block).toContain("&lt;img");
+    expect(block).toContain("&lt;svg");
+    expect(block).toContain("&lt;iframe");
+  });
+
+  it("a malformed / huge diagram source degrades gracefully (no throw, still self-contained)", () => {
+    const huge = {
+      id: "vx3",
+      kind: "diagram",
+      title: "Huge",
+      // not valid mermaid, and large — the exporter must not parse or render it,
+      // just carry it as escaped source text.
+      source: "this is )(*&^ not %%% mermaid at all\n".repeat(4000),
+    };
+    const state = baseState({
+      artifacts: [artifact({ id: "a1", type: "plan", title: "P", content: { steps: [], visuals: [huge] } })],
+    });
+    let html = "";
+    expect(() => { html = formatSessionHtml(state, OPTS); }).not.toThrow();
+    const start = html.indexOf('class="visual"');
+    const block = html.slice(start, html.indexOf("</details>", start));
+    expect(block).not.toMatch(/(?:src|href)\s*=\s*["']https?:/i);
+    expect(block).toContain("not %%% mermaid at all");
   });
 
   it("renders a spec's visuals and a decision option's visuals too", () => {

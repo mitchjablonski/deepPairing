@@ -267,6 +267,35 @@ const HOME_PREFIX_IN_PROSE = new RegExp(
   "gi",
 );
 
+// T1 (round-15) — THE DRIVE-ROOT RESIDUAL, the banked S4 LOW. HOME_PREFIX_IN_PROSE
+// collapses a home/Users segment, but a bare drive-rooted absolute with NO home
+// segment — `D:\projects\secret\x.ts`, `/mnt/d/build/x.ts`, `C:/work/x.ts` — sailed
+// through, posting the exporter's DRIVE identity + private layout verbatim onto a
+// stranger's PR (and into the share page). scrubProse feeds BOTH outbound surfaces,
+// so this one anchored pass closes both.
+//
+// It runs AFTER the home pass (so `C:\Users\<u>\` has already collapsed to `~/` and
+// this never sees the username), and it matches ONLY an UNAMBIGUOUS drive/mount ROOT
+// DESIGNATOR — a drive letter directly followed by a separator, or a
+// `/mnt|/cygdrive/<letter>/` mount root. It replaces just that root designator with
+// `~/`, keeping the trailing path (a repo-relative-looking tail the reviewer can use)
+// exactly as written. The anchored-regex discipline (round-13) holds:
+//   - the leading lookbehind excludes path/word chars, so `https://x`, `.com/mnt/x`
+//     and mid-word `http:` are prose, not a drive root;
+//   - a drive letter is `[A-Za-z]:` + separator, which no ordinary sentence spells;
+//   - a BARE POSIX absolute (`/usr/lib/x`, `/opt/build/y`) is deliberately NOT matched
+//     — those name standard system locations the reader may want, not the user's disk
+//     layout, and the only username leak they can carry (`/home`, `/Users`) the home
+//     pass already took. Over-scrubbing legit content is the failure this avoids.
+const DRIVE_ROOT_IN_PROSE = new RegExp(
+  "(?<![\\w~.\\-\\\\/])" +
+    "(?:" +
+    "[A-Za-z]:" + _SEP +
+    "|(?:[A-Za-z]:)?" + _SEP + "(?:mnt|cygdrive)" + _SEP + "[A-Za-z]" + _SEP +
+    ")",
+  "gi",
+);
+
 // R3 — the project root for the page currently being rendered.
 //
 // Path FIELDS were scrubbed from the day this exporter shipped; PROSE was not.
@@ -312,7 +341,9 @@ export function scrubProse(text: unknown, projectRoot = activeProjectRoot): stri
       }
     }
   }
-  return s.replace(HOME_PREFIX_IN_PROSE, "~/");
+  s = s.replace(HOME_PREFIX_IN_PROSE, "~/");
+  // T1 (round-15) — then the bare drive/mount root, on whatever the home pass left.
+  return s.replace(DRIVE_ROOT_IN_PROSE, "~/");
 }
 
 /** esc() for text that may carry a machine path — the scrub runs first so the
@@ -863,19 +894,28 @@ function diffBlock(file: ChangesetFile, includeCode: boolean, projectRoot?: stri
 // measured diagrams as the ONE comprehension instrument with proven organic
 // engagement, which makes it the worst possible thing to drop.
 //
-// S4 (round-14) REVISITED whether to render Mermaid to a static inline SVG at
-// export time (the picture, not its source) — the preferred outcome. It does
-// not hold up: mermaid@11's `render()` needs a real browser DOM. Driven with
-// happy-dom (the only DOM lib in the tree) it returns an EMPTY svg — the
-// SVG-namespace serialization and zero text metrics (getBBox → 0) produce
-// nothing usable — and a faithful render needs a headless Chromium (puppeteer /
-// mermaid-cli) which is an unacceptably heavy+fragile dependency to launch
-// inside the daemon's export path on arbitrary (possibly hostile) diagram
-// source. So we keep the SOURCE — but make the framing honest and PROMINENT: a
-// line that names it as source and says exactly where to see it drawn, plus the
-// Mermaid source in a labelled block. The picture is PRESENT and named instead
-// of absent and unmentioned, and the page keeps its promise (zero requests, no
-// scripts, XSS-safe — escText escapes the source).
+// S4 (round-14) and T1 (round-15) both RE-INVESTIGATED whether to render Mermaid
+// to a static inline SVG at export time (the picture, not its source) — the
+// preferred outcome, so we keep re-checking it. It does not hold up. mermaid@11's
+// `render()` needs a real browser DOM, and driving it headless fails on more than
+// text metrics: T1 ran it live against happy-dom (the only DOM lib in the tree)
+// with the full window surface wired onto globalThis, and it threw deep in edge
+// layout — `Could not find a suitable point for the given distance`
+// (calculatePoint → traverseEdge), because SVG geometry (getTotalLength /
+// getPointAtLength on path elements, getBBox for sizing) is a real browser engine,
+// not a shimmable API. A faithful render needs a headless Chromium (puppeteer /
+// mermaid-cli); launching a browser engine over arbitrary — possibly hostile —
+// diagram source inside the daemon's export path is an unacceptably heavy+fragile
+// dependency for a security-sensitive outbound surface, and a bespoke
+// parser+layout+SVG emitter would be a large, flowchart-only, fragile build
+// against this round's activate-don't-build ethos. So this is a DELIBERATE product
+// constraint, not an oversight: keep the SOURCE, and make the framing honest and
+// confident — name it as a diagram rendered in deepPairing, say exactly where to
+// see it drawn, and put the Mermaid source in a clean labelled collapsible (kept
+// OPEN, because the source is the only representation this self-contained page can
+// carry and hiding it behind a click serves no one). The page keeps its promise:
+// zero requests, no scripts, CSP default-src 'none' intact, XSS-safe — escText
+// escapes the source so a hostile diagram is inert text, never markup.
 function visualsBlock(visuals: unknown, ctx: RenderCtx): string {
   if (!Array.isArray(visuals) || visuals.length === 0) return "";
   const parts: string[] = [];
@@ -904,10 +944,10 @@ function visualsBlock(visuals: unknown, ctx: RenderCtx): string {
         // the annotated_code branch's redaction note.
         body = src
           ? ctx.includeCode
-            ? `<p class="visual-note">A diagram the pair drew and discussed. This page runs no ` +
-              `scripts, so it can't draw the picture here — the Mermaid source it was drawn from ` +
-              `is below. Paste it into deepPairing, or any Mermaid viewer (e.g. mermaid.live), to ` +
-              `see it rendered.</p>` +
+            ? `<p class="visual-note">A diagram, rendered in deepPairing. This page is fully ` +
+              `self-contained — it runs no scripts and makes no network requests — so the picture ` +
+              `isn't drawn inline; the Mermaid source it was rendered from is below. Open it in ` +
+              `deepPairing, or paste it into any Mermaid viewer (e.g. mermaid.live), to see the diagram.</p>` +
               `<details class="visual-source" open><summary>Diagram source (Mermaid)</summary>` +
               `<pre class="code" data-language="mermaid"><code>${escText(src)}</code></pre></details>`
             : `<p class="visual-note">A diagram the pair drew and discussed. It is drawn in deepPairing.</p>` +

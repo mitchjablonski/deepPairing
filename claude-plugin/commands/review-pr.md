@@ -160,7 +160,9 @@ Event mapping (the first two are enforced, not advisory):
   tool refuses otherwise and tells you the highest severity I approved; don't
   re-rate a finding to get past it, just post a `COMMENT`.
 - `APPROVE` — if I read it and had nothing to flag. That's a real outcome; don't
-  invent findings to avoid it.
+  invent findings to avoid it. A bare approve posts a genuine approval line to the
+  author on its own ("Reviewed with deepPairing — no blocking findings") — you
+  don't write the body.
 - `COMMENT` — everything else.
 
 **It posts once.** A landed review is recorded, and a second call for the same
