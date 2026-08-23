@@ -1,4 +1,4 @@
-import type { Comment, PlanVisual, PlanVisualFile, PlanVisualAnnotation } from "@deeppairing/shared";
+import type { Comment, PlanVisual, PlanVisualFile, PlanVisualDocSection, PlanVisualAnnotation } from "@deeppairing/shared";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { PrototypeFrame } from "./PrototypeFrame";
 import { CommentableCode } from "./CommentableCode";
@@ -8,6 +8,7 @@ import { useChainComments } from "../hooks/useChainComments";
 const kindLabel: Record<string, string> = {
   diagram: "Diagram",
   file_map: "File map",
+  doc_map: "Document map",
   prototype: "Prototype",
   annotated_code: "Annotated code",
 };
@@ -16,8 +17,17 @@ const kindLabel: Record<string, string> = {
 const kindNoun: Record<string, string> = {
   diagram: "diagram",
   file_map: "file map",
+  doc_map: "document map",
   prototype: "prototype",
   annotated_code: "code",
+};
+
+/** U2 — risk chip styling for a doc_map section (mirrors the finding severity
+ *  tints so "where the risk concentrates" reads at a glance). */
+const docRiskStyle: Record<string, string> = {
+  low: "bg-accent-green-dim text-accent-green",
+  medium: "bg-accent-amber-dim text-accent-amber",
+  high: "bg-accent-red-dim text-accent-red",
 };
 
 const changeStyle: Record<string, { glyph: string; cls: string }> = {
@@ -178,6 +188,10 @@ export function VisualBody({
     return <FileMap files={Array.isArray(visual.files) ? visual.files : []} />;
   }
 
+  if (visual.kind === "doc_map") {
+    return <DocMap sections={Array.isArray(visual.sections) ? visual.sections : []} />;
+  }
+
   if (visual.kind === "annotated_code") {
     return typeof visual.code === "string" && visual.code.length > 0 ? (
       <AnnotatedCode artifactId={artifactId} visual={visual} readOnly={readOnly} />
@@ -235,6 +249,48 @@ function AnnotatedCode({ artifactId, visual, readOnly = false }: { artifactId: s
       targetContext={{ visualId: visual.id }}
       readOnly={readOnly}
     />
+  );
+}
+
+// --- doc_map: the non-code sibling of file_map — a document's sections/clauses,
+//     each with an optional risk chip so "where the risk concentrates" reads at
+//     a glance (the WHERE-locative gap for non-code content). ------------------
+
+function DocMap({ sections }: { sections: PlanVisualDocSection[] }) {
+  if (sections.length === 0) return <div className="text-2xs text-text-muted">No sections listed.</div>;
+
+  const risky = sections.filter((s) => s.risk === "high" || s.risk === "medium").length;
+
+  return (
+    <div className="space-y-1.5">
+      {risky > 0 && (
+        <div className="text-[10px] text-text-muted">
+          {risky} of {sections.length} section{sections.length !== 1 ? "s" : ""} flagged
+        </div>
+      )}
+      <ul className="space-y-1">
+        {sections.map((s, i) => (
+          <li
+            key={i}
+            className="flex items-baseline gap-2 rounded border border-white/[0.05] bg-surface-code/40 px-2 py-1"
+          >
+            {s.risk && (
+              <span
+                className={`shrink-0 px-1 py-px rounded text-[10px] font-medium uppercase ${
+                  docRiskStyle[s.risk] ?? "text-text-muted"
+                }`}
+              >
+                {s.risk}
+              </span>
+            )}
+            <div className="min-w-0">
+              <span className="text-xs font-medium text-text-primary break-words">{s.label}</span>
+              {s.note && <span className="text-2xs text-text-muted"> — {s.note}</span>}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

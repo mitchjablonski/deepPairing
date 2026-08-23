@@ -411,6 +411,33 @@ describe("S1 — the field-pull routes concept / visuals / unknowns to their liv
     expect(skill).toMatch(/Give it a one-line `summary`.*WHAT-at-a-glance/);
   });
 
+  it("U2 (round-15) — SKILL routes NON-CODE understanding through the DECISION, not the explainer", () => {
+    const skill = flat(readSkill());
+    // The routing thesis: a doc/request/message/design → decision, not a read-only walk.
+    expect(skill).toContain("route through the DECISION, not a read-only walk");
+    expect(skill).toMatch(/understanding without a decision dies/i);
+    // The three live surfaces it names (options for interpretations, locator-anchored
+    // findings, a doc_map/diagram) and the closing decision.
+    expect(skill).toMatch(/Each interpretation or ambiguity is a `present_options` decision/);
+    expect(skill).toMatch(/anchors to non-code text via a `locator`/);
+    expect(skill).toMatch(/Close with the DECISION the human must rule on/);
+    // The explicit anti-pattern: do NOT end on a read-only explainer walk.
+    expect(skill).toMatch(/Do NOT end a\s*\n?\s*non-code understanding pass on a read-only explainer walk/);
+  });
+
+  it("U2 (round-15) — the doc_map visual kind is taught in SKILL and advertised in the findings tool desc's locator note", async () => {
+    const skill = flat(readSkill());
+    const d = await readToolDescriptions();
+    // doc_map is in the visual picker.
+    expect(skill).toMatch(/`kind: "doc_map"`/);
+    expect(skill).toContain("the WHERE-locative for docs");
+    // the findings tool description teaches the non-code locator anchor (kept
+    // compact for the 700-char cap); the full locator-kind vocabulary lives in
+    // SKILL's routing section, which isn't budget-capped.
+    expect(d["present_findings"]).toMatch(/locator/);
+    expect(skill).toContain('{ kind: "quote" | "heading" | "charRange" | "url", value }');
+  });
+
   it("review-pr.md routes concept to finding.concept, blast-radius to visuals, and gaps to unknowns", () => {
     const cmd = flat(readCommand("review-pr.md"));
     // concept → the finding's own field, not a log_reasoning card.

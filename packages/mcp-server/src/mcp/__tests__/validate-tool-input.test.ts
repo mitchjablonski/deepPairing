@@ -92,6 +92,60 @@ describe("Tool-input validation at the write boundary", () => {
     expect(store.getArtifacts()).toHaveLength(1);
   });
 
+  it("U2 — present_findings ACCEPTS a DOC-anchored finding (a locator, NO file:line)", async () => {
+    // The generalization keystone: a contract/message/design passage anchors via
+    // `locator` with no line grain, and it must reach disk with the locator intact.
+    const { isError } = await call("present_findings", {
+      summary: "Contract review",
+      findings: [
+        {
+          category: "risk",
+          detail: "The burst cap is left undefined in §5.",
+          significance: "high",
+          evidence: [
+            {
+              snippet: "the burst cap is undefined",
+              explanation: "Open ceiling — the vendor can throttle at will.",
+              locator: { kind: "heading", value: "§5 ¶3" },
+            },
+          ],
+        },
+      ],
+    });
+    expect(isError).toBeFalsy();
+    const content = store.getArtifacts()[0].content as {
+      findings: Array<{ evidence: Array<{ locator?: { kind: string; value: string }; filePath?: string }> }>;
+    };
+    const ev = content.findings[0].evidence[0];
+    expect(ev.filePath).toBeUndefined();
+    expect(ev.locator).toEqual({ kind: "heading", value: "§5 ¶3" });
+  });
+
+  it("U2 — a MALFORMED locator is rejected at the choke point (no silent drop)", async () => {
+    const { text, isError } = await call("present_findings", {
+      summary: "Contract review",
+      findings: [
+        {
+          category: "risk",
+          detail: "x",
+          significance: "high",
+          evidence: [{ snippet: "y", explanation: "z", locator: { kind: "paragraph", value: "" } }],
+        },
+      ],
+    });
+    expect(isError).toBe(true);
+    expect(text).toContain("INPUT_VALIDATION_FAILED");
+    // the error names the locator path so the agent can fix it.
+    expect(text).toMatch(/locator/);
+    expect(store.getArtifacts()).toHaveLength(0);
+  });
+
+  it("U2 — the findings recovery example teaches the locator anchor (not code-only)", async () => {
+    const { text } = await call("present_findings", { summary: "x", findings: "wrong" });
+    expect(text).toMatch(/Expected shape/i);
+    expect(text).toMatch(/locator/);
+  });
+
   it("present_findings PERSISTS a finding's `confidence` (C-1 — schema must model what the tool advertises)", async () => {
     // The tool's JSON schema accepts `confidence` and the UI renders a badge,
     // but the non-strict validation boundary used to strip it before persist

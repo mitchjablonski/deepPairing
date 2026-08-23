@@ -847,8 +847,14 @@ export function buildGitHubReviewPayload(
       const evidence = Array.isArray(finding.evidence) ? finding.evidence : [];
       // D7 — the runtime narrowing existed; the predicate is now a TYPE guard
       // so the loop below reads typed evidence instead of any.
+      // U2 — Evidence.filePath/lineStart are now OPTIONAL (a non-code passage
+      // anchors via `locator` instead). An inline PR comment REQUIRES a
+      // file:line anchor, so the guard narrows to the file-anchored subset —
+      // doc/message-anchored evidence simply can't post as an inline comment and
+      // is dropped from this outbound payload (the runtime check was already
+      // this strict; the guard's return type now says so).
       const structured = evidence.filter(
-        (e): e is Exclude<typeof e, string> =>
+        (e): e is Exclude<typeof e, string> & { filePath: string; lineStart: number } =>
           !!e && typeof e === "object" && !!e.filePath && typeof e.lineStart === "number",
       );
       if (structured.length === 0) continue;

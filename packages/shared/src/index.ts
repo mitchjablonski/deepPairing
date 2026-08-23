@@ -145,8 +145,10 @@ export {
 export {
   EvidenceSchema,
   EvidenceInputSchema,
+  EvidenceLocatorSchema,
   type Evidence,
   type EvidenceInput,
+  type EvidenceLocator,
 } from "./schemas/evidence.js";
 
 export {
@@ -196,6 +198,7 @@ export {
   PlanStepSchema,
   PlanVisualFileSchema,
   PlanVisualAnnotationSchema,
+  PlanVisualDocSectionSchema,
   PlanVisualSchema,
   PlanContentSchema,
   ReasoningConceptSchema,
@@ -228,6 +231,7 @@ export {
   type PlanStep,
   type PlanVisualFile,
   type PlanVisualAnnotation,
+  type PlanVisualDocSection,
   type PlanVisual,
   type PlanContent,
   type ReasoningConcept,

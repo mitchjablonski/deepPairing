@@ -398,7 +398,12 @@ export function EvidenceItem({
   allComments,
   readOnly = false,
 }: {
-  evidence: Evidence;
+  // U2 — Evidence.filePath/lineStart are optional at the schema now (docs anchor
+  // via `locator`), but EvidenceItem is the LINE-ANCHORED code renderer and is
+  // only routed evidence with a numeric lineStart (renderEvidence gates on it).
+  // The intersection makes lineStart non-optional so the gutter/OpenInEditor
+  // stay typed; filePath is still guarded at its two string-required uses.
+  evidence: Evidence & { lineStart: number };
   artifactId: string;
   findingIndex: number;
   evidenceIndex: number;
@@ -454,7 +459,7 @@ export function EvidenceItem({
 
   return (
     <>
-      {showFullFile && (
+      {showFullFile && evidence.filePath && (
         <FileViewer
           filePath={evidence.filePath}
           highlightStart={evidence.lineStart}
@@ -468,7 +473,7 @@ export function EvidenceItem({
         <div className="flex items-center justify-between px-2.5 py-1.5 bg-surface-elevated text-xs">
           <span className="font-mono text-text-secondary flex items-center gap-1.5">
             {evidence.filePath}:{evidence.lineStart}-{evidence.lineEnd}
-            <OpenInEditorLink filePath={evidence.filePath} line={evidence.lineStart} />
+            {evidence.filePath && <OpenInEditorLink filePath={evidence.filePath} line={evidence.lineStart} />}
           </span>
           <div className="flex items-center gap-2">
             {!readOnly && (
@@ -550,6 +555,124 @@ export function EvidenceItem({
   );
 }
 
+/**
+ * U2 (round-15 generalization) — the NON-CODE sibling of EvidenceItem. A
+ * doc/message/design passage has no file:line, so it can't render through the
+ * line-numbered code gutter — but the flagship "comment on the exact passage"
+ * affordance must survive. This renders the passage as a QUOTED block with a
+ * per-passage Comment + Ask affordance anchored to {findingIndex, evidenceIndex}
+ * (the same target lane EvidenceItem's AskTrigger uses), so the human still
+ * comments on the exact passage instead of the evidence degrading to prose.
+ *
+ * Anchor label comes from the optional `locator` ({ kind, value, ... }): a quote
+ * excerpt, a heading path ("§5 ¶3"), a char range, or a URL. A `url` locator is
+ * rendered as a link ONLY for http(s) — a javascript:/data: value renders as
+ * inert text (all values are React text nodes, so they're already escaped).
+ */
+export function PassageEvidenceItem({
+  evidence,
+  artifactId,
+  findingIndex,
+  evidenceIndex,
+  allComments,
+  readOnly = false,
+}: {
+  evidence: Partial<Evidence>;
+  artifactId: string;
+  findingIndex: number;
+  evidenceIndex: number;
+  allComments: Comment[];
+  readOnly?: boolean;
+}) {
+  const locator = evidence.locator;
+  // The passage text: prefer an explicit snippet, else a quote locator's value.
+  const passage =
+    typeof evidence.snippet === "string" && evidence.snippet.length > 0
+      ? evidence.snippet
+      : locator?.kind === "quote"
+        ? locator.value
+        : "";
+
+  // Anchor label — WHERE this passage lives, shown in the header.
+  let anchorLabel: string | null = null;
+  let anchorHref: string | null = null;
+  if (locator) {
+    if (locator.kind === "heading") anchorLabel = locator.value;
+    else if (locator.kind === "charRange") anchorLabel = `chars ${locator.value}`;
+    else if (locator.kind === "url") {
+      anchorLabel = locator.value;
+      const link = locator.href ?? locator.value;
+      // Only http(s) links are made clickable — never javascript:/data: etc.
+      if (typeof link === "string" && /^https?:\/\//i.test(link)) anchorHref = link;
+    } else if (locator.kind === "quote" && passage !== locator.value) {
+      // A quote used purely as the anchor (passage came from snippet).
+      anchorLabel = `❝ ${locator.value}`;
+    }
+  }
+  if (!anchorLabel && typeof evidence.filePath === "string" && evidence.filePath.length > 0) {
+    anchorLabel = evidence.filePath;
+  }
+
+  // Existing comments pinned to THIS passage (findingIndex + evidenceIndex, no
+  // line) → drives the CommentTrigger count.
+  const existing = allComments.filter(
+    (c) =>
+      c.target?.findingIndex === findingIndex &&
+      c.target?.evidenceIndex === evidenceIndex &&
+      c.target?.lineStart == null,
+  ).length;
+
+  return (
+    <div className="mt-2 rounded-md overflow-hidden border border-border-default">
+      {/* Passage header — the non-code anchor + comment/ask affordances */}
+      <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-surface-elevated text-xs">
+        <span className="min-w-0 flex items-center gap-1.5 text-text-secondary">
+          <span className="shrink-0 px-1 py-px rounded text-[10px] bg-surface-secondary text-text-muted uppercase tracking-wide">
+            {locator?.kind ?? "passage"}
+          </span>
+          {anchorHref ? (
+            <a
+              href={anchorHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="truncate text-accent-blue hover:underline"
+            >
+              {anchorLabel}
+            </a>
+          ) : (
+            anchorLabel && <span className="truncate text-text-secondary">{anchorLabel}</span>
+          )}
+        </span>
+        {!readOnly && (
+          <div className="flex items-center gap-2 shrink-0">
+            <CommentTrigger
+              artifactId={artifactId}
+              target={{ findingIndex, evidenceIndex }}
+              existingCount={existing}
+              label="Comment on this passage"
+            />
+            <AskTrigger artifactId={artifactId} target={{ findingIndex, evidenceIndex }} />
+          </div>
+        )}
+      </div>
+
+      {/* The quoted passage — a blockquote, NOT a code gutter. */}
+      {passage && (
+        <blockquote className="px-3 py-2 border-l-2 border-accent-blue/40 bg-surface-code/60 text-xs text-text-primary whitespace-pre-wrap break-words">
+          {passage}
+        </blockquote>
+      )}
+
+      {/* Explanation — why this passage matters. */}
+      {evidence.explanation && (
+        <div className="px-3 py-2 bg-accent-amber-dim/80 border-t border-border-default/20 text-xs text-text-secondary">
+          {evidence.explanation}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Exported alongside EvidenceItem so the debrief's section evidence renders
 // through the identical string|Evidence[] handling (reuse, not rebuild).
 export function renderEvidence(
@@ -586,24 +709,54 @@ export function renderEvidence(
             </p>
           );
         }
-        // Guard: skip items that don't look like Evidence objects
-        if (!ev || typeof ev !== "object" || !("filePath" in ev)) {
+        // Guard: skip items that aren't objects at all.
+        if (!ev || typeof ev !== "object") {
           return (
             <p key={evIdx} className="text-text-muted mt-0.5 font-mono text-[11px]">
               {JSON.stringify(ev)}
             </p>
           );
         }
+        const e = ev as Partial<Evidence>;
+        // U2 — LINE-anchored code evidence (every legacy Evidence carries a
+        // numeric lineStart) → the unchanged line-numbered gutter. Byte-identical
+        // routing for all existing findings (the back-compat gate).
+        if (typeof e.lineStart === "number") {
+          return (
+            <EvidenceItem
+              key={evIdx}
+              evidence={ev as Evidence & { lineStart: number }}
+              artifactId={artifactId}
+              findingIndex={findingIndex}
+              evidenceIndex={evIdx}
+              allComments={allComments}
+              readOnly={readOnly}
+            />
+          );
+        }
+        // U2 — a NON-code passage (doc / message / design): anchored by a
+        // `locator`, or a bare passage with no line grain. Render it as a
+        // QUOTED, per-passage-COMMENTABLE block — the flagship
+        // comment-on-the-exact-passage affordance survives for docs instead of
+        // degrading to prose.
+        if (e.locator || typeof e.snippet === "string" || typeof e.filePath === "string") {
+          return (
+            <PassageEvidenceItem
+              key={evIdx}
+              evidence={e}
+              artifactId={artifactId}
+              findingIndex={findingIndex}
+              evidenceIndex={evIdx}
+              allComments={allComments}
+              readOnly={readOnly}
+            />
+          );
+        }
+        // Genuine junk (no anchor, no passage) — last-resort dump, as before.
         return (
-          <EvidenceItem
-            key={evIdx}
-            evidence={ev as Evidence}
-            artifactId={artifactId}
-            findingIndex={findingIndex}
-            evidenceIndex={evIdx}
-            allComments={allComments}
-            readOnly={readOnly}
-          />
+          <p key={evIdx} className="text-text-muted mt-0.5 font-mono text-[11px]">
+            {JSON.stringify(ev)}
+          </p>
         );
       })}
     </div>
