@@ -11,6 +11,7 @@ import {
   ensurePreflightHook,
   detectCrossScopeDpEntries,
   cleanDpEntriesFromScope,
+  countDpEntries,
   HOOK_MARKERS,
   runDaemonStartupSetup,
   isPluginManaged,
@@ -476,10 +477,14 @@ describe("ensureCheckpointHook (V2)", () => {
       JSON.stringify({
         hooks: {
           PostToolUse: [
-            // Stale DP entry — matcher mismatch.
-            { matcher: "Write", hooks: [{ type: "command", command: "node old/checkpoint.mjs" }] },
-            // Another stale DP entry.
-            { matcher: "Write|Edit|MultiEdit", hooks: [{ type: "command", command: "node ancient/checkpoint.mjs" }] },
+            // Stale DP entry — realistic legacy command (bare-relative form,
+            // pre-$CLAUDE_PROJECT_DIR), matcher mismatch. #197 — recognition now
+            // anchors on `.deeppairing/hooks/checkpoint.mjs`, so a stale DP row
+            // must carry that canonical path (an arbitrary `old/checkpoint.mjs`
+            // is deliberately NOT ours anymore — it could be the user's).
+            { matcher: "Write", hooks: [{ type: "command", command: "node .deeppairing/hooks/checkpoint.mjs" }] },
+            // Another stale DP entry — leading `./` variant of the same path.
+            { matcher: "Write|Edit|MultiEdit", hooks: [{ type: "command", command: "node ./.deeppairing/hooks/checkpoint.mjs" }] },
             // User's unrelated hook.
             { matcher: "Bash", hooks: [{ type: "command", command: "echo bash" }] },
           ],
@@ -829,7 +834,9 @@ describe("Cross-scope hook dedup (X2)", () => {
         PostToolUse: [
           {
             matcher: "Write|Edit|MultiEdit",
-            hooks: [{ type: "command", command: "node /old/checkpoint.mjs" }],
+            // #197 — a genuine leftover DP row from an older install (bare-relative
+            // path). Recognition anchors on `.deeppairing/hooks/checkpoint.mjs`.
+            hooks: [{ type: "command", command: "node .deeppairing/hooks/checkpoint.mjs" }],
           },
         ],
       },
@@ -999,5 +1006,155 @@ describe("diagnoseLocalHooks — doctor's per-mode hook reconciliation (#196)", 
       JSON.stringify({ hooks: { Stop: [{ command: "node .deeppairing/hooks/stop.mjs" }] } }),
     );
     expect(byHook(diagnoseLocalHooks(tmpDir, false)).Stop).toBe("legacy");
+  });
+});
+
+describe("#197 — hook-ownership markers anchor to .deeppairing/hooks (no user-row sweep)", () => {
+  // Data-loss bug: the ownership markers substring-matched a bare basename
+  // (`hooks/stop.mjs`, `checkpoint.mjs`, `preflight.mjs`), so a user's OWN
+  // similarly-named rows — `node ./my-own/hooks/stop.mjs`,
+  // `node ./x/checkpoint.mjs`, `node ./ci/preflight.mjs --lint` — matched ours
+  // and were DELETED by `doctor --fix` / every ensure* own-the-row installer.
+  // The fix anchors each marker to the canonical `.deeppairing/hooks/<name>.mjs`
+  // path. These cases prove the near-miss user rows now SURVIVE while our real
+  // rows are still recognized/removed — asserted across all three consumers the
+  // issue names: countDpEntries, cleanDpEntriesFromScope, and diagnoseLocalHooks.
+
+  function writeSettings(filePath: string, settings: any) {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify(settings, null, 2));
+  }
+  const nested = (command: string, matcher = "") => ({ matcher, hooks: [{ type: "command", command }] });
+
+  // Canonical commands, exactly as the ensure* installers write them.
+  const CANONICAL = {
+    Stop: 'node "$CLAUDE_PROJECT_DIR/.deeppairing/hooks/stop.mjs"',
+    PostToolUse: 'node "$CLAUDE_PROJECT_DIR/.deeppairing/hooks/checkpoint.mjs"',
+    PreToolUse: 'node "$CLAUDE_PROJECT_DIR/.deeppairing/hooks/preflight.mjs"',
+  } as const;
+  // Near-miss USER rows that the OLD loose basename markers wrongly swept.
+  const NEAR_MISS = {
+    Stop: "node ./my-own/hooks/stop.mjs",
+    PostToolUse: "node ./x/checkpoint.mjs",
+    PreToolUse: "node ./ci/preflight.mjs --lint",
+  } as const;
+
+  describe.each([
+    ["Stop", CANONICAL.Stop, NEAR_MISS.Stop, HOOK_MARKERS.Stop] as const,
+    ["PostToolUse", CANONICAL.PostToolUse, NEAR_MISS.PostToolUse, HOOK_MARKERS.PostToolUse] as const,
+    ["PreToolUse", CANONICAL.PreToolUse, NEAR_MISS.PreToolUse, HOOK_MARKERS.PreToolUse] as const,
+  ])("%s hook", (hookKey, canonicalCmd, nearMissCmd, marker) => {
+    it("the anchored marker matches OUR canonical row but NOT the near-miss user row", () => {
+      expect(marker(canonicalCmd)).toBe(true);
+      expect(marker(nearMissCmd)).toBe(false);
+    });
+
+    it("countDpEntries counts only our row (1), not the user's near-miss (nested shape)", () => {
+      const settings = { hooks: { [hookKey]: [nested(canonicalCmd), nested(nearMissCmd)] } };
+      expect(countDpEntries(settings, hookKey as any, marker)).toBe(1);
+    });
+
+    it("countDpEntries covers the flat { command } shape too", () => {
+      const settings = { hooks: { [hookKey]: [{ command: canonicalCmd }, { command: nearMissCmd }] } };
+      expect(countDpEntries(settings, hookKey as any, marker)).toBe(1);
+    });
+
+    it("cleanDpEntriesFromScope (doctor --fix) removes 1 and the user's near-miss row SURVIVES", () => {
+      const scope = path.join(homeDir, ".claude", "settings.json");
+      writeSettings(scope, { hooks: { [hookKey]: [nested(canonicalCmd), nested(nearMissCmd)] } });
+      const r = cleanDpEntriesFromScope(scope, hookKey as any, marker);
+      expect(r.ok).toBe(true);
+      expect(r.removed).toBe(1); // exactly ours, never 2
+      const after = JSON.parse(fs.readFileSync(scope, "utf-8"));
+      expect(after.hooks[hookKey]).toHaveLength(1);
+      expect(after.hooks[hookKey][0].hooks[0].command).toBe(nearMissCmd);
+    });
+
+    it("detectCrossScopeDpEntries counts only our row across the near-miss", () => {
+      const scope = path.join(homeDir, ".claude", "settings.json");
+      writeSettings(scope, { hooks: { [hookKey]: [nested(canonicalCmd), nested(nearMissCmd)] } });
+      const found = detectCrossScopeDpEntries(tmpDir, hookKey as any, marker);
+      expect(found.find((s) => s.scope === "user")?.count).toBe(1);
+    });
+  });
+
+  it("no-regression: our REAL rows (both command variants) are still recognized", () => {
+    // Bare-relative form (some legacy installs) AND the $CLAUDE_PROJECT_DIR
+    // form (current installer) both carry the anchor, so both still match.
+    expect(HOOK_MARKERS.Stop("node .deeppairing/hooks/stop.mjs")).toBe(true);
+    expect(HOOK_MARKERS.Stop(CANONICAL.Stop)).toBe(true);
+    // Legacy inline single-command install — the deliberately-kept weaker arm.
+    expect(HOOK_MARKERS.Stop("node -e 'deepPairing legacy stop'")).toBe(true);
+    expect(HOOK_MARKERS.PostToolUse("node .deeppairing/hooks/checkpoint.mjs")).toBe(true);
+    expect(HOOK_MARKERS.PostToolUse(CANONICAL.PostToolUse)).toBe(true);
+    expect(HOOK_MARKERS.PreToolUse("node .deeppairing/hooks/preflight.mjs")).toBe(true);
+    expect(HOOK_MARKERS.PreToolUse(CANONICAL.PreToolUse)).toBe(true);
+  });
+
+  it("data-loss guard: doctor --fix in a project whose scope mixes ALL THREE near-miss user rows keeps every one", () => {
+    // One scope file carrying a user row that collides with each hook's old
+    // loose basename. Cleaning every hook key removes ONLY the canonical rows.
+    const scope = path.join(homeDir, ".claude", "settings.json");
+    writeSettings(scope, {
+      hooks: {
+        Stop: [nested(CANONICAL.Stop), nested(NEAR_MISS.Stop)],
+        PostToolUse: [nested(CANONICAL.PostToolUse), nested(NEAR_MISS.PostToolUse)],
+        PreToolUse: [nested(CANONICAL.PreToolUse), nested(NEAR_MISS.PreToolUse)],
+      },
+    });
+    for (const k of ["Stop", "PostToolUse", "PreToolUse"] as const) {
+      expect(cleanDpEntriesFromScope(scope, k, HOOK_MARKERS[k]).removed).toBe(1);
+    }
+    const after = JSON.parse(fs.readFileSync(scope, "utf-8"));
+    expect(after.hooks.Stop.map((e: any) => e.hooks[0].command)).toEqual([NEAR_MISS.Stop]);
+    expect(after.hooks.PostToolUse.map((e: any) => e.hooks[0].command)).toEqual([NEAR_MISS.PostToolUse]);
+    expect(after.hooks.PreToolUse.map((e: any) => e.hooks[0].command)).toEqual([NEAR_MISS.PreToolUse]);
+  });
+
+  it("diagnoseLocalHooks: a user's near-miss rows alone read as MISSING (not our hooks)", () => {
+    // settings.local.json contains ONLY the user's similarly-named rows and no
+    // real deepPairing hooks → doctor must NOT see them as installed.
+    const local = path.join(tmpDir, ".claude", "settings.local.json");
+    writeSettings(local, {
+      hooks: {
+        Stop: [nested(NEAR_MISS.Stop)],
+        PostToolUse: [nested(NEAR_MISS.PostToolUse)],
+        PreToolUse: [nested(NEAR_MISS.PreToolUse)],
+      },
+    });
+    const s = Object.fromEntries(
+      diagnoseLocalHooks(tmpDir, /* pluginManaged */ false).map((r) => [r.hook, r.state]),
+    );
+    expect(s.Stop).toBe("missing");
+    expect(s.PostToolUse).toBe("missing");
+    expect(s.PreToolUse).toBe("missing");
+  });
+
+  it("diagnoseLocalHooks: our REAL installed rows read as ok (near-miss coexisting, untouched)", () => {
+    // Install for real, then plant the user's near-miss rows alongside. doctor
+    // still reads our hooks as ok — the near-miss neither masks nor inflates.
+    ensureStopHook(tmpDir);
+    ensureCheckpointHook(tmpDir);
+    ensurePreflightHook(tmpDir);
+    const local = path.join(tmpDir, ".claude", "settings.local.json");
+    const settings = JSON.parse(fs.readFileSync(local, "utf-8"));
+    settings.hooks.Stop.push(nested(NEAR_MISS.Stop));
+    settings.hooks.PostToolUse.push(nested(NEAR_MISS.PostToolUse));
+    settings.hooks.PreToolUse.push(nested(NEAR_MISS.PreToolUse));
+    fs.writeFileSync(local, JSON.stringify(settings, null, 2));
+    const s = Object.fromEntries(
+      diagnoseLocalHooks(tmpDir, false).map((r) => [r.hook, r.state]),
+    );
+    expect(s.Stop).toBe("ok");
+    expect(s.PostToolUse).toBe("ok");
+    expect(s.PreToolUse).toBe("ok");
+    // And a real ensure* re-run does NOT delete the coexisting user rows.
+    ensureStopHook(tmpDir);
+    ensureCheckpointHook(tmpDir);
+    ensurePreflightHook(tmpDir);
+    const after = JSON.parse(fs.readFileSync(local, "utf-8"));
+    expect(after.hooks.Stop.some((e: any) => e.hooks[0].command === NEAR_MISS.Stop)).toBe(true);
+    expect(after.hooks.PostToolUse.some((e: any) => e.hooks[0].command === NEAR_MISS.PostToolUse)).toBe(true);
+    expect(after.hooks.PreToolUse.some((e: any) => e.hooks[0].command === NEAR_MISS.PreToolUse)).toBe(true);
   });
 });

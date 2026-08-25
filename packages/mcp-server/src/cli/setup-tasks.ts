@@ -74,8 +74,10 @@ function readJsonOrNull(filePath: string): any | null {
   }
 }
 
-/** Count DP entries under hookKey in a single settings object (any shape). */
-function countDpEntries(settings: any, hookKey: HookKey, marker: (cmd: string) => boolean): number {
+/** Count DP entries under hookKey in a single settings object (any shape).
+ *  Exported so #197's near-miss fixtures can assert the anchored markers
+ *  count only our own rows, not a user's similarly-named hooks. */
+export function countDpEntries(settings: any, hookKey: HookKey, marker: (cmd: string) => boolean): number {
   const entries = settings?.hooks?.[hookKey];
   if (!Array.isArray(entries)) return 0;
   let n = 0;
@@ -133,19 +135,35 @@ export function cleanDpEntriesFromScope(
   }
 }
 
-/** Marker functions used both by the installer (own-the-row in .local) and
- *  by the cross-scope detector. Centralized so a future installer
- *  command-string change updates both paths together. The Stop marker
- *  matches BOTH the legacy "deepPairing" inline command AND the X7-era
- *  file-based `node .deeppairing/hooks/stop.mjs` command. */
-const STOP_HOOK_MARKER = (cmd: string) =>
-  cmd.includes("deepPairing") || cmd.includes("hooks/stop.mjs");
-const CHECKPOINT_HOOK_MARKER = (cmd: string) => cmd.includes("checkpoint.mjs");
-const PREFLIGHT_HOOK_MARKER = (cmd: string) => cmd.includes("preflight.mjs");
+/**
+ * Marker functions used both by the installer (own-the-row in .local) and by
+ * the cross-scope detector / doctor. This is the SINGLE source of truth — every
+ * own-the-row check and every detector routes through `HOOK_MARKERS.<Key>`, so a
+ * future installer command-string change updates all paths together (there is no
+ * divergent inline copy to keep in lock-step).
+ *
+ * #197 — the markers are ANCHORED to the canonical `.deeppairing/hooks/<name>.mjs`
+ * path we actually install, NOT a loose basename substring. The bug: the old
+ * `hooks/stop.mjs` / `checkpoint.mjs` / `preflight.mjs` substrings also matched a
+ * user's OWN unrelated rows — `node ./my-own/hooks/stop.mjs`,
+ * `node ./x/checkpoint.mjs`, `node ./ci/preflight.mjs --lint` — so `doctor --fix`
+ * and every `ensure*` own-the-row installer would DELETE them (data loss). The
+ * anchor `.deeppairing/hooks/<name>.mjs` is present in every command variant we
+ * write — the bare-relative form and the `$CLAUDE_PROJECT_DIR/`-prefixed form both
+ * contain it — so tightening loses no recognition of our own rows.
+ *
+ * The Stop marker DELIBERATELY keeps the bare `deepPairing` arm as well: it
+ * recognizes the genuinely-legacy single-command installs (pre-file-based era,
+ * e.g. `node -e '...deepPairing...'`). That arm is itself a weaker substring, but
+ * tightening it would risk dropping recognition of those legacy rows, and unlike
+ * the file-path arm it does not collide with a plausible user command — so it
+ * stays.
+ */
 export const HOOK_MARKERS = {
-  Stop: STOP_HOOK_MARKER,
-  PostToolUse: CHECKPOINT_HOOK_MARKER,
-  PreToolUse: PREFLIGHT_HOOK_MARKER,
+  Stop: (cmd: string) =>
+    cmd.includes("deepPairing") || cmd.includes(".deeppairing/hooks/stop.mjs"),
+  PostToolUse: (cmd: string) => cmd.includes(".deeppairing/hooks/checkpoint.mjs"),
+  PreToolUse: (cmd: string) => cmd.includes(".deeppairing/hooks/preflight.mjs"),
 } as const;
 
 export type LocalHookState = "ok" | "missing" | "legacy" | "redundant";
@@ -448,21 +466,21 @@ export function ensureStopHook(projectRoot: string): SetupResult {
     // ONE canonical entry. Non-DP entries (someone else's user hook)
     // are left strictly alone.
     //
-    // X7 — marker also catches the new file-based command (`node
-    // .deeppairing/hooks/stop.mjs`). Substring match against the script
-    // path catches both old "deepPairing" command strings AND the new
-    // path-based one in a single check.
-    const matchesDpStopCmd = (cmd: string) =>
-      cmd.includes("deepPairing") || cmd.includes("hooks/stop.mjs");
+    // X7 — the marker also catches the new file-based command (`node
+    // "$CLAUDE_PROJECT_DIR/.deeppairing/hooks/stop.mjs"`). #197 — route the
+    // own-the-row recognition through the SINGLE exported HOOK_MARKERS.Stop
+    // (no inline copy) so the installer and doctor cannot disagree, and so the
+    // anchored `.deeppairing/hooks/stop.mjs` match never sweeps a user's own
+    // `node ./my-own/hooks/stop.mjs` row.
     const isDpStopEntry = (entry: any) => {
-      if (typeof entry?.command === "string" && matchesDpStopCmd(entry.command)) return true; // legacy flat
+      if (typeof entry?.command === "string" && HOOK_MARKERS.Stop(entry.command)) return true; // legacy flat
       if (Array.isArray(entry?.hooks)) {
-        return entry.hooks.some((h: any) => typeof h?.command === "string" && matchesDpStopCmd(h.command));
+        return entry.hooks.some((h: any) => typeof h?.command === "string" && HOOK_MARKERS.Stop(h.command));
       }
       return false;
     };
     const isLegacyFlatDp = (entry: any) =>
-      typeof entry?.command === "string" && matchesDpStopCmd(entry.command) && !Array.isArray(entry?.hooks);
+      typeof entry?.command === "string" && HOOK_MARKERS.Stop(entry.command) && !Array.isArray(entry?.hooks);
     const isCurrentCanonicalDp = (entry: any) =>
       Array.isArray(entry?.hooks) &&
       entry.hooks.length === 1 &&
@@ -502,7 +520,7 @@ export function ensureStopHook(projectRoot: string): SetupResult {
     // those scopes from this code path — the team / user might have
     // intentionally placed a hook there, and silently nuking files
     // outside .local would be hostile.
-    const otherScopes = detectCrossScopeDpEntries(projectRoot, "Stop", STOP_HOOK_MARKER)
+    const otherScopes = detectCrossScopeDpEntries(projectRoot, "Stop", HOOK_MARKERS.Stop)
       .filter((s) => s.scope !== "project-local" && s.count > 0);
     const [firstScope] = otherScopes;
     if (firstScope) {
@@ -744,10 +762,14 @@ export function ensureCheckpointHook(projectRoot: string): SetupResult {
     // $CLAUDE_PROJECT_DIR-anchored (not relative) so the hook resolves
     // regardless of the session cwd — see STOP_HOOK_COMMAND for the rationale.
     const CANONICAL_CMD = `node "$CLAUDE_PROJECT_DIR/${CHECKPOINT_SCRIPT_REL_PATH}"`;
+    // #197 — route own-the-row recognition through the SINGLE exported
+    // HOOK_MARKERS.PostToolUse (anchored to `.deeppairing/hooks/checkpoint.mjs`),
+    // not an inline `checkpoint.mjs` substring that would sweep a user's own
+    // `node ./x/checkpoint.mjs` row.
     const isDpCheckpointEntry = (entry: any) => {
-      if (typeof entry?.command === "string" && entry.command.includes("checkpoint.mjs")) return true;
+      if (typeof entry?.command === "string" && HOOK_MARKERS.PostToolUse(entry.command)) return true;
       if (Array.isArray(entry?.hooks)) {
-        return entry.hooks.some((h: any) => typeof h?.command === "string" && h.command.includes("checkpoint.mjs"));
+        return entry.hooks.some((h: any) => typeof h?.command === "string" && HOOK_MARKERS.PostToolUse(h.command));
       }
       return false;
     };
@@ -780,7 +802,7 @@ export function ensureCheckpointHook(projectRoot: string): SetupResult {
         : "Added PostToolUse checkpoint hook (.deeppairing/hooks/checkpoint.mjs)";
 
     // X2 — same cross-scope detection as Stop hook.
-    const otherScopes = detectCrossScopeDpEntries(projectRoot, "PostToolUse", CHECKPOINT_HOOK_MARKER)
+    const otherScopes = detectCrossScopeDpEntries(projectRoot, "PostToolUse", HOOK_MARKERS.PostToolUse)
       .filter((s) => s.scope !== "project-local" && s.count > 0);
     const [firstScope] = otherScopes;
     if (firstScope) {
@@ -1004,9 +1026,9 @@ export function ensurePreflightHook(projectRoot: string): SetupResult {
     settings.hooks.PreToolUse = settings.hooks.PreToolUse ?? [];
 
     const isDpEntry = (entry: any) => {
-      if (typeof entry?.command === "string" && PREFLIGHT_HOOK_MARKER(entry.command)) return true;
+      if (typeof entry?.command === "string" && HOOK_MARKERS.PreToolUse(entry.command)) return true;
       if (Array.isArray(entry?.hooks)) {
-        return entry.hooks.some((h: any) => typeof h?.command === "string" && PREFLIGHT_HOOK_MARKER(h.command));
+        return entry.hooks.some((h: any) => typeof h?.command === "string" && HOOK_MARKERS.PreToolUse(h.command));
       }
       return false;
     };

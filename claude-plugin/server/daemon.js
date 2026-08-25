@@ -5136,9 +5136,11 @@ function detectCrossScopeDpEntries(projectRoot2, hookKey, marker) {
   }
   return out;
 }
-var STOP_HOOK_MARKER = (cmd) => cmd.includes("deepPairing") || cmd.includes("hooks/stop.mjs");
-var CHECKPOINT_HOOK_MARKER = (cmd) => cmd.includes("checkpoint.mjs");
-var PREFLIGHT_HOOK_MARKER = (cmd) => cmd.includes("preflight.mjs");
+var HOOK_MARKERS = {
+  Stop: (cmd) => cmd.includes("deepPairing") || cmd.includes(".deeppairing/hooks/stop.mjs"),
+  PostToolUse: (cmd) => cmd.includes(".deeppairing/hooks/checkpoint.mjs"),
+  PreToolUse: (cmd) => cmd.includes(".deeppairing/hooks/preflight.mjs")
+};
 function ensureDeepPairingDir(projectRoot2) {
   const dpDir2 = path2.join(projectRoot2, ".deeppairing");
   try {
@@ -5342,15 +5344,14 @@ function ensureStopHook(projectRoot2) {
     }
     settings.hooks = settings.hooks ?? {};
     settings.hooks.Stop = settings.hooks.Stop ?? [];
-    const matchesDpStopCmd = (cmd) => cmd.includes("deepPairing") || cmd.includes("hooks/stop.mjs");
     const isDpStopEntry = (entry) => {
-      if (typeof entry?.command === "string" && matchesDpStopCmd(entry.command)) return true;
+      if (typeof entry?.command === "string" && HOOK_MARKERS.Stop(entry.command)) return true;
       if (Array.isArray(entry?.hooks)) {
-        return entry.hooks.some((h) => typeof h?.command === "string" && matchesDpStopCmd(h.command));
+        return entry.hooks.some((h) => typeof h?.command === "string" && HOOK_MARKERS.Stop(h.command));
       }
       return false;
     };
-    const isLegacyFlatDp = (entry) => typeof entry?.command === "string" && matchesDpStopCmd(entry.command) && !Array.isArray(entry?.hooks);
+    const isLegacyFlatDp = (entry) => typeof entry?.command === "string" && HOOK_MARKERS.Stop(entry.command) && !Array.isArray(entry?.hooks);
     const isCurrentCanonicalDp = (entry) => Array.isArray(entry?.hooks) && entry.hooks.length === 1 && entry.hooks[0]?.type === "command" && entry.hooks[0]?.command === STOP_HOOK_COMMAND && entry?.matcher === "";
     const beforeDpCount = settings.hooks.Stop.filter(isDpStopEntry).length;
     const hadLegacy = settings.hooks.Stop.some(isLegacyFlatDp);
@@ -5366,7 +5367,7 @@ function ensureStopHook(projectRoot2) {
     fs2.mkdirSync(claudeDir, { recursive: true });
     fs2.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
     let msg = hadLegacy ? "Added Stop hook (replaced legacy flat-shape entry that triggered /doctor warnings)" : beforeDpCount > 1 ? `Added Stop hook (replaced ${beforeDpCount} stale deepPairing entries)` : beforeDpCount === 1 ? "Replaced stale Stop hook entry with the current canonical version" : "Added Stop hook to .claude/settings.local.json";
-    const otherScopes = detectCrossScopeDpEntries(projectRoot2, "Stop", STOP_HOOK_MARKER).filter((s) => s.scope !== "project-local" && s.count > 0);
+    const otherScopes = detectCrossScopeDpEntries(projectRoot2, "Stop", HOOK_MARKERS.Stop).filter((s) => s.scope !== "project-local" && s.count > 0);
     const [firstScope] = otherScopes;
     if (firstScope) {
       const summary = otherScopes.map((s) => `${s.scope} (${s.count})`).join(", ");
@@ -5570,9 +5571,9 @@ function ensureCheckpointHook(projectRoot2) {
     settings.hooks.PostToolUse = settings.hooks.PostToolUse ?? [];
     const CANONICAL_CMD = `node "$CLAUDE_PROJECT_DIR/${CHECKPOINT_SCRIPT_REL_PATH}"`;
     const isDpCheckpointEntry = (entry) => {
-      if (typeof entry?.command === "string" && entry.command.includes("checkpoint.mjs")) return true;
+      if (typeof entry?.command === "string" && HOOK_MARKERS.PostToolUse(entry.command)) return true;
       if (Array.isArray(entry?.hooks)) {
-        return entry.hooks.some((h) => typeof h?.command === "string" && h.command.includes("checkpoint.mjs"));
+        return entry.hooks.some((h) => typeof h?.command === "string" && HOOK_MARKERS.PostToolUse(h.command));
       }
       return false;
     };
@@ -5590,7 +5591,7 @@ function ensureCheckpointHook(projectRoot2) {
     fs2.mkdirSync(claudeDir, { recursive: true });
     fs2.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
     let msg = beforeDpCount > 1 ? `Added PostToolUse checkpoint hook (replaced ${beforeDpCount} stale entries)` : beforeDpCount === 1 ? "Replaced stale checkpoint hook entry with the current canonical version" : "Added PostToolUse checkpoint hook (.deeppairing/hooks/checkpoint.mjs)";
-    const otherScopes = detectCrossScopeDpEntries(projectRoot2, "PostToolUse", CHECKPOINT_HOOK_MARKER).filter((s) => s.scope !== "project-local" && s.count > 0);
+    const otherScopes = detectCrossScopeDpEntries(projectRoot2, "PostToolUse", HOOK_MARKERS.PostToolUse).filter((s) => s.scope !== "project-local" && s.count > 0);
     const [firstScope] = otherScopes;
     if (firstScope) {
       const summary = otherScopes.map((s) => `${s.scope} (${s.count})`).join(", ");
@@ -5773,9 +5774,9 @@ function ensurePreflightHook(projectRoot2) {
     settings.hooks = settings.hooks ?? {};
     settings.hooks.PreToolUse = settings.hooks.PreToolUse ?? [];
     const isDpEntry = (entry) => {
-      if (typeof entry?.command === "string" && PREFLIGHT_HOOK_MARKER(entry.command)) return true;
+      if (typeof entry?.command === "string" && HOOK_MARKERS.PreToolUse(entry.command)) return true;
       if (Array.isArray(entry?.hooks)) {
-        return entry.hooks.some((h) => typeof h?.command === "string" && PREFLIGHT_HOOK_MARKER(h.command));
+        return entry.hooks.some((h) => typeof h?.command === "string" && HOOK_MARKERS.PreToolUse(h.command));
       }
       return false;
     };
