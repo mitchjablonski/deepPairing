@@ -770,8 +770,14 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
   const renderFileDiff = (file: ChangesetFile) => {
     const byLine = commentsByFileLine[file.path] ?? {};
     const xByLine = crossFileByFileLine[file.path] ?? {};
+    // W1 (#312) — the diff body rounds its OWN bottom corners. The file card
+    // that wraps it no longer carries `overflow-hidden` (that clip box made the
+    // card a sticky containing-block and defeated the pinned header), so the
+    // card can't clip these corners for us. The diff is always the last element
+    // in the card, so its own bottom radius + overflow-hidden restores the
+    // rounded card silhouette.
     return (
-      <div className="font-mono text-[13px] leading-[20px] bg-surface-primary">
+      <div className="font-mono text-[13px] leading-[20px] bg-surface-primary rounded-b-[3px] overflow-hidden">
         {file.hunks.length === 0 && (
           <div className="px-3 py-2 text-2xs text-text-muted italic">No diff hunks for this file.</div>
         )}
@@ -1097,15 +1103,30 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
       {reviewAll ? (
         /* --- Review-all: every file's diff stacked in one scroll ------------ */
         <div className="space-y-3">
+          {/* W1 (#312) — the file card no longer carries `overflow-hidden`: it
+              would clip the sticky header to the card box (making the card the
+              header's scroll container), so the header scrolled away with the
+              card instead of pinning. The header rounds its own top corners and
+              the diff body its bottom corners, restoring the rounded card. */}
           {files.map((f, i) => (
-            <div key={`${f.path}-${i}`} data-changeset-file={i} className="border border-border-subtle rounded overflow-hidden bg-surface-primary">
+            <div key={`${f.path}-${i}`} data-changeset-file={i} className="border border-border-subtle rounded bg-surface-primary">
               {/* P2 (round-11 UX) — the file-path row does NOT wrap at review
                   widths: the DIRECTORY truncates (the basename always survives —
                   review F3) so the actions stay on ONE 41px line instead of
                   pushing the header to a second row on a deep path. Below
                   1100px — where the row genuinely cannot hold path + stats +
                   three actions — it wraps again rather than overlapping. */}
-              <div className="flex flex-wrap min-[1100px]:flex-nowrap items-center gap-2 px-3 py-2 border-b border-border-subtle font-mono text-xs bg-surface-primary">
+              {/* W1 (#312) — STICKY so the per-file verdict buttons ("✓ Looks
+                  right / ↻ Needs changes") stay in reach while a long file's
+                  diff scrolls: the header pins to the top of the artifact
+                  scroll pane (ArtifactPanel's overflow-y-auto), then releases
+                  when the next file's card reaches the top — standard sticky
+                  section-header behavior. `bg-surface-primary` is opaque so diff
+                  lines don't bleed through when pinned; z-20 rides above diff
+                  content + WHERE-overlay badges but below modals/toasts (z-40+).
+                  rounded-t-[3px] rounds the top corners the card no longer
+                  clips. */}
+              <div className="sticky top-0 z-20 rounded-t-[3px] flex flex-wrap min-[1100px]:flex-nowrap items-center gap-2 px-3 py-2 border-b border-border-subtle font-mono text-xs bg-surface-primary">
                 <span className={`font-bold text-2xs shrink-0 ${changeMark[f.changeType].cls}`}>{changeMark[f.changeType].letter}</span>
                 <FilePathLabel path={f.path} />
                 <OpenInEditorLink filePath={f.path} line={1} />
@@ -1242,13 +1263,19 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
           </div>
 
           {/* Diff pane for the active file */}
-          <div className="min-w-0 border border-border-subtle rounded overflow-hidden bg-surface-primary" data-changeset-file={clampedIdx}>
+          {/* W1 (#312) — no `overflow-hidden` here either, so the active
+              file's header can pin (see the review-all card above). */}
+          <div className="min-w-0 border border-border-subtle rounded bg-surface-primary" data-changeset-file={clampedIdx}>
             {activeFile ? (
               <>
                 {/* P2 (round-11 UX) — see the review-all header above: one line
                     at review widths (directory truncates, basename survives),
                     wrapping only below 1100px. */}
-                <div className="flex flex-wrap min-[1100px]:flex-nowrap items-center gap-2 px-3 py-2 border-b border-border-subtle font-mono text-xs bg-surface-primary">
+                {/* W1 (#312) — sticky here too, so mouse users (who lack the
+                    `a` / `r` keyboard shortcuts) keep the verdict buttons in
+                    reach on a long file. Only this one-line header pins; the
+                    keyboard hint strip below stays static and scrolls away. */}
+                <div className="sticky top-0 z-20 rounded-t-[3px] flex flex-wrap min-[1100px]:flex-nowrap items-center gap-2 px-3 py-2 border-b border-border-subtle font-mono text-xs bg-surface-primary">
                   <span className={`font-bold text-2xs shrink-0 ${changeMark[activeFile.changeType].cls}`}>{changeMark[activeFile.changeType].letter}</span>
                   <FilePathLabel path={activeFile.path} />
                   <OpenInEditorLink filePath={activeFile.path} line={1} />
