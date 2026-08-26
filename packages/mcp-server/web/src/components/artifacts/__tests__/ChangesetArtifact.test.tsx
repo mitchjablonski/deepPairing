@@ -334,6 +334,58 @@ describe("ChangesetArtifact — Review all toggle (#175)", () => {
   });
 });
 
+describe("ChangesetArtifact — W1 (#312) sticky per-file header", () => {
+  // The verdict buttons ("✓ Looks right / ↻ Needs changes") live in each
+  // file's HEADER above the diff. On a long file that header scrolled out of
+  // reach; W1 pins it (position: sticky). jsdom can't measure the pixel
+  // pinning, so we assert the class contract + that the buttons still work.
+  it("carries sticky positioning on every file header in review-all mode", async () => {
+    const art = changeset({ reviewState: {} });
+    seed(art);
+    const { container } = render(<ChangesetArtifact artifact={art} />);
+    await userEvent.click(screen.getByRole("button", { name: /Review all/ }));
+
+    const headers = container.querySelectorAll("[data-changeset-file] > .sticky");
+    // One pinned header per file (the 3-file seeded changeset).
+    expect(headers.length).toBe(3);
+    headers.forEach((h) => {
+      // Pins to the scroll pane top, above diff content, opaque so lines
+      // don't bleed through when stuck.
+      expect(h.className).toMatch(/\btop-0\b/);
+      expect(h.className).toMatch(/\bz-20\b/);
+      expect(h.className).toMatch(/bg-surface-primary/);
+    });
+    // The file card must NOT clip the sticky header (overflow-hidden would
+    // trap it) — the guard for the regression this fix resolves.
+    container.querySelectorAll("[data-changeset-file]").forEach((card) => {
+      expect(card.className).not.toMatch(/overflow-hidden/);
+    });
+  });
+
+  it("keeps the disposition buttons present + clickable inside the pinned header", async () => {
+    const art = changeset({ reviewState: {} });
+    seed(art);
+    // Inject the review spy (same convention as the keyboard tests) so this
+    // assertion is deterministic regardless of prior-test store state.
+    const setReview = vi.fn().mockResolvedValue(undefined);
+    useArtifactStore.setState({ setChangesetFileReview: setReview });
+    render(<ChangesetArtifact artifact={art} />);
+    await userEvent.click(screen.getByRole("button", { name: /Review all/ }));
+
+    const looksRight = screen.getAllByTestId("looks-right");
+    expect(looksRight.length).toBe(3);
+    expect(screen.getAllByTestId("disposition-controls").length).toBe(3);
+    expect(screen.getAllByTestId("needs-changes").length).toBe(3);
+
+    // The button in the pinned header is live: clicking the first file's
+    // "Looks right" dispatches the reviewed verdict for THAT file.
+    await userEvent.click(looksRight[0]!);
+    await waitFor(() =>
+      expect(setReview).toHaveBeenCalledWith("art_cs", "auth/middleware.ts", "reviewed"),
+    );
+  });
+});
+
 describe("ChangesetArtifact — del-side comments + the collision matrix (#186)", () => {
   // The seeded middleware hunk literally has a `del` at oldLine 26
   // ("const s = await store.get(sid);") AND an `add` at newLine 26
