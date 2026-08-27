@@ -1281,6 +1281,30 @@ describe("ChangesetArtifact — X2 large-PR split chip", () => {
     expect(screen.queryByTestId("changeset-split-chip")).not.toBeInTheDocument();
   });
 
+  it("excludes a REVISED predecessor specifically (not just superseded)", () => {
+    const art = part("art_cs", "auth-rework", "2026-04-17T11:00:00.000Z");
+    const revisedPredecessor = part("art_v1", "auth-rework", "2026-04-17T10:00:00.000Z", { status: "revised" });
+    seed(art, [], [revisedPredecessor]);
+    render(<Harness id="art_cs" />);
+    // The `status === "revised"` branch drops the predecessor → one live part → no chip.
+    expect(screen.queryByTestId("changeset-split-chip")).not.toBeInTheDocument();
+  });
+
+  it("the 3-way double-count trap: v1(revised→v2) + B reads '2 of 2', never '3 of 3'", () => {
+    // Feature F: B is the earlier live part, v1 was revised INTO v2 (predecessor,
+    // excluded), and v2 (art_cs) is the later live part we render. The revised v1
+    // must not inflate the count — live parts are B + v2, and v2 is the 2nd.
+    const partB = part("art_B", "auth-rework", "2026-04-17T10:00:00.000Z");
+    const v1 = part("art_v1", "auth-rework", "2026-04-17T11:00:00.000Z", { status: "revised" });
+    const v2 = part("art_cs", "auth-rework", "2026-04-17T12:00:00.000Z");
+    seed(v2, [], [partB, v1]);
+    render(<Harness id="art_cs" />);
+    const chip = screen.getByTestId("changeset-split-chip");
+    expect(chip).toHaveTextContent("2 of 2");
+    expect(chip).not.toHaveTextContent("3 of 3");
+    expect(chip).not.toHaveTextContent("of 3");
+  });
+
   it("ignores same-feature changesets from a DIFFERENT session", () => {
     const art = part("art_cs", "auth-rework", "2026-04-17T10:00:00.000Z");
     const foreign = part("art_foreign", "auth-rework", "2026-04-17T11:00:00.000Z", { sessionId: "s2" });

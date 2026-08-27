@@ -1231,10 +1231,13 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                 <span className={`font-bold text-2xs shrink-0 ${changeMark[f.changeType].cls}`}>{changeMark[f.changeType].letter}</span>
                 <FilePathLabel path={f.path} />
                 <OpenInEditorLink filePath={f.path} line={1} />
-                {/* X3 — the "New file" pill: an all-added file's concentrated
-                    "this is new" signal, replacing the wall of green fill. */}
-                {isAllAdded(f) && <NewFilePill additions={fileStats(f).additions} />}
                 <span className="ml-auto flex items-center gap-2 shrink-0">
+                  {/* X3 — the "New file" pill rides the RIGHT action group in
+                      BOTH headers (here + the sticky active-file header), so an
+                      all-added file's "this is new" signal sits consistently
+                      with the other header actions. `flex-wrap` on the header
+                      lets this whole group drop below the path under 1100px. */}
+                  {isAllAdded(f) && <NewFilePill additions={fileStats(f).additions} />}
                   {/* U1 — the WHERE-overlay also rides the stacked review-all
                       header (this is a <div>, so the badge sits inline). */}
                   {findingOverlayByFile[f.path] && (
