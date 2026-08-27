@@ -101,12 +101,14 @@ describe("first-call hint — always-on protocol preamble", () => {
 });
 
 /**
- * #139 — detail density (verbosity). The setting is delivered ONCE per session
- * through this first-call hint (never in check_feedback's per-loop payload).
- * These pin: terse emits concrete prose-tightening guidance; rich (the default)
- * emits NOTHING (byte-for-byte the pre-feature hint); and the FLOOR — terse may
- * shrink prose but the guidance must NEVER tell the agent to drop Evidence,
- * skip an artifact, or reduce the number of artifacts.
+ * #139 / X1 — detail density (verbosity). The setting is delivered ONCE per
+ * session through this first-call hint (never in check_feedback's per-loop
+ * payload). AFTER THE X1 INVERSION: terse is the DEFAULT and the SILENT baseline
+ * (emits NOTHING — byte-for-byte the pre-feature hint), and rich is the OPT-IN
+ * that emits the short prose-expansion block. These pin: rich emits its block;
+ * terse (default and explicit) emits nothing; and the FLOOR — the
+ * code-review-before-it-lands guarantee terse must never collapse is now carried
+ * by the always-on preamble, and the default hint still asserts it.
  */
 /**
  * #195 M4 — pending-artifact inventory for a RESTARTED agent. The session store
@@ -139,51 +141,49 @@ describe("first-call hint — #195 M4 pending-artifact inventory", () => {
   });
 });
 
-describe("first-call hint — #139 detail density", () => {
-  it("emits terse prose-tightening guidance when detailDensity is 'terse'", async () => {
-    store.setDetailDensity("terse");
-    const hint = await buildFirstCallHint(store, 4000);
-    expect(hint).toMatch(/Detail density: TERSE/);
-    // The concrete instruction that IS the feature.
-    expect(hint).toMatch(/1[–-]2 sentences/);
-    expect(hint).toMatch(/[Ll]ead with the evidence/);
-  });
-
-  it("emits NO detail-density guidance in the default 'rich' mode", async () => {
-    // Default (never set) is rich; the hint must not carry the terse block.
-    const hint = await buildFirstCallHint(store, 4000);
-    expect(hint).not.toMatch(/Detail density: TERSE/);
-    expect(hint).not.toMatch(/detail density/i);
-  });
-
-  it("emits NO detail-density guidance when explicitly set back to 'rich'", async () => {
-    store.setDetailDensity("terse");
+describe("first-call hint — #139/X1 detail density (terse-by-default)", () => {
+  it("emits rich prose-expansion guidance when detailDensity is 'rich'", async () => {
+    // X1 INVERSION: rich is now the OPT-IN that appends bytes; terse is silent.
     store.setDetailDensity("rich");
     const hint = await buildFirstCallHint(store, 4000);
-    expect(hint).not.toMatch(/Detail density: TERSE/);
+    expect(hint).toMatch(/Detail density: RICH/);
+    // The concrete instruction that IS the opt-in.
+    expect(hint).toMatch(/fuller prose/);
+    // The floor is untouched by rich — those surfaces are unchanged.
+    expect(hint).toMatch(/Evidence, structured fields, diagrams, and artifact count are unchanged/);
   });
 
-  it("FLOOR — terse guidance carries the load-bearing prohibitions verbatim", async () => {
+  it("emits NO detail-density guidance in the default (terse) mode", async () => {
+    // X1: default (never set) is terse — the SILENT baseline; no density block.
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).not.toMatch(/Detail density: RICH/);
+    expect(hint).not.toMatch(/Detail density:/);
+  });
+
+  it("emits NO detail-density guidance when explicitly set back to 'terse'", async () => {
+    store.setDetailDensity("rich");
     store.setDetailDensity("terse");
     const hint = await buildFirstCallHint(store, 4000);
-    // The floor is the POSITIVE guard: these exact prohibition sentences must
-    // exist, so a well-meaning rewrite that softens the floor (e.g. "attach
-    // evidence when relevant") deletes one of them and fails HERE. A blacklist
-    // of phrasings-we-happened-to-avoid is theater — it can't catch a novel
-    // floor-violating rewrite — so this test asserts presence, not absence.
-    expect(hint).toMatch(/Do NOT reduce the number of artifacts/);
-    expect(hint).toMatch(/do NOT skip present_options/);
-    // #190 — the floor mandates a REVIEW SURFACE before code lands, without
-    // prescribing a per-edit card (batched present_changeset is the default).
-    expect(hint).toMatch(/PRESENTED FOR REVIEW BEFORE IT LANDS/);
-    expect(hint).toMatch(/present_changeset at feature boundaries by default/);
-    expect(hint).toMatch(/NEVER omit `Evidence`/);
-    // Pin the LITERAL evidence shape the agent must always attach — the whole
-    // point of the floor is that terse trims prose, never the four Evidence
-    // fields. If the parenthetical is dropped/reworded, this fails.
-    expect(hint).toContain("`Evidence` (filePath, lineStart, lineEnd, snippet)");
-    // And the explicit statement that terse trims prose, not evidence.
-    expect(hint).toMatch(/never the evidence itself/);
+    expect(hint).not.toMatch(/Detail density: RICH/);
+    expect(hint).not.toMatch(/Detail density:/);
+  });
+
+  it("FLOOR — terse-by-default still carries the load-bearing floor via the always-on preamble", async () => {
+    // X1: the terse block is now empty, so the floor that terse must never
+    // collapse is carried by the always-on PROTOCOL_PREAMBLE (and the SKILL
+    // Voice guard), not by a per-dial block. A DEFAULT (terse, no density block)
+    // hint must STILL assert the code-review-before-it-lands floor. These are
+    // POSITIVE presence guards: a rewrite that drops the floor from the preamble
+    // deletes one of them and fails HERE.
+    const hint = await buildFirstCallHint(store, 4000);
+    // No density block on the default path.
+    expect(hint).not.toMatch(/Detail density:/);
+    // #190 — the floor mandates a REVIEW SURFACE before code lands, carried by
+    // the preamble's close-the-loop headline.
+    expect(hint).toMatch(/present code for review before it lands/);
+    expect(hint).toMatch(/batched present_changeset by default/);
+    // And the run always ends with exactly one debrief.
+    expect(hint).toMatch(/present_debrief/);
   });
 });
 
@@ -304,7 +304,8 @@ describe("first-call hint — S1: guardrails survive all 24 dial variants", () =
             }
             const variantStore = fx.track(new FileStore(variantRoot, "matrix_session"));
             if (autonomy !== "supervised") variantStore.setAutonomyLevel(autonomy);
-            if (density !== "rich") variantStore.setDetailDensity(density);
+            // X1: terse is now the default; only rich needs an explicit set.
+            if (density !== "terse") variantStore.setDetailDensity(density);
             if (withRejected) {
               variantStore.recordRejectedApproach({
                 description: "Store session state in a module-level global singleton",
@@ -334,29 +335,34 @@ describe("first-call hint — S1: guardrails survive all 24 dial variants", () =
 });
 
 /**
- * S2 — the terse block's floor sentence ("do NOT skip present_options" + the
- * review-before-land floor) sits two lines above the autonomous block's "Skip
- * the opening findings/options ceremony". Adjacent absolutes pointing
- * opposite ways on the same tool invite inconsistent behavior. The terse
- * line now states the division of labor: terse governs TEXT only; whether
- * an artifact posts at all is the Autonomy dial's call.
+ * S2 / X1 — after the terse-by-default inversion, terse is the SILENT baseline
+ * (it contributes nothing), so the old adjacency hazard — a terse floor sentence
+ * two lines above the autonomous "Skip the opening findings/options ceremony" —
+ * is gone. What remains to guard is the OTHER direction: the RICH opt-in states
+ * its OWN division of labor ("artifact count are unchanged"), so a reader can't
+ * mistake fuller prose for more artifacts, and it coexists with the autonomous
+ * block without weakening either side.
  */
-describe("first-call hint — S2: terse/autonomy division of labor", () => {
-  it("terse block names the Autonomy dial as the authority on whether artifacts post", async () => {
-    store.setDetailDensity("terse");
+describe("first-call hint — S2/X1: rich/autonomy division of labor", () => {
+  it("the rich block states that artifact count is unchanged (prose ≠ count)", async () => {
+    store.setDetailDensity("rich");
     const hint = await buildFirstCallHint(store, 4000);
-    expect(hint).toContain("Terse governs TEXT only");
-    expect(hint).toContain("Autonomy dial");
-    // The floor sentence itself is intact (also pinned by the #139 FLOOR test).
-    expect(hint).toMatch(/do NOT skip present_options/);
-    expect(hint).toMatch(/PRESENTED FOR REVIEW BEFORE IT LANDS/);
+    expect(hint).toContain("artifact count are unchanged");
   });
 
-  it("the clause coexists with the autonomous block without weakening either side", async () => {
-    store.setDetailDensity("terse");
+  it("default (terse) emits NO density clause that could clash with the autonomous block", async () => {
     store.setAutonomyLevel("autonomous");
     const hint = await buildFirstCallHint(store, 4000);
-    expect(hint).toContain("Terse governs TEXT only");
+    // Terse is silent — no density line at all — so no adjacency hazard.
+    expect(hint).not.toMatch(/Detail density:/);
+    expect(hint).toMatch(/Skip the opening findings\/options ceremony/);
+  });
+
+  it("rich coexists with the autonomous block without weakening either side", async () => {
+    store.setDetailDensity("rich");
+    store.setAutonomyLevel("autonomous");
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).toMatch(/Detail density: RICH/);
     expect(hint).toMatch(/Skip the opening findings\/options ceremony/);
   });
 });

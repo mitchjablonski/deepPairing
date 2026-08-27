@@ -42,9 +42,11 @@ afterEach(() => {
 });
 
 describe("R5 — agent-context budget owner", () => {
-  it("the assembled VANILLA (supervised/rich) first-call hint stays under the declared ceiling", async () => {
+  it("the assembled VANILLA (supervised/terse) first-call hint stays under the declared ceiling", async () => {
     // A fresh project: no memory, no guardrails, no team prefs, no seeds,
-    // supervised autonomy, rich detail — the default every session pays.
+    // supervised autonomy, terse detail — the default every session pays. X1: the
+    // default flipped rich→terse, but both defaults contribute the empty string,
+    // so the vanilla hint is byte-identical and this assertion is unchanged.
     const hint = await buildFirstCallHint(store, 4000);
     expect(
       hint.length,

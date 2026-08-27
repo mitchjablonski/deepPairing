@@ -89,9 +89,11 @@ export class FileStore implements IStore {
    *  the project's preferences.json. Null for real sessions. */
   private demoPreferences: Record<string, unknown> | null = null;
   private autonomyLevel: "supervised" | "balanced" | "autonomous" = "supervised";
-  // #139 — detail density (verbosity). Default "rich" == today's behavior, so
-  // a preferences.json with no `detailDensity` field loads as rich.
-  private detailDensity: "rich" | "terse" = "rich";
+  // #139 / X1 — detail density (verbosity). Default "terse" == plain-by-default,
+  // so a preferences.json with no `detailDensity` field loads as terse. Terse
+  // shortens PROSE only (never a review surface, never Evidence, never artifact
+  // count); rich is the explicit opt-in for fuller explanatory prose.
+  private detailDensity: "rich" | "terse" = "terse";
 
   /**
    * U1 — per-file change watermarks tracked since last load. Before each
@@ -186,8 +188,9 @@ export class FileStore implements IStore {
     ) {
       this.autonomyLevel = prefs.autonomyLevel;
     }
-    // #139 — absent field keeps the "rich" default (back-compat: an existing
-    // preferences.json written before this feature has no `detailDensity`).
+    // #139 / X1 — absent field keeps the "terse" default (plain-by-default;
+    // an existing preferences.json written before this feature has no
+    // `detailDensity`, so it also reads as terse).
     if (prefs.detailDensity === "rich" || prefs.detailDensity === "terse") {
       this.detailDensity = prefs.detailDensity;
     }

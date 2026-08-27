@@ -158,17 +158,18 @@ describe("#139 — preference setters reject a poison enum value (autonomy fails
     expect(fx.track(new FileStore(tmpDir, "real")).getAutonomyLevel()).toBe("balanced");
   });
 
-  it("detail-density: invalid density 'banana' → 400 and nothing written (stays rich)", async () => {
+  it("detail-density: invalid density 'banana' → 400 and nothing written (stays terse)", async () => {
     const store = sessions.get("real")!;
-    expect(store.getDetailDensity()).toBe("rich");
+    // X1 — terse is the plain-by-default baseline.
+    expect(store.getDetailDensity()).toBe("terse");
     const res = await app.request("/api/internal/sessions/real/detail-density", {
       method: "POST",
       headers: authed,
       body: JSON.stringify({ density: "banana" }),
     });
     expect(res.status).toBe(400);
-    expect(store.getDetailDensity()).toBe("rich");
-    expect(fx.track(new FileStore(tmpDir, "real")).getDetailDensity()).toBe("rich");
+    expect(store.getDetailDensity()).toBe("terse");
+    expect(fx.track(new FileStore(tmpDir, "real")).getDetailDensity()).toBe("terse");
   });
 
   it("detail-density: a valid density still round-trips (200 + persisted)", async () => {

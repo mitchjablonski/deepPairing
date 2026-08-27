@@ -4,7 +4,7 @@ import { getGlobalStore } from "../store/global-store.js";
 import { groundingInstance } from "../store/philosophy-citation.js";
 import { AUTONOMY_POLICY_LINE, type AutonomyLevel } from "./autonomy-policy.js";
 import { PENDING_DRAFT_TYPES } from "./tools/types.js";
-import { requestSecretNote, requestScopeNote } from "./tools/check-feedback-delivery.js";
+import { requestSecretNote, requestScopeNote, artifactHumanLabel } from "./tools/check-feedback-delivery.js";
 import { cliInvocation } from "../cli-invocation.js";
 
 /** N2 (#226 scope 4) — age in ms of the OLDEST pending draft, or null if no
@@ -58,7 +58,7 @@ const HINT_BUDGET_CHARS = 1500;
 // (round-13 census) as pure paragraph accretion, and it is EXEMPT from
 // HINT_BUDGET_CHARS (it rides the uncapped prefix — see contextualCap below), so
 // nothing bounded it. This ceiling is that bound: a test asserts the assembled
-// VANILLA first-call hint (headerLine + PROTOCOL_PREAMBLE, the supervised/rich
+// VANILLA first-call hint (headerLine + PROTOCOL_PREAMBLE, the supervised/terse
 // default every session pays) stays under it, so the preamble can't silently
 // regrow. Raise it ONLY with a deliberate, reviewed reason — never to make a red
 // test green. Every load-bearing rule (the floor, the three risk classes, the
@@ -67,7 +67,9 @@ const HINT_BUDGET_CHARS = 1500;
 //
 // Measured after T2 (round-14, the preamble compression pass): PROTOCOL_PREAMBLE
 // is 6,420 chars and the assembled vanilla hint (header + preamble, supervised/
-// rich, no memory/guardrails/seeds) is ~6,753. That leaves ~380 chars of headroom
+// terse, no memory/guardrails/seeds) is ~6,753 — byte-identical to the pre-flip
+// supervised/rich vanilla, since both defaults contribute the empty string.
+// That leaves ~380 chars of headroom
 // under the preamble's own 6,800 sub-cap and ~447 under the assembled ceiling —
 // deliberately opened (T2 folded the redundant floor restatements and the
 // backstop filler WITHOUT dropping a load-bearing rule; every rule stays pinned
@@ -132,38 +134,27 @@ export const PROTOCOL_PREAMBLE = [
   "Pull the full protocol from deeppairing://onboarding. present_* refuse proposals matching a past rejected approach.",
 ].join("\n");
 
-// #139 — detail-density (verbosity) guidance. This is a STANDING preference,
-// so it's delivered here in the once-per-session first-call hint — NOT in
-// check_feedback's per-loop structuredContent (that payload is deliberately
-// byte-minimal when healthy and must stay so). The two modes live side by side
-// so the contrast is legible:
+// #139 / X1 — detail-density (verbosity) guidance. This is a STANDING
+// preference, so it's delivered here in the once-per-session first-call hint —
+// NOT in check_feedback's per-loop structuredContent (that payload is
+// deliberately byte-minimal when healthy and must stay so).
 //
-// RICH (default): today's behavior — full explanatory prose. We deliberately
-// add NOTHING to the hint, so a default (rich) session's hint stays
-// byte-for-byte as before and the common path carries zero extra tokens. The
-// agent's baseline verbosity IS rich.
-const DETAIL_DENSITY_RICH_GUIDANCE = "";
+// X1 INVERSION — the DEFAULT is now TERSE (plain-by-default), and terse is the
+// SILENT baseline: it contributes the empty string, so a default session's hint
+// stays byte-for-byte as before and the common path carries zero extra tokens.
+// The floor that terse must never collapse (every artifact still posts, code is
+// still PRESENTED FOR REVIEW BEFORE IT LANDS, Evidence always attached) is
+// carried by the always-on PROTOCOL_PREAMBLE and the SKILL Voice guard, not by
+// this now-empty block. Only an explicit RICH opt-in appends bytes — so the
+// budget-critical common path pays nothing, exactly as before the flip.
+const DETAIL_DENSITY_TERSE_GUIDANCE = "";
 //
-// TERSE: shrink the PROSE around each artifact — never the review surface.
-// The FLOOR is load-bearing and stated explicitly here: every artifact still
-// posts, present_options still surfaces genuine tradeoffs, code is still
-// PRESENTED FOR REVIEW BEFORE IT LANDS (#190 — batched present_changeset by
-// default, present_code_change for single-file/surgical changes), and Evidence
-// (filePath/lineStart/lineEnd/snippet) is ALWAYS attached. Terse means less
-// explanation AROUND the evidence, never less evidence and never fewer artifacts.
-const DETAIL_DENSITY_TERSE_GUIDANCE = [
-  "\n✂️ Detail density: TERSE — the human set this. Keep artifact PROSE tight (this affects TEXT only, not the number of artifacts).",
-  "  - Keep each finding's `detail` and `recommendation` to 1–2 sentences. Lead with the evidence; skip preamble and restatement of the task.",
-  "  - Trim option and plan descriptions to the decision-relevant essentials — pros/cons as short phrases, not paragraphs.",
-  // S2 — the trailing parenthetical states the division of labor with the
-  // autonomy dial explicitly. Without it, this line's "do NOT skip
-  // present_options" sits two lines above the autonomous block's "Skip the
-  // opening findings/options ceremony" — adjacent absolutes pointing opposite
-  // ways on the same tool. Each self-scopes, but the model shouldn't have to
-  // infer the scoping: terse governs prose, the Autonomy dial governs whether
-  // an artifact posts at all.
-  "  - Do NOT reduce the number of artifacts and do NOT skip present_options, and NEVER omit `Evidence` (filePath, lineStart, lineEnd, snippet). Code must still be PRESENTED FOR REVIEW BEFORE IT LANDS — present_changeset at feature boundaries by default, present_code_change for single-file/surgical changes. Evidence is the load-bearing content, not prose — terse trims the explanation around it, never the evidence itself. (Terse governs TEXT only; whether an artifact posts at all is governed by the Autonomy dial, not this setting.)",
-].join("\n");
+// RICH (opt-in): the human wants fuller explanatory prose. This is the ONLY
+// mode that appends to the hint now. It expands the EXPLANATION around each
+// artifact — it never changes the review surfaces: Evidence, structured fields,
+// diagrams, and artifact count are identical to terse.
+const DETAIL_DENSITY_RICH_GUIDANCE =
+  "\n🗣 Detail density: RICH — the human wants fuller prose. Expand explanations/rationale around each artifact. Evidence, structured fields, diagrams, and artifact count are unchanged.";
 
 // #148 — autonomy-level guidance. Same delivery pattern as #139's detail
 // density above: a STANDING user setting, spoken once per session in the
@@ -573,6 +564,15 @@ export async function buildFirstCallHint(
     const fullState = await store.getFullState();
     const allComments = fullState.comments ?? [];
 
+    // X4 — id → artifact lookup so the obligation lanes below can echo a HUMAN
+    // LABEL (type + title) instead of a bare `art_…` id the human never sees.
+    const artifactsById = new Map<string, { type: string; title: string }>(
+      (fullState.artifacts ?? []).map((a: { id: string; type: string; title: string }) => [
+        a.id,
+        { type: a.type, title: a.title },
+      ]),
+    );
+
     // M4 — pending-artifact inventory for a RESTARTED agent. The session store
     // is per-project and reloads across runs, so draft artifacts a PRIOR run
     // presented are still awaiting review on this run's first call. Surface them
@@ -629,8 +629,9 @@ export async function buildFirstCallHint(
     if (revisionRequested.length > 0) {
       const lines = revisionRequested.map((c: any) => {
         const aId = c.target?.artifactId ?? "(unknown)";
+        const label = artifactHumanLabel(artifactsById.get(aId));
         const excerpt = String(c.content ?? "").slice(0, 120);
-        return `  • Decision ${aId} — comment ${c.id}: "${excerpt}"`;
+        return `  • ${label} [${aId}] — comment ${c.id}: "${excerpt}"`;
       });
       blockingParts.push(
         `\n🔁 ${revisionRequested.length} REVISION REQUEST${revisionRequested.length === 1 ? "" : "S"} on decisions. The human wants the OPTIONS REVISED, not just an answer:\n${lines.join("\n")}\n` +
@@ -689,8 +690,9 @@ export async function buildFirstCallHint(
     if (followUps.length > 0) {
       const lines = followUps.map((c: any) => {
         const aId = c.target?.artifactId ?? "(unknown)";
+        const label = artifactHumanLabel(artifactsById.get(aId));
         const excerpt = String(c.content ?? "").slice(0, 100);
-        return `  • Reply ${c.id} on artifact ${aId} (parent ${c.parentCommentId}): "${excerpt}"`;
+        return `  • Reply ${c.id} on ${label} [${aId}] (parent ${c.parentCommentId}): "${excerpt}"`;
       });
       blockingParts.push(
         `\n↳ ${followUps.length} follow-up repl${followUps.length === 1 ? "y" : "ies"} in active thread${followUps.length === 1 ? "" : "s"}:\n${lines.join("\n")}\n` +
@@ -756,22 +758,22 @@ export async function buildFirstCallHint(
     // Non-fatal.
   }
 
-  // #139 — detail density. A direct, explicit user setting (opt-in; default
-  // "rich" adds nothing), so it rides in the UNCAPPED obligations tier: a
-  // verbosity instruction that silently lost the truncation lottery would make
-  // the feature unreliable. Rich contributes the empty string, so the default
-  // session's hint is byte-for-byte unchanged; only an explicit "terse" appends
-  // guidance. NOTE: terse is NOT free — the ~680-byte block lands before the
-  // contextual budget is measured (baselineLen includes obligations), so a
-  // context-heavy terse session shrinks the advisory budget by that much and
-  // may drop one advisory section (recoverable via the recall pointer). That's
-  // the right trade: the terse block itself is never truncated.
+  // #139 / X1 — detail density. A direct, explicit user setting, riding in the
+  // UNCAPPED obligations tier: a verbosity instruction that silently lost the
+  // truncation lottery would make the feature unreliable. AFTER THE X1 FLIP the
+  // DEFAULT is terse and terse contributes the empty string, so the default
+  // (plain-by-default) session's hint is byte-for-byte unchanged and the common
+  // path pays nothing; only an explicit "rich" opt-in appends its short block.
+  // The rich block is small (~250 bytes) and lands before the contextual budget
+  // is measured (baselineLen includes obligations), so a context-heavy rich
+  // session shrinks the advisory budget by that much — the right trade, and the
+  // rich block itself is never truncated.
   try {
     const density = await store.getDetailDensity?.();
-    const guidance = density === "terse" ? DETAIL_DENSITY_TERSE_GUIDANCE : DETAIL_DENSITY_RICH_GUIDANCE;
+    const guidance = density === "rich" ? DETAIL_DENSITY_RICH_GUIDANCE : DETAIL_DENSITY_TERSE_GUIDANCE;
     if (guidance) obligationsParts.push(guidance);
   } catch {
-    // Non-fatal — absent/unreadable preference falls back to rich (no guidance).
+    // Non-fatal — absent/unreadable preference falls back to terse (no guidance).
   }
 
   // #148 — autonomy dial, same uncapped-tier pattern as detail density above.

@@ -16,6 +16,39 @@ import { suggestionSummary, describeRequestScope } from "@deeppairing/shared";
  * check-feedback-golden-parity.test.ts). Do not reword here.
  */
 
+/**
+ * X4 — a HUMAN LABEL for an artifact, for anything the tooling hands the agent
+ * to echo back to its pair. The human never sees `art_…` ids (the companion
+ * shows titles + types), so wherever the agent might otherwise parrot a raw id,
+ * we hand it a label to speak instead — "changeset “Add token caching”",
+ * "decision “Cache TTL”", "the plan" — leading with what the artifact IS.
+ *
+ * Falls back to the bare type noun when there's no usable title, and NEVER emits
+ * an `art_…` id in the returned string (that's the whole point). The raw id stays
+ * available at the call site for machine correlation; this is the human-facing half.
+ */
+const ARTIFACT_TYPE_NOUN: Record<string, string> = {
+  research: "findings",
+  plan: "plan",
+  decision: "decision",
+  code_change: "code change",
+  reasoning: "reasoning",
+  spec: "spec",
+  changeset: "changeset",
+  debrief: "debrief",
+  explainer: "explainer",
+};
+
+export function artifactHumanLabel(
+  artifact: { type?: string; title?: unknown } | undefined | null,
+): string {
+  if (!artifact) return "an artifact";
+  const type = typeof artifact.type === "string" ? artifact.type : "";
+  const noun = ARTIFACT_TYPE_NOUN[type] ?? (type || "artifact");
+  const title = typeof artifact.title === "string" ? artifact.title.trim() : "";
+  return title ? `${noun} “${title}”` : `the ${noun}`;
+}
+
 /** #186 — resolve the text of a REMOVED line for delivery. A comment on a `del`
  *  line anchors to (filePath, oldLine, side:"old"); look the line up in the
  *  changeset's own hunks (already in the artifact) so the agent reads WHAT was

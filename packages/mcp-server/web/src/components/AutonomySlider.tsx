@@ -29,20 +29,22 @@ const levels: { id: AutonomyLevel; label: string; description: string }[] = [
  * #139 — detail density (verbosity) is ORTHOGONAL to autonomy. Autonomy governs
  * how MANY artifacts post + gating (auto-approve); this governs how much PROSE
  * rides inside each artifact. It lives inside the same popover as a small
- * Rich/Terse toggle — deliberately NOT a second slider, since two "how much"
- * sliders would blur which one controls auto-approve. Terse only trims text:
- * every artifact still posts and Evidence is always attached.
+ * Plain/Rich toggle — deliberately NOT a second slider, since two "how much"
+ * sliders would blur which one controls auto-approve. X1: this reads as a
+ * POSTURE, not a dial — Plain is the default and Rich is an explicit opt-in for
+ * fuller prose. Plain only trims text: every artifact still posts, Evidence and
+ * diagrams are always attached.
  */
 const densities: { id: DetailDensity; label: string; description: string }[] = [
-  { id: "rich",  label: "Rich",  description: "Full explanations around each artifact" },
-  { id: "terse", label: "Terse", description: "Tight prose; same artifacts + evidence, less text" },
+  { id: "terse", label: "Plain (default)",     description: "Tight prose; same artifacts, evidence & diagrams — less text" },
+  { id: "rich",  label: "Rich (fuller prose)", description: "Fuller explanations around each artifact" },
 ];
 
 export function AutonomySlider() {
   const [level, setLevel] = useState<AutonomyLevel>("supervised");
-  // #139 — default "rich" mirrors the store default so an old preferences.json
-  // (no detailDensity field) reads as Rich.
-  const [density, setDensity] = useState<DetailDensity>("rich");
+  // #139 / X1 — default "terse" mirrors the store default (plain-by-default) so
+  // an old preferences.json (no detailDensity field) reads as Plain.
+  const [density, setDensity] = useState<DetailDensity>("terse");
   /**
    * Q2 — cross-project publish opt-in, made REACHABLE.
    *

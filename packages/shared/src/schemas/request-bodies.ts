@@ -158,8 +158,9 @@ export type AutonomyLevel = z.infer<typeof AutonomyLevelSchema>;
 
 // #139 — detail density (verbosity) is ORTHOGONAL to autonomy: autonomy
 // governs artifact COUNT + gating (auto-approve), detailDensity governs how
-// much PROSE rides inside each artifact. Optional + absent-means-"rich" so an
-// existing preferences.json with no field behaves exactly as today.
+// much PROSE rides inside each artifact. Optional + absent-means-"terse" so a
+// fresh install pairs plain-by-default; an existing preferences.json with no
+// field also reads as terse (X1 — the plain-explanation legibility flip).
 export const DetailDensitySchema = z.enum(["rich", "terse"]);
 export type DetailDensity = z.infer<typeof DetailDensitySchema>;
 

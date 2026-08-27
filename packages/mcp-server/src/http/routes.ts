@@ -193,7 +193,7 @@ const EMPTY_STATE = {
   decisions: [],
   planReviews: [],
   autonomyLevel: "supervised",
-  detailDensity: "rich",
+  detailDensity: "terse",
   rejectedApproaches: [],
   approvedPatterns: [],
   // G1 (#198b) — requests ride the empty state so a no-session UI reads a
