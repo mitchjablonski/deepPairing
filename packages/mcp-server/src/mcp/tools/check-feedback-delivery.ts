@@ -448,10 +448,18 @@ export function deliverComment(c: Comment, artsForTargets: Artifact[]): CommentD
     ? `[follow-up on the APPROVED/RESOLVED artifact "${artsForTargets.find((a) => a.id === c.target.artifactId)?.title ?? c.target.artifactId}"] `
     : "";
 
+  // X4 — the HUMAN LABEL leads the per-loop prose the agent reads on EVERY human
+  // comment/question, so it echoes what the artifact IS ("changeset “…”", "the
+  // plan") instead of parroting the raw `art_…` id. The id stays inside the
+  // `[loc]` bracket for machine correlation (and `loc` keeps its file/line/grain
+  // dimensions). This closes the dominant leak the carryover/revision/follow-up
+  // lanes already handle, and makes the SKILL claim TRUE on the main path.
+  const humanLabel = artifactHumanLabel(artsForTargets.find((a) => a.id === c.target.artifactId));
+
   if (c.intent === "question" && !c.answeredByCommentId) {
     return {
       bucket: "question",
-      prose: `- ❓ QUESTION [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}\n    → Answer via answer_question with commentId="${c.id}"`,
+      prose: `- ❓ QUESTION ${humanLabel} [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}\n    → Answer via answer_question with commentId="${c.id}"`,
       structured: {
         commentId: c.id,
         artifactId: c.target.artifactId,
@@ -466,7 +474,7 @@ export function deliverComment(c: Comment, artsForTargets: Artifact[]): CommentD
   }
   return {
     bucket: "comment",
-    prose: `- [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}`,
+    prose: `- ${humanLabel} [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}`,
     structured: {
       id: c.id,
       artifactId: c.target.artifactId,

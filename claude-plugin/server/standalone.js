@@ -28009,10 +28009,11 @@ ${s.replacementText}${note ? `
   const regionRef = describeRegionRef(c.target.region);
   if (regionRef) loc += ` \u2014 on region ${regionRef}`;
   const followUpPrefix = c.followUp ? `[follow-up on the APPROVED/RESOLVED artifact "${artsForTargets.find((a) => a.id === c.target.artifactId)?.title ?? c.target.artifactId}"] ` : "";
+  const humanLabel = artifactHumanLabel(artsForTargets.find((a) => a.id === c.target.artifactId));
   if (c.intent === "question" && !c.answeredByCommentId) {
     return {
       bucket: "question",
-      prose: `- \u2753 QUESTION [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}
+      prose: `- \u2753 QUESTION ${humanLabel} [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}
     \u2192 Answer via answer_question with commentId="${c.id}"`,
       structured: {
         commentId: c.id,
@@ -28028,7 +28029,7 @@ ${s.replacementText}${note ? `
   }
   return {
     bucket: "comment",
-    prose: `- [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}`,
+    prose: `- ${humanLabel} [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}`,
     structured: {
       id: c.id,
       artifactId: c.target.artifactId,
