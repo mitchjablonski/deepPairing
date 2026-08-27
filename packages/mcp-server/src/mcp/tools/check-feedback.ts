@@ -1,7 +1,7 @@
 import type { ToolContext, ToolResult } from "./types.js";
 import { PENDING_DRAFT_TYPES, WAITING_DRAFT_TYPES, ACKNOWLEDGE_ONLY_DRAFT_TYPES } from "./types.js";
 import type { Artifact, Request } from "@deeppairing/shared";
-import { deliverComment, commentSecretNote, requestSecretNote, requestScopeNote } from "./check-feedback-delivery.js";
+import { deliverComment, commentSecretNote, requestSecretNote, requestScopeNote, artifactHumanLabel } from "./check-feedback-delivery.js";
 import { SERVER_VERSION } from "../../version.js";
 import { collectUnansweredQuestions, describeRequestIntent, isClosedArtifactStatus, coerceChangesetContent } from "@deeppairing/shared";
 import { getGlobalStore } from "../../store/global-store.js";
@@ -645,8 +645,18 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
       }
       // FIX 4 — carry the secret-warning note the normal drain appends, so a
       // carried-over question that may contain a pasted credential is flagged.
+      // X4 — lead with the artifact's HUMAN LABEL (type + title) so the agent
+      // echoes what it IS, not the bare `art_…` id the human never sees; the raw
+      // id stays in brackets for machine correlation.
+      const artsById = new Map<string, { type: string; title: string }>(
+        (fullState?.artifacts ?? []).map((a) => [a.id, { type: a.type, title: a.title }]),
+      );
       const lines = older.map(
-        (q) => `  • ${q.artifactId || "(session)"} — comment ${q.question.id}: "${String(q.question.content ?? "").slice(0, 120)}"${commentSecretNote(q.question)}`,
+        (q) => {
+          const label = q.artifactId ? artifactHumanLabel(artsById.get(q.artifactId)) : "the session";
+          const idTag = q.artifactId ? ` [${q.artifactId}]` : "";
+          return `  • ${label}${idTag} — comment ${q.question.id}: "${String(q.question.content ?? "").slice(0, 120)}"${commentSecretNote(q.question)}`;
+        },
       );
       parts.push(
         `↩️ ${older.length} unanswered question${older.length === 1 ? "" : "s"} carried over from earlier — the human asked ${older.length === 1 ? "it" : "them"} before (possibly a previous run) and ${older.length === 1 ? "it is" : "they are"} still open. Answer each with answer_question (commentId = the question's id) before new work:\n${lines.join("\n")}`,

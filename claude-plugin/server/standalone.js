@@ -27794,6 +27794,24 @@ var WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change", "changeset
 var ACKNOWLEDGE_ONLY_DRAFT_TYPES = ["explainer"];
 
 // src/mcp/tools/check-feedback-delivery.ts
+var ARTIFACT_TYPE_NOUN = {
+  research: "findings",
+  plan: "plan",
+  decision: "decision",
+  code_change: "code change",
+  reasoning: "reasoning",
+  spec: "spec",
+  changeset: "changeset",
+  debrief: "debrief",
+  explainer: "explainer"
+};
+function artifactHumanLabel(artifact) {
+  if (!artifact) return "an artifact";
+  const type = typeof artifact.type === "string" ? artifact.type : "";
+  const noun = ARTIFACT_TYPE_NOUN[type] ?? (type || "artifact");
+  const title = typeof artifact.title === "string" ? artifact.title.trim() : "";
+  return title ? `${noun} \u201C${title}\u201D` : `the ${noun}`;
+}
 function removedLineContent(art, filePath, oldLine) {
   if (!art || art.type !== "changeset") return void 0;
   const files = art.content?.files;
@@ -27991,10 +28009,11 @@ ${s.replacementText}${note ? `
   const regionRef = describeRegionRef(c.target.region);
   if (regionRef) loc += ` \u2014 on region ${regionRef}`;
   const followUpPrefix = c.followUp ? `[follow-up on the APPROVED/RESOLVED artifact "${artsForTargets.find((a) => a.id === c.target.artifactId)?.title ?? c.target.artifactId}"] ` : "";
+  const humanLabel = artifactHumanLabel(artsForTargets.find((a) => a.id === c.target.artifactId));
   if (c.intent === "question" && !c.answeredByCommentId) {
     return {
       bucket: "question",
-      prose: `- \u2753 QUESTION [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}
+      prose: `- \u2753 QUESTION ${humanLabel} [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}
     \u2192 Answer via answer_question with commentId="${c.id}"`,
       structured: {
         commentId: c.id,
@@ -28010,7 +28029,7 @@ ${s.replacementText}${note ? `
   }
   return {
     bucket: "comment",
-    prose: `- [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}`,
+    prose: `- ${humanLabel} [${loc}] ${followUpPrefix}${c.content}${commentSecretNote(c)}`,
     structured: {
       id: c.id,
       artifactId: c.target.artifactId,
@@ -28086,20 +28105,8 @@ var PROTOCOL_PREAMBLE = [
   "REVISING a plan/spec/decision you already presented? Call revise_artifact (mode='supersede') with its id + new content \u2014 don't re-post a fresh present_*. Re-posting orphans the thread; superseding links versions with a clean before/after diff.",
   "Pull the full protocol from deeppairing://onboarding. present_* refuse proposals matching a past rejected approach."
 ].join("\n");
-var DETAIL_DENSITY_RICH_GUIDANCE = "";
-var DETAIL_DENSITY_TERSE_GUIDANCE = [
-  "\n\u2702\uFE0F Detail density: TERSE \u2014 the human set this. Keep artifact PROSE tight (this affects TEXT only, not the number of artifacts).",
-  "  - Keep each finding's `detail` and `recommendation` to 1\u20132 sentences. Lead with the evidence; skip preamble and restatement of the task.",
-  "  - Trim option and plan descriptions to the decision-relevant essentials \u2014 pros/cons as short phrases, not paragraphs.",
-  // S2 — the trailing parenthetical states the division of labor with the
-  // autonomy dial explicitly. Without it, this line's "do NOT skip
-  // present_options" sits two lines above the autonomous block's "Skip the
-  // opening findings/options ceremony" — adjacent absolutes pointing opposite
-  // ways on the same tool. Each self-scopes, but the model shouldn't have to
-  // infer the scoping: terse governs prose, the Autonomy dial governs whether
-  // an artifact posts at all.
-  "  - Do NOT reduce the number of artifacts and do NOT skip present_options, and NEVER omit `Evidence` (filePath, lineStart, lineEnd, snippet). Code must still be PRESENTED FOR REVIEW BEFORE IT LANDS \u2014 present_changeset at feature boundaries by default, present_code_change for single-file/surgical changes. Evidence is the load-bearing content, not prose \u2014 terse trims the explanation around it, never the evidence itself. (Terse governs TEXT only; whether an artifact posts at all is governed by the Autonomy dial, not this setting.)"
-].join("\n");
+var DETAIL_DENSITY_TERSE_GUIDANCE = "";
+var DETAIL_DENSITY_RICH_GUIDANCE = "\n\u{1F5E3} Detail density: RICH \u2014 the human wants fuller prose. Expand explanations/rationale around each artifact. Evidence, structured fields, diagrams, and artifact count are unchanged.";
 var AUTONOMY_HINT_SUPERVISED = "";
 var AUTONOMY_HINT_BALANCED = [
   `
@@ -28319,6 +28326,12 @@ ${philosophyParts.join("\n")}`
   try {
     const fullState = await store.getFullState();
     const allComments = fullState.comments ?? [];
+    const artifactsById = new Map(
+      (fullState.artifacts ?? []).map((a) => [
+        a.id,
+        { type: a.type, title: a.title }
+      ])
+    );
     const pendingDrafts = (fullState.artifacts ?? []).filter(
       (a) => a.status === "draft" && PENDING_DRAFT_TYPES.includes(a.type)
     );
@@ -28343,8 +28356,9 @@ ${philosophyParts.join("\n")}`
     if (revisionRequested.length > 0) {
       const lines = revisionRequested.map((c) => {
         const aId = c.target?.artifactId ?? "(unknown)";
+        const label = artifactHumanLabel(artifactsById.get(aId));
         const excerpt = String(c.content ?? "").slice(0, 120);
-        return `  \u2022 Decision ${aId} \u2014 comment ${c.id}: "${excerpt}"`;
+        return `  \u2022 ${label} [${aId}] \u2014 comment ${c.id}: "${excerpt}"`;
       });
       blockingParts.push(
         `
@@ -28381,8 +28395,9 @@ Serve each with the matching present_* tool, passing servedRequestId so it links
     if (followUps.length > 0) {
       const lines = followUps.map((c) => {
         const aId = c.target?.artifactId ?? "(unknown)";
+        const label = artifactHumanLabel(artifactsById.get(aId));
         const excerpt = String(c.content ?? "").slice(0, 100);
-        return `  \u2022 Reply ${c.id} on artifact ${aId} (parent ${c.parentCommentId}): "${excerpt}"`;
+        return `  \u2022 Reply ${c.id} on ${label} [${aId}] (parent ${c.parentCommentId}): "${excerpt}"`;
       });
       blockingParts.push(
         `
@@ -28426,7 +28441,7 @@ Each is a continuation of an existing thread (parentCommentId points at one of y
   }
   try {
     const density = await store.getDetailDensity?.();
-    const guidance = density === "terse" ? DETAIL_DENSITY_TERSE_GUIDANCE : DETAIL_DENSITY_RICH_GUIDANCE;
+    const guidance = density === "rich" ? DETAIL_DENSITY_RICH_GUIDANCE : DETAIL_DENSITY_TERSE_GUIDANCE;
     if (guidance) obligationsParts.push(guidance);
   } catch {
   }
@@ -33103,8 +33118,15 @@ ${otherLines.join("\n")}`);
         structuredCarryover.push(entry);
         structuredQuestions.push({ ...entry, carryover: true });
       }
+      const artsById = new Map(
+        (fullState?.artifacts ?? []).map((a) => [a.id, { type: a.type, title: a.title }])
+      );
       const lines = older.map(
-        (q) => `  \u2022 ${q.artifactId || "(session)"} \u2014 comment ${q.question.id}: "${String(q.question.content ?? "").slice(0, 120)}"${commentSecretNote(q.question)}`
+        (q) => {
+          const label = q.artifactId ? artifactHumanLabel(artsById.get(q.artifactId)) : "the session";
+          const idTag = q.artifactId ? ` [${q.artifactId}]` : "";
+          return `  \u2022 ${label}${idTag} \u2014 comment ${q.question.id}: "${String(q.question.content ?? "").slice(0, 120)}"${commentSecretNote(q.question)}`;
+        }
       );
       parts.push(
         `\u21A9\uFE0F ${older.length} unanswered question${older.length === 1 ? "" : "s"} carried over from earlier \u2014 the human asked ${older.length === 1 ? "it" : "them"} before (possibly a previous run) and ${older.length === 1 ? "it is" : "they are"} still open. Answer each with answer_question (commentId = the question's id) before new work:

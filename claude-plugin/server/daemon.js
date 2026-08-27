@@ -26286,9 +26286,11 @@ var FileStore = class _FileStore {
    *  the project's preferences.json. Null for real sessions. */
   demoPreferences = null;
   autonomyLevel = "supervised";
-  // #139 — detail density (verbosity). Default "rich" == today's behavior, so
-  // a preferences.json with no `detailDensity` field loads as rich.
-  detailDensity = "rich";
+  // #139 / X1 — detail density (verbosity). Default "terse" == plain-by-default,
+  // so a preferences.json with no `detailDensity` field loads as terse. Terse
+  // shortens PROSE only (never a review surface, never Evidence, never artifact
+  // count); rich is the explicit opt-in for fuller explanatory prose.
+  detailDensity = "terse";
   /**
    * U1 — per-file change watermarks tracked since last load. Before each
    * flush we re-stat each session JSON; if EITHER mtime has advanced OR
@@ -30290,7 +30292,7 @@ var EMPTY_STATE = {
   decisions: [],
   planReviews: [],
   autonomyLevel: "supervised",
-  detailDensity: "rich",
+  detailDensity: "terse",
   rejectedApproaches: [],
   approvedPatterns: [],
   // G1 (#198b) — requests ride the empty state so a no-session UI reads a

@@ -448,9 +448,9 @@ describe("FileStore", () => {
   // same preferences.json. Round-trip, default-when-absent, and back-compat with
   // a legacy preferences.json that predates the field.
   describe("#139 — detail density", () => {
-    it("defaults to 'rich' when never set", () => {
+    it("defaults to 'terse' when never set (X1 — plain-by-default)", () => {
       const store = createStore("dd-default");
-      expect(store.getDetailDensity()).toBe("rich");
+      expect(store.getDetailDensity()).toBe("terse");
     });
 
     it("persists and reloads a 'terse' setting across store instances", () => {
@@ -477,22 +477,23 @@ describe("FileStore", () => {
       expect(reloaded.getDetailDensity()).toBe("terse");
     });
 
-    it("loads a legacy preferences.json with NO detailDensity field as 'rich' (back-compat)", () => {
+    it("loads a legacy preferences.json with NO detailDensity field as 'terse' (X1 back-compat)", () => {
       // Simulate a preferences.json written before this feature existed.
       const prefsPath = path.join(tmpDir, ".deeppairing", "preferences.json");
       fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
       fs.writeFileSync(prefsPath, JSON.stringify({ autonomyLevel: "autonomous" }));
       const store = createStore("dd-legacy");
-      // Absent field → rich; the pre-existing autonomyLevel still loads as before.
-      expect(store.getDetailDensity()).toBe("rich");
+      // Absent field → terse (plain-by-default); the pre-existing autonomyLevel
+      // still loads as before.
+      expect(store.getDetailDensity()).toBe("terse");
       expect(store.getAutonomyLevel()).toBe("autonomous");
     });
 
     it("surfaces detailDensity in getFullState for the companion UI", () => {
       const store = createStore("dd-fullstate");
-      expect(store.getFullState().detailDensity).toBe("rich");
-      store.setDetailDensity("terse");
       expect(store.getFullState().detailDensity).toBe("terse");
+      store.setDetailDensity("rich");
+      expect(store.getFullState().detailDensity).toBe("rich");
     });
   });
 

@@ -139,7 +139,9 @@ describe("#160 — check_feedback marks scanner-flagged comments (text only)", (
     const text = (res.content[0] as { text: string }).text;
     // The flagged line carries the note; the clean one doesn't.
     expect(text).toContain("here? ⚠ possible secret in this comment");
-    expect(text).toContain("- [art_1] and please rename the helper\n");
+    // X4 — the per-loop line now LEADS with the artifact's human label
+    // (type + title); the raw id stays inside the [loc] bracket.
+    expect(text).toContain("- code change “modify src/config.ts” [art_1] and please rename the helper\n");
     expect(text).not.toContain("rename the helper ⚠");
 
     // TEXT ONLY: the structured payload's top-level key set is the locked
@@ -169,7 +171,8 @@ describe("#160 — check_feedback marks scanner-flagged comments (text only)", (
 
     const res = await handleCheckFeedback(makeCtx(store), {});
     const text = (res.content[0] as { text: string }).text;
-    expect(text).toMatch(/❓ QUESTION \[art_q\].*⚠ possible secret in this comment/);
+    // X4 — the human label leads (findings “Audit”), raw id kept in the bracket.
+    expect(text).toMatch(/❓ QUESTION findings “Audit” \[art_q\].*⚠ possible secret in this comment/);
     // The note itself must never carry labels-with-values or the match: the
     // comment CONTENT is (necessarily) echoed for the agent to act on, but
     // the warning text is the fixed phrase only.

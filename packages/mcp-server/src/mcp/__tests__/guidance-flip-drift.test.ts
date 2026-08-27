@@ -42,16 +42,20 @@ afterEach(() => {
 });
 
 /** Assemble the hint across EVERY dial + density so the per-dial FLOOR lines
- *  (balanced / autonomous) and the terse floor are all in the scanned text. */
+ *  (balanced / autonomous) are all in the scanned text. X1: terse is now the
+ *  SILENT default (contributes nothing) and rich is the opt-in prose-expansion
+ *  block; the review-before-it-lands floor now rides the preamble + the per-dial
+ *  FLOOR blocks, not a density block — both densities are still assembled here so
+ *  the scan covers the rich block too. */
 async function assembleAllHints(): Promise<string> {
   const parts: string[] = [];
-  parts.push(await buildFirstCallHint(store, 4000)); // supervised default
+  parts.push(await buildFirstCallHint(store, 4000)); // supervised + terse (both defaults)
   store.setAutonomyLevel("balanced");
   parts.push(await buildFirstCallHint(store, 4000));
   store.setAutonomyLevel("autonomous");
   parts.push(await buildFirstCallHint(store, 4000));
   store.setAutonomyLevel("supervised");
-  store.setDetailDensity("terse");
+  store.setDetailDensity("rich"); // exercise the opt-in prose-expansion block
   parts.push(await buildFirstCallHint(store, 4000));
   return parts.join("\n");
 }
@@ -448,5 +452,55 @@ describe("S1 — the field-pull routes concept / visuals / unknowns to their liv
     expect(cmd).toMatch(/`visuals` diagram or `file_map`/);
     // what-you-couldn't-verify → unknowns.
     expect(cmd).toMatch(/record what you could NOT verify in `unknowns`/);
+  });
+});
+
+/**
+ * X1 — the plain-explanation legibility guidance. The terse-by-default flip is
+ * inert without the SKILL guidance that (a) guards the depth terse must never
+ * collapse, (b) sets the fluent-engineer / plain-not-jargon posture, (c) routes
+ * structural prose to a diagram, and (d) forbids naming artifacts by `art_…` id.
+ * These pin the SKILL text so a future prose-trim can't silently drop them.
+ */
+describe("X1 — plain-explanation legibility guidance is present in SKILL.md", () => {
+  it("the GUARD: terse shortens WORDS, never a SURFACE (Evidence, artifact count, visuals, debrief walk, concept/visuals/unknowns)", () => {
+    const skill = readSkill();
+    expect(skill).toMatch(/shortens WORDS, never a SURFACE/);
+    // The named surfaces terse must never trim.
+    expect(skill).toMatch(/filePath.*lineStart.*lineEnd.*snippet/);
+    expect(skill).toMatch(/a diagram is \*?dens-?er\*? than the prose it replaces/i);
+    expect(skill).toMatch(/never\s+"see chat"/);
+    expect(skill).toMatch(/`concept`\/`visuals`\/`unknowns`/);
+  });
+
+  it("the POSTURE: fluent-engineer reader + plain-not-bespoke-jargon + BUILD/REVIEW split", () => {
+    const skill = readSkill();
+    expect(skill).toMatch(/fluent engineer/i);
+    expect(skill).toMatch(/don't define a mutex\/migration\/debounce/);
+    expect(skill).toMatch(/BESPOKE, unexplained\s+shorthand/);
+    expect(skill).toMatch(/reviewIntent:"external"/);
+    expect(skill).toMatch(/Name the concept, then use it/);
+  });
+
+  it("the RELOCATION: structural prose becomes a diagram (with the two guardrails)", () => {
+    const skill = readSkill();
+    expect(skill).toMatch(/Terse RELOCATES prose/);
+    expect(skill).toMatch(/Never a terse paragraph\s+where a diagram belongs/);
+    // Guardrail (a): structural only — a finding's one-line detail stays prose.
+    expect(skill).toMatch(/a finding's one-line `detail` or rationale stays\s*\n?\s*prose/);
+    // Guardrail (b): never weakens the Evidence floor.
+    expect(skill).toMatch(/SUPPLEMENTS file:line evidence, never replaces it/);
+  });
+
+  it("the NAMING rule: never name an artifact by its art_ id", () => {
+    const skill = readSkill();
+    expect(skill).toMatch(/Name artifacts by what they ARE, never by their `art_…` id/);
+    expect(skill).toMatch(/the caching\s+decision/);
+  });
+
+  it("the RISK-QUARTET de-jargon: lead with detail+concept, don't stack all four risk fields", () => {
+    const skill = readSkill();
+    expect(skill).toMatch(/Lead with `detail` \+ `concept`/);
+    expect(skill).toMatch(/read as jargon, not rigor/);
   });
 });
