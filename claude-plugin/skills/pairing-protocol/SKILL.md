@@ -199,7 +199,15 @@ one case that closes without a *separate* debrief — its self-summarizing
   work. **Give it a one-line `summary`** — what changed, in a sentence: it's the
   human's WHAT-at-a-glance above the diff, and a changeset without one makes them
   reconstruct the intent from hunks. Attach `visuals[]` (the blast radius — the
-  shape of what this touches) for the scope at a glance.
+  shape of what this touches) for the scope at a glance. **When a change is too
+  large for one changeset** (your own output budget — there's no hard cap, but a
+  sprawling diff arriving as one card is hard to draft and harder to review),
+  SPLIT it by feature or module across several `present_changeset` calls at clean
+  boundaries — and make the split HONEST: give every part the SAME `feature` tag
+  (so the card shows a derived "Part of *auth-rework* · 2 of 3" chip) and SAY SO
+  in each `summary` — e.g. "Part 2 of 3 of the auth rework — this changeset covers
+  the token layer." Splitting is fine; a silent split that reads like the whole
+  change is not.
 - **`present_code_change`** — the **exception**, not the beat. Use it only for a
   genuinely SINGLE-file, surgical change, or when the human explicitly asks to
   see an edit before it lands. For anything spanning multiple files, batch into a
