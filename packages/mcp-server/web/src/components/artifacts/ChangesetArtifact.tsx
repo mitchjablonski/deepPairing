@@ -4,6 +4,7 @@ import {
   coerceChangesetContent,
   composeSendBackFeedback,
   deriveChangesetDisposition,
+  isNotShippedStatus,
   type ChangesetDisposition,
 } from "@deeppairing/shared";
 import { useArtifactStore } from "../../stores/artifact";
@@ -187,6 +188,75 @@ function fileStats(file: ChangesetFile): { additions: number; deletions: number 
     }
   }
   return { additions, deletions };
+}
+
+/**
+ * X3 — a GENUINELY all-added file: created new (`changeType: "added"`) with ZERO
+ * deletions. A wholesale rewrite arrives as `modified` carrying del lines, and a
+ * mostly-new file with a few deletions has `deletions > 0`, so neither trips
+ * this. Used to calm the uniform green add-fill (which carries no signal when
+ * EVERY line is green) into a single left-edge rule + a "New file" header pill,
+ * while keeping the per-line `+` gutter marker (GitHub's marker-not-fill read).
+ */
+function isAllAdded(file: ChangesetFile): boolean {
+  return file.changeType === "added" && fileStats(file).deletions === 0;
+}
+
+/** X3 — the "New file · +N" header pill: the concentrated "this is new" signal,
+ *  sat next to the per-file stats so an all-added file reads as new at a glance
+ *  without the wall of green fill. */
+function NewFilePill({ additions }: { additions: number }) {
+  return (
+    <span
+      data-testid="new-file-pill"
+      className="inline-flex items-center gap-1 shrink-0 text-2xs font-semibold text-accent-green bg-accent-green-dim rounded px-1.5 py-0.5 whitespace-nowrap"
+      title="This file is entirely new — every line is an addition"
+    >
+      New file · +{additions}
+    </span>
+  );
+}
+
+/**
+ * X2 — the DERIVED large-PR split advisory. A change too large for one changeset
+ * is split by the agent across multiple `present_changeset` calls at feature
+ * boundaries (its own output budget); each part carries the SAME `featureId`.
+ * This reads the session's LIVE changesets sharing that feature and returns
+ * "this is part N of M of <feature>", ordered by createdAt — a read-model over
+ * data that already exists (no new schema field, reusing the optional
+ * `featureId` + the artifact list the component already holds).
+ *
+ * ADVISORY only: the returned info feeds a chip, never a gate — each part still
+ * approves on its own. Degrades to null when the feature tag is absent or this
+ * is the only live part. Superseded/revised predecessors (the parentId chain)
+ * are dropped so a revised part is counted ONCE, not double. Scoped to the
+ * current session (the common case for one PR); the Features modal stays the
+ * cross-session view.
+ */
+function changesetSplitInfo(
+  artifact: Artifact,
+  allArtifacts: Artifact[],
+): { feature: string; index: number; total: number } | null {
+  const feature = artifact.featureId?.trim();
+  if (!feature) return null;
+  const parts = allArtifacts
+    .filter(
+      (a) =>
+        a.type === "changeset" &&
+        a.sessionId === artifact.sessionId &&
+        a.featureId?.trim() === feature &&
+        // Live = not a closed-with-successor predecessor. isNotShippedStatus
+        // covers superseded/retracted/rejected/obsolete; `revised` is the other
+        // parentId-chain predecessor, excluded here so v1→v2 counts as one part.
+        !isNotShippedStatus(a.status) &&
+        a.status !== "revised",
+    )
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  if (parts.length < 2) return null;
+  const index = parts.findIndex((a) => a.id === artifact.id);
+  // index -1 → this artifact itself is a superseded/revised part being viewed in
+  // history: still show feature membership, just without a brittle ordinal.
+  return { feature, index: index >= 0 ? index + 1 : 0, total: parts.length };
 }
 
 /** A 5-segment diffstat bar, proportionally green (adds) / red (dels). */
@@ -488,6 +558,9 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
     () => computeFileFindingOverlay(files, sessionFindingsArtifacts(allArtifacts, artifact.sessionId)),
     [files, allArtifacts, artifact.sessionId],
   );
+  // X2 — the derived large-PR split advisory (see changesetSplitInfo). Reads the
+  // same session artifact list; null when this isn't a tagged multi-part split.
+  const splitInfo = useMemo(() => changesetSplitInfo(artifact, allArtifacts), [artifact, allArtifacts]);
   // Jump to a pinned finding — reuse the rail's own `dp:focus-artifact` +
   // `finding:${i}` anchor dispatch (App.tsx selects the research artifact and
   // scrolls the finding into view). No new navigation machinery.
@@ -768,6 +841,10 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
 
   // ------------------------------------------------------------------------
   const renderFileDiff = (file: ChangesetFile) => {
+    // X3 — computed ONCE here so it propagates to review-all + file-by-file +
+    // rail from one edit: a genuinely all-added file drops the per-line green
+    // fill (kept the `+` gutter) and takes a single green left-edge rule instead.
+    const allAdded = isAllAdded(file);
     const byLine = commentsByFileLine[file.path] ?? {};
     const xByLine = crossFileByFileLine[file.path] ?? {};
     // W1 (#312) — the diff body rounds its OWN bottom corners. The file card
@@ -777,7 +854,7 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
     // in the card, so its own bottom radius + overflow-hidden restores the
     // rounded card silhouette.
     return (
-      <div className="font-mono text-[13px] leading-[20px] bg-surface-primary rounded-b-[3px] overflow-hidden">
+      <div className={`font-mono text-[13px] leading-[20px] bg-surface-primary rounded-b-[3px] overflow-hidden ${allAdded ? "border-l-2 border-accent-green/50" : ""}`}>
         {file.hunks.length === 0 && (
           <div className="px-3 py-2 text-2xs text-text-muted italic">No diff hunks for this file.</div>
         )}
@@ -840,7 +917,7 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                 anchorLine != null ? `line:${file.path}:${anchorSide === "old" ? "old:" : ""}${anchorLine}` : undefined;
               return (
                 <div key={`${hi}-${li}`} data-comment-anchor={anchorKey}>
-                  <div className={`flex group ${line.kind === "del" ? "bg-accent-red-dim/30" : line.kind === "add" ? "bg-accent-green-dim/30" : ""}`}>
+                  <div className={`flex group ${line.kind === "del" ? "bg-accent-red-dim/30" : line.kind === "add" && !allAdded ? "bg-accent-green-dim/30" : ""}`}>
                     {commentable ? (
                       <LineGutter
                         lineNum={anchorLine!}
@@ -1033,6 +1110,30 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
           {content.summary}
         </p>
       )}
+      {/* X2 — the DERIVED large-PR split chip. A big change split across several
+          present_changeset calls at feature boundaries (each tagged with the
+          same `featureId`) is INVISIBLE on the card today — this makes the split
+          honest: "Part of <feature> · N of M", computed from the session's live
+          same-feature changesets (changesetSplitInfo). ADVISORY ONLY — it is a
+          label, never a gate; each part still approves on its own. Self-hides
+          when the feature tag is absent or this is the only live part. */}
+      {splitInfo && (
+        <div
+          data-testid="changeset-split-chip"
+          className="inline-flex items-center gap-1.5 text-2xs font-semibold text-accent-blue bg-accent-blue-dim rounded px-2 py-1"
+          title={`This change was split across ${splitInfo.total} changesets sharing the "${splitInfo.feature}" feature, reviewed as separate parts. Advisory only — each part approves on its own.`}
+        >
+          <span aria-hidden>⧉</span>
+          <span>
+            Part of <b className="font-mono">{splitInfo.feature}</b>
+            {splitInfo.index > 0 ? (
+              <> · {splitInfo.index} of {splitInfo.total}</>
+            ) : (
+              <> · {splitInfo.total} parts</>
+            )}
+          </span>
+        </div>
+      )}
       {/* Summary strip */}
       <div
         className="flex items-center gap-4 flex-wrap px-3 py-2 bg-surface-secondary border border-border-subtle rounded text-xs text-text-secondary"
@@ -1131,6 +1232,12 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                 <FilePathLabel path={f.path} />
                 <OpenInEditorLink filePath={f.path} line={1} />
                 <span className="ml-auto flex items-center gap-2 shrink-0">
+                  {/* X3 — the "New file" pill rides the RIGHT action group in
+                      BOTH headers (here + the sticky active-file header), so an
+                      all-added file's "this is new" signal sits consistently
+                      with the other header actions. `flex-wrap` on the header
+                      lets this whole group drop below the path under 1100px. */}
+                  {isAllAdded(f) && <NewFilePill additions={fileStats(f).additions} />}
                   {/* U1 — the WHERE-overlay also rides the stacked review-all
                       header (this is a <div>, so the badge sits inline). */}
                   {findingOverlayByFile[f.path] && (
@@ -1289,6 +1396,8 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                         </span>
                       );
                     })()}
+                    {/* X3 — the "New file" pill next to the per-file stats. */}
+                    {isAllAdded(activeFile) && <NewFilePill additions={fileStats(activeFile).additions} />}
                     <WalkMeThroughButton target={{ kind: "file", filePath: activeFile.path, artifactId: artifact.id }} />
                     {renderDispositionControls(activeFile)}
                   </span>

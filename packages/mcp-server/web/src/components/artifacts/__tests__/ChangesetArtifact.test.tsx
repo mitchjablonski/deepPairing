@@ -1136,3 +1136,193 @@ describe("ChangesetArtifact — U1 the WHERE-overlay (findings pinned to the fil
     expect(screen.queryByTestId("finding-overlay-badge")).not.toBeInTheDocument();
   });
 });
+
+describe("ChangesetArtifact — X3 all-new-file coloring", () => {
+  // Walk up from a rendered line's content span to its `.flex.group` row div.
+  function rowFor(text: string): HTMLElement {
+    let el: HTMLElement | null = screen.getByText(text);
+    while (el && !el.className.includes("group")) el = el.parentElement;
+    if (!el) throw new Error(`no row for "${text}"`);
+    return el;
+  }
+  // Walk up to the file's diff-body container (the one that carries the edge rule).
+  function diffBodyFor(text: string): HTMLElement {
+    let el: HTMLElement | null = screen.getByText(text);
+    while (el && !el.className.includes("leading-[20px]")) el = el.parentElement;
+    if (!el) throw new Error(`no diff body for "${text}"`);
+    return el;
+  }
+
+  // The default factory already carries an all-added file (auth/session.test.ts:
+  // added, one add line, 0 dels) AND a mixed modified file (auth/middleware.ts:
+  // adds + a del) — the exact contrast X3 turns on.
+  const ADDED_LINE = "test('touch refreshes', () => {});";
+  const MIXED_ADD = "const s = await store.getAndTouch(sid);";
+  const MIXED_DEL = "const s = await store.get(sid);";
+
+  async function renderAllStacked() {
+    const art = changeset({ reviewState: {} });
+    seed(art);
+    render(<Harness id="art_cs" />);
+    // Review-all stacks every file's diff in one scroll so all rows render.
+    await userEvent.click(screen.getByRole("button", { name: /Review all/ }));
+  }
+
+  it("an all-added file drops the per-line green bg, shows the New-file pill + the green edge rule", async () => {
+    await renderAllStacked();
+    // No green add-fill on the all-added line…
+    expect(rowFor(ADDED_LINE).className).not.toContain("bg-accent-green-dim/30");
+    // …but the concentrated signal is present: the header pill (+1) and the
+    // subtle green left-edge rule on the diff body.
+    const pill = screen.getByTestId("new-file-pill");
+    expect(pill).toHaveTextContent("New file · +1");
+    expect(diffBodyFor(ADDED_LINE).className).toContain("border-accent-green/50");
+  });
+
+  it("keeps the green `+` gutter marker on the all-added line (marker-not-fill)", async () => {
+    await renderAllStacked();
+    const row = rowFor(ADDED_LINE);
+    // The single-glyph `+` marker span (the fixed-width gutter glyph, NOT the
+    // comment-composer "+" button) stays green even though the fill is gone.
+    const mark = Array.from(row.querySelectorAll("span")).find(
+      (s) => s.textContent === "+" && s.className.includes("w-5"),
+    );
+    expect(mark).toBeDefined();
+    expect(mark!.className).toContain("text-accent-green");
+  });
+
+  it("a mixed added-and-deleted file keeps normal green/red diff coloring + no pill/edge", async () => {
+    await renderAllStacked();
+    expect(rowFor(MIXED_ADD).className).toContain("bg-accent-green-dim/30");
+    expect(rowFor(MIXED_DEL).className).toContain("bg-accent-red-dim/30");
+    // The mixed file's diff body carries no all-added edge rule.
+    expect(diffBodyFor(MIXED_ADD).className).not.toContain("border-accent-green/50");
+    // Exactly one New-file pill in the whole stacked view (the lone added file).
+    expect(screen.getAllByTestId("new-file-pill")).toHaveLength(1);
+  });
+
+  it("a would-be all-added file WITH a deletion (deletions > 0) never trips allAdded", async () => {
+    const art = changeset({
+      reviewState: {},
+      files: [
+        {
+          path: "src/rewrite.ts",
+          // Arrives as `added` but carries a del — a partial edit, not a fresh file.
+          changeType: "added",
+          hunks: [{ lines: [
+            { kind: "add", content: "const a = 1;", newLine: 1 },
+            { kind: "del", content: "const gone = 0;", oldLine: 1 },
+          ] }],
+        },
+      ],
+    });
+    seed(art);
+    render(<Harness id="art_cs" />);
+    await userEvent.click(screen.getByRole("button", { name: /Review all/ }));
+    // deletions === 1 → keeps full coloring, no pill, no edge.
+    expect(rowFor("const a = 1;").className).toContain("bg-accent-green-dim/30");
+    expect(screen.queryByTestId("new-file-pill")).not.toBeInTheDocument();
+    expect(diffBodyFor("const a = 1;").className).not.toContain("border-accent-green/50");
+  });
+
+  it("commenting anchors on the all-added file are unaffected", async () => {
+    await renderAllStacked();
+    // The new-side line-1 comment anchor still exists (a draft changeset stays
+    // commentable) — the coloring change never touches the gutter/anchor plumbing.
+    expect(document.querySelector('[data-comment-anchor="line:auth/session.test.ts:1"]')).not.toBeNull();
+  });
+});
+
+describe("ChangesetArtifact — X2 large-PR split chip", () => {
+  function part(id: string, feature: string | undefined, createdAt: string, over: Partial<Artifact> = {}): Artifact {
+    return changeset({ reviewState: {} }, { id, featureId: feature, createdAt, title: id, ...over });
+  }
+
+  it("shows 'Part of <feature> · N of M' when ≥2 live same-feature changesets exist", () => {
+    const art = part("art_cs", "auth-rework", "2026-04-17T10:00:00.000Z");
+    const p2 = part("art_cs2", "auth-rework", "2026-04-17T11:00:00.000Z");
+    const p3 = part("art_cs3", "auth-rework", "2026-04-17T12:00:00.000Z");
+    seed(art, [], [p2, p3]);
+    render(<Harness id="art_cs" />);
+    const chip = screen.getByTestId("changeset-split-chip");
+    expect(chip).toHaveTextContent("auth-rework");
+    expect(chip).toHaveTextContent("1 of 3");
+  });
+
+  it("orders by createdAt — the later part reads 2 of 2", () => {
+    const first = part("art_first", "auth-rework", "2026-04-17T10:00:00.000Z");
+    const art = part("art_cs", "auth-rework", "2026-04-17T11:00:00.000Z");
+    seed(art, [], [first]);
+    render(<Harness id="art_cs" />);
+    expect(screen.getByTestId("changeset-split-chip")).toHaveTextContent("2 of 2");
+  });
+
+  it("is absent for a lone tagged changeset (only one part)", () => {
+    const art = part("art_cs", "auth-rework", "2026-04-17T10:00:00.000Z");
+    seed(art);
+    render(<Harness id="art_cs" />);
+    expect(screen.queryByTestId("changeset-split-chip")).not.toBeInTheDocument();
+  });
+
+  it("is absent for an untagged changeset", () => {
+    const art = part("art_cs", undefined, "2026-04-17T10:00:00.000Z");
+    const sib = part("art_cs2", undefined, "2026-04-17T11:00:00.000Z");
+    seed(art, [], [sib]);
+    render(<Harness id="art_cs" />);
+    expect(screen.queryByTestId("changeset-split-chip")).not.toBeInTheDocument();
+  });
+
+  it("excludes superseded/revised predecessors from the count", () => {
+    const art = part("art_cs", "auth-rework", "2026-04-17T11:00:00.000Z");
+    const supersededPredecessor = part("art_old", "auth-rework", "2026-04-17T10:00:00.000Z", { status: "superseded" });
+    seed(art, [], [supersededPredecessor]);
+    render(<Harness id="art_cs" />);
+    // Only one LIVE part remains → no chip.
+    expect(screen.queryByTestId("changeset-split-chip")).not.toBeInTheDocument();
+  });
+
+  it("excludes a REVISED predecessor specifically (not just superseded)", () => {
+    const art = part("art_cs", "auth-rework", "2026-04-17T11:00:00.000Z");
+    const revisedPredecessor = part("art_v1", "auth-rework", "2026-04-17T10:00:00.000Z", { status: "revised" });
+    seed(art, [], [revisedPredecessor]);
+    render(<Harness id="art_cs" />);
+    // The `status === "revised"` branch drops the predecessor → one live part → no chip.
+    expect(screen.queryByTestId("changeset-split-chip")).not.toBeInTheDocument();
+  });
+
+  it("the 3-way double-count trap: v1(revised→v2) + B reads '2 of 2', never '3 of 3'", () => {
+    // Feature F: B is the earlier live part, v1 was revised INTO v2 (predecessor,
+    // excluded), and v2 (art_cs) is the later live part we render. The revised v1
+    // must not inflate the count — live parts are B + v2, and v2 is the 2nd.
+    const partB = part("art_B", "auth-rework", "2026-04-17T10:00:00.000Z");
+    const v1 = part("art_v1", "auth-rework", "2026-04-17T11:00:00.000Z", { status: "revised" });
+    const v2 = part("art_cs", "auth-rework", "2026-04-17T12:00:00.000Z");
+    seed(v2, [], [partB, v1]);
+    render(<Harness id="art_cs" />);
+    const chip = screen.getByTestId("changeset-split-chip");
+    expect(chip).toHaveTextContent("2 of 2");
+    expect(chip).not.toHaveTextContent("3 of 3");
+    expect(chip).not.toHaveTextContent("of 3");
+  });
+
+  it("ignores same-feature changesets from a DIFFERENT session", () => {
+    const art = part("art_cs", "auth-rework", "2026-04-17T10:00:00.000Z");
+    const foreign = part("art_foreign", "auth-rework", "2026-04-17T11:00:00.000Z", { sessionId: "s2" });
+    seed(art, [], [foreign]);
+    render(<Harness id="art_cs" />);
+    expect(screen.queryByTestId("changeset-split-chip")).not.toBeInTheDocument();
+  });
+
+  it("the chip is advisory — it never gates the approve action", () => {
+    const art = part("art_cs", "auth-rework", "2026-04-17T10:00:00.000Z");
+    const p2 = part("art_cs2", "auth-rework", "2026-04-17T11:00:00.000Z");
+    seed(art, [], [p2]);
+    render(<Harness id="art_cs" />);
+    // The chip renders AND the whole-changeset action is fully live alongside it.
+    expect(screen.getByTestId("changeset-split-chip")).toBeInTheDocument();
+    const approve = screen.getByTestId("approve-all");
+    expect(approve).toBeEnabled();
+    // The chip is not itself an interactive control.
+    expect(screen.getByTestId("changeset-split-chip").tagName).not.toBe("BUTTON");
+  });
+});
