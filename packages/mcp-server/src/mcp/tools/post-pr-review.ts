@@ -1,6 +1,7 @@
 import type { ToolContext, ToolResult } from "./types.js";
 import { postPrReview, parsePrRef, GhMissingError, GhNotAuthedError } from "../../github/post-review.js";
 import { authorizeReviewPost } from "../../github/review-authorization.js";
+import { errorMessage } from "@deeppairing/shared";
 
 /** B3 — post_pr_review, extracted verbatim from the server.ts switch.
  *  Q6 (#232) B1 — the payload is no longer built here: it comes from
@@ -69,8 +70,8 @@ export async function handlePostPrReview(ctx: ToolContext, args: any): Promise<T
         postedAt: new Date().toISOString(),
         commentCount: payload.comments.length,
       });
-    } catch (stampErr: any) {
-      stampNote = ` (note: the review posted, but recording it locally failed — ${stampErr?.message ?? stampErr}. Do NOT call post_pr_review again for this PR unless your pair asks.)`;
+    } catch (stampErr) {
+      stampNote = ` (note: the review posted, but recording it locally failed — ${errorMessage(stampErr)}. Do NOT call post_pr_review again for this PR unless your pair asks.)`;
     }
     return {
       content: [{
@@ -84,7 +85,7 @@ export async function handlePostPrReview(ctx: ToolContext, args: any): Promise<T
           + stampNote,
       }],
     };
-  } catch (err: any) {
+  } catch (err) {
     if (err instanceof GhMissingError || err instanceof GhNotAuthedError) {
       return {
         content: [{ type: "text", text: err.message }],
@@ -92,7 +93,7 @@ export async function handlePostPrReview(ctx: ToolContext, args: any): Promise<T
       };
     }
     return {
-      content: [{ type: "text", text: `post_pr_review failed: ${err?.message ?? err}` }],
+      content: [{ type: "text", text: `post_pr_review failed: ${errorMessage(err)}` }],
       isError: true,
     };
   }

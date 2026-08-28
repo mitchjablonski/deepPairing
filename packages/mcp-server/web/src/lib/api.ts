@@ -176,7 +176,7 @@ export async function safeFetch(input: RequestInfo, init?: RequestInit): Promise
   let res: Response;
   try {
     res = await fetch(input, init);
-  } catch (err: any) {
+  } catch (err) {
     throw new ApiError(0, "network_error", `Couldn't reach the daemon. Run \`node packages/mcp-server/dist/cli/init.js doctor\` to diagnose.`);
   }
   if (res.ok) return res;

@@ -13,6 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { cliInvocation } from "../cli-invocation.js";
+import { errorMessage } from "@deeppairing/shared";
 // P1 — the guardrail backstop's zero-I/O prefilter. The generated hook script is
 // self-contained and cannot import at runtime, so we INTERPOLATE this literal
 // into its source at generation time: the init-path copy and the plugin-bundled
@@ -130,8 +131,8 @@ export function cleanDpEntriesFromScope(
     settings.hooks[hookKey] = kept;
     fs.writeFileSync(scopePath, JSON.stringify(settings, null, 2));
     return { ok: true, removed, message: `Removed ${removed} deepPairing ${hookKey} entr${removed === 1 ? "y" : "ies"} from ${scopePath}` };
-  } catch (err: any) {
-    return { ok: false, removed: 0, message: `Could not write ${scopePath}: ${err?.message ?? err}` };
+  } catch (err) {
+    return { ok: false, removed: 0, message: `Could not write ${scopePath}: ${errorMessage(err)}` };
   }
 }
 
@@ -223,8 +224,8 @@ export function ensureDeepPairingDir(projectRoot: string): SetupResult {
     }
     fs.mkdirSync(dpDir, { recursive: true });
     return { ok: true, changed: true, message: "Created .deeppairing/" };
-  } catch (err: any) {
-    return { ok: false, message: `Could not create .deeppairing/: ${err?.message ?? err}` };
+  } catch (err) {
+    return { ok: false, message: `Could not create .deeppairing/: ${errorMessage(err)}` };
   }
 }
 
@@ -243,8 +244,8 @@ export function ensureGitignoreEntry(projectRoot: string): SetupResult {
     const sep = content.endsWith("\n") ? "" : "\n";
     fs.appendFileSync(gitignorePath, `${sep}.deeppairing/\n`);
     return { ok: true, changed: true, message: "Added .deeppairing/ to .gitignore" };
-  } catch (err: any) {
-    return { ok: false, message: `Could not update .gitignore: ${err?.message ?? err}` };
+  } catch (err) {
+    return { ok: false, message: `Could not update .gitignore: ${errorMessage(err)}` };
   }
 }
 
@@ -415,7 +416,7 @@ try {
   }
   exit(0, "pass: no blocking drafts");
 } catch (err) {
-  exit(0, "error: " + (err?.message ?? err));
+  exit(0, "error: " + (errorMessage(err)));
 }
 `;
 const STOP_SCRIPT_REL_PATH = ".deeppairing/hooks/stop.mjs";
@@ -528,8 +529,8 @@ export function ensureStopHook(projectRoot: string): SetupResult {
       msg += ` — but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope deepPairing entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`${cliInvocation("doctor --fix")}\` to clean them.`;
     }
     return { ok: true, changed: true, message: msg };
-  } catch (err: any) {
-    return { ok: false, message: `Could not configure Stop hook: ${err?.message ?? err}` };
+  } catch (err) {
+    return { ok: false, message: `Could not configure Stop hook: ${errorMessage(err)}` };
   }
 }
 
@@ -724,7 +725,7 @@ process.stdin.on("end", () => {
     exit(0, "pass: fresh checkpoint covers " + filePath);
   } catch (err) {
     // Never block the agent on a hook bug. Exit 0 on any unexpected error.
-    exit(0, "error: " + (err?.message ?? err));
+    exit(0, "error: " + (errorMessage(err)));
   }
 });
 `;
@@ -810,8 +811,8 @@ export function ensureCheckpointHook(projectRoot: string): SetupResult {
       msg += ` — but ${otherScopes.reduce((a, b) => a + b.count, 0)} cross-scope checkpoint entr${firstScope.count === 1 && otherScopes.length === 1 ? "y" : "ies"} also detected in ${summary}; run \`${cliInvocation("doctor --fix")}\` to clean them.`;
     }
     return { ok: true, changed: true, message: msg };
-  } catch (err: any) {
-    return { ok: false, message: `Could not configure checkpoint hook: ${err?.message ?? err}` };
+  } catch (err) {
+    return { ok: false, message: `Could not configure checkpoint hook: ${errorMessage(err)}` };
   }
 }
 

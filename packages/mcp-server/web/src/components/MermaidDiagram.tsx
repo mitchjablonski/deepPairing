@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { errorMessage } from "@deeppairing/shared";
 import { createPortal } from "react-dom";
 import { useModal } from "../hooks/useModal";
 import { DiagramRegionLayer, RegionCommentsFallback } from "./DiagramRegionLayer";
@@ -219,7 +220,7 @@ export function MermaidDiagram({
         // reset: a now-successful render must not stay masked by a stale error.
         if (!cancelled) { setSvg(svg); setError(null); setRepaired(false); }
         return;
-      } catch (firstErr: any) {
+      } catch (firstErr) {
         // suppressErrorRendering makes mermaid THROW here (no bomb graphic) and
         // self-clean its temp node — remove ours too as a belt (scoped to our id).
         removeMermaidOrphan(rawId);
@@ -242,7 +243,7 @@ export function MermaidDiagram({
           }
         }
         if (!cancelled) {
-          const msg = firstErr?.message ?? String(firstErr);
+          const msg = errorMessage(firstErr);
           setError(msg);
           // Genuine unrenderable diagram (raw failed AND the repair, if any,
           // failed) — tell the agent. Send only the first line of the error so

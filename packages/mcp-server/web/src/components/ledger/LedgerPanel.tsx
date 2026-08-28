@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { errorMessage } from "@deeppairing/shared";
 import { sessionHeaders, apiBase } from "../../lib/api";
 import { useLedgerStore, ledgerHasStances } from "../../stores/ledger";
 import { normalizeConceptKey } from "@deeppairing/shared";
@@ -395,8 +396,8 @@ export function SeedAffordance({ onSeeded }: { onSeeded: () => void }) {
       }
       setText("");
       onSeeded();
-    } catch (err: any) {
-      setError(err?.message ?? String(err));
+    } catch (err) {
+      setError(errorMessage(err));
     } finally {
       setSubmitting(false);
     }

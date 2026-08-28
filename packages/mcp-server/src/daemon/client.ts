@@ -15,6 +15,7 @@ import type {
 } from "../store/store-interface.js";
 import { projectHashOf, BASE_PORT } from "../project-root.js";
 import { cliInvocation } from "../cli-invocation.js";
+import { errorName } from "@deeppairing/shared";
 
 export class DaemonClient implements IStore {
   private baseUrl: string;
@@ -200,10 +201,10 @@ export class DaemonClient implements IStore {
     let res: Response;
     try {
       res = await fetch(`${this.baseUrl}${path}`, initWithHash);
-    } catch (err: any) {
+    } catch (err) {
       // AbortError/TimeoutError are the expected long-poll end shape
       // (waitForFeedback relies on it) — propagate unchanged.
-      if (err?.name === "AbortError" || err?.name === "TimeoutError") throw err;
+      if (errorName(err) === "AbortError" || errorName(err) === "TimeoutError") throw err;
       // A network-level throw means the socket to the daemon died — classically
       // a host sleep severed it (the daemon may also have idle-shut and
       // respawned on a different port). Transparently re-adopt + retry once
@@ -710,11 +711,11 @@ export class DaemonClient implements IStore {
         `/wait-feedback?timeout=${timeoutMs}`,
         { signal: AbortSignal.timeout(timeoutMs + 5000) },
       );
-    } catch (err: any) {
+    } catch (err) {
       // Timeout or daemon-side cancellation is the EXPECTED end-of-poll
       // shape — the long-poll either resolved or hit its budget. Don't
       // throw at the caller; let them call check_feedback again.
-      if (err?.name === "AbortError" || err?.name === "TimeoutError") return;
+      if (errorName(err) === "AbortError" || errorName(err) === "TimeoutError") return;
       // Anything else (network down, 5xx) bubbles up as a structured
       // [deepPairing] error from request().
       throw err;

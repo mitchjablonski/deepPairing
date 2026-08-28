@@ -43,7 +43,7 @@ import { recordMetricEvent } from "../store/metrics-store.js";
 import { recordBroadcastMetric } from "../store/metrics-tap.js";
 import { recordPreflightBlock } from "../store/preflight-block-log.js";
 import { buildPingPayload, decidePing, sendPing } from "../ping.js";
-import { collectUnansweredQuestions } from "@deeppairing/shared";
+import { collectUnansweredQuestions, errorMessage } from "@deeppairing/shared";
 import { SERVER_VERSION } from "../version.js";
 import {
   fsHonorsPosixMode,
@@ -883,10 +883,10 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
         // don't die: same-uid is the whole trust boundary on a single-dev box.
         log(`[token] WARN: no filesystem here honors 0600 (token file ${sidecar.path} = mode ${sidecar.mode.toString(8)}). Continuing — the bearer token is readable by same-uid processes on this machine.`);
       }
-    } catch (err: any) {
+    } catch (err) {
       // A genuine write failure (unwritable dir, full disk) — surface to stderr
       // too so the wrapper's process-supervision sees it on cold start.
-      const msg = err?.message ?? String(err);
+      const msg = errorMessage(err);
       log(`FATAL: writeDaemonInfo failed: ${msg}`);
       process.stderr.write(`[deepPairing daemon] FATAL: ${msg}\n`);
       throw err;
@@ -996,7 +996,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
       // Always pair: error → log + force-close so the 'close' handler
       // runs the standard cleanup path.
       ws.on("error", (err: any) => {
-        log(`[ws] session client error (session=${sessionId}): ${err?.code ?? err?.message ?? err}`);
+        log(`[ws] session client error (session=${sessionId}): ${err?.code ?? errorMessage(err)}`);
         try { ws.terminate(); } catch {}
       });
       ws.on("close", () => {
@@ -1019,7 +1019,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
 
       // II5 — see session-client comment above. Same crash mode applies.
       ws.on("error", (err: any) => {
-        log(`[ws] global client error: ${err?.code ?? err?.message ?? err}`);
+        log(`[ws] global client error: ${err?.code ?? errorMessage(err)}`);
         try { ws.terminate(); } catch {}
       });
       ws.on("close", () => {
@@ -1036,7 +1036,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // frames the per-client handler never sees). Without this, the same
   // unhandled-emit crash mode applies one level up.
   wss.on("error", (err: any) => {
-    log(`[wss] server error: ${err?.code ?? err?.message ?? err}`);
+    log(`[wss] server error: ${err?.code ?? errorMessage(err)}`);
   });
 
   // --- Heartbeat / hooks watcher / auto-open / ping ---

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { errorMessage } from "@deeppairing/shared";
 import { buildRepairPrompt } from "../lib/repairPrompt";
 import { apiBase } from "../lib/api";
 import { useModal } from "../hooks/useModal";
@@ -96,8 +97,8 @@ export function RepairDecisionModal({
       if (!res.ok) throw new Error(`Save failed: ${res.status}`);
       const data = await res.json();
       setSavedPath(data.relPath ?? data.path ?? "saved");
-    } catch (err: any) {
-      setError(err?.message ?? "Save failed");
+    } catch (err) {
+      setError(errorMessage(err, "Save failed"));
     } finally {
       setSaving(false);
     }

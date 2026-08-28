@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Artifact, Comment } from "@deeppairing/shared";
-import { collectUnansweredQuestions, isClosedArtifactStatus } from "@deeppairing/shared";
+import { collectUnansweredQuestions, isClosedArtifactStatus, errorMessage } from "@deeppairing/shared";
 import { salvageArray } from "./salvage.js";
 import type { DecisionRecord } from "./store-interface.js";
 
@@ -457,12 +457,12 @@ export function listAllDecisions(
     let raw: unknown;
     try {
       raw = JSON.parse(fs.readFileSync(decFile, "utf-8"));
-    } catch (err: any) {
+    } catch (err) {
       // Whole-file corruption (unparseable): back up the raw bytes (.corrupt)
       // exactly like FileStore.loadJsonFile, then REPORT the session rather than
       // dropping it silently — the single most important requirement of this view.
       try { fs.copyFileSync(decFile, decFile + ".corrupt"); } catch { /* best-effort */ }
-      failedSessions.push({ sessionId, reason: err?.message ?? "unreadable decisions.json", kind: "unreadable" });
+      failedSessions.push({ sessionId, reason: errorMessage(err, "unreadable decisions.json"), kind: "unreadable" });
       continue;
     }
     // Valid JSON but not an array — the whole file is unusable AS decisions.
@@ -896,9 +896,9 @@ export function groupByFeature(
     try {
       artifacts = salvageArray<Artifact>(
         `${sessionId}/artifacts.json`, JSON.parse(fs.readFileSync(artFile, "utf-8")), "id");
-    } catch (err: any) {
+    } catch (err) {
       // Whole-file unreadable — report it, never take the whole scan down.
-      failedSessions.push({ sessionId, reason: err?.message ?? "unreadable artifacts.json" });
+      failedSessions.push({ sessionId, reason: errorMessage(err, "unreadable artifacts.json") });
       continue;
     }
     if (artifacts.length === 0) continue;

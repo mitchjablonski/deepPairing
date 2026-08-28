@@ -559,7 +559,6 @@ export function renderMarkdown(md: string, baseHeading = 3, includeCode = true, 
     // labelled block) means "the export renderer hit a bug here" reaches a
     // developer instead of looking like ordinary prose.
     try {
-      // eslint-disable-next-line no-console
       console.warn("[deepPairing] renderMarkdown fell back to plain text:", (err as Error)?.message ?? err);
     } catch { /* logging must never fail the export */ }
     let safe = "";

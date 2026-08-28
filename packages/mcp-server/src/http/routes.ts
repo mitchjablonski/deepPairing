@@ -41,8 +41,7 @@ import { readMetrics, recordMetricEvent } from "../store/metrics-store.js";
 import { readPreflightBlocks } from "../store/preflight-block-log.js";
 import { maybeUpdateTaskStatus } from "../mcp/tasks-probe.js";
 import { corsAllowedOrigin } from "./origin-policy.js";
-import {
-  CommentBodySchema,
+import { CommentBodySchema,
   SuggestionResolveBodySchema,
   DecisionResolveBodySchema,
   StatusUpdateBodySchema,
@@ -53,8 +52,7 @@ import {
   RenderFailureBodySchema,
   CreateRequestBodySchema,
   formatZodIssues,
-  normalizeConceptKey,
-} from "@deeppairing/shared";
+  normalizeConceptKey, errorMessage, errorCode } from "@deeppairing/shared";
 
 /**
  * Demo-ledger isolation — demo sessions (`demo_` prefix, minted only by
@@ -1850,8 +1848,8 @@ export function createHttpRoutes(
     try {
       realResolved = fs.realpathSync(resolved);
       realRoot = fs.realpathSync(resolvedRoot);
-    } catch (err: any) {
-      if (err?.code === "ENOENT") return c.json({ error: "File not found" }, 404);
+    } catch (err) {
+      if (errorCode(err) === "ENOENT") return c.json({ error: "File not found" }, 404);
       return c.json({ error: "Cannot read file" }, 500);
     }
     if (!realResolved.startsWith(realRoot + path.sep) && realResolved !== realRoot) {
@@ -1873,8 +1871,8 @@ export function createHttpRoutes(
       }
       const content = fs.readFileSync(realResolved, "utf-8");
       return c.json({ content, filePath, lines: content.split("\n").length });
-    } catch (err: any) {
-      if (err?.code === "ENOENT") return c.json({ error: "File not found" }, 404);
+    } catch (err) {
+      if (errorCode(err) === "ENOENT") return c.json({ error: "File not found" }, 404);
       return c.json({ error: "Cannot read file" }, 500);
     }
   });
@@ -2116,8 +2114,8 @@ export function createHttpRoutes(
       try {
         const stat = fs.lstatSync(resolved);
         if (stat.isSymbolicLink()) return c.json({ error: "invalid path" }, 400);
-      } catch (err: any) {
-        if (err?.code !== "ENOENT") throw err;
+      } catch (err) {
+        if (errorCode(err) !== "ENOENT") throw err;
       }
       const realDir = fs.realpathSync(resolvedDir);
       const realRoot = fs.realpathSync(path.resolve(projectRoot));
@@ -2127,8 +2125,8 @@ export function createHttpRoutes(
       fs.writeFileSync(resolved, content, "utf-8");
       const relPath = path.relative(projectRoot, resolved);
       return c.json({ status: "saved", path: resolved, relPath });
-    } catch (err: any) {
-      return c.json({ error: err?.message ?? "Save failed" }, 500);
+    } catch (err) {
+      return c.json({ error: errorMessage(err, "Save failed") }, 500);
     }
   });
 

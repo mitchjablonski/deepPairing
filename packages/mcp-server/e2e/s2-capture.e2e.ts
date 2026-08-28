@@ -247,7 +247,6 @@ for (const width of [1440, 900] as const) {
       // first-line-of-code y is logged too (render-timing sensitive → not pinned).
       const mainY = await pageYPct(page, "main");
       const codeY = await pageYPct(page, '[data-comment-anchor^="line:"]');
-      // eslint-disable-next-line no-console
       console.log(`[S2] ${PHASE} app-shell chrome (main top) (${theme} ${width}): ${mainY.toFixed(1)}% | first-code-line: ${codeY.toFixed(1)}%`);
 
       await shot(page, `chrome-first-code-${theme}-${width}.png`);

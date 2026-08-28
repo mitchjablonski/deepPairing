@@ -53,7 +53,7 @@ export function buildTimeline(state: SessionSnapshot): TimelineEvent[] {
     // If the artifact carries explicit statusHistory, emit one event per
     // transition (faithful replay). Otherwise fall back to the final status
     // using updatedAt as a best-effort timestamp.
-    const history = (a as any).statusHistory as Array<{ status: string; at: string }> | undefined;
+    const history = a.statusHistory;
     if (history && history.length > 0) {
       for (const entry of history) {
         if (entry.status === "draft") continue; // initial state, covered by created event
@@ -93,7 +93,7 @@ export function buildTimeline(state: SessionSnapshot): TimelineEvent[] {
 
   for (const d of state.decisions ?? []) {
     if (!d.resolvedAt || !d.response) continue;
-    const chosen = d.options?.find?.((o: any) => o.id === d.response?.optionId);
+    const chosen = d.options?.find((o) => o.id === d.response?.optionId);
     events.push({
       id: `evt_decision_${d.decisionId}`,
       kind: "decision_resolved",
@@ -106,8 +106,8 @@ export function buildTimeline(state: SessionSnapshot): TimelineEvent[] {
         chosenTitle: chosen?.title,
         reasoning: d.response.reasoning,
         rejectedTitles: (d.options ?? [])
-          .filter((o: any) => o.id !== d.response?.optionId)
-          .map((o: any) => o.title),
+          .filter((o) => o.id !== d.response?.optionId)
+          .map((o) => o.title),
       },
     });
   }
