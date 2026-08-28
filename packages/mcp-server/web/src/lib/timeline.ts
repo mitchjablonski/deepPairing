@@ -20,11 +20,16 @@ export interface TimelineEvent {
   payload?: Record<string, unknown>;
 }
 
+interface TimelineDecisionOption {
+  id: string;
+  title: string;
+}
+
 interface DecisionLike {
   decisionId: string;
   artifactId: string;
   context: string;
-  options: any[];
+  options: TimelineDecisionOption[];
   response?: { optionId: string; reasoning?: string };
   createdAt?: string;
   resolvedAt?: string;
@@ -38,12 +43,14 @@ interface PlanReviewLike {
   resolvedAt?: string;
 }
 
-export function buildTimeline(state: {
+export interface TimelineInput {
   artifacts?: Artifact[];
   comments?: Comment[];
   decisions?: DecisionLike[];
   planReviews?: PlanReviewLike[];
-}): TimelineEvent[] {
+}
+
+export function buildTimeline(state: TimelineInput): TimelineEvent[] {
   const events: TimelineEvent[] = [];
 
   for (const a of state.artifacts ?? []) {
@@ -56,7 +63,7 @@ export function buildTimeline(state: {
       payload: { type: a.type, title: a.title, version: a.version },
     });
 
-    const history = (a as any).statusHistory as Array<{ status: string; at: string }> | undefined;
+    const history = a.statusHistory;
     if (history && history.length > 0) {
       for (const entry of history) {
         if (entry.status === "draft") continue;
@@ -83,20 +90,20 @@ export function buildTimeline(state: {
 
   for (const c of state.comments ?? []) {
     const loc = c.target?.artifactId ?? "session";
-    const prefix = (c as any).intent === "question" ? "Q" : c.author === "agent" ? "A" : "You";
+    const prefix = c.intent === "question" ? "Q" : c.author === "agent" ? "A" : "You";
     events.push({
       id: `evt_comment_${c.id}`,
       kind: "comment_added",
       at: c.createdAt,
       artifactId: c.target?.artifactId,
       label: `${prefix} [${loc}]: ${c.content.slice(0, 80)}${c.content.length > 80 ? "…" : ""}`,
-      payload: { author: c.author, intent: (c as any).intent, content: c.content },
+      payload: { author: c.author, intent: c.intent, content: c.content },
     });
   }
 
   for (const d of state.decisions ?? []) {
     if (!d.resolvedAt || !d.response) continue;
-    const chosen = d.options?.find?.((o: any) => o.id === d.response?.optionId);
+    const chosen = d.options?.find((o) => o.id === d.response?.optionId);
     events.push({
       id: `evt_decision_${d.decisionId}`,
       kind: "decision_resolved",
@@ -109,8 +116,8 @@ export function buildTimeline(state: {
         chosenTitle: chosen?.title,
         reasoning: d.response.reasoning,
         rejectedTitles: (d.options ?? [])
-          .filter((o: any) => o.id !== d.response?.optionId)
-          .map((o: any) => o.title),
+          .filter((o) => o.id !== d.response?.optionId)
+          .map((o) => o.title),
       },
     });
   }

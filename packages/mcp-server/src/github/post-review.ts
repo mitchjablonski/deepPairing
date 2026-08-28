@@ -11,6 +11,7 @@
  */
 import { spawn } from "node:child_process";
 import type { GitHubReviewPayload } from "../export/format-markdown.js";
+import { errorMessage } from "@deeppairing/shared";
 
 export interface PostReviewResult {
   htmlUrl: string;
@@ -144,8 +145,8 @@ async function detectRepo(): Promise<{ owner: string; repo: string }> {
     const [owner, repo] = String(parsed.nameWithOwner).split("/");
     if (!owner || !repo) throw new Error("gh repo view returned unexpected shape");
     return { owner, repo };
-  } catch (err: any) {
-    throw new Error(`Could not parse gh repo view output: ${err?.message ?? err}`);
+  } catch (err) {
+    throw new Error(`Could not parse gh repo view output: ${errorMessage(err)}`);
   }
 }
 
@@ -191,7 +192,7 @@ export async function postPrReview(opts: {
       state: parsedBody.state ?? "COMMENTED",
       id: parsedBody.id ?? 0,
     };
-  } catch (err: any) {
-    throw new Error(`Posted, but could not parse gh response: ${err?.message ?? err}`);
+  } catch (err) {
+    throw new Error(`Posted, but could not parse gh response: ${errorMessage(err)}`);
   }
 }

@@ -120,7 +120,6 @@ describe("O3 (#231) — check_feedback read consolidation", () => {
     const { store, counts } = countingStore(base);
     await handleCheckFeedback(makeCtx(store), {});
 
-    // eslint-disable-next-line no-console
     console.log("[read-amp] counts:", JSON.stringify(counts));
 
     // Consolidated ceilings. A busy poll has immediate feedback so it skips the
@@ -155,7 +154,6 @@ describe("O3 (#231) — check_feedback read consolidation", () => {
         totalReads: Object.values(counts).reduce((a, b) => a + b, 0),
       });
     }
-    // eslint-disable-next-line no-console
     console.log("[read-amp] plan scaling:", JSON.stringify(observed));
     expect(observed[0]!.verdictReads).toBe(0);
     expect(observed[1]!.verdictReads).toBe(0);

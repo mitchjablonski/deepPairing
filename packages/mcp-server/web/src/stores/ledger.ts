@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { errorMessage } from "@deeppairing/shared";
 import { apiBase, sessionHeaders } from "../lib/api";
 
 /**
@@ -165,8 +166,8 @@ async function doFetch(
         loading: false,
         version: (s.version ?? 0) + 1,
       }) as Partial<LedgerState>);
-    } catch (err: any) {
-      set({ error: err?.message ?? String(err), loading: false });
+    } catch (err) {
+      set({ error: errorMessage(err), loading: false });
     } finally {
       inflight = null;
     }
@@ -209,11 +210,11 @@ export const useLedgerStore = create<LedgerState>((set, get) => ({
         ttl: 5000,
       });
       void get().refetch();
-    } catch (err: any) {
+    } catch (err) {
       useToastStore.getState().push({
         kind: "error",
         title: "Couldn't override",
-        body: err?.message ?? String(err),
+        body: errorMessage(err),
         ttl: 7000,
       });
     }

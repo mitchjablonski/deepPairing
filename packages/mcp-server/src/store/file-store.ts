@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
-import { suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus } from "@deeppairing/shared";
+import { suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { capConceptLength } from "./concept-hygiene.js";
@@ -279,13 +279,13 @@ export class FileStore implements IStore {
       this.fileMtimeMs[filePath] = stat.mtimeMs;
       this.fileSizes[filePath] = stat.size;
       return JSON.parse(fs.readFileSync(filePath, "utf-8"));
-    } catch (err: any) {
-      if (err?.code === "ENOENT") {
+    } catch (err) {
+      if (errorCode(err) === "ENOENT") {
         delete this.fileMtimeMs[filePath];
         delete this.fileSizes[filePath];
         return fallback;
       }
-      console.error(`[deepPairing] Corrupted file ${filePath}: ${err.message}`);
+      console.error(`[deepPairing] Corrupted file ${filePath}: ${errorMessage(err)}`);
       try {
         fs.copyFileSync(filePath, filePath + ".corrupt");
       } catch { /* best-effort backup */ }

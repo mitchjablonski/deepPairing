@@ -289,3 +289,5 @@ export {
   type RequestSource,
   type RequestScope,
 } from "./schemas/request.js";
+
+export { errorMessage, errorCode, errorName } from "./errors.js";

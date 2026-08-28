@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { errorMessage } from "@deeppairing/shared";
 import { timeAgo } from "../lib/time";
 import { apiGet, apiBase } from "../lib/api";
 import { useArtifactStore } from "../stores/artifact";
@@ -102,8 +103,8 @@ export function SessionBrowser({ onPicked }: { onPicked?: () => void } = {}) {
         if (!res.ok) throw new Error(`Search failed: ${res.status}`);
         const data = await res.json();
         setResults(data.results ?? []);
-      } catch (err: any) {
-        setSearchError(err?.message ?? "Search failed");
+      } catch (err) {
+        setSearchError(errorMessage(err, "Search failed"));
         setResults([]);
       } finally {
         setSearching(false);

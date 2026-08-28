@@ -11,6 +11,7 @@ import { readTokenSidecar } from "./token.js";
 import { projectHashOf, preferredPortFor, BASE_PORT } from "../project-root.js";
 import { SERVER_VERSION, compareServerVersions } from "../version.js";
 import { cliInvocation } from "../cli-invocation.js";
+import { errorMessage } from "@deeppairing/shared";
 
 const __thisDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -921,12 +922,12 @@ export async function ensureDaemon(
     // parent event loop (otherwise a cold `demo`/wrapper start never exits).
     release();
     return info;
-  } catch (err: any) {
+  } catch (err) {
     const tail = stderrTail().trim();
     // Capture the diagnostic tail FIRST, then release the pipe.
     release();
     if (tail) {
-      throw new Error(`${err.message}\nDaemon stderr:\n${tail}`);
+      throw new Error(`${errorMessage(err)}\nDaemon stderr:\n${tail}`);
     }
     throw err;
   }

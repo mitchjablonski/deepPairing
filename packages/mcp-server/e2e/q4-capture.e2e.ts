@@ -239,7 +239,6 @@ for (const theme of ["dark", "light"] as const) {
       if (afterWellTop + beforeWellHeight > 900) {
         expect(beforeControls, msg).toBeGreaterThan(900);
       }
-      // eslint-disable-next-line no-console
       console.log(`[q4 ${theme} ${width}] ${msg}`);
 
       await context.close();
@@ -332,7 +331,6 @@ for (const theme of ["dark", "light"] as const) {
       // name instead of the directory prefix every row shared.
       const after = geom.map((g) => g.baseWidth);
       const beforePathPct = clipped.map((c) => c.visibleFraction * 100);
-      // eslint-disable-next-line no-console
       console.log(
         `[q4 picker ${theme} ${width}] tail-truncate: ${beforePathPct.map((p) => `${p.toFixed(0)}%`).join(" / ")} ` +
           `of each path visible, all of it the shared "packages/mcp-server/…" prefix. ` +
@@ -453,7 +451,6 @@ test("Q4 review (H1) — at 900px the region composer opens ON SCREEN with its f
 
   // 2. It is actually on screen — the measurement the review made (0%).
   const vis = await visibleInViewport(page, '[data-testid="dp-region-composer-block"]');
-  // eslint-disable-next-line no-console
   console.log(`[q4 review H1] 900px block composer visibility: ${(vis * 100).toFixed(1)}% (was 0.0%)`);
   expect(vis, "the composer must be fully on screen at 900px").toBeGreaterThan(0.99);
 
@@ -490,7 +487,6 @@ test("Q4 review (H2) — a popover anchored MID-SCROLL stays inside the visible 
   const pop = page.getByTestId("dp-region-popover");
   await pop.waitFor({ timeout: 15000 });
   const vis = await visibleFractionIn(page, '[data-testid="dp-region-popover"]', ".dp-mermaid-well");
-  // eslint-disable-next-line no-console
   console.log(`[q4 review H2] mid-scroll popover visibility inside the well: ${(vis * 100).toFixed(1)}% (was 17.8%)`);
   expect(vis, "the popover must clamp to the SCROLLPORT, not the full-height wrapper").toBeGreaterThan(0.9);
 
@@ -523,7 +519,6 @@ test("Q4 review (M3) — the keyboard path and the locator list are reachable wi
     await page.evaluate(() => (document.querySelector(".dp-mermaid-well") as HTMLElement).scrollTop),
     "reaching the keyboard path must not require scrolling the well",
   ).toBe(0);
-  // eslint-disable-next-line no-console
   console.log(
     `[q4 review M3] keyboard path offset below the well: ` +
       (await page.evaluate(() => {
@@ -564,7 +559,6 @@ test("Q4 review (M3) — the keyboard path and the locator list are reachable wi
   const rowYAfter = await row.evaluate((el) => el.getBoundingClientRect().top);
   await expect(row).toBeVisible();
   expect(Math.abs(rowYAfter - rowYBefore), "the locator row must not move when it scrolls the well").toBeLessThan(4);
-  // eslint-disable-next-line no-console
   console.log(
     `[q4 review M3] locator click moved the well ${wellBefore} → ${wellAfter}; ` +
       `the row itself stayed put (${rowYBefore.toFixed(0)} → ${rowYAfter.toFixed(0)}px)`,

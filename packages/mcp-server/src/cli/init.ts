@@ -31,6 +31,7 @@ import { getGlobalStore } from "../store/global-store.js";
 import { buildLedgerHealthReport, shQuote } from "../store/ledger-health.js";
 import { cliInvocation, mcpServerConfigFor, isInstalledPackage } from "../cli-invocation.js";
 import { writeJsonAtomic } from "../store/atomic-write.js";
+import { errorMessage } from "@deeppairing/shared";
 
 /**
  * The project this CLI acts on.
@@ -553,7 +554,7 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
         label: "Delete malformed .deeppairing/daemon.json",
         apply: () => {
           try { fs.unlinkSync(infoFile); return { ok: true, message: "Deleted" }; }
-          catch (e: any) { return { ok: false, message: e?.message ?? String(e) }; }
+          catch (e) { return { ok: false, message: errorMessage(e) }; }
         },
       });
     }
@@ -571,7 +572,7 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
         label: `Remove stale daemon.json (PID ${info.pid} is dead)`,
         apply: () => {
           try { fs.unlinkSync(infoFile); return { ok: true, message: "Removed" }; }
-          catch (e: any) { return { ok: false, message: e?.message ?? String(e) }; }
+          catch (e) { return { ok: false, message: errorMessage(e) }; }
         },
       });
     }
@@ -684,11 +685,11 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
                 ok: true,
                 message: `Force-killed PID ${expectedPid} (Windows has no SIGTERM equivalent — daemon couldn't flush). Restart Claude Code.`,
               };
-            } catch (err: any) {
+            } catch (err) {
               return {
                 ok: false,
                 message:
-                  `Could not signal PID ${expectedPid}: ${err?.message ?? err}. ` +
+                  `Could not signal PID ${expectedPid}: ${errorMessage(err)}. ` +
                   `Try Task Manager / taskkill /PID ${expectedPid}.`,
               };
             }
@@ -701,11 +702,11 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
                 `Cooperative evict refused; sent SIGTERM to PID ${expectedPid}. ` +
                 `Restart Claude Code in this project to spawn a fresh daemon.`,
             };
-          } catch (err: any) {
+          } catch (err) {
             return {
               ok: false,
               message:
-                `Could not signal PID ${expectedPid}: ${err?.message ?? err}. ` +
+                `Could not signal PID ${expectedPid}: ${errorMessage(err)}. ` +
                 `The other project's daemon may have died already; try restarting Claude Code.`,
             };
           }
@@ -794,8 +795,8 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
     probeReachable = true;
     probeStatus = res.status;
     probeOk = res.ok;
-  } catch (err: any) {
-    probeStatus = err?.message ?? String(err);
+  } catch (err) {
+    probeStatus = errorMessage(err);
   }
   console.log(`  ${probeOk ? green("✓") : probeReachable ? yellow("!") : red("✗")} GET http://localhost:${port}/api/state → ${probeStatus}`);
 
@@ -1231,8 +1232,8 @@ async function exportCmd(format: string, sessionId?: string, opts: { redactCode?
           // paths render the same beats.
           store: new FileStore(cwd, chosenSessionId) as any,
         });
-      } catch (err: any) {
-        console.error(`  ${red("✗")} Failed to load session "${chosenSessionId}": ${err?.message ?? err}`);
+      } catch (err) {
+        console.error(`  ${red("✗")} Failed to load session "${chosenSessionId}": ${errorMessage(err)}`);
         process.exit(1);
       }
     }
@@ -1276,8 +1277,8 @@ async function exportCmd(format: string, sessionId?: string, opts: { redactCode?
     const state = FileStore.loadSession(cwd, chosenSessionId);
     const markdown = formatSessionMarkdown(state as any, format as any);
     process.stdout.write(markdown);
-  } catch (err: any) {
-    console.error(`  ${red("✗")} Failed to load session "${chosenSessionId}": ${err?.message ?? err}`);
+  } catch (err) {
+    console.error(`  ${red("✗")} Failed to load session "${chosenSessionId}": ${errorMessage(err)}`);
     process.exit(1);
   }
 }
@@ -1367,8 +1368,8 @@ async function philosophyCmd(sub: string | undefined, rest: string[]): Promise<v
     let raw: unknown;
     try {
       raw = JSON.parse(fs.readFileSync(file!, "utf-8"));
-    } catch (err: any) {
-      console.error(`  ${red("✗")} ${file} is not valid JSON: ${err?.message ?? err}`);
+    } catch (err) {
+      console.error(`  ${red("✗")} ${file} is not valid JSON: ${errorMessage(err)}`);
       process.exit(1);
     }
     const summary = store.importLedger(raw);
@@ -1524,8 +1525,8 @@ async function demoCmd(): Promise<void> {
     });
     if (!res.ok) throw new Error(`daemon responded ${res.status}`);
     data = (await res.json()) as { sessionId: string };
-  } catch (err: any) {
-    console.error(`  ${red("✗")} Could not start demo: ${err?.message ?? err}`);
+  } catch (err) {
+    console.error(`  ${red("✗")} Could not start demo: ${errorMessage(err)}`);
     process.exit(1);
   }
 
@@ -1607,8 +1608,8 @@ async function postPrReviewCmd(ref: string, sessionId?: string, event?: string, 
   try {
     store = new FileStore(cwd, chosenSessionId);
     state = store.getFullState();
-  } catch (err: any) {
-    console.error(`  ${red("✗")} Could not load session "${chosenSessionId}": ${err?.message ?? err}`);
+  } catch (err) {
+    console.error(`  ${red("✗")} Could not load session "${chosenSessionId}": ${errorMessage(err)}`);
     process.exit(1);
   }
 
@@ -1650,14 +1651,14 @@ async function postPrReviewCmd(ref: string, sessionId?: string, event?: string, 
         commentCount: payload.comments.length,
       });
       console.log(`    ${dim("Recorded — a second post to this PR needs --repost.")}`);
-    } catch (stampErr: any) {
-      console.error(`  ${red("!")} The review posted, but recording it locally failed: ${stampErr?.message ?? stampErr}`);
+    } catch (stampErr) {
+      console.error(`  ${red("!")} The review posted, but recording it locally failed: ${errorMessage(stampErr)}`);
     }
-  } catch (err: any) {
+  } catch (err) {
     if (err instanceof GhMissingError || err instanceof GhNotAuthedError) {
       console.error(`  ${red("✗")} ${err.message}`);
     } else {
-      console.error(`  ${red("✗")} post-pr-review failed: ${err?.message ?? err}`);
+      console.error(`  ${red("✗")} post-pr-review failed: ${errorMessage(err)}`);
     }
     process.exit(1);
   }
@@ -1812,8 +1813,8 @@ async function sessionsCmd(sub: string | undefined, rest: string[]): Promise<voi
       try {
         fs.rmSync(dir, { recursive: true, force: true });
         removed++;
-      } catch (err: any) {
-        console.log(`    ${red("✗")} ${c.id}: ${err?.message ?? err}`);
+      } catch (err) {
+        console.log(`    ${red("✗")} ${c.id}: ${errorMessage(err)}`);
       }
     }
     console.log(`  ${green("✓")} Removed ${removed} session(s).`);
@@ -1957,7 +1958,7 @@ async function listCmd(): Promise<void> {
 if (cmd === "--help" || cmd === "-h" || (!cmd && args.length === 0)) {
   // With no arguments, default to init (most common use case from npx)
   if (!cmd) {
-    main().catch((err) => { console.error(`  ${red("✗")} init failed: ${err?.message ?? err}`); process.exit(1); });
+    main().catch((err) => { console.error(`  ${red("✗")} init failed: ${errorMessage(err)}`); process.exit(1); });
   } else {
     // IV2 — this help block used to lead with 14 lines invoking the CLI
     // through the unpublished npm package name. Pre-1.0 that name isn't on
@@ -2037,7 +2038,7 @@ ${helpInvocations}
   const dryRun = args.includes("--dry-run");
   const minimal = args.includes("--minimal");
   main({ offerDemo, yes, dryRun, minimal }).catch((err) => {
-    console.error(`  ${red("✗")} init failed: ${err?.message ?? err}`);
+    console.error(`  ${red("✗")} init failed: ${errorMessage(err)}`);
     process.exit(1);
   });
 } else if (cmd === "doctor") {
@@ -2058,18 +2059,18 @@ ${helpInvocations}
     process.exit(1);
   }
   exportCmd(format, sessionId, { redactCode }).catch((err) => {
-    console.error(`  ${red("✗")} export failed: ${err?.message ?? err}`);
+    console.error(`  ${red("✗")} export failed: ${errorMessage(err)}`);
     process.exit(1);
   });
 } else if (cmd === "demo") {
   demoCmd().catch((err) => {
-    console.error(`  ${red("✗")} demo failed: ${err?.message ?? err}`);
+    console.error(`  ${red("✗")} demo failed: ${errorMessage(err)}`);
     process.exit(1);
   });
 } else if (cmd === "philosophy") {
   const sub = args[1];
   philosophyCmd(sub, args.slice(2)).catch((err) => {
-    console.error(`  ${red("✗")} philosophy ${sub ?? ""} failed: ${err?.message ?? err}`);
+    console.error(`  ${red("✗")} philosophy ${sub ?? ""} failed: ${errorMessage(err)}`);
     process.exit(1);
   });
 } else if (cmd === "team") {
@@ -2078,8 +2079,8 @@ ${helpInvocations}
   if (sub === "init") {
     try {
       teamInitCmd(force);
-    } catch (err: any) {
-      console.error(`  ${red("✗")} team init failed: ${err?.message ?? err}`);
+    } catch (err) {
+      console.error(`  ${red("✗")} team init failed: ${errorMessage(err)}`);
       process.exit(1);
     }
   } else {
@@ -2089,28 +2090,28 @@ ${helpInvocations}
 } else if (cmd === "sessions") {
   const sub = args[1];
   sessionsCmd(sub, args.slice(2)).catch((err) => {
-    console.error(`  ${red("✗")} sessions ${sub ?? ""} failed: ${err?.message ?? err}`);
+    console.error(`  ${red("✗")} sessions ${sub ?? ""} failed: ${errorMessage(err)}`);
     process.exit(1);
   });
 } else if (cmd === "url") {
   const open = args.includes("--open");
   urlCmd({ open }).catch((err) => {
-    console.error(`  ${red("✗")} url failed: ${err?.message ?? err}`);
+    console.error(`  ${red("✗")} url failed: ${errorMessage(err)}`);
     process.exit(1);
   });
 } else if (cmd === "port") {
   portCmd().catch((err) => {
-    console.error(`  ${red("✗")} port failed: ${err?.message ?? err}`);
+    console.error(`  ${red("✗")} port failed: ${errorMessage(err)}`);
     process.exit(1);
   });
 } else if (cmd === "status") {
   statusCmd().catch((err) => {
-    console.error(`  ${red("✗")} status failed: ${err?.message ?? err}`);
+    console.error(`  ${red("✗")} status failed: ${errorMessage(err)}`);
     process.exit(1);
   });
 } else if (cmd === "list") {
   listCmd().catch((err) => {
-    console.error(`  ${red("✗")} list failed: ${err?.message ?? err}`);
+    console.error(`  ${red("✗")} list failed: ${errorMessage(err)}`);
     process.exit(1);
   });
 } else if (cmd === "post-pr-review") {
@@ -2133,7 +2134,7 @@ ${helpInvocations}
     else if (args[i] === "--repost") { repost = true; }
   }
   postPrReviewCmd(ref, sessionId, event, repost).catch((err) => {
-    console.error(`  ${red("✗")} post-pr-review failed: ${err?.message ?? err}`);
+    console.error(`  ${red("✗")} post-pr-review failed: ${errorMessage(err)}`);
     process.exit(1);
   });
 } else {

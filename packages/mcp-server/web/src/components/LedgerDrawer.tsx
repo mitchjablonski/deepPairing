@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { errorMessage } from "@deeppairing/shared";
 import { apiGet, apiBase } from "../lib/api";
 import { useModal } from "../hooks/useModal";
 import { useArtifactStore } from "../stores/artifact";
@@ -59,8 +60,8 @@ export function LedgerDrawer({
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         if (!ac.signal.aborted) setEntries(data.entries ?? []);
-      } catch (err: any) {
-        if (!ac.signal.aborted) setError(err?.message ?? String(err));
+      } catch (err) {
+        if (!ac.signal.aborted) setError(errorMessage(err));
       }
     })();
     return () => ac.abort();
@@ -76,8 +77,8 @@ export function LedgerDrawer({
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         if (!ac.signal.aborted) setDigest(data);
-      } catch (err: any) {
-        if (!ac.signal.aborted) setDigestError(err?.message ?? String(err));
+      } catch (err) {
+        if (!ac.signal.aborted) setDigestError(errorMessage(err));
       }
     })();
     return () => ac.abort();
@@ -106,8 +107,8 @@ export function LedgerDrawer({
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         if (!ac.signal.aborted) setTeamPrefs(data);
-      } catch (err: any) {
-        if (!ac.signal.aborted) setTeamError(err?.message ?? String(err));
+      } catch (err) {
+        if (!ac.signal.aborted) setTeamError(errorMessage(err));
       }
     })();
     return () => ac.abort();

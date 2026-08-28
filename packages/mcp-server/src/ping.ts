@@ -11,6 +11,8 @@
  * giving up anything we'd cringe to have leaked.
  */
 
+import { errorMessage } from "@deeppairing/shared";
+
 export interface PingPayload {
   version: string;
   event: "daemon_startup";
@@ -82,7 +84,7 @@ export async function sendPing(url: string, payload: PingPayload): Promise<{ ok:
     });
     clearTimeout(timer);
     return { ok: res.ok, status: res.status };
-  } catch (err: any) {
-    return { ok: false, error: err?.message ?? String(err) };
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) };
   }
 }

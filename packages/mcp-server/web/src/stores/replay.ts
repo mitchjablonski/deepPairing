@@ -1,6 +1,6 @@
 import { create } from "zustand";
-import type { SessionAnnotation } from "@deeppairing/shared";
-import { buildTimeline, type TimelineEvent, annotationsByEventId } from "../lib/timeline";
+import type { SessionAnnotation, DecisionOption } from "@deeppairing/shared";
+import { buildTimeline, type TimelineEvent, type TimelineInput, annotationsByEventId } from "../lib/timeline";
 import { apiBase, apiGet, sessionHeaders } from "../lib/api";
 
 /**
@@ -15,7 +15,7 @@ interface DecisionRecord {
   decisionId: string;
   artifactId: string;
   context: string;
-  options: any[];
+  options: DecisionOption[];
   response?: { optionId: string; reasoning?: string };
   createdAt?: string;
   resolvedAt?: string;
@@ -54,12 +54,7 @@ interface ReplayState {
   /** Resolved-decision records; lets DecisionCard show past choices. */
   decisions: DecisionRecord[];
 
-  enterReplay: (sessionId: string, state: {
-    artifacts?: any[];
-    comments?: any[];
-    decisions?: any[];
-    planReviews?: any[];
-  }) => Promise<void>;
+  enterReplay: (sessionId: string, state: TimelineInput) => Promise<void>;
   exitReplay: () => void;
   setCursor: (cursor: string) => void;
   stepForward: () => void;
