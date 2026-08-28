@@ -70,6 +70,17 @@ interface CommentThreadProps {
   // ("frozen") artifact, so a draft the agent took back can't invite new writes.
   // Omitted everywhere else → existing threads byte-for-byte unchanged.
   readOnly?: boolean;
+  // Focus-on-OPEN. Set by callers that MOUNT this composer in response to the
+  // user opening a TARGETED comment (a debrief block's "+ Comment" toggle, the
+  // decision workbench rail activating a grain anchor) — the composer appears on
+  // a click but the caret wouldn't land in it without a second click. Distinct
+  // from `focusSignal` (a per-bump nonce for an ALREADY-mounted composer): this
+  // is a boolean the parent drives from its own open/active state, so it fires
+  // on mount-while-true — the fresh-mount case focusSignal's seed guard skips.
+  // Callers MUST pass a value that is false on artifact load and only true once
+  // the user actively opens the target, so it never steals focus on mount/render
+  // of a persistent thread. Omitted everywhere else → existing threads unchanged.
+  focusOnOpen?: boolean;
 }
 
 function Avatar({ author }: { author: string }) {
@@ -203,6 +214,7 @@ export function CommentThread({
   prefill,
   focusSignal,
   readOnly = false,
+  focusOnOpen = false,
 }: CommentThreadProps) {
   // D9 (H5) — keyed per artifact+anchor so each thread keeps its own draft.
   // Bug1 — key off the STABLE chain-root id, not the per-version artifactId: a
@@ -238,6 +250,19 @@ export function CommentThread({
     composerRef.current?.focus?.();
     composerRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
   }, [focusSignal]);
+
+  // Focus-on-OPEN — place the caret when the caller opens a targeted comment.
+  // Unlike the two nonce effects above, this fires on mount-while-`focusOnOpen`
+  // is true (the composer is mounted BY the open, so there's no prior render to
+  // transition from) AND on any false→true flip (re-opening an already-mounted
+  // rail anchor). Callers gate `focusOnOpen` on their own user-driven open state
+  // (false on artifact load), so this never steals focus on a persistent thread.
+  // `.focus?.()` optional-chained for jsdom (AutonomySlider.tsx convention).
+  useEffect(() => {
+    if (!focusOnOpen) return;
+    composerRef.current?.focus?.();
+    composerRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  }, [focusOnOpen]);
 
 
   // #164 round 2 — intent is set only by the explicit Ask button; the primary
@@ -644,6 +669,10 @@ export function CommentTrigger({
             artifactId={artifactId}
             comments={comments}
             target={target}
+            // The popover mounts only when the user clicks this trigger, so the
+            // composer that just appeared should hold the caret — no second
+            // click. (Mirrors AskTrigger's own `autoFocus` textarea.)
+            focusOnOpen
           />
         </div>
       )}

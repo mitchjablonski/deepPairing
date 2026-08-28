@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Comment } from "@deeppairing/shared";
-import { CommentThread, AskTrigger } from "../CommentThread";
+import { CommentThread, AskTrigger, CommentTrigger } from "../CommentThread";
 
 /**
  * Regression: CommentThread rendered ONLY root comments and dropped every
@@ -229,5 +229,67 @@ describe("F7 — depth-2 replies render (they used to visibly vanish)", () => {
     expect(screen.getByText("the answer")).toBeInTheDocument();
     // Pre-F7 this was neither a root nor a rendered reply.
     expect(screen.getByText("the follow-up")).toBeInTheDocument();
+  });
+});
+
+/**
+ * focus-on-OPEN — when a caller MOUNTS this composer in response to the user
+ * opening a targeted comment (a debrief block's "+ Comment", the decision
+ * workbench rail activating a grain anchor), the caret must land in the box so
+ * there's no second click. The GUARD half is the point: merely mounting a
+ * persistent thread (focusOnOpen unset/false — e.g. an artifact rendering) must
+ * NOT steal focus / scroll-jack to the composer.
+ */
+describe("CommentThread — focusOnOpen places the caret on open, not on mount", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+  });
+
+  it("focuses the composer when opened with focusOnOpen (simulates a targeted-comment click)", () => {
+    render(<CommentThread artifactId="art_1" comments={[]} focusOnOpen />);
+    const composer = screen.getByPlaceholderText(/Add a comment/i);
+    // Mounted BY the open (the composer only appears once the user activates the
+    // target), so focus fires on mount-while-true — the caret is ready to type.
+    expect(document.activeElement).toBe(composer);
+  });
+
+  it("does NOT focus the composer when merely mounted (focusOnOpen unset) — no scroll-jack on artifact render", () => {
+    render(<CommentThread artifactId="art_1" comments={[]} />);
+    const composer = screen.getByPlaceholderText(/Add a comment/i);
+    // A persistent thread just rendering (no user open) must keep native
+    // click-to-focus — the effect must not grab focus.
+    expect(document.activeElement).not.toBe(composer);
+  });
+
+  it("does NOT focus while focusOnOpen is explicitly false, and focuses on the false→true open transition", () => {
+    const { rerender } = render(<CommentThread artifactId="art_1" comments={[]} focusOnOpen={false} />);
+    const composer = screen.getByPlaceholderText(/Add a comment/i);
+    expect(document.activeElement).not.toBe(composer);
+    // The user activates this anchor/block → focusOnOpen flips true → caret lands.
+    rerender(<CommentThread artifactId="art_1" comments={[]} focusOnOpen />);
+    expect(document.activeElement).toBe(composer);
+  });
+});
+
+/**
+ * CommentTrigger — the shared on-demand comment popover (plan step / spec
+ * requirement / research finding / visual). Its composer is a CommentThread
+ * mounted only when the trigger opens, so it must hold the caret on open.
+ */
+describe("CommentTrigger — the popover composer focuses on open", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+  });
+
+  it("focuses the composer after the user clicks the trigger to open it", async () => {
+    const user = userEvent.setup();
+    render(<CommentTrigger artifactId="art_1" target={{ stepIndex: 0 }} existingCount={0} />);
+    // Closed: no composer mounted, so nothing can hold focus.
+    expect(screen.queryByPlaceholderText(/Add a comment/i)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /add a comment/i }));
+    const composer = screen.getByPlaceholderText(/Add a comment/i);
+    // Opened by the click → the caret lands in the popover composer, not on the
+    // trigger button (which native click focus would otherwise leave it on).
+    await waitFor(() => expect(document.activeElement).toBe(composer));
   });
 });

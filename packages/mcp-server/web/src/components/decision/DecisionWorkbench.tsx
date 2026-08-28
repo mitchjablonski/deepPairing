@@ -432,6 +432,11 @@ export function DecisionWorkbench({ event, artifactId, stakes, footerProps, read
                       secondarySubmitTitle="Ask the agent a question anchored to this part"
                       readOnly={readOnly}
                       roomy
+                      // The rail composer appears when the user activates this
+                      // grain anchor (a section click / head 💬). Place the caret
+                      // so they can type at once. `isActive` is false on load
+                      // (activeAnchor starts null), so no focus-steal on mount.
+                      focusOnOpen={isActive}
                     />
                   </div>
                 );
