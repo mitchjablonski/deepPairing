@@ -173,6 +173,15 @@ export interface SessionMeta {
   title: string;
   project: string;
   registeredAt: string;
+  /**
+   * Per-session-split — last time this session's wrapper touched an internal
+   * route (register or any agent tool call). With >1 session bucket for a
+   * project (concurrent Claude conversations), the companion picks the
+   * most-recently-active session as its DEFAULT view instead of map-insertion
+   * order. Optional so pre-split fixtures/daemons that never set it are
+   * tolerated (the selector falls back to registeredAt / insertion order).
+   */
+  lastActivity?: string;
 }
 
 /**
@@ -211,6 +220,10 @@ export function createActiveSessionRoutes(
         // wearing a live green dot forever. Fixtures without the set report
         // live (matches old-daemon behavior the client also tolerates).
         live: activeSessions ? activeSessions.has(id) : true,
+        // Per-session-split — the default-view selector picks the
+        // most-recently-active LIVE session when a project has >1 bucket.
+        // Falls back to registeredAt for pre-activity sessions.
+        lastActivity: meta?.lastActivity ?? meta?.registeredAt,
       };
     });
     return c.json({ sessions: list });
@@ -316,6 +329,11 @@ export function createDaemonRoutes(
     const sid = m?.[1];
     if (!sid) return;
     const now = Date.now();
+    // Per-session-split — stamp lastActivity on EVERY successful internal
+    // request (not throttled) so the companion's default-view selector always
+    // reflects the truly-most-recent session. Cheap: a single Map write.
+    const meta = sessionMeta.get(sid);
+    if (meta) meta.lastActivity = new Date(now).toISOString();
     if (now - (lastActivityBroadcastAt.get(sid) ?? 0) < AGENT_ACTIVITY_THROTTLE_MS) return;
     lastActivityBroadcastAt.set(sid, now);
     broadcast(sid, { type: "agent_activity", at: new Date(now).toISOString() });
@@ -389,6 +407,7 @@ export function createDaemonRoutes(
       title: body.title ?? sessionId,
       project: body.project ?? "",
       registeredAt: new Date().toISOString(),
+      lastActivity: new Date().toISOString(),
     });
     // C-3 — mark this session's wrapper as live so idle-shutdown holds off.
     activeSessions?.add(sessionId);

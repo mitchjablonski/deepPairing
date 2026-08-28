@@ -289,10 +289,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj2, path10) {
-  if (!path10)
+function getElementAtPath(obj2, path11) {
+  if (!path11)
     return obj2;
-  return path10.reduce((acc, key) => acc?.[key], obj2);
+  return path11.reduce((acc, key) => acc?.[key], obj2);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -620,11 +620,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path10, issues) {
+function prefixIssues(path11, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path10);
+    iss.path.unshift(path11);
     return iss;
   });
 }
@@ -841,16 +841,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path10 = []) => {
+  const processError = (error52, path11 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path10, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path11, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
       } else {
-        const fullpath = [...path10, ...issue2.path];
+        const fullpath = [...path11, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -877,17 +877,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path10 = []) => {
+  const processError = (error52, path11 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path10, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path11, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
       } else {
-        const fullpath = [...path10, ...issue2.path];
+        const fullpath = [...path11, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -919,8 +919,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path10 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path10) {
+  const path11 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path11) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -14350,13 +14350,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path10 = ref.slice(1).split("/").filter(Boolean);
-  if (path10.length === 0) {
+  const path11 = ref.slice(1).split("/").filter(Boolean);
+  if (path11.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path10[0] === defsKey) {
-    const key = path10[1];
+  if (path11[0] === defsKey) {
+    const key = path11[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -18308,8 +18308,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path10) {
-      let input = path10;
+    function removeDotSegments(path11) {
+      let input = path11;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -18508,8 +18508,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path10, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path10 && path10 !== "/" ? path10 : void 0;
+        const [path11, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path11 && path11 !== "/" ? path11 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -29179,8 +29179,8 @@ Each is a continuation of an existing thread (parentCommentId points at one of y
   }
   try {
     const fs10 = await import("node:fs");
-    const path10 = await import("node:path");
-    const claudeMd = path10.join(process.cwd(), "CLAUDE.md");
+    const path11 = await import("node:path");
+    const claudeMd = path11.join(process.cwd(), "CLAUDE.md");
     if (fs10.existsSync(claudeMd)) {
       const content = fs10.readFileSync(claudeMd, "utf-8");
       if (!content.includes("<!-- deepPairing -->")) {
@@ -30136,9 +30136,9 @@ function scalarTypeTag(i) {
 function isScalarBoundIssue(i) {
   return i.code === "too_big" || i.code === "too_small";
 }
-function receivedSize(input, path10) {
+function receivedSize(input, path11) {
   let cur = input;
-  for (const seg of path10) {
+  for (const seg of path11) {
     if (cur == null || typeof cur !== "object") return void 0;
     cur = cur[seg];
   }
@@ -30161,8 +30161,8 @@ function scalarIssueClause(i, input) {
   }
   return `${field} (${scalarTypeTag(i)})`;
 }
-function collapsePath(path10) {
-  return path10.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
+function collapsePath(path11) {
+  return path11.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
 }
 function formatValidationError(toolName, err, example, input) {
   const raw = err.issues;
@@ -30188,9 +30188,9 @@ function formatValidationError(toolName, err, example, input) {
   }
   const groupArr = [...groups.values()];
   const issues = groupArr.slice(0, 5).map((g) => {
-    const path10 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
+    const path11 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
     const suffix = g.count > 1 ? ` (${g.count}\xD7)` : "";
-    return `  \u2022 ${path10}: ${g.first.message}${suffix}`;
+    return `  \u2022 ${path11}: ${g.first.message}${suffix}`;
   });
   const more = groupArr.length > 5 ? `
   \u2022 \u2026and ${groupArr.length - 5} more` : "";
@@ -31366,7 +31366,7 @@ ${SIZE_CLIPPED_NOTE}` : "";
   return `${head}<pre class="code"${langAttr}><code>${fitted.text}${trunc}${sizeTrunc}</code></pre>`;
 }
 function diffBlock(file2, includeCode, projectRoot2) {
-  const path10 = sanitizePath(file2.path, projectRoot2);
+  const path11 = sanitizePath(file2.path, projectRoot2);
   const changeType = esc2(file2.changeType ?? "modified");
   const hunks = Array.isArray(file2.hunks) ? file2.hunks : [];
   const stats = file2.stats;
@@ -31383,7 +31383,7 @@ function diffBlock(file2, includeCode, projectRoot2) {
   const additions = stats?.additions ?? derived.additions;
   const deletions = stats?.deletions ?? derived.deletions;
   const statLine = `<span class="diffstat"><span class="add">+${additions}</span> <span class="del">\u2212${deletions}</span></span>`;
-  const header = `<div class="file-head"><code class="path">${esc2(path10)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
+  const header = `<div class="file-head"><code class="path">${esc2(path11)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
   if (!includeCode) {
     return `<div class="file">${header}<p class="redacted">Diff omitted from this export.</p></div>`;
   }
@@ -31502,9 +31502,9 @@ function evidenceBlock(evidence, includeCode, projectRoot2) {
     }
     if (!ev || typeof ev !== "object") continue;
     const e = ev;
-    const path10 = sanitizePath(e.filePath, projectRoot2);
+    const path11 = sanitizePath(e.filePath, projectRoot2);
     const range = e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null && e.lineEnd !== e.lineStart ? `-${e.lineEnd}` : ""}` : "";
-    let anchor = path10 ? `<p class="anchor"><code>${esc2(path10 + range)}</code></p>` : "";
+    let anchor = path11 ? `<p class="anchor"><code>${esc2(path11 + range)}</code></p>` : "";
     if (!anchor && e.locator && typeof e.locator.value === "string" && e.locator.value.length > 0) {
       const loc = e.locator;
       const label = loc.kind === "url" ? loc.href && loc.href.length > 0 ? `${loc.value} (${loc.href})` : loc.value : loc.kind === "charRange" ? `chars ${loc.value}` : loc.kind === "quote" ? `\u201C${loc.value}\u201D` : loc.value;
@@ -31661,9 +31661,9 @@ function decisionBody(a, ctx) {
 }
 function codeChangeBody(a, ctx) {
   const content = coerceCodeChangeContent(a.content);
-  const path10 = sanitizePath(content.filePath, ctx.projectRoot);
+  const path11 = sanitizePath(content.filePath, ctx.projectRoot);
   const parts = [
-    `<div class="file-head"><code class="path">${esc2(path10)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
+    `<div class="file-head"><code class="path">${esc2(path11)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
   ];
   if (content.reasoning) parts.push(`<p class="why">Why: ${renderInline(content.reasoning)}</p>`);
   if (content.concept?.name) {
@@ -36742,8 +36742,8 @@ var DaemonClient = class {
     if (!this.projectRoot) return false;
     try {
       const fs10 = await import("node:fs");
-      const path10 = await import("node:path");
-      const infoPath = path10.join(this.projectRoot, ".deeppairing", "daemon.json");
+      const path11 = await import("node:path");
+      const infoPath = path11.join(this.projectRoot, ".deeppairing", "daemon.json");
       if (!fs10.existsSync(infoPath)) return false;
       const raw = fs10.readFileSync(infoPath, "utf-8");
       const info = JSON.parse(raw);
@@ -36800,7 +36800,7 @@ var DaemonClient = class {
    * with the stored meta and retry the original call. Other non-2xx
    * statuses throw with a structured error so caller bugs surface.
    */
-  async request(path10, init, isRetry = false) {
+  async request(path11, init, isRetry = false) {
     const extraHeaders = {};
     if (this.projectHash) extraHeaders["X-Project-Hash"] = this.projectHash;
     if (this.authToken) extraHeaders["Authorization"] = `Bearer ${this.authToken}`;
@@ -36810,12 +36810,12 @@ var DaemonClient = class {
     };
     let res;
     try {
-      res = await fetch(`${this.baseUrl}${path10}`, initWithHash);
+      res = await fetch(`${this.baseUrl}${path11}`, initWithHash);
     } catch (err2) {
       if (errorName(err2) === "AbortError" || errorName(err2) === "TimeoutError") throw err2;
       if (!isRetry) {
         const recovered = await this.recoverDaemonConnection();
-        if (recovered) return this.request(path10, init, true);
+        if (recovered) return this.request(path11, init, true);
       }
       throw new Error(
         `[deepPairing] daemon connection lost (likely after host sleep). Reconnect failed \u2014 run \`${cliInvocation("doctor")}\` to diagnose, or restart Claude Code.`
@@ -36830,7 +36830,7 @@ var DaemonClient = class {
     if (res.status === 401 && body?.code === "daemon_auth_required" && !isRetry) {
       const rotated = await this.refreshAuthTokenFromDaemonInfo();
       if (rotated) {
-        return this.request(path10, init, true);
+        return this.request(path11, init, true);
       }
     }
     if (res.status === 404 && body?.code === "session_not_registered" && !isRetry) {
@@ -36842,7 +36842,7 @@ var DaemonClient = class {
       await this.register(this.lastRegisterMeta);
       void fetch(`${this.baseUrl}/recovered`, { method: "POST" }).catch(() => {
       });
-      return this.request(path10, init, true);
+      return this.request(path11, init, true);
     }
     const msg = body?.error ?? `request failed (${res.status})`;
     const err = new Error(`[deepPairing] ${msg}`);
@@ -36850,15 +36850,15 @@ var DaemonClient = class {
     if (typeof body?.code === "string") err.code = body.code;
     throw err;
   }
-  async post(path10, body) {
-    return this.request(path10, {
+  async post(path11, body) {
+    return this.request(path11, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: body != null ? JSON.stringify(body) : void 0
     });
   }
-  async get(path10) {
-    return this.request(path10, {});
+  async get(path11) {
+    return this.request(path11, {});
   }
   // --- Session lifecycle ---
   /**
@@ -37173,9 +37173,9 @@ var DaemonClient = class {
    * 5xx from the daemon used to flow back as `data.results === undefined`
    * and the caller fell back to `[]` silently. Now non-2xx throws.
    */
-  async requestPublic(path10) {
+  async requestPublic(path11) {
     const init = this.projectHash ? { headers: { "X-Project-Hash": this.projectHash } } : {};
-    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path10}`, init);
+    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path11}`, init);
     if (res.ok) return res.json();
     let body = {};
     try {
@@ -37221,17 +37221,33 @@ var DaemonClient = class {
 // src/standalone.ts
 init_project_root();
 init_cli_invocation();
+
+// src/session-id.ts
 import crypto4 from "node:crypto";
-import fs9 from "node:fs";
 import path9 from "node:path";
+function deriveSessionId(projectRoot2, claudeSessionIdRaw) {
+  const projectName = path9.basename(projectRoot2);
+  const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
+  const projectHash = crypto4.createHash("sha256").update(projectRoot2).digest("hex").slice(0, 8);
+  const base = `session_${safeProjectName}_${projectHash}`;
+  const sanitized = (claudeSessionIdRaw ?? "").replace(/[^a-zA-Z0-9-]/g, "").slice(0, 64);
+  if (sanitized.length === 0) {
+    return { sessionId: base, mode: "fallback" };
+  }
+  return { sessionId: `${base}_${sanitized}`, mode: "split", claudeSessionId: sanitized };
+}
+
+// src/standalone.ts
+import fs9 from "node:fs";
+import path10 from "node:path";
 var { projectRoot, source: projectRootSource } = resolveProjectRoot();
-var dpDir = path9.join(projectRoot, ".deeppairing");
-var logFile = path9.join(dpDir, "server.log");
+var dpDir = path10.join(projectRoot, ".deeppairing");
+var logFile = path10.join(dpDir, "server.log");
 function log(msg) {
   const line = `[${(/* @__PURE__ */ new Date()).toISOString()}] [mcp] ${msg}
 `;
   try {
-    fs9.mkdirSync(path9.dirname(logFile), { recursive: true });
+    fs9.mkdirSync(path10.dirname(logFile), { recursive: true });
     fs9.appendFileSync(logFile, line);
   } catch {
   }
@@ -37245,10 +37261,21 @@ async function main() {
     log(`WARN: daemon at port ${port} did not advertise authToken \u2014 internal calls will 401. Run \`${cliInvocation("doctor")}\` to refresh daemon.json.`);
   }
   log(`Daemon ready on port ${port}`);
-  const projectName = path9.basename(projectRoot);
-  const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
-  const projectHash = crypto4.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);
-  const sessionId = `session_${safeProjectName}_${projectHash}`;
+  const projectName = path10.basename(projectRoot);
+  const claudeSessionIdEnv = process.env.CLAUDE_CODE_SESSION_ID;
+  const derived = deriveSessionId(projectRoot, claudeSessionIdEnv);
+  const sessionId = derived.sessionId;
+  if (derived.mode === "split") {
+    log(
+      `session-split: MODE=split \u2014 CLAUDE_CODE_SESSION_ID present (sanitized="${derived.claudeSessionId}"), per-session bucket. Resolved sessionId=${sessionId}`
+    );
+  } else {
+    const raw = claudeSessionIdEnv;
+    const why = raw == null ? "unset" : raw.length === 0 ? "empty" : "sanitized-to-empty";
+    log(
+      `session-split: MODE=fallback \u2014 CLAUDE_CODE_SESSION_ID ${why}; using byte-identical per-project sessionId=${sessionId}`
+    );
+  }
   const client = new DaemonClient(port, sessionId, projectRoot, daemonInfo.authToken);
   await client.register({
     title: projectName,

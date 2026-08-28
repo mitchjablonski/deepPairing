@@ -15,7 +15,7 @@ import { ensureDaemon } from "./daemon/lifecycle.js";
 import { DaemonClient } from "./daemon/client.js";
 import { resolveProjectRoot } from "./project-root.js";
 import { cliInvocation } from "./cli-invocation.js";
-import crypto from "node:crypto";
+import { deriveSessionId } from "./session-id.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -61,13 +61,41 @@ async function main() {
   // duplicate session for the same project. The companion UI bound to one;
   // the agent's current wrapper polled another; approvals never landed
   // where the agent was looking. Hashing projectRoot collapses all wrappers
-  // for a project into one shared session — which is the right semantic
-  // model for pairing (the "session" is the workspace, not the process).
-  // Project name kept in the id as a human-readable hint for `ls`.
+  // for a project into one shared session. Project name kept in the id as a
+  // human-readable hint for `ls`.
+  //
+  // PER-CLAUDE-SESSION SPLIT — when Claude Code (>= v2.1.154) spawns us it sets
+  // CLAUDE_CODE_SESSION_ID in the env (== the session UUID). We append a
+  // sanitized copy so each CONCURRENT Claude session gets its OWN
+  // artifacts/comments/decisions bucket under sessions/<id>/ instead of two
+  // conversations trampling one shared bucket. The moat (rejected approaches /
+  // guardrails) lives at projectRoot/.deeppairing keyed by projectRoot,
+  // independent of sessionId, so the split can never fragment it. When the env
+  // var is ABSENT/empty (old clients, `pnpm start`, non-Claude MCP clients) the
+  // derivation returns the EXACT pre-split per-project id, byte-identical — so
+  // those callers are unchanged. See deriveSessionId + session-id tests.
   const projectName = path.basename(projectRoot);
-  const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
-  const projectHash = crypto.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);
-  const sessionId = `session_${safeProjectName}_${projectHash}`;
+  const claudeSessionIdEnv = process.env.CLAUDE_CODE_SESSION_ID;
+  const derived = deriveSessionId(projectRoot, claudeSessionIdEnv);
+  const sessionId = derived.sessionId;
+  // Startup self-probe — the spike verified the env var indirectly (daemon +
+  // issue #41836); this in-situ log is the direct confirmation that Claude
+  // Code actually put CLAUDE_CODE_SESSION_ID in THIS wrapper's process.env.
+  // The sessionId is not a secret (it's the transcript basename), so logging
+  // it is fine and lets a real session grep the mode + resolved id.
+  if (derived.mode === "split") {
+    log(
+      `session-split: MODE=split — CLAUDE_CODE_SESSION_ID present (sanitized="${derived.claudeSessionId}"), ` +
+      `per-session bucket. Resolved sessionId=${sessionId}`,
+    );
+  } else {
+    const raw = claudeSessionIdEnv;
+    const why = raw == null ? "unset" : raw.length === 0 ? "empty" : "sanitized-to-empty";
+    log(
+      `session-split: MODE=fallback — CLAUDE_CODE_SESSION_ID ${why}; ` +
+      `using byte-identical per-project sessionId=${sessionId}`,
+    );
+  }
   // CC6 — pass projectRoot so DaemonClient stamps X-Project-Hash on every
   // request. Defends against the (currently latent) case where a public
   // route moves under a hashed mount; today the AA4 middleware already
