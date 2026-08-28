@@ -80,6 +80,94 @@ export function stemToken(raw: string): string {
   return t;
 }
 
+// ---------------------------------------------------------------------
+// Paraphrase bridge — a CURATED concept-alias canonicalization layer.
+//
+// THE GAP IT CLOSES: the concept matcher requires EVERY stored-concept token
+// to be present (as a stemmed token) in the proposal. Stemming collapses
+// morphology ("host" ↔ "hosting") but NOT synonymy — a true paraphrase that
+// shares zero surface tokens ("delete the directory" vs "remove the folder")
+// slips the gate silently, breaking the "even paraphrased" guarantee.
+//
+// THE FIX (NOT embeddings, NOT a Jaccard/ratio threshold — both of those trade
+// precision for recall, and a FALSE BLOCK on an approach the human never
+// rejected is worse than a miss): a small, hand-audited table of dev-term
+// synonym GROUPS. Every member of a group canonicalizes to one shared
+// representative. Applied per-token INSIDE meaningfulTokens AFTER stemming, so
+// BOTH the stored concept and the proposal pass through the same choke point —
+// every downstream consumer (conceptMatchesProposal, findConceptToConceptMatch,
+// tokenSetKey, the ledger digest) inherits the bridge for free, and the strict
+// `.every()` quantifier is UNTOUCHED (we relax the vocabulary, never the
+// quantifier). The map is 1:1 per token, so token COUNT is preserved and the
+// single-token hard-block floor (containmentBlockAllowed, ≥2 tokens) is
+// unaffected.
+//
+// FALSE-POSITIVE DISCIPLINE (the primary risk): every entry is a deliberate,
+// human-audited conflation. When in doubt, LEAVE IT OUT — a miss routes to the
+// advisory near-miss channel and is recoverable; a false hard-block erodes
+// trust in the gate. So:
+//   - authentication and authorization are kept in SEPARATE groups (the classic
+//     near-miss); bare "auth" is DELIBERATELY OMITTED (it colloquially means
+//     either, so conflating it would bridge authn↔authz through the back door).
+//   - THE BAR FOR A GROUP: every member must be a true drop-in synonym for
+//     EVERY other member. A billing/pricing group was considered and DROPPED —
+//     "serverless" is a compute architecture (not a pricing model) and "billing"
+//     is too generic, so its members were NOT mutually substitutable, and a
+//     concept like "metered billing" would have collapsed to a single canonical
+//     and falsely hard-blocked an unrelated "serverless deployment" proposal.
+//     The moat's flagship pay-per-request example never bridged via aliases
+//     anyway (it rides verbatim/morphology reuse), so dropping it lost nothing.
+//   - "rail" / "guardrail" are in NO group, so the patched rail∈guardrail false
+//     positive stays dead here too.
+//
+// Members are listed as the STEMMED forms they reduce to (stemToken runs first),
+// including the distinct stems a family produces — e.g. "caching"/"cached" both
+// stem to "cach", "removed"/"removing" to "remov" — so the bridge survives
+// morphology on either side.
+// ---------------------------------------------------------------------
+const CONCEPT_ALIAS_GROUPS: readonly (readonly string[])[] = [
+  // delete ≡ remove (stems: delete/delet, remove/remov)
+  ["delete", "delet", "remove", "remov"],
+  // directory ≡ folder (stems: directory/directorie, folder). "dir" left out
+  // (too noisy as a bare token).
+  ["directory", "directorie", "folder"],
+  // cache ≡ memoize — caching IS memoization (stems: cache/cach, memoize/memoiz,
+  // memoization).
+  ["cache", "cach", "memoize", "memoiz", "memoization"],
+  // env ≡ environment.
+  ["env", "environment"],
+  // AUTHENTICATION side — kept STRICTLY distinct from authorization below. Bare
+  // "auth" intentionally excluded (ambiguous).
+  ["authn", "authentication", "authenticate", "authenticat", "login", "signin"],
+  // AUTHORIZATION side — never shares a representative with authentication.
+  ["authz", "authorization", "authorize", "authoriz"],
+  // (A billing/pricing group was deliberately NOT added — see the FALSE-POSITIVE
+  // DISCIPLINE note above: its candidate members were not mutually substitutable.)
+];
+
+/**
+ * Frozen token→representative map, built symmetrically from the groups above:
+ * every member of a group maps to that group's first member (its representative),
+ * so any two synonyms in the same group canonicalize to the same string.
+ */
+const CONCEPT_ALIASES: Readonly<Record<string, string>> = Object.freeze(
+  Object.fromEntries(
+    CONCEPT_ALIAS_GROUPS.flatMap((group) => {
+      const rep = group[0]!;
+      return group.map((member) => [member, rep] as const);
+    }),
+  ),
+);
+
+/**
+ * Canonicalize a single (already-stemmed) token to its synonym-group
+ * representative, or return it unchanged when it belongs to no group. 1:1 —
+ * never drops or splits a token, so the caller's token count is preserved.
+ */
+export function aliasCanonical(token: string): string {
+  return CONCEPT_ALIASES[token] ?? token;
+}
+
 /**
  * Tokenize a string into meaningful, STEMMED tokens. Splits on any
  * non-alphanumeric run (so "console.log" → ["console","log"], "pay-per-request"
@@ -91,13 +179,21 @@ export function stemToken(raw: string): string {
  * combined with the stopword guard this raises recall on acronym-driven
  * concepts without re-opening the short-fragment false positives (the surface
  * matcher's word-boundary guard is unchanged).
+ *
+ * Paraphrase bridge: after stemming, each token is canonicalized through the
+ * curated CONCEPT_ALIASES table (aliasCanonical) so synonyms collapse to one
+ * representative. This is the single choke point every concept consumer shares,
+ * so the alias bridge applies uniformly and symmetrically to stored concepts
+ * and proposals alike. Per-token and 1:1, so token count (and thus the
+ * single-token hard-block floor) is preserved.
  */
 export function meaningfulTokens(s: string): string[] {
   return s
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter((t) => t.length >= 3 && !SHORT_STOPWORDS.has(t))
-    .map(stemToken);
+    .map(stemToken)
+    .map(aliasCanonical);
 }
 
 /**
@@ -157,14 +253,24 @@ export function conceptMatchesProposal(concept: string, proposal: string): boole
  * filter dropped those tokens entirely, so they matched nothing.
  *
  * Fix: a stored concept may hard-block via PROSE token-containment only when it
- * carries ≥2 meaningful tokens. A single-token concept can still hard-block, but
- * ONLY via exact concept-key equality against a NAMED proposal concept
- * (concept↔concept) — the same floor the cross-project advisory path uses in
- * isCrossProjectAdvisoryHit. Multi-token behavior is unchanged; rail∉guardrail
- * stays dead (equality, not substring).
+ * carries ≥2 DISTINCT canonical tokens. A single-token concept can still
+ * hard-block, but ONLY via exact concept-key equality against a NAMED proposal
+ * concept (concept↔concept) — the same floor the cross-project advisory path
+ * uses in isCrossProjectAdvisoryHit. Multi-token behavior is unchanged;
+ * rail∉guardrail stays dead (equality, not substring).
+ *
+ * DISTINCT-CANONICAL (not array length): the alias layer can canonicalize two
+ * different words of a stored concept to the SAME representative (e.g. a concept
+ * whose two words both fall in one synonym group). By SET semantics that concept
+ * effectively has one decisive token, so `.every()` would let it containment-
+ * block any prose merely using one group member — reopening the single-token
+ * false-block from the back door. Counting DISTINCT canonicals closes that for
+ * every current and future group. The only thing it costs is the containment
+ * block of a near-tautological within-group 2-word phrase ("cache memoize"),
+ * which SHOULD NOT hard-block prose — so the cost is correct.
  */
 export function containmentBlockAllowed(storedConcept: string): boolean {
-  return meaningfulTokens(storedConcept).length >= 2;
+  return new Set(meaningfulTokens(storedConcept)).size >= 2;
 }
 
 /**

@@ -5,8 +5,8 @@ quotes your reason back — then pair on findings, options, and plans in a rich
 local review UI.**
 
 Reject an approach with your reason and deepPairing turns it into a gate: the
-next time the agent reaches for that concept — even paraphrased — the tool call
-is *refused* before the edit lands, and it tells you why, in your words. Around
+next time the agent reaches for that concept — even reworded — the tool call is
+*refused* before the edit lands, and it tells you why, in your words. Around
 that gate is the pairing surface it exists to protect: before it writes code,
 Claude Code shows you what it found, the options it weighed, and the plan it'll
 follow, as structured artifacts you approve or redirect in a local UI instead of
@@ -166,9 +166,13 @@ So you never have to make the same call twice:
   (off by default — see below) and reaching for that same concept **in another
   project** is **flagged, not stopped** — an advisory nudge ("you avoided this
   in `<project>` — still want it here?") that you can promote to a hard block by
-  rejecting it locally. It's literal, not semantic — a true synonym that shares
-  no words won't trip it — so name the concept for what it is and it generalizes
-  across the instances that reuse it. **False positives are one click away:**
+  rejecting it locally. The match is token-based, widened by a small **curated
+  synonym layer** (e.g. *delete*↔*remove*, *directory*↔*folder* — with
+  authentication kept deliberately distinct from authorization) so common
+  rewordings are caught too. It's a hand-audited starter set, not full semantic
+  understanding: an un-listed synonym that shares no words won't trip it *yet* —
+  so name the concept for what it is and it generalizes across the instances
+  that reuse it. **False positives are one click away:**
   "Retire this stance" in the block card deletes it from this project's stances
   and lets the proposal through. (Blocks from a committed **team rule** point you to
   `.deeppairing/team.json` instead.)
