@@ -77,8 +77,24 @@ describe("findRejectedApproachMatch", () => {
     expect(m?.via).toBe("surface");
   });
 
-  it("matches a paraphrase via concept tokens", () => {
+  // NB: this proposal REUSES the stored concept "pay-per-request hosting"
+  // verbatim — it is NOT a synonym paraphrase (it shares every meaningful
+  // token). It exercises the concept-token lane on verbatim/morphology reuse.
+  // TRUE synonym paraphrases (zero verbatim token overlap) are covered by the
+  // dedicated alias corpus in paraphrase-alias.test.ts.
+  it("matches via the concept-token lane on verbatim/morphology concept reuse", () => {
     const m = findRejectedApproachMatch(["Switch to Fly.io for pay-per-request hosting"], [railwayRejected]);
+    expect(m?.via).toBe("concept");
+  });
+
+  it("matches a TRUE synonym paraphrase (zero verbatim token reuse) via the alias bridge", () => {
+    // Stored concept and proposal share NO surface tokens: delete↔remove and
+    // directory↔folder are bridged only by the curated CONCEPT_ALIASES table.
+    const dropDir = {
+      id: "r9", description: "cleanup step", concept: "delete the directory",
+      reason: "we keep the artifacts", rejectedAt: "2026-04-01T00:00:00Z",
+    } as any;
+    const m = findRejectedApproachMatch(["let's just remove the folder after the run"], [dropDir]);
     expect(m?.via).toBe("concept");
   });
 

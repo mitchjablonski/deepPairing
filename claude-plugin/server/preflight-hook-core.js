@@ -38,8 +38,40 @@ function stemToken(raw) {
   if (t.endsWith("s") && !t.endsWith("ss") && t.length >= 5) return t.slice(0, -1);
   return t;
 }
+var CONCEPT_ALIAS_GROUPS = [
+  // delete ≡ remove (stems: delete/delet, remove/remov)
+  ["delete", "delet", "remove", "remov"],
+  // directory ≡ folder (stems: directory/directorie, folder). "dir" left out
+  // (too noisy as a bare token).
+  ["directory", "directorie", "folder"],
+  // cache ≡ memoize — caching IS memoization (stems: cache/cach, memoize/memoiz,
+  // memoization).
+  ["cache", "cach", "memoize", "memoiz", "memoization"],
+  // env ≡ environment.
+  ["env", "environment"],
+  // AUTHENTICATION side — kept STRICTLY distinct from authorization below. Bare
+  // "auth" intentionally excluded (ambiguous).
+  ["authn", "authentication", "authenticate", "authenticat", "login", "signin"],
+  // AUTHORIZATION side — never shares a representative with authentication.
+  ["authz", "authorization", "authorize", "authoriz"],
+  // Consumption-billing pricing model (the moat's own motivating example). Only
+  // the distinctive descriptors; the over-common tokens (pay/request/host/usage/
+  // pricing) are deliberately excluded — see the FP note above.
+  ["serverless", "consumption", "meter", "bill", "paygo", "payg"]
+];
+var CONCEPT_ALIASES = Object.freeze(
+  Object.fromEntries(
+    CONCEPT_ALIAS_GROUPS.flatMap((group) => {
+      const rep = group[0];
+      return group.map((member) => [member, rep]);
+    })
+  )
+);
+function aliasCanonical(token) {
+  return CONCEPT_ALIASES[token] ?? token;
+}
 function meaningfulTokens(s) {
-  return s.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 3 && !SHORT_STOPWORDS.has(t)).map(stemToken);
+  return s.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 3 && !SHORT_STOPWORDS.has(t)).map(stemToken).map(aliasCanonical);
 }
 function tokenCoverage(concept, proposal) {
   const tokens = meaningfulTokens(concept);
