@@ -12,7 +12,7 @@ review surface* that turns one-shot tool calls into pair-programming.
 Findings, decisions, plans, and code changes go through structured
 artifacts that the human reviews in a local web UI; every rejection
 becomes a typed entry that this project's pre-flight gate hard-blocks
-before the agent can paraphrase past you. If the project has opted in
+before the agent can reword past you. If the project has opted in
 to publish (one prompt at `init`, default OFF), the rejection also
 mirrors into a cross-project Philosophy Ledger — which other projects
 surface as an **advisory** nudge, never a hard block.

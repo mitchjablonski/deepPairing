@@ -20,6 +20,7 @@ import {
   aliasCanonical,
   meaningfulTokens,
   conceptMatchesProposal,
+  containmentBlockAllowed,
   findRejectedApproachMatch,
   findConceptToConceptMatch,
   runPreflight,
@@ -46,9 +47,6 @@ describe("aliasCanonical — synonyms collapse to one representative, non-member
     expect(aliasCanonical("memoiz")).toBe(aliasCanonical("cach"));
     // env ≡ environment
     expect(aliasCanonical("env")).toBe(aliasCanonical("environment"));
-    // billing model descriptors
-    expect(aliasCanonical("meter")).toBe(aliasCanonical("serverless"));
-    expect(aliasCanonical("bill")).toBe(aliasCanonical("consumption"));
   });
 
   it("keeps authentication and authorization in SEPARATE groups (the classic near-miss)", () => {
@@ -58,13 +56,15 @@ describe("aliasCanonical — synonyms collapse to one representative, non-member
     expect(aliasCanonical("auth")).toBe("auth");
   });
 
-  it("leaves un-grouped tokens untouched — rail/guardrail stay distinct, over-common billing words excluded", () => {
+  it("leaves un-grouped tokens untouched — rail/guardrail stay distinct; no billing group exists", () => {
     expect(aliasCanonical("rail")).toBe("rail");
     expect(aliasCanonical("guardrail")).toBe("guardrail");
     expect(aliasCanonical("rail")).not.toBe(aliasCanonical("guardrail"));
-    // Over-common tokens deliberately NOT in the billing group:
-    for (const common of ["pay", "request", "host", "usage", "pric"]) {
-      expect(aliasCanonical(common)).toBe(common);
+    // The billing/pricing group was DROPPED (its members were not mutually
+    // substitutable). Every one of these must now pass through unchanged, so
+    // "metered billing" can never collapse and falsely block "serverless *".
+    for (const ungrouped of ["serverless", "consumption", "meter", "bill", "billing", "metered", "pay", "request", "host", "usage", "pric"]) {
+      expect(aliasCanonical(ungrouped), `${ungrouped} must be un-aliased`).toBe(ungrouped);
     }
   });
 
@@ -81,7 +81,6 @@ describe("SHOULD-match — true synonym paraphrases (zero verbatim token reuse) 
     ["delete the directory", "remove the folder", "delete↔remove + directory↔folder"],
     ["cache then delete", "memoize then remove", "cache↔memoize + delete↔remove"],
     ["delete the env", "remove the environment", "delete↔remove + env↔environment"],
-    ["serverless consumption", "metered billing", "the moat's own consumption-billing example"],
     ["delete authentication", "remove login", "delete↔remove + authentication↔login"],
   ];
 
@@ -167,5 +166,55 @@ describe("MUST-NOT-match — near-misses and precision traps stay admitted", () 
       teamPreferences: [],
     });
     expect(r.blocked).toBe(false);
+  });
+});
+
+describe("FALSE-POSITIVE regression — the collapse-defeats-the-floor class", () => {
+  // The exact review repro: a pricing DECISION ("metered billing") must not
+  // hard-block an unrelated architecture proposal ("serverless deployment").
+  // Guarded by BOTH fixes: (1) the billing group is gone, so these tokens no
+  // longer canonicalize together; (2) even if a future group re-introduced the
+  // collapse, the distinct-canonical floor below catches it.
+  it("rejecting 'metered billing' does NOT block a 'serverless deployment' proposal", () => {
+    const r = runPreflight({
+      toolName: "present_code_change",
+      proposalStrings: ["migrate the API to a serverless deployment model"],
+      proposalConcepts: ["serverless deployment"],
+      rejectedApproaches: [rejected("metered billing")],
+      teamPreferences: [],
+    });
+    expect(r.blocked).toBe(false);
+  });
+
+  it("containmentBlockAllowed counts DISTINCT canonicals — a 2-word phrase collapsing to 1 canonical cannot containment-block", () => {
+    // "cache memoize": both words are the SAME synonym group → one distinct
+    // canonical. By array length it was ≥2 (would block); by distinct-canonical
+    // it is 1 (floored, single-token concepts block only via exact named key).
+    expect(meaningfulTokens("cache memoize")).toHaveLength(2); // count preserved
+    expect(new Set(meaningfulTokens("cache memoize")).size).toBe(1); // but 1 distinct
+    expect(containmentBlockAllowed("cache memoize")).toBe(false);
+  });
+
+  it("a within-group 2-word concept does NOT hard-block prose sharing only that one canonical", () => {
+    // Without the distinct-canonical floor, "cache memoize" → [cache, cache]
+    // would token-contain into ANY prose mentioning caching. It must not.
+    const r = runPreflight({
+      toolName: "present_findings",
+      proposalStrings: ["add a caching layer in front of the read path"],
+      rejectedApproaches: [rejected("cache memoize")],
+      teamPreferences: [],
+    });
+    expect(r.blocked).toBe(false);
+  });
+
+  it("REGRESSION: a genuine multi-DISTINCT-token concept still hard-blocks (floor not over-tightened)", () => {
+    // "global mutable state" → 3 distinct canonicals → still eligible to block.
+    const r = runPreflight({
+      toolName: "present_findings",
+      proposalStrings: ["introduce a global mutable state cache for config"],
+      rejectedApproaches: [rejected("global mutable state")],
+      teamPreferences: [],
+    });
+    expect(r.blocked).toBe(true);
   });
 });

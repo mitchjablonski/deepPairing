@@ -109,11 +109,14 @@ export function stemToken(raw: string): string {
 //   - authentication and authorization are kept in SEPARATE groups (the classic
 //     near-miss); bare "auth" is DELIBERATELY OMITTED (it colloquially means
 //     either, so conflating it would bridge authn↔authz through the back door).
-//   - over-common tokens are omitted even when they appear in a synonym phrase:
-//     the billing group carries the DISTINCTIVE model-descriptor tokens
-//     (serverless / consumption / metered / billing / paygo) but NOT "pay",
-//     "request", "host", "usage", or "pricing" — each of those rides in far too
-//     many unrelated concepts to conflate safely.
+//   - THE BAR FOR A GROUP: every member must be a true drop-in synonym for
+//     EVERY other member. A billing/pricing group was considered and DROPPED —
+//     "serverless" is a compute architecture (not a pricing model) and "billing"
+//     is too generic, so its members were NOT mutually substitutable, and a
+//     concept like "metered billing" would have collapsed to a single canonical
+//     and falsely hard-blocked an unrelated "serverless deployment" proposal.
+//     The moat's flagship pay-per-request example never bridged via aliases
+//     anyway (it rides verbatim/morphology reuse), so dropping it lost nothing.
 //   - "rail" / "guardrail" are in NO group, so the patched rail∈guardrail false
 //     positive stays dead here too.
 //
@@ -138,10 +141,8 @@ const CONCEPT_ALIAS_GROUPS: readonly (readonly string[])[] = [
   ["authn", "authentication", "authenticate", "authenticat", "login", "signin"],
   // AUTHORIZATION side — never shares a representative with authentication.
   ["authz", "authorization", "authorize", "authoriz"],
-  // Consumption-billing pricing model (the moat's own motivating example). Only
-  // the distinctive descriptors; the over-common tokens (pay/request/host/usage/
-  // pricing) are deliberately excluded — see the FP note above.
-  ["serverless", "consumption", "meter", "bill", "paygo", "payg"],
+  // (A billing/pricing group was deliberately NOT added — see the FALSE-POSITIVE
+  // DISCIPLINE note above: its candidate members were not mutually substitutable.)
 ];
 
 /**
@@ -252,14 +253,24 @@ export function conceptMatchesProposal(concept: string, proposal: string): boole
  * filter dropped those tokens entirely, so they matched nothing.
  *
  * Fix: a stored concept may hard-block via PROSE token-containment only when it
- * carries ≥2 meaningful tokens. A single-token concept can still hard-block, but
- * ONLY via exact concept-key equality against a NAMED proposal concept
- * (concept↔concept) — the same floor the cross-project advisory path uses in
- * isCrossProjectAdvisoryHit. Multi-token behavior is unchanged; rail∉guardrail
- * stays dead (equality, not substring).
+ * carries ≥2 DISTINCT canonical tokens. A single-token concept can still
+ * hard-block, but ONLY via exact concept-key equality against a NAMED proposal
+ * concept (concept↔concept) — the same floor the cross-project advisory path
+ * uses in isCrossProjectAdvisoryHit. Multi-token behavior is unchanged;
+ * rail∉guardrail stays dead (equality, not substring).
+ *
+ * DISTINCT-CANONICAL (not array length): the alias layer can canonicalize two
+ * different words of a stored concept to the SAME representative (e.g. a concept
+ * whose two words both fall in one synonym group). By SET semantics that concept
+ * effectively has one decisive token, so `.every()` would let it containment-
+ * block any prose merely using one group member — reopening the single-token
+ * false-block from the back door. Counting DISTINCT canonicals closes that for
+ * every current and future group. The only thing it costs is the containment
+ * block of a near-tautological within-group 2-word phrase ("cache memoize"),
+ * which SHOULD NOT hard-block prose — so the cost is correct.
  */
 export function containmentBlockAllowed(storedConcept: string): boolean {
-  return meaningfulTokens(storedConcept).length >= 2;
+  return new Set(meaningfulTokens(storedConcept)).size >= 2;
 }
 
 /**

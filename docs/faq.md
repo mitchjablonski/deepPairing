@@ -32,8 +32,9 @@ actually works.
 ## "What about false positives?"
 
 Real concern, and we don't pretend they don't happen. Concept-match
-is fuzzy by design (it has to be, to catch paraphrases). Two
-mitigations:
+is deliberately conservative — token-based plus a small **curated
+synonym layer**, not fuzzy similarity — precisely to keep false
+blocks rare while still catching common rewordings. Two mitigations:
 
 1. **Every block is one-click overridable** from the companion UI:
    **Retire this stance** on the block card. The agent proceeds, and
