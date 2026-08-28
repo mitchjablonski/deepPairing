@@ -204,15 +204,24 @@ function isAllAdded(file: ChangesetFile): boolean {
 
 /** X3 — the "New file · +N" header pill: the concentrated "this is new" signal,
  *  sat next to the per-file stats so an all-added file reads as new at a glance
- *  without the wall of green fill. */
+ *  without the wall of green fill.
+ *
+ *  Hygiene (review round): the pill is NEUTRAL, not green. On an all-added file
+ *  the header already carries the green `A` change-mark AND (during review) the
+ *  green "✓ Looks right" verdict — several greens all restating "this is new".
+ *  A green pill was a third. Since `isAllAdded ⊂ changeType==="added"`, the `A`
+ *  mark and this pill ALWAYS co-occur, so the pill's job is the diffstat count,
+ *  not a second "new/added" color-signal. Text goes `text-text-secondary`;
+ *  only the `+N` count stays green (the universal diffstat convention), leaving
+ *  GREEN reserved for the verdict so the one green that should win, wins. */
 function NewFilePill({ additions }: { additions: number }) {
   return (
     <span
       data-testid="new-file-pill"
-      className="inline-flex items-center gap-1 shrink-0 text-2xs font-semibold text-accent-green bg-accent-green-dim rounded px-1.5 py-0.5 whitespace-nowrap"
+      className="inline-flex items-center shrink-0 text-2xs font-semibold text-text-secondary bg-surface-secondary rounded px-1.5 py-0.5 whitespace-nowrap"
       title="This file is entirely new — every line is an addition"
     >
-      New file · +{additions}
+      New file · <span className="text-accent-green">+{additions}</span>
     </span>
   );
 }
