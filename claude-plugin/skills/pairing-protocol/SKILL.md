@@ -1,6 +1,6 @@
 ---
 name: pairing-protocol
-description: Use this whenever the user asks me to investigate code, compare options, plan a refactor, scope a spec, walk through a PR, decide between approaches, weigh tradeoffs, review a change, reason about a fix, or figure out why something is the way it is — even if they don't say "pair." Routes the work through deepPairing's structured MCP tools (present_findings, present_options, present_spec, present_plan, update_plan_progress, present_changeset, present_code_change, present_debrief, present_explainer, log_reasoning, recall, revise_artifact, withdraw_artifact, answer_question, check_feedback) so the human sees findings + decisions + plans in the companion UI, past rejections are refused, and every concept is named for learning.
+description: Use this whenever the user asks me to investigate code, compare options, plan a refactor, scope a spec, walk through a PR, decide between approaches, weigh tradeoffs, review a change, reason about a fix, or figure out why something is the way it is — even if they don't say "pair." Routes the work through deepPairing's structured MCP tools (present_findings, present_options, present_spec, present_plan, update_plan_progress, present_changeset, present_code_change, present_debrief, present_explainer, log_reasoning, recall, revise_artifact, withdraw_artifact, answer_question, post_pr_review, check_feedback) so the human sees findings + decisions + plans in the companion UI, past rejections are refused, and every concept is named for learning.
 ---
 
 # deepPairing Collaboration Protocol
@@ -240,8 +240,8 @@ one case that closes without a *separate* debrief — its self-summarizing
   cards. Reach for it by default whenever you've finished a coherent slice of
   work. **Give it a one-line `summary`** — what changed, in a sentence: it's the
   human's WHAT-at-a-glance above the diff, and a changeset without one makes them
-  reconstruct the intent from hunks. Attach `visuals[]` (the blast radius — the
-  shape of what this touches) for the scope at a glance. **When a change is too
+  reconstruct the intent from hunks. Attach `visuals[]` for the blast radius (see
+  the visuals menu above). **When a change is too
   large for one changeset** (your own output budget — there's no hard cap, but a
   sprawling diff arriving as one card is hard to draft and harder to review),
   SPLIT it by feature or module across several `present_changeset` calls at clean
@@ -274,14 +274,14 @@ one case that closes without a *separate* debrief — its self-summarizing
   change touching guardrail paths (migrations, CI, secrets) deserves it too —
   use your judgment (and see **Guardrails** for the preflight backstop that
   catches the call when your judgment goes the other way).
-  (The floor is unchanged at every size: code is ALWAYS presented for review
-  before it lands — the carve-out drops only the SEPARATE closing debrief, never
-  the review.) This is the primary comprehension surface (the thesis's 80% case):
+  (The Cadence floor is unchanged: the carve-out drops only the SEPARATE closing
+  debrief, never the review of the code.) This is the primary comprehension
+  surface (the thesis's 80% case):
   summarize what changed and why (the narrative), walk the `sections[]` (each
   with its named `concepts[]` — one of the alive surfaces for concept-naming,
   alongside `finding.concept` and options; never a stream of per-step
-  `log_reasoning` cards), attach `visuals[]` (the shape of what you built — a
-  diagram carries it faster than the prose), own the `decisionsMade[]` you made
+  `log_reasoning` cards), attach `visuals[]` (the shape of what you built; see the
+  visuals menu), own the `decisionsMade[]` you made
   WITHOUT the human (the accountability block), flag `needsYourEyes[]` (the
   prioritized review list), note what you `deferred[]`, and invite questions. The human reads it and
   can ask ANYTHING in the thread. Put the FULL story IN the debrief content —
@@ -301,9 +301,9 @@ one case that closes without a *separate* debrief — its self-summarizing
   `evidence[]` anchored to real code (filePath + lineStart + lineEnd + snippet +
   explanation), rendered through the same per-line-commentable code block as
   everything else. Add `relatedArtifactIds[]` to link artifacts the reader can
-  drill into. **Attach `visuals[]`** — a diagram of the flow you're narrating is
-  the strongest transfer on the very surface built to move the world model (a
-  sequence diagram of the request path beats three paragraphs describing it).
+  drill into. **Attach `visuals[]`** (see the visuals menu) — a diagram of the
+  flow you're narrating is the strongest transfer on the very surface built to
+  move the world model.
   **And say what you're NOT sure about — `unknowns[]`.** Each gap you couldn't
   check ("I couldn't tell whether the CLI door is covered — I didn't read
   `cli/init.ts`") renders above the fold with a one-click Ask; the gaps you

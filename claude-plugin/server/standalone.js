@@ -28851,6 +28851,9 @@ var PROTOCOL_PREAMBLE = [
   "  7. present_debrief \u2014 END every feature/autonomous run with exactly ONE (carve-out: a single-file, no-decision surgical fix closes with its own self-summarizing present_code_change instead): what changed + why, the decisions you made WITHOUT the human, what needs their eyes, what you deferred, an ask-anything thread \u2014 the primary comprehension surface. Put the full story IN it, never 'details in chat'.",
   "  8. check_feedback again \u2014 let your pair review in the UI.",
   "Explaining how existing code WORKS (onboarding, 'how does auth work here?', a spike), not reporting problems or digesting a change? Use present_explainer \u2014 a read-only walk-through: overview + sections[] anchored to real Evidence + an ask-anything thread. Not present_findings (problems) or present_debrief (a change you made). Attach `visuals[]` (a diagram transfers best) and `unknowns[]` \u2014 the gaps you couldn't check.",
+  // Hygiene (skill-usage review): the non-code→decision law lived only in
+  // SKILL.md, invisible to a bare-MCP consumer. Route it here too.
+  "Understanding a NON-CODE thing (a doc, message, request)? Route through a DECISION, not a read-only explainer walk \u2014 each interpretation/ambiguity a present_options card your pair must resolve, closing on the call they make. Understanding that rides a decision gets consumed; a read-only walk dies as optional narration.",
   "REVISING a plan/spec/decision you already presented? Call revise_artifact (mode='supersede') with its id + new content \u2014 don't re-post a fresh present_*. Re-posting orphans the thread; superseding links versions with a clean before/after diff.",
   "Pull the full protocol from deeppairing://onboarding. present_* refuse proposals matching a past rejected approach."
 ].join("\n");
