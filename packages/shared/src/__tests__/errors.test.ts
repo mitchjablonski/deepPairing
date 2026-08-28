@@ -46,7 +46,7 @@ describe("errorCode", () => {
 describe("errorName", () => {
   it("reads a string .name (e.g. AbortError / TimeoutError)", () => {
     expect(errorName({ name: "AbortError" })).toBe("AbortError");
-    expect(errorName(new Error("x")).length).toBeGreaterThan(0); // "Error"
+    expect(errorName(new Error("x"))).toBe("Error"); // Error instances carry name = "Error"
   });
 
   it("returns undefined when .name is absent", () => {
