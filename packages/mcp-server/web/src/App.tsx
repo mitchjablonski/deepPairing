@@ -4,6 +4,7 @@ import { ArtifactPanel } from "./components/ArtifactPanel";
 import { IdleHome } from "./components/IdleHome";
 import { SessionWrapCard } from "./components/SessionWrapCard";
 import { computePending, isSinglePendingInView } from "./lib/pending";
+import { selectDefaultSession } from "./lib/selectDefaultSession";
 import { useAgentRecentlyActive } from "./hooks/useAgentRecentlyActive";
 import { WaitingForClaude } from "./components/WaitingForClaude";
 import { TurnIndicator } from "./components/TurnIndicator";
@@ -197,8 +198,15 @@ function App() {
           // plain sessions[0] bound the tab to a corpse — making the
           // cross-session no-op path the DEFAULT state, with composer
           // directives flowing into a store no agent reads.
-          const live = sessions.find((s: { sessionId: string; live?: boolean }) => s.live !== false);
-          connect((live ?? sessions[0]).sessionId);
+          //
+          // Per-session-split — with the per-Claude-session split a project can
+          // hold MANY live buckets at once (concurrent conversations). Bind to
+          // the MOST-RECENTLY-ACTIVE live one so the human lands on the
+          // conversation they're actually in, not the oldest by insertion
+          // order. Single-session projects are unchanged (one live candidate is
+          // trivially the most-recent). See selectDefaultSession + its test.
+          const chosen = selectDefaultSession(sessions);
+          connect((chosen ?? sessions[0]).sessionId);
         } else {
           connect(); // Fallback: global connection
         }

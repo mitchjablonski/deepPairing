@@ -32583,7 +32583,11 @@ function createActiveSessionRoutes(sessions, sessionMeta, daemonHash, activeSess
         // which still have a REGISTERED wrapper so dead sessions stop
         // wearing a live green dot forever. Fixtures without the set report
         // live (matches old-daemon behavior the client also tolerates).
-        live: activeSessions ? activeSessions.has(id) : true
+        live: activeSessions ? activeSessions.has(id) : true,
+        // Per-session-split — the default-view selector picks the
+        // most-recently-active LIVE session when a project has >1 bucket.
+        // Falls back to registeredAt for pre-activity sessions.
+        lastActivity: meta3?.lastActivity ?? meta3?.registeredAt
       };
     });
     return c.json({ sessions: list });
@@ -32625,6 +32629,8 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const sid = m?.[1];
     if (!sid) return;
     const now = Date.now();
+    const meta3 = sessionMeta.get(sid);
+    if (meta3) meta3.lastActivity = new Date(now).toISOString();
     if (now - (lastActivityBroadcastAt.get(sid) ?? 0) < AGENT_ACTIVITY_THROTTLE_MS) return;
     lastActivityBroadcastAt.set(sid, now);
     broadcast(sid, { type: "agent_activity", at: new Date(now).toISOString() });
@@ -32672,7 +32678,8 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     sessionMeta.set(sessionId, {
       title: body.title ?? sessionId,
       project: body.project ?? "",
-      registeredAt: (/* @__PURE__ */ new Date()).toISOString()
+      registeredAt: (/* @__PURE__ */ new Date()).toISOString(),
+      lastActivity: (/* @__PURE__ */ new Date()).toISOString()
     });
     activeSessions?.add(sessionId);
     return c.json({
