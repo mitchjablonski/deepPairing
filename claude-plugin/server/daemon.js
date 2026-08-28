@@ -26905,11 +26905,9 @@ var CONCEPT_ALIAS_GROUPS = [
   // "auth" intentionally excluded (ambiguous).
   ["authn", "authentication", "authenticate", "authenticat", "login", "signin"],
   // AUTHORIZATION side — never shares a representative with authentication.
-  ["authz", "authorization", "authorize", "authoriz"],
-  // Consumption-billing pricing model (the moat's own motivating example). Only
-  // the distinctive descriptors; the over-common tokens (pay/request/host/usage/
-  // pricing) are deliberately excluded — see the FP note above.
-  ["serverless", "consumption", "meter", "bill", "paygo", "payg"]
+  ["authz", "authorization", "authorize", "authoriz"]
+  // (A billing/pricing group was deliberately NOT added — see the FALSE-POSITIVE
+  // DISCIPLINE note above: its candidate members were not mutually substitutable.)
 ];
 var CONCEPT_ALIASES = Object.freeze(
   Object.fromEntries(
