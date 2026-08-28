@@ -136,6 +136,10 @@ function BlockGrain({
             secondarySubmitLabel="Ask"
             secondarySubmitTitle={`Ask the agent a question about ${label}`}
             readOnly={readOnly}
+            // When the user reveals this block's composer via "+ Comment"
+            // (`open`), drop the caret in it. `open` is false on load — a block
+            // shown only because a prior thread exists never grabs focus.
+            focusOnOpen={open}
           />
         </div>
       )}
