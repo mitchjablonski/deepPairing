@@ -192,6 +192,7 @@ const EMPTY_STATE = {
   planReviews: [],
   autonomyLevel: "supervised",
   detailDensity: "terse",
+  persona: "auto",
   rejectedApproaches: [],
   approvedPatterns: [],
   // G1 (#198b) — requests ride the empty state so a no-session UI reads a
@@ -1760,6 +1761,13 @@ export function createHttpRoutes(
     if (parsed.data.detailDensity) {
       await store.setDetailDensity(parsed.data.detailDensity);
       broadcast({ type: "preference_changed", detailDensity: parsed.data.detailDensity }, sid);
+    }
+    // Explanation persona (the WHO axis) — orthogonal to autonomy AND detail
+    // density, so handle independently (a POST may carry any combination). Guard
+    // the accessor: a read-only store may not implement it.
+    if (parsed.data.persona && store.setPersona) {
+      await store.setPersona(parsed.data.persona);
+      broadcast({ type: "preference_changed", persona: parsed.data.persona }, sid);
     }
     // Q2 — cross-project publish opt-in. Pre-Q2 the ONLY writer was the
     // interactive `init` prompt (cli/init.ts) plus `philosophy publish on|off`

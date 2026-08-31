@@ -94,6 +94,15 @@ export class FileStore implements IStore {
   // shortens PROSE only (never a review surface, never Evidence, never artifact
   // count); rich is the explicit opt-in for fuller explanatory prose.
   private detailDensity: "rich" | "terse" = "terse";
+  // Explanation persona (the WHO axis) — orthogonal to autonomy (how many) and
+  // detailDensity (how much). Default "auto" == let the agent infer the audience
+  // from the work, so a preferences.json with no `persona` field (every file
+  // written before this feature) reads as "auto" and contributes nothing to the
+  // hint. A set value pins the audience frame. --- PERSISTENCE-SCOPE SEAM: this
+  // is stored in preferences.json (PROJECT-scoped, mirroring detailDensity). To
+  // change the override's scope (session / global) this field + readPreferences/
+  // writePreferences pair below is the single swap point.
+  private persona: "auto" | "fluent-engineer" | "new-to-this-code" | "stakeholder" = "auto";
 
   /**
    * U1 — per-file change watermarks tracked since last load. Before each
@@ -193,6 +202,16 @@ export class FileStore implements IStore {
     // `detailDensity`, so it also reads as terse).
     if (prefs.detailDensity === "rich" || prefs.detailDensity === "terse") {
       this.detailDensity = prefs.detailDensity;
+    }
+    // Absent `persona` keeps the "auto" default (an existing preferences.json
+    // written before this feature has no field, so it reads as "auto").
+    if (
+      prefs.persona === "auto" ||
+      prefs.persona === "fluent-engineer" ||
+      prefs.persona === "new-to-this-code" ||
+      prefs.persona === "stakeholder"
+    ) {
+      this.persona = prefs.persona;
     }
   }
 
@@ -1929,6 +1948,25 @@ export class FileStore implements IStore {
     return this.detailDensity;
   }
 
+  // --- Explanation persona (the WHO axis) ---
+  //
+  // PERSISTENCE-SCOPE SEAM: written to preferences.json, PROJECT-scoped, exactly
+  // like setDetailDensity. If the override should instead be session- or
+  // global-scoped, swap the read/write target HERE (and the mirror field above)
+  // — nothing else in the wiring (schema, hint block, route, UI) depends on the
+  // scope, only on these two accessors.
+
+  setPersona(persona: "auto" | "fluent-engineer" | "new-to-this-code" | "stakeholder"): void {
+    this.persona = persona;
+    const prefs = this.readPreferences();
+    prefs.persona = persona;
+    this.writePreferences(prefs);
+  }
+
+  getPersona(): "auto" | "fluent-engineer" | "new-to-this-code" | "stakeholder" {
+    return this.persona;
+  }
+
   // --- Feedback notification (for long-poll) ---
 
   private feedbackWaiters: Array<() => void> = [];
@@ -1988,6 +2026,10 @@ export class FileStore implements IStore {
       ...(() => { const pr = this.getPostedReviews(); return pr.length > 0 ? { postedReviews: pr } : {}; })(),
       autonomyLevel: this.autonomyLevel,
       detailDensity: this.detailDensity,
+      // Explanation persona (the WHO axis) rides full-state hydration so the
+      // companion UI can show + flip it without a second round trip. "auto" by
+      // default → byte-compatible for every session that never set a persona.
+      persona: this.persona,
       // Q2 — the cross-project publish opt-in rides full-state hydration so
       // the companion UI can SHOW it (and the first-reject card can decide
       // whether to offer the enable). Reads from the global ledger are always

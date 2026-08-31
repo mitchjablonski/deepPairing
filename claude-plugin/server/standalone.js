@@ -23573,7 +23573,7 @@ var init_request = __esm({
 });
 
 // ../shared/dist/schemas/request-bodies.js
-var CreateRequestBodySchema, CommentBodySchema, SuggestionResolveBodySchema, SuggestionUpdateBodySchema, DecisionResolveBodySchema, StatusUpdateBodySchema, RenameBodySchema, FeatureOverrideBodySchema, ChangesetReviewBodySchema, AutonomyLevelSchema, DetailDensitySchema, PreferenceBodySchema, RenderFailureBodySchema, PromptBodySchema;
+var CreateRequestBodySchema, CommentBodySchema, SuggestionResolveBodySchema, SuggestionUpdateBodySchema, DecisionResolveBodySchema, StatusUpdateBodySchema, RenameBodySchema, FeatureOverrideBodySchema, ChangesetReviewBodySchema, AutonomyLevelSchema, DetailDensitySchema, PersonaSchema, PreferenceBodySchema, RenderFailureBodySchema, PromptBodySchema;
 var init_request_bodies = __esm({
   "../shared/dist/schemas/request-bodies.js"() {
     "use strict";
@@ -23652,9 +23652,12 @@ var init_request_bodies = __esm({
     });
     AutonomyLevelSchema = external_exports.enum(["supervised", "balanced", "autonomous"]);
     DetailDensitySchema = external_exports.enum(["rich", "terse"]);
+    PersonaSchema = external_exports.enum(["auto", "fluent-engineer", "new-to-this-code", "stakeholder"]);
     PreferenceBodySchema = external_exports.object({
       autonomyLevel: AutonomyLevelSchema.optional(),
       detailDensity: DetailDensitySchema.optional(),
+      // Explanation persona (the WHO axis). Optional; absent reads as "auto".
+      persona: PersonaSchema.optional(),
       /**
        * Q2 — cross-project publish opt-in (`globalLedgerPublish` in
        * preferences.json). Pre-Q2 the ONLY way to flip this was the interactive
@@ -28859,6 +28862,16 @@ var PROTOCOL_PREAMBLE = [
 ].join("\n");
 var DETAIL_DENSITY_TERSE_GUIDANCE = "";
 var DETAIL_DENSITY_RICH_GUIDANCE = "\n\u{1F5E3} Detail density: RICH \u2014 the human wants fuller prose. Expand explanations/rationale around each artifact. Evidence, structured fields, diagrams, and artifact count are unchanged.";
+var PERSONA_AUTO_GUIDANCE = "";
+var PERSONA_GUIDANCE = {
+  "fluent-engineer": "\n\u{1F3AD} Explanation persona: FRAME EVERYTHING FOR a FLUENT ENGINEER \u2014 assume code literacy, don't define standard terms or narrate syntax; anchor to the specific decisions, tradeoffs, and the fork you took. This pins the audience for this session, overriding the auto-inferred frame; density (how much) and autonomy (how many) are unchanged.",
+  "new-to-this-code": "\n\u{1F3AD} Explanation persona: FRAME EVERYTHING FOR someone NEW TO THIS CODE \u2014 they have less context, so orient them to intent, the why, and the blast radius they can't read off the diff; still a fluent engineer, so no defining standard terms. This pins the audience for this session, overriding the auto-inferred frame; density (how much) and autonomy (how many) are unchanged.",
+  "stakeholder": "\n\u{1F3AD} Explanation persona: FRAME EVERYTHING FOR a STAKEHOLDER \u2014 translate OUT of code into plain language, route the understanding through the DECISION they must make, lead with impact not implementation. This pins the audience for this session, overriding the auto-inferred frame; density (how much) and autonomy (how many) are unchanged."
+};
+function personaHintFor(persona) {
+  if (persona === "auto") return PERSONA_AUTO_GUIDANCE;
+  return PERSONA_GUIDANCE[persona];
+}
 var AUTONOMY_HINT_SUPERVISED = "";
 var AUTONOMY_HINT_BALANCED = [
   `
@@ -29194,6 +29207,12 @@ Each is a continuation of an existing thread (parentCommentId points at one of y
   try {
     const density = await store.getDetailDensity?.();
     const guidance = density === "rich" ? DETAIL_DENSITY_RICH_GUIDANCE : DETAIL_DENSITY_TERSE_GUIDANCE;
+    if (guidance) obligationsParts.push(guidance);
+  } catch {
+  }
+  try {
+    const persona = await store.getPersona?.() ?? "auto";
+    const guidance = personaHintFor(persona);
     if (guidance) obligationsParts.push(guidance);
   } catch {
   }
@@ -37128,6 +37147,14 @@ var DaemonClient = class {
   async getDetailDensity() {
     const data = await this.get("/detail-density");
     return data.density;
+  }
+  // --- Explanation persona (the WHO axis) ---
+  async setPersona(persona) {
+    await this.post("/persona", { persona });
+  }
+  async getPersona() {
+    const data = await this.get("/persona");
+    return data.persona;
   }
   // --- Feedback polling ---
   /**

@@ -497,6 +497,69 @@ describe("FileStore", () => {
     });
   });
 
+  // Explanation persona (the WHO axis) — the manual OVERRIDE, persisted in the
+  // SAME preferences.json as detailDensity (project scope — see the seam note in
+  // file-store.ts). Round-trip, default-when-absent, and back-compat with a
+  // legacy preferences.json that predates the field.
+  describe("explanation persona", () => {
+    it("defaults to 'auto' when never set (infer-from-the-work)", () => {
+      const store = createStore("persona-default");
+      expect(store.getPersona()).toBe("auto");
+    });
+
+    it("persists and reloads a set persona across store instances", () => {
+      const store = createStore("persona-persist");
+      store.setPersona("stakeholder");
+      const store2 = createStore("persona-persist");
+      expect(store2.getPersona()).toBe("stakeholder");
+    });
+
+    it("round-trips back to 'auto' after being toggled", () => {
+      const store = createStore("persona-roundtrip");
+      store.setPersona("new-to-this-code");
+      store.setPersona("auto");
+      expect(createStore("persona-roundtrip").getPersona()).toBe("auto");
+    });
+
+    it("does NOT disturb the sibling autonomyLevel / detailDensity preferences", () => {
+      const store = createStore("persona-sibling");
+      store.setAutonomyLevel("balanced");
+      store.setDetailDensity("rich");
+      store.setPersona("fluent-engineer");
+      const reloaded = createStore("persona-sibling");
+      expect(reloaded.getAutonomyLevel()).toBe("balanced");
+      expect(reloaded.getDetailDensity()).toBe("rich");
+      expect(reloaded.getPersona()).toBe("fluent-engineer");
+    });
+
+    it("loads a legacy preferences.json with NO persona field as 'auto' (back-compat)", () => {
+      // Simulate a preferences.json written before this feature existed.
+      const prefsPath = path.join(tmpDir, ".deeppairing", "preferences.json");
+      fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
+      fs.writeFileSync(prefsPath, JSON.stringify({ autonomyLevel: "autonomous", detailDensity: "rich" }));
+      const store = createStore("persona-legacy");
+      expect(store.getPersona()).toBe("auto");
+      // The pre-existing siblings still load as before.
+      expect(store.getAutonomyLevel()).toBe("autonomous");
+      expect(store.getDetailDensity()).toBe("rich");
+    });
+
+    it("ignores a poisoned persona value in preferences.json (falls back to 'auto')", () => {
+      const prefsPath = path.join(tmpDir, ".deeppairing", "preferences.json");
+      fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
+      fs.writeFileSync(prefsPath, JSON.stringify({ persona: "ceo" }));
+      const store = createStore("persona-poison");
+      expect(store.getPersona()).toBe("auto");
+    });
+
+    it("surfaces persona in getFullState for the companion UI", () => {
+      const store = createStore("persona-fullstate");
+      expect(store.getFullState().persona).toBe("auto");
+      store.setPersona("stakeholder");
+      expect(store.getFullState().persona).toBe("stakeholder");
+    });
+  });
+
   it("records and retrieves session memory", () => {
     const store = createStore( "memory");
     store.recordApprovedPattern({ description: "Service pattern" });

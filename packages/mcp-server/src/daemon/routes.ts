@@ -8,7 +8,7 @@ import { z } from "zod";
 import type { FileStore } from "../store/file-store.js";
 import { ERROR_CODES } from "../error-codes.js";
 import type { PreflightTrace } from "@deeppairing/shared";
-import { AutonomyLevelSchema, DetailDensitySchema, SuggestionUpdateBodySchema } from "@deeppairing/shared";
+import { AutonomyLevelSchema, DetailDensitySchema, PersonaSchema, SuggestionUpdateBodySchema } from "@deeppairing/shared";
 import { validateSuggestionTransition } from "../store/store-interface.js";
 import { recordMetricEvent } from "../store/metrics-store.js";
 import { projectHashGate } from "../http/guards.js";
@@ -86,6 +86,7 @@ const PostedReviewBody = z
 // internal route rejects a poison value the same way /api/preferences does.
 const AutonomyPostBody = z.object({ level: AutonomyLevelSchema });
 const DetailDensityPostBody = z.object({ density: DetailDensitySchema });
+const PersonaPostBody = z.object({ persona: PersonaSchema });
 
 async function parseJsonBody<T>(
   c: Context,
@@ -1147,6 +1148,26 @@ export function createDaemonRoutes(
     const parsed = await parseJsonBody(c, DetailDensityPostBody);
     if (!parsed.ok) return parsed.res;
     r.store.setDetailDensity(parsed.data.density);
+    return c.json({ status: "updated" });
+  });
+
+  // --- Explanation persona (the WHO axis) — the audience prose is framed for ---
+
+  app.get("/api/internal/sessions/:sessionId/persona", (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    // "auto" when the store predates the field / has no accessor.
+    return c.json({ persona: r.store.getPersona?.() ?? "auto" });
+  });
+
+  app.post("/api/internal/sessions/:sessionId/persona", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    // Validate the enum against the shared schema (single source of truth) →
+    // 400 on an invalid value, nothing written.
+    const parsed = await parseJsonBody(c, PersonaPostBody);
+    if (!parsed.ok) return parsed.res;
+    r.store.setPersona?.(parsed.data.persona);
     return c.json({ status: "updated" });
   });
 

@@ -12,7 +12,7 @@
  * the guaranteed surface again.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { buildFirstCallHint, autonomyHintFor } from "../first-call-hint.js";
+import { buildFirstCallHint, autonomyHintFor, personaHintFor } from "../first-call-hint.js";
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
 import { FileStore } from "../../store/file-store.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
@@ -184,6 +184,65 @@ describe("first-call hint — #139/X1 detail density (terse-by-default)", () => 
     expect(hint).toMatch(/batched present_changeset by default/);
     // And the run always ends with exactly one debrief.
     expect(hint).toMatch(/present_debrief/);
+  });
+});
+
+/**
+ * Explanation persona (the WHO axis) — the manual OVERRIDE. Generalizes the
+ * detail-density terse/rich inversion EXACTLY: "auto" is the SILENT default
+ * (contributes the empty string, so a default session's hint is byte-identical
+ * to a pre-feature session and the agent auto-infers the audience), and each
+ * SET persona appends its short frame block. These pin the inversion, that a set
+ * persona rides the (uncapped) obligations tier, and that the round-trips through
+ * the store.
+ */
+describe("first-call hint — explanation persona override (auto-default inversion)", () => {
+  it("emits NO persona block in the default (auto) mode", async () => {
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).not.toMatch(/Explanation persona:/);
+  });
+
+  it("emits NO persona block when explicitly set back to 'auto'", async () => {
+    store.setPersona("stakeholder");
+    store.setPersona("auto");
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).not.toMatch(/Explanation persona:/);
+  });
+
+  it("'auto' is byte-identical-empty, exactly like terse-default", () => {
+    // The inversion contract: the default contributes the empty string, so the
+    // common path pays zero extra bytes.
+    expect(personaHintFor("auto")).toBe("");
+  });
+
+  it("a SET persona appends its frame block (fluent-engineer)", async () => {
+    store.setPersona("fluent-engineer");
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).toMatch(/Explanation persona: FRAME EVERYTHING FOR a FLUENT ENGINEER/);
+    // It states it overrides the auto-inferred frame and is orthogonal to the
+    // other two axes.
+    expect(hint).toMatch(/overriding the auto-inferred frame/);
+    expect(hint).toMatch(/density \(how much\) and autonomy \(how many\) are unchanged/);
+  });
+
+  it("a SET persona appends its frame block (new-to-this-code)", async () => {
+    store.setPersona("new-to-this-code");
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).toMatch(/Explanation persona: FRAME EVERYTHING FOR someone NEW TO THIS CODE/);
+    expect(hint).toMatch(/blast radius/);
+  });
+
+  it("a SET persona appends its frame block (stakeholder)", async () => {
+    store.setPersona("stakeholder");
+    const hint = await buildFirstCallHint(store, 4000);
+    expect(hint).toMatch(/Explanation persona: FRAME EVERYTHING FOR a STAKEHOLDER/);
+    expect(hint).toMatch(/route the understanding through the DECISION/);
+  });
+
+  it("personaHintFor returns a non-empty block for each of the three set personas", () => {
+    for (const p of ["fluent-engineer", "new-to-this-code", "stakeholder"] as const) {
+      expect(personaHintFor(p).length).toBeGreaterThan(0);
+    }
   });
 });
 

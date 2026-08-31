@@ -71,6 +71,8 @@ const GUARDED_ROUTES: Array<{ name: string; pathFor: (sid: string) => string }> 
   { name: "autonomy", pathFor: (s) => `/api/internal/sessions/${s}/autonomy` },
   // #139 — the detail-density setter is enum-validated too.
   { name: "detail-density", pathFor: (s) => `/api/internal/sessions/${s}/detail-density` },
+  // The explanation-persona setter (the WHO axis) is enum-validated the same way.
+  { name: "persona", pathFor: (s) => `/api/internal/sessions/${s}/persona` },
   // H2-2 review — these two used `.catch(() => ({}))`, which only caught a
   // THROWN parse; a valid-JSON `null` then Typeerror'd on destructure → 500.
   { name: "comment mark-resolved", pathFor: (s) => `/api/internal/sessions/${s}/comments/c1/mark-resolved` },
@@ -181,6 +183,34 @@ describe("#139 — preference setters reject a poison enum value (autonomy fails
     expect(res.status).toBe(200);
     expect(sessions.get("real")!.getDetailDensity()).toBe("terse");
     expect(fx.track(new FileStore(tmpDir, "real")).getDetailDensity()).toBe("terse");
+  });
+
+  it("persona: invalid persona 'ceo' → 400 and nothing written (stays auto)", async () => {
+    const store = sessions.get("real")!;
+    expect(store.getPersona!()).toBe("auto");
+    const res = await app.request("/api/internal/sessions/real/persona", {
+      method: "POST",
+      headers: authed,
+      body: JSON.stringify({ persona: "ceo" }),
+    });
+    expect(res.status).toBe(400);
+    expect(store.getPersona!()).toBe("auto");
+    expect(fx.track(new FileStore(tmpDir, "real")).getPersona()).toBe("auto");
+  });
+
+  it("persona: a valid persona still round-trips (200 + persisted + GET reads it back)", async () => {
+    const res = await app.request("/api/internal/sessions/real/persona", {
+      method: "POST",
+      headers: authed,
+      body: JSON.stringify({ persona: "stakeholder" }),
+    });
+    expect(res.status).toBe(200);
+    expect(sessions.get("real")!.getPersona!()).toBe("stakeholder");
+    expect(fx.track(new FileStore(tmpDir, "real")).getPersona()).toBe("stakeholder");
+    // GET reads it back.
+    const get = await app.request("/api/internal/sessions/real/persona", { headers: authed });
+    expect(get.status).toBe(200);
+    expect(await get.json()).toEqual({ persona: "stakeholder" });
   });
 });
 

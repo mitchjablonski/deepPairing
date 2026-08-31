@@ -16821,7 +16821,7 @@ function formatZodIssues(err) {
   const summary = issues.length === 1 ? `${first.path}: ${first.message}` : `${issues.length} validation errors (first: ${first.path}: ${first.message})`;
   return { error: summary, code: "validation_error", issues };
 }
-var CreateRequestBodySchema, CommentBodySchema, SuggestionResolveBodySchema, SuggestionUpdateBodySchema, DecisionResolveBodySchema, StatusUpdateBodySchema, RenameBodySchema, FeatureOverrideBodySchema, ChangesetReviewBodySchema, AutonomyLevelSchema, DetailDensitySchema, PreferenceBodySchema, RenderFailureBodySchema, PromptBodySchema;
+var CreateRequestBodySchema, CommentBodySchema, SuggestionResolveBodySchema, SuggestionUpdateBodySchema, DecisionResolveBodySchema, StatusUpdateBodySchema, RenameBodySchema, FeatureOverrideBodySchema, ChangesetReviewBodySchema, AutonomyLevelSchema, DetailDensitySchema, PersonaSchema, PreferenceBodySchema, RenderFailureBodySchema, PromptBodySchema;
 var init_request_bodies = __esm({
   "../shared/dist/schemas/request-bodies.js"() {
     "use strict";
@@ -16900,9 +16900,12 @@ var init_request_bodies = __esm({
     });
     AutonomyLevelSchema = external_exports.enum(["supervised", "balanced", "autonomous"]);
     DetailDensitySchema = external_exports.enum(["rich", "terse"]);
+    PersonaSchema = external_exports.enum(["auto", "fluent-engineer", "new-to-this-code", "stakeholder"]);
     PreferenceBodySchema = external_exports.object({
       autonomyLevel: AutonomyLevelSchema.optional(),
       detailDensity: DetailDensitySchema.optional(),
+      // Explanation persona (the WHO axis). Optional; absent reads as "auto".
+      persona: PersonaSchema.optional(),
       /**
        * Q2 — cross-project publish opt-in (`globalLedgerPublish` in
        * preferences.json). Pre-Q2 the ONLY way to flip this was the interactive
@@ -27070,6 +27073,15 @@ var FileStore = class _FileStore {
   // shortens PROSE only (never a review surface, never Evidence, never artifact
   // count); rich is the explicit opt-in for fuller explanatory prose.
   detailDensity = "terse";
+  // Explanation persona (the WHO axis) — orthogonal to autonomy (how many) and
+  // detailDensity (how much). Default "auto" == let the agent infer the audience
+  // from the work, so a preferences.json with no `persona` field (every file
+  // written before this feature) reads as "auto" and contributes nothing to the
+  // hint. A set value pins the audience frame. --- PERSISTENCE-SCOPE SEAM: this
+  // is stored in preferences.json (PROJECT-scoped, mirroring detailDensity). To
+  // change the override's scope (session / global) this field + readPreferences/
+  // writePreferences pair below is the single swap point.
+  persona = "auto";
   /**
    * U1 — per-file change watermarks tracked since last load. Before each
    * flush we re-stat each session JSON; if EITHER mtime has advanced OR
@@ -27142,6 +27154,9 @@ var FileStore = class _FileStore {
     }
     if (prefs.detailDensity === "rich" || prefs.detailDensity === "terse") {
       this.detailDensity = prefs.detailDensity;
+    }
+    if (prefs.persona === "auto" || prefs.persona === "fluent-engineer" || prefs.persona === "new-to-this-code" || prefs.persona === "stakeholder") {
+      this.persona = prefs.persona;
     }
   }
   load() {
@@ -28398,6 +28413,22 @@ var FileStore = class _FileStore {
   getDetailDensity() {
     return this.detailDensity;
   }
+  // --- Explanation persona (the WHO axis) ---
+  //
+  // PERSISTENCE-SCOPE SEAM: written to preferences.json, PROJECT-scoped, exactly
+  // like setDetailDensity. If the override should instead be session- or
+  // global-scoped, swap the read/write target HERE (and the mirror field above)
+  // — nothing else in the wiring (schema, hint block, route, UI) depends on the
+  // scope, only on these two accessors.
+  setPersona(persona) {
+    this.persona = persona;
+    const prefs = this.readPreferences();
+    prefs.persona = persona;
+    this.writePreferences(prefs);
+  }
+  getPersona() {
+    return this.persona;
+  }
   // --- Feedback notification (for long-poll) ---
   feedbackWaiters = [];
   /** Register a waiter that resolves when new feedback arrives */
@@ -28447,6 +28478,10 @@ var FileStore = class _FileStore {
       })(),
       autonomyLevel: this.autonomyLevel,
       detailDensity: this.detailDensity,
+      // Explanation persona (the WHO axis) rides full-state hydration so the
+      // companion UI can show + flip it without a second round trip. "auto" by
+      // default → byte-compatible for every session that never set a persona.
+      persona: this.persona,
       // Q2 — the cross-project publish opt-in rides full-state hydration so
       // the companion UI can SHOW it (and the first-reject card can decide
       // whether to offer the enable). Reads from the global ledger are always
@@ -31079,6 +31114,7 @@ var EMPTY_STATE = {
   planReviews: [],
   autonomyLevel: "supervised",
   detailDensity: "terse",
+  persona: "auto",
   rejectedApproaches: [],
   approvedPatterns: [],
   // G1 (#198b) — requests ride the empty state so a no-session UI reads a
@@ -32040,6 +32076,10 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       await store.setDetailDensity(parsed.data.detailDensity);
       broadcast({ type: "preference_changed", detailDensity: parsed.data.detailDensity }, sid);
     }
+    if (parsed.data.persona && store.setPersona) {
+      await store.setPersona(parsed.data.persona);
+      broadcast({ type: "preference_changed", persona: parsed.data.persona }, sid);
+    }
     if (parsed.data.globalLedgerPublish !== void 0) {
       if (sid?.startsWith("demo_")) {
         return c.json(
@@ -32532,6 +32572,7 @@ var PostedReviewBody = external_exports.object({
 }).strict();
 var AutonomyPostBody = external_exports.object({ level: AutonomyLevelSchema });
 var DetailDensityPostBody = external_exports.object({ density: DetailDensitySchema });
+var PersonaPostBody = external_exports.object({ persona: PersonaSchema });
 async function parseJsonBody(c, schema) {
   try {
     return { ok: true, data: schema.parse(await c.req.json()) };
@@ -33192,6 +33233,19 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const parsed = await parseJsonBody(c, DetailDensityPostBody);
     if (!parsed.ok) return parsed.res;
     r.store.setDetailDensity(parsed.data.density);
+    return c.json({ status: "updated" });
+  });
+  app.get("/api/internal/sessions/:sessionId/persona", (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    return c.json({ persona: r.store.getPersona?.() ?? "auto" });
+  });
+  app.post("/api/internal/sessions/:sessionId/persona", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const parsed = await parseJsonBody(c, PersonaPostBody);
+    if (!parsed.ok) return parsed.res;
+    r.store.setPersona?.(parsed.data.persona);
     return c.json({ status: "updated" });
   });
   app.get("/api/internal/sessions", (c) => {
