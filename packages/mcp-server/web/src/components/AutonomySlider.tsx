@@ -281,19 +281,26 @@ export function AutonomySlider() {
 
             {/* Explanation persona — the WHO axis (audience the agent frames
                 prose for). Deliberately QUIET: a small labelled select, not a
-                second slider or a co-equal button row. Default "Auto" lets the
-                agent infer the audience from the work; a set value is an escape
-                hatch that pins the frame for the session. */}
+                second slider or a co-equal button row. Scope is PER-SESSION and
+                is IN THE LABEL ("· this session"), never a bare "Audience".
+                Default "Auto" lets the agent infer the audience from the work; a
+                set value is an escape hatch that pins the frame for THIS session.
+                The framing indicator below reflects the OVERRIDE state (set vs
+                auto) + a STATIC description of the auto behavior — it never
+                claims a live per-artifact inferred persona, which the server/UI
+                cannot know (auto-infer is agent-side prose guidance, not a
+                server computation). */}
             <div className="px-3 py-2 border-t border-border-subtle">
               <label
                 htmlFor="persona-select"
                 className="block text-2xs text-text-muted mb-1.5"
               >
-                Audience: who the agent writes for
+                Audience · this session
               </label>
               <select
                 id="persona-select"
                 aria-label="Explanation persona"
+                title="Auto-detected per artifact. Set to override — applies to this session only."
                 value={persona}
                 onChange={(e) => void handlePersonaChange(e.target.value as Persona)}
                 className="w-full px-2 py-1 rounded text-2xs bg-surface border border-border-default text-text-secondary hover:bg-surface-hover focus:outline-none focus:border-accent-blue/40"
@@ -304,10 +311,28 @@ export function AutonomySlider() {
                   </option>
                 ))}
               </select>
-              <div className="text-[10px] text-text-muted mt-1 leading-relaxed">
-                Auto infers from the work (your change → engineer, someone
-                else’s PR → newcomer, a doc → stakeholder). Pick one to pin it.
-              </div>
+
+              {/* Active-framing indicator — what frame is in effect + its
+                  SOURCE. Truthful by construction: for a set persona it names the
+                  override; for auto it says "adapts per artifact" and lists the
+                  STATIC auto rules — never a per-artifact persona it can't know. */}
+              {persona === "auto" ? (
+                <div className="mt-1.5">
+                  <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium border border-border-default text-text-muted">
+                    Framing: auto · adapts per artifact
+                  </span>
+                  <div className="text-[10px] text-text-muted mt-1 leading-relaxed">
+                    your code → engineer · someone else’s PR → new-to-this-code ·
+                    docs → stakeholder
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-1.5">
+                  <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-accent-blue-dim/40 text-accent-blue border border-accent-blue/40">
+                    Framing: {persona} · set for this session
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Q2 — CROSS-PROJECT MEMORY. The permanent home for the publish

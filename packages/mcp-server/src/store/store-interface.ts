@@ -636,10 +636,11 @@ export interface IStore {
   // lets the agent infer the audience from the work (see first-call-hint's
   // persona block + SKILL Voice); a set value pins the frame. Optional in the
   // interface so a partial/read-only fake store still satisfies it; absent
-  // reads as "auto". --- PERSISTENCE-SCOPE SEAM: the FileStore implements this
-  // over preferences.json (project-scoped, mirroring detailDensity). If the
-  // persona override needs a different scope (session / global), THIS pair of
-  // methods + the FileStore impl are the single swap point.
+  // reads as "auto". SCOPE: PER-SESSION — the FileStore persists this in the
+  // session's own bucket (sessions/<id>/session-prefs.json), so two sessions in
+  // one project hold independent personas and a persona set never touches the
+  // project-level preferences.json (the cross-session moat). THIS pair of
+  // methods + the FileStore impl are the single swap point if scope changes.
   setPersona?(persona: "auto" | "fluent-engineer" | "new-to-this-code" | "stakeholder"): MaybePromise<void>;
   getPersona?(): MaybePromise<"auto" | "fluent-engineer" | "new-to-this-code" | "stakeholder">;
 

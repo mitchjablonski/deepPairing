@@ -363,6 +363,43 @@ describe("explanation persona (the WHO axis) — quiet audience select", () => {
     }
   });
 
+  it("labels the control with its PER-SESSION scope and a truthful tooltip", async () => {
+    vi.stubGlobal("fetch", mockState({ autonomyLevel: "supervised" }));
+    render(<AutonomySlider />);
+    await openPopover();
+    // Scope is IN the label, never a bare "Audience".
+    expect(screen.getByText(/Audience · this session/i)).toBeInTheDocument();
+    // Tooltip states auto-detect + session-only override, no per-artifact claim.
+    const select = screen.getByRole("combobox", { name: /explanation persona/i });
+    expect(select).toHaveAttribute(
+      "title",
+      "Auto-detected per artifact. Set to override — applies to this session only.",
+    );
+  });
+
+  it("shows the auto framing indicator + STATIC auto-rule explainer (no per-artifact claim)", async () => {
+    vi.stubGlobal("fetch", mockState({ autonomyLevel: "supervised" }));
+    render(<AutonomySlider />);
+    await openPopover();
+    expect(screen.getByText(/Framing: auto · adapts per artifact/i)).toBeInTheDocument();
+    // The static description of the auto behavior (truthful, server-knowable).
+    expect(screen.getByText(/your code → engineer/i)).toBeInTheDocument();
+    expect(screen.getByText(/someone else’s PR → new-to-this-code/i)).toBeInTheDocument();
+    // It must NOT claim a live per-artifact inferred persona.
+    expect(screen.queryByText(/set for this session/i)).not.toBeInTheDocument();
+  });
+
+  it("shows the SET framing indicator naming the override when a persona is pinned", async () => {
+    vi.stubGlobal("fetch", mockState({ autonomyLevel: "supervised", persona: "stakeholder" }));
+    render(<AutonomySlider />);
+    await openPopover();
+    await waitFor(() =>
+      expect(screen.getByText(/Framing: stakeholder · set for this session/i)).toBeInTheDocument(),
+    );
+    // The auto indicator is gone once a persona is set.
+    expect(screen.queryByText(/adapts per artifact/i)).not.toBeInTheDocument();
+  });
+
   it("reflects a persona loaded from /api/state", async () => {
     vi.stubGlobal("fetch", mockState({ autonomyLevel: "supervised", persona: "stakeholder" }));
     render(<AutonomySlider />);

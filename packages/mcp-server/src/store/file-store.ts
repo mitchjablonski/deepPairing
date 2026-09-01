@@ -96,12 +96,17 @@ export class FileStore implements IStore {
   private detailDensity: "rich" | "terse" = "terse";
   // Explanation persona (the WHO axis) — orthogonal to autonomy (how many) and
   // detailDensity (how much). Default "auto" == let the agent infer the audience
-  // from the work, so a preferences.json with no `persona` field (every file
-  // written before this feature) reads as "auto" and contributes nothing to the
-  // hint. A set value pins the audience frame. --- PERSISTENCE-SCOPE SEAM: this
-  // is stored in preferences.json (PROJECT-scoped, mirroring detailDensity). To
-  // change the override's scope (session / global) this field + readPreferences/
-  // writePreferences pair below is the single swap point.
+  // from the work, so a session with no `persona` set reads as "auto" and
+  // contributes nothing to the hint. A set value pins the audience frame.
+  //
+  // SCOPE: PER-SESSION. Persisted in this session's OWN bucket
+  // (`sessions/<id>/session-prefs.json`), NOT the project-level
+  // preferences.json — the v0.1.44 session split made each Claude session its
+  // own bucket, so an override set in one session never leaks to another and
+  // never touches the project moat (rejectedApproaches / guardrails /
+  // globalLedgerPublish all stay in projectRoot/.deeppairing/preferences.json,
+  // which persona does not read or write). See readSessionPrefs/writeSessionPrefs
+  // below — that pair is the single swap point if the scope ever changes again.
   private persona: "auto" | "fluent-engineer" | "new-to-this-code" | "stakeholder" = "auto";
 
   /**
@@ -166,6 +171,7 @@ export class FileStore implements IStore {
     this.ensureDir();
     this.load();
     this.loadPreferences();
+    this.loadSessionPrefs();
   }
 
   private ensureDir(): void {
@@ -203,8 +209,21 @@ export class FileStore implements IStore {
     if (prefs.detailDensity === "rich" || prefs.detailDensity === "terse") {
       this.detailDensity = prefs.detailDensity;
     }
-    // Absent `persona` keeps the "auto" default (an existing preferences.json
-    // written before this feature has no field, so it reads as "auto").
+    // NOTE: persona is NOT loaded here — it is PER-SESSION, so it loads from the
+    // session's own bucket in loadSessionPrefs() (called from the constructor),
+    // never from the project-level preferences.json.
+  }
+
+  // Explanation persona is PER-SESSION: it lives in the session's own bucket
+  // (sessions/<id>/session-prefs.json), so it neither reads from nor writes to
+  // the project-level preferences.json (which holds the cross-session moat).
+  private loadSessionPrefs(): void {
+    // Demo sessions keep persona in memory only (default "auto") — nothing to
+    // load, and nothing written to disk (see setPersona).
+    if (this.isDemoSession) return;
+    const prefs = this.readSessionPrefs();
+    // Absent `persona` keeps the "auto" default (a session created before this
+    // feature has no session-prefs.json, so it reads as "auto").
     if (
       prefs.persona === "auto" ||
       prefs.persona === "fluent-engineer" ||
@@ -1950,21 +1969,48 @@ export class FileStore implements IStore {
 
   // --- Explanation persona (the WHO axis) ---
   //
-  // PERSISTENCE-SCOPE SEAM: written to preferences.json, PROJECT-scoped, exactly
-  // like setDetailDensity. If the override should instead be session- or
-  // global-scoped, swap the read/write target HERE (and the mirror field above)
-  // — nothing else in the wiring (schema, hint block, route, UI) depends on the
-  // scope, only on these two accessors.
+  // SCOPE: PER-SESSION. Persisted in this session's own bucket
+  // (sessions/<id>/session-prefs.json) via readSessionPrefs/writeSessionPrefs —
+  // NOT the project-level preferences.json. Two sessions in the same project
+  // hold independent personas, and a persona set never touches the project moat.
+  // This pair (plus the mirror field + loadSessionPrefs above) is the single
+  // swap point if the scope ever changes again.
 
   setPersona(persona: "auto" | "fluent-engineer" | "new-to-this-code" | "stakeholder"): void {
     this.persona = persona;
-    const prefs = this.readPreferences();
+    // Demo sessions keep persona in memory only — never write to disk (keeps a
+    // demo run's on-disk footprint unchanged), mirroring the demoPreferences
+    // discipline for the project prefs.
+    if (this.isDemoSession) return;
+    const prefs = this.readSessionPrefs();
     prefs.persona = persona;
-    this.writePreferences(prefs);
+    this.writeSessionPrefs(prefs);
   }
 
   getPersona(): "auto" | "fluent-engineer" | "new-to-this-code" | "stakeholder" {
     return this.persona;
+  }
+
+  // Per-session preferences bucket (currently just `persona`). Separate from the
+  // project-level readPreferences/writePreferences on purpose: this file lives
+  // under the SESSION dir, so it never carries — or risks clobbering — the
+  // cross-session moat (rejectedApproaches / approvedPatterns / guardrails /
+  // globalLedgerPublish) that project preferences.json owns.
+  private sessionPrefsPath(): string {
+    return path.join(this.sessionDir(), "session-prefs.json");
+  }
+
+  private readSessionPrefs(): Record<string, unknown> {
+    return FileStore.salvageRecord(
+      // Session-scope the salvage suppression key (F10's sid:file format).
+      `${this.sessionId}:session-prefs.json`,
+      this.loadJsonFile<unknown>(this.sessionPrefsPath(), {}),
+      {} as Record<string, unknown>,
+    );
+  }
+
+  private writeSessionPrefs(prefs: Record<string, unknown>): void {
+    writeJsonAtomic(this.sessionPrefsPath(), prefs);
   }
 
   // --- Feedback notification (for long-poll) ---

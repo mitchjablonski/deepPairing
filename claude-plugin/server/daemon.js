@@ -27075,12 +27075,17 @@ var FileStore = class _FileStore {
   detailDensity = "terse";
   // Explanation persona (the WHO axis) — orthogonal to autonomy (how many) and
   // detailDensity (how much). Default "auto" == let the agent infer the audience
-  // from the work, so a preferences.json with no `persona` field (every file
-  // written before this feature) reads as "auto" and contributes nothing to the
-  // hint. A set value pins the audience frame. --- PERSISTENCE-SCOPE SEAM: this
-  // is stored in preferences.json (PROJECT-scoped, mirroring detailDensity). To
-  // change the override's scope (session / global) this field + readPreferences/
-  // writePreferences pair below is the single swap point.
+  // from the work, so a session with no `persona` set reads as "auto" and
+  // contributes nothing to the hint. A set value pins the audience frame.
+  //
+  // SCOPE: PER-SESSION. Persisted in this session's OWN bucket
+  // (`sessions/<id>/session-prefs.json`), NOT the project-level
+  // preferences.json — the v0.1.44 session split made each Claude session its
+  // own bucket, so an override set in one session never leaks to another and
+  // never touches the project moat (rejectedApproaches / guardrails /
+  // globalLedgerPublish all stay in projectRoot/.deeppairing/preferences.json,
+  // which persona does not read or write). See readSessionPrefs/writeSessionPrefs
+  // below — that pair is the single swap point if the scope ever changes again.
   persona = "auto";
   /**
    * U1 — per-file change watermarks tracked since last load. Before each
@@ -27132,6 +27137,7 @@ var FileStore = class _FileStore {
     this.ensureDir();
     this.load();
     this.loadPreferences();
+    this.loadSessionPrefs();
   }
   ensureDir() {
     const sessionDir = path10.join(this.basePath, "sessions", this.sessionId);
@@ -27155,6 +27161,13 @@ var FileStore = class _FileStore {
     if (prefs.detailDensity === "rich" || prefs.detailDensity === "terse") {
       this.detailDensity = prefs.detailDensity;
     }
+  }
+  // Explanation persona is PER-SESSION: it lives in the session's own bucket
+  // (sessions/<id>/session-prefs.json), so it neither reads from nor writes to
+  // the project-level preferences.json (which holds the cross-session moat).
+  loadSessionPrefs() {
+    if (this.isDemoSession) return;
+    const prefs = this.readSessionPrefs();
     if (prefs.persona === "auto" || prefs.persona === "fluent-engineer" || prefs.persona === "new-to-this-code" || prefs.persona === "stakeholder") {
       this.persona = prefs.persona;
     }
@@ -28415,19 +28428,40 @@ var FileStore = class _FileStore {
   }
   // --- Explanation persona (the WHO axis) ---
   //
-  // PERSISTENCE-SCOPE SEAM: written to preferences.json, PROJECT-scoped, exactly
-  // like setDetailDensity. If the override should instead be session- or
-  // global-scoped, swap the read/write target HERE (and the mirror field above)
-  // — nothing else in the wiring (schema, hint block, route, UI) depends on the
-  // scope, only on these two accessors.
+  // SCOPE: PER-SESSION. Persisted in this session's own bucket
+  // (sessions/<id>/session-prefs.json) via readSessionPrefs/writeSessionPrefs —
+  // NOT the project-level preferences.json. Two sessions in the same project
+  // hold independent personas, and a persona set never touches the project moat.
+  // This pair (plus the mirror field + loadSessionPrefs above) is the single
+  // swap point if the scope ever changes again.
   setPersona(persona) {
     this.persona = persona;
-    const prefs = this.readPreferences();
+    if (this.isDemoSession) return;
+    const prefs = this.readSessionPrefs();
     prefs.persona = persona;
-    this.writePreferences(prefs);
+    this.writeSessionPrefs(prefs);
   }
   getPersona() {
     return this.persona;
+  }
+  // Per-session preferences bucket (currently just `persona`). Separate from the
+  // project-level readPreferences/writePreferences on purpose: this file lives
+  // under the SESSION dir, so it never carries — or risks clobbering — the
+  // cross-session moat (rejectedApproaches / approvedPatterns / guardrails /
+  // globalLedgerPublish) that project preferences.json owns.
+  sessionPrefsPath() {
+    return path10.join(this.sessionDir(), "session-prefs.json");
+  }
+  readSessionPrefs() {
+    return _FileStore.salvageRecord(
+      // Session-scope the salvage suppression key (F10's sid:file format).
+      `${this.sessionId}:session-prefs.json`,
+      this.loadJsonFile(this.sessionPrefsPath(), {}),
+      {}
+    );
+  }
+  writeSessionPrefs(prefs) {
+    writeJsonAtomic(this.sessionPrefsPath(), prefs);
   }
   // --- Feedback notification (for long-poll) ---
   feedbackWaiters = [];

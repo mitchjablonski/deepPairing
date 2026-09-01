@@ -171,8 +171,9 @@ export type DetailDensity = z.infer<typeof DetailDensitySchema>;
 //   - "auto" (default) — let the agent INFER the audience from THE WORK
 //     (ownership/subject/risk; see SKILL Voice + the first-call hint). This is
 //     the alive default; it contributes the EMPTY string to the hint, exactly
-//     like terse-default, so a fresh install and every old preferences.json
-//     (which has no `persona` field) pay zero extra bytes.
+//     like terse-default, so a fresh install and any session with no persona
+//     set pay zero extra bytes. (The OVERRIDE is persisted PER-SESSION — see
+//     the store's session-prefs bucket — not in project preferences.json.)
 //   - "fluent-engineer" — today's BUILD-mode voice (assume code literacy).
 //   - "new-to-this-code" — today's REVIEW-mode voice, named (orient to intent
 //     + blast radius).
