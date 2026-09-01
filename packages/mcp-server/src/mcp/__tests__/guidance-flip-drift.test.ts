@@ -504,3 +504,54 @@ describe("X1 — plain-explanation legibility guidance is present in SKILL.md", 
     expect(skill).toMatch(/read as jargon, not rigor/);
   });
 });
+
+/**
+ * Explanation persona (the WHO axis) — the AUTO-INFER guidance. The persona
+ * feature ships its full guidance in SKILL.md (the preamble stays byte-stable at
+ * 59 chars of headroom, so the echo is SKILL-only). These pins assert the three
+ * named personas, the ownership/subject/risk auto-infer mapping, and the HARD
+ * "key on the work, never on the human's comment behavior" rule are present, so a
+ * future prose-trim can't silently drop the alive default.
+ */
+describe("explanation persona — auto-infer guidance is present in SKILL.md", () => {
+  const flat = (s: string) => s.replace(/\s+/g, " ");
+
+  it("names the three personas as the WHO axis, orthogonal to density and autonomy", () => {
+    const skill = flat(readSkill());
+    expect(skill).toContain("fluent-engineer");
+    expect(skill).toContain("new-to-this-code");
+    expect(skill).toContain("stakeholder");
+    // Explicitly the WHO axis, distinct from density (how much) and autonomy (how many).
+    expect(skill).toMatch(/Persona is the \*?audience\*? axis/);
+    expect(skill).toMatch(/ORTHOGONAL to\s*\n?\s*density.*and autonomy/);
+  });
+
+  it("teaches the ownership → subject → risk auto-infer mapping", () => {
+    const skill = flat(readSkill());
+    // Ownership = primary selector.
+    expect(skill).toMatch(/Ownership is the primary selector/);
+    expect(skill).toMatch(/Your OWN change \(build\).*fluent-engineer/);
+    expect(skill).toMatch(/SOMEONE ELSE'S PR.*reviewIntent:"external".*new-to-this-code/);
+    // Subject = secondary selector (non-code → stakeholder, locator anchor).
+    expect(skill).toMatch(/Subject is the secondary selector/);
+    expect(skill).toMatch(/NON-CODE artifact.*locator.*stakeholder/);
+    // Risk = modulator, NOT a selector.
+    expect(skill).toMatch(/Risk is a MODULATOR, not a selector/);
+    expect(skill).toMatch(/it NEVER changes WHO you're writing for/);
+  });
+
+  it("carries the HARD rule verbatim: key on THE WORK, never on the human's comment behavior", () => {
+    const skill = readSkill();
+    expect(skill).toMatch(/key on THE WORK \(ownership \/ subject \/ risk\), NEVER on the\s*\n?\s*human's comment behavior/);
+    // The round-10 rationale: attention is task-conditional; a miscalibrated frame
+    // is worse than a dead dial.
+    expect(skill).toMatch(/attention is task-conditional/);
+    expect(skill).toMatch(/miscalibrated inferred frame is worse than a dead dial/);
+  });
+
+  it("notes the manual OVERRIDE (a set persona pins the frame; default is auto)", () => {
+    const skill = flat(readSkill());
+    expect(skill).toMatch(/OVERRIDE this inference with a persona setting/);
+    expect(skill).toMatch(/Default is \*?\*?auto\*?\*? \(infer\)/);
+  });
+});

@@ -300,6 +300,9 @@ export interface IStore {
     planReviews: PlanReviewRecord[];
     autonomyLevel: string;
     detailDensity: string;
+    /** Explanation persona (the WHO axis). Optional: a read-only store may omit
+     *  it, in which case the UI reads "auto". */
+    persona?: string;
     /** Q2 — cross-project publish opt-in, so the companion UI can render (and
      *  flip) it without a second round trip. Optional: read-only stores omit it. */
     globalLedgerPublish?: boolean;
@@ -626,6 +629,20 @@ export interface IStore {
   // shape; absent means "rich" (today's behavior).
   setDetailDensity(density: "rich" | "terse"): MaybePromise<void>;
   getDetailDensity(): MaybePromise<"rich" | "terse">;
+
+  // Explanation persona — the WHO axis, orthogonal to BOTH autonomy (how many
+  // artifacts) and detailDensity (how much prose). Governs the AUDIENCE the
+  // agent frames prose for, not the count or verbosity. "auto" (the default)
+  // lets the agent infer the audience from the work (see first-call-hint's
+  // persona block + SKILL Voice); a set value pins the frame. Optional in the
+  // interface so a partial/read-only fake store still satisfies it; absent
+  // reads as "auto". SCOPE: PER-SESSION — the FileStore persists this in the
+  // session's own bucket (sessions/<id>/session-prefs.json), so two sessions in
+  // one project hold independent personas and a persona set never touches the
+  // project-level preferences.json (the cross-session moat). THIS pair of
+  // methods + the FileStore impl are the single swap point if scope changes.
+  setPersona?(persona: "auto" | "fluent-engineer" | "new-to-this-code" | "stakeholder"): MaybePromise<void>;
+  getPersona?(): MaybePromise<"auto" | "fluent-engineer" | "new-to-this-code" | "stakeholder">;
 
   // R5 (round-13 LOW) — the cross-project publish opt-in (setGlobalLedgerPublish/
   // getGlobalLedgerPublish) is declared ONCE, above with the III8 doc comment;

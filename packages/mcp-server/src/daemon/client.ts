@@ -694,6 +694,17 @@ export class DaemonClient implements IStore {
     return data.density;
   }
 
+  // --- Explanation persona (the WHO axis) ---
+
+  async setPersona(persona: "auto" | "fluent-engineer" | "new-to-this-code" | "stakeholder"): Promise<void> {
+    await this.post("/persona", { persona });
+  }
+
+  async getPersona(): Promise<"auto" | "fluent-engineer" | "new-to-this-code" | "stakeholder"> {
+    const data = await this.get<{ persona: "auto" | "fluent-engineer" | "new-to-this-code" | "stakeholder" }>("/persona");
+    return data.persona;
+  }
+
   // --- Feedback polling ---
 
   /**

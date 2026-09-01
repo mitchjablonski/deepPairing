@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render, screen, waitFor, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AutonomySlider } from "../AutonomySlider";
 import { useToastStore } from "../../stores/toast";
@@ -327,5 +327,137 @@ describe("Q2 — Minimal names the floor", () => {
     await userEvent.click(screen.getByRole("button", { name: /autonomy:/i }));
     expect(screen.getByText(/still stops at architectural forks/i)).toBeInTheDocument();
     expect(screen.queryByText(/proceeds with its recommendations/i)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Explanation persona (the WHO axis) — the manual OVERRIDE surfaced as a QUIET
+ * escape hatch (a small select), not a co-equal dial. Default "Auto" lets the
+ * agent infer the audience; picking one pins it. Orthogonal to autonomy and
+ * detail density — flipping it POSTs only { persona }.
+ */
+describe("explanation persona (the WHO axis) — quiet audience select", () => {
+  function mockState(state: Record<string, unknown>) {
+    return vi.fn((url: string, init?: any) => {
+      if (String(url).endsWith("/api/state") && (!init || !init.method || init.method === "GET")) {
+        return Promise.resolve({ ok: true, json: async () => state });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ status: "updated" }) });
+    });
+  }
+  async function openPopover() {
+    await waitFor(() => expect(screen.getByRole("button", { name: /autonomy:/i })).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /autonomy:/i }));
+  }
+
+  it("renders the audience select defaulting to Auto", async () => {
+    vi.stubGlobal("fetch", mockState({ autonomyLevel: "supervised" }));
+    render(<AutonomySlider />);
+    await openPopover();
+    const select = screen.getByRole("combobox", { name: /explanation persona/i }) as HTMLSelectElement;
+    expect(select).toBeInTheDocument();
+    expect(select.value).toBe("auto");
+    // All four options exist.
+    for (const v of ["auto", "fluent-engineer", "new-to-this-code", "stakeholder"]) {
+      expect(within(select).getByRole("option", { name: new RegExp(v.replace(/-/g, ".?"), "i") })).toBeTruthy();
+    }
+  });
+
+  it("labels the control with its PER-SESSION scope and a truthful tooltip", async () => {
+    vi.stubGlobal("fetch", mockState({ autonomyLevel: "supervised" }));
+    render(<AutonomySlider />);
+    await openPopover();
+    // Scope is IN the label, never a bare "Audience".
+    expect(screen.getByText(/Audience · this session/i)).toBeInTheDocument();
+    // Tooltip states auto-detect + session-only override, no per-artifact claim.
+    const select = screen.getByRole("combobox", { name: /explanation persona/i });
+    expect(select).toHaveAttribute(
+      "title",
+      "Auto-detected per artifact. Set to override — applies to this session only.",
+    );
+  });
+
+  it("shows the auto framing indicator + STATIC auto-rule explainer (no per-artifact claim)", async () => {
+    vi.stubGlobal("fetch", mockState({ autonomyLevel: "supervised" }));
+    render(<AutonomySlider />);
+    await openPopover();
+    expect(screen.getByText(/Framing: auto · adapts per artifact/i)).toBeInTheDocument();
+    // The static description of the auto behavior (truthful, server-knowable).
+    expect(screen.getByText(/your code → engineer/i)).toBeInTheDocument();
+    expect(screen.getByText(/someone else’s PR → new-to-this-code/i)).toBeInTheDocument();
+    // It must NOT claim a live per-artifact inferred persona.
+    expect(screen.queryByText(/set for this session/i)).not.toBeInTheDocument();
+  });
+
+  it("shows the SET framing indicator naming the override when a persona is pinned", async () => {
+    vi.stubGlobal("fetch", mockState({ autonomyLevel: "supervised", persona: "stakeholder" }));
+    render(<AutonomySlider />);
+    await openPopover();
+    await waitFor(() =>
+      expect(screen.getByText(/Framing: stakeholder · set for this session/i)).toBeInTheDocument(),
+    );
+    // The auto indicator is gone once a persona is set.
+    expect(screen.queryByText(/adapts per artifact/i)).not.toBeInTheDocument();
+  });
+
+  it("reflects a persona loaded from /api/state", async () => {
+    vi.stubGlobal("fetch", mockState({ autonomyLevel: "supervised", persona: "stakeholder" }));
+    render(<AutonomySlider />);
+    await openPopover();
+    const select = screen.getByRole("combobox", { name: /explanation persona/i }) as HTMLSelectElement;
+    await waitFor(() => expect(select.value).toBe("stakeholder"));
+  });
+
+  it("POSTs { persona } and updates the value when one is picked", async () => {
+    const fetchMock = mockState({ autonomyLevel: "supervised" });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AutonomySlider />);
+    await openPopover();
+    const select = screen.getByRole("combobox", { name: /explanation persona/i }) as HTMLSelectElement;
+    await userEvent.selectOptions(select, "new-to-this-code");
+
+    const postCall = fetchMock.mock.calls.find(
+      (c: any[]) => String(c[0]).includes("/api/preferences") && c[1]?.method === "POST",
+    );
+    expect(postCall).toBeTruthy();
+    expect(JSON.parse(postCall![1].body)).toEqual({ persona: "new-to-this-code" });
+    await waitFor(() => expect(select.value).toBe("new-to-this-code"));
+  });
+
+  it("does NOT couple to autonomy or detail density — picking a persona POSTs only { persona }", async () => {
+    const fetchMock = mockState({ autonomyLevel: "supervised" });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AutonomySlider />);
+    await openPopover();
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: /explanation persona/i }),
+      "fluent-engineer",
+    );
+    const prefCalls = fetchMock.mock.calls.filter(
+      (c: any[]) => String(c[0]).includes("/api/preferences") && c[1]?.method === "POST",
+    );
+    for (const call of prefCalls) {
+      const body = JSON.parse(call[1].body);
+      expect(body).not.toHaveProperty("autonomyLevel");
+      expect(body).not.toHaveProperty("detailDensity");
+    }
+  });
+
+  it("rolls back and warns on a failed save (soft rollback — does not gate auto-approve)", async () => {
+    useToastStore.setState({ toasts: [] });
+    const fetchMock = vi.fn((url: string, init?: any) => {
+      if (String(url).endsWith("/api/state") && (!init?.method || init.method === "GET")) {
+        return Promise.resolve({ ok: true, json: async () => ({ autonomyLevel: "supervised", persona: "auto" }) });
+      }
+      return Promise.resolve({ ok: false, status: 500, json: async () => ({}) });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AutonomySlider />);
+    await openPopover();
+    const select = screen.getByRole("combobox", { name: /explanation persona/i }) as HTMLSelectElement;
+    await userEvent.selectOptions(select, "stakeholder");
+    await waitFor(() => expect(select.value).toBe("auto")); // rolled back
+    const toasts = useToastStore.getState().toasts;
+    expect(toasts.some((t) => t.kind === "error" && /rolled back/i.test(t.body ?? ""))).toBe(true);
   });
 });

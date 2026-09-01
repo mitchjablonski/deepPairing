@@ -99,6 +99,7 @@ export {
   PreferenceBodySchema,
   AutonomyLevelSchema,
   DetailDensitySchema,
+  PersonaSchema,
   RenderFailureBodySchema,
   PromptBodySchema,
   SuggestionResolveBodySchema,
@@ -117,6 +118,7 @@ export {
   type PreferenceBody,
   type AutonomyLevel,
   type DetailDensity,
+  type Persona,
   type RenderFailureBody,
   type PromptBody,
 } from "./schemas/request-bodies.js";

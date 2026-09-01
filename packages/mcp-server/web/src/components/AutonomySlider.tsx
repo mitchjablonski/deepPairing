@@ -5,6 +5,7 @@ import { useCrossProjectStore } from "../stores/crossProject";
 
 type AutonomyLevel = "supervised" | "balanced" | "autonomous";
 type DetailDensity = "rich" | "terse";
+type Persona = "auto" | "fluent-engineer" | "new-to-this-code" | "stakeholder";
 
 /**
  * Q6 + III9: was displayed as a "Ceremony" dial. Council product review
@@ -40,11 +41,31 @@ const densities: { id: DetailDensity; label: string; description: string }[] = [
   { id: "rich",  label: "Rich (fuller prose)", description: "Fuller explanations around each artifact" },
 ];
 
+/**
+ * Explanation persona — the WHO axis, ORTHOGONAL to autonomy (how MANY
+ * artifacts) and detail density (how MUCH prose). It governs the AUDIENCE the
+ * agent frames prose for. This is deliberately a QUIET escape hatch, not a
+ * co-equal dial: the default is "Auto" (the agent infers the audience from the
+ * work — ownership/subject/risk), and a set value pins the frame for the
+ * session. Rendered as a small select inside the same popover, well below the
+ * autonomy levels, so it never reads as a second primary control.
+ */
+const personas: { id: Persona; label: string }[] = [
+  { id: "auto",             label: "Auto — infer from the work" },
+  { id: "fluent-engineer",  label: "Fluent engineer" },
+  { id: "new-to-this-code", label: "New to this code" },
+  { id: "stakeholder",      label: "Stakeholder — plain language" },
+];
+
 export function AutonomySlider() {
   const [level, setLevel] = useState<AutonomyLevel>("supervised");
   // #139 / X1 — default "terse" mirrors the store default (plain-by-default) so
   // an old preferences.json (no detailDensity field) reads as Plain.
   const [density, setDensity] = useState<DetailDensity>("terse");
+  // Explanation persona (the WHO axis). Default "auto" mirrors the store default
+  // (infer-from-the-work) so an old preferences.json with no `persona` field
+  // reads as Auto and the escape hatch shows its quiet default.
+  const [persona, setPersona] = useState<Persona>("auto");
   /**
    * Q2 — cross-project publish opt-in, made REACHABLE.
    *
@@ -73,6 +94,14 @@ export function AutonomySlider() {
         if (state.autonomyLevel) setLevel(state.autonomyLevel);
         if (state.detailDensity === "rich" || state.detailDensity === "terse") {
           setDensity(state.detailDensity);
+        }
+        if (
+          state.persona === "auto" ||
+          state.persona === "fluent-engineer" ||
+          state.persona === "new-to-this-code" ||
+          state.persona === "stakeholder"
+        ) {
+          setPersona(state.persona);
         }
         // Q2 — the publish opt-in rides full-state hydration. Shared through
         // the crossProject store so this popover and the first-reject card
@@ -130,6 +159,31 @@ export function AutonomySlider() {
       useToastStore.getState().push({
         kind: "error",
         title: "Detail density not saved",
+        body: "The change was rolled back.",
+      });
+    }
+  };
+
+  // Explanation persona (the WHO axis) — orthogonal to autonomy and does NOT
+  // gate auto-approve, so a failed save is a soft rollback (toast, no
+  // auto-approve safety claim). Mirrors handleDensityChange's optimistic-then-
+  // reconcile shape.
+  const handlePersonaChange = async (newPersona: Persona) => {
+    if (newPersona === persona) return;
+    const prev = persona;
+    setPersona(newPersona);
+    try {
+      const res = await fetch(`${apiBase()}/api/preferences`, {
+        method: "POST",
+        headers: sessionHeaders(),
+        body: JSON.stringify({ persona: newPersona }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch {
+      setPersona((cur) => (cur === newPersona ? prev : cur));
+      useToastStore.getState().push({
+        kind: "error",
+        title: "Explanation persona not saved",
         body: "The change was rolled back.",
       });
     }
@@ -223,6 +277,62 @@ export function AutonomySlider() {
                   </button>
                 ))}
               </div>
+            </div>
+
+            {/* Explanation persona — the WHO axis (audience the agent frames
+                prose for). Deliberately QUIET: a small labelled select, not a
+                second slider or a co-equal button row. Scope is PER-SESSION and
+                is IN THE LABEL ("· this session"), never a bare "Audience".
+                Default "Auto" lets the agent infer the audience from the work; a
+                set value is an escape hatch that pins the frame for THIS session.
+                The framing indicator below reflects the OVERRIDE state (set vs
+                auto) + a STATIC description of the auto behavior — it never
+                claims a live per-artifact inferred persona, which the server/UI
+                cannot know (auto-infer is agent-side prose guidance, not a
+                server computation). */}
+            <div className="px-3 py-2 border-t border-border-subtle">
+              <label
+                htmlFor="persona-select"
+                className="block text-2xs text-text-muted mb-1.5"
+              >
+                Audience · this session
+              </label>
+              <select
+                id="persona-select"
+                aria-label="Explanation persona"
+                title="Auto-detected per artifact. Set to override — applies to this session only."
+                value={persona}
+                onChange={(e) => void handlePersonaChange(e.target.value as Persona)}
+                className="w-full px-2 py-1 rounded text-2xs bg-surface border border-border-default text-text-secondary hover:bg-surface-hover focus:outline-none focus:border-accent-blue/40"
+              >
+                {personas.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+
+              {/* Active-framing indicator — what frame is in effect + its
+                  SOURCE. Truthful by construction: for a set persona it names the
+                  override; for auto it says "adapts per artifact" and lists the
+                  STATIC auto rules — never a per-artifact persona it can't know. */}
+              {persona === "auto" ? (
+                <div className="mt-1.5">
+                  <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium border border-border-default text-text-muted">
+                    Framing: auto · adapts per artifact
+                  </span>
+                  <div className="text-[10px] text-text-muted mt-1 leading-relaxed">
+                    your code → engineer · someone else’s PR → new-to-this-code ·
+                    docs → stakeholder
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-1.5">
+                  <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-accent-blue-dim/40 text-accent-blue border border-accent-blue/40">
+                    Framing: {persona} · set for this session
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Q2 — CROSS-PROJECT MEMORY. The permanent home for the publish

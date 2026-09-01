@@ -164,10 +164,32 @@ export type AutonomyLevel = z.infer<typeof AutonomyLevelSchema>;
 export const DetailDensitySchema = z.enum(["rich", "terse"]);
 export type DetailDensity = z.infer<typeof DetailDensitySchema>;
 
-// POST /api/preferences — autonomy level + detail density + future per-session prefs.
+// Explanation persona — the WHO axis, ORTHOGONAL to both autonomy (how MANY
+// artifacts) and detailDensity (how MUCH prose). Persona governs who the prose
+// is FRAMED FOR — the audience the agent writes to — not the count or the
+// verbosity. Three real personas plus "auto":
+//   - "auto" (default) — let the agent INFER the audience from THE WORK
+//     (ownership/subject/risk; see SKILL Voice + the first-call hint). This is
+//     the alive default; it contributes the EMPTY string to the hint, exactly
+//     like terse-default, so a fresh install and any session with no persona
+//     set pay zero extra bytes. (The OVERRIDE is persisted PER-SESSION — see
+//     the store's session-prefs bucket — not in project preferences.json.)
+//   - "fluent-engineer" — today's BUILD-mode voice (assume code literacy).
+//   - "new-to-this-code" — today's REVIEW-mode voice, named (orient to intent
+//     + blast radius).
+//   - "stakeholder" — the genuinely-new one: translate OUT of code, route
+//     understanding through the DECISION, plain language.
+// Optional + absent-means-"auto" so back-compat is byte-clean.
+export const PersonaSchema = z.enum(["auto", "fluent-engineer", "new-to-this-code", "stakeholder"]);
+export type Persona = z.infer<typeof PersonaSchema>;
+
+// POST /api/preferences — autonomy level + detail density + explanation persona
+// + future per-session prefs.
 export const PreferenceBodySchema = z.object({
   autonomyLevel: AutonomyLevelSchema.optional(),
   detailDensity: DetailDensitySchema.optional(),
+  // Explanation persona (the WHO axis). Optional; absent reads as "auto".
+  persona: PersonaSchema.optional(),
   /**
    * Q2 — cross-project publish opt-in (`globalLedgerPublish` in
    * preferences.json). Pre-Q2 the ONLY way to flip this was the interactive

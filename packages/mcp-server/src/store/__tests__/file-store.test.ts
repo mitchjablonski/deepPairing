@@ -497,6 +497,105 @@ describe("FileStore", () => {
     });
   });
 
+  // Explanation persona (the WHO axis) — the manual OVERRIDE, persisted in the
+  // SAME preferences.json as detailDensity (project scope — see the seam note in
+  // file-store.ts). Round-trip, default-when-absent, and back-compat with a
+  // legacy preferences.json that predates the field.
+  describe("explanation persona", () => {
+    it("defaults to 'auto' when never set (infer-from-the-work)", () => {
+      const store = createStore("persona-default");
+      expect(store.getPersona()).toBe("auto");
+    });
+
+    it("persists and reloads a set persona across store instances", () => {
+      const store = createStore("persona-persist");
+      store.setPersona("stakeholder");
+      const store2 = createStore("persona-persist");
+      expect(store2.getPersona()).toBe("stakeholder");
+    });
+
+    it("round-trips back to 'auto' after being toggled", () => {
+      const store = createStore("persona-roundtrip");
+      store.setPersona("new-to-this-code");
+      store.setPersona("auto");
+      expect(createStore("persona-roundtrip").getPersona()).toBe("auto");
+    });
+
+    it("does NOT disturb the sibling autonomyLevel / detailDensity preferences", () => {
+      const store = createStore("persona-sibling");
+      store.setAutonomyLevel("balanced");
+      store.setDetailDensity("rich");
+      store.setPersona("fluent-engineer");
+      const reloaded = createStore("persona-sibling");
+      expect(reloaded.getAutonomyLevel()).toBe("balanced");
+      expect(reloaded.getDetailDensity()).toBe("rich");
+      expect(reloaded.getPersona()).toBe("fluent-engineer");
+    });
+
+    it("persists at SESSION scope in the session's own bucket (session-prefs.json)", () => {
+      const store = createStore("persona-scope");
+      store.setPersona("stakeholder");
+      // The value lands in the SESSION bucket, not the project preferences.json.
+      const sessionPrefs = path.join(tmpDir, ".deeppairing", "sessions", "persona-scope", "session-prefs.json");
+      expect(fs.existsSync(sessionPrefs)).toBe(true);
+      expect(JSON.parse(fs.readFileSync(sessionPrefs, "utf-8")).persona).toBe("stakeholder");
+    });
+
+    it("is PER-SESSION: two sessions in one project hold independent personas, and a set never touches project preferences.json", () => {
+      const a = createStore("persona-sess-a");
+      const b = createStore("persona-sess-b");
+      a.setPersona("stakeholder");
+      b.setPersona("new-to-this-code");
+      // Each session keeps its own value…
+      expect(a.getPersona()).toBe("stakeholder");
+      expect(b.getPersona()).toBe("new-to-this-code");
+      // …and a fresh store over each session reloads that session's own value.
+      expect(createStore("persona-sess-a").getPersona()).toBe("stakeholder");
+      expect(createStore("persona-sess-b").getPersona()).toBe("new-to-this-code");
+      // The project-level moat file is NEVER written by a persona set (it may
+      // not exist at all, and if it does it must carry no `persona` key).
+      const projectPrefs = path.join(tmpDir, ".deeppairing", "preferences.json");
+      if (fs.existsSync(projectPrefs)) {
+        expect(JSON.parse(fs.readFileSync(projectPrefs, "utf-8"))).not.toHaveProperty("persona");
+      } else {
+        expect(fs.existsSync(projectPrefs)).toBe(false);
+      }
+    });
+
+    it("does NOT read persona from the project preferences.json (scope isolation)", () => {
+      // A `persona` written into the PROJECT file must be ignored — persona is
+      // session-scoped, so this stale/foreign value never leaks in.
+      const projectPrefs = path.join(tmpDir, ".deeppairing", "preferences.json");
+      fs.mkdirSync(path.dirname(projectPrefs), { recursive: true });
+      fs.writeFileSync(projectPrefs, JSON.stringify({ autonomyLevel: "autonomous", persona: "stakeholder" }));
+      const store = createStore("persona-project-ignored");
+      expect(store.getPersona()).toBe("auto"); // NOT "stakeholder"
+      // The sibling project pref still loads (it really is project-scoped).
+      expect(store.getAutonomyLevel()).toBe("autonomous");
+    });
+
+    it("loads a session with NO session-prefs.json as 'auto' (back-compat with pre-feature sessions)", () => {
+      // A session created before this feature has no session-prefs.json.
+      const store = createStore("persona-legacy");
+      expect(store.getPersona()).toBe("auto");
+    });
+
+    it("ignores a poisoned persona value in the session bucket (falls back to 'auto')", () => {
+      const sessionPrefs = path.join(tmpDir, ".deeppairing", "sessions", "persona-poison", "session-prefs.json");
+      fs.mkdirSync(path.dirname(sessionPrefs), { recursive: true });
+      fs.writeFileSync(sessionPrefs, JSON.stringify({ persona: "ceo" }));
+      const store = createStore("persona-poison");
+      expect(store.getPersona()).toBe("auto");
+    });
+
+    it("surfaces persona in getFullState for the companion UI", () => {
+      const store = createStore("persona-fullstate");
+      expect(store.getFullState().persona).toBe("auto");
+      store.setPersona("stakeholder");
+      expect(store.getFullState().persona).toBe("stakeholder");
+    });
+  });
+
   it("records and retrieves session memory", () => {
     const store = createStore( "memory");
     store.recordApprovedPattern({ description: "Service pattern" });

@@ -159,6 +159,43 @@ const DETAIL_DENSITY_TERSE_GUIDANCE = "";
 const DETAIL_DENSITY_RICH_GUIDANCE =
   "\n🗣 Detail density: RICH — the human wants fuller prose. Expand explanations/rationale around each artifact. Evidence, structured fields, diagrams, and artifact count are unchanged.";
 
+// Explanation persona (the WHO axis) — the manual OVERRIDE, generalizing the
+// detail-density terse/rich pattern EXACTLY. Persona is ORTHOGONAL to autonomy
+// (how many artifacts) and density (how much prose): it pins WHO the prose is
+// framed for.
+//
+// THE INVERSION (mirrors terse-default): "auto" is the SILENT default — it
+// contributes the EMPTY string, so a default session's hint stays byte-for-byte
+// unchanged and the agent infers the audience from THE WORK (the auto-infer
+// mapping in SKILL Voice + the preamble Voice line). Only a SET persona appends
+// a short block, and it rides the SAME UNCAPPED obligations tier the terse/rich
+// block rides, so a pinned audience can't lose the truncation lottery. The three
+// override blocks each begin "Explanation persona: FRAME EVERYTHING FOR …" and
+// end by stating the frame overrides the auto-inferred one for THIS session.
+const PERSONA_AUTO_GUIDANCE = "";
+const PERSONA_GUIDANCE: Record<
+  "fluent-engineer" | "new-to-this-code" | "stakeholder",
+  string
+> = {
+  "fluent-engineer":
+    "\n🎭 Explanation persona: FRAME EVERYTHING FOR a FLUENT ENGINEER — assume code literacy, don't define standard terms or narrate syntax; anchor to the specific decisions, tradeoffs, and the fork you took. This pins the audience for this session, overriding the auto-inferred frame; density (how much) and autonomy (how many) are unchanged.",
+  "new-to-this-code":
+    "\n🎭 Explanation persona: FRAME EVERYTHING FOR someone NEW TO THIS CODE — they have less context, so orient them to intent, the why, and the blast radius they can't read off the diff; still a fluent engineer, so no defining standard terms. This pins the audience for this session, overriding the auto-inferred frame; density (how much) and autonomy (how many) are unchanged.",
+  "stakeholder":
+    "\n🎭 Explanation persona: FRAME EVERYTHING FOR a STAKEHOLDER — translate OUT of code into plain language, route the understanding through the DECISION they must make, lead with impact not implementation. This pins the audience for this session, overriding the auto-inferred frame; density (how much) and autonomy (how many) are unchanged.",
+};
+
+/** Persona OVERRIDE block for the first-call hint. "auto" (default) is the
+ *  SILENT baseline (empty string, byte-identical to a pre-feature session); a
+ *  set persona appends its block. Exported for the test that pins the inversion.
+ */
+export function personaHintFor(
+  persona: "auto" | "fluent-engineer" | "new-to-this-code" | "stakeholder",
+): string {
+  if (persona === "auto") return PERSONA_AUTO_GUIDANCE;
+  return PERSONA_GUIDANCE[persona];
+}
+
 // #148 — autonomy-level guidance. Same delivery pattern as #139's detail
 // density above: a STANDING user setting, spoken once per session in the
 // UNCAPPED obligations tier (a dial instruction that lost the truncation
@@ -777,6 +814,20 @@ export async function buildFirstCallHint(
     if (guidance) obligationsParts.push(guidance);
   } catch {
     // Non-fatal — absent/unreadable preference falls back to terse (no guidance).
+  }
+
+  // Explanation persona (the WHO axis) — the manual OVERRIDE, same uncapped-tier
+  // pattern as detail density above. "auto" (the default) contributes the empty
+  // string, so the common path stays byte-identical and the agent infers the
+  // audience from the work (SKILL Voice + the preamble Voice line); only a SET
+  // persona appends its short block. Guarded accessor: a read-only store that
+  // doesn't implement getPersona reads as "auto" (no block).
+  try {
+    const persona = (await store.getPersona?.()) ?? "auto";
+    const guidance = personaHintFor(persona);
+    if (guidance) obligationsParts.push(guidance);
+  } catch {
+    // Non-fatal — absent/unreadable preference falls back to "auto" (no guidance).
   }
 
   // #148 — autonomy dial, same uncapped-tier pattern as detail density above.
