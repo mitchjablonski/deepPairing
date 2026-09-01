@@ -24122,7 +24122,7 @@ var SERVER_VERSION;
 var init_version = __esm({
   "src/version.ts"() {
     "use strict";
-    SERVER_VERSION = "0.1.45";
+    SERVER_VERSION = "0.1.46";
   }
 });
 
