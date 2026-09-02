@@ -24,6 +24,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { runDaemonStartupSetup } from "../cli/setup-tasks.js";
+import { upsertProject } from "../store/project-registry.js";
 import { flushAllMetrics } from "../store/metrics-store.js";
 import { preferredPortFor, BASE_PORT, PORT_SPAN } from "../project-root.js";
 import { cliInvocation } from "../cli-invocation.js";
@@ -259,6 +260,19 @@ async function main() {
     } else if (result.changed) {
       log(`Setup task: ${result.message}`);
     }
+  }
+
+  // Context bank — leave a breadcrumb in ~/.deeppairing/projects.json so the
+  // cross-project view can see this project even when no daemon is running
+  // here. The port sweep only finds LIVE daemons, and the project you last
+  // touched three weeks ago (exactly the one "where did I leave off?" is
+  // about) has none. Best-effort by construction: upsertProject swallows its
+  // own failures, and this belt-and-suspenders catch guarantees a cache file
+  // can never cost us a daemon start.
+  try {
+    if (upsertProject(projectRoot)) log(`Project registry: recorded ${projectRoot}`);
+  } catch (err) {
+    log(`Project registry warning (non-fatal): ${err}`);
   }
 
     // N2.1: probe sequential ports on EADDRINUSE so multiple projects can run

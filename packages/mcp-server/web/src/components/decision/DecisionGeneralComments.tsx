@@ -50,5 +50,17 @@ export function DecisionGeneralComments({
     [artifacts, comments, artifact.id, liveOptions],
   );
 
-  return <CommentThread artifactId={artifact.id} comments={comments} carryoverFor={carryoverFor} readOnly={readOnly} />;
+  return (
+    <CommentThread
+      artifactId={artifact.id}
+      comments={comments}
+      carryoverFor={carryoverFor}
+      readOnly={readOnly}
+      /* A decision card is the surface people are most likely to have a
+         QUESTION about rather than an opinion; without this the question lands
+         as a plain comment and nothing ever owes an answer. */
+      secondarySubmitLabel="Ask"
+      secondarySubmitTitle="Ask before you choose — the agent owes you an answer"
+    />
+  );
 }

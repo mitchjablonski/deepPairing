@@ -65,6 +65,7 @@ import {
 } from "./watchdog.js";
 import { shouldAutoOpenBrowser } from "./auto-open.js";
 import { writeJsonAtomic } from "../store/atomic-write.js";
+import { summarizeProject } from "../store/context-bank.js";
 
 /**
  * Cross-platform "open URL in default browser" without pulling in an npm
@@ -609,6 +610,15 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
       .map((r) => {
         const root = r.identity!.projectRoot as string;
         const segs = root.split(/[\\/]/).filter(Boolean);
+        // Context-bank enrichment — the two numbers the switcher wants but the
+        // identity probe can't give: when this project last saw activity, and
+        // how many decisions are still waiting on the human there. Read from
+        // the peer's DISK (a read-only session walk) rather than asking its
+        // daemon, so the sweep stays one round of probes and a peer that is
+        // slow/wedged can't stall the switcher. Additive + optional: a project
+        // we can't read reports `openDecisionCount: 0` and no lastActivity —
+        // never a failed sweep.
+        const bank = summarizeProject(root);
         return {
           projectRoot: root,
           projectHash: projectHashOf(root),
@@ -618,6 +628,8 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
           // MP1 — per-project "agent waiting" count (from each peer's
           // /api/daemon-info). Drives the switcher badge + global indicator.
           pendingCount: typeof r.identity.pendingCount === "number" ? r.identity.pendingCount : 0,
+          lastActivity: bank.lastActivity,
+          openDecisionCount: bank.openDecisionCount,
         };
       })
       .sort((a, b) => a.label.localeCompare(b.label));

@@ -23573,7 +23573,7 @@ var init_request = __esm({
 });
 
 // ../shared/dist/schemas/request-bodies.js
-var CreateRequestBodySchema, CommentBodySchema, SuggestionResolveBodySchema, SuggestionUpdateBodySchema, DecisionResolveBodySchema, StatusUpdateBodySchema, RenameBodySchema, FeatureOverrideBodySchema, ChangesetReviewBodySchema, AutonomyLevelSchema, DetailDensitySchema, PersonaSchema, PreferenceBodySchema, RenderFailureBodySchema, PromptBodySchema;
+var CreateRequestBodySchema, CommentBodySchema, SuggestionResolveBodySchema, SuggestionUpdateBodySchema, DecisionResolveBodySchema, StatusUpdateBodySchema, DecisionCloseOutBodySchema, RenameBodySchema, FeatureOverrideBodySchema, ChangesetReviewBodySchema, AutonomyLevelSchema, DetailDensitySchema, PersonaSchema, PreferenceBodySchema, RenderFailureBodySchema, PromptBodySchema;
 var init_request_bodies = __esm({
   "../shared/dist/schemas/request-bodies.js"() {
     "use strict";
@@ -23626,6 +23626,11 @@ var init_request_bodies = __esm({
        * explicitly is what lets a future paraphrase get caught across projects.
        */
       concept: external_exports.string().optional()
+    });
+    DecisionCloseOutBodySchema = external_exports.object({
+      projectRoot: external_exports.string().max(4096).optional(),
+      sessionId: external_exports.string().max(200).optional(),
+      note: external_exports.string().max(2e3).optional()
     });
     RenameBodySchema = external_exports.object({
       title: external_exports.string().min(1)
@@ -30060,6 +30065,14 @@ var ERROR_CODES = {
   verdict_already_final: "verdict_already_final",
   /** F6 — decision resolve for a decision the bound session doesn't know. */
   decision_not_in_session: "decision_not_in_session",
+  /** Context bank — a close-out aimed at a decision owned by ANOTHER project.
+   *  This slice writes only into the current project's store (a cross-project
+   *  write would mean two daemons owning the same files); the read model still
+   *  SHOWS the decision, so the refusal is explicit rather than a silent no-op. */
+  cross_project_close_out_unsupported: "cross_project_close_out_unsupported",
+  /** Context bank — close-out on a decision the human actually ANSWERED. Closing
+   *  it out would overwrite real history with "retired, nobody chose". */
+  decision_already_resolved: "decision_already_resolved",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
   comment_not_in_session: "comment_not_in_session",
   /** #172 — take-counter/insist targeted a suggestion the agent hasn't countered. */

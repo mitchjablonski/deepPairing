@@ -415,7 +415,20 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
             <DecisionGeneralComments artifact={artifact} comments={generalComments} readOnly={commentsReadOnly} />
           </Suspense>
         ) : (
-          <CommentThread artifactId={artifact.id} comments={generalComments} readOnly={commentsReadOnly} />
+          /* The question lane was structurally dead: a dry-run over real data
+             found ZERO comments carrying `intent`, so collectUnansweredQuestions
+             (and every consumer of it, incl. check_feedback's owed-questions
+             queue) always returned empty. The plumbing was fine end to end —
+             the composers people actually use simply had no way to SAY
+             "question". This is the main per-artifact thread and it had no Ask
+             button; opting it in is the whole fix here. */
+          <CommentThread
+            artifactId={artifact.id}
+            comments={generalComments}
+            readOnly={commentsReadOnly}
+            secondarySubmitLabel="Ask"
+            secondarySubmitTitle="Post as a question — the agent owes you an answer before it moves on"
+          />
         )}
       </div>
       )}

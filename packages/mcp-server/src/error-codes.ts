@@ -53,6 +53,14 @@ export const ERROR_CODES = {
   verdict_already_final: "verdict_already_final",
   /** F6 — decision resolve for a decision the bound session doesn't know. */
   decision_not_in_session: "decision_not_in_session",
+  /** Context bank — a close-out aimed at a decision owned by ANOTHER project.
+   *  This slice writes only into the current project's store (a cross-project
+   *  write would mean two daemons owning the same files); the read model still
+   *  SHOWS the decision, so the refusal is explicit rather than a silent no-op. */
+  cross_project_close_out_unsupported: "cross_project_close_out_unsupported",
+  /** Context bank — close-out on a decision the human actually ANSWERED. Closing
+   *  it out would overwrite real history with "retired, nobody chose". */
+  decision_already_resolved: "decision_already_resolved",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
   comment_not_in_session: "comment_not_in_session",
   /** #172 — take-counter/insist targeted a suggestion the agent hasn't countered. */

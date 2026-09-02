@@ -174,6 +174,25 @@ license trims PRE-WORK ceremony (findings, spec/plan); it never trims the review
 of the code itself, and it never drops the debrief. (The trivial carve-out is the
 one case that closes without a *separate* debrief — its self-summarizing
 `present_code_change` IS the comprehension surface.)
+
+**Recognize the END of the run — that is where the debrief is missed.** The rule
+above ("END EVERY feature or autonomous run with exactly ONE `present_debrief`")
+fails in practice not because you disagree with it but because runs rarely
+announce that they are over. They just stop. So treat ALL of these as the end of
+the run, and post the debrief BEFORE your closing message in chat — not after,
+not "if they ask":
+
+- tests/build/CI go green on the work you were asked to do;
+- the human signals satisfaction or closure ("thanks", "that works", "looks
+  good", "ship it", "we're done") — the debrief is what they take away, so it
+  must exist before you sign off;
+- the human changes the subject to unrelated work, or you are about to end your
+  turn with nothing left on your todo list;
+- you are about to hand off (a PR opened, an agent exiting, context running out).
+
+If you notice a run ended WITHOUT a debrief, post it late rather than not at all
+— a debrief on yesterday's work is still the only place that story exists. The
+one exception stays the trivial carve-out above.
 - **Tag every artifact with its `feature`.** When your work spans more than one
   run — a milestone, a multi-session feature — pass the same `feature` tag on
   every `present_*` you make (findings, options, plan, spec, code changes,

@@ -92,6 +92,7 @@ export {
 export {
   CommentBodySchema,
   DecisionResolveBodySchema,
+  DecisionCloseOutBodySchema,
   StatusUpdateBodySchema,
   RenameBodySchema,
   FeatureOverrideBodySchema,
@@ -111,6 +112,7 @@ export {
   type SuggestionResolveBody,
   type SuggestionUpdateBody,
   type DecisionResolveBody,
+  type DecisionCloseOutBody,
   type StatusUpdateBody,
   type RenameBody,
   type FeatureOverrideBody,
