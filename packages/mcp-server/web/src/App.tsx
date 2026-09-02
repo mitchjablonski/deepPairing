@@ -27,12 +27,15 @@ import { ProjectDecisionsModal } from "./components/ProjectDecisionsModal";
 import { FeaturesModal } from "./components/FeaturesModal";
 import { ConversationRail } from "./components/ConversationRail";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
+import { ContextBankView } from "./components/ContextBankView";
 import { SkillLoadBanner } from "./components/SkillLoadBanner";
 import { useArtifactStore } from "./stores/artifact";
 import { useReplayStore } from "./stores/replay";
 import { useConnectionStore } from "./stores/connection";
 import { usePreflightBlockStore } from "./stores/preflightBlocks";
 import { useCrossProjectStore } from "./stores/crossProject";
+import { useContextBankStore } from "./stores/contextBank";
+import { shouldLandOnBank } from "./lib/bank";
 import { scrollToAnchor } from "./lib/comment-anchor";
 import { reviewLifecycle } from "./lib/reviewLifecycle";
 import { countUnansweredQuestions } from "./lib/unanswered";
@@ -108,6 +111,43 @@ function App() {
   const unansweredCount = useArtifactStore((s) =>
     countUnansweredQuestions(Object.values(s.comments).flat()),
   );
+  /**
+   * THE CONTEXT BANK — "what am I doing across all my projects".
+   *
+   * ONE cached read at bootstrap. It feeds two things: the header badge (how
+   * many threads need you, anywhere) and the LANDING DECISION below. The
+   * surface itself does one `fresh` read when it opens. Nothing polls — the
+   * endpoint is a synchronous disk walk over every registered project.
+   */
+  const bank = useContextBankStore((s) => s.bank);
+  const bankOpen = useContextBankStore((s) => s.open);
+  const setBankOpen = useContextBankStore((s) => s.setOpen);
+  const loadBank = useContextBankStore((s) => s.load);
+  useEffect(() => {
+    loadBank();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- bootstrap read; `loadBank` is a stable store action
+  }, []);
+  /**
+   * The alive-surface call: land on the BANK when it carries cross-signal the
+   * session view structurally cannot show (more than one project with real
+   * work, or more than one live thread here) — and otherwise land exactly where
+   * this app has always landed. A deep link (`?session=`) always wins; it still
+   * binds the session underneath either way, so the bank is a layer over the
+   * app, never a replacement route. Fires ONCE per page load — re-landing on a
+   * refetch would yank the surface back over whatever the human opened.
+   */
+  const bankLandingDecidedRef = useRef(false);
+  useEffect(() => {
+    if (bankLandingDecidedRef.current || !bank || !hydrated) return;
+    bankLandingDecidedRef.current = true;
+    const deepLinkedSession =
+      typeof window === "undefined"
+        ? null
+        : new URLSearchParams(window.location.search).get("session");
+    if (shouldLandOnBank(bank, { deepLinkedSession, currentProjectRoot: projectRoot })) {
+      setBankOpen(true);
+    }
+  }, [bank, hydrated, projectRoot, setBankOpen]);
   const [showHelp, setShowHelp] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -479,6 +519,33 @@ function App() {
         <div className="flex items-center gap-3 min-w-0">
           <h1 className="text-sm font-bold shrink-0">deepPairing</h1>
           <ProjectSwitcher />
+          {/* The bank's door. Sits beside the project switcher because it
+              answers the same question one level up: not "which project", but
+              "what am I in the middle of, anywhere". The badge is the cross-
+              project needs-you total — amber, per the T3 convention, and it
+              deliberately EXCLUDES questions the agent still owes you. */}
+          <button
+            onClick={() => setBankOpen(true)}
+            data-testid="open-context-bank"
+            className="inline-flex items-center gap-1 px-2 py-1 rounded text-2xs shrink-0 bg-surface-elevated
+                       border border-border-default text-text-secondary hover:text-text-primary
+                       hover:bg-surface-hover transition-colors"
+            title="My active threads — every project, and where each one was left"
+            aria-label="Open my active threads"
+          >
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M1.5 3.5h9v6h-9zM1.5 3.5 3 1.5h6l1.5 2" />
+            </svg>
+            <span className="hidden min-[1100px]:inline">Threads</span>
+            {(bank?.totals?.needsYou ?? 0) > 0 && (
+              <span
+                className="ml-0.5 px-1.5 rounded-full bg-accent-amber text-surface-primary text-[10px] font-bold leading-tight"
+                aria-label={`${bank?.totals?.needsYou} threads need you`}
+              >
+                {bank?.totals?.needsYou}
+              </span>
+            )}
+          </button>
           <TurnIndicator
             pendingBannerVisible={pendingBannerVisible}
             questionsBannerVisible={questionsBannerVisible}
@@ -791,6 +858,7 @@ function App() {
       {/* #138 — project-wide decisions view (read-only, all sessions). */}
       {showDecisions && <ProjectDecisionsModal onClose={() => setShowDecisions(false)} />}
       {showFeatures && <FeaturesModal onClose={() => setShowFeatures(false)} />}
+      {bankOpen && <ContextBankView onClose={() => setBankOpen(false)} />}
 
       {/* Command palette */}
       {showPalette && <CommandPalette onClose={() => setShowPalette(false)} />}
