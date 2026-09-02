@@ -345,3 +345,69 @@ describe("ContextBankView — decision triage", () => {
     expect(assign).toHaveBeenCalledWith("http://localhost:3900/?session=s_beta");
   });
 });
+
+describe("ContextBankView — the counts cannot disagree with the lanes", () => {
+  it("does not count a fixture session in 'need you' while the lane quarantines it", async () => {
+    const b = bankOf([
+      project({
+        sessions: [
+          session({ sessionId: "demo_1", oneLiner: "the demo thread", fixtureLike: true, salience: ["needs-you"], openDecisionCount: 1, openDecisions: [decision({ stakes: "high", ageDays: 40 })] }),
+        ],
+      }),
+    ]);
+    // The server total says 1 — and it is not wrong, it counts every session.
+    // The surface must still show what its own lanes show.
+    b.totals = { ...b.totals, projects: 1, sessions: 1, needsYou: 1, openDecisions: 1 };
+    stubDaemon(b);
+    render(<ContextBankView onClose={() => {}} />);
+    const totals = await screen.findByTestId("bank-totals");
+    expect(totals.textContent).toMatch(/0 need you/);
+    expect(totals.textContent).toMatch(/1 demo/);
+    expect(within(screen.getByTestId("bank-lane-needs-you")).queryAllByTestId("bank-row")).toHaveLength(0);
+  });
+});
+
+describe("ContextBankView — a refused close-out keeps the human's note", () => {
+  it("restores the typed note (and the armed confirm) after a 400 rollback", async () => {
+    stubDaemon(
+      bankOf([
+        project({
+          sessions: [
+            session({ salience: ["needs-you"], openDecisionCount: 1, openDecisions: [decision({ ageDays: 70, stakes: "high" })] }),
+          ],
+        }),
+      ]),
+      { closeOutStatus: 400 },
+    );
+    render(<ContextBankView onClose={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: /replaced the session cache/ }));
+    await userEvent.click(screen.getByTestId("bank-close-out"));
+    await userEvent.type(screen.getByLabelText(/why are you closing this out/i), "a later card replaced this");
+    await userEvent.click(screen.getByRole("button", { name: /confirm close-out/i }));
+
+    await waitFor(() => expect(useToastStore.getState().toasts).toHaveLength(1));
+    // The optimistic removal remounted the row; the sentence has to come back
+    // with it, on the one path where the human is about to retry.
+    const restored = await screen.findByLabelText(/why are you closing this out/i);
+    expect((restored as HTMLInputElement).value).toBe("a later card replaced this");
+  });
+});
+
+describe("ContextBankView — chrome details", () => {
+  it("shows a disclosure caret that flips when the row expands", async () => {
+    stubDaemon(bankOf([project({ sessions: [session()] })]));
+    render(<ContextBankView onClose={() => {}} />);
+    const row = await screen.findByRole("button", { name: /replaced the session cache/ });
+    expect(row.textContent?.startsWith("\u25b8")).toBe(true);
+    await userEvent.click(row);
+    expect(screen.getByRole("button", { name: /replaced the session cache/ }).textContent?.startsWith("\u25be")).toBe(true);
+  });
+
+  it("keeps the 'partially read' chip OFF amber so amber stays attention-only", async () => {
+    stubDaemon(bankOf([project({ sessions: [session({ degraded: true, degradedReason: "unreadable" })] })]));
+    render(<ContextBankView onClose={() => {}} />);
+    const chip = await screen.findByTestId("bank-degraded");
+    expect(chip.className).not.toMatch(/accent-amber/);
+    expect(chip.className).toMatch(/surface-secondary/);
+  });
+});

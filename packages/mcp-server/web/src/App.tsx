@@ -5,6 +5,7 @@ import { IdleHome } from "./components/IdleHome";
 import { SessionWrapCard } from "./components/SessionWrapCard";
 import { computePending, isSinglePendingInView } from "./lib/pending";
 import { selectDefaultSession } from "./lib/selectDefaultSession";
+import { enterSessionReplay } from "./lib/session-replay";
 import { useAgentRecentlyActive } from "./hooks/useAgentRecentlyActive";
 import { WaitingForClaude } from "./components/WaitingForClaude";
 import { TurnIndicator } from "./components/TurnIndicator";
@@ -35,7 +36,7 @@ import { useConnectionStore } from "./stores/connection";
 import { usePreflightBlockStore } from "./stores/preflightBlocks";
 import { useCrossProjectStore } from "./stores/crossProject";
 import { useContextBankStore } from "./stores/contextBank";
-import { shouldLandOnBank } from "./lib/bank";
+import { displayCounts, shouldLandOnBank } from "./lib/bank";
 import { scrollToAnchor } from "./lib/comment-anchor";
 import { reviewLifecycle } from "./lib/reviewLifecycle";
 import { countUnansweredQuestions } from "./lib/unanswered";
@@ -120,6 +121,15 @@ function App() {
    * endpoint is a synchronous disk walk over every registered project.
    */
   const bank = useContextBankStore((s) => s.bank);
+  /**
+   * The badge counts what the BANK'S LANES count, never `bank.totals`.
+   *
+   * The server total includes fixture-flagged sessions; the lanes quarantine
+   * them. Read straight off totals, a fresh `deeppairing demo` install lit an
+   * amber "1" in the header over a Needs-you lane reading "(0) Nothing here" —
+   * a badge pointing at work that does not exist, on the onboarding path.
+   */
+  const bankNeedsYou = useContextBankStore((s) => displayCounts(s.bank).needsYou);
   const bankOpen = useContextBankStore((s) => s.open);
   const setBankOpen = useContextBankStore((s) => s.setOpen);
   const loadBank = useContextBankStore((s) => s.load);
@@ -136,6 +146,17 @@ function App() {
    * app, never a replacement route. Fires ONCE per page load — re-landing on a
    * refetch would yank the surface back over whatever the human opened.
    */
+  /** A `?session=` id this daemon hasn't registered, awaiting hydration (M2). */
+  const [pendingDeepLinkReplay, setPendingDeepLinkReplay] = useState<string | null>(null);
+  useEffect(() => {
+    if (!pendingDeepLinkReplay || !hydrated) return;
+    const target = pendingDeepLinkReplay;
+    setPendingDeepLinkReplay(null);
+    // Fail-soft: a non-2xx (the session isn't on disk either) returns false and
+    // the normal landing already in place simply stands.
+    enterSessionReplay(target).catch(() => {});
+  }, [pendingDeepLinkReplay, hydrated]);
+
   const bankLandingDecidedRef = useRef(false);
   useEffect(() => {
     if (bankLandingDecidedRef.current || !bank || !hydrated) return;
@@ -232,23 +253,43 @@ function App() {
         const sessions = data.sessions ?? [];
         if (requested && sessions.some((s: any) => s.sessionId === requested)) {
           connect(requested);
-        } else if (sessions.length > 0) {
-          // F6 (M1) — prefer a LIVE session: the daemon retains dead sessions
-          // in insertion order (oldest first), so after any Claude restart a
-          // plain sessions[0] bound the tab to a corpse — making the
-          // cross-session no-op path the DEFAULT state, with composer
-          // directives flowing into a store no agent reads.
-          //
-          // Per-session-split — with the per-Claude-session split a project can
-          // hold MANY live buckets at once (concurrent conversations). Bind to
-          // the MOST-RECENTLY-ACTIVE live one so the human lands on the
-          // conversation they're actually in, not the oldest by insertion
-          // order. Single-session projects are unchanged (one live candidate is
-          // trivially the most-recent). See selectDefaultSession + its test.
-          const chosen = selectDefaultSession(sessions);
-          connect((chosen ?? sessions[0]).sessionId);
         } else {
-          connect(); // Fallback: global connection
+          /**
+           * `?session=` names a session this daemon has NOT registered.
+           *
+           * Pre-bank that meant "bad link", and the id was silently dropped in
+           * favour of the default session. The bank made it the COMMON case:
+           * its headline population is dead, on-disk sessions (one rolling
+           * session per project, long since unregistered), and the
+           * cross-project "switch to that project to act" affordance sends
+           * exactly this URL. Landing on the right project and the wrong thread
+           * is the whole failure the bank exists to prevent.
+           *
+           * So an unregistered id is handed to the SAME read-only replay route
+           * the in-project row click uses (enterSessionReplay) rather than
+           * dropped — deferred until after hydration, because the connected
+           * payload resets and refills the artifact store and would otherwise
+           * clobber the replay it raced.
+           */
+          if (requested) setPendingDeepLinkReplay(requested);
+          if (sessions.length > 0) {
+            // F6 (M1) — prefer a LIVE session: the daemon retains dead sessions
+            // in insertion order (oldest first), so after any Claude restart a
+            // plain sessions[0] bound the tab to a corpse — making the
+            // cross-session no-op path the DEFAULT state, with composer
+            // directives flowing into a store no agent reads.
+            //
+            // Per-session-split — with the per-Claude-session split a project
+            // can hold MANY live buckets at once (concurrent conversations).
+            // Bind to the MOST-RECENTLY-ACTIVE live one so the human lands on
+            // the conversation they're actually in, not the oldest by insertion
+            // order. Single-session projects are unchanged (one live candidate
+            // is trivially the most-recent). See selectDefaultSession + its test.
+            const chosen = selectDefaultSession(sessions);
+            connect((chosen ?? sessions[0]).sessionId);
+          } else {
+            connect(); // Fallback: global connection
+          }
         }
       } catch {
         connect();
@@ -536,13 +577,21 @@ function App() {
             <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M1.5 3.5h9v6h-9zM1.5 3.5 3 1.5h6l1.5 2" />
             </svg>
-            <span className="hidden min-[1100px]:inline">Threads</span>
-            {(bank?.totals?.needsYou ?? 0) > 0 && (
+            {/* The label stays at EVERY width. Below 1100px the icon-only form
+                put two naked amber pills side by side (this one and the project
+                switcher's), which is the one arrangement that makes them
+                genuinely indistinguishable. */}
+            <span>Threads</span>
+            {bankNeedsYou > 0 && (
+              /* The DIM-CHIP form the bank surface itself uses — still amber
+                 (this is a needs-you count, T3 holds), but visibly not the
+                 switcher's solid amber pill, which counts something else
+                 entirely (pending in OTHER projects). */
               <span
-                className="ml-0.5 px-1.5 rounded-full bg-accent-amber text-surface-primary text-[10px] font-bold leading-tight"
-                aria-label={`${bank?.totals?.needsYou} threads need you`}
+                className="ml-0.5 px-1.5 rounded bg-accent-amber-dim text-accent-amber text-[10px] font-bold leading-tight"
+                aria-label={`${bankNeedsYou} threads need you`}
               >
-                {bank?.totals?.needsYou}
+                {bankNeedsYou}
               </span>
             )}
           </button>

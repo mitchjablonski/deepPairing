@@ -50,6 +50,16 @@ interface ContextBankState {
   closedOut: Record<string, true>;
   /** In-flight close-outs, by artifact id (button disable + spinner). */
   closing: Record<string, true>;
+  /**
+   * A close-out note that did NOT land, kept by artifact id.
+   *
+   * The optimistic removal unmounts the row, so a rollback remounts a FRESH
+   * DecisionRow — and the sentence the human just typed ("a later card replaced
+   * this") died with the old component instance, on the one path where they are
+   * most likely to retry. Held here so the remounted row can restore it (and
+   * re-arm the confirm around it). Cleared the moment a close-out succeeds.
+   */
+  noteDrafts: Record<string, string>;
   /** projectRoot → "localhost:PORT" for every LIVE peer daemon. */
   peers: PeerProject[];
 
@@ -68,6 +78,7 @@ export const useContextBankStore = create<ContextBankState>((set) => ({
   expanded: {},
   closedOut: {},
   closing: {},
+  noteDrafts: {},
   peers: [],
 
   load: async ({ fresh } = {}) => {
@@ -135,12 +146,22 @@ export const useContextBankStore = create<ContextBankState>((set) => ({
         headers: sessionHeaders(sessionId),
         body: JSON.stringify({ projectRoot, sessionId, note: note?.trim() || undefined }),
       });
+      set((s) => {
+        const noteDrafts = { ...s.noteDrafts };
+        delete noteDrafts[artifactId];
+        return { noteDrafts };
+      });
       return true;
     } catch (err) {
       set((s) => {
         const closedOut = { ...s.closedOut };
         delete closedOut[artifactId];
-        return { closedOut };
+        const trimmed = note?.trim();
+        return {
+          closedOut,
+          // Give the remounted row its note back — see noteDrafts.
+          noteDrafts: trimmed ? { ...s.noteDrafts, [artifactId]: trimmed } : s.noteDrafts,
+        };
       });
       const apiErr = err instanceof ApiError ? err : null;
       useToastStore.getState().push({
@@ -172,6 +193,7 @@ export const useContextBankStore = create<ContextBankState>((set) => ({
       expanded: {},
       closedOut: {},
       closing: {},
+      noteDrafts: {},
       peers: [],
     }),
 }));

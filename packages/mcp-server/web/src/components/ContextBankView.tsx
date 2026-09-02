@@ -7,6 +7,7 @@ import { enterSessionReplay } from "../lib/session-replay";
 import {
   ageTone,
   compactAge,
+  displayCounts,
   groupBank,
   laneTags,
   samePath,
@@ -174,8 +175,13 @@ interface DecisionRowProps {
 function DecisionRow({ decision, session, isCurrentProject, onSwitchToProject }: DecisionRowProps) {
   const closeOut = useContextBankStore((s) => s.closeOut);
   const closing = useContextBankStore((s) => !!s.closing[decision.artifactId]);
-  const [confirming, setConfirming] = useState(false);
-  const [note, setNote] = useState("");
+  // A refused close-out remounts this row (the optimistic removal unmounted it),
+  // so the note the human typed has to come back from the store or it is lost
+  // on exactly the path where they are about to retry. A restored draft also
+  // re-arms the confirm, so the sentence is on screen rather than one click away.
+  const savedNote = useContextBankStore((s) => s.noteDrafts[decision.artifactId] ?? "");
+  const [confirming, setConfirming] = useState(!!savedNote);
+  const [note, setNote] = useState(savedNote);
 
   const confirm = async () => {
     setConfirming(false);
@@ -348,6 +354,12 @@ function BankRowItem({ row, lane, currentProjectRoot, onClose }: RowProps) {
                    focus:outline-none focus:ring-1 focus:ring-accent-blue"
       >
         <div className="flex items-baseline gap-2 min-w-0">
+          {/* Expanding is the ONLY route from this index into a session, so the
+              affordance has to be visible, not just announced via aria-expanded.
+              Same glyph pair the fixture section already uses. */}
+          <span className="text-2xs text-text-muted shrink-0" aria-hidden="true">
+            {expanded ? "▾" : "▸"}
+          </span>
           <span className="text-2xs font-semibold text-text-secondary shrink-0 max-w-[30%] truncate">
             {project.name}
           </span>
@@ -392,8 +404,13 @@ function BankRowItem({ row, lane, currentProjectRoot, onClose }: RowProps) {
             </span>
           )}
           {(session.degraded || project.degraded) && (
+            /* Neutral, NOT amber. Amber on this surface means "your attention
+               is owed" (needs-you); an unreadable file is a data-quality fact,
+               not a queue item, and a third amber meaning would dilute the one
+               that drives action. The numeric age badges keep their amber/red
+               because they are contextual to a decision the human is reading. */
             <span
-              className="px-1.5 py-0.5 rounded text-2xs bg-accent-amber-dim text-accent-amber"
+              className="px-1.5 py-0.5 rounded text-2xs bg-surface-secondary text-text-secondary"
               title={session.degradedReason ?? project.degradedReason ?? "Partial read"}
               data-testid="bank-degraded"
             >
@@ -543,6 +560,9 @@ export function ContextBankView({ onClose }: { onClose: () => void }) {
   }, []);
 
   const lanes = useMemo(() => groupBank(bank), [bank]);
+  // Every number on this surface comes from the SAME grouping the lanes render
+  // — never from `bank.totals`, which counts the fixtures the lanes quarantine.
+  const counts = useMemo(() => displayCounts(bank, lanes), [bank, lanes]);
   const nothing =
     !loading &&
     !error &&
@@ -589,11 +609,12 @@ export function ContextBankView({ onClose }: { onClose: () => void }) {
 
         {bank && (
           <p className="text-2xs text-text-muted mb-3" data-testid="bank-totals">
-            {bank.totals.projects} project{bank.totals.projects === 1 ? "" : "s"} ·{" "}
-            {bank.totals.sessions} thread{bank.totals.sessions === 1 ? "" : "s"} ·{" "}
-            <span className="text-accent-amber">{bank.totals.needsYou} need you</span> ·{" "}
-            <span className="text-accent-blue">{bank.totals.waitingOnAgent} waiting on the agent</span>
-            {bank.totals.staleProjects > 0 && ` · ${bank.totals.staleProjects} missing path`}
+            {counts.projects} project{counts.projects === 1 ? "" : "s"} ·{" "}
+            {counts.sessions} thread{counts.sessions === 1 ? "" : "s"} ·{" "}
+            <span className="text-accent-amber">{counts.needsYou} need you</span> ·{" "}
+            <span className="text-accent-blue">{counts.waitingOnAgent} waiting on the agent</span>
+            {counts.staleProjects > 0 && ` · ${counts.staleProjects} missing path`}
+            {counts.fixtures > 0 && ` · ${counts.fixtures} demo`}
           </p>
         )}
 

@@ -12,7 +12,14 @@ import App from "../../App";
 import { useContextBankStore } from "../../stores/contextBank";
 import { useConnectionStore } from "../../stores/connection";
 import { useArtifactStore } from "../../stores/artifact";
+import { enterSessionReplay } from "../../lib/session-replay";
 import type { BankProject, BankSession, ContextBank } from "../../lib/bank";
+
+// The replay route has its own module tests; here we assert App HANDS OFF to it
+// (a fake, not a mock of the whole fetch layer).
+vi.mock("../../lib/session-replay", () => ({
+  enterSessionReplay: vi.fn().mockResolvedValue(true),
+}));
 
 const CURRENT = "/p/alpha";
 
@@ -52,19 +59,22 @@ const twoProjects = bankOf([
   { projectRoot: "/p/beta", name: "beta", lastSeen: "2026-08-01T00:00:00.000Z", stale: false, sessions: [session({ sessionId: "s2", projectRoot: "/p/beta", projectName: "beta" })], openDecisionCount: 0, needsYouCount: 0, waitingOnAgentCount: 0 },
 ]);
 
-function stubDaemon(bank: ContextBank) {
+function stubDaemon(bank: ContextBank, activeSessions: Array<{ sessionId: string }> = []) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo) => {
       const url = String(input);
       if (url.includes("/api/context-bank")) return new Response(JSON.stringify(bank), { status: 200 });
       if (url.includes("/api/projects")) return new Response(JSON.stringify({ projects: [] }), { status: 200 });
+      if (url.includes("/api/active-sessions"))
+        return new Response(JSON.stringify({ sessions: activeSessions }), { status: 200 });
       return new Response(JSON.stringify({ sessions: [] }), { status: 200 });
     }),
   );
 }
 
 beforeEach(() => {
+  vi.mocked(enterSessionReplay).mockClear();
   useContextBankStore.getState().reset();
   useArtifactStore.getState().reset();
   useConnectionStore.setState({ connected: true, hydrated: true, projectRoot: CURRENT, activeSessions: [] } as never);
@@ -106,5 +116,63 @@ describe("bank landing heuristic", () => {
     const entry = await screen.findByTestId("open-context-bank");
     entry.click();
     await waitFor(() => expect(useContextBankStore.getState().open).toBe(true));
+  });
+});
+
+describe("the header badge counts what the lanes count", () => {
+  it("shows no needs-you badge when the only needs-you session is a fixture", async () => {
+    const demoOnly = bankOf([
+      {
+        projectRoot: CURRENT, name: "alpha", lastSeen: "2026-08-01T00:00:00.000Z", stale: false,
+        sessions: [session({ sessionId: "demo_1", fixtureLike: true, salience: ["needs-you"], openDecisionCount: 1 })],
+        openDecisionCount: 1, needsYouCount: 1, waitingOnAgentCount: 0,
+      },
+    ]);
+    demoOnly.totals = { ...demoOnly.totals, needsYou: 1, openDecisions: 1 };
+    stubDaemon(demoOnly);
+    render(<App />);
+    await waitFor(() => expect(useContextBankStore.getState().bank).not.toBeNull());
+    // The badge is the header's promise that work is waiting. On a fresh
+    // `deeppairing demo` the only such session is the demo itself.
+    expect(screen.queryByLabelText(/threads need you/i)).not.toBeInTheDocument();
+  });
+
+  it("shows the badge when a REAL session needs you", async () => {
+    const real = bankOf([
+      {
+        projectRoot: CURRENT, name: "alpha", lastSeen: "2026-08-01T00:00:00.000Z", stale: false,
+        sessions: [session({ salience: ["needs-you"], openDecisionCount: 1 })],
+        openDecisionCount: 1, needsYouCount: 1, waitingOnAgentCount: 0,
+      },
+    ]);
+    stubDaemon(real);
+    render(<App />);
+    expect(await screen.findByLabelText(/1 threads need you/i)).toBeInTheDocument();
+  });
+});
+
+describe("?session= pointing at a session this daemon has not registered", () => {
+  it("replays it instead of silently landing on the default session", async () => {
+    // The bank's headline population is DEAD on-disk sessions, and the
+    // cross-project "switch to act" affordance sends exactly this URL.
+    window.history.replaceState({}, "", "/?session=s_dead");
+    stubDaemon(oneProject, [{ sessionId: "s_live" }]);
+    render(<App />);
+    await waitFor(() => expect(enterSessionReplay).toHaveBeenCalledWith("s_dead"));
+  });
+
+  it("leaves a LIVE deep-linked session on the normal binding path (no replay)", async () => {
+    window.history.replaceState({}, "", "/?session=s_live");
+    stubDaemon(oneProject, [{ sessionId: "s_live" }]);
+    render(<App />);
+    await waitFor(() => expect(useContextBankStore.getState().bank).not.toBeNull());
+    expect(enterSessionReplay).not.toHaveBeenCalled();
+  });
+
+  it("does nothing extra when there is no deep link at all", async () => {
+    stubDaemon(oneProject, [{ sessionId: "s_live" }]);
+    render(<App />);
+    await waitFor(() => expect(useContextBankStore.getState().bank).not.toBeNull());
+    expect(enterSessionReplay).not.toHaveBeenCalled();
   });
 });

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   ageTone,
   compactAge,
+  displayCounts,
   groupBank,
   laneTags,
   maxDecisionAge,
@@ -286,5 +287,95 @@ describe("normalizeBank — the accessory surface can never take the shell down"
     const b = normalizeBank(good);
     expect(b?.totals).toEqual(good.totals);
     expect(b?.projects[0]?.sessions[0]?.sessionId).toBe("s1");
+  });
+});
+
+describe("displayCounts — the badge and the lanes must agree", () => {
+  it("EXCLUDES fixture sessions from every count the surface shows", () => {
+    // The proven onboarding failure: a fresh `deeppairing demo` install has one
+    // fixture session tagged needs-you. Read off `bank.totals` the header lit an
+    // amber 1 over a Needs-you lane reading "(0) Nothing here".
+    const demoOnly = bank([
+      project({
+        sessions: [
+          session({ sessionId: "demo_1", fixtureLike: true, salience: ["needs-you"], openDecisionCount: 1, openDecisions: [decision({ stakes: "high", ageDays: 40 })] }),
+        ],
+      }),
+    ]);
+    demoOnly.totals = { ...demoOnly.totals, projects: 1, sessions: 1, needsYou: 1, openDecisions: 1 };
+    const lanes = groupBank(demoOnly);
+    const counts = displayCounts(demoOnly);
+    // The badge and the lane say the same thing, which is the whole point.
+    expect(counts.needsYou).toBe(0);
+    expect(lanes.needsYou).toHaveLength(0);
+    expect(counts.sessions).toBe(0);
+    expect(counts.projects).toBe(0);
+    expect(counts.fixtures).toBe(1);
+  });
+
+  it("counts a dual-lane session once in `sessions` but in both lane counts", () => {
+    const b = bank([
+      project({
+        sessions: [
+          session({ sessionId: "both", salience: ["needs-you", "waiting-on-agent"], openDecisionCount: 1, openDecisions: [decision()], unansweredQuestionCount: 1 }),
+        ],
+      }),
+    ]);
+    const counts = displayCounts(b);
+    expect(counts.sessions).toBe(1);
+    expect(counts.needsYou).toBe(1);
+    expect(counts.waitingOnAgent).toBe(1);
+  });
+
+  it("still reports a stale project's missing path (a registry fact)", () => {
+    const b = bank([project({ stale: true, sessions: [session()] })]);
+    expect(displayCounts(b).staleProjects).toBe(1);
+  });
+
+  it("is all-zero for a null bank", () => {
+    expect(displayCounts(null)).toEqual({
+      projects: 0, sessions: 0, needsYou: 0, waitingOnAgent: 0, staleProjects: 0, fixtures: 0,
+    });
+  });
+});
+
+describe("normalizeBank — hostile payloads at SESSION level", () => {
+  it("survives sessions:[null] instead of taking the whole app down", () => {
+    // Proven: an un-filtered null session threw inside maxStakesRank, and
+    // because the bank mounts from App the root ErrorBoundary replaced the
+    // ENTIRE app with "Something went wrong".
+    const b = normalizeBank({ projects: [{ projectRoot: "/p/alpha", name: "alpha", sessions: [null, 3, "x"] }] });
+    expect(b?.projects[0]?.sessions).toEqual([]);
+    expect(() => groupBank(b)).not.toThrow();
+    expect(() => shouldLandOnBank(b, { currentProjectRoot: "/p/alpha" })).not.toThrow();
+    expect(displayCounts(b).sessions).toBe(0);
+  });
+
+  it("coerces a session's openDecisions / salience / counts to safe shapes", () => {
+    const b = normalizeBank({
+      projects: [
+        {
+          projectRoot: "/p/alpha",
+          name: "alpha",
+          sessions: [
+            { sessionId: "s1", openDecisions: [null, { decisionId: "d1", artifactId: "a1" }], salience: [null, "needs-you"], openDecisionCount: "2", lastActivity: 5 },
+          ],
+        },
+      ],
+    });
+    const s = b?.projects[0]?.sessions[0];
+    expect(s?.openDecisions).toHaveLength(1);
+    expect(s?.salience).toEqual(["needs-you"]);
+    expect(s?.openDecisionCount).toBe(0);
+    expect(s?.lastActivity).toBe("");
+    expect(() => maxStakesRank(s!)).not.toThrow();
+    // It still lands in the needs-you lane on the tag it does have.
+    expect(groupBank(b).needsYou).toHaveLength(1);
+  });
+
+  it("drops a null PROJECT without dropping its siblings", () => {
+    const b = normalizeBank({ projects: [null, { projectRoot: "/p/beta", name: "beta", sessions: [] }] });
+    expect(b?.projects).toHaveLength(1);
+    expect(b?.projects[0]?.name).toBe("beta");
   });
 });

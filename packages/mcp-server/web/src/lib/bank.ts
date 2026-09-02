@@ -305,15 +305,38 @@ export function visibleDecisions(
 export function normalizeBank(raw: unknown): ContextBank | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Partial<ContextBank>;
-  const totals = (r.totals ?? {}) as Partial<ContextBank["totals"]>;
   const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  const totals = (r.totals ?? {}) as Partial<ContextBank["totals"]>;
   const projects = Array.isArray(r.projects) ? r.projects : [];
   return {
     generatedAt: typeof r.generatedAt === "string" ? r.generatedAt : "",
-    projects: projects.map((p) => ({
-      ...p,
-      sessions: Array.isArray(p?.sessions) ? p.sessions : [],
-    })),
+    projects: projects
+      .filter((p): p is BankProject => !!p && typeof p === "object")
+      .map((p) => ({
+        ...p,
+        // One level DEEPER than the first cut, which stopped at the sessions
+        // array itself: a `sessions: [null]` payload sailed through and then
+        // threw in maxStakesRank — and because this surface mounts from App,
+        // the root ErrorBoundary replaced the ENTIRE app with "Something went
+        // wrong". Every field the triage code walks unguarded is coerced here,
+        // at the one door the payload comes through.
+        sessions: (Array.isArray(p?.sessions) ? p.sessions : [])
+          .filter((x): x is BankSession => !!x && typeof x === "object")
+          .map((x) => ({
+            ...x,
+            openDecisions: (Array.isArray(x.openDecisions) ? x.openDecisions : []).filter(
+              (d): d is BankOpenDecision => !!d && typeof d === "object",
+            ),
+            salience: (Array.isArray(x.salience) ? x.salience : []).filter(
+              (t): t is SalienceTag => typeof t === "string",
+            ),
+            openDecisionCount: num(x.openDecisionCount),
+            draftReviewCount: num(x.draftReviewCount),
+            unansweredQuestionCount: num(x.unansweredQuestionCount),
+            artifactCount: num(x.artifactCount),
+            lastActivity: typeof x.lastActivity === "string" ? x.lastActivity : "",
+          })),
+      })),
     totals: {
       projects: num(totals.projects),
       sessions: num(totals.sessions),
@@ -323,5 +346,45 @@ export function normalizeBank(raw: unknown): ContextBank | null {
       staleProjects: num(totals.staleProjects),
     },
     staleAfterDays: num(r.staleAfterDays),
+  };
+}
+
+/**
+ * THE COUNTS THE SURFACE (and the header badge) MAY SHOW.
+ *
+ * `bank.totals` comes straight off the server and counts EVERY session,
+ * including the fixture-flagged ones the lanes quarantine. Rendering the server
+ * total beside a lane that excludes fixtures produces a badge that says "1 need
+ * you" over a lane that says "(0) Nothing here" — and the session it is counting
+ * is the demo, i.e. exactly the state a first-run `deeppairing demo` user is in.
+ *
+ * So every number on this surface is derived from the SAME grouping the lanes
+ * render. One source, one truth. `staleProjects` stays a registry fact (a
+ * missing path is missing regardless of what's inside it) but is likewise
+ * derived here rather than read from totals, so nothing on the surface can be
+ * counted two different ways.
+ */
+export interface BankDisplayCounts {
+  projects: number;
+  sessions: number;
+  needsYou: number;
+  waitingOnAgent: number;
+  staleProjects: number;
+  fixtures: number;
+}
+
+export function displayCounts(bank: ContextBank | null, lanes?: BankLanes): BankDisplayCounts {
+  const l = lanes ?? groupBank(bank);
+  const realRows = [...l.needsYou, ...l.waiting, ...l.quiet, ...l.done];
+  // A session can sit in two lanes (it owes in both directions) — count it once.
+  const sessionKeys = new Set(realRows.map((r) => r.key));
+  const projectRoots = new Set(realRows.map((r) => r.project.projectRoot));
+  return {
+    projects: projectRoots.size,
+    sessions: sessionKeys.size,
+    needsYou: l.needsYou.length,
+    waitingOnAgent: l.waiting.length,
+    staleProjects: (bank?.projects ?? []).filter((p) => p.stale).length,
+    fixtures: l.fixtures.length,
   };
 }
