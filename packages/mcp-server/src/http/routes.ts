@@ -10,6 +10,11 @@ import { FileStore, LEDGER_EXEMPT_REJECT_TYPES } from "../store/file-store.js";
 import { isCrossTerminalVerdictFlip } from "../store/verdict-guard.js";
 import type { LiveDecisionSource } from "../store/session-scan.js";
 import {
+  getContextBank,
+  clearContextBankCache,
+  DEFAULT_STALE_AFTER_DAYS,
+} from "../store/context-bank.js";
+import {
   readFeatureOverrides,
   setFeatureGroupTitle,
   assignArtifactToFeature,
@@ -51,8 +56,9 @@ import { CommentBodySchema,
   PreferenceBodySchema,
   RenderFailureBodySchema,
   CreateRequestBodySchema,
+  DecisionCloseOutBodySchema,
   formatZodIssues,
-  normalizeConceptKey, errorMessage, errorCode } from "@deeppairing/shared";
+  normalizeConceptKey, errorMessage, errorCode, isClosedArtifactStatus } from "@deeppairing/shared";
 
 /**
  * Demo-ledger isolation — demo sessions (`demo_` prefix, minted only by
@@ -199,6 +205,23 @@ const EMPTY_STATE = {
   // consistent shape (the composer shows nothing until a session exists).
   requests: [],
 } as const;
+
+/**
+ * Does this project already have a session directory by this id? Gates the
+ * close-out route's TRANSIENT FileStore: the FileStore constructor mkdirs its
+ * session dir, so constructing one for an unknown id would CREATE an empty
+ * session as a side effect of a triage click. Existence-check first.
+ */
+function sessionDirExists(projectRoot: string, sessionId: string): boolean {
+  // Reject anything that could escape the sessions dir — the id arrives in a
+  // request body.
+  if (!sessionId || sessionId.includes("/") || sessionId.includes("\\") || sessionId.includes("..")) return false;
+  try {
+    return fs.existsSync(path.join(projectRoot, ".deeppairing", "sessions", sessionId));
+  } catch {
+    return false;
+  }
+}
 
 export function createHttpRoutes(
   storeOrGetter: IStore | StoreGetter,
@@ -574,7 +597,7 @@ export function createHttpRoutes(
     // interceptor doesn't see sectionId (feedback_received is trimmed),
     // so we count it inline here.
     if (projectRoot) {
-      const sectionId = (target as any)?.sectionId;
+      const sectionId = (target as { sectionId?: unknown } | undefined)?.sectionId;
       if (typeof sectionId === "string" && sectionId.startsWith("horizon_check:request:")) {
         try { recordMetricEvent(projectRoot, { kind: "horizon_check_requested" }); } catch {}
       }
@@ -766,7 +789,7 @@ export function createHttpRoutes(
       fallbackArtifact = artifacts.find(
         (a) =>
           a.type === "decision" &&
-          ((a.content as any)?.decisionId === decisionId || a.id === decisionId),
+          ((a.content as { decisionId?: string } | null)?.decisionId === decisionId || a.id === decisionId),
       );
       targetArtifactId = fallbackArtifact?.id;
     }
@@ -825,6 +848,171 @@ export function createHttpRoutes(
     }, sid);
 
     return c.json({ status: "resolved", decisionId });
+  });
+
+  /**
+   * The context bank's TRIAGE affordance, server side — close a decision
+   * OUT-OF-BAND.
+   *
+   * The dry-run that shaped the bank found 25 open decisions across 10
+   * projects, 9 of them older than 60 days, several whose own prose says a
+   * later card replaced them and yet stayed "awaiting your decision" forever.
+   * Those queues have no exit today: the ONLY way a decision leaves the
+   * awaiting set is by picking an option, and picking an option you don't mean
+   * writes a false record of what you chose.
+   *
+   * So this route closes the card WITHOUT a choice. It reuses the existing
+   * terminal status `obsolete` — "valid, but the discussion overtook it",
+   * already in isClosedArtifactStatus, already the ui_dismiss_obsolete
+   * transition reason — rather than minting a new status the rest of the
+   * codebase would have to learn. Flipping the backing artifact terminal makes
+   * listAllDecisions compute `closedUnresolved` for the record, which is
+   * exactly the honest end state: the question was retired, nobody answered it.
+   *
+   * It NEVER writes a decision response. There is no optionId in this path at
+   * all, so no future reader can mistake a dismissal for a choice.
+   *
+   * SCOPE (this slice): the CURRENT project only. Writing into another
+   * project's store from here would mean a second daemon's live FileStore and
+   * this one both owning the same files — the cross-write hazard AA4 exists to
+   * prevent. A cross-project close-out therefore 400s cleanly and the read
+   * model still SHOWS the decision; routing it to the owning daemon is the
+   * follow-up.
+   */
+  app.post("/api/decisions/:decisionId/close-out", async (c) => {
+    const decisionId = c.req.param("decisionId");
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = DecisionCloseOutBodySchema.safeParse(bodyVal.value);
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    const { projectRoot: targetRoot, sessionId: bodySessionId, note } = parsed.data;
+
+    // Cross-project guard — an explicit, honest refusal rather than a write
+    // into the wrong store.
+    if (targetRoot && (!projectRoot || path.resolve(targetRoot) !== path.resolve(projectRoot))) {
+      return c.json(
+        {
+          error: "cross_project_close_out_unsupported",
+          code: ERROR_CODES.cross_project_close_out_unsupported,
+          message:
+            "This decision belongs to another project. Open that project's companion UI to close it out — " +
+            "cross-project writes are not supported yet.",
+          projectRoot: targetRoot,
+        },
+        400,
+      );
+    }
+
+    const sid = bodySessionId ?? getSessionId(c);
+    // Prefer the LIVE store (a session the daemon owns must never be written
+    // through a second FileStore instance); fall back to a transient read+write
+    // store for a DEAD session that only exists on disk — which is where most
+    // of the stale decisions live (one rolling session per project, long since
+    // unregistered).
+    let transient: FileStore | null = null;
+    if (!getStore(sid) && sid && projectRoot && sessionDirExists(projectRoot, sid)) {
+      try {
+        transient = new FileStore(projectRoot, sid);
+      } catch (err) {
+        log(`[close-out] transient store for ${sid} failed: ${err}`);
+      }
+    }
+    const store: IStore | null = getStore(sid) ?? transient;
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+
+    const artifacts = await store.getArtifacts();
+    const record = await store.getDecision(decisionId);
+    // BOTH lookup paths must assert `type === "decision"`. Pre-review only the
+    // fallback did, so a decision RECORD whose artifactId pointed at a
+    // non-decision artifact (a stale/mis-set reference — records and artifacts
+    // are written by different processes over the same files, see X6) let a
+    // triage click flip a PLAN to `obsolete` and return 200. A close-out must
+    // never be able to retire an artifact that is not the decision card.
+    const isDecisionArtifact = (a: Artifact | undefined): a is Artifact =>
+      !!a && a.type === "decision";
+    const byRecord = record?.artifactId ? artifacts.find((a) => a.id === record.artifactId) : undefined;
+    const artifact =
+      (isDecisionArtifact(byRecord) ? byRecord : undefined) ??
+      artifacts.find(
+        (a) =>
+          a.type === "decision" &&
+          ((a.content as { decisionId?: string } | null)?.decisionId === decisionId || a.id === decisionId),
+      );
+    if (!artifact) {
+      return c.json(
+        { error: "decision_not_in_session", code: ERROR_CODES.decision_not_in_session,
+          message: "This decision belongs to a different session than the one this tab is bound to." },
+        404,
+      );
+    }
+
+    // Never overwrite a REAL answer. A resolved decision is history, not a queue
+    // item, and the triage view should not have offered this in the first place.
+    if (record?.response) {
+      return c.json(
+        { error: "decision_already_resolved", code: ERROR_CODES.decision_already_resolved,
+          currentStatus: artifact.status,
+          message: "This decision was already answered — nothing to close out." },
+        409,
+      );
+    }
+    // Idempotent: a double-click (or a second tab) must not append a second
+    // status-history entry.
+    if (isClosedArtifactStatus(artifact.status)) {
+      return c.json({ status: "already_closed", decisionId, artifactId: artifact.id, artifactStatus: artifact.status });
+    }
+
+    await store.updateArtifactStatus(artifact.id, "obsolete", "ui_dismiss_obsolete");
+    if (note?.trim()) {
+      try {
+        await store.addComment({
+          id: `c_${nanoid(8)}`,
+          artifactId: artifact.id,
+          content: note.trim(),
+          author: "human",
+          target: { artifactId: artifact.id },
+        });
+      } catch (err) {
+        // The close-out already landed; a failed note must not undo it or 500.
+        log(`[close-out] note comment failed for ${artifact.id}: ${err}`);
+      }
+    }
+    await store.forceFlush();
+    transient?.dispose();
+    clearContextBankCache();
+    broadcast({ type: "artifact_updated", artifactId: artifact.id, status: "obsolete", reason: "ui_dismiss_obsolete" }, sid);
+    log(`[close-out] decisionId=${decisionId} artifactId=${artifact.id} → obsolete (no option selected)`);
+    return c.json({ status: "closed_out", decisionId, artifactId: artifact.id, artifactStatus: "obsolete" });
+  });
+
+  /**
+   * The context bank — "what am I doing across all my projects".
+   *
+   * A cross-project READ-ONLY derived model (store/context-bank.ts): the
+   * project registry (~/.deeppairing/projects.json), then a disk walk of each
+   * project's sessions. It never opens another project's live daemon, and it
+   * never writes.
+   *
+   * Sibling of /api/decisions and /api/features in every operational respect:
+   * no body, no session lookup, hash-gated by the global middleware, and it
+   * DEGRADES to an empty bank rather than 500ing — a cross-project overview
+   * that can be taken down by one unreadable project directory is worse than
+   * none.
+   *
+   * `?fresh=1` bypasses the scan cache (the refresh affordance).
+   */
+  app.get("/api/context-bank", (c) => {
+    try {
+      return c.json(getContextBank({ fresh: c.req.query("fresh") === "1" }));
+    } catch (err) {
+      log(`[context-bank] read failed, returning empty: ${err}`);
+      return c.json({
+        generatedAt: new Date().toISOString(),
+        projects: [],
+        totals: { projects: 0, sessions: 0, openDecisions: 0, needsYou: 0, waitingOnAgent: 0, staleProjects: 0 },
+        staleAfterDays: DEFAULT_STALE_AFTER_DAYS,
+      });
+    }
   });
 
   // Approve/revise/reject a plan from the web UI

@@ -606,6 +606,12 @@ export function DiagramRegionLayer({
         // posted comment anchors to optionId + visualId + region together.
         target={{ visualId, region: active, ...(optionId ? { optionId } : {}) }}
         roomy
+        /* Diagrams are where people actually ask things ("why does auth verify
+           happen before the cache check?" — a real comment from the dry-run
+           data, posted through THIS composer with no intent because there was
+           no Ask button to press). */
+        secondarySubmitLabel="Ask"
+        secondarySubmitTitle="Post as a question about this region — the agent owes you an answer"
       />
     </>
   ) : null;

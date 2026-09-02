@@ -104,6 +104,30 @@ export const StatusUpdateBodySchema = z.object({
 });
 export type StatusUpdateBody = z.infer<typeof StatusUpdateBodySchema>;
 
+/**
+ * POST /api/decisions/:decisionId/close-out — the context bank's triage
+ * affordance. Retires an open decision WITHOUT selecting an option (the
+ * backing artifact goes to the existing terminal status `obsolete`).
+ *
+ * Every field is optional and additive:
+ *  - `projectRoot` — the OWNING project. Present so the server can refuse a
+ *    cross-project close-out explicitly (400) instead of silently writing into
+ *    whichever store this daemon happens to hold. Cross-project writes are a
+ *    later slice; the bank still SHOWS those decisions meanwhile.
+ *  - `sessionId` — the owning session, so a decision in a DEAD (unregistered)
+ *    session can still be closed out. Falls back to the X-Session-Id header.
+ *  - `note` — an optional human note recorded as a comment on the card ("a
+ *    later card replaced this"). Never a decision response: there is
+ *    deliberately no optionId in this schema, so nothing downstream can read a
+ *    dismissal as a choice.
+ */
+export const DecisionCloseOutBodySchema = z.object({
+  projectRoot: z.string().max(4096).optional(),
+  sessionId: z.string().max(200).optional(),
+  note: z.string().max(2000).optional(),
+});
+export type DecisionCloseOutBody = z.infer<typeof DecisionCloseOutBodySchema>;
+
 // POST /api/artifacts/:artifactId/rename
 export const RenameBodySchema = z.object({
   title: z.string().min(1),

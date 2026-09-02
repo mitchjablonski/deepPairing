@@ -25,16 +25,29 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setGlobalStoreForTests } from "../store/global-store.js";
+import { setProjectRegistryPathForTests } from "../store/project-registry.js";
+import { clearContextBankCache } from "../store/context-bank.js";
 
 let guardTmpDir: string | null = null;
 
 beforeEach(() => {
   guardTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-ledger-guard-"));
   setGlobalStoreForTests(path.join(guardTmpDir, "philosophy.json"));
+  // The project registry (~/.deeppairing/projects.json) is the SAME hazard
+  // class as the ledger above — a user-global file under the real HOME that a
+  // daemon-startup path writes to. Redirect it for every test on the same
+  // beforeEach so no run can ever append to the developer's real project list.
+  setProjectRegistryPathForTests(path.join(guardTmpDir, "projects.json"));
+  // The context-bank scan cache is module-level. Without this, a bank built in
+  // one test is served to the next (whose fixture tree is a different tmpdir),
+  // producing order-dependent phantom passes/failures.
+  clearContextBankCache();
 });
 
 afterEach(() => {
   setGlobalStoreForTests(null);
+  setProjectRegistryPathForTests(null);
+  clearContextBankCache();
   if (guardTmpDir) {
     fs.rmSync(guardTmpDir, { recursive: true, force: true });
     guardTmpDir = null;
