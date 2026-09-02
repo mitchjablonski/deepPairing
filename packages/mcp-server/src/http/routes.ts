@@ -597,7 +597,7 @@ export function createHttpRoutes(
     // interceptor doesn't see sectionId (feedback_received is trimmed),
     // so we count it inline here.
     if (projectRoot) {
-      const sectionId = (target as any)?.sectionId;
+      const sectionId = (target as { sectionId?: unknown } | undefined)?.sectionId;
       if (typeof sectionId === "string" && sectionId.startsWith("horizon_check:request:")) {
         try { recordMetricEvent(projectRoot, { kind: "horizon_check_requested" }); } catch {}
       }
@@ -789,7 +789,7 @@ export function createHttpRoutes(
       fallbackArtifact = artifacts.find(
         (a) =>
           a.type === "decision" &&
-          ((a.content as any)?.decisionId === decisionId || a.id === decisionId),
+          ((a.content as { decisionId?: string } | null)?.decisionId === decisionId || a.id === decisionId),
       );
       targetArtifactId = fallbackArtifact?.id;
     }
@@ -922,8 +922,17 @@ export function createHttpRoutes(
 
     const artifacts = await store.getArtifacts();
     const record = await store.getDecision(decisionId);
+    // BOTH lookup paths must assert `type === "decision"`. Pre-review only the
+    // fallback did, so a decision RECORD whose artifactId pointed at a
+    // non-decision artifact (a stale/mis-set reference — records and artifacts
+    // are written by different processes over the same files, see X6) let a
+    // triage click flip a PLAN to `obsolete` and return 200. A close-out must
+    // never be able to retire an artifact that is not the decision card.
+    const isDecisionArtifact = (a: Artifact | undefined): a is Artifact =>
+      !!a && a.type === "decision";
+    const byRecord = record?.artifactId ? artifacts.find((a) => a.id === record.artifactId) : undefined;
     const artifact =
-      (record?.artifactId ? artifacts.find((a) => a.id === record.artifactId) : undefined) ??
+      (isDecisionArtifact(byRecord) ? byRecord : undefined) ??
       artifacts.find(
         (a) =>
           a.type === "decision" &&
@@ -1000,7 +1009,7 @@ export function createHttpRoutes(
       return c.json({
         generatedAt: new Date().toISOString(),
         projects: [],
-        totals: { projects: 0, sessions: 0, openDecisions: 0, needsYou: 0, staleProjects: 0 },
+        totals: { projects: 0, sessions: 0, openDecisions: 0, needsYou: 0, waitingOnAgent: 0, staleProjects: 0 },
         staleAfterDays: DEFAULT_STALE_AFTER_DAYS,
       });
     }

@@ -242,7 +242,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // preflight_blocked per DEMO session and replay it to any late-joining WS
   // client. Only demo sessions (throwaway) and only this one event type — real
   // pairing toasts are live signals we must never resurrect on reconnect.
-  const demoReplayEvents = new Map<string, any>();
+  const demoReplayEvents = new Map<string, Record<string, unknown>>();
 
   function broadcast(sessionId: string, event: any): void {
     let outgoing = event;

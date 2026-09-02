@@ -14,6 +14,7 @@ import { createMcpServer } from "./mcp/server.js";
 import { ensureDaemon } from "./daemon/lifecycle.js";
 import { DaemonClient } from "./daemon/client.js";
 import { resolveProjectRoot } from "./project-root.js";
+import { upsertProject } from "./store/project-registry.js";
 import { cliInvocation } from "./cli-invocation.js";
 import { deriveSessionId } from "./session-id.js";
 import fs from "node:fs";
@@ -40,6 +41,21 @@ function log(msg: string): void {
 async function main() {
   log("MCP wrapper starting");
   log(`Project root: ${projectRoot} (resolved via ${projectRootSource})`);
+
+  // Context bank — record this project in ~/.deeppairing/projects.json.
+  // daemon/index.ts does the same on ITS startup, but that only fires when this
+  // wrapper actually spawns a daemon: attach to an already-running daemon (the
+  // common case, and always the case for one started by a pre-bank build) and
+  // the breadcrumb is never written, so the project is invisible to every
+  // bank — including the one this very process is about to serve. Upserting
+  // from the wrapper too makes the registry track "a project I opened", which
+  // is the thing the bank is actually about. Idempotent; best-effort by
+  // construction, and never worth failing a wrapper start over.
+  try {
+    upsertProject(projectRoot);
+  } catch (err) {
+    log(`Project registry warning (non-fatal): ${err}`);
+  }
 
   // Ensure the shared daemon is running.
   // II1 — ensureDaemon now returns the full DaemonInfo (port + authToken)

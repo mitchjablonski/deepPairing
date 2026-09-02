@@ -16,6 +16,7 @@ import {
   truncateOneLiner,
   summarizeProject,
   DEFAULT_STALE_AFTER_DAYS,
+  BANK_FRESH_FLOOR_MS,
   type BankProject,
   type BankSession,
 } from "../context-bank.js";
@@ -361,7 +362,13 @@ describe("context bank — the other open loops", () => {
     });
     const s = onlySession("alpha", "s1");
     expect(s.unansweredQuestionCount).toBe(1);
-    expect(s.salience).toContain("needs-you");
+    // WHOSE TURN: a question the human asked is the AGENT's turn. It must NOT
+    // land in the "what needs me" lane — the same rule create-daemon.ts already
+    // enforces (unanswered questions are "the INVERSE of pendingCount") and the
+    // switcher badge already honors.
+    expect(s.salience).toContain("waiting-on-agent");
+    expect(s.salience).not.toContain("needs-you");
+    expect(s.salience).not.toContain("quiet");
   });
 
   it("an ANSWERED question stops counting", () => {
@@ -386,6 +393,7 @@ describe("context bank — salience", () => {
     const s = onlySession("alpha", "s1");
     expect(s.salience).toContain("quiet");
     expect(s.salience).not.toContain("needs-you");
+    expect(s.salience).not.toContain("waiting-on-agent");
     expect(s.salience).not.toContain("stale");
   });
 
@@ -434,6 +442,60 @@ describe("context bank — salience", () => {
   });
 });
 
+describe("context bank — whose turn is it (the needs-you / waiting-on-agent split)", () => {
+  it("a session with BOTH an open decision and an open question carries BOTH tags", () => {
+    const root = project("alpha");
+    writeSession(root, "s1", {
+      artifacts: [
+        { id: "art_dec_1", type: "decision", createdAt: ISO(70) },
+        { id: "art_1", type: "research", createdAt: ISO(3) },
+      ],
+      decisions: [openDecisionRecord()],
+      comments: [
+        { id: "c_q", artifactId: "art_1", author: "human", intent: "question", content: "why?", target: { artifactId: "art_1" }, createdAt: ISO(2) },
+      ],
+    });
+    const s = onlySession("alpha", "s1");
+    expect(s.salience).toEqual(expect.arrayContaining(["needs-you", "waiting-on-agent"]));
+    expect(s.salience).not.toContain("quiet");
+  });
+
+  it("the PROJECT rollup counts the two lanes separately — questions never inflate needsYou", () => {
+    const withQuestion = project("questions-only");
+    writeSession(withQuestion, "s1", {
+      artifacts: [{ id: "art_1", type: "research", createdAt: ISO(3) }],
+      comments: [
+        { id: "c_q", artifactId: "art_1", author: "human", intent: "question", content: "why?", target: { artifactId: "art_1" }, createdAt: ISO(2) },
+      ],
+    });
+    const withDecision = project("decisions-only");
+    writeSession(withDecision, "s1", {
+      artifacts: [{ id: "art_dec_1", type: "decision", createdAt: ISO(70) }],
+      decisions: [openDecisionRecord()],
+    });
+
+    const b = bank();
+    const q = b.projects.find((p) => p.name === "questions-only")!;
+    const d = b.projects.find((p) => p.name === "decisions-only")!;
+    expect(q).toMatchObject({ needsYouCount: 0, waitingOnAgentCount: 1 });
+    expect(d).toMatchObject({ needsYouCount: 1, waitingOnAgentCount: 0 });
+    expect(b.totals).toMatchObject({ needsYou: 1, waitingOnAgent: 1 });
+  });
+
+  it("an unanswered question blocks `done` — the work is not finished, it is owed", () => {
+    const root = project("alpha");
+    writeSession(root, "s1", {
+      artifacts: [{ id: "art_1", type: "changeset", status: "approved", createdAt: ISO(2) }],
+      comments: [
+        { id: "c_q", artifactId: "art_1", author: "human", intent: "question", content: "why?", target: { artifactId: "art_1" }, createdAt: ISO(1) },
+      ],
+    });
+    const s = onlySession("alpha", "s1");
+    expect(s.salience).not.toContain("done");
+    expect(s.salience).toContain("waiting-on-agent");
+  });
+});
+
 describe("context bank — filtering and honesty", () => {
   it("SKIPS empty session dirs entirely (the 33-empty-dirs case)", () => {
     const root = project("alpha");
@@ -460,6 +522,20 @@ describe("context bank — filtering and honesty", () => {
     expect(byId["real-work"]!.fixtureLike).toBeUndefined();
     // Flagged, never dropped.
     expect(Object.keys(byId)).toHaveLength(3);
+  });
+
+  it("does NOT mislabel a user's real session that merely LOOKS test-shaped", () => {
+    // A `test_`/`fixture` PREFIX rule flagged this repo's own routes harness
+    // session (`test_session`) — and would stamp "demo data" on a real session
+    // named `test_flaky_retry`. A false fixture flag is as damaging as hiding
+    // the card: the human discounts work that mattered.
+    const root = project("alpha");
+    for (const id of ["test_session", "test_flaky_retry", "fixture-loader-rewrite", "preview-env-preview"]) {
+      writeSession(root, id, { artifacts: [{ id: `art_${id}`, type: "research", createdAt: ISO(1) }] });
+    }
+    for (const s of onlyProject("alpha").sessions) {
+      expect(s.fixtureLike, `${s.sessionId} must not be flagged`).toBeUndefined();
+    }
   });
 
   it("a CORRUPT session degrades to a flagged thin entry and never kills the scan", () => {
@@ -517,7 +593,7 @@ describe("context bank — cross-project shape", () => {
     writeSession(bRoot, "s1", { artifacts: [{ id: "art_1", type: "debrief", content: { summary: "Done." }, createdAt: ISO(1) }] });
 
     const b = bank();
-    expect(b.totals).toMatchObject({ projects: 2, sessions: 2, openDecisions: 1, needsYou: 1 });
+    expect(b.totals).toMatchObject({ projects: 2, sessions: 2, openDecisions: 1, needsYou: 1, waitingOnAgent: 0 });
     expect(b.staleAfterDays).toBe(DEFAULT_STALE_AFTER_DAYS);
     // beta touched a day ago sorts ahead of alpha's 70-day-old card.
     expect(b.projects[0]!.name).toBe("beta");
@@ -568,14 +644,54 @@ describe("context bank — scan cache", () => {
     expect(fresh.totals.sessions).toBe(2);
   });
 
-  it("fresh:true bypasses the TTL", () => {
+  it("fresh:true bypasses the TTL (once past the floor)", () => {
     const root = project("alpha");
     writeSession(root, "s1", { artifacts: [{ id: "art_1", type: "research", createdAt: ISO(1) }] });
     getContextBank({ now: NOW, ttlMs: 60_000 });
     writeSession(root, "s2", { artifacts: [{ id: "art_2", type: "research", createdAt: ISO(1) }] });
 
-    expect(getContextBank({ now: NOW, ttlMs: 60_000 }).totals.sessions).toBe(1);
-    expect(getContextBank({ now: NOW, ttlMs: 60_000, fresh: true }).totals.sessions).toBe(2);
+    const later = new Date(NOW.getTime() + BANK_FRESH_FLOOR_MS + 1);
+    // Deep inside the 60s TTL, a plain read is still cached…
+    expect(getContextBank({ now: later, ttlMs: 60_000 }).totals.sessions).toBe(1);
+    // …and fresh cuts through it.
+    expect(getContextBank({ now: later, ttlMs: 60_000, fresh: true }).totals.sessions).toBe(2);
+  });
+
+  it("fresh does NOT re-walk inside the floor — a held refresh button can't pin the loop", () => {
+    const root = project("alpha");
+    writeSession(root, "s1", { artifacts: [{ id: "art_1", type: "research", createdAt: ISO(1) }] });
+    getContextBank({ now: NOW, ttlMs: 60_000 });
+    writeSession(root, "s2", { artifacts: [{ id: "art_2", type: "research", createdAt: ISO(1) }] });
+
+    // Inside the floor, fresh rides the cached bank (same object identity).
+    const inFloor = getContextBank({ now: new Date(NOW.getTime() + BANK_FRESH_FLOOR_MS - 1), ttlMs: 60_000, fresh: true });
+    expect(inFloor.totals.sessions).toBe(1);
+    // Past the floor it genuinely refreshes, well inside the 60s TTL.
+    const past = getContextBank({ now: new Date(NOW.getTime() + BANK_FRESH_FLOOR_MS + 1), ttlMs: 60_000, fresh: true });
+    expect(past.totals.sessions).toBe(2);
+  });
+
+  it("the cache is KEYED — a different staleAfterDays is not served the prior bank", () => {
+    const root = project("alpha");
+    const dir = writeSession(root, "s1", { artifacts: [{ id: "art_1", type: "research", createdAt: ISO(40) }] });
+    backdate(dir, 40);
+
+    const lenient = getContextBank({ now: NOW, staleAfterDays: 90, ttlMs: 60_000 });
+    expect(lenient.projects[0]!.sessions[0]!.salience).not.toContain("stale");
+    // Same instant, same TTL, DIFFERENT question — must not reuse the answer above.
+    const strict = getContextBank({ now: NOW, staleAfterDays: 7, ttlMs: 60_000 });
+    expect(strict.projects[0]!.sessions[0]!.salience).toContain("stale");
+  });
+
+  it("an injected registry neither reads nor poisons the cache", () => {
+    const root = project("alpha");
+    writeSession(root, "s1", { artifacts: [{ id: "art_1", type: "research", createdAt: ISO(1) }] });
+    // Seed the cache from disk…
+    expect(getContextBank({ now: NOW, ttlMs: 60_000 }).totals.projects).toBe(1);
+    // …an injected-empty-registry call must not be served that bank…
+    expect(getContextBank({ now: NOW, ttlMs: 60_000, registry: [] }).totals.projects).toBe(0);
+    // …nor overwrite it for the next disk-backed reader.
+    expect(getContextBank({ now: NOW, ttlMs: 60_000 }).totals.projects).toBe(1);
   });
 
   it("clearContextBankCache forces the next read to re-walk", () => {

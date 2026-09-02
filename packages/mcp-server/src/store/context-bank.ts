@@ -51,8 +51,19 @@ export type DerivationRung =
  */
 export type DerivationQuality = "rich" | "medium" | "thin";
 
-/** Derived, never stored. See deriveSalience. */
-export type SalienceTag = "needs-you" | "quiet" | "stale" | "done";
+/**
+ * Derived, never stored. See deriveSalience.
+ *
+ * `needs-you` and `waiting-on-agent` are the TWO SIDES of "whose turn is it",
+ * and this codebase already had an answer before the bank existed: an
+ * unanswered HUMAN question is the AGENT's turn, not yours. See
+ * create-daemon.ts's `computeDaemonUnansweredCount`, which calls itself "the
+ * INVERSE of pendingCount", and the multi-project switcher, whose "waiting on
+ * you" badge deliberately EXCLUDES human questions. Folding questions into
+ * `needs-you` would have inverted the product's own established signal, so the
+ * two lanes stay separate all the way out to the API.
+ */
+export type SalienceTag = "needs-you" | "waiting-on-agent" | "quiet" | "stale" | "done";
 
 const RUNG_QUALITY: Record<DerivationRung, DerivationQuality> = {
   "debrief-summary": "rich",
@@ -73,26 +84,31 @@ export const DEFAULT_STALE_AFTER_DAYS = 21;
 export const DEFAULT_BANK_TTL_MS = 20_000;
 
 /**
- * Session-id patterns that mark this REPO's own fixtures/demos. Deliberately
- * NOT a general fixture classifier — a heuristic that guesses "this looks like
- * demo data" across a stranger's projects would eventually hide real work.
- * These are the ids deepPairing itself mints or ships:
- *   - `demo_*`  — minted only by POST /api/demo/run (FileStore.isDemoSession)
- *   - `*-demo`, `*-preview`, `fixture*`, `test_*` — the checked-in sample
- *     sessions in this repo (b-demo, dv1-demo, batch2-preview, …)
- * Sessions matching these are FLAGGED (`fixtureLike`), never hidden: the
- * dry-run found stray test artifacts polluting real queues, and the fix for
- * that is a visible label, not a silent filter that could swallow real work.
+ * Session ids that mark deepPairing's OWN demo/fixture data.
+ *
+ * Deliberately narrow. An earlier draft also matched the prefixes `test_` and
+ * `fixture` — which mislabels this repo's own routes harness (`test_session`)
+ * and, far worse, would stamp "demo data" on a user's real session named
+ * `test_flaky_retry`. A false `fixtureLike` on real work is the same failure as
+ * hiding it: the human discounts a card that mattered. So the rule is now:
+ *   - `demo_*` — an id ONLY POST /api/demo/run can mint (FileStore.isDemoSession
+ *     keys on exactly this prefix, so it is a fact about provenance, not a guess)
+ *   - the exact ids of the sample sessions checked into THIS repo
+ *
+ * Nothing here is a general "looks like test data" classifier, and it must not
+ * become one. Matches are FLAGGED, never hidden — the dry-run found stray test
+ * artifacts polluting real queues, and the fix for that is a visible label
+ * rather than a silent filter that could swallow real work.
  */
+const KNOWN_FIXTURE_SESSION_IDS: ReadonlySet<string> = new Set([
+  "b-demo",
+  "dv1-demo",
+  "batch2-preview",
+]);
+
 function looksLikeFixtureSession(sessionId: string): boolean {
   const id = sessionId.toLowerCase();
-  return (
-    id.startsWith("demo_") ||
-    id.startsWith("test_") ||
-    id.startsWith("fixture") ||
-    id.endsWith("-demo") ||
-    id.endsWith("-preview")
-  );
+  return id.startsWith("demo_") || KNOWN_FIXTURE_SESSION_IDS.has(id);
 }
 
 /** An open decision, with the age + supersede context the triage view needs. */
@@ -160,7 +176,11 @@ export interface BankProject {
   /** Newest lastActivity across sessions; absent when there are none. */
   lastActivity?: string;
   openDecisionCount: number;
+  /** Sessions with an open decision or a draft review — work stalled on YOU. */
   needsYouCount: number;
+  /** Sessions with an unanswered human question — the AGENT's turn, counted
+   *  separately so the "what needs me" headline can never absorb it. */
+  waitingOnAgentCount: number;
   /** Set when the project's sessions dir could not be walked at all. */
   degraded?: boolean;
   degradedReason?: string;
@@ -174,8 +194,10 @@ export interface ContextBank {
     projects: number;
     sessions: number;
     openDecisions: number;
-    /** Sessions carrying at least one open loop. */
+    /** Sessions with a loop that is genuinely YOURS (decision / draft review). */
     needsYou: number;
+    /** Sessions where the AGENT owes an answer. Never folded into needsYou. */
+    waitingOnAgent: number;
     /** Projects the registry knows about whose root no longer exists. */
     staleProjects: number;
   };
@@ -348,12 +370,25 @@ function mentionsId(haystack: string, id: string): boolean {
  * the moment the human acts, and a "needs you" badge that outlives the need is
  * exactly the noise this feature exists to remove.
  *
+ * WHOSE TURN IS IT — the split that matters:
+ *   - `needsYou`      = open decisions + draft reviews. Work stalled ON YOU.
+ *   - `waitingOnAgent`= unanswered human questions. You already did your part;
+ *                       the agent owes the answer.
+ * These must NOT be summed. The bank's headline number is "what needs me", and
+ * counting your own unanswered questions there would tell you to go look at the
+ * one thing you cannot act on. This mirrors the rule the daemon already
+ * enforces (create-daemon.ts: unanswered questions are "the INVERSE of
+ * pendingCount") and the switcher badge that already excludes them.
+ *
  * Deliberately NOT included: any "time-sensitive"/urgency tag. Nothing in the
  * data says a decision is urgent; age is reported as a NUMBER and the human
  * decides what old means.
  */
 export function deriveSalience(input: {
-  openLoops: number;
+  /** Open decisions + draft reviews — the loops that are genuinely YOURS. */
+  needsYou: number;
+  /** Unanswered human questions — the agent's turn, tracked separately. */
+  waitingOnAgent: number;
   artifacts: Artifact[];
   lastActivity: string;
   now: Date;
@@ -364,14 +399,17 @@ export function deriveSalience(input: {
   const isStale =
     Number.isFinite(ageMs) && ageMs > input.staleAfterDays * 24 * 60 * 60 * 1000;
 
-  if (input.openLoops > 0) tags.push("needs-you");
-  else tags.push("quiet");
+  if (input.needsYou > 0) tags.push("needs-you");
+  if (input.waitingOnAgent > 0) tags.push("waiting-on-agent");
+  // `quiet` means neither side owes anything — NOT merely "nothing owed by you".
+  if (input.needsYou === 0 && input.waitingOnAgent === 0) tags.push("quiet");
   if (isStale) tags.push("stale");
-  // "done" is a strong claim, so it needs a strong condition: no open loops AND
-  // every artifact reached a terminal status. A session with a draft sitting in
-  // it is quiet, not done.
+  // "done" is a strong claim, so it needs a strong condition: nothing open on
+  // EITHER side AND every artifact reached a terminal status. A session with a
+  // draft sitting in it — or an unanswered question — is quiet/waiting, not done.
   if (
-    input.openLoops === 0 &&
+    input.needsYou === 0 &&
+    input.waitingOnAgent === 0 &&
     input.artifacts.length > 0 &&
     input.artifacts.every((a) => isClosedArtifactStatus(a.status))
   ) {
@@ -418,6 +456,7 @@ export function scanProject(
     sessions: [],
     openDecisionCount: 0,
     needsYouCount: 0,
+    waitingOnAgentCount: 0,
   };
   if (entry.stale) return project;
 
@@ -467,6 +506,7 @@ export function scanProject(
   project.lastActivity = project.sessions[0]?.lastActivity;
   project.openDecisionCount = project.sessions.reduce((n, s) => n + s.openDecisionCount, 0);
   project.needsYouCount = project.sessions.filter((s) => s.salience.includes("needs-you")).length;
+  project.waitingOnAgentCount = project.sessions.filter((s) => s.salience.includes("waiting-on-agent")).length;
   return project;
 }
 
@@ -544,7 +584,8 @@ function scanSession(input: {
 
   const lastActivity = deriveLastActivity(artifacts, [artFile, commentsFile, path.join(dir, "decisions.json")]);
   const { oneLiner, rung, quality } = deriveOneLiner(artifacts, open);
-  const openLoops = open.length + draftReviewCount + unansweredQuestionCount;
+  // The turn split — see deriveSalience. Questions are NOT added in here.
+  const needsYou = open.length + draftReviewCount;
 
   const session: BankSession = {
     sessionId,
@@ -559,7 +600,14 @@ function scanSession(input: {
     openDecisionCount: open.length,
     draftReviewCount,
     unansweredQuestionCount,
-    salience: deriveSalience({ openLoops, artifacts, lastActivity, now, staleAfterDays }),
+    salience: deriveSalience({
+      needsYou,
+      waitingOnAgent: unansweredQuestionCount,
+      artifacts,
+      lastActivity,
+      now,
+      staleAfterDays,
+    }),
   };
   if (looksLikeFixtureSession(sessionId)) session.fixtureLike = true;
   if (degraded) {
@@ -619,6 +667,7 @@ export function buildContextBank(options: BuildContextBankOptions = {}): Context
         sessions: [],
         openDecisionCount: 0,
         needsYouCount: 0,
+        waitingOnAgentCount: 0,
         degraded: true,
         degradedReason: String(err),
       });
@@ -635,6 +684,7 @@ export function buildContextBank(options: BuildContextBankOptions = {}): Context
       sessions: projects.reduce((n, p) => n + p.sessions.length, 0),
       openDecisions: projects.reduce((n, p) => n + p.openDecisionCount, 0),
       needsYou: projects.reduce((n, p) => n + p.needsYouCount, 0),
+      waitingOnAgent: projects.reduce((n, p) => n + p.waitingOnAgentCount, 0),
       staleProjects: projects.filter((p) => p.stale).length,
     },
     staleAfterDays,
@@ -643,21 +693,56 @@ export function buildContextBank(options: BuildContextBankOptions = {}): Context
 
 // --- cache -----------------------------------------------------------------
 
-let cache: { at: number; bank: ContextBank } | null = null;
+let cache: { at: number; key: string; bank: ContextBank } | null = null;
+
+/**
+ * Minimum age before `fresh` will force a re-walk. Mirrors the /api/projects
+ * sweep's identical floor (create-daemon.ts): `fresh` must bypass the TTL for a
+ * genuine refresh, but WITHOUT a floor a held-down refresh button (or a drive-by
+ * page — CORS blocks cross-origin reads, not request execution) turns every
+ * click into another synchronous disk walk over every registered project,
+ * pinning the event loop. A refresh that rides a <2s-old result is
+ * indistinguishable to the human.
+ */
+export const BANK_FRESH_FLOOR_MS = 2_000;
+
+/**
+ * The cache key. The cached bank is only reusable for a call that would have
+ * COMPUTED the same thing, so anything that changes the result belongs here.
+ * Today that is `staleAfterDays` (it decides the `stale` tag). An INJECTED
+ * registry is not keyed — it bypasses the cache entirely below, because
+ * hashing an arbitrary caller-supplied array is a worse trap than not caching
+ * a call that only tests make.
+ */
+function cacheKeyOf(options: BuildContextBankOptions): string {
+  return `stale:${options.staleAfterDays ?? DEFAULT_STALE_AFTER_DAYS}`;
+}
 
 /**
  * TTL-cached bank. The scan is a disk walk over every known project, and the
  * UI polls; without this, N tabs × 30s each re-walk every project's session
- * tree. `fresh` bypasses the TTL (the "refresh" affordance).
+ * tree. `fresh` bypasses the TTL down to BANK_FRESH_FLOOR_MS.
+ *
+ * The cache is keyed (see cacheKeyOf) rather than global: pre-review this
+ * function ignored its own arguments, so a call with different options was
+ * silently served the previous caller's bank — a trap that would have produced
+ * a real, hard-to-see wrong answer the first time a second caller appeared.
+ * Calls that inject a `registry` skip the cache in BOTH directions (they never
+ * read it and never poison it).
  */
 export function getContextBank(
   options: BuildContextBankOptions & { fresh?: boolean; ttlMs?: number } = {},
 ): ContextBank {
-  const ttl = options.ttlMs ?? DEFAULT_BANK_TTL_MS;
   const nowMs = (options.now ?? new Date()).getTime();
-  if (!options.fresh && cache && nowMs - cache.at < ttl) return cache.bank;
+  // An injected registry describes a world the cache cannot represent.
+  if (options.registry) return buildContextBank(options);
+
+  const ttl = options.ttlMs ?? DEFAULT_BANK_TTL_MS;
+  const maxAge = options.fresh ? Math.min(BANK_FRESH_FLOOR_MS, ttl) : ttl;
+  const key = cacheKeyOf(options);
+  if (cache && cache.key === key && nowMs - cache.at < maxAge) return cache.bank;
   const bank = buildContextBank(options);
-  cache = { at: nowMs, bank };
+  cache = { at: nowMs, key, bank };
   return bank;
 }
 

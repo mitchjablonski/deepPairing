@@ -28675,9 +28675,14 @@ var RUNG_QUALITY = {
 var ONE_LINER_MAX = 140;
 var DEFAULT_STALE_AFTER_DAYS = 21;
 var DEFAULT_BANK_TTL_MS = 2e4;
+var KNOWN_FIXTURE_SESSION_IDS = /* @__PURE__ */ new Set([
+  "b-demo",
+  "dv1-demo",
+  "batch2-preview"
+]);
 function looksLikeFixtureSession(sessionId) {
   const id = sessionId.toLowerCase();
-  return id.startsWith("demo_") || id.startsWith("test_") || id.startsWith("fixture") || id.endsWith("-demo") || id.endsWith("-preview");
+  return id.startsWith("demo_") || KNOWN_FIXTURE_SESSION_IDS.has(id);
 }
 function truncateOneLiner(raw2, max = ONE_LINER_MAX) {
   const s = raw2.replace(/\s+/g, " ").trim();
@@ -28776,10 +28781,11 @@ function deriveSalience(input) {
   const tags = [];
   const ageMs = input.now.getTime() - Date.parse(input.lastActivity);
   const isStale = Number.isFinite(ageMs) && ageMs > input.staleAfterDays * 24 * 60 * 60 * 1e3;
-  if (input.openLoops > 0) tags.push("needs-you");
-  else tags.push("quiet");
+  if (input.needsYou > 0) tags.push("needs-you");
+  if (input.waitingOnAgent > 0) tags.push("waiting-on-agent");
+  if (input.needsYou === 0 && input.waitingOnAgent === 0) tags.push("quiet");
   if (isStale) tags.push("stale");
-  if (input.openLoops === 0 && input.artifacts.length > 0 && input.artifacts.every((a) => isClosedArtifactStatus(a.status))) {
+  if (input.needsYou === 0 && input.waitingOnAgent === 0 && input.artifacts.length > 0 && input.artifacts.every((a) => isClosedArtifactStatus(a.status))) {
     tags.push("done");
   }
   return tags;
@@ -28809,7 +28815,8 @@ function scanProject(entry, opts) {
     stale: entry.stale,
     sessions: [],
     openDecisionCount: 0,
-    needsYouCount: 0
+    needsYouCount: 0,
+    waitingOnAgentCount: 0
   };
   if (entry.stale) return project;
   const sessionsDir = path12.join(entry.projectRoot, ".deeppairing", "sessions");
@@ -28846,6 +28853,7 @@ function scanProject(entry, opts) {
   project.lastActivity = project.sessions[0]?.lastActivity;
   project.openDecisionCount = project.sessions.reduce((n, s) => n + s.openDecisionCount, 0);
   project.needsYouCount = project.sessions.filter((s) => s.salience.includes("needs-you")).length;
+  project.waitingOnAgentCount = project.sessions.filter((s) => s.salience.includes("waiting-on-agent")).length;
   return project;
 }
 function groupBySession(decisions) {
@@ -28897,7 +28905,7 @@ function scanSession(input) {
   }
   const lastActivity = deriveLastActivity(artifacts, [artFile, commentsFile, path12.join(dir, "decisions.json")]);
   const { oneLiner, rung, quality } = deriveOneLiner(artifacts, open);
-  const openLoops = open.length + draftReviewCount + unansweredQuestionCount;
+  const needsYou = open.length + draftReviewCount;
   const session = {
     sessionId,
     projectRoot: project.projectRoot,
@@ -28911,7 +28919,14 @@ function scanSession(input) {
     openDecisionCount: open.length,
     draftReviewCount,
     unansweredQuestionCount,
-    salience: deriveSalience({ openLoops, artifacts, lastActivity, now, staleAfterDays })
+    salience: deriveSalience({
+      needsYou,
+      waitingOnAgent: unansweredQuestionCount,
+      artifacts,
+      lastActivity,
+      now,
+      staleAfterDays
+    })
   };
   if (looksLikeFixtureSession(sessionId)) session.fixtureLike = true;
   if (degraded) {
@@ -28957,6 +28972,7 @@ function buildContextBank(options = {}) {
         sessions: [],
         openDecisionCount: 0,
         needsYouCount: 0,
+        waitingOnAgentCount: 0,
         degraded: true,
         degradedReason: String(err)
       });
@@ -28971,18 +28987,26 @@ function buildContextBank(options = {}) {
       sessions: projects.reduce((n, p) => n + p.sessions.length, 0),
       openDecisions: projects.reduce((n, p) => n + p.openDecisionCount, 0),
       needsYou: projects.reduce((n, p) => n + p.needsYouCount, 0),
+      waitingOnAgent: projects.reduce((n, p) => n + p.waitingOnAgentCount, 0),
       staleProjects: projects.filter((p) => p.stale).length
     },
     staleAfterDays
   };
 }
 var cache = null;
+var BANK_FRESH_FLOOR_MS = 2e3;
+function cacheKeyOf(options) {
+  return `stale:${options.staleAfterDays ?? DEFAULT_STALE_AFTER_DAYS}`;
+}
 function getContextBank(options = {}) {
-  const ttl = options.ttlMs ?? DEFAULT_BANK_TTL_MS;
   const nowMs = (options.now ?? /* @__PURE__ */ new Date()).getTime();
-  if (!options.fresh && cache && nowMs - cache.at < ttl) return cache.bank;
+  if (options.registry) return buildContextBank(options);
+  const ttl = options.ttlMs ?? DEFAULT_BANK_TTL_MS;
+  const maxAge = options.fresh ? Math.min(BANK_FRESH_FLOOR_MS, ttl) : ttl;
+  const key = cacheKeyOf(options);
+  if (cache && cache.key === key && nowMs - cache.at < maxAge) return cache.bank;
   const bank = buildContextBank(options);
-  cache = { at: nowMs, bank };
+  cache = { at: nowMs, key, bank };
   return bank;
 }
 function clearContextBankCache() {
@@ -31997,7 +32021,9 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
     const artifacts = await store.getArtifacts();
     const record2 = await store.getDecision(decisionId);
-    const artifact = (record2?.artifactId ? artifacts.find((a) => a.id === record2.artifactId) : void 0) ?? artifacts.find(
+    const isDecisionArtifact = (a) => !!a && a.type === "decision";
+    const byRecord = record2?.artifactId ? artifacts.find((a) => a.id === record2.artifactId) : void 0;
+    const artifact = (isDecisionArtifact(byRecord) ? byRecord : void 0) ?? artifacts.find(
       (a) => a.type === "decision" && (a.content?.decisionId === decisionId || a.id === decisionId)
     );
     if (!artifact) {
@@ -32053,7 +32079,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       return c.json({
         generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
         projects: [],
-        totals: { projects: 0, sessions: 0, openDecisions: 0, needsYou: 0, staleProjects: 0 },
+        totals: { projects: 0, sessions: 0, openDecisions: 0, needsYou: 0, waitingOnAgent: 0, staleProjects: 0 },
         staleAfterDays: DEFAULT_STALE_AFTER_DAYS
       });
     }

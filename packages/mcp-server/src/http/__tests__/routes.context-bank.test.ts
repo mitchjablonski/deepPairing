@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DecisionOption } from "@deeppairing/shared";
 import { setProjectRegistryPathForTests, upsertProject } from "../../store/project-registry.js";
-import { clearContextBankCache } from "../../store/context-bank.js";
+import { clearContextBankCache, BANK_FRESH_FLOOR_MS } from "../../store/context-bank.js";
 import { createHttpRoutes } from "../routes.js";
 import { createRoutesTestContext, destroyRoutesTestContext, withHash, type RoutesTestContext } from "./routes.harness.js";
 
@@ -87,7 +87,10 @@ describe("GET /api/context-bank", () => {
     seedOpenDecision();
     // The cache is intentionally sticky…
     expect((await (await ctx.app.request("/api/context-bank")).json()).totals.openDecisions).toBe(0);
-    // …until asked for fresh data.
+    // …until asked for fresh data. (The route's fresh path has a 2s min-age
+    // floor; `before` above was built by an earlier request in this test, which
+    // is why the floor has to be waited out rather than assumed away.)
+    await new Promise((r) => setTimeout(r, BANK_FRESH_FLOOR_MS + 50));
     expect((await (await ctx.app.request("/api/context-bank?fresh=1")).json()).totals.openDecisions).toBe(1);
   });
 });
@@ -114,7 +117,11 @@ describe("the question lane, end to end (the rider)", () => {
     const body = await (await ctx.app.request("/api/context-bank?fresh=1")).json();
     const session = body.projects[0].sessions.find((s: { sessionId: string }) => s.sessionId === "test_session");
     expect(session.unansweredQuestionCount).toBe(1);
-    expect(session.salience).toContain("needs-you");
+    // WHOSE TURN — the question is owed BY the agent, so it belongs to the
+    // waiting-on-agent lane and must stay out of the "what needs me" headline.
+    expect(session.salience).toContain("waiting-on-agent");
+    expect(session.salience).not.toContain("needs-you");
+    expect(body.totals).toMatchObject({ needsYou: 0, waitingOnAgent: 1 });
   });
 
   it("the SAME comment posted WITHOUT intent stays invisible to the lane (the bug it fixes)", async () => {
@@ -228,6 +235,24 @@ describe("POST /api/decisions/:id/close-out", () => {
     const artifact = (await ctx.store.getArtifacts()).find((a) => a.id === "a1")!;
     const obsoleteEntries = (artifact.statusHistory ?? []).filter((h) => h.status === "obsolete");
     expect(obsoleteEntries).toHaveLength(1);
+  });
+
+  it("refuses to retire a NON-decision artifact a decision record points at", async () => {
+    // The record and the artifacts are written by different processes over the
+    // same files (X6), so a record whose artifactId has drifted onto another
+    // artifact is reachable. Without the type check on the record path, this
+    // flipped a PLAN to obsolete and returned 200.
+    ctx.store.createArtifact({ id: "a_plan", type: "plan", title: "Rollout plan", content: {} });
+    ctx.store.recordDecisionRequest({ decisionId: "d_bad", artifactId: "a_plan", context: "?", options: OPTS });
+    ctx.store.forceFlush();
+
+    const res = await ctx.app.request("/api/decisions/d_bad/close-out", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Session-Id": "test_session" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(404);
+    expect((await ctx.store.getArtifacts()).find((a) => a.id === "a_plan")!.status).toBe("draft");
   });
 
   it("404s for a decision this session doesn't own", async () => {
