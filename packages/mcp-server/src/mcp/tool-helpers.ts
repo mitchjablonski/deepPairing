@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { IStore } from "../store/store-interface.js";
 import type { TeamPreference, Comment } from "@deeppairing/shared";
+import { lintArtifactContent, bySeverity } from "@deeppairing/shared";
 import type { ToolResult } from "./tools/types.js";
 import {
   ELICIT_APPROVE_SCHEMA,
@@ -485,6 +486,51 @@ export async function getPassiveFeedback(store: IStore, excludeIds: string[] = [
   if (shown.length === 0) return "";
   const formatted = shown.map((c) => `- ${c.content}`).join("\n");
   return `\n\n[Human feedback]: ${formatted}`;
+}
+
+/** How many style violations get spelled out before the tail counts the rest.
+ *  Four keeps the whole block at five lines, which is the entire token cost. */
+const MAX_STYLE_LINES = 4;
+
+/**
+ * "Write to your pair" — the STYLE echo on a present_* result.
+ *
+ * WARN ONLY. The artifact is already recorded, versioned and broadcast by the
+ * time this runs. Nothing here can block, reject, rewrite or re-version
+ * anything: it appends prose to the tool's success text so the agent learns
+ * what its own register looked like and writes the NEXT artifact better. If the
+ * linter throws for any reason, the tool result is returned unchanged.
+ *
+ * The rules and the score come from @deeppairing/shared's prose-lint, which the
+ * companion UI's clarity chip also calls — one implementation, so the number the
+ * agent is told and the number the human sees can never disagree.
+ *
+ * Token cost: zero when the prose is clean (returns ""), and at most five lines
+ * otherwise — a header plus up to four violations, worst-severity first.
+ */
+export function formatStyleWarnings(type: string, content: unknown): string {
+  let result;
+  try {
+    result = lintArtifactContent(type, content);
+  } catch {
+    // A linter bug must never cost the agent its tool result.
+    return "";
+  }
+  if (result.violations.length === 0) return "";
+
+  // Carry the field path alongside each violation so every line says WHERE,
+  // then rank worst-severity-first and keep only the top few.
+  const located = result.fields.flatMap((f) => f.violations.map((v) => ({ path: f.path, v })));
+  located.sort((a, b) => bySeverity(a.v, b.v));
+  const shown = located.slice(0, MAX_STYLE_LINES);
+  const rest = located.length - shown.length;
+
+  const lines = shown.map(({ path, v }) => `- ${path}: ${v.message}`);
+  const tail = rest > 0 ? ` ${rest} more in the UI.` : "";
+  return (
+    `\n\nSTYLE (clarity ${result.score}/100) — house prose, warn only; nothing was changed.${tail}\n` +
+    lines.join("\n")
+  );
 }
 
 /**

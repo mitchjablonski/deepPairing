@@ -50,7 +50,7 @@ export function ReasoningCard({ artifact }: Props) {
         </div>
         <SimpleMarkdown
           text={rc.action}
-          className="text-sm text-text-primary font-medium space-y-1"
+          className="prose-field text-sm text-text-primary font-medium space-y-1"
         />
         {rc.confidence && (
           <span
@@ -82,7 +82,7 @@ export function ReasoningCard({ artifact }: Props) {
         </div>
         <SimpleMarkdown
           text={rc.reasoning}
-          className="text-sm text-text-secondary space-y-2"
+          className="prose-field text-sm text-text-secondary space-y-2"
         />
       </div>
 

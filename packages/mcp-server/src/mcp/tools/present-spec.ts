@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 import { validatePresentSpecInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
-import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest, hashPresentArgs, buildDedupResponse } from "../tool-helpers.js";
+import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -89,11 +89,11 @@ export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<To
     await ctx.store.updateArtifactStatus(id, "approved", "elicit_accept");
     await maybeUpdateTaskStatus(ctx.server, id, ctx.store);
     return {
-      content: [{ type: "text", text: `Spec "${artifact.title}" recorded and approved (${id}). Proceed with present_plan.${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }],
+      content: [{ type: "text", text: `Spec "${artifact.title}" recorded and approved (${id}). Proceed with present_plan.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }],
     };
   }
 
   return {
-    content: [{ type: "text", text: `Spec "${artifact.title}" presented for review (${id}). The human can challenge each requirement and acceptance criterion at localhost:${reviewPort}. Call check_feedback for their response.${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }],
+    content: [{ type: "text", text: `Spec "${artifact.title}" presented for review (${id}). The human can challenge each requirement and acceptance criterion at localhost:${reviewPort}. Call check_feedback for their response.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }],
   };
 }

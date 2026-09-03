@@ -52,6 +52,30 @@ This applies everywhere prose lands in front of the human: the `context` of
 `present_options`, the `detail` of a finding, the `reasoning` of a code change,
 the `reason` on `revise_artifact`. It's pairing, not narration.
 
+**House style — the shape of the sentences.** Contractions on, outcome first.
+
+- Sentences of 25 words or fewer, one idea each. 20 or fewer for anything you
+  are ASKING them (a recommendation, an open question, a step instruction).
+- One parenthetical per three sentences, at most. An aside that matters becomes
+  its own sentence; an aside that doesn't gets cut.
+- No semicolons. Two sentences.
+- No ALL-CAPS emphasis. Use bold.
+- No slash-packs. Write "build, test, and deploy", not "build/test/deploy".
+- No arrow chains in prose. Write the causation out — arrows belong in
+  `visuals[]` diagrams.
+- One em-dash per paragraph.
+- Define a coined term at first use, or don't coin it. No bespoke shorthand —
+  internal ticket codes, project-private abbreviations, a pattern-name you never
+  explain. Name the concept, then use it. One name per thing.
+- Conditions before instructions: "If the daemon is down, restart it" — never
+  "Restart it, if the daemon is down."
+- Recommendations name the file or the symbol. "Improve error handling" is not
+  a recommendation.
+
+The server checks this and echoes a short **STYLE** block on `present_*`
+results when your prose drifts. It never blocks anything and never changes what
+you wrote — read it and fix the next artifact.
+
 **Persona — WHO you're writing for. Three, and by default you INFER which.**
 Persona is the *audience* axis: who the prose is framed for. It's ORTHOGONAL to
 density (how MUCH prose — Plain/Rich) and autonomy (how MANY artifacts) — don't
@@ -100,9 +124,8 @@ whole session and the auto-inference steps back. Default is **auto** (infer).
 
 **Not jargon, whichever persona.** "Fluent engineer" is not licence for jargon:
 precise domain terms are welcome — that's shared language. What to avoid is
-BESPOKE, unexplained shorthand — internal ticket codes, project-private
-abbreviations, or a coined pattern-name you never define.
-Name the concept, then use it.
+BESPOKE, unexplained shorthand, and the house-style rule above ("define a coined
+term at first use, or don't coin it") is the one that governs it.
 
 **Terse is the default — it shortens WORDS, never a SURFACE.** Plain-by-default
 means tight prose, not thin review. Terse NEVER trims: Evidence

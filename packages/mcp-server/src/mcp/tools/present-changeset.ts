@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 import { validatePresentChangesetInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
-import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, hashPresentArgs, buildDedupResponse } from "../tool-helpers.js";
+import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 /**
@@ -150,7 +150,7 @@ export async function handlePresentChangeset(ctx: ToolContext, args: any): Promi
         `Changeset "${artifact.title}" presented for review (${id}) — ${fileCount} file${fileCount === 1 ? "" : "s"}. ` +
         `The human reviews each file (and can comment across files) at localhost:${reviewPort}. ` +
         `Call check_feedback for their per-file review state, comments, and verdict. ` +
-        `${closing}${traceSummary}${advisory}${nudge}${await ctx.helpers.getPassiveFeedback()}`,
+        `${closing}${traceSummary}${advisory}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`,
     }],
   };
 }

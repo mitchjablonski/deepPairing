@@ -631,7 +631,7 @@ function WorkbenchColumn({
           <div className="text-2xs uppercase tracking-wide text-text-muted font-semibold">Summary</div>
           {renderAffordance({ optionId: option.id, sectionId: "summary", label: `${title} · summary` })}
         </div>
-        <SimpleMarkdown text={option.description} className="text-xs text-text-secondary mt-1 space-y-1" />
+        <SimpleMarkdown text={option.description} className="prose-field text-xs text-text-secondary mt-1 space-y-1" />
       </div>
 
       {/* Pros — each a commentable grain row */}

@@ -204,7 +204,7 @@ export function ExplainerArtifact({ artifact }: ExplainerArtifactProps) {
         {content.title && (
           <div className="text-sm font-semibold text-text-primary">{content.title}</div>
         )}
-        <SimpleMarkdown text={content.overview} className="text-sm text-text-secondary space-y-2" />
+        <SimpleMarkdown text={content.overview} className="prose-field text-sm text-text-secondary space-y-2" />
       </ExplainerBlock>
 
       {/* R4 P-C (#284) — WHAT I'M NOT SURE ABOUT, above the fold. The orientation
@@ -289,7 +289,7 @@ export function ExplainerArtifact({ artifact }: ExplainerArtifactProps) {
                   <div className="min-w-0 flex-1 space-y-2">
                     <div className="text-sm font-semibold text-text-primary">{section.heading}</div>
                     {section.body && (
-                      <SimpleMarkdown text={section.body} className="text-xs text-text-secondary space-y-1" />
+                      <SimpleMarkdown text={section.body} className="prose-field text-xs text-text-secondary space-y-1" />
                     )}
 
                     {/* Evidence — reuse the Research renderer (Evidence +

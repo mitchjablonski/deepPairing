@@ -905,7 +905,7 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
         </div>
 
         {/* Detail */}
-        <SimpleMarkdown text={finding.detail} className={`text-text-secondary mt-2 space-y-2 ${focusMode ? "text-sm leading-relaxed" : "text-xs"}`} />
+        <SimpleMarkdown text={finding.detail} className={`prose-field text-text-secondary mt-2 space-y-2 ${focusMode ? "text-sm leading-relaxed" : "text-xs"}`} />
 
         {/* R4 P-A (#284) — the named pattern behind this finding. The badge is
             the CTA: it is ledger-aware (recurrence count + your stance) and
@@ -930,7 +930,7 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
                 measured 3.81:1 dark / 4.14:1 light. The label above it is
                 already the solid token; the alpha bought nothing but a sub-AA
                 body. Solid: 5.27 / 5.56. */}
-            <SimpleMarkdown text={finding.impact} className={`text-accent-red ${focusMode ? "text-sm" : "text-xs"}`} />
+            <SimpleMarkdown text={finding.impact} className={`prose-field text-accent-red ${focusMode ? "text-sm" : "text-xs"}`} />
           </div>
         )}
 
@@ -941,7 +941,7 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
             {/* R2 (contrast) — same class as Impact above: `text-accent-green/80`
                 measured 4.45:1 dark / 3.67:1 light on the green-dim/50 wash.
                 Solid: 6.15 / 5.39. */}
-            <SimpleMarkdown text={finding.recommendation} className={`text-accent-green ${focusMode ? "text-sm" : "text-xs"}`} />
+            <SimpleMarkdown text={finding.recommendation} className={`prose-field text-accent-green ${focusMode ? "text-sm" : "text-xs"}`} />
           </div>
         )}
       </div>
@@ -951,7 +951,7 @@ export function ResearchArtifact({ artifact }: ResearchArtifactProps) {
   return (
     <div className="space-y-4">
       {content.summary && (
-        <SimpleMarkdown text={content.summary} className="text-sm text-text-secondary space-y-2" />
+        <SimpleMarkdown text={content.summary} className="prose-field text-sm text-text-secondary space-y-2" />
       )}
 
       {/* R4 P-B (#284) — visuals framing the research (an architecture diagram,

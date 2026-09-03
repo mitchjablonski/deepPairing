@@ -300,10 +300,10 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
                       <StepStatusMarker index={i} status={step.status} />
                     )}
                     <div className={`flex-1 min-w-0 ${!checkedSteps[i] && artifact.status === "draft" ? "opacity-40 line-through" : ""}`}>
-                      <p className="text-sm text-text-primary font-medium">
+                      <p className="prose-field text-sm text-text-primary font-medium">
                         {step.description}
                       </p>
-                      <p className="text-xs text-text-muted mt-0.5">
+                      <p className="prose-field text-xs text-text-muted mt-0.5">
                         {step.reasoning}
                       </p>
                       {step.statusNote && (
@@ -358,8 +358,8 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
                           </div>
                           {step.branches.map((branch, bi) => (
                             <div key={bi} className="p-2 bg-surface-elevated/50 rounded border border-white/[0.04]">
-                              <p className="text-xs text-text-primary font-medium">{branch.description}</p>
-                              <p className="text-2xs text-text-muted mt-0.5">{branch.reasoning}</p>
+                              <p className="prose-field text-xs text-text-primary font-medium">{branch.description}</p>
+                              <p className="prose-field text-2xs text-text-muted mt-0.5">{branch.reasoning}</p>
                               {branch.files && branch.files.length > 0 && (
                                 <div className="flex flex-wrap gap-1 mt-1">
                                   {branch.files.map((f, fi) => {

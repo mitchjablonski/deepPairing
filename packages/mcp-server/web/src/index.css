@@ -300,6 +300,31 @@ h1, h2, h3, h4, h5, h6 {
   line-height: 1.2;
 }
 
+/*
+ * "Write to your pair" — readable prose measure.
+ *
+ * Applied to LONG PROSE renders only: summaries, details, descriptions,
+ * overviews, and explainer/debrief section bodies. Never to code blocks,
+ * diffs or diagrams, which need every pixel of width they can get.
+ *
+ * It caps the TEXT measure at 65ch and leaves the card's own layout width
+ * alone, so nothing about the surrounding grid changes — a line just stops
+ * running past the distance an eye can track back from.
+ */
+.prose-field {
+  max-width: 65ch;
+  line-height: 1.5;
+  text-align: left;
+}
+
+/* A touch more air between paragraphs than the default block stack. */
+.prose-field > p + p,
+.prose-field > div + div,
+.prose-field > p + ul,
+.prose-field > ul + p {
+  margin-top: 0.6em;
+}
+
 /* Single-line truncation utility */
 .truncate-line {
   overflow: hidden;

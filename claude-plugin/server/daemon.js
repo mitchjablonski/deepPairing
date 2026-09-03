@@ -17224,6 +17224,13 @@ var init_errors3 = __esm({
   }
 });
 
+// ../shared/dist/prose-lint.js
+var init_prose_lint = __esm({
+  "../shared/dist/prose-lint.js"() {
+    "use strict";
+  }
+});
+
 // ../shared/dist/index.js
 var init_dist = __esm({
   "../shared/dist/index.js"() {
@@ -17248,6 +17255,7 @@ var init_dist = __esm({
     init_unanswered();
     init_request();
     init_errors3();
+    init_prose_lint();
   }
 });
 

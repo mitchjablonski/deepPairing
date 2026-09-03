@@ -204,8 +204,8 @@ function assertNever(_x) {
 function assert(_) {
 }
 function getEnumValues(entries) {
-  const numericValues = Object.values(entries).filter((v) => typeof v === "number");
-  const values = Object.entries(entries).filter(([k, _]) => numericValues.indexOf(+k) === -1).map(([_, v]) => v);
+  const numericValues = Object.values(entries).filter((v2) => typeof v2 === "number");
+  const values = Object.entries(entries).filter(([k, _]) => numericValues.indexOf(+k) === -1).map(([_, v2]) => v2);
   return values;
 }
 function joinValues(array2, separator = "|") {
@@ -258,9 +258,9 @@ function defineLazy(object3, key, getter) {
       }
       return value;
     },
-    set(v) {
+    set(v2) {
       Object.defineProperty(object3, key, {
-        value: v
+        value: v2
         // configurable: true,
       });
     },
@@ -2407,10 +2407,10 @@ var init_schemas = __esm({
           v7: 7,
           v8: 8
         };
-        const v = versionMap[def.version];
-        if (v === void 0)
+        const v2 = versionMap[def.version];
+        if (v2 === void 0)
           throw new Error(`Invalid UUID version: "${def.version}"`);
-        def.pattern ?? (def.pattern = uuid(v));
+        def.pattern ?? (def.pattern = uuid(v2));
       } else
         def.pattern ?? (def.pattern = uuid());
       $ZodStringFormat.init(inst, def);
@@ -2888,8 +2888,8 @@ var init_schemas = __esm({
           const field = shape[key]._zod;
           if (field.values) {
             propValues[key] ?? (propValues[key] = /* @__PURE__ */ new Set());
-            for (const v of field.values)
-              propValues[key].add(v);
+            for (const v2 of field.values)
+              propValues[key].add(v2);
           }
         }
         return propValues;
@@ -3140,10 +3140,10 @@ var init_schemas = __esm({
           const pv = option._zod.propValues;
           if (!pv || Object.keys(pv).length === 0)
             throw new Error(`Invalid discriminated union option at index "${def.options.indexOf(option)}"`);
-          for (const [k, v] of Object.entries(pv)) {
+          for (const [k, v2] of Object.entries(pv)) {
             if (!propValues[k])
               propValues[k] = /* @__PURE__ */ new Set();
-            for (const val of v) {
+            for (const val of v2) {
               propValues[k].add(val);
             }
           }
@@ -3157,11 +3157,11 @@ var init_schemas = __esm({
           const values = o._zod.propValues?.[def.discriminator];
           if (!values || values.size === 0)
             throw new Error(`Invalid discriminated union option at index "${def.options.indexOf(o)}"`);
-          for (const v of values) {
-            if (map2.has(v)) {
-              throw new Error(`Duplicate discriminator value "${String(v)}"`);
+          for (const v2 of values) {
+            if (map2.has(v2)) {
+              throw new Error(`Duplicate discriminator value "${String(v2)}"`);
             }
-            map2.set(v, o);
+            map2.set(v2, o);
           }
         }
         return map2;
@@ -3634,8 +3634,8 @@ var init_schemas = __esm({
     $ZodNonOptional = /* @__PURE__ */ $constructor("$ZodNonOptional", (inst, def) => {
       $ZodType.init(inst, def);
       defineLazy(inst._zod, "values", () => {
-        const v = def.innerType._zod.values;
-        return v ? new Set([...v].filter((x) => x !== void 0)) : void 0;
+        const v2 = def.innerType._zod.values;
+        return v2 ? new Set([...v2].filter((x) => x !== void 0)) : void 0;
       });
       inst._zod.parse = (payload, ctx) => {
         const result = def.innerType._zod.run(payload, ctx);
@@ -6016,7 +6016,7 @@ var init_he = __esm({
             if (issue2.values.length === 1) {
               return `\u05E2\u05E8\u05DA \u05DC\u05D0 \u05EA\u05E7\u05D9\u05DF: \u05D4\u05E2\u05E8\u05DA \u05D7\u05D9\u05D9\u05D1 \u05DC\u05D4\u05D9\u05D5\u05EA ${stringifyPrimitive(issue2.values[0])}`;
             }
-            const stringified = issue2.values.map((v) => stringifyPrimitive(v));
+            const stringified = issue2.values.map((v2) => stringifyPrimitive(v2));
             if (issue2.values.length === 2) {
               return `\u05E2\u05E8\u05DA \u05DC\u05D0 \u05EA\u05E7\u05D9\u05DF: \u05D4\u05D0\u05E4\u05E9\u05E8\u05D5\u05D9\u05D5\u05EA \u05D4\u05DE\u05EA\u05D0\u05D9\u05DE\u05D5\u05EA \u05D4\u05DF ${stringified[0]} \u05D0\u05D5 ${stringified[1]}`;
             }
@@ -11086,7 +11086,7 @@ function _set(Class2, valueType, params) {
 }
 // @__NO_SIDE_EFFECTS__
 function _enum(Class2, values, params) {
-  const entries = Array.isArray(values) ? Object.fromEntries(values.map((v) => [v, v])) : values;
+  const entries = Array.isArray(values) ? Object.fromEntries(values.map((v2) => [v2, v2])) : values;
   return new Class2({
     type: "enum",
     entries,
@@ -11291,8 +11291,8 @@ function _stringbool(Classes, _params) {
   let truthyArray = params.truthy ?? ["true", "1", "yes", "on", "y", "enabled"];
   let falsyArray = params.falsy ?? ["false", "0", "no", "off", "n", "disabled"];
   if (params.case !== "sensitive") {
-    truthyArray = truthyArray.map((v) => typeof v === "string" ? v.toLowerCase() : v);
-    falsyArray = falsyArray.map((v) => typeof v === "string" ? v.toLowerCase() : v);
+    truthyArray = truthyArray.map((v2) => typeof v2 === "string" ? v2.toLowerCase() : v2);
+    falsyArray = falsyArray.map((v2) => typeof v2 === "string" ? v2.toLowerCase() : v2);
   }
   const truthySet = new Set(truthyArray);
   const falsySet = new Set(falsyArray);
@@ -11895,9 +11895,9 @@ var init_json_schema_processors = __esm({
     enumProcessor = (schema, _ctx, json2, _params) => {
       const def = schema._zod.def;
       const values = getEnumValues(def.entries);
-      if (values.every((v) => typeof v === "number"))
+      if (values.every((v2) => typeof v2 === "number"))
         json2.type = "number";
-      if (values.every((v) => typeof v === "string"))
+      if (values.every((v2) => typeof v2 === "string"))
         json2.type = "string";
       json2.enum = values;
     };
@@ -11930,13 +11930,13 @@ var init_json_schema_processors = __esm({
           json2.const = val;
         }
       } else {
-        if (vals.every((v) => typeof v === "number"))
+        if (vals.every((v2) => typeof v2 === "number"))
           json2.type = "number";
-        if (vals.every((v) => typeof v === "string"))
+        if (vals.every((v2) => typeof v2 === "string"))
           json2.type = "string";
-        if (vals.every((v) => typeof v === "boolean"))
+        if (vals.every((v2) => typeof v2 === "boolean"))
           json2.type = "boolean";
-        if (vals.every((v) => v === null))
+        if (vals.every((v2) => v2 === null))
           json2.type = "null";
         json2.enum = vals;
       }
@@ -12034,11 +12034,11 @@ var init_json_schema_processors = __esm({
       }
       const allKeys = new Set(Object.keys(shape));
       const requiredKeys = new Set([...allKeys].filter((key) => {
-        const v = def.shape[key]._zod;
+        const v2 = def.shape[key]._zod;
         if (ctx.io === "input") {
-          return v.optin === void 0;
+          return v2.optin === void 0;
         } else {
-          return v.optout === void 0;
+          return v2.optout === void 0;
         }
       }));
       if (requiredKeys.size > 0) {
@@ -12158,7 +12158,7 @@ var init_json_schema_processors = __esm({
       }
       const keyValues = keyType._zod.values;
       if (keyValues) {
-        const validKeyValues = [...keyValues].filter((v) => typeof v === "string" || typeof v === "number");
+        const validKeyValues = [...keyValues].filter((v2) => typeof v2 === "string" || typeof v2 === "number");
         if (validKeyValues.length > 0) {
           json2.required = validKeyValues;
         }
@@ -13025,12 +13025,12 @@ function _installLazyMethods(inst, group, methods) {
         });
         return bound;
       },
-      set(v) {
+      set(v2) {
         Object.defineProperty(this, key, {
           configurable: true,
           writable: true,
           enumerable: true,
-          value: v
+          value: v2
         });
       }
     });
@@ -13309,7 +13309,7 @@ function set(valueType, params) {
   });
 }
 function _enum2(values, params) {
-  const entries = Array.isArray(values) ? Object.fromEntries(values.map((v) => [v, v])) : values;
+  const entries = Array.isArray(values) ? Object.fromEntries(values.map((v2) => [v2, v2])) : values;
   return new ZodEnum({
     type: "enum",
     entries,
@@ -14414,10 +14414,10 @@ function convertBaseSchema(schema, ctx) {
     if (enumValues.length === 1) {
       return z.literal(enumValues[0]);
     }
-    if (enumValues.every((v) => typeof v === "string")) {
+    if (enumValues.every((v2) => typeof v2 === "string")) {
       return z.enum(enumValues);
     }
-    const literalSchemas = enumValues.map((v) => z.literal(v));
+    const literalSchemas = enumValues.map((v2) => z.literal(v2));
     if (literalSchemas.length < 2) {
       return literalSchemas[0];
     }
@@ -19074,17 +19074,17 @@ var require_core = __commonJS({
         return this.opts.defaultMeta = typeof meta3 == "object" ? meta3[schemaId] || meta3 : void 0;
       }
       validate(schemaKeyRef, data) {
-        let v;
+        let v2;
         if (typeof schemaKeyRef == "string") {
-          v = this.getSchema(schemaKeyRef);
-          if (!v)
+          v2 = this.getSchema(schemaKeyRef);
+          if (!v2)
             throw new Error(`no schema with key or ref "${schemaKeyRef}"`);
         } else {
-          v = this.compile(schemaKeyRef);
+          v2 = this.compile(schemaKeyRef);
         }
-        const valid = v(data);
-        if (!("$async" in v))
-          this.errors = v.errors;
+        const valid = v2(data);
+        if (!("$async" in v2))
+          this.errors = v2.errors;
         return valid;
       }
       compile(schema, _meta) {
@@ -19578,8 +19578,8 @@ var require_ref = __commonJS({
           return callRef(cxt, (0, codegen_1._)`${rootName}.validate`, root, root.$async);
         }
         function callValidate(sch) {
-          const v = getValidate(cxt, sch);
-          callRef(cxt, v, sch, sch.$async);
+          const v2 = getValidate(cxt, sch);
+          callRef(cxt, v2, sch, sch.$async);
         }
         function inlineRefSchema(sch) {
           const schName = gen.scopeValue("schema", opts.code.source === true ? { ref: sch, code: (0, codegen_1.stringify)(sch) } : { ref: sch });
@@ -19601,7 +19601,7 @@ var require_ref = __commonJS({
       return sch.validate ? gen.scopeValue("validate", { ref: sch.validate }) : (0, codegen_1._)`${gen.scopeValue("wrapper", { ref: sch })}.validate`;
     }
     exports.getValidate = getValidate;
-    function callRef(cxt, v, sch, $async) {
+    function callRef(cxt, v2, sch, $async) {
       const { gen, it } = cxt;
       const { allErrors, schemaEnv: env, opts } = it;
       const passCxt = opts.passContext ? names_1.default.this : codegen_1.nil;
@@ -19614,8 +19614,8 @@ var require_ref = __commonJS({
           throw new Error("async schema referenced by sync schema");
         const valid = gen.let("valid");
         gen.try(() => {
-          gen.code((0, codegen_1._)`await ${(0, code_1.callValidateCode)(cxt, v, passCxt)}`);
-          addEvaluatedFrom(v);
+          gen.code((0, codegen_1._)`await ${(0, code_1.callValidateCode)(cxt, v2, passCxt)}`);
+          addEvaluatedFrom(v2);
           if (!allErrors)
             gen.assign(valid, true);
         }, (e) => {
@@ -19627,7 +19627,7 @@ var require_ref = __commonJS({
         cxt.ok(valid);
       }
       function callSyncRef() {
-        cxt.result((0, code_1.callValidateCode)(cxt, v, passCxt), () => addEvaluatedFrom(v), () => addErrorsFrom(v));
+        cxt.result((0, code_1.callValidateCode)(cxt, v2, passCxt), () => addEvaluatedFrom(v2), () => addErrorsFrom(v2));
       }
       function addErrorsFrom(source) {
         const errs = (0, codegen_1._)`${source}.errors`;
@@ -20126,7 +20126,7 @@ var require_enum = __commonJS({
         cxt.pass(valid);
         function loopEnum() {
           gen.assign(valid, false);
-          gen.forOf("v", schemaCode, (v) => gen.if((0, codegen_1._)`${getEql()}(${data}, ${v})`, () => gen.assign(valid, true).break()));
+          gen.forOf("v", schemaCode, (v2) => gen.if((0, codegen_1._)`${getEql()}(${data}, ${v2})`, () => gen.assign(valid, true).break()));
         }
         function equalCode(vSchema, i) {
           const sch = schema[i];
@@ -21512,7 +21512,7 @@ var require_ajv = __commonJS({
     var Ajv2 = class extends core_1.default {
       _addVocabularies() {
         super._addVocabularies();
-        draft7_1.default.forEach((v) => this.addVocabulary(v));
+        draft7_1.default.forEach((v2) => this.addVocabulary(v2));
         if (this.opts.discriminator)
           this.addKeyword(discriminator_1.default);
       }
@@ -22927,23 +22927,23 @@ var init_message = __esm({
 });
 
 // ../shared/dist/schemas/coerce-content.js
-function oneOf(v, allowed, d) {
-  return typeof v === "string" && allowed.includes(v) ? v : d;
+function oneOf(v2, allowed, d) {
+  return typeof v2 === "string" && allowed.includes(v2) ? v2 : d;
 }
-function optOneOf(v, allowed) {
-  return typeof v === "string" && allowed.includes(v) ? v : void 0;
+function optOneOf(v2, allowed) {
+  return typeof v2 === "string" && allowed.includes(v2) ? v2 : void 0;
 }
-function coerceConcept(v) {
-  if (!isObj(v))
+function coerceConcept(v2) {
+  if (!isObj(v2))
     return void 0;
-  const name = str(v.name);
+  const name = str(v2.name);
   if (!name)
     return void 0;
-  const oneLineExplanation = optStr(v.oneLineExplanation);
+  const oneLineExplanation = optStr(v2.oneLineExplanation);
   return oneLineExplanation ? { name, oneLineExplanation } : { name };
 }
-function coerceFinding(v) {
-  const f = obj(v);
+function coerceFinding(v2) {
+  const f = obj(v2);
   const out = {
     category: str(f.category),
     detail: str(f.detail),
@@ -22985,16 +22985,16 @@ function coerceResearchContent(raw) {
   if (Array.isArray(c.openQuestions))
     out.openQuestions = strArr(c.openQuestions);
   if (Array.isArray(c.visuals))
-    out.visuals = c.visuals.map((v, i) => coerceVisual(v, `visual_${i}`));
+    out.visuals = c.visuals.map((v2, i) => coerceVisual(v2, `visual_${i}`));
   return out;
 }
-function coerceFiles(v) {
-  if (!Array.isArray(v))
+function coerceFiles(v2) {
+  if (!Array.isArray(v2))
     return void 0;
-  return v.every((x) => typeof x === "string") ? v : v.filter(isObj);
+  return v2.every((x) => typeof x === "string") ? v2 : v2.filter(isObj);
 }
-function coercePlanStep(v) {
-  const s = obj(v);
+function coercePlanStep(v2) {
+  const s = obj(v2);
   const out = {
     description: str(s.description),
     reasoning: str(s.reasoning)
@@ -23041,7 +23041,7 @@ function coercePlanContent(raw) {
     estimatedChanges: typeof c.estimatedChanges === "string" && c.estimatedChanges.trim() ? c.estimatedChanges : num(c.estimatedChanges)
   };
   if (Array.isArray(c.visuals)) {
-    out.visuals = c.visuals.map((v, i) => coerceVisual(v, `visual_${i}`));
+    out.visuals = c.visuals.map((v2, i) => coerceVisual(v2, `visual_${i}`));
   }
   return out;
 }
@@ -23057,8 +23057,8 @@ function visualFallbackId(o, indexFallback) {
   const hasContent = parts.some((p) => p != null && (typeof p !== "string" || p.length > 0) && (!Array.isArray(p) || p.length > 0));
   return hasContent ? `${kind}_${hashStr(JSON.stringify(parts))}` : indexFallback;
 }
-function coerceVisual(v, fallbackId) {
-  const o = obj(v);
+function coerceVisual(v2, fallbackId) {
+  const o = obj(v2);
   const out = {
     id: str(o.id) || visualFallbackId(o, fallbackId),
     kind: oneOf(o.kind, ["diagram", "file_map", "doc_map", "prototype", "annotated_code"], "diagram")
@@ -23112,8 +23112,8 @@ function coerceVisual(v, fallbackId) {
   }
   return out;
 }
-function coerceRequirement(v) {
-  const r = obj(v);
+function coerceRequirement(v2) {
+  const r = obj(v2);
   const out = {
     id: str(r.id),
     statement: str(r.statement),
@@ -23125,8 +23125,8 @@ function coerceRequirement(v) {
     out.priority = priority;
   return out;
 }
-function coerceTask(v) {
-  const t = obj(v);
+function coerceTask(v2) {
+  const t = obj(v2);
   const out = { description: str(t.description) };
   if (Array.isArray(t.linkedRequirementIds))
     out.linkedRequirementIds = strArr(t.linkedRequirementIds);
@@ -23150,11 +23150,11 @@ function coerceSpecContent(raw) {
   if (Array.isArray(c.openQuestions))
     out.openQuestions = strArr(c.openQuestions);
   if (Array.isArray(c.visuals))
-    out.visuals = c.visuals.map((v, i) => coerceVisual(v, `visual_${i}`));
+    out.visuals = c.visuals.map((v2, i) => coerceVisual(v2, `visual_${i}`));
   return out;
 }
-function coerceOption(v) {
-  const o = obj(v);
+function coerceOption(v2) {
+  const o = obj(v2);
   const out = {
     id: str(o.id),
     title: str(o.title),
@@ -23234,8 +23234,8 @@ function coerceReasoningContent(raw) {
   }
   return out;
 }
-function coerceHunkLine(v) {
-  const l = obj(v);
+function coerceHunkLine(v2) {
+  const l = obj(v2);
   const out = {
     kind: oneOf(l.kind, ["ctx", "add", "del"], "ctx"),
     content: str(l.content)
@@ -23246,15 +23246,15 @@ function coerceHunkLine(v) {
     out.newLine = l.newLine;
   return out;
 }
-function coerceHunk(v) {
-  const h = obj(v);
+function coerceHunk(v2) {
+  const h = obj(v2);
   const out = { lines: arr(h.lines).map(coerceHunkLine) };
   if (typeof h.header === "string")
     out.header = h.header;
   return out;
 }
-function coerceChangesetFile(v) {
-  const f = obj(v);
+function coerceChangesetFile(v2) {
+  const f = obj(v2);
   const out = {
     path: str(f.path),
     changeType: oneOf(f.changeType, ["modified", "added", "deleted"], "modified"),
@@ -23268,42 +23268,42 @@ function coerceChangesetFile(v) {
   }
   return out;
 }
-function coerceReviewState(v) {
-  if (!isObj(v))
+function coerceReviewState(v2) {
+  if (!isObj(v2))
     return void 0;
   const out = {};
-  for (const [k, val] of Object.entries(v)) {
+  for (const [k, val] of Object.entries(v2)) {
     if (val === "reviewed" || val === "needs_changes" || val === "skipped")
       out[k] = val;
   }
   return Object.keys(out).length > 0 ? out : void 0;
 }
-function coerceReviewReasons(v) {
-  if (!isObj(v))
+function coerceReviewReasons(v2) {
+  if (!isObj(v2))
     return void 0;
   const out = {};
-  for (const [k, val] of Object.entries(v)) {
+  for (const [k, val] of Object.entries(v2)) {
     if (typeof val === "string" && val.length > 0)
       out[k] = val;
   }
   return Object.keys(out).length > 0 ? out : void 0;
 }
-function coerceChangesetSource(v) {
-  if (!isObj(v))
+function coerceChangesetSource(v2) {
+  if (!isObj(v2))
     return void 0;
-  if (v.kind !== "github-pr")
+  if (v2.kind !== "github-pr")
     return void 0;
   const out = { kind: "github-pr" };
-  if (typeof v.number === "number" && Number.isInteger(v.number) && v.number > 0)
-    out.number = v.number;
-  if (typeof v.url === "string" && v.url.length > 0)
-    out.url = v.url;
-  if (typeof v.headRef === "string" && v.headRef.length > 0)
-    out.headRef = v.headRef;
-  if (typeof v.baseRef === "string" && v.baseRef.length > 0)
-    out.baseRef = v.baseRef;
-  if (typeof v.author === "string" && v.author.length > 0)
-    out.author = v.author;
+  if (typeof v2.number === "number" && Number.isInteger(v2.number) && v2.number > 0)
+    out.number = v2.number;
+  if (typeof v2.url === "string" && v2.url.length > 0)
+    out.url = v2.url;
+  if (typeof v2.headRef === "string" && v2.headRef.length > 0)
+    out.headRef = v2.headRef;
+  if (typeof v2.baseRef === "string" && v2.baseRef.length > 0)
+    out.baseRef = v2.baseRef;
+  if (typeof v2.author === "string" && v2.author.length > 0)
+    out.author = v2.author;
   return out;
 }
 function coerceChangesetContent(raw) {
@@ -23327,22 +23327,22 @@ function coerceChangesetContent(raw) {
   if (source)
     out.source = source;
   if (Array.isArray(c.visuals))
-    out.visuals = c.visuals.map((v, i) => coerceVisual(v, `visual_${i}`));
+    out.visuals = c.visuals.map((v2, i) => coerceVisual(v2, `visual_${i}`));
   return out;
 }
-function coerceConcepts(v) {
-  if (!Array.isArray(v))
+function coerceConcepts(v2) {
+  if (!Array.isArray(v2))
     return void 0;
-  const out = v.map(coerceConcept).filter((c) => !!c);
+  const out = v2.map(coerceConcept).filter((c) => !!c);
   return out;
 }
-function coerceEvidenceInputs(v) {
-  if (!Array.isArray(v))
+function coerceEvidenceInputs(v2) {
+  if (!Array.isArray(v2))
     return void 0;
-  return v.filter((x) => typeof x === "string" || isObj(x));
+  return v2.filter((x) => typeof x === "string" || isObj(x));
 }
-function coerceDebriefSection(v) {
-  const s = obj(v);
+function coerceDebriefSection(v2) {
+  const s = obj(v2);
   const out = {
     title: str(s.title),
     body: str(s.body)
@@ -23359,22 +23359,22 @@ function coerceDebriefSection(v) {
     out.artifactRefs = strArr(s.artifactRefs);
   return out;
 }
-function coerceDebriefDecision(v) {
-  const d = obj(v);
+function coerceDebriefDecision(v2) {
+  const d = obj(v2);
   const out = { what: str(d.what), why: str(d.why) };
   if (typeof d.alternative === "string")
     out.alternative = d.alternative;
   return out;
 }
-function coerceDebriefReviewItem(v) {
-  const r = obj(v);
+function coerceDebriefReviewItem(v2) {
+  const r = obj(v2);
   const out = { what: str(r.what), why: str(r.why) };
   if (typeof r.artifactRef === "string")
     out.artifactRef = r.artifactRef;
   return out;
 }
-function coerceDebriefDeferred(v) {
-  const d = obj(v);
+function coerceDebriefDeferred(v2) {
+  const d = obj(v2);
   return { what: str(d.what), why: str(d.why) };
 }
 function coerceDebriefContent(raw) {
@@ -23391,11 +23391,11 @@ function coerceDebriefContent(raw) {
   if (Array.isArray(c.openQuestions))
     out.openQuestions = strArr(c.openQuestions);
   if (Array.isArray(c.visuals))
-    out.visuals = c.visuals.map((v, i) => coerceVisual(v, `visual_${i}`));
+    out.visuals = c.visuals.map((v2, i) => coerceVisual(v2, `visual_${i}`));
   return out;
 }
-function coerceExplainerSection(v) {
-  const s = obj(v);
+function coerceExplainerSection(v2) {
+  const s = obj(v2);
   const out = {
     heading: str(s.heading),
     body: str(s.body)
@@ -23419,7 +23419,7 @@ function coerceExplainerContent(raw) {
   if (Array.isArray(c.suggestedQuestions))
     out.suggestedQuestions = strArr(c.suggestedQuestions);
   if (Array.isArray(c.visuals))
-    out.visuals = c.visuals.map((v, i) => coerceVisual(v, `visual_${i}`));
+    out.visuals = c.visuals.map((v2, i) => coerceVisual(v2, `visual_${i}`));
   if (Array.isArray(c.unknowns))
     out.unknowns = strArr(c.unknowns);
   return out;
@@ -23428,14 +23428,14 @@ var isObj, obj, str, num, bool, arr, strArr, optStr, LMH;
 var init_coerce_content = __esm({
   "../shared/dist/schemas/coerce-content.js"() {
     "use strict";
-    isObj = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
-    obj = (v) => isObj(v) ? v : {};
-    str = (v, d = "") => typeof v === "string" ? v : d;
-    num = (v, d = 0) => typeof v === "number" && Number.isFinite(v) ? v : d;
-    bool = (v, d = false) => typeof v === "boolean" ? v : d;
-    arr = (v) => Array.isArray(v) ? v : [];
-    strArr = (v) => arr(v).filter((x) => typeof x === "string");
-    optStr = (v) => typeof v === "string" ? v : void 0;
+    isObj = (v2) => typeof v2 === "object" && v2 !== null && !Array.isArray(v2);
+    obj = (v2) => isObj(v2) ? v2 : {};
+    str = (v2, d = "") => typeof v2 === "string" ? v2 : d;
+    num = (v2, d = 0) => typeof v2 === "number" && Number.isFinite(v2) ? v2 : d;
+    bool = (v2, d = false) => typeof v2 === "boolean" ? v2 : d;
+    arr = (v2) => Array.isArray(v2) ? v2 : [];
+    strArr = (v2) => arr(v2).filter((x) => typeof x === "string");
+    optStr = (v2) => typeof v2 === "string" ? v2 : void 0;
     LMH = ["low", "medium", "high"];
   }
 });
@@ -23972,6 +23972,743 @@ var init_errors3 = __esm({
   }
 });
 
+// ../shared/dist/prose-lint.js
+function blank(chars, start, end) {
+  for (let i = start; i < end && i < chars.length; i++) {
+    if (chars[i] !== "\n")
+      chars[i] = BLANK;
+  }
+}
+function maskNonProse(text) {
+  const chars = text.split("");
+  const fence = /^[ \t]*(?:```|~~~)/gm;
+  let openAt = null;
+  let m;
+  while ((m = fence.exec(text)) !== null) {
+    if (openAt === null) {
+      openAt = m.index;
+    } else {
+      const lineEnd = text.indexOf("\n", m.index);
+      blank(chars, openAt, lineEnd === -1 ? text.length : lineEnd);
+      openAt = null;
+    }
+  }
+  if (openAt !== null)
+    blank(chars, openAt, text.length);
+  const masked0 = chars.join("");
+  const span = /`[^`\n]*`/g;
+  while ((m = span.exec(masked0)) !== null) {
+    blank(chars, m.index, m.index + m[0].length);
+  }
+  const masked1 = chars.join("");
+  const tableLine = /^[ \t]*\|.*$|^[ \t]*[:\- |]{6,}$/gm;
+  while ((m = tableLine.exec(masked1)) !== null) {
+    if (m[0].trim().length === 0)
+      continue;
+    blank(chars, m.index, m.index + m[0].length);
+  }
+  const masked2 = chars.join("");
+  const url2 = /\b(?:https?|ftp|file|ws|wss):\/\/[^\s)\]]+/gi;
+  while ((m = url2.exec(masked2)) !== null) {
+    blank(chars, m.index, m.index + m[0].length);
+  }
+  const masked3 = chars.join("");
+  const pathRe = /(?:~|\.{1,2})?\/?[\w.@+-]+(?:\/[\w.@+-]+)+\/?/g;
+  while ((m = pathRe.exec(masked3)) !== null) {
+    const tok = m[0].replace(/[.,;:!?)\]]+$/, "");
+    if (!tok.includes("/"))
+      continue;
+    const anchored = /^(?:~\/|\.{1,2}\/|\/)/.test(tok);
+    const hasExtension = tok.split("/").some((seg) => /^[\w@+-][\w.@+-]*\.[A-Za-z]{1,6}$/.test(seg));
+    if (anchored || hasExtension)
+      blank(chars, m.index, m.index + tok.length);
+  }
+  return chars.join("");
+}
+function isStructuralLine(line) {
+  const t = line.trim();
+  if (t.length === 0)
+    return true;
+  if (/^#{1,6}\s/.test(t))
+    return true;
+  if (/^[-*+]\s*$/.test(t))
+    return true;
+  if (/^>\s/.test(t))
+    return true;
+  if (/^[-=_*]{3,}$/.test(t))
+    return true;
+  return false;
+}
+function stripLeadingMarker(line) {
+  const m = /^(\s*(?:[-*+]|\d+[.)])\s+|\s*>\s+)/.exec(line);
+  if (!m)
+    return { text: line, shift: 0 };
+  return { text: line.slice(m[0].length), shift: m[0].length };
+}
+function countWords(s) {
+  const trimmed = s.trim();
+  if (!trimmed)
+    return 0;
+  return trimmed.split(/\s+/).filter((w) => /[A-Za-z0-9]/.test(w)).length;
+}
+function splitProse(masked) {
+  const paragraphs = [];
+  const blockRe = /[^\n]*(?:\n(?!\s*\n)[^\n]*)*/g;
+  let m;
+  while ((m = blockRe.exec(masked)) !== null) {
+    if (m[0].length === 0) {
+      blockRe.lastIndex++;
+      if (blockRe.lastIndex > masked.length)
+        break;
+      continue;
+    }
+    const blockStart = m.index;
+    const block = m[0];
+    if (block.trim().length === 0)
+      continue;
+    const sentences = [];
+    let lineOffset = 0;
+    for (const line of block.split("\n")) {
+      const lineStart = blockStart + lineOffset;
+      lineOffset += line.length + 1;
+      if (isStructuralLine(line))
+        continue;
+      if (/^#{1,6}\s/.test(line.trim()))
+        continue;
+      const { text: body, shift } = stripLeadingMarker(line);
+      let cursor = 0;
+      for (const piece of body.split(/(?<=[.!?])\s+/)) {
+        const at = body.indexOf(piece, cursor);
+        const start = at === -1 ? cursor : at;
+        cursor = start + piece.length;
+        const trimmedLead = piece.length - piece.trimStart().length;
+        const text = piece.trim();
+        if (!text)
+          continue;
+        sentences.push({
+          text,
+          index: lineStart + shift + start + trimmedLead,
+          words: countWords(text)
+        });
+      }
+    }
+    if (sentences.length === 0)
+      continue;
+    paragraphs.push({ text: block, index: blockStart, sentences });
+  }
+  return paragraphs;
+}
+function excerptAt(original, index, length) {
+  const raw = original.slice(Math.max(0, index), Math.max(0, index) + Math.max(1, length));
+  const flat = raw.replace(/\s+/g, " ").trim();
+  return flat.length <= EXCERPT_MAX ? flat : `${flat.slice(0, EXCERPT_MAX - 1).trimEnd()}\u2026`;
+}
+function v(rule, message, ctx, index, length) {
+  return {
+    ruleId: rule.id,
+    severity: rule.severity,
+    message,
+    excerpt: excerptAt(ctx.original, index, length),
+    index
+  };
+}
+function scanParens(masked) {
+  const groups = [];
+  const nested = [];
+  const stack = [];
+  for (let i = 0; i < masked.length; i++) {
+    const c = masked[i];
+    if (c === "(") {
+      if (stack.length > 0)
+        nested.push(i);
+      stack.push(i);
+    } else if (c === ")") {
+      const start = stack.pop();
+      if (start === void 0)
+        continue;
+      if (stack.length === 0)
+        groups.push({ start, end: i + 1 });
+    }
+  }
+  return { groups, nested };
+}
+function escapeRe(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function scoreViolations(violations, wordCount) {
+  const raw = violations.reduce((sum, x) => sum + SEVERITY_WEIGHT[x.severity], 0);
+  if (raw === 0)
+    return 100;
+  const normalized = raw * 100 / Math.max(wordCount, MIN_SCORING_WORDS);
+  return Math.max(0, Math.min(100, Math.round(100 - normalized)));
+}
+function lintProse(text, options = {}) {
+  const mode = options.mode ?? "flavored";
+  if (typeof text !== "string" || text.trim().length === 0) {
+    return { violations: [], score: 100 };
+  }
+  const masked = maskNonProse(text);
+  const paragraphs = splitProse(masked);
+  const sentences = paragraphs.flatMap((p) => p.sentences);
+  const ctx = { mode, original: text, masked, paragraphs, sentences };
+  const violations = [];
+  for (const rule of PROSE_RULES) {
+    if (!rule.modes.includes(mode))
+      continue;
+    violations.push(...rule.check(masked, ctx));
+  }
+  violations.sort((a, b) => a.index - b.index || a.ruleId.localeCompare(b.ruleId));
+  const words = sentences.reduce((n, s) => n + s.words, 0);
+  return { violations, score: scoreViolations(violations, words) };
+}
+function resolvePath(node, segments, prefix) {
+  if (node === null || node === void 0)
+    return [];
+  if (segments.length === 0) {
+    return typeof node === "string" && node.trim().length > 0 ? [{ path: prefix, text: node }] : [];
+  }
+  const head = segments[0] ?? "";
+  const rest = segments.slice(1);
+  const isArray = head.endsWith("[]");
+  const key = isArray ? head.slice(0, -2) : head;
+  let next = node;
+  if (key.length > 0) {
+    if (typeof node !== "object" || Array.isArray(node))
+      return [];
+    next = node[key];
+  }
+  if (!isArray)
+    return resolvePath(next, rest, prefix ? `${prefix}.${key}` : key);
+  if (!Array.isArray(next))
+    return [];
+  const base = prefix ? `${prefix}.${key}` : key;
+  const out = [];
+  next.forEach((item, i) => {
+    out.push(...resolvePath(item, rest, `${base}[${i}]`));
+  });
+  return out;
+}
+function lintArtifactContent(type, content) {
+  const specs = PROSE_FIELD_MAP[type];
+  if (!specs || content === null || typeof content !== "object") {
+    return { fields: [], violations: [], score: 100 };
+  }
+  const fields = [];
+  for (const spec of specs) {
+    for (const hit of resolvePath(content, spec.path.split("."), "")) {
+      const { violations: violations2, score: score2 } = lintProse(hit.text, { mode: spec.mode });
+      if (violations2.length === 0)
+        continue;
+      fields.push({ path: hit.path, mode: spec.mode, violations: violations2, score: score2 });
+    }
+  }
+  const violations = fields.flatMap((f) => f.violations);
+  const score = fields.length === 0 ? 100 : Math.min(...fields.map((f) => f.score));
+  return { fields, violations, score };
+}
+function bySeverity(a, b) {
+  return SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] || a.index - b.index;
+}
+var SENTENCE_WORD_LIMIT, PARENTHETICAL_SENTENCES_PER, PARENTHETICAL_MIN_CHARS, PARAGRAPH_SENTENCE_LIMIT, EM_DASH_PER_PARAGRAPH, ALL_CAPS_WHITELIST, SLASH_PACK_EXCEPTIONS, IMPERATIVE_VERBS, WORDINESS_MAP, SEVERITY_WEIGHT, BLANK, EXCERPT_MAX, sentenceLength, parentheticalDensity, semicolon, allCapsEmphasis, slashPack, arrowChain, emDashBudget, COINAGE_MIN_CHARS, COINAGE_DEFINITION_WINDOW, undefinedCoinage, inlineEnumeration, paragraphLength, trailingCondition, vagueRecommendation, wordiness, PROSE_RULES, MIN_SCORING_WORDS, PROSE_FIELD_MAP, SEVERITY_RANK;
+var init_prose_lint = __esm({
+  "../shared/dist/prose-lint.js"() {
+    "use strict";
+    SENTENCE_WORD_LIMIT = {
+      flavored: 25,
+      strict: 20
+    };
+    PARENTHETICAL_SENTENCES_PER = 3;
+    PARENTHETICAL_MIN_CHARS = 15;
+    PARAGRAPH_SENTENCE_LIMIT = 5;
+    EM_DASH_PER_PARAGRAPH = 1;
+    ALL_CAPS_WHITELIST = [
+      "API",
+      "APIS",
+      "ABI",
+      "AST",
+      "ASCII",
+      "AWS",
+      "CDN",
+      "CI",
+      "CD",
+      "CLI",
+      "CPU",
+      "CRUD",
+      "CSS",
+      "CSV",
+      "DNS",
+      "DOM",
+      "DTO",
+      "E2E",
+      "EOF",
+      "ENV",
+      "GCP",
+      "GNU",
+      "GPL",
+      "GPU",
+      "GRPC",
+      "HTML",
+      "HTTP",
+      "HTTPS",
+      "ID",
+      "IDE",
+      "IO",
+      "ISO",
+      "JS",
+      "JSON",
+      "JSX",
+      "JWT",
+      "LLM",
+      "MCP",
+      "MD",
+      "MFA",
+      "MIT",
+      "NPM",
+      "OAUTH",
+      "OK",
+      "ORM",
+      "OS",
+      "PDF",
+      "PII",
+      "PNPM",
+      "PR",
+      "PRS",
+      "QA",
+      "QPS",
+      "RAM",
+      "REST",
+      "RFC",
+      "RPC",
+      "SDK",
+      "SHA",
+      "SLA",
+      "SLO",
+      "SQL",
+      "SSL",
+      "SSO",
+      "TLS",
+      "TODO",
+      "TSX",
+      "TS",
+      "TTL",
+      "UI",
+      "URI",
+      "URL",
+      "UTC",
+      "UTF",
+      "UUID",
+      "UX",
+      "VM",
+      "VS",
+      "WS",
+      "WSL",
+      "XML",
+      "YAML",
+      "README",
+      "FIXME",
+      "NOTE",
+      "WIP"
+    ];
+    SLASH_PACK_EXCEPTIONS = [
+      "tcp/ip",
+      "and/or",
+      "read/write",
+      "input/output",
+      "pass/fail",
+      "yes/no",
+      "his/her",
+      "her/his",
+      "she/he",
+      "date/time",
+      "true/false",
+      "http/https"
+    ];
+    IMPERATIVE_VERBS = [
+      "add",
+      "avoid",
+      "call",
+      "check",
+      "delete",
+      "do",
+      "don't",
+      "drop",
+      "fix",
+      "keep",
+      "make",
+      "move",
+      "name",
+      "never",
+      "pass",
+      "prefer",
+      "put",
+      "read",
+      "remove",
+      "rename",
+      "replace",
+      "return",
+      "run",
+      "set",
+      "ship",
+      "split",
+      "start",
+      "stop",
+      "use",
+      "wrap",
+      "write"
+    ];
+    WORDINESS_MAP = {
+      "in order to": "to",
+      "utilize": "use",
+      "leverage": "use",
+      "prior to": "before",
+      "it's worth noting that": "",
+      "it is important to note that": "",
+      "note that": "",
+      "as mentioned above": "",
+      "a number of": "some",
+      "in addition": "also",
+      "due to the fact that": "because",
+      "at this point in time": "now",
+      "perform an analysis of": "analyze",
+      "provides assistance to": "helps",
+      "make use of": "use"
+    };
+    SEVERITY_WEIGHT = {
+      high: 8,
+      medium: 4,
+      low: 1
+    };
+    BLANK = " ";
+    EXCERPT_MAX = 80;
+    sentenceLength = {
+      id: "sentence-length",
+      tier: 1,
+      severity: "medium",
+      modes: ["strict", "flavored"],
+      check: (_text, ctx) => {
+        const limit = SENTENCE_WORD_LIMIT[ctx.mode];
+        return ctx.sentences.filter((s) => s.words > limit).map((s) => v(sentenceLength, `${s.words}-word sentence (limit ${limit}) \u2014 split it; one idea per sentence.`, ctx, s.index, s.text.length));
+      }
+    };
+    parentheticalDensity = {
+      id: "parenthetical-density",
+      tier: 1,
+      severity: "medium",
+      modes: ["strict", "flavored"],
+      check: (text, ctx) => {
+        const out = [];
+        const { groups, nested } = scanParens(text);
+        const substantial = groups.filter((g) => g.end - g.start - 2 >= PARENTHETICAL_MIN_CHARS);
+        const sentenceCount = Math.max(1, ctx.sentences.length);
+        const budget = Math.max(1, Math.ceil(sentenceCount / PARENTHETICAL_SENTENCES_PER));
+        const first = substantial[0];
+        if (substantial.length > budget && first) {
+          out.push(v(parentheticalDensity, `${substantial.length} parentheticals across ${sentenceCount} sentence${sentenceCount === 1 ? "" : "s"} (budget ${budget}) \u2014 an aside that matters should be its own sentence.`, ctx, first.start, first.end - first.start));
+        }
+        for (const at of nested) {
+          out.push(v(parentheticalDensity, "Nested parenthetical \u2014 an aside inside an aside is never readable.", ctx, at, 40));
+        }
+        return out;
+      }
+    };
+    semicolon = {
+      id: "semicolon",
+      tier: 1,
+      severity: "medium",
+      modes: ["strict", "flavored"],
+      check: (text, ctx) => {
+        const out = [];
+        const re = /;/g;
+        let m;
+        while ((m = re.exec(text)) !== null) {
+          const before = text.slice(Math.max(0, m.index - 12), m.index);
+          if (/&#?\w+$/.test(before))
+            continue;
+          out.push(v(semicolon, "Semicolon \u2014 split it into two sentences.", ctx, m.index, 60));
+        }
+        return out;
+      }
+    };
+    allCapsEmphasis = {
+      id: "all-caps-emphasis",
+      tier: 1,
+      severity: "medium",
+      modes: ["strict", "flavored"],
+      check: (text, ctx) => {
+        const whitelist = new Set(ALL_CAPS_WHITELIST.map((w) => w.toUpperCase()));
+        const out = [];
+        const re = /\b([A-Z][A-Z0-9]{2,})(s?)\b/g;
+        let m;
+        while ((m = re.exec(text)) !== null) {
+          const word = m[1] ?? "";
+          if ((word.match(/[A-Z]/g) ?? []).length < 3)
+            continue;
+          if (whitelist.has(word))
+            continue;
+          if (word.endsWith("S") && whitelist.has(word.slice(0, -1)))
+            continue;
+          if (m[2] === "s" && whitelist.has(word))
+            continue;
+          if (text[m.index + m[0].length] === "(")
+            continue;
+          out.push(v(allCapsEmphasis, `"${word}" shouts \u2014 use bold for emphasis, not capitals.`, ctx, m.index, Math.max(m[0].length, 48)));
+        }
+        return out;
+      }
+    };
+    slashPack = {
+      id: "slash-pack",
+      tier: 1,
+      severity: "medium",
+      modes: ["strict", "flavored"],
+      check: (text, ctx) => {
+        const exceptions = new Set(SLASH_PACK_EXCEPTIONS.map((s) => s.toLowerCase()));
+        const out = [];
+        const re = /\b\w{3,}\/\w{3,}(?:\/\w{3,})*\b/g;
+        let m;
+        while ((m = re.exec(text)) !== null) {
+          const tok = m[0];
+          if (exceptions.has(tok.toLowerCase()))
+            continue;
+          if (tok.split("/").every((seg) => /^\d+$/.test(seg)))
+            continue;
+          out.push(v(slashPack, `"${tok}" packs terms into a slash \u2014 write "${tok.split("/").join(", ")}" out.`, ctx, m.index, Math.max(tok.length, 48)));
+        }
+        return out;
+      }
+    };
+    arrowChain = {
+      id: "arrow-chain",
+      tier: 1,
+      severity: "high",
+      modes: ["strict", "flavored"],
+      check: (text, ctx) => {
+        const out = [];
+        const re = /(?:→|⇒|->)/g;
+        let m;
+        while ((m = re.exec(text)) !== null) {
+          out.push(v(arrowChain, "Arrow in prose \u2014 write the causation out; arrows belong in visuals[] diagrams.", ctx, m.index, 60));
+        }
+        return out;
+      }
+    };
+    emDashBudget = {
+      id: "em-dash-budget",
+      tier: 1,
+      severity: "medium",
+      modes: ["strict", "flavored"],
+      check: (_text, ctx) => {
+        const out = [];
+        for (const p of ctx.paragraphs) {
+          const hits = [...p.text.matchAll(/—/g)];
+          if (hits.length <= EM_DASH_PER_PARAGRAPH)
+            continue;
+          out.push(v(emDashBudget, `${hits.length} em-dashes in one paragraph (budget ${EM_DASH_PER_PARAGRAPH}) \u2014 the rest should be full stops.`, ctx, p.index + (hits[EM_DASH_PER_PARAGRAPH]?.index ?? 0), 60));
+        }
+        return out;
+      }
+    };
+    COINAGE_MIN_CHARS = 8;
+    COINAGE_DEFINITION_WINDOW = 220;
+    undefinedCoinage = {
+      id: "undefined-coinage",
+      tier: 1,
+      severity: "high",
+      modes: ["strict", "flavored"],
+      check: (text, ctx) => {
+        const candidates = {};
+        const note = (label, at, end) => {
+          const key = label.toLowerCase();
+          const existing = candidates[key];
+          if (existing)
+            existing.count += 1;
+          else
+            candidates[key] = { label, first: at, firstEnd: end, count: 1 };
+        };
+        const stacked = /\b[A-Za-z]{2,}(?:-[A-Za-z]{2,}){2,}\b/g;
+        let m;
+        while ((m = stacked.exec(text)) !== null)
+          note(m[0], m.index, m.index + m[0].length);
+        const quoted = /["“]([^"”\n]{3,40})["”]/g;
+        while ((m = quoted.exec(text)) !== null)
+          note((m[1] ?? "").trim(), m.index, m.index + m[0].length);
+        const out = [];
+        for (const c of Object.values(candidates)) {
+          if (c.count < 2)
+            continue;
+          if (c.label.length < COINAGE_MIN_CHARS)
+            continue;
+          const tail = text.slice(c.firstEnd, c.firstEnd + COINAGE_DEFINITION_WINDOW);
+          const defined = /^\s*(?:is|are|means|=|—|:)\s/.test(tail) || /^\s*\([^)]{6,}\)/.test(tail);
+          if (defined)
+            continue;
+          out.push(v(undefinedCoinage, `"${c.label}" is coined and used ${c.count} times without a definition \u2014 define it at first use or don't coin it.`, ctx, c.first, Math.max(c.label.length, 60)));
+        }
+        return out.sort((a, b) => a.index - b.index);
+      }
+    };
+    inlineEnumeration = {
+      id: "inline-enumeration",
+      tier: 1,
+      severity: "medium",
+      modes: ["strict", "flavored"],
+      check: (_text, ctx) => {
+        const out = [];
+        for (const s of ctx.sentences) {
+          if (/\(1\)/.test(s.text) && /\(2\)/.test(s.text)) {
+            out.push(v(inlineEnumeration, "Inline (1)\u2026(2) enumeration \u2014 use a real list.", ctx, s.index, s.text.length));
+          }
+        }
+        return out;
+      }
+    };
+    paragraphLength = {
+      id: "paragraph-length",
+      tier: 2,
+      severity: "low",
+      modes: ["strict", "flavored"],
+      check: (_text, ctx) => ctx.paragraphs.filter((p) => p.sentences.length > PARAGRAPH_SENTENCE_LIMIT).map((p) => v(paragraphLength, `${p.sentences.length}-sentence paragraph (limit ${PARAGRAPH_SENTENCE_LIMIT}) \u2014 break it up.`, ctx, p.index, 60))
+    };
+    trailingCondition = {
+      id: "trailing-condition",
+      tier: 2,
+      severity: "medium",
+      modes: ["strict"],
+      check: (_text, ctx) => {
+        const verbs = new Set(IMPERATIVE_VERBS.map((w) => w.toLowerCase()));
+        const out = [];
+        for (const s of ctx.sentences) {
+          const firstWord = (/^([A-Za-z']+)/.exec(s.text)?.[1] ?? "").toLowerCase();
+          if (!verbs.has(firstWord))
+            continue;
+          const m = /,\s+(if|when|unless)\s+[^,]{4,}[.!?]?$/i.exec(s.text);
+          if (!m)
+            continue;
+          out.push(v(trailingCondition, `Instruction ends in an "${(m[1] ?? "if").toLowerCase()}" clause \u2014 put the condition first.`, ctx, s.index, s.text.length));
+        }
+        return out;
+      }
+    };
+    vagueRecommendation = {
+      id: "vague-recommendation",
+      tier: 2,
+      severity: "medium",
+      modes: ["strict"],
+      check: (_text, ctx) => {
+        const out = [];
+        for (const s of ctx.sentences) {
+          const m = /\b(consider improving|improve|enhance|better)\s+(?:the\s+|a\s+|its\s+)?([a-z]{3,})\b/i.exec(s.text);
+          if (!m)
+            continue;
+          const source = ctx.original.slice(s.index, s.index + s.text.length + 2);
+          if (/`|\.[a-z]{1,5}\b|\//.test(source))
+            continue;
+          out.push(v(vagueRecommendation, `"${m[0]}" names no target \u2014 a recommendation should name the file or symbol.`, ctx, s.index, s.text.length));
+        }
+        return out;
+      }
+    };
+    wordiness = {
+      id: "wordiness",
+      tier: 3,
+      severity: "low",
+      modes: ["strict", "flavored"],
+      check: (text, ctx) => {
+        const out = [];
+        for (const phrase of Object.keys(WORDINESS_MAP)) {
+          const replacement = WORDINESS_MAP[phrase];
+          const re = new RegExp(`\\b${escapeRe(phrase)}\\b`, "gi");
+          let m;
+          while ((m = re.exec(text)) !== null) {
+            out.push(v(wordiness, replacement ? `"${phrase}" \u2192 "${replacement}".` : `"${phrase}" \u2014 cut it.`, ctx, m.index, Math.max(m[0].length, 48)));
+          }
+        }
+        return out.sort((a, b) => a.index - b.index);
+      }
+    };
+    PROSE_RULES = [
+      sentenceLength,
+      parentheticalDensity,
+      semicolon,
+      allCapsEmphasis,
+      slashPack,
+      arrowChain,
+      emDashBudget,
+      undefinedCoinage,
+      inlineEnumeration,
+      paragraphLength,
+      trailingCondition,
+      vagueRecommendation,
+      wordiness
+    ];
+    MIN_SCORING_WORDS = 100;
+    PROSE_FIELD_MAP = {
+      research: [
+        { path: "summary", mode: "flavored" },
+        { path: "findings[].detail", mode: "flavored" },
+        { path: "findings[].impact", mode: "flavored" },
+        { path: "findings[].recommendation", mode: "strict" },
+        { path: "findings[].concept.oneLineExplanation", mode: "flavored" },
+        { path: "openQuestions[]", mode: "strict" }
+      ],
+      plan: [
+        { path: "steps[].description", mode: "strict" },
+        { path: "steps[].reasoning", mode: "flavored" },
+        { path: "steps[].statusNote", mode: "flavored" },
+        { path: "steps[].branches[].description", mode: "strict" },
+        { path: "steps[].branches[].reasoning", mode: "flavored" }
+      ],
+      spec: [
+        { path: "objective", mode: "flavored" },
+        { path: "context", mode: "flavored" },
+        { path: "design", mode: "flavored" },
+        { path: "requirements[].statement", mode: "strict" },
+        { path: "requirements[].rationale", mode: "flavored" },
+        { path: "requirements[].acceptanceCriteria[]", mode: "strict" },
+        { path: "tasks[].description", mode: "strict" },
+        { path: "openQuestions[]", mode: "strict" }
+      ],
+      decision: [
+        { path: "context", mode: "flavored" },
+        { path: "options[].description", mode: "flavored" },
+        { path: "options[].pros[]", mode: "strict" },
+        { path: "options[].cons[]", mode: "strict" },
+        { path: "options[].concept.oneLineExplanation", mode: "flavored" }
+      ],
+      code_change: [{ path: "reasoning", mode: "flavored" }],
+      changeset: [
+        { path: "summary", mode: "flavored" },
+        { path: "risks[]", mode: "flavored" }
+      ],
+      reasoning: [
+        { path: "action", mode: "flavored" },
+        { path: "reasoning", mode: "flavored" },
+        { path: "alternativesConsidered[]", mode: "flavored" },
+        { path: "alternativeDetails[].reason", mode: "flavored" },
+        { path: "concept.oneLineExplanation", mode: "flavored" }
+      ],
+      debrief: [
+        { path: "summary", mode: "flavored" },
+        { path: "sections[].body", mode: "flavored" },
+        { path: "decisionsMade[].what", mode: "flavored" },
+        { path: "decisionsMade[].why", mode: "flavored" },
+        { path: "decisionsMade[].alternative", mode: "flavored" },
+        { path: "needsYourEyes[].what", mode: "strict" },
+        { path: "needsYourEyes[].why", mode: "strict" },
+        { path: "deferred[].what", mode: "flavored" },
+        { path: "deferred[].why", mode: "flavored" },
+        { path: "openQuestions[]", mode: "strict" }
+      ],
+      explainer: [
+        { path: "overview", mode: "flavored" },
+        { path: "sections[].body", mode: "flavored" },
+        { path: "unknowns[]", mode: "flavored" }
+      ]
+    };
+    SEVERITY_RANK = { high: 0, medium: 1, low: 2 };
+  }
+});
+
 // ../shared/dist/index.js
 var init_dist = __esm({
   "../shared/dist/index.js"() {
@@ -23996,6 +24733,7 @@ var init_dist = __esm({
     init_unanswered();
     init_request();
     init_errors3();
+    init_prose_lint();
   }
 });
 
@@ -24083,15 +24821,15 @@ function resolveProjectRoot(opts = {}) {
     { value: env.DEEPPAIRING_PROJECT_ROOT, source: "DEEPPAIRING_PROJECT_ROOT" }
   ];
   for (const c of candidates) {
-    const v = c.value?.trim();
-    if (!v) continue;
-    if (!path4.isAbsolute(v)) continue;
+    const v2 = c.value?.trim();
+    if (!v2) continue;
+    if (!path4.isAbsolute(v2)) continue;
     try {
-      if (!fs5.statSync(v).isDirectory()) continue;
+      if (!fs5.statSync(v2).isDirectory()) continue;
     } catch {
       continue;
     }
-    return { projectRoot: path4.resolve(v), source: c.source };
+    return { projectRoot: path4.resolve(v2), source: c.source };
   }
   return { projectRoot: path4.resolve(cwd()), source: "cwd" };
 }
@@ -24108,8 +24846,8 @@ var init_project_root = __esm({
 });
 
 // src/version.ts
-function parseSemver(v) {
-  const m = /^\s*(\d+)\.(\d+)\.(\d+)/.exec(v);
+function parseSemver(v2) {
+  const m = /^\s*(\d+)\.(\d+)\.(\d+)/.exec(v2);
   if (!m) return null;
   return [Number(m[1]), Number(m[2]), Number(m[3])];
 }
@@ -24455,8 +25193,8 @@ function classifyDaemonVersion(runningVersion, myVersion) {
   if (cmp > 0) return "newer";
   return "same";
 }
-function verdictIsStale(v) {
-  return v === "older" || v === "absent" || v === "unknown";
+function verdictIsStale(v2) {
+  return v2 === "older" || v2 === "absent" || v2 === "unknown";
 }
 function describeDaemonVersionHealth(runningVersion, pluginVersion) {
   const verdict = classifyDaemonVersion(runningVersion, pluginVersion);
@@ -24735,7 +25473,7 @@ var LATEST_PROTOCOL_VERSION = "2025-11-25";
 var SUPPORTED_PROTOCOL_VERSIONS = [LATEST_PROTOCOL_VERSION, "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"];
 var RELATED_TASK_META_KEY = "io.modelcontextprotocol/related-task";
 var JSONRPC_VERSION = "2.0";
-var AssertObjectSchema = custom((v) => v !== null && (typeof v === "object" || typeof v === "function"));
+var AssertObjectSchema = custom((v2) => v2 !== null && (typeof v2 === "object" || typeof v2 === "function"));
 var ProgressTokenSchema = union([string2(), number2().int()]);
 var CursorSchema = string2();
 var TaskCreationParamsSchema = looseObject({
@@ -29262,6 +30000,7 @@ ${assembled.join("\n")}`;
 }
 
 // src/mcp/tool-helpers.ts
+init_dist();
 import { createHash } from "node:crypto";
 
 // src/mcp/elicit.ts
@@ -29723,8 +30462,8 @@ async function tryElicit(server, message) {
   }
 }
 function terminalApproveEnabled(env) {
-  const v = (env.DEEPPAIRING_TERMINAL_APPROVE ?? "").toLowerCase();
-  return v === "1" || v === "true" || v === "yes";
+  const v2 = (env.DEEPPAIRING_TERMINAL_APPROVE ?? "").toLowerCase();
+  return v2 === "1" || v2 === "true" || v2 === "yes";
 }
 var ADVISORY_EXEMPT_TOOLS = /* @__PURE__ */ new Set([
   "present_explainer",
@@ -29866,6 +30605,26 @@ async function getPassiveFeedback(store, excludeIds = []) {
 
 [Human feedback]: ${formatted}`;
 }
+var MAX_STYLE_LINES = 4;
+function formatStyleWarnings(type, content) {
+  let result;
+  try {
+    result = lintArtifactContent(type, content);
+  } catch {
+    return "";
+  }
+  if (result.violations.length === 0) return "";
+  const located = result.fields.flatMap((f) => f.violations.map((v2) => ({ path: f.path, v: v2 })));
+  located.sort((a, b) => bySeverity(a.v, b.v));
+  const shown = located.slice(0, MAX_STYLE_LINES);
+  const rest = located.length - shown.length;
+  const lines = shown.map(({ path: path12, v: v2 }) => `- ${path12}: ${v2.message}`);
+  const tail = rest > 0 ? ` ${rest} more in the UI.` : "";
+  return `
+
+STYLE (clarity ${result.score}/100) \u2014 house prose, warn only; nothing was changed.${tail}
+` + lines.join("\n");
+}
 var PresentIdempotencyRegistry = class {
   constructor(windowMs = 3e4, now = () => Date.now()) {
     this.windowMs = windowMs;
@@ -29938,13 +30697,13 @@ var PresentIdempotencyRegistry = class {
 function hashPresentArgs(args) {
   return createHash("sha256").update(stableStringify(args)).digest("hex");
 }
-function stableStringify(v) {
-  if (v === null || typeof v !== "object") {
-    const s = JSON.stringify(v);
+function stableStringify(v2) {
+  if (v2 === null || typeof v2 !== "object") {
+    const s = JSON.stringify(v2);
     return s === void 0 ? "null" : s;
   }
-  if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;
-  const obj2 = v;
+  if (Array.isArray(v2)) return `[${v2.map(stableStringify).join(",")}]`;
+  const obj2 = v2;
   const keys = Object.keys(obj2).sort();
   return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj2[k])}`).join(",")}}`;
 }
@@ -30442,14 +31201,14 @@ var EXAMPLE_EXPLAINER = `{
   "relatedArtifactIds": ["art_xxxxxxxxxx"],
   "suggestedQuestions": ["Where does the session get created in the first place?"]
 }`;
-var prop = (v, key) => v && typeof v === "object" ? v[key] : void 0;
-var normEcho = (v) => typeof v === "string" ? v.trim().toLowerCase() : "";
-var pluckSet = (v, listKey, field) => {
-  const list = prop(v, listKey);
+var prop = (v2, key) => v2 && typeof v2 === "object" ? v2[key] : void 0;
+var normEcho = (v2) => typeof v2 === "string" ? v2.trim().toLowerCase() : "";
+var pluckSet = (v2, listKey, field) => {
+  const list = prop(v2, listKey);
   const items = Array.isArray(list) ? list : [];
   return items.map((x) => normEcho(prop(x, field))).filter((s) => s.length > 0).sort();
 };
-var echoSetEq = (a, b) => a.length > 0 && a.length === b.length && a.every((v, i) => v === b[i]);
+var echoSetEq = (a, b) => a.length > 0 && a.length === b.length && a.every((v2, i) => v2 === b[i]);
 var EX_OPTIONS = JSON.parse(EXAMPLE_OPTIONS);
 var EX_FINDINGS = JSON.parse(EXAMPLE_FINDINGS);
 var EX_SPEC = JSON.parse(EXAMPLE_SPEC);
@@ -30522,8 +31281,8 @@ var TO_CHANGESET_FILE_KIND = {
   modify: "modified",
   delete: "deleted"
 };
-function aliasFileKind(v, map2) {
-  return typeof v === "string" && map2[v] ? map2[v] : v;
+function aliasFileKind(v2, map2) {
+  return typeof v2 === "string" && map2[v2] ? map2[v2] : v2;
 }
 function aliasFileArray(files, map2) {
   if (!Array.isArray(files)) return files;
@@ -30533,12 +31292,12 @@ function aliasFileArray(files, map2) {
 }
 function aliasPlanVisuals(visuals) {
   if (!Array.isArray(visuals)) return visuals;
-  return visuals.map((v) => {
-    if (!v || typeof v !== "object" || !Array.isArray(v.files)) return v;
-    const files = v.files.map(
+  return visuals.map((v2) => {
+    if (!v2 || typeof v2 !== "object" || !Array.isArray(v2.files)) return v2;
+    const files = v2.files.map(
       (f) => f && typeof f === "object" && "change" in f ? { ...f, change: aliasFileKind(f.change, TO_CODE_FILE_KIND) } : f
     );
-    return { ...v, files };
+    return { ...v2, files };
   });
 }
 function aliasField(o, from, to) {
@@ -30912,7 +31671,7 @@ async function handleLogReasoning(ctx, args) {
     // reading and polling, and "proceed with code changes" is an instruction to
     // do the one thing that flow forbids (touching a colleague's files).
     // log_reasoning names a concept; it does not license an edit.
-    content: [{ type: "text", text: `Reasoning logged.${nudge}${await ctx.helpers.getPassiveFeedback()}` }]
+    content: [{ type: "text", text: `Reasoning logged.${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }]
   };
 }
 
@@ -31078,12 +31837,12 @@ function scanContentForSecrets(content, maxDepth = DEFAULT_SCAN_DEPTH) {
       return;
     }
     if (Array.isArray(value)) {
-      value.forEach((v, i) => walk(v, `${fieldPath}[${i}]`, depth + 1));
+      value.forEach((v2, i) => walk(v2, `${fieldPath}[${i}]`, depth + 1));
       return;
     }
     if (typeof value === "object") {
-      for (const [k, v] of Object.entries(value)) {
-        walk(v, fieldPath ? `${fieldPath}.${k}` : k, depth + 1);
+      for (const [k, v2] of Object.entries(value)) {
+        walk(v2, fieldPath ? `${fieldPath}.${k}` : k, depth + 1);
       }
     }
   };
@@ -31471,21 +32230,21 @@ function visualsBlock(visuals, ctx) {
   const parts = [];
   for (const raw of visuals) {
     if (!raw || typeof raw !== "object") continue;
-    const v = raw;
-    const title = v.title ? escText(v.title) : "";
-    const caption = v.caption ? `<p class="visual-caption">${renderInline(v.caption)}</p>` : "";
+    const v2 = raw;
+    const title = v2.title ? escText(v2.title) : "";
+    const caption = v2.caption ? `<p class="visual-caption">${renderInline(v2.caption)}</p>` : "";
     let body = "";
     let kindLabel = "";
-    switch (v.kind) {
+    switch (v2.kind) {
       case "diagram": {
         kindLabel = "Diagram";
-        const src = String(v.source ?? "").trim();
+        const src = String(v2.source ?? "").trim();
         body = src ? ctx.includeCode ? `<p class="visual-note">A diagram, rendered in deepPairing. This page is fully self-contained \u2014 it runs no scripts and makes no network requests \u2014 so the picture isn't drawn inline; the Mermaid source it was rendered from is below. Open it in deepPairing, or paste it into any Mermaid viewer (e.g. mermaid.live), to see the diagram.</p><details class="visual-source" open><summary>Diagram source (Mermaid)</summary><pre class="code" data-language="mermaid"><code>${escText(src)}</code></pre></details>` : `<p class="visual-note">A diagram the pair drew and discussed. It is drawn in deepPairing.</p><p class="redacted">Diagram source omitted from this export.</p>` : `<p class="visual-note">A diagram was attached here, but its source was not recorded.</p>`;
         break;
       }
       case "file_map": {
         kindLabel = "File map";
-        const rows = (v.files ?? []).map((f) => {
+        const rows = (v2.files ?? []).map((f) => {
           const p = sanitizePath(f?.path, ctx.projectRoot);
           if (!p) return "";
           const change = f?.change ? `<span class="chip chip--${esc2(f.change)}">${esc2(f.change)}</span>` : "";
@@ -31497,12 +32256,12 @@ function visualsBlock(visuals, ctx) {
       }
       case "annotated_code": {
         kindLabel = "Annotated code";
-        const p = sanitizePath(v.filePath, ctx.projectRoot);
-        body = (p ? `<p class="anchor"><code>${esc2(p)}</code></p>` : "") + codeBlock(v.code ?? "", {
-          language: v.language,
+        const p = sanitizePath(v2.filePath, ctx.projectRoot);
+        body = (p ? `<p class="anchor"><code>${esc2(p)}</code></p>` : "") + codeBlock(v2.code ?? "", {
+          language: v2.language,
           maxLines: MAX_SNIPPET_LINES,
           includeCode: ctx.includeCode
-        }) + ((v.annotations ?? []).length ? `<ul class="visual-annotations">${(v.annotations ?? []).map((n) => `<li><code>line ${esc2(n?.line ?? "?")}</code> ${renderInline(n?.note ?? "")}</li>`).join("")}</ul>` : "");
+        }) + ((v2.annotations ?? []).length ? `<ul class="visual-annotations">${(v2.annotations ?? []).map((n) => `<li><code>line ${esc2(n?.line ?? "?")}</code> ${renderInline(n?.note ?? "")}</li>`).join("")}</ul>` : "");
         break;
       }
       case "prototype":
@@ -33475,11 +34234,11 @@ Decline to review in detail at http://localhost:${reviewPort}`
     await ctx.store.updateArtifactStatus(id, "approved", "elicit_accept");
     await maybeUpdateTaskStatus(ctx.server, id, ctx.store);
     return {
-      content: [{ type: "text", text: `Findings recorded and approved (${id}).${outwardNote}${traceSummary}${await ctx.helpers.getPassiveFeedback()}` }]
+      content: [{ type: "text", text: `Findings recorded and approved (${id}).${outwardNote}${traceSummary}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }]
     };
   }
   return {
-    content: [{ type: "text", text: `Findings recorded (${id}). Human can review at localhost:${reviewPort}. Call check_feedback for their response.${outwardNote}${traceSummary}${await ctx.helpers.getPassiveFeedback()}` }]
+    content: [{ type: "text", text: `Findings recorded (${id}). Human can review at localhost:${reviewPort}. Call check_feedback for their response.${outwardNote}${traceSummary}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }]
   };
 }
 
@@ -33491,7 +34250,7 @@ async function handlePresentOptions(ctx, args) {
   const title = validated.data.title;
   const artifactTitle = title ?? context;
   const proposedOptions = validatedOptions.map(
-    (o) => o.visuals?.length ? { ...o, visuals: o.visuals.map((v, i) => ({ ...v, id: v.id ?? `${o.id}_visual_${i}` })) } : o
+    (o) => o.visuals?.length ? { ...o, visuals: o.visuals.map((v2, i) => ({ ...v2, id: v2.id ?? `${o.id}_visual_${i}` })) } : o
   );
   const proposals = [
     context,
@@ -33564,7 +34323,7 @@ async function handlePresentOptions(ctx, args) {
     stakes
   });
   return {
-    content: [{ type: "text", text: `Decision "${artifactTitle}" presented to human (${decisionId}, artifact ${id}). They can select at localhost:${reviewPort}. Call check_feedback for their choice.${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }],
+    content: [{ type: "text", text: `Decision "${artifactTitle}" presented to human (${decisionId}, artifact ${id}). They can select at localhost:${reviewPort}. Call check_feedback for their choice.${formatPreflightTraceSummary(pre.trace)}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }],
     structuredContent: { artifactId: id, decisionId }
   };
 }
@@ -33638,13 +34397,13 @@ function changesetReviewField(a) {
   if (files.length === 0) return {};
   const raw = content?.reviewState ?? {};
   const reviewState = {};
-  for (const [k, v] of Object.entries(raw)) {
-    if (v === "reviewed" || v === "needs_changes" || v === "skipped") reviewState[k] = v;
+  for (const [k, v2] of Object.entries(raw)) {
+    if (v2 === "reviewed" || v2 === "needs_changes" || v2 === "skipped") reviewState[k] = v2;
   }
   const rawReasons = content?.reviewReasons ?? {};
   const reviewReasons = {};
-  for (const [k, v] of Object.entries(rawReasons)) {
-    if (typeof v === "string" && v.length > 0) reviewReasons[k] = v;
+  for (const [k, v2] of Object.entries(rawReasons)) {
+    if (typeof v2 === "string" && v2.length > 0) reviewReasons[k] = v2;
   }
   const filesReviewed = files.filter((f) => {
     const s = f.path ? reviewState[f.path] : void 0;
@@ -34628,8 +35387,8 @@ async function handleReviseArtifact(ctx, args) {
     }
     const supersedeValidator = SUPERSEDE_VALIDATORS[old.type];
     if (supersedeValidator) {
-      const v = supersedeValidator({ title: args?.title ?? old.title, ...content });
-      if (!v.ok) return v.error;
+      const v2 = supersedeValidator({ title: args?.title ?? old.title, ...content });
+      if (!v2.ok) return v2.error;
     }
     if (old.type === "changeset" && content && typeof content === "object") {
       delete content.reviewState;
@@ -34948,7 +35707,7 @@ function parsePrNumber(ref) {
 var ALLOWED_EVENTS = ["COMMENT", "REQUEST_CHANGES", "APPROVE"];
 var UNDECIDED_STATUSES = /* @__PURE__ */ new Set(["draft", "reviewing", "revised"]);
 var DECIDED_EXCLUDED_STATUSES = /* @__PURE__ */ new Set(["rejected", "superseded", "retracted", "obsolete"]);
-var SEVERITY_RANK = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
+var SEVERITY_RANK2 = { info: 0, low: 1, medium: 2, high: 3, critical: 4 };
 function isAnchored(e) {
   return !!e && typeof e === "object" && !!e.filePath && typeof e.lineStart === "number";
 }
@@ -35040,10 +35799,10 @@ function authorizeReviewPost(state, opts) {
   }
   if (event === "REQUEST_CHANGES") {
     const outbound = approved.flatMap(outboundFindings);
-    const blocking = outbound.filter((f) => SEVERITY_RANK[f.severity ?? "info"] >= SEVERITY_RANK.high);
+    const blocking = outbound.filter((f) => SEVERITY_RANK2[f.severity ?? "info"] >= SEVERITY_RANK2.high);
     if (blocking.length === 0) {
       const highest = outbound.reduce(
-        (acc, f) => SEVERITY_RANK[f.severity ?? "info"] > SEVERITY_RANK[acc] ? f.severity ?? "info" : acc,
+        (acc, f) => SEVERITY_RANK2[f.severity ?? "info"] > SEVERITY_RANK2[acc] ? f.severity ?? "info" : acc,
         "info"
       );
       return {
@@ -35194,11 +35953,11 @@ Decline to review requirements and acceptance criteria in the companion UI at ht
     await ctx.store.updateArtifactStatus(id, "approved", "elicit_accept");
     await maybeUpdateTaskStatus(ctx.server, id, ctx.store);
     return {
-      content: [{ type: "text", text: `Spec "${artifact.title}" recorded and approved (${id}). Proceed with present_plan.${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }]
+      content: [{ type: "text", text: `Spec "${artifact.title}" recorded and approved (${id}). Proceed with present_plan.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }]
     };
   }
   return {
-    content: [{ type: "text", text: `Spec "${artifact.title}" presented for review (${id}). The human can challenge each requirement and acceptance criterion at localhost:${reviewPort}. Call check_feedback for their response.${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }]
+    content: [{ type: "text", text: `Spec "${artifact.title}" presented for review (${id}). The human can challenge each requirement and acceptance criterion at localhost:${reviewPort}. Call check_feedback for their response.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }]
   };
 }
 
@@ -35269,11 +36028,11 @@ Decline to review steps in detail at http://localhost:${reviewPort}`
     await maybeUpdateTaskStatus(ctx.server, id, ctx.store);
     await ctx.store.resolvePlanReview(id, "approved");
     return {
-      content: [{ type: "text", text: `Plan "${args?.title}" approved (${id}). Proceed with implementation.${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }]
+      content: [{ type: "text", text: `Plan "${args?.title}" approved (${id}). Proceed with implementation.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }]
     };
   }
   return {
-    content: [{ type: "text", text: `Plan "${args?.title}" presented for review (${id}). Human can approve/revise/reject at localhost:${reviewPort}. Call check_feedback for their verdict.${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}` }]
+    content: [{ type: "text", text: `Plan "${args?.title}" presented for review (${id}). Human can approve/revise/reject at localhost:${reviewPort}. Call check_feedback for their verdict.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }]
   };
 }
 
@@ -35357,12 +36116,12 @@ Decline to review the diff at http://localhost:${reviewPort}`
       await ctx.store.updateArtifactStatus(id, "approved");
       await maybeUpdateTaskStatus(ctx.server, id, ctx.store);
       return {
-        content: [{ type: "text", text: `Code change approved (${id}): ${effectiveChangeType} ${filePath}.${closeNote}${changesetNudge}${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }]
+        content: [{ type: "text", text: `Code change approved (${id}): ${effectiveChangeType} ${filePath}.${closeNote}${changesetNudge}${formatPreflightTraceSummary(pre.trace)}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }]
       };
     }
   }
   return {
-    content: [{ type: "text", text: `Code change presented for review (${id}): ${effectiveChangeType} ${filePath}. Human can review at localhost:${reviewPort}.${closeNote}${changesetNudge}${formatPreflightTraceSummary(pre.trace)}${await ctx.helpers.getPassiveFeedback()}` }]
+    content: [{ type: "text", text: `Code change presented for review (${id}): ${effectiveChangeType} ${filePath}. Human can review at localhost:${reviewPort}.${closeNote}${changesetNudge}${formatPreflightTraceSummary(pre.trace)}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }]
   };
 }
 
@@ -35439,7 +36198,7 @@ Raise it WITH THEM, not on the PR: one present_findings entry with audience: "in
   return {
     content: [{
       type: "text",
-      text: `Changeset "${artifact.title}" presented for review (${id}) \u2014 ${fileCount} file${fileCount === 1 ? "" : "s"}. The human reviews each file (and can comment across files) at localhost:${reviewPort}. Call check_feedback for their per-file review state, comments, and verdict. ${closing}${traceSummary}${advisory}${nudge}${await ctx.helpers.getPassiveFeedback()}`
+      text: `Changeset "${artifact.title}" presented for review (${id}) \u2014 ${fileCount} file${fileCount === 1 ? "" : "s"}. The human reviews each file (and can comment across files) at localhost:${reviewPort}. Call check_feedback for their per-file review state, comments, and verdict. ${closing}${traceSummary}${advisory}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`
     }]
   };
 }
@@ -35519,7 +36278,7 @@ async function handlePresentDebrief(ctx, args) {
   return {
     content: [{
       type: "text",
-      text: `Debrief "${artifact.title}" presented for review (${id}) \u2014 ${sectionCount} section${sectionCount === 1 ? "" : "s"}${eyesCount > 0 ? `, ${eyesCount} item${eyesCount === 1 ? "" : "s"} flagged for your eyes` : ""}. This is the primary comprehension surface: the human reads the walk-through and can ask ANYTHING in the thread at localhost:${reviewPort}. Call check_feedback for their questions, comments, and verdict.${danglingNote}${servedNote}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`
+      text: `Debrief "${artifact.title}" presented for review (${id}) \u2014 ${sectionCount} section${sectionCount === 1 ? "" : "s"}${eyesCount > 0 ? `, ${eyesCount} item${eyesCount === 1 ? "" : "s"} flagged for your eyes` : ""}. This is the primary comprehension surface: the human reads the walk-through and can ask ANYTHING in the thread at localhost:${reviewPort}. Call check_feedback for their questions, comments, and verdict.${danglingNote}${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`
     }]
   };
 }
@@ -35589,7 +36348,7 @@ async function handlePresentExplainer(ctx, args) {
   return {
     content: [{
       type: "text",
-      text: `Explainer "${artifact.title}" presented for review (${id}) \u2014 a read-only walk-through of ${sectionCount} section${sectionCount === 1 ? "" : "s"}. The human reads it in order and can ask ANYTHING in the thread at localhost:${reviewPort}. Call check_feedback for their questions and comments.${servedNote}${ctaNudge}${traceSummary}${nudge}${await ctx.helpers.getPassiveFeedback()}`
+      text: `Explainer "${artifact.title}" presented for review (${id}) \u2014 a read-only walk-through of ${sectionCount} section${sectionCount === 1 ? "" : "s"}. The human reads it in order and can ask ANYTHING in the thread at localhost:${reviewPort}. Call check_feedback for their questions and comments.${servedNote}${ctaNudge}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`
     }]
   };
 }
@@ -36595,8 +37354,8 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
         get checkFeedbackPollCount() {
           return checkFeedbackPollCount;
         },
-        set checkFeedbackPollCount(v) {
-          checkFeedbackPollCount = v;
+        set checkFeedbackPollCount(v2) {
+          checkFeedbackPollCount = v2;
         },
         reportedRejectedVerdicts,
         reportedPlanVerdicts
@@ -37309,15 +38068,15 @@ function readFile() {
   const projects = {};
   let dropped = 0;
   for (const [key, value] of Object.entries(projectsRaw)) {
-    const v = value;
-    if (!v || typeof v !== "object" || typeof v.projectRoot !== "string" || !v.projectRoot) {
+    const v2 = value;
+    if (!v2 || typeof v2 !== "object" || typeof v2.projectRoot !== "string" || !v2.projectRoot) {
       dropped++;
       continue;
     }
     projects[key] = {
-      projectRoot: v.projectRoot,
-      name: typeof v.name === "string" && v.name ? v.name : path9.basename(v.projectRoot),
-      lastSeen: typeof v.lastSeen === "string" ? v.lastSeen : (/* @__PURE__ */ new Date(0)).toISOString()
+      projectRoot: v2.projectRoot,
+      name: typeof v2.name === "string" && v2.name ? v2.name : path9.basename(v2.projectRoot),
+      lastSeen: typeof v2.lastSeen === "string" ? v2.lastSeen : (/* @__PURE__ */ new Date(0)).toISOString()
     };
   }
   if (dropped > 0) salvageLog("projects.json", `dropped ${dropped} malformed entr${dropped === 1 ? "y" : "ies"}`);

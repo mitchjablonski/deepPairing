@@ -64,7 +64,7 @@ export function SpecArtifact({ artifact }: Props) {
         </h3>
         <SimpleMarkdown
           text={spec.objective}
-          className="text-sm text-text-primary font-medium space-y-1"
+          className="prose-field text-sm text-text-primary font-medium space-y-1"
         />
       </div>
 
@@ -73,7 +73,7 @@ export function SpecArtifact({ artifact }: Props) {
           <h3 className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-1.5">
             Context
           </h3>
-          <SimpleMarkdown text={spec.context} className="text-xs text-text-secondary space-y-1" />
+          <SimpleMarkdown text={spec.context} className="prose-field text-xs text-text-secondary space-y-1" />
         </div>
       )}
 
@@ -103,7 +103,7 @@ export function SpecArtifact({ artifact }: Props) {
           <h3 className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-1.5">
             Design
           </h3>
-          <SimpleMarkdown text={spec.design} className="text-xs text-text-secondary space-y-1" />
+          <SimpleMarkdown text={spec.design} className="prose-field text-xs text-text-secondary space-y-1" />
         </div>
       )}
 

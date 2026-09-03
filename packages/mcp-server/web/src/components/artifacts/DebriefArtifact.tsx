@@ -258,7 +258,7 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
         comments={comments}
         readOnly={writeLocked}
       >
-        <SimpleMarkdown text={content.summary} className="text-sm text-text-secondary space-y-2" />
+        <SimpleMarkdown text={content.summary} className="prose-field text-sm text-text-secondary space-y-2" />
       </DebriefBlock>
 
       {/* R4 P-B (#284) — visuals framing the debrief ("here's the shape of what
@@ -313,7 +313,7 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
               >
                 <div className="text-sm font-semibold text-text-primary">{section.title}</div>
                 {section.body && (
-                  <SimpleMarkdown text={section.body} className="text-xs text-text-secondary space-y-1" />
+                  <SimpleMarkdown text={section.body} className="prose-field text-xs text-text-secondary space-y-1" />
                 )}
 
                 {/* Concepts — the learning lever (reuse ConceptBadge). */}
