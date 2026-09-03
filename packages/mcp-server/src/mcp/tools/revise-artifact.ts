@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 import type { DecisionOption } from "@deeppairing/shared";
 import type { ToolContext, ToolResult } from "./types.js";
-import { notifyResourcesListChanged } from "../tool-helpers.js";
+import { notifyResourcesListChanged, formatStyleWarnings } from "../tool-helpers.js";
 import { maybeUpdateTaskStatus } from "../tasks-probe.js";
 import {
   validatePresentFindingsInput,
@@ -200,8 +200,12 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
     // So: withdraw BLOCKS (a retraction must never dodge review), supersede CARRIES
     // (a revision must never lose the review it hasn't seen yet). Both protect the
     // same invariant — no human input is ever swallowed — by opposite means.
+    // The fix-it path echoes style too. A supersede is the ONE call where the
+    // agent is rewriting prose it already wrote, so it is the only place the
+    // STYLE block can be acted on immediately rather than "next artifact" —
+    // and pre-this it was the one present-shaped path that stayed silent.
     return {
-      content: [{ type: "text", text: `Superseded ${artifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).` }],
+      content: [{ type: "text", text: `Superseded ${artifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${formatStyleWarnings(newArtifact.type, newArtifact.content)}` }],
     };
   }
 

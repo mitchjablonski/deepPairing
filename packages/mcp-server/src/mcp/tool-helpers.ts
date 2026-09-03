@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { IStore } from "../store/store-interface.js";
-import type { TeamPreference, Comment } from "@deeppairing/shared";
-import { lintArtifactContent, bySeverity } from "@deeppairing/shared";
+import type { TeamPreference, Comment, ProseMode, ProseSeverity } from "@deeppairing/shared";
+import { lintArtifactContent, lintProse, bySeverity } from "@deeppairing/shared";
 import type { ToolResult } from "./tools/types.js";
 import {
   ELICIT_APPROVE_SCHEMA,
@@ -493,6 +493,28 @@ export async function getPassiveFeedback(store: IStore, excludeIds: string[] = [
 const MAX_STYLE_LINES = 4;
 
 /**
+ * One line per RULE, worst first. Ranking raw violations put four instances of
+ * the same semicolon habit in all four slots, so the agent read one lesson and
+ * paid for four lines of it. De-duplicating by rule spends the same four lines
+ * on the four worst DISTINCT problems, which is what a critique is for. The
+ * kept instance is the highest-severity one, earliest in the field on a tie,
+ * because bySeverity already sorts that way.
+ */
+function topDistinctStyleLines<T extends { v: { ruleId: string; severity: ProseSeverity } }>(
+  located: T[],
+  limit: number,
+): { shown: T[]; rest: number } {
+  const seen = new Set<string>();
+  const distinct: T[] = [];
+  for (const item of located) {
+    if (seen.has(item.v.ruleId)) continue;
+    seen.add(item.v.ruleId);
+    distinct.push(item);
+  }
+  return { shown: distinct.slice(0, limit), rest: Math.max(0, distinct.length - limit) };
+}
+
+/**
  * "Write to your pair" — the STYLE echo on a present_* result.
  *
  * WARN ONLY. The artifact is already recorded, versioned and broadcast by the
@@ -519,16 +541,43 @@ export function formatStyleWarnings(type: string, content: unknown): string {
   if (result.violations.length === 0) return "";
 
   // Carry the field path alongside each violation so every line says WHERE,
-  // then rank worst-severity-first and keep only the top few.
+  // then rank worst-severity-first and keep one line per distinct rule.
   const located = result.fields.flatMap((f) => f.violations.map((v) => ({ path: f.path, v })));
   located.sort((a, b) => bySeverity(a.v, b.v));
-  const shown = located.slice(0, MAX_STYLE_LINES);
+  const { shown } = topDistinctStyleLines(located, MAX_STYLE_LINES);
   const rest = located.length - shown.length;
 
   const lines = shown.map(({ path, v }) => `- ${path}: ${v.message}`);
-  const tail = rest > 0 ? ` ${rest} more in the UI.` : "";
+  return styleBlock(result.score, lines, rest);
+}
+
+/**
+ * The same STYLE echo for a bare prose string that is not an artifact field —
+ * today, the `answer` an agent posts back on a human's question. The rules and
+ * the score are the artifact path's rules and score, so a reply is held to
+ * exactly the register the artifact was.
+ */
+export function formatProseStyleWarnings(label: string, text: string, mode: ProseMode = "strict"): string {
+  let result;
+  try {
+    result = lintProse(text, { mode });
+  } catch {
+    return "";
+  }
+  if (result.violations.length === 0) return "";
+  const located = [...result.violations].sort(bySeverity).map((v) => ({ path: label, v }));
+  const { shown } = topDistinctStyleLines(located, MAX_STYLE_LINES);
+  const rest = located.length - shown.length;
+  return styleBlock(result.score, shown.map(({ path, v }) => `- ${path}: ${v.message}`), rest);
+}
+
+/** The shared five-line shape. The tail says "+N more" rather than "N more in
+ *  the UI" because the clarity chip is hidden on a good-enough score, and a
+ *  warning must not promise the human a control that isn't on their screen. */
+function styleBlock(score: number, lines: string[], rest: number): string {
+  const tail = rest > 0 ? ` (+${rest} more)` : "";
   return (
-    `\n\nSTYLE (clarity ${result.score}/100) — house prose, warn only; nothing was changed.${tail}\n` +
+    `\n\nSTYLE (clarity ${score}/100) — house prose, warn only. Nothing was changed.${tail}\n` +
     lines.join("\n")
   );
 }

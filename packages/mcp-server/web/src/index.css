@@ -311,18 +311,28 @@ h1, h2, h3, h4, h5, h6 {
  * alone, so nothing about the surrounding grid changes — a line just stops
  * running past the distance an eye can track back from.
  */
-.prose-field {
-  max-width: 65ch;
-  line-height: 1.5;
-  text-align: left;
-}
+/*
+ * IN @layer components ON PURPOSE. Unlayered CSS beats every Tailwind layer,
+ * so an unlayered `.prose-field { line-height }` silently overrode the
+ * `leading-relaxed` and `leading-snug` utilities sitting on the same elements
+ * (ResearchArtifact's focus mode, ChangesetArtifact's summary). Inside the
+ * components layer the utility wins, which is the whole contract of a utility
+ * class — and the measure cap still applies wherever nothing overrides it.
+ */
+@layer components {
+  .prose-field {
+    max-width: 65ch;
+    line-height: 1.5;
+    text-align: left;
+  }
 
-/* A touch more air between paragraphs than the default block stack. */
-.prose-field > p + p,
-.prose-field > div + div,
-.prose-field > p + ul,
-.prose-field > ul + p {
-  margin-top: 0.6em;
+  /* A touch more air between paragraphs than the default block stack. */
+  .prose-field > p + p,
+  .prose-field > div + div,
+  .prose-field > p + ul,
+  .prose-field > ul + p {
+    margin-top: 0.6em;
+  }
 }
 
 /* Single-line truncation utility */

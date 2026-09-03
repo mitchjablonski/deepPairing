@@ -1,5 +1,10 @@
 import { useMemo, useRef, useState } from "react";
-import { lintArtifactContent, bySeverity, type Violation } from "@deeppairing/shared";
+// The SUBPATH, not the package root. The root index pulls Zod in with it, and
+// Zod lives in the eager entry chunk — importing the linter through it would
+// have parked 12KB of rules in every page load for a chip that is lazy and
+// usually hidden. prose-lint.ts has no imports at all, so through the subpath
+// it lands in this component's own chunk.
+import { lintArtifactContent, bySeverity, type Violation } from "@deeppairing/shared/prose-lint";
 import type { Artifact } from "@deeppairing/shared";
 import { useDismissOnOutside } from "../hooks/useDismissOnOutside";
 
@@ -20,7 +25,16 @@ import { useDismissOnOutside } from "../hooks/useDismissOnOutside";
  * is the entry chunk (see the lazy renderer block there).
  */
 
-/** Below this the chip turns amber; below the second, red. */
+/**
+ * THE VISIBILITY GATE. The chip used to render on any violation at all, which
+ * put a "clarity 96" badge on roughly two thirds of hand-polished artifacts —
+ * a permanent piece of chrome that told the reader nothing they could act on.
+ * A score at or above this is prose that is fine, so the card stays clean and
+ * the chip means something when it does appear.
+ */
+const SHOW_AT = 96;
+
+/** Below this the chip turns amber. Below the second, red. */
 const WARN_AT = 85;
 const BAD_AT = 65;
 
@@ -77,7 +91,7 @@ export function ClarityChip({ artifact }: { artifact: Artifact }) {
     }
   }, [artifact.type, artifact.content]);
 
-  if (result.violations.length === 0) return null;
+  if (result.violations.length === 0 || result.score >= SHOW_AT) return null;
 
   const tone = toneFor(result.score);
   const count = result.violations.length;

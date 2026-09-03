@@ -24013,17 +24013,33 @@ function maskNonProse(text) {
     blank(chars, m.index, m.index + m[0].length);
   }
   const masked3 = chars.join("");
+  const quoteLine = /^[ \t]*>.*$/gm;
+  while ((m = quoteLine.exec(masked3)) !== null) {
+    blank(chars, m.index, m.index + m[0].length);
+  }
+  const masked4 = chars.join("");
   const pathRe = /(?:~|\.{1,2})?\/?[\w.@+-]+(?:\/[\w.@+-]+)+\/?/g;
-  while ((m = pathRe.exec(masked3)) !== null) {
+  while ((m = pathRe.exec(masked4)) !== null) {
     const tok = m[0].replace(/[.,;:!?)\]]+$/, "");
     if (!tok.includes("/"))
       continue;
     const anchored = /^(?:~\/|\.{1,2}\/|\/)/.test(tok);
     const hasExtension = tok.split("/").some((seg) => /^[\w@+-][\w.@+-]*\.[A-Za-z]{1,6}$/.test(seg));
-    if (anchored || hasExtension)
+    if (anchored || hasExtension || isRepoPath(tok))
       blank(chars, m.index, m.index + tok.length);
   }
   return chars.join("");
+}
+function isRepoPath(token) {
+  const segments = token.replace(/\/+$/, "").split("/");
+  if (segments.length < 2)
+    return false;
+  const roots = new Set(SOURCE_ROOT_WORDS);
+  if (roots.has((segments[0] ?? "").toLowerCase()))
+    return true;
+  if (segments.length >= REPO_PATH_MIN_DEEP_SEGMENTS)
+    return true;
+  return segments.length >= 3 && segments.some((s) => INNER_ROOT_WORDS.has(s.toLowerCase()));
 }
 function isStructuralLine(line) {
   const t = line.trim();
@@ -24132,6 +24148,77 @@ function scanParens(masked) {
   }
   return { groups, nested };
 }
+function lineStartAt(text, index) {
+  const at = text.lastIndexOf("\n", Math.max(0, index - 1));
+  return at === -1 ? 0 : at + 1;
+}
+function lineEndAt(text, index) {
+  const at = text.indexOf("\n", index);
+  return at === -1 ? text.length : at;
+}
+function insideQuotes(text, index) {
+  const line = text.slice(lineStartAt(text, index), lineEndAt(text, index));
+  const at = index - lineStartAt(text, index);
+  let openStraight = false;
+  let openSmart = false;
+  for (let i = 0; i < at; i++) {
+    const c = line[i];
+    if (c === '"')
+      openStraight = !openStraight;
+    else if (c === "\u201C")
+      openSmart = true;
+    else if (c === "\u201D")
+      openSmart = false;
+  }
+  if (!openStraight && !openSmart)
+    return false;
+  const rest = line.slice(at);
+  return openStraight ? rest.includes('"') : rest.includes("\u201D");
+}
+function onHeadingLine(text, index) {
+  const line = text.slice(lineStartAt(text, index), lineEndAt(text, index));
+  return /^[ \t]*#{1,6}\s/.test(line);
+}
+function wholeCapsToken(text, start, end) {
+  let s = start;
+  let e = end;
+  while (s >= 2 && /[-/]/.test(text[s - 1] ?? "") && /[A-Za-z0-9]/.test(text[s - 2] ?? "")) {
+    const prev = /[A-Za-z0-9]+$/.exec(text.slice(0, s - 1));
+    if (!prev)
+      break;
+    s = s - 1 - prev[0].length;
+  }
+  for (; ; ) {
+    if (!/[-/]/.test(text[e] ?? ""))
+      break;
+    const next = /^[A-Za-z0-9]+/.exec(text.slice(e + 1));
+    if (!next)
+      break;
+    e = e + 1 + next[0].length;
+  }
+  return { start: s, end: e };
+}
+function emDashUnits(paragraph) {
+  const units = [];
+  for (const s of paragraph.sentences) {
+    const hits = [...s.text.matchAll(/—/g)].map((h) => s.index + (h.index ?? 0));
+    if (hits.length >= 2 && hits.length % 2 === 0) {
+      for (let i = 0; i < hits.length; i += 2)
+        units.push(hits[i]);
+    } else {
+      units.push(...hits);
+    }
+  }
+  return units.sort((a, b) => a - b);
+}
+function hasProperSegment(token) {
+  const parts = token.split("-");
+  return parts.some((part, i) => {
+    if (/[A-Z]/.test(part.slice(1)))
+      return true;
+    return i > 0 && /^[A-Z]/.test(part);
+  });
+}
 function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -24141,6 +24228,9 @@ function scoreViolations(violations, wordCount) {
     return 100;
   const normalized = raw * 100 / Math.max(wordCount, MIN_SCORING_WORDS);
   return Math.max(0, Math.min(100, Math.round(100 - normalized)));
+}
+function proseWordCount(text) {
+  return splitProse(maskNonProse(text)).flatMap((p) => p.sentences).reduce((n, s) => n + s.words, 0);
 }
 function lintProse(text, options = {}) {
   const mode = options.mode ?? "flavored";
@@ -24195,10 +24285,13 @@ function lintArtifactContent(type, content) {
   }
   const fields = [];
   for (const spec of specs) {
+    const exempt = new Set(spec.exclude ?? []);
     for (const hit of resolvePath(content, spec.path.split("."), "")) {
-      const { violations: violations2, score: score2 } = lintProse(hit.text, { mode: spec.mode });
+      const lint = lintProse(hit.text, { mode: spec.mode });
+      const violations2 = exempt.size === 0 ? lint.violations : lint.violations.filter((x) => !exempt.has(x.ruleId));
       if (violations2.length === 0)
         continue;
+      const score2 = violations2.length === lint.violations.length ? lint.score : scoreViolations(violations2, proseWordCount(hit.text));
       fields.push({ path: hit.path, mode: spec.mode, violations: violations2, score: score2 });
     }
   }
@@ -24209,7 +24302,7 @@ function lintArtifactContent(type, content) {
 function bySeverity(a, b) {
   return SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] || a.index - b.index;
 }
-var SENTENCE_WORD_LIMIT, PARENTHETICAL_SENTENCES_PER, PARENTHETICAL_MIN_CHARS, PARAGRAPH_SENTENCE_LIMIT, EM_DASH_PER_PARAGRAPH, ALL_CAPS_WHITELIST, SLASH_PACK_EXCEPTIONS, IMPERATIVE_VERBS, WORDINESS_MAP, SEVERITY_WEIGHT, BLANK, EXCERPT_MAX, sentenceLength, parentheticalDensity, semicolon, allCapsEmphasis, slashPack, arrowChain, emDashBudget, COINAGE_MIN_CHARS, COINAGE_DEFINITION_WINDOW, undefinedCoinage, inlineEnumeration, paragraphLength, trailingCondition, vagueRecommendation, wordiness, PROSE_RULES, MIN_SCORING_WORDS, PROSE_FIELD_MAP, SEVERITY_RANK;
+var SENTENCE_WORD_LIMIT, PARENTHETICAL_SENTENCES_PER, PARENTHETICAL_MIN_CHARS, PARAGRAPH_SENTENCE_LIMIT, EM_DASH_PER_PARAGRAPH, ALL_CAPS_WHITELIST, ALL_CAPS_EMPHASIS_WORDS, SLASH_PACK_EXCEPTIONS, SOURCE_ROOT_WORDS, NUMBER_WORDS, COMMON_HYPHEN_COMPOUNDS, IMPERATIVE_VERBS, WORDINESS_MAP, SEVERITY_WEIGHT, BLANK, REPO_PATH_MIN_DEEP_SEGMENTS, INNER_ROOT_WORDS, EXCERPT_MAX, sentenceLength, parentheticalDensity, semicolon, allCapsEmphasis, slashPack, arrowChain, emDashBudget, COINAGE_MIN_CHARS, COINAGE_DEFINITION_WINDOW, COINAGE_PLAIN_MIN_USES, undefinedCoinage, inlineEnumeration, paragraphLength, trailingCondition, vagueRecommendation, wordiness, PROSE_RULES, MIN_SCORING_WORDS, CAPTION_EXEMPT, PROSE_FIELD_MAP, SEVERITY_RANK;
 var init_prose_lint = __esm({
   "../shared/dist/prose-lint.js"() {
     "use strict";
@@ -24222,6 +24315,7 @@ var init_prose_lint = __esm({
     PARAGRAPH_SENTENCE_LIMIT = 5;
     EM_DASH_PER_PARAGRAPH = 1;
     ALL_CAPS_WHITELIST = [
+      // Protocols, formats, platform words.
       "API",
       "APIS",
       "ABI",
@@ -24232,6 +24326,7 @@ var init_prose_lint = __esm({
       "CI",
       "CD",
       "CLI",
+      "CORS",
       "CPU",
       "CRUD",
       "CSS",
@@ -24239,10 +24334,13 @@ var init_prose_lint = __esm({
       "DNS",
       "DOM",
       "DTO",
+      "DX",
       "E2E",
       "EOF",
       "ENV",
+      "ETA",
       "GCP",
+      "GIF",
       "GNU",
       "GPL",
       "GPU",
@@ -24254,15 +24352,19 @@ var init_prose_lint = __esm({
       "IDE",
       "IO",
       "ISO",
+      "JPEG",
+      "JPG",
       "JS",
       "JSON",
       "JSX",
       "JWT",
       "LLM",
+      "LRU",
       "MCP",
       "MD",
       "MFA",
       "MIT",
+      "NAT",
       "NPM",
       "OAUTH",
       "OK",
@@ -24270,27 +24372,35 @@ var init_prose_lint = __esm({
       "OS",
       "PDF",
       "PII",
+      "PNG",
       "PNPM",
       "PR",
       "PRS",
       "QA",
       "QPS",
       "RAM",
+      "REPL",
       "REST",
       "RFC",
       "RPC",
+      "RSS",
       "SDK",
       "SHA",
       "SLA",
       "SLO",
+      "SSE",
+      "SSH",
       "SQL",
       "SSL",
       "SSO",
+      "SVG",
+      "TCP",
       "TLS",
       "TODO",
       "TSX",
       "TS",
       "TTL",
+      "UDP",
       "UI",
       "URI",
       "URL",
@@ -24300,6 +24410,7 @@ var init_prose_lint = __esm({
       "UX",
       "VM",
       "VS",
+      "WCAG",
       "WS",
       "WSL",
       "XML",
@@ -24307,7 +24418,173 @@ var init_prose_lint = __esm({
       "README",
       "FIXME",
       "NOTE",
-      "WIP"
+      "WIP",
+      // SQL verbs and HTTP methods read as symbol names, not shouting.
+      "SELECT",
+      "JOIN",
+      "INSERT",
+      "UPDATE",
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "HEAD",
+      "OPTIONS",
+      // Standards and house shorthand that show up in this project's own prose.
+      "BDA",
+      "STE",
+      "PMF",
+      "SOTA",
+      // deepPairing's own enum literals. These are field VALUES the agent is
+      // quoting back, not emphasis: a `significance: "high"` reads as HIGH.
+      "HIGH",
+      "MEDIUM",
+      "LOW",
+      "WARN",
+      "INFO",
+      "ERROR",
+      "DEBUG",
+      "TRACE",
+      "DRAFT",
+      "APPROVED",
+      "REJECTED",
+      "PENDING",
+      "REVIEWING",
+      "SUPERSEDED",
+      "WITHDRAWN",
+      "RETRACTED",
+      "OBSOLETE"
+    ];
+    ALL_CAPS_EMPHASIS_WORDS = [
+      "ALL",
+      "ALREADY",
+      "ALWAYS",
+      "AND",
+      "ANY",
+      "ANYTHING",
+      "ARE",
+      "BAD",
+      "BEFORE",
+      "BEST",
+      "BOTH",
+      "BROKEN",
+      "BUT",
+      "CAN",
+      "DEAD",
+      "DELIBERATELY",
+      "DID",
+      "DOES",
+      "DONE",
+      "EACH",
+      "ENTIRELY",
+      "EVEN",
+      "EVER",
+      "EVERY",
+      "EVERYTHING",
+      "EXACT",
+      "EXACTLY",
+      "FALSE",
+      "FAR",
+      "FEW",
+      "FIRST",
+      "FIX",
+      "FIXED",
+      "FULL",
+      "GOOD",
+      "HAD",
+      "HAS",
+      "HAVE",
+      "HERE",
+      "HOW",
+      "HUGE",
+      "INSTEAD",
+      "ITS",
+      "JUST",
+      "KEEP",
+      "LAST",
+      "LEAST",
+      "LESS",
+      "LIVE",
+      "LONG",
+      "LOST",
+      "MANY",
+      "MORE",
+      "MOST",
+      "MUCH",
+      "MUST",
+      "NEED",
+      "NEVER",
+      "NEW",
+      "NEXT",
+      "NONE",
+      "NOPE",
+      "NOT",
+      "NOTHING",
+      "NOW",
+      "OFF",
+      "OLD",
+      "ONCE",
+      "ONE",
+      "ONLY",
+      "OUT",
+      "OVER",
+      "OWN",
+      "RATHER",
+      "REAL",
+      "REALLY",
+      "RESEARCH",
+      "RIGHT",
+      "SAME",
+      "SETTLED",
+      "SHOULD",
+      "SILENTLY",
+      "SOME",
+      "SOMETHING",
+      "STILL",
+      "STOP",
+      "SUCH",
+      "SURE",
+      "TAKE",
+      "THAN",
+      "THAT",
+      "THEIR",
+      "THEM",
+      "THEN",
+      "THERE",
+      "THESE",
+      "THEY",
+      "THIS",
+      "THOSE",
+      "THE",
+      "TOO",
+      "TRUE",
+      "TWO",
+      "UNDER",
+      "UNTIL",
+      "VERY",
+      "WAS",
+      "WERE",
+      "WHAT",
+      "WHEN",
+      "WHERE",
+      "WHETHER",
+      "WHICH",
+      "WHILE",
+      "WHO",
+      "WHY",
+      "WILL",
+      "WITH",
+      "WITHOUT",
+      "WORKING",
+      "WORKS",
+      "WORSE",
+      "WORST",
+      "WRONG",
+      "YES",
+      "YET",
+      "YOU",
+      "YOUR"
     ];
     SLASH_PACK_EXCEPTIONS = [
       "tcp/ip",
@@ -24322,6 +24599,123 @@ var init_prose_lint = __esm({
       "date/time",
       "true/false",
       "http/https"
+    ];
+    SOURCE_ROOT_WORDS = [
+      "packages",
+      "src",
+      "app",
+      "apps",
+      "lib",
+      "libs",
+      "test",
+      "tests",
+      "docs",
+      "web",
+      "scripts",
+      "dist",
+      "node_modules",
+      "claude-plugin",
+      "components",
+      "hooks",
+      "store",
+      "mcp",
+      "http"
+    ];
+    NUMBER_WORDS = /* @__PURE__ */ new Set([
+      "zero",
+      "one",
+      "two",
+      "three",
+      "four",
+      "five",
+      "six",
+      "seven",
+      "eight",
+      "nine",
+      "ten",
+      "eleven",
+      "twelve",
+      "twenty",
+      "thirty",
+      "forty",
+      "fifty",
+      "hundred",
+      "thousand",
+      "million",
+      "billion",
+      "half",
+      "halves",
+      "third",
+      "thirds",
+      "quarter",
+      "quarters",
+      "fifth",
+      "fifths",
+      "sixth",
+      "sixths",
+      "eighth",
+      "eighths",
+      "tenth",
+      "tenths"
+    ]);
+    COMMON_HYPHEN_COMPOUNDS = [
+      "end-to-end",
+      "out-of-the-box",
+      "up-to-date",
+      "out-of-date",
+      "one-to-one",
+      "many-to-many",
+      "one-to-many",
+      "many-to-one",
+      "day-to-day",
+      "state-of-the-art",
+      "well-thought-out",
+      "peer-to-peer",
+      "copy-on-write",
+      "one-size-fits-all",
+      "first-come-first-served",
+      "face-to-face",
+      "side-by-side",
+      "back-and-forth",
+      "hand-in-hand",
+      "all-or-nothing",
+      "off-the-shelf",
+      "step-by-step",
+      "line-by-line",
+      "word-for-word",
+      "apples-to-apples",
+      "point-to-point",
+      "run-of-the-mill",
+      "on-the-fly",
+      "out-of-band",
+      "out-of-scope",
+      "nice-to-have",
+      "trial-and-error",
+      "cause-and-effect",
+      "black-and-white",
+      "up-and-running",
+      "plug-and-play",
+      "drag-and-drop",
+      "copy-and-paste",
+      "mix-and-match",
+      "tried-and-true",
+      "man-in-the-middle",
+      "time-to-live",
+      "point-in-time",
+      "right-to-left",
+      "left-to-right",
+      "top-to-bottom",
+      "bottom-to-top",
+      "pay-as-you-go",
+      "over-the-wire",
+      "as-a-service",
+      "best-of-breed",
+      "least-recently-used",
+      "first-in-first-out",
+      "last-in-first-out",
+      "so-and-so",
+      "give-and-take",
+      "wait-and-see"
     ];
     IMPERATIVE_VERBS = [
       "add",
@@ -24379,6 +24773,19 @@ var init_prose_lint = __esm({
       low: 1
     };
     BLANK = " ";
+    REPO_PATH_MIN_DEEP_SEGMENTS = 4;
+    INNER_ROOT_WORDS = /* @__PURE__ */ new Set([
+      "packages",
+      "src",
+      "lib",
+      "libs",
+      "node_modules",
+      "claude-plugin",
+      "components",
+      "dist",
+      "scripts",
+      "mcp"
+    ]);
     EXCERPT_MAX = 80;
     sentenceLength = {
       id: "sentence-length",
@@ -24387,7 +24794,7 @@ var init_prose_lint = __esm({
       modes: ["strict", "flavored"],
       check: (_text, ctx) => {
         const limit = SENTENCE_WORD_LIMIT[ctx.mode];
-        return ctx.sentences.filter((s) => s.words > limit).map((s) => v(sentenceLength, `${s.words}-word sentence (limit ${limit}) \u2014 split it; one idea per sentence.`, ctx, s.index, s.text.length));
+        return ctx.sentences.filter((s) => s.words > limit).map((s) => v(sentenceLength, `${s.words}-word sentence (limit ${limit}) \u2014 split it. One idea per sentence.`, ctx, s.index, s.text.length));
       }
     };
     parentheticalDensity = {
@@ -24436,11 +24843,15 @@ var init_prose_lint = __esm({
       modes: ["strict", "flavored"],
       check: (text, ctx) => {
         const whitelist = new Set(ALL_CAPS_WHITELIST.map((w) => w.toUpperCase()));
-        const out = [];
+        const emphasis = new Set(ALL_CAPS_EMPHASIS_WORDS.map((w) => w.toUpperCase()));
+        const candidates = [];
         const re = /\b([A-Z][A-Z0-9]{2,})(s?)\b/g;
+        let reportedTo = -1;
         let m;
         while ((m = re.exec(text)) !== null) {
           const word = m[1] ?? "";
+          if (m.index < reportedTo)
+            continue;
           if ((word.match(/[A-Z]/g) ?? []).length < 3)
             continue;
           if (whitelist.has(word))
@@ -24451,8 +24862,35 @@ var init_prose_lint = __esm({
             continue;
           if (text[m.index + m[0].length] === "(")
             continue;
-          out.push(v(allCapsEmphasis, `"${word}" shouts \u2014 use bold for emphasis, not capitals.`, ctx, m.index, Math.max(m[0].length, 48)));
+          if (onHeadingLine(text, m.index))
+            continue;
+          if (insideQuotes(text, m.index))
+            continue;
+          const token = wholeCapsToken(text, m.index, m.index + m[0].length);
+          const full = text.slice(token.start, token.end);
+          reportedTo = token.end;
+          if (full !== word && /\d/.test(full))
+            continue;
+          const parts = full.split(/[-/]/).filter((p) => /^[A-Z][A-Z0-9]{2,}$/.test(p));
+          if (parts.length > 0 && parts.every((p) => whitelist.has(p)))
+            continue;
+          candidates.push({ start: token.start, end: token.end, full, parts: parts.length ? parts : [full] });
         }
+        const out = [];
+        candidates.forEach((c, i) => {
+          const isWord = c.parts.some((p) => emphasis.has(p));
+          const prev = candidates[i - 1];
+          const next = candidates[i + 1];
+          const runsWith = (other) => {
+            if (!other)
+              return false;
+            const gap = other.start > c.end ? text.slice(c.end, other.start) : text.slice(other.end, c.start);
+            return gap.length <= 3 && /^[\s,:–—-]*$/.test(gap);
+          };
+          if (!isWord && !runsWith(prev) && !runsWith(next))
+            return;
+          out.push(v(allCapsEmphasis, `"${c.full}" shouts \u2014 use bold for emphasis, not capitals.`, ctx, c.start, Math.max(c.full.length, 48)));
+        });
         return out;
       }
     };
@@ -24470,7 +24908,8 @@ var init_prose_lint = __esm({
           const tok = m[0];
           if (exceptions.has(tok.toLowerCase()))
             continue;
-          if (tok.split("/").every((seg) => /^\d+$/.test(seg)))
+          const segs = tok.split("/");
+          if (segs.every((seg) => /^\d+$/.test(seg) || NUMBER_WORDS.has(seg.toLowerCase())))
             continue;
           out.push(v(slashPack, `"${tok}" packs terms into a slash \u2014 write "${tok.split("/").join(", ")}" out.`, ctx, m.index, Math.max(tok.length, 48)));
         }
@@ -24487,6 +24926,10 @@ var init_prose_lint = __esm({
         const re = /(?:→|⇒|->)/g;
         let m;
         while ((m = re.exec(text)) !== null) {
+          const before = /([\d.,%]+)\s*$/.exec(text.slice(0, m.index));
+          const after = /^\s*(~?[\d.,%]+)/.exec(text.slice(m.index + m[0].length));
+          if (before && after && /\d/.test(before[1] ?? "") && /\d/.test(after[1] ?? ""))
+            continue;
           out.push(v(arrowChain, "Arrow in prose \u2014 write the causation out; arrows belong in visuals[] diagrams.", ctx, m.index, 60));
         }
         return out;
@@ -24500,43 +24943,47 @@ var init_prose_lint = __esm({
       check: (_text, ctx) => {
         const out = [];
         for (const p of ctx.paragraphs) {
-          const hits = [...p.text.matchAll(/—/g)];
-          if (hits.length <= EM_DASH_PER_PARAGRAPH)
+          const units = emDashUnits(p);
+          if (units.length <= EM_DASH_PER_PARAGRAPH)
             continue;
-          out.push(v(emDashBudget, `${hits.length} em-dashes in one paragraph (budget ${EM_DASH_PER_PARAGRAPH}) \u2014 the rest should be full stops.`, ctx, p.index + (hits[EM_DASH_PER_PARAGRAPH]?.index ?? 0), 60));
+          out.push(v(emDashBudget, `${units.length} em-dashes in one paragraph (budget ${EM_DASH_PER_PARAGRAPH}) \u2014 the rest should be full stops.`, ctx, units[EM_DASH_PER_PARAGRAPH] ?? p.index, 60));
         }
         return out;
       }
     };
     COINAGE_MIN_CHARS = 8;
     COINAGE_DEFINITION_WINDOW = 220;
+    COINAGE_PLAIN_MIN_USES = 3;
     undefinedCoinage = {
       id: "undefined-coinage",
       tier: 1,
-      severity: "high",
+      // Medium, not high. The rule reads INTENT off surface shape, which is the
+      // shakiest inference in the file, so a residual false positive must never
+      // own the first line of the agent's STYLE block.
+      severity: "medium",
       modes: ["strict", "flavored"],
       check: (text, ctx) => {
+        const common = new Set(COMMON_HYPHEN_COMPOUNDS.map((w) => w.toLowerCase()));
         const candidates = {};
-        const note = (label, at, end) => {
+        const stacked = /\b[A-Za-z]{2,}(?:-[A-Za-z]{2,}){2,}\b/g;
+        let m;
+        while ((m = stacked.exec(text)) !== null) {
+          const label = m[0];
+          if (common.has(label.toLowerCase()))
+            continue;
           const key = label.toLowerCase();
           const existing = candidates[key];
           if (existing)
             existing.count += 1;
           else
-            candidates[key] = { label, first: at, firstEnd: end, count: 1 };
-        };
-        const stacked = /\b[A-Za-z]{2,}(?:-[A-Za-z]{2,}){2,}\b/g;
-        let m;
-        while ((m = stacked.exec(text)) !== null)
-          note(m[0], m.index, m.index + m[0].length);
-        const quoted = /["“]([^"”\n]{3,40})["”]/g;
-        while ((m = quoted.exec(text)) !== null)
-          note((m[1] ?? "").trim(), m.index, m.index + m[0].length);
+            candidates[key] = { label, first: m.index, firstEnd: m.index + label.length, count: 1 };
+        }
         const out = [];
         for (const c of Object.values(candidates)) {
-          if (c.count < 2)
-            continue;
           if (c.label.length < COINAGE_MIN_CHARS)
+            continue;
+          const minUses = hasProperSegment(c.label) ? 2 : COINAGE_PLAIN_MIN_USES;
+          if (c.count < minUses)
             continue;
           const tail = text.slice(c.firstEnd, c.firstEnd + COINAGE_DEFINITION_WINDOW);
           const defined = /^\s*(?:is|are|means|=|—|:)\s/.test(tail) || /^\s*\([^)]{6,}\)/.test(tail);
@@ -24592,16 +25039,22 @@ var init_prose_lint = __esm({
     vagueRecommendation = {
       id: "vague-recommendation",
       tier: 2,
-      severity: "medium",
+      // Low. "Vague" is a judgement about meaning made from surface shape alone,
+      // so this rule is the most likely in the file to be wrong about a sentence
+      // that is fine. Low severity keeps a miss cheap.
+      severity: "low",
       modes: ["strict"],
       check: (_text, ctx) => {
         const out = [];
         for (const s of ctx.sentences) {
-          const m = /\b(consider improving|improve|enhance|better)\s+(?:the\s+|a\s+|its\s+)?([a-z]{3,})\b/i.exec(s.text);
+          const m = /\b(consider improving|improve|enhance|better)\s+(?!the\b|a\b|an\b|its\b|this\b|that\b|our\b|your\b|their\b)([a-z]{3,})\b/i.exec(s.text);
           if (!m)
             continue;
           const source = ctx.original.slice(s.index, s.index + s.text.length + 2);
-          if (/`|\.[a-z]{1,5}\b|\//.test(source))
+          if (/`|\.[a-z]{1,5}\b|\/|\d/.test(source))
+            continue;
+          const laterWords = source.trim().split(/\s+/).slice(1);
+          if (laterWords.some((w) => /^[A-Z]/.test(w) || /[a-z][A-Z]/.test(w)))
             continue;
           out.push(v(vagueRecommendation, `"${m[0]}" names no target \u2014 a recommendation should name the file or symbol.`, ctx, s.index, s.text.length));
         }
@@ -24641,7 +25094,8 @@ var init_prose_lint = __esm({
       vagueRecommendation,
       wordiness
     ];
-    MIN_SCORING_WORDS = 100;
+    MIN_SCORING_WORDS = 30;
+    CAPTION_EXEMPT = ["arrow-chain"];
     PROSE_FIELD_MAP = {
       research: [
         { path: "summary", mode: "flavored" },
@@ -24649,14 +25103,16 @@ var init_prose_lint = __esm({
         { path: "findings[].impact", mode: "flavored" },
         { path: "findings[].recommendation", mode: "strict" },
         { path: "findings[].concept.oneLineExplanation", mode: "flavored" },
-        { path: "openQuestions[]", mode: "strict" }
+        { path: "openQuestions[]", mode: "strict" },
+        { path: "visuals[].caption", mode: "flavored", exclude: CAPTION_EXEMPT }
       ],
       plan: [
         { path: "steps[].description", mode: "strict" },
         { path: "steps[].reasoning", mode: "flavored" },
         { path: "steps[].statusNote", mode: "flavored" },
         { path: "steps[].branches[].description", mode: "strict" },
-        { path: "steps[].branches[].reasoning", mode: "flavored" }
+        { path: "steps[].branches[].reasoning", mode: "flavored" },
+        { path: "visuals[].caption", mode: "flavored", exclude: CAPTION_EXEMPT }
       ],
       spec: [
         { path: "objective", mode: "flavored" },
@@ -24666,19 +25122,22 @@ var init_prose_lint = __esm({
         { path: "requirements[].rationale", mode: "flavored" },
         { path: "requirements[].acceptanceCriteria[]", mode: "strict" },
         { path: "tasks[].description", mode: "strict" },
-        { path: "openQuestions[]", mode: "strict" }
+        { path: "openQuestions[]", mode: "strict" },
+        { path: "visuals[].caption", mode: "flavored", exclude: CAPTION_EXEMPT }
       ],
       decision: [
         { path: "context", mode: "flavored" },
         { path: "options[].description", mode: "flavored" },
         { path: "options[].pros[]", mode: "strict" },
         { path: "options[].cons[]", mode: "strict" },
-        { path: "options[].concept.oneLineExplanation", mode: "flavored" }
+        { path: "options[].concept.oneLineExplanation", mode: "flavored" },
+        { path: "options[].visuals[].caption", mode: "flavored", exclude: CAPTION_EXEMPT }
       ],
       code_change: [{ path: "reasoning", mode: "flavored" }],
       changeset: [
         { path: "summary", mode: "flavored" },
-        { path: "risks[]", mode: "flavored" }
+        { path: "risks[]", mode: "flavored" },
+        { path: "visuals[].caption", mode: "flavored", exclude: CAPTION_EXEMPT }
       ],
       reasoning: [
         { path: "action", mode: "flavored" },
@@ -24697,12 +25156,14 @@ var init_prose_lint = __esm({
         { path: "needsYourEyes[].why", mode: "strict" },
         { path: "deferred[].what", mode: "flavored" },
         { path: "deferred[].why", mode: "flavored" },
-        { path: "openQuestions[]", mode: "strict" }
+        { path: "openQuestions[]", mode: "strict" },
+        { path: "visuals[].caption", mode: "flavored", exclude: CAPTION_EXEMPT }
       ],
       explainer: [
         { path: "overview", mode: "flavored" },
         { path: "sections[].body", mode: "flavored" },
-        { path: "unknowns[]", mode: "flavored" }
+        { path: "unknowns[]", mode: "flavored" },
+        { path: "visuals[].caption", mode: "flavored", exclude: CAPTION_EXEMPT }
       ]
     };
     SEVERITY_RANK = { high: 0, medium: 1, low: 2 };
@@ -30606,6 +31067,16 @@ async function getPassiveFeedback(store, excludeIds = []) {
 [Human feedback]: ${formatted}`;
 }
 var MAX_STYLE_LINES = 4;
+function topDistinctStyleLines(located, limit) {
+  const seen = /* @__PURE__ */ new Set();
+  const distinct = [];
+  for (const item of located) {
+    if (seen.has(item.v.ruleId)) continue;
+    seen.add(item.v.ruleId);
+    distinct.push(item);
+  }
+  return { shown: distinct.slice(0, limit), rest: Math.max(0, distinct.length - limit) };
+}
 function formatStyleWarnings(type, content) {
   let result;
   try {
@@ -30616,13 +31087,29 @@ function formatStyleWarnings(type, content) {
   if (result.violations.length === 0) return "";
   const located = result.fields.flatMap((f) => f.violations.map((v2) => ({ path: f.path, v: v2 })));
   located.sort((a, b) => bySeverity(a.v, b.v));
-  const shown = located.slice(0, MAX_STYLE_LINES);
+  const { shown } = topDistinctStyleLines(located, MAX_STYLE_LINES);
   const rest = located.length - shown.length;
   const lines = shown.map(({ path: path12, v: v2 }) => `- ${path12}: ${v2.message}`);
-  const tail = rest > 0 ? ` ${rest} more in the UI.` : "";
+  return styleBlock(result.score, lines, rest);
+}
+function formatProseStyleWarnings(label, text, mode = "strict") {
+  let result;
+  try {
+    result = lintProse(text, { mode });
+  } catch {
+    return "";
+  }
+  if (result.violations.length === 0) return "";
+  const located = [...result.violations].sort(bySeverity).map((v2) => ({ path: label, v: v2 }));
+  const { shown } = topDistinctStyleLines(located, MAX_STYLE_LINES);
+  const rest = located.length - shown.length;
+  return styleBlock(result.score, shown.map(({ path: path12, v: v2 }) => `- ${path12}: ${v2.message}`), rest);
+}
+function styleBlock(score, lines, rest) {
+  const tail = rest > 0 ? ` (+${rest} more)` : "";
   return `
 
-STYLE (clarity ${result.score}/100) \u2014 house prose, warn only; nothing was changed.${tail}
+STYLE (clarity ${score}/100) \u2014 house prose, warn only. Nothing was changed.${tail}
 ` + lines.join("\n");
 }
 var PresentIdempotencyRegistry = class {
@@ -35230,7 +35717,7 @@ async function handleAnswerQuestion(ctx, args) {
         // N2 (#226 scope 6) — exclude the comment we just answered from the
         // passive drain so the reply doesn't echo the human's own question
         // back as "[Human feedback]".
-        content: [{ type: "text", text: `${verb} on ${commentId}. The human will see your reply on the suggestion card.${await ctx.helpers.getPassiveFeedback([commentId])}` }]
+        content: [{ type: "text", text: `${verb} on ${commentId}. The human will see your reply on the suggestion card.${formatProseStyleWarnings("answer", answer)}${await ctx.helpers.getPassiveFeedback([commentId])}` }]
       };
     }
   }
@@ -35275,7 +35762,7 @@ async function handleAnswerQuestion(ctx, args) {
     // N2 (#226 scope 6) — exclude the just-answered comment from the passive
     // drain: pre-N2 this spliced the human's question back into the reply as
     // "[Human feedback]: - <the question>", echoing the very thing we answered.
-    content: [{ type: "text", text: `Answered ${commentId}. The human will see the reply under their question.${await ctx.helpers.getPassiveFeedback([commentId])}` }]
+    content: [{ type: "text", text: `Answered ${commentId}. The human will see the reply under their question.${formatProseStyleWarnings("answer", answer)}${await ctx.helpers.getPassiveFeedback([commentId])}` }]
   };
 }
 
@@ -35446,7 +35933,7 @@ async function handleReviseArtifact(ctx, args) {
     broadcast({ type: "artifact_updated", artifactId: old.id, status: "superseded" });
     notifyResourcesListChanged(server);
     return {
-      content: [{ type: "text", text: `Superseded ${artifactId} \u2192 ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).` }]
+      content: [{ type: "text", text: `Superseded ${artifactId} \u2192 ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${formatStyleWarnings(newArtifact.type, newArtifact.content)}` }]
     };
   }
   const artifacts = await store.getArtifacts();

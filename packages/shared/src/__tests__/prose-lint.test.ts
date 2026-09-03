@@ -192,8 +192,8 @@ describe("arrow-chain", () => {
 });
 
 describe("em-dash-budget", () => {
-  it("flags a paragraph with two em-dashes", () => {
-    const text = "The gate fired — a local stance — and the artifact still landed.";
+  it("flags a paragraph that spends two separate em-dashes", () => {
+    const text = "The gate fired — it held. The artifact landed — it rendered.";
     const hit = lintProse(text).violations.find((v) => v.ruleId === "em-dash-budget");
     expect(hit).toBeDefined();
     expect(hit!.message).toMatch(/2 em-dashes in one paragraph/);
@@ -203,6 +203,22 @@ describe("em-dash-budget", () => {
     expect(fired("The gate fired — the artifact still landed.", "em-dash-budget")).toBe(false);
   });
 
+  it("counts a PAIRED em-dash as one unit, not two", () => {
+    // A parenthetical written with two marks is a single gesture.
+    expect(fired("The gate fired — a local stance — and the artifact landed.", "em-dash-budget")).toBe(false);
+    // Four marks in one sentence is two pairs, which is still over budget.
+    expect(
+      fired(
+        "The gate fired — a local stance — and the artifact — a draft — still landed.",
+        "em-dash-budget",
+      ),
+    ).toBe(true);
+  });
+
+  it("still charges an ODD run in full", () => {
+    expect(fired("The gate fired — a local stance — and it held — twice.", "em-dash-budget")).toBe(true);
+  });
+
   it("counts per paragraph, not per field", () => {
     const text = "The gate fired — it held.\n\nThe artifact landed — it rendered.";
     expect(fired(text, "em-dash-budget")).toBe(false);
@@ -210,12 +226,28 @@ describe("em-dash-budget", () => {
 });
 
 describe("undefined-coinage", () => {
-  it("flags a hyphen-stacked coinage used twice with no definition", () => {
+  it("flags a plain hyphen-stacked coinage leaned on three times", () => {
     const text =
-      "The alive-surface-law explains the routing. Every card obeys the alive-surface-law here.";
+      "The alive-surface-law explains the routing. Every card obeys the alive-surface-law here. " +
+      "So the alive-surface-law wins.";
     const hit = lintProse(text).violations.find((v) => v.ruleId === "undefined-coinage");
     expect(hit).toBeDefined();
     expect(hit!.message).toContain("define it at first use");
+    // Medium, so a residual miss can never own line 1 of the STYLE block.
+    expect(hit!.severity).toBe("medium");
+  });
+
+  it("flags a NAME-shaped coinage on the second use", () => {
+    const text =
+      "Every card obeys the alive-Surface-law. The alive-Surface-law is why.";
+    expect(fired(text, "undefined-coinage")).toBe(true);
+    const camel = "The deepPairing-gate-rule holds. The deepPairing-gate-rule holds again.";
+    expect(fired(camel, "undefined-coinage")).toBe(true);
+  });
+
+  it("does not flag a plain compound used only twice", () => {
+    const text = "The read-through-cache is warm. The read-through-cache holds.";
+    expect(fired(text, "undefined-coinage")).toBe(false);
   });
 
   it("does not flag a coinage defined at first use", () => {
@@ -347,7 +379,7 @@ describe("preprocessing: what must never trigger a rule", () => {
   });
 
   it("ignores inline code spans", () => {
-    const text = "Call `store.get(a; b)` and `build/test/deploy` before the SHOUT.";
+    const text = "Call `store.get(a; b)` and `build/test/deploy` before the REAL fix.";
     expect(ids(lintProse(text).violations)).toEqual(["all-caps-emphasis"]);
   });
 
@@ -381,11 +413,14 @@ describe("preprocessing: what must never trigger a rule", () => {
 
   it("does not count a heading or a bullet glyph as a sentence", () => {
     // Headings and bullets are structure, so the sentence-shaped rules skip
-    // them — but a heading is still prose, so shouting inside one still counts.
+    // them. Caps in a HEADING are a formatting choice, not shouting in a
+    // paragraph, so all-caps-emphasis skips heading lines too.
     const text = "## WHAT THE RESEARCH SETTLED\n\n- one\n- two\n";
     expect(fired(text, "sentence-length")).toBe(false);
     expect(fired(text, "paragraph-length")).toBe(false);
-    expect(fired(text, "all-caps-emphasis")).toBe(true);
+    expect(fired(text, "all-caps-emphasis")).toBe(false);
+    // ...but the same words in a body paragraph still count.
+    expect(fired("WHAT THE RESEARCH SETTLED is the middle gear.", "all-caps-emphasis")).toBe(true);
   });
 
   it("lints the sentence inside a bullet, marker stripped", () => {
@@ -455,9 +490,19 @@ describe("scoring", () => {
     expect(scoreViolations(Array(10).fill(one), 1000)).toBe(92);
   });
 
-  it("floors short fields at MIN_SCORING_WORDS so one slip cannot zero them", () => {
+  it("floors very short fields at MIN_SCORING_WORDS so one slip cannot zero them", () => {
     const one: Violation = { ruleId: "x", severity: "high", message: "", excerpt: "", index: 0 };
-    expect(scoreViolations([one], 3)).toBe(92);
+    // 8 x 100 / 30 — the floor stops a three-word field dividing by nearly zero.
+    expect(scoreViolations([one], 3)).toBe(73);
+    expect(scoreViolations([one], 30)).toBe(73);
+  });
+
+  it("costs a SHORT field proportionally more, so the amber band is reachable", () => {
+    const medium: Violation = { ruleId: "x", severity: "medium", message: "", excerpt: "", index: 0 };
+    // The pre-review curve floored every field at 100 words, so this scored 96
+    // and nothing could ever reach amber (<85) or red (<65).
+    expect(scoreViolations([medium, medium], 50)).toBe(84);
+    expect(scoreViolations([medium, medium], 500)).toBe(98);
   });
 
   it("clamps at 0", () => {
@@ -472,6 +517,149 @@ describe("scoring", () => {
     const clean = "Shop routing now outranks healthy elites. That is worth about 0.05 fewer relics per run.";
     expect(lintProse(messy).score).toBeLessThan(lintProse(clean).score);
     expect(lintProse(clean).score).toBe(100);
+  });
+});
+
+// --- review round 1: the false positives, pinned ---------------------------
+
+describe("regression: undefined-coinage false positives", () => {
+  const COMMON = [
+    "end-to-end", "out-of-the-box", "up-to-date", "one-to-one", "day-to-day",
+    "state-of-the-art", "well-thought-out", "peer-to-peer", "copy-on-write",
+    "one-size-fits-all", "first-come-first-served", "side-by-side",
+    "back-and-forth", "off-the-shelf", "step-by-step", "on-the-fly",
+    "out-of-band", "time-to-live",
+  ];
+
+  it("never asks the author to define an ordinary English compound", () => {
+    for (const word of COMMON) {
+      const text = `The ${word} path is fine. Every lane is ${word} here. Still ${word}.`;
+      expect(fired(text, "undefined-coinage"), word).toBe(false);
+    }
+    expect(COMMON.length).toBe(18);
+  });
+
+  it("never flags a repeated QUOTED phrase — quoting your pair is the protocol", () => {
+    const text =
+      'You said "needs your eyes" on the gate. That "needs your eyes" note is why I stopped. ' +
+      'The "needs your eyes" lane stays open.';
+    expect(fired(text, "undefined-coinage")).toBe(false);
+    const smart = "You called it \u201cthe compression register\u201d twice. The \u201cthe compression register\u201d holds.";
+    expect(fired(smart, "undefined-coinage")).toBe(false);
+  });
+});
+
+describe("regression: all-caps-emphasis false positives", () => {
+  it("does not flag the acronyms and enum literals on the whitelist", () => {
+    const tokens = [
+      "LRU", "NAT", "CORS", "SVG", "PNG", "GIF", "JPEG", "JPG", "ETA", "SSE",
+      "TTL", "WCAG", "SQL", "SELECT", "JOIN", "GET", "POST", "PUT", "PATCH",
+      "DELETE", "HEAD", "BDA", "STE", "PMF", "RSS", "DNS", "TCP", "UDP", "SSH",
+      "TLS", "SSL", "JWT", "UUID", "SHA", "CRUD", "REPL", "AST", "ORM", "E2E",
+      "HIGH", "MEDIUM", "LOW", "WARN", "INFO", "ERROR", "DEBUG", "DRAFT",
+    ];
+    for (const t of tokens) {
+      expect(fired(`The ${t} value is set on the record.`, "all-caps-emphasis"), t).toBe(false);
+    }
+  });
+
+  it("does not flag caps on a markdown heading line", () => {
+    expect(fired("### WHAT CHANGED\n\nThe daemon rebound its port.", "all-caps-emphasis")).toBe(false);
+  });
+
+  it("does not flag a quoted value, straight or smart", () => {
+    expect(fired('The daemon logged "BIND FAILED" and retried.', "all-caps-emphasis")).toBe(false);
+    expect(fired("The daemon logged \u201cBIND FAILED\u201d and retried.", "all-caps-emphasis")).toBe(false);
+  });
+
+  it("does not flag a LONE unlisted acronym, but does flag a run of caps", () => {
+    // The whitelist can never name every acronym, so a lone unknown token amid
+    // lowercase is read as a name, not a shout.
+    expect(fired("A SPOF in the write path is the risk.", "all-caps-emphasis")).toBe(false);
+    expect(fired("The SQS consumer drains it.", "all-caps-emphasis")).toBe(false);
+    expect(fired("The MRTR spec landed.", "all-caps-emphasis")).toBe(false);
+    // An ordinary English word in capitals is shouting.
+    expect(fired("The middle gear is REAL.", "all-caps-emphasis")).toBe(true);
+    // ...and so is a RUN of capitalised words, listed or not.
+    expect(fired("The SPOF SQS lane is the risk.", "all-caps-emphasis")).toBe(true);
+  });
+
+  it("treats a hyphenated identifier as ONE token, and passes it when it carries a digit", () => {
+    const hits = lintProse("The ASD-STE100 register is the reference.").violations.filter(
+      (v) => v.ruleId === "all-caps-emphasis",
+    );
+    expect(hits).toHaveLength(0);
+    expect(fired("Every ISO-8601 stamp is UTC.", "all-caps-emphasis")).toBe(false);
+    // A digit-free hyphenated shout is still ONE violation, not two.
+    const shout = lintProse("The REALLY-BADLY written line.").violations.filter(
+      (v) => v.ruleId === "all-caps-emphasis",
+    );
+    expect(shout).toHaveLength(1);
+    expect(shout[0]!.message).toContain('"REALLY-BADLY"');
+  });
+});
+
+describe("regression: slash-pack false positives", () => {
+  it("does not flag an extension-less repo path", () => {
+    for (const s of [
+      "The rules live in packages/shared/src today.",
+      "Look under src/mcp/tools for the handler.",
+      "The bundle is claude-plugin/server here.",
+      "It sits in web/src/components/artifacts somewhere.",
+      "Check node_modules/.bin first.",
+      "The file is in my-app/src/store already.",
+    ]) {
+      expect(fired(s, "slash-pack"), s).toBe(false);
+    }
+  });
+
+  it("still flags the canonical word pack", () => {
+    expect(fired("The build/test/deploy loop is the slow part.", "slash-pack")).toBe(true);
+    expect(fired("Every file/socket handle is closed.", "slash-pack")).toBe(true);
+  });
+
+  it("does not flag a ratio written in digits or in words", () => {
+    for (const s of [
+      "About 3/4 of the corpus is narrative.",
+      "Roughly two/thirds of the cards carried a chip.",
+      "That is one/half of the budget.",
+    ]) {
+      expect(fired(s, "slash-pack"), s).toBe(false);
+    }
+  });
+});
+
+describe("regression: arrow-chain, blockquotes, vague recommendations", () => {
+  it("does not flag an arrow whose sides are both numbers", () => {
+    expect(fired("The chip count went 5 -> 4 after the fix.", "arrow-chain")).toBe(false);
+    expect(fired("Coverage moved 92% → 71% overnight.", "arrow-chain")).toBe(false);
+    // A causal arrow between words still fires.
+    expect(fired("Preflight → block → toast.", "arrow-chain")).toBe(true);
+    expect(fired("Shop routing → ~0.05 fewer relics per run.", "arrow-chain")).toBe(true);
+  });
+
+  it("masks a markdown blockquote — quoted text is not the agent's register", () => {
+    const text = "You wrote:\n\n> The build/test/deploy loop is slow; it SHOUTS at me → always.\n\nThat is fixed now.";
+    expect(lintProse(text).violations).toHaveLength(0);
+  });
+
+  it("does not call a localized recommendation vague", () => {
+    for (const s of [
+      "Improve the retry loop in the daemon supervisor.",
+      "Improve its error handling before the next release.",
+      "Improve error handling in runPreflight.",
+      "Improve error handling on line 40.",
+    ]) {
+      expect(fired(s, "vague-recommendation", "strict"), s).toBe(false);
+    }
+  });
+
+  it("still flags a bare mass-noun improvement, at LOW severity", () => {
+    const hit = lintProse("Improve error handling around the boundary.", { mode: "strict" }).violations.find(
+      (v) => v.ruleId === "vague-recommendation",
+    );
+    expect(hit).toBeDefined();
+    expect(hit!.severity).toBe("low");
   });
 });
 
@@ -574,6 +762,28 @@ describe("lintArtifactContent", () => {
     });
     expect(result.fields.map((f) => f.path)).toContain("openQuestions[0]");
     expect(result.fields[0]!.mode).toBe("strict");
+  });
+
+  it("lints a visual caption but never tells it to move its arrow into a visual", () => {
+    const result = lintArtifactContent("decision", {
+      options: [
+        {
+          id: "o1",
+          label: "Redis",
+          description: "Fine.",
+          visuals: [{ id: "v1", kind: "diagram", caption: "App → Redis, TTL on the key" }],
+        },
+      ],
+    });
+    expect(result.violations.some((v) => v.ruleId === "arrow-chain")).toBe(false);
+    expect(result.score).toBe(100);
+    // The path IS in the map, and a non-exempt rule still fires there.
+    const shouty = lintArtifactContent("explainer", {
+      overview: "Fine.",
+      sections: [],
+      visuals: [{ id: "v1", kind: "diagram", caption: "The store is REALLY the ONLY source." }],
+    });
+    expect(shouty.fields.map((f) => f.path)).toContain("visuals[0].caption");
   });
 
   it("covers every artifact type in the field map with at least one field", () => {

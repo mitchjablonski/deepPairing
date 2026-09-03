@@ -53,6 +53,32 @@ function seed(store: FileStore, content: string) {
   });
 }
 
+describe("answer_question — the STYLE echo (review round 1)", () => {
+  it("echoes house style on the agent's reply prose", async () => {
+    const store = fx.track(new FileStore(tmpDir, "s_style"));
+    seed(store, "why");
+    const res = await handleAnswerQuestion(makeCtx(store), {
+      commentId: "cmt_s",
+      answer: "Countered; the null return would silently drop the upload.",
+      suggestionState: "countered",
+    });
+    const text = String(res.content[0]?.text ?? "");
+    expect(text).toContain("STYLE (clarity");
+    expect(text).toContain("- answer: ");
+  });
+
+  it("stays silent when the reply reads cleanly", async () => {
+    const store = fx.track(new FileStore(tmpDir, "s_style_clean"));
+    seed(store, "why");
+    const res = await handleAnswerQuestion(makeCtx(store), {
+      commentId: "cmt_s",
+      answer: "Countered. A null return would silently drop the upload.",
+      suggestionState: "countered",
+    });
+    expect(String(res.content[0]?.text ?? "")).not.toContain("STYLE (clarity");
+  });
+});
+
 describe("#172 answer_question resolves suggestions", () => {
   it("applies a suggestion, stamps the version, posts the reply, and records the why", async () => {
     const store = fx.track(new FileStore(tmpDir, "s_apply"));

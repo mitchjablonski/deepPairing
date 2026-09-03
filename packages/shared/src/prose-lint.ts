@@ -112,14 +112,53 @@ export const EM_DASH_PER_PARAGRAPH = 1;
  * for anyone extending the check.
  */
 export const ALL_CAPS_WHITELIST: readonly string[] = [
-  "API", "APIS", "ABI", "AST", "ASCII", "AWS", "CDN", "CI", "CD", "CLI", "CPU",
-  "CRUD", "CSS", "CSV", "DNS", "DOM", "DTO", "E2E", "EOF", "ENV", "GCP", "GNU",
-  "GPL", "GPU", "GRPC", "HTML", "HTTP", "HTTPS", "ID", "IDE", "IO", "ISO",
-  "JS", "JSON", "JSX", "JWT", "LLM", "MCP", "MD", "MFA", "MIT", "NPM", "OAUTH",
-  "OK", "ORM", "OS", "PDF", "PII", "PNPM", "PR", "PRS", "QA", "QPS", "RAM",
-  "REST", "RFC", "RPC", "SDK", "SHA", "SLA", "SLO", "SQL", "SSL", "SSO", "TLS",
-  "TODO", "TSX", "TS", "TTL", "UI", "URI", "URL", "UTC", "UTF", "UUID", "UX",
-  "VM", "VS", "WS", "WSL", "XML", "YAML", "README", "FIXME", "NOTE", "WIP",
+  // Protocols, formats, platform words.
+  "API", "APIS", "ABI", "AST", "ASCII", "AWS", "CDN", "CI", "CD", "CLI", "CORS",
+  "CPU", "CRUD", "CSS", "CSV", "DNS", "DOM", "DTO", "DX", "E2E", "EOF", "ENV",
+  "ETA", "GCP", "GIF", "GNU", "GPL", "GPU", "GRPC", "HTML", "HTTP", "HTTPS",
+  "ID", "IDE", "IO", "ISO", "JPEG", "JPG", "JS", "JSON", "JSX", "JWT", "LLM",
+  "LRU", "MCP", "MD", "MFA", "MIT", "NAT", "NPM", "OAUTH", "OK", "ORM", "OS",
+  "PDF", "PII", "PNG", "PNPM", "PR", "PRS", "QA", "QPS", "RAM", "REPL", "REST",
+  "RFC", "RPC", "RSS", "SDK", "SHA", "SLA", "SLO", "SSE", "SSH", "SQL", "SSL",
+  "SSO", "SVG", "TCP", "TLS", "TODO", "TSX", "TS", "TTL", "UDP", "UI", "URI",
+  "URL", "UTC", "UTF", "UUID", "UX", "VM", "VS", "WCAG", "WS", "WSL", "XML",
+  "YAML", "README", "FIXME", "NOTE", "WIP",
+  // SQL verbs and HTTP methods read as symbol names, not shouting.
+  "SELECT", "JOIN", "INSERT", "UPDATE", "GET", "POST", "PUT", "PATCH", "DELETE",
+  "HEAD", "OPTIONS",
+  // Standards and house shorthand that show up in this project's own prose.
+  "BDA", "STE", "PMF", "SOTA",
+  // deepPairing's own enum literals. These are field VALUES the agent is
+  // quoting back, not emphasis: a `significance: "high"` reads as HIGH.
+  "HIGH", "MEDIUM", "LOW", "WARN", "INFO", "ERROR", "DEBUG", "TRACE",
+  "DRAFT", "APPROVED", "REJECTED", "PENDING", "REVIEWING", "SUPERSEDED",
+  "WITHDRAWN", "RETRACTED", "OBSOLETE",
+];
+
+/**
+ * Ordinary English words that get set in capitals for emphasis. A LONE
+ * all-caps token only counts as shouting when it is one of these (or sits in a
+ * run of capitalised words). Everything else that is not on the whitelist is
+ * far more likely to be an acronym nobody has listed yet — "SPOF", "SQS",
+ * "MRTR" — and scolding the author for naming a thing is the worst failure
+ * this rule can have. Exported so a project can extend it.
+ */
+export const ALL_CAPS_EMPHASIS_WORDS: readonly string[] = [
+  "ALL", "ALREADY", "ALWAYS", "AND", "ANY", "ANYTHING", "ARE", "BAD", "BEFORE",
+  "BEST", "BOTH", "BROKEN", "BUT", "CAN", "DEAD", "DELIBERATELY", "DID", "DOES",
+  "DONE", "EACH", "ENTIRELY", "EVEN", "EVER", "EVERY", "EVERYTHING", "EXACT",
+  "EXACTLY", "FALSE", "FAR", "FEW", "FIRST", "FIX", "FIXED", "FULL", "GOOD",
+  "HAD", "HAS", "HAVE", "HERE", "HOW", "HUGE", "INSTEAD", "ITS", "JUST", "KEEP",
+  "LAST", "LEAST", "LESS", "LIVE", "LONG", "LOST", "MANY", "MORE", "MOST",
+  "MUCH", "MUST", "NEED", "NEVER", "NEW", "NEXT", "NONE", "NOPE", "NOT",
+  "NOTHING", "NOW", "OFF", "OLD", "ONCE", "ONE", "ONLY", "OUT", "OVER", "OWN",
+  "RATHER", "REAL", "REALLY", "RESEARCH", "RIGHT", "SAME", "SETTLED", "SHOULD",
+  "SILENTLY", "SOME", "SOMETHING", "STILL", "STOP", "SUCH", "SURE", "TAKE",
+  "THAN", "THAT", "THEIR", "THEM", "THEN", "THERE", "THESE", "THEY", "THIS",
+  "THOSE", "THE", "TOO", "TRUE", "TWO", "UNDER", "UNTIL", "VERY", "WAS", "WERE",
+  "WHAT", "WHEN", "WHERE", "WHETHER", "WHICH", "WHILE", "WHO", "WHY", "WILL",
+  "WITH", "WITHOUT", "WORKING", "WORKS", "WORSE", "WORST", "WRONG", "YES",
+  "YET", "YOU", "YOUR",
 ];
 
 /**
@@ -131,6 +170,52 @@ export const ALL_CAPS_WHITELIST: readonly string[] = [
 export const SLASH_PACK_EXCEPTIONS: readonly string[] = [
   "tcp/ip", "and/or", "read/write", "input/output", "pass/fail", "yes/no",
   "his/her", "her/his", "she/he", "date/time", "true/false", "http/https",
+];
+
+/**
+ * First-segment words that make a slash-run a REPO PATH rather than a word
+ * pack. An extension-less path ("packages/shared/src") looks exactly like
+ * compression to a regex, so the masker uses this list to tell them apart.
+ * Kept to directory names a source tree actually uses.
+ */
+export const SOURCE_ROOT_WORDS: readonly string[] = [
+  "packages", "src", "app", "apps", "lib", "libs", "test", "tests", "docs",
+  "web", "scripts", "dist", "node_modules", "claude-plugin", "components",
+  "hooks", "store", "mcp", "http",
+];
+
+/**
+ * Number words, so a written ratio ("two/thirds") is not read as a word pack.
+ * Bare digit runs ("3/4", "12/31/2026") are handled separately.
+ */
+const NUMBER_WORDS: ReadonlySet<string> = new Set([
+  "zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
+  "nine", "ten", "eleven", "twelve", "twenty", "thirty", "forty", "fifty",
+  "hundred", "thousand", "million", "billion", "half", "halves", "third",
+  "thirds", "quarter", "quarters", "fifth", "fifths", "sixth", "sixths",
+  "eighth", "eighths", "tenth", "tenths",
+]);
+
+/**
+ * Ordinary English compounds that happen to stack three or more hyphenated
+ * parts. None of them is a coinage, so `undefined-coinage` must never ask an
+ * author to define "end-to-end". Matched case-insensitively.
+ */
+export const COMMON_HYPHEN_COMPOUNDS: readonly string[] = [
+  "end-to-end", "out-of-the-box", "up-to-date", "out-of-date", "one-to-one",
+  "many-to-many", "one-to-many", "many-to-one", "day-to-day", "state-of-the-art",
+  "well-thought-out", "peer-to-peer", "copy-on-write", "one-size-fits-all",
+  "first-come-first-served", "face-to-face", "side-by-side", "back-and-forth",
+  "hand-in-hand", "all-or-nothing", "off-the-shelf", "step-by-step",
+  "line-by-line", "word-for-word", "apples-to-apples", "point-to-point",
+  "run-of-the-mill", "on-the-fly", "out-of-band", "out-of-scope",
+  "nice-to-have", "trial-and-error", "cause-and-effect", "black-and-white",
+  "up-and-running", "plug-and-play", "drag-and-drop", "copy-and-paste",
+  "mix-and-match", "tried-and-true", "man-in-the-middle", "time-to-live",
+  "point-in-time", "right-to-left", "left-to-right", "top-to-bottom",
+  "bottom-to-top", "pay-as-you-go", "over-the-wire", "as-a-service",
+  "best-of-breed", "least-recently-used", "first-in-first-out",
+  "last-in-first-out", "so-and-so", "give-and-take", "wait-and-see",
 ];
 
 /**
@@ -242,23 +327,69 @@ export function maskNonProse(text: string): string {
 
   const masked3 = chars.join("");
 
-  // 5. File paths. A slash-run counts as a path when it is anchored (`./`,
-  //    `../`, `/`, `~/`) or when any segment carries a file extension. That
-  //    deliberately leaves bare word-packs like "build/test/deploy" visible —
-  //    those are the compression the `slash-pack` rule is here to catch. Write
-  //    an extension-less path in backticks and it is masked as code.
+  // 5. Blockquote lines. A `>` line is text the agent is QUOTING — the human's
+  //    own words, a log line, a spec excerpt. It is not the agent's register,
+  //    so linting it would scold the author for someone else's punctuation.
+  const quoteLine = /^[ \t]*>.*$/gm;
+  while ((m = quoteLine.exec(masked3)) !== null) {
+    blank(chars, m.index, m.index + m[0].length);
+  }
+
+  const masked4 = chars.join("");
+
+  // 6. File paths. A slash-run counts as a path when it is anchored (`./`,
+  //    `../`, `/`, `~/`), when any segment carries a file extension, or when
+  //    it is shaped like a repo path — see isRepoPath. That deliberately
+  //    leaves bare word-packs like "build/test/deploy" visible, which are the
+  //    compression the `slash-pack` rule is here to catch.
   const pathRe = /(?:~|\.{1,2})?\/?[\w.@+-]+(?:\/[\w.@+-]+)+\/?/g;
-  while ((m = pathRe.exec(masked3)) !== null) {
+  while ((m = pathRe.exec(masked4)) !== null) {
     // Drop sentence punctuation the greedy class swallowed ("…/prose-lint.ts."),
     // or the trailing period hides the extension and the path reads as a pack.
     const tok = m[0].replace(/[.,;:!?)\]]+$/, "");
     if (!tok.includes("/")) continue;
     const anchored = /^(?:~\/|\.{1,2}\/|\/)/.test(tok);
     const hasExtension = tok.split("/").some((seg) => /^[\w@+-][\w.@+-]*\.[A-Za-z]{1,6}$/.test(seg));
-    if (anchored || hasExtension) blank(chars, m.index, m.index + tok.length);
+    if (anchored || hasExtension || isRepoPath(tok)) blank(chars, m.index, m.index + tok.length);
   }
 
   return chars.join("");
+}
+
+/**
+ * An EXTENSION-LESS repo path, told apart from a word pack. Two shapes count:
+ * a run whose first segment is a source-root directory name
+ * ("packages/shared/src"), and a deep run of four or more segments, which no
+ * one writes as prose compression.
+ *
+ * Three-segment runs are deliberately NOT masked on depth alone. That is
+ * exactly the shape of the canonical pack — "build/test/deploy" — and losing
+ * it would gut the rule. Write an extension-less three-segment path in
+ * backticks and it masks as code.
+ */
+const REPO_PATH_MIN_DEEP_SEGMENTS = 4;
+
+/**
+ * The subset of SOURCE_ROOT_WORDS that is safe to match ANYWHERE in a run, not
+ * just at the front. "test", "store", "app" and friends are left out because
+ * they are also ordinary English words, and a middle segment is exactly where
+ * a word pack puts one — "build/test/deploy" is the canonical pack and it must
+ * keep firing.
+ */
+const INNER_ROOT_WORDS: ReadonlySet<string> = new Set([
+  "packages", "src", "lib", "libs", "node_modules", "claude-plugin",
+  "components", "dist", "scripts", "mcp",
+]);
+
+function isRepoPath(token: string): boolean {
+  const segments = token.replace(/\/+$/, "").split("/");
+  if (segments.length < 2) return false;
+  const roots = new Set(SOURCE_ROOT_WORDS);
+  if (roots.has((segments[0] ?? "").toLowerCase())) return true;
+  if (segments.length >= REPO_PATH_MIN_DEEP_SEGMENTS) return true;
+  // A three-segment run still reads as a path when one of its inner segments
+  // is an unmistakable source directory ("my-app/src/store").
+  return segments.length >= 3 && segments.some((s) => INNER_ROOT_WORDS.has(s.toLowerCase()));
 }
 
 /** Lines that are structure, not prose: headings, list bullets, blockquotes and
@@ -379,7 +510,7 @@ const sentenceLength: ProseRule = {
       .map((s) =>
         v(
           sentenceLength,
-          `${s.words}-word sentence (limit ${limit}) — split it; one idea per sentence.`,
+          `${s.words}-word sentence (limit ${limit}) — split it. One idea per sentence.`,
           ctx,
           s.index,
           s.text.length,
@@ -464,6 +595,66 @@ const semicolon: ProseRule = {
   },
 };
 
+/** Start of the line containing `index`. */
+function lineStartAt(text: string, index: number): number {
+  const at = text.lastIndexOf("\n", Math.max(0, index - 1));
+  return at === -1 ? 0 : at + 1;
+}
+
+/** End of the line containing `index` (exclusive). */
+function lineEndAt(text: string, index: number): number {
+  const at = text.indexOf("\n", index);
+  return at === -1 ? text.length : at;
+}
+
+/** True when `index` sits inside a double-quoted run on its own line, straight
+ *  or smart. A quoted ALL-CAPS token is a value being reported, not a shout. */
+function insideQuotes(text: string, index: number): boolean {
+  const line = text.slice(lineStartAt(text, index), lineEndAt(text, index));
+  const at = index - lineStartAt(text, index);
+  let openStraight = false;
+  let openSmart = false;
+  for (let i = 0; i < at; i++) {
+    const c = line[i];
+    if (c === '"') openStraight = !openStraight;
+    else if (c === "“") openSmart = true;
+    else if (c === "”") openSmart = false;
+  }
+  if (!openStraight && !openSmart) return false;
+  // Only count it as quoted when the run actually CLOSES after the token.
+  const rest = line.slice(at);
+  return openStraight ? rest.includes('"') : rest.includes("”");
+}
+
+/** True when `index` sits on a markdown heading line. A heading is a label,
+ *  and labels in caps are a formatting choice, not shouting mid-paragraph. */
+function onHeadingLine(text: string, index: number): boolean {
+  const line = text.slice(lineStartAt(text, index), lineEndAt(text, index));
+  return /^[ \t]*#{1,6}\s/.test(line);
+}
+
+/**
+ * Grow a bare ALL-CAPS match out to the whole hyphen- or slash-joined token it
+ * belongs to, so "ASD-STE100" and "CI/CD" are ONE token rather than two
+ * separate shouts. Returns the token's absolute [start, end).
+ */
+function wholeCapsToken(text: string, start: number, end: number): { start: number; end: number } {
+  let s = start;
+  let e = end;
+  while (s >= 2 && /[-/]/.test(text[s - 1] ?? "") && /[A-Za-z0-9]/.test(text[s - 2] ?? "")) {
+    const prev = /[A-Za-z0-9]+$/.exec(text.slice(0, s - 1));
+    if (!prev) break;
+    s = s - 1 - prev[0].length;
+  }
+  for (;;) {
+    if (!/[-/]/.test(text[e] ?? "")) break;
+    const next = /^[A-Za-z0-9]+/.exec(text.slice(e + 1));
+    if (!next) break;
+    e = e + 1 + next[0].length;
+  }
+  return { start: s, end: e };
+}
+
 const allCapsEmphasis: ProseRule = {
   id: "all-caps-emphasis",
   tier: 1,
@@ -471,11 +662,14 @@ const allCapsEmphasis: ProseRule = {
   modes: ["strict", "flavored"],
   check: (text, ctx) => {
     const whitelist = new Set(ALL_CAPS_WHITELIST.map((w) => w.toUpperCase()));
-    const out: Violation[] = [];
+    const emphasis = new Set(ALL_CAPS_EMPHASIS_WORDS.map((w) => w.toUpperCase()));
+    const candidates: Array<{ start: number; end: number; full: string; parts: string[] }> = [];
     const re = /\b([A-Z][A-Z0-9]{2,})(s?)\b/g;
+    let reportedTo = -1;
     let m: RegExpExecArray | null;
     while ((m = re.exec(text)) !== null) {
       const word = m[1] ?? "";
+      if (m.index < reportedTo) continue; // already covered by a wider token
       if ((word.match(/[A-Z]/g) ?? []).length < 3) continue;
       if (whitelist.has(word)) continue;
       // A pluralized acronym: "SDKS" / "SDKs" is still the whitelisted "SDK".
@@ -483,16 +677,49 @@ const allCapsEmphasis: ProseRule = {
       if (m[2] === "s" && whitelist.has(word)) continue;
       // Immediately followed by "(" reads as a symbol reference, not shouting.
       if (text[m.index + m[0].length] === "(") continue;
+      if (onHeadingLine(text, m.index)) continue;
+      if (insideQuotes(text, m.index)) continue;
+
+      const token = wholeCapsToken(text, m.index, m.index + m[0].length);
+      const full = text.slice(token.start, token.end);
+      reportedTo = token.end;
+      // A hyphenated or slashed identifier carrying a digit is a standard name
+      // ("ASD-STE100", "ISO-8601"), never emphasis.
+      if (full !== word && /\d/.test(full)) continue;
+      // Every ALL-CAPS part whitelisted means the whole token is fine ("CI/CD").
+      const parts = full.split(/[-/]/).filter((p) => /^[A-Z][A-Z0-9]{2,}$/.test(p));
+      if (parts.length > 0 && parts.every((p) => whitelist.has(p))) continue;
+      candidates.push({ start: token.start, end: token.end, full, parts: parts.length ? parts : [full] });
+    }
+
+    // THE SHOUT TEST. A whitelist can never name every acronym in the world,
+    // and the corpus showed which way the misses fall: a lone unknown token
+    // amid lowercase ("a SPOF in the write path", "the SQS consumer") is a
+    // NAME, while shouting is either an ordinary English word set in capitals
+    // or a RUN of capitalised words. So a candidate has to be one of those two
+    // to count. That kills the acronym false positives wholesale instead of
+    // one list entry at a time.
+    const out: Violation[] = [];
+    candidates.forEach((c, i) => {
+      const isWord = c.parts.some((p) => emphasis.has(p));
+      const prev = candidates[i - 1];
+      const next = candidates[i + 1];
+      const runsWith = (other?: { start: number; end: number }) => {
+        if (!other) return false;
+        const gap = other.start > c.end ? text.slice(c.end, other.start) : text.slice(other.end, c.start);
+        return gap.length <= 3 && /^[\s,:–—-]*$/.test(gap);
+      };
+      if (!isWord && !runsWith(prev) && !runsWith(next)) return;
       out.push(
         v(
           allCapsEmphasis,
-          `"${word}" shouts — use bold for emphasis, not capitals.`,
+          `"${c.full}" shouts — use bold for emphasis, not capitals.`,
           ctx,
-          m.index,
-          Math.max(m[0].length, 48),
+          c.start,
+          Math.max(c.full.length, 48),
         ),
       );
-    }
+    });
     return out;
   },
 };
@@ -510,8 +737,10 @@ const slashPack: ProseRule = {
     while ((m = re.exec(text)) !== null) {
       const tok = m[0];
       if (exceptions.has(tok.toLowerCase())) continue;
-      // Digit-only segments are dates/versions, not word packs.
-      if (tok.split("/").every((seg) => /^\d+$/.test(seg))) continue;
+      // Digit-only segments are dates/versions, not word packs. Number WORDS
+      // are the same thing spelled out — "two/thirds" is a ratio.
+      const segs = tok.split("/");
+      if (segs.every((seg) => /^\d+$/.test(seg) || NUMBER_WORDS.has(seg.toLowerCase()))) continue;
       out.push(
         v(
           slashPack,
@@ -536,6 +765,11 @@ const arrowChain: ProseRule = {
     const re = /(?:→|⇒|->)/g;
     let m: RegExpExecArray | null;
     while ((m = re.exec(text)) !== null) {
+      // A numeric arrow is a measurement ("5 -> 4", "92% → 71%"), not a
+      // causal chain the author should have written out.
+      const before = /([\d.,%]+)\s*$/.exec(text.slice(0, m.index));
+      const after = /^\s*(~?[\d.,%]+)/.exec(text.slice(m.index + m[0].length));
+      if (before && after && /\d/.test(before[1] ?? "") && /\d/.test(after[1] ?? "")) continue;
       out.push(
         v(
           arrowChain,
@@ -550,6 +784,29 @@ const arrowChain: ProseRule = {
   },
 };
 
+/**
+ * Em-dashes a paragraph actually spends, counted as UNITS rather than glyphs.
+ *
+ * A PAIRED em-dash inside one sentence — like this one — is a single
+ * parenthetical gesture written with two marks. Charging it twice made the
+ * most careful use of the punctuation the most expensive, which is backwards.
+ * So an even run of two or more inside one sentence costs half its glyphs, and
+ * an odd run (a genuine trailing dash, or three marks in a row) costs all of
+ * them. The returned offsets are absolute, one per unit spent.
+ */
+function emDashUnits(paragraph: ProseParagraph): number[] {
+  const units: number[] = [];
+  for (const s of paragraph.sentences) {
+    const hits = [...s.text.matchAll(/—/g)].map((h) => s.index + (h.index ?? 0));
+    if (hits.length >= 2 && hits.length % 2 === 0) {
+      for (let i = 0; i < hits.length; i += 2) units.push(hits[i] as number);
+    } else {
+      units.push(...hits);
+    }
+  }
+  return units.sort((a, b) => a - b);
+}
+
 const emDashBudget: ProseRule = {
   id: "em-dash-budget",
   tier: 1,
@@ -558,14 +815,14 @@ const emDashBudget: ProseRule = {
   check: (_text, ctx) => {
     const out: Violation[] = [];
     for (const p of ctx.paragraphs) {
-      const hits = [...p.text.matchAll(/—/g)];
-      if (hits.length <= EM_DASH_PER_PARAGRAPH) continue;
+      const units = emDashUnits(p);
+      if (units.length <= EM_DASH_PER_PARAGRAPH) continue;
       out.push(
         v(
           emDashBudget,
-          `${hits.length} em-dashes in one paragraph (budget ${EM_DASH_PER_PARAGRAPH}) — the rest should be full stops.`,
+          `${units.length} em-dashes in one paragraph (budget ${EM_DASH_PER_PARAGRAPH}) — the rest should be full stops.`,
           ctx,
-          p.index + (hits[EM_DASH_PER_PARAGRAPH]?.index ?? 0),
+          units[EM_DASH_PER_PARAGRAPH] ?? p.index,
           60,
         ),
       );
@@ -578,36 +835,62 @@ const emDashBudget: ProseRule = {
 const COINAGE_MIN_CHARS = 8;
 /** How far past the first mention we look for a definition. */
 const COINAGE_DEFINITION_WINDOW = 220;
+/** A lowercase hyphen-stack has to be leaned on this hard before it reads as a
+ *  private label rather than an ordinary descriptive compound. */
+const COINAGE_PLAIN_MIN_USES = 3;
+
+/**
+ * Does the token carry a segment that marks it as a NAME rather than a
+ * description? Three shapes count: an internal capital ("deepPairing-aware"),
+ * a fully capitalised part ("MOAT-safe-lane"), and a capitalised part that is
+ * not the first ("alive-Surface-law"). A capital on the FIRST part alone is
+ * ignored, because that is just how a sentence starts.
+ */
+function hasProperSegment(token: string): boolean {
+  const parts = token.split("-");
+  return parts.some((part, i) => {
+    if (/[A-Z]/.test(part.slice(1))) return true; // deepPairing, MOAT
+    return i > 0 && /^[A-Z]/.test(part);
+  });
+}
 
 const undefinedCoinage: ProseRule = {
   id: "undefined-coinage",
   tier: 1,
-  severity: "high",
+  // Medium, not high. The rule reads INTENT off surface shape, which is the
+  // shakiest inference in the file, so a residual false positive must never
+  // own the first line of the agent's STYLE block.
+  severity: "medium",
   modes: ["strict", "flavored"],
   check: (text, ctx) => {
-    // `first`/`firstEnd` bracket the FIRST mention including any quote marks,
-    // so the definition probe starts exactly after it.
+    const common = new Set(COMMON_HYPHEN_COMPOUNDS.map((w) => w.toLowerCase()));
+    // `first`/`firstEnd` bracket the FIRST mention, so the definition probe
+    // starts exactly after it.
     const candidates: Record<string, { label: string; first: number; firstEnd: number; count: number }> = {};
-    const note = (label: string, at: number, end: number) => {
+
+    // Hyphen-stacked coinage: three or more hyphenated parts. This is the ONLY
+    // arm. A repeated QUOTED phrase used to count too, which flagged the agent
+    // for quoting its pair back to them — the one register the pairing
+    // protocol explicitly asks for.
+    const stacked = /\b[A-Za-z]{2,}(?:-[A-Za-z]{2,}){2,}\b/g;
+    let m: RegExpExecArray | null;
+    while ((m = stacked.exec(text)) !== null) {
+      const label = m[0];
+      if (common.has(label.toLowerCase())) continue;
       const key = label.toLowerCase();
       const existing = candidates[key];
       if (existing) existing.count += 1;
-      else candidates[key] = { label, first: at, firstEnd: end, count: 1 };
-    };
-
-    // Hyphen-stacked coinage: three or more hyphenated parts.
-    const stacked = /\b[A-Za-z]{2,}(?:-[A-Za-z]{2,}){2,}\b/g;
-    let m: RegExpExecArray | null;
-    while ((m = stacked.exec(text)) !== null) note(m[0], m.index, m.index + m[0].length);
-
-    // Quoted term: "the alive-surface law", “compression register”.
-    const quoted = /["“]([^"”\n]{3,40})["”]/g;
-    while ((m = quoted.exec(text)) !== null) note((m[1] ?? "").trim(), m.index, m.index + m[0].length);
+      else candidates[key] = { label, first: m.index, firstEnd: m.index + label.length, count: 1 };
+    }
 
     const out: Violation[] = [];
     for (const c of Object.values(candidates)) {
-      if (c.count < 2) continue;
       if (c.label.length < COINAGE_MIN_CHARS) continue;
+      // Two uses of a plain lowercase compound is just ordinary description
+      // ("a read-through cache"). Ask for a definition only when the token
+      // reads as a NAME, or when the author leans on it a third time.
+      const minUses = hasProperSegment(c.label) ? 2 : COINAGE_PLAIN_MIN_USES;
+      if (c.count < minUses) continue;
       const tail = text.slice(c.firstEnd, c.firstEnd + COINAGE_DEFINITION_WINDOW);
       // A definition looks like "X is ...", "X = ...", "X — ..." or "X (gloss)".
       const defined =
@@ -696,17 +979,29 @@ const trailingCondition: ProseRule = {
 const vagueRecommendation: ProseRule = {
   id: "vague-recommendation",
   tier: 2,
-  severity: "medium",
+  // Low. "Vague" is a judgement about meaning made from surface shape alone,
+  // so this rule is the most likely in the file to be wrong about a sentence
+  // that is fine. Low severity keeps a miss cheap.
+  severity: "low",
   modes: ["strict"],
   check: (_text, ctx) => {
     const out: Violation[] = [];
     for (const s of ctx.sentences) {
-      const m = /\b(consider improving|improve|enhance|better)\s+(?:the\s+|a\s+|its\s+)?([a-z]{3,})\b/i.exec(s.text);
+      // A DEFINITE article points at a specific thing the reader can go find
+      // ("improve THE retry loop"). The vague shape is the bare mass noun:
+      // "improve error handling", "improve performance".
+      const m =
+        /\b(consider improving|improve|enhance|better)\s+(?!the\b|a\b|an\b|its\b|this\b|that\b|our\b|your\b|their\b)([a-z]{3,})\b/i.exec(
+          s.text,
+        );
       if (!m) continue;
       // If the sentence names something concrete in the ORIGINAL text — a
-      // backticked symbol, a path, an extension — it is not vague.
+      // backticked symbol, a path, an extension, a number, or a capitalised
+      // identifier past the first word — it is not vague.
       const source = ctx.original.slice(s.index, s.index + s.text.length + 2);
-      if (/`|\.[a-z]{1,5}\b|\//.test(source)) continue;
+      if (/`|\.[a-z]{1,5}\b|\/|\d/.test(source)) continue;
+      const laterWords = source.trim().split(/\s+/).slice(1);
+      if (laterWords.some((w) => /^[A-Z]/.test(w) || /[a-z][A-Z]/.test(w))) continue;
       out.push(
         v(
           vagueRecommendation,
@@ -781,13 +1076,20 @@ export const PROSE_RULES: readonly ProseRule[] = [
  *   normalized = raw × 100 / max(wordCount, MIN_SCORING_WORDS)
  *   score      = clamp(round(100 − normalized), 0, 100)
  *
- * The MIN_SCORING_WORDS floor stops a one-line field from scoring 0 on a
- * single violation (and stops a two-word field from dividing by nearly zero).
- * With the floor, one high-severity violation in a short field costs 8 points,
- * and ten of them in a 1,000-word field cost the same 8 — the score reads as
- * "density of trouble", which is what the corpus measured.
+ * The MIN_SCORING_WORDS floor only stops a two-word field from dividing by
+ * nearly zero. It used to sit at 100, which quietly flattened the whole curve:
+ * almost every artifact field is shorter than 100 words, so almost every field
+ * was divided by 100 no matter how short it was, and two real problems in a
+ * 50-word summary scored 92. Nothing could reach the amber band, let alone the
+ * red one, and the chip became a number that only ever said "fine".
+ *
+ * At 30 the arithmetic is honest again. A 50-word field with two medium
+ * violations now scores 84 (8 × 100 / 50), which is where a reader would put
+ * it. A 500-word field with the same two scores 98, because two slips across
+ * five hundred words genuinely is fine. The score still reads as density of
+ * trouble — it just measures the density the author actually wrote.
  */
-export const MIN_SCORING_WORDS = 100;
+export const MIN_SCORING_WORDS = 30;
 
 export function scoreViolations(violations: Violation[], wordCount: number): number {
   const raw = violations.reduce((sum, x) => sum + SEVERITY_WEIGHT[x.severity], 0);
@@ -802,6 +1104,13 @@ export function scoreViolations(violations: Violation[], wordCount: number): num
  * Lint one prose field. Pure and deterministic: the same text and mode always
  * produce the same violations in the same order.
  */
+/** The word count `lintProse` scores against: prose only, after masking. */
+function proseWordCount(text: string): number {
+  return splitProse(maskNonProse(text))
+    .flatMap((p) => p.sentences)
+    .reduce((n, s) => n + s.words, 0);
+}
+
 export function lintProse(text: string, options: LintOptions = {}): LintResult {
   const mode: ProseMode = options.mode ?? "flavored";
   if (typeof text !== "string" || text.trim().length === 0) {
@@ -840,7 +1149,17 @@ export function lintProse(text: string, options: LintOptions = {}): LintResult {
 export interface ProseFieldSpec {
   path: string;
   mode: ProseMode;
+  /**
+   * Rule ids this field is exempt from. One field needs it today: a diagram's
+   * own `caption`, where `arrow-chain` would tell the author that "arrows
+   * belong in visuals[] diagrams" about a line that IS the label on a
+   * visuals[] diagram.
+   */
+  exclude?: readonly string[];
 }
+
+/** A caption labels a diagram, so an arrow in it is the diagram talking. */
+const CAPTION_EXEMPT: readonly string[] = ["arrow-chain"];
 
 export const PROSE_FIELD_MAP: Readonly<Record<string, readonly ProseFieldSpec[]>> = {
   research: [
@@ -850,6 +1169,7 @@ export const PROSE_FIELD_MAP: Readonly<Record<string, readonly ProseFieldSpec[]>
     { path: "findings[].recommendation", mode: "strict" },
     { path: "findings[].concept.oneLineExplanation", mode: "flavored" },
     { path: "openQuestions[]", mode: "strict" },
+    { path: "visuals[].caption", mode: "flavored", exclude: CAPTION_EXEMPT },
   ],
   plan: [
     { path: "steps[].description", mode: "strict" },
@@ -857,6 +1177,7 @@ export const PROSE_FIELD_MAP: Readonly<Record<string, readonly ProseFieldSpec[]>
     { path: "steps[].statusNote", mode: "flavored" },
     { path: "steps[].branches[].description", mode: "strict" },
     { path: "steps[].branches[].reasoning", mode: "flavored" },
+    { path: "visuals[].caption", mode: "flavored", exclude: CAPTION_EXEMPT },
   ],
   spec: [
     { path: "objective", mode: "flavored" },
@@ -867,6 +1188,7 @@ export const PROSE_FIELD_MAP: Readonly<Record<string, readonly ProseFieldSpec[]>
     { path: "requirements[].acceptanceCriteria[]", mode: "strict" },
     { path: "tasks[].description", mode: "strict" },
     { path: "openQuestions[]", mode: "strict" },
+    { path: "visuals[].caption", mode: "flavored", exclude: CAPTION_EXEMPT },
   ],
   decision: [
     { path: "context", mode: "flavored" },
@@ -874,11 +1196,13 @@ export const PROSE_FIELD_MAP: Readonly<Record<string, readonly ProseFieldSpec[]>
     { path: "options[].pros[]", mode: "strict" },
     { path: "options[].cons[]", mode: "strict" },
     { path: "options[].concept.oneLineExplanation", mode: "flavored" },
+    { path: "options[].visuals[].caption", mode: "flavored", exclude: CAPTION_EXEMPT },
   ],
   code_change: [{ path: "reasoning", mode: "flavored" }],
   changeset: [
     { path: "summary", mode: "flavored" },
     { path: "risks[]", mode: "flavored" },
+    { path: "visuals[].caption", mode: "flavored", exclude: CAPTION_EXEMPT },
   ],
   reasoning: [
     { path: "action", mode: "flavored" },
@@ -898,11 +1222,13 @@ export const PROSE_FIELD_MAP: Readonly<Record<string, readonly ProseFieldSpec[]>
     { path: "deferred[].what", mode: "flavored" },
     { path: "deferred[].why", mode: "flavored" },
     { path: "openQuestions[]", mode: "strict" },
+    { path: "visuals[].caption", mode: "flavored", exclude: CAPTION_EXEMPT },
   ],
   explainer: [
     { path: "overview", mode: "flavored" },
     { path: "sections[].body", mode: "flavored" },
     { path: "unknowns[]", mode: "flavored" },
+    { path: "visuals[].caption", mode: "flavored", exclude: CAPTION_EXEMPT },
   ],
 };
 
@@ -967,9 +1293,18 @@ export function lintArtifactContent(type: string, content: unknown): ArtifactPro
   }
   const fields: ProseFieldResult[] = [];
   for (const spec of specs) {
+    const exempt = new Set(spec.exclude ?? []);
     for (const hit of resolvePath(content, spec.path.split("."), "")) {
-      const { violations, score } = lintProse(hit.text, { mode: spec.mode });
+      const lint = lintProse(hit.text, { mode: spec.mode });
+      const violations = exempt.size === 0
+        ? lint.violations
+        : lint.violations.filter((x) => !exempt.has(x.ruleId));
       if (violations.length === 0) continue;
+      // Re-score without the exempt rules, so an exemption actually costs
+      // nothing rather than being hidden from the list but charged anyway.
+      const score = violations.length === lint.violations.length
+        ? lint.score
+        : scoreViolations(violations, proseWordCount(hit.text));
       fields.push({ path: hit.path, mode: spec.mode, violations, score });
     }
   }

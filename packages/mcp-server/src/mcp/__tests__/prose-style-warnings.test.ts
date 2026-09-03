@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatStyleWarnings } from "../tool-helpers.js";
+import { formatStyleWarnings, formatProseStyleWarnings } from "../tool-helpers.js";
 
 /**
  * "Write to your pair" — the STYLE echo appended to a present_* result.
@@ -29,7 +29,7 @@ describe("formatStyleWarnings", () => {
 
   it("names the clarity score and the field, and says it changed nothing", () => {
     const out = formatStyleWarnings("research", { summary: MESSY, findings: [] });
-    expect(out).toMatch(/^\n\nSTYLE \(clarity \d{1,3}\/100\) — house prose, warn only; nothing was changed\./);
+    expect(out).toMatch(/^\n\nSTYLE \(clarity \d{1,3}\/100\) — house prose, warn only\. Nothing was changed\./);
     expect(out).toContain("- summary: ");
   });
 
@@ -43,7 +43,33 @@ describe("formatStyleWarnings", () => {
     // One header + at most four violation lines.
     expect(lines.length).toBeLessThanOrEqual(5);
     expect(lines.filter((l) => l.startsWith("- "))).toHaveLength(4);
-    expect(lines[0]).toMatch(/\d+ more in the UI\./);
+    // "(+N more)", not "N more in the UI" — the clarity chip is hidden on a
+    // good-enough score, so the block must not promise a control on screen.
+    expect(lines[0]).toMatch(/\(\+\d+ more\)$/);
+    expect(lines[0]).not.toContain("in the UI");
+  });
+
+  it("spends its four lines on four DISTINCT rules, not four of the same one", () => {
+    // Five semicolons and one arrow. Pre-review the semicolons took every slot
+    // and the agent paid four lines for one lesson.
+    const out = formatStyleWarnings("research", {
+      summary:
+        "One; two; three; four; five. The daemon → the UI. WHAT THE RESEARCH SETTLED here.",
+      findings: [],
+    });
+    const rules = out
+      .trim()
+      .split("\n")
+      .filter((l) => l.startsWith("- "));
+    expect(rules.length).toBeGreaterThan(1);
+    expect(rules.filter((l) => l.includes("Semicolon"))).toHaveLength(1);
+  });
+
+  it("echoes style for a bare prose string too (answer_question's reply)", () => {
+    expect(formatProseStyleWarnings("answer", "The store binds one port.")).toBe("");
+    const out = formatProseStyleWarnings("answer", MESSY);
+    expect(out).toContain("- answer: ");
+    expect(out).toMatch(/^\n\nSTYLE \(clarity \d{1,3}\/100\)/);
   });
 
   it("ranks the worst severity first", () => {

@@ -1,6 +1,7 @@
 import { nanoid } from "nanoid";
 import type { ToolContext, ToolResult } from "./types.js";
 import { validateSuggestionTransition, type SuggestionUpdate } from "../../store/store-interface.js";
+import { formatProseStyleWarnings } from "../tool-helpers.js";
 
 /**
  * B3 — answer_question, extracted verbatim from the server.ts switch.
@@ -120,7 +121,7 @@ export async function handleAnswerQuestion(ctx: ToolContext, args: any): Promise
         // N2 (#226 scope 6) — exclude the comment we just answered from the
         // passive drain so the reply doesn't echo the human's own question
         // back as "[Human feedback]".
-        content: [{ type: "text", text: `${verb} on ${commentId}. The human will see your reply on the suggestion card.${await ctx.helpers.getPassiveFeedback([commentId])}` }],
+        content: [{ type: "text", text: `${verb} on ${commentId}. The human will see your reply on the suggestion card.${formatProseStyleWarnings("answer", answer)}${await ctx.helpers.getPassiveFeedback([commentId])}` }],
       };
     }
     // else: not owing a response + no state → a legitimate plain reply (e.g. to
@@ -196,6 +197,6 @@ export async function handleAnswerQuestion(ctx: ToolContext, args: any): Promise
     // N2 (#226 scope 6) — exclude the just-answered comment from the passive
     // drain: pre-N2 this spliced the human's question back into the reply as
     // "[Human feedback]: - <the question>", echoing the very thing we answered.
-    content: [{ type: "text", text: `Answered ${commentId}. The human will see the reply under their question.${await ctx.helpers.getPassiveFeedback([commentId])}` }],
+    content: [{ type: "text", text: `Answered ${commentId}. The human will see the reply under their question.${formatProseStyleWarnings("answer", answer)}${await ctx.helpers.getPassiveFeedback([commentId])}` }],
   };
 }

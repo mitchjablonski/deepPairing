@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { lintArtifactContent } from "@deeppairing/shared/prose-lint";
 import { ClarityChip } from "../ClarityChip";
 
 /**
@@ -47,6 +48,36 @@ describe("ClarityChip", () => {
     );
     expect(container).toBeEmptyDOMElement();
     expect(screen.queryByTestId("clarity-chip")).toBeNull();
+  });
+
+  it("renders nothing when the score is good enough, even with a violation", () => {
+    // THE VISIBILITY GATE. One low-severity slip across a long, otherwise
+    // clean field is not worth a badge — pre-review this put a permanent
+    // "clarity 99" chip on two thirds of hand-polished artifacts.
+    const long =
+      "The daemon binds one port per project. " +
+      "The port comes from a hash of the project path. " +
+      "The companion reads it back out of the daemon file. " +
+      "A late reader still sees the record the agent wrote. " +
+      "We utilize the store for that. " +
+      "Nothing here is cached in the browser. " +
+      "The web app asks the server on every load. " +
+      "That keeps the two numbers honest. " +
+      "The store writes before it broadcasts. " +
+      "A reload therefore shows the same thing. " +
+      "None of this changed in this release. " +
+      "The rest of the flow is unchanged as well. " +
+      "The review surface stays where it was. " +
+      "Comments still land on the artifact they name. " +
+      "The agent reads them on the next poll. " +
+      "Nothing else about the loop moved at all.";
+    const result = lintArtifactContent("research", { summary: long, findings: [] });
+    expect(result.violations.length).toBeGreaterThan(0);
+    expect(result.score).toBeGreaterThanOrEqual(96);
+    const { container } = render(
+      <ClarityChip artifact={mkArtifact("research", { summary: long, findings: [] })} />,
+    );
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("renders nothing for an artifact type with no prose fields mapped", () => {
