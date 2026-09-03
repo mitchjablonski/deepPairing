@@ -17,12 +17,14 @@ import { useDismissOnOutside } from "../hooks/useDismissOnOutside";
  * agent's number and the human's number therefore come from one implementation
  * and can never disagree.
  *
- * It renders nothing at all when the prose is clean, so a well-written artifact
- * carries no chrome. Clicking it expands the violations grouped by field.
+ * It renders nothing at all until the score drops below SHOW_AT, so a
+ * well-written artifact carries no chrome. Clicking it expands the violations
+ * grouped by field.
  *
- * LAZY BY DESIGN — mount this through React.lazy. The import above pulls the
- * shared package's runtime index, which drags Zod in with it, and ArtifactPanel
- * is the entry chunk (see the lazy renderer block there).
+ * LAZY BY DESIGN — mount this through React.lazy. ArtifactPanel is the entry
+ * chunk (see the lazy renderer block there), and the linter is 12KB of rules
+ * that most page loads never need. Together with the subpath import above,
+ * that keeps the whole thing out of the eager bundle.
  */
 
 /**
