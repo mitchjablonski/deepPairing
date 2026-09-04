@@ -86,14 +86,16 @@ function acquireLock(statePath: string): string | null {
     try {
       fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
       return lock;
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") return null;
+      if (Date.now() >= deadline) return null;
       try {
         if (Date.now() - fs.statSync(lock).mtimeMs > 5000) {
           fs.unlinkSync(lock);
           continue;
         }
-      } catch {
-        continue;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
       }
       if (Date.now() >= deadline) return null;
       try {
