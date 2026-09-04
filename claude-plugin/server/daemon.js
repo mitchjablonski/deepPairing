@@ -22496,7 +22496,7 @@ try {
   }
   exit(0, "pass: no blocking drafts");
 } catch (err) {
-  exit(0, "error: " + (errorMessage(err)));
+  exit(0, "error: " + (err instanceof Error ? err.message : String(err)));
 }
 `;
 var STOP_SCRIPT_REL_PATH = ".deeppairing/hooks/stop.mjs";
@@ -22723,7 +22723,7 @@ process.stdin.on("end", () => {
     exit(0, "pass: fresh checkpoint covers " + filePath);
   } catch (err) {
     // Never block the agent on a hook bug. Exit 0 on any unexpected error.
-    exit(0, "error: " + (errorMessage(err)));
+    exit(0, "error: " + (err instanceof Error ? err.message : String(err)));
   }
 });
 `;
