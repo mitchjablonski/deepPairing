@@ -4219,8 +4219,8 @@ var init_az = __esm({
 });
 
 // ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/be.js
-function getBelarusianPlural(count, one, few, many) {
-  const absCount = Math.abs(count);
+function getBelarusianPlural(count2, one, few, many) {
+  const absCount = Math.abs(count2);
   const lastDigit = absCount % 10;
   const lastTwoDigits = absCount % 100;
   if (lastTwoDigits >= 11 && lastTwoDigits <= 19) {
@@ -6400,8 +6400,8 @@ var init_hu = __esm({
 });
 
 // ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/hy.js
-function getArmenianPlural(count, one, many) {
-  return Math.abs(count) === 1 ? one : many;
+function getArmenianPlural(count2, one, many) {
+  return Math.abs(count2) === 1 ? one : many;
 }
 function withDefiniteArticle(word) {
   if (!word)
@@ -8642,8 +8642,8 @@ var init_ro = __esm({
 });
 
 // ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ru.js
-function getRussianPlural(count, one, few, many) {
-  const absCount = Math.abs(count);
+function getRussianPlural(count2, one, few, many) {
+  const absCount = Math.abs(count2);
   const lastDigit = absCount % 10;
   const lastTwoDigits = absCount % 100;
   if (lastTwoDigits >= 11 && lastTwoDigits <= 19) {
@@ -17231,6 +17231,38 @@ var init_prose_lint = __esm({
   }
 });
 
+// ../shared/dist/schemas/ledger-digest.js
+var count, LedgerDigestSchema;
+var init_ledger_digest = __esm({
+  "../shared/dist/schemas/ledger-digest.js"() {
+    "use strict";
+    init_zod();
+    count = external_exports.number().finite().nonnegative();
+    LedgerDigestSchema = external_exports.object({
+      shapedThisProject: count,
+      nearMissesThisProject: count,
+      blockedThisProject: count,
+      sessionsTouched: count,
+      topCitedStances: external_exports.array(external_exports.object({
+        concept: external_exports.string(),
+        source: external_exports.enum(["session", "team"]),
+        citationCount: count,
+        globalCitationCount: count.optional(),
+        sampleArtifactId: external_exports.string().optional(),
+        sampleSessionId: external_exports.string().optional()
+      })),
+      seededStances: external_exports.array(external_exports.object({
+        concept: external_exports.string(),
+        stance: external_exports.enum(["avoid", "prefer", "mixed"]),
+        citedTimesElsewhere: count,
+        sampleArtifactId: external_exports.string().optional(),
+        sampleSessionId: external_exports.string().optional()
+      })).optional(),
+      globalLedger: external_exports.object({ concepts: count, projects: count, multiProjectConcepts: count })
+    });
+  }
+});
+
 // ../shared/dist/index.js
 var init_dist = __esm({
   "../shared/dist/index.js"() {
@@ -17256,6 +17288,7 @@ var init_dist = __esm({
     init_request();
     init_errors3();
     init_prose_lint();
+    init_ledger_digest();
   }
 });
 
@@ -19553,7 +19586,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net2 = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes2, createHash } = __require("crypto");
+    var { randomBytes: randomBytes3, createHash } = __require("crypto");
     var { Duplex, Readable: Readable2 } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -20091,7 +20124,7 @@ var require_websocket = __commonJS({
         }
       }
       const defaultPort = isSecure ? 443 : 80;
-      const key = randomBytes2(16).toString("base64");
+      const key = randomBytes3(16).toString("base64");
       const request = isSecure ? https.request : http.request;
       const protocolSet = /* @__PURE__ */ new Set();
       let perMessageDeflate;
@@ -25506,6 +25539,7 @@ import { fileURLToPath as fileURLToPath4 } from "node:url";
 import fs21 from "node:fs";
 import path20 from "node:path";
 import { spawn as spawn2 } from "node:child_process";
+import { randomBytes as randomBytes2 } from "node:crypto";
 
 // src/error-codes.ts
 var ERROR_CODES = {
@@ -27208,9 +27242,9 @@ var FileStore = class _FileStore {
    * size has changed beyond what we last saw, another writer (CLI command,
    * second daemon during a race, external editor) has touched the file
    * and our in-memory copy is no longer the full truth. We re-read the
-   * disk version and merge by id before writing — in-memory wins on key
-   * collisions because those are the user's latest actions, but records
-   * added by the other writer survive instead of being clobbered.
+   * disk version and merge by id against our last observed version. Fields
+   * that did not change locally adopt external changes; genuine same-field
+   * conflicts keep the local edit. New external records also survive.
    *
    * Why two signals: mtime granularity is FS-dependent (WSL2 and some
    * older Linux/Windows give second-only resolution), so two writes in
@@ -27232,6 +27266,9 @@ var FileStore = class _FileStore {
   // an entry whenever readIfChanged detects an external write, so the skip can
   // never defeat the U1 merge self-heal.
   lastSerialized = {};
+  // Baseline for three-way merges. Unlike the write-skip cache this survives
+  // external-change invalidation and is populated when a store first loads.
+  lastObserved = {};
   // BB2 — held for FileStore.invalidateLedgerDigestCache, which is keyed
   // by projectRoot so all sessions in this project bust the same cache.
   // BB4 — also read by the recall mode='ledger' handler to call
@@ -27361,7 +27398,9 @@ var FileStore = class _FileStore {
       const stat = fs12.statSync(filePath);
       this.fileMtimeMs[filePath] = stat.mtimeMs;
       this.fileSizes[filePath] = stat.size;
-      return JSON.parse(fs12.readFileSync(filePath, "utf-8"));
+      const parsed = JSON.parse(fs12.readFileSync(filePath, "utf-8"));
+      this.lastObserved[filePath] = JSON.stringify(parsed);
+      return parsed;
     } catch (err) {
       if (errorCode(err) === "ENOENT") {
         delete this.fileMtimeMs[filePath];
@@ -27428,6 +27467,7 @@ var FileStore = class _FileStore {
     if (this.lastSerialized[filePath] === serialized) return;
     writeStringAtomic(filePath, serialized);
     this.lastSerialized[filePath] = serialized;
+    this.lastObserved[filePath] = serialized;
     try {
       const stat = fs12.statSync(filePath);
       this.fileMtimeMs[filePath] = stat.mtimeMs;
@@ -27436,18 +27476,30 @@ var FileStore = class _FileStore {
     }
   }
   /**
-   * U1 — merge-by-id helper. If another writer touched the file, union the
-   * on-disk records with our in-memory ones; in-memory wins on key
-   * collisions because those are the user's most recent actions. Records
-   * the other writer added that we never saw still survive instead of
-   * being overwritten.
+   * Merge against the last observed version, field by field. Unchanged local
+   * fields adopt external edits; actual local edits win a same-field conflict.
+   * Thus an unrelated local edit cannot restore a stale human verdict.
    */
-  mergeArrayById(inMemory, onDisk, keyField) {
+  mergeArrayById(inMemory, onDisk, keyField, filePath) {
     if (!onDisk || !Array.isArray(onDisk)) return inMemory;
+    const baseline = JSON.parse(this.lastObserved[filePath] ?? "[]");
+    const before = new Map((Array.isArray(baseline) ? baseline : []).map((r) => [r?.[keyField], r]));
+    const disk = new Map(onDisk.map((r) => [r[keyField], r]));
     const seen = new Set(inMemory.map((r) => r[keyField]).filter(Boolean));
     const additions = onDisk.filter((r) => r[keyField] && !seen.has(r[keyField]));
-    if (additions.length === 0) return inMemory;
-    return [...additions, ...inMemory];
+    return [...additions, ...inMemory.map((local) => {
+      const base = before.get(local[keyField]);
+      const external = disk.get(local[keyField]);
+      if (!base || !external) return local;
+      const merged = { ...external };
+      for (const key of /* @__PURE__ */ new Set([...Object.keys(base), ...Object.keys(local)])) {
+        if (JSON.stringify(local[key]) !== JSON.stringify(base[key])) {
+          if (key in local) merged[key] = local[key];
+          else delete merged[key];
+        }
+      }
+      return merged;
+    })];
   }
   flush() {
     const dir = this.sessionDir();
@@ -27460,7 +27512,8 @@ var FileStore = class _FileStore {
       this.artifacts = this.mergeArrayById(
         this.artifacts,
         _FileStore.salvageArray(`${this.sessionId}:artifacts.json (external)`, diskArtifacts, "id"),
-        "id"
+        "id",
+        artifactsPath
       );
       delete this.lastSerialized[artifactsPath];
     }
@@ -27469,26 +27522,29 @@ var FileStore = class _FileStore {
       this.comments = this.mergeArrayById(
         this.comments,
         _FileStore.salvageArray("comments.json (external)", diskComments, "id"),
-        "id"
+        "id",
+        commentsPath
       );
       delete this.lastSerialized[commentsPath];
     }
     const diskDecisions = this.readIfChanged(decisionsPath);
     if (diskDecisions) {
-      for (const d of _FileStore.salvageArray("decisions.json (external)", diskDecisions, "decisionId")) {
-        if (!this.decisions.has(d.decisionId)) {
-          this.decisions.set(d.decisionId, d);
-        }
-      }
+      this.decisions = new Map(this.mergeArrayById(
+        Array.from(this.decisions.values()),
+        _FileStore.salvageArray("decisions.json (external)", diskDecisions, "decisionId"),
+        "decisionId",
+        decisionsPath
+      ).map((d) => [d.decisionId, d]));
       delete this.lastSerialized[decisionsPath];
     }
     const diskPlans = this.readIfChanged(plansPath);
     if (diskPlans) {
-      for (const p of _FileStore.salvageArray("plan-reviews.json (external)", diskPlans, "artifactId")) {
-        if (!this.planReviews.has(p.artifactId)) {
-          this.planReviews.set(p.artifactId, p);
-        }
-      }
+      this.planReviews = new Map(this.mergeArrayById(
+        Array.from(this.planReviews.values()),
+        _FileStore.salvageArray("plan-reviews.json (external)", diskPlans, "artifactId"),
+        "artifactId",
+        plansPath
+      ).map((p) => [p.artifactId, p]));
       delete this.lastSerialized[plansPath];
     }
     this.atomicWrite(artifactsPath, this.artifacts);
@@ -33891,8 +33947,16 @@ function runDemoScript({
   schedule = defaultSchedule,
   makeArtifactId = defaultArtifactId
 }) {
+  let cancelled = false;
+  const cancellations = [];
+  const scheduleStep = (ms, fn) => {
+    const cancel = schedule(ms, () => {
+      if (!cancelled) return fn();
+    });
+    if (cancel) cancellations.push(cancel);
+  };
   const findingsArtifactId = makeArtifactId();
-  schedule(500, async () => {
+  scheduleStep(500, async () => {
     const artifact = await store.createArtifact({
       id: findingsArtifactId,
       type: "research",
@@ -33911,7 +33975,7 @@ function runDemoScript({
     });
     broadcast(sessionId, { type: "artifact_created", artifact });
   });
-  schedule(2500, async () => {
+  scheduleStep(2500, async () => {
     await store.updateArtifactStatus(findingsArtifactId, "rejected", "demo_script");
     await store.recordRejectedApproach({
       description: DEFAULT_REJECTION_DESCRIPTION,
@@ -33929,7 +33993,7 @@ function runDemoScript({
       sourceArtifactId: findingsArtifactId
     });
   });
-  schedule(5e3, () => {
+  scheduleStep(5e3, () => {
     broadcast(sessionId, {
       type: "preflight_blocked",
       toolName: "present_findings",
@@ -33944,7 +34008,7 @@ function runDemoScript({
     });
   });
   const explainerArtifactId = makeArtifactId();
-  schedule(6500, async () => {
+  scheduleStep(6500, async () => {
     const artifact = await store.createArtifact({
       id: explainerArtifactId,
       type: "explainer",
@@ -33977,7 +34041,7 @@ function runDemoScript({
     broadcast(sessionId, { type: "artifact_created", artifact });
   });
   const debriefArtifactId = makeArtifactId();
-  schedule(8e3, async () => {
+  scheduleStep(8e3, async () => {
     const artifact = await store.createArtifact({
       id: debriefArtifactId,
       type: "debrief",
@@ -34016,13 +34080,17 @@ function runDemoScript({
     });
     broadcast(sessionId, { type: "artifact_created", artifact });
   });
-  return { artifactId: findingsArtifactId };
+  return { artifactId: findingsArtifactId, cancel: () => {
+    cancelled = true;
+    for (const cancel of cancellations) cancel();
+  } };
 }
 function defaultSchedule(ms, fn) {
   const t = setTimeout(() => {
     void fn();
   }, ms);
   t.unref?.();
+  return () => clearTimeout(t);
 }
 function defaultArtifactId() {
   return `art_demo_${Math.random().toString(36).slice(2, 8)}`;
@@ -34199,6 +34267,7 @@ function createDaemon(deps) {
   const sessions = /* @__PURE__ */ new Map();
   const sessionMeta = /* @__PURE__ */ new Map();
   const activeSessions = /* @__PURE__ */ new Set();
+  const demoRuns = /* @__PURE__ */ new Map();
   function createSession(sessionId) {
     log2(`Creating session: ${sessionId}`);
     const store = new FileStore(projectRoot2, sessionId);
@@ -34276,9 +34345,9 @@ function createDaemon(deps) {
     }
   }
   function getClientCount() {
-    let count = globalClients.size;
-    for (const clients of wsClients.values()) count += clients.size;
-    return count;
+    let count2 = globalClients.size;
+    for (const clients of wsClients.values()) count2 += clients.size;
+    return count2;
   }
   let shutdownTimer = null;
   const DEMO_IDLE_GRACE_MS = 10 * 6e4;
@@ -34496,23 +34565,34 @@ function createDaemon(deps) {
     });
   });
   app.post("/api/demo/run", (c) => {
+    if (!isAllowedWsOrigin(c.req.header("Origin"), c.req.header("Host"))) {
+      return c.json({ error: "Demo requests must come from the companion UI." }, 403);
+    }
     const MAX_DEMO_SESSIONS = 5;
-    const demoIds = Array.from(sessions.keys()).filter((id) => id.startsWith("demo_")).sort();
+    const sessionRoot = path20.resolve(dpDir2, "sessions");
+    const diskIds = fs21.existsSync(sessionRoot) ? fs21.readdirSync(sessionRoot).filter((id) => /^demo_\d+(?:_[a-f0-9]+)?$/.test(id)) : [];
+    const demoIds = [.../* @__PURE__ */ new Set([...diskIds, ...Array.from(sessions.keys()).filter((id) => /^demo_\d+(?:_[a-f0-9]+)?$/.test(id))])].sort();
     while (demoIds.length >= MAX_DEMO_SESSIONS) {
       const oldest = demoIds.shift();
+      demoRuns.get(oldest)?.();
+      demoRuns.delete(oldest);
+      sessions.get(oldest)?.dispose();
+      const demoDir = path20.resolve(sessionRoot, oldest);
+      if (path20.dirname(demoDir) !== sessionRoot) throw new Error("Invalid demo session path");
+      fs21.rmSync(demoDir, { recursive: true, force: true });
       sessions.delete(oldest);
       sessionMeta.delete(oldest);
       activeSessions.delete(oldest);
       demoReplayEvents.delete(oldest);
     }
-    const sessionId = `demo_${Date.now()}`;
+    const sessionId = `demo_${Date.now()}_${randomBytes2(4).toString("hex")}`;
     const store = createSession(sessionId);
     sessionMeta.set(sessionId, {
       title: "deepPairing demo",
       project: "demo",
       registeredAt: (/* @__PURE__ */ new Date()).toISOString()
     });
-    runDemoScript({ sessionId, store, broadcast });
+    demoRuns.set(sessionId, runDemoScript({ sessionId, store, broadcast }).cancel);
     checkAutoShutdown();
     return c.json({ sessionId, startedAt: (/* @__PURE__ */ new Date()).toISOString() });
   });
@@ -34776,6 +34856,9 @@ function createDaemon(deps) {
     }
   }
   function dispose() {
+    for (const cancel of demoRuns.values()) cancel();
+    demoRuns.clear();
+    for (const [id, store] of sessions) if (id.startsWith("demo_")) store.dispose();
     if (shutdownTimer) {
       clearTimeout(shutdownTimer);
       shutdownTimer = null;

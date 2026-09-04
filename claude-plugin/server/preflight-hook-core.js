@@ -290,7 +290,7 @@ Prior rejection reason: "${match.rejected.reason}"` : "";
 Matched on underlying concept: "${match.rejected.concept}". A paraphrased proposal still counts \u2014 the user has rejected this kind of approach.` : "";
       const message = `REJECTED_APPROACH_BLOCKED: ${toolName} refused \u2014 your proposal contains "${match.proposal}" which the user previously rejected ("${match.rejected.description}").${reasonLine}${conceptLine}
 
-Do NOT retry with this approach. Revise your proposal to exclude it, or \u2014 if you believe conditions have changed \u2014 present_findings first to make the case for reconsidering, then wait for the human's response via check_feedback. The artifact was NOT created.`;
+Do NOT retry with this approach. Propose an alternative. If this is a false positive or conditions have changed, ask the human to override this block in the companion UI's Ledger before retrying. Mentioning the rejected concept in present_findings is checked by this same gate. The artifact was NOT created.`;
       return {
         blocked: true,
         block: {
@@ -581,6 +581,7 @@ function readSessionCeremony(projectRoot, now = Date.now()) {
   let storesSeen = 0;
   let storesParsed = 0;
   for (const id of ids) {
+    if (id.startsWith("demo_")) continue;
     let arr;
     try {
       const af = path2.join(sessionsDir, id, "artifacts.json");
@@ -664,7 +665,9 @@ function acquireHookStateLock(statePath, now = Date.now()) {
     try {
       fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
       return lock;
-    } catch {
+    } catch (error) {
+      if (error.code !== "EEXIST") return null;
+      if (Date.now() >= deadline) return null;
       try {
         if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {
           fs.unlinkSync(lock);
