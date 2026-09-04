@@ -12,6 +12,7 @@
 import { spawn } from "node:child_process";
 import type { GitHubReviewPayload } from "../export/format-markdown.js";
 import { errorMessage } from "@deeppairing/shared";
+import { parsePrReference, validRepoOwner, validRepoName } from "./pr-reference.js";
 
 export interface PostReviewResult {
   htmlUrl: string;
@@ -57,16 +58,8 @@ function looksUnauthenticated(stderr: string): boolean {
 
 /** Parse a PR reference: "42", "#42", or a full URL → { owner?, repo?, number }. */
 export function parsePrRef(ref: string): { owner?: string; repo?: string; number: number } {
-  const urlMatch = ref.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
-  if (urlMatch) {
-    // `!` safe: group 3 is a required capture — a match always carries it.
-    return { owner: urlMatch[1], repo: urlMatch[2], number: parseInt(urlMatch[3]!, 10) };
-  }
-  const numMatch = ref.replace(/^#/, "").match(/^(\d+)$/);
-  if (numMatch) {
-    // `!` safe: group 1 is a required capture — a match always carries it.
-    return { number: parseInt(numMatch[1]!, 10) };
-  }
+  const parsed = parsePrReference(ref);
+  if (parsed) return parsed;
   throw new Error(`Could not parse PR reference: "${ref}". Expected a number like "42" or a GitHub URL.`);
 }
 
@@ -135,7 +128,7 @@ function run(
 
 /** Detect the current repo's owner/name using `gh repo view`. */
 async function detectRepo(): Promise<{ owner: string; repo: string }> {
-  const res = await run("gh", ["repo", "view", "--json", "nameWithOwner"]);
+  const res = await run("gh", ["repo", "view", "--json", "nameWithOwner,url"]);
   if (res.code !== 0) {
     if (looksUnauthenticated(res.stderr)) throw new GhNotAuthedError();
     throw new Error(`gh repo view failed: ${res.stderr.trim() || res.stdout.trim()}`);
@@ -143,7 +136,11 @@ async function detectRepo(): Promise<{ owner: string; repo: string }> {
   try {
     const parsed = JSON.parse(res.stdout);
     const [owner, repo] = String(parsed.nameWithOwner).split("/");
-    if (!owner || !repo) throw new Error("gh repo view returned unexpected shape");
+    const identity = typeof parsed.url === "string" ? parsePrReference(`${parsed.url}/pull/1`) : null;
+    if (!owner || !repo || identity?.owner?.toLowerCase() !== owner.toLowerCase() ||
+        identity?.repo?.toLowerCase() !== repo.toLowerCase()) {
+      throw new Error("Repository detection must identify an HTTPS github.com repository; pass a full supported PR URL.");
+    }
     return { owner, repo };
   } catch (err) {
     throw new Error(`Could not parse gh repo view output: ${errorMessage(err)}`);
@@ -153,10 +150,16 @@ async function detectRepo(): Promise<{ owner: string; repo: string }> {
 /** Resolve number-only refs and overrides before checking approval scope. */
 export async function resolvePrTarget(ref: string, owner?: string, repo?: string): Promise<string> {
   const parsed = parsePrRef(ref);
+  if ((owner !== undefined && !validRepoOwner(owner)) ||
+      (repo !== undefined && !validRepoName(repo))) {
+    throw new Error("Invalid GitHub owner/repo override; supply repository names, not URL components.");
+  }
   const targetOwner = owner ?? parsed.owner;
   const targetRepo = repo ?? parsed.repo;
   const detected = !targetOwner || !targetRepo ? await detectRepo() : null;
-  return `https://github.com/${targetOwner ?? detected!.owner}/${targetRepo ?? detected!.repo}/pull/${parsed.number}`;
+  const target = `https://github.com/${targetOwner ?? detected!.owner}/${targetRepo ?? detected!.repo}/pull/${parsed.number}`;
+  parsePrRef(target); // Validate detected names as well as explicit overrides.
+  return target;
 }
 
 /**
@@ -170,22 +173,15 @@ export async function postPrReview(opts: {
   owner?: string;
   repo?: string;
 }): Promise<PostReviewResult> {
-  const parsed = parsePrRef(opts.ref);
-  let owner = opts.owner ?? parsed.owner;
-  let repo = opts.repo ?? parsed.repo;
-
-  if (!owner || !repo) {
-    const detected = await detectRepo();
-    owner = detected.owner;
-    repo = detected.repo;
-  }
+  const parsed = parsePrRef(await resolvePrTarget(opts.ref, opts.owner, opts.repo));
+  const { owner, repo } = parsed;
 
   const endpoint = `repos/${owner}/${repo}/pulls/${parsed.number}/reviews`;
   const body = JSON.stringify(opts.payload);
 
   const res = await run(
     "gh",
-    ["api", endpoint, "-X", "POST", "--input", "-", "-H", "Accept: application/vnd.github+json"],
+    ["api", endpoint, "--hostname", "github.com", "-X", "POST", "--input", "-", "-H", "Accept: application/vnd.github+json"],
     body,
   );
 

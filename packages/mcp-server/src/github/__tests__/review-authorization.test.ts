@@ -49,7 +49,7 @@ const args = process.argv.slice(2);
 let stdin = "";
 try { stdin = fs.readFileSync(0, "utf-8"); } catch {}
 fs.appendFileSync(process.env.DP_GH_FAKE_LOG, JSON.stringify({ args, stdin }) + "\\n");
-if (args[0] === "repo") { process.stdout.write(JSON.stringify({ nameWithOwner: "acme/widgets" })); process.exit(0); }
+if (args[0] === "repo") { process.stdout.write(JSON.stringify({ nameWithOwner: "acme/widgets", url: "https://github.com/acme/widgets" })); process.exit(0); }
 const body = JSON.parse(stdin || "{}");
 process.stdout.write(JSON.stringify({ id: 1, state: body.event === "APPROVE" ? "APPROVED" : "COMMENTED", html_url: "https://github.com/acme/widgets/pull/42#pullrequestreview-1" }));
 process.exit(0);

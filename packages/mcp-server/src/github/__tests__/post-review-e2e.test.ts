@@ -43,6 +43,7 @@ let originalPath: string | undefined;
 type Mode =
   | "ok"
   | "notauthed-repo"
+  | "enterprise-repo"
   | "notauthed-api"
   | "bad-credentials"
   | "pr-closed"
@@ -89,7 +90,7 @@ const NOT_LOGGED_IN = "gh: To use GitHub CLI in a GitHub Actions workflow, set t
 
 if (isRepoView) {
   if (mode === "notauthed-repo") { process.stderr.write(NOT_LOGGED_IN); process.exit(1); }
-  process.stdout.write(JSON.stringify({ nameWithOwner: "acme/widgets" }));
+  process.stdout.write(JSON.stringify({ nameWithOwner: "acme/widgets", url: mode === "enterprise-repo" ? "https://github.corp.example/acme/widgets" : "https://github.com/acme/widgets" }));
   process.exit(0);
 }
 if (isApi) {
@@ -254,6 +255,7 @@ describe("Q6 — postPrReview against a real (fake) gh process", () => {
     expect(call!.args).toEqual([
       "api",
       "repos/acme/widgets/pulls/42/reviews",
+      "--hostname", "github.com",
       "-X", "POST",
       "--input", "-",
       "-H", "Accept: application/vnd.github+json",
@@ -271,7 +273,7 @@ describe("Q6 — postPrReview against a real (fake) gh process", () => {
     await postPrReview({ ref: "77", payload: payloadFor([LOW_FINDING]) });
     const log = calls();
     expect(log).toHaveLength(2);
-    expect(log[0]!.args).toEqual(["repo", "view", "--json", "nameWithOwner"]);
+    expect(log[0]!.args).toEqual(["repo", "view", "--json", "nameWithOwner,url"]);
     expect(log[1]!.args[1]).toBe("repos/acme/widgets/pulls/77/reviews");
   });
 
@@ -280,6 +282,31 @@ describe("Q6 — postPrReview against a real (fake) gh process", () => {
     const log = calls();
     expect(log).toHaveLength(1);
     expect(log[0]!.args[1]).toBe("repos/other/fork/pulls/9/reviews");
+  });
+
+  it("does not translate an enterprise repository into a public github.com target", async () => {
+    setMode("enterprise-repo");
+    await expect(postPrReview({ ref: "42", payload: payloadFor([LOW_FINDING]) })).rejects.toThrow(/github.com repository/);
+    expect(calls()).toHaveLength(1);
+    expect(calls()[0]!.args[0]).toBe("repo");
+  });
+
+  it("retains a partial owner override while detecting only the missing repository", async () => {
+    await postPrReview({ ref: "42", owner: "other", payload: payloadFor([LOW_FINDING]) });
+    expect(calls()[1]!.args[1]).toBe("repos/other/widgets/pulls/42/reviews");
+  });
+
+  it("pins a full public PR URL to github.com even with an ambient GH_HOST", async () => {
+    const previous = process.env.GH_HOST;
+    process.env.GH_HOST = "github.corp.example";
+    try {
+      await postPrReview({ ref: "https://github.com/acme/widgets/pull/42", payload: payloadFor([LOW_FINDING]) });
+      const args = calls()[0]!.args;
+      expect(args[args.indexOf("--hostname") + 1]).toBe("github.com");
+    } finally {
+      if (previous === undefined) delete process.env.GH_HOST;
+      else process.env.GH_HOST = previous;
+    }
   });
 });
 
