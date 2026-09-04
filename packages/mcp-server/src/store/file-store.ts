@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
 import { suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
@@ -592,6 +593,7 @@ export class FileStore implements IStore {
     };
     this.artifacts.push(artifact);
     if (params.type === "code_change") this.touchCodeChangeMarker(now);
+    this.writeCodeCheckpoints(artifact);
     // #176 — a revise (supersede) mints this v2 with parentId set; the parent's
     // render-failure records now describe a version the human no longer sees, so
     // clear them. The re-presented diagram will report afresh if it's still broken.
@@ -601,12 +603,8 @@ export class FileStore implements IStore {
   }
 
   /**
-   * PP1 — a tiny project-level marker the per-edit checkpoint hook reads instead
-   * of readdir-ing + JSON.parsing every session's (potentially multi-MB,
-   * diff-bearing) artifacts.json on every Write/Edit. Last write wins = the
-   * most-recent code_change across all sessions, which is exactly what the
-   * checkpoint's freshness rule needs. Best-effort: if it's missing the hook
-   * just falls back to nagging (the safe default).
+   * Compatibility hint for older installed checkpoint hooks. Current hooks
+   * use file/session receipts and deliberately ignore this global timestamp.
    */
   private touchCodeChangeMarker(at: string): void {
     try {
@@ -616,6 +614,44 @@ export class FileStore implements IStore {
       writeJsonAtomic(path.join(this.basePath, "last-code-change.json"), { at });
     } catch {
       /* hint only */
+    }
+  }
+
+  /** Local reminder receipts, separate from the legacy project-wide hint. */
+  private checkpointFiles(artifact: Artifact): string[] {
+    if (this.isDemoSession || !artifact.content || typeof artifact.content !== "object") return [];
+    const content = artifact.content as { filePath?: unknown; files?: { filePath?: unknown }[]; reviewIntent?: unknown };
+    if (content.reviewIntent === "external") return [];
+    const files = artifact.type === "code_change" ? [content.filePath]
+      : artifact.type === "changeset" && Array.isArray(content.files) ? content.files.map(f => f?.filePath) : [];
+    return [...new Set(files.filter((f): f is string => typeof f === "string" && f.trim().length > 0)
+      .map(f => path.resolve(this.projectRoot, f)))];
+  }
+
+  private codeCheckpointPath(filePath: string): string {
+    const key = crypto.createHash("sha256").update(filePath).digest("hex");
+    return path.join(this.basePath, "sessions", this.sessionId, "code-checkpoints", key + ".json");
+  }
+
+  private writeCodeCheckpoints(artifact: Artifact): void {
+    for (const filePath of this.checkpointFiles(artifact)) {
+      try {
+        const markerPath = this.codeCheckpointPath(filePath);
+        fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+        writeJsonAtomic(markerPath, { version: 1, at: artifact.createdAt,
+          sessionId: this.sessionId, artifactId: artifact.id, filePath });
+      } catch { /* best-effort reminder: absent receipts cause a nag */ }
+    }
+  }
+
+  private revokeCodeCheckpoints(artifact: Artifact): void {
+    for (const filePath of this.checkpointFiles(artifact)) {
+      try {
+        const markerPath = this.codeCheckpointPath(filePath);
+        const marker = JSON.parse(fs.readFileSync(markerPath, "utf8"));
+        // Superseding an older artifact must not erase its successor's receipt.
+        if (marker.artifactId === artifact.id) fs.unlinkSync(markerPath);
+      } catch { /* already consumed or unavailable */ }
     }
   }
 
@@ -669,6 +705,9 @@ export class FileStore implements IStore {
       const now = new Date().toISOString();
       const fromStatus = art.status;
       art.status = status;
+      if (["rejected", "revised", "superseded", "retracted", "obsolete"].includes(status)) {
+        this.revokeCodeCheckpoints(art);
+      }
       art.updatedAt = now;
       // Append to statusHistory so replay can reconstruct the trail faithfully.
       // Lazy-init so older sessions opt into the richer format on first

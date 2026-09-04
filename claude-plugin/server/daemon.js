@@ -22258,7 +22258,7 @@ var serve = (options, listeningListener) => {
 };
 
 // src/daemon/index.ts
-import crypto5 from "node:crypto";
+import crypto6 from "node:crypto";
 import fs22 from "node:fs";
 import path21 from "node:path";
 
@@ -22558,6 +22558,7 @@ var CHECKPOINT_HOOK_SCRIPT = `#!/usr/bin/env node
 // ESM (.mjs): use import, not require.
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 
 // V2.1 \u2014 skip-list for files that are unambiguously NOT worth a per-edit
 // checkpoint. Scope is deliberately narrow: only generated/vendored paths
@@ -22603,7 +22604,7 @@ function isTrivialFile(filePath) {
 
 // X7 \u2014 record every fire to .deeppairing/hooks-state.json so the
 // companion UI's HookStatus can show "hook stack working" feedback.
-const STATE_PATH = path.join(process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || process.cwd(), ".deeppairing", "hooks-state.json");
+let STATE_PATH = path.join(process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || process.cwd(), ".deeppairing", "hooks-state.json");
 // Q1 \u2014 durable hooks-state writes, mirrored from preflight-hook-core's
 // readHookState / writeHookStateAtomic / acquireHookStateLock. Pre-Q1 every
 // writer of this file did a plain read-modify-writeFileSync: two hooks firing
@@ -22677,6 +22678,8 @@ process.stdin.on("data", (c) => { stdin += c; });
 process.stdin.on("end", () => {
   try {
     const ev = stdin ? JSON.parse(stdin) : {};
+    const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || ev.cwd || process.cwd();
+    STATE_PATH = path.join(projectRoot, ".deeppairing", "hooks-state.json");
     const tool = ev.tool_name || ev.toolName || "";
     if (!["Write", "Edit", "MultiEdit"].includes(tool)) exit(0, "skip: tool=" + (tool || "(unknown)"));
     const filePath =
@@ -22687,25 +22690,37 @@ process.stdin.on("end", () => {
     // V2.1 \u2014 trivial files (gitignore, lockfiles, generated paths) auto-pass.
     if (isTrivialFile(filePath)) exit(0, "skip: trivial file " + filePath);
 
-    const dpDir = path.join(process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || process.cwd(), ".deeppairing");
+    const dpDir = path.join(projectRoot, ".deeppairing");
     if (!fs.existsSync(path.join(dpDir, "sessions"))) exit(0, "skip: no sessions dir");
 
-    // PP1 \u2014 read the most-recent code_change timestamp from a tiny marker the
-    // store writes on each present_code_change, instead of readdir-ing +
-    // JSON.parsing every session's (multi-MB, diff-bearing) artifacts.json on
-    // every Write/Edit. Absent marker \u2192 0 \u2192 falls through to the nag (safe).
-    let mostRecentCheckpoint = 0;
+    // Mirrors deriveSessionId; store-to-emitted-hook tests pin their parity.
+    // Prefer the actual hook event over a potentially stale inherited env.
+    const rawSessionId = ev.session_id ?? process.env.CLAUDE_CODE_SESSION_ID ?? "";
+    const sid = typeof rawSessionId === "string" ? rawSessionId.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 64) : "";
+    const projectName = path.basename(projectRoot).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
+    const projectHash = crypto.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);
+    const sessionId = "session_" + projectName + "_" + projectHash + (sid ? "_" + sid : "");
+    let covered = false;
     try {
-      const m = JSON.parse(fs.readFileSync(path.join(dpDir, "last-code-change.json"), "utf-8"));
-      const t = new Date(m.at).getTime();
-      if (Number.isFinite(t)) mostRecentCheckpoint = t;
-    } catch { /* no marker yet \u2014 treat as no recent checkpoint */ }
-
-    // Threshold rule: every Write needs a code_change artifact created in
-    // the last FRESH_MS window.
-    const FRESH_MS = 60 * 1000;
-    const ageMs = Date.now() - mostRecentCheckpoint;
-    if (mostRecentCheckpoint === 0 || ageMs > FRESH_MS) {
+      if (typeof filePath === "string" && filePath !== "(unknown)" && filePath.trim() &&
+          typeof rawSessionId === "string" && (!rawSessionId || sid)) {
+        const absolutePath = path.resolve(projectRoot, filePath);
+        const key = crypto.createHash("sha256").update(absolutePath).digest("hex");
+        const markerPath = path.join(dpDir, "sessions", sessionId, "code-checkpoints", key + ".json");
+        const claimPath = markerPath + ".claim." + process.pid + "." + crypto.randomBytes(8).toString("hex");
+        // Atomic claim: one receipt covers one edit. Concurrent hooks cannot
+        // both consume it, and a newer presentation cannot be unlinked here.
+        fs.renameSync(markerPath, claimPath);
+        try {
+          const m = JSON.parse(fs.readFileSync(claimPath, "utf8"));
+          const age = typeof m.at === "string" ? Date.now() - Date.parse(m.at) : NaN;
+          covered = m.version === 1 && m.sessionId === sessionId && m.filePath === absolutePath &&
+            typeof m.artifactId === "string" && m.artifactId.length > 0 &&
+            Number.isFinite(age) && age >= 0 && age <= 60 * 1000;
+        } finally { try { fs.unlinkSync(claimPath); } catch {} }
+      }
+    } catch { /* missing/corrupt/legacy receipt: remind, never block */ }
+    if (!covered) {
       process.stderr.write(
         "deepPairing: " + tool + " on " + filePath +
         " with no present_code_change for it. Present EVERY code change BEFORE " +
@@ -22714,7 +22729,7 @@ process.stdin.on("end", () => {
         "one. A write straight to disk never reaches the human's review surface; " +
         "they can't see or comment on it. If you skipped this for prior edits " +
         "this session, backfill them now with present_code_change. " +
-        "(Per-Edit Checkpoint rule. Config / generated files like .gitignore are auto-skipped.)\\n"
+        "(Per-Edit Checkpoint rule. Lockfiles and generated paths are auto-skipped.)\\n"
       );
       // Non-blocking reminder: surface on stderr, exit 0. A stdout message +
       // exit 2 showed Claude only an empty-stderr "blocking error" with no reason.
@@ -25631,6 +25646,7 @@ var TOOL_ERROR_RETRYABLE = {
 init_dist();
 import fs12 from "node:fs";
 import path11 from "node:path";
+import crypto4 from "node:crypto";
 
 // ../../node_modules/.pnpm/nanoid@5.1.7/node_modules/nanoid/index.js
 import { webcrypto as crypto3 } from "node:crypto";
@@ -27556,22 +27572,57 @@ var FileStore = class _FileStore {
     };
     this.artifacts.push(artifact);
     if (params.type === "code_change") this.touchCodeChangeMarker(now);
+    this.writeCodeCheckpoints(artifact);
     if (params.parentId) this.clearRenderFailuresFor(params.parentId);
     this.scheduleFlush();
     return artifact;
   }
   /**
-   * PP1 — a tiny project-level marker the per-edit checkpoint hook reads instead
-   * of readdir-ing + JSON.parsing every session's (potentially multi-MB,
-   * diff-bearing) artifacts.json on every Write/Edit. Last write wins = the
-   * most-recent code_change across all sessions, which is exactly what the
-   * checkpoint's freshness rule needs. Best-effort: if it's missing the hook
-   * just falls back to nagging (the safe default).
+   * Compatibility hint for older installed checkpoint hooks. Current hooks
+   * use file/session receipts and deliberately ignore this global timestamp.
    */
   touchCodeChangeMarker(at) {
     try {
       writeJsonAtomic(path11.join(this.basePath, "last-code-change.json"), { at });
     } catch {
+    }
+  }
+  /** Local reminder receipts, separate from the legacy project-wide hint. */
+  checkpointFiles(artifact) {
+    if (this.isDemoSession || !artifact.content || typeof artifact.content !== "object") return [];
+    const content = artifact.content;
+    if (content.reviewIntent === "external") return [];
+    const files = artifact.type === "code_change" ? [content.filePath] : artifact.type === "changeset" && Array.isArray(content.files) ? content.files.map((f) => f?.filePath) : [];
+    return [...new Set(files.filter((f) => typeof f === "string" && f.trim().length > 0).map((f) => path11.resolve(this.projectRoot, f)))];
+  }
+  codeCheckpointPath(filePath) {
+    const key = crypto4.createHash("sha256").update(filePath).digest("hex");
+    return path11.join(this.basePath, "sessions", this.sessionId, "code-checkpoints", key + ".json");
+  }
+  writeCodeCheckpoints(artifact) {
+    for (const filePath of this.checkpointFiles(artifact)) {
+      try {
+        const markerPath = this.codeCheckpointPath(filePath);
+        fs12.mkdirSync(path11.dirname(markerPath), { recursive: true });
+        writeJsonAtomic(markerPath, {
+          version: 1,
+          at: artifact.createdAt,
+          sessionId: this.sessionId,
+          artifactId: artifact.id,
+          filePath
+        });
+      } catch {
+      }
+    }
+  }
+  revokeCodeCheckpoints(artifact) {
+    for (const filePath of this.checkpointFiles(artifact)) {
+      try {
+        const markerPath = this.codeCheckpointPath(filePath);
+        const marker = JSON.parse(fs12.readFileSync(markerPath, "utf8"));
+        if (marker.artifactId === artifact.id) fs12.unlinkSync(markerPath);
+      } catch {
+      }
     }
   }
   renameArtifact(artifactId, title) {
@@ -27608,6 +27659,9 @@ var FileStore = class _FileStore {
       const now = (/* @__PURE__ */ new Date()).toISOString();
       const fromStatus = art.status;
       art.status = status;
+      if (["rejected", "revised", "superseded", "retracted", "obsolete"].includes(status)) {
+        this.revokeCodeCheckpoints(art);
+      }
       art.updatedAt = now;
       const history = art.statusHistory ?? [];
       if (history.length === 0 && art.createdAt) {
@@ -31257,7 +31311,7 @@ function formatLearnings(state) {
 }
 
 // src/export/html-export.ts
-import crypto4 from "node:crypto";
+import crypto5 from "node:crypto";
 import fs15 from "node:fs";
 import path14 from "node:path";
 var MAX_TRACE_LOOKUPS = 200;
@@ -31356,7 +31410,7 @@ async function assembleSessionHtml(state, options = {}) {
   });
 }
 function htmlExportFileName(sessionId, generatedAt = (/* @__PURE__ */ new Date()).toISOString()) {
-  const token = crypto4.createHash("sha1").update(String(sessionId)).digest("hex").slice(0, 8);
+  const token = crypto5.createHash("sha1").update(String(sessionId)).digest("hex").slice(0, 8);
   const day = generatedAt.slice(0, 10);
   return `deeppairing-session-${day}-${token}.html`;
 }
@@ -34837,7 +34891,7 @@ var projectRoot = process.env.DEEPPAIRING_PROJECT_ROOT ?? process.cwd();
 var dpDir = path21.join(projectRoot, ".deeppairing");
 var logFile = path21.join(dpDir, "daemon.log");
 var startedAt = (/* @__PURE__ */ new Date()).toISOString();
-var daemonAuthToken = crypto5.randomBytes(32).toString("hex");
+var daemonAuthToken = crypto6.randomBytes(32).toString("hex");
 var LOG_MAX_BYTES = 1024 * 1024;
 var LOG_KEEP_FILES = 3;
 function maybeRotateLog() {
