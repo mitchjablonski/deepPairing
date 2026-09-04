@@ -36125,6 +36125,30 @@ async function handleWithdrawArtifact(ctx, args) {
 // src/github/post-review.ts
 init_dist();
 import { spawn } from "node:child_process";
+
+// src/github/pr-reference.ts
+function validRepoOwner(value) {
+  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(value);
+}
+function validRepoName(value) {
+  return /^(?!\.{1,2}$)[a-z0-9_.-]+$/i.test(value);
+}
+function parsePrReference(ref) {
+  const value = ref.trim();
+  const bare = /^#?(\d+)$/.exec(value);
+  if (bare) {
+    const number5 = Number(bare[1]);
+    return Number.isSafeInteger(number5) && number5 > 0 ? { number: number5 } : null;
+  }
+  const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/(?:files|commits|checks))?\/?(?:[?#][^\s]*)?$/i.exec(value);
+  if (!match) return null;
+  const [, owner, repo, digits] = match;
+  const number4 = Number(digits);
+  if (!owner || !repo || !validRepoOwner(owner) || !validRepoName(repo) || !Number.isSafeInteger(number4) || number4 < 1) return null;
+  return { owner, repo, number: number4 };
+}
+
+// src/github/post-review.ts
 var GhMissingError = class extends Error {
   constructor() {
     super("The `gh` CLI is not available. Install from https://cli.github.com/ and run `gh auth login`.");
@@ -36142,14 +36166,8 @@ function looksUnauthenticated(stderr) {
   return lower.includes("not logged into") || lower.includes("authentication token") || lower.includes("bad credentials") || lower.includes("requires authentication");
 }
 function parsePrRef(ref) {
-  const urlMatch = ref.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
-  if (urlMatch) {
-    return { owner: urlMatch[1], repo: urlMatch[2], number: parseInt(urlMatch[3], 10) };
-  }
-  const numMatch = ref.replace(/^#/, "").match(/^(\d+)$/);
-  if (numMatch) {
-    return { number: parseInt(numMatch[1], 10) };
-  }
+  const parsed = parsePrReference(ref);
+  if (parsed) return parsed;
   throw new Error(`Could not parse PR reference: "${ref}". Expected a number like "42" or a GitHub URL.`);
 }
 var GH_TIMEOUT_MS = Number(process.env.DEEPPAIRING_GH_TIMEOUT_MS) || 2e4;
@@ -36201,7 +36219,7 @@ function run(cmd, args, stdin) {
   });
 }
 async function detectRepo() {
-  const res = await run("gh", ["repo", "view", "--json", "nameWithOwner"]);
+  const res = await run("gh", ["repo", "view", "--json", "nameWithOwner,url"]);
   if (res.code !== 0) {
     if (looksUnauthenticated(res.stderr)) throw new GhNotAuthedError();
     throw new Error(`gh repo view failed: ${res.stderr.trim() || res.stdout.trim()}`);
@@ -36209,7 +36227,10 @@ async function detectRepo() {
   try {
     const parsed = JSON.parse(res.stdout);
     const [owner, repo] = String(parsed.nameWithOwner).split("/");
-    if (!owner || !repo) throw new Error("gh repo view returned unexpected shape");
+    const identity = typeof parsed.url === "string" ? parsePrReference(`${parsed.url}/pull/1`) : null;
+    if (!owner || !repo || identity?.owner?.toLowerCase() !== owner.toLowerCase() || identity?.repo?.toLowerCase() !== repo.toLowerCase()) {
+      throw new Error("Repository detection must identify an HTTPS github.com repository; pass a full supported PR URL.");
+    }
     return { owner, repo };
   } catch (err) {
     throw new Error(`Could not parse gh repo view output: ${errorMessage(err)}`);
@@ -36217,25 +36238,24 @@ async function detectRepo() {
 }
 async function resolvePrTarget(ref, owner, repo) {
   const parsed = parsePrRef(ref);
+  if (owner !== void 0 && !validRepoOwner(owner) || repo !== void 0 && !validRepoName(repo)) {
+    throw new Error("Invalid GitHub owner/repo override; supply repository names, not URL components.");
+  }
   const targetOwner = owner ?? parsed.owner;
   const targetRepo = repo ?? parsed.repo;
   const detected = !targetOwner || !targetRepo ? await detectRepo() : null;
-  return `https://github.com/${targetOwner ?? detected.owner}/${targetRepo ?? detected.repo}/pull/${parsed.number}`;
+  const target = `https://github.com/${targetOwner ?? detected.owner}/${targetRepo ?? detected.repo}/pull/${parsed.number}`;
+  parsePrRef(target);
+  return target;
 }
 async function postPrReview(opts) {
-  const parsed = parsePrRef(opts.ref);
-  let owner = opts.owner ?? parsed.owner;
-  let repo = opts.repo ?? parsed.repo;
-  if (!owner || !repo) {
-    const detected = await detectRepo();
-    owner = detected.owner;
-    repo = detected.repo;
-  }
+  const parsed = parsePrRef(await resolvePrTarget(opts.ref, opts.owner, opts.repo));
+  const { owner, repo } = parsed;
   const endpoint = `repos/${owner}/${repo}/pulls/${parsed.number}/reviews`;
   const body = JSON.stringify(opts.payload);
   const res = await run(
     "gh",
-    ["api", endpoint, "-X", "POST", "--input", "-", "-H", "Accept: application/vnd.github+json"],
+    ["api", endpoint, "--hostname", "github.com", "-X", "POST", "--input", "-", "-H", "Accept: application/vnd.github+json"],
     body
   );
   if (res.code !== 0) {
@@ -36262,16 +36282,12 @@ function samePrTarget(record3, ref) {
   const parsed = parsePrNumber(ref);
   if (parsed === null || parsed.number !== record3.prNumber) return false;
   if (parsed.owner && parsed.repo && record3.owner && record3.repo) {
-    return parsed.owner === record3.owner && parsed.repo === record3.repo;
+    return parsed.owner.toLowerCase() === record3.owner.toLowerCase() && parsed.repo.toLowerCase() === record3.repo.toLowerCase();
   }
   return true;
 }
 function parsePrNumber(ref) {
-  const urlMatch = ref.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
-  if (urlMatch) return { owner: urlMatch[1], repo: urlMatch[2], number: parseInt(urlMatch[3], 10) };
-  const numMatch = ref.replace(/^#/, "").trim().match(/^(\d+)$/);
-  if (numMatch) return { number: parseInt(numMatch[1], 10) };
-  return null;
+  return parsePrReference(ref);
 }
 
 // src/github/review-authorization.ts
