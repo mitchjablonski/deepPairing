@@ -24092,6 +24092,7 @@ function splitProse(masked) {
       if (/^#{1,6}\s/.test(line.trim()))
         continue;
       const { text: body, shift } = stripLeadingMarker(line);
+      const fromListItem = /^\s*(?:[-*+]|\d+[.)])\s+/.test(line);
       let cursor = 0;
       for (const piece of body.split(/(?<=[.!?])\s+/)) {
         const at = body.indexOf(piece, cursor);
@@ -24104,7 +24105,8 @@ function splitProse(masked) {
         sentences.push({
           text,
           index: lineStart + shift + start + trimmedLead,
-          words: countWords(text)
+          words: countWords(text),
+          ...fromListItem ? { fromListItem: true } : {}
         });
       }
     }
@@ -25014,7 +25016,10 @@ var init_prose_lint = __esm({
       tier: 2,
       severity: "low",
       modes: ["strict", "flavored"],
-      check: (_text, ctx) => ctx.paragraphs.filter((p) => p.sentences.length > PARAGRAPH_SENTENCE_LIMIT).map((p) => v(paragraphLength, `${p.sentences.length}-sentence paragraph (limit ${PARAGRAPH_SENTENCE_LIMIT}) \u2014 break it up.`, ctx, p.index, 60))
+      check: (_text, ctx) => ctx.paragraphs.map((p) => ({
+        p,
+        proseCount: p.sentences.filter((s) => !s.fromListItem).length
+      })).filter(({ proseCount }) => proseCount > PARAGRAPH_SENTENCE_LIMIT).map(({ p, proseCount }) => v(paragraphLength, `${proseCount}-sentence paragraph (limit ${PARAGRAPH_SENTENCE_LIMIT}) \u2014 break it up.`, ctx, p.index, 60))
     };
     trailingCondition = {
       id: "trailing-condition",

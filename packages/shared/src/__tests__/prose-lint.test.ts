@@ -301,6 +301,31 @@ describe("paragraph-length", () => {
   it("allows five sentences", () => {
     expect(fired("One. Two. Three. Four. Five.", "paragraph-length")).toBe(false);
   });
+
+  it("does not count a bullet run as one long paragraph", () => {
+    const text = [
+      "- The daemon restarts cleanly.",
+      "- The port stays stable.",
+      "- The registry is written once.",
+      "- The scanner is read-only.",
+      "- The chip hides when clean.",
+      "- The score is deterministic.",
+      "- The bundle is committed.",
+      "- The tests are green.",
+    ].join("\n");
+    expect(fired(text, "paragraph-length")).toBe(false);
+  });
+
+  it("still counts prose sentences around a bullet run", () => {
+    const text = [
+      "First point. Second point. Third point. Fourth point. Fifth point. Sixth point.",
+      "- one bullet.",
+      "- two bullets.",
+    ].join("\n");
+    const hit = lintProse(text).violations.find((v) => v.ruleId === "paragraph-length");
+    expect(hit).toBeDefined();
+    expect(hit!.message).toMatch(/6-sentence paragraph/);
+  });
 });
 
 describe("trailing-condition (strict only)", () => {

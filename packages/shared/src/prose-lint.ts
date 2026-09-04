@@ -58,6 +58,10 @@ export interface ProseSentence {
   index: number;
   /** Word count, after masking (code/URLs/paths contribute nothing). */
   words: number;
+  /** True when the sentence came off a markdown list-item line. A bullet run
+   *  is already visually chunked, so `paragraph-length` skips these — a
+   *  6-item list is not a 6-sentence wall of prose. */
+  fromListItem?: boolean;
 }
 
 /** One blank-line-delimited paragraph of prose. */
@@ -448,6 +452,7 @@ export function splitProse(masked: string): ProseParagraph[] {
       if (isStructuralLine(line)) continue;
       if (/^#{1,6}\s/.test(line.trim())) continue;
       const { text: body, shift } = stripLeadingMarker(line);
+      const fromListItem = /^\s*(?:[-*+]|\d+[.)])\s+/.test(line);
       let cursor = 0;
       for (const piece of body.split(/(?<=[.!?])\s+/)) {
         const at = body.indexOf(piece, cursor);
@@ -460,6 +465,7 @@ export function splitProse(masked: string): ProseParagraph[] {
           text,
           index: lineStart + shift + start + trimmedLead,
           words: countWords(text),
+          ...(fromListItem ? { fromListItem: true } : {}),
         });
       }
     }
@@ -937,11 +943,15 @@ const paragraphLength: ProseRule = {
   modes: ["strict", "flavored"],
   check: (_text, ctx) =>
     ctx.paragraphs
-      .filter((p) => p.sentences.length > PARAGRAPH_SENTENCE_LIMIT)
-      .map((p) =>
+      .map((p) => ({
+        p,
+        proseCount: p.sentences.filter((s) => !s.fromListItem).length,
+      }))
+      .filter(({ proseCount }) => proseCount > PARAGRAPH_SENTENCE_LIMIT)
+      .map(({ p, proseCount }) =>
         v(
           paragraphLength,
-          `${p.sentences.length}-sentence paragraph (limit ${PARAGRAPH_SENTENCE_LIMIT}) — break it up.`,
+          `${proseCount}-sentence paragraph (limit ${PARAGRAPH_SENTENCE_LIMIT}) — break it up.`,
           ctx,
           p.index,
           60,
