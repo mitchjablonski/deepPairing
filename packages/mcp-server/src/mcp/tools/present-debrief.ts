@@ -1,4 +1,5 @@
 import { nanoid } from "nanoid";
+import { preflightArtifact } from "../artifact-preflight.js";
 import { validatePresentDebriefInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
@@ -25,16 +26,7 @@ export async function handlePresentDebrief(ctx: ToolContext, args: any): Promise
   // Preflight against rejected approaches. Feed the title, the narrative
   // summary, the section titles, and any named concepts so a debrief re-proposing
   // a rejected approach is caught (concept↔concept lane).
-  const proposals: string[] = [
-    title,
-    summary,
-    ...(sections ?? []).map((s) => s.title),
-    ...(decisionsMade ?? []).map((d) => d.what),
-  ].filter(Boolean);
-  const proposalConcepts: string[] = (sections ?? [])
-    .flatMap((s) => (s.concepts ?? []).map((c) => c.name))
-    .filter(Boolean);
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_debrief", proposals, [], proposalConcepts);
+  const pre = (await preflightArtifact(ctx, "present_debrief", "debrief", title, validated.data))!;
   if (!pre.ok) return pre.response;
 
   // N2 (#226, F5) — short-window de-dup for an identical, still-draft debrief

@@ -14,6 +14,7 @@ import { useConnectionStore } from "../../stores/connection";
 import { useArtifactStore } from "../../stores/artifact";
 import { enterSessionReplay } from "../../lib/session-replay";
 import type { BankProject, BankSession, ContextBank } from "../../lib/bank";
+import { resetLedgerStoreForTests } from "../../stores/ledger";
 
 // The replay route has its own module tests; here we assert App HANDS OFF to it
 // (a fake, not a mock of the whole fetch layer).
@@ -66,6 +67,10 @@ function stubDaemon(bank: ContextBank, activeSessions: Array<{ sessionId: string
       const url = String(input);
       if (url.includes("/api/context-bank")) return new Response(JSON.stringify(bank), { status: 200 });
       if (url.includes("/api/projects")) return new Response(JSON.stringify({ projects: [] }), { status: 200 });
+      if (url.includes("/api/ledger/digest")) return Response.json({
+        shapedThisProject: 0, nearMissesThisProject: 0, blockedThisProject: 0, sessionsTouched: 0,
+        topCitedStances: [], globalLedger: { concepts: 0, projects: 0, multiProjectConcepts: 0 },
+      });
       if (url.includes("/api/active-sessions"))
         return new Response(JSON.stringify({ sessions: activeSessions }), { status: 200 });
       return new Response(JSON.stringify({ sessions: [] }), { status: 200 });
@@ -74,6 +79,8 @@ function stubDaemon(bank: ContextBank, activeSessions: Array<{ sessionId: string
 }
 
 beforeEach(() => {
+  resetLedgerStoreForTests();
+  vi.spyOn(console, "error");
   vi.mocked(enterSessionReplay).mockClear();
   useContextBankStore.getState().reset();
   useArtifactStore.getState().reset();
@@ -81,6 +88,9 @@ beforeEach(() => {
   window.history.replaceState({}, "", "/");
 });
 afterEach(() => {
+  expect(console.error).not.toHaveBeenCalled();
+  vi.restoreAllMocks();
+  resetLedgerStoreForTests();
   vi.unstubAllGlobals();
   window.history.replaceState({}, "", "/");
 });

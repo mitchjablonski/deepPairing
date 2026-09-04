@@ -150,6 +150,15 @@ async function detectRepo(): Promise<{ owner: string; repo: string }> {
   }
 }
 
+/** Resolve number-only refs and overrides before checking approval scope. */
+export async function resolvePrTarget(ref: string, owner?: string, repo?: string): Promise<string> {
+  const parsed = parsePrRef(ref);
+  const targetOwner = owner ?? parsed.owner;
+  const targetRepo = repo ?? parsed.repo;
+  const detected = !targetOwner || !targetRepo ? await detectRepo() : null;
+  return `https://github.com/${targetOwner ?? detected!.owner}/${targetRepo ?? detected!.repo}/pull/${parsed.number}`;
+}
+
 /**
  * Post a review on a GitHub PR via `gh api`. Resolves { htmlUrl, state, id }
  * on success. Surfaces clear errors otherwise.

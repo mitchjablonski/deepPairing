@@ -85,6 +85,8 @@ straight from `gh pr diff`. Also pass:
 ```
 source: { kind: "github-pr", number: <N>, url: <url>, headRef: <head>, baseRef: <base>, author: <login> }
 ```
+Keep the full `source.url`: posting checks the approved changeset against the
+destination repository and PR. A number alone cannot identify the repository.
 
 **Draw the blast radius on it** — attach a `visuals` diagram or `file_map` of
 the shape of what this PR touches, including what it reaches *outside* the diff,

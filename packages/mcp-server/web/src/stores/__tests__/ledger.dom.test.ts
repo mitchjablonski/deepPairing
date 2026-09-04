@@ -30,6 +30,23 @@ const sampleDigest = {
 };
 
 describe("useLedgerStore (EE2)", () => {
+  it("rejects malformed successful responses without exposing them to components", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ sessions: [] }) }));
+    await useLedgerStore.getState().refetch();
+    expect(useLedgerStore.getState().digest).toBeNull();
+    expect(useLedgerStore.getState().error).toContain("invalid");
+    expect(useLedgerStore.getState().loading).toBe(false);
+  });
+
+  it("keeps the last valid digest when a refresh returns malformed data", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => sampleDigest })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ...sampleDigest, globalLedger: null }) }));
+    await useLedgerStore.getState().refetch();
+    await useLedgerStore.getState().refetch();
+    expect(useLedgerStore.getState().digest).toEqual(sampleDigest);
+    expect(useLedgerStore.getState().error).toContain("invalid");
+  });
   it("dedupes concurrent ensureLedgerSubscriptions / refetch calls into a single fetch", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

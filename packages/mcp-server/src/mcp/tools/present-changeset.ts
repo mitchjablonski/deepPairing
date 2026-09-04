@@ -1,4 +1,5 @@
 import { nanoid } from "nanoid";
+import { preflightArtifact } from "../artifact-preflight.js";
 import { validatePresentChangesetInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
@@ -43,13 +44,7 @@ export async function handlePresentChangeset(ctx: ToolContext, args: any): Promi
   // blocked). The agent then does what review-pr.md already asks: raise the
   // matched stance WITH the human, as an internal-audience finding. The moat
   // points outward instead of blocking inward — but it points.
-  const pre = await ctx.helpers.preflightRejectedApproaches(
-    "present_changeset",
-    [title, summary ?? "", ...(risks ?? [])].filter(Boolean),
-    files.map((f) => f.path).filter(Boolean),
-    [],
-    { advisory: isExternal },
-  );
+  const pre = (await preflightArtifact(ctx, "present_changeset", "changeset", title, validated.data))!;
   if (!pre.ok) return pre.response;
 
   // N2 (#226) — short-window de-dup for an identical, still-draft changeset.

@@ -82,7 +82,7 @@ describe("#168 deeppairing demo — cold run exits cleanly + respects NO_OPEN", 
       expect(res.signal).toBeNull();       // NOT killed by our timeout
       expect(res.code).toBe(0);            // clean exit
       // NO_OPEN suppression path prints the URL for the human to open manually.
-      expect(out).toMatch(/open http:\/\/localhost:\d+\/\?session=demo_\d+ in your browser/);
+      expect(out).toMatch(/open http:\/\/localhost:\d+\/\?session=demo_\d+_[a-f0-9]+ in your browser/);
       // Sanity: the daemon actually came up.
       expect(out).toMatch(/Daemon ready on port \d+/);
     },
