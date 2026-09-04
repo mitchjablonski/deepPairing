@@ -14,6 +14,31 @@ beforeEach(() => {
 });
 
 describe("MCP Tool Handlers — revise_artifact", () => {
+  it("blocks rejected approaches in revisions before superseding or creating artifacts", async () => {
+    await callTool("present_findings", { summary: "Inspect dependency injection", findings: [{ category: "Architecture", detail: "Use constructor arguments", significance: "high" }] });
+    const old = store.getArtifacts()[0];
+    const originalStatus = old.status;
+    store.recordRejectedApproach({ description: "global mutable state for config", concept: "global mutable state for config", reason: "Hard to test" });
+    const result = await callTool("revise_artifact", {
+      artifactId: old.id, mode: "supersede", reason: "New recommendation",
+      content: { summary: "Use global mutable state for config", findings: [{ category: "Architecture", detail: "Use a singleton", significance: "high" }] },
+    });
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("REJECTED_APPROACH_BLOCKED");
+    expect(store.getArtifacts()).toHaveLength(1);
+    expect(store.getArtifacts()[0].status).toBe(originalStatus);
+    expect(store.getCommentsForArtifact(old.id)).toHaveLength(0);
+  });
+
+  it("records the policy trace on an allowed revision", async () => {
+    await callTool("present_findings", { summary: "Inspect config", findings: [{ category: "Architecture", detail: "Use constructor arguments", significance: "high" }] });
+    const old = store.getArtifacts()[0];
+    const result = await callTool("revise_artifact", { artifactId: old.id, mode: "supersede", reason: "Clarify",
+      content: { summary: "Inject config", findings: [{ category: "Architecture", detail: "Pass config explicitly", significance: "high" }] } });
+    expect(result.isError).not.toBe(true);
+    const next = store.getArtifacts().find(a => a.parentId === old.id)!;
+    expect(store.getPreflightTrace(next.id)).toBeTruthy();
+  });
   describe("revise_artifact — the STYLE echo (review round 1)", () => {
     it("echoes house style on a supersede, so the fix-it path is not the silent one", async () => {
       await callTool("present_findings", {

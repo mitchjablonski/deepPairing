@@ -51,6 +51,31 @@ function newStore(sessionId: string): FileStore {
 }
 
 describe("FileStore concurrent-flush merge (U1)", () => {
+  it("a stale flush preserves an external verdict and unrelated local changes", () => {
+    const a = newStore("stale-verdict");
+    a.createArtifact({ id: "art", type: "research", title: "Original", content: {} });
+    a.forceFlush();
+    const b = newStore("stale-verdict");
+    b.updateArtifactStatus("art", "approved", "ui_approve_button");
+    b.forceFlush();
+    a.renameArtifact("art", "Renamed locally");
+    a.forceFlush();
+    const fresh = newStore("stale-verdict").getArtifacts()[0];
+    expect(fresh.status).toBe("approved");
+    expect(fresh.title).toBe("Renamed locally");
+    expect(a.getArtifacts()[0].status).toBe("approved");
+  });
+
+  it("an unchanged writer preserves externally acknowledged comments", () => {
+    const a = newStore("stale-comment");
+    a.addComment({ id: "c", artifactId: "art", content: "Review me", author: "human" });
+    a.forceFlush();
+    const b = newStore("stale-comment");
+    b.acknowledgeComments(["c"]);
+    b.forceFlush();
+    a.forceFlush();
+    expect(newStore("stale-comment").getUnacknowledgedComments()).toHaveLength(0);
+  });
   it("two stores adding distinct artifacts both survive — neither clobbers the other", () => {
     const a = newStore("interleave");
     a.createArtifact({ id: "art_A", type: "research", title: "A's finding", content: {} });

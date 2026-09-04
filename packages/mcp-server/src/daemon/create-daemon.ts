@@ -31,6 +31,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { ERROR_CODES } from "../error-codes.js";
 import { FileStore } from "../store/file-store.js";
 import type { LiveDecisionSource } from "../store/session-scan.js";
@@ -204,6 +205,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // + the client count; `sessions.size` is monotonic and never reaches 0, which
   // is why the daemon used to leak a process per project forever.
   const activeSessions = new Set<string>();
+  const demoRuns = new Map<string, () => void>();
 
   function createSession(sessionId: string): FileStore {
     log(`Creating session: ${sessionId}`);
@@ -743,26 +745,38 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // requiring Claude Code to be connected. This is the PMF-thesis validator:
   // a fresh-install user must SEE the block fire, not just read about it.
   app.post("/api/demo/run", (c) => {
+    if (!isAllowedWsOrigin(c.req.header("Origin"), c.req.header("Host"))) {
+      return c.json({ error: "Demo requests must come from the companion UI." }, 403);
+    }
     // S5 — bound demo-session minting. This route is intentionally unauthenticated
     // (the cold-clone hero demo), so a loop could otherwise accumulate unbounded
     // in-memory sessions. Evict the oldest demo sessions to keep at most a handful.
     const MAX_DEMO_SESSIONS = 5;
-    const demoIds = Array.from(sessions.keys()).filter((id) => id.startsWith("demo_")).sort();
+    const sessionRoot = path.resolve(dpDir, "sessions");
+    // Include previous daemon runs so restarting does not reset the disk cap.
+    const diskIds = fs.existsSync(sessionRoot) ? fs.readdirSync(sessionRoot).filter(id => /^demo_\d+(?:_[a-f0-9]+)?$/.test(id)) : [];
+    const demoIds = [...new Set([...diskIds, ...Array.from(sessions.keys()).filter(id => /^demo_\d+(?:_[a-f0-9]+)?$/.test(id))])].sort();
     while (demoIds.length >= MAX_DEMO_SESSIONS) {
       const oldest = demoIds.shift()!;
+      demoRuns.get(oldest)?.();
+      demoRuns.delete(oldest);
+      sessions.get(oldest)?.dispose();
+      const demoDir = path.resolve(sessionRoot, oldest);
+      if (path.dirname(demoDir) !== sessionRoot) throw new Error("Invalid demo session path");
+      fs.rmSync(demoDir, { recursive: true, force: true });
       sessions.delete(oldest);
       sessionMeta.delete(oldest);
       activeSessions.delete(oldest);
       demoReplayEvents.delete(oldest); // #168 — don't leak the stashed hero event
     }
-    const sessionId = `demo_${Date.now()}`;
+    const sessionId = `demo_${Date.now()}_${randomBytes(4).toString("hex")}`;
     const store = createSession(sessionId);
     sessionMeta.set(sessionId, {
       title: "deepPairing demo",
       project: "demo",
       registeredAt: new Date().toISOString(),
     });
-    runDemoScript({ sessionId, store, broadcast });
+    demoRuns.set(sessionId, runDemoScript({ sessionId, store, broadcast }).cancel);
     // #168 — disarm any idle-shutdown timer already armed before this request:
     // the new demo session is inside its grace, so the daemon must not shut
     // down. checkAutoShutdown() sees demoGraceActive() and clears the timer
@@ -1219,6 +1233,9 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   }
 
   function dispose(): void {
+    for (const cancel of demoRuns.values()) cancel();
+    demoRuns.clear();
+    for (const [id, store] of sessions) if (id.startsWith("demo_")) store.dispose();
     if (shutdownTimer) { clearTimeout(shutdownTimer); shutdownTimer = null; }
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
     if (pingTimer) { clearTimeout(pingTimer); pingTimer = null; }

@@ -103,7 +103,7 @@ function changeset(id: string, status: string, external: boolean): Artifact {
     status: status as Artifact["status"],
     content: {
       files: [{ path: "src/limiter.ts", changeType: "added", hunks: [] }],
-      ...(external ? { reviewIntent: "external", source: { kind: "github-pr", number: 123 } } : {}),
+      ...(external ? { reviewIntent: "external", source: { kind: "github-pr", number: 42, url: "https://github.com/acme/widgets/pull/42" } } : {}),
     },
     agentReasoning: null, createdAt: "2026-08-20T10:00:00.000Z", updatedAt: "2026-08-20T10:00:00.000Z",
   } as Artifact;
@@ -373,6 +373,14 @@ describe("R1 (#279) fix 1 — an APPROVE WITH comments is still an APPROVE", () 
     );
     expect(res.isError).toBe(true);
     expect(calls()).toHaveLength(0);
+  });
+
+  it("rechecks the resolved destination so owner/repo overrides cannot borrow an approval", async () => {
+    const result = await handlePostPrReview(ctxFor([changeset("cs_1", "approved", true)]), {
+      pr: "42", owner: "unreviewed", repo: "other", event: "APPROVE",
+    });
+    expect(result.isError).toBe(true);
+    expect(apiCalls()).toHaveLength(0);
   });
 });
 

@@ -1,6 +1,8 @@
 import { create } from "zustand";
-import { errorMessage } from "@deeppairing/shared";
+import { errorMessage, LedgerDigestSchema } from "@deeppairing/shared";
 import { apiBase, sessionHeaders } from "../lib/api";
+import type { LedgerDigest } from "@deeppairing/shared";
+export type { LedgerDigest } from "@deeppairing/shared";
 
 /**
  * EE2 — shared ledger digest store. Pre-EE2 three independent fetchers
@@ -17,44 +19,6 @@ import { apiBase, sessionHeaders } from "../lib/api";
  * surfacing a load failure inline (LedgerPanel renders "Could not
  * load the ledger: {error}" when set).
  */
-export interface LedgerDigest {
-  shapedThisProject: number;
-  nearMissesThisProject: number;
-  blockedThisProject: number;
-  sessionsTouched: number;
-  topCitedStances: Array<{
-    concept: string;
-    source: "session" | "team";
-    citationCount: number;
-    /**
-     * EE3 — cross-project citation count (sum of non-manual instances
-     * for this concept across the whole global ledger, including the
-     * project-local count). Lets PreflightBreadcrumb escalate to
-     * signal tier when a stance has accumulated multi-project weight
-     * even if it hasn't fired enough times in THIS project yet.
-     * Optional for back-compat with pre-EE3 fixtures.
-     */
-    globalCitationCount?: number;
-    sampleArtifactId?: string;
-    sampleSessionId?: string;
-  }>;
-  seededStances?: Array<{
-    concept: string;
-    stance: "avoid" | "prefer" | "mixed";
-    citedTimesElsewhere: number;
-    /**
-     * FF1 — when a seed has been cited in a real session, the digest
-     * threads the citing artifact through so the LedgerPanel can render
-     * the BB6 jump-to-citing-artifact button on the seeded row. Pre-FF1
-     * EE4's dedup deleted the duplicate top-cited row, taking the link
-     * with it.
-     */
-    sampleArtifactId?: string;
-    sampleSessionId?: string;
-  }>;
-  globalLedger: { concepts: number; projects: number; multiProjectConcepts: number };
-}
-
 /**
  * R2 — "does this human actually have a ledger?", in ONE place.
  *
@@ -159,7 +123,12 @@ async function doFetch(
         set({ error: `${res.status}`, loading: false });
         return;
       }
-      const body = (await res.json()) as LedgerDigest;
+      const parsed = LedgerDigestSchema.safeParse(await res.json());
+      if (!parsed.success) {
+        set({ error: "The ledger response is invalid. Reload the companion or restart its daemon.", loading: false });
+        return;
+      }
+      const body: LedgerDigest = parsed.data;
       set((s: any) => ({
         digest: body,
         error: null,

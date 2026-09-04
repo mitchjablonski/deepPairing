@@ -1587,7 +1587,7 @@ async function demoCmd(): Promise<void> {
 async function postPrReviewCmd(ref: string, sessionId?: string, event?: string, repost = false) {
   const { FileStore } = await import("../store/file-store.js");
   const { authorizeReviewPost } = await import("../github/review-authorization.js");
-  const { postPrReview, parsePrRef, GhMissingError, GhNotAuthedError } = await import("../github/post-review.js");
+  const { postPrReview, parsePrRef, resolvePrTarget, GhMissingError, GhNotAuthedError } = await import("../github/post-review.js");
 
   let chosenSessionId = sessionId;
   if (!chosenSessionId) {
@@ -1632,13 +1632,16 @@ async function postPrReviewCmd(ref: string, sessionId?: string, event?: string, 
   const { payload } = auth;
 
   try {
-    const result = await postPrReview({ ref, payload });
+    const target = await resolvePrTarget(ref);
+    const targetAuth = authorizeReviewPost(state, { event, pr: target, repost });
+    if (!targetAuth.ok) throw new Error(targetAuth.reason);
+    const result = await postPrReview({ ref: target, payload: targetAuth.payload });
     console.log(`  ${green("✓")} Posted ${payload.comments.length} inline comment${payload.comments.length === 1 ? "" : "s"} on PR ${ref}`);
     if (result.htmlUrl) console.log(`    ${dim(result.htmlUrl)}`);
     // R1 (#279) — same stamp the MCP door writes, into the same sidecar, so a
     // duplicate post is refused no matter which door it comes from.
     try {
-      const parsed = parsePrRef(ref);
+      const parsed = parsePrRef(target);
       store.recordPostedReview({
         pr: ref,
         prNumber: parsed.number,

@@ -1,7 +1,8 @@
 import { nanoid } from "nanoid";
 import type { DecisionOption } from "@deeppairing/shared";
 import type { ToolContext, ToolResult } from "./types.js";
-import { notifyResourcesListChanged, formatStyleWarnings } from "../tool-helpers.js";
+import { notifyResourcesListChanged, formatStyleWarnings, persistPreflightTrace } from "../tool-helpers.js";
+import { preflightArtifact } from "../artifact-preflight.js";
 import { maybeUpdateTaskStatus } from "../tasks-probe.js";
 import {
   validatePresentFindingsInput,
@@ -92,6 +93,10 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       const v = supersedeValidator({ title: args?.title ?? old.title, ...(content as Record<string, unknown>) });
       if (!v.ok) return v.error;
     }
+    // A replacement proposes new work just like its original presentation.
+    // Refuse before creating v2 or changing v1 so a blocked revision is atomic.
+    const pre = await preflightArtifact(ctx, "revise_artifact", old.type, String(args?.title ?? old.title), content);
+    if (pre && !pre.ok) return pre.response;
     // #171 — reviewState is HUMAN-driven review PROGRESS, never agent input. A
     // v2 changeset must start with FRESH review state: carrying an echoed
     // reviewState forward would stamp stale ✓ marks onto files whose diff just
@@ -171,6 +176,7 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       await store.recordPlanReview(newId);
     }
 
+    if (pre?.ok) await persistPreflightTrace(store, broadcast, newArtifact, "revise_artifact", pre.trace);
     broadcast({ type: "artifact_created", artifact: newArtifact });
     broadcast({ type: "artifact_updated", artifactId: old.id, status: "superseded" });
     // HH10 — supersede creates a new resource AND retires the old

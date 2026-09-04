@@ -200,7 +200,7 @@ function approvedExternalChangeset(): Artifact {
     title: "PR #42 — rate limiting", status: "approved",
     content: {
       files: [{ path: "auth/session.ts", changeType: "modified", hunks: [] }],
-      reviewIntent: "external", source: { kind: "github-pr", number: 42 },
+      reviewIntent: "external", source: { kind: "github-pr", number: 42, url: "https://github.com/acme/widgets/pull/42" },
     },
     agentReasoning: null, createdAt: "2026-08-20T10:00:00.000Z", updatedAt: "2026-08-20T10:00:00.000Z",
   } as Artifact;

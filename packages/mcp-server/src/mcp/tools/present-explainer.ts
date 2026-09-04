@@ -1,4 +1,5 @@
 import { nanoid } from "nanoid";
+import { preflightArtifact } from "../artifact-preflight.js";
 import { validatePresentExplainerInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
@@ -26,12 +27,7 @@ export async function handlePresentExplainer(ctx: ToolContext, args: Record<stri
   // section headings so an explainer re-narrating a rejected approach is caught.
   // No concepts arm — the explainer carries no named concepts (it explains code
   // as-is rather than proposing a pattern).
-  const proposals: string[] = [
-    title,
-    overview,
-    ...(sections ?? []).map((s) => s.heading),
-  ].filter(Boolean);
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_explainer", proposals, [], []);
+  const pre = (await preflightArtifact(ctx, "present_explainer", "explainer", title, validated.data))!;
   if (!pre.ok) return pre.response;
 
   // N2 (#226) — short-window de-dup for an identical, still-draft explainer.

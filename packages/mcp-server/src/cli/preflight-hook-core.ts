@@ -331,6 +331,7 @@ export function readSessionCeremony(projectRoot: string, now: number = Date.now(
   let storesSeen = 0;
   let storesParsed = 0;
   for (const id of ids) {
+    if (id.startsWith("demo_")) continue; // Demo fiction cannot authorize real work.
     let arr: unknown;
     try {
       const af = path.join(sessionsDir, id, "artifacts.json");
@@ -496,7 +497,11 @@ export function acquireHookStateLock(statePath: string, now: number = Date.now()
     try {
       fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
       return lock;
-    } catch {
+    } catch (error) {
+      // Only an existing lock means contention. Missing directories, denied
+      // access and other filesystem failures must take the fail-open path.
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") return null;
+      if (Date.now() >= deadline) return null;
       try {
         if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {
           fs.unlinkSync(lock); // a crashed hook must not wedge the next one

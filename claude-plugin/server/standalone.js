@@ -2885,10 +2885,10 @@ var init_schemas = __esm({
         const shape = def.shape;
         const propValues = {};
         for (const key in shape) {
-          const field = shape[key]._zod;
-          if (field.values) {
+          const field2 = shape[key]._zod;
+          if (field2.values) {
             propValues[key] ?? (propValues[key] = /* @__PURE__ */ new Set());
-            for (const v2 of field.values)
+            for (const v2 of field2.values)
               propValues[key].add(v2);
           }
         }
@@ -4173,8 +4173,8 @@ var init_az = __esm({
 });
 
 // ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/be.js
-function getBelarusianPlural(count, one, few, many) {
-  const absCount = Math.abs(count);
+function getBelarusianPlural(count2, one, few, many) {
+  const absCount = Math.abs(count2);
   const lastDigit = absCount % 10;
   const lastTwoDigits = absCount % 100;
   if (lastTwoDigits >= 11 && lastTwoDigits <= 19) {
@@ -6354,8 +6354,8 @@ var init_hu = __esm({
 });
 
 // ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/hy.js
-function getArmenianPlural(count, one, many) {
-  return Math.abs(count) === 1 ? one : many;
+function getArmenianPlural(count2, one, many) {
+  return Math.abs(count2) === 1 ? one : many;
 }
 function withDefiniteArticle(word) {
   if (!word)
@@ -8596,8 +8596,8 @@ var init_ro = __esm({
 });
 
 // ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ru.js
-function getRussianPlural(count, one, few, many) {
-  const absCount = Math.abs(count);
+function getRussianPlural(count2, one, few, many) {
+  const absCount = Math.abs(count2);
   const lastDigit = absCount % 10;
   const lastTwoDigits = absCount % 100;
   if (lastTwoDigits >= 11 && lastTwoDigits <= 19) {
@@ -17302,20 +17302,20 @@ var require_resolve = __commonJS({
       return false;
     }
     function countKeys(schema) {
-      let count = 0;
+      let count2 = 0;
       for (const key in schema) {
         if (key === "$ref")
           return Infinity;
-        count++;
+        count2++;
         if (SIMPLE_INLINED.has(key))
           continue;
         if (typeof schema[key] == "object") {
-          (0, util_1.eachItem)(schema[key], (sch) => count += countKeys(sch));
+          (0, util_1.eachItem)(schema[key], (sch) => count2 += countKeys(sch));
         }
-        if (count === Infinity)
+        if (count2 === Infinity)
           return Infinity;
       }
-      return count;
+      return count2;
     }
     function getFullPath(resolver, id = "", normalize) {
       if (normalize !== false)
@@ -20400,8 +20400,8 @@ var require_contains = __commonJS({
         cxt.result(valid, () => cxt.reset());
         function validateItemsWithCount() {
           const schValid = gen.name("_valid");
-          const count = gen.let("count", 0);
-          validateItems(schValid, () => gen.if(schValid, () => checkLimits(count)));
+          const count2 = gen.let("count", 0);
+          validateItems(schValid, () => gen.if(schValid, () => checkLimits(count2)));
         }
         function validateItems(_valid, block) {
           gen.forRange("i", 0, len, (i) => {
@@ -20414,16 +20414,16 @@ var require_contains = __commonJS({
             block();
           });
         }
-        function checkLimits(count) {
-          gen.code((0, codegen_1._)`${count}++`);
+        function checkLimits(count2) {
+          gen.code((0, codegen_1._)`${count2}++`);
           if (max === void 0) {
-            gen.if((0, codegen_1._)`${count} >= ${min}`, () => gen.assign(valid, true).break());
+            gen.if((0, codegen_1._)`${count2} >= ${min}`, () => gen.assign(valid, true).break());
           } else {
-            gen.if((0, codegen_1._)`${count} > ${max}`, () => gen.assign(valid, false).break());
+            gen.if((0, codegen_1._)`${count2} > ${max}`, () => gen.assign(valid, false).break());
             if (min === 1)
               gen.assign(valid, true);
             else
-              gen.if((0, codegen_1._)`${count} >= ${min}`, () => gen.assign(valid, true));
+              gen.if((0, codegen_1._)`${count2} >= ${min}`, () => gen.assign(valid, true));
           }
         }
       }
@@ -21858,8 +21858,8 @@ var require_dist = __commonJS({
         return ajv;
       }
       const [formats, exportName] = opts.mode === "fast" ? [formats_1.fastFormats, fastName] : [formats_1.fullFormats, fullName];
-      const list = opts.formats || formats_1.formatNames;
-      addFormats(ajv, list, formats, exportName);
+      const list2 = opts.formats || formats_1.formatNames;
+      addFormats(ajv, list2, formats, exportName);
       if (opts.keywords)
         (0, limit_1.default)(ajv);
       return ajv;
@@ -21871,11 +21871,11 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list, fs11, exportName) {
+    function addFormats(ajv, list2, fs11, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
-      for (const f of list)
+      for (const f of list2)
         ajv.addFormat(f, fs11[f]);
     }
     module.exports = exports = formatsPlugin;
@@ -25175,6 +25175,38 @@ var init_prose_lint = __esm({
   }
 });
 
+// ../shared/dist/schemas/ledger-digest.js
+var count, LedgerDigestSchema;
+var init_ledger_digest = __esm({
+  "../shared/dist/schemas/ledger-digest.js"() {
+    "use strict";
+    init_zod();
+    count = external_exports.number().finite().nonnegative();
+    LedgerDigestSchema = external_exports.object({
+      shapedThisProject: count,
+      nearMissesThisProject: count,
+      blockedThisProject: count,
+      sessionsTouched: count,
+      topCitedStances: external_exports.array(external_exports.object({
+        concept: external_exports.string(),
+        source: external_exports.enum(["session", "team"]),
+        citationCount: count,
+        globalCitationCount: count.optional(),
+        sampleArtifactId: external_exports.string().optional(),
+        sampleSessionId: external_exports.string().optional()
+      })),
+      seededStances: external_exports.array(external_exports.object({
+        concept: external_exports.string(),
+        stance: external_exports.enum(["avoid", "prefer", "mixed"]),
+        citedTimesElsewhere: count,
+        sampleArtifactId: external_exports.string().optional(),
+        sampleSessionId: external_exports.string().optional()
+      })).optional(),
+      globalLedger: external_exports.object({ concepts: count, projects: count, multiProjectConcepts: count })
+    });
+  }
+});
+
 // ../shared/dist/index.js
 var init_dist = __esm({
   "../shared/dist/index.js"() {
@@ -25200,6 +25232,7 @@ var init_dist = __esm({
     init_request();
     init_errors3();
     init_prose_lint();
+    init_ledger_digest();
   }
 });
 
@@ -30776,7 +30809,7 @@ Prior rejection reason: "${match.rejected.reason}"` : "";
 Matched on underlying concept: "${match.rejected.concept}". A paraphrased proposal still counts \u2014 the user has rejected this kind of approach.` : "";
       const message = `REJECTED_APPROACH_BLOCKED: ${toolName} refused \u2014 your proposal contains "${match.proposal}" which the user previously rejected ("${match.rejected.description}").${reasonLine}${conceptLine}
 
-Do NOT retry with this approach. Revise your proposal to exclude it, or \u2014 if you believe conditions have changed \u2014 present_findings first to make the case for reconsidering, then wait for the human's response via check_feedback. The artifact was NOT created.`;
+Do NOT retry with this approach. Propose an alternative. If this is a false positive or conditions have changed, ask the human to override this block in the companion UI's Ledger before retrying. Mentioning the rejected concept in present_findings is checked by this same gate. The artifact was NOT created.`;
       return {
         blocked: true,
         block: {
@@ -31430,7 +31463,7 @@ function receivedSize(input, path12) {
   return void 0;
 }
 function scalarIssueClause(i, input) {
-  const field = `\`${i.path.join(".") || "(root)"}\``;
+  const field2 = `\`${i.path.join(".") || "(root)"}\``;
   if (isScalarBoundIssue(i)) {
     const isString = i.origin === "string";
     const isArray = i.origin === "array";
@@ -31438,11 +31471,11 @@ function scalarIssueClause(i, input) {
     const size = receivedSize(input, i.path);
     const got = size !== void 0 ? `, got ${size}` : "";
     if (i.code === "too_big") {
-      return `${field}: too long (max ${i.maximum}${unit}${got})`;
+      return `${field2}: too long (max ${i.maximum}${unit}${got})`;
     }
-    return `${field}: too short (min ${i.minimum}${unit}${got})`;
+    return `${field2}: too short (min ${i.minimum}${unit}${got})`;
   }
-  return `${field} (${scalarTypeTag(i)})`;
+  return `${field2} (${scalarTypeTag(i)})`;
 }
 function collapsePath(path12) {
   return path12.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
@@ -31695,10 +31728,10 @@ var EXAMPLE_EXPLAINER = `{
 }`;
 var prop = (v2, key) => v2 && typeof v2 === "object" ? v2[key] : void 0;
 var normEcho = (v2) => typeof v2 === "string" ? v2.trim().toLowerCase() : "";
-var pluckSet = (v2, listKey, field) => {
-  const list = prop(v2, listKey);
-  const items = Array.isArray(list) ? list : [];
-  return items.map((x) => normEcho(prop(x, field))).filter((s) => s.length > 0).sort();
+var pluckSet = (v2, listKey, field2) => {
+  const list2 = prop(v2, listKey);
+  const items = Array.isArray(list2) ? list2 : [];
+  return items.map((x) => normEcho(prop(x, field2))).filter((s) => s.length > 0).sort();
 };
 var echoSetEq = (a, b) => a.length > 0 && a.length === b.length && a.every((v2, i) => v2 === b[i]);
 var EX_OPTIONS = JSON.parse(EXAMPLE_OPTIONS);
@@ -32913,10 +32946,10 @@ function planBody(a, ctx) {
 }
 function decisionBody(a, ctx) {
   const content = coerceDecisionContent(a.content);
-  const record2 = ctx.state.decisions.find(
+  const record3 = ctx.state.decisions.find(
     (d) => d.decisionId === content.decisionId || d.artifactId === a.id
   );
-  const chosenId = record2?.response?.optionId;
+  const chosenId = record3?.response?.optionId;
   const parts = [];
   if (content.context) parts.push(renderMarkdown(content.context, 4, ctx.includeCode));
   parts.push(`<div class="options">`);
@@ -32932,10 +32965,10 @@ function decisionBody(a, ctx) {
     );
   }
   parts.push(`</div>`);
-  if (record2?.response) {
+  if (record3?.response) {
     const chosenOption = (content.options ?? []).find((o) => o.id === chosenId);
     parts.push(
-      `<div class="verdict verdict--chosen"><strong>The human chose:</strong> ${escText(chosenOption?.title ?? chosenId ?? "")}` + (record2.response.reasoning ? ` \u2014 \u201C${renderInline(record2.response.reasoning)}\u201D` : "") + `</div>`
+      `<div class="verdict verdict--chosen"><strong>The human chose:</strong> ${escText(chosenOption?.title ?? chosenId ?? "")}` + (record3.response.reasoning ? ` \u2014 \u201C${renderInline(record3.response.reasoning)}\u201D` : "") + `</div>`
     );
   } else {
     parts.push(`<p class="pending">No answer recorded for this fork.</p>`);
@@ -33481,9 +33514,9 @@ function renderSessionPage(state, options) {
   for (const c of state.comments ?? []) {
     const id = c.target?.artifactId;
     if (id && artifactIds.has(id)) {
-      const list = commentsByArtifact.get(id) ?? [];
-      list.push(c);
-      commentsByArtifact.set(id, list);
+      const list2 = commentsByArtifact.get(id) ?? [];
+      list2.push(c);
+      commentsByArtifact.set(id, list2);
     } else {
       looseComments.push(c);
     }
@@ -34127,9 +34160,9 @@ function formatReplay(state) {
   });
   const annotationsByEvent = /* @__PURE__ */ new Map();
   for (const ann of state.annotations ?? []) {
-    const list = annotationsByEvent.get(ann.targetEventId) ?? [];
-    list.push(ann);
-    annotationsByEvent.set(ann.targetEventId, list);
+    const list2 = annotationsByEvent.get(ann.targetEventId) ?? [];
+    list2.push(ann);
+    annotationsByEvent.set(ann.targetEventId, list2);
   }
   if (events.length === 0) {
     sections.push("_No events recorded in this session._");
@@ -34307,9 +34340,9 @@ function formatPrComments(state) {
     const evidence = entry.finding.evidence;
     const firstPath = Array.isArray(evidence) && evidence[0] && typeof evidence[0] === "object" ? evidence[0].filePath : void 0;
     const key = firstPath ?? "General";
-    const list = byFile.get(key) ?? [];
-    list.push(entry);
-    byFile.set(key, list);
+    const list2 = byFile.get(key) ?? [];
+    list2.push(entry);
+    byFile.set(key, list2);
   }
   for (const [filePath, entries] of byFile.entries()) {
     sections.push(`### ${filePath}`);
@@ -34653,21 +34686,63 @@ Tell the human this before they send it.
   };
 }
 
+// src/mcp/artifact-preflight.ts
+var record2 = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {};
+var list = (value) => Array.isArray(value) ? value : [];
+var strings = (values) => values.filter((v2) => typeof v2 === "string" && v2.length > 0);
+var field = (values, key) => list(values).map((v2) => record2(v2)[key]);
+function artifactProposal(type, title, value) {
+  const c = record2(value);
+  let text = [];
+  let paths = [];
+  let concepts = [];
+  switch (type) {
+    case "research":
+      text = [title, c.summary, ...field(c.findings, "title"), ...field(c.findings, "recommendation")];
+      paths = list(c.findings).flatMap((f) => field(record2(f).evidence, "filePath"));
+      break;
+    case "decision":
+      text = [c.context, ...field(c.options, "title"), ...field(c.options, "description")];
+      concepts = field(c.options, "concept").map((v2) => record2(v2).name);
+      break;
+    case "spec":
+      text = [title, c.objective, ...field(c.requirements, "statement"), ...field(c.requirements, "rationale"), ...field(c.tasks, "description")];
+      break;
+    case "plan":
+      paths = list(c.steps).flatMap((s) => list(record2(s).files).map((f) => typeof f === "string" ? f : record2(f).filePath));
+      text = [title, ...field(c.steps, "description"), ...field(c.steps, "reasoning"), ...paths];
+      break;
+    case "code_change":
+      text = [c.filePath, c.reasoning];
+      paths = [c.filePath];
+      concepts = [record2(c.concept).name];
+      break;
+    case "changeset":
+      text = [title, c.summary, ...list(c.risks)];
+      paths = field(c.files, "path");
+      break;
+    case "debrief":
+      text = [title, c.summary, ...field(c.sections, "title"), ...field(c.decisionsMade, "what")];
+      concepts = list(c.sections).flatMap((s) => field(record2(s).concepts, "name"));
+      break;
+    case "explainer":
+      text = [title, c.overview, ...field(c.sections, "heading")];
+      break;
+    default:
+      return null;
+  }
+  return { text: strings(text), paths: strings(paths), concepts: strings(concepts), advisory: type === "changeset" && c.reviewIntent === "external" };
+}
+function preflightArtifact(ctx, toolName, type, title, content) {
+  const proposal = artifactProposal(type, title, content);
+  return proposal ? ctx.helpers.preflightRejectedApproaches(toolName, proposal.text, proposal.paths, proposal.concepts, { advisory: proposal.advisory }) : null;
+}
+
 // src/mcp/tools/present-findings.ts
 async function handlePresentFindings(ctx, args) {
   const validated = validatePresentFindingsInput(args);
   if (!validated.ok) return validated.error;
-  const findings = validated.data.findings;
-  const proposals = [
-    args?.title ?? "",
-    validated.data.summary,
-    ...findings.map((f) => f?.title ?? ""),
-    ...findings.map((f) => f?.recommendation ?? "")
-  ].filter(Boolean);
-  const proposalPaths = findings.flatMap(
-    (f) => Array.isArray(f?.evidence) ? f.evidence.map((e) => typeof e === "object" && e?.filePath || "").filter(Boolean) : []
-  );
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_findings", proposals, proposalPaths);
+  const pre = await preflightArtifact(ctx, "present_findings", "research", args?.title ?? "", validated.data);
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_findings", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
@@ -34744,13 +34819,7 @@ async function handlePresentOptions(ctx, args) {
   const proposedOptions = validatedOptions.map(
     (o) => o.visuals?.length ? { ...o, visuals: o.visuals.map((v2, i) => ({ ...v2, id: v2.id ?? `${o.id}_visual_${i}` })) } : o
   );
-  const proposals = [
-    context,
-    ...proposedOptions.map((o) => o.title),
-    ...proposedOptions.map((o) => o.description)
-  ].filter(Boolean);
-  const proposalConcepts = proposedOptions.map((o) => o.concept?.name).filter((n) => Boolean(n && n.trim()));
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_options", proposals, [], proposalConcepts);
+  const pre = await preflightArtifact(ctx, "present_options", "decision", artifactTitle, validated.data);
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_options", hashPresentArgs(args));
   if (dedup.duplicate) {
@@ -35214,9 +35283,9 @@ ${lines.join("\n")}`
   } catch {
   }
   if (freshlyRejected.length > 0) {
-    const list = freshlyRejected.map((a) => `"${a.title}" (${a.type})`).join(", ");
+    const list2 = freshlyRejected.map((a) => `"${a.title}" (${a.type})`).join(", ");
     parts.push(
-      `\u274C REJECTED (${freshlyRejected.length}): ${list}
+      `\u274C REJECTED (${freshlyRejected.length}): ${list2}
 The human rejected ${freshlyRejected.length === 1 ? "this" : "these"} \u2014 do NOT apply. Revise the approach or propose a different one (see their comment above for why).`
     );
   }
@@ -35882,6 +35951,8 @@ async function handleReviseArtifact(ctx, args) {
       const v2 = supersedeValidator({ title: args?.title ?? old.title, ...content });
       if (!v2.ok) return v2.error;
     }
+    const pre = await preflightArtifact(ctx, "revise_artifact", old.type, String(args?.title ?? old.title), content);
+    if (pre && !pre.ok) return pre.response;
     if (old.type === "changeset" && content && typeof content === "object") {
       delete content.reviewState;
     }
@@ -35934,6 +36005,7 @@ async function handleReviseArtifact(ctx, args) {
     if (old.type === "plan") {
       await store.recordPlanReview(newId);
     }
+    if (pre?.ok) await persistPreflightTrace(store, broadcast, newArtifact, "revise_artifact", pre.trace);
     broadcast({ type: "artifact_created", artifact: newArtifact });
     broadcast({ type: "artifact_updated", artifactId: old.id, status: "superseded" });
     notifyResourcesListChanged(server);
@@ -36143,6 +36215,13 @@ async function detectRepo() {
     throw new Error(`Could not parse gh repo view output: ${errorMessage(err)}`);
   }
 }
+async function resolvePrTarget(ref, owner, repo) {
+  const parsed = parsePrRef(ref);
+  const targetOwner = owner ?? parsed.owner;
+  const targetRepo = repo ?? parsed.repo;
+  const detected = !targetOwner || !targetRepo ? await detectRepo() : null;
+  return `https://github.com/${targetOwner ?? detected.owner}/${targetRepo ?? detected.repo}/pull/${parsed.number}`;
+}
 async function postPrReview(opts) {
   const parsed = parsePrRef(opts.ref);
   let owner = opts.owner ?? parsed.owner;
@@ -36179,11 +36258,11 @@ async function postPrReview(opts) {
 init_dist();
 
 // src/store/posted-reviews.ts
-function samePrTarget(record2, ref) {
+function samePrTarget(record3, ref) {
   const parsed = parsePrNumber(ref);
-  if (parsed === null || parsed.number !== record2.prNumber) return false;
-  if (parsed.owner && parsed.repo && record2.owner && record2.repo) {
-    return parsed.owner === record2.owner && parsed.repo === record2.repo;
+  if (parsed === null || parsed.number !== record3.prNumber) return false;
+  if (parsed.owner && parsed.repo && record3.owner && record3.repo) {
+    return parsed.owner === record3.owner && parsed.repo === record3.repo;
   }
   return true;
 }
@@ -36260,6 +36339,19 @@ function authorizeReviewPost(state, opts) {
   }
   const approved = findingsArtifacts.filter((a) => a.status === "approved");
   const decidedNo = findingsArtifacts.filter((a) => DECIDED_EXCLUDED_STATUSES.has(a.status));
+  if (opts.pr) {
+    const target = parsePrNumber(opts.pr);
+    const external = externalChangesets(state.artifacts).filter((a) => !["superseded", "retracted", "obsolete"].includes(a.status));
+    for (const artifact of external) {
+      const source = coerceChangesetContent(artifact.content).source;
+      const reviewed = source?.url ? parsePrNumber(source.url) : null;
+      const same = target && reviewed?.owner && reviewed.repo && target.number === reviewed.number && (source?.number === void 0 || source.number === reviewed.number) && (!target.owner || target.owner.toLowerCase() === reviewed.owner.toLowerCase()) && (!target.repo || target.repo.toLowerCase() === reviewed.repo.toLowerCase());
+      if (!same) return {
+        ok: false,
+        reason: `Refusing to post: "${artifact.title}" does not identify the requested PR ${opts.pr}. Present that PR with its full source.url and get your pair's verdict before posting.`
+      };
+    }
+  }
   if (event === "APPROVE") {
     const externals = externalChangesets(state.artifacts);
     const refused = externals.filter((a) => a.status === "rejected" || a.status === "revised");
@@ -36326,19 +36418,29 @@ async function handlePostPrReview(ctx, args) {
   if (!auth.ok) {
     return { content: [{ type: "text", text: auth.reason }], isError: true };
   }
-  const { payload } = auth;
+  let { payload } = auth;
   try {
-    const result = await postPrReview({
+    const target = await resolvePrTarget(
       ref,
-      payload,
-      owner: typeof args?.owner === "string" ? args.owner : void 0,
-      repo: typeof args?.repo === "string" ? args.repo : void 0
+      typeof args?.owner === "string" ? args.owner : void 0,
+      typeof args?.repo === "string" ? args.repo : void 0
+    );
+    const targetAuth = authorizeReviewPost(await store.getFullState(), {
+      event: args?.event,
+      pr: target,
+      repost: args?.repost === true
+    });
+    if (!targetAuth.ok) return { content: [{ type: "text", text: targetAuth.reason }], isError: true };
+    payload = targetAuth.payload;
+    const result = await postPrReview({
+      ref: target,
+      payload
     });
     let stampNote = "";
     try {
-      const parsed = parsePrRef(ref);
-      const owner = typeof args?.owner === "string" ? args.owner : parsed.owner;
-      const repo = typeof args?.repo === "string" ? args.repo : parsed.repo;
+      const parsed = parsePrRef(target);
+      const owner = parsed.owner;
+      const repo = parsed.repo;
       await store.recordPostedReview({
         pr: ref,
         prNumber: parsed.number,
@@ -36382,14 +36484,7 @@ async function handlePresentSpec(ctx, args) {
   const { title, objective, context, requirements, design, tasks, openQuestions, visuals } = validated.data;
   const requirementsArr = requirements;
   const tasksArr = tasks ?? [];
-  const proposals = [
-    title,
-    objective,
-    ...requirementsArr.map((r) => r.statement),
-    ...requirementsArr.map((r) => r.rationale),
-    ...tasksArr.map((t) => t.description)
-  ].filter(Boolean);
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_spec", proposals);
+  const pre = await preflightArtifact(ctx, "present_spec", "spec", title, validated.data);
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_spec", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
@@ -36458,18 +36553,7 @@ async function handlePresentPlan(ctx, args) {
   const validated = validatePresentPlanInput(args);
   if (!validated.ok) return validated.error;
   const { title, steps: planSteps, estimatedChanges, visuals } = validated.data;
-  const proposals = [
-    title,
-    ...planSteps.map((s) => s.description),
-    ...planSteps.map((s) => s.reasoning),
-    ...planSteps.flatMap(
-      (s) => Array.isArray(s.files) ? s.files.map((f) => String(typeof f === "string" ? f : f?.filePath ?? "")) : []
-    )
-  ].filter(Boolean);
-  const proposalPaths = planSteps.flatMap(
-    (s) => Array.isArray(s.files) ? s.files.map((f) => typeof f === "string" ? f : f?.filePath).filter(Boolean) : []
-  );
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_plan", proposals, proposalPaths);
+  const pre = await preflightArtifact(ctx, "present_plan", "plan", title, validated.data);
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_plan", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
@@ -36547,10 +36631,7 @@ async function handlePresentCodeChange(ctx, args) {
   if (effectiveBefore && effectiveChangeType === "create") {
     effectiveChangeType = "modify";
   }
-  const proposals = [filePath, reasoning].filter(Boolean);
-  const proposalPaths = [filePath];
-  const proposalConcepts = [concept?.name].filter((n) => Boolean(n && n.trim()));
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_code_change", proposals, proposalPaths, proposalConcepts);
+  const pre = await preflightArtifact(ctx, "present_code_change", "code_change", "", validated.data);
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_code_change", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
@@ -36623,13 +36704,7 @@ async function handlePresentChangeset(ctx, args) {
   if (!validated.ok) return validated.error;
   const { title, summary, files, risks, reviewIntent, source, visuals } = validated.data;
   const isExternal = reviewIntent === "external";
-  const pre = await ctx.helpers.preflightRejectedApproaches(
-    "present_changeset",
-    [title, summary ?? "", ...risks ?? []].filter(Boolean),
-    files.map((f) => f.path).filter(Boolean),
-    [],
-    { advisory: isExternal }
-  );
+  const pre = await preflightArtifact(ctx, "present_changeset", "changeset", title, validated.data);
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_changeset", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
@@ -36700,14 +36775,7 @@ async function handlePresentDebrief(ctx, args) {
   const validated = validatePresentDebriefInput(args);
   if (!validated.ok) return validated.error;
   const { title, summary, sections, decisionsMade, needsYourEyes, deferred, openQuestions, visuals } = validated.data;
-  const proposals = [
-    title,
-    summary,
-    ...(sections ?? []).map((s) => s.title),
-    ...(decisionsMade ?? []).map((d) => d.what)
-  ].filter(Boolean);
-  const proposalConcepts = (sections ?? []).flatMap((s) => (s.concepts ?? []).map((c) => c.name)).filter(Boolean);
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_debrief", proposals, [], proposalConcepts);
+  const pre = await preflightArtifact(ctx, "present_debrief", "debrief", title, validated.data);
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_debrief", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
@@ -36780,12 +36848,7 @@ async function handlePresentExplainer(ctx, args) {
   const validated = validatePresentExplainerInput(args);
   if (!validated.ok) return validated.error;
   const { title, overview, sections, relatedArtifactIds, suggestedQuestions, visuals, unknowns } = validated.data;
-  const proposals = [
-    title,
-    overview,
-    ...(sections ?? []).map((s) => s.heading)
-  ].filter(Boolean);
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_explainer", proposals, [], []);
+  const pre = await preflightArtifact(ctx, "present_explainer", "explainer", title, validated.data);
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_explainer", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
@@ -38449,8 +38512,8 @@ var DaemonClient = class {
    *  READ needs no proxy: the record rides getFullState above. NOT
    *  fire-and-forget — a swallowed failure here re-arms a duplicate post, so
    *  the caller awaits it before reporting success. */
-  async recordPostedReview(record2) {
-    await this.post("/posted-reviews", record2);
+  async recordPostedReview(record3) {
+    await this.post("/posted-reviews", record3);
   }
   async forceFlush() {
     await this.post("/flush");

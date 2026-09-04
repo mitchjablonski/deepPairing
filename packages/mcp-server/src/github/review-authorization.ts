@@ -66,7 +66,7 @@ import type { Artifact, Finding } from "@deeppairing/shared";
 import { coerceResearchContent, coerceChangesetContent, isPostableFinding } from "@deeppairing/shared";
 import { buildGitHubReviewPayload, type GitHubReviewPayload, type GitHubReviewEvent } from "../export/format-markdown.js";
 import type { PostedReviewRecord } from "../store/posted-reviews.js";
-import { samePrTarget } from "../store/posted-reviews.js";
+import { samePrTarget, parsePrNumber } from "../store/posted-reviews.js";
 
 /** The minimum of a session this gate reads. Structural, so both callers'
  *  slightly different state shapes (store.getFullState vs FileStore.loadSession)
@@ -274,6 +274,27 @@ export function authorizeReviewPost(
   // retracted/obsolete are honoured by omission.
   const approved = findingsArtifacts.filter((a) => a.status === "approved");
   const decidedNo = findingsArtifacts.filter((a) => DECIDED_EXCLUDED_STATUSES.has(a.status));
+
+  // A verdict belongs to the PR shown on the surface. Check every standing
+  // external chunk; mixing two PRs must not silently authorize either one.
+  if (opts.pr) {
+    const target = parsePrNumber(opts.pr);
+    const external = externalChangesets(state.artifacts).filter(a =>
+      !["superseded", "retracted", "obsolete"].includes(a.status));
+    for (const artifact of external) {
+      const source = coerceChangesetContent(artifact.content).source;
+      const reviewed = source?.url ? parsePrNumber(source.url) : null;
+      const same = target && reviewed?.owner && reviewed.repo &&
+        target.number === reviewed.number &&
+        (source?.number === undefined || source.number === reviewed.number) &&
+        (!target.owner || target.owner.toLowerCase() === reviewed.owner.toLowerCase()) &&
+        (!target.repo || target.repo.toLowerCase() === reviewed.repo.toLowerCase());
+      if (!same) return {
+        ok: false,
+        reason: `Refusing to post: "${artifact.title}" does not identify the requested PR ${opts.pr}. Present that PR with its full source.url and get your pair's verdict before posting.`,
+      };
+    }
+  }
 
   // (c) A BARE APPROVE IS A REAL VERDICT ON SOMEONE ELSE'S PR — and so is an
   // APPROVE that happens to carry inline comments.

@@ -738,9 +738,10 @@ export function runPreflight(input: PreflightInput): PreflightResult {
       const message =
         `REJECTED_APPROACH_BLOCKED: ${toolName} refused — your proposal contains "${match.proposal}" ` +
         `which the user previously rejected ("${match.rejected.description}").${reasonLine}${conceptLine}\n\n` +
-        `Do NOT retry with this approach. Revise your proposal to exclude it, or — if you believe ` +
-        `conditions have changed — present_findings first to make the case for reconsidering, then ` +
-        `wait for the human's response via check_feedback. The artifact was NOT created.`;
+        `Do NOT retry with this approach. Propose an alternative. If this is a false positive or ` +
+        `conditions have changed, ask the human to override this block in the companion UI's Ledger ` +
+        `before retrying. Mentioning the rejected concept in present_findings is checked by this same gate. ` +
+        `The artifact was NOT created.`;
       return {
         blocked: true,
         block: {

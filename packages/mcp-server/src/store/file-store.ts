@@ -115,9 +115,9 @@ export class FileStore implements IStore {
    * size has changed beyond what we last saw, another writer (CLI command,
    * second daemon during a race, external editor) has touched the file
    * and our in-memory copy is no longer the full truth. We re-read the
-   * disk version and merge by id before writing — in-memory wins on key
-   * collisions because those are the user's latest actions, but records
-   * added by the other writer survive instead of being clobbered.
+   * disk version and merge by id against our last observed version. Fields
+   * that did not change locally adopt external changes; genuine same-field
+   * conflicts keep the local edit. New external records also survive.
    *
    * Why two signals: mtime granularity is FS-dependent (WSL2 and some
    * older Linux/Windows give second-only resolution), so two writes in
@@ -139,6 +139,9 @@ export class FileStore implements IStore {
   // an entry whenever readIfChanged detects an external write, so the skip can
   // never defeat the U1 merge self-heal.
   private lastSerialized: Record<string, string> = {};
+  // Baseline for three-way merges. Unlike the write-skip cache this survives
+  // external-change invalidation and is populated when a store first loads.
+  private lastObserved: Record<string, string> = {};
 
   // BB2 — held for FileStore.invalidateLedgerDigestCache, which is keyed
   // by projectRoot so all sessions in this project bust the same cache.
@@ -316,7 +319,9 @@ export class FileStore implements IStore {
       const stat = fs.statSync(filePath);
       this.fileMtimeMs[filePath] = stat.mtimeMs;
       this.fileSizes[filePath] = stat.size;
-      return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      this.lastObserved[filePath] = JSON.stringify(parsed);
+      return parsed;
     } catch (err) {
       if (errorCode(err) === "ENOENT") {
         delete this.fileMtimeMs[filePath];
@@ -405,6 +410,7 @@ export class FileStore implements IStore {
     if (this.lastSerialized[filePath] === serialized) return;
     writeStringAtomic(filePath, serialized);
     this.lastSerialized[filePath] = serialized;
+    this.lastObserved[filePath] = serialized;
     try {
       const stat = fs.statSync(filePath);
       this.fileMtimeMs[filePath] = stat.mtimeMs;
@@ -413,22 +419,35 @@ export class FileStore implements IStore {
   }
 
   /**
-   * U1 — merge-by-id helper. If another writer touched the file, union the
-   * on-disk records with our in-memory ones; in-memory wins on key
-   * collisions because those are the user's most recent actions. Records
-   * the other writer added that we never saw still survive instead of
-   * being overwritten.
+   * Merge against the last observed version, field by field. Unchanged local
+   * fields adopt external edits; actual local edits win a same-field conflict.
+   * Thus an unrelated local edit cannot restore a stale human verdict.
    */
   private mergeArrayById<T extends Record<string, any>>(
     inMemory: T[],
     onDisk: T[] | null,
     keyField: string,
+    filePath: string,
   ): T[] {
     if (!onDisk || !Array.isArray(onDisk)) return inMemory;
+    const baseline = JSON.parse(this.lastObserved[filePath] ?? "[]") as T[];
+    const before = new Map((Array.isArray(baseline) ? baseline : []).map(r => [r?.[keyField], r]));
+    const disk = new Map(onDisk.map(r => [r[keyField], r]));
     const seen = new Set(inMemory.map((r) => r[keyField]).filter(Boolean));
     const additions = onDisk.filter((r) => r[keyField] && !seen.has(r[keyField]));
-    if (additions.length === 0) return inMemory;
-    return [...additions, ...inMemory];
+    return [...additions, ...inMemory.map(local => {
+      const base = before.get(local[keyField]);
+      const external = disk.get(local[keyField]);
+      if (!base || !external) return local;
+      const merged = { ...external } as Record<string, unknown>;
+      for (const key of new Set([...Object.keys(base), ...Object.keys(local)])) {
+        if (JSON.stringify(local[key]) !== JSON.stringify(base[key])) {
+          if (key in local) merged[key] = local[key];
+          else delete merged[key];
+        }
+      }
+      return merged as T;
+    })];
   }
 
   private flush(): void {
@@ -459,6 +478,7 @@ export class FileStore implements IStore {
         this.artifacts,
         FileStore.salvageArray<Artifact>(`${this.sessionId}:artifacts.json (external)`, diskArtifacts, "id"),
         "id",
+        artifactsPath,
       );
       delete this.lastSerialized[artifactsPath];
     }
@@ -468,25 +488,22 @@ export class FileStore implements IStore {
         this.comments,
         FileStore.salvageArray<Comment>("comments.json (external)", diskComments, "id"),
         "id",
+        commentsPath,
       );
       delete this.lastSerialized[commentsPath];
     }
     const diskDecisions = this.readIfChanged<unknown>(decisionsPath);
     if (diskDecisions) {
-      for (const d of FileStore.salvageArray<DecisionRecord>("decisions.json (external)", diskDecisions, "decisionId")) {
-        if (!this.decisions.has(d.decisionId)) {
-          this.decisions.set(d.decisionId, d);
-        }
-      }
+      this.decisions = new Map(this.mergeArrayById(Array.from(this.decisions.values()),
+        FileStore.salvageArray<DecisionRecord>("decisions.json (external)", diskDecisions, "decisionId"),
+        "decisionId", decisionsPath).map(d => [d.decisionId, d]));
       delete this.lastSerialized[decisionsPath];
     }
     const diskPlans = this.readIfChanged<unknown>(plansPath);
     if (diskPlans) {
-      for (const p of FileStore.salvageArray<PlanReviewRecord>("plan-reviews.json (external)", diskPlans, "artifactId")) {
-        if (!this.planReviews.has(p.artifactId)) {
-          this.planReviews.set(p.artifactId, p);
-        }
-      }
+      this.planReviews = new Map(this.mergeArrayById(Array.from(this.planReviews.values()),
+        FileStore.salvageArray<PlanReviewRecord>("plan-reviews.json (external)", diskPlans, "artifactId"),
+        "artifactId", plansPath).map(p => [p.artifactId, p]));
       delete this.lastSerialized[plansPath];
     }
 

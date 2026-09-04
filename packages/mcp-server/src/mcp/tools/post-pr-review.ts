@@ -1,5 +1,5 @@
 import type { ToolContext, ToolResult } from "./types.js";
-import { postPrReview, parsePrRef, GhMissingError, GhNotAuthedError } from "../../github/post-review.js";
+import { postPrReview, parsePrRef, resolvePrTarget, GhMissingError, GhNotAuthedError } from "../../github/post-review.js";
 import { authorizeReviewPost } from "../../github/review-authorization.js";
 import { errorMessage } from "@deeppairing/shared";
 
@@ -39,14 +39,22 @@ export async function handlePostPrReview(ctx: ToolContext, args: any): Promise<T
   if (!auth.ok) {
     return { content: [{ type: "text", text: auth.reason }], isError: true };
   }
-  const { payload } = auth;
+  let { payload } = auth;
 
   try {
+    // Resolve before the final check: owner/repo overrides and bare numbers
+    // must be checked against the destination that will actually receive it.
+    const target = await resolvePrTarget(ref,
+      typeof args?.owner === "string" ? args.owner : undefined,
+      typeof args?.repo === "string" ? args.repo : undefined);
+    const targetAuth = authorizeReviewPost(await store.getFullState() as never, {
+      event: args?.event, pr: target, repost: args?.repost === true,
+    });
+    if (!targetAuth.ok) return { content: [{ type: "text", text: targetAuth.reason }], isError: true };
+    payload = targetAuth.payload;
     const result = await postPrReview({
-      ref,
+      ref: target,
       payload,
-      owner: typeof args?.owner === "string" ? args.owner : undefined,
-      repo: typeof args?.repo === "string" ? args.repo : undefined,
     });
     // R1 (#279) — record the landed review BEFORE reporting success, so a
     // second call refuses instead of notifying the author again. Awaited (not
@@ -56,9 +64,9 @@ export async function handlePostPrReview(ctx: ToolContext, args: any): Promise<T
     // send the agent to re-post it.
     let stampNote = "";
     try {
-      const parsed = parsePrRef(ref);
-      const owner = typeof args?.owner === "string" ? args.owner : parsed.owner;
-      const repo = typeof args?.repo === "string" ? args.repo : parsed.repo;
+      const parsed = parsePrRef(target);
+      const owner = parsed.owner;
+      const repo = parsed.repo;
       await store.recordPostedReview({
         pr: ref,
         prNumber: parsed.number,

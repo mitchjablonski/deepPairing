@@ -266,7 +266,8 @@ describe("runPreflight orchestrator", () => {
     if (r.blocked) {
       expect(r.block.message).toMatch(/REJECTED_APPROACH_BLOCKED/);
       expect(r.block.message).toMatch(/Railway/);
-      expect(r.block.message).toMatch(/check_feedback/);
+      expect(r.block.message).toMatch(/ask the human to override this block in the companion UI's Ledger/);
+      expect(r.block.message).toMatch(/present_findings is checked by this same gate/);
     }
   });
 

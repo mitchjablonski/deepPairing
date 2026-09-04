@@ -340,3 +340,4 @@ export {
   type Violation,
   type ArtifactProseResult,
 } from "./prose-lint.js";
+export { LedgerDigestSchema, type LedgerDigest } from "./schemas/ledger-digest.js";
