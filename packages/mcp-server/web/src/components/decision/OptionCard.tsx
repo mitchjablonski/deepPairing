@@ -120,7 +120,7 @@ export function OptionCard({ option, index, focused, submitting, locked = false,
       <CarryoverBadge state={carryover} />
 
       {/* Description */}
-      <SimpleMarkdown text={option.description} className="text-xs text-text-secondary mb-2 space-y-1" />
+      <SimpleMarkdown text={option.description} className="prose-field text-xs text-text-secondary mb-2 space-y-1" />
 
       {/* Y5 — concept badge. Names the underlying pattern so this
           option's rejection (or approval) compounds across projects

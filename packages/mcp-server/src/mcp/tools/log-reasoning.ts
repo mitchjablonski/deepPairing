@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 import { validateLogReasoningInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
-import { notifyResourcesListChanged } from "../tool-helpers.js";
+import { notifyResourcesListChanged, formatStyleWarnings } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handleLogReasoning(ctx: ToolContext, args: any): Promise<ToolResult> {
@@ -58,6 +58,6 @@ export async function handleLogReasoning(ctx: ToolContext, args: any): Promise<T
     // reading and polling, and "proceed with code changes" is an instruction to
     // do the one thing that flow forbids (touching a colleague's files).
     // log_reasoning names a concept; it does not license an edit.
-    content: [{ type: "text", text: `Reasoning logged.${nudge}${await ctx.helpers.getPassiveFeedback()}` }],
+    content: [{ type: "text", text: `Reasoning logged.${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }],
   };
 }

@@ -13,6 +13,12 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
+    "./prose-lint": {
+      "types": "./dist/prose-lint.d.ts",
+      "development": "./src/prose-lint.ts",
+      "import": "./dist/prose-lint.js",
+      "default": "./dist/prose-lint.js"
+    },
     "./__fixtures__/*": {
       "development": "./src/__fixtures__/*.ts",
       "import": "./dist/__fixtures__/*.js",

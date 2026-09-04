@@ -33,6 +33,11 @@ const ExplainerArtifact = lazy(() => import("./artifacts/ExplainerArtifact").the
 // coercion (coerceDecisionContent) stays out of the entry chunk; only decision
 // artifacts mount it (every other type keeps the plain CommentThread below).
 const DecisionGeneralComments = lazy(() => import("./decision/DecisionGeneralComments").then((m) => ({ default: m.DecisionGeneralComments })));
+// "Write to your pair" — the clarity chip. LAZY for the same reason as the
+// renderers above: it imports the shared package's RUNTIME index (prose-lint),
+// which would otherwise pull Zod back into this entry chunk. It renders null
+// when the artifact's prose is clean, so most cards pay nothing for it.
+const ClarityChip = lazy(() => import("./ClarityChip").then((m) => ({ default: m.ClarityChip })));
 import { CommentThread } from "./CommentThread";
 import { useChainComments } from "../hooks/useChainComments";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
@@ -334,6 +339,11 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
           {artifact.version > 1 && (
             <span className="text-2xs text-text-muted">v{artifact.version}</span>
           )}
+          {/* House prose check. Computed client-side from the same shared
+              linter the server uses for its STYLE warnings; null when clean. */}
+          <Suspense fallback={null}>
+            <ClarityChip artifact={artifact} />
+          </Suspense>
         </div>
         {artifact.agentReasoning && (
           <p className="text-xs text-text-muted italic">{artifact.agentReasoning}</p>

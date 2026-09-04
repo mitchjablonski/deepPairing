@@ -14,6 +14,46 @@ beforeEach(() => {
 });
 
 describe("MCP Tool Handlers — revise_artifact", () => {
+  describe("revise_artifact — the STYLE echo (review round 1)", () => {
+    it("echoes house style on a supersede, so the fix-it path is not the silent one", async () => {
+      await callTool("present_findings", {
+        summary: "The daemon binds one port.",
+        findings: [{ category: "other", detail: "It reads it back.", significance: "low" }],
+      });
+      const artifact = store.getArtifacts()[0];
+      const { text, isError } = await callTool("revise_artifact", {
+        artifactId: artifact.id,
+        mode: "supersede",
+        reason: "tightening the readout",
+        content: {
+          summary: "The gate fired; the artifact landed anyway.",
+          findings: [{ category: "other", detail: "It reads it back.", significance: "low" }],
+        },
+      });
+      expect(isError).toBeFalsy();
+      expect(text).toContain("STYLE (clarity");
+      expect(text).toContain("Semicolon");
+    });
+
+    it("stays silent on a supersede whose prose is clean", async () => {
+      await callTool("present_findings", {
+        summary: "The daemon binds one port.",
+        findings: [{ category: "other", detail: "It reads it back.", significance: "low" }],
+      });
+      const artifact = store.getArtifacts()[0];
+      const { text } = await callTool("revise_artifact", {
+        artifactId: artifact.id,
+        mode: "supersede",
+        reason: "tightening the readout",
+        content: {
+          summary: "The daemon binds one port per project.",
+          findings: [{ category: "other", detail: "The companion reads it back.", significance: "low" }],
+        },
+      });
+      expect(text).not.toContain("STYLE (clarity");
+    });
+  });
+
   describe("revise_artifact — mode: obsolete", () => {
     it("marks the artifact obsolete (overcome by new info) so it leaves the review queue", async () => {
       await callTool("present_findings", {

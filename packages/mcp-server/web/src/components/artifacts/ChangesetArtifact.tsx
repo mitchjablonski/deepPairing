@@ -1114,7 +1114,7 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
       {content.summary && content.summary.trim() && (
         <p
           data-testid="changeset-summary"
-          className="text-sm text-text-secondary leading-snug px-1 break-words"
+          className="prose-field text-sm text-text-secondary leading-snug px-1 break-words"
         >
           {content.summary}
         </p>

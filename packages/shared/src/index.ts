@@ -295,3 +295,48 @@ export {
 } from "./schemas/request.js";
 
 export { errorMessage, errorCode, errorName } from "./errors.js";
+
+/**
+ * "Write to your pair" — the house prose linter. Pure, zero-dep, deterministic,
+ * and shared BY DESIGN: the MCP server appends its STYLE warnings to present_*
+ * tool results and the companion UI renders the clarity chip from the exact
+ * same rules, so the two can never drift.
+ */
+export {
+  lintProse,
+  lintArtifactContent,
+  scoreViolations,
+  maskNonProse,
+  splitProse,
+  excerptAt,
+  bySeverity,
+  PROSE_RULES,
+  PROSE_FIELD_MAP,
+  ALL_CAPS_WHITELIST,
+  ALL_CAPS_EMPHASIS_WORDS,
+  SLASH_PACK_EXCEPTIONS,
+  SOURCE_ROOT_WORDS,
+  COMMON_HYPHEN_COMPOUNDS,
+  IMPERATIVE_VERBS,
+  WORDINESS_MAP,
+  SEVERITY_WEIGHT,
+  SENTENCE_WORD_LIMIT,
+  PARENTHETICAL_SENTENCES_PER,
+  PARENTHETICAL_MIN_CHARS,
+  PARAGRAPH_SENTENCE_LIMIT,
+  EM_DASH_PER_PARAGRAPH,
+  MIN_SCORING_WORDS,
+  type ProseMode,
+  type ProseSeverity,
+  type ProseTier,
+  type ProseRule,
+  type ProseFieldSpec,
+  type ProseFieldResult,
+  type ProseSentence,
+  type ProseParagraph,
+  type LintOptions,
+  type LintContext,
+  type LintResult,
+  type Violation,
+  type ArtifactProseResult,
+} from "./prose-lint.js";
