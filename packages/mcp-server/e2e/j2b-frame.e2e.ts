@@ -108,16 +108,20 @@ async function gotoSession(page: Page, theme: "dark" | "light", width = 1100): P
   await page.waitForTimeout(1000);
 }
 
-test("#212 (J2b) — one-card frame: dark + light + 900px (top region)", async ({ page }) => {
-  for (const theme of ["dark", "light"] as const) {
-    await gotoSession(page, theme, 1100);
-    await page.screenshot({ path: path.join(SHOTS, `j2b-frame-${theme}-${LABEL}.png`), clip: { x: 0, y: 0, width: 1100, height: 200 } });
-  }
-  // 900px (VS Code webview width) — the nav labels collapse; the frame must
-  // still not double up the "you have work" signal.
-  await gotoSession(page, "dark", 900);
-  await page.screenshot({ path: path.join(SHOTS, `j2b-frame-900px-${LABEL}.png`), clip: { x: 0, y: 0, width: 900, height: 200 } });
-});
+for (const variant of [
+  { name: "dark", theme: "dark", width: 1100, screenshot: `j2b-frame-dark-${LABEL}.png` },
+  { name: "light", theme: "light", width: 1100, screenshot: `j2b-frame-light-${LABEL}.png` },
+  { name: "900px", theme: "dark", width: 900, screenshot: `j2b-frame-900px-${LABEL}.png` },
+] as const) {
+  test(`#212 (J2b) — one-card frame: ${variant.name} (top region)`, async ({ page }) => {
+    // 900px is the VS Code webview width, where the nav labels collapse.
+    await gotoSession(page, variant.theme, variant.width);
+    await page.screenshot({
+      path: path.join(SHOTS, variant.screenshot),
+      clip: { x: 0, y: 0, width: variant.width, height: 200 },
+    });
+  });
+}
 
 test("#212 (J2b) — assert the step-down: single in-view card suppresses the banner, pill is a bare count", async ({ page }) => {
   // Only meaningful for the "after" build; skipped when capturing the origin/main
