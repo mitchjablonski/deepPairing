@@ -564,11 +564,11 @@ describe("target-scoped external review authorization", () => {
   const PR_100 = "https://github.com/acme/widgets/pull/100";
   const PR_200 = "https://github.com/acme/widgets/pull/200";
 
-  it("posts approved findings to one PR without an unrelated PR contaminating its SHA", () => {
+  it("posts approved findings without an older closed target chunk contaminating the current SHA", () => {
     const auth = authorizeReviewPost(session([
       findings("art_100", "approved"),
       changesetFor("cs_100", "approved", 100, REVIEWED_SHA),
-      changesetFor("cs_200", "draft", 200, OTHER_SHA),
+      changesetFor("cs_100_old", "superseded", 100, OTHER_SHA),
     ]), { event: "COMMENT", pr: PR_100 });
     expect(auth.ok).toBe(true);
     if (!auth.ok) throw new Error("unreachable");
@@ -583,6 +583,66 @@ describe("target-scoped external review authorization", () => {
     expect(auth.ok).toBe(true);
     if (!auth.ok) throw new Error("unreachable");
     expect(auth.payload.commit_id).toBe(REVIEWED_SHA);
+  });
+
+  it("refuses to attach globally-scoped approved findings to one PR in a multi-PR session", () => {
+    const auth = authorizeReviewPost(session([
+      findings("findings_100", "approved", "Finding found while reviewing PR #100"),
+      changesetFor("cs_100", "approved", 100, REVIEWED_SHA),
+      findings("findings_200", "approved", "Finding found while reviewing PR #200"),
+      changesetFor("cs_200", "approved", 200, OTHER_SHA),
+    ]), { event: "COMMENT", pr: PR_100 });
+    expect(auth.ok).toBe(false);
+    if (auth.ok) throw new Error("unreachable");
+    expect(auth.reason).toContain("changeset history identifies more than one pull request");
+    expect(auth.reason).toContain("could publish another PR's findings");
+  });
+
+  it.each(["superseded", "retracted", "obsolete"])(
+    "still refuses ambiguous cross-PR findings when the other PR changeset is %s",
+    (closedStatus) => {
+      const auth = authorizeReviewPost(session([
+        findings("findings_100", "approved", "Finding found while reviewing PR #100"),
+        changesetFor("cs_100", "approved", 100, REVIEWED_SHA),
+        findings("findings_200", "approved", "Finding found while reviewing PR #200"),
+        changesetFor("cs_200", closedStatus, 200, OTHER_SHA),
+      ]), { event: "COMMENT", pr: PR_100 });
+      expect(auth.ok).toBe(false);
+      if (auth.ok) throw new Error("unreachable");
+      expect(auth.reason).toContain("changeset history identifies more than one pull request");
+      expect(auth.reason).toContain("could publish another PR's findings");
+    },
+  );
+
+  it("refuses findings when closed history contradicts its PR URL with another number", () => {
+    const contradictory = changesetFor("cs_bad", "obsolete", 100, OTHER_SHA);
+    (contradictory.content as any).source.number = 200;
+    const auth = authorizeReviewPost(session([
+      findings("art_100", "approved"),
+      changesetFor("cs_100", "approved", 100, REVIEWED_SHA),
+      contradictory,
+    ]), { event: "COMMENT", pr: PR_100 });
+    expect(auth.ok).toBe(false);
+    if (auth.ok) throw new Error("unreachable");
+    expect(auth.reason).toContain("contradicts");
+    expect(auth.reason).toContain("cs_bad");
+  });
+
+  it("a bare PR number cannot collapse same-number changesets from different repositories", () => {
+    const otherRepo = changesetFor(
+      "cs_other_repo", "approved", 100, REVIEWED_SHA,
+      "https://github.com/other/project/pull/100",
+    );
+    const auth = authorizeReviewPost(session([
+      findings("findings_widgets", "approved", "Widgets finding"),
+      changesetFor("cs_widgets", "approved", 100, REVIEWED_SHA),
+      findings("findings_project", "approved", "Other project finding"),
+      otherRepo,
+    ]), { event: "COMMENT", pr: "100" });
+    expect(auth.ok).toBe(false);
+    if (auth.ok) throw new Error("unreachable");
+    expect(auth.reason).toContain("changeset history identifies more than one pull request");
+    expect(auth.reason).toContain("full pull-request URL");
   });
 
   it("still refuses a known wrong target when no matching chunk exists", () => {
@@ -619,7 +679,61 @@ describe("target-scoped external review authorization", () => {
     );
     expect(auth.ok).toBe(false);
     if (auth.ok) throw new Error("unreachable");
-    expect(auth.reason).toContain("nothing in this session records your pair approving this PR");
+    expect(auth.reason).toContain("no full, valid PR source URL");
+  });
+
+  it("unknown standing provenance cannot hide beside a matching chunk to authorize APPROVE", () => {
+    const auth = authorizeReviewPost(session([
+      changesetFor("cs_100", "approved", 100, REVIEWED_SHA),
+      changesetFor("cs_legacy", "approved", 100, null, null),
+    ]), { event: "APPROVE", pr: PR_100 });
+    expect(auth.ok).toBe(false);
+    if (auth.ok) throw new Error("unreachable");
+    expect(auth.reason).toContain("cs_legacy");
+    expect(auth.reason).toContain("no full, valid PR source URL");
+  });
+
+  it("closed unknown provenance blocks APPROVE-with-findings but not a target-only verdict", () => {
+    const target = changesetFor("cs_100", "approved", 100, REVIEWED_SHA);
+    const closedLegacy = changesetFor("cs_legacy", "obsolete", 100, null, null);
+    const withFindings = authorizeReviewPost(session([
+      findings("art_100", "approved"), target, closedLegacy,
+    ]), { event: "APPROVE", pr: PR_100 });
+    expect(withFindings.ok).toBe(false);
+    if (withFindings.ok) throw new Error("unreachable");
+    expect(withFindings.reason).toContain("cs_legacy");
+    expect(withFindings.reason).toContain("approved findings");
+
+    const bare = authorizeReviewPost(session([target, closedLegacy]), { event: "APPROVE", pr: PR_100 });
+    expect(bare.ok).toBe(true);
+    if (!bare.ok) throw new Error("unreachable");
+    expect(bare.payload.commit_id).toBe(REVIEWED_SHA);
+  });
+
+  it("unknown legacy provenance does not block an authorized COMMENT in a single known target session", () => {
+    const auth = authorizeReviewPost(session([
+      findings("art_100", "approved"),
+      changesetFor("cs_100", "approved", 100, REVIEWED_SHA),
+      changesetFor("cs_legacy", "approved", 100, null, null),
+    ]), { event: "COMMENT", pr: PR_100 });
+    expect(auth.ok).toBe(true);
+    if (!auth.ok) throw new Error("unreachable");
+    expect(auth.payload.commit_id).toBe(REVIEWED_SHA);
+  });
+
+  it("never downgrades a SHA-aware revision into the legacy mutable-head COMMENT path", () => {
+    const old = changesetFor("cs_v1", "superseded", 100, REVIEWED_SHA);
+    const revised = changesetFor("cs_v2", "draft", 100, null);
+    revised.parentId = old.id;
+    const auth = authorizeReviewPost(session([
+      findings("art_from_v1", "approved"),
+      old,
+      revised,
+    ]), { event: "COMMENT", pr: PR_100 });
+    expect(auth.ok).toBe(false);
+    if (auth.ok) throw new Error("unreachable");
+    expect(auth.reason).toContain("refresh-required revision");
+    expect(auth.reason).toContain("never attach an old approval");
   });
 
   it("never silently drops an unruled finding beside legacy provenance", () => {

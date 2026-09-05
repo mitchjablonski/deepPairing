@@ -119,12 +119,13 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
     if (pre && !pre.ok) return pre.response;
     // #171 — reviewState is HUMAN-driven review PROGRESS, never agent input. A
     // v2 changeset must start with FRESH review state: carrying an echoed
-    // reviewState forward would stamp stale ✓ marks onto files whose diff just
-    // changed. The handler persists the RAW `content` (not the validator's
-    // stripped `data`), so drop it here. (present_changeset already ignores it
-    // on the create path.)
+    // reviewState/reviewReasons forward would stamp stale ✓ marks and old human
+    // objections onto files whose diff just changed. The handler persists the
+    // RAW `content` (not the validator's stripped `data`), so drop both here.
+    // (present_changeset already ignores them on the create path.)
     if (old.type === "changeset") {
       delete content.reviewState;
+      delete content.reviewReasons;
     }
 
     const title = String(args?.title ?? old.title);

@@ -4,6 +4,7 @@
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import type { FileStore } from "../../store/file-store.js";
+import { authorizeReviewPost } from "../../github/review-authorization.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
 
 const ctx = setupServerTest();
@@ -89,6 +90,31 @@ describe("MCP Tool Handlers — revise_artifact", () => {
       author: "dana",
     });
     expect((revised.content as any).source.headSha).toBeUndefined();
+
+    await callTool("present_findings", {
+      title: "Review of PR #123",
+      summary: "Finding approved against the earlier immutable head.",
+      findings: [{
+        category: "Concurrency",
+        title: "Limiter update races logout",
+        detail: "The limiter update can land after logout.",
+        significance: "high",
+        severity: "high",
+        evidence: [{
+          filePath: "src/limiter.ts", lineStart: 1, lineEnd: 1,
+          snippet: "updateLimiter()", explanation: "This call races the logout transition.",
+        }],
+      }],
+    });
+    const findings = store.getArtifacts().find((a) => a.type === "research")!;
+    store.updateArtifactStatus(findings.id, "approved");
+    const authorization = authorizeReviewPost(
+      { sessionId: "revision-freshness", artifacts: store.getArtifacts() },
+      { event: "COMMENT", pr: source.url },
+    );
+    expect(authorization.ok).toBe(false);
+    if (authorization.ok) throw new Error("unreachable");
+    expect(authorization.reason).toContain("refresh-required revision");
   });
 
   it("accepts explicitly refreshed source provenance on an external revision", async () => {
@@ -655,7 +681,7 @@ describe("MCP Tool Handlers — revise_artifact", () => {
       expect(store.getArtifacts()[0].status).not.toBe("superseded");
     });
 
-    it("#171 — a superseded changeset starts with FRESH review state (echoed reviewState is stripped)", async () => {
+    it("#171 — a superseded changeset starts with FRESH human review state and reasons", async () => {
       await callTool("present_changeset", {
         title: "Move TTL refresh into middleware",
         files: [
@@ -678,6 +704,8 @@ describe("MCP Tool Handlers — revise_artifact", () => {
           ],
           // The agent echoes v1's review state — a stale ✓ on a changed diff.
           reviewState: { "auth/middleware.ts": "reviewed" },
+          // Human-authored objections belong to v1's exact diff too.
+          reviewReasons: { "auth/session.ts": "The old refresh ordering races logout." },
         },
         reason: "adjust the middleware check",
       });
@@ -686,6 +714,7 @@ describe("MCP Tool Handlers — revise_artifact", () => {
       expect(v2.type).toBe("changeset");
       // v2 must not carry v1's ✓ mark — review starts fresh.
       expect((v2.content as any).reviewState).toBeUndefined();
+      expect((v2.content as any).reviewReasons).toBeUndefined();
     });
 
     it("F5 — refuses to supersede a closed (rejected) artifact instead of resurrecting it", async () => {
