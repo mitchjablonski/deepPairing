@@ -80,6 +80,12 @@ freeze the writer. Malformed, duplicate, unreadable, or lost previously observed
 artifact collections fail closed. The daemon client uses a dedicated authenticated
 route; older daemons cannot silently fall back to cached state. Ordinary UI
 hydration and last-flush-wins persistence keep their existing contracts.
+Every posting snapshot also strictly validates legacy posted-review history,
+including reauthorization after reservation; malformed history is never treated
+as an empty record merely because the journal's initial reservation succeeded.
+These checks assume supported review handlers and cooperating current writers.
+They do not prove historical human authorization after direct JSON tampering or
+privileged mutation of an approved artifact without using the revision workflow.
 
 ## Recovery and compatibility
 

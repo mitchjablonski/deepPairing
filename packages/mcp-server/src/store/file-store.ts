@@ -2091,7 +2091,7 @@ export class FileStore implements IStore {
         }
         const artifacts = mergeArtifactRecords(baseline, this.artifacts, disk, value => value.id);
         return JSON.parse(JSON.stringify({
-          sessionId: this.sessionId, artifacts, postedReviews: this.getPostedReviews(),
+          sessionId: this.sessionId, artifacts, postedReviews: this.reviewPosts.readLegacyHistory(),
         })) as { sessionId: string; artifacts: Artifact[]; postedReviews: PostedReviewRecord[] };
       });
     } catch (error) {

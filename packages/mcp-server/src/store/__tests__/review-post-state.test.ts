@@ -4,6 +4,8 @@ import path from "node:path";
 import { FileStore } from "../file-store.js";
 import { SessionReviewConflictError } from "../session-records.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
+import { executeDurableReviewPost } from "../../github/durable-review-post.js";
+import { reviewPostDigest } from "../review-post-journal.js";
 
 let fx: GlobalStoreFixture;
 beforeEach(() => { fx = withGlobalStore("dp-review-post-state-"); });
@@ -20,6 +22,42 @@ function seed(approved = false) {
 }
 
 describe("posting-specific fresh authorization state", () => {
+  it.each(["{broken", "{}", '[{"reviewId":1}]'])("refuses corrupt or invalid posting history: %s", bytes => {
+    const store = seed(true);
+    fs.writeFileSync(file("posted-reviews.json"), bytes);
+    expect(() => store.getReviewPostState()).toThrow(/history is unreadable or invalid/);
+    expect(fs.readFileSync(file("posted-reviews.json"), "utf8")).toBe(bytes);
+  });
+
+  it("does not send if legacy history becomes corrupt after reservation", async () => {
+    const store = seed(true);
+    const journal = store.reviewPosts;
+    const payload = { event: "COMMENT" as const, body: "Reviewed", comments: [] };
+    const identity = {
+      target: "https://github.com/acme/widgets/pull/42", event: payload.event,
+      payloadDigest: reviewPostDigest(payload), authorizationDigest: "a".repeat(64),
+    };
+    let sends = 0;
+    await expect(executeDurableReviewPost({
+      store: {
+        reserve: (value, repost) => {
+          const lease = journal.reserve(value, repost);
+          fs.writeFileSync(file("posted-reviews.json"), "{broken");
+          return lease;
+        },
+        markSending: (lease, value) => journal.markSending(lease, value),
+        failBeforeSending: lease => journal.failBeforeSending(lease),
+        markUnknown: lease => journal.markUnknown(lease),
+        succeed: (lease, result) => journal.succeed(lease, result),
+      },
+      payload, identity, repost: false,
+      reauthorize: () => { store.getReviewPostState(); return identity; },
+      send: async () => { sends++; throw new Error("Must not send"); },
+    })).rejects.toThrow(/did not start its POST/);
+    expect(sends).toBe(0);
+    expect(journal.list()[0]!.state).toBe("failed");
+  });
+
   it("observes external revocation without an artifact mutation or a helpful forceFlush", () => {
     seed(true);
     const stale = open();
