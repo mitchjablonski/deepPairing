@@ -26204,16 +26204,28 @@ function withSessionFlushLock(filePath, run) {
       Atomics.wait(waitArray, 0, 0, 10);
     }
   }
+  let result;
+  let failed = false;
+  let failure;
   try {
     fs7.writeFileSync(fd, JSON.stringify({ pid: process.pid, createdAt: (/* @__PURE__ */ new Date()).toISOString() }));
-    return run();
-  } finally {
+    result = run();
+  } catch (err) {
+    failed = true;
+    failure = err;
+  }
+  for (const cleanup of [() => fs7.closeSync(fd), () => fs7.unlinkSync(filePath)]) {
     try {
-      fs7.closeSync(fd);
-    } finally {
-      fs7.unlinkSync(filePath);
+      cleanup();
+    } catch (err) {
+      if (!failed) {
+        failed = true;
+        failure = err;
+      }
     }
   }
+  if (failed) throw failure;
+  return result;
 }
 
 // src/store/project-signals.ts
