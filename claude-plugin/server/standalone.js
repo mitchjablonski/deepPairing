@@ -34696,7 +34696,7 @@ Tell the human this before they send it.
 // src/mcp/artifact-preflight.ts
 var record2 = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {};
 var list = (value) => Array.isArray(value) ? value : [];
-var strings = (values) => values.filter((v2) => typeof v2 === "string" && v2.length > 0);
+var strings = (values) => values.filter((v2) => typeof v2 === "string").map((v2) => v2.trim()).filter((v2) => v2.length > 0);
 var field = (values, key) => list(values).map((v2) => record2(v2)[key]);
 function artifactProposal(type, title, value) {
   const c = record2(value);
@@ -34738,7 +34738,15 @@ function artifactProposal(type, title, value) {
     default:
       return null;
   }
-  return { text: strings(text), paths: strings(paths), concepts: strings(concepts), advisory: type === "changeset" && c.reviewIntent === "external" };
+  return {
+    text: strings(text),
+    paths: strings(paths),
+    concepts: strings(concepts),
+    // A debrief reports what already happened; it is not a fresh proposal.
+    // Recalled rejections still surface as advice, but cannot prevent the
+    // historical record from naming the rejected path.
+    advisory: type === "debrief" || type === "changeset" && c.reviewIntent === "external"
+  };
 }
 function preflightArtifact(ctx, toolName, type, title, content) {
   const proposal = artifactProposal(type, title, content);
@@ -35902,6 +35910,7 @@ async function handleUpdatePlanProgress(ctx, args) {
 }
 
 // src/mcp/tools/revise-artifact.ts
+init_dist();
 var SUPERSEDE_VALIDATORS = {
   research: validatePresentFindingsInput,
   spec: validatePresentSpecInput,
@@ -35932,8 +35941,8 @@ async function handleReviseArtifact(ctx, args) {
     };
   }
   if (mode === "supersede") {
-    const content = args?.content && typeof args.content === "object" ? args.content : null;
-    if (!content) {
+    const suppliedContent = args?.content && typeof args.content === "object" && !Array.isArray(args.content) ? args.content : null;
+    if (!suppliedContent) {
       return {
         content: [{ type: "text", text: "revise_artifact with mode='supersede' requires a `content` object (same shape the original present_* tool accepts)." }],
         isError: true
@@ -35953,6 +35962,17 @@ async function handleReviseArtifact(ctx, args) {
         isError: true
       };
     }
+    const content = { ...suppliedContent };
+    if (old.type === "changeset") {
+      const oldChangeset = coerceChangesetContent(old.content);
+      if (oldChangeset.reviewIntent === "external") {
+        content.reviewIntent = "external";
+        if (content.source === void 0 && oldChangeset.source) {
+          const { headSha: _reviewedCommit, ...displayProvenance } = oldChangeset.source;
+          content.source = displayProvenance;
+        }
+      }
+    }
     const supersedeValidator = SUPERSEDE_VALIDATORS[old.type];
     if (supersedeValidator) {
       const v2 = supersedeValidator({ title: args?.title ?? old.title, ...content });
@@ -35960,7 +35980,7 @@ async function handleReviseArtifact(ctx, args) {
     }
     const pre = await preflightArtifact(ctx, "revise_artifact", old.type, String(args?.title ?? old.title), content);
     if (pre && !pre.ok) return pre.response;
-    if (old.type === "changeset" && content && typeof content === "object") {
+    if (old.type === "changeset") {
       delete content.reviewState;
     }
     const title = String(args?.title ?? old.title);
@@ -36016,8 +36036,11 @@ async function handleReviseArtifact(ctx, args) {
     broadcast({ type: "artifact_created", artifact: newArtifact });
     broadcast({ type: "artifact_updated", artifactId: old.id, status: "superseded" });
     notifyResourcesListChanged(server);
+    const advisory = pre?.ok && pre.advisory ? `
+
+\u26A0 Recalled stance \u2014 advisory, not a block (this revision records external or historical material rather than proposing that approach): ${pre.advisory}` : "";
     return {
-      content: [{ type: "text", text: `Superseded ${artifactId} \u2192 ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${formatStyleWarnings(newArtifact.type, newArtifact.content)}` }]
+      content: [{ type: "text", text: `Superseded ${artifactId} \u2192 ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${formatStyleWarnings(newArtifact.type, newArtifact.content)}${advisory}` }]
     };
   }
   const artifacts = await store.getArtifacts();
@@ -36420,8 +36443,30 @@ function externalChangesets(artifacts) {
 }
 var CLOSED_CHANGESET_STATUSES = /* @__PURE__ */ new Set(["superseded", "retracted", "obsolete"]);
 var FULL_GIT_SHA2 = /^[0-9a-fA-F]{40}$/;
+function samePrIdentity(target, reviewed) {
+  return target.number === reviewed.number && (!target.owner || !!reviewed.owner && target.owner.toLowerCase() === reviewed.owner.toLowerCase()) && (!target.repo || !!reviewed.repo && target.repo.toLowerCase() === reviewed.repo.toLowerCase());
+}
+function scopeExternalChangesets(artifacts, ref) {
+  const target = parsePrNumber(ref);
+  const scope = { matching: [], other: [], contradictory: [], unknown: [] };
+  for (const artifact of artifacts) {
+    const source = coerceChangesetContent(artifact.content).source;
+    const reviewed = source?.url ? parsePrNumber(source.url) : null;
+    if (!target || !reviewed?.owner || !reviewed.repo) {
+      scope.unknown.push(artifact);
+      continue;
+    }
+    if (samePrIdentity(target, reviewed)) {
+      if (source?.number !== void 0 && source.number !== reviewed.number) scope.contradictory.push(artifact);
+      else scope.matching.push(artifact);
+    } else {
+      scope.other.push({ artifact, reviewed });
+    }
+  }
+  return scope;
+}
 function reviewedHeadFor(artifacts, event) {
-  const standing = externalChangesets(artifacts).filter((a) => !CLOSED_CHANGESET_STATUSES.has(a.status));
+  const standing = artifacts.filter((a) => !CLOSED_CHANGESET_STATUSES.has(a.status));
   const valid = [];
   const missing = [];
   const malformed = [];
@@ -36508,21 +36553,28 @@ function authorizeReviewPost(state, opts) {
   }
   const approved = findingsArtifacts.filter((a) => a.status === "approved");
   const decidedNo = findingsArtifacts.filter((a) => DECIDED_EXCLUDED_STATUSES.has(a.status));
+  let targetExternals = externalChangesets(state.artifacts);
   if (opts.pr) {
-    const target = parsePrNumber(opts.pr);
-    const external = externalChangesets(state.artifacts).filter((a) => !CLOSED_CHANGESET_STATUSES.has(a.status));
-    for (const artifact of external) {
-      const source = coerceChangesetContent(artifact.content).source;
-      const reviewed = source?.url ? parsePrNumber(source.url) : null;
-      const same = target && reviewed?.owner && reviewed.repo && target.number === reviewed.number && (source?.number === void 0 || source.number === reviewed.number) && (!target.owner || target.owner.toLowerCase() === reviewed.owner.toLowerCase()) && (!target.repo || target.repo.toLowerCase() === reviewed.repo.toLowerCase());
-      if (!same) return {
+    const standing = targetExternals.filter((a) => !CLOSED_CHANGESET_STATUSES.has(a.status));
+    const standingScope = scopeExternalChangesets(standing, opts.pr);
+    if (standingScope.contradictory.length > 0) {
+      const artifact = standingScope.contradictory[0];
+      return {
         ok: false,
-        reason: `Refusing to post: "${artifact.title}" does not identify the requested PR ${opts.pr}. Present that PR with its full source.url and get your pair's verdict before posting.`
+        reason: `Refusing to post: "${artifact.title}" (${artifact.id}) has a source.number that contradicts its source.url. Present one coherent PR identity and get your pair's verdict again.`
       };
     }
+    if (standingScope.matching.length === 0 && standingScope.other.length > 0) {
+      const { artifact, reviewed } = standingScope.other[0];
+      return {
+        ok: false,
+        reason: `Refusing to post: "${artifact.title}" identifies https://github.com/${reviewed.owner}/${reviewed.repo}/pull/${reviewed.number}, not the requested PR ${opts.pr}. Present the requested PR with its full source.url and get your pair's verdict before posting.`
+      };
+    }
+    targetExternals = scopeExternalChangesets(targetExternals, opts.pr).matching;
   }
   if (event === "APPROVE") {
-    const externals = externalChangesets(state.artifacts);
+    const externals = targetExternals;
     const refused = externals.filter((a) => a.status === "rejected" || a.status === "revised");
     if (refused.length > 0) {
       const first = refused[0];
@@ -36541,9 +36593,9 @@ function authorizeReviewPost(state, opts) {
       };
     }
   }
-  const reviewedHead = reviewedHeadFor(state.artifacts, event);
+  const reviewedHead = reviewedHeadFor(targetExternals, event);
   if (!reviewedHead.ok) return { ok: false, reason: reviewedHead.reason };
-  const payload = buildGitHubReviewPayload({ ...state, artifacts: approved }, { event });
+  const payload = buildGitHubReviewPayload({ ...state, artifacts: approved, decisions: [] }, { event });
   if (reviewedHead.headSha) payload.commit_id = reviewedHead.headSha;
   if (payload.comments.length === 0) {
     if (event === "APPROVE") return { ok: true, payload, event, reviewedHeadSha: reviewedHead.headSha };
