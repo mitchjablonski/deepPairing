@@ -1,16 +1,17 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./test.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { teardownDaemon, portOf } from "./daemon-harness.js";
+import { attachDaemonOutput, captureDaemonOutput, teardownDaemon, portOf } from "./daemon-harness.js";
 
 /**
  * #213 (J3) — round-5 corrections-polish screenshots + smoke: the Move UNDO
  * toast (M-4), the lazy-load SKELETON fallback (L-9), and the 900px collapsed
- * rail's tooltip scent (L-8). Boots ONE daemon on the isolated e2e port window
- * (never 3847-3974), seeded with milestone/phase/ungrouped artifacts.
+ * rail's tooltip scent (L-8). Boots a fresh daemon and session for every test
+ * on the isolated e2e port window (never 3847-3974), seeded with
+ * milestone/phase/ungrouped artifacts.
  *
  * Screenshots land in $DP213_SHOTS (default: os.tmpdir()/dp-213-shots).
  */
@@ -38,7 +39,7 @@ async function waitForDaemon(r: string): Promise<string> {
   throw new Error("daemon did not come up");
 }
 
-test.beforeAll(async () => {
+test.beforeEach(async () => {
   if (!fs.existsSync(daemonJs)) {
     throw new Error(`dist/daemon/index.js missing at ${daemonJs} — run \`pnpm build\` before the e2e suite.`);
   }
@@ -47,8 +48,9 @@ test.beforeAll(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "dp-213-root-"));
   proc = spawn(process.execPath, [daemonJs], {
     env: { ...process.env, HOME: home, DEEPPAIRING_PROJECT_ROOT: root, DEEPPAIRING_NO_OPEN: "1" },
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  captureDaemonOutput(proc);
   base = await waitForDaemon(root);
 
   const token = JSON.parse(fs.readFileSync(path.join(root, ".deeppairing", "daemon.json"), "utf-8")).authToken as string;
@@ -84,7 +86,8 @@ test.beforeAll(async () => {
   });
 });
 
-test.afterAll(async () => {
+test.afterEach(async ({}, testInfo) => {
+  await attachDaemonOutput(proc, testInfo);
   await teardownDaemon(proc, portOf(base));
   for (const dir of [root, home]) {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
