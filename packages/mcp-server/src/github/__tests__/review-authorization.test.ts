@@ -20,6 +20,7 @@ import path from "node:path";
 import type { Artifact } from "@deeppairing/shared";
 import { authorizeReviewPost } from "../review-authorization.js";
 import { handlePostPrReview } from "../../mcp/tools/post-pr-review.js";
+import { ReviewPostJournal } from "../../store/review-post-journal.js";
 
 const REVIEWED_SHA = "0123456789abcdef0123456789abcdef01234567";
 const OTHER_SHA = "89abcdef0123456789abcdef0123456789abcdef";
@@ -164,8 +165,11 @@ const session = (artifacts: Artifact[], extra: Record<string, unknown> = {}) =>
  *  makes "call the tool twice, the second refuses" a real end-to-end pin. */
 const ctxFor = (artifacts: Artifact[]) => {
   const postedReviews: unknown[] = [];
+  const project = fs.mkdtempSync(path.join(binDir, "session-"));
+  fs.mkdirSync(path.join(project, ".deeppairing", "sessions", "s1"), { recursive: true });
   return {
     store: {
+      reviewPosts: new ReviewPostJournal(project, "s1"),
       getFullState: async () => session(artifacts, postedReviews.length ? { postedReviews } : {}),
       recordPostedReview: async (r: unknown) => { postedReviews.push(r); },
     },

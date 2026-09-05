@@ -34,6 +34,7 @@ import {
 import { buildGitHubReviewPayload, type GitHubReviewPayload } from "../../export/format-markdown.js";
 import { handlePostPrReview } from "../../mcp/tools/post-pr-review.js";
 import type { Artifact } from "@deeppairing/shared";
+import { ReviewPostJournal } from "../../store/review-post-journal.js";
 
 // --- the fake gh -------------------------------------------------------------
 
@@ -263,8 +264,11 @@ function payloadFor(findings: unknown[], event?: GitHubReviewPayload["event"]): 
  *  getFullState() from real artifacts, exactly as FileStore would. */
 function fakeCtx(artifacts: Artifact[]) {
   const postedReviews: unknown[] = [];
+  const project = fs.mkdtempSync(path.join(binDir, "session-"));
+  fs.mkdirSync(path.join(project, ".deeppairing", "sessions", "s_review"), { recursive: true });
   return {
     store: {
+      reviewPosts: new ReviewPostJournal(project, "s_review"),
       getFullState: async () => ({
         ...sessionState(artifacts),
         // R1 (#279) — the posted-review record rides full state; the fake keeps
@@ -475,6 +479,26 @@ describe("Q6 — error paths (each one executed, not assumed)", () => {
 // --- the handler -------------------------------------------------------------
 
 describe("Q6 — handlePostPrReview (the MCP tool) end to end", () => {
+  it("#344 concurrent MCP posts share one durable send reservation", async () => {
+    const ctx = fakeCtx([researchArtifact([HIGH_FINDING])]);
+    const results = await Promise.all([0, 1].map(() => handlePostPrReview(ctx, { pr: "42" })));
+    expect(results.filter(result => !result.isError)).toHaveLength(1);
+    expect(reviewPostCalls()).toHaveLength(1);
+  });
+
+  it("#344 an unconfirmed remote response blocks another actual POST even with repost", async () => {
+    const ctx = fakeCtx([researchArtifact([HIGH_FINDING])]);
+    setMode("bad-success-state");
+    const first = await handlePostPrReview(ctx, { pr: "42" });
+    expect(first.isError).toBe(true);
+    expect(first.content[0]!.text).toContain("may have reached GitHub");
+    setMode("ok");
+    const again = await handlePostPrReview(ctx, { pr: "42", repost: true });
+    expect(again.isError).toBe(true);
+    expect(again.content[0]!.text).toContain("unknown");
+    expect(reviewPostCalls()).toHaveLength(1);
+  });
+
   it("posts and reports the review URL", async () => {
     const res = await handlePostPrReview(fakeCtx([researchArtifact([HIGH_FINDING])]), {
       pr: "https://github.com/acme/widgets/pull/42",
