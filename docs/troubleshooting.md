@@ -1,5 +1,18 @@
 # Troubleshooting
 
+## E2E daemon port isolation
+
+Playwright assigns each test invocation a best-effort isolated daemon port
+window starting at port 33000 or higher. This keeps browser tests out of both the normal
+3847–3974 application range and Vitest's 20000–32000 test ranges. The window is
+derived once from the GitHub run identity and process ID, then inherited by all
+Playwright workers and their daemon children. Explicit
+`DEEPPAIRING_PORT_BASE`/`DEEPPAIRING_PORT_SPAN` values are preserved.
+
+The derivation reduces interference between concurrent local runs; it does not
+reserve ports or guarantee uniqueness. Daemon bind retries remain the backstop
+when two processes select the same window.
+
 If something isn't behaving, start with:
 
 ```bash
