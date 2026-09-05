@@ -1223,7 +1223,6 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   }
 
   function dispose(): void {
-    if (disposed) return;
     disposed = true;
     if (shutdownTimer) { clearTimeout(shutdownTimer); shutdownTimer = null; }
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
