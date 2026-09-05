@@ -28,6 +28,21 @@ identify a reviewed file. Missing, expired, future-dated, corrupt, or already
 consumed receipts produce a reminder and exit 0. Lockfiles and generated paths
 keep their existing exemptions; config files such as `.gitignore` are included.
 
+## Supported hook host contract
+
+Generated project hooks are supported on macOS, Linux, and Windows when Claude
+Code launches hook commands through its POSIX-compatible shell contract. The
+registered command uses `$CLAUDE_PROJECT_DIR` and quotes it, so hooks remain
+anchored to the project even when the current directory differs or the path
+contains spaces. On Windows this means the Git Bash environment used by Claude
+Code; running the command text directly in PowerShell or `cmd.exe` is not a
+supported substitute because those shells use different variable syntax.
+
+The installer marks generated `.mjs` files executable on filesystems with POSIX
+mode bits. The command still invokes `node` explicitly, so Windows does not rely
+on an executable bit or shebang. CI smoke-tests this installed command and the
+native Node runtime on both Ubuntu and Windows.
+
 A receipt tracks presentation, not human approval or equality between the
 presented text and the applied edit. The hook remains a non-blocking reminder;
 the preflight and artifact-review mechanisms retain their separate roles.
