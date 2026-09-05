@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { once } from "node:events";
 import { PassThrough } from "node:stream";
 import { spawnSync, type ChildProcess } from "node:child_process";
@@ -14,21 +14,27 @@ import {
   spawnDiagnosticProcess,
   withSetupDiagnostics,
 } from "../../e2e/daemon-harness.js";
-import { BoundedDiagnosticTail, redactDiagnostic } from "../../e2e/diagnostics.js";
+import { attachDiagnosticFile, BoundedDiagnosticTail, redactDiagnostic } from "../../e2e/diagnostics.js";
 
 function fakeProcess() {
   return { stdout: new PassThrough(), stderr: new PassThrough() } as unknown as ChildProcess;
 }
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const diagnosticDirs: string[] = [];
+afterEach(() => {
+  for (const dir of diagnosticDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
+
+function diagnosticInfo(attach: (name: string, value: { path: string }) => Promise<void>): TestInfo {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-diagnostic-file-"));
+  diagnosticDirs.push(dir);
+  return { status: "failed", expectedStatus: "passed", outputPath: (name: string) => path.join(dir, name), attach } as unknown as TestInfo;
+}
 
 async function capturedBody(proc: ChildProcess): Promise<Buffer> {
   let body: Buffer | undefined;
-  const info = {
-    status: "failed",
-    expectedStatus: "passed",
-    attach: async (_name: string, value: { body: Buffer }) => { body = value.body; },
-  } as unknown as TestInfo;
+  const info = diagnosticInfo(async (_name, value) => { body = fs.readFileSync(value.path); });
   await attachDaemonOutput(proc, info);
   if (!body) throw new Error("diagnostic attachment missing");
   return body;
@@ -92,11 +98,7 @@ describe("E2E daemon diagnostics", () => {
     const proc = fakeProcess();
     captureDaemonOutput(proc);
     const bodies: string[] = [];
-    const info = {
-      status: "failed",
-      expectedStatus: "passed",
-      attach: async (_name: string, value: { body: Buffer }) => { bodies.push(value.body.toString()); },
-    } as unknown as TestInfo;
+    const info = diagnosticInfo(async (_name, value) => { bodies.push(fs.readFileSync(value.path, "utf8")); });
 
     proc.stderr!.emit("data", Buffer.from("Authorization: Bearer prefix-"));
     await attachDaemonOutput(proc, info);
@@ -114,11 +116,7 @@ describe("E2E daemon diagnostics", () => {
     const proc = fakeProcess();
     captureDaemonOutput(proc);
     const bodies: string[] = [];
-    const info = {
-      status: "failed",
-      expectedStatus: "passed",
-      attach: async (_name: string, value: { body: Buffer }) => { bodies.push(value.body.toString()); },
-    } as unknown as TestInfo;
+    const info = diagnosticInfo(async (_name, value) => { bodies.push(fs.readFileSync(value.path, "utf8")); });
 
     proc.stderr!.emit("data", Buffer.from('{"Cookie":"sid=partial-cookie-secret'));
     await attachDaemonOutput(proc, info);
@@ -164,13 +162,18 @@ describe("E2E daemon diagnostics", () => {
     ]);
     await once(proc, "close");
     const primary = new Error("primary startup failure");
-    const info = {
-      status: "failed",
-      expectedStatus: "passed",
-      attach: async () => { throw new Error("attachment backend failed"); },
-    } as unknown as TestInfo;
+    const info = diagnosticInfo(async () => { throw new Error("attachment backend failed"); });
 
     await expect(withSetupDiagnostics(proc, info, async () => { throw primary; })).rejects.toBe(primary);
+    expect(fs.readFileSync(info.outputPath("daemon-diagnostics.txt"), "utf8")).not.toContain("child-setup-secret");
+  });
+
+  it("does not replace a test failure when the diagnostic file cannot be written", async () => {
+    const info = diagnosticInfo(async () => { throw new Error("must not attach a missing file"); });
+    const blocker = info.outputPath("not-a-directory");
+    fs.writeFileSync(blocker, "fixture");
+    info.outputPath = (name: string) => path.join(blocker, name);
+    await expect(attachDiagnosticFile(info, "browser-diagnostics", Buffer.from("safe line\n"))).resolves.toBeUndefined();
   });
 
   it("attaches a real crashing child's redacted tail when Playwright beforeAll fails", () => {
@@ -189,17 +192,32 @@ describe("E2E daemon diagnostics", () => {
       expect(run.status, report).toBe(1);
       expect(report).toContain("deliberate beforeAll seed failure");
       expect(report).toContain("attachment #1: daemon-diagnostics");
-      expect(report).toContain("deliberate child crash");
-      expect(report).toContain("Set-Cookie: [REDACTED]");
       const files = fs.readdirSync(outputDir, { recursive: true })
         .map(String)
         .map((entry) => path.join(outputDir, entry))
         .filter((entry) => fs.statSync(entry).isFile());
       const attachments = files.map((entry) => fs.readFileSync(entry, "utf8")).join("\n");
+      expect(files.some((entry) => entry.endsWith("daemon-diagnostics.txt"))).toBe(true);
+      expect(attachments).toContain("deliberate child crash");
+      expect(attachments).toContain("Set-Cookie: [REDACTED]");
       expect(`${report}\n${attachments}`).not.toContain("playwright-fixture-secret");
     } finally {
       fs.rmSync(outputDir, { recursive: true, force: true });
     }
+  });
+
+  it("uploads only failure evidence even when a retry makes CI green", () => {
+    const workflow = fs.readFileSync(path.resolve(packageRoot, "../../.github/workflows/ci.yml"), "utf8");
+    const upload = workflow.split("- name: Upload Playwright failure diagnostics")[1]?.split("\n  hook-smoke:")[0] ?? "";
+    expect(upload).toContain("if: always()");
+    expect(upload).toContain("if-no-files-found: ignore");
+    expect(upload).toContain("retention-days: 7");
+    const paths = upload.match(/packages\/mcp-server\/test-results\/[^\r\n]+/g);
+    expect(paths).toEqual([
+      "packages/mcp-server/test-results/**/test-failed-*.png",
+      "packages/mcp-server/test-results/**/error-context.md",
+      "packages/mcp-server/test-results/**/*diagnostics*.txt",
+    ]);
   });
 
   it("preserves the prior tail when an oversized browser event is discarded", () => {
