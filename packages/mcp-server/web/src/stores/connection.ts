@@ -347,8 +347,16 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
                 get().sessionId === connectedSid &&
                 isCompleteRecoverySnapshot(data.state, connectedSid));
             if (validReplayExitState) {
-              hydrateArtifactState(store, data.state);
-              if (replay.exiting) useReplayStore.getState().completeExit();
+              const previousArtifactState = useArtifactStore.getState();
+              try {
+                hydrateArtifactState(store, data.state);
+                if (replay.exiting) useReplayStore.getState().completeExit();
+              } catch {
+                // A malformed nested entry can still throw after the reset.
+                // Restore the historical frame and keep replay's write lock;
+                // its bounded timeout will surface the retry path.
+                useArtifactStore.setState(previousArtifactState);
+              }
             }
           } else if (!data.state && supersededRecovery) {
             // A stateless reconnect supersedes the HTTP recovery request but

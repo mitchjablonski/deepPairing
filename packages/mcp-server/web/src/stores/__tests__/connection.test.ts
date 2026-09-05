@@ -658,6 +658,14 @@ describe("connection store — safe daemon recovery (#339)", () => {
     expect(useArtifactStore.getState().artifacts.map((item) => item.id)).toEqual(["historic"]);
 
     activeAdapter.emit({ type: "connected", state: {
+      ...snapshot("A"), decisions: [null],
+    } });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useReplayStore.getState()).toMatchObject({ active: true, exiting: true });
+    expect(useArtifactStore.getState().artifacts.map((item) => item.id)).toEqual(["historic"]);
+
+    activeAdapter.emit({ type: "connected", state: {
       sessionId: "A", artifacts: [], comments: [],
     } });
     await Promise.resolve();
@@ -676,6 +684,18 @@ describe("connection store — safe daemon recovery (#339)", () => {
     await vi.runAllTimersAsync();
     expect(useReplayStore.getState()).toMatchObject({ active: false, exiting: false });
     expect(useArtifactStore.getState().artifacts.map((item) => item.id)).toEqual(["live-after-retry"]);
+
+    await useReplayStore.getState().enterReplay("newer-history", {
+      artifacts: [artifact("newer-history", "newer-history") as any], comments: [],
+    });
+    useArtifactStore.getState().reset();
+    useArtifactStore.getState().addArtifact(artifact("newer-history", "newer-history") as any);
+    recovery!.action!.onClick();
+    expect(activeAdapter.switchedSessions).toEqual(["A", "A"]);
+    expect(useReplayStore.getState()).toMatchObject({
+      active: true, exiting: false, sessionId: "newer-history",
+    });
+    expect(useArtifactStore.getState().artifacts.map((item) => item.id)).toEqual(["newer-history"]);
     vi.useRealTimers();
   });
 

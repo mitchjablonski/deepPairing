@@ -89,6 +89,7 @@ const REPLAY_EXIT_TIMEOUT_MS = 10_000;
 
 let playTimer: ReturnType<typeof setInterval> | null = null;
 let exitRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
+let exitRecoveryToastId: string | null = null;
 let replayOperation = 0;
 
 /** Stop the shared play timer (no-op when already idle). Centralized so the
@@ -108,6 +109,16 @@ function clearExitRecoveryTimer(): void {
   }
 }
 
+function dismissExitRecoveryToast(): void {
+  const toastId = exitRecoveryToastId;
+  exitRecoveryToastId = null;
+  if (toastId) {
+    void import("./toast").then(({ useToastStore }) => {
+      useToastStore.getState().dismiss(toastId);
+    });
+  }
+}
+
 /**
  * Leaving replay is intentionally fail-closed: the historical frame remains
  * visible under the replay write lock until a full live snapshot arrives.
@@ -115,19 +126,24 @@ function clearExitRecoveryTimer(): void {
  */
 function scheduleExitRecoveryTimeout(operation: number): void {
   clearExitRecoveryTimer();
+  dismissExitRecoveryToast();
   exitRecoveryTimer = setTimeout(() => {
     exitRecoveryTimer = null;
     if (operation !== replayOperation || !useReplayStore.getState().exiting) return;
     void import("./toast").then(({ useToastStore }) => {
       if (operation !== replayOperation || !useReplayStore.getState().exiting) return;
-      useToastStore.getState().push({
+      exitRecoveryToastId = useToastStore.getState().push({
         kind: "error",
         title: "Couldn't leave replay",
         body: "Live session state has not arrived. Replay remains read-only; retry when the daemon reconnects.",
         ttl: 0,
         action: {
           label: "Retry",
-          onClick: () => useReplayStore.getState().exitReplay(),
+          onClick: () => {
+            if (operation !== replayOperation || !useReplayStore.getState().exiting) return;
+            dismissExitRecoveryToast();
+            useReplayStore.getState().exitReplay();
+          },
         },
       });
     });
@@ -155,6 +171,7 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
     // before enterSessionReplay installs any historical artifacts.
     clearPlayTimer();
     clearExitRecoveryTimer();
+    dismissExitRecoveryToast();
     set({
       active: true,
       exiting: false,
@@ -240,6 +257,7 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
     if (!get().exiting) return;
     clearPlayTimer();
     clearExitRecoveryTimer();
+    dismissExitRecoveryToast();
     set({ active: false, exiting: false, sessionId: null, events: [], cursor: "", playing: false, annotations: [], decisions: [] });
   },
 
