@@ -1617,7 +1617,7 @@ async function postPrReviewCmd(ref: string, sessionId?: string, event?: string, 
   try {
     const initialReader = new FileStore(cwd, chosenSessionId);
     try {
-      state = initialReader.getFullState();
+      state = initialReader.getReviewPostState();
     } finally {
       // Read-only snapshots are disposed, never force-flushed: flushing a
       // stale cache here could overwrite a daemon verdict that arrived later.
@@ -1655,7 +1655,7 @@ async function postPrReviewCmd(ref: string, sessionId?: string, event?: string, 
     const authorizeFresh = () => {
       const finalReader = new FileStore(cwd, chosenSessionId);
       try {
-        return authorizeDurableReview(finalReader.getFullState(), { event, repost }, prepared);
+        return authorizeDurableReview(finalReader.getReviewPostState(), { event, repost }, prepared);
       } finally {
         finalReader.dispose();
       }

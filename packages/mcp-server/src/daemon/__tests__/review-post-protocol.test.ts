@@ -51,6 +51,26 @@ afterEach(async () => {
   fx.dispose();
 });
 
+it("HTTP posting reads external revocation while UI hydration remains cached", async () => {
+  local.createArtifact({ id: "a", type: "research", title: "Review", content: {} });
+  local.updateArtifactStatus("a", "approved", "ui_approve_button");
+  local.forceFlush();
+  const external = fx.track(new FileStore(fx.dir, "s"));
+  external.updateArtifactStatus("a", "obsolete", "agent_obsolete");
+  external.forceFlush();
+  expect((await client.getFullState()).artifacts[0].status).toBe("approved");
+  expect((await client.getReviewPostState()).artifacts[0].status).toBe("obsolete");
+  expect(broadcasts).toEqual([]);
+});
+
+it("posting snapshot route requires bearer, project, and an existing session", async () => {
+  const url = "/api/internal/sessions/s/review-post-state";
+  const headers = { Authorization: `Bearer ${token}`, "X-Project-Hash": projectHashOf(fx.dir) };
+  expect((await app.request(url, { headers: { "X-Project-Hash": projectHashOf(fx.dir) } })).status).toBe(401);
+  expect((await app.request(url, { headers: { ...headers, "X-Project-Hash": "wrong" } })).status).toBe(403);
+  expect((await app.request("/api/internal/sessions/absent/review-post-state", { headers })).status).toBe(404);
+});
+
 it("CLI FileStore and real HTTP DaemonClient share one durable reservation", async () => {
   let sends = 0;
   const outcomes = await Promise.allSettled([local.reviewPosts, client.reviewPosts].map(store =>

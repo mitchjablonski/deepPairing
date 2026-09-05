@@ -280,7 +280,7 @@ function fakeCtx(artifacts: Artifact[]) {
   return {
     store: {
       reviewPosts: new ReviewPostJournal(project, "s_review"),
-      getFullState: async () => ({
+      getReviewPostState: async () => ({
         ...sessionState(artifacts),
         // R1 (#279) — the posted-review record rides full state; the fake keeps
         // what it was given, like FileStore's sidecar.
@@ -717,7 +717,7 @@ describe("Q6 — handlePostPrReview (the MCP tool) end to end", () => {
     const withdrawn = { ...approved, status: "revised" as const };
     const ctx = {
       store: {
-        getFullState: async () => sessionState(reads++ === 0 ? [approved] : [withdrawn]),
+        getReviewPostState: async () => sessionState(reads++ === 0 ? [approved] : [withdrawn]),
         recordPostedReview: async () => {},
       },
     } as never;
