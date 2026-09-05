@@ -116,20 +116,21 @@ describe("sessions merge (U0.6)", () => {
     expect(fs.existsSync(path.join(tmpDir, ".deeppairing/sessions/into"))).toBe(true);
   });
 
-  it("merges all known artifact types: artifacts, comments, decisions, plan-reviews, retrospectives", () => {
+  it("merges all known artifact types: artifacts, comments, decisions, plan-reviews, requests, retrospectives", () => {
     if (!fs.existsSync(cliEntry)) return;
     writeSession("from", {
       "artifacts.json":      [{ id: "art1", sessionId: "from", type: "research", status: "draft" }],
       "comments.json":       [{ id: "c1",  sessionId: "from", target: { artifactId: "art1" } }],
       "decisions.json":      [{ decisionId: "d1", artifactId: "art1" }],
       "plan-reviews.json":   [{ artifactId: "art1", verdict: "approved" }],
+      "requests.json":       [{ id: "req1", sessionId: "from", text: "Explain this" }],
       "retrospectives.json": [{ id: "r1", decisionId: "d1", verdict: "right" }],
     });
     writeSession("into", { "artifacts.json": [] });
 
     const r = runMerge(["from", "into"]);
     expect(r.exitCode).toBe(0);
-    for (const f of ["artifacts.json", "comments.json", "decisions.json", "plan-reviews.json", "retrospectives.json"]) {
+    for (const f of ["artifacts.json", "comments.json", "decisions.json", "plan-reviews.json", "requests.json", "retrospectives.json"]) {
       const arr = JSON.parse(
         fs.readFileSync(path.join(tmpDir, ".deeppairing/sessions/into", f), "utf-8"),
       );
@@ -150,5 +151,44 @@ describe("sessions merge (U0.6)", () => {
     const r = runMerge(["nonexistent", "into"]);
     expect(r.exitCode).not.toBe(0);
     expect(r.stderr + r.stdout).toMatch(/not found/i);
+  });
+
+  it("refuses a busy FileStore claim without writing or removing the source", () => {
+    if (!fs.existsSync(cliEntry)) return;
+    writeSession("from", { "comments.json": [{ id: "source", sessionId: "from" }] });
+    writeSession("into", { "comments.json": [{ id: "target", sessionId: "into" }] });
+    const claim = path.join(tmpDir, ".deeppairing/sessions/into/.flush.lock");
+    fs.writeFileSync(claim, "live writer");
+
+    const r = runMerge(["from", "into"]);
+    expect(r.exitCode).not.toBe(0);
+    expect(fs.existsSync(claim)).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, ".deeppairing/sessions/from"))).toBe(true);
+    expect(JSON.parse(fs.readFileSync(path.join(tmpDir, ".deeppairing/sessions/into/comments.json"), "utf8")))
+      .toEqual([{ id: "target", sessionId: "into" }]);
+  });
+
+  it("validates every input array before writing an earlier merge file", () => {
+    if (!fs.existsSync(cliEntry)) return;
+    writeSession("from", {
+      "artifacts.json": [{ id: "source-artifact", sessionId: "from" }],
+      "retrospectives.json": [],
+    });
+    writeSession("into", { "artifacts.json": [{ id: "target-artifact", sessionId: "into" }] });
+    fs.writeFileSync(path.join(tmpDir, ".deeppairing/sessions/from/retrospectives.json"), "{broken");
+
+    const r = runMerge(["from", "into"]);
+    expect(r.exitCode).not.toBe(0);
+    expect(JSON.parse(fs.readFileSync(path.join(tmpDir, ".deeppairing/sessions/into/artifacts.json"), "utf8")))
+      .toEqual([{ id: "target-artifact", sessionId: "into" }]);
+    expect(fs.existsSync(path.join(tmpDir, ".deeppairing/sessions/from"))).toBe(true);
+  });
+
+  it("rejects session ids that escape the sessions directory", () => {
+    if (!fs.existsSync(cliEntry)) return;
+    writeSession("into", { "comments.json": [] });
+    const r = runMerge(["../outside", "into"]);
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr + r.stdout).toMatch(/session ids|escaped/i);
   });
 });

@@ -331,6 +331,22 @@ describe("H1-3 — the heartbeat runs through safeHeartbeatTick", () => {
 });
 
 describe("dispose() — the test-teardown seam actually clears every factory handle", () => {
+  it("late client-close idle checks cannot re-arm cleanup after disposal", () => {
+    vi.useFakeTimers();
+    const { daemon, exits, releases } = makeDaemon();
+    daemon.checkAutoShutdown();
+    expect(vi.getTimerCount()).toBe(1);
+    daemon.dispose();
+    // Both WS close handlers call this after removing their last client.
+    // A close event already queued at disposal must remain harmless.
+    daemon.checkAutoShutdown();
+    daemon.checkAutoShutdown();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(61_000);
+    expect(exits).toEqual([]);
+    expect(releases).toEqual([]);
+  });
+
   class FakeWatcher extends EventEmitter {
     closed = false;
     close(): void {

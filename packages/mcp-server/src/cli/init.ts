@@ -31,6 +31,7 @@ import { getGlobalStore } from "../store/global-store.js";
 import { buildLedgerHealthReport, shQuote } from "../store/ledger-health.js";
 import { cliInvocation, mcpServerConfigFor, isInstalledPackage } from "../cli-invocation.js";
 import { writeJsonAtomic } from "../store/atomic-write.js";
+import { withSessionFlushLock } from "../store/session-records.js";
 import { errorMessage } from "@deeppairing/shared";
 
 /**
@@ -1751,9 +1752,18 @@ async function sessionsCmd(sub: string | undefined, rest: string[]): Promise<voi
       console.error(`  ${red("✗")} from and into must differ.`);
       process.exit(1);
     }
+    if (!/^[a-zA-Z0-9_-]+$/.test(fromId) || !/^[a-zA-Z0-9_-]+$/.test(intoId)) {
+      console.error(`  ${red("✗")} Session ids may contain only letters, numbers, underscores, and hyphens.`);
+      process.exit(1);
+    }
     const sessionsDir = path.join(cwd, ".deeppairing", "sessions");
-    const fromDir = path.join(sessionsDir, fromId);
-    const intoDir = path.join(sessionsDir, intoId);
+    const resolvedSessionsDir = path.resolve(sessionsDir);
+    const fromDir = path.resolve(resolvedSessionsDir, fromId);
+    const intoDir = path.resolve(resolvedSessionsDir, intoId);
+    if (path.dirname(fromDir) !== resolvedSessionsDir || path.dirname(intoDir) !== resolvedSessionsDir) {
+      console.error(`  ${red("✗")} Session path escaped the sessions directory.`);
+      process.exit(1);
+    }
     if (!fs.existsSync(fromDir)) {
       console.error(`  ${red("✗")} Source session directory not found: ${fromDir}`);
       process.exit(1);
@@ -1766,38 +1776,43 @@ async function sessionsCmd(sub: string | undefined, rest: string[]): Promise<voi
     // The merge is shape-aware per file. Each session JSON is an array of
     // records; we concat + dedupe on `id` (target wins on collisions because
     // the user explicitly chose it as the canonical store).
-    const filesToMerge = ["artifacts.json", "comments.json", "decisions.json", "plan-reviews.json", "retrospectives.json"];
+    const filesToMerge = ["artifacts.json", "comments.json", "decisions.json", "plan-reviews.json", "requests.json", "retrospectives.json"];
     const summary: Record<string, { from: number; into: number; merged: number }> = {};
-
-    for (const file of filesToMerge) {
-      const fromPath = path.join(fromDir, file);
-      const intoPath = path.join(intoDir, file);
-      if (!fs.existsSync(fromPath)) continue;
-
-      let fromArr: any[] = [];
-      let intoArr: any[] = [];
-      try { fromArr = JSON.parse(fs.readFileSync(fromPath, "utf-8")); } catch { continue; }
-      try { if (fs.existsSync(intoPath)) intoArr = JSON.parse(fs.readFileSync(intoPath, "utf-8")); } catch {}
-      if (!Array.isArray(fromArr) || !Array.isArray(intoArr)) continue;
-
-      const seen = new Set(intoArr.map((r) => r.id ?? r.decisionId ?? r.artifactId).filter(Boolean));
-      const additions = fromArr.filter((r) => {
-        const key = r.id ?? r.decisionId ?? r.artifactId;
-        return key && !seen.has(key);
+    const claimDirs = [fromDir, intoDir].sort((a, b) => a.localeCompare(b));
+    withSessionFlushLock(path.join(claimDirs[0]!, ".flush.lock"), () => {
+      withSessionFlushLock(path.join(claimDirs[1]!, ".flush.lock"), () => {
+        const plans: Array<{ file: string; intoPath: string; merged: any[]; from: number; into: number; added: number }> = [];
+        // Validate every managed array before the first replacement. The merge
+        // still is not cross-file transactional, but malformed late files can
+        // no longer leave earlier files changed before the command refuses.
+        for (const file of filesToMerge) {
+          const fromPath = path.join(fromDir, file);
+          const intoPath = path.join(intoDir, file);
+          if (!fs.existsSync(fromPath)) continue;
+          const fromArr: unknown = JSON.parse(fs.readFileSync(fromPath, "utf-8"));
+          const intoArr: unknown = fs.existsSync(intoPath)
+            ? JSON.parse(fs.readFileSync(intoPath, "utf-8"))
+            : [];
+          if (!Array.isArray(fromArr) || !Array.isArray(intoArr)) {
+            throw new Error(`Cannot merge ${file}: source and target must both contain JSON arrays`);
+          }
+          const seen = new Set(intoArr.map((r) => r?.id ?? r?.decisionId ?? r?.artifactId).filter(Boolean));
+          const additions = fromArr.filter((r) => {
+            const key = r?.id ?? r?.decisionId ?? r?.artifactId;
+            return key && !seen.has(key);
+          }).map((record) => {
+            const copy = { ...record };
+            if (copy.sessionId) copy.sessionId = intoId;
+            return copy;
+          });
+          plans.push({ file, intoPath, merged: [...intoArr, ...additions], from: fromArr.length, into: intoArr.length, added: additions.length });
+        }
+        for (const plan of plans) {
+          writeJsonAtomic(plan.intoPath, plan.merged);
+          summary[plan.file] = { from: plan.from, into: plan.into, merged: plan.added };
+        }
       });
-      // Rewrite the sessionId field so artifacts/comments report the new home.
-      for (const a of additions) {
-        if (a.sessionId) a.sessionId = intoId;
-      }
-      const merged = [...intoArr, ...additions];
-      // Q1 item 9 — SECURITY.md claims "all session and ledger writes go through
-      // writeJsonAtomic". This hand-rolled `+ ".tmp"` was the one exception: a
-      // FIXED tmp name, so two concurrent merges could truncate each other's
-      // temp file, and it left the claim false. Use the real writer.
-      writeJsonAtomic(intoPath, merged);
-
-      summary[file] = { from: fromArr.length, into: intoArr.length, merged: additions.length };
-    }
+    });
 
     console.log(bold("\n  deepPairing sessions merge"));
     console.log(`  ${green("✓")} Merged ${fromId} → ${intoId}`);

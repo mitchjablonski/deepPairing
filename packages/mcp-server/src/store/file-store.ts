@@ -1,11 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
 import { suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { capConceptLength } from "./concept-hygiene.js";
 import { writeJsonAtomic, writeStringAtomic } from "./atomic-write.js";
+import {
+  mergeArtifactRecords,
+  mergeSessionRecords,
+  SessionReviewConflictError,
+  withSessionFlushLock,
+} from "./session-records.js";
 import { salvageArray, salvageRecord, salvageLog } from "./salvage.js";
 import { senseProjectGuardrails, loadTeamPreferences } from "./project-signals.js";
 import type { ProjectGuardrail } from "./project-signals.js";
@@ -110,19 +117,9 @@ export class FileStore implements IStore {
   // below — that pair is the single swap point if the scope ever changes again.
   private persona: "auto" | "fluent-engineer" | "new-to-this-code" | "stakeholder" = "auto";
 
-  // PP2 — last serialized bytes we wrote per file, so flush() can skip the disk
-  // write (and the temp+rename) when a file is byte-identical to what's already
-  // there. Kills the write-amplification where a single comment rewrote the
-  // multi-MB artifacts.json: now only the file(s) that actually changed hit disk.
-  // Cost: holds a serialized copy of each session file in RAM (grows with
-  // artifacts.json size) — an accepted trade for the I/O savings. flush() drops
-  // an entry whenever readIfChanged detects an external write, so the skip can
-  // never defeat the U1 merge self-heal.
-  private lastSerialized: Record<string, string> = {};
-  // Exact observed bytes are both the three-way merge baseline and the change
-  // detector. Metadata cannot detect equal-length edits with the same mtime.
-  // Unlike the write-skip cache this survives external-change invalidation.
-  private lastObserved: Record<string, string> = {};
+  // Immutable snapshots identify local changes independently of filesystem mtimes.
+  private recordBaselines: Record<string, string> = {};
+  private backedUpCorruption: Record<string, string> = {};
 
   // BB2 — held for FileStore.invalidateLedgerDigestCache, which is keyed
   // by projectRoot so all sessions in this project bust the same cache.
@@ -154,6 +151,7 @@ export class FileStore implements IStore {
     if (this.isDemoSession) this.demoPreferences = {};
     this.ensureDir();
     this.load();
+    this.captureRecordBaselines();
     this.loadPreferences();
     this.loadSessionPrefs();
   }
@@ -279,6 +277,7 @@ export class FileStore implements IStore {
       }
       this.reviewLatencies = [];
     }
+    this.flushedLatencyCount = this.reviewLatencies.length;
   }
 
   // D1 — the salvage helpers (disk trust boundary) live in salvage.ts since
@@ -288,55 +287,39 @@ export class FileStore implements IStore {
   static salvageArray = salvageArray;
   static salvageRecord = salvageRecord;
 
-  /** Load a JSON file with graceful error handling. Records exact bytes so a
-   *  later flush can detect external writes and merge instead of clobber. */
+  /** Load a JSON file with graceful error handling and best-effort backup. */
   private loadJsonFile<T>(filePath: string, fallback: T): T {
+    let bytes: string | undefined;
     try {
       if (!fs.existsSync(filePath)) {
-        delete this.lastObserved[filePath];
         return fallback;
       }
-      const raw = fs.readFileSync(filePath, "utf-8");
-      const parsed = JSON.parse(raw);
-      this.lastObserved[filePath] = raw;
-      return parsed;
+      bytes = fs.readFileSync(filePath, "utf-8");
+      return JSON.parse(bytes);
     } catch (err) {
       if (errorCode(err) === "ENOENT") {
-        delete this.lastObserved[filePath];
         return fallback;
       }
       console.error(`[deepPairing] Corrupted file ${filePath}: ${errorMessage(err)}`);
       try {
         fs.copyFileSync(filePath, filePath + ".corrupt");
+        if (err instanceof SyntaxError && bytes !== undefined) this.backedUpCorruption[filePath] = bytes;
       } catch { /* best-effort backup */ }
       return fallback;
     }
   }
 
-  /**
-   * U1 — return the on-disk version of `filePath` IFF the file was modified
-   * by another writer since we last loaded it; otherwise null. Caller uses
-   * the result to merge external changes into in-memory state before flush.
-   *
-   * Read the bytes even when metadata matches: "approved" and "rejected"
-   * have the same length, and timestamps can be coarse or restored. This
-   * adds reads at flush time, but unchanged bytes need no parsing or write.
-   * It is change detection, not a lock across concurrent read/modify/write.
-   */
-  private readIfChanged<T>(filePath: string): T | null {
-    try {
-      const raw = fs.readFileSync(filePath, "utf-8");
-      if (raw === this.lastObserved[filePath]) return null;
-      const parsed = JSON.parse(raw);
-      return parsed as T;
-    } catch {
-      return null;
-    }
+  private flushFailureLogged = false;
+  private flushRetryDelay = 100;
+  private reviewConflict: SessionReviewConflictError | null = null;
+  private disposed = false;
+
+  private assertAuthorizationReadable(): void {
+    if (this.reviewConflict) throw this.reviewConflict;
   }
 
-  private flushFailureLogged = false;
-
-  private scheduleFlush(): void {
+  private scheduleFlush(delay = 100): void {
+    if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
     if (this.flushTimer) return;
     this.flushTimer = setTimeout(() => {
       // C3 — a throwing timer callback is an UNCAUGHT EXCEPTION that kills
@@ -344,9 +327,11 @@ export class FileStore implements IStore {
       // removal (demo-session eviction rm -rf's the session dir; tests remove
       // tmpdirs) and ENOENT out of writeFileSync. Losing one best-effort
       // flush is fine; taking down the daemon is not.
+      let retry = false;
       try {
         this.flush();
         this.flushFailureLogged = false;
+        this.flushRetryDelay = 100;
       } catch (err) {
         // Swallow — the next mutation reschedules. ENOENT is the EXPECTED
         // teardown/eviction race (the session dir was rm'd out from under a
@@ -357,149 +342,114 @@ export class FileStore implements IStore {
         // ENOSPC, …) once per streak — a bare swallow of those turns a real
         // write failure into silent permanent data loss.
         const code = (err as NodeJS.ErrnoException | undefined)?.code;
+        retry = code === "ELOCKED";
         if (code !== "ENOENT" && !this.flushFailureLogged) {
           this.flushFailureLogged = true;
           console.error(`[deepPairing] debounced flush failed for session ${this.sessionId}:`, err);
         }
       }
       this.flushTimer = null;
-    }, 100);
-  }
-
-  /** Atomic write: delegates to writeJsonAtomic (PID+TS+random temp suffix
-   *  so concurrent flushes to the same path can't truncate each other's tmp).
-   *  Refreshes the byte baseline only after a successful rename. */
-  private atomicWrite(filePath: string, data: unknown): void {
-    // PP2 — serialize once, and skip the disk write entirely when the bytes are
-    // identical to our last write. A debounced flush re-writes ALL session files
-    // on every mutation; this means a comment only rewrites comments.json, not
-    // the (often multi-MB, diff-bearing) artifacts.json that didn't change.
-    // Safe: we only skip when the content is byte-for-byte what we already
-    // persisted — never a real change. Same indent (2) as writeJsonAtomic.
-    const serialized = JSON.stringify(data, null, 2);
-    if (this.lastSerialized[filePath] === serialized) return;
-    writeStringAtomic(filePath, serialized);
-    this.lastSerialized[filePath] = serialized;
-    this.lastObserved[filePath] = serialized;
-  }
-
-  /**
-   * Merge against the last observed version, field by field. Unchanged local
-   * fields adopt external edits; actual local edits win a same-field conflict.
-   * Thus an unrelated local edit cannot restore a stale human verdict.
-   */
-  private mergeArrayById<T extends Record<string, any>>(
-    inMemory: T[],
-    onDisk: T[] | null,
-    keyField: string,
-    filePath: string,
-  ): T[] {
-    if (!onDisk || !Array.isArray(onDisk)) return inMemory;
-    const baseline = JSON.parse(this.lastObserved[filePath] ?? "[]") as T[];
-    const before = new Map((Array.isArray(baseline) ? baseline : []).map(r => [r?.[keyField], r]));
-    const disk = new Map(onDisk.map(r => [r[keyField], r]));
-    const seen = new Set(inMemory.map((r) => r[keyField]).filter(Boolean));
-    const additions = onDisk.filter((r) => r[keyField] && !seen.has(r[keyField]));
-    return [...additions, ...inMemory.map(local => {
-      const base = before.get(local[keyField]);
-      const external = disk.get(local[keyField]);
-      if (!base || !external) return local;
-      const merged = { ...external } as Record<string, unknown>;
-      for (const key of new Set([...Object.keys(base), ...Object.keys(local)])) {
-        if (JSON.stringify(local[key]) !== JSON.stringify(base[key])) {
-          if (key in local) merged[key] = local[key];
-          else delete merged[key];
-        }
+      if (retry) {
+        this.flushRetryDelay = Math.min(this.flushRetryDelay * 2, 2000);
+        this.scheduleFlush(this.flushRetryDelay);
       }
-      return merged as T;
-    })];
+    }, delay);
+    // Retry while the daemon is alive, but do not keep a shutting-down process
+    // alive forever behind an abandoned lock. dispose() cancels this timer too.
+    if (delay > 100) this.flushTimer.unref?.();
+  }
+
+  private captureRecordBaselines(): void {
+    const records: Record<string, unknown[]> = {
+      "artifacts.json": this.artifacts, "comments.json": this.comments,
+      "decisions.json": [...this.decisions.values()], "plan-reviews.json": [...this.planReviews.values()],
+      "requests.json": this.requests, "render-failures.json": this.renderFailures,
+    };
+    for (const [file, values] of Object.entries(records)) this.recordBaselines[file] = JSON.stringify(values);
+  }
+
+  private flushRecords<T>(
+    file: string, local: T[], key: (value: T) => string, salvage: (raw: unknown) => T[],
+    optional = false,
+    merge: (baseline: T[], local: T[], disk: T[], key: (value: T) => string) => T[] = mergeSessionRecords,
+  ): T[] {
+    const baseline = this.recordBaselines[file] ?? "[]";
+    const serialized = JSON.stringify(local);
+    const dirty = serialized !== baseline;
+    if (!dirty) return local;
+    const filePath = path.join(this.sessionDir(), file);
+    let raw: unknown;
+    let diskBytes: string | undefined;
+    try {
+      diskBytes = fs.readFileSync(filePath, "utf8");
+      raw = JSON.parse(diskBytes);
+    } catch (err) {
+      // An unchanged corrupt file already backed up during load may be repaired.
+      // New corruption or I/O failures must not destroy an unknown disk update.
+      const knownCorruption = err instanceof SyntaxError && diskBytes !== undefined &&
+        this.backedUpCorruption[filePath] === diskBytes;
+      if (errorCode(err) !== "ENOENT" && !knownCorruption) throw err;
+      raw = [];
+    }
+    const merged = merge(JSON.parse(baseline) as T[], local, salvage(raw), key);
+    const mergedBytes = JSON.stringify(merged, null, 2);
+    if (dirty && (!optional || merged.length > 0 || diskBytes !== undefined) && diskBytes !== mergedBytes) {
+      writeStringAtomic(filePath, mergedBytes);
+    }
+    // Advance only AFTER a successful write. A failed flush retains its delta.
+    this.recordBaselines[file] = JSON.stringify(merged);
+    delete this.backedUpCorruption[filePath];
+    return merged;
   }
 
   private flush(): void {
-    const dir = this.sessionDir();
-    const artifactsPath = path.join(dir, "artifacts.json");
-    const commentsPath = path.join(dir, "comments.json");
-    const decisionsPath = path.join(dir, "decisions.json");
-    const plansPath = path.join(dir, "plan-reviews.json");
-
-    // U1 — merge any external changes since our last load before clobbering
-    // each file. The deterministic-sessionId fix from U0.6 already makes
-    // intra-daemon races vanishingly rare, but CLI commands and a daemon
-    // restart race could still touch the same files.
-    // PP2 — when readIfChanged detects an external write, drop that file's
-    // skip-cache entry so atomicWrite CANNOT skip below. Critical for the U1
-    // self-heal: an external writer that shrank/clobbered the file is merged
-    // into memory here, but if the merge nets back to our last-written bytes the
-    // skip would leave the external (lossy) version on disk and our merged copy
-    // only in RAM. Forcing the rewrite restores it (and keeps in-memory-wins).
-    // D1 review — the EXTERNAL reads must be salvaged too: a null element in a
-    // hand-edited file threw inside mergeArrayById's filter, the flush catch
-    // swallowed it, and — because the byte baseline only advances on a
-    // successful load/write — EVERY subsequent flush re-read and re-threw:
-    // persistence for the session silently stopped until the file was fixed.
-    const diskArtifacts = this.readIfChanged<unknown>(artifactsPath);
-    if (diskArtifacts) {
-      this.artifacts = this.mergeArrayById(
-        this.artifacts,
-        FileStore.salvageArray<Artifact>(`${this.sessionId}:artifacts.json (external)`, diskArtifacts, "id"),
-        "id",
-        artifactsPath,
-      );
-      delete this.lastSerialized[artifactsPath];
-    }
-    const diskComments = this.readIfChanged<unknown>(commentsPath);
-    if (diskComments) {
-      this.comments = this.mergeArrayById(
-        this.comments,
-        FileStore.salvageArray<Comment>("comments.json (external)", diskComments, "id"),
-        "id",
-        commentsPath,
-      );
-      delete this.lastSerialized[commentsPath];
-    }
-    const diskDecisions = this.readIfChanged<unknown>(decisionsPath);
-    if (diskDecisions) {
-      this.decisions = new Map(this.mergeArrayById(Array.from(this.decisions.values()),
-        FileStore.salvageArray<DecisionRecord>("decisions.json (external)", diskDecisions, "decisionId"),
-        "decisionId", decisionsPath).map(d => [d.decisionId, d]));
-      delete this.lastSerialized[decisionsPath];
-    }
-    const diskPlans = this.readIfChanged<unknown>(plansPath);
-    if (diskPlans) {
-      this.planReviews = new Map(this.mergeArrayById(Array.from(this.planReviews.values()),
-        FileStore.salvageArray<PlanReviewRecord>("plan-reviews.json (external)", diskPlans, "artifactId"),
-        "artifactId", plansPath).map(p => [p.artifactId, p]));
-      delete this.lastSerialized[plansPath];
-    }
-
-    this.atomicWrite(artifactsPath, this.artifacts);
-    this.atomicWrite(commentsPath, this.comments);
-    this.atomicWrite(decisionsPath, Array.from(this.decisions.values()));
-    this.atomicWrite(plansPath, Array.from(this.planReviews.values()));
-    // AA3 — persist reviewLatencies so a daemon idle-shutdown doesn't
-    // wipe them. Only write when we have data; an empty array is still
-    // useful (signals "no reviews yet"), but skipping the write keeps
-    // session dirs tidy on first use.
-    if (this.reviewLatencies.length > 0) {
-      this.atomicWrite(path.join(dir, "metrics.json"), this.reviewLatencies);
-    }
-    // #176 — persist render failures only when there are any, so a session that
-    // never had a broken diagram keeps a byte-identical dir (same rule as
-    // metrics.json). Low-stakes + append-mostly; skips the U1 external-merge
-    // dance the artifacts/comments files need.
-    if (this.renderFailures.length > 0) {
-      this.atomicWrite(path.join(dir, "render-failures.json"), this.renderFailures);
-    }
-    // G1 (#198b) — persist requests only when there are any (same tidy-dir rule
-    // as metrics.json / render-failures.json). Append-mostly, low-stakes → skips
-    // the U1 external-merge dance the artifacts/comments files need.
-    if (this.requests.length > 0) {
-      this.atomicWrite(path.join(dir, "requests.json"), this.requests);
+    // A conflicted writer still holds the stale in-memory verdict that caused
+    // the safety failure. Keep every later flush fenced: only a newly created
+    // FileStore may reload the persisted artifact and resume authorization.
+    this.assertAuthorizationReadable();
+    try {
+      withSessionFlushLock(path.join(this.sessionDir(), ".flush.lock"), () => {
+        this.artifacts = this.flushRecords("artifacts.json", this.artifacts, (r) => r.id,
+          (raw) => FileStore.salvageArray<Artifact>(`${this.sessionId}:artifacts.json (external)`, raw, "id"), false,
+          mergeArtifactRecords);
+        this.comments = this.flushRecords("comments.json", this.comments, (r) => r.id,
+          (raw) => FileStore.salvageArray<Comment>("comments.json (external)", raw, "id"));
+        this.decisions = new Map(this.flushRecords("decisions.json", [...this.decisions.values()], (r) => r.decisionId,
+          (raw) => FileStore.salvageArray<DecisionRecord>("decisions.json (external)", raw, "decisionId")).map((r) => [r.decisionId, r]));
+        this.planReviews = new Map(this.flushRecords("plan-reviews.json", [...this.planReviews.values()], (r) => r.artifactId,
+          (raw) => FileStore.salvageArray<PlanReviewRecord>("plan-reviews.json (external)", raw, "artifactId")).map((r) => [r.artifactId, r]));
+        this.requests = this.flushRecords("requests.json", this.requests, (r) => r.id,
+          (raw) => FileStore.salvageArray<Request>("requests.json (external)", raw, "id"), true);
+        this.renderFailures = this.flushRecords("render-failures.json", this.renderFailures,
+          (r) => JSON.stringify([r.artifactId, r.visualId]), (raw) => {
+            const keyed = (Array.isArray(raw) ? raw : []).map((r) => ({
+              ...r, __key: JSON.stringify([r?.artifactId, r?.visualId]),
+            }));
+            return FileStore.salvageArray<RenderFailureRecord & { __key: string }>(
+              "render-failures.json (external)", keyed, "__key").map(({ __key, ...r }) => r);
+          }, true);
+        // Metrics lack stable IDs: append only this writer's new observations.
+        const metricsPath = path.join(this.sessionDir(), "metrics.json");
+        if (this.reviewLatencies.length > this.flushedLatencyCount) {
+          const raw = this.loadJsonFile<unknown>(metricsPath, []);
+          const disk = Array.isArray(raw) ? raw.filter((r) => r && typeof r.type === "string" && Number.isFinite(r.latencyMs)) : [];
+          const merged = [...disk, ...this.reviewLatencies.slice(this.flushedLatencyCount)];
+          writeJsonAtomic(metricsPath, merged);
+          this.reviewLatencies = merged;
+          this.flushedLatencyCount = merged.length;
+        }
+      });
+    } catch (error) {
+      if (error instanceof SessionReviewConflictError) this.reviewConflict = error;
+      throw error;
     }
   }
 
+  private flushedLatencyCount = 0;
+
   /** Force an immediate flush — call before process exit */
   forceFlush(): void {
+    if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
@@ -512,6 +462,7 @@ export class FileStore implements IStore {
    *  (or has been) removed. Unlike forceFlush(), this deliberately discards the
    *  pending write; the caller is disposing the store. Idempotent. */
   dispose(): void {
+    this.disposed = true;
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
@@ -574,6 +525,7 @@ export class FileStore implements IStore {
     };
     this.artifacts.push(artifact);
     if (params.type === "code_change") this.touchCodeChangeMarker(now);
+    this.writeCodeCheckpoints(artifact);
     // #176 — a revise (supersede) mints this v2 with parentId set; the parent's
     // render-failure records now describe a version the human no longer sees, so
     // clear them. The re-presented diagram will report afresh if it's still broken.
@@ -583,12 +535,8 @@ export class FileStore implements IStore {
   }
 
   /**
-   * PP1 — a tiny project-level marker the per-edit checkpoint hook reads instead
-   * of readdir-ing + JSON.parsing every session's (potentially multi-MB,
-   * diff-bearing) artifacts.json on every Write/Edit. Last write wins = the
-   * most-recent code_change across all sessions, which is exactly what the
-   * checkpoint's freshness rule needs. Best-effort: if it's missing the hook
-   * just falls back to nagging (the safe default).
+   * Compatibility hint for older installed checkpoint hooks. Current hooks
+   * use file/session receipts and deliberately ignore this global timestamp.
    */
   private touchCodeChangeMarker(at: string): void {
     try {
@@ -598,6 +546,44 @@ export class FileStore implements IStore {
       writeJsonAtomic(path.join(this.basePath, "last-code-change.json"), { at });
     } catch {
       /* hint only */
+    }
+  }
+
+  /** Local reminder receipts, separate from the legacy project-wide hint. */
+  private checkpointFiles(artifact: Artifact): string[] {
+    if (this.isDemoSession || !artifact.content || typeof artifact.content !== "object") return [];
+    const content = artifact.content as { filePath?: unknown; files?: { filePath?: unknown }[]; reviewIntent?: unknown };
+    if (content.reviewIntent === "external") return [];
+    const files = artifact.type === "code_change" ? [content.filePath]
+      : artifact.type === "changeset" && Array.isArray(content.files) ? content.files.map(f => f?.filePath) : [];
+    return [...new Set(files.filter((f): f is string => typeof f === "string" && f.trim().length > 0)
+      .map(f => path.resolve(this.projectRoot, f)))];
+  }
+
+  private codeCheckpointPath(filePath: string): string {
+    const key = crypto.createHash("sha256").update(filePath).digest("hex");
+    return path.join(this.basePath, "sessions", this.sessionId, "code-checkpoints", key + ".json");
+  }
+
+  private writeCodeCheckpoints(artifact: Artifact): void {
+    for (const filePath of this.checkpointFiles(artifact)) {
+      try {
+        const markerPath = this.codeCheckpointPath(filePath);
+        fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+        writeJsonAtomic(markerPath, { version: 1, at: artifact.createdAt,
+          sessionId: this.sessionId, artifactId: artifact.id, filePath });
+      } catch { /* best-effort reminder: absent receipts cause a nag */ }
+    }
+  }
+
+  private revokeCodeCheckpoints(artifact: Artifact): void {
+    for (const filePath of this.checkpointFiles(artifact)) {
+      try {
+        const markerPath = this.codeCheckpointPath(filePath);
+        const marker = JSON.parse(fs.readFileSync(markerPath, "utf8"));
+        // Superseding an older artifact must not erase its successor's receipt.
+        if (marker.artifactId === artifact.id) fs.unlinkSync(markerPath);
+      } catch { /* already consumed or unavailable */ }
     }
   }
 
@@ -651,6 +637,9 @@ export class FileStore implements IStore {
       const now = new Date().toISOString();
       const fromStatus = art.status;
       art.status = status;
+      if (["rejected", "revised", "superseded", "retracted", "obsolete"].includes(status)) {
+        this.revokeCodeCheckpoints(art);
+      }
       art.updatedAt = now;
       // Append to statusHistory so replay can reconstruct the trail faithfully.
       // Lazy-init so older sessions opt into the richer format on first
@@ -788,6 +777,7 @@ export class FileStore implements IStore {
   }
 
   getArtifacts(): Artifact[] {
+    this.assertAuthorizationReadable();
     return this.artifacts;
   }
 
@@ -1052,6 +1042,7 @@ export class FileStore implements IStore {
    * appear here. Old artifacts lacking the field simply don't match.
    */
   getUnacknowledgedStatusChanges(): Artifact[] {
+    this.assertAuthorizationReadable();
     return this.artifacts.filter(
       (a) => (a as { statusChangeUnreported?: boolean }).statusChangeUnreported === true,
     );
@@ -1304,6 +1295,7 @@ export class FileStore implements IStore {
   }
 
   getDecisionResponse(decisionId: string): { optionId: string; reasoning?: string } | null {
+    this.assertAuthorizationReadable();
     return this.decisions.get(decisionId)?.response ?? null;
   }
 
@@ -1347,16 +1339,19 @@ export class FileStore implements IStore {
   }
 
   getPendingDecisions(): DecisionRecord[] {
+    this.assertAuthorizationReadable();
     return Array.from(this.decisions.values()).filter(
       (d) => !d.response && !this.isArtifactClosed(d.artifactId),
     );
   }
 
   getDecision(decisionId: string): DecisionRecord | undefined {
+    this.assertAuthorizationReadable();
     return this.decisions.get(decisionId);
   }
 
   getResolvedDecisions(): DecisionRecord[] {
+    this.assertAuthorizationReadable();
     return Array.from(this.decisions.values()).filter((d) => d.response && !d.acknowledged);
   }
 
@@ -1390,12 +1385,14 @@ export class FileStore implements IStore {
   }
 
   getPlanReviewVerdict(artifactId: string): { verdict: string; feedback?: string } | null {
+    this.assertAuthorizationReadable();
     const review = this.planReviews.get(artifactId);
     if (!review?.verdict) return null;
     return { verdict: review.verdict, feedback: review.feedback };
   }
 
   getPendingPlanReviews(): PlanReviewRecord[] {
+    this.assertAuthorizationReadable();
     return Array.from(this.planReviews.values()).filter(
       (p) => !p.verdict && !this.isArtifactClosed(p.artifactId),
     );
@@ -2037,6 +2034,7 @@ export class FileStore implements IStore {
   // --- Full state (for web UI hydration) ---
 
   getFullState() {
+    this.assertAuthorizationReadable();
     return {
       sessionId: this.sessionId,
       artifacts: this.artifacts,

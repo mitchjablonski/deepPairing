@@ -673,8 +673,8 @@ function acquireHookStateLock(statePath, now = Date.now()) {
           fs.unlinkSync(lock);
           continue;
         }
-      } catch {
-        continue;
+      } catch (error2) {
+        if (error2.code !== "ENOENT") return null;
       }
       if (Date.now() >= deadline) return null;
       sleepSync(LOCK_SPIN_MS);

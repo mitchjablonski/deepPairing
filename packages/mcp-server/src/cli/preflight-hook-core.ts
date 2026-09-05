@@ -498,8 +498,8 @@ export function acquireHookStateLock(statePath: string, now: number = Date.now()
       fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
       return lock;
     } catch (error) {
-      // Only an existing lock means contention. Missing directories, denied
-      // access and other filesystem failures must take the fail-open path.
+        // Only an existing lock means contention. Missing directories, denied
+        // access and other filesystem failures must take the fail-open path.
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") return null;
       if (Date.now() >= deadline) return null;
       try {
@@ -507,8 +507,10 @@ export function acquireHookStateLock(statePath: string, now: number = Date.now()
           fs.unlinkSync(lock); // a crashed hook must not wedge the next one
           continue;
         }
-      } catch {
-        continue; // the holder released it between our open and our stat
+      } catch (error) {
+        // ENOENT means the holder released the lock; retry with the same
+        // deadline and backoff. A stat/unlink permission error is terminal.
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
       }
       if (Date.now() >= deadline) return null;
       sleepSync(LOCK_SPIN_MS);
