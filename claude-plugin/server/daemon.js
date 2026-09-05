@@ -34471,6 +34471,7 @@ function createDaemon(deps) {
     return count;
   }
   let shutdownTimer = null;
+  let disposed = false;
   const DEMO_IDLE_GRACE_MS = 10 * 6e4;
   function demoGraceActive(nowMs = Date.now()) {
     for (const [sessionId, meta3] of sessionMeta.entries()) {
@@ -34482,6 +34483,7 @@ function createDaemon(deps) {
     return false;
   }
   function checkAutoShutdown() {
+    if (disposed) return;
     if (activeSessions.size === 0 && getClientCount() === 0 && demoGraceActive()) {
       if (shutdownTimer) {
         clearTimeout(shutdownTimer);
@@ -34966,6 +34968,8 @@ function createDaemon(deps) {
     }
   }
   function dispose() {
+    if (disposed) return;
+    disposed = true;
     if (shutdownTimer) {
       clearTimeout(shutdownTimer);
       shutdownTimer = null;
