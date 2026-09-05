@@ -46,7 +46,7 @@ export function captureDaemonOutput(proc: ChildProcess): void {
         return;
       }
       streamState.pending += tail;
-      if (streamState.pending) retainLine(state, source, streamState.pending);
+      if (streamState.pending) retainLine(state, source, "[incomplete line withheld]");
       streamState.pending = "";
     });
   };

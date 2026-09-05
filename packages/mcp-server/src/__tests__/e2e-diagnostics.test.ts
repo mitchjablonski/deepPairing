@@ -79,7 +79,7 @@ describe("E2E daemon diagnostics", () => {
       "-e",
       "console.error('Set-Cookie: sid=child-secret; HttpOnly'); console.log('startup failed deliberately'); process.exit(23)",
     ]);
-    await once(proc, "exit");
+    await once(proc, "close");
 
     const output = (await capturedBody(proc)).toString();
     expect(proc.exitCode).toBe(23);
@@ -133,16 +133,28 @@ describe("E2E daemon diagnostics", () => {
     expect(bodies.join("\n")).not.toContain("eventual-secret");
   });
 
-  it("redacts an unterminated quoted credential when the stream ends", async () => {
+  it("withholds unterminated credentials when the stream ends", async () => {
     const proc = fakeProcess();
     captureDaemonOutput(proc);
-    proc.stderr!.emit("data", Buffer.from('{"password":"first final-secret'));
+    proc.stderr!.emit("data", Buffer.from("safe complete line\n"));
+    proc.stderr!.emit("data", Buffer.from('{"password":"prefix \\" escaped-end-secret'));
     proc.stderr!.emit("end");
 
     const output = (await capturedBody(proc)).toString();
-    expect(output).toContain('"password":"[REDACTED]');
-    expect(output).not.toContain("first");
-    expect(output).not.toContain("final-secret");
+    expect(output).toContain("safe complete line");
+    expect(output).toContain("[incomplete line withheld]");
+    expect(output).not.toContain("escaped-end-secret");
+  });
+
+  it("withholds an unterminated Set-Cookie array when the stream ends", async () => {
+    const proc = fakeProcess();
+    captureDaemonOutput(proc);
+    proc.stderr!.emit("data", Buffer.from('{"Set-Cookie":["sid=end-array-secret'));
+    proc.stderr!.emit("end");
+
+    const output = (await capturedBody(proc)).toString();
+    expect(output).toContain("[incomplete line withheld]");
+    expect(output).not.toContain("end-array-secret");
   });
 
   it("preserves the primary setup error when diagnostic attachment fails", async () => {
@@ -150,7 +162,7 @@ describe("E2E daemon diagnostics", () => {
       "-e",
       "console.error('x-api-key: child-setup-secret'); process.exit(17)",
     ]);
-    await once(proc, "exit");
+    await once(proc, "close");
     const primary = new Error("primary startup failure");
     const info = {
       status: "failed",
