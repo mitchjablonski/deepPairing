@@ -34968,7 +34968,6 @@ function createDaemon(deps) {
     }
   }
   function dispose() {
-    if (disposed) return;
     disposed = true;
     if (shutdownTimer) {
       clearTimeout(shutdownTimer);
