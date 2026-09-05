@@ -1,3 +1,13 @@
+import fs from "node:fs/promises";
+import type { TestInfo } from "@playwright/test";
+
+/** Persist only an already-redacted, bounded tail outside the raw trace archive. */
+export async function attachDiagnosticFile(testInfo: TestInfo, name: string, body: Buffer): Promise<void> {
+  const file = testInfo.outputPath(`${name}.txt`);
+  await fs.writeFile(file, body);
+  await testInfo.attach(name, { path: file, contentType: "text/plain" });
+}
+
 const URL_PATTERN = /https?:\/\/[^\s<>"']+/gi;
 
 function scrubUrl(value: string): string {

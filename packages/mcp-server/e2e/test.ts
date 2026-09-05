@@ -1,6 +1,6 @@
 import { test as base, expect } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
-import { BoundedDiagnosticTail } from "./diagnostics.js";
+import { attachDiagnosticFile, BoundedDiagnosticTail } from "./diagnostics.js";
 import { attachActiveDaemonOutputs, attachSetupFailureOutputs } from "./daemon-harness.js";
 
 const MAX_DIAGNOSTIC_BYTES = 64 * 1024;
@@ -45,10 +45,7 @@ export const test = base.extend<{ browserDiagnostics: void }>({
       mutableBrowser.newContext = originalNewContext;
       await attachActiveDaemonOutputs(testInfo);
       if (testInfo.status !== testInfo.expectedStatus && diagnostics.lines.length) {
-        await testInfo.attach("browser-diagnostics", {
-          body: diagnostics.body(),
-          contentType: "text/plain",
-        });
+        await attachDiagnosticFile(testInfo, "browser-diagnostics", diagnostics.body());
       }
     }
   }, { auto: true }],

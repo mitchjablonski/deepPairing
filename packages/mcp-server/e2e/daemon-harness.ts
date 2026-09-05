@@ -2,7 +2,7 @@ import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
 import net from "node:net";
 import { StringDecoder } from "node:string_decoder";
 import type { TestInfo } from "@playwright/test";
-import { BoundedDiagnosticTail, redactDiagnostic } from "./diagnostics.js";
+import { attachDiagnosticFile, BoundedDiagnosticTail, redactDiagnostic } from "./diagnostics.js";
 
 const MAX_DAEMON_DIAGNOSTIC_BYTES = 64 * 1024;
 interface DiagnosticStreamState { decoder: StringDecoder; pending: string; source: string; discarding: boolean }
@@ -98,10 +98,7 @@ export async function attachDaemonOutput(
     }
   }
   if (snapshot.lines.length) {
-    await testInfo.attach(opts.name ?? "daemon-diagnostics", {
-      body: snapshot.body(),
-      contentType: "text/plain",
-    });
+    await attachDiagnosticFile(testInfo, opts.name ?? "daemon-diagnostics", snapshot.body());
   }
 }
 
