@@ -7,7 +7,12 @@ import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { capConceptLength } from "./concept-hygiene.js";
 import { writeJsonAtomic, writeStringAtomic } from "./atomic-write.js";
-import { mergeSessionRecords, withSessionFlushLock } from "./session-records.js";
+import {
+  mergeArtifactRecords,
+  mergeSessionRecords,
+  SessionReviewConflictError,
+  withSessionFlushLock,
+} from "./session-records.js";
 import { salvageArray, salvageRecord, salvageLog } from "./salvage.js";
 import { senseProjectGuardrails, loadTeamPreferences } from "./project-signals.js";
 import type { ProjectGuardrail } from "./project-signals.js";
@@ -305,6 +310,11 @@ export class FileStore implements IStore {
 
   private flushFailureLogged = false;
   private flushRetryDelay = 100;
+  private reviewConflict: SessionReviewConflictError | null = null;
+
+  private assertAuthorizationReadable(): void {
+    if (this.reviewConflict) throw this.reviewConflict;
+  }
 
   private scheduleFlush(delay = 100): void {
     if (this.flushTimer) return;
@@ -358,6 +368,7 @@ export class FileStore implements IStore {
   private flushRecords<T>(
     file: string, local: T[], key: (value: T) => string, salvage: (raw: unknown) => T[],
     optional = false,
+    merge: (baseline: T[], local: T[], disk: T[], key: (value: T) => string) => T[] = mergeSessionRecords,
   ): T[] {
     const baseline = this.recordBaselines[file] ?? "[]";
     const serialized = JSON.stringify(local);
@@ -377,7 +388,7 @@ export class FileStore implements IStore {
       if (errorCode(err) !== "ENOENT" && !knownCorruption) throw err;
       raw = [];
     }
-    const merged = mergeSessionRecords(JSON.parse(baseline) as T[], local, salvage(raw), key);
+    const merged = merge(JSON.parse(baseline) as T[], local, salvage(raw), key);
     const mergedBytes = JSON.stringify(merged, null, 2);
     if (dirty && (!optional || merged.length > 0 || diskBytes !== undefined) && diskBytes !== mergedBytes) {
       writeStringAtomic(filePath, mergedBytes);
@@ -389,36 +400,42 @@ export class FileStore implements IStore {
   }
 
   private flush(): void {
-    withSessionFlushLock(path.join(this.sessionDir(), ".flush.lock"), () => {
-      this.artifacts = this.flushRecords("artifacts.json", this.artifacts, (r) => r.id,
-        (raw) => FileStore.salvageArray<Artifact>(`${this.sessionId}:artifacts.json (external)`, raw, "id"));
-      this.comments = this.flushRecords("comments.json", this.comments, (r) => r.id,
-        (raw) => FileStore.salvageArray<Comment>("comments.json (external)", raw, "id"));
-      this.decisions = new Map(this.flushRecords("decisions.json", [...this.decisions.values()], (r) => r.decisionId,
-        (raw) => FileStore.salvageArray<DecisionRecord>("decisions.json (external)", raw, "decisionId")).map((r) => [r.decisionId, r]));
-      this.planReviews = new Map(this.flushRecords("plan-reviews.json", [...this.planReviews.values()], (r) => r.artifactId,
-        (raw) => FileStore.salvageArray<PlanReviewRecord>("plan-reviews.json (external)", raw, "artifactId")).map((r) => [r.artifactId, r]));
-      this.requests = this.flushRecords("requests.json", this.requests, (r) => r.id,
-        (raw) => FileStore.salvageArray<Request>("requests.json (external)", raw, "id"), true);
-      this.renderFailures = this.flushRecords("render-failures.json", this.renderFailures,
-        (r) => JSON.stringify([r.artifactId, r.visualId]), (raw) => {
-          const keyed = (Array.isArray(raw) ? raw : []).map((r) => ({
-            ...r, __key: JSON.stringify([r?.artifactId, r?.visualId]),
-          }));
-          return FileStore.salvageArray<RenderFailureRecord & { __key: string }>(
-            "render-failures.json (external)", keyed, "__key").map(({ __key, ...r }) => r);
-        }, true);
-      // Metrics lack stable IDs: append only this writer's new observations.
-      const metricsPath = path.join(this.sessionDir(), "metrics.json");
-      if (this.reviewLatencies.length > this.flushedLatencyCount) {
-        const raw = this.loadJsonFile<unknown>(metricsPath, []);
-        const disk = Array.isArray(raw) ? raw.filter((r) => r && typeof r.type === "string" && Number.isFinite(r.latencyMs)) : [];
-        const merged = [...disk, ...this.reviewLatencies.slice(this.flushedLatencyCount)];
-        writeJsonAtomic(metricsPath, merged);
-        this.reviewLatencies = merged;
-        this.flushedLatencyCount = merged.length;
-      }
-    });
+    try {
+      withSessionFlushLock(path.join(this.sessionDir(), ".flush.lock"), () => {
+        this.artifacts = this.flushRecords("artifacts.json", this.artifacts, (r) => r.id,
+          (raw) => FileStore.salvageArray<Artifact>(`${this.sessionId}:artifacts.json (external)`, raw, "id"), false,
+          mergeArtifactRecords);
+        this.comments = this.flushRecords("comments.json", this.comments, (r) => r.id,
+          (raw) => FileStore.salvageArray<Comment>("comments.json (external)", raw, "id"));
+        this.decisions = new Map(this.flushRecords("decisions.json", [...this.decisions.values()], (r) => r.decisionId,
+          (raw) => FileStore.salvageArray<DecisionRecord>("decisions.json (external)", raw, "decisionId")).map((r) => [r.decisionId, r]));
+        this.planReviews = new Map(this.flushRecords("plan-reviews.json", [...this.planReviews.values()], (r) => r.artifactId,
+          (raw) => FileStore.salvageArray<PlanReviewRecord>("plan-reviews.json (external)", raw, "artifactId")).map((r) => [r.artifactId, r]));
+        this.requests = this.flushRecords("requests.json", this.requests, (r) => r.id,
+          (raw) => FileStore.salvageArray<Request>("requests.json (external)", raw, "id"), true);
+        this.renderFailures = this.flushRecords("render-failures.json", this.renderFailures,
+          (r) => JSON.stringify([r.artifactId, r.visualId]), (raw) => {
+            const keyed = (Array.isArray(raw) ? raw : []).map((r) => ({
+              ...r, __key: JSON.stringify([r?.artifactId, r?.visualId]),
+            }));
+            return FileStore.salvageArray<RenderFailureRecord & { __key: string }>(
+              "render-failures.json (external)", keyed, "__key").map(({ __key, ...r }) => r);
+          }, true);
+        // Metrics lack stable IDs: append only this writer's new observations.
+        const metricsPath = path.join(this.sessionDir(), "metrics.json");
+        if (this.reviewLatencies.length > this.flushedLatencyCount) {
+          const raw = this.loadJsonFile<unknown>(metricsPath, []);
+          const disk = Array.isArray(raw) ? raw.filter((r) => r && typeof r.type === "string" && Number.isFinite(r.latencyMs)) : [];
+          const merged = [...disk, ...this.reviewLatencies.slice(this.flushedLatencyCount)];
+          writeJsonAtomic(metricsPath, merged);
+          this.reviewLatencies = merged;
+          this.flushedLatencyCount = merged.length;
+        }
+      });
+    } catch (error) {
+      if (error instanceof SessionReviewConflictError) this.reviewConflict = error;
+      throw error;
+    }
   }
 
   private flushedLatencyCount = 0;
@@ -751,6 +768,7 @@ export class FileStore implements IStore {
   }
 
   getArtifacts(): Artifact[] {
+    this.assertAuthorizationReadable();
     return this.artifacts;
   }
 
@@ -1015,6 +1033,7 @@ export class FileStore implements IStore {
    * appear here. Old artifacts lacking the field simply don't match.
    */
   getUnacknowledgedStatusChanges(): Artifact[] {
+    this.assertAuthorizationReadable();
     return this.artifacts.filter(
       (a) => (a as { statusChangeUnreported?: boolean }).statusChangeUnreported === true,
     );
@@ -1267,6 +1286,7 @@ export class FileStore implements IStore {
   }
 
   getDecisionResponse(decisionId: string): { optionId: string; reasoning?: string } | null {
+    this.assertAuthorizationReadable();
     return this.decisions.get(decisionId)?.response ?? null;
   }
 
@@ -1310,16 +1330,19 @@ export class FileStore implements IStore {
   }
 
   getPendingDecisions(): DecisionRecord[] {
+    this.assertAuthorizationReadable();
     return Array.from(this.decisions.values()).filter(
       (d) => !d.response && !this.isArtifactClosed(d.artifactId),
     );
   }
 
   getDecision(decisionId: string): DecisionRecord | undefined {
+    this.assertAuthorizationReadable();
     return this.decisions.get(decisionId);
   }
 
   getResolvedDecisions(): DecisionRecord[] {
+    this.assertAuthorizationReadable();
     return Array.from(this.decisions.values()).filter((d) => d.response && !d.acknowledged);
   }
 
@@ -1353,12 +1376,14 @@ export class FileStore implements IStore {
   }
 
   getPlanReviewVerdict(artifactId: string): { verdict: string; feedback?: string } | null {
+    this.assertAuthorizationReadable();
     const review = this.planReviews.get(artifactId);
     if (!review?.verdict) return null;
     return { verdict: review.verdict, feedback: review.feedback };
   }
 
   getPendingPlanReviews(): PlanReviewRecord[] {
+    this.assertAuthorizationReadable();
     return Array.from(this.planReviews.values()).filter(
       (p) => !p.verdict && !this.isArtifactClosed(p.artifactId),
     );
@@ -1995,6 +2020,7 @@ export class FileStore implements IStore {
   // --- Full state (for web UI hydration) ---
 
   getFullState() {
+    this.assertAuthorizationReadable();
     return {
       sessionId: this.sessionId,
       artifacts: this.artifacts,

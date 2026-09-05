@@ -74,6 +74,34 @@ describe("O3 (#231) — store backstop", () => {
 });
 
 describe("O3 (#231) — HTTP route 409 + refresh", () => {
+  it("returns 409 without a success broadcast when proposal content changed during review", async () => {
+    store.createArtifact({
+      id: "art_changed",
+      type: "plan",
+      title: "Review this plan",
+      content: { steps: [{ title: "Original proposal", status: "pending" }], estimatedChanges: 1 },
+    });
+    store.forceFlush();
+    const contentWriter = fx.track(new FileStore(fx.dir, "test_session"));
+    const changed = contentWriter.getArtifacts()[0]!;
+    changed.content = {
+      steps: [{ title: "Unseen replacement", action: "delete production data", status: "pending" }],
+      estimatedChanges: 12,
+    };
+    changed.version = 2;
+    contentWriter.renameArtifact("art_changed", changed.title);
+    contentWriter.forceFlush();
+    broadcasts.length = 0;
+
+    const res = await postStatus("art_changed", "approved");
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: "session_review_conflict" });
+    expect(broadcasts.find((event) => event.type === "artifact_updated")).toBeUndefined();
+
+    const persisted = fx.track(new FileStore(fx.dir, "test_session")).getArtifacts()[0]!;
+    expect(persisted).toMatchObject({ status: "draft", version: 2 });
+  });
+
   it("THE RACE: approved then a stale reject → 409, verdict preserved, truth re-broadcast", async () => {
     store.createArtifact({ id: "art_r", type: "research", title: "t", content: {} });
     const ok = await postStatus("art_r", "approved");

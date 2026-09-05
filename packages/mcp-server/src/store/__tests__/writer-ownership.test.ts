@@ -20,6 +20,76 @@ function seed() {
 }
 
 describe("writer-owned deltas", () => {
+  it.each([false, true])("does not combine an approval with concurrently changed content (contentFirst=%s)", (contentFirst) => {
+    const seedStore = open();
+    seedStore.createArtifact({
+      id: "plan",
+      type: "plan",
+      title: "Review this plan",
+      content: { steps: [{ title: "Original step", status: "pending" }], estimatedChanges: 1 },
+    });
+    seedStore.forceFlush();
+
+    const contentWriter = open();
+    const reviewer = open();
+    const changed = contentWriter.getArtifacts()[0]!;
+    changed.content = {
+      steps: [{ title: "Replace the reviewed approach", action: "delete production data", status: "pending" }],
+      estimatedChanges: 12,
+    };
+    changed.version = 2;
+    // getArtifacts exposes the live record for historical callers. Rename to
+    // schedule this substantive proposal rewrite through the normal writer.
+    contentWriter.renameArtifact("plan", changed.title);
+    reviewer.updateArtifactStatus("plan", "approved", "ui_approve_button");
+
+    const first = contentFirst ? contentWriter : reviewer;
+    const second = contentFirst ? reviewer : contentWriter;
+    first.forceFlush();
+    expect(() => second.forceFlush()).toThrow(/changed content.*review verdict|review verdict.*changed content/i);
+    expect(() => second.getArtifacts()).toThrow(/changed content.*review verdict|review verdict.*changed content/i);
+    expect(() => second.getFullState()).toThrow(/changed content.*review verdict|review verdict.*changed content/i);
+
+    const persisted = open().getArtifacts()[0]!;
+    expect(persisted.status === "approved" && persisted.version === 2).toBe(false);
+  });
+
+  it("allows one writer to change content and then review that same content", () => {
+    const writer = open();
+    writer.createArtifact({
+      id: "plan",
+      type: "plan",
+      title: "Review this plan",
+      content: { steps: [{ title: "Original step", status: "pending" }], estimatedChanges: 1 },
+    });
+    writer.forceFlush();
+
+    const artifact = writer.getArtifacts()[0]!;
+    artifact.content = { steps: [{ title: "Replacement step", status: "pending" }], estimatedChanges: 2 };
+    artifact.version = 2;
+    writer.renameArtifact("plan", artifact.title);
+    writer.updateArtifactStatus("plan", "approved", "ui_approve_button");
+    expect(() => writer.forceFlush()).not.toThrow();
+    expect(open().getArtifacts()[0]).toMatchObject({ status: "approved", version: 2 });
+  });
+
+  it("allows progress updates to an artifact that was already approved in the writer baseline", () => {
+    const reviewer = open();
+    reviewer.createArtifact({
+      id: "plan",
+      type: "plan",
+      title: "Approved plan",
+      content: { steps: [{ title: "Execute", status: "pending" }], estimatedChanges: 1 },
+    });
+    reviewer.updateArtifactStatus("plan", "approved", "ui_approve_button");
+    reviewer.forceFlush();
+
+    const progressWriter = open();
+    progressWriter.updatePlanProgress("plan", [{ stepIndex: 0, status: "done" }]);
+    expect(() => progressWriter.forceFlush()).not.toThrow();
+    expect((open().getArtifacts()[0]!.content as any).steps[0].status).toBe("done");
+  });
+
   it.each([false, true])("unrelated stale comment cannot revert review state (reverse=%s)", (reverse) => {
     const a = seed();
     const b = open();
