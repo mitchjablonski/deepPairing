@@ -4,6 +4,7 @@
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import type { FileStore } from "../../store/file-store.js";
+import { authorizeReviewPost } from "../../github/review-authorization.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
 
 const ctx = setupServerTest();
@@ -38,6 +39,137 @@ describe("MCP Tool Handlers — revise_artifact", () => {
     expect(result.isError).not.toBe(true);
     const next = store.getArtifacts().find(a => a.parentId === old.id)!;
     expect(store.getPreflightTrace(next.id)).toBeTruthy();
+  });
+
+  it("preserves external PR identity on revision without inheriting the reviewed head SHA", async () => {
+    store.recordRejectedApproach({
+      description: "in-process rate limiting",
+      concept: "in-process rate limiting",
+      reason: "we use the edge limiter",
+    });
+    const source = {
+      kind: "github-pr",
+      number: 123,
+      url: "https://github.com/acme/widgets/pull/123",
+      headRef: "feat/rate-limit",
+      baseRef: "main",
+      author: "dana",
+      headSha: "0123456789abcdef0123456789abcdef01234567",
+    };
+    await callTool("present_changeset", {
+      title: "PR #123 — in-process rate limiting",
+      summary: "Adds in-process rate limiting.",
+      files: [{ path: "src/limiter.ts", changeType: "modified", hunks: [] }],
+      reviewIntent: "external",
+      source,
+    });
+    const old = store.getArtifacts()[0]!;
+
+    const result = await callTool("revise_artifact", {
+      artifactId: old.id,
+      mode: "supersede",
+      reason: "refresh the displayed diff",
+      // The normal replacement shape omits review-only metadata.
+      content: {
+        summary: "Still uses in-process rate limiting, with a corrected hunk.",
+        files: [{ path: "src/limiter.ts", changeType: "modified", hunks: [] }],
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.text).toContain("advisory, not a block");
+    const revised = store.getArtifacts().find((a) => a.parentId === old.id)!;
+    expect(revised.status).toBe("draft");
+    expect((revised.content as any).reviewIntent).toBe("external");
+    expect((revised.content as any).source).toEqual({
+      kind: "github-pr",
+      number: 123,
+      url: "https://github.com/acme/widgets/pull/123",
+      headRef: "feat/rate-limit",
+      baseRef: "main",
+      author: "dana",
+    });
+    expect((revised.content as any).source.headSha).toBeUndefined();
+
+    await callTool("present_findings", {
+      title: "Review of PR #123",
+      summary: "Finding approved against the earlier immutable head.",
+      findings: [{
+        category: "Concurrency",
+        title: "Limiter update races logout",
+        detail: "The limiter update can land after logout.",
+        significance: "high",
+        severity: "high",
+        evidence: [{
+          filePath: "src/limiter.ts", lineStart: 1, lineEnd: 1,
+          snippet: "updateLimiter()", explanation: "This call races the logout transition.",
+        }],
+      }],
+    });
+    const findings = store.getArtifacts().find((a) => a.type === "research")!;
+    store.updateArtifactStatus(findings.id, "approved");
+    const authorization = authorizeReviewPost(
+      { sessionId: "revision-freshness", artifacts: store.getArtifacts() },
+      { event: "COMMENT", pr: source.url },
+    );
+    expect(authorization.ok).toBe(false);
+    if (authorization.ok) throw new Error("unreachable");
+    expect(authorization.reason).toContain("refresh-required revision");
+  });
+
+  it("accepts explicitly refreshed source provenance on an external revision", async () => {
+    await callTool("present_changeset", {
+      title: "PR #123",
+      files: [{ path: "src/limiter.ts", changeType: "modified", hunks: [] }],
+      reviewIntent: "external",
+      source: {
+        kind: "github-pr", number: 123, url: "https://github.com/acme/widgets/pull/123",
+        headSha: "0123456789abcdef0123456789abcdef01234567",
+      },
+    });
+    const old = store.getArtifacts()[0]!;
+    const freshSha = "89abcdef0123456789abcdef0123456789abcdef";
+    const result = await callTool("revise_artifact", {
+      artifactId: old.id,
+      mode: "supersede",
+      reason: "fetched the new PR head",
+      content: {
+        files: [{ path: "src/limiter.ts", changeType: "modified", hunks: [] }],
+        source: {
+          kind: "github-pr", number: 123, url: "https://github.com/acme/widgets/pull/123", headSha: freshSha,
+        },
+      },
+    });
+    expect(result.isError).toBeFalsy();
+    const revised = store.getArtifacts().find((a) => a.parentId === old.id)!;
+    expect((revised.content as any).reviewIntent).toBe("external");
+    expect((revised.content as any).source.headSha).toBe(freshSha);
+    expect(revised.status).toBe("draft");
+  });
+
+  it("treats a debrief revision as historical narrative, not a new rejected proposal", async () => {
+    await callTool("present_debrief", {
+      title: "Debrief — loader",
+      summary: "We shipped the loader with the selected cache.",
+    });
+    const old = store.getArtifacts()[0]!;
+    store.recordRejectedApproach({
+      description: "in-memory LRU cache",
+      concept: "in-memory LRU cache",
+      reason: "it diverges per process",
+    });
+
+    const result = await callTool("revise_artifact", {
+      artifactId: old.id,
+      mode: "supersede",
+      reason: "record the rejected alternative",
+      content: { summary: "We shipped the loader after you rejected the in-memory LRU cache." },
+    });
+    expect(result.isError).toBeFalsy();
+    expect(result.text).toContain("advisory, not a block");
+    const revised = store.getArtifacts().find((a) => a.parentId === old.id)!;
+    expect(revised.status).toBe("draft");
+    expect((revised.content as any).summary).toContain("rejected the in-memory LRU cache");
   });
   describe("revise_artifact — the STYLE echo (review round 1)", () => {
     it("echoes house style on a supersede, so the fix-it path is not the silent one", async () => {
@@ -549,7 +681,7 @@ describe("MCP Tool Handlers — revise_artifact", () => {
       expect(store.getArtifacts()[0].status).not.toBe("superseded");
     });
 
-    it("#171 — a superseded changeset starts with FRESH review state (echoed reviewState is stripped)", async () => {
+    it("#171 — a superseded changeset starts with FRESH human review state and reasons", async () => {
       await callTool("present_changeset", {
         title: "Move TTL refresh into middleware",
         files: [
@@ -572,6 +704,8 @@ describe("MCP Tool Handlers — revise_artifact", () => {
           ],
           // The agent echoes v1's review state — a stale ✓ on a changed diff.
           reviewState: { "auth/middleware.ts": "reviewed" },
+          // Human-authored objections belong to v1's exact diff too.
+          reviewReasons: { "auth/session.ts": "The old refresh ordering races logout." },
         },
         reason: "adjust the middleware check",
       });
@@ -580,6 +714,7 @@ describe("MCP Tool Handlers — revise_artifact", () => {
       expect(v2.type).toBe("changeset");
       // v2 must not carry v1's ✓ mark — review starts fresh.
       expect((v2.content as any).reviewState).toBeUndefined();
+      expect((v2.content as any).reviewReasons).toBeUndefined();
     });
 
     it("F5 — refuses to supersede a closed (rejected) artifact instead of resurrecting it", async () => {
