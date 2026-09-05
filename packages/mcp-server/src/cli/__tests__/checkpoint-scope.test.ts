@@ -3,7 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ensureCheckpointHook } from "../setup-tasks.js";
+import { createMcpServer } from "../../mcp/server.js";
 import { deriveSessionId } from "../../session-id.js";
 import { FileStore } from "../../store/file-store.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
@@ -32,6 +35,28 @@ function env() {
 }
 function event(filePath: string, session: string | undefined = "session-a") {
   return JSON.stringify({tool_name: "Edit", session_id: session, tool_input: {file_path: filePath}});
+}
+async function presentChangeset(reviewIntent?: "external") {
+  const { server } = createMcpServer(store, () => {}, 4000);
+  const client = new Client({ name: "checkpoint-test", version: "1.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  try {
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const result = await client.callTool({ name: "present_changeset", arguments: {
+      title: "Two local file edits",
+      files: ["src/a.ts", "src/b.ts"].map(file => ({ path: file, changeType: "modified", hunks: [] })),
+      ...(reviewIntent ? { reviewIntent, source: { kind: "github-pr", number: 42,
+        url: "https://github.com/acme/widgets/pull/42", headSha: "a".repeat(40) } } : {}),
+    } });
+    expect(result.isError).not.toBe(true);
+    const artifact = store.getArtifacts().find(value => value.type === "changeset");
+    expect(artifact).toBeDefined();
+    return artifact!;
+  } finally {
+    await client.close();
+    await server.close();
+  }
 }
 function fireCount() {
   try {
@@ -152,16 +177,35 @@ describe("file/session checkpoint receipts", () => {
     store.updateArtifactStatus(a.id, "approved");
     expect(hook()).toContain("present_code_change");
   });
-  it("supports each file of a presented changeset", () => {
-    store.createArtifact({id: "set", type: "changeset", title: "two files",
-      content: {files: [{filePath: "src/a.ts"}, {filePath: "src/b.ts"}]}});
+  it("mints ten-minute receipts through present_changeset and consumes only the edited file", async () => {
+    const artifact = await presentChangeset();
+    for (const file of ["src/a.ts", "src/b.ts"]) {
+      expect(fs.existsSync(marker(file))).toBe(true);
+      const receipt = JSON.parse(fs.readFileSync(marker(file), "utf8"));
+      expect(receipt).toMatchObject({ artifactId: artifact.id, sessionId: store.getSessionId(), filePath: path.resolve(root, file) });
+      expect(Date.parse(receipt.expiresAt) - Date.parse(receipt.at)).toBe(10 * 60_000);
+    }
     expect(hook()).toBe("");
+    expect(fs.existsSync(marker())).toBe(false);
+    expect(fs.existsSync(marker("src/b.ts"))).toBe(true);
     expect(hook("src/b.ts")).toBe("");
+    expect(fs.existsSync(marker("src/b.ts"))).toBe(false);
     expect(hook()).toContain("present_code_change");
   });
-  it("external PR review does not count as presenting code to apply", () => {
-    store.createArtifact({id: "external", type: "changeset", title: "review",
-      content: {reviewIntent: "external", files: [{filePath: "src/a.ts"}]}});
+  it("external present_changeset does not mint local edit receipts", async () => {
+    await presentChangeset("external");
+    expect(fs.existsSync(marker())).toBe(false);
+    expect(fs.existsSync(marker("src/b.ts"))).toBe(false);
+    expect(hook()).toContain("present_code_change");
+  });
+  it.each(["rejected", "revised", "superseded", "retracted", "obsolete"] as const)("revokes every file receipt of a %s changeset", status => {
+    const artifact = store.createArtifact({ id: "set", type: "changeset", title: "two files",
+      content: { files: ["src/a.ts", "src/b.ts"].map(file => ({ path: file, changeType: "modified", hunks: [] })) } });
+    expect(fs.existsSync(marker())).toBe(true);
+    expect(fs.existsSync(marker("src/b.ts"))).toBe(true);
+    store.updateArtifactStatus(artifact.id, status);
+    expect(fs.existsSync(marker())).toBe(false);
+    expect(fs.existsSync(marker("src/b.ts"))).toBe(false);
     expect(hook()).toContain("present_code_change");
   });
   it("uses the same sanitized session ID as the wrapper", () => {
@@ -277,7 +321,7 @@ describe("file/session checkpoint receipts", () => {
   });
   it("stamps changeset receipts with a ten-minute expiry", () => {
     store.createArtifact({id: "long", type: "changeset", title: "long",
-      content: {files: [{filePath: "src/a.ts"}]}});
+      content: {files: [{path: "src/a.ts", changeType: "modified", hunks: []}]}});
     const m = JSON.parse(fs.readFileSync(marker(), "utf8"));
     expect(Date.parse(m.expiresAt) - Date.parse(m.at)).toBe(10 * 60_000);
   });

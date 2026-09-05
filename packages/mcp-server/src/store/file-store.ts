@@ -552,10 +552,10 @@ export class FileStore implements IStore {
   /** Local reminder receipts, separate from the legacy project-wide hint. */
   private checkpointFiles(artifact: Artifact): string[] {
     if (this.isDemoSession || !artifact.content || typeof artifact.content !== "object") return [];
-    const content = artifact.content as { filePath?: unknown; files?: { filePath?: unknown }[]; reviewIntent?: unknown };
+    const content = artifact.content as { filePath?: unknown; files?: { path?: unknown }[]; reviewIntent?: unknown };
     if (content.reviewIntent === "external") return [];
     const files = artifact.type === "code_change" ? [content.filePath]
-      : artifact.type === "changeset" && Array.isArray(content.files) ? content.files.map(f => f?.filePath) : [];
+      : artifact.type === "changeset" && Array.isArray(content.files) ? content.files.map(f => f?.path) : [];
     return [...new Set(files.filter((f): f is string => typeof f === "string" && f.trim().length > 0)
       .map(f => path.resolve(this.projectRoot, f)))];
   }
