@@ -14,7 +14,7 @@ import {
   spawnDiagnosticProcess,
   withSetupDiagnostics,
 } from "../../e2e/daemon-harness.js";
-import { BoundedDiagnosticTail, redactDiagnostic } from "../../e2e/diagnostics.js";
+import { attachDiagnosticFile, BoundedDiagnosticTail, redactDiagnostic } from "../../e2e/diagnostics.js";
 
 function fakeProcess() {
   return { stdout: new PassThrough(), stderr: new PassThrough() } as unknown as ChildProcess;
@@ -165,6 +165,15 @@ describe("E2E daemon diagnostics", () => {
     const info = diagnosticInfo(async () => { throw new Error("attachment backend failed"); });
 
     await expect(withSetupDiagnostics(proc, info, async () => { throw primary; })).rejects.toBe(primary);
+    expect(fs.readFileSync(info.outputPath("daemon-diagnostics.txt"), "utf8")).not.toContain("child-setup-secret");
+  });
+
+  it("does not replace a test failure when the diagnostic file cannot be written", async () => {
+    const info = diagnosticInfo(async () => { throw new Error("must not attach a missing file"); });
+    const blocker = info.outputPath("not-a-directory");
+    fs.writeFileSync(blocker, "fixture");
+    info.outputPath = (name: string) => path.join(blocker, name);
+    await expect(attachDiagnosticFile(info, "browser-diagnostics", Buffer.from("safe line\n"))).resolves.toBeUndefined();
   });
 
   it("attaches a real crashing child's redacted tail when Playwright beforeAll fails", () => {

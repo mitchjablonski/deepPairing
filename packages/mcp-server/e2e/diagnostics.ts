@@ -3,9 +3,14 @@ import type { TestInfo } from "@playwright/test";
 
 /** Persist only an already-redacted, bounded tail outside the raw trace archive. */
 export async function attachDiagnosticFile(testInfo: TestInfo, name: string, body: Buffer): Promise<void> {
-  const file = testInfo.outputPath(`${name}.txt`);
-  await fs.writeFile(file, body);
-  await testInfo.attach(name, { path: file, contentType: "text/plain" });
+  try {
+    const file = testInfo.outputPath(`${name}.txt`);
+    await fs.writeFile(file, body);
+    await testInfo.attach(name, { path: file, contentType: "text/plain" });
+  } catch (error) {
+    // Diagnostics are secondary evidence, never a replacement for the failure.
+    console.warn(`[e2e] could not persist ${name}: ${redactDiagnostic(String(error))}`);
+  }
 }
 
 const URL_PATTERN = /https?:\/\/[^\s<>"']+/gi;
