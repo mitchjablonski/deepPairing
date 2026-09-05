@@ -71,20 +71,26 @@ describe("installed hook launch contract", () => {
         },
       }),
     ];
-    let preflightOutput: unknown;
-    for (const [index, command] of commands.entries()) {
+    function runInstalledHook(command: string, input: string, expectCaughtError = false) {
       const result = spawnSync(shell, [...shellArgs, command], {
         cwd: parent,
         env: { ...process.env, CLAUDE_PROJECT_DIR: shellProjectRoot },
-        input: payloads[index],
+        input,
         encoding: "utf8",
         timeout: 10_000,
       });
       expect(result.error).toBeUndefined();
       expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).not.toContain('"deny"');
       expect(result.stdout).not.toContain("hook error");
-      expect(result.stderr).not.toContain("hook error");
+      if (expectCaughtError) expect(result.stderr).toContain("[deepPairing] preflight hook error:");
+      else expect(result.stderr).not.toContain("hook error");
       expect(result.stderr).not.toContain("ReferenceError");
+      return result;
+    }
+    let preflightOutput: unknown;
+    for (const [index, command] of commands.entries()) {
+      const result = runInstalledHook(command, payloads[index]!);
       if (index === 2) preflightOutput = JSON.parse(result.stdout);
     }
 
@@ -96,6 +102,33 @@ describe("installed hook launch contract", () => {
       }),
     }));
 
+    // #340 / #366 review M1: malformed stdin must reach the INSTALLED wrapper's
+    // catch through the real shell command. A process.exit(1) regression in
+    // that catch must fail here, even though every normal decision still works.
+    const malformed = runInstalledHook(commands[2]!, "{ not json", true);
+    expect(malformed.stdout).toBe("");
+
+    // Preserve the common, non-firing edit path separately from the guardrail.
+    const ordinary = runInstalledHook(commands[2]!, JSON.stringify({
+      tool_name: "Edit", tool_input: { file_path: "src/smoke.ts", new_string: "const enabled = true;" },
+    }));
+    expect(ordinary.stdout).toBe("");
+
+    // Exercise the ledger fast path as well as the independent guardrail gate.
+    fs.writeFileSync(path.join(projectRoot, ".deeppairing", "preferences.json"), JSON.stringify({
+      rejectedApproaches: [{ description: "global mutable state for config", reason: "Keep configuration explicit" }],
+    }));
+    const ledger = runInstalledHook(commands[2]!, JSON.stringify({
+      tool_name: "Edit", tool_input: { file_path: "src/config.ts", new_string: "global mutable state for config" },
+    }));
+    expect(JSON.parse(ledger.stdout)).toEqual(expect.objectContaining({
+      hookSpecificOutput: expect.objectContaining({
+        hookEventName: "PreToolUse",
+        permissionDecision: "ask",
+        permissionDecisionReason: expect.stringContaining("REJECTED_APPROACH_BLOCKED"),
+      }),
+    }));
+
     const hookState = JSON.parse(
       fs.readFileSync(path.join(projectRoot, ".deeppairing", "hooks-state.json"), "utf8"),
     );
@@ -103,6 +136,7 @@ describe("installed hook launch contract", () => {
       expect.objectContaining({ hook: "stop", exitCode: 0, reason: expect.not.stringMatching(/^error:/) }),
       expect.objectContaining({ hook: "checkpoint", exitCode: 0, reason: expect.not.stringMatching(/^error:/) }),
       expect.objectContaining({ hook: "preflight", kind: "ask", reason: "guardrail:workflows" }),
+      expect.objectContaining({ hook: "preflight", kind: "ask", reason: "session" }),
     ]));
 
     for (const name of ["stop.mjs", "checkpoint.mjs", "preflight.mjs"]) {
