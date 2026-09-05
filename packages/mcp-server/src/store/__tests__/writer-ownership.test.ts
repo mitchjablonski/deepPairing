@@ -50,8 +50,14 @@ describe("writer-owned deltas", () => {
     expect(() => second.getArtifacts()).toThrow(/changed content.*review verdict|review verdict.*changed content/i);
     expect(() => second.getFullState()).toThrow(/changed content.*review verdict|review verdict.*changed content/i);
 
+    // Mutating the frozen instance must not make its stale in-memory verdict
+    // writable again. Recovery requires a fresh FileStore loaded from disk.
+    second.createArtifact({ id: "after-conflict", type: "research", title: "Must stay memory-only", content: {} });
+    expect(() => second.forceFlush()).toThrow(/changed content.*review verdict|review verdict.*changed content/i);
+
     const persisted = open().getArtifacts()[0]!;
     expect(persisted.status === "approved" && persisted.version === 2).toBe(false);
+    expect(open().getArtifacts().some((artifact) => artifact.id === "after-conflict")).toBe(false);
   });
 
   it("allows one writer to change content and then review that same content", () => {

@@ -402,6 +402,10 @@ export class FileStore implements IStore {
   }
 
   private flush(): void {
+    // A conflicted writer still holds the stale in-memory verdict that caused
+    // the safety failure. Keep every later flush fenced: only a newly created
+    // FileStore may reload the persisted artifact and resume authorization.
+    this.assertAuthorizationReadable();
     try {
       withSessionFlushLock(path.join(this.sessionDir(), ".flush.lock"), () => {
         this.artifacts = this.flushRecords("artifacts.json", this.artifacts, (r) => r.id,

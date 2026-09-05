@@ -9,7 +9,7 @@ export class SessionReviewConflictError extends Error {
   constructor(readonly artifactId: string) {
     super(
       `Artifact ${artifactId} has changed content and a concurrent review verdict. ` +
-      "Reload the session and review the persisted artifact before authorizing it.",
+      "Stop and restart the session writer, then review the persisted artifact before authorizing it.",
     );
     this.name = "SessionReviewConflictError";
   }
