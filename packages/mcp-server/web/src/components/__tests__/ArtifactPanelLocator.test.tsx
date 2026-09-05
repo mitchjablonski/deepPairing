@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, act, fireEvent, cleanup } from "@testing-library/react";
 import { useArtifactStore } from "../../stores/artifact";
-import { useReplayStore } from "../../stores/replay";
+import { replayRehydrateSettled, useReplayStore } from "../../stores/replay";
 import { ArtifactPanel, buildFlowGroups } from "../ArtifactPanel";
 import type { Artifact } from "@deeppairing/shared";
 
@@ -85,10 +85,11 @@ function ringNodes() {
   return document.querySelectorAll(".dp-arrival-ring");
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.useFakeTimers();
-  useArtifactStore.getState().reset();
   useReplayStore.getState().exitReplay();
+  await replayRehydrateSettled();
+  useArtifactStore.getState().reset();
   stubMatchMedia(false);
 });
 

@@ -588,6 +588,36 @@ describe("connection store — safe daemon recovery (#339)", () => {
     sessionId, artifacts, comments: [], requests: [], decisions: [],
   });
 
+  it("leaves an active historical replay and pending annotations untouched", async () => {
+    const annotations = deferredResponse();
+    const { useReplayStore } = await import("../replay");
+    const fetchMock = vi.fn((url: string | URL | Request) =>
+      String(url).includes("/annotations")
+        ? annotations.promise
+        : Promise.resolve(new Response(JSON.stringify(snapshot("A", [artifact("live", "A")])))));
+    vi.stubGlobal("fetch", fetchMock);
+    useConnectionStore.getState().connect();
+    useConnectionStore.setState({ sessionId: "A" });
+
+    const entering = useReplayStore.getState().enterReplay("historic", {
+      artifacts: [artifact("historic", "historic") as any], comments: [],
+    });
+    useArtifactStore.getState().addArtifact(artifact("historic", "historic") as any);
+    activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
+
+    annotations.resolve(new Response(JSON.stringify({
+      annotations: [{ id: "historic-note", sessionId: "historic", targetEventId: "event", note: "note", tags: [], createdAt: "now" }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    await entering;
+    await flush();
+
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/state"))).toBe(false);
+    expect(useArtifactStore.getState().artifacts.map((item) => item.id)).toEqual(["historic"]);
+    expect(useReplayStore.getState().annotations.map((item) => item.id)).toEqual(["historic-note"]);
+    expect(useReplayStore.getState().active).toBe(true);
+    useReplayStore.setState({ active: false, exiting: false });
+  });
+
   it("discards an A recovery after an A-B-A session transition", async () => {
     const pending = deferredResponse();
     vi.stubGlobal("fetch", vi.fn((url: string | URL | Request) =>
@@ -609,6 +639,50 @@ describe("connection store — safe daemon recovery (#339)", () => {
     expect(useArtifactStore.getState().artifacts).toEqual([]);
   });
 
+  it.each(["already active", "entered before dispatch", "exiting"])(
+    "protects the historical frame from live mutation messages when replay is %s",
+    async (phase) => {
+      const { useReplayStore } = await import("../replay");
+      vi.stubGlobal("fetch", vi.fn(async () => new Response("{}")));
+      useConnectionStore.getState().connect();
+      activeAdapter.emit({ type: "connected", state: snapshot("A", [artifact("historic", "historic")]) });
+      await flush();
+      const historicalState = useArtifactStore.getState();
+      const enter = () => useReplayStore.getState().enterReplay("historic", {
+        artifacts: historicalState.artifacts, comments: [],
+      });
+      if (phase !== "entered before dispatch") await enter();
+      if (phase === "exiting") useReplayStore.setState({ exiting: true });
+
+      for (const message of [
+        { type: "artifact_created", artifact: artifact("live", "A") },
+        { type: "artifact_updated", artifactId: "historic", status: "approved" },
+        ...["plan_progress_updated", "changeset_review_updated", "artifact_content_updated"].map((type) => ({
+          type, artifact: { ...artifact("historic", "A"), title: "live replacement" },
+        })),
+        { type: "comment_added", comment: { id: "c", target: { artifactId: "historic" }, content: "live" } },
+        { type: "comment_updated", comment: { id: "c", target: { artifactId: "historic" }, content: "updated" } },
+        { type: "request_added", request: { id: "r", sessionId: "A", prompt: "live" } },
+        { type: "request_served", requestId: "r", artifactId: "historic" },
+        { type: "artifact_renamed", artifactId: "historic", title: "live rename" },
+        { type: "decision_resolved", artifactId: "historic", decisionId: "d", optionId: "o" },
+        { type: "decisions_acknowledged", decisionIds: ["d"] },
+      ]) activeAdapter.emit(message);
+      if (phase === "entered before dispatch") await enter();
+      await flush();
+      expect(useArtifactStore.getState()).toEqual(historicalState);
+
+      // The authoritative connected snapshot releases the exit write lock;
+      // subsequent live events must resume normally.
+      useReplayStore.setState({ exiting: true });
+      activeAdapter.emit({ type: "connected", state: snapshot("A", [artifact("current", "A")]) });
+      activeAdapter.emit({ type: "artifact_created", artifact: artifact("next", "A") });
+      await flush();
+      expect(useReplayStore.getState().active).toBe(false);
+      expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["current", "next"]);
+    },
+  );
+
   it("discards a queued dynamic-import callback after a session switch", async () => {
     useConnectionStore.getState().connect();
     activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [] } });
@@ -622,7 +696,7 @@ describe("connection store — safe daemon recovery (#339)", () => {
     expect(useArtifactStore.getState().artifacts).toEqual([]);
   });
 
-  it("latest overlapping recovery wins", async () => {
+  it("latest overlapping recovery preserves mutations buffered before and after it", async () => {
     const first = deferredResponse();
     const second = deferredResponse();
     const stateResponses = [first.promise, second.promise];
@@ -635,8 +709,10 @@ describe("connection store — safe daemon recovery (#339)", () => {
     await flush();
     activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
     await flush();
+    activeAdapter.emit({ type: "artifact_created", artifact: artifact("before-second", "A") });
     activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
     await flush();
+    activeAdapter.emit({ type: "artifact_created", artifact: artifact("after-second", "A") });
 
     second.resolve(new Response(JSON.stringify(snapshot("A", [artifact("new", "A")])), {
       status: 200, headers: { "Content-Type": "application/json" },
@@ -646,7 +722,9 @@ describe("connection store — safe daemon recovery (#339)", () => {
       status: 200, headers: { "Content-Type": "application/json" },
     }));
     await flush();
-    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["new"]);
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id).sort()).toEqual([
+      "after-second", "before-second", "new",
+    ]);
   });
 
   it("discards a recovery response from a disconnected connection generation", async () => {
@@ -670,7 +748,7 @@ describe("connection store — safe daemon recovery (#339)", () => {
     expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["current"]);
   });
 
-  it("abandons an older snapshot when a live event arrives", async () => {
+  it("hydrates the snapshot and then replays a live event that arrived during fetch", async () => {
     const pending = deferredResponse();
     vi.stubGlobal("fetch", vi.fn((url: string | URL | Request) =>
       String(url).endsWith("/api/state") ? pending.promise : Promise.resolve(new Response("{}"))));
@@ -685,7 +763,7 @@ describe("connection store — safe daemon recovery (#339)", () => {
       status: 200, headers: { "Content-Type": "application/json" },
     }));
     await flush();
-    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["live"]);
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id).sort()).toEqual(["live", "snapshot"]);
   });
 
   it("abandons an older snapshot rather than overwriting an optimistic rename", async () => {
@@ -744,19 +822,26 @@ describe("connection store — safe daemon recovery (#339)", () => {
     ["null payload", null],
     ["malformed arrays", { sessionId: "A", artifacts: null, comments: [], requests: [], decisions: [] }],
     ["different session", snapshot("B", [artifact("from-B", "B")])],
-  ])("preserves valid state for an HTTP 200 %s", async (_label, payload) => {
+    ["hydration exception", { ...snapshot("A", [artifact("partial", "A")]), decisions: [null] }],
+  ])("preserves valid state and drains buffered events for an HTTP 200 %s", async (_label, payload) => {
     const { useToastStore } = await import("../toast");
     useToastStore.getState().dismissAll();
-    vi.stubGlobal("fetch", vi.fn(async (url: string | URL | Request) =>
-      String(url).endsWith("/api/state")
-        ? new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } })
-        : new Response("{}")));
+    const pending = deferredResponse();
+    vi.stubGlobal("fetch", vi.fn((url: string | URL | Request) =>
+      String(url).endsWith("/api/state") ? pending.promise : Promise.resolve(new Response("{}"))));
     useConnectionStore.getState().connect();
     activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [artifact("valid", "A")], comments: [] } });
     await flush();
     activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
     await flush();
+    activeAdapter.emit({ type: "artifact_created", artifact: artifact("buffered", "A") });
+    activeAdapter.emit({ type: "artifact_renamed", artifactId: "buffered", title: "latest title" });
+    await flush();
     expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["valid"]);
+    pending.resolve(new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } }));
+    await flush();
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["valid", "buffered"]);
+    expect(useArtifactStore.getState().artifacts[1]?.title).toBe("latest title");
     expect(useToastStore.getState().toasts.some((t) => t.title.includes("session state refetched"))).toBe(false);
   });
 
@@ -793,7 +878,7 @@ describe("connection store — safe daemon recovery (#339)", () => {
     expect(useToastStore.getState().toasts).toHaveLength(0);
   });
 
-  it("bounds a hung recovery and ignores its eventual response", async () => {
+  it("bounds a hung recovery, applies its buffer, and ignores its eventual response", async () => {
     const pending = deferredResponse();
     vi.stubGlobal("fetch", vi.fn((url: string | URL | Request) =>
       String(url).endsWith("/api/state") ? pending.promise : Promise.resolve(new Response("{}"))));
@@ -806,13 +891,14 @@ describe("connection store — safe daemon recovery (#339)", () => {
     // without using flush(), whose setTimeouts are intentionally faked here.
     await Promise.resolve();
     await Promise.resolve();
+    activeAdapter.emit({ type: "artifact_created", artifact: artifact("buffered", "A") });
     await vi.advanceTimersByTimeAsync(10_000);
     vi.useRealTimers();
     pending.resolve(new Response(JSON.stringify(snapshot("A", [artifact("late", "A")])), {
       status: 200, headers: { "Content-Type": "application/json" },
     }));
     await flush();
-    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["valid"]);
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id).sort()).toEqual(["buffered", "valid"]);
   });
 
   it("keeps valid state and does not claim success when recovery fails", async () => {

@@ -1,6 +1,7 @@
 import { apiGet, apiBase } from "./api";
-import { useArtifactStore } from "../stores/artifact";
 import { useReplayStore } from "../stores/replay";
+import { hydrateArtifactSession } from "./session-hydration";
+import { beginSessionTransition, isCurrentSessionTransition } from "./session-transition";
 
 /**
  * #138 — the ONE cross-session navigation scheme: open a past session in
@@ -23,30 +24,21 @@ export async function enterSessionReplay(
   sessionId: string,
   focusArtifactId?: string,
 ): Promise<boolean> {
+  const transition = beginSessionTransition(sessionId);
   const res = await apiGet(`${apiBase()}/api/sessions/${sessionId}`);
   if (!res.ok) return false;
   // Response.json() is typed `any`; keep it inferred (no explicit `any`
   // annotation) so the store's own types apply at each call site below.
   const state = await res.json();
+  if (!isCurrentSessionTransition(transition)) return false;
 
-  const store = useArtifactStore.getState();
-  store.reset();
-  for (const artifact of state.artifacts ?? []) {
-    store.addArtifact(artifact);
-  }
-  for (const comment of state.comments ?? []) {
-    store.addComment(comment);
-  }
-  // Re-seed agent-consumed decision receipts (reset() cleared them), so a
-  // replayed decision doesn't show a permanently-false "will pick it up".
-  const ackedIds: string[] = (state.decisions ?? [])
-    .filter((d: { decisionId?: string; acknowledged?: boolean }) => d?.acknowledged && d?.decisionId)
-    .map((d: { decisionId?: string }) => d.decisionId as string);
-  if (ackedIds.length > 0) {
-    store.markDecisionsAcknowledged(ackedIds);
-  }
-
-  await useReplayStore.getState().enterReplay(sessionId, state);
+  // enterReplay flips the read-only gate synchronously, before its annotation
+  // request yields. Historical artifacts can only become visible after that.
+  const enteringReplay = useReplayStore.getState().enterReplay(sessionId, state, transition);
+  if (!isCurrentSessionTransition(transition)) return false;
+  hydrateArtifactSession(state, { focusArtifactId });
+  await enteringReplay;
+  if (!isCurrentSessionTransition(transition)) return false;
 
   if (focusArtifactId) {
     const target = (state.artifacts ?? []).find(
@@ -54,7 +46,6 @@ export async function enterSessionReplay(
     );
     if (target?.createdAt) {
       useReplayStore.getState().setCursor(target.createdAt);
-      store.selectArtifact(focusArtifactId);
     }
   }
   return true;

@@ -6,6 +6,12 @@ import { isDraftAwaitingReview } from "../lib/pending";
 import { pushDaemonRestartToast } from "../lib/daemon-restart";
 import { noAgentLive } from "../lib/liveness";
 import type { Artifact, Comment, Request } from "@deeppairing/shared";
+import { useReplayStore } from "./replay";
+import {
+  beginSessionTransition,
+  isCurrentSessionTransition,
+  type SessionTransitionToken,
+} from "../lib/session-transition";
 
 type ArtifactStoreState = ReturnType<(typeof import("./artifact"))["useArtifactStore"]["getState"]>;
 interface RecoverySnapshot {
@@ -111,11 +117,20 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
   let pendingRecovery: {
     connection: number;
     session: number;
+    transition: SessionTransitionToken;
+    sessionId: string;
+    messages: any[];
     controller: AbortController;
     timeout?: ReturnType<typeof setTimeout>;
     unsubscribe: () => void;
   } | null = null;
   const RECOVERY_TIMEOUT_MS = 10_000;
+  const recoveryMutationTypes = new Set([
+    "artifact_created", "artifact_updated", "plan_progress_updated",
+    "changeset_review_updated", "artifact_content_updated", "comment_added",
+    "comment_updated", "request_added", "request_served", "artifact_renamed",
+    "decision_resolved", "decisions_acknowledged",
+  ]);
 
   const isCurrent = (connection: number, session: number) =>
     connection === connectionGeneration && session === sessionGeneration;
@@ -205,6 +220,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
   function handleMessage(
     data: any,
     messageConnection = connectionGeneration,
+    recoveryTransition?: SessionTransitionToken,
   ) {
     const inboundSid = data.type === "connected" ? data.state?.sessionId : undefined;
     const currentSid = get().sessionId;
@@ -232,9 +248,23 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       sessionGeneration++;
     }
     const messageSession = sessionGeneration;
+    if (
+      pendingRecovery &&
+      pendingRecovery.connection === messageConnection &&
+      pendingRecovery.session === messageSession &&
+      isCurrentSessionTransition(pendingRecovery.transition) &&
+      recoveryMutationTypes.has(data.type)
+    ) {
+      pendingRecovery.messages.push(data);
+      return;
+    }
     // Import artifact store lazily to avoid circular deps
     import("./artifact").then(({ useArtifactStore }) => {
       if (!isCurrent(messageConnection, messageSession)) return;
+      if (recoveryTransition && !isCurrentSessionTransition(recoveryTransition)) return;
+      // Replay can begin while the artifact-store import is pending. Its
+      // historical frame remains protected until live hydration completes.
+      if (recoveryMutationTypes.has(data.type) && useReplayStore.getState().active) return;
       const store = useArtifactStore.getState();
 
       switch (data.type) {
@@ -289,10 +319,13 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           const adapter = get().adapter;
           if (adapter?.refreshUrl) adapter.refreshUrl();
 
-          // Reset before hydration to prevent duplicates on reconnect
-          if (data.state) {
+          // A reconnect while browsing history must not replace the historical
+          // frame. During replay exit, however, this is the awaited live state.
+          const replay = useReplayStore.getState();
+          if (data.state && (!replay.active || replay.exiting)) {
             if (connectedSnapshot !== snapshotGeneration) return;
             hydrateArtifactState(store, data.state);
+            if (replay.exiting) useReplayStore.getState().completeExit();
           }
 
           set({ hydrated: true });
@@ -651,6 +684,19 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           // resume, toastApiError's 401 identity check is the safety net that
           // upgrades it to the reload toast. Left intentionally.
           {
+            // Replay owns the shared artifact store. A live recovery must not
+            // replace a historical frame or invalidate pending annotations;
+            // exiting replay performs its own authoritative live hydration.
+            if (useReplayStore.getState().active) break;
+            const expectedSessionId = data.sessionId ?? get().sessionId;
+            if (typeof expectedSessionId !== "string") break;
+            const previousMessages =
+              pendingRecovery &&
+              pendingRecovery.sessionId === expectedSessionId &&
+              isCurrent(pendingRecovery.connection, pendingRecovery.session) &&
+              isCurrentSessionTransition(pendingRecovery.transition)
+                ? pendingRecovery.messages
+                : [];
             cancelPendingRecovery();
             const recoveryConnection = messageConnection;
             const recoverySession = messageSession;
@@ -659,21 +705,38 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             const recovery: NonNullable<typeof pendingRecovery> = {
               connection: recoveryConnection,
               session: recoverySession,
+              transition: beginSessionTransition(expectedSessionId),
+              sessionId: expectedSessionId,
+              messages: previousMessages,
               controller,
               unsubscribe: () => {},
             };
             pendingRecovery = recovery;
+            const drainRecoveryMessages = () => {
+              if (
+                !isCurrent(recoveryConnection, recoverySession) ||
+                !isCurrentSessionTransition(recovery.transition) ||
+                get().sessionId !== expectedSessionId
+              ) return;
+              for (const message of recovery.messages.splice(0)) {
+                handleMessage(message, recoveryConnection, recovery.transition);
+              }
+            };
             recovery.unsubscribe = useArtifactStore.subscribe(() => {
-              // A snapshot predates every artifact-store mutation made while
-              // its fetch is pending, whether optimistic/local or live/remote.
-              // Abandon it rather than guessing how to replay the mutation.
-              if (pendingRecovery === recovery) cancelPendingRecovery();
+              // Optimistic/local mutations are not WebSocket messages and
+              // cannot be replayed safely. Preserve them by abandoning the
+              // older snapshot, then apply any WS messages already buffered.
+              if (pendingRecovery !== recovery) return;
+              cancelPendingRecovery();
+              drainRecoveryMessages();
             });
             recovery.timeout = setTimeout(() => {
-                if (pendingRecovery === recovery) cancelPendingRecovery();
-              }, RECOVERY_TIMEOUT_MS);
+              if (pendingRecovery !== recovery) return;
+              cancelPendingRecovery();
+              drainRecoveryMessages();
+            }, RECOVERY_TIMEOUT_MS);
             fetch(`${apiBase()}/api/state`, {
-              headers: { ...sessionHeaders(), "X-Session-Id": data.sessionId ?? get().sessionId ?? "" },
+              headers: { ...sessionHeaders(), "X-Session-Id": expectedSessionId },
               signal: controller.signal,
             })
             .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`state fetch failed: ${r.status}`))))
@@ -681,11 +744,12 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
               if (
                 pendingRecovery !== recovery ||
                 recoverySnapshot !== snapshotGeneration ||
-                !isCurrent(recoveryConnection, recoverySession)
+                !isCurrent(recoveryConnection, recoverySession) ||
+                !isCurrentSessionTransition(recovery.transition)
               ) return;
-              const expectedSessionId = data.sessionId ?? get().sessionId;
-              if (typeof expectedSessionId !== "string" || !isCompleteRecoverySnapshot(fresh, expectedSessionId)) {
+              if (!isCompleteRecoverySnapshot(fresh, expectedSessionId)) {
                 cancelPendingRecovery();
+                drainRecoveryMessages();
                 return;
               }
               if (recovery.timeout !== undefined) clearTimeout(recovery.timeout);
@@ -696,10 +760,15 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
                 hydrateArtifactState(store, fresh);
               } catch {
                 useArtifactStore.setState(previousArtifactState);
+                drainRecoveryMessages();
                 return;
               }
+              drainRecoveryMessages();
               import("./toast").then(({ useToastStore }) => {
-                if (!isCurrent(recoveryConnection, recoverySession)) return;
+                if (
+                  !isCurrent(recoveryConnection, recoverySession) ||
+                  !isCurrentSessionTransition(recovery.transition)
+                ) return;
                 useToastStore.getState().push({
                   kind: "info",
                   title: "Daemon recovered — session state refetched",
@@ -709,7 +778,9 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
               });
             })
               .catch(() => {
-                if (pendingRecovery === recovery) cancelPendingRecovery();
+                if (pendingRecovery !== recovery) return;
+                cancelPendingRecovery();
+                drainRecoveryMessages();
               });
           }
           break;
@@ -808,6 +879,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       adapter.onMessage((data) => handleMessage(data, thisConnection));
 
       adapter.onDisconnect(() => {
+        beginSessionTransition(get().sessionId);
         connectionGeneration++;
         sessionGeneration++;
         snapshotGeneration++;
@@ -855,6 +927,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     disconnect: () => {
       const { adapter } = get();
       if (adapter) {
+        beginSessionTransition(get().sessionId);
         connectionGeneration++;
         sessionGeneration++;
         snapshotGeneration++;
@@ -867,6 +940,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     switchSession: (sessionId: string) => {
       const { adapter } = get();
       if (adapter && "switchSession" in adapter) {
+        beginSessionTransition(sessionId);
         sessionGeneration++;
         snapshotGeneration++;
         cancelPendingRecovery();
