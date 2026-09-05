@@ -18,6 +18,28 @@ export function redactDiagnostic(value: string): string {
   return value
     .replace(URL_PATTERN, scrubUrl)
     .replace(
+      /(\b"?authorization"?\s*[:=]\s*")((?:\\.|[^"\\])*)"/gi,
+      (_match, prefix: string, credential: string) => {
+        const scheme = credential.match(/^([A-Za-z][A-Za-z0-9._-]*\s+)/)?.[1] ?? "";
+        return `${prefix}${scheme}[REDACTED]"`;
+      },
+    )
+    .replace(
+      /(\b'?authorization'?\s*[:=]\s*')((?:\\.|[^'\\])*)'/gi,
+      (_match, prefix: string, credential: string) => {
+        const scheme = credential.match(/^([A-Za-z][A-Za-z0-9._-]*\s+)/)?.[1] ?? "";
+        return `${prefix}${scheme}[REDACTED]'`;
+      },
+    )
+    .replace(
+      /(\b"?(?:authToken|accessToken|apiKey|password)"?\s*[:=]\s*")((?:\\.|[^"\\])*)"/gi,
+      '$1[REDACTED]"',
+    )
+    .replace(
+      /(\b'?(?:authToken|accessToken|apiKey|password)'?\s*[:=]\s*')((?:\\.|[^'\\])*)'/gi,
+      "$1[REDACTED]'",
+    )
+    .replace(
       /(\b"?authorization"?\s*[:=]\s*["']?)((?:[A-Za-z][A-Za-z0-9._-]*\s+)?)[^,\s;"']+/gi,
       "$1$2[REDACTED]",
     )

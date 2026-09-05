@@ -33,13 +33,22 @@ describe("E2E daemon diagnostics", () => {
       "accessToken=bare-secret",
       "Authorization: Basic basic-secret",
       "Authorization=Custom custom-secret",
+      'password="two word secret"',
+      "accessToken='single quoted secret'",
+      'apiKey="escaped \\\"quote-secret\\\" suffix-secret"',
+      'Authorization: "Bearer spaced-auth-secret trailing-secret"',
+      "Authorization='Custom single-auth-secret trailing-secret'",
       "https://user:url-secret@example.test/path?token=query-secret#fragment-secret",
     ].join("\n"));
 
     for (const secret of [
       "double-secret", "single-secret", "bare-secret", "basic-secret",
       "custom-secret", "url-secret", "query-secret", "fragment-secret",
+      "two word secret", "single quoted secret", "quote-secret", "suffix-secret",
+      "spaced-auth-secret", "trailing-secret", "single-auth-secret",
     ]) expect(output).not.toContain(secret);
+    expect(output).toContain('Authorization: "Bearer [REDACTED]"');
+    expect(output).toContain("Authorization='Custom [REDACTED]'");
     expect(output).toContain("https://example.test/path");
   });
 
