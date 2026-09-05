@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { randomBytes } from "node:crypto";
 import { runPreflight } from "../mcp/preflight-validator.js";
 import { sessionHasLivePreWorkCeremony } from "../debrief-gate.js";
+import { appendHookFire, hookStatePath } from "../hooks/hook-state.js";
 // Q1 — the ONE guardrail rule table, in a Node-builtins-only leaf module that
 // store/project-signals.ts, setup-tasks.ts and both hook entries also import.
 // F14's hand-written "loose superset" prefilter is GONE: the hook entries call
@@ -427,138 +427,30 @@ function stampGuardrailAsk(state: Record<string, unknown>, match: GuardrailMatch
   state.guardrailAsks = asks;
 }
 
-const FIRE_LOG_CAP = 50;
-
 /**
- * Q1 item 4 — the atomic write, ported into the hook lane.
+ * #342 — the hooks-state lock / read / atomic-write machinery moved to
+ * `src/hooks/hook-state.ts` and is re-exported here under its existing names.
  *
- * hooks-state.json had FOUR unlocked read-modify-write writers — this one, both
- * Stop copies (the plugin-bundled entry and setup-tasks' generated twin), and
- * the generated checkpoint script — all ending in a plain `fs.writeFileSync`. Two hooks firing in the same instant could interleave a
- * torn write, and the next reader's `JSON.parse` throws — at which point the
- * catch below used to reset the file to `{version:1}`, DISCARDING every prior
- * fire with no backup. That is the exact failure the project's own salvage rule
- * forbids ("back up before any committing drop").
+ * It used to live in FOUR places: this file, stop-hook-entry.ts, and untyped JS
+ * text inside setup-tasks.ts's two template literals. #332 had to repair the
+ * bounded-retry loop in all four; #333 shipped a `ReferenceError` because the
+ * emitted text called an identifier that only existed in the generator's module
+ * scope. One implementation removes the category.
  *
- * Same tmp+rename guarantee as store/atomic-write.ts's writeStringAtomic, but
- * re-implemented here in Node builtins only: this module is dynamically
- * imported by the init-generated `.mjs` under plain `node`, so it cannot reach
- * into the store layer. (Same discipline as readTeamPreferences above.)
+ * These re-exports are deliberate, not vestigial: this module is dynamically
+ * imported BY the init-generated `.mjs` under plain `node` (setup-tasks stamps
+ * its on-disk URL as CORE_URL), and the emitted preflight hook calls these
+ * names. They are also part of the module's tested surface
+ * (preflight-hook-core.test.ts, hook-lock-retry.test.ts). esbuild inlines
+ * hook-state.ts into `claude-plugin/server/preflight-hook-core.js`, so the
+ * bundled copy stays dependency-free.
  */
-export function writeHookStateAtomic(statePath: string, state: unknown): void {
-  const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${randomBytes(4).toString("hex")}`;
-  try {
-    fs.writeFileSync(tmp, JSON.stringify(state));
-    fs.renameSync(tmp, statePath);
-  } catch (err) {
-    try { fs.unlinkSync(tmp); } catch { /* never mask the real error */ }
-    throw err;
-  }
-}
-
-/**
- * M1 (round-12 adversarial review) — the atomic write was necessary and NOT
- * sufficient.
- *
- * tmp+rename guarantees no reader ever sees a torn file. It does NOT serialize
- * read-modify-write: two hooks that both read state N and both rename their
- * N+1 leave one of the two updates gone. Measured with 8 parallel invocations:
- * 8 asks were emitted, but only 4 fire records and — the part that matters — 4
- * DEDUP STAMPS survived. A dropped stamp means the same file asks again inside
- * its 30-minute window, which is the spurious-ask failure H1 is about.
- *
- * So the whole RMW runs under an O_EXCL lockfile. Hooks are sub-100 ms
- * processes, so a short spin is the right shape (no async, no dependency):
- *   - O_EXCL create is the atomic test-and-set;
- *   - a lock older than LOCK_STALE_MS is BROKEN, so a hook killed mid-write
- *     cannot wedge every later one;
- *   - failing to acquire within LOCK_MAX_WAIT_MS proceeds UNSYNCHRONIZED
- *     rather than dropping the record — degraded beats silent, and a hook may
- *     never fail the tool call it is gating.
- */
-const LOCK_STALE_MS = 5_000;
-const LOCK_SPIN_MS = 2;
-const LOCK_MAX_WAIT_MS = 500;
-
-/** Synchronous sleep — the hook lane has no async seam to yield through. */
-function sleepSync(ms: number): void {
-  try {
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-  } catch {
-    /* SharedArrayBuffer unavailable — spin-free fallback: just retry */
-  }
-}
-
-/** Returns the lock path on success, or null to proceed unsynchronized. */
-export function acquireHookStateLock(statePath: string, now: number = Date.now()): string | null {
-  const lock = `${statePath}.lock`;
-  const deadline = now + LOCK_MAX_WAIT_MS;
-  for (;;) {
-    try {
-      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
-      return lock;
-    } catch (error) {
-        // Only an existing lock means contention. Missing directories, denied
-        // access and other filesystem failures must take the fail-open path.
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") return null;
-      if (Date.now() >= deadline) return null;
-      try {
-        if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {
-          fs.unlinkSync(lock); // a crashed hook must not wedge the next one
-          continue;
-        }
-      } catch (error) {
-        // ENOENT means the holder released the lock; retry with the same
-        // deadline and backoff. A stat/unlink permission error is terminal.
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
-      }
-      if (Date.now() >= deadline) return null;
-      sleepSync(LOCK_SPIN_MS);
-    }
-  }
-}
-
-export function releaseHookStateLock(lock: string | null): void {
-  if (!lock) return;
-  try {
-    fs.unlinkSync(lock);
-  } catch {
-    /* already gone */
-  }
-}
-
-/**
- * Q1 item 4 — read hooks-state.json, and NEVER silently discard history.
- *
- * Three outcomes:
- *   - absent            → a fresh `{version:1}`, no backup (nothing was lost);
- *   - present + valid   → the parsed object;
- *   - present + corrupt → a fresh object, but the bytes are first copied to
- *     `hooks-state.json.corrupt-<ISO>` so the fire log is recoverable by hand.
- *     The backup is best-effort: if it fails we still reset, because a hook may
- *     never fail the tool call it is gating.
- */
-export function readHookState(statePath: string): Record<string, unknown> {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(statePath, "utf-8");
-  } catch {
-    return { version: 1 }; // absent / unreadable — nothing to salvage
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
-  } catch {
-    /* fall through to the salvage copy */
-  }
-  try {
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    fs.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);
-  } catch {
-    /* best-effort */
-  }
-  return { version: 1 };
-}
+export {
+  acquireHookStateLock,
+  releaseHookStateLock,
+  readHookState,
+  writeHookStateAtomic,
+} from "../hooks/hook-state.js";
 
 /**
  * The single hooks-state writer for the preflight lane (F11/F12). Appends the
@@ -584,30 +476,22 @@ export function readHookState(statePath: string): Record<string, unknown> {
  * typed where the fire log is read.
  */
 export function recordHookFire(projectRoot: string, decision: HookDecision, now: number = Date.now()): void {
-  try {
-    const sp = path.join(projectRoot, ".deeppairing", "hooks-state.json");
-    // Before the lock — O_EXCL needs the directory to exist.
-    fs.mkdirSync(path.dirname(sp), { recursive: true });
-    const lock = acquireHookStateLock(sp);
-    try {
-      const state = readHookState(sp);
-      state.version = 1;
-      const fires = Array.isArray(state.fires) ? state.fires : [];
-      fires.push({
-        at: new Date(now).toISOString(),
-        hook: "preflight",
-        kind: "ask" as const,
-        reason: decision.guardrail ? `guardrail:${decision.guardrail.category}` : decision.source || "blocked",
-      });
-      state.fires = fires.slice(-FIRE_LOG_CAP);
+  // appendHookFire owns the mkdir, the lock, the capped append and the atomic
+  // write, and never throws. The guardrail dedup stamp rides in the SAME
+  // read-modify-write via `mutate` — a second lock/RMW pair would reintroduce
+  // exactly the lost-update the lock exists to prevent.
+  appendHookFire(
+    hookStatePath(projectRoot),
+    {
+      at: new Date(now).toISOString(),
+      hook: "preflight",
+      kind: "ask" as const,
+      reason: decision.guardrail ? `guardrail:${decision.guardrail.category}` : decision.source || "blocked",
+    },
+    (state) => {
       if (decision.guardrail) stampGuardrailAsk(state, decision.guardrail, now);
-      writeHookStateAtomic(sp, state);
-    } finally {
-      releaseHookStateLock(lock);
-    }
-  } catch {
-    /* recording must never fail the hook itself */
-  }
+    },
+  );
 }
 
 /**
