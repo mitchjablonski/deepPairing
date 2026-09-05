@@ -81,9 +81,10 @@ function waitForExit(child: ChildProcessWithoutNullStreams): Promise<void> {
   });
 }
 
-async function waitForFiles(files: string[]): Promise<void> {
+async function waitForFiles(files: string[], failure: () => unknown): Promise<void> {
   const deadline = Date.now() + CHILD_TIMEOUT_MS;
   while (Date.now() < deadline) {
+    if (failure()) throw failure();
     if (files.every((file) => fs.existsSync(file))) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -108,12 +109,15 @@ describe("FileStore cooperative cross-process writers", () => {
 
     const a = startWriter("A");
     const b = startWriter("B");
+    let childFailure: unknown;
+    // Attach error/exit listeners immediately, before the readiness barrier.
+    // Consume early rejections so startup failures cannot become unhandled errors.
+    const finished = Promise.all([waitForExit(a), waitForExit(b)]).catch((err: unknown) => { childFailure = err; });
     try {
-      await waitForFiles([path.join(fx.dir, ".ready-A"), path.join(fx.dir, ".ready-B")]);
-      const doneA = waitForExit(a);
-      const doneB = waitForExit(b);
+      await waitForFiles([path.join(fx.dir, ".ready-A"), path.join(fx.dir, ".ready-B")], () => childFailure);
       fs.writeFileSync(path.join(fx.dir, ".go"), "go");
-      await Promise.all([doneA, doneB]);
+      await finished;
+      if (childFailure) throw childFailure;
 
       const sessionDir = path.join(fx.dir, ".deeppairing", "sessions", SESSION);
       const artifacts = JSON.parse(fs.readFileSync(path.join(sessionDir, "artifacts.json"), "utf8"));
@@ -124,6 +128,7 @@ describe("FileStore cooperative cross-process writers", () => {
       expect(fs.existsSync(path.join(sessionDir, ".flush.lock"))).toBe(false);
     } finally {
       await Promise.all([stopChild(a), stopChild(b)]);
+      await finished;
     }
   });
 });
