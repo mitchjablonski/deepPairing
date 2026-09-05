@@ -177,6 +177,21 @@ describe("writer-owned deltas", () => {
     expect(open().getArtifacts().find((r) => r.id === "a")?.title).toBe("retry");
   });
 
+  it("a disposed store cannot write into a replacement session directory", () => {
+    const stale = open();
+    stale.createArtifact({ id: "stale", type: "research", title: "Stale", content: {} });
+    stale.dispose();
+    const sessionDir = path.dirname(file("artifacts.json"));
+    fs.rmSync(sessionDir, { recursive: true });
+
+    const replacement = open();
+    replacement.createArtifact({ id: "fresh", type: "research", title: "Fresh", content: {} });
+    replacement.forceFlush();
+
+    expect(() => stale.forceFlush()).toThrow(/disposed/i);
+    expect(open().getArtifacts().map((artifact) => artifact.id)).toEqual(["fresh"]);
+  });
+
   it.each([false, true])("preserves concurrent status audit entries (reverse=%s)", (reverse) => {
     const a = seed();
     const b = open();

@@ -311,12 +311,14 @@ export class FileStore implements IStore {
   private flushFailureLogged = false;
   private flushRetryDelay = 100;
   private reviewConflict: SessionReviewConflictError | null = null;
+  private disposed = false;
 
   private assertAuthorizationReadable(): void {
     if (this.reviewConflict) throw this.reviewConflict;
   }
 
   private scheduleFlush(delay = 100): void {
+    if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
     if (this.flushTimer) return;
     this.flushTimer = setTimeout(() => {
       // C3 — a throwing timer callback is an UNCAUGHT EXCEPTION that kills
@@ -442,6 +444,7 @@ export class FileStore implements IStore {
 
   /** Force an immediate flush — call before process exit */
   forceFlush(): void {
+    if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
@@ -454,6 +457,7 @@ export class FileStore implements IStore {
    *  (or has been) removed. Unlike forceFlush(), this deliberately discards the
    *  pending write; the caller is disposing the store. Idempotent. */
   dispose(): void {
+    this.disposed = true;
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
