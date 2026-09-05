@@ -27316,6 +27316,7 @@ var FileStore = class _FileStore {
   persona = "auto";
   // Immutable snapshots identify local changes independently of filesystem mtimes.
   recordBaselines = {};
+  observedRecordFiles = /* @__PURE__ */ new Set();
   backedUpCorruption = {};
   // BB2 — held for FileStore.invalidateLedgerDigestCache, which is keyed
   // by projectRoot so all sessions in this project bust the same cache.
@@ -27444,6 +27445,7 @@ var FileStore = class _FileStore {
         return fallback;
       }
       bytes = fs13.readFileSync(filePath, "utf-8");
+      this.observedRecordFiles.add(path11.basename(filePath));
       return JSON.parse(bytes);
     } catch (err) {
       if (errorCode(err) === "ENOENT") {
@@ -27506,8 +27508,15 @@ var FileStore = class _FileStore {
     try {
       diskBytes = fs13.readFileSync(filePath, "utf8");
       raw2 = JSON.parse(diskBytes);
+      this.observedRecordFiles.add(file2);
     } catch (err) {
       const knownCorruption = err instanceof SyntaxError && diskBytes !== void 0 && this.backedUpCorruption[filePath] === diskBytes;
+      if (errorCode(err) === "ENOENT" && this.observedRecordFiles.has(file2)) {
+        throw Object.assign(
+          new Error(`Previously observed session collection disappeared: ${filePath}`),
+          { code: "ESESSIONFILEMISSING", path: filePath }
+        );
+      }
       if (errorCode(err) !== "ENOENT" && !knownCorruption) throw err;
       raw2 = [];
     }
@@ -27515,6 +27524,7 @@ var FileStore = class _FileStore {
     const mergedBytes = JSON.stringify(merged, null, 2);
     if (dirty && (!optional2 || merged.length > 0 || diskBytes !== void 0) && diskBytes !== mergedBytes) {
       writeStringAtomic(filePath, mergedBytes);
+      this.observedRecordFiles.add(file2);
     }
     this.recordBaselines[file2] = JSON.stringify(merged);
     delete this.backedUpCorruption[filePath];
