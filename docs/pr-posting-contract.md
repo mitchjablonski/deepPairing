@@ -47,6 +47,13 @@ state, and timestamps. Fingerprint the exact authorized payload and immutable
 provenance; do not store tokens, raw credentials, or raw review bodies in the
 operation journal. A token is a local fencing value, not external authorization.
 
+For recovery correlation, the wire body appends an HTML comment containing the
+random operation ID (never its fencing token or the session ID). The stored
+payload digest covers the authorized payload before this deterministic suffix.
+Reconciliation requires that exact suffix, removes it, and compares the remote
+body and original inline-comment coordinates/content with the stored digest.
+An older identical review without this operation marker is not a match.
+
 Both CLI and MCP must use one coordinator and the same durable store methods.
 Resolve/read remote preparation first, re-read local authorization, reserve,
 and compare the prepared payload/provenance with the current authorized result
@@ -76,6 +83,15 @@ anything. No match, unavailable API, or ambiguous matches are not evidence that
 the operation failed: leave it blocked and ask the human to inspect GitHub.
 Do not turn generic `repost` into an unknown-outcome bypass. Explicit human
 recovery must identify the operation and acknowledge the uncertainty.
+
+Operator commands are `review-posts <session-id> list`,
+`review-posts <session-id> cancel-reserved <operation-id>`, and
+`review-posts <session-id> reconcile <operation-id> <remote-review-id>`.
+Reconciliation fetches the selected review and all bounded comment pages via
+GET only. Wrong marker, edited content, missing original coordinates, unsupported
+multi-line/reply records, changed comment order, API failure, or pagination beyond
+the safety cap leaves the operation blocked. It does not search for approximate
+matches or claim remote absence proves non-delivery.
 
 ## Verification
 

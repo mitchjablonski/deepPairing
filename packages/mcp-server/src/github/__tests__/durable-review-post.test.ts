@@ -90,7 +90,7 @@ it("does not publish a caller's payload mutation during an awaited gate", async 
     reauthorize: async () => { mutable.body = "Never authorized"; return identity; },
     send: async (_target, frozen) => { sentBody = frozen.body; return result; },
   });
-  expect(sentBody).toBe("Reviewed");
+  expect(sentBody).toMatch(/^Reviewed\n\n<!-- deepPairing-review-operation:[0-9a-f-]+ -->$/);
 });
 
 it("invalid success response remains unknown and is never reported as a posted review", async () => {

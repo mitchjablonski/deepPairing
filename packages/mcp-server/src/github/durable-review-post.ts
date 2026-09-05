@@ -68,7 +68,11 @@ export async function executeDurableReviewPost(opts: {
 
   let result: ReviewPostResult;
   try {
-    result = validateReviewPostResult(identity, await opts.send(identity.target, payload));
+    // An opaque operation marker lets later read-only reconciliation identify
+    // THIS attempt, not an older otherwise-identical review. It is not a token,
+    // session ID, credential, or GitHub idempotency key.
+    const wirePayload = { ...payload, body: payload.body + reviewPostMarker(lease.operationId) };
+    result = validateReviewPostResult(identity, await opts.send(identity.target, wirePayload));
   } catch (err) {
     try { await opts.store.markUnknown(lease); } catch { /* durable sending still blocks retry */ }
     throw new ReviewPostUnknownError(lease.operationId, err);
@@ -83,4 +87,11 @@ export async function executeDurableReviewPost(opts: {
     try { await opts.store.markUnknown(lease); } catch { /* sending remains unresolved */ }
     return { operationId: lease.operationId, result, receipt: "unconfirmed" };
   }
+}
+
+export function reviewPostMarker(operationId: string): string {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(operationId)) {
+    throw new Error("Invalid durable review operation ID");
+  }
+  return `\n\n<!-- deepPairing-review-operation:${operationId} -->`;
 }

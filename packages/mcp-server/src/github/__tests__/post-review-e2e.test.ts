@@ -35,6 +35,7 @@ import { buildGitHubReviewPayload, type GitHubReviewPayload } from "../../export
 import { handlePostPrReview } from "../../mcp/tools/post-pr-review.js";
 import type { Artifact } from "@deeppairing/shared";
 import { ReviewPostJournal } from "../../store/review-post-journal.js";
+import { reconcileReviewPostCommand } from "../../cli/review-posts.js";
 
 // --- the fake gh -------------------------------------------------------------
 
@@ -49,6 +50,7 @@ let originalPath: string | undefined;
  *  a separate process, so env is the only channel). */
 type Mode =
   | "ok"
+  | "recovery-read"
   | "head-changed"
   | "notauthed-repo"
   | "enterprise-repo"
@@ -113,6 +115,12 @@ if (isRepoView) {
   process.exit(0);
 }
 if (isApi) {
+  if (mode === "recovery-read") {
+    if (args.includes("POST")) { process.stderr.write("Recovery must never POST"); process.exit(99); }
+    const fixture = JSON.parse(fs.readFileSync(process.env.DP_GH_RECOVERY_FIXTURE, "utf8"));
+    process.stdout.write(JSON.stringify(String(args[1]).includes("/comments?") ? fixture.comments : fixture.review));
+    process.exit(0);
+  }
   if (mode === "notauthed-api") { process.stderr.write(NOT_LOGGED_IN); process.exit(1); }
   if (mode === "bad-credentials") {
     // An expired / revoked / under-scoped token: gh is logged in, GitHub says no.
@@ -185,6 +193,7 @@ afterAll(() => {
   delete process.env.DP_GH_FAKE_LOG;
   delete process.env.DP_GH_FAKE_MODE;
   delete process.env.DEEPPAIRING_GH_TIMEOUT_MS;
+  delete process.env.DP_GH_RECOVERY_FIXTURE;
   fs.rmSync(binDir, { recursive: true, force: true });
 });
 
@@ -479,6 +488,33 @@ describe("Q6 — error paths (each one executed, not assumed)", () => {
 // --- the handler -------------------------------------------------------------
 
 describe("Q6 — handlePostPrReview (the MCP tool) end to end", () => {
+  it("#344 explicit remote reconciliation verifies the marked review using GETs only", async () => {
+    const ctx = fakeCtx([researchArtifact([HIGH_FINDING])]);
+    setMode("bad-success-state");
+    await handlePostPrReview(ctx, { pr: "42" });
+    const journal = (ctx as any).store.reviewPosts as ReviewPostJournal;
+    const operation = journal.list()[0]!;
+    expect(operation.state).toBe("unknown");
+    const sent = JSON.parse(reviewPostCalls()[0]!.stdin);
+    const commit = "0123456789abcdef0123456789abcdef01234567";
+    const fixture = {
+      review: { id: 4242, html_url: "https://github.com/acme/widgets/pull/42#pullrequestreview-4242",
+        state: "COMMENTED", body: sent.body, commit_id: commit, submitted_at: new Date().toISOString() },
+      comments: sent.comments.map((comment: any, index: number) => ({ ...comment,
+        id: index + 1, pull_request_review_id: 4242, original_line: comment.line, original_commit_id: commit })),
+    };
+    const fixturePath = path.join(binDir, "recovery.json");
+    fs.writeFileSync(fixturePath, JSON.stringify(fixture));
+    process.env.DP_GH_RECOVERY_FIXTURE = fixturePath;
+    setMode("recovery-read");
+    const project = path.resolve(path.dirname(journal.journalPath), "..", "..", "..");
+    const text = await reconcileReviewPostCommand(project, ["s_review", "reconcile", operation.id, "4242"]);
+    expect(text).toContain("No review was posted by recovery");
+    expect(journal.list()[0].state).toBe("succeeded");
+    expect(reviewPostCalls()).toHaveLength(1);
+    expect(calls().slice(-2).every(call => call.args.includes("GET"))).toBe(true);
+  });
+
   it("#344 concurrent MCP posts share one durable send reservation", async () => {
     const ctx = fakeCtx([researchArtifact([HIGH_FINDING])]);
     const results = await Promise.all([0, 1].map(() => handlePostPrReview(ctx, { pr: "42" })));

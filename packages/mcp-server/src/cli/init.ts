@@ -2061,6 +2061,8 @@ ${helpInvocations}
     dp review-posts <session-id>           Inspect durable review-post operations
     dp review-posts <session-id> cancel-reserved <operation-id>
                                           Cancel only an operation that has not started sending
+    dp review-posts <session-id> reconcile <operation-id> <remote-review-id>
+                                          Verify a remote review and record it without posting
                                            on a GitHub PR. Requires \`gh\` CLI installed + authed.
     dp --help                              Show this help message
     dp --version                           Show version
@@ -2159,8 +2161,10 @@ ${helpInvocations}
     process.exit(1);
   });
 } else if (cmd === "review-posts") {
-  import("./review-posts.js").then(({ reviewPostsCommand }) => {
-    console.log(reviewPostsCommand(cwd, args.slice(1)));
+  import("./review-posts.js").then(async ({ reviewPostsCommand, reconcileReviewPostCommand }) => {
+    console.log(args[2] === "reconcile"
+      ? await reconcileReviewPostCommand(cwd, args.slice(1))
+      : reviewPostsCommand(cwd, args.slice(1)));
   }).catch(err => {
     console.error(`  ${red("✗")} review-posts failed: ${errorMessage(err)}`);
     process.exitCode = 1;

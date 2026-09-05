@@ -183,6 +183,11 @@ Run `deeppairing review-posts <session-id>` to inspect operation IDs and states.
 Only a `reserved` operation can be cancelled with
 `deeppairing review-posts <session-id> cancel-reserved <operation-id>`.
 Inspect the remote review and reconcile its identity before posting again.
+Use `deeppairing review-posts <session-id> reconcile <operation-id> <remote-review-id>`
+only after identifying the review on GitHub. This performs read-only verification
+of the operation marker, destination, verdict, reviewed commit, body and inline
+comments, then records the receipt locally. A mismatch or unavailable API leaves
+the operation blocked; recovery never sends another review.
 A `reserved` operation has not authorized a send; explicit cancellation must
 fence its original caller. A retained disk lock needs all writers stopped and
 inspection before any manual repair; age or a dead-looking PID is not proof
