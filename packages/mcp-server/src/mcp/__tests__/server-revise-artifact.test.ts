@@ -39,6 +39,112 @@ describe("MCP Tool Handlers — revise_artifact", () => {
     const next = store.getArtifacts().find(a => a.parentId === old.id)!;
     expect(store.getPreflightTrace(next.id)).toBeTruthy();
   });
+
+  it("preserves external PR identity on revision without inheriting the reviewed head SHA", async () => {
+    store.recordRejectedApproach({
+      description: "in-process rate limiting",
+      concept: "in-process rate limiting",
+      reason: "we use the edge limiter",
+    });
+    const source = {
+      kind: "github-pr",
+      number: 123,
+      url: "https://github.com/acme/widgets/pull/123",
+      headRef: "feat/rate-limit",
+      baseRef: "main",
+      author: "dana",
+      headSha: "0123456789abcdef0123456789abcdef01234567",
+    };
+    await callTool("present_changeset", {
+      title: "PR #123 — in-process rate limiting",
+      summary: "Adds in-process rate limiting.",
+      files: [{ path: "src/limiter.ts", changeType: "modified", hunks: [] }],
+      reviewIntent: "external",
+      source,
+    });
+    const old = store.getArtifacts()[0]!;
+
+    const result = await callTool("revise_artifact", {
+      artifactId: old.id,
+      mode: "supersede",
+      reason: "refresh the displayed diff",
+      // The normal replacement shape omits review-only metadata.
+      content: {
+        summary: "Still uses in-process rate limiting, with a corrected hunk.",
+        files: [{ path: "src/limiter.ts", changeType: "modified", hunks: [] }],
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.text).toContain("advisory, not a block");
+    const revised = store.getArtifacts().find((a) => a.parentId === old.id)!;
+    expect(revised.status).toBe("draft");
+    expect((revised.content as any).reviewIntent).toBe("external");
+    expect((revised.content as any).source).toEqual({
+      kind: "github-pr",
+      number: 123,
+      url: "https://github.com/acme/widgets/pull/123",
+      headRef: "feat/rate-limit",
+      baseRef: "main",
+      author: "dana",
+    });
+    expect((revised.content as any).source.headSha).toBeUndefined();
+  });
+
+  it("accepts explicitly refreshed source provenance on an external revision", async () => {
+    await callTool("present_changeset", {
+      title: "PR #123",
+      files: [{ path: "src/limiter.ts", changeType: "modified", hunks: [] }],
+      reviewIntent: "external",
+      source: {
+        kind: "github-pr", number: 123, url: "https://github.com/acme/widgets/pull/123",
+        headSha: "0123456789abcdef0123456789abcdef01234567",
+      },
+    });
+    const old = store.getArtifacts()[0]!;
+    const freshSha = "89abcdef0123456789abcdef0123456789abcdef";
+    const result = await callTool("revise_artifact", {
+      artifactId: old.id,
+      mode: "supersede",
+      reason: "fetched the new PR head",
+      content: {
+        files: [{ path: "src/limiter.ts", changeType: "modified", hunks: [] }],
+        source: {
+          kind: "github-pr", number: 123, url: "https://github.com/acme/widgets/pull/123", headSha: freshSha,
+        },
+      },
+    });
+    expect(result.isError).toBeFalsy();
+    const revised = store.getArtifacts().find((a) => a.parentId === old.id)!;
+    expect((revised.content as any).reviewIntent).toBe("external");
+    expect((revised.content as any).source.headSha).toBe(freshSha);
+    expect(revised.status).toBe("draft");
+  });
+
+  it("treats a debrief revision as historical narrative, not a new rejected proposal", async () => {
+    await callTool("present_debrief", {
+      title: "Debrief — loader",
+      summary: "We shipped the loader with the selected cache.",
+    });
+    const old = store.getArtifacts()[0]!;
+    store.recordRejectedApproach({
+      description: "in-memory LRU cache",
+      concept: "in-memory LRU cache",
+      reason: "it diverges per process",
+    });
+
+    const result = await callTool("revise_artifact", {
+      artifactId: old.id,
+      mode: "supersede",
+      reason: "record the rejected alternative",
+      content: { summary: "We shipped the loader after you rejected the in-memory LRU cache." },
+    });
+    expect(result.isError).toBeFalsy();
+    expect(result.text).toContain("advisory, not a block");
+    const revised = store.getArtifacts().find((a) => a.parentId === old.id)!;
+    expect(revised.status).toBe("draft");
+    expect((revised.content as any).summary).toContain("rejected the in-memory LRU cache");
+  });
   describe("revise_artifact — the STYLE echo (review round 1)", () => {
     it("echoes house style on a supersede, so the fix-it path is not the silent one", async () => {
       await callTool("present_findings", {

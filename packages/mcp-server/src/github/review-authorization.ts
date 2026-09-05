@@ -165,8 +165,49 @@ function externalChangesets(artifacts: Artifact[]): Artifact[] {
 const CLOSED_CHANGESET_STATUSES = new Set(["superseded", "retracted", "obsolete"]);
 const FULL_GIT_SHA = /^[0-9a-fA-F]{40}$/;
 
-/** #343 — derive the ONE immutable commit represented by every standing
- * external chunk. This reads the raw persisted value as well as the coercer:
+type ParsedPr = NonNullable<ReturnType<typeof parsePrNumber>>;
+
+function samePrIdentity(target: ParsedPr, reviewed: ParsedPr): boolean {
+  return target.number === reviewed.number &&
+    (!target.owner || (!!reviewed.owner && target.owner.toLowerCase() === reviewed.owner.toLowerCase())) &&
+    (!target.repo || (!!reviewed.repo && target.repo.toLowerCase() === reviewed.repo.toLowerCase()));
+}
+
+interface ExternalTargetScope {
+  matching: Artifact[];
+  /** A parseable source URL for another PR. */
+  other: Array<{ artifact: Artifact; reviewed: ParsedPr }>;
+  /** A source that claims the target URL but contradicts it with source.number. */
+  contradictory: Artifact[];
+  /** Legacy/malformed source provenance cannot establish a target identity. */
+  unknown: Artifact[];
+}
+
+/** Partition external-review chunks by the requested PR. Unrelated PRs are
+ * valid session history, not contaminants of the target review. */
+function scopeExternalChangesets(artifacts: Artifact[], ref: string): ExternalTargetScope {
+  const target = parsePrNumber(ref);
+  const scope: ExternalTargetScope = { matching: [], other: [], contradictory: [], unknown: [] };
+
+  for (const artifact of artifacts) {
+    const source = coerceChangesetContent(artifact.content).source;
+    const reviewed = source?.url ? parsePrNumber(source.url) : null;
+    if (!target || !reviewed?.owner || !reviewed.repo) {
+      scope.unknown.push(artifact);
+      continue;
+    }
+    if (samePrIdentity(target, reviewed)) {
+      if (source?.number !== undefined && source.number !== reviewed.number) scope.contradictory.push(artifact);
+      else scope.matching.push(artifact);
+    } else {
+      scope.other.push({ artifact, reviewed });
+    }
+  }
+  return scope;
+}
+
+/** #343 — derive the ONE immutable commit represented by the supplied standing
+ * target chunks. This reads the raw persisted value as well as the coercer:
  * coercion intentionally drops malformed optional fields for legacy
  * readability, but the authorization boundary must distinguish "old/missing"
  * from "someone supplied a broken SHA" and fail closed.
@@ -179,7 +220,7 @@ function reviewedHeadFor(
   artifacts: Artifact[],
   event: GitHubReviewEvent,
 ): { ok: true; headSha?: string } | { ok: false; reason: string } {
-  const standing = externalChangesets(artifacts).filter((a) => !CLOSED_CHANGESET_STATUSES.has(a.status));
+  const standing = artifacts.filter((a) => !CLOSED_CHANGESET_STATUSES.has(a.status));
   const valid: Array<{ artifact: Artifact; sha: string }> = [];
   const missing: Artifact[] = [];
   const malformed: Artifact[] = [];
@@ -359,25 +400,33 @@ export function authorizeReviewPost(
   const approved = findingsArtifacts.filter((a) => a.status === "approved");
   const decidedNo = findingsArtifacts.filter((a) => DECIDED_EXCLUDED_STATUSES.has(a.status));
 
-  // A verdict belongs to the PR shown on the surface. Check every standing
-  // external chunk; mixing two PRs must not silently authorize either one.
+  // A verdict belongs to the requested PR. A session may legitimately review
+  // several PRs, so only matching chunks determine this target's verdict and
+  // immutable SHA. Legacy source-less chunks remain usable for COMMENT when
+  // approved findings authorize an actual payload, but can never grant an
+  // APPROVE because they establish neither repository nor commit identity.
+  let targetExternals = externalChangesets(state.artifacts);
   if (opts.pr) {
-    const target = parsePrNumber(opts.pr);
-    const external = externalChangesets(state.artifacts).filter(a =>
+    const standing = targetExternals.filter(a =>
       !CLOSED_CHANGESET_STATUSES.has(a.status));
-    for (const artifact of external) {
-      const source = coerceChangesetContent(artifact.content).source;
-      const reviewed = source?.url ? parsePrNumber(source.url) : null;
-      const same = target && reviewed?.owner && reviewed.repo &&
-        target.number === reviewed.number &&
-        (source?.number === undefined || source.number === reviewed.number) &&
-        (!target.owner || target.owner.toLowerCase() === reviewed.owner.toLowerCase()) &&
-        (!target.repo || target.repo.toLowerCase() === reviewed.repo.toLowerCase());
-      if (!same) return {
+    const standingScope = scopeExternalChangesets(standing, opts.pr);
+    if (standingScope.contradictory.length > 0) {
+      const artifact = standingScope.contradictory[0]!;
+      return {
         ok: false,
-        reason: `Refusing to post: "${artifact.title}" does not identify the requested PR ${opts.pr}. Present that PR with its full source.url and get your pair's verdict before posting.`,
+        reason: `Refusing to post: "${artifact.title}" (${artifact.id}) has a source.number that contradicts its source.url. Present one coherent PR identity and get your pair's verdict again.`,
       };
     }
+    if (standingScope.matching.length === 0 && standingScope.other.length > 0) {
+      const { artifact, reviewed } = standingScope.other[0]!;
+      return {
+        ok: false,
+        reason:
+          `Refusing to post: "${artifact.title}" identifies https://github.com/${reviewed.owner}/${reviewed.repo}/pull/${reviewed.number}, ` +
+          `not the requested PR ${opts.pr}. Present the requested PR with its full source.url and get your pair's verdict before posting.`,
+      };
+    }
+    targetExternals = scopeExternalChangesets(targetExternals, opts.pr).matching;
   }
 
   // (c) A BARE APPROVE IS A REAL VERDICT ON SOMEONE ELSE'S PR — and so is an
@@ -389,7 +438,7 @@ export function authorizeReviewPost(
   // posted another on a PR the human had explicitly REJECTED. The event is what
   // makes this a verdict, not the comment count, so the event is what gates it.
   if (event === "APPROVE") {
-    const externals = externalChangesets(state.artifacts);
+    const externals = targetExternals;
 
     // The human's "no" on the PR itself is not an exclusion — it is the
     // opposite verdict, and an APPROVE contradicts it outright.
@@ -433,7 +482,7 @@ export function authorizeReviewPost(
     }
   }
 
-  const reviewedHead = reviewedHeadFor(state.artifacts, event);
+  const reviewedHead = reviewedHeadFor(targetExternals, event);
   if (!reviewedHead.ok) return { ok: false, reason: reviewedHead.reason };
 
   // (b) THE EXCLUSION, stated honestly. This product has NO per-finding verdict:
@@ -451,7 +500,10 @@ export function authorizeReviewPost(
   // finding. A comment is as often agreement ("good catch, say it harder") as
   // dissent, so dropping a commented-on finding would be a guess — and guessing
   // is what this gate exists to stop.
-  const payload = buildGitHubReviewPayload({ ...state, artifacts: approved } as never, { event });
+  // The outbound title is derived only from approved research. Private
+  // decisions are unrelated session context and must never leak into a review
+  // header when no findings title is available.
+  const payload = buildGitHubReviewPayload({ ...state, artifacts: approved, decisions: [] } as never, { event });
   if (reviewedHead.headSha) payload.commit_id = reviewedHead.headSha;
 
   if (payload.comments.length === 0) {
