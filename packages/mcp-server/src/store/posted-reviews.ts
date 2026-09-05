@@ -69,10 +69,9 @@ export function parsePrNumber(ref: string): { owner?: string; repo?: string; num
   return parsePrReference(ref);
 }
 
-/** Read the sidecar. Absent or corrupt → empty: a lost record can only cause a
- *  duplicate post to be *allowed*, never a legitimate one to be refused, so
- *  failing open here is the safe direction (the human's verdict checks, which
- *  fail CLOSED, are untouched by this file). */
+/** Best-effort sidecar read for hydration and the legacy compatibility mirror.
+ * Posting authorization must use ReviewPostJournal.readLegacyHistory instead:
+ * malformed history is never permission to post another review. */
 export function readPostedReviews(projectRoot: string, sessionId: string): PostedReviewRecord[] {
   try {
     const raw = fs.readFileSync(postedReviewsPath(projectRoot, sessionId), "utf-8");

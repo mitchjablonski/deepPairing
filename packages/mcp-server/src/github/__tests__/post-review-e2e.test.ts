@@ -273,8 +273,8 @@ function payloadFor(findings: unknown[], event?: GitHubReviewPayload["event"]): 
   );
 }
 
-/** The one method handlePostPrReview touches. A fake, not a mock: it answers
- *  getFullState() from real artifacts, exactly as FileStore would. */
+/** A fake, not a mock: fresh authorization snapshots plus the real durable
+ * journal boundary used by handlePostPrReview. */
 function fakeCtx(artifacts: Artifact[]) {
   const postedReviews: unknown[] = [];
   const project = fs.mkdtempSync(path.join(binDir, "session-"));
