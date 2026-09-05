@@ -30,7 +30,7 @@ import { appendHookFire, hookErrorMessage, hookStatePath, resolveHookProjectRoot
 
 const HOOK_NAME = "checkpoint";
 const EDIT_TOOLS = ["Write", "Edit", "MultiEdit"];
-/** A receipt older than this is stale — the presentation was not for this edit. */
+/** Legacy receipts without a store-owned expiry keep their original lifetime. */
 const RECEIPT_TTL_MS = 60 * 1000;
 
 // V2.1 — skip-list for files that are unambiguously NOT worth a per-edit
@@ -114,17 +114,22 @@ function claimReceipt(dpDir: string, sessionId: string, absolutePath: string, no
   try {
     const m: unknown = JSON.parse(fs.readFileSync(claimPath, "utf8"));
     if (!m || typeof m !== "object") return false;
-    const r = m as { version?: unknown; sessionId?: unknown; filePath?: unknown; artifactId?: unknown; at?: unknown };
-    const age = typeof r.at === "string" ? now - Date.parse(r.at) : NaN;
+    const r = m as { version?: unknown; sessionId?: unknown; filePath?: unknown; artifactId?: unknown; at?: unknown; expiresAt?: unknown };
+    const at = typeof r.at === "string" ? Date.parse(r.at) : NaN;
+    // #359 (0867f45d): the store owns expiry, including longer changeset arcs.
+    const expiresAt = r.expiresAt === undefined ? at + RECEIPT_TTL_MS
+      : typeof r.expiresAt === "string" ? Date.parse(r.expiresAt) : NaN;
     return (
       r.version === 1 &&
       r.sessionId === sessionId &&
       r.filePath === absolutePath &&
       typeof r.artifactId === "string" &&
       r.artifactId.length > 0 &&
-      Number.isFinite(age) &&
-      age >= 0 && // a future-dated receipt is a clock fault, not coverage
-      age <= RECEIPT_TTL_MS
+      Number.isFinite(at) &&
+      Number.isFinite(expiresAt) &&
+      expiresAt >= at &&
+      now >= at && // a future-dated receipt is a clock fault, not coverage
+      now <= expiresAt
     );
   } finally {
     try {
@@ -141,8 +146,9 @@ export function runCheckpointHook(stdin: string, now: number = Date.now()): neve
   // fire when the payload itself is unparseable; re-resolved with the event's
   // own cwd once we have one.
   let statePath = hookStatePath(resolveHookProjectRoot());
+  let resolvedCandidateIds: string[] = [];
   function exit(code: number, reason: string): never {
-    appendHookFire(statePath, { at: new Date().toISOString(), hook: HOOK_NAME, exitCode: code, reason });
+    appendHookFire(statePath, { at: new Date().toISOString(), hook: HOOK_NAME, exitCode: code, reason, resolvedCandidateIds });
     process.exit(code);
   }
 
@@ -152,7 +158,7 @@ export function runCheckpointHook(stdin: string, now: number = Date.now()): neve
     // is #333's regression contract and strictly more diagnostic than
     // reporting a normal `skip: tool=(unknown)` for a broken event.
     const ev: CheckpointEvent = stdin ? (JSON.parse(stdin) as CheckpointEvent) : {};
-    const projectRoot = resolveHookProjectRoot(ev.cwd);
+    const projectRoot = path.resolve(resolveHookProjectRoot(ev.cwd));
     statePath = hookStatePath(projectRoot);
 
     const tool = (typeof ev.tool_name === "string" && ev.tool_name) || (typeof ev.toolName === "string" && ev.toolName) || "";
@@ -168,27 +174,34 @@ export function runCheckpointHook(stdin: string, now: number = Date.now()): neve
     const dpDir = path.join(projectRoot, ".deeppairing");
     if (!fs.existsSync(path.join(dpDir, "sessions"))) exit(0, "skip: no sessions dir");
 
-    // #335 — the SAME derivation the store used to write the receipt, now by
-    // import rather than by a hand-mirrored expression. The event's own
-    // session_id is preferred over a potentially stale inherited env value.
-    const rawSessionId = ev.session_id ?? process.env.CLAUDE_CODE_SESSION_ID ?? "";
-    // A non-string session_id is an unknown identity, not an absent one: it
-    // must NOT resolve to the no-session fallback id.
-    const sessionIdUsable = typeof rawSessionId === "string";
-    const derived = deriveSessionId(projectRoot, sessionIdUsable ? rawSessionId : "");
-    // A session id that was PRESENT but sanitized to empty (`..`, `///`) must
-    // not fall back to the no-session id either: the store never wrote there
-    // for this session, and claiming the fallback receipt would let one
-    // session consume another's. Refuse coverage — a nag is the safe direction.
-    const idResolved = sessionIdUsable && (!rawSessionId || derived.mode === "split");
+    // #359 (0867f45d) compatibility: event identity is first, inherited session
+    // lineage second. Resolve only these candidates, never scan other sessions.
+    // Keep #342's canonical derivation import instead of reviving a JS twin.
+    const eventHasIdentity = Object.prototype.hasOwnProperty.call(ev, "session_id");
+    const malformedEventIdentity = eventHasIdentity && ev.session_id !== "" && typeof ev.session_id !== "string";
+    const rawCandidates = [ev.session_id, process.env.CLAUDE_CODE_SESSION_ID];
+    const anyNonemptyIdentity = rawCandidates.some(value => typeof value === "string" && value.length > 0);
+    for (const raw of rawCandidates) {
+      if (typeof raw !== "string" || !raw) continue;
+      const derived = deriveSessionId(projectRoot, raw);
+      // An identity sanitized to empty must not claim the legacy fallback.
+      if (derived.mode !== "split") continue;
+      if (!resolvedCandidateIds.includes(derived.sessionId)) resolvedCandidateIds.push(derived.sessionId);
+    }
+    if (resolvedCandidateIds.length === 0 && !anyNonemptyIdentity && !malformedEventIdentity) {
+      resolvedCandidateIds = [deriveSessionId(projectRoot, "").sessionId];
+    }
 
     let covered = false;
-    try {
-      if (filePath !== "(unknown)" && filePath.trim() && idResolved) {
-        covered = claimReceipt(dpDir, derived.sessionId, path.resolve(projectRoot, filePath), now);
+    if (filePath !== "(unknown)" && filePath.trim()) {
+      for (const sessionId of resolvedCandidateIds) {
+        try {
+          covered = claimReceipt(dpDir, sessionId, path.resolve(projectRoot, filePath), now);
+        } catch {
+          /* missing/corrupt receipt: try the next known lineage candidate */
+        }
+        if (covered) break; // Consume only the first valid receipt.
       }
-    } catch {
-      /* missing/corrupt/legacy receipt: remind, never block */
     }
 
     if (!covered) {
