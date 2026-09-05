@@ -18,11 +18,9 @@
  *   - Test or tooling code that constructs multiple FileStore instances
  *     against the same session directory.
  *
- * U1's defense: before each flush, re-stat each session JSON; if mtime has
- * advanced since we loaded it, re-read and merge the disk records by id
- * before writing. In-memory wins on key collisions (those are the user's
- * latest actions); records the other writer added survive instead of being
- * dropped.
+ * Before each flush, compare the exact session JSON bytes with the observed
+ * baseline, then three-way merge changed records by id. Unchanged local
+ * fields adopt external changes; explicit same-field local edits win.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
@@ -51,6 +49,30 @@ function newStore(sessionId: string): FileStore {
 }
 
 describe("FileStore concurrent-flush merge (U1)", () => {
+  it.each([0, -60_000])("preserves equal-length external verdict edits when mtime moves by %i ms", offset => {
+    const seed = newStore("same-stat");
+    seed.createArtifact({ id: "art", type: "research", title: "Original", content: {} });
+    seed.updateArtifactStatus("art", "approved", "ui_approve_button");
+    seed.forceFlush();
+    const file = path.join(tmpDir, ".deeppairing", "sessions", "same-stat", "artifacts.json");
+    const baselineTime = new Date("2026-01-01T12:00:00Z");
+    fs.utimesSync(file, baselineTime, baselineTime);
+    const stale = newStore("same-stat");
+    const before = fs.statSync(file);
+    const raw = fs.readFileSync(file, "utf8");
+    // A separate writer/editor records a newer verdict. Both statuses have
+    // eight characters, so size cannot distinguish this from the old file.
+    fs.writeFileSync(file, raw.replace('"status": "approved"', '"status": "rejected"'));
+    fs.utimesSync(file, baselineTime, new Date(baselineTime.getTime() + offset));
+    expect(fs.statSync(file).size).toBe(before.size);
+    expect(fs.statSync(file).mtimeMs).toBe(before.mtimeMs + offset);
+    stale.renameArtifact("art", "Renamed locally");
+    stale.forceFlush();
+    const artifact = JSON.parse(fs.readFileSync(file, "utf8"))[0];
+    expect(artifact.status).toBe("rejected");
+    expect(artifact.title).toBe("Renamed locally");
+  });
+
   it("a stale flush preserves an external verdict and unrelated local changes", () => {
     const a = newStore("stale-verdict");
     a.createArtifact({ id: "art", type: "research", title: "Original", content: {} });
@@ -84,7 +106,7 @@ describe("FileStore concurrent-flush merge (U1)", () => {
     // B loads (sees A's artifact), then adds its own. A is still alive in
     // memory and adds another. Both flush. Pre-U1: B's flush dropped art_A2
     // (B never saw it); A's flush dropped art_B1 (A never saw it). Post-U1:
-    // both writers' contributions survive via mtime-driven merge.
+    // both writers' contributions survive via byte-detected merge.
     const b = newStore("interleave");
     expect(b.getArtifacts().map((x) => x.id)).toEqual(["art_A"]);
 
@@ -190,8 +212,8 @@ describe("FileStore concurrent-flush merge (U1)", () => {
     expect(ids).toEqual(["plan_A", "plan_A2", "plan_B"]);
   });
 
-  it("no merge churn when a single store flushes back-to-back (its own writes don't trigger re-read)", () => {
-    // Sanity: the mtime watermark uses strict > so the store doesn't merge
+  it("no merge churn when a single store flushes back-to-back (its own writes don't trigger a merge)", () => {
+    // Sanity: the bytes match our baseline, so the store doesn't merge
     // against its own most-recent write. Two rapid flushes from the same
     // store should produce one final snapshot, not duplicated records.
     const a = newStore("self-flush");

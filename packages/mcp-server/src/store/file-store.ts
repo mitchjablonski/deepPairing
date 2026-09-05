@@ -109,27 +109,6 @@ export class FileStore implements IStore {
   // below — that pair is the single swap point if the scope ever changes again.
   private persona: "auto" | "fluent-engineer" | "new-to-this-code" | "stakeholder" = "auto";
 
-  /**
-   * U1 — per-file change watermarks tracked since last load. Before each
-   * flush we re-stat each session JSON; if EITHER mtime has advanced OR
-   * size has changed beyond what we last saw, another writer (CLI command,
-   * second daemon during a race, external editor) has touched the file
-   * and our in-memory copy is no longer the full truth. We re-read the
-   * disk version and merge by id against our last observed version. Fields
-   * that did not change locally adopt external changes; genuine same-field
-   * conflicts keep the local edit. New external records also survive.
-   *
-   * Why two signals: mtime granularity is FS-dependent (WSL2 and some
-   * older Linux/Windows give second-only resolution), so two writes in
-   * the same second produce identical mtimeMs even though content
-   * differs. Falling back to size catches that — it's not a perfect
-   * checksum, but two distinct sets of artifacts almost always serialize
-   * to different lengths. Together they give good-enough defense in depth
-   * on top of the U0.6 deterministic-sessionId fix that already
-   * collapses intra-daemon races to zero.
-   */
-  private fileMtimeMs: Record<string, number> = {};
-  private fileSizes: Record<string, number> = {};
   // PP2 — last serialized bytes we wrote per file, so flush() can skip the disk
   // write (and the temp+rename) when a file is byte-identical to what's already
   // there. Kills the write-amplification where a single comment rewrote the
@@ -139,8 +118,9 @@ export class FileStore implements IStore {
   // an entry whenever readIfChanged detects an external write, so the skip can
   // never defeat the U1 merge self-heal.
   private lastSerialized: Record<string, string> = {};
-  // Baseline for three-way merges. Unlike the write-skip cache this survives
-  // external-change invalidation and is populated when a store first loads.
+  // Exact observed bytes are both the three-way merge baseline and the change
+  // detector. Metadata cannot detect equal-length edits with the same mtime.
+  // Unlike the write-skip cache this survives external-change invalidation.
   private lastObserved: Record<string, string> = {};
 
   // BB2 — held for FileStore.invalidateLedgerDigestCache, which is keyed
@@ -307,25 +287,21 @@ export class FileStore implements IStore {
   static salvageArray = salvageArray;
   static salvageRecord = salvageRecord;
 
-  /** Load a JSON file with graceful error handling. Records mtime + size so a
+  /** Load a JSON file with graceful error handling. Records exact bytes so a
    *  later flush can detect external writes and merge instead of clobber. */
   private loadJsonFile<T>(filePath: string, fallback: T): T {
     try {
       if (!fs.existsSync(filePath)) {
-        delete this.fileMtimeMs[filePath];
-        delete this.fileSizes[filePath];
+        delete this.lastObserved[filePath];
         return fallback;
       }
-      const stat = fs.statSync(filePath);
-      this.fileMtimeMs[filePath] = stat.mtimeMs;
-      this.fileSizes[filePath] = stat.size;
-      const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-      this.lastObserved[filePath] = JSON.stringify(parsed);
+      const raw = fs.readFileSync(filePath, "utf-8");
+      const parsed = JSON.parse(raw);
+      this.lastObserved[filePath] = raw;
       return parsed;
     } catch (err) {
       if (errorCode(err) === "ENOENT") {
-        delete this.fileMtimeMs[filePath];
-        delete this.fileSizes[filePath];
+        delete this.lastObserved[filePath];
         return fallback;
       }
       console.error(`[deepPairing] Corrupted file ${filePath}: ${errorMessage(err)}`);
@@ -341,22 +317,16 @@ export class FileStore implements IStore {
    * by another writer since we last loaded it; otherwise null. Caller uses
    * the result to merge external changes into in-memory state before flush.
    *
-   * Change detection is OR(mtimeMs > lastSeen, size != lastSeen). Either
-   * signal alone is unreliable (WSL2 mtime is second-resolution; size
-   * could match by coincidence on a same-length swap), but together they
-   * catch the realistic external-write cases we care about.
+   * Read the bytes even when metadata matches: "approved" and "rejected"
+   * have the same length, and timestamps can be coarse or restored. This
+   * adds reads at flush time, but unchanged bytes need no parsing or write.
+   * It is change detection, not a lock across concurrent read/modify/write.
    */
   private readIfChanged<T>(filePath: string): T | null {
     try {
-      if (!fs.existsSync(filePath)) return null;
-      const stat = fs.statSync(filePath);
-      const lastMtime = this.fileMtimeMs[filePath] ?? 0;
-      const lastSize = this.fileSizes[filePath];
-      const mtimeAdvanced = stat.mtimeMs > lastMtime;
-      const sizeChanged = lastSize !== undefined && stat.size !== lastSize;
-      const sizeFirstSeen = lastSize === undefined;
-      if (!mtimeAdvanced && !sizeChanged && !sizeFirstSeen) return null;
-      const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      const raw = fs.readFileSync(filePath, "utf-8");
+      if (raw === this.lastObserved[filePath]) return null;
+      const parsed = JSON.parse(raw);
       return parsed as T;
     } catch {
       return null;
@@ -397,8 +367,7 @@ export class FileStore implements IStore {
 
   /** Atomic write: delegates to writeJsonAtomic (PID+TS+random temp suffix
    *  so concurrent flushes to the same path can't truncate each other's tmp).
-   *  Refreshes mtime+size watermark after rename so the next external-change
-   *  check uses the new baseline. */
+   *  Refreshes the byte baseline only after a successful rename. */
   private atomicWrite(filePath: string, data: unknown): void {
     // PP2 — serialize once, and skip the disk write entirely when the bytes are
     // identical to our last write. A debounced flush re-writes ALL session files
@@ -411,11 +380,6 @@ export class FileStore implements IStore {
     writeStringAtomic(filePath, serialized);
     this.lastSerialized[filePath] = serialized;
     this.lastObserved[filePath] = serialized;
-    try {
-      const stat = fs.statSync(filePath);
-      this.fileMtimeMs[filePath] = stat.mtimeMs;
-      this.fileSizes[filePath] = stat.size;
-    } catch { /* swallow — watermark refresh is best-effort */ }
   }
 
   /**
@@ -469,7 +433,7 @@ export class FileStore implements IStore {
     // only in RAM. Forcing the rewrite restores it (and keeps in-memory-wins).
     // D1 review — the EXTERNAL reads must be salvaged too: a null element in a
     // hand-edited file threw inside mergeArrayById's filter, the flush catch
-    // swallowed it, and — because the mtime watermark only advances on a
+    // swallowed it, and — because the byte baseline only advances on a
     // successful load/write — EVERY subsequent flush re-read and re-threw:
     // persistence for the session silently stopped until the file was fixed.
     const diskArtifacts = this.readIfChanged<unknown>(artifactsPath);
