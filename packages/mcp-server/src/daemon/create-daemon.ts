@@ -330,6 +330,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // index.ts — timers that only exist to run forever belong to the entry.)
 
   let shutdownTimer: ReturnType<typeof setInterval> | null = null;
+  let disposed = false;
 
   // #168 — demo-aware idle grace. A `deeppairing demo` run creates a demo
   // session but registers NO wrapper (activeSessions stays empty) and, once the
@@ -357,6 +358,9 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   }
 
   function checkAutoShutdown(): void {
+    // WebSocket close callbacks can arrive after dispose() has cleared the
+    // timers. They must not re-arm idle cleanup against released stores.
+    if (disposed) return;
     // #168 — while a freshly-created demo session is inside its grace window,
     // hold the daemon open even with no clients so a late click on the printed
     // URL still connects. The 30s cadence (index.ts) re-invokes this, so once
@@ -1219,6 +1223,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   }
 
   function dispose(): void {
+    disposed = true;
     if (shutdownTimer) { clearTimeout(shutdownTimer); shutdownTimer = null; }
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
     if (pingTimer) { clearTimeout(pingTimer); pingTimer = null; }
