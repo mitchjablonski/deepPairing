@@ -173,11 +173,14 @@ latency class entirely and is the durable fix.
 
 ## session_review_conflict
 
-Two session writers raced: one changed reviewed artifact content while another
-recorded a verdict. deepPairing refuses to combine those writes, freezes
-artifact authorization in that writer, and returns HTTP 409. Independent
-comments, requests, and decision records continue to persist, but the affected
-artifact cannot be authorized from the frozen process.
+Two session writers raced: one changed reviewed artifact identity while another
+recorded review authority (a verdict, decision response, plan review, or
+per-file changeset disposition). deepPairing refuses to combine those writes,
+freezes review-authority reads and the artifact, decision, plan-review, and
+review-metrics write lanes in that writer, and returns a structured HTTP 409.
+Independent comments, requests, and render-failure records continue to persist,
+but the affected artifact cannot be authorized from the frozen process. This is
+failure isolation across collections, not a cross-file transaction guarantee.
 
 Stop and restart the session writer so it reloads the persisted artifact, then
 review that exact version again before authorizing it. Do not delete or replace
