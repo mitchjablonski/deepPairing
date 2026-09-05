@@ -177,6 +177,38 @@ describe("writer-owned deltas", () => {
     expect(open().getArtifacts().find((r) => r.id === "a")?.title).toBe("retry");
   });
 
+  it("a partial flush retry does not overwrite an intervening writer", () => {
+    const retrying = seed();
+    const intervening = open();
+    retrying.renameArtifact("a", "partially committed");
+    retrying.addComment({ id: "pending-comment", artifactId: "a", content: "retry me", author: "human" });
+
+    const realRename = fs.renameSync;
+    let failedComments = false;
+    const rename = vi.spyOn(fs, "renameSync").mockImplementation((oldPath, newPath) => {
+      if (!failedComments && String(newPath).endsWith("comments.json")) {
+        failedComments = true;
+        throw Object.assign(new Error("injected comments failure"), { code: "EIO" });
+      }
+      return realRename(oldPath, newPath);
+    });
+    try {
+      expect(() => retrying.forceFlush()).toThrow("injected comments failure");
+    } finally {
+      rename.mockRestore();
+    }
+
+    // artifacts.json committed before comments.json failed. A writer that
+    // loaded the old baseline now replaces that title before the retry.
+    intervening.renameArtifact("a", "intervening writer");
+    intervening.forceFlush();
+    retrying.forceFlush();
+
+    const loaded = open();
+    expect(loaded.getArtifacts()[0]?.title).toBe("intervening writer");
+    expect(loaded.getCommentsForArtifact("a").map((comment) => comment.id)).toContain("pending-comment");
+  });
+
   it("a disposed store cannot write into a replacement session directory", () => {
     const stale = open();
     stale.createArtifact({ id: "stale", type: "research", title: "Stale", content: {} });
