@@ -2,7 +2,7 @@ import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
 import net from "node:net";
 import { StringDecoder } from "node:string_decoder";
 import type { TestInfo } from "@playwright/test";
-import { BoundedDiagnosticTail } from "./diagnostics.js";
+import { BoundedDiagnosticTail, redactDiagnostic } from "./diagnostics.js";
 
 const MAX_DAEMON_DIAGNOSTIC_BYTES = 64 * 1024;
 interface DiagnosticStreamState { decoder: StringDecoder; pending: string; source: string; discarding: boolean }
@@ -70,35 +70,49 @@ export async function attachDaemonOutput(
 ): Promise<void> {
   if (!proc || (!opts.force && testInfo.status === testInfo.expectedStatus)) return;
   const state = daemonOutput.get(proc);
-  if (state) {
-    for (const stream of state.streams) {
-      const tail = stream.decoder.end();
-      if (stream.discarding) {
-        stream.pending = "";
-        continue;
-      }
-      stream.pending += tail;
-      if (stream.pending) retainLine(state, stream.source, stream.pending);
-      stream.pending = "";
+  if (!state) return;
+
+  // Snapshot without consuming StringDecoder or pending state. Attachments can
+  // happen more than once while a process is alive (setup catch, then teardown);
+  // clearing a credential prefix here would let its later suffix through raw.
+  const snapshot = new BoundedDiagnosticTail(MAX_DAEMON_DIAGNOSTIC_BYTES);
+  for (const line of state.tail.lines) {
+    snapshot.record(line.toString("utf8").replace(/\n$/, ""));
+  }
+  for (const stream of state.streams) {
+    if (!stream.discarding && stream.pending) {
+      snapshot.record(`[${stream.source}] ${stream.pending}`);
     }
   }
-  if (state?.tail.lines.length) {
+  if (snapshot.lines.length) {
     await testInfo.attach(opts.name ?? "daemon-diagnostics", {
-      body: state.tail.body(),
+      body: snapshot.body(),
       contentType: "text/plain",
     });
   }
 }
 
-/** Attach every diagnostic child still owned by this worker after a failed test. */
-export async function attachActiveDaemonOutputs(testInfo: TestInfo): Promise<void> {
-  if (testInfo.status === testInfo.expectedStatus) return;
+export async function attachActiveDaemonOutputs(
+  testInfo: TestInfo,
+  opts: { force?: boolean } = {},
+): Promise<void> {
+  if (!opts.force && testInfo.status === testInfo.expectedStatus) return;
   let index = 0;
   for (const proc of diagnosticProcesses) {
     await attachDaemonOutput(proc, testInfo, {
       force: true,
       name: index++ === 0 ? "daemon-diagnostics" : `daemon-diagnostics-${index}`,
     });
+  }
+}
+
+async function attachWithoutMaskingError(proc: ChildProcess, testInfo: TestInfo): Promise<void> {
+  try {
+    await attachDaemonOutput(proc, testInfo, { force: true });
+  } catch (attachmentError) {
+    // Reporting is secondary. Keep the causal setup exception and emit only a
+    // redacted description of the attachment failure for runner logs.
+    console.warn(`[e2e] could not attach daemon diagnostics: ${redactDiagnostic(String(attachmentError))}`);
   }
 }
 
@@ -111,7 +125,7 @@ export async function withSetupDiagnostics<T>(
   try {
     return await setup();
   } catch (error) {
-    await attachDaemonOutput(proc, testInfo, { force: true });
+    await attachWithoutMaskingError(proc, testInfo);
     throw error;
   }
 }

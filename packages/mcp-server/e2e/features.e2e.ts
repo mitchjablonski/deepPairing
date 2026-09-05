@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { teardownDaemon, portOf, spawnDiagnosticProcess, withSetupDiagnostics } from "./daemon-harness.js";
+import { attachDaemonOutput, teardownDaemon, portOf, spawnDiagnosticProcess, withSetupDiagnostics } from "./daemon-harness.js";
 
 /**
  * #203 (H2) — the Features view, slice 1: real-browser smoke + screenshot
@@ -208,7 +208,10 @@ test.describe("#206 — human corrections", () => {
     await withSetupDiagnostics(procCorr, testInfo, () => seedFeatures(corrBase, corrRoot));
   });
 
-  test.afterEach(async () => {
+  test.afterEach(async ({}, testInfo) => {
+    // afterEach runs before the auto-fixture's failure attachment. Preserve the
+    // correction daemon's tail before teardown unregisters it.
+    await attachDaemonOutput(procCorr, testInfo);
     await teardownDaemon(procCorr, portOf(corrBase));
     try { fs.rmSync(corrRoot, { recursive: true, force: true }); } catch {}
   });

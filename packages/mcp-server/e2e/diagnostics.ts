@@ -17,6 +17,14 @@ function scrubUrl(value: string): string {
 export function redactDiagnostic(value: string): string {
   return value
     .replace(URL_PATTERN, scrubUrl)
+    .replace(
+      /(\b"?(?:set-cookie|cookie)"?\s*[:=]\s*")((?:\\.|[^"\\])*)"/gi,
+      '$1[REDACTED]"',
+    )
+    .replace(
+      /(\b'?(?:set-cookie|cookie)'?\s*[:=]\s*')((?:\\.|[^'\\])*)'/gi,
+      "$1[REDACTED]'",
+    )
     .replace(/(\b(?:set-cookie|cookie)\s*:\s*)[^\r\n]*/gi, "$1[REDACTED]")
     .replace(
       /(\b"?authorization"?\s*[:=]\s*")((?:\\.|[^"\\])*)"/gi,

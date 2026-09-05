@@ -1609,7 +1609,7 @@ test("a11y: the Ledger drawer with a stance row + armed remove confirm has no se
   // this opens the drawer for real. Seed one stance first so the Stances tab
   // renders a row WITH the remove button. Snapshot and restore the isolated
   // ledger so neither worker count nor declaration order becomes a fixture.
-  const ledgerPath = path.join(home, ".deeppairing", "philosophy.json");
+  const ledgerPath = path.join(home, ".deeppairing", "philosophy", "v1.json");
   const priorLedger = fs.existsSync(ledgerPath) ? fs.readFileSync(ledgerPath) : undefined;
   try {
     const info = (await (await fetch(`${baseURL}/api/daemon-info`)).json()) as { projectHash: string };

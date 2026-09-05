@@ -8,6 +8,7 @@ import {
   captureDaemonOutput,
   diagnosticPendingBytesForTests,
   spawnDiagnosticProcess,
+  withSetupDiagnostics,
 } from "../../e2e/daemon-harness.js";
 import { BoundedDiagnosticTail, redactDiagnostic } from "../../e2e/diagnostics.js";
 
@@ -42,6 +43,8 @@ describe("E2E daemon diagnostics", () => {
       "Authorization='Custom single-auth-secret trailing-secret'",
       "Cookie: session=cookie-secret; theme=dark",
       "Set-Cookie: session=set-cookie-secret; HttpOnly; Secure",
+      '{"Cookie":"sid=json-cookie-secret; csrf=json-csrf-secret"}',
+      "{'Set-Cookie':'sid=object-set-cookie-secret; HttpOnly'}",
       "x-api-key: x-header-secret",
       "api_key=snake-secret",
       "https://user:url-secret@example.test/path?token=query-secret#fragment-secret",
@@ -53,9 +56,12 @@ describe("E2E daemon diagnostics", () => {
       "two word secret", "single quoted secret", "quote-secret", "suffix-secret",
       "spaced-auth-secret", "trailing-secret", "single-auth-secret",
       "cookie-secret", "set-cookie-secret", "x-header-secret", "snake-secret",
+      "json-cookie-secret", "json-csrf-secret", "object-set-cookie-secret",
     ]) expect(output).not.toContain(secret);
     expect(output).toContain('Authorization: "Bearer [REDACTED]"');
     expect(output).toContain("Authorization='Custom [REDACTED]'");
+    expect(output).toContain('{"Cookie":"[REDACTED]"}');
+    expect(output).toContain("{'Set-Cookie':'[REDACTED]'}");
     expect(output).toContain("https://example.test/path");
   });
 
@@ -71,6 +77,43 @@ describe("E2E daemon diagnostics", () => {
     expect(output).toContain("startup failed deliberately");
     expect(output).toContain("Set-Cookie: [REDACTED]");
     expect(output).not.toContain("child-secret");
+  });
+
+  it("keeps split credentials redacted across repeated live attachments", async () => {
+    const proc = fakeProcess();
+    captureDaemonOutput(proc);
+    const bodies: string[] = [];
+    const info = {
+      status: "failed",
+      expectedStatus: "passed",
+      attach: async (_name: string, value: { body: Buffer }) => { bodies.push(value.body.toString()); },
+    } as unknown as TestInfo;
+
+    proc.stderr!.emit("data", Buffer.from("Authorization: Bearer prefix-"));
+    await attachDaemonOutput(proc, info);
+    proc.stderr!.emit("data", Buffer.from("suffix-secret\n"));
+    await attachDaemonOutput(proc, info);
+
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).toContain("Bearer [REDACTED]");
+    expect(bodies.join("\n")).not.toContain("prefix-");
+    expect(bodies.join("\n")).not.toContain("suffix-secret");
+  });
+
+  it("preserves the primary setup error when diagnostic attachment fails", async () => {
+    const proc = spawnDiagnosticProcess(process.execPath, [
+      "-e",
+      "console.error('x-api-key: child-setup-secret'); process.exit(17)",
+    ]);
+    await once(proc, "exit");
+    const primary = new Error("primary startup failure");
+    const info = {
+      status: "failed",
+      expectedStatus: "passed",
+      attach: async () => { throw new Error("attachment backend failed"); },
+    } as unknown as TestInfo;
+
+    await expect(withSetupDiagnostics(proc, info, async () => { throw primary; })).rejects.toBe(primary);
   });
 
   it("preserves the prior tail when an oversized browser event is discarded", () => {
