@@ -3,6 +3,24 @@ import { performance } from "node:perf_hooks";
 
 type RecordValue = Record<string, unknown>;
 
+export class SessionReviewConflictError extends Error {
+  readonly code = "ESESSIONREVIEWCONFLICT";
+
+  constructor(readonly artifactId: string) {
+    super(
+      `Artifact ${artifactId} has changed content and a concurrent review verdict. ` +
+      "Stop and restart the session writer, then review the persisted artifact before authorizing it.",
+    );
+    this.name = "SessionReviewConflictError";
+  }
+}
+
+export function isSessionReviewConflictError(error: unknown): error is SessionReviewConflictError {
+  return error instanceof SessionReviewConflictError ||
+    (!!error && typeof error === "object" &&
+      (error as { code?: unknown }).code === "ESESSIONREVIEWCONFLICT");
+}
+
 function object(value: unknown): value is RecordValue {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -53,6 +71,49 @@ export function mergeSessionRecords<T>(
     else if (merged.has(id)) merged.set(id, mergeValue(before.get(id), record, merged.get(id)) as T);
   }
   return [...merged.values()];
+}
+
+const REVIEW_VERDICTS = new Set(["approved", "rejected", "revised"]);
+const REVIEWED_IDENTITY_FIELDS = ["content", "version", "type", "parentId"] as const;
+
+function reviewVerdictChanged(base: RecordValue, candidate: RecordValue): boolean {
+  return JSON.stringify(base.status) !== JSON.stringify(candidate.status) &&
+    REVIEW_VERDICTS.has(String(candidate.status));
+}
+
+function reviewedIdentityChanged(base: RecordValue, candidate: RecordValue): boolean {
+  return REVIEWED_IDENTITY_FIELDS.some(
+    (field) => JSON.stringify(base[field]) !== JSON.stringify(candidate[field]),
+  );
+}
+
+/** Artifact records need one safety rule beyond the generic deterministic
+ * last-flush policy: a review verdict cannot be transplanted onto proposal
+ * content that the reviewer did not see. Metadata such as title and featureId
+ * remains independently mergeable. */
+export function mergeArtifactRecords<T extends object>(
+  baseline: T[], local: T[], disk: T[], key: (value: T) => string,
+): T[] {
+  const before = new Map(baseline.map((record) => [key(record), record]));
+  const current = new Map(local.map((record) => [key(record), record]));
+  const persisted = new Map(disk.map((record) => [key(record), record]));
+
+  for (const [id, baseValue] of before) {
+    const localRecord = current.get(id);
+    const diskRecord = persisted.get(id);
+    if (!localRecord || !diskRecord) continue;
+    const base = baseValue as RecordValue;
+    const localValue = localRecord as RecordValue;
+    const diskValue = diskRecord as RecordValue;
+    if (
+      (reviewVerdictChanged(base, localValue) && reviewedIdentityChanged(base, diskValue)) ||
+      (reviewVerdictChanged(base, diskValue) && reviewedIdentityChanged(base, localValue))
+    ) {
+      throw new SessionReviewConflictError(id);
+    }
+  }
+
+  return mergeSessionRecords(baseline, local, disk, key);
 }
 
 /** Cooperating FileStore writers serialize the complete read/merge/write

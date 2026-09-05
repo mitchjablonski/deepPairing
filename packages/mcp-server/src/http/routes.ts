@@ -8,6 +8,7 @@ import { ERROR_CODES } from "../error-codes.js";
 import type { IStore } from "../store/store-interface.js";
 import { FileStore, LEDGER_EXEMPT_REJECT_TYPES } from "../store/file-store.js";
 import { isCrossTerminalVerdictFlip } from "../store/verdict-guard.js";
+import { isSessionReviewConflictError } from "../store/session-records.js";
 import type { LiveDecisionSource } from "../store/session-scan.js";
 import {
   getContextBank,
@@ -1111,15 +1112,21 @@ export function createHttpRoutes(
     // can mean the hook reads stale `draft` and traps the agent in a poll
     // loop even though the user just approved.
     // AA7b — forceFlush is required on IStore, no cast needed.
-    // F10 review — the split-state class must not escape via persistence: the
-    // verdict already landed in memory and notifyFeedbackWaiters released the
-    // agent's check_feedback, so a disk throw here (ENOSPC/EACCES/dir-removed
-    // race) must NOT 500 the route — the UI would roll back and toast failure
-    // for a verdict the agent is already acting on. Log loudly, return 200;
-    // the debounced flush self-corrects persistence on the next write.
+    // F10 review — ordinary disk failures remain log-and-retry because the
+    // verdict already landed in memory. A review/content ownership conflict is
+    // different: reporting success would authorize content this reviewer never
+    // saw. Return 409 before any success broadcast; FileStore freezes its
+    // authorization reads until the session is reloaded.
     try {
       await store.forceFlush();
     } catch (err) {
+      if (isSessionReviewConflictError(err)) {
+        return c.json({
+          error: "session_review_conflict",
+          code: ERROR_CODES.session_review_conflict,
+          message: err.message,
+        }, 409);
+      }
       console.error(`[deepPairing] verdict flush failed (verdict landed in memory; debounced flush will retry): ${err}`);
     }
 

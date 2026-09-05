@@ -20,6 +20,82 @@ function seed() {
 }
 
 describe("writer-owned deltas", () => {
+  it.each([false, true])("does not combine an approval with concurrently changed content (contentFirst=%s)", (contentFirst) => {
+    const seedStore = open();
+    seedStore.createArtifact({
+      id: "plan",
+      type: "plan",
+      title: "Review this plan",
+      content: { steps: [{ title: "Original step", status: "pending" }], estimatedChanges: 1 },
+    });
+    seedStore.forceFlush();
+
+    const contentWriter = open();
+    const reviewer = open();
+    const changed = contentWriter.getArtifacts()[0]!;
+    changed.content = {
+      steps: [{ title: "Replace the reviewed approach", action: "delete production data", status: "pending" }],
+      estimatedChanges: 12,
+    };
+    changed.version = 2;
+    // getArtifacts exposes the live record for historical callers. Rename to
+    // schedule this substantive proposal rewrite through the normal writer.
+    contentWriter.renameArtifact("plan", changed.title);
+    reviewer.updateArtifactStatus("plan", "approved", "ui_approve_button");
+
+    const first = contentFirst ? contentWriter : reviewer;
+    const second = contentFirst ? reviewer : contentWriter;
+    first.forceFlush();
+    expect(() => second.forceFlush()).toThrow(/changed content.*review verdict|review verdict.*changed content/i);
+    expect(() => second.getArtifacts()).toThrow(/changed content.*review verdict|review verdict.*changed content/i);
+    expect(() => second.getFullState()).toThrow(/changed content.*review verdict|review verdict.*changed content/i);
+
+    // Mutating the frozen instance must not make its stale in-memory verdict
+    // writable again. Recovery requires a fresh FileStore loaded from disk.
+    second.createArtifact({ id: "after-conflict", type: "research", title: "Must stay memory-only", content: {} });
+    expect(() => second.forceFlush()).toThrow(/changed content.*review verdict|review verdict.*changed content/i);
+
+    const persisted = open().getArtifacts()[0]!;
+    expect(persisted.status === "approved" && persisted.version === 2).toBe(false);
+    expect(open().getArtifacts().some((artifact) => artifact.id === "after-conflict")).toBe(false);
+  });
+
+  it("allows one writer to change content and then review that same content", () => {
+    const writer = open();
+    writer.createArtifact({
+      id: "plan",
+      type: "plan",
+      title: "Review this plan",
+      content: { steps: [{ title: "Original step", status: "pending" }], estimatedChanges: 1 },
+    });
+    writer.forceFlush();
+
+    const artifact = writer.getArtifacts()[0]!;
+    artifact.content = { steps: [{ title: "Replacement step", status: "pending" }], estimatedChanges: 2 };
+    artifact.version = 2;
+    writer.renameArtifact("plan", artifact.title);
+    writer.updateArtifactStatus("plan", "approved", "ui_approve_button");
+    expect(() => writer.forceFlush()).not.toThrow();
+    expect(open().getArtifacts()[0]).toMatchObject({ status: "approved", version: 2 });
+  });
+
+  it("allows progress updates to an artifact that was already approved in the writer baseline", () => {
+    const reviewer = open();
+    reviewer.createArtifact({
+      id: "plan",
+      type: "plan",
+      title: "Approved plan",
+      content: { steps: [{ title: "Execute", status: "pending" }], estimatedChanges: 1 },
+    });
+    reviewer.updateArtifactStatus("plan", "approved", "ui_approve_button");
+    reviewer.forceFlush();
+
+    const progressWriter = open();
+    progressWriter.updatePlanProgress("plan", [{ stepIndex: 0, status: "done" }]);
+    expect(() => progressWriter.forceFlush()).not.toThrow();
+    expect((open().getArtifacts()[0]!.content as any).steps[0].status).toBe("done");
+  });
+
   it.each([false, true])("unrelated stale comment cannot revert review state (reverse=%s)", (reverse) => {
     const a = seed();
     const b = open();
@@ -105,6 +181,53 @@ describe("writer-owned deltas", () => {
     fs.writeFileSync(file("artifacts.json"), saved);
     a.forceFlush();
     expect(open().getArtifacts().find((r) => r.id === "a")?.title).toBe("retry");
+  });
+
+  it("a partial flush retry does not overwrite an intervening writer", () => {
+    const retrying = seed();
+    const intervening = open();
+    retrying.renameArtifact("a", "partially committed");
+    retrying.addComment({ id: "pending-comment", artifactId: "a", content: "retry me", author: "human" });
+
+    const realRename = fs.renameSync;
+    let failedComments = false;
+    const rename = vi.spyOn(fs, "renameSync").mockImplementation((oldPath, newPath) => {
+      if (!failedComments && String(newPath).endsWith("comments.json")) {
+        failedComments = true;
+        throw Object.assign(new Error("injected comments failure"), { code: "EIO" });
+      }
+      return realRename(oldPath, newPath);
+    });
+    try {
+      expect(() => retrying.forceFlush()).toThrow("injected comments failure");
+    } finally {
+      rename.mockRestore();
+    }
+
+    // artifacts.json committed before comments.json failed. A writer that
+    // loaded the old baseline now replaces that title before the retry.
+    intervening.renameArtifact("a", "intervening writer");
+    intervening.forceFlush();
+    retrying.forceFlush();
+
+    const loaded = open();
+    expect(loaded.getArtifacts()[0]?.title).toBe("intervening writer");
+    expect(loaded.getCommentsForArtifact("a").map((comment) => comment.id)).toContain("pending-comment");
+  });
+
+  it("a disposed store cannot write into a replacement session directory", () => {
+    const stale = open();
+    stale.createArtifact({ id: "stale", type: "research", title: "Stale", content: {} });
+    stale.dispose();
+    const sessionDir = path.dirname(file("artifacts.json"));
+    fs.rmSync(sessionDir, { recursive: true });
+
+    const replacement = open();
+    replacement.createArtifact({ id: "fresh", type: "research", title: "Fresh", content: {} });
+    replacement.forceFlush();
+
+    expect(() => stale.forceFlush()).toThrow(/disposed/i);
+    expect(open().getArtifacts().map((artifact) => artifact.id)).toEqual(["fresh"]);
   });
 
   it.each([false, true])("preserves concurrent status audit entries (reverse=%s)", (reverse) => {

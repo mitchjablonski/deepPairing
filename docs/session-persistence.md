@@ -26,7 +26,22 @@ guarantee, or protection against older FileStore versions / tools which ignore
 the lock. Different-process readers may observe a partially completed multi-file
 flush. Same-field conflicts do not provide compare-and-swap or user arbitration.
 Metrics merge this writer's appended observations; other sidecars have their
-own persistence contracts. Existing session JSON formats are unchanged.
+own persistence contracts. Existing session JSON formats are unchanged. A
+debounced HTTP mutation can return after changing memory but before persistence;
+non-lock disk failures are logged and remain pending until a later mutation or
+an explicit successful `forceFlush()`. Callers that require confirmed durability
+must use a route that performs and reports that flush.
+
+## Recovering a review/content conflict
+
+When one writer changes an artifact's reviewed identity (content, version, type,
+or parent) while another records a review verdict, their stale states are not
+merged. The writer that detects the conflict freezes authorization reads and all
+later flushes so its in-memory verdict can never be committed after the fact.
+Preserve and inspect the on-disk artifact, then stop and restart the daemon or
+other session writer to create a fresh FileStore. Review the reloaded artifact
+before authorizing it. A browser refresh alone does not recreate the daemon's
+FileStore and therefore does not clear the freeze.
 
 ## Recovering an abandoned flush lock
 
