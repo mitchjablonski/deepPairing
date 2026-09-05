@@ -29,7 +29,7 @@ describe("posting-specific fresh authorization state", () => {
     expect(fs.readFileSync(file("posted-reviews.json"), "utf8")).toBe(bytes);
   });
 
-  it("does not send if legacy history becomes corrupt after reservation", async () => {
+  it.each(["reserve", "sending"] as const)("does not send if legacy history becomes corrupt after %s", async phase => {
     const store = seed(true);
     const journal = store.reviewPosts;
     const payload = { event: "COMMENT" as const, body: "Reviewed", comments: [] };
@@ -42,10 +42,13 @@ describe("posting-specific fresh authorization state", () => {
       store: {
         reserve: (value, repost) => {
           const lease = journal.reserve(value, repost);
-          fs.writeFileSync(file("posted-reviews.json"), "{broken");
+          if (phase === "reserve") fs.writeFileSync(file("posted-reviews.json"), "{broken");
           return lease;
         },
-        markSending: (lease, value) => journal.markSending(lease, value),
+        markSending: (lease, value) => {
+          journal.markSending(lease, value);
+          if (phase === "sending") fs.writeFileSync(file("posted-reviews.json"), "{broken");
+        },
         failBeforeSending: lease => journal.failBeforeSending(lease),
         markUnknown: lease => journal.markUnknown(lease),
         succeed: (lease, result) => journal.succeed(lease, result),
@@ -55,7 +58,7 @@ describe("posting-specific fresh authorization state", () => {
       send: async () => { sends++; throw new Error("Must not send"); },
     })).rejects.toThrow(/did not start its POST/);
     expect(sends).toBe(0);
-    expect(journal.list()[0]!.state).toBe("failed");
+    expect(journal.list()[0]!.state).toBe(phase === "reserve" ? "failed" : "sending");
   });
 
   it("observes external revocation without an artifact mutation or a helpful forceFlush", () => {
