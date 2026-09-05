@@ -9,11 +9,27 @@
  * production in the generated lane while the bundled lane was fine.
  *
  * Lanes:
- *   generated stop        — what ensureStopHook writes into a project
- *   generated checkpoint  — what ensureCheckpointHook writes into a project
- *   bundled stop          — claude-plugin/server/stop.mjs (rebuilt from source)
- *   core                  — preflight-hook-core.js, the module the generated
- *                           preflight hook dynamically imports (lock cases)
+ *   generated stop            — what ensureStopHook writes into a project
+ *   generated checkpoint      — what ensureCheckpointHook writes into a project
+ *   bundled-from-source stop  — src/cli/stop-hook-entry.ts, bundled HERE by
+ *                               esbuild into a temp file
+ *   shipped stop              — the COMMITTED claude-plugin/server/stop.mjs,
+ *                               the file claude-plugin/hooks/hooks.json points
+ *                               a marketplace install at
+ *   bundled-from-source core  — src/cli/preflight-hook-core.ts, bundled HERE
+ *                               (lock cases)
+ *   shipped core              — the COMMITTED
+ *                               claude-plugin/server/preflight-hook-core.js,
+ *                               the module the init-stamped preflight hook
+ *                               dynamically imports off disk (lock cases)
+ *
+ * #349 review (C1): the lanes labelled "bundled" were a fresh esbuild of the
+ * source into a temp file, so a committed bundle that had DRIFTED from source
+ * passed this suite green — the exact bug class (#333) where the emitted
+ * artefact and the source disagreed. The rebuild lanes are kept and honestly
+ * relabelled `bundled-from-source`; the committed artefacts now have lanes of
+ * their own. The bundle-staleness gate proves the two agree today; these lanes
+ * prove the shipped bytes themselves satisfy the contract.
  *
  * Everything runs in a CHILD PROCESS with an explicit `timeout`, because
  * Vitest cannot interrupt a synchronous infinite loop in its own worker: a
@@ -38,19 +54,75 @@ import { ensureStopHook, ensureCheckpointHook } from "../../cli/setup-tasks.js";
 
 const TIMEOUT = 10_000;
 
-type Lane = "generated stop" | "generated checkpoint" | "bundled stop" | "core";
-const STOP_LANES: Lane[] = ["generated stop", "bundled stop"];
-const HOOK_LANES: Lane[] = ["generated stop", "generated checkpoint", "bundled stop"];
-const ALL_LANES: Lane[] = [...HOOK_LANES, "core"];
+/** The repo root, found by walking up to the workspace manifest. */
+function findRepoRoot(from: string): string {
+  let dir = from;
+  for (;;) {
+    if (fs.existsSync(path.join(dir, "pnpm-workspace.yaml"))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) throw new Error(`no pnpm-workspace.yaml above ${from}`);
+    dir = parent;
+  }
+}
+const REPO_ROOT = findRepoRoot(path.dirname(fileURLToPath(import.meta.url)));
+const SHIPPED_DIR = path.join(REPO_ROOT, "claude-plugin", "server");
+const SHIPPED_STOP = path.join(SHIPPED_DIR, "stop.mjs");
+const SHIPPED_CORE = path.join(SHIPPED_DIR, "preflight-hook-core.js");
 
-/** esbuild output for the lanes that aren't written by the installer. */
+/**
+ * The shipped lanes execute committed, generated-but-checked-in artefacts. A
+ * checkout that has never built them (or a pruned one) has nothing to run, so
+ * those lanes are skipped — never silently dropped: the guard test below names
+ * exactly which file is missing and how to regenerate it.
+ */
+const MISSING_SHIPPED = [SHIPPED_STOP, SHIPPED_CORE].filter((f) => !fs.existsSync(f));
+const HAVE_SHIPPED = MISSING_SHIPPED.length === 0;
+
+type LaneKind = "stop" | "checkpoint" | "core";
+type LaneSpec = {
+  kind: LaneKind;
+  /** The artefact this lane actually executes, resolved per case root. */
+  script: (root: string) => string;
+};
+
+/** esbuild output for the `bundled-from-source` lanes. */
 let buildDir: string;
-const bundled: Record<string, string> = {};
+const builtFromSource: Record<string, string> = {};
+
+const LANES = {
+  "generated stop": {
+    kind: "stop",
+    script: (root: string) => path.join(root, ".deeppairing/hooks/stop.mjs"),
+  },
+  "generated checkpoint": {
+    kind: "checkpoint",
+    script: (root: string) => path.join(root, ".deeppairing/hooks/checkpoint.mjs"),
+  },
+  "bundled-from-source stop": { kind: "stop", script: () => builtFromSource["stop"]! },
+  "shipped stop": { kind: "stop", script: () => SHIPPED_STOP },
+  "bundled-from-source core": { kind: "core", script: () => builtFromSource["core"]! },
+  "shipped core": { kind: "core", script: () => SHIPPED_CORE },
+} satisfies Record<string, LaneSpec>;
+
+type Lane = keyof typeof LANES;
+
+const kindOf = (lane: Lane): LaneKind => LANES[lane].kind;
+const scriptFor = (lane: Lane, root: string): string => LANES[lane].script(root);
+const isShipped = (lane: Lane): boolean => lane.startsWith("shipped ");
+
+const lanesOfKind = (...kinds: LaneKind[]): Lane[] =>
+  (Object.keys(LANES) as Lane[]).filter(
+    (lane) => kinds.includes(kindOf(lane)) && (HAVE_SHIPPED || !isShipped(lane)),
+  );
+
+const STOP_LANES = lanesOfKind("stop");
+const HOOK_LANES = lanesOfKind("stop", "checkpoint");
+const ALL_LANES = lanesOfKind("stop", "checkpoint", "core");
 
 beforeAll(() => {
   buildDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-contract-build-"));
   for (const [key, entry] of [
-    ["bundled stop", "cli/stop-hook-entry"],
+    ["stop", "cli/stop-hook-entry"],
     ["core", "cli/preflight-hook-core"],
   ] as const) {
     const outfile = path.join(buildDir, `${path.basename(entry)}.mjs`);
@@ -62,10 +134,27 @@ beforeAll(() => {
       format: "esm",
       target: "node20",
     });
-    bundled[key] = outfile;
+    builtFromSource[key] = outfile;
   }
 }, 60_000);
 afterAll(() => fs.rmSync(buildDir, { recursive: true, force: true }));
+
+describe("shipped-artifact lanes", () => {
+  it.skipIf(!HAVE_SHIPPED)(
+    HAVE_SHIPPED
+      ? "run the committed claude-plugin/server artefacts, not a rebuild of them"
+      : `SKIPPED — absent: ${MISSING_SHIPPED.join(", ")}; run \`pnpm build:clean\` to regenerate claude-plugin/server`,
+    () => {
+      for (const artefact of [SHIPPED_STOP, SHIPPED_CORE]) {
+        expect(fs.statSync(artefact).size, `${artefact} is empty`).toBeGreaterThan(0);
+      }
+      // The lane table must actually point at those paths — a lane that
+      // resolved to a temp rebuild would make this whole suite's claim false.
+      expect(scriptFor("shipped stop", "/unused")).toBe(SHIPPED_STOP);
+      expect(scriptFor("shipped core", "/unused")).toBe(SHIPPED_CORE);
+    },
+  );
+});
 
 const roots: string[] = [];
 afterAll(() => {
@@ -105,7 +194,7 @@ function fires(root: string): unknown[] {
 
 /** A default stdin payload that reaches each lane's real work. */
 function defaultInput(lane: Lane): string {
-  return lane === "generated checkpoint"
+  return kindOf(lane) === "checkpoint"
     ? JSON.stringify({ tool_name: "Edit", session_id: "s-a", tool_input: { file_path: "src/app.ts" } })
     : "{}";
 }
@@ -126,19 +215,17 @@ function run(lane: Lane, root: string, opts: RunOptions = {}): SpawnSyncReturns<
     fs.writeFileSync(preload, opts.preload);
     args.push("--import", pathToFileURL(preload).href);
   }
-  if (lane === "core") {
+  if (kindOf(lane) === "core") {
     args.push(
       "--input-type=module",
       "-e",
-      `import * as core from ${JSON.stringify(pathToFileURL(bundled["core"]!).href)};\n${
+      `import * as core from ${JSON.stringify(pathToFileURL(scriptFor(lane, root)).href)};\n${
         opts.coreScript ??
         `const l = core.acquireHookStateLock(${JSON.stringify(statePath(root))}); console.log(l); core.releaseHookStateLock(l);`
       }`,
     );
-  } else if (lane === "bundled stop") {
-    args.push(bundled["bundled stop"]!);
   } else {
-    args.push(path.join(root, ".deeppairing/hooks", lane === "generated stop" ? "stop.mjs" : "checkpoint.mjs"));
+    args.push(scriptFor(lane, root));
   }
   return spawnSync(process.execPath, args, {
     cwd: root,
@@ -249,10 +336,7 @@ describe.each(HOOK_LANES)("%s — missing directories", (lane) => {
     // .deeppairing/hooks-state.json's PARENT is a file, so mkdir + O_EXCL both
     // fail. Nothing can be recorded — the hook must still exit 0.
     const root = makeRoot();
-    const script =
-      lane === "bundled stop"
-        ? bundled["bundled stop"]!
-        : path.join(root, ".deeppairing/hooks", lane === "generated stop" ? "stop.mjs" : "checkpoint.mjs");
+    const script = scriptFor(lane, root);
     const jail = fs.mkdtempSync(path.join(os.tmpdir(), "dp-contract-jail-"));
     roots.push(jail);
     fs.writeFileSync(path.join(jail, ".deeppairing"), "not a directory");
@@ -294,7 +378,7 @@ describe.each(ALL_LANES)("%s — filesystem faults on the lock", (lane) => {
     const log = faultLog(root);
     const preload = fsFault("hooks-state.json.lock", syscalls);
     const env = { DP_FAULT_LOG: log };
-    if (lane === "core") {
+    if (kindOf(lane) === "core") {
       const result = run(lane, root, { preload, env });
       expect(result.error, result.stderr).toBeUndefined();
       expect(result.status, result.stderr).toBe(0);
@@ -320,7 +404,7 @@ describe.each(ALL_LANES)("%s — stale lock recovery", (lane) => {
   it("breaks a stale lock and leaves none behind", () => {
     const root = makeRoot();
     const lock = plantStaleLock(root);
-    if (lane === "core") {
+    if (kindOf(lane) === "core") {
       const result = run(lane, root);
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout.trim()).toBe(lock);
@@ -355,7 +439,7 @@ fs.openSync = (p, ...a) => {
   return real(p, ...a);
 };
 `;
-    if (lane === "core") {
+    if (kindOf(lane) === "core") {
       const result = run(lane, root, { preload });
       expect(result.error, result.stderr).toBeUndefined();
       expect(result.status, result.stderr).toBe(0);
@@ -372,7 +456,7 @@ fs.openSync = (p, ...a) => {
     const log = faultLog(root);
     const preload = fsFault("hooks-state.json.lock", { unlinkSync: "EACCES", openSync: "EEXIST" });
     const env = { DP_FAULT_LOG: log };
-    if (lane === "core") {
+    if (kindOf(lane) === "core") {
       const result = run(lane, root, { preload, env });
       expect(result.error, result.stderr).toBeUndefined();
       expect(result.stdout.trim()).toBe("null");
@@ -386,7 +470,7 @@ fs.openSync = (p, ...a) => {
 });
 
 describe.each(HOOK_LANES)("%s — non-Error throws", (lane) => {
-  const target = lane === "generated checkpoint" ? "existsSync" : "readdirSync";
+  const target = kindOf(lane) === "checkpoint" ? "existsSync" : "readdirSync";
   it.each([
     ["a real Error", "new Error('read denied')", "error: read denied"],
     ["a bare string", "'read denied'", "error: read denied"],
@@ -420,7 +504,7 @@ describe.each(HOOK_LANES)("%s — paths with spaces and non-ASCII", (lane) => {
         tool_input: { file_path: "src/my components/Card büttön.tsx" },
       }),
     });
-    if (lane === "generated checkpoint") expect(reason).toContain("Card büttön.tsx");
+    if (kindOf(lane) === "checkpoint") expect(reason).toContain("Card büttön.tsx");
   });
 });
 
@@ -430,10 +514,7 @@ describe.each(HOOK_LANES)("%s — contention", (lane) => {
     async () => {
       const root = makeRoot();
       const N = 8;
-      const script =
-        lane === "bundled stop"
-          ? bundled["bundled stop"]!
-          : path.join(root, ".deeppairing/hooks", lane === "generated stop" ? "stop.mjs" : "checkpoint.mjs");
+      const script = scriptFor(lane, root);
       const codes = await Promise.all(
         Array.from({ length: N }, () =>
           new Promise<number | null>((resolve, reject) => {
