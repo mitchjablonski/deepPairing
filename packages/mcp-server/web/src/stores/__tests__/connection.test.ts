@@ -676,7 +676,6 @@ describe("connection store — safe daemon recovery (#339)", () => {
       // subsequent live events must resume normally.
       useReplayStore.setState({ exiting: true });
       activeAdapter.emit({ type: "connected", state: snapshot("A", [artifact("current", "A")]) });
-      await flush();
       activeAdapter.emit({ type: "artifact_created", artifact: artifact("next", "A") });
       await flush();
       expect(useReplayStore.getState().active).toBe(false);

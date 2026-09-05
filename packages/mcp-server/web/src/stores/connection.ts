@@ -222,7 +222,6 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     messageConnection = connectionGeneration,
     recoveryTransition?: SessionTransitionToken,
   ) {
-    if (recoveryMutationTypes.has(data.type) && useReplayStore.getState().active) return;
     const inboundSid = data.type === "connected" ? data.state?.sessionId : undefined;
     const currentSid = get().sessionId;
     const isNewDaemon =
