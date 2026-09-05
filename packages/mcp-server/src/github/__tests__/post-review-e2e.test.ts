@@ -58,6 +58,9 @@ type Mode =
   | "unparseable"
   | "bad-success-id"
   | "bad-success-url"
+  | "bad-success-credentials"
+  | "bad-success-port"
+  | "bad-success-query"
   | "bad-success-state"
   | "bad-success-commit"
   /** Exits instantly WITHOUT reading stdin — the EPIPE crasher (see below). */
@@ -139,10 +142,19 @@ if (isApi) {
   const htmlUrl = target.length === 6
     ? "https://github.com/" + target[1] + "/" + target[2] + "/pull/" + target[4] + "#pullrequestreview-4242"
     : "https://github.com/acme/widgets/pull/42#pullrequestreview-4242";
+  const responseUrl = mode === "bad-success-url"
+    ? "https://github.com/attacker/wrong/pull/1"
+    : mode === "bad-success-credentials"
+      ? htmlUrl.replace("https://", "https://user:secret@")
+      : mode === "bad-success-port"
+        ? htmlUrl.replace("github.com", "github.com:443")
+        : mode === "bad-success-query"
+          ? htmlUrl.replace("#", "?transport=proxy#")
+          : htmlUrl;
   process.stdout.write(JSON.stringify({
     id: mode === "bad-success-id" ? 0 : 4242,
     state: mode === "bad-success-state" ? "PENDING" : state,
-    html_url: mode === "bad-success-url" ? "https://github.com/attacker/wrong/pull/1" : htmlUrl,
+    html_url: responseUrl,
     ...(body.commit_id ? { commit_id: mode === "bad-success-commit" ? "not-a-sha" : body.commit_id } : {}),
     body: body.body,
   }));
@@ -567,7 +579,15 @@ describe("Q6 — handlePostPrReview (the MCP tool) end to end", () => {
 
   it("#343 rejects malformed success identity instead of stamping uncertain metadata", async () => {
     const target = "https://github.com/acme/widgets/pull/42";
-    for (const mode of ["bad-success-id", "bad-success-url", "bad-success-state", "bad-success-commit"] as const) {
+    for (const mode of [
+      "bad-success-id",
+      "bad-success-url",
+      "bad-success-credentials",
+      "bad-success-port",
+      "bad-success-query",
+      "bad-success-state",
+      "bad-success-commit",
+    ] as const) {
       fs.writeFileSync(logPath, "");
       setMode(mode);
       await expect(postPreparedPrReview({
