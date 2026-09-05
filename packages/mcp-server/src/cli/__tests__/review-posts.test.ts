@@ -126,6 +126,15 @@ it("oversized claims cannot be inspected into release permission", () => {
   expect(fs.statSync(journal.claimPath).size).toBe(4097);
 });
 
+it("rejects a nonregular journal before opening it", () => {
+  fs.mkdirSync(journal.journalPath);
+  const open = vi.spyOn(fs, "openSync");
+  try {
+    expect(() => journal.list()).toThrow(/unreadable or invalid/);
+    expect(open).not.toHaveBeenCalled();
+  } finally { open.mockRestore(); }
+});
+
 it.each([[], ["s", "force"], ["s", "cancel-reserved"], ["s", "list", "extra"], ["../outside"]].map(args => [args]))(
   "rejects invalid operator arguments %j", args => {
     expect(() => reviewPostsCommand(root, args)).toThrow();

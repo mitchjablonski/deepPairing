@@ -106,7 +106,11 @@ function resultMatches(identity: ReviewPostIdentity, result: ReviewPostResult): 
 /** Enforce the limit during reads as well as before allocation, including a
  * file that grows after fstat. Regular files only; descriptors always close. */
 function readBoundedFile(file: string, maxBytes: number): Buffer {
-  const fd = fs.openSync(file, "r");
+  const entry = fs.lstatSync(file);
+  if (!entry.isFile() || entry.isSymbolicLink()) throw new Error("Inspection requires a regular non-symlink file");
+  // O_NONBLOCK prevents a raced-in FIFO from hanging open before fstat can
+  // reject it. It has no effect on ordinary regular files.
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0));
   try {
     const stat = fs.fstatSync(fd);
     if (!stat.isFile() || stat.size > maxBytes) throw new Error("File exceeds inspection safety limit or is not regular");
