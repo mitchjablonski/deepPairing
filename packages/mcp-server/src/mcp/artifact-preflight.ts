@@ -3,7 +3,10 @@ import type { ToolContext } from "./tools/types.js";
 const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const list = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
-const strings = (values: unknown[]): string[] => values.filter((v): v is string => typeof v === "string" && v.length > 0);
+const strings = (values: unknown[]): string[] => values
+  .filter((v): v is string => typeof v === "string")
+  .map((v) => v.trim())
+  .filter((v) => v.length > 0);
 const field = (values: unknown, key: string): unknown[] => list(values).map(v => record(v)[key]);
 
 /** One proposal projection for both initial presentation and replacement versions. */
@@ -47,7 +50,15 @@ export function artifactProposal(type: string, title: string, value: unknown) {
     default:
       return null;
   }
-  return { text: strings(text), paths: strings(paths), concepts: strings(concepts), advisory: type === "changeset" && c.reviewIntent === "external" };
+  return {
+    text: strings(text),
+    paths: strings(paths),
+    concepts: strings(concepts),
+    // A debrief reports what already happened; it is not a fresh proposal.
+    // Recalled rejections still surface as advice, but cannot prevent the
+    // historical record from naming the rejected path.
+    advisory: type === "debrief" || (type === "changeset" && c.reviewIntent === "external"),
+  };
 }
 
 export function preflightArtifact(ctx: ToolContext, toolName: string, type: string, title: string, content: unknown) {

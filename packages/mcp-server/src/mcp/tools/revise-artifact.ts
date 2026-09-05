@@ -1,5 +1,5 @@
 import { nanoid } from "nanoid";
-import type { DecisionOption } from "@deeppairing/shared";
+import { coerceChangesetContent, type DecisionOption } from "@deeppairing/shared";
 import type { ToolContext, ToolResult } from "./types.js";
 import { notifyResourcesListChanged, formatStyleWarnings, persistPreflightTrace } from "../tool-helpers.js";
 import { preflightArtifact } from "../artifact-preflight.js";
@@ -56,8 +56,10 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
   }
 
   if (mode === "supersede") {
-    const content = (args?.content && typeof args.content === "object") ? args.content : null;
-    if (!content) {
+    const suppliedContent = (args?.content && typeof args.content === "object" && !Array.isArray(args.content))
+      ? args.content as Record<string, unknown>
+      : null;
+    if (!suppliedContent) {
       return {
         content: [{ type: "text", text: "revise_artifact with mode='supersede' requires a `content` object (same shape the original present_* tool accepts)." }],
         isError: true,
@@ -82,6 +84,24 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       };
     }
 
+    // An external changeset stays somebody else's PR when it is revised. The
+    // revise contract asks for replacement content, so callers commonly omit
+    // the review-only metadata. Preserve that identity and its display
+    // provenance, but NEVER inherit headSha: changing the content means the
+    // old reviewed commit no longer describes v2. A caller that fetched and
+    // presented a fresh immutable diff may supply a new source explicitly.
+    const content: Record<string, unknown> = { ...suppliedContent };
+    if (old.type === "changeset") {
+      const oldChangeset = coerceChangesetContent(old.content);
+      if (oldChangeset.reviewIntent === "external") {
+        content.reviewIntent = "external";
+        if (content.source === undefined && oldChangeset.source) {
+          const { headSha: _reviewedCommit, ...displayProvenance } = oldChangeset.source;
+          content.source = displayProvenance;
+        }
+      }
+    }
+
     // F3 — route the new content through the SAME strict validator the
     // original present_* tool uses, keyed on the artifact type. Pre-this,
     // supersede only checked `typeof content === "object"`, so a revision
@@ -99,12 +119,13 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
     if (pre && !pre.ok) return pre.response;
     // #171 — reviewState is HUMAN-driven review PROGRESS, never agent input. A
     // v2 changeset must start with FRESH review state: carrying an echoed
-    // reviewState forward would stamp stale ✓ marks onto files whose diff just
-    // changed. The handler persists the RAW `content` (not the validator's
-    // stripped `data`), so drop it here. (present_changeset already ignores it
-    // on the create path.)
-    if (old.type === "changeset" && content && typeof content === "object") {
-      delete (content as Record<string, unknown>).reviewState;
+    // reviewState/reviewReasons forward would stamp stale ✓ marks and old human
+    // objections onto files whose diff just changed. The handler persists the
+    // RAW `content` (not the validator's stripped `data`), so drop both here.
+    // (present_changeset already ignores them on the create path.)
+    if (old.type === "changeset") {
+      delete content.reviewState;
+      delete content.reviewReasons;
     }
 
     const title = String(args?.title ?? old.title);
@@ -210,8 +231,11 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
     // agent is rewriting prose it already wrote, so it is the only place the
     // STYLE block can be acted on immediately rather than "next artifact" —
     // and pre-this it was the one present-shaped path that stayed silent.
+    const advisory = pre?.ok && pre.advisory
+      ? `\n\n⚠ Recalled stance — advisory, not a block (this revision records external or historical material rather than proposing that approach): ${pre.advisory}`
+      : "";
     return {
-      content: [{ type: "text", text: `Superseded ${artifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${formatStyleWarnings(newArtifact.type, newArtifact.content)}` }],
+      content: [{ type: "text", text: `Superseded ${artifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${formatStyleWarnings(newArtifact.type, newArtifact.content)}${advisory}` }],
     };
   }
 
