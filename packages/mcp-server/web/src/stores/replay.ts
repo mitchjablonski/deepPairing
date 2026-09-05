@@ -2,6 +2,11 @@ import { create } from "zustand";
 import type { SessionAnnotation, DecisionOption } from "@deeppairing/shared";
 import { buildTimeline, type TimelineEvent, type TimelineInput, annotationsByEventId } from "../lib/timeline";
 import { apiBase, apiGet, sessionHeaders } from "../lib/api";
+import {
+  beginSessionTransition,
+  isCurrentSessionTransition,
+  type SessionTransitionToken,
+} from "../lib/session-transition";
 
 /**
  * Replay mode state — active when the user opens a past session from
@@ -44,6 +49,9 @@ export function replayRehydrateSettled(): Promise<void> {
 
 interface ReplayState {
   active: boolean;
+  /** Exit requested, but historical state remains read-only until it has been
+   * cleared and (for a browser tab) replaced by the live snapshot. */
+  exiting: boolean;
   sessionId: string | null;
   events: TimelineEvent[];
   /** ISO timestamp — every event with e.at <= cursor is "visible". */
@@ -54,8 +62,13 @@ interface ReplayState {
   /** Resolved-decision records; lets DecisionCard show past choices. */
   decisions: DecisionRecord[];
 
-  enterReplay: (sessionId: string, state: TimelineInput) => Promise<void>;
+  enterReplay: (
+    sessionId: string,
+    state: TimelineInput,
+    transition?: SessionTransitionToken,
+  ) => Promise<void>;
   exitReplay: () => void;
+  completeExit: () => void;
   setCursor: (cursor: string) => void;
   stepForward: () => void;
   stepBackward: () => void;
@@ -74,6 +87,7 @@ const REPLAY_BASE_TICK_MS = 1200;
 const REPLAY_MIN_TICK_MS = 120;
 
 let playTimer: ReturnType<typeof setInterval> | null = null;
+let replayOperation = 0;
 
 /** Stop the shared play timer (no-op when already idle). Centralized so the
  *  five previous inline `if (playTimer) { clearInterval(…); playTimer = null; }`
@@ -87,6 +101,7 @@ function clearPlayTimer(): void {
 
 export const useReplayStore = create<ReplayState>((set, get) => ({
   active: false,
+  exiting: false,
   sessionId: null,
   events: [],
   cursor: "",
@@ -95,9 +110,26 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
   annotations: [],
   decisions: [],
 
-  enterReplay: async (sessionId, state) => {
+  enterReplay: async (sessionId, state, suppliedTransition) => {
+    const operation = ++replayOperation;
+    const transition = suppliedTransition ?? beginSessionTransition(sessionId);
     const events = buildTimeline(state);
     const initialCursor = events[0]?.at ?? new Date().toISOString();
+
+    // `active` is the write lock. Commit it before annotation I/O yields and
+    // before enterSessionReplay installs any historical artifacts.
+    clearPlayTimer();
+    set({
+      active: true,
+      exiting: false,
+      sessionId,
+      events,
+      cursor: initialCursor,
+      playing: false,
+      speed: 1,
+      annotations: [],
+      decisions: (state.decisions ?? []) as DecisionRecord[],
+    });
 
     // Fetch annotations for this session (best-effort)
     let annotations: SessionAnnotation[] = [];
@@ -109,23 +141,25 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
       }
     } catch {}
 
-    clearPlayTimer();
-    set({
-      active: true,
-      sessionId,
-      events,
-      cursor: initialCursor,
-      playing: false,
-      speed: 1,
-      annotations,
-      decisions: (state.decisions ?? []) as DecisionRecord[],
-    });
+    if (
+      operation === replayOperation &&
+      isCurrentSessionTransition(transition) &&
+      get().active &&
+      !get().exiting &&
+      get().sessionId === sessionId
+    ) {
+      set({ annotations });
+    }
   },
 
   exitReplay: () => {
     const wasActive = get().active;
+    const operation = ++replayOperation;
+    const transition = wasActive ? beginSessionTransition(null) : null;
     clearPlayTimer();
-    set({ active: false, sessionId: null, events: [], cursor: "", playing: false, annotations: [], decisions: [] });
+    // Keep the write lock until the historical store is cleared and the live
+    // snapshot, when available, has replaced it.
+    if (wasActive) set({ exiting: true, playing: false });
     // H1 — loadSession RESET the live artifact store and filled it with the
     // historical session; exiting used to leave that store in place, so
     // historical drafts rendered with fully-mutable footers (the F12 guard
@@ -136,16 +170,36 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
     if (!wasActive) return;
     rehydrateInFlight = Promise.all([import("./connection"), import("./artifact")]).then(
       ([{ useConnectionStore }, { useArtifactStore }]) => {
+        if (
+          operation !== replayOperation ||
+          !get().exiting ||
+          !transition ||
+          !isCurrentSessionTransition(transition)
+        ) return;
         // Review — reset UNCONDITIONALLY first: the VS Code webview adapter
         // has no switchSession, so the rehydrate silently no-op'd there and
         // the historical store stayed live. A double reset is harmless (the
         // connected handler resets again before hydration).
         useArtifactStore.getState().reset();
-        const sid = useConnectionStore.getState().sessionId;
-        if (sid) useConnectionStore.getState().switchSession(sid);
+        const connection = useConnectionStore.getState();
+        const sid = connection.sessionId;
+        const canRehydrate = Boolean(
+          sid && connection.adapter && "switchSession" in connection.adapter,
+        );
+        if (canRehydrate && sid) {
+          connection.switchSession(sid);
+        } else {
+          get().completeExit();
+        }
       },
     );
     void rehydrateInFlight;
+  },
+
+  completeExit: () => {
+    if (!get().exiting) return;
+    clearPlayTimer();
+    set({ active: false, exiting: false, sessionId: null, events: [], cursor: "", playing: false, annotations: [], decisions: [] });
   },
 
   setCursor: (cursor) => set({ cursor }),
