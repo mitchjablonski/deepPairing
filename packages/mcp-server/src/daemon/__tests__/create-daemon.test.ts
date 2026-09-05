@@ -22,6 +22,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DecisionOption } from "@deeppairing/shared";
 import { createDaemon, type CreateDaemonDeps, type Daemon } from "../create-daemon.js";
+import { FileStore } from "../../store/file-store.js";
 import { projectHashOf } from "../../project-root.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { ERROR_CODES } from "../../error-codes.js";
@@ -390,6 +391,59 @@ describe("dispose() — the test-teardown seam actually clears every factory han
     // …and the WS server emitted 'close' (ws defers it a nextTick).
     await new Promise<void>((r) => process.nextTick(r));
     expect(wssClosed).toBe(true);
+  });
+});
+
+describe("cleanup failure isolation", () => {
+  it("flushes later sessions and removes discovery state when one session is conflicted", () => {
+    const { daemon, tmpDir, logs } = makeDaemon();
+    const failed = daemon.createSession("failed");
+    const healthy = daemon.createSession("healthy");
+    const failure = Object.assign(new Error("review conflict"), { code: "ESESSIONREVIEWCONFLICT" });
+    vi.spyOn(failed, "forceFlush").mockImplementation(() => { throw failure; });
+    const healthyFlush = vi.spyOn(healthy, "forceFlush");
+    const daemonInfo = path.join(tmpDir, ".deeppairing", "daemon.json");
+    fs.writeFileSync(daemonInfo, "{}");
+
+    expect(() => daemon.cleanup()).not.toThrow();
+    expect(healthyFlush).toHaveBeenCalledOnce();
+    expect(fs.existsSync(daemonInfo)).toBe(false);
+    expect(logs.some((line) => line.includes("failed") && line.includes("review conflict"))).toBe(true);
+  });
+
+  it("maps a frozen internal state read to an actionable conflict response", async () => {
+    const { daemon, tmpDir, fx } = makeDaemon();
+    const local = daemon.createSession("conflicted");
+    local.createArtifact({
+      id: "plan",
+      type: "plan",
+      title: "Plan",
+      content: { steps: [{ title: "Old", status: "pending" }] },
+    });
+    local.forceFlush();
+    const external = fx.track(new FileStore(tmpDir, "conflicted"));
+    const changed = external.getArtifacts()[0]!;
+    changed.content = { steps: [{ title: "New", status: "pending" }] };
+    changed.version = 2;
+    external.renameArtifact("plan", changed.title);
+    external.forceFlush();
+    local.updateArtifactStatus("plan", "approved", "ui_approve_button");
+    expect(() => local.forceFlush()).toThrow(/changed content.*review verdict|review verdict.*changed content/i);
+
+    const response = await daemon.app.request("/api/internal/sessions/conflicted/state", {
+      headers: { Authorization: "Bearer test-token" },
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      code: ERROR_CODES.session_review_conflict,
+      message: expect.stringMatching(/restart.*review/i),
+    });
+
+    const liveResponse = await daemon.app.request("/api/live-session/conflicted", {
+      headers: { "X-Project-Hash": projectHashOf(tmpDir) },
+    });
+    expect(liveResponse.status).toBe(409);
+    expect(await liveResponse.json()).toMatchObject({ code: ERROR_CODES.session_review_conflict });
   });
 });
 

@@ -53,11 +53,18 @@ describe("writer-owned deltas", () => {
     // Mutating the frozen instance must not make its stale in-memory verdict
     // writable again. Recovery requires a fresh FileStore loaded from disk.
     second.createArtifact({ id: "after-conflict", type: "research", title: "Must stay memory-only", content: {} });
+    second.addComment({ id: "safe-comment", artifactId: "__session__", content: "Do not lose this", author: "human" });
+    const request = second.addRequest({ text: "Keep working on the recovery", intent: "implement" });
+    second.recordDecisionRequest({ decisionId: "safe-decision", artifactId: "plan", context: "Recovery choice", options: [] });
     expect(() => second.forceFlush()).toThrow(/changed content.*review verdict|review verdict.*changed content/i);
 
-    const persisted = open().getArtifacts()[0]!;
+    const recovered = open();
+    const persisted = recovered.getArtifacts()[0]!;
     expect(persisted.status === "approved" && persisted.version === 2).toBe(false);
-    expect(open().getArtifacts().some((artifact) => artifact.id === "after-conflict")).toBe(false);
+    expect(recovered.getArtifacts().some((artifact) => artifact.id === "after-conflict")).toBe(false);
+    expect(recovered.getCommentsForArtifact("__session__").map((comment) => comment.id)).toContain("safe-comment");
+    expect(recovered.getRequests().map((item) => item.id)).toContain(request.id);
+    expect(recovered.getDecision("safe-decision")?.context).toBe("Recovery choice");
   });
 
   it("allows one writer to change content and then review that same content", () => {
@@ -94,6 +101,31 @@ describe("writer-owned deltas", () => {
     progressWriter.updatePlanProgress("plan", [{ stepIndex: 0, status: "done" }]);
     expect(() => progressWriter.forceFlush()).not.toThrow();
     expect((open().getArtifacts()[0]!.content as any).steps[0].status).toBe("done");
+  });
+
+  it.each([false, true])("does not treat concurrent plan progress as a proposal/review conflict (progressFirst=%s)", (progressFirst) => {
+    const seedStore = open();
+    seedStore.createArtifact({
+      id: "plan",
+      type: "plan",
+      title: "Review this plan",
+      content: { steps: [{ title: "Execute", action: "ship safely", status: "pending" }], estimatedChanges: 1 },
+    });
+    seedStore.forceFlush();
+
+    const progressWriter = open();
+    const reviewer = open();
+    progressWriter.updatePlanProgress("plan", [{ stepIndex: 0, status: "done", statusNote: "verified" }]);
+    reviewer.updateArtifactStatus("plan", "approved", "ui_approve_button");
+
+    const first = progressFirst ? progressWriter : reviewer;
+    const second = progressFirst ? reviewer : progressWriter;
+    first.forceFlush();
+    expect(() => second.forceFlush()).not.toThrow();
+    expect(open().getArtifacts()[0]).toMatchObject({
+      status: "approved",
+      content: { steps: [{ title: "Execute", action: "ship safely", status: "done", statusNote: "verified" }] },
+    });
   });
 
   it.each([false, true])("unrelated stale comment cannot revert review state (reverse=%s)", (reverse) => {
@@ -243,6 +275,7 @@ describe("writer-owned deltas", () => {
     const intervening = open();
     retrying.renameArtifact("a", "partially committed");
     retrying.addComment({ id: "pending-comment", artifactId: "a", content: "retry me", author: "human" });
+    const independentRequest = retrying.addRequest({ text: "persist past a comments failure", intent: "implement" });
 
     const realRename = fs.renameSync;
     let failedComments = false;
@@ -258,6 +291,8 @@ describe("writer-owned deltas", () => {
     } finally {
       rename.mockRestore();
     }
+    expect(JSON.parse(fs.readFileSync(file("requests.json"), "utf8")).map((request: { id: string }) => request.id))
+      .toContain(independentRequest.id);
 
     // artifacts.json committed before comments.json failed. A writer that
     // loaded the old baseline now replaces that title before the retry.
@@ -268,6 +303,31 @@ describe("writer-owned deltas", () => {
     const loaded = open();
     expect(loaded.getArtifacts()[0]?.title).toBe("intervening writer");
     expect(loaded.getCommentsForArtifact("a").map((comment) => comment.id)).toContain("pending-comment");
+  });
+
+  it("preserves independent sidecars while refusing to overwrite freshly corrupted artifacts", () => {
+    const writer = seed();
+    const knownGoodArtifacts = fs.readFileSync(file("artifacts.json"), "utf8");
+    writer.renameArtifact("a", "pending artifact mutation");
+    writer.addComment({ id: "corruption-comment", artifactId: "__session__", content: "Keep this", author: "human" });
+    const request = writer.addRequest({ text: "Recover the artifact file manually", intent: "implement" });
+    writer.recordDecisionRequest({ decisionId: "corruption-decision", artifactId: "a", context: "Manual recovery", options: [] });
+    fs.writeFileSync(file("artifacts.json"), "{broken");
+
+    expect(() => writer.forceFlush()).toThrow(SyntaxError);
+    expect(fs.readFileSync(file("artifacts.json"), "utf8")).toBe("{broken");
+    expect(JSON.parse(fs.readFileSync(file("comments.json"), "utf8")).map((comment: { id: string }) => comment.id))
+      .toContain("corruption-comment");
+    expect(JSON.parse(fs.readFileSync(file("requests.json"), "utf8")).map((item: { id: string }) => item.id))
+      .toContain(request.id);
+    expect(JSON.parse(fs.readFileSync(file("decisions.json"), "utf8")).map((decision: { decisionId: string }) => decision.decisionId))
+      .toContain("corruption-decision");
+
+    // The failed artifact delta stays dirty: restoring the known-good bytes
+    // lets the same writer retry without another mutation.
+    fs.writeFileSync(file("artifacts.json"), knownGoodArtifacts);
+    expect(() => writer.forceFlush()).not.toThrow();
+    expect(open().getArtifacts().find((artifact) => artifact.id === "a")?.title).toBe("pending artifact mutation");
   });
 
   it("a disposed store cannot write into a replacement session directory", () => {

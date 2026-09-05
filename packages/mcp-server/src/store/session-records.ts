@@ -81,9 +81,28 @@ function reviewVerdictChanged(base: RecordValue, candidate: RecordValue): boolea
     REVIEW_VERDICTS.has(String(candidate.status));
 }
 
+/** Plan execution progress is not proposal identity. A reviewer approves the
+ * step text/order/action, not whether a cooperating agent has since marked a
+ * step pending/in-progress/done or attached an execution note. Keep the
+ * projection plan-only: identically named fields in every other artifact type
+ * remain review-bearing content. */
+function reviewedContent(record: RecordValue): unknown {
+  const content = record.content;
+  if (record.type !== "plan" || !object(content) || !Array.isArray(content.steps)) return content;
+  return {
+    ...content,
+    steps: content.steps.map((step) => {
+      if (!object(step)) return step;
+      const { status: _status, statusNote: _statusNote, ...proposal } = step;
+      return proposal;
+    }),
+  };
+}
+
 function reviewedIdentityChanged(base: RecordValue, candidate: RecordValue): boolean {
   return REVIEWED_IDENTITY_FIELDS.some(
-    (field) => JSON.stringify(base[field]) !== JSON.stringify(candidate[field]),
+    (field) => JSON.stringify(field === "content" ? reviewedContent(base) : base[field]) !==
+      JSON.stringify(field === "content" ? reviewedContent(candidate) : candidate[field]),
   );
 }
 

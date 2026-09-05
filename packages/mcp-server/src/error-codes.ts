@@ -104,6 +104,7 @@ export const USER_FACING_ERROR_CODES: readonly ErrorCode[] = [
   ERROR_CODES.daemon_auth_required,
   ERROR_CODES.project_hash_mismatch,
   ERROR_CODES.session_not_registered,
+  ERROR_CODES.session_review_conflict,
   ERROR_CODES.review_post_conflict,
 ];
 

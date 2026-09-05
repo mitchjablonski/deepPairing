@@ -414,40 +414,82 @@ export class FileStore implements IStore {
 
   private flush(): void {
     // A conflicted writer still holds the stale in-memory verdict that caused
-    // the safety failure. Keep every later flush fenced: only a newly created
+    // the safety failure. Never write its artifacts again: only a newly created
     // FileStore may reload the persisted artifact and resume authorization.
-    this.assertAuthorizationReadable();
+    // Independent human input is different. Comments, requests, and decision
+    // records must remain durable even while the artifact lane is frozen.
+    const reviewConflict = this.reviewConflict;
     try {
       withSessionFlushLock(path.join(this.sessionDir(), ".flush.lock"), () => {
-        this.artifacts = this.flushRecords("artifacts.json", this.artifacts, (r) => r.id,
-          (raw) => FileStore.salvageArray<Artifact>(`${this.sessionId}:artifacts.json (external)`, raw, "id"), false,
-          mergeArtifactRecords);
-        this.comments = this.flushRecords("comments.json", this.comments, (r) => r.id,
-          (raw) => FileStore.salvageArray<Comment>("comments.json (external)", raw, "id"));
-        this.decisions = new Map(this.flushRecords("decisions.json", [...this.decisions.values()], (r) => r.decisionId,
-          (raw) => FileStore.salvageArray<DecisionRecord>("decisions.json (external)", raw, "decisionId")).map((r) => [r.decisionId, r]));
-        this.planReviews = new Map(this.flushRecords("plan-reviews.json", [...this.planReviews.values()], (r) => r.artifactId,
-          (raw) => FileStore.salvageArray<PlanReviewRecord>("plan-reviews.json (external)", raw, "artifactId")).map((r) => [r.artifactId, r]));
-        this.requests = this.flushRecords("requests.json", this.requests, (r) => r.id,
-          (raw) => FileStore.salvageArray<Request>("requests.json (external)", raw, "id"), true);
-        this.renderFailures = this.flushRecords("render-failures.json", this.renderFailures,
-          (r) => JSON.stringify([r.artifactId, r.visualId]), (raw) => {
-            const keyed = (Array.isArray(raw) ? raw : []).map((r) => ({
-              ...r, __key: JSON.stringify([r?.artifactId, r?.visualId]),
-            }));
-            return FileStore.salvageArray<RenderFailureRecord & { __key: string }>(
-              "render-failures.json (external)", keyed, "__key").map(({ __key, ...r }) => r);
-          }, true);
+        let firstFailure: unknown = reviewConflict;
+        let artifactWriteBlocked = !!reviewConflict;
+        const attempt = (write: () => void): void => {
+          try {
+            write();
+          } catch (error) {
+            if (firstFailure === null || firstFailure === undefined) firstFailure = error;
+          }
+        };
+
+        if (!artifactWriteBlocked) {
+          attempt(() => {
+            try {
+              this.artifacts = this.flushRecords("artifacts.json", this.artifacts, (r) => r.id,
+                (raw) => FileStore.salvageArray<Artifact>(`${this.sessionId}:artifacts.json (external)`, raw, "id"), false,
+                mergeArtifactRecords);
+            } catch (error) {
+              artifactWriteBlocked = true;
+              if (error instanceof SessionReviewConflictError) {
+                this.reviewConflict = error;
+              }
+              throw error;
+            }
+          });
+        }
+        attempt(() => {
+          this.comments = this.flushRecords("comments.json", this.comments, (r) => r.id,
+            (raw) => FileStore.salvageArray<Comment>("comments.json (external)", raw, "id"));
+        });
+        attempt(() => {
+          this.decisions = new Map(this.flushRecords("decisions.json", [...this.decisions.values()], (r) => r.decisionId,
+            (raw) => FileStore.salvageArray<DecisionRecord>("decisions.json (external)", raw, "decisionId")).map((r) => [r.decisionId, r]));
+        });
+        // A plan-review verdict is coupled to artifact authorization. Do not
+        // persist it after an artifact ownership conflict; a fresh store must
+        // reconcile the proposal before that verdict can become durable.
+        if (!artifactWriteBlocked) {
+          attempt(() => {
+            this.planReviews = new Map(this.flushRecords("plan-reviews.json", [...this.planReviews.values()], (r) => r.artifactId,
+              (raw) => FileStore.salvageArray<PlanReviewRecord>("plan-reviews.json (external)", raw, "artifactId")).map((r) => [r.artifactId, r]));
+          });
+        }
+        attempt(() => {
+          this.requests = this.flushRecords("requests.json", this.requests, (r) => r.id,
+            (raw) => FileStore.salvageArray<Request>("requests.json (external)", raw, "id"), true);
+        });
+        attempt(() => {
+          this.renderFailures = this.flushRecords("render-failures.json", this.renderFailures,
+            (r) => JSON.stringify([r.artifactId, r.visualId]), (raw) => {
+              const keyed = (Array.isArray(raw) ? raw : []).map((r) => ({
+                ...r, __key: JSON.stringify([r?.artifactId, r?.visualId]),
+              }));
+              return FileStore.salvageArray<RenderFailureRecord & { __key: string }>(
+                "render-failures.json (external)", keyed, "__key").map(({ __key, ...r }) => r);
+            }, true);
+        });
         // Metrics lack stable IDs: append only this writer's new observations.
         const metricsPath = path.join(this.sessionDir(), "metrics.json");
-        if (this.reviewLatencies.length > this.flushedLatencyCount) {
-          const raw = this.loadJsonFile<unknown>(metricsPath, []);
-          const disk = Array.isArray(raw) ? raw.filter((r) => r && typeof r.type === "string" && Number.isFinite(r.latencyMs)) : [];
-          const merged = [...disk, ...this.reviewLatencies.slice(this.flushedLatencyCount)];
-          writeJsonAtomic(metricsPath, merged);
-          this.reviewLatencies = merged;
-          this.flushedLatencyCount = merged.length;
+        if (!artifactWriteBlocked && this.reviewLatencies.length > this.flushedLatencyCount) {
+          attempt(() => {
+            const raw = this.loadJsonFile<unknown>(metricsPath, []);
+            const disk = Array.isArray(raw) ? raw.filter((r) => r && typeof r.type === "string" && Number.isFinite(r.latencyMs)) : [];
+            const merged = [...disk, ...this.reviewLatencies.slice(this.flushedLatencyCount)];
+            writeJsonAtomic(metricsPath, merged);
+            this.reviewLatencies = merged;
+            this.flushedLatencyCount = merged.length;
+          });
         }
+        if (firstFailure !== null && firstFailure !== undefined) throw firstFailure;
       });
     } catch (error) {
       if (error instanceof SessionReviewConflictError) this.reviewConflict = error;

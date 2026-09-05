@@ -425,6 +425,13 @@ export function createHttpRoutes(
   }));
 
   app.onError((err, c) => {
+    if (isSessionReviewConflictError(err)) {
+      return c.json({
+        error: "session_review_conflict",
+        code: ERROR_CODES.session_review_conflict,
+        message: err.message,
+      }, 409);
+    }
     if (err instanceof SyntaxError) {
       return c.json({ error: "Invalid JSON" }, 400);
     }
@@ -1106,6 +1113,21 @@ export function createHttpRoutes(
     // X6 — see comment above; HTTP-side mutations pass null for `server`.
     await maybeUpdateTaskStatus(null, artifactId, store);
 
+    // Preserve the human's explanation even if the artifact verdict races a
+    // concurrent proposal rewrite. flush() keeps comments durable while it
+    // rejects the unsafe artifact merge below, so the 409 is truthful about
+    // the verdict without silently discarding the user's words.
+    if (feedback) {
+      const comment = await store.addComment({
+        id: `cmt_${nanoid(10)}`,
+        artifactId,
+        content: feedback,
+        author: "human",
+        verdictFeedback: true,
+      });
+      broadcast({ type: "comment_added", comment }, sid);
+    }
+
     // U0.6 — force the debounced flush so the Stop hook (which reads
     // .deeppairing/sessions/*/artifacts.json directly from disk) sees the
     // new status before its next tick. Without this, a 100ms debounce window
@@ -1128,20 +1150,6 @@ export function createHttpRoutes(
         }, 409);
       }
       console.error(`[deepPairing] verdict flush failed (verdict landed in memory; debounced flush will retry): ${err}`);
-    }
-
-    if (feedback) {
-      const comment = await store.addComment({
-        id: `cmt_${nanoid(10)}`,
-        artifactId,
-        content: feedback,
-        author: "human",
-        // #187 — this is the VERDICT's own feedback note, posted AFTER the status
-        // flip above. On an "Approve with modifications" (status now `approved`)
-        // it must NOT be dressed as a late follow-up — it's review feedback.
-        verdictFeedback: true,
-      });
-      broadcast({ type: "comment_added", comment }, sid);
     }
 
     // When an artifact is rejected, remember the approach so pre-flight blocks

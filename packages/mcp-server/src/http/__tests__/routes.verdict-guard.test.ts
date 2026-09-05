@@ -74,7 +74,7 @@ describe("O3 (#231) — store backstop", () => {
 });
 
 describe("O3 (#231) — HTTP route 409 + refresh", () => {
-  it("returns 409 without a success broadcast when proposal content changed during review", async () => {
+  it("returns actionable 409s, preserves verdict feedback, and emits no success when proposal content changed during review", async () => {
     store.createArtifact({
       id: "art_changed",
       type: "plan",
@@ -93,13 +93,24 @@ describe("O3 (#231) — HTTP route 409 + refresh", () => {
     contentWriter.forceFlush();
     broadcasts.length = 0;
 
-    const res = await postStatus("art_changed", "approved");
+    const res = await postStatus("art_changed", "approved", "Keep the useful rationale even though the verdict raced");
     expect(res.status).toBe(409);
     expect(await res.json()).toMatchObject({ code: "session_review_conflict" });
     expect(broadcasts.find((event) => event.type === "artifact_updated")).toBeUndefined();
 
-    const persisted = fx.track(new FileStore(fx.dir, "test_session")).getArtifacts()[0]!;
+    const recovered = fx.track(new FileStore(fx.dir, "test_session"));
+    const persisted = recovered.getArtifacts()[0]!;
     expect(persisted).toMatchObject({ status: "draft", version: 2 });
+    expect(recovered.getCommentsForArtifact("art_changed").map((comment) => comment.content)).toContain(
+      "Keep the useful rationale even though the verdict raced",
+    );
+
+    const state = await app.request("/api/state");
+    expect(state.status).toBe(409);
+    expect(await state.json()).toMatchObject({
+      code: "session_review_conflict",
+      message: expect.stringMatching(/restart.*review/i),
+    });
   });
 
   it("THE RACE: approved then a stale reject → 409, verdict preserved, truth re-broadcast", async () => {
