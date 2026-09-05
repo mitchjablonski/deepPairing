@@ -12,6 +12,7 @@ class FakeAdapter implements ConnectionAdapter {
   disconnectHandler: (() => void) | null = null;
   connected = false;
   refreshUrlCalls = 0;
+  switchedSessions: string[] = [];
 
   connect() { this.connected = true; this.connectHandler?.(); }
   disconnect() { this.connected = false; this.disconnectHandler?.(); }
@@ -19,7 +20,7 @@ class FakeAdapter implements ConnectionAdapter {
   onConnect(h: () => void) { this.connectHandler = h; }
   onDisconnect(h: () => void) { this.disconnectHandler = h; }
   refreshUrl() { this.refreshUrlCalls++; }
-  switchSession(_sessionId: string) {}
+  switchSession(sessionId: string) { this.switchedSessions.push(sessionId); }
 
   fatalMismatchHandler: ((info: { liveProjectRoot?: string; liveHash: string }) => void) | null = null;
   onFatalMismatch(h: (info: { liveProjectRoot?: string; liveHash: string }) => void) { this.fatalMismatchHandler = h; }
@@ -58,6 +59,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -591,6 +593,7 @@ describe("connection store — safe daemon recovery (#339)", () => {
   it("leaves an active historical replay and pending annotations untouched", async () => {
     const annotations = deferredResponse();
     const { useReplayStore } = await import("../replay");
+    const { useToastStore } = await import("../toast");
     const fetchMock = vi.fn((url: string | URL | Request) =>
       String(url).includes("/annotations")
         ? annotations.promise
@@ -615,7 +618,116 @@ describe("connection store — safe daemon recovery (#339)", () => {
     expect(useArtifactStore.getState().artifacts.map((item) => item.id)).toEqual(["historic"]);
     expect(useReplayStore.getState().annotations.map((item) => item.id)).toEqual(["historic-note"]);
     expect(useReplayStore.getState().active).toBe(true);
+    expect(useToastStore.getState().toasts.some((toast) => toast.title.includes("Daemon restarted"))).toBe(true);
     useReplayStore.setState({ active: false, exiting: false });
+  });
+
+  it("keeps replay read-only with its historical frame when live exit hydration never arrives", async () => {
+    const { useReplayStore, replayRehydrateSettled } = await import("../replay");
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ annotations: [] }), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    })));
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "connected", state: snapshot("A", [artifact("live-before-replay", "A")]) });
+    await flush();
+
+    await useReplayStore.getState().enterReplay("historic", {
+      artifacts: [artifact("historic", "historic") as any], comments: [],
+    });
+    useArtifactStore.getState().reset();
+    useArtifactStore.getState().addArtifact(artifact("historic", "historic") as any);
+
+    vi.useFakeTimers();
+    useReplayStore.getState().exitReplay();
+    await replayRehydrateSettled();
+    expect(activeAdapter.switchedSessions).toEqual(["A"]);
+    expect(useReplayStore.getState()).toMatchObject({ active: true, exiting: true });
+    expect(useArtifactStore.getState().artifacts.map((item) => item.id)).toEqual(["historic"]);
+
+    activeAdapter.emit({ type: "artifact_created", artifact: artifact("live-during-exit", "A") });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useArtifactStore.getState().artifacts.map((item) => item.id)).toEqual(["historic"]);
+
+    activeAdapter.emit({ type: "connected" });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useReplayStore.getState()).toMatchObject({ active: true, exiting: true });
+    expect(useArtifactStore.getState().artifacts.map((item) => item.id)).toEqual(["historic"]);
+
+    activeAdapter.emit({ type: "connected", state: {
+      ...snapshot("A"), decisions: [null],
+    } });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useReplayStore.getState()).toMatchObject({ active: true, exiting: true });
+    expect(useArtifactStore.getState().artifacts.map((item) => item.id)).toEqual(["historic"]);
+
+    activeAdapter.emit({ type: "connected", state: {
+      sessionId: "A", artifacts: [], comments: [],
+    } });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useReplayStore.getState()).toMatchObject({ active: true, exiting: true });
+    expect(useArtifactStore.getState().artifacts.map((item) => item.id)).toEqual(["historic"]);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    const recovery = useToastStore.getState().toasts.find((toast) => toast.title.includes("Couldn't leave replay"));
+    expect(recovery).toMatchObject({ kind: "error", ttl: 0, action: { label: "Retry" } });
+
+    recovery!.action!.onClick();
+    await replayRehydrateSettled();
+    expect(activeAdapter.switchedSessions).toEqual(["A", "A"]);
+    activeAdapter.emit({ type: "connected", state: snapshot("A", [artifact("live-after-retry", "A")]) });
+    await vi.runAllTimersAsync();
+    expect(useReplayStore.getState()).toMatchObject({ active: false, exiting: false });
+    expect(useArtifactStore.getState().artifacts.map((item) => item.id)).toEqual(["live-after-retry"]);
+
+    await useReplayStore.getState().enterReplay("newer-history", {
+      artifacts: [artifact("newer-history", "newer-history") as any], comments: [],
+    });
+    useArtifactStore.getState().reset();
+    useArtifactStore.getState().addArtifact(artifact("newer-history", "newer-history") as any);
+    recovery!.action!.onClick();
+    expect(activeAdapter.switchedSessions).toEqual(["A", "A"]);
+    expect(useReplayStore.getState()).toMatchObject({
+      active: true, exiting: false, sessionId: "newer-history",
+    });
+    expect(useArtifactStore.getState().artifacts.map((item) => item.id)).toEqual(["newer-history"]);
+    vi.useRealTimers();
+  });
+
+  it("does not let a late replay-exit snapshot unlock a newer replay", async () => {
+    const { useReplayStore, replayRehydrateSettled } = await import("../replay");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ annotations: [] }), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    })));
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "connected", state: snapshot("A", [artifact("live", "A")]) });
+    await flush();
+
+    await useReplayStore.getState().enterReplay("historic-1", {
+      artifacts: [artifact("historic-1", "historic-1") as any], comments: [],
+    });
+    useArtifactStore.getState().reset();
+    useArtifactStore.getState().addArtifact(artifact("historic-1", "historic-1") as any);
+    useReplayStore.getState().exitReplay();
+    await replayRehydrateSettled();
+
+    await useReplayStore.getState().enterReplay("historic-2", {
+      artifacts: [artifact("historic-2", "historic-2") as any], comments: [],
+    });
+    useArtifactStore.getState().reset();
+    useArtifactStore.getState().addArtifact(artifact("historic-2", "historic-2") as any);
+    activeAdapter.emit({ type: "connected", state: snapshot("A", [artifact("late-live", "A")]) });
+    await flush();
+
+    expect(useReplayStore.getState()).toMatchObject({
+      active: true, exiting: false, sessionId: "historic-2",
+    });
+    expect(useArtifactStore.getState().artifacts.map((item) => item.id)).toEqual(["historic-2"]);
   });
 
   it("discards an A recovery after an A-B-A session transition", async () => {
@@ -766,6 +878,27 @@ describe("connection store — safe daemon recovery (#339)", () => {
     expect(useArtifactStore.getState().artifacts.map((a) => a.id).sort()).toEqual(["live", "snapshot"]);
   });
 
+  it("drains buffered recovery events when a stateless connected frame supersedes the fetch", async () => {
+    const pending = deferredResponse();
+    vi.stubGlobal("fetch", vi.fn((url: string | URL | Request) =>
+      String(url).endsWith("/api/state") ? pending.promise : Promise.resolve(new Response("{}"))));
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "connected", state: snapshot("A") });
+    await flush();
+    activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
+    await flush();
+    activeAdapter.emit({ type: "artifact_created", artifact: artifact("buffered", "A") });
+    activeAdapter.emit({ type: "connected" });
+    await flush();
+
+    expect(useArtifactStore.getState().artifacts.map((item) => item.id)).toEqual(["buffered"]);
+    pending.resolve(new Response(JSON.stringify(snapshot("A", [artifact("obsolete", "A")])), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    }));
+    await flush();
+    expect(useArtifactStore.getState().artifacts.map((item) => item.id)).toEqual(["buffered"]);
+  });
+
   it("abandons an older snapshot rather than overwriting an optimistic rename", async () => {
     const recovery = deferredResponse();
     const rename = deferredResponse();
@@ -858,7 +991,7 @@ describe("connection store — safe daemon recovery (#339)", () => {
     await flush();
     activeAdapter.emit({ type: "ledger_write", kind: "approved", concept: "small modules" });
     await flush();
-    expect(useToastStore.getState().toasts).toHaveLength(1);
+    expect(useToastStore.getState().toasts.filter((t) => t.title.includes("Added to your Ledger"))).toHaveLength(1);
     pending.resolve(new Response(JSON.stringify(snapshot("A")), {
       status: 200, headers: { "Content-Type": "application/json" },
     }));
@@ -914,6 +1047,7 @@ describe("connection store — safe daemon recovery (#339)", () => {
     activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
     await flush();
     expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["valid"]);
+    expect(useToastStore.getState().toasts.some((t) => t.title.includes("Daemon restarted"))).toBe(true);
     expect(useToastStore.getState().toasts.some((t) => t.title.includes("session state refetched"))).toBe(false);
   });
 });

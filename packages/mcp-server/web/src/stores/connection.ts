@@ -48,6 +48,11 @@ interface ActiveSession {
   live?: boolean;
 }
 
+interface SwitchSessionOptions {
+  /** Keep the current artifact frame until connected.state replaces it. */
+  preserveStateUntilConnected?: boolean;
+}
+
 interface ConnectionState {
   connected: boolean;
   /** D8 (H4) — epoch ms of the FIRST disconnect of the current outage; null while connected. */
@@ -86,7 +91,7 @@ interface ConnectionState {
 
   connect: (sessionId?: string) => void;
   disconnect: () => void;
-  switchSession: (sessionId: string) => void;
+  switchSession: (sessionId: string, options?: SwitchSessionOptions) => void;
   /** Poll the current daemon's session list. Returns whether the fetch
    *  SUCCEEDED (Bug A — the foreign-owner guard awaits this to confirm a
    *  suspected-foreign session isn't just lagging the 10s poll; a `false`
@@ -173,6 +178,17 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     if (recovery.timeout !== undefined) clearTimeout(recovery.timeout);
     recovery.unsubscribe();
     recovery.controller.abort();
+  };
+
+  const drainRecoveryMessages = (recovery: NonNullable<typeof pendingRecovery>) => {
+    if (
+      !isCurrent(recovery.connection, recovery.session) ||
+      !isCurrentSessionTransition(recovery.transition) ||
+      get().sessionId !== recovery.sessionId
+    ) return;
+    for (const message of recovery.messages.splice(0)) {
+      handleMessage(message, recovery.connection, recovery.transition);
+    }
   };
 
   // B2 — draft-notification dedupe + burst suppression. Dedupe is by ARTIFACT
@@ -269,6 +285,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
 
       switch (data.type) {
         case "connected": {
+          const supersededRecovery = pendingRecovery;
           const connectedSnapshot = ++snapshotGeneration;
           cancelPendingRecovery();
           // U4 — daemon-restart detection. If we've connected before, compare
@@ -324,8 +341,29 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           const replay = useReplayStore.getState();
           if (data.state && (!replay.active || replay.exiting)) {
             if (connectedSnapshot !== snapshotGeneration) return;
-            hydrateArtifactState(store, data.state);
-            if (replay.exiting) useReplayStore.getState().completeExit();
+            const validReplayExitState =
+              !replay.exiting ||
+              (typeof connectedSid === "string" &&
+                get().sessionId === connectedSid &&
+                isCompleteRecoverySnapshot(data.state, connectedSid));
+            if (validReplayExitState) {
+              const previousArtifactState = useArtifactStore.getState();
+              try {
+                hydrateArtifactState(store, data.state);
+                if (replay.exiting) useReplayStore.getState().completeExit();
+              } catch {
+                // A malformed nested entry can still throw after the reset.
+                // Restore the historical frame and keep replay's write lock;
+                // its bounded timeout will surface the retry path.
+                useArtifactStore.setState(previousArtifactState);
+              }
+            }
+          } else if (!data.state && supersededRecovery) {
+            // A stateless reconnect supersedes the HTTP recovery request but
+            // not the same-session events buffered behind it. Stateful
+            // connected frames are authoritative and intentionally discard
+            // their older buffer instead.
+            drainRecoveryMessages(supersededRecovery);
           }
 
           set({ hydrated: true });
@@ -684,6 +722,18 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           // resume, toastApiError's 401 identity check is the safety net that
           // upgrades it to the reload toast. Left intentionally.
           {
+            // Surface the restart even if replay owns the artifact store or
+            // the best-effort state fetch fails. The success toast below is a
+            // separate claim and appears only after complete hydration.
+            void import("./toast").then(({ useToastStore }) => {
+              if (!isCurrent(messageConnection, messageSession)) return;
+              useToastStore.getState().push({
+                kind: "info",
+                title: "Daemon restarted — checking session state",
+                body: "The wrapper reconnected. Anything submitted in the last few seconds may need to be retried.",
+                ttl: 8000,
+              });
+            });
             // Replay owns the shared artifact store. A live recovery must not
             // replace a historical frame or invalidate pending annotations;
             // exiting replay performs its own authoritative live hydration.
@@ -712,28 +762,18 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
               unsubscribe: () => {},
             };
             pendingRecovery = recovery;
-            const drainRecoveryMessages = () => {
-              if (
-                !isCurrent(recoveryConnection, recoverySession) ||
-                !isCurrentSessionTransition(recovery.transition) ||
-                get().sessionId !== expectedSessionId
-              ) return;
-              for (const message of recovery.messages.splice(0)) {
-                handleMessage(message, recoveryConnection, recovery.transition);
-              }
-            };
             recovery.unsubscribe = useArtifactStore.subscribe(() => {
               // Optimistic/local mutations are not WebSocket messages and
               // cannot be replayed safely. Preserve them by abandoning the
               // older snapshot, then apply any WS messages already buffered.
               if (pendingRecovery !== recovery) return;
               cancelPendingRecovery();
-              drainRecoveryMessages();
+              drainRecoveryMessages(recovery);
             });
             recovery.timeout = setTimeout(() => {
               if (pendingRecovery !== recovery) return;
               cancelPendingRecovery();
-              drainRecoveryMessages();
+              drainRecoveryMessages(recovery);
             }, RECOVERY_TIMEOUT_MS);
             fetch(`${apiBase()}/api/state`, {
               headers: { ...sessionHeaders(), "X-Session-Id": expectedSessionId },
@@ -749,7 +789,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
               ) return;
               if (!isCompleteRecoverySnapshot(fresh, expectedSessionId)) {
                 cancelPendingRecovery();
-                drainRecoveryMessages();
+                drainRecoveryMessages(recovery);
                 return;
               }
               if (recovery.timeout !== undefined) clearTimeout(recovery.timeout);
@@ -760,10 +800,10 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
                 hydrateArtifactState(store, fresh);
               } catch {
                 useArtifactStore.setState(previousArtifactState);
-                drainRecoveryMessages();
+                drainRecoveryMessages(recovery);
                 return;
               }
-              drainRecoveryMessages();
+              drainRecoveryMessages(recovery);
               import("./toast").then(({ useToastStore }) => {
                 if (
                   !isCurrent(recoveryConnection, recoverySession) ||
@@ -780,7 +820,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
               .catch(() => {
                 if (pendingRecovery !== recovery) return;
                 cancelPendingRecovery();
-                drainRecoveryMessages();
+                drainRecoveryMessages(recovery);
               });
           }
           break;
@@ -937,7 +977,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       }
     },
 
-    switchSession: (sessionId: string) => {
+    switchSession: (sessionId: string, options?: SwitchSessionOptions) => {
       const { adapter } = get();
       if (adapter && "switchSession" in adapter) {
         beginSessionTransition(sessionId);
@@ -946,11 +986,13 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         cancelPendingRecovery();
         const switchConnection = connectionGeneration;
         const switchSessionGeneration = sessionGeneration;
-        // Reset artifact store before switching
-        import("./artifact").then(({ useArtifactStore }) => {
-          if (!isCurrent(switchConnection, switchSessionGeneration)) return;
-          useArtifactStore.getState().reset();
-        });
+        if (!options?.preserveStateUntilConnected) {
+          // Ordinary navigation clears the previous session immediately.
+          import("./artifact").then(({ useArtifactStore }) => {
+            if (!isCurrent(switchConnection, switchSessionGeneration)) return;
+            useArtifactStore.getState().reset();
+          });
+        }
         (adapter as any).switchSession(sessionId);
         // B2 — drop the OLD session's heartbeat streak, or the TurnIndicator
         // shows "Agent working · Nm" from session A for up to 45s on session B.
