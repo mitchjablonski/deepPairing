@@ -445,6 +445,40 @@ describe("cleanup failure isolation", () => {
     expect(liveResponse.status).toBe(409);
     expect(await liveResponse.json()).toMatchObject({ code: ERROR_CODES.session_review_conflict });
   });
+
+  it("returns 409 before an internal decision resolution becomes durable", async () => {
+    const { daemon, tmpDir, fx } = makeDaemon();
+    const local = daemon.createSession("decision-conflict");
+    local.createArtifact({
+      id: "decision-card",
+      type: "decision",
+      title: "Which cache?",
+      content: { decisionId: "cache", question: "Which cache?", options: OPTS },
+    });
+    local.recordDecisionRequest({
+      decisionId: "cache", artifactId: "decision-card", context: "Which cache?", options: OPTS,
+    });
+    local.forceFlush();
+
+    const contentWriter = fx.track(new FileStore(tmpDir, "decision-conflict"));
+    const changed = contentWriter.getArtifacts()[0]!;
+    changed.content = { decisionId: "cache", question: "Which queue?", options: OPTS };
+    changed.version = 2;
+    contentWriter.renameArtifact("decision-card", changed.title);
+    contentWriter.forceFlush();
+
+    const response = await daemon.app.request("/api/internal/sessions/decision-conflict/decisions/cache/resolve", {
+      method: "POST",
+      headers: { Authorization: "Bearer test-token", "Content-Type": "application/json" },
+      body: JSON.stringify({ optionId: "o1", reasoning: "Fits the old cache question" }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: ERROR_CODES.session_review_conflict });
+
+    const recovered = fx.track(new FileStore(tmpDir, "decision-conflict"));
+    expect(recovered.getArtifacts()[0]).toMatchObject({ status: "draft", version: 2 });
+    expect(recovered.getDecisionResponse("cache")).toBeNull();
+  });
 });
 
 describe("#152 / R4 — the auto-open and install-health-ping guard call sites", () => {

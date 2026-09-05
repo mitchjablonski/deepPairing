@@ -81,22 +81,41 @@ function reviewVerdictChanged(base: RecordValue, candidate: RecordValue): boolea
     REVIEW_VERDICTS.has(String(candidate.status));
 }
 
-/** Plan execution progress is not proposal identity. A reviewer approves the
- * step text/order/action, not whether a cooperating agent has since marked a
- * step pending/in-progress/done or attached an execution note. Keep the
- * projection plan-only: identically named fields in every other artifact type
- * remain review-bearing content. */
+function changesetReviewChanged(base: RecordValue, candidate: RecordValue): boolean {
+  if (base.type !== "changeset" || candidate.type !== "changeset") return false;
+  const baseContent = object(base.content) ? base.content : {};
+  const candidateContent = object(candidate.content) ? candidate.content : {};
+  return JSON.stringify([baseContent.reviewState, baseContent.reviewReasons]) !==
+    JSON.stringify([candidateContent.reviewState, candidateContent.reviewReasons]);
+}
+
+function reviewAuthorityChanged(base: RecordValue, candidate: RecordValue): boolean {
+  return reviewVerdictChanged(base, candidate) || changesetReviewChanged(base, candidate);
+}
+
+/** Plan execution progress and changeset file dispositions are not proposal
+ * identity. Reviewers approve plan step text/order/action and changeset file
+ * contents; execution status and reviewState/reviewReasons are authority
+ * layered onto that proposal. Identically named fields in other artifact
+ * types remain review-bearing content. */
 function reviewedContent(record: RecordValue): unknown {
   const content = record.content;
-  if (record.type !== "plan" || !object(content) || !Array.isArray(content.steps)) return content;
-  return {
-    ...content,
-    steps: content.steps.map((step) => {
-      if (!object(step)) return step;
-      const { status: _status, statusNote: _statusNote, ...proposal } = step;
-      return proposal;
-    }),
-  };
+  if (!object(content)) return content;
+  if (record.type === "plan" && Array.isArray(content.steps)) {
+    return {
+      ...content,
+      steps: content.steps.map((step) => {
+        if (!object(step)) return step;
+        const { status: _status, statusNote: _statusNote, ...proposal } = step;
+        return proposal;
+      }),
+    };
+  }
+  if (record.type === "changeset") {
+    const { reviewState: _reviewState, reviewReasons: _reviewReasons, ...proposal } = content;
+    return proposal;
+  }
+  return content;
 }
 
 function reviewedIdentityChanged(base: RecordValue, candidate: RecordValue): boolean {
@@ -125,8 +144,8 @@ export function mergeArtifactRecords<T extends object>(
     const localValue = localRecord as RecordValue;
     const diskValue = diskRecord as RecordValue;
     if (
-      (reviewVerdictChanged(base, localValue) && reviewedIdentityChanged(base, diskValue)) ||
-      (reviewVerdictChanged(base, diskValue) && reviewedIdentityChanged(base, localValue))
+      (reviewAuthorityChanged(base, localValue) && reviewedIdentityChanged(base, diskValue)) ||
+      (reviewAuthorityChanged(base, diskValue) && reviewedIdentityChanged(base, localValue))
     ) {
       throw new SessionReviewConflictError(id);
     }

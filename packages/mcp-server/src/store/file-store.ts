@@ -416,8 +416,9 @@ export class FileStore implements IStore {
     // A conflicted writer still holds the stale in-memory verdict that caused
     // the safety failure. Never write its artifacts again: only a newly created
     // FileStore may reload the persisted artifact and resume authorization.
-    // Independent human input is different. Comments, requests, and decision
-    // records must remain durable even while the artifact lane is frozen.
+    // Independent human input is different. Comments and requests remain
+    // durable even while the artifact lane is frozen. Decision records and
+    // plan reviews can authorize artifact content, so they freeze with it.
     const reviewConflict = this.reviewConflict;
     try {
       withSessionFlushLock(path.join(this.sessionDir(), ".flush.lock"), () => {
@@ -450,14 +451,15 @@ export class FileStore implements IStore {
           this.comments = this.flushRecords("comments.json", this.comments, (r) => r.id,
             (raw) => FileStore.salvageArray<Comment>("comments.json (external)", raw, "id"));
         });
-        attempt(() => {
-          this.decisions = new Map(this.flushRecords("decisions.json", [...this.decisions.values()], (r) => r.decisionId,
-            (raw) => FileStore.salvageArray<DecisionRecord>("decisions.json (external)", raw, "decisionId")).map((r) => [r.decisionId, r]));
-        });
-        // A plan-review verdict is coupled to artifact authorization. Do not
-        // persist it after an artifact ownership conflict; a fresh store must
-        // reconcile the proposal before that verdict can become durable.
+        // Decision responses and plan-review verdicts are coupled to artifact
+        // authorization. Do not persist either after an artifact ownership
+        // conflict; a fresh store must reconcile the proposal before that
+        // authority can become durable.
         if (!artifactWriteBlocked) {
+          attempt(() => {
+            this.decisions = new Map(this.flushRecords("decisions.json", [...this.decisions.values()], (r) => r.decisionId,
+              (raw) => FileStore.salvageArray<DecisionRecord>("decisions.json (external)", raw, "decisionId")).map((r) => [r.decisionId, r]));
+          });
           attempt(() => {
             this.planReviews = new Map(this.flushRecords("plan-reviews.json", [...this.planReviews.values()], (r) => r.artifactId,
               (raw) => FileStore.salvageArray<PlanReviewRecord>("plan-reviews.json (external)", raw, "artifactId")).map((r) => [r.artifactId, r]));

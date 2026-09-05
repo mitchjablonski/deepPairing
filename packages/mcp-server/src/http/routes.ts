@@ -841,6 +841,15 @@ export function createHttpRoutes(
         // artifact (it had no record to key off), so the route does it.
         await store.updateArtifactStatus(targetArtifactId, "approved", "ui_decision_resolve");
       }
+    }
+
+    // A decision response authorizes its backing artifact. Persist the
+    // artifact and decision record together before announcing success; a
+    // concurrent proposal rewrite must return the global typed 409 and emit no
+    // decision_resolved event.
+    await store.forceFlush();
+
+    if (targetArtifactId) {
       // X6 — emission seam: HTTP-side mutations pass null for `server`
       // (the MCP server lives in the daemon's separate process). Today
       // a no-op; future Tasks impl can route via the daemon broadcast.
@@ -1323,12 +1332,10 @@ export function createHttpRoutes(
         400,
       );
     }
-    // Persist before the agent's next poll (mirrors the status route's flush).
-    try {
-      await store.forceFlush();
-    } catch (err) {
-      console.error(`[deepPairing] changeset review flush failed (state landed in memory; debounced flush will retry): ${err}`);
-    }
+    // Persist before reporting success. Review dispositions authorize the
+    // changeset's file contents, so a concurrent proposal rewrite must surface
+    // the global typed 409 and suppress the success broadcast.
+    await store.forceFlush();
     // Full-artifact patch: review state lives in content, so the web store must
     // replaceArtifact (like plan_progress_updated), not just patch a status.
     broadcast({ type: "changeset_review_updated", artifact: updated }, sid);

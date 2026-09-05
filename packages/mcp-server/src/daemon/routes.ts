@@ -909,6 +909,10 @@ export function createDaemonRoutes(
     // already advanced it on disk; this closes the live-update gap that left
     // this path — unlike the public route — broadcasting no artifactId at all).
     const artifactId = r.store.getDecision(decisionId)?.artifactId;
+    // A response and its backing artifact are one authorization write. Flush
+    // before the daemon claims success; app.onError maps a concurrent proposal
+    // rewrite to the shared session_review_conflict 409, with no broadcast.
+    await r.store.forceFlush();
     broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId, optionId, reasoning, confidence, predictedOutcome });
     return c.json({ status: "resolved" });
   });

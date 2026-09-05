@@ -163,6 +163,44 @@ describe("O3 (#231) — HTTP route 409 + refresh", () => {
     expect(res.status).toBe(200);
     expect(store.getArtifacts().find((a) => a.id === "art_dec")?.status).toBe("approved");
   });
+
+  it("returns 409 and emits no decision success when the backing artifact changed", async () => {
+    const option = {
+      id: "opt_a", title: "Redis", description: "Shared cache", pros: ["fast"], cons: ["ops"],
+      effort: "low" as const, risk: "low" as const, recommendation: true,
+    };
+    store.createArtifact({
+      id: "art_dec_race",
+      type: "decision",
+      title: "Which cache?",
+      content: { decisionId: "dec_race", question: "Which cache?", options: [option] },
+    });
+    store.recordDecisionRequest({
+      decisionId: "dec_race", artifactId: "art_dec_race", context: "Which cache?", options: [option],
+    });
+    store.forceFlush();
+
+    const contentWriter = fx.track(new FileStore(fx.dir, "test_session"));
+    const changed = contentWriter.getArtifacts()[0]!;
+    changed.content = { decisionId: "dec_race", question: "Which queue?", options: [option] };
+    changed.version = 2;
+    contentWriter.renameArtifact("art_dec_race", changed.title);
+    contentWriter.forceFlush();
+    broadcasts.length = 0;
+
+    const res = await app.request("/api/decisions/dec_race", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ optionId: "opt_a", reasoning: "Fits the old cache question" }),
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: "session_review_conflict" });
+    expect(broadcasts.find((event) => event.type === "decision_resolved")).toBeUndefined();
+
+    const recovered = fx.track(new FileStore(fx.dir, "test_session"));
+    expect(recovered.getArtifacts()[0]).toMatchObject({ status: "draft", version: 2 });
+    expect(recovered.getDecisionResponse("dec_race")).toBeNull();
+  });
 });
 
 /**
