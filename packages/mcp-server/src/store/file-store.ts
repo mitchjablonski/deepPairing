@@ -550,11 +550,13 @@ export class FileStore implements IStore {
   }
 
   private writeCodeCheckpoints(artifact: Artifact): void {
+    const ttlMs = artifact.type === "changeset" ? 10 * 60 * 1000 : 60 * 1000;
+    const expiresAt = new Date(Date.parse(artifact.createdAt) + ttlMs).toISOString();
     for (const filePath of this.checkpointFiles(artifact)) {
       try {
         const markerPath = this.codeCheckpointPath(filePath);
         fs.mkdirSync(path.dirname(markerPath), { recursive: true });
-        writeJsonAtomic(markerPath, { version: 1, at: artifact.createdAt,
+        writeJsonAtomic(markerPath, { version: 1, at: artifact.createdAt, expiresAt,
           sessionId: this.sessionId, artifactId: artifact.id, filePath });
       } catch { /* best-effort reminder: absent receipts cause a nag */ }
     }
@@ -622,7 +624,7 @@ export class FileStore implements IStore {
       const fromStatus = art.status;
       art.status = status;
       if (["rejected", "revised", "superseded", "retracted", "obsolete"].includes(status)) {
-        this.revokeCodeCheckpoints(art);
+        try { this.revokeCodeCheckpoints(art); } catch { /* reminder hint only */ }
       }
       art.updatedAt = now;
       // Append to statusHistory so replay can reconstruct the trail faithfully.
