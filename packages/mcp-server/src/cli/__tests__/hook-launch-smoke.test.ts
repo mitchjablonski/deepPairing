@@ -33,6 +33,10 @@ describe("installed hook launch contract", () => {
     expect(ensureStopHook(projectRoot).ok).toBe(true);
     expect(ensureCheckpointHook(projectRoot).ok).toBe(true);
     expect(ensurePreflightHook(projectRoot).ok).toBe(true);
+    // An empty, readable session store means the guardrail evaluator has enough
+    // information to ask when no pre-work ceremony is live. This keeps the
+    // preflight launch smoke out of its no-ledger/no-guardrail fast path.
+    fs.mkdirSync(path.join(projectRoot, ".deeppairing", "sessions"), { recursive: true });
 
     const settings = JSON.parse(
       fs.readFileSync(path.join(projectRoot, ".claude", "settings.local.json"), "utf8"),
@@ -59,8 +63,15 @@ describe("installed hook launch contract", () => {
     const payloads = [
       "{}",
       JSON.stringify({ tool_name: "Edit", tool_input: { file_path: "src/smoke.ts" } }),
-      JSON.stringify({ tool_name: "Edit", tool_input: { file_path: "src/smoke.ts", new_string: "export const smoke = true;" } }),
+      JSON.stringify({
+        tool_name: "Write",
+        tool_input: {
+          file_path: ".github/workflows/smoke.yml",
+          content: "name: smoke",
+        },
+      }),
     ];
+    let preflightOutput: unknown;
     for (const [index, command] of commands.entries()) {
       const result = spawnSync(shell, [...shellArgs, command], {
         cwd: parent,
@@ -74,7 +85,16 @@ describe("installed hook launch contract", () => {
       expect(result.stdout).not.toContain("hook error");
       expect(result.stderr).not.toContain("hook error");
       expect(result.stderr).not.toContain("ReferenceError");
+      if (index === 2) preflightOutput = JSON.parse(result.stdout);
     }
+
+    expect(preflightOutput).toEqual(expect.objectContaining({
+      hookSpecificOutput: expect.objectContaining({
+        hookEventName: "PreToolUse",
+        permissionDecision: "ask",
+        permissionDecisionReason: expect.stringContaining("GUARDRAIL_ESCALATION"),
+      }),
+    }));
 
     const hookState = JSON.parse(
       fs.readFileSync(path.join(projectRoot, ".deeppairing", "hooks-state.json"), "utf8"),
@@ -82,6 +102,7 @@ describe("installed hook launch contract", () => {
     expect(hookState.fires).toEqual(expect.arrayContaining([
       expect.objectContaining({ hook: "stop", exitCode: 0, reason: expect.not.stringMatching(/^error:/) }),
       expect.objectContaining({ hook: "checkpoint", exitCode: 0, reason: expect.not.stringMatching(/^error:/) }),
+      expect.objectContaining({ hook: "preflight", kind: "ask", reason: "guardrail:workflows" }),
     ]));
 
     for (const name of ["stop.mjs", "checkpoint.mjs", "preflight.mjs"]) {
