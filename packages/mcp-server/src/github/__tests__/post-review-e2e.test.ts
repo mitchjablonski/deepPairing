@@ -24,6 +24,8 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   bindReviewPayloadToPreparedTarget,
   postPreparedPrReview,
@@ -488,6 +490,34 @@ describe("Q6 — error paths (each one executed, not assumed)", () => {
 // --- the handler -------------------------------------------------------------
 
 describe("Q6 — handlePostPrReview (the MCP tool) end to end", () => {
+  it("#344 separate CLI processes preserve uncertain sends and refuse --repost", async () => {
+    const project = fs.mkdtempSync(path.join(binDir, "cli-project-"));
+    const sessionDir = path.join(project, ".deeppairing", "sessions", "s_review");
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionDir, "artifacts.json"), JSON.stringify([researchArtifact([HIGH_FINDING])]));
+    const originalArtifacts = fs.readFileSync(path.join(sessionDir, "artifacts.json"), "utf8");
+    const cli = fileURLToPath(new URL("../../cli/init.ts", import.meta.url));
+    const runCli = (mode: Mode, extra: string[] = []) => new Promise<{ code: number; output: string }>((resolve) => {
+      execFile(process.execPath, ["--import", import.meta.resolve("tsx"), cli,
+        "post-pr-review", "https://github.com/acme/widgets/pull/42", "--session-id", "s_review", ...extra], {
+        cwd: project, timeout: 20_000,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: project, DEEPPAIRING_PROJECT_ROOT: project,
+          DP_GH_FAKE_MODE: mode },
+      }, (error, stdout, stderr) => resolve({ code: error ? Number(error.code) || 1 : 0, output: stdout + stderr }));
+    });
+
+    const first = await runCli("bad-success-state");
+    expect(first.code, first.output).toBe(1);
+    expect(first.output).toContain("may have reached GitHub");
+    expect(new ReviewPostJournal(project, "s_review").list()[0].state).toBe("unknown");
+    const second = await runCli("ok", ["--repost"]);
+    expect(second.code, second.output).toBe(1);
+    expect(second.output).toContain("unknown");
+    expect(reviewPostCalls()).toHaveLength(1);
+    // Read-only CLI authorization must not flush a stale FileStore snapshot.
+    expect(fs.readFileSync(path.join(sessionDir, "artifacts.json"), "utf8")).toBe(originalArtifacts);
+  }, 45_000);
+
   it("#344 explicit remote reconciliation verifies the marked review using GETs only", async () => {
     const ctx = fakeCtx([researchArtifact([HIGH_FINDING])]);
     setMode("bad-success-state");
