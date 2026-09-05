@@ -19,6 +19,7 @@ class FakeAdapter implements ConnectionAdapter {
   onConnect(h: () => void) { this.connectHandler = h; }
   onDisconnect(h: () => void) { this.disconnectHandler = h; }
   refreshUrl() { this.refreshUrlCalls++; }
+  switchSession(_sessionId: string) {}
 
   fatalMismatchHandler: ((info: { liveProjectRoot?: string; liveHash: string }) => void) | null = null;
   onFatalMismatch(h: (info: { liveProjectRoot?: string; liveHash: string }) => void) { this.fatalMismatchHandler = h; }
@@ -66,6 +67,12 @@ async function flush() {
   // cover the chain on all supported platforms.
   await new Promise((r) => setTimeout(r, 0));
   await new Promise((r) => setTimeout(r, 0));
+}
+
+function deferredResponse() {
+  let resolve!: (response: Response) => void;
+  const promise = new Promise<Response>((r) => { resolve = r; });
+  return { promise, resolve };
 }
 
 describe("connection store — handleMessage dispatch", () => {
@@ -568,6 +575,260 @@ describe("connection store — lifecycle", () => {
     // The adapter's connect() was called exactly once (the second store.connect
     // detects an existing adapter and returns early).
     expect(connectSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("connection store — safe daemon recovery (#339)", () => {
+  const artifact = (id: string, sessionId: string) => ({
+    id, sessionId, type: "research", version: 1, parentId: null,
+    title: id, status: "draft", content: {}, agentReasoning: null,
+    createdAt: "2026-04-16T10:00:00.000Z", updatedAt: "2026-04-16T10:00:00.000Z",
+  });
+  const snapshot = (sessionId: string, artifacts: any[] = []) => ({
+    sessionId, artifacts, comments: [], requests: [], decisions: [],
+  });
+
+  it("discards an A recovery after an A-B-A session transition", async () => {
+    const pending = deferredResponse();
+    vi.stubGlobal("fetch", vi.fn((url: string | URL | Request) =>
+      String(url).endsWith("/api/state") ? pending.promise : Promise.resolve(new Response("{}"))));
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [] } });
+    await flush();
+    activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
+    await flush();
+
+    useConnectionStore.getState().switchSession("B");
+    useConnectionStore.getState().switchSession("A");
+    pending.resolve(new Response(JSON.stringify(snapshot("A", [artifact("stale-A", "A")])), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    }));
+    await flush();
+
+    expect(useConnectionStore.getState().sessionId).toBe("A");
+    expect(useArtifactStore.getState().artifacts).toEqual([]);
+  });
+
+  it("discards a queued dynamic-import callback after a session switch", async () => {
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [] } });
+    await flush();
+
+    activeAdapter.emit({ type: "artifact_created", artifact: artifact("from-A", "A") });
+    useConnectionStore.getState().switchSession("B");
+    await flush();
+
+    expect(useConnectionStore.getState().sessionId).toBe("B");
+    expect(useArtifactStore.getState().artifacts).toEqual([]);
+  });
+
+  it("latest overlapping recovery wins", async () => {
+    const first = deferredResponse();
+    const second = deferredResponse();
+    const stateResponses = [first.promise, second.promise];
+    vi.stubGlobal("fetch", vi.fn((url: string | URL | Request) =>
+      String(url).endsWith("/api/state")
+        ? stateResponses.shift()!
+        : Promise.resolve(new Response("{}"))));
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [] } });
+    await flush();
+    activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
+    await flush();
+    activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
+    await flush();
+
+    second.resolve(new Response(JSON.stringify(snapshot("A", [artifact("new", "A")])), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    }));
+    await flush();
+    first.resolve(new Response(JSON.stringify(snapshot("A", [artifact("old", "A")])), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    }));
+    await flush();
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["new"]);
+  });
+
+  it("discards a recovery response from a disconnected connection generation", async () => {
+    const pending = deferredResponse();
+    vi.stubGlobal("fetch", vi.fn((url: string | URL | Request) =>
+      String(url).endsWith("/api/state") ? pending.promise : Promise.resolve(new Response("{}"))));
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [] } });
+    await flush();
+    activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
+    await flush();
+    useConnectionStore.getState().disconnect();
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [artifact("current", "A")], comments: [] } });
+    await flush();
+
+    pending.resolve(new Response(JSON.stringify(snapshot("A", [artifact("obsolete", "A")])), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    }));
+    await flush();
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["current"]);
+  });
+
+  it("abandons an older snapshot when a live event arrives", async () => {
+    const pending = deferredResponse();
+    vi.stubGlobal("fetch", vi.fn((url: string | URL | Request) =>
+      String(url).endsWith("/api/state") ? pending.promise : Promise.resolve(new Response("{}"))));
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [] } });
+    await flush();
+    activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
+    await flush();
+    activeAdapter.emit({ type: "artifact_created", artifact: artifact("live", "A") });
+    await flush();
+    pending.resolve(new Response(JSON.stringify(snapshot("A", [artifact("snapshot", "A")])), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    }));
+    await flush();
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["live"]);
+  });
+
+  it("abandons an older snapshot rather than overwriting an optimistic rename", async () => {
+    const recovery = deferredResponse();
+    const rename = deferredResponse();
+    vi.stubGlobal("fetch", vi.fn((url: string | URL | Request) => {
+      const target = String(url);
+      if (target.endsWith("/api/state")) return recovery.promise;
+      if (target.includes("/rename")) return rename.promise;
+      return Promise.resolve(new Response("{}"));
+    }));
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [artifact("a", "A")], comments: [] } });
+    await flush();
+    activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
+    await flush();
+
+    const renamePromise = useArtifactStore.getState().renameArtifact("a", "optimistic");
+    expect(useArtifactStore.getState().artifacts[0]?.title).toBe("optimistic");
+    recovery.resolve(new Response(JSON.stringify(snapshot("A", [artifact("a", "A")])), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    }));
+    await flush();
+    expect(useArtifactStore.getState().artifacts[0]?.title).toBe("optimistic");
+    rename.resolve(new Response("{}", { status: 200 }));
+    await renamePromise;
+  });
+
+  it("uses complete hydration and only reports recovery after success", async () => {
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL | Request) => String(url).endsWith("/api/state") ? new Response(JSON.stringify({
+      sessionId: "A",
+      artifacts: [artifact("decision-art", "A")], comments: [],
+      requests: [{ id: "request-1", sessionId: "A", prompt: "help", createdAt: "now" }],
+      decisions: [
+        { decisionId: "acked", acknowledged: true },
+        { decisionId: "resolved", acknowledged: false, response: { optionId: "option-2", reasoning: "best" }, resolvedAt: "then" },
+      ],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }) : new Response("{}")));
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [] } });
+    await flush();
+    activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
+    await flush();
+
+    const state = useArtifactStore.getState();
+    expect(state.requests).toHaveLength(1);
+    expect(state.acknowledgedDecisions).toMatchObject({ acked: true });
+    expect(state.resolvedDecisions.resolved).toMatchObject({ optionId: "option-2", reasoning: "best" });
+    expect(state.selectedArtifactId).toBe("decision-art");
+    expect(useToastStore.getState().toasts.some((t) => t.title.includes("session state refetched"))).toBe(true);
+  });
+
+  it.each([
+    ["null payload", null],
+    ["malformed arrays", { sessionId: "A", artifacts: null, comments: [], requests: [], decisions: [] }],
+    ["different session", snapshot("B", [artifact("from-B", "B")])],
+  ])("preserves valid state for an HTTP 200 %s", async (_label, payload) => {
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL | Request) =>
+      String(url).endsWith("/api/state")
+        ? new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } })
+        : new Response("{}")));
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [artifact("valid", "A")], comments: [] } });
+    await flush();
+    activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
+    await flush();
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["valid"]);
+    expect(useToastStore.getState().toasts.some((t) => t.title.includes("session state refetched"))).toBe(false);
+  });
+
+  it("does not replay non-state side effects after hydration", async () => {
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    const pending = deferredResponse();
+    vi.stubGlobal("fetch", vi.fn((url: string | URL | Request) =>
+      String(url).endsWith("/api/state") ? pending.promise : Promise.resolve(new Response("{}"))));
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [] } });
+    await flush();
+    activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
+    await flush();
+    activeAdapter.emit({ type: "ledger_write", kind: "approved", concept: "small modules" });
+    await flush();
+    expect(useToastStore.getState().toasts).toHaveLength(1);
+    pending.resolve(new Response(JSON.stringify(snapshot("A")), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    }));
+    await flush();
+    expect(useToastStore.getState().toasts.filter((t) => t.title.includes("Added to your Ledger"))).toHaveLength(1);
+  });
+
+  it("drops a nested side-effect import invalidated by a session switch", async () => {
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [] } });
+    await flush();
+    activeAdapter.emit({ type: "ledger_write", kind: "approved", concept: "stale" });
+    useConnectionStore.getState().switchSession("B");
+    await flush();
+    expect(useToastStore.getState().toasts).toHaveLength(0);
+  });
+
+  it("bounds a hung recovery and ignores its eventual response", async () => {
+    const pending = deferredResponse();
+    vi.stubGlobal("fetch", vi.fn((url: string | URL | Request) =>
+      String(url).endsWith("/api/state") ? pending.promise : Promise.resolve(new Response("{}"))));
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [artifact("valid", "A")], comments: [] } });
+    await flush();
+    vi.useFakeTimers();
+    activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
+    // The artifact module is already loaded; drain the import continuation
+    // without using flush(), whose setTimeouts are intentionally faked here.
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(10_000);
+    vi.useRealTimers();
+    pending.resolve(new Response(JSON.stringify(snapshot("A", [artifact("late", "A")])), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    }));
+    await flush();
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["valid"]);
+  });
+
+  it("keeps valid state and does not claim success when recovery fails", async () => {
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL | Request) =>
+      String(url).endsWith("/api/state") ? new Response("no", { status: 500 }) : new Response("{}")));
+    useArtifactStore.getState().addArtifact(artifact("valid", "A") as any);
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A" } });
+    await flush();
+    useArtifactStore.getState().addArtifact(artifact("valid", "A") as any);
+    activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
+    await flush();
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["valid"]);
+    expect(useToastStore.getState().toasts.some((t) => t.title.includes("session state refetched"))).toBe(false);
   });
 });
 
