@@ -1,5 +1,77 @@
 import type { ChildProcess } from "node:child_process";
 import net from "node:net";
+import { StringDecoder } from "node:string_decoder";
+import type { TestInfo } from "@playwright/test";
+import { BoundedDiagnosticTail } from "./diagnostics.js";
+
+const MAX_DAEMON_DIAGNOSTIC_BYTES = 64 * 1024;
+interface DiagnosticStreamState { decoder: StringDecoder; pending: string; source: string; discarding: boolean }
+interface DiagnosticState { tail: BoundedDiagnosticTail; streams: DiagnosticStreamState[] }
+const daemonOutput = new WeakMap<ChildProcess, DiagnosticState>();
+
+function retainLine(state: DiagnosticState, source: string, line: string): void {
+  state.tail.record(`[${source}] ${line}`);
+}
+
+/** Capture a bounded tail of a daemon spawned with piped stdout/stderr. */
+export function captureDaemonOutput(proc: ChildProcess): void {
+  const state: DiagnosticState = { tail: new BoundedDiagnosticTail(MAX_DAEMON_DIAGNOSTIC_BYTES), streams: [] };
+  daemonOutput.set(proc, state);
+  const watch = (source: string, stream: NodeJS.ReadableStream | null | undefined) => {
+    if (!stream) return;
+    const streamState: DiagnosticStreamState = { decoder: new StringDecoder("utf8"), pending: "", source, discarding: false };
+    state.streams.push(streamState);
+    stream.on("data", (chunk: Buffer | string) => {
+      let decoded = typeof chunk === "string" ? chunk : streamState.decoder.write(chunk);
+      if (streamState.discarding) {
+        const newline = decoded.indexOf("\n");
+        if (newline < 0) return;
+        decoded = decoded.slice(newline + 1);
+        streamState.discarding = false;
+      }
+      streamState.pending += decoded;
+      const parts = streamState.pending.split(/\r?\n/);
+      streamState.pending = parts.pop() ?? "";
+      for (const line of parts) retainLine(state, source, line);
+      if (Buffer.byteLength(streamState.pending) > MAX_DAEMON_DIAGNOSTIC_BYTES) {
+        streamState.pending = "";
+        streamState.discarding = true;
+      }
+    });
+  };
+  watch("stdout", proc.stdout);
+  watch("stderr", proc.stderr);
+}
+
+/** Test-only observation of bounded pre-newline state. */
+export function diagnosticPendingBytesForTests(proc: ChildProcess): number {
+  return daemonOutput.get(proc)?.streams.reduce(
+    (total, stream) => total + Buffer.byteLength(stream.pending), 0,
+  ) ?? 0;
+}
+
+export async function attachDaemonOutput(proc: ChildProcess | undefined, testInfo: TestInfo): Promise<void> {
+  if (!proc || testInfo.status === testInfo.expectedStatus) return;
+  const state = daemonOutput.get(proc);
+  if (state) {
+    for (const stream of state.streams) {
+      const tail = stream.decoder.end();
+      if (stream.discarding) {
+        stream.pending = "";
+        continue;
+      }
+      stream.pending += tail;
+      if (stream.pending) retainLine(state, stream.source, stream.pending);
+      stream.pending = "";
+    }
+  }
+  if (state?.tail.lines.length) {
+    await testInfo.attach("daemon-diagnostics", {
+      body: state.tail.body(),
+      contentType: "text/plain",
+    });
+  }
+}
 
 /**
  * Shared e2e teardown barrier.

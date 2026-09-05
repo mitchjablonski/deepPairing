@@ -173,6 +173,19 @@ latency class entirely and is the durable fix.
 
 ## Still stuck?
 
+### Diagnosing an intermittent browser-test failure
+
+Playwright keeps a screenshot and local trace for each failed E2E test under
+`packages/mcp-server/test-results/`. CI uploads the screenshots plus bounded,
+credential-redacted browser and daemon diagnostics for seven days. Raw trace
+archives stay local because they can contain synthetic Authorization headers;
+do not attach a trace publicly without inspecting it for credentials first.
+
+Prefer the first failed readiness assertion and its browser/daemon timestamps
+over increasing a timeout or adding a sleep. Re-run the failing spec by itself,
+then before and after its preceding spec to distinguish a cold-start problem
+from shared fixture or teardown state.
+
 Open an issue with:
 
 * The output of `doctor --fix` (it's verbose on purpose).
