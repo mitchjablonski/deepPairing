@@ -179,6 +179,9 @@ A durable review-post operation or its journal prevents another post. Preserve
 bypass them, or repeat a GitHub POST after an uncertain response.
 
 An unresolved `sending` or `unknown` operation may already have reached GitHub.
+Run `deeppairing review-posts <session-id>` to inspect operation IDs and states.
+Only a `reserved` operation can be cancelled with
+`deeppairing review-posts <session-id> cancel-reserved <operation-id>`.
 Inspect the remote review and reconcile its identity before posting again.
 A `reserved` operation has not authorized a send; explicit cancellation must
 fence its original caller. A retained disk lock needs all writers stopped and

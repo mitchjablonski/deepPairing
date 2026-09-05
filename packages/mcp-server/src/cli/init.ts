@@ -2058,6 +2058,9 @@ ${helpInvocations}
     dp export html [--redact-code]         Write a self-contained shareable HTML page to .deeppairing/exports/
                                            and print its path (--redact-code drops the code bodies)
     dp post-pr-review <pr>                 Post the pairing session's findings as inline comments
+    dp review-posts <session-id>           Inspect durable review-post operations
+    dp review-posts <session-id> cancel-reserved <operation-id>
+                                          Cancel only an operation that has not started sending
                                            on a GitHub PR. Requires \`gh\` CLI installed + authed.
     dp --help                              Show this help message
     dp --version                           Show version
@@ -2154,6 +2157,13 @@ ${helpInvocations}
   listCmd().catch((err) => {
     console.error(`  ${red("✗")} list failed: ${errorMessage(err)}`);
     process.exit(1);
+  });
+} else if (cmd === "review-posts") {
+  import("./review-posts.js").then(({ reviewPostsCommand }) => {
+    console.log(reviewPostsCommand(cwd, args.slice(1)));
+  }).catch(err => {
+    console.error(`  ${red("✗")} review-posts failed: ${errorMessage(err)}`);
+    process.exitCode = 1;
   });
 } else if (cmd === "post-pr-review") {
   const ref = args[1];
