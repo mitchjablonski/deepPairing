@@ -15548,7 +15548,8 @@ var init_content_types = __esm({
       url: external_exports.string().optional().describe("Full PR URL \u2014 the banner links it"),
       headRef: external_exports.string().optional().describe("Source branch, e.g. 'feat/rate-limit'"),
       baseRef: external_exports.string().optional().describe("Target branch, e.g. 'main'"),
-      author: external_exports.string().optional().describe("PR author's GitHub login")
+      author: external_exports.string().optional().describe("PR author's GitHub login"),
+      headSha: external_exports.string().regex(/^[0-9a-fA-F]{40}$/).transform((sha) => sha.toLowerCase()).optional().describe("Immutable 40-hex Git commit SHA returned by gh pr view --json headRefOid for the exact diff shown to the human")
     });
     ChangesetContentSchema = external_exports.object({
       summary: external_exports.string().optional(),
@@ -15566,7 +15567,7 @@ var init_content_types = __esm({
        *  ChangesetReviewIntentSchema for exactly what "external" changes. */
       reviewIntent: ChangesetReviewIntentSchema.optional().describe("Set to 'external' when this diff is SOMEONE ELSE'S code you are reviewing (a GitHub PR you were pinged on), not a change you are proposing. Omit for your own work. An external changeset's approve/needs-changes is the human's REVIEW VERDICT \u2014 it stays local until they say to post it, and it never means 'this code lands'."),
       /** Q6 (#232) — where an external changeset came from (the PR). */
-      source: ChangesetSourceSchema.optional().describe("Provenance of an external changeset \u2014 the PR it was pulled from: { kind: 'github-pr', number, url, headRef, baseRef, author }. Fill in whatever `gh pr view` gave you; the review surface names and links it."),
+      source: ChangesetSourceSchema.optional().describe("Provenance of an external changeset \u2014 the PR and immutable commit it was pulled from: { kind: 'github-pr', number, url, headRef, baseRef, author, headSha }. Capture headSha from `gh pr view --json headRefOid`; an APPROVE without it is refused rather than guessed from the PR's later head."),
       /**
        * R4 P-B (#284) — a changeset-level visual: "the shape of what this PR
        * touches" — a diagram or file map that frames the whole diff before the
@@ -16581,6 +16582,9 @@ function coerceChangesetSource(v) {
     out.baseRef = v.baseRef;
   if (typeof v.author === "string" && v.author.length > 0)
     out.author = v.author;
+  if (typeof v.headSha === "string" && /^[0-9a-fA-F]{40}$/.test(v.headSha)) {
+    out.headSha = v.headSha.toLowerCase();
+  }
   return out;
 }
 function coerceChangesetContent(raw2) {

@@ -1,5 +1,12 @@
 import type { ToolContext, ToolResult } from "./types.js";
-import { postPrReview, parsePrRef, resolvePrTarget, GhMissingError, GhNotAuthedError } from "../../github/post-review.js";
+import {
+  bindReviewPayloadToPreparedTarget,
+  postPreparedPrReview,
+  preparePrReviewTarget,
+  parsePrRef,
+  GhMissingError,
+  GhNotAuthedError,
+} from "../../github/post-review.js";
 import { authorizeReviewPost } from "../../github/review-authorization.js";
 import { errorMessage } from "@deeppairing/shared";
 
@@ -39,23 +46,27 @@ export async function handlePostPrReview(ctx: ToolContext, args: any): Promise<T
   if (!auth.ok) {
     return { content: [{ type: "text", text: auth.reason }], isError: true };
   }
-  let { payload } = auth;
-
   try {
-    // Resolve before the final check: owner/repo overrides and bare numbers
-    // must be checked against the destination that will actually receive it.
-    const target = await resolvePrTarget(ref,
-      typeof args?.owner === "string" ? args.owner : undefined,
-      typeof args?.repo === "string" ? args.repo : undefined);
+    // #343 — preparation is read-only: resolve the canonical destination and
+    // observe its current head. It intentionally happens BEFORE the final local
+    // authorization read, so a verdict/content edit during the network wait is
+    // rebuilt into (or removes authorization from) the actual outbound payload.
+    const prepared = await preparePrReviewTarget({
+      ref,
+      ...(typeof args?.owner === "string" ? { owner: args.owner } : {}),
+      ...(typeof args?.repo === "string" ? { repo: args.repo } : {}),
+    });
+    const target = prepared.target;
     const targetAuth = authorizeReviewPost(await store.getFullState() as never, {
       event: args?.event, pr: target, repost: args?.repost === true,
     });
     if (!targetAuth.ok) return { content: [{ type: "text", text: targetAuth.reason }], isError: true };
-    payload = targetAuth.payload;
-    const result = await postPrReview({
-      ref: target,
-      payload,
-    });
+    const payload = bindReviewPayloadToPreparedTarget(
+      targetAuth.payload,
+      targetAuth.reviewedHeadSha,
+      prepared,
+    );
+    const result = await postPreparedPrReview({ target, payload });
     // R1 (#279) — record the landed review BEFORE reporting success, so a
     // second call refuses instead of notifying the author again. Awaited (not
     // fire-and-forget): if the stamp fails, the agent should hear about it in

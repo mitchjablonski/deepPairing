@@ -14,7 +14,7 @@ between reviewing a PR and skimming a diff.
 **(a) Ingest.** Get the full picture before you say anything:
 
 ```
-gh pr view $ARGUMENTS --json title,body,author,headRefName,baseRefName,url,files,additions,deletions
+gh pr view $ARGUMENTS --json title,body,author,headRefName,baseRefName,headRefOid,url,files,additions,deletions
 gh pr view $ARGUMENTS --comments        # what's already been said
 gh pr checks $ARGUMENTS                 # what CI thinks
 gh pr diff $ARGUMENTS                   # the change itself
@@ -83,10 +83,14 @@ pad.
 straight from `gh pr diff`. Also pass:
 
 ```
-source: { kind: "github-pr", number: <N>, url: <url>, headRef: <head>, baseRef: <base>, author: <login> }
+source: { kind: "github-pr", number: <N>, url: <url>, headRef: <head>, baseRef: <base>, author: <login>, headSha: <headRefOid> }
 ```
 Keep the full `source.url`: posting checks the approved changeset against the
 destination repository and PR. A number alone cannot identify the repository.
+Keep the exact 40-hex `headSha` on every changeset chunk: it binds the verdict
+to the immutable commit whose diff I saw. If the PR moves, fetch the new
+`headRefOid`, present that commit's new diff, and get a fresh verdict — never
+retrofit the current branch head onto an old approval.
 
 **Draw the blast radius on it** — attach a `visuals` diagram or `file_map` of
 the shape of what this PR touches, including what it reaches *outside* the diff,

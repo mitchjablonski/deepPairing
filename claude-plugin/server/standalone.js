@@ -22274,7 +22274,8 @@ var init_content_types = __esm({
       url: external_exports.string().optional().describe("Full PR URL \u2014 the banner links it"),
       headRef: external_exports.string().optional().describe("Source branch, e.g. 'feat/rate-limit'"),
       baseRef: external_exports.string().optional().describe("Target branch, e.g. 'main'"),
-      author: external_exports.string().optional().describe("PR author's GitHub login")
+      author: external_exports.string().optional().describe("PR author's GitHub login"),
+      headSha: external_exports.string().regex(/^[0-9a-fA-F]{40}$/).transform((sha) => sha.toLowerCase()).optional().describe("Immutable 40-hex Git commit SHA returned by gh pr view --json headRefOid for the exact diff shown to the human")
     });
     ChangesetContentSchema = external_exports.object({
       summary: external_exports.string().optional(),
@@ -22292,7 +22293,7 @@ var init_content_types = __esm({
        *  ChangesetReviewIntentSchema for exactly what "external" changes. */
       reviewIntent: ChangesetReviewIntentSchema.optional().describe("Set to 'external' when this diff is SOMEONE ELSE'S code you are reviewing (a GitHub PR you were pinged on), not a change you are proposing. Omit for your own work. An external changeset's approve/needs-changes is the human's REVIEW VERDICT \u2014 it stays local until they say to post it, and it never means 'this code lands'."),
       /** Q6 (#232) — where an external changeset came from (the PR). */
-      source: ChangesetSourceSchema.optional().describe("Provenance of an external changeset \u2014 the PR it was pulled from: { kind: 'github-pr', number, url, headRef, baseRef, author }. Fill in whatever `gh pr view` gave you; the review surface names and links it."),
+      source: ChangesetSourceSchema.optional().describe("Provenance of an external changeset \u2014 the PR and immutable commit it was pulled from: { kind: 'github-pr', number, url, headRef, baseRef, author, headSha }. Capture headSha from `gh pr view --json headRefOid`; an APPROVE without it is refused rather than guessed from the PR's later head."),
       /**
        * R4 P-B (#284) — a changeset-level visual: "the shape of what this PR
        * touches" — a diagram or file map that frames the whole diff before the
@@ -23304,6 +23305,9 @@ function coerceChangesetSource(v2) {
     out.baseRef = v2.baseRef;
   if (typeof v2.author === "string" && v2.author.length > 0)
     out.author = v2.author;
+  if (typeof v2.headSha === "string" && /^[0-9a-fA-F]{40}$/.test(v2.headSha)) {
+    out.headSha = v2.headSha.toLowerCase();
+  }
   return out;
 }
 function coerceChangesetContent(raw) {
@@ -36149,6 +36153,21 @@ function parsePrReference(ref) {
 }
 
 // src/github/post-review.ts
+var FULL_GIT_SHA = /^[0-9a-fA-F]{40}$/;
+function canonicalSha(value) {
+  return FULL_GIT_SHA.test(value) ? value.toLowerCase() : null;
+}
+function requireCanonicalTarget(target) {
+  const parsed = parsePrRef(target);
+  if (!parsed.owner || !parsed.repo) {
+    throw new Error("A prepared review target must be a full canonical github.com pull-request URL.");
+  }
+  const canonical = `https://github.com/${parsed.owner}/${parsed.repo}/pull/${parsed.number}`;
+  if (target.trim().toLowerCase() !== canonical.toLowerCase()) {
+    throw new Error("A prepared review target must not contain a tab, query, fragment, or non-canonical suffix.");
+  }
+  return { owner: parsed.owner, repo: parsed.repo, number: parsed.number };
+}
 var GhMissingError = class extends Error {
   constructor() {
     super("The `gh` CLI is not available. Install from https://cli.github.com/ and run `gh auth login`.");
@@ -36248,8 +36267,62 @@ async function resolvePrTarget(ref, owner, repo) {
   parsePrRef(target);
   return target;
 }
-async function postPrReview(opts) {
-  const parsed = parsePrRef(await resolvePrTarget(opts.ref, opts.owner, opts.repo));
+async function preparePrReviewTarget(opts) {
+  const target = await resolvePrTarget(opts.ref, opts.owner, opts.repo);
+  const parsed = parsePrRef(target);
+  const endpoint = `repos/${parsed.owner}/${parsed.repo}/pulls/${parsed.number}`;
+  const res = await run("gh", [
+    "api",
+    endpoint,
+    "--hostname",
+    "github.com",
+    "-H",
+    "Accept: application/vnd.github+json",
+    "--jq",
+    ".head.sha"
+  ]);
+  if (res.code !== 0) {
+    if (looksUnauthenticated(res.stderr)) throw new GhNotAuthedError();
+    throw new Error(`gh api failed while reading the PR head (exit ${res.code}): ${res.stderr.trim() || res.stdout.trim()}`);
+  }
+  const currentHeadSha = canonicalSha(res.stdout.trim());
+  if (!currentHeadSha) {
+    throw new Error(`Could not read a valid 40-hex head SHA for ${target}; refusing to prepare a review.`);
+  }
+  return { target, currentHeadSha };
+}
+function bindReviewPayloadToPreparedTarget(payload, reviewedHeadSha, prepared) {
+  if (!reviewedHeadSha) {
+    if (payload.event === "APPROVE") {
+      throw new Error("Refusing to post an APPROVE without an immutable reviewed head SHA.");
+    }
+    const { commit_id: _ignored, ...legacyPayload } = payload;
+    return legacyPayload;
+  }
+  const canonicalReviewed = canonicalSha(reviewedHeadSha);
+  if (!canonicalReviewed) {
+    throw new Error("Refusing to post: the locally authorized reviewed head SHA is malformed.");
+  }
+  const payloadCommit = payload.commit_id ? canonicalSha(payload.commit_id) : void 0;
+  if (payload.commit_id && !payloadCommit) {
+    throw new Error("Refusing to post: the authorized payload contains a malformed commit SHA.");
+  }
+  if (payloadCommit && payloadCommit !== canonicalReviewed) {
+    throw new Error("Refusing to post: the authorized payload and reviewed changeset disagree on commit SHA.");
+  }
+  const canonicalCurrent = canonicalSha(prepared.currentHeadSha);
+  if (!canonicalCurrent) {
+    throw new Error("Refusing to post: remote preparation did not return a valid 40-hex PR head SHA.");
+  }
+  if (canonicalCurrent !== canonicalReviewed) {
+    throw new Error(
+      `Refusing to post: PR ${prepared.target} changed since your pair reviewed it (reviewed ${canonicalReviewed.slice(0, 12)}, current ${canonicalCurrent.slice(0, 12)}). Fetch and present the new head, then get a fresh verdict. The current head is never substituted for the reviewed commit.`
+    );
+  }
+  return { ...payload, commit_id: canonicalReviewed };
+}
+async function postPreparedPrReview(opts) {
+  const parsed = requireCanonicalTarget(opts.target);
   const { owner, repo } = parsed;
   const endpoint = `repos/${owner}/${repo}/pulls/${parsed.number}/reviews`;
   const body = JSON.stringify(opts.payload);
@@ -36264,10 +36337,38 @@ async function postPrReview(opts) {
   }
   try {
     const parsedBody = JSON.parse(res.stdout);
+    if (!parsedBody || typeof parsedBody !== "object") {
+      throw new Error("response is not an object");
+    }
+    if (!Number.isSafeInteger(parsedBody.id) || parsedBody.id <= 0) {
+      throw new Error("review id is not a positive integer");
+    }
+    const expectedState = opts.payload.event === "APPROVE" ? "APPROVED" : opts.payload.event === "REQUEST_CHANGES" ? "CHANGES_REQUESTED" : "COMMENTED";
+    if (parsedBody.state !== expectedState) {
+      throw new Error(`review state ${JSON.stringify(parsedBody.state)} does not match ${opts.payload.event}`);
+    }
+    if (typeof parsedBody.html_url !== "string") {
+      throw new Error("review URL is missing");
+    }
+    let reviewUrl;
+    try {
+      reviewUrl = new URL(parsedBody.html_url);
+    } catch {
+      throw new Error("review URL is malformed");
+    }
+    const expectedPath = `/${owner}/${repo}/pull/${parsed.number}`.toLowerCase();
+    if (reviewUrl.protocol !== "https:" || reviewUrl.hostname.toLowerCase() !== "github.com" || reviewUrl.pathname.toLowerCase() !== expectedPath || reviewUrl.hash !== `#pullrequestreview-${parsedBody.id}`) {
+      throw new Error("review URL does not identify the posted review on the prepared target");
+    }
+    const commitId = parsedBody.commit_id === void 0 ? void 0 : typeof parsedBody.commit_id === "string" ? canonicalSha(parsedBody.commit_id) : null;
+    if (commitId === null) {
+      throw new Error("review commit_id is malformed");
+    }
     return {
-      htmlUrl: parsedBody.html_url ?? "",
-      state: parsedBody.state ?? "COMMENTED",
-      id: parsedBody.id ?? 0
+      htmlUrl: reviewUrl.toString(),
+      state: parsedBody.state,
+      id: parsedBody.id,
+      ...commitId ? { commitId } : {}
     };
   } catch (err) {
     throw new Error(`Posted, but could not parse gh response: ${errorMessage(err)}`);
@@ -36313,6 +36414,54 @@ function externalChangesets(artifacts) {
     (a) => a.type === "changeset" && coerceChangesetContent(a.content).reviewIntent === "external"
   );
 }
+var CLOSED_CHANGESET_STATUSES = /* @__PURE__ */ new Set(["superseded", "retracted", "obsolete"]);
+var FULL_GIT_SHA2 = /^[0-9a-fA-F]{40}$/;
+function reviewedHeadFor(artifacts, event) {
+  const standing = externalChangesets(artifacts).filter((a) => !CLOSED_CHANGESET_STATUSES.has(a.status));
+  const valid = [];
+  const missing = [];
+  const malformed = [];
+  for (const artifact of standing) {
+    const rawSource = artifact.content && typeof artifact.content === "object" ? artifact.content.source : void 0;
+    const rawSha = rawSource && typeof rawSource === "object" ? rawSource.headSha : void 0;
+    if (rawSha === void 0) {
+      missing.push(artifact);
+    } else if (typeof rawSha !== "string" || !FULL_GIT_SHA2.test(rawSha)) {
+      malformed.push(artifact);
+    } else {
+      valid.push({ artifact, sha: rawSha.toLowerCase() });
+    }
+  }
+  if (malformed.length > 0) {
+    return {
+      ok: false,
+      reason: `Refusing to post: malformed reviewed head SHA on ${malformed.map((a) => `"${a.title}" (${a.id})`).join(", ")}. Capture the exact 40-hex headRefOid from GitHub, present that commit's diff, and get a fresh human verdict; the current PR head is never guessed as an old approval's commit.`
+    };
+  }
+  if (valid.length === 0) {
+    if (event !== "APPROVE") return { ok: true };
+    return {
+      ok: false,
+      reason: `Refusing to post an APPROVE: ${standing.length === 0 ? "no standing external changeset" : missing.map((a) => `"${a.title}" (${a.id})`).join(", ")} records the immutable reviewed head SHA. Legacy session files remain readable, but an unknown commit cannot authorize an approval. Fetch headRefOid, present that exact diff as a fresh external changeset, and get your pair's verdict again; never substitute the PR's current head for an old approval.`
+    };
+  }
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      reason: `Refusing to post: mixed immutable-SHA provenance across the standing external changesets. ${valid.map(({ artifact }) => `"${artifact.title}" (${artifact.id})`).join(", ")} name a reviewed commit, but ${missing.map((a) => `"${a.title}" (${a.id})`).join(", ")} do not. Present every chunk from one exact head SHA and get fresh verdicts.`
+    };
+  }
+  const bySha = /* @__PURE__ */ new Map();
+  for (const entry of valid) bySha.set(entry.sha, [...bySha.get(entry.sha) ?? [], entry.artifact]);
+  if (bySha.size !== 1) {
+    const detail = [...bySha.entries()].map(([sha, chunks]) => `${sha.slice(0, 12)} (${chunks.map((a) => a.id).join(", ")})`).join("; ");
+    return {
+      ok: false,
+      reason: `Refusing to post: the standing external changesets describe different reviewed commits: ${detail}. A review is one verdict on one immutable PR head; present every chunk from the same commit and get fresh human verdicts.`
+    };
+  }
+  return { ok: true, headSha: valid[0].sha };
+}
 function normalizeEvent(raw) {
   if (raw === void 0 || raw === null || typeof raw === "string" && raw.trim() === "") {
     return { ok: true, event: "COMMENT" };
@@ -36357,7 +36506,7 @@ function authorizeReviewPost(state, opts) {
   const decidedNo = findingsArtifacts.filter((a) => DECIDED_EXCLUDED_STATUSES.has(a.status));
   if (opts.pr) {
     const target = parsePrNumber(opts.pr);
-    const external = externalChangesets(state.artifacts).filter((a) => !["superseded", "retracted", "obsolete"].includes(a.status));
+    const external = externalChangesets(state.artifacts).filter((a) => !CLOSED_CHANGESET_STATUSES.has(a.status));
     for (const artifact of external) {
       const source = coerceChangesetContent(artifact.content).source;
       const reviewed = source?.url ? parsePrNumber(source.url) : null;
@@ -36388,9 +36537,12 @@ function authorizeReviewPost(state, opts) {
       };
     }
   }
+  const reviewedHead = reviewedHeadFor(state.artifacts, event);
+  if (!reviewedHead.ok) return { ok: false, reason: reviewedHead.reason };
   const payload = buildGitHubReviewPayload({ ...state, artifacts: approved }, { event });
+  if (reviewedHead.headSha) payload.commit_id = reviewedHead.headSha;
   if (payload.comments.length === 0) {
-    if (event === "APPROVE") return { ok: true, payload, event };
+    if (event === "APPROVE") return { ok: true, payload, event, reviewedHeadSha: reviewedHead.headSha };
     const excludedNote = decidedNo.length > 0 ? ` (${decidedNo.length} findings artifact${decidedNo.length === 1 ? " was" : "s were"} excluded \u2014 ${decidedNo.map((a) => `"${a.title}" is ${a.status}`).join(", ")})` : "";
     return {
       ok: false,
@@ -36411,7 +36563,12 @@ function authorizeReviewPost(state, opts) {
       };
     }
   }
-  return { ok: true, payload, event };
+  return {
+    ok: true,
+    payload,
+    event,
+    ...reviewedHead.headSha ? { reviewedHeadSha: reviewedHead.headSha } : {}
+  };
 }
 
 // src/mcp/tools/post-pr-review.ts
@@ -36434,24 +36591,25 @@ async function handlePostPrReview(ctx, args) {
   if (!auth.ok) {
     return { content: [{ type: "text", text: auth.reason }], isError: true };
   }
-  let { payload } = auth;
   try {
-    const target = await resolvePrTarget(
+    const prepared = await preparePrReviewTarget({
       ref,
-      typeof args?.owner === "string" ? args.owner : void 0,
-      typeof args?.repo === "string" ? args.repo : void 0
-    );
+      ...typeof args?.owner === "string" ? { owner: args.owner } : {},
+      ...typeof args?.repo === "string" ? { repo: args.repo } : {}
+    });
+    const target = prepared.target;
     const targetAuth = authorizeReviewPost(await store.getFullState(), {
       event: args?.event,
       pr: target,
       repost: args?.repost === true
     });
     if (!targetAuth.ok) return { content: [{ type: "text", text: targetAuth.reason }], isError: true };
-    payload = targetAuth.payload;
-    const result = await postPrReview({
-      ref: target,
-      payload
-    });
+    const payload = bindReviewPayloadToPreparedTarget(
+      targetAuth.payload,
+      targetAuth.reviewedHeadSha,
+      prepared
+    );
+    const result = await postPreparedPrReview({ target, payload });
     let stampNote = "";
     try {
       const parsed = parsePrRef(target);
@@ -36777,7 +36935,8 @@ Raise it WITH THEM, not on the PR: one present_findings entry with audience: "in
   const nudge = await revisionNudge(ctx.store, "changeset", title, id);
   const fileCount = files.length;
   const prLabel2 = source?.number ? `PR #${source.number}` : "the PR";
-  const closing = isExternal ? `This is an EXTERNAL review \u2014 ${prLabel2}${source?.author ? ` by ${source.author}` : ""} is someone else's code. Their per-file verdicts are their REVIEW OPINION and stay LOCAL: nothing is posted and nothing lands until they say to post it. Do NOT apply, revise, or "fix" these files. Keep polling check_feedback and answer what they ask \u2014 trace callers, read the surrounding code, run a safe test \u2014 and when they say to post it, call post_pr_review (REQUEST_CHANGES only if a surviving finding is high/critical \u2014 the tool CHECKS this now and refuses otherwise \u2014 else COMMENT). No present_debrief is owed for a review of code you did not write.` : `When the feature wraps, end with present_debrief.`;
+  const reviewedCommit = source?.headSha ? ` at immutable commit ${source.headSha.slice(0, 12)}` : ` with NO immutable head SHA recorded (legacy-readable, but APPROVE will be refused until the current headRefOid is presented and reviewed)`;
+  const closing = isExternal ? `This is an EXTERNAL review \u2014 ${prLabel2}${source?.author ? ` by ${source.author}` : ""}${reviewedCommit} is someone else's code. Their per-file verdicts are their REVIEW OPINION and stay LOCAL: nothing is posted and nothing lands until they say to post it. Do NOT apply, revise, or "fix" these files. Keep polling check_feedback and answer what they ask \u2014 trace callers, read the surrounding code, run a safe test \u2014 and when they say to post it, call post_pr_review (REQUEST_CHANGES only if a surviving finding is high/critical \u2014 the tool CHECKS this now and refuses otherwise \u2014 else COMMENT). No present_debrief is owed for a review of code you did not write.` : `When the feature wraps, end with present_debrief.`;
   return {
     content: [{
       type: "text",
@@ -37423,7 +37582,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "present_changeset",
         annotations: { title: "Present changeset", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-        description: "Present a change that spans 2+ FILES as ONE reviewable artifact \u2014 unified diffs per file, per-file review state, and comments that can anchor across files. Use this for multi-file changes (a refactor, a feature touching several modules); a SINGLE-file change stays present_code_change.\n\nSchema note: `title` (artifact-level) and `files` are REQUIRED. Each file has `path`, `changeType` ('modified'|'added'|'deleted'), and `hunks` (unified-diff shaped: an optional `header` plus `lines`, each `{ kind: 'ctx'|'add'|'del', content, oldLine?, newLine? }`). Give it a one-line `summary` \u2014 what changed, in a sentence \u2014 it is the human's WHAT-at-a-glance, rendered above the diff. Also optional: `risks[]` (e.g. 'touches auth') and per-file `stats` ({additions, deletions}). Optional `visuals[]` \u2014 DRAW THE BLAST RADIUS: a diagram or file_map of the shape of what this change touches, rendered above the file rail so the human sees the scope before diving into hunks. INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: SINGLE REVIEW SURFACE \u2014 the human dispositions each file (looks-right, or needs-changes with a reason) and the whole-changeset verdict is DERIVED (all look-right \u2192 approve; any flagged \u2192 send those files back for revision). Review happens in the companion UI; don't paste diffs in chat. Non-blocking: it records + returns immediately. Call check_feedback for their per-file disposition, reasons, comments, and verdict \u2014 a send-back arrives as a `revised` status with feedback naming which files to revise and why.\n\nREVIEWING SOMEONE ELSE'S PR (`reviewIntent: 'external'`): when the human was pinged to review a GitHub PR, feed THE PR'S DIFF in here \u2014 one changeset file per changed file, hunks straight from `gh pr diff <N>` \u2014 and set `reviewIntent: 'external'` plus `source: { kind: 'github-pr', number, url, headRef, baseRef, author }`. That is what puts their colleague's diff on the rich surface: per-hunk comments, walk-me-through per hunk, findings anchored to real lines. Semantics change with the flag and you must honour them: the verdict is the HUMAN'S REVIEW OPINION, not a landing gate \u2014 it stays LOCAL until they tell you to post it (post_pr_review), nothing here is on their disk, and you must NOT apply, revise, or 'fix' these files or send yourself back to redraft them. No closing present_debrief is owed for code the pair did not write; the session's output is the posted review. Omit `reviewIntent` for your own work \u2014 absent means local, exactly as before.\n\n`reviewIntent: 'external'` IS AN ASSERTION WITH CONSEQUENCES, and nothing can verify it from here: it exempts the session from the closing-debrief gate and it is what lets post_pr_review send an APPROVE. Set it ONLY for code your pair genuinely did not write (a colleague's PR you fetched with `gh`). Their recorded stances are still weighed against an external diff \u2014 you get them back as an ADVISORY on this call rather than a refusal, because a stance about their codebase must not stop you SHOWING them someone else's. Raise any such match with them as a finding with `audience: 'internal'`; it is their private history and it must never be quoted to the PR author.",
+        description: "Present a change that spans 2+ FILES as ONE reviewable artifact \u2014 unified diffs per file, per-file review state, and comments that can anchor across files. Use this for multi-file changes (a refactor, a feature touching several modules); a SINGLE-file change stays present_code_change.\n\nSchema note: `title` (artifact-level) and `files` are REQUIRED. Each file has `path`, `changeType` ('modified'|'added'|'deleted'), and `hunks` (unified-diff shaped: an optional `header` plus `lines`, each `{ kind: 'ctx'|'add'|'del', content, oldLine?, newLine? }`). Give it a one-line `summary` \u2014 what changed, in a sentence \u2014 it is the human's WHAT-at-a-glance, rendered above the diff. Also optional: `risks[]` (e.g. 'touches auth') and per-file `stats` ({additions, deletions}). Optional `visuals[]` \u2014 DRAW THE BLAST RADIUS: a diagram or file_map of the shape of what this change touches, rendered above the file rail so the human sees the scope before diving into hunks. INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: SINGLE REVIEW SURFACE \u2014 the human dispositions each file (looks-right, or needs-changes with a reason) and the whole-changeset verdict is DERIVED (all look-right \u2192 approve; any flagged \u2192 send those files back for revision). Review happens in the companion UI; don't paste diffs in chat. Non-blocking: it records + returns immediately. Call check_feedback for their per-file disposition, reasons, comments, and verdict \u2014 a send-back arrives as a `revised` status with feedback naming which files to revise and why.\n\nREVIEWING SOMEONE ELSE'S PR (`reviewIntent: 'external'`): when the human was pinged to review a GitHub PR, fetch metadata with `gh pr view <N> --json number,url,headRefName,baseRefName,author,headRefOid`, then feed THE SAME COMMIT'S DIFF in here \u2014 one changeset file per changed file, hunks straight from `gh pr diff <N>` \u2014 and set `reviewIntent: 'external'` plus `source: { kind: 'github-pr', number, url, headRef, baseRef, author, headSha: headRefOid }`. `headSha` is the immutable commit the human is reviewing: preserve it on every chunk and supply the newly fetched value on any revised/current diff. Never guess it from the branch later; APPROVE without it is refused. That is what puts their colleague's diff on the rich surface: per-hunk comments, walk-me-through per hunk, findings anchored to real lines. Semantics change with the flag and you must honour them: the verdict is the HUMAN'S REVIEW OPINION, not a landing gate \u2014 it stays LOCAL until they tell you to post it (post_pr_review), nothing here is on their disk, and you must NOT apply, revise, or 'fix' these files or send yourself back to redraft them. No closing present_debrief is owed for code the pair did not write; the session's output is the posted review. Omit `reviewIntent` for your own work \u2014 absent means local, exactly as before.\n\n`reviewIntent: 'external'` IS AN ASSERTION WITH CONSEQUENCES, and nothing can verify it from here: it exempts the session from the closing-debrief gate and it is what lets post_pr_review send an APPROVE. Set it ONLY for code your pair genuinely did not write (a colleague's PR you fetched with `gh`). Their recorded stances are still weighed against an external diff \u2014 you get them back as an ADVISORY on this call rather than a refusal, because a stance about their codebase must not stop you SHOWING them someone else's. Raise any such match with them as a finding with `audience: 'internal'`; it is their private history and it must never be quoted to the PR author.",
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_changeset)
@@ -37474,7 +37633,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "post_pr_review",
         annotations: { title: "Post PR review", readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-        description: 'Post this session\'s approved findings as inline comments on a GitHub PR via the `gh` CLI. Only findings with structured evidence (filePath + lineStart) anchor as inline comments; rejected / retracted / superseded artifacts are omitted.\n\nCall this ONLY when the human has explicitly told you to post ("post the review", "ship the review"). "We\'re done here" ends the discussion, NOT the review \u2014 it is not permission to write into someone else\'s repository. If it is ambiguous, ask them.\n\nAUTHORIZATION IS CHECKED, not assumed: before anything reaches GitHub the tool verifies the human\'s recorded verdicts in the session store. A findings artifact they never ruled on (draft/reviewing/revised) REFUSES the whole post and is named in the error \u2014 go and get their verdict, don\'t try to route around it. Findings they rejected are excluded automatically, and findings marked `audience: "internal"` NEVER post at all. An APPROVE \u2014 with or without inline comments \u2014 requires them to have APPROVED every live external changeset for this PR (the PR on the review surface); if they REJECTED it, the APPROVE is refused outright. There is no force flag and no bypass; if it refuses, the answer is a human verdict, not a retry.\n\nPOSTS ONCE. A landed review is recorded in the session, and a second call for the same PR refuses with the URL of the first \u2014 a re-post notifies the author again. If the human explicitly asks you to post again, pass `repost: true`.',
+        description: 'Post this session\'s approved findings as inline comments on a GitHub PR via the `gh` CLI. Only findings with structured evidence (filePath + lineStart) anchor as inline comments; rejected / retracted / superseded artifacts are omitted.\n\nCall this ONLY when the human has explicitly told you to post ("post the review", "ship the review"). "We\'re done here" ends the discussion, NOT the review \u2014 it is not permission to write into someone else\'s repository. If it is ambiguous, ask them.\n\nAUTHORIZATION IS CHECKED, not assumed: before anything reaches GitHub the tool verifies the human\'s recorded verdicts in the session store. A findings artifact they never ruled on (draft/reviewing/revised) REFUSES the whole post and is named in the error \u2014 go and get their verdict, don\'t try to route around it. Findings they rejected are excluded automatically, and findings marked `audience: "internal"` NEVER post at all. An APPROVE \u2014 with or without inline comments \u2014 requires them to have APPROVED every live external changeset for this exact repository, PR, and immutable `source.headSha`; missing/mixed SHAs or a changed remote head refuse. COMMENT/REQUEST_CHANGES keep all-legacy no-SHA sessions working, but mixed provenance refuses. The outbound `commit_id` is the reviewed SHA, never a guessed current head. GitHub offers no atomic lock between the final head read and POST, so this is bound-commit semantics, not a promise that a push cannot race the read. There is no force flag and no bypass; if it refuses, the answer is a human verdict, not a retry.\n\nPOSTS ONCE. A landed review is recorded in the session, and a second call for the same PR refuses with the URL of the first \u2014 a re-post notifies the author again. If the human explicitly asks you to post again, pass `repost: true`.',
         inputSchema: {
           type: "object",
           properties: {
@@ -37624,7 +37783,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "revise_artifact",
         annotations: { title: "Revise artifact", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-        description: "Revise a prior artifact. `mode: 'supersede'` creates a v(N+1) draft linked via parentId (requires new `content`); the old flips to 'superseded'. `mode: 'retract'` marks the artifact 'retracted' with the reason.\n\nUN-ARMING A REVIEW (R1): normally only a draft/reviewing artifact can be retracted \u2014 an approved one is the human's standing verdict. The one exception is a PR-review session (a changeset with reviewIntent: 'external' present): there, `mode: 'retract'` on an APPROVED findings artifact is how the human's \"actually, don't send that one\" gets expressed, because approval in that session is what ARMS the findings for posting. Use it when they say so; the artifact then cannot be posted.",
+        description: "Revise a prior artifact. `mode: 'supersede'` creates a v(N+1) draft linked via parentId (requires new `content`); the old flips to 'superseded'. `mode: 'retract'` marks the artifact 'retracted' with the reason.\n\nUN-ARMING A REVIEW (R1): normally only a draft/reviewing artifact can be retracted \u2014 an approved one is the human's standing verdict. The one exception is a PR-review session (a changeset with reviewIntent: 'external' present): there, `mode: 'retract'` on an APPROVED findings artifact is how the human's \"actually, don't send that one\" gets expressed, because approval in that session is what ARMS the findings for posting. Use it when they say so; the artifact then cannot be posted.\n\nREVISING AN EXTERNAL CHANGESET (#343): preserve its full GitHub source provenance, including the exact `headSha`, only when the revised surface still represents that same commit. If the PR changed, fetch the new `headRefOid`, present the new diff with that SHA, and get a fresh verdict. Never carry an old SHA onto new code or omit it to fall back to the branch head.",
         inputSchema: {
           type: "object",
           properties: {

@@ -524,7 +524,8 @@ style automated reviewer; the human is in the loop on every finding.
 
 Run the `/deeppairing:review-pr` arc (that command carries the detail):
 
-1. **Ingest.** `gh pr view <N>` (title, body, comments, checks) and
+1. **Ingest.** `gh pr view <N>` (title, body, comments, checks, and immutable
+   `headRefOid`) and
    `gh pr diff <N>`, plus the surrounding code — most real risks live in
    what the diff *doesn't* show. The `/deeppairing:review-pr` command
    materializes the PR head into a scratch git worktree for exactly this, so
@@ -533,7 +534,8 @@ Run the `/deeppairing:review-pr` arc (that command carries the detail):
    PR does, how the pieces fit, what its blast radius is. Audience is the
    human as reviewer; scope is this PR, not the repo.
 3. **The diff onto the surface — `present_changeset` with
-   `reviewIntent: "external"`** and `source: { kind: "github-pr", … }`.
+   `reviewIntent: "external"`** and `source: { kind: "github-pr", …,
+   headSha: <headRefOid> }`.
    One changeset file per changed file, hunks from `gh pr diff`. This is
    what makes it readable: per-hunk comments and walk-me-through. The
    flag changes the semantics and you must honour them — the verdict is
@@ -570,7 +572,8 @@ Run the `/deeppairing:review-pr` arc (that command carries the detail):
    The tool verifies the human's recorded verdicts before it calls GitHub
    and refuses otherwise — an unruled findings artifact blocks the post
    (it names which), rejected and internal-audience findings are excluded,
-   an `APPROVE` needs their approval on every live external changeset, and
+   an `APPROVE` needs their approval on every live external changeset from the
+   same exact `headSha` (missing/mixed/stale provenance refuses), and
    the same PR is never posted to twice. There is no override: if it
    refuses, go and get the verdict.
 

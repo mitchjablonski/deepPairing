@@ -18,6 +18,37 @@ export interface PostReviewResult {
   htmlUrl: string;
   state: string;
   id: number;
+  /** GitHub's immutable commit binding when the response includes it. Older
+   *  fakes/proxies may omit this field, so callers that journal delivery must
+   *  validate it when present without assuming it will always be echoed. */
+  commitId?: string;
+}
+
+export interface PreparedPrReviewTarget {
+  /** Canonical, validated github.com PR URL. */
+  target: string;
+  /** Read-only snapshot taken during posting preparation. This is not a lock:
+   * a later push may race the review POST, so the outbound commit_id remains
+   * the authoritative binding. */
+  currentHeadSha: string;
+}
+
+const FULL_GIT_SHA = /^[0-9a-fA-F]{40}$/;
+
+function canonicalSha(value: string): string | null {
+  return FULL_GIT_SHA.test(value) ? value.toLowerCase() : null;
+}
+
+function requireCanonicalTarget(target: string): { owner: string; repo: string; number: number } {
+  const parsed = parsePrRef(target);
+  if (!parsed.owner || !parsed.repo) {
+    throw new Error("A prepared review target must be a full canonical github.com pull-request URL.");
+  }
+  const canonical = `https://github.com/${parsed.owner}/${parsed.repo}/pull/${parsed.number}`;
+  if (target.trim().toLowerCase() !== canonical.toLowerCase()) {
+    throw new Error("A prepared review target must not contain a tab, query, fragment, or non-canonical suffix.");
+  }
+  return { owner: parsed.owner, repo: parsed.repo, number: parsed.number };
 }
 
 export class GhMissingError extends Error {
@@ -162,6 +193,75 @@ export async function resolvePrTarget(ref: string, owner?: string, repo?: string
   return target;
 }
 
+/** #343 — resolve the canonical destination and read its current head before
+ * local authorization is re-read. This is deliberately preparation, not an
+ * atomic compare-and-post claim: GitHub offers no lock spanning this GET and
+ * the later review POST. */
+export async function preparePrReviewTarget(opts: {
+  ref: string;
+  owner?: string;
+  repo?: string;
+}): Promise<PreparedPrReviewTarget> {
+  const target = await resolvePrTarget(opts.ref, opts.owner, opts.repo);
+  const parsed = parsePrRef(target);
+  const endpoint = `repos/${parsed.owner}/${parsed.repo}/pulls/${parsed.number}`;
+  const res = await run("gh", [
+    "api", endpoint, "--hostname", "github.com", "-H", "Accept: application/vnd.github+json", "--jq", ".head.sha",
+  ]);
+  if (res.code !== 0) {
+    if (looksUnauthenticated(res.stderr)) throw new GhNotAuthedError();
+    throw new Error(`gh api failed while reading the PR head (exit ${res.code}): ${res.stderr.trim() || res.stdout.trim()}`);
+  }
+  const currentHeadSha = canonicalSha(res.stdout.trim());
+  if (!currentHeadSha) {
+    throw new Error(`Could not read a valid 40-hex head SHA for ${target}; refusing to prepare a review.`);
+  }
+  return { target, currentHeadSha };
+}
+
+/** #343 — perform the freshness comparison after callers have re-read local
+ * authorization, then return the exact outbound payload. `commit_id` is always
+ * the reviewed SHA, never the remote value observed during preparation.
+ *
+ * An all-legacy COMMENT/REQUEST_CHANGES can have no reviewedHeadSha and remains
+ * unbound for backward compatibility. APPROVE cannot. */
+export function bindReviewPayloadToPreparedTarget(
+  payload: GitHubReviewPayload,
+  reviewedHeadSha: string | undefined,
+  prepared: PreparedPrReviewTarget,
+): GitHubReviewPayload {
+  if (!reviewedHeadSha) {
+    if (payload.event === "APPROVE") {
+      throw new Error("Refusing to post an APPROVE without an immutable reviewed head SHA.");
+    }
+    const { commit_id: _ignored, ...legacyPayload } = payload;
+    return legacyPayload;
+  }
+  const canonicalReviewed = canonicalSha(reviewedHeadSha);
+  if (!canonicalReviewed) {
+    throw new Error("Refusing to post: the locally authorized reviewed head SHA is malformed.");
+  }
+  const payloadCommit = payload.commit_id ? canonicalSha(payload.commit_id) : undefined;
+  if (payload.commit_id && !payloadCommit) {
+    throw new Error("Refusing to post: the authorized payload contains a malformed commit SHA.");
+  }
+  if (payloadCommit && payloadCommit !== canonicalReviewed) {
+    throw new Error("Refusing to post: the authorized payload and reviewed changeset disagree on commit SHA.");
+  }
+  const canonicalCurrent = canonicalSha(prepared.currentHeadSha);
+  if (!canonicalCurrent) {
+    throw new Error("Refusing to post: remote preparation did not return a valid 40-hex PR head SHA.");
+  }
+  if (canonicalCurrent !== canonicalReviewed) {
+    throw new Error(
+      `Refusing to post: PR ${prepared.target} changed since your pair reviewed it ` +
+      `(reviewed ${canonicalReviewed.slice(0, 12)}, current ${canonicalCurrent.slice(0, 12)}). ` +
+      `Fetch and present the new head, then get a fresh verdict. The current head is never substituted for the reviewed commit.`,
+    );
+  }
+  return { ...payload, commit_id: canonicalReviewed };
+}
+
 /**
  * Post a review on a GitHub PR via `gh api`. Resolves { htmlUrl, state, id }
  * on success. Surfaces clear errors otherwise.
@@ -173,7 +273,19 @@ export async function postPrReview(opts: {
   owner?: string;
   repo?: string;
 }): Promise<PostReviewResult> {
-  const parsed = parsePrRef(await resolvePrTarget(opts.ref, opts.owner, opts.repo));
+  const target = await resolvePrTarget(opts.ref, opts.owner, opts.repo);
+  return postPreparedPrReview({ target, payload: opts.payload });
+}
+
+/** #343 — the single network-write boundary. Callers prepare the target,
+ * re-read local authorization, bind the reviewed SHA, and only then call this.
+ * Keeping resolution/head reads out of this function gives #344 a clean seam
+ * for durable reservation immediately before the uncertain POST. */
+export async function postPreparedPrReview(opts: {
+  target: string;
+  payload: GitHubReviewPayload;
+}): Promise<PostReviewResult> {
+  const parsed = requireCanonicalTarget(opts.target);
   const { owner, repo } = parsed;
 
   const endpoint = `repos/${owner}/${repo}/pulls/${parsed.number}/reviews`;
@@ -192,10 +304,48 @@ export async function postPrReview(opts: {
 
   try {
     const parsedBody = JSON.parse(res.stdout);
+    if (!parsedBody || typeof parsedBody !== "object") {
+      throw new Error("response is not an object");
+    }
+    if (!Number.isSafeInteger(parsedBody.id) || parsedBody.id <= 0) {
+      throw new Error("review id is not a positive integer");
+    }
+    const expectedState = opts.payload.event === "APPROVE"
+      ? "APPROVED"
+      : opts.payload.event === "REQUEST_CHANGES"
+        ? "CHANGES_REQUESTED"
+        : "COMMENTED";
+    if (parsedBody.state !== expectedState) {
+      throw new Error(`review state ${JSON.stringify(parsedBody.state)} does not match ${opts.payload.event}`);
+    }
+    if (typeof parsedBody.html_url !== "string") {
+      throw new Error("review URL is missing");
+    }
+    let reviewUrl: URL;
+    try {
+      reviewUrl = new URL(parsedBody.html_url);
+    } catch {
+      throw new Error("review URL is malformed");
+    }
+    const expectedPath = `/${owner}/${repo}/pull/${parsed.number}`.toLowerCase();
+    if (reviewUrl.protocol !== "https:" || reviewUrl.hostname.toLowerCase() !== "github.com" ||
+        reviewUrl.pathname.toLowerCase() !== expectedPath ||
+        reviewUrl.hash !== `#pullrequestreview-${parsedBody.id}`) {
+      throw new Error("review URL does not identify the posted review on the prepared target");
+    }
+    const commitId = parsedBody.commit_id === undefined
+      ? undefined
+      : typeof parsedBody.commit_id === "string"
+        ? canonicalSha(parsedBody.commit_id)
+        : null;
+    if (commitId === null) {
+      throw new Error("review commit_id is malformed");
+    }
     return {
-      htmlUrl: parsedBody.html_url ?? "",
-      state: parsedBody.state ?? "COMMENTED",
-      id: parsedBody.id ?? 0,
+      htmlUrl: reviewUrl.toString(),
+      state: parsedBody.state,
+      id: parsedBody.id,
+      ...(commitId ? { commitId } : {}),
     };
   } catch (err) {
     throw new Error(`Posted, but could not parse gh response: ${errorMessage(err)}`);
