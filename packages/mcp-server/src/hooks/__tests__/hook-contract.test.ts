@@ -171,18 +171,39 @@ function expectOneCleanFire(lane: Lane, root: string, opts: RunOptions = {}): st
 /**
  * An fs-boundary FAKE (not a mock framework): the real filesystem everywhere
  * except the one path and one syscall the case is about.
+ *
+ * Each injection appends to `$DP_FAULT_LOG`. A fault that never fires would
+ * make its case vacuously green — the hook would simply take the happy path
+ * and satisfy every invariant — so `expectFaultFired` asserts the log is
+ * non-empty. This is the difference between "the hook survived the fault" and
+ * "the fault was a no-op".
  */
 function fsFault(target: string, syscalls: Record<string, string>): string {
   return `import fs from 'node:fs';
+const LOG = process.env.DP_FAULT_LOG;
 const hit = p => String(p).includes(${JSON.stringify(target)});
-const fail = code => { throw Object.assign(new Error('injected ' + code), {code}); };
+const fail = (call, code) => {
+  try { fs.appendFileSync(LOG, call + ':' + code + '\\n'); } catch {}
+  throw Object.assign(new Error('injected ' + code), {code});
+};
 ${Object.entries(syscalls)
   .map(
     ([call, code]) =>
-      `{ const real = fs.${call}; fs.${call} = (p, ...a) => hit(p) ? fail(${JSON.stringify(code)}) : real(p, ...a); }`,
+      `{ const real = fs.${call}; fs.${call} = (p, ...a) => hit(p) ? fail(${JSON.stringify(call)}, ${JSON.stringify(code)}) : real(p, ...a); }`,
   )
   .join("\n")}
 `;
+}
+
+/** Asserts the injected fault actually fired at least once. */
+function expectFaultFired(log: string): void {
+  expect(fs.existsSync(log), "the injected fault never fired — the case is vacuous").toBe(true);
+  expect(fs.readFileSync(log, "utf8").trim().length, "the injected fault never fired").toBeGreaterThan(0);
+}
+
+/** A path for one case's fault log, inside that case's own root. */
+function faultLog(root: string): string {
+  return path.join(root, `fault.${Math.random().toString(16).slice(2)}.log`);
 }
 
 // ---------------------------------------------------------------------------
@@ -270,16 +291,19 @@ describe.each(ALL_LANES)("%s — filesystem faults on the lock", (lane) => {
     ["live contention", { openSync: "EEXIST" }],
   ])("stays bounded and fails open on %s", (_name, syscalls) => {
     const root = makeRoot();
+    const log = faultLog(root);
     const preload = fsFault("hooks-state.json.lock", syscalls);
+    const env = { DP_FAULT_LOG: log };
     if (lane === "core") {
-      const result = run(lane, root, { preload });
+      const result = run(lane, root, { preload, env });
       expect(result.error, result.stderr).toBeUndefined();
       expect(result.status, result.stderr).toBe(0);
       // null means "proceed unsynchronized", never "throw" and never "spin".
       expect(result.stdout.trim()).toBe("null");
     } else {
-      expectOneCleanFire(lane, root, { preload });
+      expectOneCleanFire(lane, root, { preload, env });
     }
+    expectFaultFired(log);
   });
 });
 
@@ -345,14 +369,19 @@ fs.openSync = (p, ...a) => {
   it("gives up bounded on a stale lock it cannot unlink", () => {
     const root = makeRoot();
     plantStaleLock(root);
+    const log = faultLog(root);
     const preload = fsFault("hooks-state.json.lock", { unlinkSync: "EACCES", openSync: "EEXIST" });
+    const env = { DP_FAULT_LOG: log };
     if (lane === "core") {
-      const result = run(lane, root, { preload });
+      const result = run(lane, root, { preload, env });
       expect(result.error, result.stderr).toBeUndefined();
       expect(result.stdout.trim()).toBe("null");
     } else {
-      expectOneCleanFire(lane, root, { preload });
+      expectOneCleanFire(lane, root, { preload, env });
     }
+    // The unlink must actually have been attempted: the whole point of the
+    // one-shot brokeStale guard is that the breaker RUNS here and then stops.
+    expect(fs.readFileSync(log, "utf8")).toContain("unlinkSync:EACCES");
   });
 });
 
