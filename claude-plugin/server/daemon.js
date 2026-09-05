@@ -25302,6 +25302,7 @@ var USER_FACING_ERROR_CODES = [
   ERROR_CODES.daemon_auth_required,
   ERROR_CODES.project_hash_mismatch,
   ERROR_CODES.session_not_registered,
+  ERROR_CODES.session_review_conflict,
   ERROR_CODES.review_post_conflict
 ];
 var TOOL_ERROR_CODES = {
@@ -25912,9 +25913,21 @@ var REVIEWED_IDENTITY_FIELDS = ["content", "version", "type", "parentId"];
 function reviewVerdictChanged(base, candidate) {
   return JSON.stringify(base.status) !== JSON.stringify(candidate.status) && REVIEW_VERDICTS.has(String(candidate.status));
 }
+function reviewedContent(record2) {
+  const content = record2.content;
+  if (record2.type !== "plan" || !object2(content) || !Array.isArray(content.steps)) return content;
+  return {
+    ...content,
+    steps: content.steps.map((step) => {
+      if (!object2(step)) return step;
+      const { status: _status, statusNote: _statusNote, ...proposal } = step;
+      return proposal;
+    })
+  };
+}
 function reviewedIdentityChanged(base, candidate) {
   return REVIEWED_IDENTITY_FIELDS.some(
-    (field) => JSON.stringify(base[field]) !== JSON.stringify(candidate[field])
+    (field) => JSON.stringify(field === "content" ? reviewedContent(base) : base[field]) !== JSON.stringify(field === "content" ? reviewedContent(candidate) : candidate[field])
   );
 }
 function mergeArtifactRecords(baseline, local, disk, key) {
@@ -27602,68 +27615,104 @@ var FileStore = class _FileStore {
     return merged;
   }
   flush() {
-    this.assertAuthorizationReadable();
+    const reviewConflict = this.reviewConflict;
     try {
       withSessionFlushLock(path12.join(this.sessionDir(), ".flush.lock"), () => {
-        this.artifacts = this.flushRecords(
-          "artifacts.json",
-          this.artifacts,
-          (r) => r.id,
-          (raw2) => _FileStore.salvageArray(`${this.sessionId}:artifacts.json (external)`, raw2, "id"),
-          false,
-          mergeArtifactRecords
-        );
-        this.comments = this.flushRecords(
-          "comments.json",
-          this.comments,
-          (r) => r.id,
-          (raw2) => _FileStore.salvageArray("comments.json (external)", raw2, "id")
-        );
-        this.decisions = new Map(this.flushRecords(
-          "decisions.json",
-          [...this.decisions.values()],
-          (r) => r.decisionId,
-          (raw2) => _FileStore.salvageArray("decisions.json (external)", raw2, "decisionId")
-        ).map((r) => [r.decisionId, r]));
-        this.planReviews = new Map(this.flushRecords(
-          "plan-reviews.json",
-          [...this.planReviews.values()],
-          (r) => r.artifactId,
-          (raw2) => _FileStore.salvageArray("plan-reviews.json (external)", raw2, "artifactId")
-        ).map((r) => [r.artifactId, r]));
-        this.requests = this.flushRecords(
-          "requests.json",
-          this.requests,
-          (r) => r.id,
-          (raw2) => _FileStore.salvageArray("requests.json (external)", raw2, "id"),
-          true
-        );
-        this.renderFailures = this.flushRecords(
-          "render-failures.json",
-          this.renderFailures,
-          (r) => JSON.stringify([r.artifactId, r.visualId]),
-          (raw2) => {
-            const keyed = (Array.isArray(raw2) ? raw2 : []).map((r) => ({
-              ...r,
-              __key: JSON.stringify([r?.artifactId, r?.visualId])
-            }));
-            return _FileStore.salvageArray(
-              "render-failures.json (external)",
-              keyed,
-              "__key"
-            ).map(({ __key, ...r }) => r);
-          },
-          true
-        );
-        const metricsPath2 = path12.join(this.sessionDir(), "metrics.json");
-        if (this.reviewLatencies.length > this.flushedLatencyCount) {
-          const raw2 = this.loadJsonFile(metricsPath2, []);
-          const disk = Array.isArray(raw2) ? raw2.filter((r) => r && typeof r.type === "string" && Number.isFinite(r.latencyMs)) : [];
-          const merged = [...disk, ...this.reviewLatencies.slice(this.flushedLatencyCount)];
-          writeJsonAtomic(metricsPath2, merged);
-          this.reviewLatencies = merged;
-          this.flushedLatencyCount = merged.length;
+        let firstFailure = reviewConflict;
+        let artifactWriteBlocked = !!reviewConflict;
+        const attempt = (write) => {
+          try {
+            write();
+          } catch (error51) {
+            if (firstFailure === null || firstFailure === void 0) firstFailure = error51;
+          }
+        };
+        if (!artifactWriteBlocked) {
+          attempt(() => {
+            try {
+              this.artifacts = this.flushRecords(
+                "artifacts.json",
+                this.artifacts,
+                (r) => r.id,
+                (raw2) => _FileStore.salvageArray(`${this.sessionId}:artifacts.json (external)`, raw2, "id"),
+                false,
+                mergeArtifactRecords
+              );
+            } catch (error51) {
+              artifactWriteBlocked = true;
+              if (error51 instanceof SessionReviewConflictError) {
+                this.reviewConflict = error51;
+              }
+              throw error51;
+            }
+          });
         }
+        attempt(() => {
+          this.comments = this.flushRecords(
+            "comments.json",
+            this.comments,
+            (r) => r.id,
+            (raw2) => _FileStore.salvageArray("comments.json (external)", raw2, "id")
+          );
+        });
+        attempt(() => {
+          this.decisions = new Map(this.flushRecords(
+            "decisions.json",
+            [...this.decisions.values()],
+            (r) => r.decisionId,
+            (raw2) => _FileStore.salvageArray("decisions.json (external)", raw2, "decisionId")
+          ).map((r) => [r.decisionId, r]));
+        });
+        if (!artifactWriteBlocked) {
+          attempt(() => {
+            this.planReviews = new Map(this.flushRecords(
+              "plan-reviews.json",
+              [...this.planReviews.values()],
+              (r) => r.artifactId,
+              (raw2) => _FileStore.salvageArray("plan-reviews.json (external)", raw2, "artifactId")
+            ).map((r) => [r.artifactId, r]));
+          });
+        }
+        attempt(() => {
+          this.requests = this.flushRecords(
+            "requests.json",
+            this.requests,
+            (r) => r.id,
+            (raw2) => _FileStore.salvageArray("requests.json (external)", raw2, "id"),
+            true
+          );
+        });
+        attempt(() => {
+          this.renderFailures = this.flushRecords(
+            "render-failures.json",
+            this.renderFailures,
+            (r) => JSON.stringify([r.artifactId, r.visualId]),
+            (raw2) => {
+              const keyed = (Array.isArray(raw2) ? raw2 : []).map((r) => ({
+                ...r,
+                __key: JSON.stringify([r?.artifactId, r?.visualId])
+              }));
+              return _FileStore.salvageArray(
+                "render-failures.json (external)",
+                keyed,
+                "__key"
+              ).map(({ __key, ...r }) => r);
+            },
+            true
+          );
+        });
+        const metricsPath2 = path12.join(this.sessionDir(), "metrics.json");
+        if (!artifactWriteBlocked && this.reviewLatencies.length > this.flushedLatencyCount) {
+          attempt(() => {
+            const raw2 = this.loadJsonFile(metricsPath2, []);
+            const disk = Array.isArray(raw2) ? raw2.filter((r) => r && typeof r.type === "string" && Number.isFinite(r.latencyMs)) : [];
+            const merged = [...disk, ...this.reviewLatencies.slice(this.flushedLatencyCount)];
+            writeJsonAtomic(metricsPath2, merged);
+            this.reviewLatencies = merged;
+            this.flushedLatencyCount = merged.length;
+          });
+        }
+        if (firstFailure !== null && firstFailure !== void 0) throw firstFailure;
       });
     } catch (error51) {
       if (error51 instanceof SessionReviewConflictError) this.reviewConflict = error51;
@@ -31991,6 +32040,13 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     origin: (origin) => corsAllowedOrigin(origin)
   }));
   app.onError((err, c) => {
+    if (isSessionReviewConflictError(err)) {
+      return c.json({
+        error: "session_review_conflict",
+        code: ERROR_CODES.session_review_conflict,
+        message: err.message
+      }, 409);
+    }
     if (err instanceof SyntaxError) {
       return c.json({ error: "Invalid JSON" }, 400);
     }
@@ -32420,6 +32476,16 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       await store.resolvePlanReview(artifactId, status, feedback);
     }
     await maybeUpdateTaskStatus(null, artifactId, store);
+    if (feedback) {
+      const comment = await store.addComment({
+        id: `cmt_${nanoid3(10)}`,
+        artifactId,
+        content: feedback,
+        author: "human",
+        verdictFeedback: true
+      });
+      broadcast({ type: "comment_added", comment }, sid);
+    }
     try {
       await store.forceFlush();
     } catch (err) {
@@ -32431,19 +32497,6 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
         }, 409);
       }
       console.error(`[deepPairing] verdict flush failed (verdict landed in memory; debounced flush will retry): ${err}`);
-    }
-    if (feedback) {
-      const comment = await store.addComment({
-        id: `cmt_${nanoid3(10)}`,
-        artifactId,
-        content: feedback,
-        author: "human",
-        // #187 — this is the VERDICT's own feedback note, posted AFTER the status
-        // flip above. On an "Approve with modifications" (status now `approved`)
-        // it must NOT be dressed as a late follow-up — it's review feedback.
-        verdictFeedback: true
-      });
-      broadcast({ type: "comment_added", comment }, sid);
     }
     if (status === "rejected") {
       const artifacts = await store.getArtifacts();
@@ -33513,6 +33566,12 @@ async function readJsonObject(c, opts) {
 }
 function createActiveSessionRoutes(sessions, sessionMeta, daemonHash, activeSessions) {
   const app = new Hono2();
+  app.onError((error51, c) => {
+    if (isSessionReviewConflictError(error51)) {
+      return c.json({ error: "session_review_conflict", code: ERROR_CODES.session_review_conflict, message: error51.message }, 409);
+    }
+    return c.json({ error: "Internal server error" }, 500);
+  });
   const gate = projectHashGate(daemonHash);
   app.use("/api/active-sessions", gate);
   app.use("/api/live-session/*", gate);
@@ -33549,6 +33608,12 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
   const log2 = logFn ?? (() => {
   });
   const app = new Hono2();
+  app.onError((error51, c) => {
+    if (isSessionReviewConflictError(error51)) {
+      return c.json({ error: "session_review_conflict", code: ERROR_CODES.session_review_conflict, message: error51.message }, 409);
+    }
+    return c.json({ error: "Internal server error" }, 500);
+  });
   if (authToken) {
     app.use("/api/internal/*", async (c, next) => {
       const auth = c.req.header("Authorization");
@@ -34879,8 +34944,12 @@ function createDaemon(deps) {
     log: log2
   });
   function cleanup() {
-    for (const store of sessions.values()) {
-      store.forceFlush();
+    for (const [sessionId, store] of sessions) {
+      try {
+        store.forceFlush();
+      } catch (error51) {
+        log2(`[cleanup] failed to flush session ${sessionId}: ${errorMessage(error51)}`);
+      }
     }
     try {
       if (fs23.existsSync(daemonInfoFile)) fs23.unlinkSync(daemonInfoFile);
