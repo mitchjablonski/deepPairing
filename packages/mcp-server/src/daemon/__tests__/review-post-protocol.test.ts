@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { serve } from "@hono/node-server";
 import type { ServerType } from "@hono/node-server";
+import { Hono } from "hono";
 import fs from "node:fs";
 import { createDaemonRoutes, type SessionMeta } from "../routes.js";
 import { DaemonClient } from "../client.js";
@@ -9,6 +10,7 @@ import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global
 import { executeDurableReviewPost } from "../../github/durable-review-post.js";
 import { reviewPostDigest } from "../../store/review-post-journal.js";
 import { projectHashOf } from "../../project-root.js";
+import { projectHashGate } from "../../http/guards.js";
 
 const token = "review-post-test-token";
 const target = "https://github.com/acme/widget/pull/12";
@@ -32,8 +34,12 @@ beforeEach(async () => {
   };
   local = create("s");
   broadcasts = [];
-  app = createDaemonRoutes(sessions, new Map<string, SessionMeta>(), create,
+  const internal = createDaemonRoutes(sessions, new Map<string, SessionMeta>(), create,
     (_sid, event) => broadcasts.push(event), undefined, fx.dir, token);
+  // Production mounts the project-hash gate on the enclosing daemon app.
+  app = new Hono();
+  app.use("/api/internal/*", projectHashGate(projectHashOf(fx.dir)));
+  app.route("/", internal);
   const port = await new Promise<number>(resolve => {
     server = serve({ fetch: app.fetch, port: 0 }, info => resolve(info.port));
   });
@@ -75,7 +81,7 @@ it("corrupt durable history refuses over HTTP without modifying it or broadcasti
 it("bearer and project gates precede validation; malformed transitions never persist", async () => {
   const url = "/api/internal/sessions/s/review-post-operations";
   const headers = { "Content-Type": "application/json", Authorization: `Bearer ${token}`, "X-Project-Hash": projectHashOf(fx.dir) };
-  expect((await app.request(url, { method: "POST", body: "null" })).status).toBe(401);
+  expect((await app.request(url, { method: "POST", headers: { "X-Project-Hash": projectHashOf(fx.dir) }, body: "null" })).status).toBe(401);
   expect((await app.request(url, { method: "POST", headers: { ...headers, "X-Project-Hash": "wrong" }, body: "null" })).status).toBe(403);
   for (const body of ["null", "{broken", JSON.stringify({ action: "sending", lease: { operationId: "bad", token: "bad" }, identity }),
     JSON.stringify({ action: "reserve", identity, repost: true, extra: true })]) {
