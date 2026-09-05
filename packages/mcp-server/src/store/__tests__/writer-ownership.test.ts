@@ -180,4 +180,13 @@ describe("merge and lock contract", () => {
     expect(fs.existsSync(lock)).toBe(false);
     expect(withSessionFlushLock(lock, () => 42)).toBe(42);
   });
+
+  it("cleanup failure does not mask the original callback error", () => {
+    const lock = path.join(fx.dir, "removed-lock");
+    expect(() => withSessionFlushLock(lock, () => {
+      fs.unlinkSync(lock); // simulate an external cleanup racing this writer
+      throw new Error("primary error");
+    })).toThrow("primary error");
+    expect(() => withSessionFlushLock(lock, () => fs.unlinkSync(lock))).toThrow();
+  });
 });

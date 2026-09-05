@@ -75,10 +75,23 @@ export function withSessionFlushLock<T>(filePath: string, run: () => T): T {
       Atomics.wait(waitArray, 0, 0, 10);
     }
   }
+  let result!: T;
+  let failed = false;
+  let failure: unknown;
   try {
     fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }));
-    return run();
-  } finally {
-    try { fs.closeSync(fd); } finally { fs.unlinkSync(filePath); }
+    result = run();
+  } catch (err) {
+    failed = true;
+    failure = err;
   }
+  // Always attempt both cleanup operations, but preserve the original failure.
+  // A cleanup-only failure still propagates (an orphan lock needs attention).
+  for (const cleanup of [() => fs.closeSync(fd), () => fs.unlinkSync(filePath)]) {
+    try { cleanup(); } catch (err) {
+      if (!failed) { failed = true; failure = err; }
+    }
+  }
+  if (failed) throw failure;
+  return result;
 }
