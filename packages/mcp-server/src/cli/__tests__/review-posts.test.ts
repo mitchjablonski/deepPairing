@@ -39,6 +39,71 @@ it("refuses cancellation of a possibly sent operation and preserves uncertainty"
   expect(journal.list()[0].state).toBe("sending");
 });
 
+it.each(["sending", "unknown"] as const)("operator acknowledgement preserves %s evidence and still requires repost", state => {
+  const lease = journal.reserve(identity);
+  journal.markSending(lease, identity);
+  if (state === "unknown") journal.markUnknown(lease);
+  const [{ operationDigest }] = JSON.parse(reviewPostsCommand(root, ["s"]));
+  expect(() => journal.reserve(identity, true)).toThrow();
+  expect(() => reviewPostsCommand(root, ["s", "acknowledge-unknown", lease.operationId, operationDigest])).toThrow();
+  expect(() => journal.acknowledgeUnknown(lease.operationId, operationDigest, false, true)).toThrow();
+  expect(() => journal.acknowledgeUnknown(lease.operationId, operationDigest, true, false)).toThrow();
+  const output = reviewPostsCommand(root, ["s", "acknowledge-unknown", lease.operationId, operationDigest,
+    "--all-writers-stopped", "--accept-duplicate-risk"]);
+  expect(output).toContain("does NOT prove");
+  expect(journal.list()[0]).toMatchObject({ id: lease.operationId, state: "abandoned",
+    operatorAcknowledgement: { priorState: state, operationDigest } });
+  expect(() => journal.markSending(lease, identity)).toThrow();
+  expect(() => journal.markUnknown(lease)).toThrow();
+  expect(() => journal.reserve(identity)).toThrow(/repost/);
+  const next = journal.reserve(identity, true);
+  expect(next.operationId).not.toBe(lease.operationId);
+  expect(new ReviewPostJournal(root, "s").list()).toHaveLength(2);
+});
+
+it("cannot acknowledge a reserved or changed operation from stale inspection", () => {
+  const lease = journal.reserve(identity);
+  const [{ operationDigest }] = JSON.parse(reviewPostsCommand(root, ["s"]));
+  expect(() => journal.acknowledgeUnknown(lease.operationId, operationDigest, true, true)).toThrow();
+  journal.markSending(lease, identity);
+  expect(() => journal.acknowledgeUnknown(lease.operationId, operationDigest, true, true)).toThrow(/changed/);
+  expect(journal.list()[0].state).toBe("sending");
+});
+
+it.each(["review-post-operations.json", "posted-reviews.json"])("inspection explains corrupt %s without dumping or clearing it", filename => {
+  journal.reserve(identity);
+  const file = path.join(path.dirname(journal.journalPath), filename);
+  const secretBytes = '{"private-token":"do-not-print-this"';
+  fs.writeFileSync(file, secretBytes);
+  const output = reviewPostsCommand(root, ["s", "list"]);
+  expect(JSON.parse(output)).toMatchObject({ blocked: true });
+  expect(output).toContain(file.replaceAll("\\", "\\\\"));
+  expect(output).not.toContain("do-not-print-this");
+  expect(reviewPostsCommand(root, ["s", "inspect"])).not.toContain("private-token");
+  expect(fs.readFileSync(file, "utf8")).toBe(secretBytes);
+  expect(() => journal.reserve(identity, true)).toThrow();
+});
+
+it("claim release requires explicit offline coordination and the unchanged inspected digest", () => {
+  const lease = journal.reserve(identity);
+  const before = fs.readFileSync(journal.journalPath, "utf8");
+  fs.writeFileSync(journal.claimPath, "secret-owner-token");
+  const output = reviewPostsCommand(root, ["s", "inspect"]);
+  expect(output).not.toContain("secret-owner-token");
+  const digest = JSON.parse(output).claim.digest;
+  expect(() => reviewPostsCommand(root, ["s", "release-claim", digest])).toThrow();
+  expect(() => journal.releaseClaim(digest, false)).toThrow();
+  fs.writeFileSync(journal.claimPath, "replacement-owner-token");
+  expect(() => journal.releaseClaim(digest, true)).toThrow(/changed/);
+  expect(fs.readFileSync(journal.claimPath, "utf8")).toBe("replacement-owner-token");
+  const replacementDigest = JSON.parse(reviewPostsCommand(root, ["s", "inspect"])).claim.digest;
+  expect(reviewPostsCommand(root, ["s", "release-claim", replacementDigest, "--all-writers-stopped"])).toContain("Journal/history unchanged");
+  expect(fs.existsSync(journal.claimPath)).toBe(false);
+  expect(fs.readFileSync(journal.journalPath, "utf8")).toBe(before);
+  journal.cancelReserved(lease.operationId);
+  expect(journal.list()[0].state).toBe("failed");
+});
+
 it.each([[], ["s", "force"], ["s", "cancel-reserved"], ["s", "list", "extra"], ["../outside"]].map(args => [args]))(
   "rejects invalid operator arguments %j", args => {
     expect(() => reviewPostsCommand(root, args)).toThrow();

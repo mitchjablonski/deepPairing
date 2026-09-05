@@ -492,6 +492,26 @@ describe("Q6 — error paths (each one executed, not assumed)", () => {
 // --- the handler -------------------------------------------------------------
 
 describe("Q6 — handlePostPrReview (the MCP tool) end to end", () => {
+  it("CLI never chooses an implicit session for an external write", async () => {
+    const project = fs.mkdtempSync(path.join(binDir, "implicit-session-"));
+    for (const session of ["reviewed", "unrelated-newer"]) {
+      const directory = path.join(project, ".deeppairing", "sessions", session);
+      fs.mkdirSync(directory, { recursive: true });
+      fs.writeFileSync(path.join(directory, "artifacts.json"), JSON.stringify([researchArtifact([HIGH_FINDING])]));
+    }
+    const cli = fileURLToPath(new URL("../../cli/init.ts", import.meta.url));
+    const outcome = await new Promise<{ code: number; output: string }>(resolve => {
+      execFile(process.execPath, ["--import", import.meta.resolve("tsx"), cli,
+        "post-pr-review", "https://github.com/acme/widgets/pull/42"], {
+        cwd: project, timeout: 20_000,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: project, DEEPPAIRING_PROJECT_ROOT: project },
+      }, (error, stdout, stderr) => resolve({ code: error ? Number(error.code) || 1 : 0, output: stdout + stderr }));
+    });
+    expect(outcome.code).toBe(1);
+    expect(outcome.output).toContain("requires --session-id");
+    expect(calls()).toHaveLength(0);
+  }, 25_000);
+
   it("#344 separate CLI processes preserve uncertain sends and refuse --repost", async () => {
     const project = fs.mkdtempSync(path.join(binDir, "cli-project-"));
     const sessionDir = path.join(project, ".deeppairing", "sessions", "s_review");

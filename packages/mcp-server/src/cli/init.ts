@@ -1581,8 +1581,8 @@ async function demoCmd(): Promise<void> {
 }
 
 /**
- * `deeppairing post-pr-review <pr> [--session-id ID] [--event EVENT] [--repost]`
- *  — post the current (or specified) pairing session's findings as inline
+ * `deeppairing post-pr-review <pr> --session-id ID [--event EVENT] [--repost]`
+ *  — post the explicitly specified pairing session's findings as inline
  *  comments on a GitHub PR. Uses the `gh` CLI.
  */
 async function postPrReviewCmd(ref: string, sessionId?: string, event?: string, repost = false) {
@@ -1599,15 +1599,11 @@ async function postPrReviewCmd(ref: string, sessionId?: string, event?: string, 
     GhNotAuthedError,
   } = await import("../github/post-review.js");
 
-  let chosenSessionId = sessionId;
-  if (!chosenSessionId) {
-    const [firstSession] = FileStore.listSessions(cwd);
-    if (!firstSession) {
-      console.error(`  ${red("✗")} No sessions found in this project. Start a deepPairing session first.`);
-      process.exit(1);
-    }
-    chosenSessionId = firstSession.id;
+  if (!sessionId?.trim()) {
+    console.error(`  ${red("✗")} Posting requires --session-id ID. Use the exact session reviewed in the companion UI; the CLI never guesses a session for an external write.`);
+    process.exit(1);
   }
+  const chosenSessionId = sessionId;
 
   // R1 (#279) — a live FileStore, not the static loadSession snapshot: this
   // door must also STAMP the landed review (see below), and the stamp writes
@@ -2072,7 +2068,7 @@ ${helpInvocations}
                                            (format: full | pr-description | pr-comments | adr | replay | learnings)
     dp export html [--redact-code]         Write a self-contained shareable HTML page to .deeppairing/exports/
                                            and print its path (--redact-code drops the code bodies)
-    dp post-pr-review <pr>                 Post the pairing session's findings as inline comments
+    dp post-pr-review <pr> --session-id ID  Post the explicitly reviewed session's findings
                                            on a GitHub PR. Requires \`gh\` CLI installed + authed.
     dp review-posts <session-id>           Inspect durable review-post operations
     dp review-posts <session-id> cancel-reserved <operation-id>
