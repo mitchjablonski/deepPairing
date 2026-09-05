@@ -28,10 +28,10 @@ exactly-once delivery**. See the [GitHub review API](https://docs.github.com/en/
 | State | Meaning | Allowed next state |
 | --- | --- | --- |
 | reserved | Locally claimed; network POST has not begun | sending, failed |
-| sending | Durable marker written before invoking POST; may have landed | succeeded, unknown |
+| sending | Durable marker written before invoking POST; may have landed | succeeded, unknown, explicit operator abandonment |
 | succeeded | Validated remote review identity recorded | terminal |
 | failed | This operation is known not to have invoked POST | terminal |
-| unknown | Remote acceptance cannot be established | succeeded by reconciliation only |
+| unknown | Remote acceptance cannot be established | succeeded by reconciliation, explicit operator abandonment |
 | abandoned | Operator acknowledged uncertainty and duplicate risk | terminal; fresh explicit repost required |
 
 A process dying in `sending` leaves an unresolved operation, never permission

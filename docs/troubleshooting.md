@@ -193,6 +193,13 @@ fence its original caller. A retained disk lock needs all writers stopped and
 inspection before any manual repair; age or a dead-looking PID is not proof
 that stealing it is safe. Corrupt history requires recovery, not a reset.
 
+Use `review-posts <session-id> inspect` for redacted file metadata, validation
+errors, and the current claim digest even when normal history cannot be read.
+Explicit offline claim release and acknowledgement of duplicate risk are described
+in the [operator recovery contract](pr-posting-contract.md#offline-operator-inspection-and-acknowledgement).
+They require all writers stopped, preserve journal history, and never send a review.
+An acknowledgement is not evidence that an uncertain review was absent.
+
 ## Still stuck?
 
 Open an issue with:

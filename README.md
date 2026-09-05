@@ -327,7 +327,7 @@ deeppairing port                          # bare daemon port to stdout (scriptab
 deeppairing status                        # friendly daemon picture: port, URL, pid, version, running/alive
 deeppairing team init                     # scaffold .deeppairing/team.json
 deeppairing philosophy export | import f --merge | publish on|off | remove <concept>
-deeppairing post-pr-review <pr>           # post pair findings as PR comments
+deeppairing post-pr-review <pr> --session-id ID  # post the explicitly reviewed session
 deeppairing export <full|pr-comments|adr|replay|learnings>
 ```
 

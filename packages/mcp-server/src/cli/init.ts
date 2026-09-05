@@ -2071,6 +2071,7 @@ ${helpInvocations}
     dp post-pr-review <pr> --session-id ID  Post the explicitly reviewed session's findings
                                            on a GitHub PR. Requires \`gh\` CLI installed + authed.
     dp review-posts <session-id>           Inspect durable review-post operations
+    dp review-posts <session-id> inspect   Inspect validity and redacted file/claim metadata
     dp review-posts <session-id> cancel-reserved <operation-id>
                                           Cancel only an operation that has not started sending
     dp review-posts <session-id> reconcile <operation-id> <remote-review-id>
