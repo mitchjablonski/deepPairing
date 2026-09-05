@@ -1,4 +1,4 @@
-import { test, expect, type Page, type TestInfo } from "./test.js";
+import { test, daemonBeforeAll, expect, type Page, type TestInfo } from "./test.js";
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -78,7 +78,7 @@ let soup: Daemon;
 // Item 4: one approved artifact (hasArtifacts, no pending) + an unanswered question.
 let exited: Daemon;
 
-test.beforeAll(async ({}, testInfo) => {
+daemonBeforeAll(() => [soup?.proc, exited?.proc], async (testInfo) => {
   if (!fs.existsSync(daemonJs)) {
     throw new Error(`dist/daemon/index.js missing at ${daemonJs} — run \`pnpm build\` before the e2e suite.`);
   }

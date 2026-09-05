@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "./test.js";
+import { test, daemonBeforeAll, expect, type Page } from "./test.js";
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -47,7 +47,7 @@ const OPTS = [
   { id: "o2", title: "Postgres table", description: "Reuse the primary DB", pros: ["no new infra"], cons: ["row churn"], effort: "medium", risk: "medium", recommendation: false },
 ];
 
-test.beforeAll(async ({}, testInfo) => {
+daemonBeforeAll(() => [proc], async (testInfo) => {
   if (!fs.existsSync(daemonJs)) {
     throw new Error(`dist/daemon/index.js missing at ${daemonJs} — run \`pnpm build\` before the e2e suite.`);
   }

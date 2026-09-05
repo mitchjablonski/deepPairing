@@ -1,4 +1,4 @@
-import { test, expect } from "./test.js";
+import { test, daemonBeforeAll, expect } from "./test.js";
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -53,7 +53,7 @@ async function waitForDaemon(root: string): Promise<{ base: string; token: strin
   throw new Error("daemon did not start");
 }
 
-test.beforeAll(async ({}, testInfo) => {
+daemonBeforeAll(() => [proc], async (testInfo) => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), "dp-p2-home-"));
   projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-p2-"));
   if (process.env.CAPTURE_P2) fs.mkdirSync(OUT, { recursive: true });

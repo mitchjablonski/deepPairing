@@ -39,6 +39,16 @@ export function captureDaemonOutput(proc: ChildProcess): void {
         streamState.discarding = true;
       }
     });
+    stream.once("end", () => {
+      const tail = streamState.decoder.end();
+      if (streamState.discarding) {
+        streamState.pending = "";
+        return;
+      }
+      streamState.pending += tail;
+      if (streamState.pending) retainLine(state, source, streamState.pending);
+      streamState.pending = "";
+    });
   };
   watch("stdout", proc.stdout);
   watch("stderr", proc.stderr);
@@ -79,9 +89,12 @@ export async function attachDaemonOutput(
   for (const line of state.tail.lines) {
     snapshot.record(line.toString("utf8").replace(/\n$/, ""));
   }
+  // Do not expose unterminated lines. A pending JSON/header credential may not
+  // match a redactor until its closing quote arrives; the completed line will
+  // be retained and scrubbed on the next newline/data event.
   for (const stream of state.streams) {
-    if (!stream.discarding && stream.pending) {
-      snapshot.record(`[${stream.source}] ${stream.pending}`);
+    if (stream.discarding || stream.pending) {
+      snapshot.record(`[${stream.source}] [incomplete line withheld]`);
     }
   }
   if (snapshot.lines.length) {
@@ -106,13 +119,22 @@ export async function attachActiveDaemonOutputs(
   }
 }
 
-async function attachWithoutMaskingError(proc: ChildProcess, testInfo: TestInfo): Promise<void> {
-  try {
-    await attachDaemonOutput(proc, testInfo, { force: true });
-  } catch (attachmentError) {
-    // Reporting is secondary. Keep the causal setup exception and emit only a
-    // redacted description of the attachment failure for runner logs.
-    console.warn(`[e2e] could not attach daemon diagnostics: ${redactDiagnostic(String(attachmentError))}`);
+/** Attach all processes implicated in a setup hook without replacing its error. */
+export async function attachSetupFailureOutputs(
+  processes: Iterable<ChildProcess | undefined>,
+  testInfo: TestInfo,
+): Promise<void> {
+  let index = 0;
+  for (const proc of processes) {
+    if (!proc) continue;
+    try {
+      await attachDaemonOutput(proc, testInfo, {
+        force: true,
+        name: index++ === 0 ? "daemon-diagnostics" : `daemon-diagnostics-${index}`,
+      });
+    } catch (attachmentError) {
+      console.warn(`[e2e] could not attach daemon diagnostics: ${redactDiagnostic(String(attachmentError))}`);
+    }
   }
 }
 
@@ -125,7 +147,7 @@ export async function withSetupDiagnostics<T>(
   try {
     return await setup();
   } catch (error) {
-    await attachWithoutMaskingError(proc, testInfo);
+    await attachSetupFailureOutputs([proc], testInfo);
     throw error;
   }
 }

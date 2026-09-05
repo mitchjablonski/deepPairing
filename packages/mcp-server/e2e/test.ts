@@ -1,18 +1,9 @@
 import { test as base, expect } from "@playwright/test";
+import type { ChildProcess } from "node:child_process";
 import { BoundedDiagnosticTail } from "./diagnostics.js";
-import { attachActiveDaemonOutputs } from "./daemon-harness.js";
+import { attachActiveDaemonOutputs, attachSetupFailureOutputs } from "./daemon-harness.js";
 
 const MAX_DIAGNOSTIC_BYTES = 64 * 1024;
-const filesWithStartedTests = new Set<string>();
-
-// A failed beforeAll skips auto-fixtures entirely. This hook is registered
-// before each spec's own teardown hook, so startup/seed tails are attached
-// before that spec kills and unregisters its daemon.
-base.afterAll(async ({}, testInfo) => {
-  if (!filesWithStartedTests.has(testInfo.file)) {
-    await attachActiveDaemonOutputs(testInfo, { force: true });
-  }
-});
 
 function safeUrl(value: string): string {
   try {
@@ -30,7 +21,6 @@ function safeUrl(value: string): string {
 /** Auto-fixture that attaches a bounded, credential-redacted browser log on failure. */
 export const test = base.extend<{ browserDiagnostics: void }>({
   browserDiagnostics: [async ({ browser, page }, use, testInfo) => {
-    filesWithStartedTests.add(testInfo.file);
     const diagnostics = new BoundedDiagnosticTail(MAX_DIAGNOSTIC_BYTES);
     const record = (line: string) => diagnostics.record(line);
     const watchPage = (target: typeof page) => {
@@ -63,6 +53,21 @@ export const test = base.extend<{ browserDiagnostics: void }>({
     }
   }, { auto: true }],
 });
+
+/** Register a complete beforeAll setup with causal daemon diagnostics. */
+export function daemonBeforeAll(
+  processes: () => Iterable<ChildProcess | undefined>,
+  setup: (testInfo: import("@playwright/test").TestInfo) => Promise<void>,
+): void {
+  test.beforeAll(async ({}, testInfo) => {
+    try {
+      await setup(testInfo);
+    } catch (error) {
+      await attachSetupFailureOutputs(processes(), testInfo);
+      throw error;
+    }
+  });
+}
 
 export { expect };
 export type { Page, Locator, Browser, BrowserContext, TestInfo } from "@playwright/test";

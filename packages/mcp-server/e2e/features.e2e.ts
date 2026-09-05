@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "./test.js";
+import { test, daemonBeforeAll, expect, type Page } from "./test.js";
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -52,7 +52,7 @@ function bootDaemon(root: string): ChildProcess {
   });
 }
 
-test.beforeAll(async ({}, testInfo) => {
+daemonBeforeAll(() => [procFull, procEmpty], async (testInfo) => {
   if (!fs.existsSync(daemonJs)) {
     throw new Error(`dist/daemon/index.js missing at ${daemonJs} — run \`pnpm build\` before the e2e suite.`);
   }
@@ -211,9 +211,12 @@ test.describe("#206 — human corrections", () => {
   test.afterEach(async ({}, testInfo) => {
     // afterEach runs before the auto-fixture's failure attachment. Preserve the
     // correction daemon's tail before teardown unregisters it.
-    await attachDaemonOutput(procCorr, testInfo);
-    await teardownDaemon(procCorr, portOf(corrBase));
-    try { fs.rmSync(corrRoot, { recursive: true, force: true }); } catch {}
+    try {
+      await attachDaemonOutput(procCorr, testInfo);
+    } finally {
+      await teardownDaemon(procCorr, portOf(corrBase));
+      try { fs.rmSync(corrRoot, { recursive: true, force: true }); } catch {}
+    }
   });
 
   test("rename a feature and move an artifact, persisted (dark theme)", async ({ page }) => {

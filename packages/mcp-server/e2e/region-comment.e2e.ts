@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "./test.js";
+import { test, daemonBeforeAll, expect, type Page } from "./test.js";
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -45,7 +45,7 @@ async function waitForDaemon(root: string): Promise<{ base: string; token: strin
   throw new Error("daemon did not come up");
 }
 
-test.beforeAll(async ({}, testInfo) => {
+daemonBeforeAll(() => [proc], async (testInfo) => {
   if (!fs.existsSync(daemonJs)) {
     throw new Error(`dist/daemon/index.js missing at ${daemonJs} — run \`pnpm build\` before the e2e suite.`);
   }

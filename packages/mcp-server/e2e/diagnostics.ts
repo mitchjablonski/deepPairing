@@ -13,6 +13,10 @@ function scrubUrl(value: string): string {
   }
 }
 
+function safeAuthorizationScheme(credential: string): string {
+  return credential.match(/^((?:Basic|Bearer|Digest|Negotiate|AWS4-HMAC-SHA256)\s+)/i)?.[1] ?? "";
+}
+
 /** Best-effort scrubber for the common credentials emitted by local E2E services. */
 export function redactDiagnostic(value: string): string {
   return value
@@ -25,18 +29,24 @@ export function redactDiagnostic(value: string): string {
       /(\b'?(?:set-cookie|cookie)'?\s*[:=]\s*')((?:\\.|[^'\\])*)'/gi,
       "$1[REDACTED]'",
     )
+    .replace(/(\b"?(?:set-cookie|cookie)"?\s*[:=]\s*")[^"\r\n]*$/gim, "$1[REDACTED]")
+    .replace(/(\b'?(?:set-cookie|cookie)'?\s*[:=]\s*')[^'\r\n]*$/gim, "$1[REDACTED]")
+    .replace(
+      /(\b["']?(?:set-cookie|cookie)["']?\s*[:=]\s*)\[[^\r\n]*\]/gi,
+      '$1["[REDACTED]"]',
+    )
     .replace(/(\b(?:set-cookie|cookie)\s*:\s*)[^\r\n]*/gi, "$1[REDACTED]")
     .replace(
       /(\b"?authorization"?\s*[:=]\s*")((?:\\.|[^"\\])*)"/gi,
       (_match, prefix: string, credential: string) => {
-        const scheme = credential.match(/^([A-Za-z][A-Za-z0-9._-]*\s+)/)?.[1] ?? "";
+        const scheme = safeAuthorizationScheme(credential);
         return `${prefix}${scheme}[REDACTED]"`;
       },
     )
     .replace(
       /(\b'?authorization'?\s*[:=]\s*')((?:\\.|[^'\\])*)'/gi,
       (_match, prefix: string, credential: string) => {
-        const scheme = credential.match(/^([A-Za-z][A-Za-z0-9._-]*\s+)/)?.[1] ?? "";
+        const scheme = safeAuthorizationScheme(credential);
         return `${prefix}${scheme}[REDACTED]'`;
       },
     )
@@ -49,8 +59,22 @@ export function redactDiagnostic(value: string): string {
       "$1[REDACTED]'",
     )
     .replace(
-      /(\b"?authorization"?\s*[:=]\s*["']?)((?:[A-Za-z][A-Za-z0-9._-]*\s+)?)[^,\s;"']+/gi,
-      "$1$2[REDACTED]",
+      /(\b"?(?:authToken|accessToken|apiKey|x-api-key|api_key|password)"?\s*[:=]\s*")[^"\r\n]*$/gim,
+      "$1[REDACTED]",
+    )
+    .replace(
+      /(\b'?(?:authToken|accessToken|apiKey|x-api-key|api_key|password)'?\s*[:=]\s*')[^'\r\n]*$/gim,
+      "$1[REDACTED]",
+    )
+    .replace(
+      /(\b"?authorization"?\s*[:=]\s*)([^\r\n]*)/gi,
+      (_match, prefix: string, credential: string) => {
+        const quote = credential[0] === '"' || credential[0] === "'" ? credential[0] : "";
+        const content = quote ? credential.slice(1) : credential;
+        const scheme = safeAuthorizationScheme(content);
+        const closed = quote && credential.trimEnd().endsWith(quote) ? quote : "";
+        return `${prefix}${quote}${scheme}[REDACTED]${closed}`;
+      },
     )
     .replace(
       /(\b"?(?:authToken|accessToken|apiKey|x-api-key|api_key|password)"?\s*[:=]\s*["']?)[^,\s;"']+/gi,
