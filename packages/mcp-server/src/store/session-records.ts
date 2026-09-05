@@ -81,9 +81,47 @@ function reviewVerdictChanged(base: RecordValue, candidate: RecordValue): boolea
     REVIEW_VERDICTS.has(String(candidate.status));
 }
 
+function changesetReviewChanged(base: RecordValue, candidate: RecordValue): boolean {
+  if (base.type !== "changeset" || candidate.type !== "changeset") return false;
+  const baseContent = object(base.content) ? base.content : {};
+  const candidateContent = object(candidate.content) ? candidate.content : {};
+  return JSON.stringify([baseContent.reviewState, baseContent.reviewReasons]) !==
+    JSON.stringify([candidateContent.reviewState, candidateContent.reviewReasons]);
+}
+
+function reviewAuthorityChanged(base: RecordValue, candidate: RecordValue): boolean {
+  return reviewVerdictChanged(base, candidate) || changesetReviewChanged(base, candidate);
+}
+
+/** Plan execution progress and changeset file dispositions are not proposal
+ * identity. Reviewers approve plan step text/order/action and changeset file
+ * contents; execution status and reviewState/reviewReasons are authority
+ * layered onto that proposal. Identically named fields in other artifact
+ * types remain review-bearing content. */
+function reviewedContent(record: RecordValue): unknown {
+  const content = record.content;
+  if (!object(content)) return content;
+  if (record.type === "plan" && Array.isArray(content.steps)) {
+    return {
+      ...content,
+      steps: content.steps.map((step) => {
+        if (!object(step)) return step;
+        const { status: _status, statusNote: _statusNote, ...proposal } = step;
+        return proposal;
+      }),
+    };
+  }
+  if (record.type === "changeset") {
+    const { reviewState: _reviewState, reviewReasons: _reviewReasons, ...proposal } = content;
+    return proposal;
+  }
+  return content;
+}
+
 function reviewedIdentityChanged(base: RecordValue, candidate: RecordValue): boolean {
   return REVIEWED_IDENTITY_FIELDS.some(
-    (field) => JSON.stringify(base[field]) !== JSON.stringify(candidate[field]),
+    (field) => JSON.stringify(field === "content" ? reviewedContent(base) : base[field]) !==
+      JSON.stringify(field === "content" ? reviewedContent(candidate) : candidate[field]),
   );
 }
 
@@ -106,8 +144,8 @@ export function mergeArtifactRecords<T extends object>(
     const localValue = localRecord as RecordValue;
     const diskValue = diskRecord as RecordValue;
     if (
-      (reviewVerdictChanged(base, localValue) && reviewedIdentityChanged(base, diskValue)) ||
-      (reviewVerdictChanged(base, diskValue) && reviewedIdentityChanged(base, localValue))
+      (reviewAuthorityChanged(base, localValue) && reviewedIdentityChanged(base, diskValue)) ||
+      (reviewAuthorityChanged(base, diskValue) && reviewedIdentityChanged(base, localValue))
     ) {
       throw new SessionReviewConflictError(id);
     }

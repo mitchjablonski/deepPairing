@@ -425,6 +425,13 @@ export function createHttpRoutes(
   }));
 
   app.onError((err, c) => {
+    if (isSessionReviewConflictError(err)) {
+      return c.json({
+        error: "session_review_conflict",
+        code: ERROR_CODES.session_review_conflict,
+        message: err.message,
+      }, 409);
+    }
     if (err instanceof SyntaxError) {
       return c.json({ error: "Invalid JSON" }, 400);
     }
@@ -834,6 +841,15 @@ export function createHttpRoutes(
         // artifact (it had no record to key off), so the route does it.
         await store.updateArtifactStatus(targetArtifactId, "approved", "ui_decision_resolve");
       }
+    }
+
+    // A decision response authorizes its backing artifact. Persist the
+    // artifact and decision record together before announcing success; a
+    // concurrent proposal rewrite must return the global typed 409 and emit no
+    // decision_resolved event.
+    await store.forceFlush();
+
+    if (targetArtifactId) {
       // X6 — emission seam: HTTP-side mutations pass null for `server`
       // (the MCP server lives in the daemon's separate process). Today
       // a no-op; future Tasks impl can route via the daemon broadcast.
@@ -1106,6 +1122,21 @@ export function createHttpRoutes(
     // X6 — see comment above; HTTP-side mutations pass null for `server`.
     await maybeUpdateTaskStatus(null, artifactId, store);
 
+    // Preserve the human's explanation even if the artifact verdict races a
+    // concurrent proposal rewrite. flush() keeps comments durable while it
+    // rejects the unsafe artifact merge below, so the 409 is truthful about
+    // the verdict without silently discarding the user's words.
+    if (feedback) {
+      const comment = await store.addComment({
+        id: `cmt_${nanoid(10)}`,
+        artifactId,
+        content: feedback,
+        author: "human",
+        verdictFeedback: true,
+      });
+      broadcast({ type: "comment_added", comment }, sid);
+    }
+
     // U0.6 — force the debounced flush so the Stop hook (which reads
     // .deeppairing/sessions/*/artifacts.json directly from disk) sees the
     // new status before its next tick. Without this, a 100ms debounce window
@@ -1128,20 +1159,6 @@ export function createHttpRoutes(
         }, 409);
       }
       console.error(`[deepPairing] verdict flush failed (verdict landed in memory; debounced flush will retry): ${err}`);
-    }
-
-    if (feedback) {
-      const comment = await store.addComment({
-        id: `cmt_${nanoid(10)}`,
-        artifactId,
-        content: feedback,
-        author: "human",
-        // #187 — this is the VERDICT's own feedback note, posted AFTER the status
-        // flip above. On an "Approve with modifications" (status now `approved`)
-        // it must NOT be dressed as a late follow-up — it's review feedback.
-        verdictFeedback: true,
-      });
-      broadcast({ type: "comment_added", comment }, sid);
     }
 
     // When an artifact is rejected, remember the approach so pre-flight blocks
@@ -1315,12 +1332,10 @@ export function createHttpRoutes(
         400,
       );
     }
-    // Persist before the agent's next poll (mirrors the status route's flush).
-    try {
-      await store.forceFlush();
-    } catch (err) {
-      console.error(`[deepPairing] changeset review flush failed (state landed in memory; debounced flush will retry): ${err}`);
-    }
+    // Persist before reporting success. Review dispositions authorize the
+    // changeset's file contents, so a concurrent proposal rewrite must surface
+    // the global typed 409 and suppress the success broadcast.
+    await store.forceFlush();
     // Full-artifact patch: review state lives in content, so the web store must
     // replaceArtifact (like plan_progress_updated), not just patch a status.
     broadcast({ type: "changeset_review_updated", artifact: updated }, sid);

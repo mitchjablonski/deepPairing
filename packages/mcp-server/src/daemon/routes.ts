@@ -13,6 +13,7 @@ import { validateSuggestionTransition } from "../store/store-interface.js";
 import { recordMetricEvent } from "../store/metrics-store.js";
 import { projectHashGate } from "../http/guards.js";
 import { ReviewPostJournalError, reviewPostIdentitySchema, reviewPostLeaseSchema, reviewPostResultSchema } from "../store/review-post-journal.js";
+import { isSessionReviewConflictError } from "../store/session-records.js";
 
 const ReviewPostOperationBody = z.discriminatedUnion("action", [
   z.object({ action: z.literal("reserve"), identity: reviewPostIdentitySchema, repost: z.boolean() }).strict(),
@@ -212,6 +213,12 @@ export function createActiveSessionRoutes(
   activeSessions?: Set<string>,
 ): Hono {
   const app = new Hono();
+  app.onError((error, c) => {
+    if (isSessionReviewConflictError(error)) {
+      return c.json({ error: "session_review_conflict", code: ERROR_CODES.session_review_conflict, message: error.message }, 409);
+    }
+    return c.json({ error: "Internal server error" }, 500);
+  });
   const gate = projectHashGate(daemonHash);
   app.use("/api/active-sessions", gate);
   app.use("/api/live-session/*", gate);
@@ -300,6 +307,12 @@ export function createDaemonRoutes(
   // here; we want both UI clicks and agent-driven status updates in one log.
   const log: LogFn = logFn ?? (() => {});
   const app = new Hono();
+  app.onError((error, c) => {
+    if (isSessionReviewConflictError(error)) {
+      return c.json({ error: "session_review_conflict", code: ERROR_CODES.session_review_conflict, message: error.message }, 409);
+    }
+    return c.json({ error: "Internal server error" }, 500);
+  });
 
   // II1 — auth gate. Runs before any handler. When the route construction
   // didn't supply an authToken (test fixtures), the gate is a no-op so the
@@ -896,6 +909,10 @@ export function createDaemonRoutes(
     // already advanced it on disk; this closes the live-update gap that left
     // this path — unlike the public route — broadcasting no artifactId at all).
     const artifactId = r.store.getDecision(decisionId)?.artifactId;
+    // A response and its backing artifact are one authorization write. Flush
+    // before the daemon claims success; app.onError maps a concurrent proposal
+    // rewrite to the shared session_review_conflict 409, with no broadcast.
+    await r.store.forceFlush();
     broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId, optionId, reasoning, confidence, predictedOutcome });
     return c.json({ status: "resolved" });
   });

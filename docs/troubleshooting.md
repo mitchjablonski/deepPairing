@@ -171,6 +171,23 @@ MCP_TIMEOUT=60000 claude
 As with the timeout above, a native-ext4 checkout (e.g. under `~`) erases the
 latency class entirely and is the durable fix.
 
+## session_review_conflict
+
+Two session writers raced: one changed reviewed artifact identity while another
+recorded review authority (a verdict, decision response, plan review, or
+per-file changeset disposition). deepPairing refuses to combine those writes,
+freezes review-authority reads and the artifact, decision, plan-review, and
+review-metrics write lanes in that writer, and returns a structured HTTP 409.
+Independent comments, requests, and render-failure records continue to persist,
+but the affected artifact cannot be authorized from the frozen process. This is
+failure isolation across collections, not a cross-file transaction guarantee.
+
+Stop and restart the session writer so it reloads the persisted artifact, then
+review that exact version again before authorizing it. Do not delete or replace
+`artifacts.json` to bypass the conflict; preserve it for inspection. If the file
+is corrupt, restore or hand-repair the preserved data before retrying —
+deepPairing will not automatically overwrite unknown artifact history.
+
 ## review_post_conflict
 
 A durable review-post operation or its journal prevents another post. Preserve

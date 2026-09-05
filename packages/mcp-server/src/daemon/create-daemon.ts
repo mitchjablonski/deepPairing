@@ -826,8 +826,14 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
 
   function cleanup(): void {
     // Flush all sessions
-    for (const store of sessions.values()) {
-      store.forceFlush();
+    for (const [sessionId, store] of sessions) {
+      try {
+        store.forceFlush();
+      } catch (error) {
+        // One corrupt/conflicted session must not strand every later session
+        // or keep stale daemon discovery credentials on disk during shutdown.
+        log(`[cleanup] failed to flush session ${sessionId}: ${errorMessage(error)}`);
+      }
     }
     // Remove daemon info file
     try { if (fs.existsSync(daemonInfoFile)) fs.unlinkSync(daemonInfoFile); } catch {}

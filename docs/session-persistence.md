@@ -40,9 +40,20 @@ must use a route that performs and reports that flush.
 ## Recovering a review/content conflict
 
 When one writer changes an artifact's reviewed identity (content, version, type,
-or parent) while another records a review verdict, their stale states are not
-merged. The writer that detects the conflict freezes authorization reads and all
-later flushes so its in-memory verdict can never be committed after the fact.
+or parent) while another records review authority, their stale states are not
+merged. Review authority includes terminal verdicts, decision responses, plan
+reviews, and a changeset's per-file `reviewState` / `reviewReasons`. Plan-step
+execution `status` / `statusNote` is progress rather than proposal identity, so
+progress-only updates may still merge without transplanting a review.
+
+The writer that detects the conflict freezes authorization reads and later
+artifact, decision, plan-review, and review-metrics writes, so its stale review
+authority cannot be committed after the fact. Independent comments, requests,
+and render-failure records still get their own flush attempts; this isolates
+accepted human input but does not make the files transactional. Affected HTTP
+state and review-authority surfaces return a structured
+`session_review_conflict` 409 instead of reporting success.
+
 Preserve and inspect the on-disk artifact, then stop and restart the daemon or
 other session writer to create a fresh FileStore. Review the reloaded artifact
 before authorizing it. A browser refresh alone does not recreate the daemon's

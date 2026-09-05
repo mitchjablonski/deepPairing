@@ -76,10 +76,12 @@ baseline. This read does not flush, replace the live cache, or advance baselines
 External revocations and deletions therefore affect the next posting gate even
 when the daemon has no locally dirty artifacts. Divergent concurrent verdicts,
 review/content conflicts, and incompatible same-ID additions refuse posting and
-freeze the writer. Malformed, duplicate, unreadable, or lost previously observed
-artifact collections fail closed. The daemon client uses a dedicated authenticated
-route; older daemons cannot silently fall back to cached state. Ordinary UI
-hydration and last-flush-wins persistence keep their existing contracts.
+freeze review-authority reads and writes in that writer; independent comments
+and requests can still persist through their isolated sidecar lanes. Malformed,
+duplicate, unreadable, or lost previously observed artifact collections fail
+closed. The daemon client uses a dedicated authenticated route; older daemons
+cannot silently fall back to cached state. Ordinary UI hydration and
+last-flush-wins persistence keep their existing contracts.
 Every posting snapshot also strictly validates legacy posted-review history,
 including reauthorization after reservation; malformed history is never treated
 as an empty record merely because the journal's initial reservation succeeded.
