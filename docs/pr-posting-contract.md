@@ -11,6 +11,13 @@ repost authorization. An unresolved operation blocks **even `repost: true`**.
 Changing the event, payload, spelling of the target, or reviewed SHA cannot
 evade that unresolved-operation guard.
 
+The scope is deliberately one session, not all reviews in a project. Separate
+sessions can contain independent human-reviewed payloads and may post to the same
+PR. Cross-session duplicate prevention is not claimed. The CLI requires an explicit
+`--session-id` identifying the same reviewed session as MCP; it never selects the
+most recent session for an external write. Starting another session is not recovery
+for an unknown result: inspect and resolve the original operation first.
+
 The remote review endpoint sends notifications and accepts `commit_id`, but
 does not document an idempotency key or conditional compare-and-post API.
 Consequently this is duplicate prevention and honest uncertainty, **not
@@ -21,15 +28,19 @@ exactly-once delivery**. See the [GitHub review API](https://docs.github.com/en/
 | State | Meaning | Allowed next state |
 | --- | --- | --- |
 | reserved | Locally claimed; network POST has not begun | sending, failed |
-| sending | Durable marker written before invoking POST; may have landed | succeeded, unknown |
+| sending | Durable marker written before invoking POST; may have landed | succeeded, unknown, explicit operator abandonment |
 | succeeded | Validated remote review identity recorded | terminal |
 | failed | This operation is known not to have invoked POST | terminal |
-| unknown | Remote acceptance cannot be established | succeeded by reconciliation only |
+| unknown | Remote acceptance cannot be established | succeeded by reconciliation, explicit operator abandonment |
+| abandoned | Operator acknowledged uncertainty and duplicate risk | terminal; fresh explicit repost required |
 
 A process dying in `sending` leaves an unresolved operation, never permission
 to retry. A timeout, dropped response, malformed success response, or failed
 local success stamp is uncertain. Conservatively treat any failure after POST
 invocation as unknown, even if it might be a harmless authentication rejection.
+An operator may explicitly acknowledge `sending`/`unknown` as `abandoned` using the
+offline procedure below. This records a human decision, **not** a definite failure
+or proof that GitHub accepted nothing. Ordinary `repost` never performs this step.
 
 Reserve and transition operations use a short, exclusive session-local claim.
 Do not hold that filesystem claim across a network await. Every transition
@@ -37,6 +48,8 @@ compares an unguessable operation ID/token and its expected current state;
 late callers cannot send after a reservation was cancelled. No age-only or
 cross-platform PID-based claim stealing. An orphaned filesystem claim requires
 all writers to stop before explicit local repair.
+The journal claim is distinct from the artifact writer's `.flush.lock`; neither
+is held while acquiring the other or while awaiting a network operation.
 
 ## Identity and authorization
 
@@ -114,6 +127,32 @@ GET only. Wrong marker, edited content, missing original coordinates, unsupporte
 multi-line/reply records, changed comment order, API failure, or pagination beyond
 the safety cap leaves the operation blocked. It does not search for approximate
 matches or claim remote absence proves non-delivery.
+
+### Offline operator inspection and acknowledgement
+
+`review-posts <session-id> inspect` reports bounded file metadata, validity, and a
+claim digest without printing raw bytes, claim tokens, credentials, or review bodies.
+`list` also returns blocked inspection details when journal/history validation fails.
+Neither command repairs, deletes, or converts corrupted history into an empty journal.
+Preserve corrupted files and restore them from trustworthy evidence before posting.
+
+If a claim is abandoned, stop **all** writers for that session, including CLI/MCP
+processes and the daemon. Inspect it, then explicitly run
+`review-posts <session-id> release-claim <digest> --all-writers-stopped`.
+Only the unchanged inspected claim is removed; journal/history remain untouched.
+The flag is the operator's coordination assertion, not an automatic liveness check.
+Do not run it concurrently with any writer. A changed digest refuses removal.
+
+If remote evidence cannot reconcile an operation and the human chooses to accept
+the risk of a duplicate review, stop all writers, inspect `list`, and run
+`review-posts <session-id> acknowledge-unknown <operation-id> <operationDigest> --all-writers-stopped --accept-duplicate-risk`.
+This preserves the original operation and records its prior uncertain state, digest,
+and acknowledgement time as `abandoned`. A stale digest or non-uncertain state refuses.
+It sends nothing, and late original callers are fenced. A subsequent attempt still
+requires an explicit human-authorized repost plus current target/verdict/SHA checks.
+Never run this automatically, on the agent's initiative, or as a substitute for
+checking available remote evidence. Older binaries reject this new journal state;
+do not downgrade a session containing operator acknowledgements.
 
 ## Verification
 

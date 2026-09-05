@@ -27060,11 +27060,19 @@ var operationSchema = external_exports.object({
   tokenDigest: digestSchema,
   sessionId: external_exports.string().min(1),
   identity: reviewPostIdentitySchema,
-  state: external_exports.enum(["reserved", "sending", "succeeded", "failed", "unknown"]),
+  state: external_exports.enum(["reserved", "sending", "succeeded", "failed", "unknown", "abandoned"]),
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
-  result: resultSchema.optional()
+  result: resultSchema.optional(),
+  operatorAcknowledgement: external_exports.object({
+    acknowledgedAt: timestampSchema,
+    priorState: external_exports.enum(["sending", "unknown"]),
+    operationDigest: digestSchema
+  }).strict().optional()
 }).strict().superRefine((value, ctx) => {
+  if (value.state === "abandoned" !== (value.operatorAcknowledgement !== void 0)) {
+    ctx.addIssue({ code: "custom", message: "Only operator-abandoned uncertainty carries an acknowledgement" });
+  }
   if (value.state === "succeeded" !== (value.result !== void 0)) {
     ctx.addIssue({ code: "custom", message: "Only success carries a remote review identity" });
   }
@@ -27102,6 +27110,28 @@ function resultMatches(identity, result) {
   const states = { COMMENT: "COMMENTED", REQUEST_CHANGES: "CHANGES_REQUESTED", APPROVE: "APPROVED" };
   return result.state === states[identity.event] && (!identity.reviewedHeadSha || result.commitId === identity.reviewedHeadSha) && result.htmlUrl.toLowerCase() === `${identity.target}#pullrequestreview-${result.id}`;
 }
+function readBoundedFile(file2, maxBytes) {
+  const entry = fs13.lstatSync(file2);
+  if (!entry.isFile() || entry.isSymbolicLink()) throw new Error("Inspection requires a regular non-symlink file");
+  const fd = fs13.openSync(file2, fs13.constants.O_RDONLY | (fs13.constants.O_NONBLOCK ?? 0));
+  try {
+    const stat = fs13.fstatSync(fd);
+    if (!stat.isFile() || stat.size > maxBytes) throw new Error("File exceeds inspection safety limit or is not regular");
+    const chunks = [];
+    let total = 0;
+    while (total <= maxBytes) {
+      const chunk = Buffer.alloc(Math.min(64 * 1024, maxBytes + 1 - total));
+      const count2 = fs13.readSync(fd, chunk, 0, chunk.length, null);
+      if (count2 === 0) return Buffer.concat(chunks, total);
+      total += count2;
+      if (total > maxBytes) throw new Error("File exceeds inspection safety limit");
+      chunks.push(chunk.subarray(0, count2));
+    }
+    throw new Error("File exceeds inspection safety limit");
+  } finally {
+    fs13.closeSync(fd);
+  }
+}
 var ReviewPostJournal = class {
   constructor(projectRoot2, sessionId, persist = writeJsonAtomic) {
     this.sessionId = sessionId;
@@ -27123,8 +27153,7 @@ var ReviewPostJournal = class {
   markerPath;
   read() {
     try {
-      const raw2 = fs13.readFileSync(this.journalPath, "utf8");
-      if (raw2.length > 8 * 1024 * 1024) throw new Error("Journal exceeds safety limit");
+      const raw2 = readBoundedFile(this.journalPath, 8 * 1024 * 1024).toString("utf8");
       const journal = journalSchema.parse(JSON.parse(raw2));
       const ids = /* @__PURE__ */ new Set();
       const activeTargets = /* @__PURE__ */ new Set();
@@ -27141,14 +27170,13 @@ var ReviewPostJournal = class {
       if (err.code === "ENOENT" && !fs13.existsSync(this.markerPath)) {
         return { version: 1, operations: [] };
       }
-      throw new ReviewPostJournalError("corrupt", "Review-post journal is unreadable or invalid; preserve it and reconcile before posting.");
+      throw new ReviewPostJournalError("corrupt", `Review-post journal is unreadable or invalid: ${this.journalPath}. Preserve it and inspect before posting.`);
     }
   }
   /** Legacy data is advisory elsewhere, but it must fail CLOSED at the posting boundary. */
   readLegacyHistory() {
     try {
-      const raw2 = fs13.readFileSync(this.legacyPath, "utf8");
-      if (raw2.length > 8 * 1024 * 1024) throw new Error("History exceeds safety limit");
+      const raw2 = readBoundedFile(this.legacyPath, 8 * 1024 * 1024).toString("utf8");
       return external_exports.array(external_exports.object({
         pr: external_exports.string().refine((v) => parsePrReference(v) !== null),
         prNumber: external_exports.number().int().positive().max(Number.MAX_SAFE_INTEGER),
@@ -27166,7 +27194,7 @@ var ReviewPostJournal = class {
       })).parse(JSON.parse(raw2));
     } catch (err) {
       if (err.code === "ENOENT") return [];
-      throw new ReviewPostJournalError("corrupt", "Posted-review history is unreadable or invalid; preserve it and reconcile before posting.");
+      throw new ReviewPostJournalError("corrupt", `Posted-review history is unreadable or invalid: ${this.legacyPath}. Preserve it and inspect before posting.`);
     }
   }
   claim(fn) {
@@ -27208,6 +27236,78 @@ var ReviewPostJournal = class {
   list() {
     return this.read().operations;
   }
+  /** Read-only diagnostics. Never print raw bytes, fencing tokens, or payloads. */
+  inspect() {
+    const metadata = (file2) => {
+      try {
+        const stat = fs13.lstatSync(file2);
+        return {
+          path: file2,
+          exists: true,
+          bytes: stat.size,
+          modifiedAt: stat.mtime.toISOString(),
+          regularFile: stat.isFile() && !stat.isSymbolicLink()
+        };
+      } catch (err) {
+        return { path: file2, exists: err.code !== "ENOENT", unreadable: true };
+      }
+    };
+    const validate = (read) => {
+      try {
+        read();
+        return { valid: true };
+      } catch (err) {
+        return { valid: false, error: err instanceof ReviewPostJournalError ? err.message : "Unreadable state" };
+      }
+    };
+    let claimDigest;
+    try {
+      claimDigest = this.readClaimDigest();
+    } catch {
+    }
+    return {
+      journal: { ...metadata(this.journalPath), ...validate(() => this.read()) },
+      legacyHistory: { ...metadata(this.legacyPath), ...validate(() => this.readLegacyHistory()) },
+      protocolMarker: metadata(this.markerPath),
+      claim: { ...metadata(this.claimPath), ...claimDigest ? { digest: claimDigest } : {} }
+    };
+  }
+  readClaimDigest() {
+    const stat = fs13.lstatSync(this.claimPath);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4096) {
+      throw new ReviewPostJournalError("invalid", "Claim must be a regular file of at most 4096 bytes; inspect it manually.");
+    }
+    return createHash("sha256").update(readBoundedFile(this.claimPath, 4096)).digest("hex");
+  }
+  /** Operator-only, offline coordination: this is NOT a process-liveness proof.
+   * The explicit assertion excludes concurrent replacement after comparison. */
+  releaseClaim(expectedDigest, allWritersStopped) {
+    if (allWritersStopped !== true || !digestSchema.safeParse(expectedDigest).success) {
+      throw new ReviewPostJournalError("invalid", "Claim release requires all writers stopped and the inspected claim digest.");
+    }
+    if (this.readClaimDigest() !== expectedDigest) {
+      throw new ReviewPostJournalError("stale", "Claim changed since inspection; it was not removed.");
+    }
+    fs13.unlinkSync(this.claimPath);
+  }
+  /** An explicit operator accepts duplicate risk, not evidence of non-delivery.
+   * Never exposed to MCP/daemon mutation routes or automatic retry logic. */
+  acknowledgeUnknown(operationId, expectedDigest, allWritersStopped, acceptDuplicateRisk) {
+    if (allWritersStopped !== true || acceptDuplicateRisk !== true || !digestSchema.safeParse(expectedDigest).success) {
+      throw new ReviewPostJournalError("invalid", "Acknowledgement requires all writers stopped, duplicate-risk acceptance, and the inspected operation digest.");
+    }
+    this.update(operationId, (op) => {
+      if (!["sending", "unknown"].includes(op.state) || reviewPostDigest(op) !== expectedDigest) {
+        throw new ReviewPostJournalError("stale", "Operation changed or is not uncertain; no acknowledgement recorded.");
+      }
+      op.operatorAcknowledgement = {
+        acknowledgedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        priorState: op.state,
+        operationDigest: expectedDigest
+      };
+      op.state = "abandoned";
+    });
+  }
   reserve(identity, repost = false) {
     const parsed = reviewPostIdentitySchema.parse(identity);
     return this.claim(() => {
@@ -27218,8 +27318,8 @@ var ReviewPostJournal = class {
       if (unresolved) {
         throw new ReviewPostJournalError("blocked", `Review operation ${unresolved.id} is ${unresolved.state}; reconcile it before another post. Repost does not bypass uncertainty.`);
       }
-      if (!repost && (prior.some((op) => op.state === "succeeded") || legacy.some((op) => samePrTarget(op, parsed.target)))) {
-        throw new ReviewPostJournalError("blocked", "This session already posted to that PR; fresh human repost authorization is required.");
+      if (!repost && (prior.some((op) => op.state === "succeeded" || op.state === "abandoned") || legacy.some((op) => samePrTarget(op, parsed.target)))) {
+        throw new ReviewPostJournalError("blocked", "This session already posted or acknowledged an uncertain post to that PR; fresh human repost authorization is required.");
       }
       if (journal.operations.length >= 4096) throw new ReviewPostJournalError("blocked", "Review-post journal is full; stop writers and perform a history-preserving migration before posting. Do not delete or reset the journal.");
       const lease = { operationId: randomUUID(), token: randomUUID() };
