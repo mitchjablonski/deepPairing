@@ -36860,16 +36860,16 @@ async function handlePostPrReview(ctx, args) {
       isError: true
     };
   }
-  const state = await store.getFullState();
-  const auth = authorizeReviewPost(state, {
-    event: args?.event,
-    pr: ref,
-    repost: args?.repost === true
-  });
-  if (!auth.ok) {
-    return { content: [{ type: "text", text: auth.reason }], isError: true };
-  }
   try {
+    const state = await store.getReviewPostState();
+    const auth = authorizeReviewPost(state, {
+      event: args?.event,
+      pr: ref,
+      repost: args?.repost === true
+    });
+    if (!auth.ok) {
+      return { content: [{ type: "text", text: auth.reason }], isError: true };
+    }
     const prepared = await preparePrReviewTarget({
       ref,
       ...typeof args?.owner === "string" ? { owner: args.owner } : {},
@@ -36877,13 +36877,13 @@ async function handlePostPrReview(ctx, args) {
     });
     const target = prepared.target;
     const options = { event: args?.event, repost: args?.repost === true };
-    const { payload, identity } = authorizeDurableReview(await store.getFullState(), options, prepared);
+    const { payload, identity } = authorizeDurableReview(await store.getReviewPostState(), options, prepared);
     const posted = await executeDurableReviewPost({
       store: store.reviewPosts,
       payload,
       identity,
       repost: options.repost,
-      reauthorize: async () => authorizeDurableReview(await store.getFullState(), options, prepared).identity,
+      reauthorize: async () => authorizeDurableReview(await store.getReviewPostState(), options, prepared).identity,
       send: (canonicalTarget, frozenPayload) => postPreparedPrReview({ target: canonicalTarget, payload: frozenPayload })
     });
     const { result } = posted;
@@ -38974,6 +38974,9 @@ var DaemonClient = class {
   // --- Full state ---
   async getFullState() {
     return this.get("/state");
+  }
+  async getReviewPostState() {
+    return this.get("/review-post-state");
   }
   /** R1 (#279) — proxy the posted-review stamp to the daemon's FileStore. The
    *  READ needs no proxy: the record rides getFullState above. NOT
