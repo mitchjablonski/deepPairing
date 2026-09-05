@@ -35982,6 +35982,7 @@ async function handleReviseArtifact(ctx, args) {
     if (pre && !pre.ok) return pre.response;
     if (old.type === "changeset") {
       delete content.reviewState;
+      delete content.reviewReasons;
     }
     const title = String(args?.title ?? old.title);
     const newId = `art_${nanoid3(10)}`;
@@ -36465,14 +36466,30 @@ function scopeExternalChangesets(artifacts, ref) {
   }
   return scope;
 }
+function knownPrIdentityCount(artifacts) {
+  const identities = /* @__PURE__ */ new Set();
+  for (const artifact of artifacts) {
+    const url2 = coerceChangesetContent(artifact.content).source?.url;
+    const parsed = url2 ? parsePrNumber(url2) : null;
+    if (parsed?.owner && parsed.repo) {
+      identities.add(`${parsed.owner.toLowerCase()}/${parsed.repo.toLowerCase()}#${parsed.number}`);
+    }
+  }
+  return identities.size;
+}
 function reviewedHeadFor(artifacts, event) {
   const standing = artifacts.filter((a) => !CLOSED_CHANGESET_STATUSES.has(a.status));
   const valid = [];
   const missing = [];
   const malformed = [];
-  for (const artifact of standing) {
+  let closedWithShaProvenance;
+  for (const artifact of artifacts) {
     const rawSource = artifact.content && typeof artifact.content === "object" ? artifact.content.source : void 0;
     const rawSha = rawSource && typeof rawSource === "object" ? rawSource.headSha : void 0;
+    if (CLOSED_CHANGESET_STATUSES.has(artifact.status)) {
+      if (rawSha !== void 0) closedWithShaProvenance ??= artifact;
+      continue;
+    }
     if (rawSha === void 0) {
       missing.push(artifact);
     } else if (typeof rawSha !== "string" || !FULL_GIT_SHA2.test(rawSha)) {
@@ -36488,7 +36505,13 @@ function reviewedHeadFor(artifacts, event) {
     };
   }
   if (valid.length === 0) {
-    if (event !== "APPROVE") return { ok: true };
+    if (event !== "APPROVE") {
+      if (!closedWithShaProvenance) return { ok: true };
+      return {
+        ok: false,
+        reason: `Refusing to post without an immutable reviewed head SHA: an earlier version, "${closedWithShaProvenance.title}" (${closedWithShaProvenance.id}), recorded SHA provenance, but no standing target changeset does now. This is a refresh-required revision, not a wholly legacy session. Fetch headRefOid, present that exact diff, and get fresh verdicts; never attach an old approval to the PR's mutable current head.`
+      };
+    }
     return {
       ok: false,
       reason: `Refusing to post an APPROVE: ${standing.length === 0 ? "no standing external changeset" : missing.map((a) => `"${a.title}" (${a.id})`).join(", ")} records the immutable reviewed head SHA. Legacy session files remain readable, but an unknown commit cannot authorize an approval. Fetch headRefOid, present that exact diff as a fresh external changeset, and get your pair's verdict again; never substitute the PR's current head for an old approval.`
@@ -36555,23 +36578,39 @@ function authorizeReviewPost(state, opts) {
   const decidedNo = findingsArtifacts.filter((a) => DECIDED_EXCLUDED_STATUSES.has(a.status));
   let targetExternals = externalChangesets(state.artifacts);
   if (opts.pr) {
+    const fullScope = scopeExternalChangesets(targetExternals, opts.pr);
     const standing = targetExternals.filter((a) => !CLOSED_CHANGESET_STATUSES.has(a.status));
     const standingScope = scopeExternalChangesets(standing, opts.pr);
-    if (standingScope.contradictory.length > 0) {
-      const artifact = standingScope.contradictory[0];
+    const contradictory = standingScope.contradictory[0] ?? (approved.length > 0 ? fullScope.contradictory[0] : void 0);
+    if (contradictory) {
+      const artifact = contradictory;
       return {
         ok: false,
         reason: `Refusing to post: "${artifact.title}" (${artifact.id}) has a source.number that contradicts its source.url. Present one coherent PR identity and get your pair's verdict again.`
       };
     }
-    if (standingScope.matching.length === 0 && standingScope.other.length > 0) {
-      const { artifact, reviewed } = standingScope.other[0];
+    if (approved.length > 0 && knownPrIdentityCount(targetExternals) > 1) {
+      return {
+        ok: false,
+        reason: `Refusing to post findings: this session's changeset history identifies more than one pull request, but findings artifacts do not record which one they belong to. Posting them to ${opts.pr} could publish another PR's findings. Review and post one PR per session, using its full pull-request URL.`
+      };
+    }
+    if (fullScope.matching.length === 0 && fullScope.other.length > 0) {
+      const { artifact, reviewed } = fullScope.other[0];
       return {
         ok: false,
         reason: `Refusing to post: "${artifact.title}" identifies https://github.com/${reviewed.owner}/${reviewed.repo}/pull/${reviewed.number}, not the requested PR ${opts.pr}. Present the requested PR with its full source.url and get your pair's verdict before posting.`
       };
     }
-    targetExternals = scopeExternalChangesets(targetExternals, opts.pr).matching;
+    const unknownApproveChunk = event === "APPROVE" ? standingScope.unknown[0] ?? (approved.length > 0 ? fullScope.unknown[0] : void 0) : void 0;
+    if (unknownApproveChunk) {
+      const artifact = unknownApproveChunk;
+      return {
+        ok: false,
+        reason: `Refusing to post an APPROVE: "${artifact.title}" (${artifact.id}) has no full, valid PR source URL, so the gate cannot prove whether it is another part of ${opts.pr} or whether the approved findings belong to it. Present every relevant chunk with its full source.url and get your pair's verdict again.`
+      };
+    }
+    targetExternals = fullScope.matching;
   }
   if (event === "APPROVE") {
     const externals = targetExternals;
