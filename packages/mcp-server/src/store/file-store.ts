@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
-import { suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode } from "@deeppairing/shared";
+import { ArtifactSchema, suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { capConceptLength } from "./concept-hygiene.js";
@@ -119,6 +119,7 @@ export class FileStore implements IStore {
 
   // Immutable snapshots identify local changes independently of filesystem mtimes.
   private recordBaselines: Record<string, string> = {};
+  private observedRecordFiles = new Set<string>();
   private backedUpCorruption: Record<string, string> = {};
 
   // BB2 — held for FileStore.invalidateLedgerDigestCache, which is keyed
@@ -295,6 +296,7 @@ export class FileStore implements IStore {
         return fallback;
       }
       bytes = fs.readFileSync(filePath, "utf-8");
+      this.observedRecordFiles.add(path.basename(filePath));
       return JSON.parse(bytes);
     } catch (err) {
       if (errorCode(err) === "ENOENT") {
@@ -383,11 +385,18 @@ export class FileStore implements IStore {
     try {
       diskBytes = fs.readFileSync(filePath, "utf8");
       raw = JSON.parse(diskBytes);
+      this.observedRecordFiles.add(file);
     } catch (err) {
       // An unchanged corrupt file already backed up during load may be repaired.
       // New corruption or I/O failures must not destroy an unknown disk update.
       const knownCorruption = err instanceof SyntaxError && diskBytes !== undefined &&
         this.backedUpCorruption[filePath] === diskBytes;
+      if (errorCode(err) === "ENOENT" && this.observedRecordFiles.has(file)) {
+        throw Object.assign(
+          new Error(`Previously observed session collection disappeared: ${filePath}`),
+          { code: "ESESSIONFILEMISSING", path: filePath },
+        );
+      }
       if (errorCode(err) !== "ENOENT" && !knownCorruption) throw err;
       raw = [];
     }
@@ -395,6 +404,7 @@ export class FileStore implements IStore {
     const mergedBytes = JSON.stringify(merged, null, 2);
     if (dirty && (!optional || merged.length > 0 || diskBytes !== undefined) && diskBytes !== mergedBytes) {
       writeStringAtomic(filePath, mergedBytes);
+      this.observedRecordFiles.add(file);
     }
     // Advance only AFTER a successful write. A failed flush retains its delta.
     this.recordBaselines[file] = JSON.stringify(merged);
@@ -2034,6 +2044,61 @@ export class FileStore implements IStore {
   }
 
   // --- Full state (for web UI hydration) ---
+
+  /** Read permission-bearing state under the cooperating writers' claim without
+   * flushing or changing the live cache/baselines. UI hydration stays cheap. */
+  getReviewPostState() {
+    if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
+    this.assertAuthorizationReadable();
+    if (this.isDemoSession) throw new Error("Demo sessions cannot authorize PR review posting");
+    try {
+      return withSessionFlushLock(path.join(this.sessionDir(), ".flush.lock"), () => {
+        const baseline: Artifact[] = JSON.parse(this.recordBaselines["artifacts.json"] ?? "[]");
+        let raw: unknown;
+        try {
+          raw = JSON.parse(fs.readFileSync(path.join(this.sessionDir(), "artifacts.json"), "utf8"));
+          this.observedRecordFiles.add("artifacts.json");
+        } catch (error) {
+          // A new, never-persisted session may have only pending local artifacts.
+          // Losing an observed collection must never restore its cached approvals.
+          if (errorCode(error) !== "ENOENT" || this.observedRecordFiles.has("artifacts.json")) throw error;
+          raw = [];
+        }
+        if (!Array.isArray(raw) || raw.some(value => !ArtifactSchema.safeParse(value).success)) {
+          throw new Error("Cannot authorize a PR review from malformed persisted artifacts");
+        }
+        const disk = raw as Artifact[];
+        if (new Set(disk.map(value => value.id)).size !== disk.length) {
+          throw new Error("Cannot authorize a PR review from duplicate persisted artifacts");
+        }
+        const before = new Map(baseline.map(value => [value.id, value]));
+        const persisted = new Map(disk.map(value => [value.id, value]));
+        for (const local of this.artifacts) {
+          const remote = persisted.get(local.id);
+          if (!remote) continue;
+          const base = before.get(local.id);
+          // Posting has stricter conflict semantics than ordinary last-flush-wins
+          // persistence: a pending approval cannot override another writer's
+          // revocation, including obsolete/retracted/superseded statuses.
+          if (base && base.status !== local.status && base.status !== remote.status && local.status !== remote.status) {
+            throw new SessionReviewConflictError(local.id);
+          }
+          if (!base && (["content", "version", "type", "parentId", "status"] as const).some(
+            field => JSON.stringify(local[field]) !== JSON.stringify(remote[field]),
+          )) {
+            throw new SessionReviewConflictError(local.id);
+          }
+        }
+        const artifacts = mergeArtifactRecords(baseline, this.artifacts, disk, value => value.id);
+        return JSON.parse(JSON.stringify({
+          sessionId: this.sessionId, artifacts, postedReviews: this.reviewPosts.readLegacyHistory(),
+        })) as { sessionId: string; artifacts: Artifact[]; postedReviews: PostedReviewRecord[] };
+      });
+    } catch (error) {
+      if (error instanceof SessionReviewConflictError) this.reviewConflict = error;
+      throw error;
+    }
+  }
 
   getFullState() {
     this.assertAuthorizationReadable();

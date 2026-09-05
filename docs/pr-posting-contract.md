@@ -69,6 +69,24 @@ The final check is an authorization snapshot, not a distributed transaction:
 a human verdict or remote head can change after it. #343 binds the POST to the
 reviewed SHA; this protocol must not advertise an atomic lock on GitHub state.
 
+Posting uses `getReviewPostState`, not the cached UI hydration snapshot. FileStore
+reads the persisted artifact collection under the same short `.flush.lock` used
+by cooperating writers, then projects pending local changes against its immutable
+baseline. This read does not flush, replace the live cache, or advance baselines.
+External revocations and deletions therefore affect the next posting gate even
+when the daemon has no locally dirty artifacts. Divergent concurrent verdicts,
+review/content conflicts, and incompatible same-ID additions refuse posting and
+freeze the writer. Malformed, duplicate, unreadable, or lost previously observed
+artifact collections fail closed. The daemon client uses a dedicated authenticated
+route; older daemons cannot silently fall back to cached state. Ordinary UI
+hydration and last-flush-wins persistence keep their existing contracts.
+Every posting snapshot also strictly validates legacy posted-review history,
+including reauthorization after reservation; malformed history is never treated
+as an empty record merely because the journal's initial reservation succeeded.
+These checks assume supported review handlers and cooperating current writers.
+They do not prove historical human authorization after direct JSON tampering or
+privileged mutation of an approved artifact without using the revision workflow.
+
 ## Recovery and compatibility
 
 Keep valid legacy `posted-reviews.json` readable and duplicate-blocking. Missing

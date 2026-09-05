@@ -27145,7 +27145,7 @@ var ReviewPostJournal = class {
     }
   }
   /** Legacy data is advisory elsewhere, but it must fail CLOSED at the posting boundary. */
-  legacy() {
+  readLegacyHistory() {
     try {
       const raw2 = fs13.readFileSync(this.legacyPath, "utf8");
       if (raw2.length > 8 * 1024 * 1024) throw new Error("History exceeds safety limit");
@@ -27212,7 +27212,7 @@ var ReviewPostJournal = class {
     const parsed = reviewPostIdentitySchema.parse(identity);
     return this.claim(() => {
       const journal = this.read();
-      const legacy = this.legacy();
+      const legacy = this.readLegacyHistory();
       const prior = journal.operations.filter((op) => op.identity.target === parsed.target);
       const unresolved = prior.find((op) => ["reserved", "sending", "unknown"].includes(op.state));
       if (unresolved) {
@@ -27381,6 +27381,7 @@ var FileStore = class _FileStore {
   persona = "auto";
   // Immutable snapshots identify local changes independently of filesystem mtimes.
   recordBaselines = {};
+  observedRecordFiles = /* @__PURE__ */ new Set();
   backedUpCorruption = {};
   // BB2 — held for FileStore.invalidateLedgerDigestCache, which is keyed
   // by projectRoot so all sessions in this project bust the same cache.
@@ -27509,6 +27510,7 @@ var FileStore = class _FileStore {
         return fallback;
       }
       bytes = fs14.readFileSync(filePath, "utf-8");
+      this.observedRecordFiles.add(path12.basename(filePath));
       return JSON.parse(bytes);
     } catch (err) {
       if (errorCode(err) === "ENOENT") {
@@ -27577,8 +27579,15 @@ var FileStore = class _FileStore {
     try {
       diskBytes = fs14.readFileSync(filePath, "utf8");
       raw2 = JSON.parse(diskBytes);
+      this.observedRecordFiles.add(file2);
     } catch (err) {
       const knownCorruption = err instanceof SyntaxError && diskBytes !== void 0 && this.backedUpCorruption[filePath] === diskBytes;
+      if (errorCode(err) === "ENOENT" && this.observedRecordFiles.has(file2)) {
+        throw Object.assign(
+          new Error(`Previously observed session collection disappeared: ${filePath}`),
+          { code: "ESESSIONFILEMISSING", path: filePath }
+        );
+      }
       if (errorCode(err) !== "ENOENT" && !knownCorruption) throw err;
       raw2 = [];
     }
@@ -27586,6 +27595,7 @@ var FileStore = class _FileStore {
     const mergedBytes = JSON.stringify(merged, null, 2);
     if (dirty && (!optional2 || merged.length > 0 || diskBytes !== void 0) && diskBytes !== mergedBytes) {
       writeStringAtomic(filePath, mergedBytes);
+      this.observedRecordFiles.add(file2);
     }
     this.recordBaselines[file2] = JSON.stringify(merged);
     delete this.backedUpCorruption[filePath];
@@ -28815,6 +28825,57 @@ var FileStore = class _FileStore {
     for (const resolve of waiters) resolve();
   }
   // --- Full state (for web UI hydration) ---
+  /** Read permission-bearing state under the cooperating writers' claim without
+   * flushing or changing the live cache/baselines. UI hydration stays cheap. */
+  getReviewPostState() {
+    if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
+    this.assertAuthorizationReadable();
+    if (this.isDemoSession) throw new Error("Demo sessions cannot authorize PR review posting");
+    try {
+      return withSessionFlushLock(path12.join(this.sessionDir(), ".flush.lock"), () => {
+        const baseline = JSON.parse(this.recordBaselines["artifacts.json"] ?? "[]");
+        let raw2;
+        try {
+          raw2 = JSON.parse(fs14.readFileSync(path12.join(this.sessionDir(), "artifacts.json"), "utf8"));
+          this.observedRecordFiles.add("artifacts.json");
+        } catch (error51) {
+          if (errorCode(error51) !== "ENOENT" || this.observedRecordFiles.has("artifacts.json")) throw error51;
+          raw2 = [];
+        }
+        if (!Array.isArray(raw2) || raw2.some((value) => !ArtifactSchema.safeParse(value).success)) {
+          throw new Error("Cannot authorize a PR review from malformed persisted artifacts");
+        }
+        const disk = raw2;
+        if (new Set(disk.map((value) => value.id)).size !== disk.length) {
+          throw new Error("Cannot authorize a PR review from duplicate persisted artifacts");
+        }
+        const before = new Map(baseline.map((value) => [value.id, value]));
+        const persisted = new Map(disk.map((value) => [value.id, value]));
+        for (const local of this.artifacts) {
+          const remote = persisted.get(local.id);
+          if (!remote) continue;
+          const base = before.get(local.id);
+          if (base && base.status !== local.status && base.status !== remote.status && local.status !== remote.status) {
+            throw new SessionReviewConflictError(local.id);
+          }
+          if (!base && ["content", "version", "type", "parentId", "status"].some(
+            (field) => JSON.stringify(local[field]) !== JSON.stringify(remote[field])
+          )) {
+            throw new SessionReviewConflictError(local.id);
+          }
+        }
+        const artifacts = mergeArtifactRecords(baseline, this.artifacts, disk, (value) => value.id);
+        return JSON.parse(JSON.stringify({
+          sessionId: this.sessionId,
+          artifacts,
+          postedReviews: this.reviewPosts.readLegacyHistory()
+        }));
+      });
+    } catch (error51) {
+      if (error51 instanceof SessionReviewConflictError) this.reviewConflict = error51;
+      throw error51;
+    }
+  }
   getFullState() {
     this.assertAuthorizationReadable();
     return {
@@ -33977,6 +34038,11 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     return c.json(r.store.getFullState());
+  });
+  app.get("/api/internal/sessions/:sessionId/review-post-state", (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    return c.json(r.store.getReviewPostState());
   });
   app.get("/api/internal/sessions/:sessionId/metrics", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));

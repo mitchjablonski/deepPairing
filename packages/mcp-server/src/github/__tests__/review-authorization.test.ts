@@ -191,7 +191,7 @@ const ctxFor = (artifacts: Artifact[]) => {
   return {
     store: {
       reviewPosts: new ReviewPostJournal(project, "s1"),
-      getFullState: async () => session(artifacts, postedReviews.length ? { postedReviews } : {}),
+      getReviewPostState: async () => session(artifacts, postedReviews.length ? { postedReviews } : {}),
       recordPostedReview: async (r: unknown) => { postedReviews.push(r); },
     },
   } as never;

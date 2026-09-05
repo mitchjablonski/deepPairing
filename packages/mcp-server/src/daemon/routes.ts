@@ -1002,6 +1002,12 @@ export function createDaemonRoutes(
     return c.json(r.store.getFullState());
   });
 
+  app.get("/api/internal/sessions/:sessionId/review-post-state", (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    return c.json(r.store.getReviewPostState());
+  });
+
   app.get("/api/internal/sessions/:sessionId/metrics", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;

@@ -183,6 +183,61 @@ describe("writer-owned deltas", () => {
     expect(open().getArtifacts().find((r) => r.id === "a")?.title).toBe("retry");
   });
 
+  it("does not interpret a missing observed collection as deleting every record", () => {
+    const a = seed();
+    const saved = fs.readFileSync(file("artifacts.json"), "utf8");
+    fs.unlinkSync(file("artifacts.json"));
+    a.createArtifact({ id: "d", type: "research", title: "pending", content: {} });
+
+    expect(() => a.forceFlush()).toThrow(`Previously observed session collection disappeared: ${file("artifacts.json")}`);
+    expect(fs.existsSync(file("artifacts.json"))).toBe(false);
+    expect(a.getArtifacts().map((r) => r.id)).toEqual(["a", "d"]);
+
+    fs.writeFileSync(file("artifacts.json"), saved);
+    a.forceFlush();
+    expect(open().getArtifacts().map((r) => r.id)).toEqual(["a", "d"]);
+  });
+
+  it("protects an observed empty collection while allowing a never-existing one", () => {
+    const sessionDir = path.dirname(file("artifacts.json"));
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(file("artifacts.json"), "[]");
+    const a = open();
+    fs.unlinkSync(file("artifacts.json"));
+    a.createArtifact({ id: "a", type: "research", title: "pending", content: {} });
+    expect(() => a.forceFlush()).toThrow("Previously observed session collection disappeared");
+
+    const fresh = fx.track(new FileStore(fx.dir, "never-persisted"));
+    fresh.createArtifact({ id: "new", type: "research", title: "first", content: {} });
+    fresh.addRequest({ text: "first request", intent: "explain" });
+    expect(() => fresh.forceFlush()).not.toThrow();
+    expect(fresh.getArtifacts()).toHaveLength(1);
+    expect(JSON.parse(fs.readFileSync(path.join(
+      fx.dir, ".deeppairing/sessions/never-persisted/requests.json",
+    ), "utf8"))).toHaveLength(1);
+  });
+
+  it("remembers a collection read even when it disappears before baseline capture", () => {
+    seed();
+    const artifactsPath = file("artifacts.json");
+    const originalRead = fs.readFileSync.bind(fs);
+    const readSpy = vi.spyOn(fs, "readFileSync").mockImplementation(((target: fs.PathOrFileDescriptor, ...args: unknown[]) => {
+      const value = (originalRead as (...readArgs: unknown[]) => unknown)(target, ...args);
+      if (path.resolve(String(target)) === path.resolve(artifactsPath)) fs.unlinkSync(artifactsPath);
+      return value;
+    }) as typeof fs.readFileSync);
+    let a!: FileStore;
+    try {
+      a = open();
+    } finally {
+      readSpy.mockRestore();
+    }
+    a.createArtifact({ id: "later", type: "research", title: "pending", content: {} });
+
+    expect(() => a.forceFlush()).toThrow(`Previously observed session collection disappeared: ${artifactsPath}`);
+    expect(fs.existsSync(artifactsPath)).toBe(false);
+  });
+
   it("a partial flush retry does not overwrite an intervening writer", () => {
     const retrying = seed();
     const intervening = open();
