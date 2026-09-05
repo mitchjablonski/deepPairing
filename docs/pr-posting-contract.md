@@ -1,6 +1,6 @@
 # Recoverable PR review posting (#344)
 
-Status: proposed; draft stack, **do not merge**. Commit provenance comes from
+Status: implemented for review; draft stack, **do not merge**. Commit provenance comes from
 #343; this protocol must not weaken its target, verdict, or reviewed-SHA gates.
 
 ## Invariant

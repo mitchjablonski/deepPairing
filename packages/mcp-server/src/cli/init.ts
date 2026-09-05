@@ -2058,12 +2058,12 @@ ${helpInvocations}
     dp export html [--redact-code]         Write a self-contained shareable HTML page to .deeppairing/exports/
                                            and print its path (--redact-code drops the code bodies)
     dp post-pr-review <pr>                 Post the pairing session's findings as inline comments
+                                           on a GitHub PR. Requires \`gh\` CLI installed + authed.
     dp review-posts <session-id>           Inspect durable review-post operations
     dp review-posts <session-id> cancel-reserved <operation-id>
                                           Cancel only an operation that has not started sending
     dp review-posts <session-id> reconcile <operation-id> <remote-review-id>
                                           Verify a remote review and record it without posting
-                                           on a GitHub PR. Requires \`gh\` CLI installed + authed.
     dp --help                              Show this help message
     dp --version                           Show version
 `);
