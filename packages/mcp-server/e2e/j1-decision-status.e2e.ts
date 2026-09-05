@@ -108,8 +108,8 @@ async function selectArtifact(page: Page, title: string): Promise<void> {
   await page.waitForTimeout(400);
 }
 
-test("(a) resolved pill + (b) retracted reason/dimmed border + (c) Withdrawn modal row, both themes", async ({ page }) => {
-  for (const theme of ["dark", "light"] as const) {
+for (const theme of ["dark", "light"] as const) {
+  test(`(a) resolved pill + (b) retracted reason/dimmed border + (c) Withdrawn modal row — ${theme}`, async ({ page }) => {
     await load(page, theme);
 
     // (a) RESOLVED decision — the header pill reads Approved, NOT the amber
@@ -137,5 +137,5 @@ test("(a) resolved pill + (b) retracted reason/dimmed border + (c) Withdrawn mod
     await page.screenshot({ path: path.join(SHOTS, `decisions-modal-withdrawn-${theme}.png`), fullPage: false });
     await page.keyboard.press("Escape");
     await page.waitForTimeout(200);
-  }
-});
+  });
+}
