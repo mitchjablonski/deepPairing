@@ -27797,7 +27797,7 @@ var Protocol = class {
         }
         await this.notification(notification, notificationOptions);
       },
-      sendRequest: async (r, resultSchema, options) => {
+      sendRequest: async (r, resultSchema2, options) => {
         if (abortController.signal.aborted) {
           throw new McpError(ErrorCode.ConnectionClosed, "Request was cancelled");
         }
@@ -27809,7 +27809,7 @@ var Protocol = class {
         if (effectiveTaskId && taskStore) {
           await taskStore.updateTaskStatus(effectiveTaskId, "input_required");
         }
-        return await this.request(r, resultSchema, requestOptions);
+        return await this.request(r, resultSchema2, requestOptions);
       },
       authInfo: extra?.authInfo,
       requestId: request.id,
@@ -27970,11 +27970,11 @@ var Protocol = class {
    *
    * @experimental Use `client.experimental.tasks.requestStream()` to access this method.
    */
-  async *requestStream(request, resultSchema, options) {
+  async *requestStream(request, resultSchema2, options) {
     const { task } = options ?? {};
     if (!task) {
       try {
-        const result = await this.request(request, resultSchema, options);
+        const result = await this.request(request, resultSchema2, options);
         yield { type: "result", result };
       } catch (error51) {
         yield {
@@ -27998,7 +27998,7 @@ var Protocol = class {
         yield { type: "taskStatus", task: task2 };
         if (isTerminal(task2.status)) {
           if (task2.status === "completed") {
-            const result = await this.getTaskResult({ taskId }, resultSchema, options);
+            const result = await this.getTaskResult({ taskId }, resultSchema2, options);
             yield { type: "result", result };
           } else if (task2.status === "failed") {
             yield {
@@ -28014,7 +28014,7 @@ var Protocol = class {
           return;
         }
         if (task2.status === "input_required") {
-          const result = await this.getTaskResult({ taskId }, resultSchema, options);
+          const result = await this.getTaskResult({ taskId }, resultSchema2, options);
           yield { type: "result", result };
           return;
         }
@@ -28034,7 +28034,7 @@ var Protocol = class {
    *
    * Do not use this method to emit notifications! Use notification() instead.
    */
-  request(request, resultSchema, options) {
+  request(request, resultSchema2, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
     return new Promise((resolve, reject) => {
       const earlyReject = (error51) => {
@@ -28110,7 +28110,7 @@ var Protocol = class {
           return reject(response);
         }
         try {
-          const parseResult = safeParse2(resultSchema, response.result);
+          const parseResult = safeParse2(resultSchema2, response.result);
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
@@ -28166,8 +28166,8 @@ var Protocol = class {
    *
    * @experimental Use `client.experimental.tasks.getTaskResult()` to access this method.
    */
-  async getTaskResult(params, resultSchema, options) {
-    return this.request({ method: "tasks/result", params }, resultSchema, options);
+  async getTaskResult(params, resultSchema2, options) {
+    return this.request({ method: "tasks/result", params }, resultSchema2, options);
   }
   /**
    * Lists tasks, optionally starting from a pagination cursor.
@@ -28560,8 +28560,8 @@ var ExperimentalServerTasks = class {
    *
    * @experimental
    */
-  requestStream(request, resultSchema, options) {
-    return this._server.requestStream(request, resultSchema, options);
+  requestStream(request, resultSchema2, options) {
+    return this._server.requestStream(request, resultSchema2, options);
   }
   /**
    * Sends a sampling request and returns an AsyncGenerator that yields response messages.
@@ -28726,8 +28726,8 @@ var ExperimentalServerTasks = class {
    *
    * @experimental
    */
-  async getTaskResult(taskId, resultSchema, options) {
-    return this._server.getTaskResult({ taskId }, resultSchema, options);
+  async getTaskResult(taskId, resultSchema2, options) {
+    return this._server.getTaskResult({ taskId }, resultSchema2, options);
   }
   /**
    * Lists tasks with optional pagination.
@@ -31384,12 +31384,15 @@ var ERROR_CODES = {
   not_a_changeset_file: "not_a_changeset_file",
   /** #171 — the store can't persist changeset review state (a read-only /
    *  non-FileStore implementation lacks setChangesetFileReview). */
-  unsupported: "unsupported"
+  unsupported: "unsupported",
+  /** Durable review-post state needs inspection; do not retry an external POST. */
+  review_post_conflict: "review_post_conflict"
 };
 var USER_FACING_ERROR_CODES = [
   ERROR_CODES.daemon_auth_required,
   ERROR_CODES.project_hash_mismatch,
-  ERROR_CODES.session_not_registered
+  ERROR_CODES.session_not_registered,
+  ERROR_CODES.review_post_conflict
 ];
 var TOOL_ERROR_CODES = {
   /** Zod validation failed on tool input — agent should fix the shape and retry. */
@@ -36574,6 +36577,187 @@ function authorizeReviewPost(state, opts) {
 
 // src/mcp/tools/post-pr-review.ts
 init_dist();
+
+// src/store/review-post-journal.ts
+init_zod();
+import { createHash as createHash2, randomUUID } from "node:crypto";
+var digestSchema = external_exports.string().regex(/^[0-9a-f]{64}$/);
+var eventSchema = external_exports.enum(["COMMENT", "REQUEST_CHANGES", "APPROVE"]);
+var timestampSchema = external_exports.iso.datetime();
+var reviewPostResultSchema = external_exports.object({
+  id: external_exports.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  htmlUrl: external_exports.string(),
+  state: external_exports.enum(["COMMENTED", "CHANGES_REQUESTED", "APPROVED"]),
+  commitId: external_exports.string().regex(/^[0-9a-f]{40}$/).optional()
+}).strict();
+var resultSchema = reviewPostResultSchema;
+var reviewPostLeaseSchema = external_exports.object({ operationId: external_exports.uuid(), token: external_exports.uuid() }).strict();
+var reviewPostIdentitySchema = external_exports.object({
+  target: external_exports.string(),
+  event: eventSchema,
+  reviewedHeadSha: external_exports.string().regex(/^[0-9a-f]{40}$/).optional(),
+  payloadDigest: digestSchema,
+  authorizationDigest: digestSchema
+}).strict().superRefine((value, ctx) => {
+  if (canonicalReviewTarget(value.target) !== value.target) {
+    ctx.addIssue({ code: "custom", message: "Expected a canonical GitHub PR target" });
+  }
+  if (value.event === "APPROVE" && !value.reviewedHeadSha) {
+    ctx.addIssue({ code: "custom", message: "Approval requires reviewed commit identity" });
+  }
+});
+var operationSchema = external_exports.object({
+  id: external_exports.uuid(),
+  tokenDigest: digestSchema,
+  sessionId: external_exports.string().min(1),
+  identity: reviewPostIdentitySchema,
+  state: external_exports.enum(["reserved", "sending", "succeeded", "failed", "unknown"]),
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+  result: resultSchema.optional()
+}).strict().superRefine((value, ctx) => {
+  if (value.state === "succeeded" !== (value.result !== void 0)) {
+    ctx.addIssue({ code: "custom", message: "Only success carries a remote review identity" });
+  }
+  if (value.result && !resultMatches(value.identity, value.result)) {
+    ctx.addIssue({ code: "custom", message: "Remote review identity does not match the operation" });
+  }
+});
+var journalSchema = external_exports.object({
+  version: external_exports.literal(1),
+  operations: external_exports.array(operationSchema).max(4096)
+}).strict();
+var ReviewPostJournalError = class extends Error {
+  constructor(reason, message) {
+    super(message);
+    this.reason = reason;
+    this.name = "ReviewPostJournalError";
+  }
+  reason;
+};
+function canonicalReviewTarget(ref) {
+  const parsed = parsePrReference(ref);
+  return parsed?.owner && parsed.repo ? `https://github.com/${parsed.owner.toLowerCase()}/${parsed.repo.toLowerCase()}/pull/${parsed.number}` : null;
+}
+function reviewPostDigest(value) {
+  const stable = (v2) => {
+    if (Array.isArray(v2)) return v2.map(stable);
+    if (v2 && typeof v2 === "object") {
+      return Object.fromEntries(Object.keys(v2).sort().map((k) => [k, stable(v2[k])]));
+    }
+    return v2;
+  };
+  return createHash2("sha256").update(JSON.stringify(stable(value))).digest("hex");
+}
+function resultMatches(identity, result) {
+  const states = { COMMENT: "COMMENTED", REQUEST_CHANGES: "CHANGES_REQUESTED", APPROVE: "APPROVED" };
+  return result.state === states[identity.event] && (!identity.reviewedHeadSha || result.commitId === identity.reviewedHeadSha) && result.htmlUrl.toLowerCase() === `${identity.target}#pullrequestreview-${result.id}`;
+}
+function validateReviewPostResult(identity, result) {
+  const parsed = resultSchema.parse(result);
+  if (!resultMatches(identity, parsed)) {
+    throw new ReviewPostJournalError("invalid", "Remote review identity does not match the attempted post");
+  }
+  return parsed;
+}
+
+// src/github/authorized-durable-review.ts
+function authorizeDurableReview(state, options, prepared) {
+  const target = canonicalReviewTarget(prepared.target);
+  if (!target) throw new Error("Prepared review destination is not a canonical GitHub PR");
+  const auth = authorizeReviewPost(state, { event: options.event, repost: options.repost, pr: target });
+  if (!auth.ok) throw new Error(auth.reason);
+  const payload = bindReviewPayloadToPreparedTarget(auth.payload, auth.reviewedHeadSha, prepared);
+  const identity = {
+    target,
+    event: auth.event,
+    ...auth.reviewedHeadSha ? { reviewedHeadSha: auth.reviewedHeadSha } : {},
+    payloadDigest: reviewPostDigest(payload),
+    // These are the gate's permission-bearing inputs. Deliberately conservative:
+    // any artifact change during reservation requires fresh human-state review.
+    authorizationDigest: reviewPostDigest({ sessionId: state.sessionId, artifacts: state.artifacts })
+  };
+  return { payload, identity };
+}
+
+// src/github/durable-review-post.ts
+var ReviewPostNotSentError = class extends Error {
+  constructor(operationId, cause, reservationReleased) {
+    super(`Review operation ${operationId} did not start its POST. ` + (reservationReleased ? "Its reservation was released; re-check authorization before trying again." : "Its local reservation needs inspection before trying again."), { cause });
+    this.operationId = operationId;
+    this.reservationReleased = reservationReleased;
+    this.name = "ReviewPostNotSentError";
+  }
+  operationId;
+  reservationReleased;
+};
+var ReviewPostUnknownError = class extends Error {
+  constructor(operationId, cause) {
+    super(`Review operation ${operationId} may have reached GitHub. Do not retry or use repost; reconcile this operation first.`, { cause });
+    this.operationId = operationId;
+    this.name = "ReviewPostUnknownError";
+  }
+  operationId;
+};
+async function executeDurableReviewPost(opts) {
+  const payload = JSON.parse(JSON.stringify(opts.payload));
+  const identity = reviewPostIdentitySchema.parse(opts.identity);
+  const commitId = payload.commit_id;
+  if (identity.payloadDigest !== reviewPostDigest(payload) || identity.event !== payload.event || commitId !== identity.reviewedHeadSha) {
+    throw new Error("Review-post payload does not match its authorized digest");
+  }
+  const lease = await opts.store.reserve(identity, opts.repost);
+  try {
+    const current = reviewPostIdentitySchema.parse(await opts.reauthorize());
+    if (reviewPostDigest(current) !== reviewPostDigest(identity)) {
+      throw new Error("Review authorization or content changed while reserving the post");
+    }
+    await opts.store.markSending(lease, identity);
+    const beforeSend = reviewPostIdentitySchema.parse(await opts.reauthorize());
+    if (reviewPostDigest(beforeSend) !== reviewPostDigest(identity)) {
+      throw new Error("Review authorization or content changed during the sending transition");
+    }
+  } catch (err) {
+    let reservationReleased = false;
+    try {
+      await opts.store.failBeforeSending(lease);
+      reservationReleased = true;
+    } catch {
+    }
+    throw new ReviewPostNotSentError(lease.operationId, err, reservationReleased);
+  }
+  let result;
+  try {
+    const wirePayload = { ...payload, body: payload.body + reviewPostMarker(lease.operationId) };
+    result = validateReviewPostResult(identity, await opts.send(identity.target, wirePayload));
+  } catch (err) {
+    try {
+      await opts.store.markUnknown(lease);
+    } catch {
+    }
+    throw new ReviewPostUnknownError(lease.operationId, err);
+  }
+  try {
+    await opts.store.succeed(lease, result);
+    return { operationId: lease.operationId, result, receipt: "recorded" };
+  } catch {
+    try {
+      await opts.store.markUnknown(lease);
+    } catch {
+    }
+    return { operationId: lease.operationId, result, receipt: "unconfirmed" };
+  }
+}
+function reviewPostMarker(operationId) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(operationId)) {
+    throw new Error("Invalid durable review operation ID");
+  }
+  return `
+
+<!-- deepPairing-review-operation:${operationId} -->`;
+}
+
+// src/mcp/tools/post-pr-review.ts
 async function handlePostPrReview(ctx, args) {
   const { store } = ctx;
   const ref = String(args?.pr ?? "").trim();
@@ -36599,19 +36783,18 @@ async function handlePostPrReview(ctx, args) {
       ...typeof args?.repo === "string" ? { repo: args.repo } : {}
     });
     const target = prepared.target;
-    const targetAuth = authorizeReviewPost(await store.getFullState(), {
-      event: args?.event,
-      pr: target,
-      repost: args?.repost === true
+    const options = { event: args?.event, repost: args?.repost === true };
+    const { payload, identity } = authorizeDurableReview(await store.getFullState(), options, prepared);
+    const posted = await executeDurableReviewPost({
+      store: store.reviewPosts,
+      payload,
+      identity,
+      repost: options.repost,
+      reauthorize: async () => authorizeDurableReview(await store.getFullState(), options, prepared).identity,
+      send: (canonicalTarget, frozenPayload) => postPreparedPrReview({ target: canonicalTarget, payload: frozenPayload })
     });
-    if (!targetAuth.ok) return { content: [{ type: "text", text: targetAuth.reason }], isError: true };
-    const payload = bindReviewPayloadToPreparedTarget(
-      targetAuth.payload,
-      targetAuth.reviewedHeadSha,
-      prepared
-    );
-    const result = await postPreparedPrReview({ target, payload });
-    let stampNote = "";
+    const { result } = posted;
+    let stampNote = posted.receipt === "unconfirmed" ? ` Review ${posted.operationId} posted, but its durable receipt is unconfirmed. Do not retry or repost; reconcile this operation first.` : "";
     try {
       const parsed = parsePrRef(target);
       const owner = parsed.owner;
@@ -36628,7 +36811,7 @@ async function handlePostPrReview(ctx, args) {
         commentCount: payload.comments.length
       });
     } catch (stampErr) {
-      stampNote = ` (note: the review posted, but recording it locally failed \u2014 ${errorMessage(stampErr)}. Do NOT call post_pr_review again for this PR unless your pair asks.)`;
+      stampNote += ` (Legacy history update failed \u2014 ${errorMessage(stampErr)}. The durable journal still prevents another post.)`;
     }
     return {
       content: [{
@@ -38179,6 +38362,21 @@ init_project_root();
 init_cli_invocation();
 init_dist();
 var DaemonClient = class {
+  reviewPosts = {
+    reserve: (identity, repost) => this.post("/review-post-operations", { action: "reserve", identity, repost }),
+    markSending: async (lease, identity) => {
+      await this.post("/review-post-operations", { action: "sending", lease, identity });
+    },
+    failBeforeSending: async (lease) => {
+      await this.post("/review-post-operations", { action: "failed", lease });
+    },
+    markUnknown: async (lease) => {
+      await this.post("/review-post-operations", { action: "unknown", lease });
+    },
+    succeed: async (lease, result) => {
+      await this.post("/review-post-operations", { action: "succeeded", lease, result });
+    }
+  };
   baseUrl;
   sessionId;
   /**

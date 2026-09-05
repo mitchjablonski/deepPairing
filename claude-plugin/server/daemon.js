@@ -335,10 +335,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj2, path22) {
-  if (!path22)
+function getElementAtPath(obj2, path23) {
+  if (!path23)
     return obj2;
-  return path22.reduce((acc, key) => acc?.[key], obj2);
+  return path23.reduce((acc, key) => acc?.[key], obj2);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -666,11 +666,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path22, issues) {
+function prefixIssues(path23, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path22);
+    iss.path.unshift(path23);
     return iss;
   });
 }
@@ -887,16 +887,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path22 = []) => {
+  const processError = (error52, path23 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path22, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path23, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path23, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path23, ...issue2.path]);
       } else {
-        const fullpath = [...path22, ...issue2.path];
+        const fullpath = [...path23, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -923,17 +923,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path22 = []) => {
+  const processError = (error52, path23 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path22, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path23, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path23, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path23, ...issue2.path]);
       } else {
-        const fullpath = [...path22, ...issue2.path];
+        const fullpath = [...path23, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -965,8 +965,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path22 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path22) {
+  const path23 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path23) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -14396,13 +14396,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path22 = ref.slice(1).split("/").filter(Boolean);
-  if (path22.length === 0) {
+  const path23 = ref.slice(1).split("/").filter(Boolean);
+  if (path23.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path22[0] === defsKey) {
-    const key = path22[1];
+  if (path23[0] === defsKey) {
+    const key = path23[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -19590,7 +19590,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net2 = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes3, createHash } = __require("crypto");
+    var { randomBytes: randomBytes3, createHash: createHash2 } = __require("crypto");
     var { Duplex, Readable: Readable2 } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -20258,7 +20258,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest = createHash("sha1").update(key + GUID).digest("base64");
+        const digest = createHash2("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -20627,7 +20627,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash } = __require("crypto");
+    var { createHash: createHash2 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -20934,7 +20934,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest = createHash("sha1").update(key + GUID).digest("base64");
+        const digest = createHash2("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -21046,29 +21046,29 @@ var init_version = __esm({
 });
 
 // src/daemon/token.ts
-import fs19 from "node:fs";
+import fs20 from "node:fs";
 import os4 from "node:os";
-import path18 from "node:path";
+import path19 from "node:path";
 function fsHonorsPosixMode(dir) {
   let probe = null;
   try {
-    fs19.mkdirSync(dir, { recursive: true });
-    probe = path18.join(dir, `.dp-mode-probe-${process.pid}-${Date.now()}`);
-    const fd = fs19.openSync(probe, "w", 384);
-    fs19.closeSync(fd);
+    fs20.mkdirSync(dir, { recursive: true });
+    probe = path19.join(dir, `.dp-mode-probe-${process.pid}-${Date.now()}`);
+    const fd = fs20.openSync(probe, "w", 384);
+    fs20.closeSync(fd);
     try {
-      fs19.chmodSync(probe, 384);
+      fs20.chmodSync(probe, 384);
     } catch {
       return false;
     }
-    const mode = fs19.statSync(probe).mode & 511;
+    const mode = fs20.statSync(probe).mode & 511;
     return (mode & 63) === 0;
   } catch {
     return false;
   } finally {
     if (probe) {
       try {
-        fs19.unlinkSync(probe);
+        fs20.unlinkSync(probe);
       } catch {
       }
     }
@@ -21080,53 +21080,53 @@ function tokenPlacement(opts) {
 }
 function runtimeBaseDir() {
   const xdg = process.env.XDG_RUNTIME_DIR?.trim();
-  if (xdg && path18.isAbsolute(xdg)) {
+  if (xdg && path19.isAbsolute(xdg)) {
     try {
-      if (fs19.statSync(xdg).isDirectory()) return path18.join(xdg, "deeppairing");
+      if (fs20.statSync(xdg).isDirectory()) return path19.join(xdg, "deeppairing");
     } catch {
     }
   }
-  return path18.join(os4.tmpdir(), "deeppairing");
+  return path19.join(os4.tmpdir(), "deeppairing");
 }
 function tokenSidecarPath(projectRoot2) {
-  return path18.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
+  return path19.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
 }
 function writeTokenSidecar(projectRoot2, payload) {
   const file2 = tokenSidecarPath(projectRoot2);
-  const dir = path18.dirname(file2);
-  fs19.mkdirSync(dir, { recursive: true, mode: 448 });
+  const dir = path19.dirname(file2);
+  fs20.mkdirSync(dir, { recursive: true, mode: 448 });
   try {
-    fs19.chmodSync(dir, 448);
+    fs20.chmodSync(dir, 448);
   } catch {
   }
   const uid = typeof process.getuid === "function" ? process.getuid() : void 0;
   try {
-    const dstat = fs19.lstatSync(dir);
+    const dstat = fs20.lstatSync(dir);
     if (dstat.isSymbolicLink() || uid !== void 0 && dstat.uid !== uid) {
       return { path: file2, mode: dstat.mode & 511, honored: false, refused: true };
     }
   } catch {
     return { path: file2, mode: 511, honored: false, refused: true };
   }
-  const O_NOFOLLOW = fs19.constants.O_NOFOLLOW ?? 0;
+  const O_NOFOLLOW = fs20.constants.O_NOFOLLOW ?? 0;
   let fd;
   try {
-    fd = fs19.openSync(file2, fs19.constants.O_WRONLY | fs19.constants.O_CREAT | fs19.constants.O_TRUNC | O_NOFOLLOW, 384);
+    fd = fs20.openSync(file2, fs20.constants.O_WRONLY | fs20.constants.O_CREAT | fs20.constants.O_TRUNC | O_NOFOLLOW, 384);
   } catch {
     return { path: file2, mode: 511, honored: false, refused: true };
   }
   try {
-    fs19.writeFileSync(fd, JSON.stringify({ ...payload, projectRoot: projectRoot2 }, null, 2));
+    fs20.writeFileSync(fd, JSON.stringify({ ...payload, projectRoot: projectRoot2 }, null, 2));
   } finally {
-    fs19.closeSync(fd);
+    fs20.closeSync(fd);
   }
   try {
-    fs19.chmodSync(file2, 384);
+    fs20.chmodSync(file2, 384);
   } catch {
   }
   let mode = 511;
   try {
-    mode = fs19.statSync(file2).mode & 511;
+    mode = fs20.statSync(file2).mode & 511;
   } catch {
   }
   return { path: file2, mode, honored: (mode & 63) === 0 };
@@ -21134,15 +21134,15 @@ function writeTokenSidecar(projectRoot2, payload) {
 function readTokenSidecar(projectRoot2) {
   try {
     const file2 = tokenSidecarPath(projectRoot2);
-    if (!fs19.existsSync(file2)) return null;
-    return JSON.parse(fs19.readFileSync(file2, "utf-8"));
+    if (!fs20.existsSync(file2)) return null;
+    return JSON.parse(fs20.readFileSync(file2, "utf-8"));
   } catch {
     return null;
   }
 }
 function unlinkTokenSidecar(projectRoot2) {
   try {
-    fs19.unlinkSync(tokenSidecarPath(projectRoot2));
+    fs20.unlinkSync(tokenSidecarPath(projectRoot2));
   } catch {
   }
 }
@@ -21175,9 +21175,9 @@ __export(lifecycle_exports, {
   waitForPortRelease: () => waitForPortRelease
 });
 import { spawn, execFileSync } from "node:child_process";
-import fs20 from "node:fs";
+import fs21 from "node:fs";
 import net from "node:net";
-import path19 from "node:path";
+import path20 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 function logStale(msg) {
   try {
@@ -21187,13 +21187,13 @@ function logStale(msg) {
   }
 }
 function daemonInfoPath(projectRoot2) {
-  return path19.join(projectRoot2, ".deeppairing", DAEMON_FILE);
+  return path20.join(projectRoot2, ".deeppairing", DAEMON_FILE);
 }
 function readDaemonInfo(projectRoot2) {
   const infoPath = daemonInfoPath(projectRoot2);
   try {
-    if (!fs20.existsSync(infoPath)) return null;
-    const info = JSON.parse(fs20.readFileSync(infoPath, "utf-8"));
+    if (!fs21.existsSync(infoPath)) return null;
+    const info = JSON.parse(fs21.readFileSync(infoPath, "utf-8"));
     if (!info.authToken) {
       const sidecar = readTokenSidecar(projectRoot2);
       if (sidecar?.authToken && (sidecar.pid === void 0 || sidecar.pid === info.pid)) {
@@ -21311,7 +21311,7 @@ async function isDaemonRunning(projectRoot2, range = { start: preferredPortFor(p
   }
   if (info) {
     try {
-      fs20.unlinkSync(daemonInfoPath(projectRoot2));
+      fs21.unlinkSync(daemonInfoPath(projectRoot2));
     } catch {
     }
   }
@@ -21355,8 +21355,8 @@ function buildReadinessTimeoutMessage(args) {
     `deepPairing daemon did not become ready within ${timeoutMs}ms (probed this project's ports ${first}\u2013${last}).`,
     hint
   ];
-  const logPath2 = path19.join(projectRoot2, ".deeppairing", "daemon.log");
-  if (fs20.existsSync(logPath2)) {
+  const logPath2 = path20.join(projectRoot2, ".deeppairing", "daemon.log");
+  if (fs21.existsSync(logPath2)) {
     lines.push(`See ${logPath2} for the daemon's own startup log.`);
   }
   lines.push(`To diagnose: ${cliInvocation("doctor")}`);
@@ -21398,8 +21398,8 @@ async function describePortHolders(projectRoot2) {
   return parts.join("\n");
 }
 function spawnDaemon(projectRoot2) {
-  const daemonScript = path19.join(__thisDir2, "../../dist/daemon/index.js");
-  const scriptPath = fs20.existsSync(daemonScript) ? daemonScript : path19.join(__thisDir2, "daemon.js");
+  const daemonScript = path20.join(__thisDir2, "../../dist/daemon/index.js");
+  const scriptPath = fs21.existsSync(daemonScript) ? daemonScript : path20.join(__thisDir2, "daemon.js");
   const child = spawn("node", [scriptPath], {
     cwd: projectRoot2,
     detached: true,
@@ -21495,7 +21495,7 @@ function pidIsGone(pid) {
 function readProcessStartTime(pid) {
   try {
     if (process.platform === "linux") {
-      const stat = fs20.readFileSync(`/proc/${pid}/stat`, "utf-8");
+      const stat = fs21.readFileSync(`/proc/${pid}/stat`, "utf-8");
       const rparen = stat.lastIndexOf(")");
       if (rparen === -1) return null;
       const rest = stat.slice(rparen + 1).trim().split(/\s+/);
@@ -21641,7 +21641,7 @@ var init_lifecycle = __esm({
     init_version();
     init_cli_invocation();
     init_dist();
-    __thisDir2 = path19.dirname(fileURLToPath3(import.meta.url));
+    __thisDir2 = path20.dirname(fileURLToPath3(import.meta.url));
     DAEMON_FILE = "daemon.json";
     DEFAULT_PORT = BASE_PORT;
     MAX_PORT_ATTEMPTS = 10;
@@ -22296,8 +22296,8 @@ var serve = (options, listeningListener) => {
 
 // src/daemon/index.ts
 import crypto5 from "node:crypto";
-import fs22 from "node:fs";
-import path21 from "node:path";
+import fs23 from "node:fs";
+import path22 from "node:path";
 
 // src/cli/setup-tasks.ts
 init_cli_invocation();
@@ -23493,26 +23493,26 @@ var handleParsingNestedValues = (form, key, value) => {
 };
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/utils/url.js
-var splitPath = (path22) => {
-  const paths = path22.split("/");
+var splitPath = (path23) => {
+  const paths = path23.split("/");
   if (paths[0] === "") {
     paths.shift();
   }
   return paths;
 };
 var splitRoutingPath = (routePath) => {
-  const { groups, path: path22 } = extractGroupsFromPath(routePath);
-  const paths = splitPath(path22);
+  const { groups, path: path23 } = extractGroupsFromPath(routePath);
+  const paths = splitPath(path23);
   return replaceGroupMarks(paths, groups);
 };
-var extractGroupsFromPath = (path22) => {
+var extractGroupsFromPath = (path23) => {
   const groups = [];
-  path22 = path22.replace(/\{[^}]+\}/g, (match2, index) => {
+  path23 = path23.replace(/\{[^}]+\}/g, (match2, index) => {
     const mark = `@${index}`;
     groups.push([mark, match2]);
     return mark;
   });
-  return { groups, path: path22 };
+  return { groups, path: path23 };
 };
 var replaceGroupMarks = (paths, groups) => {
   for (let i = groups.length - 1; i >= 0; i--) {
@@ -23569,8 +23569,8 @@ var getPath = (request) => {
       const queryIndex = url2.indexOf("?", i);
       const hashIndex = url2.indexOf("#", i);
       const end = queryIndex === -1 ? hashIndex === -1 ? void 0 : hashIndex : hashIndex === -1 ? queryIndex : Math.min(queryIndex, hashIndex);
-      const path22 = url2.slice(start, end);
-      return tryDecodeURI(path22.includes("%25") ? path22.replace(/%25/g, "%2525") : path22);
+      const path23 = url2.slice(start, end);
+      return tryDecodeURI(path23.includes("%25") ? path23.replace(/%25/g, "%2525") : path23);
     } else if (charCode === 63 || charCode === 35) {
       break;
     }
@@ -23587,11 +23587,11 @@ var mergePath = (base, sub, ...rest) => {
   }
   return `${base?.[0] === "/" ? "" : "/"}${base}${sub === "/" ? "" : `${base?.at(-1) === "/" ? "" : "/"}${sub?.[0] === "/" ? sub.slice(1) : sub}`}`;
 };
-var checkOptionalParameter = (path22) => {
-  if (path22.charCodeAt(path22.length - 1) !== 63 || !path22.includes(":")) {
+var checkOptionalParameter = (path23) => {
+  if (path23.charCodeAt(path23.length - 1) !== 63 || !path23.includes(":")) {
     return null;
   }
-  const segments = path22.split("/");
+  const segments = path23.split("/");
   const results = [];
   let basePath = "";
   segments.forEach((segment) => {
@@ -23732,9 +23732,9 @@ var HonoRequest = class {
    */
   path;
   bodyCache = {};
-  constructor(request, path22 = "/", matchResult = [[]]) {
+  constructor(request, path23 = "/", matchResult = [[]]) {
     this.raw = request;
-    this.path = path22;
+    this.path = path23;
     this.#matchResult = matchResult;
     this.#validatedData = {};
   }
@@ -24486,8 +24486,8 @@ var Hono = class _Hono {
         return this;
       };
     });
-    this.on = (method, path22, ...handlers) => {
-      for (const p of [path22].flat()) {
+    this.on = (method, path23, ...handlers) => {
+      for (const p of [path23].flat()) {
         this.#path = p;
         for (const m of [method].flat()) {
           handlers.map((handler) => {
@@ -24544,8 +24544,8 @@ var Hono = class _Hono {
    * app.route("/api", app2) // GET /api/user
    * ```
    */
-  route(path22, app) {
-    const subApp = this.basePath(path22);
+  route(path23, app) {
+    const subApp = this.basePath(path23);
     app.routes.map((r) => {
       let handler;
       if (app.errorHandler === errorHandler) {
@@ -24571,9 +24571,9 @@ var Hono = class _Hono {
    * const api = new Hono().basePath('/api')
    * ```
    */
-  basePath(path22) {
+  basePath(path23) {
     const subApp = this.#clone();
-    subApp._basePath = mergePath(this._basePath, path22);
+    subApp._basePath = mergePath(this._basePath, path23);
     return subApp;
   }
   /**
@@ -24647,7 +24647,7 @@ var Hono = class _Hono {
    * })
    * ```
    */
-  mount(path22, applicationHandler, options) {
+  mount(path23, applicationHandler, options) {
     let replaceRequest;
     let optionHandler;
     if (options) {
@@ -24674,7 +24674,7 @@ var Hono = class _Hono {
       return [c.env, executionContext];
     };
     replaceRequest ||= (() => {
-      const mergedPath = mergePath(this._basePath, path22);
+      const mergedPath = mergePath(this._basePath, path23);
       const pathPrefixLength = mergedPath === "/" ? 0 : mergedPath.length;
       return (request) => {
         const url2 = new URL(request.url);
@@ -24689,19 +24689,19 @@ var Hono = class _Hono {
       }
       await next();
     };
-    this.#addRoute(METHOD_NAME_ALL, mergePath(path22, "*"), handler);
+    this.#addRoute(METHOD_NAME_ALL, mergePath(path23, "*"), handler);
     return this;
   }
-  #addRoute(method, path22, handler, baseRoutePath) {
+  #addRoute(method, path23, handler, baseRoutePath) {
     method = method.toUpperCase();
-    path22 = mergePath(this._basePath, path22);
+    path23 = mergePath(this._basePath, path23);
     const r = {
       basePath: baseRoutePath !== void 0 ? mergePath(this._basePath, baseRoutePath) : this._basePath,
-      path: path22,
+      path: path23,
       method,
       handler
     };
-    this.router.add(method, path22, [handler, r]);
+    this.router.add(method, path23, [handler, r]);
     this.routes.push(r);
   }
   #handleError(err, c) {
@@ -24714,10 +24714,10 @@ var Hono = class _Hono {
     if (method === "HEAD") {
       return (async () => new Response(null, await this.#dispatch(request, executionCtx, env, "GET")))();
     }
-    const path22 = this.getPath(request, { env });
-    const matchResult = this.router.match(method, path22);
+    const path23 = this.getPath(request, { env });
+    const matchResult = this.router.match(method, path23);
     const c = new Context(request, {
-      path: path22,
+      path: path23,
       matchResult,
       env,
       executionCtx,
@@ -24817,15 +24817,15 @@ var Hono = class _Hono {
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/router/reg-exp-router/matcher.js
 var emptyParam = [];
-function match(method, path22) {
+function match(method, path23) {
   const matchers = this.buildAllMatchers();
-  const match2 = ((method2, path23) => {
+  const match2 = ((method2, path24) => {
     const matcher = matchers[method2] || matchers[METHOD_NAME_ALL];
-    const staticMatch = matcher[2][path23];
+    const staticMatch = matcher[2][path24];
     if (staticMatch) {
       return staticMatch;
     }
-    const match3 = path23.match(matcher[0]);
+    const match3 = path24.match(matcher[0]);
     if (!match3) {
       return [[], emptyParam];
     }
@@ -24833,7 +24833,7 @@ function match(method, path22) {
     return [matcher[1][index], match3];
   });
   this.match = match2;
-  return match2(method, path22);
+  return match2(method, path23);
 }
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/router/reg-exp-router/node.js
@@ -24948,12 +24948,12 @@ var Node = class _Node {
 var Trie = class {
   #context = { varIndex: 0 };
   #root = new Node();
-  insert(path22, index, pathErrorCheckOnly) {
+  insert(path23, index, pathErrorCheckOnly) {
     const paramAssoc = [];
     const groups = [];
     for (let i = 0; ; ) {
       let replaced = false;
-      path22 = path22.replace(/\{[^}]+\}/g, (m) => {
+      path23 = path23.replace(/\{[^}]+\}/g, (m) => {
         const mark = `@\\${i}`;
         groups[i] = [mark, m];
         i++;
@@ -24964,7 +24964,7 @@ var Trie = class {
         break;
       }
     }
-    const tokens = path22.match(/(?::[^\/]+)|(?:\/\*$)|./g) || [];
+    const tokens = path23.match(/(?::[^\/]+)|(?:\/\*$)|./g) || [];
     for (let i = groups.length - 1; i >= 0; i--) {
       const [mark] = groups[i];
       for (let j = tokens.length - 1; j >= 0; j--) {
@@ -25003,9 +25003,9 @@ var Trie = class {
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/router/reg-exp-router/router.js
 var nullMatcher = [/^$/, [], /* @__PURE__ */ Object.create(null)];
 var wildcardRegExpCache = /* @__PURE__ */ Object.create(null);
-function buildWildcardRegExp(path22) {
-  return wildcardRegExpCache[path22] ??= new RegExp(
-    path22 === "*" ? "" : `^${path22.replace(
+function buildWildcardRegExp(path23) {
+  return wildcardRegExpCache[path23] ??= new RegExp(
+    path23 === "*" ? "" : `^${path23.replace(
       /\/\*$|([.\\+*[^\]$()])/g,
       (_, metaChar) => metaChar ? `\\${metaChar}` : "(?:|/.*)"
     )}$`
@@ -25027,17 +25027,17 @@ function buildMatcherFromPreprocessedRoutes(routes) {
   );
   const staticMap = /* @__PURE__ */ Object.create(null);
   for (let i = 0, j = -1, len = routesWithStaticPathFlag.length; i < len; i++) {
-    const [pathErrorCheckOnly, path22, handlers] = routesWithStaticPathFlag[i];
+    const [pathErrorCheckOnly, path23, handlers] = routesWithStaticPathFlag[i];
     if (pathErrorCheckOnly) {
-      staticMap[path22] = [handlers.map(([h]) => [h, /* @__PURE__ */ Object.create(null)]), emptyParam];
+      staticMap[path23] = [handlers.map(([h]) => [h, /* @__PURE__ */ Object.create(null)]), emptyParam];
     } else {
       j++;
     }
     let paramAssoc;
     try {
-      paramAssoc = trie.insert(path22, j, pathErrorCheckOnly);
+      paramAssoc = trie.insert(path23, j, pathErrorCheckOnly);
     } catch (e) {
-      throw e === PATH_ERROR ? new UnsupportedPathError(path22) : e;
+      throw e === PATH_ERROR ? new UnsupportedPathError(path23) : e;
     }
     if (pathErrorCheckOnly) {
       continue;
@@ -25071,12 +25071,12 @@ function buildMatcherFromPreprocessedRoutes(routes) {
   }
   return [regexp, handlerMap, staticMap];
 }
-function findMiddleware(middleware, path22) {
+function findMiddleware(middleware, path23) {
   if (!middleware) {
     return void 0;
   }
   for (const k of Object.keys(middleware).sort((a, b) => b.length - a.length)) {
-    if (buildWildcardRegExp(k).test(path22)) {
+    if (buildWildcardRegExp(k).test(path23)) {
       return [...middleware[k]];
     }
   }
@@ -25090,7 +25090,7 @@ var RegExpRouter = class {
     this.#middleware = { [METHOD_NAME_ALL]: /* @__PURE__ */ Object.create(null) };
     this.#routes = { [METHOD_NAME_ALL]: /* @__PURE__ */ Object.create(null) };
   }
-  add(method, path22, handler) {
+  add(method, path23, handler) {
     const middleware = this.#middleware;
     const routes = this.#routes;
     if (!middleware || !routes) {
@@ -25105,18 +25105,18 @@ var RegExpRouter = class {
         });
       });
     }
-    if (path22 === "/*") {
-      path22 = "*";
+    if (path23 === "/*") {
+      path23 = "*";
     }
-    const paramCount = (path22.match(/\/:/g) || []).length;
-    if (/\*$/.test(path22)) {
-      const re = buildWildcardRegExp(path22);
+    const paramCount = (path23.match(/\/:/g) || []).length;
+    if (/\*$/.test(path23)) {
+      const re = buildWildcardRegExp(path23);
       if (method === METHOD_NAME_ALL) {
         Object.keys(middleware).forEach((m) => {
-          middleware[m][path22] ||= findMiddleware(middleware[m], path22) || findMiddleware(middleware[METHOD_NAME_ALL], path22) || [];
+          middleware[m][path23] ||= findMiddleware(middleware[m], path23) || findMiddleware(middleware[METHOD_NAME_ALL], path23) || [];
         });
       } else {
-        middleware[method][path22] ||= findMiddleware(middleware[method], path22) || findMiddleware(middleware[METHOD_NAME_ALL], path22) || [];
+        middleware[method][path23] ||= findMiddleware(middleware[method], path23) || findMiddleware(middleware[METHOD_NAME_ALL], path23) || [];
       }
       Object.keys(middleware).forEach((m) => {
         if (method === METHOD_NAME_ALL || method === m) {
@@ -25134,15 +25134,15 @@ var RegExpRouter = class {
       });
       return;
     }
-    const paths = checkOptionalParameter(path22) || [path22];
+    const paths = checkOptionalParameter(path23) || [path23];
     for (let i = 0, len = paths.length; i < len; i++) {
-      const path23 = paths[i];
+      const path24 = paths[i];
       Object.keys(routes).forEach((m) => {
         if (method === METHOD_NAME_ALL || method === m) {
-          routes[m][path23] ||= [
-            ...findMiddleware(middleware[m], path23) || findMiddleware(middleware[METHOD_NAME_ALL], path23) || []
+          routes[m][path24] ||= [
+            ...findMiddleware(middleware[m], path24) || findMiddleware(middleware[METHOD_NAME_ALL], path24) || []
           ];
-          routes[m][path23].push([handler, paramCount - len + i + 1]);
+          routes[m][path24].push([handler, paramCount - len + i + 1]);
         }
       });
     }
@@ -25161,13 +25161,13 @@ var RegExpRouter = class {
     const routes = [];
     let hasOwnRoute = method === METHOD_NAME_ALL;
     [this.#middleware, this.#routes].forEach((r) => {
-      const ownRoute = r[method] ? Object.keys(r[method]).map((path22) => [path22, r[method][path22]]) : [];
+      const ownRoute = r[method] ? Object.keys(r[method]).map((path23) => [path23, r[method][path23]]) : [];
       if (ownRoute.length !== 0) {
         hasOwnRoute ||= true;
         routes.push(...ownRoute);
       } else if (method !== METHOD_NAME_ALL) {
         routes.push(
-          ...Object.keys(r[METHOD_NAME_ALL]).map((path22) => [path22, r[METHOD_NAME_ALL][path22]])
+          ...Object.keys(r[METHOD_NAME_ALL]).map((path23) => [path23, r[METHOD_NAME_ALL][path23]])
         );
       }
     });
@@ -25187,13 +25187,13 @@ var SmartRouter = class {
   constructor(init) {
     this.#routers = init.routers;
   }
-  add(method, path22, handler) {
+  add(method, path23, handler) {
     if (!this.#routes) {
       throw new Error(MESSAGE_MATCHER_IS_ALREADY_BUILT);
     }
-    this.#routes.push([method, path22, handler]);
+    this.#routes.push([method, path23, handler]);
   }
-  match(method, path22) {
+  match(method, path23) {
     if (!this.#routes) {
       throw new Error("Fatal error");
     }
@@ -25208,7 +25208,7 @@ var SmartRouter = class {
         for (let i2 = 0, len2 = routes.length; i2 < len2; i2++) {
           router.add(...routes[i2]);
         }
-        res = router.match(method, path22);
+        res = router.match(method, path23);
       } catch (e) {
         if (e instanceof UnsupportedPathError) {
           continue;
@@ -25258,10 +25258,10 @@ var Node2 = class _Node2 {
     }
     this.#patterns = [];
   }
-  insert(method, path22, handler) {
+  insert(method, path23, handler) {
     this.#order = ++this.#order;
     let curNode = this;
-    const parts = splitRoutingPath(path22);
+    const parts = splitRoutingPath(path23);
     const possibleKeys = [];
     for (let i = 0, len = parts.length; i < len; i++) {
       const p = parts[i];
@@ -25310,12 +25310,12 @@ var Node2 = class _Node2 {
       }
     }
   }
-  search(method, path22) {
+  search(method, path23) {
     const handlerSets = [];
     this.#params = emptyParams;
     const curNode = this;
     let curNodes = [curNode];
-    const parts = splitPath(path22);
+    const parts = splitPath(path23);
     const curNodesQueue = [];
     const len = parts.length;
     let partOffsets = null;
@@ -25357,13 +25357,13 @@ var Node2 = class _Node2 {
           if (matcher instanceof RegExp) {
             if (partOffsets === null) {
               partOffsets = new Array(len);
-              let offset = path22[0] === "/" ? 1 : 0;
+              let offset = path23[0] === "/" ? 1 : 0;
               for (let p = 0; p < len; p++) {
                 partOffsets[p] = offset;
                 offset += parts[p].length + 1;
               }
             }
-            const restPathString = path22.substring(partOffsets[i]);
+            const restPathString = path23.substring(partOffsets[i]);
             const m = matcher.exec(restPathString);
             if (m) {
               params[name] = m[0];
@@ -25416,18 +25416,18 @@ var TrieRouter = class {
   constructor() {
     this.#node = new Node2();
   }
-  add(method, path22, handler) {
-    const results = checkOptionalParameter(path22);
+  add(method, path23, handler) {
+    const results = checkOptionalParameter(path23);
     if (results) {
       for (let i = 0, len = results.length; i < len; i++) {
         this.#node.insert(method, results[i], handler);
       }
       return;
     }
-    this.#node.insert(method, path22, handler);
+    this.#node.insert(method, path23, handler);
   }
-  match(method, path22) {
-    return this.#node.search(method, path22);
+  match(method, path23) {
+    return this.#node.search(method, path23);
   }
 };
 
@@ -25540,8 +25540,8 @@ var import_websocket_server = __toESM(require_websocket_server(), 1);
 
 // src/daemon/create-daemon.ts
 import { fileURLToPath as fileURLToPath4 } from "node:url";
-import fs21 from "node:fs";
-import path20 from "node:path";
+import fs22 from "node:fs";
+import path21 from "node:path";
 import { spawn as spawn2 } from "node:child_process";
 import { randomBytes as randomBytes2 } from "node:crypto";
 
@@ -25611,12 +25611,15 @@ var ERROR_CODES = {
   not_a_changeset_file: "not_a_changeset_file",
   /** #171 — the store can't persist changeset review state (a read-only /
    *  non-FileStore implementation lacks setChangesetFileReview). */
-  unsupported: "unsupported"
+  unsupported: "unsupported",
+  /** Durable review-post state needs inspection; do not retry an external POST. */
+  review_post_conflict: "review_post_conflict"
 };
 var USER_FACING_ERROR_CODES = [
   ERROR_CODES.daemon_auth_required,
   ERROR_CODES.project_hash_mismatch,
-  ERROR_CODES.session_not_registered
+  ERROR_CODES.session_not_registered,
+  ERROR_CODES.review_post_conflict
 ];
 var TOOL_ERROR_CODES = {
   /** Zod validation failed on tool input — agent should fix the shape and retry. */
@@ -25663,8 +25666,8 @@ var TOOL_ERROR_RETRYABLE = {
 
 // src/store/file-store.ts
 init_dist();
-import fs12 from "node:fs";
-import path11 from "node:path";
+import fs13 from "node:fs";
+import path12 from "node:path";
 
 // ../../node_modules/.pnpm/nanoid@5.1.7/node_modules/nanoid/index.js
 import { webcrypto as crypto3 } from "node:crypto";
@@ -27151,8 +27154,43 @@ function isCrossTerminalVerdictFlip(from, to, reason) {
 // src/store/posted-reviews.ts
 import fs11 from "node:fs";
 import path10 from "node:path";
+
+// src/github/pr-reference.ts
+function validRepoOwner(value) {
+  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(value);
+}
+function validRepoName(value) {
+  return /^(?!\.{1,2}$)[a-z0-9_.-]+$/i.test(value);
+}
+function parsePrReference(ref) {
+  const value = ref.trim();
+  const bare = /^#?(\d+)$/.exec(value);
+  if (bare) {
+    const number5 = Number(bare[1]);
+    return Number.isSafeInteger(number5) && number5 > 0 ? { number: number5 } : null;
+  }
+  const match2 = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/(?:files|commits|checks))?\/?(?:[?#][^\s]*)?$/i.exec(value);
+  if (!match2) return null;
+  const [, owner, repo, digits] = match2;
+  const number4 = Number(digits);
+  if (!owner || !repo || !validRepoOwner(owner) || !validRepoName(repo) || !Number.isSafeInteger(number4) || number4 < 1) return null;
+  return { owner, repo, number: number4 };
+}
+
+// src/store/posted-reviews.ts
 function postedReviewsPath(projectRoot2, sessionId) {
   return path10.join(projectRoot2, ".deeppairing", "sessions", sessionId, "posted-reviews.json");
+}
+function samePrTarget(record2, ref) {
+  const parsed = parsePrNumber(ref);
+  if (parsed === null || parsed.number !== record2.prNumber) return false;
+  if (parsed.owner && parsed.repo && record2.owner && record2.repo) {
+    return parsed.owner.toLowerCase() === record2.owner.toLowerCase() && parsed.repo.toLowerCase() === record2.repo.toLowerCase();
+  }
+  return true;
+}
+function parsePrNumber(ref) {
+  return parsePrReference(ref);
 }
 function readPostedReviews(projectRoot2, sessionId) {
   try {
@@ -27169,6 +27207,290 @@ function appendPostedReview(projectRoot2, sessionId, record2) {
   writeJsonAtomic(postedReviewsPath(projectRoot2, sessionId), all);
   return all;
 }
+
+// src/store/review-post-journal.ts
+init_zod();
+import fs12 from "node:fs";
+import path11 from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+var digestSchema = external_exports.string().regex(/^[0-9a-f]{64}$/);
+var eventSchema = external_exports.enum(["COMMENT", "REQUEST_CHANGES", "APPROVE"]);
+var timestampSchema = external_exports.iso.datetime();
+var reviewPostResultSchema = external_exports.object({
+  id: external_exports.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  htmlUrl: external_exports.string(),
+  state: external_exports.enum(["COMMENTED", "CHANGES_REQUESTED", "APPROVED"]),
+  commitId: external_exports.string().regex(/^[0-9a-f]{40}$/).optional()
+}).strict();
+var resultSchema = reviewPostResultSchema;
+var reviewPostLeaseSchema = external_exports.object({ operationId: external_exports.uuid(), token: external_exports.uuid() }).strict();
+var reviewPostIdentitySchema = external_exports.object({
+  target: external_exports.string(),
+  event: eventSchema,
+  reviewedHeadSha: external_exports.string().regex(/^[0-9a-f]{40}$/).optional(),
+  payloadDigest: digestSchema,
+  authorizationDigest: digestSchema
+}).strict().superRefine((value, ctx) => {
+  if (canonicalReviewTarget(value.target) !== value.target) {
+    ctx.addIssue({ code: "custom", message: "Expected a canonical GitHub PR target" });
+  }
+  if (value.event === "APPROVE" && !value.reviewedHeadSha) {
+    ctx.addIssue({ code: "custom", message: "Approval requires reviewed commit identity" });
+  }
+});
+var operationSchema = external_exports.object({
+  id: external_exports.uuid(),
+  tokenDigest: digestSchema,
+  sessionId: external_exports.string().min(1),
+  identity: reviewPostIdentitySchema,
+  state: external_exports.enum(["reserved", "sending", "succeeded", "failed", "unknown"]),
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+  result: resultSchema.optional()
+}).strict().superRefine((value, ctx) => {
+  if (value.state === "succeeded" !== (value.result !== void 0)) {
+    ctx.addIssue({ code: "custom", message: "Only success carries a remote review identity" });
+  }
+  if (value.result && !resultMatches(value.identity, value.result)) {
+    ctx.addIssue({ code: "custom", message: "Remote review identity does not match the operation" });
+  }
+});
+var journalSchema = external_exports.object({
+  version: external_exports.literal(1),
+  operations: external_exports.array(operationSchema).max(4096)
+}).strict();
+var ReviewPostJournalError = class extends Error {
+  constructor(reason, message) {
+    super(message);
+    this.reason = reason;
+    this.name = "ReviewPostJournalError";
+  }
+  reason;
+};
+function canonicalReviewTarget(ref) {
+  const parsed = parsePrReference(ref);
+  return parsed?.owner && parsed.repo ? `https://github.com/${parsed.owner.toLowerCase()}/${parsed.repo.toLowerCase()}/pull/${parsed.number}` : null;
+}
+function reviewPostDigest(value) {
+  const stable = (v) => {
+    if (Array.isArray(v)) return v.map(stable);
+    if (v && typeof v === "object") {
+      return Object.fromEntries(Object.keys(v).sort().map((k) => [k, stable(v[k])]));
+    }
+    return v;
+  };
+  return createHash("sha256").update(JSON.stringify(stable(value))).digest("hex");
+}
+function resultMatches(identity, result) {
+  const states = { COMMENT: "COMMENTED", REQUEST_CHANGES: "CHANGES_REQUESTED", APPROVE: "APPROVED" };
+  return result.state === states[identity.event] && (!identity.reviewedHeadSha || result.commitId === identity.reviewedHeadSha) && result.htmlUrl.toLowerCase() === `${identity.target}#pullrequestreview-${result.id}`;
+}
+var ReviewPostJournal = class {
+  constructor(projectRoot2, sessionId, persist = writeJsonAtomic) {
+    this.sessionId = sessionId;
+    this.persist = persist;
+    if (!sessionId || sessionId === "." || sessionId.includes("..") || /[/\\\0]/.test(sessionId) || sessionId.trim() !== sessionId || /[. ]$/.test(sessionId)) {
+      throw new ReviewPostJournalError("invalid", "Invalid session ID for review-post journal");
+    }
+    const dir = path11.join(projectRoot2, ".deeppairing", "sessions", sessionId);
+    this.journalPath = path11.join(dir, "review-post-operations.json");
+    this.claimPath = path11.join(dir, ".review-post.lock");
+    this.legacyPath = path11.join(dir, "posted-reviews.json");
+    this.markerPath = path11.join(dir, ".review-post-protocol-v1");
+  }
+  sessionId;
+  persist;
+  journalPath;
+  claimPath;
+  legacyPath;
+  markerPath;
+  read() {
+    try {
+      const raw2 = fs12.readFileSync(this.journalPath, "utf8");
+      if (raw2.length > 8 * 1024 * 1024) throw new Error("Journal exceeds safety limit");
+      const journal = journalSchema.parse(JSON.parse(raw2));
+      const ids = /* @__PURE__ */ new Set();
+      const activeTargets = /* @__PURE__ */ new Set();
+      for (const op of journal.operations) {
+        if (op.sessionId !== this.sessionId || ids.has(op.id)) throw new Error("Invalid operation/session identity");
+        ids.add(op.id);
+        if (["reserved", "sending", "unknown"].includes(op.state)) {
+          if (activeTargets.has(op.identity.target)) throw new Error("Overlapping unresolved operations");
+          activeTargets.add(op.identity.target);
+        }
+      }
+      return journal;
+    } catch (err) {
+      if (err.code === "ENOENT" && !fs12.existsSync(this.markerPath)) {
+        return { version: 1, operations: [] };
+      }
+      throw new ReviewPostJournalError("corrupt", "Review-post journal is unreadable or invalid; preserve it and reconcile before posting.");
+    }
+  }
+  /** Legacy data is advisory elsewhere, but it must fail CLOSED at the posting boundary. */
+  legacy() {
+    try {
+      const raw2 = fs12.readFileSync(this.legacyPath, "utf8");
+      if (raw2.length > 8 * 1024 * 1024) throw new Error("History exceeds safety limit");
+      return external_exports.array(external_exports.object({
+        pr: external_exports.string().refine((v) => parsePrReference(v) !== null),
+        prNumber: external_exports.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+        owner: external_exports.string().refine(validRepoOwner).optional(),
+        repo: external_exports.string().refine(validRepoName).optional(),
+        event: eventSchema,
+        reviewId: external_exports.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+        url: external_exports.url(),
+        postedAt: timestampSchema,
+        commentCount: external_exports.number().int().nonnegative()
+      }).passthrough().refine((v) => {
+        const parsed = parsePrReference(v.pr);
+        const posted = parsePrReference(v.url);
+        return parsed?.number === v.prNumber && posted?.number === v.prNumber && !!posted.owner && !!posted.repo && (!v.owner || !parsed.owner || v.owner.toLowerCase() === parsed.owner.toLowerCase()) && (!v.repo || !parsed.repo || v.repo.toLowerCase() === parsed.repo.toLowerCase()) && (!v.owner || v.owner.toLowerCase() === posted.owner.toLowerCase()) && (!v.repo || v.repo.toLowerCase() === posted.repo.toLowerCase()) && (!parsed.owner || parsed.owner.toLowerCase() === posted.owner.toLowerCase()) && (!parsed.repo || parsed.repo.toLowerCase() === posted.repo.toLowerCase());
+      })).parse(JSON.parse(raw2));
+    } catch (err) {
+      if (err.code === "ENOENT") return [];
+      throw new ReviewPostJournalError("corrupt", "Posted-review history is unreadable or invalid; preserve it and reconcile before posting.");
+    }
+  }
+  claim(fn) {
+    const token = randomUUID();
+    let fd;
+    try {
+      fd = fs12.openSync(this.claimPath, "wx", 384);
+    } catch (err) {
+      if (err.code === "EEXIST") {
+        throw new ReviewPostJournalError("busy", "Review-post state is locked. Retry later; never remove a claim while a writer may still be running.");
+      }
+      throw err;
+    }
+    try {
+      fs12.writeFileSync(fd, token);
+    } catch (err) {
+      fs12.closeSync(fd);
+      fs12.unlinkSync(this.claimPath);
+      throw err;
+    }
+    fs12.closeSync(fd);
+    let primaryFailed = false;
+    try {
+      return fn();
+    } catch (err) {
+      primaryFailed = true;
+      throw err;
+    } finally {
+      try {
+        if (fs12.readFileSync(this.claimPath, "utf8") !== token) {
+          throw new ReviewPostJournalError("stale", "Review-post claim changed while held; stop writers and inspect state.");
+        }
+        fs12.unlinkSync(this.claimPath);
+      } catch (err) {
+        if (!primaryFailed) throw err;
+      }
+    }
+  }
+  list() {
+    return this.read().operations;
+  }
+  reserve(identity, repost = false) {
+    const parsed = reviewPostIdentitySchema.parse(identity);
+    return this.claim(() => {
+      const journal = this.read();
+      const legacy = this.legacy();
+      const prior = journal.operations.filter((op) => op.identity.target === parsed.target);
+      const unresolved = prior.find((op) => ["reserved", "sending", "unknown"].includes(op.state));
+      if (unresolved) {
+        throw new ReviewPostJournalError("blocked", `Review operation ${unresolved.id} is ${unresolved.state}; reconcile it before another post. Repost does not bypass uncertainty.`);
+      }
+      if (!repost && (prior.some((op) => op.state === "succeeded") || legacy.some((op) => samePrTarget(op, parsed.target)))) {
+        throw new ReviewPostJournalError("blocked", "This session already posted to that PR; fresh human repost authorization is required.");
+      }
+      if (journal.operations.length >= 4096) throw new ReviewPostJournalError("blocked", "Review-post journal is full; stop writers and perform a history-preserving migration before posting. Do not delete or reset the journal.");
+      const lease = { operationId: randomUUID(), token: randomUUID() };
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      journal.operations.push({
+        id: lease.operationId,
+        tokenDigest: reviewPostDigest(lease.token),
+        sessionId: this.sessionId,
+        identity: parsed,
+        state: "reserved",
+        createdAt: now,
+        updatedAt: now
+      });
+      if (!fs12.existsSync(this.markerPath)) {
+        fs12.writeFileSync(this.markerPath, "1\n", { flag: "wx", mode: 384 });
+      }
+      this.persist(this.journalPath, journal);
+      return lease;
+    });
+  }
+  update(operationId, mutate) {
+    this.claim(() => {
+      const journal = this.read();
+      const op = journal.operations.find((op2) => op2.id === operationId);
+      if (!op) throw new ReviewPostJournalError("stale", "Review-post reservation is absent");
+      mutate(op);
+      op.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+      this.persist(this.journalPath, journalSchema.parse(journal));
+    });
+  }
+  transition(lease, mutate) {
+    this.update(lease.operationId, (op) => {
+      if (op.tokenDigest !== reviewPostDigest(lease.token)) {
+        throw new ReviewPostJournalError("stale", "Review-post reservation belongs to another caller");
+      }
+      mutate(op);
+    });
+  }
+  /** Deliberately not idempotent: a repeated sending response must NEVER authorize a second POST. */
+  markSending(lease, identity) {
+    this.transition(lease, (op) => {
+      if (op.state !== "reserved" || reviewPostDigest(op.identity) !== reviewPostDigest(reviewPostIdentitySchema.parse(identity))) {
+        throw new ReviewPostJournalError("stale", "Review-post reservation changed or may already have been sent");
+      }
+      op.state = "sending";
+    });
+  }
+  failBeforeSending(lease) {
+    this.transition(lease, (op) => {
+      if (op.state !== "reserved") throw new ReviewPostJournalError("stale", "A possibly sent review cannot be marked failed");
+      op.state = "failed";
+    });
+  }
+  /** Explicit operator recovery. Cancelling only reserved atomically fences the original caller. */
+  cancelReserved(operationId) {
+    this.update(operationId, (op) => {
+      if (op.state !== "reserved") throw new ReviewPostJournalError("stale", "A possibly sent review cannot be cancelled");
+      op.state = "failed";
+    });
+  }
+  markUnknown(lease) {
+    this.transition(lease, (op) => {
+      if (op.state !== "sending" && op.state !== "unknown") throw new ReviewPostJournalError("stale", "Only a possibly sent review can become unknown");
+      op.state = "unknown";
+    });
+  }
+  succeed(lease, result) {
+    const parsed = resultSchema.parse(result);
+    this.transition(lease, (op) => {
+      if (!["sending", "unknown", "succeeded"].includes(op.state) || !resultMatches(op.identity, parsed) || op.result && reviewPostDigest(op.result) !== reviewPostDigest(parsed)) {
+        throw new ReviewPostJournalError("stale", "Remote review does not match this possibly sent operation");
+      }
+      op.state = "succeeded";
+      op.result = parsed;
+    });
+  }
+  /** No POST: caller must independently verify the remote review before recording recovery. */
+  reconcileSucceeded(operationId, identity, result) {
+    const parsed = resultSchema.parse(result);
+    this.update(operationId, (op) => {
+      if (!["sending", "unknown", "succeeded"].includes(op.state) || reviewPostDigest(op.identity) !== reviewPostDigest(reviewPostIdentitySchema.parse(identity)) || !resultMatches(op.identity, parsed) || op.result && reviewPostDigest(op.result) !== reviewPostDigest(parsed)) {
+        throw new ReviewPostJournalError("stale", "Remote review does not match the unresolved operation");
+      }
+      op.state = "succeeded";
+      op.result = parsed;
+    });
+  }
+};
 
 // src/store/file-store.ts
 var LEDGER_EXEMPT_REJECT_TYPES = /* @__PURE__ */ new Set([
@@ -27260,8 +27582,8 @@ var FileStore = class _FileStore {
   projectRoot;
   constructor(projectRoot2, sessionId) {
     this.projectRoot = projectRoot2;
-    this.basePath = path11.join(projectRoot2, ".deeppairing");
-    this.projectHint = path11.basename(projectRoot2);
+    this.basePath = path12.join(projectRoot2, ".deeppairing");
+    this.projectHint = path12.basename(projectRoot2);
     this.guardrails = senseProjectGuardrails(projectRoot2);
     this.teamPreferences = loadTeamPreferences(this.basePath);
     this.sessionId = sessionId ?? `session_${Date.now()}`;
@@ -27276,14 +27598,14 @@ var FileStore = class _FileStore {
     this.loadSessionPrefs();
   }
   ensureDir() {
-    const sessionDir = path11.join(this.basePath, "sessions", this.sessionId);
-    fs12.mkdirSync(sessionDir, { recursive: true });
+    const sessionDir = path12.join(this.basePath, "sessions", this.sessionId);
+    fs13.mkdirSync(sessionDir, { recursive: true });
   }
   sessionDir() {
-    return path11.join(this.basePath, "sessions", this.sessionId);
+    return path12.join(this.basePath, "sessions", this.sessionId);
   }
   loadPreferences() {
-    const prefsPath = path11.join(this.basePath, "preferences.json");
+    const prefsPath = path12.join(this.basePath, "preferences.json");
     const prefs = _FileStore.salvageRecord(
       // G6 — labels are the once-per-process suppression KEY: session-scope
       // them (F10's sid:file format) so a second corrupt session still logs.
@@ -27312,27 +27634,27 @@ var FileStore = class _FileStore {
     const dir = this.sessionDir();
     this.artifacts = _FileStore.salvageArray(
       `${this.sessionId}:artifacts.json`,
-      this.loadJsonFile(path11.join(dir, "artifacts.json"), []),
+      this.loadJsonFile(path12.join(dir, "artifacts.json"), []),
       "id"
     );
     this.comments = _FileStore.salvageArray(
       `${this.sessionId}:comments.json`,
-      this.loadJsonFile(path11.join(dir, "comments.json"), []),
+      this.loadJsonFile(path12.join(dir, "comments.json"), []),
       "id"
     );
     const decArr = _FileStore.salvageArray(
       `${this.sessionId}:decisions.json`,
-      this.loadJsonFile(path11.join(dir, "decisions.json"), []),
+      this.loadJsonFile(path12.join(dir, "decisions.json"), []),
       "decisionId"
     );
     this.decisions = new Map(decArr.map((d) => [d.decisionId, d]));
     const planArr = _FileStore.salvageArray(
       `${this.sessionId}:plan-reviews.json`,
-      this.loadJsonFile(path11.join(dir, "plan-reviews.json"), []),
+      this.loadJsonFile(path12.join(dir, "plan-reviews.json"), []),
       "artifactId"
     );
     this.planReviews = new Map(planArr.map((p) => [p.artifactId, p]));
-    const rawFailures = this.loadJsonFile(path11.join(dir, "render-failures.json"), []);
+    const rawFailures = this.loadJsonFile(path12.join(dir, "render-failures.json"), []);
     const keyedFailures = (Array.isArray(rawFailures) ? rawFailures : []).map((r) => ({
       ...r,
       __key: `${r?.artifactId} ${r?.visualId}`
@@ -27344,11 +27666,11 @@ var FileStore = class _FileStore {
     ).map(({ __key, ...r }) => r);
     this.requests = _FileStore.salvageArray(
       `${this.sessionId}:requests.json`,
-      this.loadJsonFile(path11.join(dir, "requests.json"), []),
+      this.loadJsonFile(path12.join(dir, "requests.json"), []),
       "id"
     );
     this.postedReviews = readPostedReviews(this.projectRoot, this.sessionId);
-    const rawMetrics = this.loadJsonFile(path11.join(dir, "metrics.json"), []);
+    const rawMetrics = this.loadJsonFile(path12.join(dir, "metrics.json"), []);
     if (Array.isArray(rawMetrics)) {
       const kept = rawMetrics.filter(
         (e) => !!e && typeof e === "object" && typeof e.type === "string" && typeof e.latencyMs === "number" && Number.isFinite(e.latencyMs)
@@ -27374,11 +27696,11 @@ var FileStore = class _FileStore {
    *  later flush can detect external writes and merge instead of clobber. */
   loadJsonFile(filePath, fallback) {
     try {
-      if (!fs12.existsSync(filePath)) {
+      if (!fs13.existsSync(filePath)) {
         delete this.lastObserved[filePath];
         return fallback;
       }
-      const raw2 = fs12.readFileSync(filePath, "utf-8");
+      const raw2 = fs13.readFileSync(filePath, "utf-8");
       const parsed = JSON.parse(raw2);
       this.lastObserved[filePath] = raw2;
       return parsed;
@@ -27389,7 +27711,7 @@ var FileStore = class _FileStore {
       }
       console.error(`[deepPairing] Corrupted file ${filePath}: ${errorMessage(err)}`);
       try {
-        fs12.copyFileSync(filePath, filePath + ".corrupt");
+        fs13.copyFileSync(filePath, filePath + ".corrupt");
       } catch {
       }
       return fallback;
@@ -27407,7 +27729,7 @@ var FileStore = class _FileStore {
    */
   readIfChanged(filePath) {
     try {
-      const raw2 = fs12.readFileSync(filePath, "utf-8");
+      const raw2 = fs13.readFileSync(filePath, "utf-8");
       if (raw2 === this.lastObserved[filePath]) return null;
       const parsed = JSON.parse(raw2);
       return parsed;
@@ -27470,10 +27792,10 @@ var FileStore = class _FileStore {
   }
   flush() {
     const dir = this.sessionDir();
-    const artifactsPath = path11.join(dir, "artifacts.json");
-    const commentsPath = path11.join(dir, "comments.json");
-    const decisionsPath = path11.join(dir, "decisions.json");
-    const plansPath = path11.join(dir, "plan-reviews.json");
+    const artifactsPath = path12.join(dir, "artifacts.json");
+    const commentsPath = path12.join(dir, "comments.json");
+    const decisionsPath = path12.join(dir, "decisions.json");
+    const plansPath = path12.join(dir, "plan-reviews.json");
     const diskArtifacts = this.readIfChanged(artifactsPath);
     if (diskArtifacts) {
       this.artifacts = this.mergeArrayById(
@@ -27519,13 +27841,13 @@ var FileStore = class _FileStore {
     this.atomicWrite(decisionsPath, Array.from(this.decisions.values()));
     this.atomicWrite(plansPath, Array.from(this.planReviews.values()));
     if (this.reviewLatencies.length > 0) {
-      this.atomicWrite(path11.join(dir, "metrics.json"), this.reviewLatencies);
+      this.atomicWrite(path12.join(dir, "metrics.json"), this.reviewLatencies);
     }
     if (this.renderFailures.length > 0) {
-      this.atomicWrite(path11.join(dir, "render-failures.json"), this.renderFailures);
+      this.atomicWrite(path12.join(dir, "render-failures.json"), this.renderFailures);
     }
     if (this.requests.length > 0) {
-      this.atomicWrite(path11.join(dir, "requests.json"), this.requests);
+      this.atomicWrite(path12.join(dir, "requests.json"), this.requests);
     }
   }
   /** Force an immediate flush — call before process exit */
@@ -27589,7 +27911,7 @@ var FileStore = class _FileStore {
    */
   touchCodeChangeMarker(at) {
     try {
-      writeJsonAtomic(path11.join(this.basePath, "last-code-change.json"), { at });
+      writeJsonAtomic(path12.join(this.basePath, "last-code-change.json"), { at });
     } catch {
     }
   }
@@ -28399,7 +28721,7 @@ var FileStore = class _FileStore {
   }
   readPreferences() {
     if (this.demoPreferences) return this.demoPreferences;
-    const prefsPath = path11.join(this.basePath, "preferences.json");
+    const prefsPath = path12.join(this.basePath, "preferences.json");
     return _FileStore.salvageRecord("preferences.json", this.loadJsonFile(prefsPath, {}), {});
   }
   writePreferences(prefs) {
@@ -28407,7 +28729,7 @@ var FileStore = class _FileStore {
       this.demoPreferences = prefs;
       return;
     }
-    const prefsPath = path11.join(this.basePath, "preferences.json");
+    const prefsPath = path12.join(this.basePath, "preferences.json");
     writeJsonAtomic(prefsPath, prefs);
   }
   // --- Session annotations (learner's replay notes) ---
@@ -28418,7 +28740,7 @@ var FileStore = class _FileStore {
    * accidentally becoming agent context.
    */
   annotationsPath() {
-    return path11.join(this.sessionDir(), "annotations.json");
+    return path12.join(this.sessionDir(), "annotations.json");
   }
   getAnnotations() {
     return this.loadJsonFile(this.annotationsPath(), []);
@@ -28445,6 +28767,10 @@ var FileStore = class _FileStore {
     return true;
   }
   // --- Posted reviews (R1 #279) ---
+  /** Fresh journal reads and short disk claims are shared with CLI processes. */
+  get reviewPosts() {
+    return new ReviewPostJournal(this.projectRoot, this.sessionId);
+  }
   /**
    * R1 (#279) — record that a review LANDED on a PR. Called only after `gh`
    * returned success, by whichever door posted; the authorization gate reads
@@ -28524,7 +28850,7 @@ var FileStore = class _FileStore {
    * evolves separately if needed).
    */
   preflightTracesPath() {
-    return path11.join(this.sessionDir(), "preflight-traces.json");
+    return path12.join(this.sessionDir(), "preflight-traces.json");
   }
   recordPreflightTrace(artifactId, trace) {
     const map2 = _FileStore.salvageRecord(
@@ -28588,7 +28914,7 @@ var FileStore = class _FileStore {
   // cross-session moat (rejectedApproaches / approvedPatterns / guardrails /
   // globalLedgerPublish) that project preferences.json owns.
   sessionPrefsPath() {
-    return path11.join(this.sessionDir(), "session-prefs.json");
+    return path12.join(this.sessionDir(), "session-prefs.json");
   }
   readSessionPrefs() {
     return _FileStore.salvageRecord(
@@ -28688,13 +29014,13 @@ var FileStore = class _FileStore {
 };
 
 // src/http/routes.ts
-import fs17 from "node:fs";
-import path16 from "node:path";
+import fs18 from "node:fs";
+import path17 from "node:path";
 
 // src/store/context-bank.ts
 init_dist();
-import fs13 from "node:fs";
-import path12 from "node:path";
+import fs14 from "node:fs";
+import path13 from "node:path";
 var RUNG_QUALITY = {
   "debrief-summary": "rich",
   "changeset-summary": "medium",
@@ -28822,12 +29148,12 @@ function deriveSalience(input) {
   return tags;
 }
 function readJsonArray(label, file2, idField) {
-  if (!fs13.existsSync(file2)) return [];
-  return salvageArray(label, JSON.parse(fs13.readFileSync(file2, "utf-8")), idField);
+  if (!fs14.existsSync(file2)) return [];
+  return salvageArray(label, JSON.parse(fs14.readFileSync(file2, "utf-8")), idField);
 }
 function mtimeIso(file2) {
   try {
-    return fs13.statSync(file2).mtime.toISOString();
+    return fs14.statSync(file2).mtime.toISOString();
   } catch {
     return null;
   }
@@ -28850,11 +29176,11 @@ function scanProject(entry, opts) {
     waitingOnAgentCount: 0
   };
   if (entry.stale) return project;
-  const sessionsDir = path12.join(entry.projectRoot, ".deeppairing", "sessions");
+  const sessionsDir = path13.join(entry.projectRoot, ".deeppairing", "sessions");
   let dirNames;
   try {
-    if (!fs13.existsSync(sessionsDir)) return project;
-    dirNames = fs13.readdirSync(sessionsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    if (!fs14.existsSync(sessionsDir)) return project;
+    dirNames = fs14.readdirSync(sessionsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
   } catch (err) {
     project.degraded = true;
     project.degradedReason = `sessions dir unreadable: ${String(err)}`;
@@ -28894,9 +29220,9 @@ function groupBySession(decisions) {
 }
 function scanSession(input) {
   const { sessionId, sessionsDir, project, now, staleAfterDays } = input;
-  const dir = path12.join(sessionsDir, sessionId);
-  const artFile = path12.join(dir, "artifacts.json");
-  const commentsFile = path12.join(dir, "comments.json");
+  const dir = path13.join(sessionsDir, sessionId);
+  const artFile = path13.join(dir, "artifacts.json");
+  const commentsFile = path13.join(dir, "comments.json");
   let artifacts = [];
   let degraded = false;
   let degradedReason;
@@ -28934,7 +29260,7 @@ function scanSession(input) {
   } catch {
     unansweredQuestionCount = 0;
   }
-  const lastActivity = deriveLastActivity(artifacts, [artFile, commentsFile, path12.join(dir, "decisions.json")]);
+  const lastActivity = deriveLastActivity(artifacts, [artFile, commentsFile, path13.join(dir, "decisions.json")]);
   const { oneLiner, rung, quality } = deriveOneLiner(artifacts, open);
   const needsYou = open.length + draftReviewCount;
   const session = {
@@ -29046,7 +29372,7 @@ function clearContextBankCache() {
 function summarizeProject(projectRoot2, opts = {}) {
   try {
     const summary = scanProject(
-      { projectRoot: projectRoot2, name: path12.basename(projectRoot2), lastSeen: (/* @__PURE__ */ new Date(0)).toISOString(), stale: false },
+      { projectRoot: projectRoot2, name: path13.basename(projectRoot2), lastSeen: (/* @__PURE__ */ new Date(0)).toISOString(), stale: false },
       { now: opts.now ?? /* @__PURE__ */ new Date(), staleAfterDays: DEFAULT_STALE_AFTER_DAYS }
     );
     return { lastActivity: summary.lastActivity, openDecisionCount: summary.openDecisionCount };
@@ -29056,13 +29382,13 @@ function summarizeProject(projectRoot2, opts = {}) {
 }
 
 // src/store/feature-overrides.ts
-import fs14 from "node:fs";
-import path13 from "node:path";
+import fs15 from "node:fs";
+import path14 from "node:path";
 var VERSION2 = 1;
 var loggedUnknownVersion = false;
 var TITLE_MAX = 120;
 function overridesPath(projectRoot2) {
-  return path13.join(projectRoot2, ".deeppairing", "feature-overrides.json");
+  return path14.join(projectRoot2, ".deeppairing", "feature-overrides.json");
 }
 function emptyOverrides() {
   return { version: VERSION2, groupTitles: {}, artifactAssignments: {} };
@@ -29080,8 +29406,8 @@ function sanitizeRecord(raw2) {
 function readFeatureOverridesFile(projectRoot2) {
   const file2 = overridesPath(projectRoot2);
   try {
-    if (!fs14.existsSync(file2)) return emptyOverrides();
-    const parsed = JSON.parse(fs14.readFileSync(file2, "utf-8"));
+    if (!fs15.existsSync(file2)) return emptyOverrides();
+    const parsed = JSON.parse(fs15.readFileSync(file2, "utf-8"));
     if (parsed?.version !== VERSION2) {
       if (!loggedUnknownVersion) {
         loggedUnknownVersion = true;
@@ -29108,7 +29434,7 @@ function readFeatureOverrides(projectRoot2) {
 }
 function writeFeatureOverridesFile(projectRoot2, data) {
   const file2 = overridesPath(projectRoot2);
-  fs14.mkdirSync(path13.dirname(file2), { recursive: true });
+  fs15.mkdirSync(path14.dirname(file2), { recursive: true });
   writeJsonAtomic(file2, data);
 }
 function setFeatureGroupTitle(projectRoot2, groupKey, title) {
@@ -29534,7 +29860,7 @@ ${SIZE_CLIPPED_NOTE}` : "";
   return `${head}<pre class="code"${langAttr}><code>${fitted.text}${trunc}${sizeTrunc}</code></pre>`;
 }
 function diffBlock(file2, includeCode, projectRoot2) {
-  const path22 = sanitizePath(file2.path, projectRoot2);
+  const path23 = sanitizePath(file2.path, projectRoot2);
   const changeType = esc2(file2.changeType ?? "modified");
   const hunks = Array.isArray(file2.hunks) ? file2.hunks : [];
   const stats = file2.stats;
@@ -29551,7 +29877,7 @@ function diffBlock(file2, includeCode, projectRoot2) {
   const additions = stats?.additions ?? derived.additions;
   const deletions = stats?.deletions ?? derived.deletions;
   const statLine = `<span class="diffstat"><span class="add">+${additions}</span> <span class="del">\u2212${deletions}</span></span>`;
-  const header = `<div class="file-head"><code class="path">${esc2(path22)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
+  const header = `<div class="file-head"><code class="path">${esc2(path23)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
   if (!includeCode) {
     return `<div class="file">${header}<p class="redacted">Diff omitted from this export.</p></div>`;
   }
@@ -29670,9 +29996,9 @@ function evidenceBlock(evidence, includeCode, projectRoot2) {
     }
     if (!ev || typeof ev !== "object") continue;
     const e = ev;
-    const path22 = sanitizePath(e.filePath, projectRoot2);
+    const path23 = sanitizePath(e.filePath, projectRoot2);
     const range = e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null && e.lineEnd !== e.lineStart ? `-${e.lineEnd}` : ""}` : "";
-    let anchor = path22 ? `<p class="anchor"><code>${esc2(path22 + range)}</code></p>` : "";
+    let anchor = path23 ? `<p class="anchor"><code>${esc2(path23 + range)}</code></p>` : "";
     if (!anchor && e.locator && typeof e.locator.value === "string" && e.locator.value.length > 0) {
       const loc = e.locator;
       const label = loc.kind === "url" ? loc.href && loc.href.length > 0 ? `${loc.value} (${loc.href})` : loc.value : loc.kind === "charRange" ? `chars ${loc.value}` : loc.kind === "quote" ? `\u201C${loc.value}\u201D` : loc.value;
@@ -29829,9 +30155,9 @@ function decisionBody(a, ctx) {
 }
 function codeChangeBody(a, ctx) {
   const content = coerceCodeChangeContent(a.content);
-  const path22 = sanitizePath(content.filePath, ctx.projectRoot);
+  const path23 = sanitizePath(content.filePath, ctx.projectRoot);
   const parts = [
-    `<div class="file-head"><code class="path">${esc2(path22)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
+    `<div class="file-head"><code class="path">${esc2(path23)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
   ];
   if (content.reasoning) parts.push(`<p class="why">Why: ${renderInline(content.reasoning)}</p>`);
   if (content.concept?.name) {
@@ -31277,8 +31603,8 @@ function formatLearnings(state) {
 
 // src/export/html-export.ts
 import crypto4 from "node:crypto";
-import fs15 from "node:fs";
-import path14 from "node:path";
+import fs16 from "node:fs";
+import path15 from "node:path";
 var MAX_TRACE_LOOKUPS = 200;
 async function gatherPreflightTraces(store, artifacts) {
   if (!store?.getPreflightTrace) return [];
@@ -31297,8 +31623,8 @@ async function gatherPreflightTraces(store, artifacts) {
 function readGuardrailFires(projectRoot2) {
   if (!projectRoot2) return [];
   try {
-    const p = path14.join(projectRoot2, ".deeppairing", "hooks-state.json");
-    const parsed = JSON.parse(fs15.readFileSync(p, "utf-8"));
+    const p = path15.join(projectRoot2, ".deeppairing", "hooks-state.json");
+    const parsed = JSON.parse(fs16.readFileSync(p, "utf-8"));
     const fires = Array.isArray(parsed?.fires) ? parsed.fires : [];
     const out = [];
     for (const raw2 of fires) {
@@ -31371,7 +31697,7 @@ async function assembleSessionHtml(state, options = {}) {
     ...renderOptions,
     secretLabels,
     secretCount,
-    projectName: renderOptions.projectName ?? (projectRoot2 ? path14.basename(projectRoot2) : void 0)
+    projectName: renderOptions.projectName ?? (projectRoot2 ? path15.basename(projectRoot2) : void 0)
   });
 }
 function htmlExportFileName(sessionId, generatedAt = (/* @__PURE__ */ new Date()).toISOString()) {
@@ -31402,19 +31728,19 @@ async function recordRejectedOptionConcept(store, broadcast, params) {
 init_project_root();
 
 // src/store/preflight-block-log.ts
-import fs16 from "node:fs";
-import path15 from "node:path";
+import fs17 from "node:fs";
+import path16 from "node:path";
 var MAX_BLOCKS = 50;
 var VERSION3 = 1;
 function logPath(projectRoot2) {
-  return path15.join(projectRoot2, ".deeppairing", "preflight-blocks.json");
+  return path16.join(projectRoot2, ".deeppairing", "preflight-blocks.json");
 }
 function readPreflightBlocks(projectRoot2) {
   const file2 = logPath(projectRoot2);
   let raw2;
   try {
-    if (!fs16.existsSync(file2)) return [];
-    raw2 = fs16.readFileSync(file2, "utf-8");
+    if (!fs17.existsSync(file2)) return [];
+    raw2 = fs17.readFileSync(file2, "utf-8");
   } catch {
     return [];
   }
@@ -31430,7 +31756,7 @@ function readPreflightBlocks(projectRoot2) {
   if (raw2.trim().length > 0) {
     try {
       const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-      fs16.writeFileSync(`${file2}.corrupt-${stamp}`, raw2);
+      fs17.writeFileSync(`${file2}.corrupt-${stamp}`, raw2);
     } catch {
     }
   }
@@ -31467,7 +31793,7 @@ function recordPreflightBlock(projectRoot2, sessionId, event) {
   try {
     const blocks = [entry, ...readPreflightBlocks(projectRoot2)].slice(0, MAX_BLOCKS);
     const file2 = logPath(projectRoot2);
-    fs16.mkdirSync(path15.dirname(file2), { recursive: true });
+    fs17.mkdirSync(path16.dirname(file2), { recursive: true });
     writeJsonAtomic(file2, { version: VERSION3, blocks });
     return entry;
   } catch {
@@ -31660,7 +31986,7 @@ var EMPTY_STATE = {
 function sessionDirExists(projectRoot2, sessionId) {
   if (!sessionId || sessionId.includes("/") || sessionId.includes("\\") || sessionId.includes("..")) return false;
   try {
-    return fs17.existsSync(path16.join(projectRoot2, ".deeppairing", "sessions", sessionId));
+    return fs18.existsSync(path17.join(projectRoot2, ".deeppairing", "sessions", sessionId));
   } catch {
     return false;
   }
@@ -32028,7 +32354,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const parsed = DecisionCloseOutBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     const { projectRoot: targetRoot, sessionId: bodySessionId, note } = parsed.data;
-    if (targetRoot && (!projectRoot2 || path16.resolve(targetRoot) !== path16.resolve(projectRoot2))) {
+    if (targetRoot && (!projectRoot2 || path17.resolve(targetRoot) !== path17.resolve(projectRoot2))) {
       return c.json(
         {
           error: "cross_project_close_out_unsupported",
@@ -32762,33 +33088,33 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (!filePath || !projectRoot2) {
       return c.json({ error: "path parameter required" }, 400);
     }
-    const resolved = path16.resolve(projectRoot2, filePath.startsWith("/") ? filePath.slice(1) : filePath);
-    const resolvedRoot = path16.resolve(projectRoot2);
-    if (!resolved.startsWith(resolvedRoot + path16.sep) && resolved !== resolvedRoot) {
+    const resolved = path17.resolve(projectRoot2, filePath.startsWith("/") ? filePath.slice(1) : filePath);
+    const resolvedRoot = path17.resolve(projectRoot2);
+    if (!resolved.startsWith(resolvedRoot + path17.sep) && resolved !== resolvedRoot) {
       return c.json({ error: "Path outside project root" }, 403);
     }
     let realResolved;
     let realRoot;
     try {
-      realResolved = fs17.realpathSync(resolved);
-      realRoot = fs17.realpathSync(resolvedRoot);
+      realResolved = fs18.realpathSync(resolved);
+      realRoot = fs18.realpathSync(resolvedRoot);
     } catch (err) {
       if (errorCode(err) === "ENOENT") return c.json({ error: "File not found" }, 404);
       return c.json({ error: "Cannot read file" }, 500);
     }
-    if (!realResolved.startsWith(realRoot + path16.sep) && realResolved !== realRoot) {
+    if (!realResolved.startsWith(realRoot + path17.sep) && realResolved !== realRoot) {
       return c.json({ error: "Path outside project root" }, 403);
     }
     try {
       const MAX_FILE_BYTES = 5 * 1024 * 1024;
-      const size = fs17.statSync(realResolved).size;
+      const size = fs18.statSync(realResolved).size;
       if (size > MAX_FILE_BYTES) {
         return c.json(
           { error: `File too large to view (${size} bytes > ${MAX_FILE_BYTES}-byte cap).`, code: ERROR_CODES.body_too_large },
           413
         );
       }
-      const content = fs17.readFileSync(realResolved, "utf-8");
+      const content = fs18.readFileSync(realResolved, "utf-8");
       return c.json({ content, filePath, lines: content.split("\n").length });
     } catch (err) {
       if (errorCode(err) === "ENOENT") return c.json({ error: "File not found" }, 404);
@@ -32802,10 +33128,10 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
   });
   app.get("/api/hook-state", (c) => {
     if (!projectRoot2) return c.json({ version: 1, fires: [] });
-    const statePath = path16.join(projectRoot2, ".deeppairing", "hooks-state.json");
-    if (!fs17.existsSync(statePath)) return c.json({ version: 1, fires: [] });
+    const statePath = path17.join(projectRoot2, ".deeppairing", "hooks-state.json");
+    if (!fs18.existsSync(statePath)) return c.json({ version: 1, fires: [] });
     try {
-      const raw2 = JSON.parse(fs17.readFileSync(statePath, "utf-8"));
+      const raw2 = JSON.parse(fs18.readFileSync(statePath, "utf-8"));
       const fires = Array.isArray(raw2?.fires) ? raw2.fires.slice(-25) : [];
       return c.json({ version: 1, fires });
     } catch {
@@ -32930,28 +33256,28 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const sessionTag = sanitize(body?.sessionId);
     const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
     const filename = [ts, sessionTag, decisionTag].filter(Boolean).join("_") + ".md";
-    const promptsDir = path16.join(projectRoot2, ".deeppairing", "prompts");
+    const promptsDir = path17.join(projectRoot2, ".deeppairing", "prompts");
     try {
-      fs17.mkdirSync(promptsDir, { recursive: true });
-      const fullPath = path16.join(promptsDir, filename);
-      const resolved = path16.resolve(fullPath);
-      const resolvedDir = path16.resolve(promptsDir);
-      if (!resolved.startsWith(resolvedDir + path16.sep)) {
+      fs18.mkdirSync(promptsDir, { recursive: true });
+      const fullPath = path17.join(promptsDir, filename);
+      const resolved = path17.resolve(fullPath);
+      const resolvedDir = path17.resolve(promptsDir);
+      if (!resolved.startsWith(resolvedDir + path17.sep)) {
         return c.json({ error: "invalid path" }, 400);
       }
       try {
-        const stat = fs17.lstatSync(resolved);
+        const stat = fs18.lstatSync(resolved);
         if (stat.isSymbolicLink()) return c.json({ error: "invalid path" }, 400);
       } catch (err) {
         if (errorCode(err) !== "ENOENT") throw err;
       }
-      const realDir = fs17.realpathSync(resolvedDir);
-      const realRoot = fs17.realpathSync(path16.resolve(projectRoot2));
-      if (!realDir.startsWith(realRoot + path16.sep) && realDir !== realRoot) {
+      const realDir = fs18.realpathSync(resolvedDir);
+      const realRoot = fs18.realpathSync(path17.resolve(projectRoot2));
+      if (!realDir.startsWith(realRoot + path17.sep) && realDir !== realRoot) {
         return c.json({ error: "invalid path" }, 400);
       }
-      fs17.writeFileSync(resolved, content, "utf-8");
-      const relPath = path16.relative(projectRoot2, resolved);
+      fs18.writeFileSync(resolved, content, "utf-8");
+      const relPath = path17.relative(projectRoot2, resolved);
       return c.json({ status: "saved", path: resolved, relPath });
     } catch (err) {
       return c.json({ error: errorMessage(err, "Save failed") }, 500);
@@ -32972,8 +33298,8 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
 }
 
 // src/http/static-ui.ts
-import fs18 from "node:fs";
-import path17 from "node:path";
+import fs19 from "node:fs";
+import path18 from "node:path";
 var MIME_TYPES = {
   html: "text/html",
   js: "application/javascript",
@@ -32985,9 +33311,9 @@ var MIME_TYPES = {
 };
 function mountStaticUi(app, opts) {
   const { webDistPath, authToken, projectHash, log: log2 } = opts;
-  if (!fs18.existsSync(webDistPath)) return;
+  if (!fs19.existsSync(webDistPath)) return;
   const serveInjectedIndex = (indexPath) => {
-    const html = fs18.readFileSync(indexPath, "utf-8");
+    const html = fs19.readFileSync(indexPath, "utf-8");
     const tokenJson = JSON.stringify(authToken);
     const hashJson = JSON.stringify(projectHash);
     const injection = `<script>window.__deepPairingToken = ${tokenJson}; window.__dpProjectHash = ${hashJson};</script>`;
@@ -33009,22 +33335,22 @@ function mountStaticUi(app, opts) {
   app.get("/*", async (c, next) => {
     if (c.req.path.startsWith("/api/")) return next();
     const filePath = c.req.path === "/" ? "/index.html" : c.req.path;
-    const fullPath = path17.join(webDistPath, filePath);
-    const resolvedPath = path17.resolve(fullPath);
-    const resolvedBase = path17.resolve(webDistPath);
-    if (!resolvedPath.startsWith(resolvedBase + path17.sep) && resolvedPath !== resolvedBase) {
+    const fullPath = path18.join(webDistPath, filePath);
+    const resolvedPath = path18.resolve(fullPath);
+    const resolvedBase = path18.resolve(webDistPath);
+    if (!resolvedPath.startsWith(resolvedBase + path18.sep) && resolvedPath !== resolvedBase) {
       return c.notFound();
     }
-    if (fs18.existsSync(fullPath)) {
-      const ext = path17.extname(filePath).slice(1);
+    if (fs19.existsSync(fullPath)) {
+      const ext = path18.extname(filePath).slice(1);
       if (ext === "html") return serveInjectedIndex(fullPath);
-      const content = fs18.readFileSync(fullPath);
+      const content = fs19.readFileSync(fullPath);
       return new Response(content, {
         headers: { "Content-Type": MIME_TYPES[ext] ?? "application/octet-stream" }
       });
     }
-    const indexPath = path17.join(webDistPath, "index.html");
-    if (fs18.existsSync(indexPath)) {
+    const indexPath = path18.join(webDistPath, "index.html");
+    if (fs19.existsSync(indexPath)) {
       return serveInjectedIndex(indexPath);
     }
     return c.notFound();
@@ -33170,6 +33496,13 @@ function applyTopLevelGuards(app, opts) {
 }
 
 // src/daemon/routes.ts
+var ReviewPostOperationBody = external_exports.discriminatedUnion("action", [
+  external_exports.object({ action: external_exports.literal("reserve"), identity: reviewPostIdentitySchema, repost: external_exports.boolean() }).strict(),
+  external_exports.object({ action: external_exports.literal("sending"), lease: reviewPostLeaseSchema, identity: reviewPostIdentitySchema }).strict(),
+  external_exports.object({ action: external_exports.literal("failed"), lease: reviewPostLeaseSchema }).strict(),
+  external_exports.object({ action: external_exports.literal("unknown"), lease: reviewPostLeaseSchema }).strict(),
+  external_exports.object({ action: external_exports.literal("succeeded"), lease: reviewPostLeaseSchema, result: reviewPostResultSchema }).strict()
+]);
 var RecordRejectedBody = external_exports.object({
   description: external_exports.string().min(1),
   reason: external_exports.string().optional(),
@@ -33510,6 +33843,36 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     if (!parsed.ok) return parsed.res;
     r.store.recordPostedReview(parsed.data);
     return c.json({ status: "recorded" });
+  });
+  app.post("/api/internal/sessions/:sessionId/review-post-operations", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const parsed = await parseJsonBody(c, ReviewPostOperationBody);
+    if (!parsed.ok) return parsed.res;
+    const body = parsed.data;
+    const journal = r.store.reviewPosts;
+    try {
+      switch (body.action) {
+        case "reserve":
+          return c.json(journal.reserve(body.identity, body.repost));
+        case "sending":
+          journal.markSending(body.lease, body.identity);
+          break;
+        case "failed":
+          journal.failBeforeSending(body.lease);
+          break;
+        case "unknown":
+          journal.markUnknown(body.lease);
+          break;
+        case "succeeded":
+          journal.succeed(body.lease, body.result);
+          break;
+      }
+      return c.json({ status: "recorded" });
+    } catch (err) {
+      if (!(err instanceof ReviewPostJournalError)) throw err;
+      return c.json({ error: err.message, code: ERROR_CODES.review_post_conflict, reason: err.reason }, 409);
+    }
   });
   app.post("/api/internal/sessions/:sessionId/comments", async (c) => {
     const sessionId = c.req.param("sessionId");
@@ -34224,13 +34587,13 @@ function createDaemon(deps) {
     env = process.env,
     version: version2 = SERVER_VERSION,
     openBrowser = defaultOpenBrowser,
-    watch = (dir, listener) => fs21.watch(dir, listener),
+    watch = (dir, listener) => fs22.watch(dir, listener),
     heartbeatIntervalMs = 3e4
   } = deps;
   const daemonProjectHash = projectHashOf(projectRoot2);
   let boundPort = 0;
-  const dpDir2 = path20.join(projectRoot2, ".deeppairing");
-  const daemonInfoFile = path20.join(dpDir2, "daemon.json");
+  const dpDir2 = path21.join(projectRoot2, ".deeppairing");
+  const daemonInfoFile = path21.join(dpDir2, "daemon.json");
   const sessions = /* @__PURE__ */ new Map();
   const sessionMeta = /* @__PURE__ */ new Map();
   const activeSessions = /* @__PURE__ */ new Set();
@@ -34496,11 +34859,11 @@ function createDaemon(deps) {
     return c.json({ status: "evicting", pid: process.pid });
   });
   app.get("/api/skill-status", (c) => {
-    const claudeMdPath = path20.join(projectRoot2, "CLAUDE.md");
+    const claudeMdPath = path21.join(projectRoot2, "CLAUDE.md");
     let claudeMdHasMarker = false;
     try {
-      if (fs21.existsSync(claudeMdPath)) {
-        claudeMdHasMarker = fs21.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
+      if (fs22.existsSync(claudeMdPath)) {
+        claudeMdHasMarker = fs22.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
       }
     } catch {
     }
@@ -34536,17 +34899,17 @@ function createDaemon(deps) {
       return c.json({ error: "Demo requests must come from the companion UI." }, 403);
     }
     const MAX_DEMO_SESSIONS = 5;
-    const sessionRoot = path20.resolve(dpDir2, "sessions");
-    const diskIds = fs21.existsSync(sessionRoot) ? fs21.readdirSync(sessionRoot).filter((id) => /^demo_\d+(?:_[a-f0-9]+)?$/.test(id)) : [];
+    const sessionRoot = path21.resolve(dpDir2, "sessions");
+    const diskIds = fs22.existsSync(sessionRoot) ? fs22.readdirSync(sessionRoot).filter((id) => /^demo_\d+(?:_[a-f0-9]+)?$/.test(id)) : [];
     const demoIds = [.../* @__PURE__ */ new Set([...diskIds, ...Array.from(sessions.keys()).filter((id) => /^demo_\d+(?:_[a-f0-9]+)?$/.test(id))])].sort();
     while (demoIds.length >= MAX_DEMO_SESSIONS) {
       const oldest = demoIds.shift();
       demoRuns.get(oldest)?.();
       demoRuns.delete(oldest);
       sessions.get(oldest)?.dispose();
-      const demoDir = path20.resolve(sessionRoot, oldest);
-      if (path20.dirname(demoDir) !== sessionRoot) throw new Error("Invalid demo session path");
-      fs21.rmSync(demoDir, { recursive: true, force: true });
+      const demoDir = path21.resolve(sessionRoot, oldest);
+      if (path21.dirname(demoDir) !== sessionRoot) throw new Error("Invalid demo session path");
+      fs22.rmSync(demoDir, { recursive: true, force: true });
       sessions.delete(oldest);
       sessionMeta.delete(oldest);
       activeSessions.delete(oldest);
@@ -34564,10 +34927,10 @@ function createDaemon(deps) {
     return c.json({ sessionId, startedAt: (/* @__PURE__ */ new Date()).toISOString() });
   });
   app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions));
-  const __thisDir3 = path20.dirname(fileURLToPath4(import.meta.url));
-  const monorepoWebDist = path20.join(__thisDir3, "../../dist/web");
-  const webDistCandidates = [monorepoWebDist, path20.join(__thisDir3, "web")];
-  const webDistPath = webDistCandidates.find((p) => fs21.existsSync(p)) ?? monorepoWebDist;
+  const __thisDir3 = path21.dirname(fileURLToPath4(import.meta.url));
+  const monorepoWebDist = path21.join(__thisDir3, "../../dist/web");
+  const webDistCandidates = [monorepoWebDist, path21.join(__thisDir3, "web")];
+  const webDistPath = webDistCandidates.find((p) => fs22.existsSync(p)) ?? monorepoWebDist;
   mountStaticUi(app, {
     webDistPath,
     authToken: daemonAuthToken2,
@@ -34579,7 +34942,7 @@ function createDaemon(deps) {
       store.forceFlush();
     }
     try {
-      if (fs21.existsSync(daemonInfoFile)) fs21.unlinkSync(daemonInfoFile);
+      if (fs22.existsSync(daemonInfoFile)) fs22.unlinkSync(daemonInfoFile);
     } catch {
     }
     try {
@@ -34603,7 +34966,7 @@ function createDaemon(deps) {
   function writeDaemonInfo(port) {
     const discovery = { pid: process.pid, port, startedAt: startedAt2, projectRoot: projectRoot2, version: version2 };
     try {
-      fs21.mkdirSync(dpDir2, { recursive: true });
+      fs22.mkdirSync(dpDir2, { recursive: true });
       if (resolveTokenPlacement() === "in-repo") {
         writeFile0600(daemonInfoFile, { ...discovery, authToken: daemonAuthToken2 });
         return;
@@ -34731,11 +35094,11 @@ function createDaemon(deps) {
   let hooksWatcher = null;
   function startHooksWatcher() {
     let lastFireSeen = 0;
-    const hooksStatePath = path20.join(projectRoot2, ".deeppairing", "hooks-state.json");
+    const hooksStatePath = path21.join(projectRoot2, ".deeppairing", "hooks-state.json");
     const broadcastNewFires = () => {
       try {
-        if (!fs21.existsSync(hooksStatePath)) return;
-        const raw2 = JSON.parse(fs21.readFileSync(hooksStatePath, "utf-8"));
+        if (!fs22.existsSync(hooksStatePath)) return;
+        const raw2 = JSON.parse(fs22.readFileSync(hooksStatePath, "utf-8"));
         const fires = Array.isArray(raw2?.fires) ? raw2.fires : [];
         for (const f of fires) {
           const t = new Date(f.at).getTime();
@@ -34747,8 +35110,8 @@ function createDaemon(deps) {
       }
     };
     try {
-      if (fs21.existsSync(hooksStatePath)) {
-        const raw2 = JSON.parse(fs21.readFileSync(hooksStatePath, "utf-8"));
+      if (fs22.existsSync(hooksStatePath)) {
+        const raw2 = JSON.parse(fs22.readFileSync(hooksStatePath, "utf-8"));
         const fires = Array.isArray(raw2?.fires) ? raw2.fires : [];
         for (const f of fires) {
           const t = new Date(f.at).getTime();
@@ -34758,10 +35121,10 @@ function createDaemon(deps) {
     } catch {
     }
     try {
-      const hooksDir = path20.dirname(hooksStatePath);
-      fs21.mkdirSync(hooksDir, { recursive: true });
+      const hooksDir = path21.dirname(hooksStatePath);
+      fs22.mkdirSync(hooksDir, { recursive: true });
       const watcher = watch(hooksDir, (_event, filename) => {
-        if (filename === "hooks-state.json" || filename === path20.basename(hooksStatePath)) {
+        if (filename === "hooks-state.json" || filename === path21.basename(hooksStatePath)) {
           broadcastNewFires();
         }
       });
@@ -34784,11 +35147,11 @@ function createDaemon(deps) {
     const pingDecision = decidePing(env);
     if (pingDecision.shouldSend) {
       pingTimer = setTimeout(() => {
-        const claudeMdPath = path20.join(projectRoot2, "CLAUDE.md");
+        const claudeMdPath = path21.join(projectRoot2, "CLAUDE.md");
         let claudeMdHasMarker = false;
         try {
-          if (fs21.existsSync(claudeMdPath)) {
-            claudeMdHasMarker = fs21.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
+          if (fs22.existsSync(claudeMdPath)) {
+            claudeMdHasMarker = fs22.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
           }
         } catch {
         }
@@ -34880,21 +35243,21 @@ function createDaemon(deps) {
 // src/daemon/index.ts
 var MAX_PORT_ATTEMPTS2 = 10;
 var projectRoot = process.env.DEEPPAIRING_PROJECT_ROOT ?? process.cwd();
-var dpDir = path21.join(projectRoot, ".deeppairing");
-var logFile = path21.join(dpDir, "daemon.log");
+var dpDir = path22.join(projectRoot, ".deeppairing");
+var logFile = path22.join(dpDir, "daemon.log");
 var startedAt = (/* @__PURE__ */ new Date()).toISOString();
 var daemonAuthToken = crypto5.randomBytes(32).toString("hex");
 var LOG_MAX_BYTES = 1024 * 1024;
 var LOG_KEEP_FILES = 3;
 function maybeRotateLog() {
   try {
-    const stat = fs22.statSync(logFile);
+    const stat = fs23.statSync(logFile);
     if (stat.size < LOG_MAX_BYTES) return;
     for (let i = LOG_KEEP_FILES - 1; i >= 1; i--) {
       const src = i === 1 ? logFile : `${logFile}.${i - 1}`;
       const dst = `${logFile}.${i}`;
       try {
-        if (fs22.existsSync(src)) fs22.renameSync(src, dst);
+        if (fs23.existsSync(src)) fs23.renameSync(src, dst);
       } catch {
       }
     }
@@ -34905,9 +35268,9 @@ function log(msg) {
   const line = `[${(/* @__PURE__ */ new Date()).toISOString()}] [daemon] ${msg}
 `;
   try {
-    fs22.mkdirSync(path21.dirname(logFile), { recursive: true });
+    fs23.mkdirSync(path22.dirname(logFile), { recursive: true });
     maybeRotateLog();
-    fs22.appendFileSync(logFile, line);
+    fs23.appendFileSync(logFile, line);
   } catch {
   }
 }
