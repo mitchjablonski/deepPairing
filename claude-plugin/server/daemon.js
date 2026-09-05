@@ -27730,7 +27730,7 @@ var FileStore = class _FileStore {
     if (this.isDemoSession || !artifact.content || typeof artifact.content !== "object") return [];
     const content = artifact.content;
     if (content.reviewIntent === "external") return [];
-    const files = artifact.type === "code_change" ? [content.filePath] : artifact.type === "changeset" && Array.isArray(content.files) ? content.files.map((f) => f?.filePath) : [];
+    const files = artifact.type === "code_change" ? [content.filePath] : artifact.type === "changeset" && Array.isArray(content.files) ? content.files.map((f) => f?.path) : [];
     return [...new Set(files.filter((f) => typeof f === "string" && f.trim().length > 0).map((f) => path12.resolve(this.projectRoot, f)))];
   }
   codeCheckpointPath(filePath) {
