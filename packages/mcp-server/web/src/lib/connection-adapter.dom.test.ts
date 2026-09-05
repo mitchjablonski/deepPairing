@@ -149,6 +149,8 @@ describe("WebSocketAdapter socket ownership", () => {
     const json = vi.fn(() => new Promise<unknown>((resolve) => {
       resolveJson = resolve;
     }));
+    const response = new Response(null, { status: 200 });
+    response.json = json;
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => {
       resolveFetch = resolve;
     })));
@@ -168,14 +170,14 @@ describe("WebSocketAdapter socket ownership", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
 
     if (boundary === "json") {
-      resolveFetch({ ok: true, json } as Response);
+      resolveFetch(response);
       await vi.waitFor(() => expect(json).toHaveBeenCalledTimes(1));
     }
     if (action === "connect") adapter.connect();
     else adapter.disconnect();
     const socketCountAfterAction = ControlledWebSocket.instances.length;
     if (boundary === "fetch") {
-      resolveFetch({ ok: true, json } as Response);
+      resolveFetch(response);
       await vi.waitFor(() => expect(json).toHaveBeenCalledTimes(1));
     }
     resolveJson({ projectHash: "project-b" });
