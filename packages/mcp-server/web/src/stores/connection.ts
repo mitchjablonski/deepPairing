@@ -220,7 +220,9 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
   function handleMessage(
     data: any,
     messageConnection = connectionGeneration,
+    recoveryTransition?: SessionTransitionToken,
   ) {
+    if (recoveryMutationTypes.has(data.type) && useReplayStore.getState().active) return;
     const inboundSid = data.type === "connected" ? data.state?.sessionId : undefined;
     const currentSid = get().sessionId;
     const isNewDaemon =
@@ -260,6 +262,10 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     // Import artifact store lazily to avoid circular deps
     import("./artifact").then(({ useArtifactStore }) => {
       if (!isCurrent(messageConnection, messageSession)) return;
+      if (recoveryTransition && !isCurrentSessionTransition(recoveryTransition)) return;
+      // Replay can begin while the artifact-store import is pending. Its
+      // historical frame remains protected until live hydration completes.
+      if (recoveryMutationTypes.has(data.type) && useReplayStore.getState().active) return;
       const store = useArtifactStore.getState();
 
       switch (data.type) {
@@ -707,28 +713,28 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
               unsubscribe: () => {},
             };
             pendingRecovery = recovery;
+            const drainRecoveryMessages = () => {
+              if (
+                !isCurrent(recoveryConnection, recoverySession) ||
+                !isCurrentSessionTransition(recovery.transition) ||
+                get().sessionId !== expectedSessionId
+              ) return;
+              for (const message of recovery.messages.splice(0)) {
+                handleMessage(message, recoveryConnection, recovery.transition);
+              }
+            };
             recovery.unsubscribe = useArtifactStore.subscribe(() => {
               // Optimistic/local mutations are not WebSocket messages and
               // cannot be replayed safely. Preserve them by abandoning the
               // older snapshot, then apply any WS messages already buffered.
               if (pendingRecovery !== recovery) return;
               cancelPendingRecovery();
-              for (const message of recovery.messages) {
-                handleMessage(message, recoveryConnection);
-              }
+              drainRecoveryMessages();
             });
             recovery.timeout = setTimeout(() => {
               if (pendingRecovery !== recovery) return;
               cancelPendingRecovery();
-              if (
-                isCurrent(recoveryConnection, recoverySession) &&
-                isCurrentSessionTransition(recovery.transition) &&
-                get().sessionId === expectedSessionId
-              ) {
-                for (const message of recovery.messages) {
-                  handleMessage(message, recoveryConnection);
-                }
-              }
+              drainRecoveryMessages();
             }, RECOVERY_TIMEOUT_MS);
             fetch(`${apiBase()}/api/state`, {
               headers: { ...sessionHeaders(), "X-Session-Id": expectedSessionId },
@@ -744,6 +750,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
               ) return;
               if (!isCompleteRecoverySnapshot(fresh, expectedSessionId)) {
                 cancelPendingRecovery();
+                drainRecoveryMessages();
                 return;
               }
               if (recovery.timeout !== undefined) clearTimeout(recovery.timeout);
@@ -754,11 +761,10 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
                 hydrateArtifactState(store, fresh);
               } catch {
                 useArtifactStore.setState(previousArtifactState);
+                drainRecoveryMessages();
                 return;
               }
-              for (const message of recovery.messages) {
-                handleMessage(message, recoveryConnection);
-              }
+              drainRecoveryMessages();
               import("./toast").then(({ useToastStore }) => {
                 if (
                   !isCurrent(recoveryConnection, recoverySession) ||
@@ -775,15 +781,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
               .catch(() => {
                 if (pendingRecovery !== recovery) return;
                 cancelPendingRecovery();
-                if (
-                  isCurrent(recoveryConnection, recoverySession) &&
-                  isCurrentSessionTransition(recovery.transition) &&
-                  get().sessionId === expectedSessionId
-                ) {
-                  for (const message of recovery.messages) {
-                    handleMessage(message, recoveryConnection);
-                  }
-                }
+                drainRecoveryMessages();
               });
           }
           break;

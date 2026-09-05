@@ -138,25 +138,21 @@ export class WebSocketAdapter implements ConnectionAdapter {
     if (this.ws && this.ws.readyState <= 1) return;
     this.closed = false; // a fresh connect re-arms the adapter
 
-    const socket = new WebSocket(this.url);
-    this.ws = socket;
+    this.ws = new WebSocket(this.url);
 
-    socket.onopen = () => {
-      if (this.ws !== socket) return;
+    this.ws.onopen = () => {
       this.reconnectAttempt = 0; // Reset backoff on successful connect
       this.connectHandler?.();
     };
 
-    socket.onmessage = (event) => {
-      if (this.ws !== socket) return;
+    this.ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
         this.messageHandler?.(data);
       } catch { /* ignore malformed */ }
     };
 
-    socket.onclose = () => {
-      if (this.ws !== socket) return;
+    this.ws.onclose = () => {
       this.disconnectHandler?.();
       // MP1 — a deliberate disconnect (project switch / teardown) is terminal
       // for this adapter. Don't reconnect and don't probe — the caller built (or
@@ -198,8 +194,8 @@ export class WebSocketAdapter implements ConnectionAdapter {
       this.reconnectTimer = setTimeout(() => this.connect(), delay);
     };
 
-    socket.onerror = () => {
-      if (this.ws === socket) socket.close();
+    this.ws.onerror = () => {
+      this.ws?.close();
     };
   }
 
