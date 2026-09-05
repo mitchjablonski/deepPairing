@@ -438,6 +438,9 @@ function ExternalReviewBanner({ source }: { source?: ChangesetSource }) {
              under AA. Differentiation now comes from font-mono + text-2xs. */
           <span className="font-mono text-2xs"> ({source.headRef} → {source.baseRef})</span>
         ) : null}
+        {source?.headSha ? (
+          <span className="font-mono text-2xs"> (reviewed {source.headSha.slice(0, 12)})</span>
+        ) : null}
       </span>
       <span aria-hidden="true" className="opacity-60">·</span>
       {/* R2 (contrast) — `opacity-90` measured 4.54:1 dark / 4.05:1 light; the

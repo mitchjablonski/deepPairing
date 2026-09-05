@@ -517,9 +517,11 @@ export type ChangesetReviewReasons = z.infer<typeof ChangesetReviewReasonsSchema
 export const ChangesetReviewIntentSchema = z.enum(["local", "external"]);
 export type ChangesetReviewIntent = z.infer<typeof ChangesetReviewIntentSchema>;
 
-/** Q6 (#232) — provenance for an external changeset: where the diff came from,
- *  so the banner can name the PR and link it. Every field but `kind` optional —
- *  the agent fills in whatever `gh pr view` gave it. */
+/** Q6 (#232), #343 — provenance for an external changeset: where the diff
+ *  came from, so the banner can name the PR and link it, plus the immutable
+ *  commit the human actually reviewed. Every field but `kind` remains optional
+ *  so pre-#343 session files are readable. Posting APPROVE deliberately applies
+ *  the stronger rule: no headSha means no authorization. */
 export const ChangesetSourceSchema = z.object({
   kind: z.literal("github-pr").describe("Provenance kind. Today only 'github-pr'."),
   number: z.number().int().positive().optional().describe("PR number, e.g. 123"),
@@ -527,6 +529,10 @@ export const ChangesetSourceSchema = z.object({
   headRef: z.string().optional().describe("Source branch, e.g. 'feat/rate-limit'"),
   baseRef: z.string().optional().describe("Target branch, e.g. 'main'"),
   author: z.string().optional().describe("PR author's GitHub login"),
+  headSha: z.string().regex(/^[0-9a-fA-F]{40}$/)
+    .transform((sha) => sha.toLowerCase())
+    .optional()
+    .describe("Immutable 40-hex Git commit SHA returned by gh pr view --json headRefOid for the exact diff shown to the human"),
 });
 export type ChangesetSource = z.infer<typeof ChangesetSourceSchema>;
 
@@ -548,7 +554,7 @@ export const ChangesetContentSchema = z.object({
     .describe("Set to 'external' when this diff is SOMEONE ELSE'S code you are reviewing (a GitHub PR you were pinged on), not a change you are proposing. Omit for your own work. An external changeset's approve/needs-changes is the human's REVIEW VERDICT — it stays local until they say to post it, and it never means 'this code lands'."),
   /** Q6 (#232) — where an external changeset came from (the PR). */
   source: ChangesetSourceSchema.optional()
-    .describe("Provenance of an external changeset — the PR it was pulled from: { kind: 'github-pr', number, url, headRef, baseRef, author }. Fill in whatever `gh pr view` gave you; the review surface names and links it."),
+    .describe("Provenance of an external changeset — the PR and immutable commit it was pulled from: { kind: 'github-pr', number, url, headRef, baseRef, author, headSha }. Capture headSha from `gh pr view --json headRefOid`; an APPROVE without it is refused rather than guessed from the PR's later head."),
   /**
    * R4 P-B (#284) — a changeset-level visual: "the shape of what this PR
    * touches" — a diagram or file map that frames the whole diff before the

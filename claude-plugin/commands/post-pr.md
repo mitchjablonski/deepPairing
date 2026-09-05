@@ -37,12 +37,23 @@ out to GitHub, and refuses if they aren't there. So if it comes back refusing:
 - `APPROVE` — if I read it and had nothing to flag. That is a complete review;
   it posts with no inline comments and you don't need findings to use it. It
   does need me to have **approved every live PR changeset** in the UI — and it
-  is refused outright if I rejected one. That approval is what authorizes an
+  is refused outright if I rejected one. Every standing chunk must name the
+  same immutable `source.headSha`; missing, malformed, mixed, or stale commit
+  provenance refuses instead of substituting the PR's current head. That
+  approval is what authorizes an
   approving review on someone else's repo. A bare approve carries a genuine
   approval line for the author automatically ("Reviewed with deepPairing — no
   blocking findings") — you don't compose the body.
 - `COMMENT` — everything else, and the default. Anything that isn't one of these
-  three is refused rather than guessed at.
+  three is refused rather than guessed at. A wholly legacy review with no
+  recorded head SHA may still post COMMENT/REQUEST_CHANGES unbound, but once
+  any standing chunk has a SHA, they must all carry the same valid one.
+
+Before sending, the tool reads the current remote head and then re-reads my
+local authorization. The outbound GitHub `commit_id` is the commit I reviewed,
+never the current head guessed after the fact. GitHub has no atomic
+compare-and-post operation, so a push can still race after that read; this is a
+bound-commit guarantee, not a claim that the branch was locked during POST.
 
 **It posts once.** The tool records a landed review and refuses a second post to
 the same PR, with the URL of the first — a re-post notifies the author all over

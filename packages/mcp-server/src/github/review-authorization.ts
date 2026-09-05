@@ -82,7 +82,7 @@ export interface AuthorizableSession {
 }
 
 export type ReviewAuthorization =
-  | { ok: true; payload: GitHubReviewPayload; event: GitHubReviewEvent }
+  | { ok: true; payload: GitHubReviewPayload; event: GitHubReviewEvent; reviewedHeadSha?: string }
   | { ok: false; reason: string };
 
 /** R1 (#279) — the three events GitHub's review API accepts, and the ONLY three
@@ -160,6 +160,90 @@ function externalChangesets(artifacts: Artifact[]): Artifact[] {
   return artifacts.filter(
     (a) => a.type === "changeset" && coerceChangesetContent(a.content).reviewIntent === "external",
   );
+}
+
+const CLOSED_CHANGESET_STATUSES = new Set(["superseded", "retracted", "obsolete"]);
+const FULL_GIT_SHA = /^[0-9a-fA-F]{40}$/;
+
+/** #343 — derive the ONE immutable commit represented by every standing
+ * external chunk. This reads the raw persisted value as well as the coercer:
+ * coercion intentionally drops malformed optional fields for legacy
+ * readability, but the authorization boundary must distinguish "old/missing"
+ * from "someone supplied a broken SHA" and fail closed.
+ *
+ * COMMENT/REQUEST_CHANGES compatibility is intentionally narrow: a wholly
+ * legacy session (all missing) remains postable without commit_id. Once any
+ * standing chunk claims SHA provenance, every standing chunk must carry the
+ * same valid SHA. APPROVE always requires that complete provenance. */
+function reviewedHeadFor(
+  artifacts: Artifact[],
+  event: GitHubReviewEvent,
+): { ok: true; headSha?: string } | { ok: false; reason: string } {
+  const standing = externalChangesets(artifacts).filter((a) => !CLOSED_CHANGESET_STATUSES.has(a.status));
+  const valid: Array<{ artifact: Artifact; sha: string }> = [];
+  const missing: Artifact[] = [];
+  const malformed: Artifact[] = [];
+
+  for (const artifact of standing) {
+    const rawSource = artifact.content && typeof artifact.content === "object"
+      ? (artifact.content as { source?: unknown }).source
+      : undefined;
+    const rawSha = rawSource && typeof rawSource === "object"
+      ? (rawSource as { headSha?: unknown }).headSha
+      : undefined;
+    if (rawSha === undefined) {
+      missing.push(artifact);
+    } else if (typeof rawSha !== "string" || !FULL_GIT_SHA.test(rawSha)) {
+      malformed.push(artifact);
+    } else {
+      valid.push({ artifact, sha: rawSha.toLowerCase() });
+    }
+  }
+
+  if (malformed.length > 0) {
+    return {
+      ok: false,
+      reason:
+        `Refusing to post: malformed reviewed head SHA on ${malformed.map((a) => `"${a.title}" (${a.id})`).join(", ")}. ` +
+        `Capture the exact 40-hex headRefOid from GitHub, present that commit's diff, and get a fresh human verdict; the current PR head is never guessed as an old approval's commit.`,
+    };
+  }
+
+  if (valid.length === 0) {
+    if (event !== "APPROVE") return { ok: true };
+    return {
+      ok: false,
+      reason:
+        `Refusing to post an APPROVE: ${standing.length === 0 ? "no standing external changeset" : missing.map((a) => `"${a.title}" (${a.id})`).join(", ")} ` +
+        `records the immutable reviewed head SHA. Legacy session files remain readable, but an unknown commit cannot authorize an approval. ` +
+        `Fetch headRefOid, present that exact diff as a fresh external changeset, and get your pair's verdict again; never substitute the PR's current head for an old approval.`,
+    };
+  }
+
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      reason:
+        `Refusing to post: mixed immutable-SHA provenance across the standing external changesets. ` +
+        `${valid.map(({ artifact }) => `"${artifact.title}" (${artifact.id})`).join(", ")} name a reviewed commit, but ` +
+        `${missing.map((a) => `"${a.title}" (${a.id})`).join(", ")} do not. Present every chunk from one exact head SHA and get fresh verdicts.`,
+    };
+  }
+
+  const bySha = new Map<string, Artifact[]>();
+  for (const entry of valid) bySha.set(entry.sha, [...(bySha.get(entry.sha) ?? []), entry.artifact]);
+  if (bySha.size !== 1) {
+    const detail = [...bySha.entries()]
+      .map(([sha, chunks]) => `${sha.slice(0, 12)} (${chunks.map((a) => a.id).join(", ")})`)
+      .join("; ");
+    return {
+      ok: false,
+      reason:
+        `Refusing to post: the standing external changesets describe different reviewed commits: ${detail}. ` +
+        `A review is one verdict on one immutable PR head; present every chunk from the same commit and get fresh human verdicts.`,
+    };
+  }
+  return { ok: true, headSha: valid[0]!.sha };
 }
 
 /**
@@ -280,7 +364,7 @@ export function authorizeReviewPost(
   if (opts.pr) {
     const target = parsePrNumber(opts.pr);
     const external = externalChangesets(state.artifacts).filter(a =>
-      !["superseded", "retracted", "obsolete"].includes(a.status));
+      !CLOSED_CHANGESET_STATUSES.has(a.status));
     for (const artifact of external) {
       const source = coerceChangesetContent(artifact.content).source;
       const reviewed = source?.url ? parsePrNumber(source.url) : null;
@@ -349,6 +433,9 @@ export function authorizeReviewPost(
     }
   }
 
+  const reviewedHead = reviewedHeadFor(state.artifacts, event);
+  if (!reviewedHead.ok) return { ok: false, reason: reviewedHead.reason };
+
   // (b) THE EXCLUSION, stated honestly. This product has NO per-finding verdict:
   // a comment can TARGET a findingIndex but carries no accept/reject state
   // (verified — the schema has no per-finding verdict field at all). So the
@@ -365,11 +452,12 @@ export function authorizeReviewPost(
   // dissent, so dropping a commented-on finding would be a guess — and guessing
   // is what this gate exists to stop.
   const payload = buildGitHubReviewPayload({ ...state, artifacts: approved } as never, { event });
+  if (reviewedHead.headSha) payload.commit_id = reviewedHead.headSha;
 
   if (payload.comments.length === 0) {
     // An APPROVE got here only by passing the authorization above, and a bare
     // APPROVE (no inline comments) is its normal, commonest shape.
-    if (event === "APPROVE") return { ok: true, payload, event };
+    if (event === "APPROVE") return { ok: true, payload, event, reviewedHeadSha: reviewedHead.headSha };
 
     // Zero comments on a non-APPROVE event. As in the first Q6 cut, except it
     // now also names an EXCLUDED artifact rather than looking like the findings
@@ -413,5 +501,10 @@ export function authorizeReviewPost(
     }
   }
 
-  return { ok: true, payload, event };
+  return {
+    ok: true,
+    payload,
+    event,
+    ...(reviewedHead.headSha ? { reviewedHeadSha: reviewedHead.headSha } : {}),
+  };
 }

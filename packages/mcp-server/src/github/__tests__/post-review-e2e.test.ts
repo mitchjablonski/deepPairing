@@ -24,7 +24,13 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { postPrReview, GhMissingError, GhNotAuthedError } from "../post-review.js";
+import {
+  bindReviewPayloadToPreparedTarget,
+  postPreparedPrReview,
+  postPrReview,
+  GhMissingError,
+  GhNotAuthedError,
+} from "../post-review.js";
 import { buildGitHubReviewPayload, type GitHubReviewPayload } from "../../export/format-markdown.js";
 import { handlePostPrReview } from "../../mcp/tools/post-pr-review.js";
 import type { Artifact } from "@deeppairing/shared";
@@ -42,6 +48,7 @@ let originalPath: string | undefined;
  *  a separate process, so env is the only channel). */
 type Mode =
   | "ok"
+  | "head-changed"
   | "notauthed-repo"
   | "enterprise-repo"
   | "notauthed-api"
@@ -49,6 +56,13 @@ type Mode =
   | "pr-closed"
   | "line-not-in-diff"
   | "unparseable"
+  | "bad-success-id"
+  | "bad-success-url"
+  | "bad-success-credentials"
+  | "bad-success-port"
+  | "bad-success-query"
+  | "bad-success-state"
+  | "bad-success-commit"
   /** Exits instantly WITHOUT reading stdin — the EPIPE crasher (see below). */
   | "exit-without-reading-stdin";
 
@@ -60,6 +74,10 @@ function setMode(mode: Mode) {
 function calls(): { args: string[]; stdin: string }[] {
   if (!fs.existsSync(logPath)) return [];
   return fs.readFileSync(logPath, "utf-8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+}
+
+function reviewPostCalls(): { args: string[]; stdin: string }[] {
+  return calls().filter((c) => c.args.includes("POST"));
 }
 
 const FAKE_GH = `#!/usr/bin/env node
@@ -110,14 +128,34 @@ if (isApi) {
     process.exit(1);
   }
   if (mode === "unparseable") { process.stdout.write("<html>502 Bad Gateway</html>"); process.exit(0); }
+  if (!args.includes("POST")) {
+    process.stdout.write(mode === "head-changed"
+      ? "89abcdef0123456789abcdef0123456789abcdef\\n"
+      : "0123456789abcdef0123456789abcdef01234567\\n");
+    process.exit(0);
+  }
   // Success: the documented POST .../reviews response, echoing the event we got.
   const body = JSON.parse(stdin || "{}");
   const state = body.event === "REQUEST_CHANGES" ? "CHANGES_REQUESTED"
     : body.event === "APPROVE" ? "APPROVED" : "COMMENTED";
+  const target = String(args[1] || "").split("/");
+  const htmlUrl = target.length === 6
+    ? "https://github.com/" + target[1] + "/" + target[2] + "/pull/" + target[4] + "#pullrequestreview-4242"
+    : "https://github.com/acme/widgets/pull/42#pullrequestreview-4242";
+  const responseUrl = mode === "bad-success-url"
+    ? "https://github.com/attacker/wrong/pull/1"
+    : mode === "bad-success-credentials"
+      ? htmlUrl.replace("https://", "https://user:secret@")
+      : mode === "bad-success-port"
+        ? htmlUrl.replace("github.com", "github.com:443")
+        : mode === "bad-success-query"
+          ? htmlUrl.replace("#", "?transport=proxy#")
+          : htmlUrl;
   process.stdout.write(JSON.stringify({
-    id: 4242,
-    state,
-    html_url: "https://github.com/acme/widgets/pull/42#pullrequestreview-4242",
+    id: mode === "bad-success-id" ? 0 : 4242,
+    state: mode === "bad-success-state" ? "PENDING" : state,
+    html_url: responseUrl,
+    ...(body.commit_id ? { commit_id: mode === "bad-success-commit" ? "not-a-sha" : body.commit_id } : {}),
     body: body.body,
   }));
   process.exit(0);
@@ -201,7 +239,10 @@ function approvedExternalChangeset(): Artifact {
     title: "PR #42 — rate limiting", status: "approved",
     content: {
       files: [{ path: "auth/session.ts", changeType: "modified", hunks: [] }],
-      reviewIntent: "external", source: { kind: "github-pr", number: 42, url: "https://github.com/acme/widgets/pull/42" },
+      reviewIntent: "external", source: {
+        kind: "github-pr", number: 42, url: "https://github.com/acme/widgets/pull/42",
+        headSha: "0123456789abcdef0123456789abcdef01234567",
+      },
     },
     agentReasoning: null, createdAt: "2026-08-20T10:00:00.000Z", updatedAt: "2026-08-20T10:00:00.000Z",
   } as Artifact;
@@ -443,7 +484,7 @@ describe("Q6 — handlePostPrReview (the MCP tool) end to end", () => {
     expect(res.content[0]!.text).toContain("Posted 1 inline comment on PR");
     expect(res.content[0]!.text).toContain("as REQUEST_CHANGES");
     expect(res.content[0]!.text).toContain("#pullrequestreview-4242");
-    expect(JSON.parse(calls()[0]!.stdin).event).toBe("REQUEST_CHANGES");
+    expect(JSON.parse(reviewPostCalls()[0]!.stdin).event).toBe("REQUEST_CHANGES");
   });
 
   it("event mapping: absent and case-variant events resolve; an UNKNOWN one is refused", async () => {
@@ -462,7 +503,7 @@ describe("Q6 — handlePostPrReview (the MCP tool) end to end", () => {
         ...(given === undefined ? {} : { event: given }),
       });
       expect(res.isError, `event=${given}`).toBeFalsy();
-      expect(JSON.parse(calls()[0]!.stdin).event, `event=${given}`).toBe(expected);
+      expect(JSON.parse(reviewPostCalls()[0]!.stdin).event, `event=${given}`).toBe(expected);
     }
 
     // APPROVE needs the human's approval of the PR itself, so it is exercised
@@ -472,7 +513,7 @@ describe("Q6 — handlePostPrReview (the MCP tool) end to end", () => {
       pr: "https://github.com/acme/widgets/pull/42", event: "approve",
     });
     expect(approve.isError).toBeFalsy();
-    expect(JSON.parse(calls()[0]!.stdin).event).toBe("APPROVE");
+    expect(JSON.parse(reviewPostCalls()[0]!.stdin).event).toBe("APPROVE");
 
     fs.writeFileSync(logPath, "");
     const unknown = await handlePostPrReview(fakeCtx([researchArtifact([LOW_FINDING])]), {
@@ -512,8 +553,91 @@ describe("Q6 — handlePostPrReview (the MCP tool) end to end", () => {
     expect(res.content[0]!.text).not.toContain("Posted 0 inline comments");
     const sent = JSON.parse(calls().at(-1)!.stdin);
     expect(sent.event).toBe("APPROVE");
+    expect(sent.commit_id).toBe("0123456789abcdef0123456789abcdef01234567");
     expect(sent.comments).toEqual([]);
     expect(sent.body).toContain("deepPairing notes"); // still says where it came from
+  });
+
+  it("#343 prepared send returns GitHub's validated immutable commit binding", async () => {
+    const reviewed = "0123456789ABCDEF0123456789ABCDEF01234567";
+    const payload = bindReviewPayloadToPreparedTarget(
+      { ...payloadFor([HIGH_FINDING], "REQUEST_CHANGES"), commit_id: reviewed },
+      reviewed,
+      {
+        target: "https://github.com/acme/widgets/pull/42",
+        currentHeadSha: reviewed,
+      },
+    );
+    const result = await postPreparedPrReview({
+      target: "https://github.com/acme/widgets/pull/42",
+      payload,
+    });
+
+    expect(result.commitId).toBe(reviewed.toLowerCase());
+    expect(JSON.parse(reviewPostCalls()[0]!.stdin).commit_id).toBe(reviewed.toLowerCase());
+  });
+
+  it("#343 rejects malformed success identity instead of stamping uncertain metadata", async () => {
+    const target = "https://github.com/acme/widgets/pull/42";
+    for (const mode of [
+      "bad-success-id",
+      "bad-success-url",
+      "bad-success-credentials",
+      "bad-success-port",
+      "bad-success-query",
+      "bad-success-state",
+      "bad-success-commit",
+    ] as const) {
+      fs.writeFileSync(logPath, "");
+      setMode(mode);
+      await expect(postPreparedPrReview({
+        target,
+        payload: { ...payloadFor([LOW_FINDING]), commit_id: "0123456789abcdef0123456789abcdef01234567" },
+      })).rejects.toThrow(/Posted, but could not parse/);
+    }
+  });
+
+  it("#343 documents the unavoidable push-after-read race as bound-commit semantics", () => {
+    const reviewed = "0123456789abcdef0123456789abcdef01234567";
+    // A push can occur after this prepared snapshot and before the POST. There
+    // is no GitHub compare-and-post transaction to close that window. The
+    // safety property is that we still send the reviewed SHA as commit_id;
+    // the later branch head is never substituted into an old verdict.
+    const payload = bindReviewPayloadToPreparedTarget(
+      payloadFor([LOW_FINDING]),
+      reviewed,
+      { target: "https://github.com/acme/widgets/pull/42", currentHeadSha: reviewed },
+    );
+    expect(payload.commit_id).toBe(reviewed);
+  });
+
+  it("#343 refuses when the PR head changed after the reviewed artifact was approved", async () => {
+    setMode("head-changed");
+    const res = await handlePostPrReview(fakeCtx([approvedExternalChangeset()]), { pr: "42", event: "APPROVE" });
+    expect(res.isError).toBe(true);
+    expect(res.content[0]!.text).toContain("changed since your pair reviewed it");
+    expect(res.content[0]!.text).toContain("0123456");
+    expect(res.content[0]!.text).toContain("89abcde");
+    expect(reviewPostCalls()).toHaveLength(0);
+  });
+
+  it("#343 rebuilds authorization from fresh local state after the remote head read", async () => {
+    let reads = 0;
+    const approved = approvedExternalChangeset();
+    const withdrawn = { ...approved, status: "revised" as const };
+    const ctx = {
+      store: {
+        getFullState: async () => sessionState(reads++ === 0 ? [approved] : [withdrawn]),
+        recordPostedReview: async () => {},
+      },
+    } as never;
+
+    const res = await handlePostPrReview(ctx, { pr: "42", event: "APPROVE" });
+    expect(res.isError).toBe(true);
+    expect(res.content[0]!.text).toContain("sent back for changes");
+    expect(reads).toBe(2);
+    expect(calls().some((c) => c.args[0] === "api" && !c.args.includes("POST"))).toBe(true);
+    expect(reviewPostCalls()).toHaveLength(0);
   });
 
   it("…but a zero-comment REQUEST_CHANGES is still refused — blocking someone without saying why", async () => {

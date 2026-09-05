@@ -21,6 +21,9 @@ import type { Artifact } from "@deeppairing/shared";
 import { authorizeReviewPost } from "../review-authorization.js";
 import { handlePostPrReview } from "../../mcp/tools/post-pr-review.js";
 
+const REVIEWED_SHA = "0123456789abcdef0123456789abcdef01234567";
+const OTHER_SHA = "89abcdef0123456789abcdef0123456789abcdef";
+
 // --- the fake gh (same shape as post-review-e2e; success-only) ---------------
 
 let binDir: string;
@@ -36,7 +39,7 @@ function calls(): { args: string[]; stdin: string }[] {
  *  `gh repo view` first to detect the repo, so counting every gh invocation
  *  would count the lookup as a post. This counts what actually lands on the PR. */
 function apiCalls(): { args: string[]; stdin: string }[] {
-  return calls().filter((c) => c.args[0] === "api");
+  return calls().filter((c) => c.args[0] === "api" && c.args.includes("POST"));
 }
 
 beforeAll(() => {
@@ -50,8 +53,17 @@ let stdin = "";
 try { stdin = fs.readFileSync(0, "utf-8"); } catch {}
 fs.appendFileSync(process.env.DP_GH_FAKE_LOG, JSON.stringify({ args, stdin }) + "\\n");
 if (args[0] === "repo") { process.stdout.write(JSON.stringify({ nameWithOwner: "acme/widgets", url: "https://github.com/acme/widgets" })); process.exit(0); }
+if (args[0] === "api" && !args.includes("POST")) { process.stdout.write("${REVIEWED_SHA}\\n"); process.exit(0); }
 const body = JSON.parse(stdin || "{}");
-process.stdout.write(JSON.stringify({ id: 1, state: body.event === "APPROVE" ? "APPROVED" : "COMMENTED", html_url: "https://github.com/acme/widgets/pull/42#pullrequestreview-1" }));
+const target = String(args[1] || "").split("/");
+const state = body.event === "APPROVE" ? "APPROVED"
+  : body.event === "REQUEST_CHANGES" ? "CHANGES_REQUESTED" : "COMMENTED";
+process.stdout.write(JSON.stringify({
+  id: 1,
+  state,
+  html_url: "https://github.com/" + target[1] + "/" + target[2] + "/pull/" + target[4] + "#pullrequestreview-1",
+  ...(body.commit_id ? { commit_id: body.commit_id } : {}),
+}));
 process.exit(0);
 `);
   fs.chmodSync(bin, 0o755);
@@ -97,13 +109,19 @@ function proseFindings(id: string, status: string): Artifact {
   } as Artifact;
 }
 
-function changeset(id: string, status: string, external: boolean): Artifact {
+function changeset(id: string, status: string, external: boolean, headSha: unknown = REVIEWED_SHA): Artifact {
   return {
     id, sessionId: "s1", type: "changeset", version: 1, parentId: null, title: "PR #123 — rate limiting",
     status: status as Artifact["status"],
     content: {
       files: [{ path: "src/limiter.ts", changeType: "added", hunks: [] }],
-      ...(external ? { reviewIntent: "external", source: { kind: "github-pr", number: 42, url: "https://github.com/acme/widgets/pull/42" } } : {}),
+      ...(external ? {
+        reviewIntent: "external",
+        source: {
+          kind: "github-pr", number: 42, url: "https://github.com/acme/widgets/pull/42",
+          ...(headSha !== null ? { headSha } : {}),
+        },
+      } : {}),
     },
     agentReasoning: null, createdAt: "2026-08-20T10:00:00.000Z", updatedAt: "2026-08-20T10:00:00.000Z",
   } as Artifact;
@@ -271,7 +289,31 @@ describe("Q6 B1(c) — a bare APPROVE is a real verdict and needs real authoriza
     expect(auth.ok).toBe(true);
     if (!auth.ok) throw new Error("unreachable");
     expect(auth.payload.event).toBe("APPROVE");
+    expect(auth.payload.commit_id).toBe(REVIEWED_SHA);
+    expect(auth.reviewedHeadSha).toBe(REVIEWED_SHA);
     expect(auth.payload.comments).toEqual([]);
+  });
+
+  it("#343 — REFUSES APPROVE when legacy provenance has no immutable reviewed SHA", () => {
+    const auth = authorizeReviewPost(
+      session([changeset("cs_legacy", "approved", true, null)]),
+      { event: "APPROVE", pr: "https://github.com/acme/widgets/pull/42" },
+    );
+    expect(auth.ok).toBe(false);
+    if (auth.ok) throw new Error("unreachable");
+    expect(auth.reason).toContain("reviewed head SHA");
+    expect(auth.reason).toContain("cs_legacy");
+  });
+
+  it("#343 — REFUSES APPROVE when a persisted SHA is malformed", () => {
+    const auth = authorizeReviewPost(
+      session([changeset("cs_bad", "approved", true, "not-a-sha")]),
+      { event: "APPROVE", pr: "https://github.com/acme/widgets/pull/42" },
+    );
+    expect(auth.ok).toBe(false);
+    if (auth.ok) throw new Error("unreachable");
+    expect(auth.reason).toContain("malformed");
+    expect(auth.reason).toContain("cs_bad");
   });
 
   // T1 (round-15) — THE BARE-APPROVE BODY. What lands on the colleague's PR must
@@ -422,6 +464,74 @@ describe("R1 (#279) fix 2 — ALL live external changesets must be approved", ()
     expect(auth.ok).toBe(false);
     if (auth.ok) throw new Error("unreachable");
     expect(auth.reason).toContain("closed");
+  });
+
+  it("#343 — REFUSES chunks from different reviewed commits", () => {
+    const auth = authorizeReviewPost(session([
+      changeset("cs_a", "approved", true, REVIEWED_SHA),
+      changeset("cs_b", "approved", true, OTHER_SHA),
+    ]), { event: "APPROVE", pr: "https://github.com/acme/widgets/pull/42" });
+    expect(auth.ok).toBe(false);
+    if (auth.ok) throw new Error("unreachable");
+    expect(auth.reason).toContain("different reviewed commits");
+    expect(auth.reason).toContain("cs_a");
+    expect(auth.reason).toContain("cs_b");
+  });
+
+  it("#343 — legacy COMMENT remains readable/postable, but mixed SHA provenance refuses", () => {
+    const legacy = authorizeReviewPost(
+      session([findings("art_1", "approved"), changeset("cs_legacy", "approved", true, null)]),
+      { event: "COMMENT", pr: "https://github.com/acme/widgets/pull/42" },
+    );
+    expect(legacy.ok).toBe(true);
+    if (!legacy.ok) throw new Error("unreachable");
+    expect(legacy.payload.commit_id).toBeUndefined();
+    expect(legacy.reviewedHeadSha).toBeUndefined();
+
+    const mixed = authorizeReviewPost(
+      session([
+        findings("art_1", "approved"),
+        changeset("cs_sha", "approved", true, REVIEWED_SHA),
+        changeset("cs_legacy", "approved", true, null),
+      ]),
+      { event: "COMMENT", pr: "https://github.com/acme/widgets/pull/42" },
+    );
+    expect(mixed.ok).toBe(false);
+    if (mixed.ok) throw new Error("unreachable");
+    expect(mixed.reason).toContain("mixed immutable-SHA provenance");
+  });
+
+  it("#343 — once COMMENT has SHA provenance, every standing chunk must have one valid canonical SHA", () => {
+    const malformed = authorizeReviewPost(
+      session([
+        findings("art_1", "approved"),
+        changeset("cs_good", "approved", true, REVIEWED_SHA.toUpperCase()),
+        changeset("cs_bad", "approved", true, "abc123"),
+      ]),
+      { event: "COMMENT", pr: "https://github.com/acme/widgets/pull/42" },
+    );
+    expect(malformed.ok).toBe(false);
+    if (malformed.ok) throw new Error("unreachable");
+    expect(malformed.reason).toContain("malformed reviewed head SHA");
+
+    const canonical = authorizeReviewPost(
+      session([findings("art_1", "approved"), changeset("cs_upper", "approved", true, REVIEWED_SHA.toUpperCase())]),
+      { event: "COMMENT", pr: "https://github.com/acme/widgets/pull/42" },
+    );
+    expect(canonical.ok).toBe(true);
+    if (!canonical.ok) throw new Error("unreachable");
+    expect(canonical.reviewedHeadSha).toBe(REVIEWED_SHA);
+    expect(canonical.payload.commit_id).toBe(REVIEWED_SHA);
+  });
+
+  it("#343 — closed legacy/malformed chunks do not contaminate the standing reviewed commit", () => {
+    const auth = authorizeReviewPost(session([
+      changeset("cs_old", "superseded", true, "not-a-sha"),
+      changeset("cs_live", "approved", true, REVIEWED_SHA),
+    ]), { event: "APPROVE", pr: "https://github.com/acme/widgets/pull/42" });
+    expect(auth.ok).toBe(true);
+    if (!auth.ok) throw new Error("unreachable");
+    expect(auth.reviewedHeadSha).toBe(REVIEWED_SHA);
   });
 });
 
@@ -682,8 +792,8 @@ describe("Q6 B1 — the gate is enforced before anything leaves the machine", ()
       pr: "https://github.com/acme/widgets/pull/42", event: "REQUEST_CHANGES",
     });
     expect(res.isError).toBeFalsy();
-    expect(calls()).toHaveLength(1);
-    expect(JSON.parse(calls()[0]!.stdin).comments).toHaveLength(1);
+    expect(apiCalls()).toHaveLength(1);
+    expect(JSON.parse(apiCalls()[0]!.stdin).comments).toHaveLength(1);
   });
 
   it("a bare APPROVE through the MCP tool spawns no gh without the changeset approval", async () => {
@@ -704,6 +814,9 @@ describe("Q6 B1 — the gate is enforced before anything leaves the machine", ()
     const cmd = init.slice(init.indexOf("async function postPrReviewCmd"), init.indexOf("U0.6 —"));
     expect(cmd).not.toContain("buildGitHubReviewPayload");
     expect(cmd).toContain("auth.ok");
+    expect(cmd).toContain("const finalReader = new FileStore");
+    expect(cmd).toContain("finalReader.dispose()");
+    expect(cmd).not.toMatch(/\.forceFlush\s*\(/);
   });
 
   it("there is NO force/override flag anywhere in the gate or its callers", () => {

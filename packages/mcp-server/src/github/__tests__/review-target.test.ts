@@ -5,7 +5,17 @@ function state(url?: string): AuthorizableSession {
   return { sessionId: "s", decisions: [], comments: [], planReviews: [], preferences: {}, artifacts: [{
     id: "a", sessionId: "s", type: "changeset", title: "Reviewed change", status: "approved", version: 1,
     parentId: null, agentReasoning: null, createdAt: "2026-09-04T12:00:00Z", updatedAt: "2026-09-04T12:00:00Z",
-    content: { summary: "Reviewed", files: [], reviewIntent: "external", source: { kind: "github-pr", number: 123, ...(url ? { url } : {}) } },
+    content: {
+      summary: "Reviewed",
+      files: [],
+      reviewIntent: "external",
+      source: {
+        kind: "github-pr",
+        number: 123,
+        headSha: "0123456789abcdef0123456789abcdef01234567",
+        ...(url ? { url } : {}),
+      },
+    },
   }] };
 }
 

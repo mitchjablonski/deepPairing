@@ -132,8 +132,11 @@ export async function handlePresentChangeset(ctx: ToolContext, args: any): Promi
   // PR — telling the agent to "end with present_debrief" there would have it
   // narrate a colleague's feature back to the person who just reviewed it.
   const prLabel = source?.number ? `PR #${source.number}` : "the PR";
+  const reviewedCommit = source?.headSha
+    ? ` at immutable commit ${source.headSha.slice(0, 12)}`
+    : ` with NO immutable head SHA recorded (legacy-readable, but APPROVE will be refused until the current headRefOid is presented and reviewed)`;
   const closing = isExternal
-    ? `This is an EXTERNAL review — ${prLabel}${source?.author ? ` by ${source.author}` : ""} is someone else's code. ` +
+    ? `This is an EXTERNAL review — ${prLabel}${source?.author ? ` by ${source.author}` : ""}${reviewedCommit} is someone else's code. ` +
       `Their per-file verdicts are their REVIEW OPINION and stay LOCAL: nothing is posted and nothing lands until they say to post it. ` +
       `Do NOT apply, revise, or "fix" these files. Keep polling check_feedback and answer what they ask — trace callers, read the surrounding code, run a safe test — ` +
       `and when they say to post it, call post_pr_review (REQUEST_CHANGES only if a surviving finding is high/critical — the tool CHECKS this now and refuses otherwise — else COMMENT). No present_debrief is owed for a review of code you did not write.`

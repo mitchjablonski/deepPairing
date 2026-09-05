@@ -498,6 +498,13 @@ function coerceChangesetSource(v: unknown): ChangesetSource | undefined {
   if (typeof v.headRef === "string" && v.headRef.length > 0) out.headRef = v.headRef;
   if (typeof v.baseRef === "string" && v.baseRef.length > 0) out.baseRef = v.baseRef;
   if (typeof v.author === "string" && v.author.length > 0) out.author = v.author;
+  // #343 — canonicalize a valid immutable commit id, but never trim, pad,
+  // resolve, or replace a malformed/missing value. Legacy files remain
+  // readable; the outbound APPROVE gate decides that unknown provenance cannot
+  // authorize a review.
+  if (typeof v.headSha === "string" && /^[0-9a-fA-F]{40}$/.test(v.headSha)) {
+    out.headSha = v.headSha.toLowerCase();
+  }
   return out;
 }
 

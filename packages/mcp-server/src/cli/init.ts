@@ -1587,7 +1587,14 @@ async function demoCmd(): Promise<void> {
 async function postPrReviewCmd(ref: string, sessionId?: string, event?: string, repost = false) {
   const { FileStore } = await import("../store/file-store.js");
   const { authorizeReviewPost } = await import("../github/review-authorization.js");
-  const { postPrReview, parsePrRef, resolvePrTarget, GhMissingError, GhNotAuthedError } = await import("../github/post-review.js");
+  const {
+    bindReviewPayloadToPreparedTarget,
+    postPreparedPrReview,
+    preparePrReviewTarget,
+    parsePrRef,
+    GhMissingError,
+    GhNotAuthedError,
+  } = await import("../github/post-review.js");
 
   let chosenSessionId = sessionId;
   if (!chosenSessionId) {
@@ -1603,11 +1610,16 @@ async function postPrReviewCmd(ref: string, sessionId?: string, event?: string, 
   // door must also STAMP the landed review (see below), and the stamp writes
   // its own sidecar file. Nothing else about the session is mutated here, so
   // sharing the directory with a running daemon stays safe.
-  let store: InstanceType<typeof FileStore>;
   let state: any;
   try {
-    store = new FileStore(cwd, chosenSessionId);
-    state = store.getFullState();
+    const initialReader = new FileStore(cwd, chosenSessionId);
+    try {
+      state = initialReader.getFullState();
+    } finally {
+      // Read-only snapshots are disposed, never force-flushed: flushing a
+      // stale cache here could overwrite a daemon verdict that arrived later.
+      initialReader.dispose();
+    }
   } catch (err) {
     console.error(`  ${red("✗")} Could not load session "${chosenSessionId}": ${errorMessage(err)}`);
     process.exit(1);
@@ -1629,30 +1641,51 @@ async function postPrReviewCmd(ref: string, sessionId?: string, event?: string, 
     console.error(`  ${red("✗")} ${auth.reason}`);
     process.exit(1);
   }
-  const { payload } = auth;
 
   try {
-    const target = await resolvePrTarget(ref);
-    const targetAuth = authorizeReviewPost(state, { event, pr: target, repost });
+    const prepared = await preparePrReviewTarget({ ref });
+    const target = prepared.target;
+    // #343 — use a genuinely new disk snapshot after every remote preparation
+    // await. The earlier reader may be stale while the daemon records a new
+    // verdict, and forceFlush would be actively unsafe here. Dispose this
+    // read-only instance before the final authorization gate and network send.
+    const finalReader = new FileStore(cwd, chosenSessionId);
+    let freshState: any;
+    try {
+      freshState = finalReader.getFullState();
+    } finally {
+      finalReader.dispose();
+    }
+    const targetAuth = authorizeReviewPost(freshState, { event, pr: target, repost });
     if (!targetAuth.ok) throw new Error(targetAuth.reason);
-    const result = await postPrReview({ ref: target, payload: targetAuth.payload });
+    const payload = bindReviewPayloadToPreparedTarget(
+      targetAuth.payload,
+      targetAuth.reviewedHeadSha,
+      prepared,
+    );
+    const result = await postPreparedPrReview({ target, payload });
     console.log(`  ${green("✓")} Posted ${payload.comments.length} inline comment${payload.comments.length === 1 ? "" : "s"} on PR ${ref}`);
     if (result.htmlUrl) console.log(`    ${dim(result.htmlUrl)}`);
     // R1 (#279) — same stamp the MCP door writes, into the same sidecar, so a
     // duplicate post is refused no matter which door it comes from.
     try {
       const parsed = parsePrRef(target);
-      store.recordPostedReview({
-        pr: ref,
-        prNumber: parsed.number,
-        ...(parsed.owner ? { owner: parsed.owner } : {}),
-        ...(parsed.repo ? { repo: parsed.repo } : {}),
-        event: payload.event,
-        reviewId: result.id,
-        url: result.htmlUrl,
-        postedAt: new Date().toISOString(),
-        commentCount: payload.comments.length,
-      });
+      const recorder = new FileStore(cwd, chosenSessionId);
+      try {
+        recorder.recordPostedReview({
+          pr: ref,
+          prNumber: parsed.number,
+          ...(parsed.owner ? { owner: parsed.owner } : {}),
+          ...(parsed.repo ? { repo: parsed.repo } : {}),
+          event: payload.event,
+          reviewId: result.id,
+          url: result.htmlUrl,
+          postedAt: new Date().toISOString(),
+          commentCount: payload.comments.length,
+        });
+      } finally {
+        recorder.dispose();
+      }
       console.log(`    ${dim("Recorded — a second post to this PR needs --repost.")}`);
     } catch (stampErr) {
       console.error(`  ${red("!")} The review posted, but recording it locally failed: ${errorMessage(stampErr)}`);
