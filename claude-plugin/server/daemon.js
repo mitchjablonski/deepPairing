@@ -26144,7 +26144,7 @@ import { performance } from "node:perf_hooks";
 var SessionReviewConflictError = class extends Error {
   constructor(artifactId) {
     super(
-      `Artifact ${artifactId} has changed content and a concurrent review verdict. Reload the session and review the persisted artifact before authorizing it.`
+      `Artifact ${artifactId} has changed content and a concurrent review verdict. Stop and restart the session writer, then review the persisted artifact before authorizing it.`
     );
     this.artifactId = artifactId;
     this.name = "SessionReviewConflictError";
@@ -27570,6 +27570,7 @@ var FileStore = class _FileStore {
     return merged;
   }
   flush() {
+    this.assertAuthorizationReadable();
     try {
       withSessionFlushLock(path11.join(this.sessionDir(), ".flush.lock"), () => {
         this.artifacts = this.flushRecords(
