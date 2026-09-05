@@ -25913,17 +25913,33 @@ var REVIEWED_IDENTITY_FIELDS = ["content", "version", "type", "parentId"];
 function reviewVerdictChanged(base, candidate) {
   return JSON.stringify(base.status) !== JSON.stringify(candidate.status) && REVIEW_VERDICTS.has(String(candidate.status));
 }
+function changesetReviewChanged(base, candidate) {
+  if (base.type !== "changeset" || candidate.type !== "changeset") return false;
+  const baseContent = object2(base.content) ? base.content : {};
+  const candidateContent = object2(candidate.content) ? candidate.content : {};
+  return JSON.stringify([baseContent.reviewState, baseContent.reviewReasons]) !== JSON.stringify([candidateContent.reviewState, candidateContent.reviewReasons]);
+}
+function reviewAuthorityChanged(base, candidate) {
+  return reviewVerdictChanged(base, candidate) || changesetReviewChanged(base, candidate);
+}
 function reviewedContent(record2) {
   const content = record2.content;
-  if (record2.type !== "plan" || !object2(content) || !Array.isArray(content.steps)) return content;
-  return {
-    ...content,
-    steps: content.steps.map((step) => {
-      if (!object2(step)) return step;
-      const { status: _status, statusNote: _statusNote, ...proposal } = step;
-      return proposal;
-    })
-  };
+  if (!object2(content)) return content;
+  if (record2.type === "plan" && Array.isArray(content.steps)) {
+    return {
+      ...content,
+      steps: content.steps.map((step) => {
+        if (!object2(step)) return step;
+        const { status: _status, statusNote: _statusNote, ...proposal } = step;
+        return proposal;
+      })
+    };
+  }
+  if (record2.type === "changeset") {
+    const { reviewState: _reviewState, reviewReasons: _reviewReasons, ...proposal } = content;
+    return proposal;
+  }
+  return content;
 }
 function reviewedIdentityChanged(base, candidate) {
   return REVIEWED_IDENTITY_FIELDS.some(
@@ -25941,7 +25957,7 @@ function mergeArtifactRecords(baseline, local, disk, key) {
     const base = baseValue;
     const localValue = localRecord;
     const diskValue = diskRecord;
-    if (reviewVerdictChanged(base, localValue) && reviewedIdentityChanged(base, diskValue) || reviewVerdictChanged(base, diskValue) && reviewedIdentityChanged(base, localValue)) {
+    if (reviewAuthorityChanged(base, localValue) && reviewedIdentityChanged(base, diskValue) || reviewAuthorityChanged(base, diskValue) && reviewedIdentityChanged(base, localValue)) {
       throw new SessionReviewConflictError(id);
     }
   }
@@ -27655,15 +27671,15 @@ var FileStore = class _FileStore {
             (raw2) => _FileStore.salvageArray("comments.json (external)", raw2, "id")
           );
         });
-        attempt(() => {
-          this.decisions = new Map(this.flushRecords(
-            "decisions.json",
-            [...this.decisions.values()],
-            (r) => r.decisionId,
-            (raw2) => _FileStore.salvageArray("decisions.json (external)", raw2, "decisionId")
-          ).map((r) => [r.decisionId, r]));
-        });
         if (!artifactWriteBlocked) {
+          attempt(() => {
+            this.decisions = new Map(this.flushRecords(
+              "decisions.json",
+              [...this.decisions.values()],
+              (r) => r.decisionId,
+              (raw2) => _FileStore.salvageArray("decisions.json (external)", raw2, "decisionId")
+            ).map((r) => [r.decisionId, r]));
+          });
           attempt(() => {
             this.planReviews = new Map(this.flushRecords(
               "plan-reviews.json",
@@ -32319,6 +32335,9 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       if (!decision) {
         await store.updateArtifactStatus(targetArtifactId, "approved", "ui_decision_resolve");
       }
+    }
+    await store.forceFlush();
+    if (targetArtifactId) {
       await maybeUpdateTaskStatus(null, targetArtifactId, store);
     }
     broadcast({
@@ -32602,11 +32621,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
         400
       );
     }
-    try {
-      await store.forceFlush();
-    } catch (err) {
-      console.error(`[deepPairing] changeset review flush failed (state landed in memory; debounced flush will retry): ${err}`);
-    }
+    await store.forceFlush();
     broadcast({ type: "changeset_review_updated", artifact: updated }, sid);
     return c.json({ status: "updated", artifactId });
   });
@@ -34026,6 +34041,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       return c.json({ error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error }, 400);
     }
     const artifactId = r.store.getDecision(decisionId)?.artifactId;
+    await r.store.forceFlush();
     broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId, optionId, reasoning, confidence, predictedOutcome });
     return c.json({ status: "resolved" });
   });
