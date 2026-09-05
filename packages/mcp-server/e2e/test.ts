@@ -1,5 +1,6 @@
 import { test as base, expect } from "@playwright/test";
 import { BoundedDiagnosticTail } from "./diagnostics.js";
+import { attachActiveDaemonOutputs } from "./daemon-harness.js";
 
 const MAX_DIAGNOSTIC_BYTES = 64 * 1024;
 
@@ -41,6 +42,7 @@ export const test = base.extend<{ browserDiagnostics: void }>({
       await use();
     } finally {
       mutableBrowser.newContext = originalNewContext;
+      await attachActiveDaemonOutputs(testInfo);
       if (testInfo.status !== testInfo.expectedStatus && diagnostics.lines.length) {
         await testInfo.attach("browser-diagnostics", {
           body: diagnostics.body(),

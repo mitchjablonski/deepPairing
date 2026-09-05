@@ -1,10 +1,10 @@
 import { test, expect, type Page } from "./test.js";
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { teardownDaemon, portOf } from "./daemon-harness.js";
+import { teardownDaemon, portOf, spawnDiagnosticProcess, withSetupDiagnostics } from "./daemon-harness.js";
 
 /**
  * J1 (#209) — real-browser verification + PR screenshots that the STATUS track
@@ -47,18 +47,17 @@ const OPTS = [
   { id: "o2", title: "Postgres table", description: "Reuse the primary DB", pros: ["no new infra"], cons: ["row churn"], effort: "medium", risk: "medium", recommendation: false },
 ];
 
-test.beforeAll(async () => {
+test.beforeAll(async ({}, testInfo) => {
   if (!fs.existsSync(daemonJs)) {
     throw new Error(`dist/daemon/index.js missing at ${daemonJs} — run \`pnpm build\` before the e2e suite.`);
   }
   fs.mkdirSync(SHOTS, { recursive: true });
   home = fs.mkdtempSync(path.join(os.tmpdir(), "dp-209-home-"));
   projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-209-"));
-  proc = spawn(process.execPath, [daemonJs], {
+  proc = spawnDiagnosticProcess(process.execPath, [daemonJs], {
     env: { ...process.env, HOME: home, DEEPPAIRING_PROJECT_ROOT: projectRoot, DEEPPAIRING_NO_OPEN: "1" },
-    stdio: "ignore",
   });
-  const daemon = await waitForDaemon(projectRoot);
+  const daemon = await withSetupDiagnostics(proc, testInfo, () => waitForDaemon(projectRoot));
   baseURL = daemon.base;
   const h = { "Content-Type": "application/json", Authorization: `Bearer ${daemon.token}` };
   const post = (route: string, body: unknown) =>

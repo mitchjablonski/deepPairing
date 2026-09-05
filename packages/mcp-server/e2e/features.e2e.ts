@@ -1,10 +1,10 @@
 import { test, expect, type Page } from "./test.js";
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { teardownDaemon, portOf } from "./daemon-harness.js";
+import { teardownDaemon, portOf, spawnDiagnosticProcess, withSetupDiagnostics } from "./daemon-harness.js";
 
 /**
  * #203 (H2) — the Features view, slice 1: real-browser smoke + screenshot
@@ -29,6 +29,7 @@ let home: string;
 let fullBase: string;
 let emptyBase: string;
 let corrBase: string;
+let seedFeatures: (base: string, root: string) => Promise<void>;
 
 async function waitForDaemon(root: string): Promise<{ base: string; token: string }> {
   const daemonJson = path.join(root, ".deeppairing", "daemon.json");
@@ -46,13 +47,12 @@ async function waitForDaemon(root: string): Promise<{ base: string; token: strin
 }
 
 function bootDaemon(root: string): ChildProcess {
-  return spawn(process.execPath, [daemonJs], {
+  return spawnDiagnosticProcess(process.execPath, [daemonJs], {
     env: { ...process.env, HOME: home, DEEPPAIRING_PROJECT_ROOT: root, DEEPPAIRING_NO_OPEN: "1" },
-    stdio: "ignore",
   });
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({}, testInfo) => {
   if (!fs.existsSync(daemonJs)) {
     throw new Error(`dist/daemon/index.js missing at ${daemonJs} — run \`pnpm build\` before the e2e suite.`);
   }
@@ -60,22 +60,19 @@ test.beforeAll(async () => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), "dp-203-home-"));
   fullRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-203-full-"));
   emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-203-empty-"));
-  corrRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-206-corr-"));
 
   procFull = bootDaemon(fullRoot);
   procEmpty = bootDaemon(emptyRoot);
-  procCorr = bootDaemon(corrRoot);
-  fullBase = (await waitForDaemon(fullRoot)).base;
-  emptyBase = (await waitForDaemon(emptyRoot)).base;
-  corrBase = (await waitForDaemon(corrRoot)).base;
+  fullBase = (await withSetupDiagnostics(procFull, testInfo, () => waitForDaemon(fullRoot))).base;
+  emptyBase = (await withSetupDiagnostics(procEmpty, testInfo, () => waitForDaemon(emptyRoot))).base;
 
   const tokenOf = (root: string) =>
     JSON.parse(fs.readFileSync(path.join(root, ".deeppairing", "daemon.json"), "utf-8")).authToken as string;
 
   // The shared feature seed — a Milestone 6 (2 artifacts + an unresolved
   // decision), a Phase 0, and one plain-titled Ungrouped artifact. Seeded into
-  // BOTH the slice-1 (full) daemon and the #206 corrections daemon.
-  const seed = async (base: string, root: string): Promise<void> => {
+  // both the slice-1 daemon and each isolated #206 corrections daemon.
+  seedFeatures = async (base: string, root: string): Promise<void> => {
     const h = { "Content-Type": "application/json", Authorization: `Bearer ${tokenOf(root)}` };
     const post = (route: string, body: unknown) =>
       fetch(`${base}/api/internal/sessions/feat/${route}`, { method: "POST", headers: h, body: JSON.stringify(body) })
@@ -128,15 +125,13 @@ test.beforeAll(async () => {
     });
   };
 
-  await seed(fullBase, fullRoot);
-  await seed(corrBase, corrRoot);
+  await seedFeatures(fullBase, fullRoot);
 });
 
 test.afterAll(async () => {
   await teardownDaemon(procFull, portOf(fullBase));
   await teardownDaemon(procEmpty, portOf(emptyBase));
-  await teardownDaemon(procCorr, portOf(corrBase));
-  for (const dir of [fullRoot, emptyRoot, corrRoot, home]) {
+  for (const dir of [fullRoot, emptyRoot, home]) {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
   }
 });
@@ -201,12 +196,23 @@ test("#203 — empty project shows the honest empty state", async ({ page }) => 
 });
 
 // #206 (I1) — the human corrections: RENAME a group + MOVE an artifact. Runs on
-// a SEPARATE seeded daemon (procCorr) so its persisted overrides can't perturb
-// the slice-1 tests above. SERIAL: the light-theme test observes the rename the
-// first test persisted, so they must not run in parallel. Exact group-TITLE
-// assertions are scoped to the group container (the per-row move-select lists
-// other groups' titles as <option>s).
-test.describe.serial("#206 — human corrections", () => {
+// a fresh seeded daemon per test so each scenario is independently runnable
+// and declaration order cannot become part of the fixture contract. Exact
+// group-TITLE assertions are scoped to the group container (the per-row
+// move-select lists other groups' titles as <option>s).
+test.describe("#206 — human corrections", () => {
+  test.beforeEach(async ({}, testInfo) => {
+    corrRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-206-corr-"));
+    procCorr = bootDaemon(corrRoot);
+    corrBase = (await withSetupDiagnostics(procCorr, testInfo, () => waitForDaemon(corrRoot))).base;
+    await withSetupDiagnostics(procCorr, testInfo, () => seedFeatures(corrBase, corrRoot));
+  });
+
+  test.afterEach(async () => {
+    await teardownDaemon(procCorr, portOf(corrBase));
+    try { fs.rmSync(corrRoot, { recursive: true, force: true }); } catch {}
+  });
+
   test("rename a feature and move an artifact, persisted (dark theme)", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 950 });
     await openFeatures(page, corrBase, "feat");
@@ -245,12 +251,17 @@ test.describe.serial("#206 — human corrections", () => {
     await openFeatures(page, corrBase, "feat");
     const view = page.locator('[data-testid="features-view"]');
     expect(await page.locator("html").getAttribute("data-theme")).toBe("light");
-    // The rename persisted from the previous test is visible here too.
+    // Exercise the persisted correction on this test's own pristine fixture.
+    const m6 = view.locator('[data-feature-group="milestone-6"]');
+    await m6.locator("[data-feature-rename]").click();
+    const input = view.locator("[data-feature-rename-input]");
+    await input.fill("Quota backfill");
+    await input.press("Enter");
     await expect(
-      view.locator('[data-feature-group="milestone-6"]').getByText("Quota backfill", { exact: true }),
+      m6.getByText("Quota backfill", { exact: true }),
     ).toBeVisible();
     // Exercise the rename input's light-theme styling.
-    await view.locator('[data-feature-group="milestone-6"] [data-feature-rename]').click();
+    await m6.locator("[data-feature-rename]").click();
     await expect(view.locator("[data-feature-rename-input]")).toBeVisible();
     await page.screenshot({ path: path.join(SHOTS, "features-corrections-light.png") });
   });

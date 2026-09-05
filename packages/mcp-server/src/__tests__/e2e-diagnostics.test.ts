@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { once } from "node:events";
 import { PassThrough } from "node:stream";
 import type { ChildProcess } from "node:child_process";
 import type { TestInfo } from "@playwright/test";
@@ -6,6 +7,7 @@ import {
   attachDaemonOutput,
   captureDaemonOutput,
   diagnosticPendingBytesForTests,
+  spawnDiagnosticProcess,
 } from "../../e2e/daemon-harness.js";
 import { BoundedDiagnosticTail, redactDiagnostic } from "../../e2e/diagnostics.js";
 
@@ -38,6 +40,10 @@ describe("E2E daemon diagnostics", () => {
       'apiKey="escaped \\\"quote-secret\\\" suffix-secret"',
       'Authorization: "Bearer spaced-auth-secret trailing-secret"',
       "Authorization='Custom single-auth-secret trailing-secret'",
+      "Cookie: session=cookie-secret; theme=dark",
+      "Set-Cookie: session=set-cookie-secret; HttpOnly; Secure",
+      "x-api-key: x-header-secret",
+      "api_key=snake-secret",
       "https://user:url-secret@example.test/path?token=query-secret#fragment-secret",
     ].join("\n"));
 
@@ -46,10 +52,25 @@ describe("E2E daemon diagnostics", () => {
       "custom-secret", "url-secret", "query-secret", "fragment-secret",
       "two word secret", "single quoted secret", "quote-secret", "suffix-secret",
       "spaced-auth-secret", "trailing-secret", "single-auth-secret",
+      "cookie-secret", "set-cookie-secret", "x-header-secret", "snake-secret",
     ]) expect(output).not.toContain(secret);
     expect(output).toContain('Authorization: "Bearer [REDACTED]"');
     expect(output).toContain("Authorization='Custom [REDACTED]'");
     expect(output).toContain("https://example.test/path");
+  });
+
+  it("captures and redacts output from a real crashing child process", async () => {
+    const proc = spawnDiagnosticProcess(process.execPath, [
+      "-e",
+      "console.error('Set-Cookie: sid=child-secret; HttpOnly'); console.log('startup failed deliberately'); process.exit(23)",
+    ]);
+    await once(proc, "exit");
+
+    const output = (await capturedBody(proc)).toString();
+    expect(proc.exitCode).toBe(23);
+    expect(output).toContain("startup failed deliberately");
+    expect(output).toContain("Set-Cookie: [REDACTED]");
+    expect(output).not.toContain("child-secret");
   });
 
   it("preserves the prior tail when an oversized browser event is discarded", () => {

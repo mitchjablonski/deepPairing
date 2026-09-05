@@ -1,11 +1,11 @@
 import { test, expect } from "./test.js";
 import AxeBuilder from "@axe-core/playwright";
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { teardownDaemon, portOf } from "./daemon-harness.js";
+import { teardownDaemon, portOf, spawnDiagnosticProcess, withSetupDiagnostics } from "./daemon-harness.js";
 
 /**
  * C3 — automated a11y regression net (@axe-core/playwright). The UI invests
@@ -52,18 +52,17 @@ async function waitForDaemon(root: string): Promise<{ base: string; token: strin
   throw new Error("daemon did not come up");
 }
 
-test.beforeAll(async () => {
+test.beforeAll(async ({}, testInfo) => {
   if (!fs.existsSync(daemonJs)) {
     throw new Error(`dist/daemon/index.js missing at ${daemonJs} — run \`pnpm build\` before the e2e suite.`);
   }
   home = fs.mkdtempSync(path.join(os.tmpdir(), "dp-a11y-home-"));
   projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-a11y-"));
-  proc = spawn(process.execPath, [daemonJs], {
+  proc = spawnDiagnosticProcess(process.execPath, [daemonJs], {
     // #152 — scripted start: suppress the daemon's browser auto-open.
     env: { ...process.env, HOME: home, DEEPPAIRING_PROJECT_ROOT: projectRoot, DEEPPAIRING_NO_OPEN: "1" },
-    stdio: "ignore",
   });
-  const daemon = await waitForDaemon(projectRoot);
+  const daemon = await withSetupDiagnostics(proc, testInfo, () => waitForDaemon(projectRoot));
   baseURL = daemon.base;
   authToken = daemon.token;
 
@@ -1608,54 +1607,58 @@ test("a11y: the Ledger drawer with a stance row + armed remove confirm has no se
   // #193 — the per-stance remove affordance shipped into a surface no e2e
   // scan ever opened (the exact hollow-net shape #187 taught us about), so
   // this opens the drawer for real. Seed one stance first so the Stances tab
-  // renders a row WITH the remove button (workers=1 + declaration order:
-  // this runs last, so the seeded ledger entry can't disturb earlier scans;
-  // the ledger lives in the K2 tmp HOME, never the developer's real one).
-  const info = (await (await fetch(`${baseURL}/api/daemon-info`)).json()) as { projectHash: string };
-  const seed = await fetch(`${baseURL}/api/philosophy/seed`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Project-Hash": info.projectHash,
-      Authorization: `Bearer ${authToken}`,
-    },
-    body: JSON.stringify({
-      concept: "global mutable state",
-      verdict: "rejected",
-      reason: "broke testability in 3 places",
-    }),
-  });
-  if (!seed.ok) throw new Error(`seed stance failed: ${seed.status}`);
+  // renders a row WITH the remove button. Snapshot and restore the isolated
+  // ledger so neither worker count nor declaration order becomes a fixture.
+  const ledgerPath = path.join(home, ".deeppairing", "philosophy.json");
+  const priorLedger = fs.existsSync(ledgerPath) ? fs.readFileSync(ledgerPath) : undefined;
+  try {
+    const info = (await (await fetch(`${baseURL}/api/daemon-info`)).json()) as { projectHash: string };
+    const seed = await fetch(`${baseURL}/api/philosophy/seed`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Project-Hash": info.projectHash,
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({
+        concept: "global mutable state",
+        verdict: "rejected",
+        reason: "broke testability in 3 places",
+      }),
+    });
+    if (!seed.ok) throw new Error(`seed stance failed: ${seed.status}`);
 
-  await page.goto(`${baseURL}/?session=a11y`);
-  await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
-  // #212 (J4) — the top-level header Ledger button was cut; the drawer's own
-  // entry points (the Diagnostics ⋯ entry + the ⌘K palette) all fire the shared
-  // dp:open-your-taste event. Dispatch it directly so the scan sees ONLY the
-  // drawer under test — no Diagnostics popover left open behind the backdrop.
-  await page.evaluate(() => window.dispatchEvent(new CustomEvent("dp:open-your-taste")));
-  // Marquee-surface rule: never analyze before the row + its remove button
-  // exist (a drawer stuck on "Loading…" would pass hollow).
-  const removeBtn = page.getByRole("button", { name: /^Remove stance: global mutable state$/ });
-  await removeBtn.waitFor({ timeout: 15000 });
+    await page.goto(`${baseURL}/?session=a11y`);
+    await page.waitForSelector("[data-artifact-id]", { timeout: 15000 });
+    // #212 (J4) — the top-level header Ledger button was cut; the drawer's own
+    // entry points all fire the shared dp:open-your-taste event. Dispatch it
+    // directly so the scan sees only the drawer under test.
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent("dp:open-your-taste")));
+    const removeBtn = page.getByRole("button", { name: /^Remove stance: global mutable state$/ });
+    await removeBtn.waitFor({ timeout: 15000 });
 
-  // Scan 1 — drawer open, row unarmed. Zero disabled rules, like every scan
-  // in this file.
-  const results = await new AxeBuilder({ page })
-    .withTags(["wcag2a", "wcag2aa"])
-    .analyze();
-  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
-  expect(serious, `axe violations (drawer, unarmed):\n${fmt(serious)}`).toEqual([]);
+    const results = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa"])
+      .analyze();
+    const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+    expect(serious, `axe violations (drawer, unarmed):\n${fmt(serious)}`).toEqual([]);
 
-  // Scan 2 — armed confirm (the destructive step's copy + buttons). Arming
-  // only — never confirm, so the scan mutates nothing.
-  await removeBtn.click();
-  await page.waitForSelector('[data-testid="stance-remove-confirm"]', { timeout: 15000 });
-  const armed = await new AxeBuilder({ page })
-    .withTags(["wcag2a", "wcag2aa"])
-    .analyze();
-  const armedSerious = armed.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
-  expect(armedSerious, `axe violations (drawer, armed confirm):\n${fmt(armedSerious)}`).toEqual([]);
+    // Arming only — never confirm, so the second scan mutates nothing further.
+    await removeBtn.click();
+    await page.waitForSelector('[data-testid="stance-remove-confirm"]', { timeout: 15000 });
+    const armed = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa"])
+      .analyze();
+    const armedSerious = armed.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+    expect(armedSerious, `axe violations (drawer, armed confirm):\n${fmt(armedSerious)}`).toEqual([]);
+  } finally {
+    if (priorLedger) {
+      fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
+      fs.writeFileSync(ledgerPath, priorLedger);
+    } else {
+      fs.rmSync(ledgerPath, { force: true });
+    }
+  }
 });
 
 /**

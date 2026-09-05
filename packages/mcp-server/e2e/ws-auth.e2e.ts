@@ -1,11 +1,11 @@
 import { test, expect } from "./test.js";
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
-import { teardownDaemon, portOf } from "./daemon-harness.js";
+import { teardownDaemon, portOf, spawnDiagnosticProcess, withSetupDiagnostics } from "./daemon-harness.js";
 
 /**
  * #159 — the GG2/II2/D5 WebSocket upgrade auth, proven against a REAL spawned
@@ -29,35 +29,36 @@ let home: string;
 let baseURL: string;
 let projectHash: string;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({}, testInfo) => {
   if (!fs.existsSync(daemonJs)) {
     throw new Error(`dist/daemon/index.js missing at ${daemonJs} — run \`pnpm build\` before the e2e suite.`);
   }
   home = fs.mkdtempSync(path.join(os.tmpdir(), "dp-wsauth-home-"));
   projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-wsauth-"));
-  proc = spawn(process.execPath, [daemonJs], {
+  proc = spawnDiagnosticProcess(process.execPath, [daemonJs], {
     env: { ...process.env, HOME: home, DEEPPAIRING_PROJECT_ROOT: projectRoot, DEEPPAIRING_NO_OPEN: "1" },
-    stdio: "ignore",
   });
-  const infoPath = path.join(projectRoot, ".deeppairing", "daemon.json");
-  let port = 0;
-  for (let i = 0; i < 120 && !port; i++) {
-    try {
-      const info = JSON.parse(fs.readFileSync(infoPath, "utf-8"));
-      if (info.port) {
-        const res = await fetch(`http://localhost:${info.port}/api/daemon-info`).catch(() => null);
-        if (res?.ok) {
-          const di = (await res.json()) as { projectHash?: string };
-          port = info.port;
-          projectHash = di.projectHash ?? "";
+  await withSetupDiagnostics(proc, testInfo, async () => {
+    const infoPath = path.join(projectRoot, ".deeppairing", "daemon.json");
+    let port = 0;
+    for (let i = 0; i < 120 && !port; i++) {
+      try {
+        const info = JSON.parse(fs.readFileSync(infoPath, "utf-8"));
+        if (info.port) {
+          const res = await fetch(`http://localhost:${info.port}/api/daemon-info`).catch(() => null);
+          if (res?.ok) {
+            const di = (await res.json()) as { projectHash?: string };
+            port = info.port;
+            projectHash = di.projectHash ?? "";
+          }
         }
-      }
-    } catch {}
-    if (!port) await new Promise((r) => setTimeout(r, 250));
-  }
-  if (!port) throw new Error("daemon did not become reachable within 30s");
-  if (!projectHash) throw new Error("daemon did not advertise a projectHash");
-  baseURL = `http://localhost:${port}`;
+      } catch {}
+      if (!port) await new Promise((r) => setTimeout(r, 250));
+    }
+    if (!port) throw new Error("daemon did not become reachable within 30s");
+    if (!projectHash) throw new Error("daemon did not advertise a projectHash");
+    baseURL = `http://localhost:${port}`;
+  });
 });
 
 test.afterAll(async () => {

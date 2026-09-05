@@ -17,6 +17,7 @@ function scrubUrl(value: string): string {
 export function redactDiagnostic(value: string): string {
   return value
     .replace(URL_PATTERN, scrubUrl)
+    .replace(/(\b(?:set-cookie|cookie)\s*:\s*)[^\r\n]*/gi, "$1[REDACTED]")
     .replace(
       /(\b"?authorization"?\s*[:=]\s*")((?:\\.|[^"\\])*)"/gi,
       (_match, prefix: string, credential: string) => {
@@ -32,11 +33,11 @@ export function redactDiagnostic(value: string): string {
       },
     )
     .replace(
-      /(\b"?(?:authToken|accessToken|apiKey|password)"?\s*[:=]\s*")((?:\\.|[^"\\])*)"/gi,
+      /(\b"?(?:authToken|accessToken|apiKey|x-api-key|api_key|password)"?\s*[:=]\s*")((?:\\.|[^"\\])*)"/gi,
       '$1[REDACTED]"',
     )
     .replace(
-      /(\b'?(?:authToken|accessToken|apiKey|password)'?\s*[:=]\s*')((?:\\.|[^'\\])*)'/gi,
+      /(\b'?(?:authToken|accessToken|apiKey|x-api-key|api_key|password)'?\s*[:=]\s*')((?:\\.|[^'\\])*)'/gi,
       "$1[REDACTED]'",
     )
     .replace(
@@ -44,7 +45,7 @@ export function redactDiagnostic(value: string): string {
       "$1$2[REDACTED]",
     )
     .replace(
-      /(\b"?(?:authToken|accessToken|apiKey|password)"?\s*[:=]\s*["']?)[^,\s;"']+/gi,
+      /(\b"?(?:authToken|accessToken|apiKey|x-api-key|api_key|password)"?\s*[:=]\s*["']?)[^,\s;"']+/gi,
       "$1[REDACTED]",
     )
     .replace(/(\bbearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, "$1[REDACTED]");
