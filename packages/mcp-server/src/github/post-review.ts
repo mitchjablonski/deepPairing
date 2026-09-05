@@ -354,3 +354,26 @@ export async function postPreparedPrReview(opts: {
     throw new Error(`Posted, but could not parse gh response: ${errorMessage(err)}`);
   }
 }
+
+/** Read-only recovery for an explicitly selected review. Bounded pagination;
+ * unavailable or incomplete evidence must never release an uncertain operation. */
+export async function readReviewForReconciliation(target: string, reviewId: number): Promise<{ review: unknown; comments: unknown[] }> {
+  const { owner, repo, number } = requireCanonicalTarget(target);
+  if (!Number.isSafeInteger(reviewId) || reviewId <= 0) throw new Error("Invalid remote review ID");
+  const endpoint = `repos/${owner}/${repo}/pulls/${number}/reviews/${reviewId}`;
+  const read = async (url: string): Promise<unknown> => {
+    const res = await run("gh", ["api", url, "--hostname", "github.com", "-X", "GET", "-H", "Accept: application/vnd.github+json"]);
+    if (res.code !== 0) throw new Error(`Could not verify remote review (gh exit ${res.code}); operation remains unresolved`);
+    if (res.stdout.length > 8 * 1024 * 1024) throw new Error("Remote recovery response exceeds safety limit");
+    return JSON.parse(res.stdout);
+  };
+  const review = await read(endpoint);
+  const comments: unknown[] = [];
+  for (let page = 1; page <= 20; page++) {
+    const rows = await read(`${endpoint}/comments?per_page=100&page=${page}`);
+    if (!Array.isArray(rows) || rows.length > 100) throw new Error("Invalid remote review comment page");
+    comments.push(...rows);
+    if (rows.length < 100) return { review, comments };
+  }
+  throw new Error("Remote review pagination exceeds safety limit; operation remains unresolved");
+}

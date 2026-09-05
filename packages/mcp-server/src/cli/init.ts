@@ -1587,8 +1587,10 @@ async function demoCmd(): Promise<void> {
 async function postPrReviewCmd(ref: string, sessionId?: string, event?: string, repost = false) {
   const { FileStore } = await import("../store/file-store.js");
   const { authorizeReviewPost } = await import("../github/review-authorization.js");
+  const { authorizeDurableReview } = await import("../github/authorized-durable-review.js");
+  const { executeDurableReviewPost } = await import("../github/durable-review-post.js");
+  const { ReviewPostJournal } = await import("../store/review-post-journal.js");
   const {
-    bindReviewPayloadToPreparedTarget,
     postPreparedPrReview,
     preparePrReviewTarget,
     parsePrRef,
@@ -1649,23 +1651,26 @@ async function postPrReviewCmd(ref: string, sessionId?: string, event?: string, 
     // await. The earlier reader may be stale while the daemon records a new
     // verdict, and forceFlush would be actively unsafe here. Dispose this
     // read-only instance before the final authorization gate and network send.
-    const finalReader = new FileStore(cwd, chosenSessionId);
-    let freshState: any;
-    try {
-      freshState = finalReader.getFullState();
-    } finally {
-      finalReader.dispose();
-    }
-    const targetAuth = authorizeReviewPost(freshState, { event, pr: target, repost });
-    if (!targetAuth.ok) throw new Error(targetAuth.reason);
-    const payload = bindReviewPayloadToPreparedTarget(
-      targetAuth.payload,
-      targetAuth.reviewedHeadSha,
-      prepared,
-    );
-    const result = await postPreparedPrReview({ target, payload });
+    const authorizeFresh = () => {
+      const finalReader = new FileStore(cwd, chosenSessionId);
+      try {
+        return authorizeDurableReview(finalReader.getFullState(), { event, repost }, prepared);
+      } finally {
+        finalReader.dispose();
+      }
+    };
+    const { payload, identity } = authorizeFresh();
+    const posted = await executeDurableReviewPost({
+      store: new ReviewPostJournal(cwd, chosenSessionId), payload, identity, repost,
+      reauthorize: () => authorizeFresh().identity,
+      send: (canonicalTarget, frozenPayload) => postPreparedPrReview({ target: canonicalTarget, payload: frozenPayload }),
+    });
+    const { result } = posted;
     console.log(`  ${green("✓")} Posted ${payload.comments.length} inline comment${payload.comments.length === 1 ? "" : "s"} on PR ${ref}`);
     if (result.htmlUrl) console.log(`    ${dim(result.htmlUrl)}`);
+    if (posted.receipt === "unconfirmed") {
+      console.error(`  ${red("!")} Review ${posted.operationId} posted, but its durable receipt is unconfirmed. Do not retry or repost; reconcile this operation first.`);
+    }
     // R1 (#279) — same stamp the MCP door writes, into the same sidecar, so a
     // duplicate post is refused no matter which door it comes from.
     try {
@@ -1686,7 +1691,7 @@ async function postPrReviewCmd(ref: string, sessionId?: string, event?: string, 
       } finally {
         recorder.dispose();
       }
-      console.log(`    ${dim("Recorded — a second post to this PR needs --repost.")}`);
+      console.log(`    ${dim(posted.receipt === "recorded" ? "Recorded — a second post to this PR needs --repost." : "Legacy history recorded; durable operation still needs reconciliation.")}`);
     } catch (stampErr) {
       console.error(`  ${red("!")} The review posted, but recording it locally failed: ${errorMessage(stampErr)}`);
     }
@@ -2054,6 +2059,11 @@ ${helpInvocations}
                                            and print its path (--redact-code drops the code bodies)
     dp post-pr-review <pr>                 Post the pairing session's findings as inline comments
                                            on a GitHub PR. Requires \`gh\` CLI installed + authed.
+    dp review-posts <session-id>           Inspect durable review-post operations
+    dp review-posts <session-id> cancel-reserved <operation-id>
+                                          Cancel only an operation that has not started sending
+    dp review-posts <session-id> reconcile <operation-id> <remote-review-id>
+                                          Verify a remote review and record it without posting
     dp --help                              Show this help message
     dp --version                           Show version
 `);
@@ -2149,6 +2159,15 @@ ${helpInvocations}
   listCmd().catch((err) => {
     console.error(`  ${red("✗")} list failed: ${errorMessage(err)}`);
     process.exit(1);
+  });
+} else if (cmd === "review-posts") {
+  import("./review-posts.js").then(async ({ reviewPostsCommand, reconcileReviewPostCommand }) => {
+    console.log(args[2] === "reconcile"
+      ? await reconcileReviewPostCommand(cwd, args.slice(1))
+      : reviewPostsCommand(cwd, args.slice(1)));
+  }).catch(err => {
+    console.error(`  ${red("✗")} review-posts failed: ${errorMessage(err)}`);
+    process.exitCode = 1;
   });
 } else if (cmd === "post-pr-review") {
   const ref = args[1];

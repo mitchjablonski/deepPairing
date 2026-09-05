@@ -16,6 +16,7 @@ import { ledgerDigest, invalidateLedgerDigestCache } from "./ledger-digest.js";
 import { detectAndRecordGateEscape } from "./preflight-residual.js";
 import { isCrossTerminalVerdictFlip } from "./verdict-guard.js";
 import { readPostedReviews, appendPostedReview, type PostedReviewRecord } from "./posted-reviews.js";
+import { ReviewPostJournal } from "./review-post-journal.js";
 import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, RenderFailureRecord, StatusTransitionReason , RecordDecisionParams } from "./store-interface.js";
 
 export type { DecisionRecord, PlanReviewRecord };
@@ -1807,6 +1808,11 @@ export class FileStore implements IStore {
   }
 
   // --- Posted reviews (R1 #279) ---
+
+  /** Fresh journal reads and short disk claims are shared with CLI processes. */
+  get reviewPosts(): ReviewPostJournal {
+    return new ReviewPostJournal(this.projectRoot, this.sessionId);
+  }
 
   /**
    * R1 (#279) — record that a review LANDED on a PR. Called only after `gh`
