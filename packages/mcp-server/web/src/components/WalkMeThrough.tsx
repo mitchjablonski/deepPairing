@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChangesetHunk, RequestScope } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
@@ -265,6 +265,18 @@ export function WalkMeThroughButton({
   const pushToast = useToastStore((s) => s.push);
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
+  const sentResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mounted = useRef(false);
+
+  useEffect(() => {
+    // Set on every effect mount so React StrictMode's setup-cleanup-setup cycle
+    // leaves the live instance enabled.
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (sentResetTimer.current !== null) clearTimeout(sentResetTimer.current);
+    };
+  }, []);
 
   // A request emitted during replay would land on the wrong (historical)
   // session, and submitRequest refuses it anyway — so the affordance is withheld.
@@ -283,8 +295,13 @@ export function WalkMeThroughButton({
       // scoped ask (not a hand-typed composer request); `scope` is what the
       // agent scopes the explainer to (and links relatedArtifactIds at).
       await submitRequest(requestText, "explain", { source: "walk_me_through", scope });
+      if (!mounted.current) return;
       setSent(true);
-      setTimeout(() => setSent(false), 2500);
+      if (sentResetTimer.current !== null) clearTimeout(sentResetTimer.current);
+      sentResetTimer.current = setTimeout(() => {
+        sentResetTimer.current = null;
+        setSent(false);
+      }, 2500);
       // Liveness-branched confirmation — the same predicate the request composer
       // uses, so the two surfaces can't disagree about whether an agent is live.
       // P2 fix 4 — both branches now name the DESTINATION: round 11 found nothing
@@ -304,9 +321,10 @@ export function WalkMeThroughButton({
         });
       }
     } catch {
+      if (!mounted.current) return;
       /* store rolled back + toasted the error */
     } finally {
-      setSending(false);
+      if (mounted.current) setSending(false);
     }
   };
 
