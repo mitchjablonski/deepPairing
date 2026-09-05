@@ -2,7 +2,8 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    # Stacked PRs target another codex branch until the stack is reviewed.
+    branches: [main, 'codex/**']
   push:
     branches: [main]
 
