@@ -14,6 +14,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { cliInvocation } from "../cli-invocation.js";
 import { errorMessage } from "@deeppairing/shared";
+import { CHECKPOINT_HOOK_SCRIPT, STOP_HOOK_SCRIPT } from "./hook-scripts.generated.js";
 // P1 — the guardrail backstop's zero-I/O prefilter. The generated hook script is
 // self-contained and cannot import at runtime, so we INTERPOLATE this literal
 // into its source at generation time: the init-path copy and the plugin-bundled
@@ -254,171 +255,16 @@ export function ensureGitignoreEntry(projectRoot: string): SetupResult {
  * human review. Without it, the agent can fire-and-forget present_findings
  * and exit before the user has a chance to triage in the companion UI.
  *
- * U0.4 / U0.6 — age guard: drafts older than DRAFT_MAX_AGE_MS are treated as
- * abandoned (user moved on, agent shouldn't stay stuck forever). The default
- * is 30 minutes.
+ * X9 — a real .mjs file, not an inline `node -e "..."`: editable, debuggable,
+ * no shell+JSON+JS triple-escaping.
  *
- * X7 — every fire (pass OR nag) appends an entry to
- * .deeppairing/hooks-state.json. The companion UI's HookStatus component
- * reads + listens to that file to surface "hook stack working" feedback.
- *
- * X9 (partial) — converted from inline `node -e "..."` to a real .mjs file
- * (matches the checkpoint hook's pattern). Editable, debuggable, no
- * shell+JSON+JS triple-escaping.
+ * #342 — the script is no longer a template literal here. It is esbuild output
+ * of `src/cli/stop-hook-entry.ts` (the SAME entry the plugin's
+ * `server/stop.mjs` is built from), embedded by
+ * `scripts/generate-hook-scripts.mjs`. The behaviour, the age guard and the
+ * hooks-state fire log all live in `src/hooks/stop-hook.ts` and are
+ * typechecked and unit-testable there.
  */
-const STOP_HOOK_SCRIPT = `#!/usr/bin/env node
-// deepPairing Stop hook — installed by ensureStopHook (X7 / X9).
-// ESM (.mjs).
-import fs from "node:fs";
-import path from "node:path";
-
-const HOOK_NAME = "stop";
-const STATE_PATH = path.join(process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || process.cwd(), ".deeppairing", "hooks-state.json");
-const STATE_CAP = 50;
-// Q1 — durable hooks-state writes, mirrored from preflight-hook-core's
-// readHookState / writeHookStateAtomic / acquireHookStateLock. Pre-Q1 every
-// writer of this file did a plain read-modify-writeFileSync: two hooks firing
-// at once could tear the JSON, and the next reader's catch reset it to
-// {version:1}, DISCARDING the whole fire log with no backup. Atomic rename
-// fixes the torn read but NOT the lost update (M1: 8 parallel invocations kept
-// only 4 records), so the whole read-modify-write runs under an O_EXCL
-// lockfile with a stale-breaker and a bounded spin. Failing to acquire proceeds
-// unsynchronized rather than dropping the record.
-function readState(statePath) {
-  let raw;
-  try { raw = fs.readFileSync(statePath, "utf-8"); } catch { return { version: 1 }; }
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
-  } catch {}
-  try { fs.writeFileSync(statePath + ".corrupt-" + new Date().toISOString().replace(/[:.]/g, "-"), raw); } catch {}
-  return { version: 1 };
-}
-function writeStateAtomic(statePath, state) {
-  const tmp = statePath + ".tmp." + process.pid + "." + Date.now() + "." + Math.random().toString(16).slice(2, 10);
-  try {
-    fs.writeFileSync(tmp, JSON.stringify(state));
-    fs.renameSync(tmp, statePath);
-  } catch (err) {
-    try { fs.unlinkSync(tmp); } catch {}
-    throw err;
-  }
-}
-function acquireLock(statePath) {
-  const lock = statePath + ".lock";
-  const deadline = Date.now() + 500;
-  for (;;) {
-    try {
-      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
-      return lock;
-    } catch {
-      try {
-        if (Date.now() - fs.statSync(lock).mtimeMs > 5000) { fs.unlinkSync(lock); continue; }
-      } catch { continue; }
-      if (Date.now() >= deadline) return null; // degraded beats dropping the record
-      try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2); } catch {}
-    }
-  }
-}
-function releaseLock(lock) { if (lock) { try { fs.unlinkSync(lock); } catch {} } }
-function recordFire(exitCode, reason) {
-  try {
-    fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true }); // before O_EXCL
-    const lock = acquireLock(STATE_PATH);
-    try {
-      const state = readState(STATE_PATH);
-      state.version = 1;
-      state.fires = Array.isArray(state.fires) ? state.fires : [];
-      state.fires.push({
-        at: new Date().toISOString(),
-        hook: HOOK_NAME,
-        exitCode,
-        reason,
-      });
-      if (state.fires.length > STATE_CAP) state.fires = state.fires.slice(-STATE_CAP);
-      writeStateAtomic(STATE_PATH, state);
-    } finally { releaseLock(lock); }
-  } catch {
-    // Recording must never fail the hook itself.
-  }
-}
-function exit(code, reason) {
-  recordFire(code, reason);
-  process.exit(code);
-}
-
-try {
-  const sessionsDir = path.join(process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || process.cwd(), ".deeppairing", "sessions");
-  if (!fs.existsSync(sessionsDir)) exit(0, "no sessions dir");
-
-  const MAX_AGE_MS = 30 * 60 * 1000;
-  const now = Date.now();
-  // #195 F1 — remember the first session that owes a debrief (recent code work,
-  // no debrief). Only surfaced if NO blocking draft fired (blocking wins).
-  let owesDebriefSession = null;
-  for (const id of fs.readdirSync(sessionsDir)) {
-    const af = path.join(sessionsDir, id, "artifacts.json");
-    if (!fs.existsSync(af)) continue;
-    let arr;
-    try { arr = JSON.parse(fs.readFileSync(af, "utf-8")); } catch { continue; }
-    if (!Array.isArray(arr)) continue;
-    const blocking = arr.some((x) => {
-      if (x.status !== "draft") return false;
-      if (!["research", "spec", "plan", "decision", "code_change", "changeset"].includes(x.type)) return false;
-      const t = x.createdAt ? new Date(x.createdAt).getTime() : 0;
-      if (t && now - t > MAX_AGE_MS) return false; // abandoned, no longer blocks
-      return true;
-    });
-    if (blocking) {
-      process.stderr.write("deepPairing: pending artifacts need review — call check_feedback\\n");
-      // Non-blocking reminder: surface on stderr, exit 0. A stdout message +
-      // exit 2 showed Claude only an empty-stderr "Stop hook error".
-      exit(0, "pending artifacts in " + id);
-    }
-    // #195 F1 + J2a (#210) — debrief-owed: ceremony scales with task size.
-    // INLINE TWIN of sessionOwesDebrief (debrief-gate.ts) — kept in lock-step
-    // with the bundled copy by stop-hook-debrief-parity.test.ts. Count LIVE
-    // artifacts: a LIVE debrief (not superseded/retracted/obsolete/rejected)
-    // closes the loop; code counts LIVE code_change/changeset (rejected KEPT,
-    // superseded/retracted/obsolete dropped); a decision/spec/plan (any status)
-    // OR a dead-but-attempted debrief is feature-shaping ceremony that escalates
-    // even a single-file fix. research/findings is NOT ceremony. Trivial: exactly
-    // one live single-file code_change, no changeset, no ceremony.
-    // Q6 (#232) — a changeset with content.reviewIntent === "external" is a
-    // colleague's PR on the review surface, not code the pair wrote: it is
-    // skipped entirely (never counted as "code was presented").
-    if (owesDebriefSession === null) {
-      const CODE_CLOSED = ["superseded", "retracted", "obsolete"];
-      const DEBRIEF_DEAD = ["superseded", "retracted", "obsolete", "rejected"];
-      const isExternalReview = (x) =>
-        x.type === "changeset" && !!x.content && typeof x.content === "object" &&
-        x.content.reviewIntent === "external";
-      const hasLiveDebrief = arr.some((x) => x.type === "debrief" && !DEBRIEF_DEAD.includes(x.status));
-      const recentCode = arr.filter((x) => {
-        if (!["code_change", "changeset"].includes(x.type)) return false;
-        if (isExternalReview(x)) return false;
-        if (CODE_CLOSED.includes(x.status)) return false;
-        const t = x.createdAt ? new Date(x.createdAt).getTime() : 0;
-        return !t || now - t <= MAX_AGE_MS;
-      });
-      const changesets = recentCode.filter((x) => x.type === "changeset").length;
-      const codeChanges = recentCode.filter((x) => x.type === "code_change").length;
-      const hasCeremony =
-        arr.some((x) => ["decision", "spec", "plan"].includes(x.type)) ||
-        arr.some((x) => x.type === "debrief");
-      const trivial = changesets === 0 && codeChanges === 1 && !hasCeremony;
-      if (!hasLiveDebrief && recentCode.length > 0 && !trivial) owesDebriefSession = id;
-    }
-  }
-  if (owesDebriefSession !== null) {
-    process.stderr.write("deepPairing: code was presented but no present_debrief yet — end the run with one so your pair gets the walk-through\\n");
-    exit(0, "owes debrief in " + owesDebriefSession);
-  }
-  exit(0, "pass: no blocking drafts");
-} catch (err) {
-  exit(0, "error: " + (errorMessage(err)));
-}
-`;
 const STOP_SCRIPT_REL_PATH = ".deeppairing/hooks/stop.mjs";
 // Anchor the command at $CLAUDE_PROJECT_DIR, NOT a bare relative path: Claude
 // Code runs hooks with whatever cwd the session is in, which is not guaranteed
@@ -536,199 +382,24 @@ export function ensureStopHook(projectRoot: string): SetupResult {
 
 /**
  * V2 — PostToolUse "checkpoint" hook. Fires after every Write/Edit/MultiEdit
- * and exits 2 to nag the agent into calling present_code_change BEFORE the
- * next edit. The threshold is 1 (deliberately strict): the protocol says
- * "before each Write/Edit", so the FIRST Write without a preceding
- * code_change is already a violation.
+ * and nags the agent into calling present_code_change BEFORE the next edit.
+ * The threshold is 1 (deliberately strict): the protocol says "before each
+ * Write/Edit", so the FIRST Write without a preceding code_change is already
+ * a violation.
  *
  * Why a real script file (not an inline `node -e "..."`):
  * shell+JSON+JS triple-escaping made the inline version unmaintainable and
- * silently broke. Writing to disk gives us:
- *   - debuggable (the script is in .deeppairing/hooks/, run it directly)
- *   - editable (a team can soften the rule by tweaking the file)
- *   - tested via execSync without escape gymnastics
+ * silently broke. Writing to disk gives us a hook that is debuggable (run
+ * .deeppairing/hooks/checkpoint.mjs directly), editable (a team can soften the
+ * rule by tweaking the file), and testable via execSync without escape
+ * gymnastics.
  *
- * Implementation:
- *   - Read .deeppairing/sessions/&#x2A;/artifacts.json to find the most-recent
- *     code_change artifact's createdAt as the "last checkpoint" timestamp.
- *   - Read PostToolUse event payload from stdin (Claude Code's hook protocol).
- *   - If the tool isn't Write/Edit/MultiEdit, exit 0 (the matcher should
- *     have filtered, but we're belt-and-suspenders here).
- *   - If no code_change artifact exists OR the most recent one predates
- *     this PostToolUse event, exit 2 with a nag.
+ * #342 — the script is no longer a template literal here. It is esbuild output
+ * of `src/cli/checkpoint-hook-entry.ts`, embedded by
+ * `scripts/generate-hook-scripts.mjs`. The skip-list, the #335 one-shot
+ * file/session receipt claim and the hooks-state fire log all live in
+ * `src/hooks/checkpoint-hook.ts`, typechecked and unit-testable.
  */
-const CHECKPOINT_HOOK_SCRIPT = `#!/usr/bin/env node
-// deepPairing checkpoint hook (V2) — installed by ensureCheckpointHook.
-// ESM (.mjs): use import, not require.
-import fs from "node:fs";
-import path from "node:path";
-
-// V2.1 — skip-list for files that are unambiguously NOT worth a per-edit
-// checkpoint. Scope is deliberately narrow: only generated/vendored paths
-// and auto-generated lockfiles. Config / policy files (.gitignore,
-// package.json, .npmrc, .prettierrc) DO get nagged — those represent real
-// decisions a paired human should react to.
-//
-// Categories:
-//   - Lockfiles: regenerated from a manifest, reviewing them is busy-work
-//     (the manifest change is the real decision; deps are mechanical).
-//   - Generated / vendored paths: outputs of a build, not human-authored.
-//   - IDE-only dirs: editor settings; not the project's code.
-//
-// If a team wants stricter checkpointing they can edit this file directly
-// (.deeppairing/hooks/checkpoint.mjs). To LOOSEN it (e.g. also auto-skip
-// .gitignore), add the basename / prefix here.
-const SKIP_BASENAMES = new Set([
-  // Lockfiles only — manifest files (package.json, Cargo.toml, etc.) are
-  // policy and should still nag.
-  "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb",
-  "uv.lock", "poetry.lock", "Cargo.lock", "Gemfile.lock", "go.sum",
-  "composer.lock",
-]);
-const SKIP_PATH_PREFIXES = [
-  // Generated / vendored output — not human-authored source.
-  "dist/", "build/", "node_modules/", ".deeppairing/", ".next/",
-  ".turbo/", ".cache/", "coverage/", ".nyc_output/",
-  // IDE-local config — workspace settings, not project decisions.
-  ".vscode/", ".idea/",
-];
-
-function isTrivialFile(filePath) {
-  if (!filePath || filePath === "(unknown)") return false;
-  const norm = filePath.replace(/\\\\/g, "/");
-  const base = norm.split("/").pop() || "";
-  if (SKIP_BASENAMES.has(base)) return true;
-  // Match prefixes either at the start of the path or after the project root.
-  for (const prefix of SKIP_PATH_PREFIXES) {
-    if (norm.includes("/" + prefix) || norm.startsWith(prefix)) return true;
-  }
-  return false;
-}
-
-// X7 — record every fire to .deeppairing/hooks-state.json so the
-// companion UI's HookStatus can show "hook stack working" feedback.
-const STATE_PATH = path.join(process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || process.cwd(), ".deeppairing", "hooks-state.json");
-// Q1 — durable hooks-state writes, mirrored from preflight-hook-core's
-// readHookState / writeHookStateAtomic / acquireHookStateLock. Pre-Q1 every
-// writer of this file did a plain read-modify-writeFileSync: two hooks firing
-// at once could tear the JSON, and the next reader's catch reset it to
-// {version:1}, DISCARDING the whole fire log with no backup. Atomic rename
-// fixes the torn read but NOT the lost update (M1: 8 parallel invocations kept
-// only 4 records), so the whole read-modify-write runs under an O_EXCL
-// lockfile with a stale-breaker and a bounded spin. Failing to acquire proceeds
-// unsynchronized rather than dropping the record.
-function readState(statePath) {
-  let raw;
-  try { raw = fs.readFileSync(statePath, "utf-8"); } catch { return { version: 1 }; }
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
-  } catch {}
-  try { fs.writeFileSync(statePath + ".corrupt-" + new Date().toISOString().replace(/[:.]/g, "-"), raw); } catch {}
-  return { version: 1 };
-}
-function writeStateAtomic(statePath, state) {
-  const tmp = statePath + ".tmp." + process.pid + "." + Date.now() + "." + Math.random().toString(16).slice(2, 10);
-  try {
-    fs.writeFileSync(tmp, JSON.stringify(state));
-    fs.renameSync(tmp, statePath);
-  } catch (err) {
-    try { fs.unlinkSync(tmp); } catch {}
-    throw err;
-  }
-}
-function acquireLock(statePath) {
-  const lock = statePath + ".lock";
-  const deadline = Date.now() + 500;
-  for (;;) {
-    try {
-      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
-      return lock;
-    } catch {
-      try {
-        if (Date.now() - fs.statSync(lock).mtimeMs > 5000) { fs.unlinkSync(lock); continue; }
-      } catch { continue; }
-      if (Date.now() >= deadline) return null; // degraded beats dropping the record
-      try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2); } catch {}
-    }
-  }
-}
-function releaseLock(lock) { if (lock) { try { fs.unlinkSync(lock); } catch {} } }
-function recordFire(exitCode, reason) {
-  try {
-    fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true }); // before O_EXCL
-    const lock = acquireLock(STATE_PATH);
-    try {
-      const state = readState(STATE_PATH);
-      state.version = 1;
-      state.fires = Array.isArray(state.fires) ? state.fires : [];
-      state.fires.push({ at: new Date().toISOString(), hook: "checkpoint", exitCode, reason });
-      if (state.fires.length > 50) state.fires = state.fires.slice(-50);
-      writeStateAtomic(STATE_PATH, state);
-    } finally { releaseLock(lock); }
-  } catch { /* recording must never fail the hook itself */ }
-}
-function exit(code, reason) {
-  recordFire(code, reason);
-  process.exit(code);
-}
-
-let stdin = "";
-process.stdin.setEncoding("utf-8");
-process.stdin.on("data", (c) => { stdin += c; });
-process.stdin.on("end", () => {
-  try {
-    const ev = stdin ? JSON.parse(stdin) : {};
-    const tool = ev.tool_name || ev.toolName || "";
-    if (!["Write", "Edit", "MultiEdit"].includes(tool)) exit(0, "skip: tool=" + (tool || "(unknown)"));
-    const filePath =
-      (ev.tool_input && (ev.tool_input.file_path || ev.tool_input.filePath)) ||
-      (ev.input && ev.input.file_path) ||
-      "(unknown)";
-
-    // V2.1 — trivial files (gitignore, lockfiles, generated paths) auto-pass.
-    if (isTrivialFile(filePath)) exit(0, "skip: trivial file " + filePath);
-
-    const dpDir = path.join(process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || process.cwd(), ".deeppairing");
-    if (!fs.existsSync(path.join(dpDir, "sessions"))) exit(0, "skip: no sessions dir");
-
-    // PP1 — read the most-recent code_change timestamp from a tiny marker the
-    // store writes on each present_code_change, instead of readdir-ing +
-    // JSON.parsing every session's (multi-MB, diff-bearing) artifacts.json on
-    // every Write/Edit. Absent marker → 0 → falls through to the nag (safe).
-    let mostRecentCheckpoint = 0;
-    try {
-      const m = JSON.parse(fs.readFileSync(path.join(dpDir, "last-code-change.json"), "utf-8"));
-      const t = new Date(m.at).getTime();
-      if (Number.isFinite(t)) mostRecentCheckpoint = t;
-    } catch { /* no marker yet — treat as no recent checkpoint */ }
-
-    // Threshold rule: every Write needs a code_change artifact created in
-    // the last FRESH_MS window.
-    const FRESH_MS = 60 * 1000;
-    const ageMs = Date.now() - mostRecentCheckpoint;
-    if (mostRecentCheckpoint === 0 || ageMs > FRESH_MS) {
-      process.stderr.write(
-        "deepPairing: " + tool + " on " + filePath +
-        " with no present_code_change for it. Present EVERY code change BEFORE " +
-        "the Write/Edit — including small follow-on edits, new files (tests, " +
-        "configs), and each file of a multi-file change, not just the 'main' " +
-        "one. A write straight to disk never reaches the human's review surface; " +
-        "they can't see or comment on it. If you skipped this for prior edits " +
-        "this session, backfill them now with present_code_change. " +
-        "(Per-Edit Checkpoint rule. Config / generated files like .gitignore are auto-skipped.)\\n"
-      );
-      // Non-blocking reminder: surface on stderr, exit 0. A stdout message +
-      // exit 2 showed Claude only an empty-stderr "blocking error" with no reason.
-      exit(0, "nag: " + tool + " on " + filePath);
-    }
-    exit(0, "pass: fresh checkpoint covers " + filePath);
-  } catch (err) {
-    // Never block the agent on a hook bug. Exit 0 on any unexpected error.
-    exit(0, "error: " + (errorMessage(err)));
-  }
-});
-`;
 
 const CHECKPOINT_SCRIPT_REL_PATH = ".deeppairing/hooks/checkpoint.mjs";
 
