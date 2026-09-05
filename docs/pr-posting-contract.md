@@ -57,8 +57,12 @@ An older identical review without this operation marker is not a match.
 Both CLI and MCP must use one coordinator and the same durable store methods.
 Resolve/read remote preparation first, re-read local authorization, reserve,
 and compare the prepared payload/provenance with the current authorized result
-again before the durable `sending` transition. The coordinator then posts only
-that frozen payload. Any mismatch before `sending` is a known-not-sent failure.
+again before the durable `sending` transition, then re-check once more after
+that transition's response and immediately before invoking POST. The coordinator
+posts only that frozen payload. Any mismatch before `sending` is a known-not-sent
+failure. A mismatch after durable `sending` prevents POST but conservatively
+leaves the journal unresolved; it is never rolled back into automatic retry
+permission across an uncertain daemon response.
 No fake/in-memory fallback is allowed when durable posting methods are absent.
 
 The final check is an authorization snapshot, not a distributed transaction:

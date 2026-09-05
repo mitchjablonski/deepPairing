@@ -115,7 +115,8 @@ export class ReviewPostJournal {
     private readonly sessionId: string,
     private readonly persist: (filePath: string, value: unknown) => void = writeJsonAtomic,
   ) {
-    if (!sessionId || sessionId.includes("..") || /[/\\\0]/.test(sessionId)) {
+    if (!sessionId || sessionId === "." || sessionId.includes("..") || /[/\\\0]/.test(sessionId) ||
+        sessionId.trim() !== sessionId || /[. ]$/.test(sessionId)) {
       throw new ReviewPostJournalError("invalid", "Invalid session ID for review-post journal");
     }
     const dir = path.join(projectRoot, ".deeppairing", "sessions", sessionId);

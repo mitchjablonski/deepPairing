@@ -67,6 +67,39 @@ it("remote acceptance followed by a lost response blocks retry after restart, ev
   expect(sends).toBe(1);
 });
 
+it("refuses a verdict changed while the durable sending response is in flight", async () => {
+  let release!: () => void;
+  let entered!: () => void;
+  const transitionEntered = new Promise<void>(resolve => { entered = resolve; });
+  const response = new Promise<void>(resolve => { release = resolve; });
+  let current = identity;
+  let sends = 0;
+  const deferredStore = {
+    reserve: store.reserve.bind(store),
+    markSending: async (...args: Parameters<typeof store.markSending>) => {
+      store.markSending(...args);
+      entered();
+      await response;
+    },
+    failBeforeSending: store.failBeforeSending.bind(store),
+    markUnknown: store.markUnknown.bind(store),
+    succeed: store.succeed.bind(store),
+  };
+  const pending = executeDurableReviewPost({
+    store: deferredStore, identity, payload, repost: false, reauthorize: () => current,
+    send: async () => { sends++; return result; },
+  });
+  const refused = expect(pending).rejects.toBeInstanceOf(ReviewPostNotSentError);
+  await transitionEntered;
+  current = { ...identity, authorizationDigest: "e".repeat(64) };
+  release();
+  await refused;
+  expect(sends).toBe(0);
+  // Sending is durable; no automatic rollback can safely re-arm another caller.
+  expect(store.list()[0].state).toBe("sending");
+  expect(() => store.reserve(identity, true)).toThrow(/sending/);
+});
+
 it("returns the known remote success with an unconfirmed receipt if the local stamp fails", async () => {
   let writes = 0;
   const faulty = new ReviewPostJournal(root, "s", (file, value) => {

@@ -205,6 +205,9 @@ describe("durable review-post journal", () => {
   it("rejects path traversal without making session directories", () => {
     expect(() => new ReviewPostJournal(root, "../outside")).toThrow(/Invalid session/);
     expect(() => new ReviewPostJournal(root, "")).toThrow(/Invalid session/);
+    for (const id of [".", "s.", "s ", " s"]) {
+      expect(() => new ReviewPostJournal(root, id)).toThrow(/Invalid session/);
+    }
     expect(() => new ReviewPostJournal(root, "missing").reserve(identity)).toThrow();
     expect(fs.existsSync(path.join(root, ".deeppairing", "sessions", "missing"))).toBe(false);
   });

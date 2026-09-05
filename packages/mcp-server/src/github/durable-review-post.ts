@@ -60,6 +60,13 @@ export async function executeDurableReviewPost(opts: {
       throw new Error("Review authorization or content changed while reserving the post");
     }
     await opts.store.markSending(lease, identity);
+    // The daemon transition itself is an HTTP await. A human may withdraw
+    // approval while its response is in flight; no local gate may precede
+    // that wait and still be advertised as the final pre-POST authorization.
+    const beforeSend = reviewPostIdentitySchema.parse(await opts.reauthorize());
+    if (reviewPostDigest(beforeSend) !== reviewPostDigest(identity)) {
+      throw new Error("Review authorization or content changed during the sending transition");
+    }
   } catch (err) {
     let reservationReleased = false;
     try { await opts.store.failBeforeSending(lease); reservationReleased = true; } catch { /* preserve the reservation */ }
