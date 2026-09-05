@@ -113,6 +113,7 @@ export class FileStore implements IStore {
 
   // Immutable snapshots identify local changes independently of filesystem mtimes.
   private recordBaselines: Record<string, string> = {};
+  private observedRecordFiles = new Set<string>();
   private backedUpCorruption: Record<string, string> = {};
 
   // BB2 — held for FileStore.invalidateLedgerDigestCache, which is keyed
@@ -289,6 +290,7 @@ export class FileStore implements IStore {
         return fallback;
       }
       bytes = fs.readFileSync(filePath, "utf-8");
+      this.observedRecordFiles.add(path.basename(filePath));
       return JSON.parse(bytes);
     } catch (err) {
       if (errorCode(err) === "ENOENT") {
@@ -369,11 +371,18 @@ export class FileStore implements IStore {
     try {
       diskBytes = fs.readFileSync(filePath, "utf8");
       raw = JSON.parse(diskBytes);
+      this.observedRecordFiles.add(file);
     } catch (err) {
       // An unchanged corrupt file already backed up during load may be repaired.
       // New corruption or I/O failures must not destroy an unknown disk update.
       const knownCorruption = err instanceof SyntaxError && diskBytes !== undefined &&
         this.backedUpCorruption[filePath] === diskBytes;
+      if (errorCode(err) === "ENOENT" && this.observedRecordFiles.has(file)) {
+        throw Object.assign(
+          new Error(`Previously observed session collection disappeared: ${filePath}`),
+          { code: "ESESSIONFILEMISSING", path: filePath },
+        );
+      }
       if (errorCode(err) !== "ENOENT" && !knownCorruption) throw err;
       raw = [];
     }
@@ -381,6 +390,7 @@ export class FileStore implements IStore {
     const mergedBytes = JSON.stringify(merged, null, 2);
     if (dirty && (!optional || merged.length > 0 || diskBytes !== undefined) && diskBytes !== mergedBytes) {
       writeStringAtomic(filePath, mergedBytes);
+      this.observedRecordFiles.add(file);
     }
     // Advance only AFTER a successful write. A failed flush retains its delta.
     this.recordBaselines[file] = JSON.stringify(merged);
