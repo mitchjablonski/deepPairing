@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -102,6 +102,28 @@ it("claim release requires explicit offline coordination and the unchanged inspe
   expect(fs.readFileSync(journal.journalPath, "utf8")).toBe(before);
   journal.cancelReserved(lease.operationId);
   expect(journal.list()[0].state).toBe("failed");
+});
+
+it("inspection refuses oversized history before reading its bytes", () => {
+  const fd = fs.openSync(journal.journalPath, "w");
+  fs.ftruncateSync(fd, 8 * 1024 * 1024 + 1);
+  fs.closeSync(fd);
+  const read = vi.spyOn(fs, "readSync");
+  try {
+    const output = JSON.parse(reviewPostsCommand(root, ["s", "inspect"]));
+    expect(output.journal).toMatchObject({ valid: false, bytes: 8 * 1024 * 1024 + 1 });
+    expect(read).not.toHaveBeenCalled();
+  } finally { read.mockRestore(); }
+  expect(fs.statSync(journal.journalPath).size).toBe(8 * 1024 * 1024 + 1);
+});
+
+it("oversized claims cannot be inspected into release permission", () => {
+  fs.writeFileSync(journal.claimPath, "x".repeat(4097));
+  const output = JSON.parse(reviewPostsCommand(root, ["s", "inspect"]));
+  expect(output.claim.bytes).toBe(4097);
+  expect(output.claim.digest).toBeUndefined();
+  expect(() => journal.releaseClaim("a".repeat(64), true)).toThrow();
+  expect(fs.statSync(journal.claimPath).size).toBe(4097);
 });
 
 it.each([[], ["s", "force"], ["s", "cancel-reserved"], ["s", "list", "extra"], ["../outside"]].map(args => [args]))(

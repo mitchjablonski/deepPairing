@@ -103,6 +103,29 @@ function resultMatches(identity: ReviewPostIdentity, result: ReviewPostResult): 
     result.htmlUrl.toLowerCase() === `${identity.target}#pullrequestreview-${result.id}`;
 }
 
+/** Enforce the limit during reads as well as before allocation, including a
+ * file that grows after fstat. Regular files only; descriptors always close. */
+function readBoundedFile(file: string, maxBytes: number): Buffer {
+  const fd = fs.openSync(file, "r");
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.size > maxBytes) throw new Error("File exceeds inspection safety limit or is not regular");
+    const chunks: Buffer[] = [];
+    let total = 0;
+    while (total <= maxBytes) {
+      const chunk = Buffer.alloc(Math.min(64 * 1024, maxBytes + 1 - total));
+      const count = fs.readSync(fd, chunk, 0, chunk.length, null);
+      if (count === 0) return Buffer.concat(chunks, total);
+      total += count;
+      if (total > maxBytes) throw new Error("File exceeds inspection safety limit");
+      chunks.push(chunk.subarray(0, count));
+    }
+    throw new Error("File exceeds inspection safety limit");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 export function validateReviewPostResult(identity: ReviewPostIdentity, result: unknown): ReviewPostResult {
   const parsed = resultSchema.parse(result);
   if (!resultMatches(identity, parsed)) {
@@ -136,8 +159,7 @@ export class ReviewPostJournal {
 
   private read(): Journal {
     try {
-      const raw = fs.readFileSync(this.journalPath, "utf8");
-      if (raw.length > 8 * 1024 * 1024) throw new Error("Journal exceeds safety limit");
+      const raw = readBoundedFile(this.journalPath, 8 * 1024 * 1024).toString("utf8");
       const journal = journalSchema.parse(JSON.parse(raw));
       const ids = new Set<string>();
       const activeTargets = new Set<string>();
@@ -161,8 +183,7 @@ export class ReviewPostJournal {
   /** Legacy data is advisory elsewhere, but it must fail CLOSED at the posting boundary. */
   readLegacyHistory(): PostedReviewRecord[] {
     try {
-      const raw = fs.readFileSync(this.legacyPath, "utf8");
-      if (raw.length > 8 * 1024 * 1024) throw new Error("History exceeds safety limit");
+      const raw = readBoundedFile(this.legacyPath, 8 * 1024 * 1024).toString("utf8");
       return z.array(z.object({
         pr: z.string().refine(v => parsePrReference(v) !== null),
         prNumber: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
@@ -252,7 +273,7 @@ export class ReviewPostJournal {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4096) {
       throw new ReviewPostJournalError("invalid", "Claim must be a regular file of at most 4096 bytes; inspect it manually.");
     }
-    return createHash("sha256").update(fs.readFileSync(this.claimPath)).digest("hex");
+    return createHash("sha256").update(readBoundedFile(this.claimPath, 4096)).digest("hex");
   }
 
   /** Operator-only, offline coordination: this is NOT a process-liveness proof.
