@@ -1,13 +1,14 @@
-import type { ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import net from "node:net";
 import { StringDecoder } from "node:string_decoder";
 import type { TestInfo } from "@playwright/test";
-import { BoundedDiagnosticTail } from "./diagnostics.js";
+import { BoundedDiagnosticTail, redactDiagnostic } from "./diagnostics.js";
 
 const MAX_DAEMON_DIAGNOSTIC_BYTES = 64 * 1024;
 interface DiagnosticStreamState { decoder: StringDecoder; pending: string; source: string; discarding: boolean }
 interface DiagnosticState { tail: BoundedDiagnosticTail; streams: DiagnosticStreamState[] }
 const daemonOutput = new WeakMap<ChildProcess, DiagnosticState>();
+const diagnosticProcesses = new Set<ChildProcess>();
 
 function retainLine(state: DiagnosticState, source: string, line: string): void {
   state.tail.record(`[${source}] ${line}`);
@@ -38,9 +39,31 @@ export function captureDaemonOutput(proc: ChildProcess): void {
         streamState.discarding = true;
       }
     });
+    stream.once("end", () => {
+      const tail = streamState.decoder.end();
+      if (streamState.discarding) {
+        streamState.pending = "";
+        return;
+      }
+      streamState.pending += tail;
+      if (streamState.pending) retainLine(state, source, "[incomplete line withheld]");
+      streamState.pending = "";
+    });
   };
   watch("stdout", proc.stdout);
   watch("stderr", proc.stderr);
+}
+
+/** Spawn an E2E child with bounded, redacted stdout/stderr capture enabled. */
+export function spawnDiagnosticProcess(
+  command: string,
+  args: readonly string[],
+  options: Omit<SpawnOptions, "stdio"> = {},
+): ChildProcess {
+  const proc = spawn(command, args, { ...options, stdio: ["ignore", "pipe", "pipe"] });
+  captureDaemonOutput(proc);
+  diagnosticProcesses.add(proc);
+  return proc;
 }
 
 /** Test-only observation of bounded pre-newline state. */
@@ -50,26 +73,82 @@ export function diagnosticPendingBytesForTests(proc: ChildProcess): number {
   ) ?? 0;
 }
 
-export async function attachDaemonOutput(proc: ChildProcess | undefined, testInfo: TestInfo): Promise<void> {
-  if (!proc || testInfo.status === testInfo.expectedStatus) return;
+export async function attachDaemonOutput(
+  proc: ChildProcess | undefined,
+  testInfo: TestInfo,
+  opts: { force?: boolean; name?: string } = {},
+): Promise<void> {
+  if (!proc || (!opts.force && testInfo.status === testInfo.expectedStatus)) return;
   const state = daemonOutput.get(proc);
-  if (state) {
-    for (const stream of state.streams) {
-      const tail = stream.decoder.end();
-      if (stream.discarding) {
-        stream.pending = "";
-        continue;
-      }
-      stream.pending += tail;
-      if (stream.pending) retainLine(state, stream.source, stream.pending);
-      stream.pending = "";
+  if (!state) return;
+
+  // Snapshot without consuming StringDecoder or pending state. Attachments can
+  // happen more than once while a process is alive (setup catch, then teardown);
+  // clearing a credential prefix here would let its later suffix through raw.
+  const snapshot = new BoundedDiagnosticTail(MAX_DAEMON_DIAGNOSTIC_BYTES);
+  for (const line of state.tail.lines) {
+    snapshot.record(line.toString("utf8").replace(/\n$/, ""));
+  }
+  // Do not expose unterminated lines. A pending JSON/header credential may not
+  // match a redactor until its closing quote arrives; the completed line will
+  // be retained and scrubbed on the next newline/data event.
+  for (const stream of state.streams) {
+    if (stream.discarding || stream.pending) {
+      snapshot.record(`[${stream.source}] [incomplete line withheld]`);
     }
   }
-  if (state?.tail.lines.length) {
-    await testInfo.attach("daemon-diagnostics", {
-      body: state.tail.body(),
+  if (snapshot.lines.length) {
+    await testInfo.attach(opts.name ?? "daemon-diagnostics", {
+      body: snapshot.body(),
       contentType: "text/plain",
     });
+  }
+}
+
+export async function attachActiveDaemonOutputs(
+  testInfo: TestInfo,
+  opts: { force?: boolean } = {},
+): Promise<void> {
+  if (!opts.force && testInfo.status === testInfo.expectedStatus) return;
+  let index = 0;
+  for (const proc of diagnosticProcesses) {
+    await attachDaemonOutput(proc, testInfo, {
+      force: true,
+      name: index++ === 0 ? "daemon-diagnostics" : `daemon-diagnostics-${index}`,
+    });
+  }
+}
+
+/** Attach all processes implicated in a setup hook without replacing its error. */
+export async function attachSetupFailureOutputs(
+  processes: Iterable<ChildProcess | undefined>,
+  testInfo: TestInfo,
+): Promise<void> {
+  let index = 0;
+  for (const proc of processes) {
+    if (!proc) continue;
+    try {
+      await attachDaemonOutput(proc, testInfo, {
+        force: true,
+        name: index++ === 0 ? "daemon-diagnostics" : `daemon-diagnostics-${index}`,
+      });
+    } catch (attachmentError) {
+      console.warn(`[e2e] could not attach daemon diagnostics: ${redactDiagnostic(String(attachmentError))}`);
+    }
+  }
+}
+
+/** Preserve a setup failure's process tail before Playwright skips test fixtures. */
+export async function withSetupDiagnostics<T>(
+  proc: ChildProcess,
+  testInfo: TestInfo,
+  setup: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await setup();
+  } catch (error) {
+    await attachSetupFailureOutputs([proc], testInfo);
+    throw error;
   }
 }
 
@@ -174,7 +253,10 @@ export async function teardownDaemon(
   proc.kill("SIGTERM");
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (await isDown()) return;
+    if (await isDown()) {
+      diagnosticProcesses.delete(proc);
+      return;
+    }
     await sleep(50);
   }
 
@@ -187,7 +269,10 @@ export async function teardownDaemon(
   }
   const killDeadline = Date.now() + 2000;
   while (Date.now() < killDeadline) {
-    if (await isDown()) return;
+    if (await isDown()) {
+      diagnosticProcesses.delete(proc);
+      return;
+    }
     await sleep(50);
   }
   // Review NIT — a silent give-up reproduces the original flake with zero
@@ -195,6 +280,7 @@ export async function teardownDaemon(
   console.warn(
     `[e2e] teardownDaemon gave up: pid=${pid} port=${port} still up after SIGKILL — the next spec may flake`,
   );
+  diagnosticProcesses.delete(proc);
 }
 
 /** Parse the daemon port out of a `http://localhost:PORT` base URL. */

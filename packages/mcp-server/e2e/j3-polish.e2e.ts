@@ -1,10 +1,10 @@
 import { test, expect, type Page } from "./test.js";
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { attachDaemonOutput, captureDaemonOutput, teardownDaemon, portOf } from "./daemon-harness.js";
+import { attachDaemonOutput, teardownDaemon, portOf, spawnDiagnosticProcess, withSetupDiagnostics } from "./daemon-harness.js";
 
 /**
  * #213 (J3) — round-5 corrections-polish screenshots + smoke: the Move UNDO
@@ -39,19 +39,17 @@ async function waitForDaemon(r: string): Promise<string> {
   throw new Error("daemon did not come up");
 }
 
-test.beforeEach(async () => {
+test.beforeEach(async ({}, testInfo) => {
   if (!fs.existsSync(daemonJs)) {
     throw new Error(`dist/daemon/index.js missing at ${daemonJs} — run \`pnpm build\` before the e2e suite.`);
   }
   fs.mkdirSync(SHOTS, { recursive: true });
   home = fs.mkdtempSync(path.join(os.tmpdir(), "dp-213-home-"));
   root = fs.mkdtempSync(path.join(os.tmpdir(), "dp-213-root-"));
-  proc = spawn(process.execPath, [daemonJs], {
+  proc = spawnDiagnosticProcess(process.execPath, [daemonJs], {
     env: { ...process.env, HOME: home, DEEPPAIRING_PROJECT_ROOT: root, DEEPPAIRING_NO_OPEN: "1" },
-    stdio: ["ignore", "pipe", "pipe"],
   });
-  captureDaemonOutput(proc);
-  base = await waitForDaemon(root);
+  base = await withSetupDiagnostics(proc, testInfo, () => waitForDaemon(root));
 
   const token = JSON.parse(fs.readFileSync(path.join(root, ".deeppairing", "daemon.json"), "utf-8")).authToken as string;
   const h = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };

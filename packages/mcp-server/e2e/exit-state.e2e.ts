@@ -1,10 +1,10 @@
-import { test, expect, type Page } from "./test.js";
-import { spawn, type ChildProcess } from "node:child_process";
+import { test, daemonBeforeAll, expect, type Page, type TestInfo } from "./test.js";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { teardownDaemon, portOf } from "./daemon-harness.js";
+import { teardownDaemon, portOf, spawnDiagnosticProcess, withSetupDiagnostics } from "./daemon-harness.js";
 
 /**
  * F2 (#196) — real-browser verification + PR screenshots for the two states a
@@ -47,25 +47,30 @@ async function waitForDaemon(root: string): Promise<{ base: string; token: strin
   throw new Error("daemon did not come up");
 }
 
-async function bootDaemon(tag: string, seed: (post: (route: string, body: unknown) => Promise<void>) => Promise<void>): Promise<Daemon> {
+async function bootDaemon(
+  tag: string,
+  testInfo: TestInfo,
+  seed: (post: (route: string, body: unknown) => Promise<void>) => Promise<void>,
+): Promise<Daemon> {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), `dp-196-home-${tag}-`));
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), `dp-196-${tag}-`));
-  const proc = spawn(process.execPath, [daemonJs], {
+  const proc = spawnDiagnosticProcess(process.execPath, [daemonJs], {
     env: { ...process.env, HOME: home, DEEPPAIRING_PROJECT_ROOT: projectRoot, DEEPPAIRING_NO_OPEN: "1" },
-    stdio: "ignore",
   });
-  const daemon = await waitForDaemon(projectRoot);
-  const baseURL = daemon.base;
-  const h = { "Content-Type": "application/json", Authorization: `Bearer ${daemon.token}` };
-  const post = (route: string, body: unknown) =>
-    fetch(`${baseURL}/api/internal/sessions/s/${route}`, { method: "POST", headers: h, body: JSON.stringify(body) })
-      .then((r) => { if (!r.ok) throw new Error(`seed ${route} failed: ${r.status}`); });
-  await post("register", { title: "Rate limiting" });
-  await seed(post);
-  // Exit the wrapper: drop the session from the active set (live:false) while
-  // its store stays readable — exactly the state both items are about.
-  await post("unregister", {});
-  return { proc, baseURL, projectRoot, home };
+  return withSetupDiagnostics(proc, testInfo, async () => {
+    const daemon = await waitForDaemon(projectRoot);
+    const baseURL = daemon.base;
+    const h = { "Content-Type": "application/json", Authorization: `Bearer ${daemon.token}` };
+    const post = (route: string, body: unknown) =>
+      fetch(`${baseURL}/api/internal/sessions/s/${route}`, { method: "POST", headers: h, body: JSON.stringify(body) })
+        .then((r) => { if (!r.ok) throw new Error(`seed ${route} failed: ${r.status}`); });
+    await post("register", { title: "Rate limiting" });
+    await seed(post);
+    // Exit the wrapper: drop the session from the active set (live:false) while
+    // its store stays readable — exactly the state both items are about.
+    await post("unregister", {});
+    return { proc, baseURL, projectRoot, home };
+  });
 }
 
 // Item 5: two draft artifacts (pending) + an unanswered question comment.
@@ -73,13 +78,13 @@ let soup: Daemon;
 // Item 4: one approved artifact (hasArtifacts, no pending) + an unanswered question.
 let exited: Daemon;
 
-test.beforeAll(async () => {
+daemonBeforeAll(() => [soup?.proc, exited?.proc], async (testInfo) => {
   if (!fs.existsSync(daemonJs)) {
     throw new Error(`dist/daemon/index.js missing at ${daemonJs} — run \`pnpm build\` before the e2e suite.`);
   }
   fs.mkdirSync(SHOTS, { recursive: true });
 
-  soup = await bootDaemon("soup", async (post) => {
+  soup = await bootDaemon("soup", testInfo, async (post) => {
     await post("artifacts", {
       id: "plan_1", type: "plan", title: "Add per-user API rate limiting",
       content: { summary: "Sliding-window limiter.", steps: [{ description: "Add a RateLimiter", reasoning: "burst safety", files: ["src/rl.ts"] }] },
@@ -91,7 +96,7 @@ test.beforeAll(async () => {
     await post("comments", { id: "q_1", artifactId: "res_1", author: "human", intent: "question", content: "Does this cover websocket upgrades too?" });
   });
 
-  exited = await bootDaemon("exit", async (post) => {
+  exited = await bootDaemon("exit", testInfo, async (post) => {
     await post("artifacts", {
       id: "res_a", type: "research", title: "Middleware audit",
       content: { summary: "One choke point.", findings: [{ category: "Architecture", title: "Single choke point", detail: "All routes flow through one middleware.", significance: "high" }] },

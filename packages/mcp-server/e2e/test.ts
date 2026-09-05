@@ -1,5 +1,7 @@
 import { test as base, expect } from "@playwright/test";
+import type { ChildProcess } from "node:child_process";
 import { BoundedDiagnosticTail } from "./diagnostics.js";
+import { attachActiveDaemonOutputs, attachSetupFailureOutputs } from "./daemon-harness.js";
 
 const MAX_DIAGNOSTIC_BYTES = 64 * 1024;
 
@@ -41,6 +43,7 @@ export const test = base.extend<{ browserDiagnostics: void }>({
       await use();
     } finally {
       mutableBrowser.newContext = originalNewContext;
+      await attachActiveDaemonOutputs(testInfo);
       if (testInfo.status !== testInfo.expectedStatus && diagnostics.lines.length) {
         await testInfo.attach("browser-diagnostics", {
           body: diagnostics.body(),
@@ -50,6 +53,21 @@ export const test = base.extend<{ browserDiagnostics: void }>({
     }
   }, { auto: true }],
 });
+
+/** Register a complete beforeAll setup with causal daemon diagnostics. */
+export function daemonBeforeAll(
+  processes: () => Iterable<ChildProcess | undefined>,
+  setup: (testInfo: import("@playwright/test").TestInfo) => Promise<void>,
+): void {
+  test.beforeAll(async ({}, testInfo) => {
+    try {
+      await setup(testInfo);
+    } catch (error) {
+      await attachSetupFailureOutputs(processes(), testInfo);
+      throw error;
+    }
+  });
+}
 
 export { expect };
 export type { Page, Locator, Browser, BrowserContext, TestInfo } from "@playwright/test";
