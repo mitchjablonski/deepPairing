@@ -36704,11 +36704,19 @@ var operationSchema = external_exports.object({
   tokenDigest: digestSchema,
   sessionId: external_exports.string().min(1),
   identity: reviewPostIdentitySchema,
-  state: external_exports.enum(["reserved", "sending", "succeeded", "failed", "unknown"]),
+  state: external_exports.enum(["reserved", "sending", "succeeded", "failed", "unknown", "abandoned"]),
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
-  result: resultSchema.optional()
+  result: resultSchema.optional(),
+  operatorAcknowledgement: external_exports.object({
+    acknowledgedAt: timestampSchema,
+    priorState: external_exports.enum(["sending", "unknown"]),
+    operationDigest: digestSchema
+  }).strict().optional()
 }).strict().superRefine((value, ctx) => {
+  if (value.state === "abandoned" !== (value.operatorAcknowledgement !== void 0)) {
+    ctx.addIssue({ code: "custom", message: "Only operator-abandoned uncertainty carries an acknowledgement" });
+  }
   if (value.state === "succeeded" !== (value.result !== void 0)) {
     ctx.addIssue({ code: "custom", message: "Only success carries a remote review identity" });
   }
