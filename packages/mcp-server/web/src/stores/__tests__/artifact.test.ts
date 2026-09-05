@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { useArtifactStore } from "../artifact";
-import { useReplayStore } from "../replay";
+import { useReplayStore, replayRehydrateSettled } from "../replay";
 import type { Artifact, Comment } from "@deeppairing/shared";
 
 function artifact(id: string, overrides: Partial<Artifact> = {}): Artifact {
@@ -761,6 +761,7 @@ describe("F12 — the store refuses ALL mutations during replay (the mouse path)
 
   it("mutations work again after exitReplay", async () => {
     useReplayStore.getState().exitReplay();
+    await replayRehydrateSettled();
     const fetchSpy = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ status: "updated" }), { status: 200, headers: { "Content-Type": "application/json" } }),
     );
