@@ -38,6 +38,8 @@ import { handlePostPrReview } from "../../mcp/tools/post-pr-review.js";
 import type { Artifact } from "@deeppairing/shared";
 import { ReviewPostJournal } from "../../store/review-post-journal.js";
 import { reconcileReviewPostCommand } from "../../cli/review-posts.js";
+import { FileStore } from "../../store/file-store.js";
+import { withGlobalStore } from "../../__tests__/global-store-fixture.js";
 
 // --- the fake gh -------------------------------------------------------------
 
@@ -728,6 +730,39 @@ describe("Q6 — handlePostPrReview (the MCP tool) end to end", () => {
     expect(reads).toBe(2);
     expect(calls().some((c) => c.args[0] === "api" && !c.args.includes("POST"))).toBe(true);
     expect(reviewPostCalls()).toHaveLength(0);
+  });
+
+  it("refuses a real FileStore's external revocation after the initial MCP gate", async () => {
+    const fx = withGlobalStore("dp-mcp-fresh-post-");
+    try {
+      const stale = fx.track(new FileStore(fx.dir, "s_review"));
+      const approved = approvedExternalChangeset();
+      stale.createArtifact({ id: approved.id, type: approved.type, title: approved.title, content: approved.content });
+      stale.updateArtifactStatus(approved.id, "approved", "ui_approve_button");
+      stale.forceFlush();
+      const external = fx.track(new FileStore(fx.dir, "s_review"));
+      let reads = 0;
+      const ctx = { store: {
+        reviewPosts: stale.reviewPosts,
+        getReviewPostState: async () => {
+          const state = stale.getReviewPostState();
+          if (++reads === 1) {
+            external.updateArtifactStatus(approved.id, "obsolete", "agent_obsolete");
+            external.forceFlush();
+          }
+          return state;
+        },
+        recordPostedReview: () => { throw new Error("Must not post"); },
+      } } as never;
+      const res = await handlePostPrReview(ctx, { pr: "42", event: "APPROVE" });
+      expect(res.isError).toBe(true);
+      expect(reads).toBe(2);
+      expect(stale.getFullState().artifacts[0]!.status).toBe("approved");
+      expect(reviewPostCalls()).toHaveLength(0);
+      expect(stale.reviewPosts.list()).toEqual([]);
+    } finally {
+      fx.dispose();
+    }
   });
 
   it("…but a zero-comment REQUEST_CHANGES is still refused — blocking someone without saying why", async () => {
