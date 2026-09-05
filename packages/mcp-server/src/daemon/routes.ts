@@ -12,6 +12,15 @@ import { AutonomyLevelSchema, DetailDensitySchema, PersonaSchema, SuggestionUpda
 import { validateSuggestionTransition } from "../store/store-interface.js";
 import { recordMetricEvent } from "../store/metrics-store.js";
 import { projectHashGate } from "../http/guards.js";
+import { ReviewPostJournalError, reviewPostIdentitySchema, reviewPostLeaseSchema, reviewPostResultSchema } from "../store/review-post-journal.js";
+
+const ReviewPostOperationBody = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("reserve"), identity: reviewPostIdentitySchema, repost: z.boolean() }).strict(),
+  z.object({ action: z.literal("sending"), lease: reviewPostLeaseSchema, identity: reviewPostIdentitySchema }).strict(),
+  z.object({ action: z.literal("failed"), lease: reviewPostLeaseSchema }).strict(),
+  z.object({ action: z.literal("unknown"), lease: reviewPostLeaseSchema }).strict(),
+  z.object({ action: z.literal("succeeded"), lease: reviewPostLeaseSchema, result: reviewPostResultSchema }).strict(),
+]);
 
 // BB8 — wire-input validation for the typed-object signatures AA1
 // introduced. AA1's typing protected only in-process callers; routes
@@ -632,6 +641,30 @@ export function createDaemonRoutes(
   });
 
   // --- Comments ---
+
+  // Journal transitions are synchronous local commits, not GitHub requests.
+  // Upstream bearer/project gates and requireStore bind this to one session.
+  app.post("/api/internal/sessions/:sessionId/review-post-operations", async c => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const parsed = await parseJsonBody(c, ReviewPostOperationBody);
+    if (!parsed.ok) return parsed.res;
+    const body = parsed.data;
+    const journal = r.store.reviewPosts;
+    try {
+      switch (body.action) {
+        case "reserve": return c.json(journal.reserve(body.identity, body.repost));
+        case "sending": journal.markSending(body.lease, body.identity); break;
+        case "failed": journal.failBeforeSending(body.lease); break;
+        case "unknown": journal.markUnknown(body.lease); break;
+        case "succeeded": journal.succeed(body.lease, body.result); break;
+      }
+      return c.json({ status: "recorded" });
+    } catch (err) {
+      if (!(err instanceof ReviewPostJournalError)) throw err;
+      return c.json({ error: err.message, code: ERROR_CODES.review_post_conflict, reason: err.reason }, 409);
+    }
+  });
 
   app.post("/api/internal/sessions/:sessionId/comments", async (c) => {
     const sessionId = c.req.param("sessionId");

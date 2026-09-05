@@ -9,12 +9,14 @@ import { samePrTarget, type PostedReviewRecord } from "./posted-reviews.js";
 const digestSchema = z.string().regex(/^[0-9a-f]{64}$/);
 const eventSchema = z.enum(["COMMENT", "REQUEST_CHANGES", "APPROVE"]);
 const timestampSchema = z.iso.datetime();
-const resultSchema = z.object({
+export const reviewPostResultSchema = z.object({
   id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   htmlUrl: z.string(),
   state: z.enum(["COMMENTED", "CHANGES_REQUESTED", "APPROVED"]),
   commitId: z.string().regex(/^[0-9a-f]{40}$/).optional(),
 }).strict();
+const resultSchema = reviewPostResultSchema;
+export const reviewPostLeaseSchema = z.object({ operationId: z.uuid(), token: z.uuid() }).strict();
 
 export const reviewPostIdentitySchema = z.object({
   target: z.string(),
@@ -191,13 +193,21 @@ export class ReviewPostJournal {
     try { fs.writeFileSync(fd, token); }
     catch (err) { fs.closeSync(fd); fs.unlinkSync(this.claimPath); throw err; }
     fs.closeSync(fd);
+    let primaryFailed = false;
     try { return fn(); }
+    catch (err) { primaryFailed = true; throw err; }
     finally {
       // No age/PID stealing. An operator replacement must not be unlinked by a late owner.
-      if (fs.readFileSync(this.claimPath, "utf8") !== token) {
-        throw new ReviewPostJournalError("stale", "Review-post claim changed while held; stop writers and inspect state.");
+      try {
+        if (fs.readFileSync(this.claimPath, "utf8") !== token) {
+          throw new ReviewPostJournalError("stale", "Review-post claim changed while held; stop writers and inspect state.");
+        }
+        fs.unlinkSync(this.claimPath);
+      } catch (err) {
+        // Preserve the durable-write failure; a cleanup error must not disguise
+        // whether the primary transition was confirmed. A retained lock blocks.
+        if (!primaryFailed) throw err;
       }
-      fs.unlinkSync(this.claimPath);
     }
   }
 
@@ -216,7 +226,7 @@ export class ReviewPostJournal {
       if (!repost && (prior.some(op => op.state === "succeeded") || legacy.some(op => samePrTarget(op, parsed.target)))) {
         throw new ReviewPostJournalError("blocked", "This session already posted to that PR; fresh human repost authorization is required.");
       }
-      if (journal.operations.length >= 4096) throw new ReviewPostJournalError("blocked", "Review-post journal is full; archive with all writers stopped before posting.");
+      if (journal.operations.length >= 4096) throw new ReviewPostJournalError("blocked", "Review-post journal is full; stop writers and perform a history-preserving migration before posting. Do not delete or reset the journal.");
       const lease = { operationId: randomUUID(), token: randomUUID() };
       const now = new Date().toISOString();
       journal.operations.push({

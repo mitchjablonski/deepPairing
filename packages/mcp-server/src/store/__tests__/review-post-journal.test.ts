@@ -192,6 +192,16 @@ describe("durable review-post journal", () => {
     expect(fs.existsSync(journal().journalPath)).toBe(false);
   });
 
+  it("preserves the primary write failure if the claim also changes during cleanup", () => {
+    const primary = new Error("journal storage failure");
+    const faulty = new ReviewPostJournal(root, sid, () => {
+      fs.writeFileSync(journal().claimPath, "replacement owner");
+      throw primary;
+    });
+    expect(() => faulty.reserve(identity)).toThrow(primary);
+    expect(fs.readFileSync(journal().claimPath, "utf8")).toBe("replacement owner");
+  });
+
   it("rejects path traversal without making session directories", () => {
     expect(() => new ReviewPostJournal(root, "../outside")).toThrow(/Invalid session/);
     expect(() => new ReviewPostJournal(root, "")).toThrow(/Invalid session/);

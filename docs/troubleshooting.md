@@ -171,6 +171,20 @@ MCP_TIMEOUT=60000 claude
 As with the timeout above, a native-ext4 checkout (e.g. under `~`) erases the
 latency class entirely and is the durable fix.
 
+## review_post_conflict
+
+A durable review-post operation or its journal prevents another post. Preserve
+`review-post-operations.json`, `.review-post-protocol-v1`, and any
+`.review-post.lock` in the affected session. Do not delete them, use `repost` to
+bypass them, or repeat a GitHub POST after an uncertain response.
+
+An unresolved `sending` or `unknown` operation may already have reached GitHub.
+Inspect the remote review and reconcile its identity before posting again.
+A `reserved` operation has not authorized a send; explicit cancellation must
+fence its original caller. A retained disk lock needs all writers stopped and
+inspection before any manual repair; age or a dead-looking PID is not proof
+that stealing it is safe. Corrupt history requires recovery, not a reset.
+
 ## Still stuck?
 
 Open an issue with:
