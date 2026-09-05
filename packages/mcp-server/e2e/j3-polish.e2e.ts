@@ -100,7 +100,7 @@ async function openFeatures(page: Page): Promise<void> {
 
 // L-5 + M-4 — the per-row Move select (revealed on row hover/focus) posts the
 // override AND raises an UNDO toast. Undo restores the prior state.
-test("#213 M-4 — moving an artifact raises an Undo toast (dark)", async ({ page }) => {
+const undoDark = async ({ page }: { page: Page }) => {
   await page.setViewportSize({ width: 1440, height: 950 });
   await openFeatures(page);
   const view = page.locator('[data-testid="features-view"]');
@@ -121,9 +121,9 @@ test("#213 M-4 — moving an artifact raises an Undo toast (dark)", async ({ pag
   await expect(
     view.locator('[data-feature-group="milestone-6"] [data-feature-artifact]'),
   ).toHaveCount(2, { timeout: 10000 });
-});
+};
 
-test("#213 M-4 — the Undo toast renders legibly (light)", async ({ page }) => {
+const undoLight = async ({ page }: { page: Page }) => {
   await page.addInitScript(() => localStorage.setItem("dp-theme", "light"));
   await page.setViewportSize({ width: 1440, height: 950 });
   await openFeatures(page);
@@ -133,7 +133,16 @@ test("#213 M-4 — the Undo toast renders legibly (light)", async ({ page }) => 
   const toast = page.locator('[data-testid="toast-region"]');
   await expect(toast.getByText(/Moved to Phase 0/i)).toBeVisible();
   await page.screenshot({ path: path.join(SHOTS, "undo-toast-light.png") });
-});
+};
+
+// #341 acceptance probe: reverse actual registration order in the same worker,
+// while the default suite and each test's fresh beforeEach seed stay unchanged.
+const undoCases = [
+  { title: "#213 M-4 — moving an artifact raises an Undo toast (dark)", run: undoDark },
+  { title: "#213 M-4 — the Undo toast renders legibly (light)", run: undoLight },
+];
+if (process.env.DP_E2E_UNDO_REVERSE === "1") undoCases.reverse();
+for (const scenario of undoCases) test(scenario.title, scenario.run);
 
 // L-9 — the lazy artifact renderer's Suspense fallback is a type-shaped skeleton
 // (title bar + prose + body + trailing blocks), not a blank grey flash. Delay
