@@ -36357,7 +36357,8 @@ async function postPreparedPrReview(opts) {
       throw new Error("review URL is malformed");
     }
     const expectedPath = `/${owner}/${repo}/pull/${parsed.number}`.toLowerCase();
-    if (reviewUrl.protocol !== "https:" || reviewUrl.hostname.toLowerCase() !== "github.com" || reviewUrl.pathname.toLowerCase() !== expectedPath || reviewUrl.hash !== `#pullrequestreview-${parsedBody.id}`) {
+    const canonicalReviewUrl = `https://github.com/${owner}/${repo}/pull/${parsed.number}#pullrequestreview-${parsedBody.id}`;
+    if (reviewUrl.protocol !== "https:" || reviewUrl.hostname.toLowerCase() !== "github.com" || reviewUrl.pathname.toLowerCase() !== expectedPath || reviewUrl.hash !== `#pullrequestreview-${parsedBody.id}` || parsedBody.html_url.toLowerCase() !== canonicalReviewUrl.toLowerCase()) {
       throw new Error("review URL does not identify the posted review on the prepared target");
     }
     const commitId = parsedBody.commit_id === void 0 ? void 0 : typeof parsedBody.commit_id === "string" ? canonicalSha(parsedBody.commit_id) : null;
