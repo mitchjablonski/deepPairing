@@ -60,7 +60,8 @@ it("HTTP posting reads external revocation while UI hydration remains cached", a
   external.forceFlush();
   expect((await client.getFullState()).artifacts[0].status).toBe("approved");
   expect((await client.getReviewPostState()).artifacts[0].status).toBe("obsolete");
-  expect(broadcasts).toEqual([]);
+  // Internal reads may emit the existing agent-activity heartbeat, not state mutations.
+  expect(broadcasts.every(event => (event as { type: string }).type === "agent_activity")).toBe(true);
 });
 
 it("posting snapshot route requires bearer, project, and an existing session", async () => {
