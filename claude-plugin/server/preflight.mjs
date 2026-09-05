@@ -1,13 +1,12 @@
 import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);
 
 // src/cli/preflight-hook-entry.ts
-import fs2 from "node:fs";
-import path3 from "node:path";
+import fs3 from "node:fs";
+import path4 from "node:path";
 
 // src/cli/preflight-hook-core.ts
-import fs from "node:fs";
-import path2 from "node:path";
-import { randomBytes } from "node:crypto";
+import fs2 from "node:fs";
+import path3 from "node:path";
 
 // src/mcp/preflight-validator.ts
 function normalizeConceptKey(name) {
@@ -411,8 +410,113 @@ function sessionHasLivePreWorkCeremony(artifacts, isRecent = () => true) {
   );
 }
 
-// src/guardrail-rules.ts
+// src/hooks/hook-state.ts
+import fs from "node:fs";
 import path from "node:path";
+var FIRE_LOG_CAP = 50;
+var LOCK_STALE_MS = 5e3;
+var LOCK_SPIN_MS = 2;
+var LOCK_MAX_WAIT_MS = 500;
+function errnoCode(err) {
+  if (typeof err === "object" && err !== null && "code" in err) {
+    const code = err.code;
+    if (typeof code === "string") return code;
+  }
+  return void 0;
+}
+function sleepSync(ms) {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {
+  }
+}
+function acquireHookStateLock(statePath, now = Date.now()) {
+  const lock = `${statePath}.lock`;
+  const deadline = now + LOCK_MAX_WAIT_MS;
+  let brokeStale = false;
+  for (; ; ) {
+    try {
+      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
+      return lock;
+    } catch (error) {
+      if (errnoCode(error) !== "EEXIST") return null;
+      try {
+        if (!brokeStale && Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {
+          brokeStale = true;
+          fs.unlinkSync(lock);
+          continue;
+        }
+      } catch (staleErr) {
+        if (errnoCode(staleErr) !== "ENOENT") return null;
+      }
+      if (Date.now() >= deadline) return null;
+      sleepSync(LOCK_SPIN_MS);
+    }
+  }
+}
+function releaseHookStateLock(lock) {
+  if (!lock) return;
+  try {
+    fs.unlinkSync(lock);
+  } catch {
+  }
+}
+function readHookState(statePath) {
+  let raw;
+  try {
+    raw = fs.readFileSync(statePath, "utf-8");
+  } catch {
+    return { version: 1 };
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+  } catch {
+  }
+  try {
+    const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
+    fs.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);
+  } catch {
+  }
+  return { version: 1 };
+}
+function writeHookStateAtomic(statePath, state) {
+  const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 10)}`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(state));
+    fs.renameSync(tmp, statePath);
+  } catch (err) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+    }
+    throw err;
+  }
+}
+function appendHookFire(statePath, fire, mutate) {
+  try {
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    const lock = acquireHookStateLock(statePath);
+    try {
+      const state = readHookState(statePath);
+      state.version = 1;
+      const fires = Array.isArray(state.fires) ? state.fires : [];
+      fires.push(fire);
+      state.fires = fires.slice(-FIRE_LOG_CAP);
+      mutate?.(state);
+      writeHookStateAtomic(statePath, state);
+    } finally {
+      releaseHookStateLock(lock);
+    }
+  } catch {
+  }
+}
+function hookStatePath(projectRoot) {
+  return path.join(projectRoot, ".deeppairing", "hooks-state.json");
+}
+
+// src/guardrail-rules.ts
+import path2 from "node:path";
 var GUARDRAIL_RULES = [
   {
     category: "migrations",
@@ -476,8 +580,8 @@ function matchGuardrailPath(projectRoot, paths) {
   try {
     for (const raw of paths) {
       if (typeof raw !== "string" || !raw) continue;
-      const abs = path.resolve(projectRoot, raw);
-      const rel = path.relative(projectRoot, abs).replace(/\\/g, "/");
+      const abs = path2.resolve(projectRoot, raw);
+      const rel = path2.relative(projectRoot, abs).replace(/\\/g, "/");
       if (!rel || rel === ".." || rel.startsWith("../")) continue;
       const rule = ruleForRelPath(rel);
       if (rule) return { category: rule.category, path: rel, rationale: rule.rationale, note: rule.note };
@@ -500,10 +604,10 @@ function toolInputTargetsGuardrail(projectRoot, toolInput) {
 
 // src/cli/preflight-hook-core.ts
 function readRejectedApproaches(projectRoot) {
-  const p = path2.join(projectRoot, ".deeppairing", "preferences.json");
+  const p = path3.join(projectRoot, ".deeppairing", "preferences.json");
   try {
-    if (!fs.existsSync(p)) return [];
-    const raw = JSON.parse(fs.readFileSync(p, "utf-8"));
+    if (!fs2.existsSync(p)) return [];
+    const raw = JSON.parse(fs2.readFileSync(p, "utf-8"));
     const list = raw?.rejectedApproaches;
     if (!Array.isArray(list)) return [];
     return list.map(
@@ -520,10 +624,10 @@ function readRejectedApproaches(projectRoot) {
   }
 }
 function readTeamPreferences(projectRoot) {
-  const p = path2.join(projectRoot, ".deeppairing", "team.json");
+  const p = path3.join(projectRoot, ".deeppairing", "team.json");
   try {
-    if (!fs.existsSync(p)) return [];
-    const stripped = fs.readFileSync(p, "utf-8").split("\n").map((l) => /^\s*\/\//.test(l) ? "" : l).join("\n");
+    if (!fs2.existsSync(p)) return [];
+    const stripped = fs2.readFileSync(p, "utf-8").split("\n").map((l) => /^\s*\/\//.test(l) ? "" : l).join("\n");
     const raw = JSON.parse(stripped);
     if (!raw || raw.version !== 1 || !Array.isArray(raw.preferences)) return [];
     const KINDS = /* @__PURE__ */ new Set(["require", "prefer", "avoid"]);
@@ -573,11 +677,11 @@ function withinWindow(t, now, maxAgeMs) {
 }
 var PER_PATH_DEDUP_CLASSES = /* @__PURE__ */ new Set(["migrations", "secrets"]);
 function readSessionCeremony(projectRoot, now = Date.now()) {
-  const sessionsDir = path2.join(projectRoot, ".deeppairing", "sessions");
+  const sessionsDir = path3.join(projectRoot, ".deeppairing", "sessions");
   let ids;
   try {
-    if (!fs.existsSync(sessionsDir)) return { reachable: false, hasLiveCeremony: false };
-    ids = fs.readdirSync(sessionsDir);
+    if (!fs2.existsSync(sessionsDir)) return { reachable: false, hasLiveCeremony: false };
+    ids = fs2.readdirSync(sessionsDir);
   } catch {
     return { reachable: false, hasLiveCeremony: false };
   }
@@ -587,10 +691,10 @@ function readSessionCeremony(projectRoot, now = Date.now()) {
   for (const id of ids) {
     let arr;
     try {
-      const af = path2.join(sessionsDir, id, "artifacts.json");
-      if (!fs.existsSync(af)) continue;
+      const af = path3.join(sessionsDir, id, "artifacts.json");
+      if (!fs2.existsSync(af)) continue;
       storesSeen++;
-      arr = JSON.parse(fs.readFileSync(af, "utf-8"));
+      arr = JSON.parse(fs2.readFileSync(af, "utf-8"));
       if (!Array.isArray(arr)) continue;
     } catch {
       continue;
@@ -609,8 +713,8 @@ function readSessionCeremony(projectRoot, now = Date.now()) {
 }
 function guardrailAskSuppressed(projectRoot, category, matchedPath, now = Date.now()) {
   try {
-    const sp = path2.join(projectRoot, ".deeppairing", "hooks-state.json");
-    const state = JSON.parse(fs.readFileSync(sp, "utf-8"));
+    const sp = path3.join(projectRoot, ".deeppairing", "hooks-state.json");
+    const state = JSON.parse(fs2.readFileSync(sp, "utf-8"));
     const entry = state?.guardrailAsks?.[category];
     const at = PER_PATH_DEDUP_CLASSES.has(category) ? entry && typeof entry === "object" ? entry[matchedPath] : void 0 : entry;
     if (typeof at !== "string") return false;
@@ -638,101 +742,19 @@ function stampGuardrailAsk(state, match, now) {
   }
   state.guardrailAsks = asks;
 }
-var FIRE_LOG_CAP = 50;
-function writeHookStateAtomic(statePath, state) {
-  const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${randomBytes(4).toString("hex")}`;
-  try {
-    fs.writeFileSync(tmp, JSON.stringify(state));
-    fs.renameSync(tmp, statePath);
-  } catch (err) {
-    try {
-      fs.unlinkSync(tmp);
-    } catch {
-    }
-    throw err;
-  }
-}
-var LOCK_STALE_MS = 5e3;
-var LOCK_SPIN_MS = 2;
-var LOCK_MAX_WAIT_MS = 500;
-function sleepSync(ms) {
-  try {
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-  } catch {
-  }
-}
-function acquireHookStateLock(statePath, now = Date.now()) {
-  const lock = `${statePath}.lock`;
-  const deadline = now + LOCK_MAX_WAIT_MS;
-  for (; ; ) {
-    try {
-      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
-      return lock;
-    } catch (error) {
-      if (error.code !== "EEXIST") return null;
-      if (Date.now() >= deadline) return null;
-      try {
-        if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {
-          fs.unlinkSync(lock);
-          continue;
-        }
-      } catch (error2) {
-        if (error2.code !== "ENOENT") return null;
-      }
-      if (Date.now() >= deadline) return null;
-      sleepSync(LOCK_SPIN_MS);
-    }
-  }
-}
-function releaseHookStateLock(lock) {
-  if (!lock) return;
-  try {
-    fs.unlinkSync(lock);
-  } catch {
-  }
-}
-function readHookState(statePath) {
-  let raw;
-  try {
-    raw = fs.readFileSync(statePath, "utf-8");
-  } catch {
-    return { version: 1 };
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
-  } catch {
-  }
-  try {
-    const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-    fs.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);
-  } catch {
-  }
-  return { version: 1 };
-}
 function recordHookFire(projectRoot, decision, now = Date.now()) {
-  try {
-    const sp = path2.join(projectRoot, ".deeppairing", "hooks-state.json");
-    fs.mkdirSync(path2.dirname(sp), { recursive: true });
-    const lock = acquireHookStateLock(sp);
-    try {
-      const state = readHookState(sp);
-      state.version = 1;
-      const fires = Array.isArray(state.fires) ? state.fires : [];
-      fires.push({
-        at: new Date(now).toISOString(),
-        hook: "preflight",
-        kind: "ask",
-        reason: decision.guardrail ? `guardrail:${decision.guardrail.category}` : decision.source || "blocked"
-      });
-      state.fires = fires.slice(-FIRE_LOG_CAP);
+  appendHookFire(
+    hookStatePath(projectRoot),
+    {
+      at: new Date(now).toISOString(),
+      hook: "preflight",
+      kind: "ask",
+      reason: decision.guardrail ? `guardrail:${decision.guardrail.category}` : decision.source || "blocked"
+    },
+    (state) => {
       if (decision.guardrail) stampGuardrailAsk(state, decision.guardrail, now);
-      writeHookStateAtomic(sp, state);
-    } finally {
-      releaseHookStateLock(lock);
     }
-  } catch {
-  }
+  );
 }
 function guardrailReason(match) {
   return `Allow this edit to ${match.path}? It's a guardrail path (${match.category} \u2014 ${match.note}), and no findings, options, spec, or plan is live in this project's recent sessions. Decline to have it presented for review first \u2014 presenting findings, options, a spec, or a plan is what makes this prompt stop.
@@ -777,12 +799,12 @@ function evaluatePreflightHook(args) {
 // src/cli/preflight-hook-entry.ts
 function ledgersPresent(root) {
   try {
-    const prefs = JSON.parse(fs2.readFileSync(path3.join(root, ".deeppairing", "preferences.json"), "utf-8"));
+    const prefs = JSON.parse(fs3.readFileSync(path4.join(root, ".deeppairing", "preferences.json"), "utf-8"));
     if (Array.isArray(prefs?.rejectedApproaches) && prefs.rejectedApproaches.length > 0) return true;
   } catch {
   }
   try {
-    if (fs2.existsSync(path3.join(root, ".deeppairing", "team.json"))) return true;
+    if (fs3.existsSync(path4.join(root, ".deeppairing", "team.json"))) return true;
   } catch {
   }
   return false;
