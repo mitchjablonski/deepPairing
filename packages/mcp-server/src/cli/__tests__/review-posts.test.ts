@@ -32,6 +32,23 @@ it("explicit reserved cancellation fences the old caller", () => {
   expect(journal.list()[0].state).toBe("failed");
 });
 
+it("offers operators no unsent release and shows the coordinator's own release provenance", () => {
+  const lease = journal.reserve(identity);
+  journal.markSending(lease, identity);
+  // #344 — releasing an unsent attempt is a live-lease-only door. The operator
+  // surface exposes no verb for it; only `cancel-reserved`, which still refuses.
+  for (const action of ["release-unsent", "unsent", "fail-unsent"]) {
+    expect(() => reviewPostsCommand(root, ["s", action, lease.operationId])).toThrow(/Usage/);
+  }
+  expect(reviewPostsCommand(root, ["s"])).not.toMatch(/release-unsent|unsentRelease/);
+  expect(journal.list()[0]!.state).toBe("sending");
+
+  journal.releaseUnsent(lease); // the live coordinator's own call
+  const [listed] = JSON.parse(reviewPostsCommand(root, ["s"]));
+  expect(listed).toMatchObject({ state: "failed", unsentRelease: { priorState: "sending" } });
+  expect(reviewPostsCommand(root, ["s"])).not.toContain(lease.token);
+});
+
 it("refuses cancellation of a possibly sent operation and preserves uncertainty", () => {
   const lease = journal.reserve(identity);
   journal.markSending(lease, identity);

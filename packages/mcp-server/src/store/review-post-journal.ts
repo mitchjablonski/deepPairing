@@ -47,9 +47,19 @@ const operationSchema = z.object({
     priorState: z.enum(["sending", "unknown"]),
     operationDigest: digestSchema,
   }).strict().optional(),
+  /** Recorded when the live coordinator released its own never-sent attempt.
+   * `priorState: "sending"` is the interesting case: it says this operation
+   * reached the durable pre-POST transition and still never left the machine. */
+  unsentRelease: z.object({
+    releasedAt: timestampSchema,
+    priorState: z.enum(["reserved", "sending"]),
+  }).strict().optional(),
 }).strict().superRefine((value, ctx) => {
   if ((value.state === "abandoned") !== (value.operatorAcknowledgement !== undefined)) {
     ctx.addIssue({ code: "custom", message: "Only operator-abandoned uncertainty carries an acknowledgement" });
+  }
+  if (value.unsentRelease && value.state !== "failed") {
+    ctx.addIssue({ code: "custom", message: "Only a definitely unsent operation carries an unsent release" });
   }
   if ((value.state === "succeeded") !== (value.result !== undefined)) {
     ctx.addIssue({ code: "custom", message: "Only success carries a remote review identity" });
@@ -374,6 +384,39 @@ export class ReviewPostJournal {
   failBeforeSending(lease: ReviewPostLease): void {
     this.transition(lease, op => {
       if (op.state !== "reserved") throw new ReviewPostJournalError("stale", "A possibly sent review cannot be marked failed");
+      op.state = "failed";
+    });
+  }
+
+  /**
+   * #344 — the ONLY door that may reclassify a `sending` operation as definitely
+   * unsent, and its authority is the lease, not this class.
+   *
+   * TRUST BOUNDARY. The journal cannot observe GitHub, so it cannot prove
+   * non-delivery. It proves two narrower things and trusts a third:
+   *   1. The caller presents the exact fencing token this operation was issued
+   *      (`transition`). The token is generated per reservation, is never
+   *      persisted in plaintext (only its digest) and never written to a log, so
+   *      a restarted process, a competing process and the operator CLI cannot
+   *      produce it. Holding it means being the live coordinator of THIS attempt.
+   *   2. The operation is still pre-POST in this journal (`reserved`/`sending`).
+   *   3. TRUSTED, not verified: that the caller has not invoked `send`. This is
+   *      an in-process code-path invariant of `executeDurableReviewPost`, whose
+   *      only call site is the catch of the pre-send block; every path at or
+   *      after `send` — including a timeout, a malformed response and a lost
+   *      response — goes to `markUnknown` instead.
+   *
+   * Consequently this is NOT an operator control and is not reachable from the
+   * review-posts CLI: `cancelReserved` stays `reserved`-only. Elapsed time, a
+   * missing remote review, a restart and a generic cancellation remain unable to
+   * classify an operation as unsent.
+   */
+  releaseUnsent(lease: ReviewPostLease): void {
+    this.transition(lease, op => {
+      if (op.state !== "reserved" && op.state !== "sending") {
+        throw new ReviewPostJournalError("stale", "Only a still-unsent reservation can be released; this operation may already have been sent");
+      }
+      op.unsentRelease = { releasedAt: new Date().toISOString(), priorState: op.state };
       op.state = "failed";
     });
   }

@@ -23,6 +23,7 @@ export class DaemonClient implements IStore {
     reserve: (identity, repost) => this.post("/review-post-operations", { action: "reserve", identity, repost }),
     markSending: async (lease, identity) => { await this.post("/review-post-operations", { action: "sending", lease, identity }); },
     failBeforeSending: async lease => { await this.post("/review-post-operations", { action: "failed", lease }); },
+    releaseUnsent: async lease => { await this.post("/review-post-operations", { action: "unsent", lease }); },
     markUnknown: async lease => { await this.post("/review-post-operations", { action: "unknown", lease }); },
     succeed: async (lease, result) => { await this.post("/review-post-operations", { action: "succeeded", lease, result }); },
   };

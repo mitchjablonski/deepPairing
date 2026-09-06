@@ -28,11 +28,16 @@ exactly-once delivery**. See the [GitHub review API](https://docs.github.com/en/
 | State | Meaning | Allowed next state |
 | --- | --- | --- |
 | reserved | Locally claimed; network POST has not begun | sending, failed |
-| sending | Durable marker written before invoking POST; may have landed | succeeded, unknown, explicit operator abandonment |
+| sending | Durable marker written before invoking POST; may have landed | succeeded, unknown, explicit operator abandonment, live-lease unsent release |
 | succeeded | Validated remote review identity recorded | terminal |
 | failed | This operation is known not to have invoked POST | terminal |
 | unknown | Remote acceptance cannot be established | succeeded by reconciliation, explicit operator abandonment |
 | abandoned | Operator acknowledged uncertainty and duplicate risk | terminal; fresh explicit repost required |
+
+A `sending` operation released through the live-lease door records an
+`unsentRelease` marker naming its prior state, so `list` distinguishes "never
+left `reserved`" from "reached the pre-POST transition and still never sent".
+See [Live-lease unsent release](#live-lease-unsent-release).
 
 A process dying in `sending` leaves an unresolved operation, never permission
 to retry. A timeout, dropped response, malformed success response, or failed
@@ -72,10 +77,11 @@ Resolve/read remote preparation first, re-read local authorization, reserve,
 and compare the prepared payload/provenance with the current authorized result
 again before the durable `sending` transition, then re-check once more after
 that transition's response and immediately before invoking POST. The coordinator
-posts only that frozen payload. Any mismatch before `sending` is a known-not-sent
-failure. A mismatch after durable `sending` prevents POST but conservatively
-leaves the journal unresolved; it is never rolled back into automatic retry
-permission across an uncertain daemon response.
+posts only that frozen payload. Any mismatch or error before POST is invoked is a
+known-not-sent failure, including one raised after the durable `sending`
+transition; see [Live-lease unsent release](#live-lease-unsent-release) for the
+narrow conditions under which that classification is permitted. Nothing at or
+after POST invocation may be classified this way.
 No fake/in-memory fallback is allowed when durable posting methods are absent.
 
 The final check is an authorization snapshot, not a distributed transaction:
@@ -113,6 +119,51 @@ before downgrade, and do not downgrade an unresolved session.
 An abandoned `reserved` operation can be explicitly cancelled with an atomic
 state/token check, which fences any late attempt to enter `sending`. A
 `sending`/`unknown` operation cannot be cancelled as though it never sent.
+
+### Live-lease unsent release
+
+The second reauthorization runs *after* the durable `sending` transition, because
+that transition is itself an awaited daemon round trip during which a human can
+withdraw approval. When it fails — a revoked verdict, an `ELOCKED` authorization
+read, an unreadable journal, or an ambiguous `markSending` response — the
+coordinator has provably not invoked POST. Leaving that attempt unresolved
+would demand an operator acknowledgement that accepts duplicate risk for a review
+that certainly does not exist. The coordinator therefore releases its own exact
+attempt to `failed`.
+
+This is a **trust boundary, not remote proof of non-delivery.** The journal
+cannot observe GitHub. It verifies two things and trusts a third:
+
+1. The caller presents the exact unguessable fencing token issued to that
+   operation. The token is held only in the live coordinator's memory, is
+   persisted only as a digest, and is never logged — so a restarted process, a
+   competing process, and the operator CLI cannot produce it.
+2. The operation is still `reserved` or `sending` in this journal.
+3. *Trusted, not verified:* that the caller has not invoked POST. This is an
+   in-process code-path invariant of the coordinator, whose only call site is
+   the failure path of the block that precedes the single POST call.
+
+Consequently the following must **not** reach this door, and do not:
+
+- A crash or restart in `sending` — the lease is gone with the process.
+- A wrong, forged, stale, or replayed lease, or a second release of one already
+  released.
+- Any invocation of POST, including a timeout, a dropped response, and a
+  malformed success response; those remain `unknown`.
+- Generic operator cancellation. `cancel-reserved` stays `reserved`-only, and no
+  operator command releases an unsent attempt — the operator has no lease.
+- Elapsed time, missing remote evidence, or an absent remote review.
+
+The release is best-effort and fail-closed: if its own durable write fails, the
+operation stays blocking and the caller is told the reservation was not released.
+Over the daemon this is a distinct `unsent` protocol action, kept separate from
+the reserved-only `failed` action so an older client's narrower release keeps its
+meaning; an older daemon rejects the new action and the attempt stays blocking.
+
+Like operator acknowledgements, the `unsentRelease` marker is a journal field an
+older binary rejects as invalid rather than ignores. That refusal is fail-closed,
+but it blocks posting for the whole session: do not downgrade a session whose
+journal records one.
 Reconciliation may record a verified matching remote review without posting
 anything. No match, unavailable API, or ambiguous matches are not evidence that
 the operation failed: leave it blocked and ask the human to inspect GitHub.
@@ -161,6 +212,7 @@ targets; mixed event/SHA/payload and target case variants; failure before send;
 process death before/after `sending`; remote acceptance followed by timeout;
 invalid response identity; local stamp failure; corrupt legacy/new records;
 abandoned reservations and stale tokens; reauthorization after delayed remote
-preparation; and CLI/MCP parity. A restart must never turn uncertainty into a
+preparation; a real held `.flush.lock` during the second reauthorization;
+wrong/forged/replayed leases against the unsent release; and CLI/MCP parity. A restart must never turn uncertainty into a
 second POST. Source tests, typecheck/lint, clean bundle, and independent
 adversarial review are required before this draft is considered ready.

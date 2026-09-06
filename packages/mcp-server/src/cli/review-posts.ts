@@ -35,6 +35,7 @@ export function reviewPostsCommand(projectRoot: string, args: string[]): string 
     createdAt: op.createdAt, updatedAt: op.updatedAt,
     operationDigest: reviewPostDigest(op),
     ...(op.operatorAcknowledgement ? { operatorAcknowledgement: op.operatorAcknowledgement } : {}),
+    ...(op.unsentRelease ? { unsentRelease: op.unsentRelease } : {}),
     ...(op.result ? { result: op.result } : {}),
   })), null, 2);
 }
