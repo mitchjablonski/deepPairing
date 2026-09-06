@@ -196,15 +196,17 @@ node claude-plugin/server/review-posts.mjs <session-id>
 
 Pass `--help` for the full verb list; it prints its own absolute path in every
 example, and names the project it is acting on so a run from the wrong
-directory can't be mistaken for an empty journal.
+directory can't be mistaken for an empty journal. Five of its verbs are
+entirely offline; `reconcile` is the one that reads GitHub, and it only ever
+reads.
 
 Only a `reserved` operation can be cancelled, with
 `<entry> <session-id> cancel-reserved <operation-id>`.
 Inspect the remote review and reconcile its identity before posting again.
-Use `deeppairing review-posts <session-id> reconcile <operation-id> <remote-review-id>`
+Use `<entry> <session-id> reconcile <operation-id> <remote-review-id>`
 only after identifying the review on GitHub. Reconciling contacts GitHub, so it
-lives in the full CLI (source checkout or npm install), not in the offline
-plugin entry. This performs read-only verification
+needs `gh` installed and authenticated — but it is GET-only and ships in the
+plugin entry alongside the offline verbs. This performs read-only verification
 of the operation marker, destination, verdict, reviewed commit, body and inline
 comments, then records the receipt locally. A mismatch or unavailable API leaves
 the operation blocked; recovery never sends another review.

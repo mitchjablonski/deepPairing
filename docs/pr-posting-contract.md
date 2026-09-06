@@ -220,15 +220,39 @@ find ~/.claude/plugins -name review-posts.mjs -path '*deeppairing*'
 Run it with `--help` and it prints its own absolute path in every example, so
 the invocation is true for wherever it actually landed. It acts on the project
 at `CLAUDE_PROJECT_DIR`, else `DEEPPAIRING_PROJECT_ROOT`, else the current
-directory, and names that project on stderr — a recovery run in the wrong
-directory otherwise reads as an empty journal. `list` and `inspect` print JSON
-on stdout, so `… <session-id> | jq` works.
+directory, and names that project on stderr. `list` and `inspect` print JSON on
+stdout, so `… <session-id> | jq` works.
 
-That entry is deliberately **offline only**: it bundles
-`cli/review-posts-offline.ts`, which imports the journal and nothing else, so
-the review POST path is absent from it by construction. `reconcile` performs
-GitHub GETs and stays in the full CLI (source checkout or npm install); it is
-not available on the plugin-only path.
+A session id it cannot find in that project is **refused**, naming the ids that
+do exist — a typo, or the right id in the wrong directory, must not answer `[]`
+and exit 0, which reads exactly like "this session posted nothing". The check is
+directory existence only, never session readability: gating it on
+`FileStore.listSessions` the way the posting door does would make a session with
+corrupt artifacts unrecoverable through the one tool that exists to recover it.
+A session directory with no journal yet still answers with an empty list.
+
+The entry ships the **whole** operator surface, in two honest classes:
+
+- **Offline** — `list`, `inspect`, `cancel-reserved`, `release-claim`,
+  `acknowledge-unknown`. These open no network connection at all.
+- **Read-only GitHub** — `reconcile`, which needs `gh` installed and
+  authenticated. It issues GETs for the review id you give it and its comment
+  pages, checks the correlation marker, destination, verdict, reviewed commit,
+  body and every inline comment, and records the result locally on a match. A
+  mismatch, a missing review, or an unavailable API leaves the operation
+  blocked; recovery never sends a review.
+
+It **cannot** submit a review, and that is structural rather than promised: the
+remote read lives in `github/read-review.ts`, which `github/post-review.ts`
+imports (never the reverse), so the posting module and the payload builder are
+outside the operator bundle's module graph. The shipped file contains no HTTP
+method string but `GET` and constructs exactly one outbound command — asserted
+against the built artifact in `__tests__/plugin-operator-entry.test.ts`.
+
+Shipping only the offline verbs would have left an operator who *found* the
+review on the PR with two moves: accept duplicate risk, or install the source
+tree. Reconciling against real evidence is strictly better information than an
+acknowledgement, so the drain that uses it has to be in the box.
 
 ### Offline operator inspection and acknowledgement
 

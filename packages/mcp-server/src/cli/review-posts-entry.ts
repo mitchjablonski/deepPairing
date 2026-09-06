@@ -16,9 +16,16 @@
  * Deliberately a launcher, not the CLI. Bundling `cli/init.ts` would ship
  * `init` / `doctor` / `demo` / `post-pr-review` — daemon spawns, hook
  * installation, and the review POST itself — into a file whose whole purpose is
- * offline recovery. This entry reaches only `review-posts-offline.ts`, which
- * imports the journal and nothing else, so the bundle provably contains no
- * posting path (asserted in `__tests__/plugin-operator-entry.test.ts`).
+ * recovery. This entry reaches `cli/review-posts.ts`, whose remote read comes
+ * from `github/read-review.ts` rather than `github/post-review.ts`, so the
+ * bundle carries no way to submit a review (asserted against the shipped file
+ * in `__tests__/plugin-operator-entry.test.ts`).
+ *
+ * It carries the WHOLE operator surface, `reconcile` included. Shipping the
+ * five offline verbs alone would have left an operator who found the review on
+ * the PR with only two shipped moves — accept duplicate risk, or install the
+ * source tree — which is the distribution gap this entry exists to close, one
+ * verb further down (Astra's review of #383).
  *
  * Equally deliberately NOT an MCP or daemon route: these verbs accept duplicate
  * risk on a human's assertion. They stay a thing a person runs, with the agent
@@ -27,7 +34,8 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveProjectRoot } from "../project-root.js";
-import { reviewPostsCommand } from "./review-posts-offline.js";
+import { reconcileReviewPostCommand, reviewPostsCommand } from "./review-posts.js";
+import { readSessionDirectories } from "./session-selection.js";
 
 /**
  * Deliberately not `errorMessage` from `@deeppairing/shared`: that specifier is
@@ -62,33 +70,45 @@ export function helpText(entryPath: string): string {
     "",
     "Acts on the project rooted at CLAUDE_PROJECT_DIR, else DEEPPAIRING_PROJECT_ROOT,",
     "else the current directory. Run it from the project whose review you are recovering.",
+    "It names that project on stderr and refuses a session id it cannot find there,",
+    "rather than answering a typo with an empty list. A session whose artifacts are",
+    "damaged is still reachable — only the directory has to exist.",
     "",
+    "Offline — these never open a network connection:",
     "  <session-id> [list]                     list durable operations (JSON; no tokens, no review text)",
     "  <session-id> inspect                    redacted file/claim metadata, readable even when history is not",
     "  <session-id> cancel-reserved <op-id>    fence a reserved operation that never authorized a send",
     "  <session-id> release-claim <digest> --all-writers-stopped",
     "  <session-id> acknowledge-unknown <op-id> <digest> --all-writers-stopped --accept-duplicate-risk",
     "",
+    "Read-only GitHub — needs `gh` installed and authenticated:",
+    "  <session-id> reconcile <op-id> <remote-review-id>",
+    "                                          verify the review YOU identified on the PR and",
+    "                                          record it locally. GET only; it cannot send a review",
+    "                                          and cannot turn missing evidence into a retry.",
+    "",
     "Examples:",
     run("s_1a2b3c"),
     run("s_1a2b3c inspect"),
     run("s_1a2b3c cancel-reserved 8c1f…"),
+    run("s_1a2b3c reconcile 8c1f… 2145678"),
     "",
     "Digests come from the `operationDigest` field of `list` and the `claim.digest`",
     "field of `inspect`. Both assertion flags are your statement, not a check this",
     "can make: stop every writer (Claude Code sessions and the daemon) first.",
     "An acknowledgement records that you accept duplicate risk — it is not evidence",
-    "the uncertain review was absent.",
+    "the uncertain review was absent, and reconciling later is strictly better",
+    "information: find the review on the PR first if you can.",
     "",
-    "This entry never contacts GitHub and never sends a review. Reconciling an",
-    "operation against a review you found on the PR is a read-only GitHub GET and",
-    "lives in the full CLI: `deeppairing review-posts <session-id> reconcile",
-    "<op-id> <remote-review-id>` (source checkout or npm install).",
+    "Nothing here can submit a review. `reconcile` reads the review id you give it,",
+    "checks the correlation marker, destination, verdict, reviewed commit, body and",
+    "every inline comment, and refuses on any mismatch — leaving the operation",
+    "blocked rather than guessing.",
   ].join("\n");
 }
 
 /** Exported for tests; `main()` runs only when this file is the entry point. */
-export function main(argv: string[], entryPath: string): number {
+export async function main(argv: string[], entryPath: string): Promise<number> {
   if (argv[0] === "--help" || argv[0] === "-h" || argv[0] === "help") {
     console.log(helpText(entryPath));
     return 0;
@@ -102,8 +122,34 @@ export function main(argv: string[], entryPath: string): number {
   // still sees WHICH project answered — a recovery run in the wrong directory
   // reads as an empty journal, which is the most dangerous possible silence.
   console.error(`deepPairing project: ${resolved.projectRoot} (${resolved.source})`);
+
+  // ...and the banner alone does not close that silence. An unknown session id
+  // — a typo, or the right id in the wrong project — otherwise answered `[]`
+  // and exit 0, which reads exactly like "this session posted nothing".
+  //
+  // The check is DIRECTORY EXISTENCE, never session readability. Gating on
+  // `FileStore.listSessions` (as the posting door does) would make a session
+  // whose artifacts are corrupt unrecoverable through the one tool that exists
+  // to recover it — the opposite of the point. A session with no directory has
+  // no journal, no claim and no protocol marker, so nothing is reachable there
+  // and refusing costs an operator nothing.
+  const sessionId = argv[0]?.trim();
+  const directories = readSessionDirectories(resolved.projectRoot);
+  if (sessionId && !directories.includes(sessionId)) {
+    console.error(`No session "${sessionId}" in this project — nothing was created.`);
+    console.error(directories.length > 0
+      ? `Sessions here: ${directories.slice(0, 20).join(", ")}${directories.length > 20 ? `, and ${directories.length - 20} more` : ""}.`
+      : "This project has no sessions at all. Check that you are in the right directory.");
+    return 1;
+  }
+
   try {
-    console.log(reviewPostsCommand(resolved.projectRoot, argv));
+    // `reconcile` is the one verb that reads GitHub, and the one that is async.
+    // Same dispatch shape the full CLI uses, one positional earlier (there,
+    // argv[0] is the `review-posts` subcommand name).
+    console.log(argv[1] === "reconcile"
+      ? await reconcileReviewPostCommand(resolved.projectRoot, argv)
+      : reviewPostsCommand(resolved.projectRoot, argv));
     return 0;
   } catch (err) {
     console.error(`review-posts failed: ${describeError(err)}`);
@@ -115,5 +161,5 @@ export function main(argv: string[], entryPath: string): number {
 // or a `./` prefix doesn't turn the entry into a silent no-op import.
 const entry = fileURLToPath(import.meta.url);
 if (process.argv[1] && path.resolve(process.argv[1]) === entry) {
-  process.exitCode = main(process.argv.slice(2), entry);
+  void main(process.argv.slice(2), entry).then((code) => { process.exitCode = code; });
 }

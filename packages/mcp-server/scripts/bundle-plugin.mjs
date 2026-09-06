@@ -17,9 +17,11 @@
  *                                         resolves it beside standalone.js)
  *   claude-plugin/server/web/            (the daemon's webDistPath fallback
  *                                         resolves web/ beside daemon.js)
- *   claude-plugin/server/review-posts.mjs (offline operator recovery — the only
- *                                         runnable drain for the durable
- *                                         posting protocol on this install path)
+ *   claude-plugin/server/review-posts.mjs (operator recovery — the only runnable
+ *                                         drain for the durable posting protocol
+ *                                         on this install path; five offline
+ *                                         verbs plus a GET-only reconcile, and
+ *                                         no way to submit a review)
  *
  * Bundle success IS the containment proof: esbuild errors at build time on
  * any unresolvable specifier, so a workspace-only import can't slip through.
@@ -112,14 +114,16 @@ await build({
   outfile: resolve(pluginDir, "preflight.mjs"),
 });
 
-// #344 — the OFFLINE operator recovery entry. The durable posting protocol can
-// leave a session needing `cancel-reserved`, `release-claim` or
-// `acknowledge-unknown`, and until now the only caller of those verbs was
+// #344 — the operator recovery entry. The durable posting protocol can leave a
+// session needing `cancel-reserved`, `release-claim`, `acknowledge-unknown` or
+// `reconcile`, and until now the only caller of those verbs was
 // `dist/cli/init.js`, which this bundle does not emit — so on a marketplace
 // install the daemon could write states that nothing shipped could clear.
-// Deliberately its own tiny entry rather than the whole CLI: it reaches only
-// cli/review-posts-offline.ts (journal, no GitHub imports), so the review POST
-// path is absent from the bundle by construction, not by promise.
+// Deliberately its own entry rather than the whole CLI: it reaches
+// cli/review-posts.ts, whose remote read comes from github/read-review.ts and
+// not github/post-review.ts, so the posting module and the payload builder stay
+// outside this bundle's module graph — no way to submit a review, by
+// construction rather than by promise.
 await build({
   ...shared,
   entryPoints: [resolve(pkgRoot, "src/cli/review-posts-entry.ts")],

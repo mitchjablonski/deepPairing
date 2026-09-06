@@ -116,11 +116,12 @@ Both run the self-contained bundles under `server/` via
 
 **Operator recovery entry** (`server/review-posts.mjs`)
 
-A standalone, offline command you run yourself when a PR review post ends in an
+A standalone command you run yourself when a PR review post ends in an
 unresolved state — inspect the durable journal, cancel a reservation that never
-sent, release an abandoned claim, or acknowledge an uncertain result. A
-marketplace install has no `deeppairing` binary, so this ships as its own entry
-rather than as part of the CLI:
+sent, release an abandoned claim, reconcile against a review you found on the
+PR, or acknowledge an uncertain result. A marketplace install has no
+`deeppairing` binary, so this ships as its own entry rather than as part of the
+CLI:
 
 ```bash
 # Locate it once (CLAUDE_PLUGIN_ROOT is set for hooks, not for your shell):
@@ -129,10 +130,15 @@ find ~/.claude/plugins -name review-posts.mjs -path '*deeppairing*'
 node "<that path>" --help
 ```
 
+Five verbs are entirely offline. `reconcile` is the one that reads GitHub
+(via `gh`), and it only ever reads: it verifies the review id you give it
+against the operation's marker, destination, verdict, commit and comments, and
+refuses on any mismatch. **Nothing here can submit a review** — the posting
+module is outside this bundle's module graph, not merely unused by it.
+
 It is deliberately **not** an MCP tool and not a daemon route: these verbs
 accept duplicate risk on your assertion, and the agent must not be able to make
-that assertion for you. It never contacts GitHub and never sends a review — the
-`reconcile` verb, which reads GitHub, stays in the full CLI. See
+that assertion for you. See
 [docs/pr-posting-contract.md](../docs/pr-posting-contract.md#where-the-operator-commands-live).
 
 **Companion web UI** — a deterministic per-project port in `3847-3974`,

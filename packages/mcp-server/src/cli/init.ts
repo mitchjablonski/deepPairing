@@ -2088,7 +2088,7 @@ ${helpInvocations}
                                           Cancel only an operation that has not started sending
     dp review-posts <session-id> reconcile <operation-id> <remote-review-id>
                                           Verify a remote review and record it without posting
-                                          (The offline review-posts verbs also ship as a standalone
+                                          (All the review-posts verbs also ship as a standalone
                                           operator entry inside the plugin bundle — run
                                           \`node <plugin>/server/review-posts.mjs --help\`; a
                                           marketplace install has no \`dp\` binary.)
