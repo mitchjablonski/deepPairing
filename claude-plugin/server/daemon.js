@@ -35072,10 +35072,74 @@ function createDaemon(deps) {
         clients = /* @__PURE__ */ new Set();
         wsClients.set(sessionId, clients);
       }
+      let refusalDeadline = null;
+      let cleanedUp = false;
+      const cleanup2 = () => {
+        if (refusalDeadline) {
+          clearTimeout(refusalDeadline);
+          refusalDeadline = null;
+        }
+        if (cleanedUp) return;
+        cleanedUp = true;
+        clients.delete(ws);
+        if (clients.size === 0) wsClients.delete(sessionId);
+        checkAutoShutdown();
+      };
+      ws.on("error", (err) => {
+        log2(`[ws] session client error (session=${sessionId}): ${err?.code ?? errorMessage(err)}`);
+        cleanup2();
+        try {
+          ws.terminate();
+        } catch {
+        }
+      });
+      ws.on("close", cleanup2);
       clients.add(ws);
       const store = sessions.get(sessionId);
       if (store) {
-        ws.send(JSON.stringify({ type: "connected", state: store.getFullState(), projectRoot: projectRoot2, projectHash: daemonProjectHash, daemonStartedAt: startedAt2 }));
+        try {
+          ws.send(JSON.stringify({ type: "connected", state: store.getFullState(), projectRoot: projectRoot2, projectHash: daemonProjectHash, daemonStartedAt: startedAt2 }));
+        } catch (error51) {
+          const knownConflict = isSessionReviewConflictError(error51);
+          log2(knownConflict ? `[ws] initial snapshot refused: session review conflict (session=${sessionId}): ${errorMessage(error51)}` : `[ws] initial snapshot failed (session=${sessionId}): ${errorMessage(error51)}`);
+          cleanup2();
+          const refusal = knownConflict ? { type: "connection_refused", code: ERROR_CODES.session_review_conflict, message: "Session state requires review before reconnecting." } : { type: "connection_refused", message: "Session state is temporarily unavailable." };
+          refusalDeadline = setTimeout(() => {
+            log2(`[ws] initial snapshot refusal timed out (session=${sessionId}); terminating client`);
+            try {
+              ws.terminate();
+            } catch {
+            }
+          }, 1e3);
+          refusalDeadline.unref?.();
+          try {
+            ws.send(JSON.stringify(refusal), (sendError) => {
+              if (sendError) {
+                log2(`[ws] initial snapshot refusal send failed (session=${sessionId}): ${errorMessage(sendError)}`);
+                try {
+                  ws.terminate();
+                } catch {
+                }
+                return;
+              }
+              try {
+                ws.close(1011, "Initial snapshot unavailable");
+              } catch {
+                try {
+                  ws.terminate();
+                } catch {
+                }
+              }
+            });
+          } catch (sendError) {
+            log2(`[ws] initial snapshot refusal send failed (session=${sessionId}): ${errorMessage(sendError)}`);
+            try {
+              ws.terminate();
+            } catch {
+            }
+          }
+          return;
+        }
       }
       if (sessionId.startsWith("demo_")) {
         const replay = demoReplayEvents.get(sessionId);
@@ -35083,36 +35147,76 @@ function createDaemon(deps) {
           ws.send(JSON.stringify({ ...replay, sessionId, replayed: true }));
         }
       }
-      ws.on("error", (err) => {
-        log2(`[ws] session client error (session=${sessionId}): ${err?.code ?? errorMessage(err)}`);
-        try {
-          ws.terminate();
-        } catch {
-        }
-      });
-      ws.on("close", () => {
-        clients.delete(ws);
-        if (clients.size === 0) wsClients.delete(sessionId);
-        checkAutoShutdown();
-      });
     } else {
-      globalClients.add(ws);
-      const sessionList = Array.from(sessions.entries()).map(([id, store]) => ({
-        sessionId: id,
-        artifactCount: store.getArtifacts().length
-      }));
-      ws.send(JSON.stringify({ type: "connected", sessions: sessionList, projectRoot: projectRoot2, projectHash: daemonProjectHash, daemonStartedAt: startedAt2 }));
-      ws.on("error", (err) => {
-        log2(`[ws] global client error: ${err?.code ?? errorMessage(err)}`);
-        try {
-          ws.terminate();
-        } catch {
+      let refusalDeadline = null;
+      let cleanedUp = false;
+      const cleanup2 = () => {
+        if (refusalDeadline) {
+          clearTimeout(refusalDeadline);
+          refusalDeadline = null;
         }
-      });
-      ws.on("close", () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
         globalClients.delete(ws);
         checkAutoShutdown();
+      };
+      ws.on("error", (err) => {
+        log2(`[ws] global client error: ${err?.code ?? errorMessage(err)}`);
+        cleanup2();
+        try {
+          ws.terminate();
+        } catch {
+        }
       });
+      ws.on("close", cleanup2);
+      globalClients.add(ws);
+      try {
+        const sessionList = Array.from(sessions.entries()).map(([id, store]) => ({
+          sessionId: id,
+          artifactCount: store.getArtifacts().length
+        }));
+        ws.send(JSON.stringify({ type: "connected", sessions: sessionList, projectRoot: projectRoot2, projectHash: daemonProjectHash, daemonStartedAt: startedAt2 }));
+      } catch (error51) {
+        const knownConflict = isSessionReviewConflictError(error51);
+        log2(knownConflict ? `[ws] global initial snapshot refused: session review conflict: ${errorMessage(error51)}` : `[ws] global initial snapshot failed: ${errorMessage(error51)}`);
+        cleanup2();
+        const refusal = knownConflict ? { type: "connection_refused", code: ERROR_CODES.session_review_conflict, message: "Session state requires review before reconnecting." } : { type: "connection_refused", message: "Session state is temporarily unavailable." };
+        refusalDeadline = setTimeout(() => {
+          log2("[ws] global initial snapshot refusal timed out; terminating client");
+          try {
+            ws.terminate();
+          } catch {
+          }
+        }, 1e3);
+        refusalDeadline.unref?.();
+        try {
+          ws.send(JSON.stringify(refusal), (sendError) => {
+            if (sendError) {
+              log2(`[ws] global initial snapshot refusal send failed: ${errorMessage(sendError)}`);
+              try {
+                ws.terminate();
+              } catch {
+              }
+              return;
+            }
+            try {
+              ws.close(1011, "Initial snapshot unavailable");
+            } catch {
+              try {
+                ws.terminate();
+              } catch {
+              }
+            }
+          });
+        } catch (sendError) {
+          log2(`[ws] global initial snapshot refusal send failed: ${errorMessage(sendError)}`);
+          try {
+            ws.terminate();
+          } catch {
+          }
+        }
+        return;
+      }
     }
     log2(`WebSocket client connected (session: ${sessionId ?? "global"}, total: ${getClientCount()})`);
   });
