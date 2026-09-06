@@ -51,8 +51,9 @@ artifact, decision, plan-review, and review-metrics writes, so its stale review
 authority cannot be committed after the fact. Writes into those lanes are
 refused at the store entrypoint — `createArtifact`, `updateArtifactStatus`,
 `renameArtifact`, `setRetractReason`, `updatePlanProgress`,
-`setChangesetFileReview`, and the decision / plan-review record and resolve
-calls — before any in-memory mutation, checkpoint receipt, hint file, or
+`setChangesetFileReview`, `acknowledgeStatusChanges`, `acknowledgeDecisions`,
+and the decision / plan-review record and resolve calls — before any in-memory
+mutation, checkpoint receipt, hint file, or
 render-failure clear, so no caller holds a success receipt for a record the
 flush would discard. A refused revision leaves its parent untouched. Independent
 comments, requests, and render-failure records still get their own flush

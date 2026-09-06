@@ -186,7 +186,10 @@ Once a writer is frozen, every later write into those lanes is refused up
 front with the same 409, before any in-memory change, checkpoint receipt, or
 broadcast: creating an artifact (`present_*`), revising one
 (`revise_artifact`), any status transition, plan progress, per-file changeset
-review, and decision or plan-review records. A `present_*` or `revise_artifact`
+review, decision or plan-review records, and the consume-once acknowledgements
+of status changes and resolved decisions (a refused acknowledgement leaves the
+notice reported on disk, so a fresh writer surfaces it again rather than losing
+it). A `present_*` or `revise_artifact`
 call that returns this error created nothing, and the artifact it tried to
 revise is exactly as it was on disk — no v2, no `superseded` flip, no comment.
 The first conflict is different only in when it is detected: the verdict route
