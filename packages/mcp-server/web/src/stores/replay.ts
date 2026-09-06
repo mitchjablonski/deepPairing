@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { SessionAnnotation, DecisionOption } from "@deeppairing/shared";
 import { buildTimeline, type TimelineEvent, type TimelineInput, annotationsByEventId } from "../lib/timeline";
 import { apiBase, apiGet, sessionHeaders } from "../lib/api";
+import { useToastStore } from "./toast";
 import {
   beginSessionTransition,
   isCurrentSessionTransition,
@@ -112,11 +113,7 @@ function clearExitRecoveryTimer(): void {
 function dismissExitRecoveryToast(): void {
   const toastId = exitRecoveryToastId;
   exitRecoveryToastId = null;
-  if (toastId) {
-    void import("./toast").then(({ useToastStore }) => {
-      useToastStore.getState().dismiss(toastId);
-    });
-  }
+  if (toastId) useToastStore.getState().dismiss(toastId);
 }
 
 /**
@@ -130,24 +127,50 @@ function scheduleExitRecoveryTimeout(operation: number): void {
   exitRecoveryTimer = setTimeout(() => {
     exitRecoveryTimer = null;
     if (operation !== replayOperation || !useReplayStore.getState().exiting) return;
-    void import("./toast").then(({ useToastStore }) => {
-      if (operation !== replayOperation || !useReplayStore.getState().exiting) return;
-      exitRecoveryToastId = useToastStore.getState().push({
-        kind: "error",
-        title: "Couldn't leave replay",
-        body: "Live session state has not arrived. Replay remains read-only; retry when the daemon reconnects.",
-        ttl: 0,
-        action: {
-          label: "Retry",
-          onClick: () => {
-            if (operation !== replayOperation || !useReplayStore.getState().exiting) return;
-            dismissExitRecoveryToast();
-            useReplayStore.getState().exitReplay();
-          },
+    // Static toast import on purpose: this fires precisely when the daemon
+    // may be unreachable, and a dynamic `import("./toast")` here would be a
+    // network fetch of a Vite facade chunk that cannot succeed offline (see
+    // warmExitPath below). toast.ts imports only zustand — no cycle.
+    exitRecoveryToastId = useToastStore.getState().push({
+      kind: "error",
+      title: "Couldn't leave replay",
+      body: "Live session state has not arrived. Replay remains read-only; retry when the daemon reconnects.",
+      ttl: 0,
+      action: {
+        label: "Retry",
+        onClick: () => {
+          if (operation !== replayOperation || !useReplayStore.getState().exiting) return;
+          dismissExitRecoveryToast();
+          useReplayStore.getState().exitReplay();
         },
-      });
+      },
     });
   }, REPLAY_EXIT_TIMEOUT_MS);
+}
+
+/**
+ * #339 (browser evidence) — exiting replay rehydrates through dynamic imports
+ * of the connection + artifact stores (they import this module, so a static
+ * edge would be a cycle). Vite emits those `import()`s as tiny FACADE chunks
+ * that are fetched from the daemon the FIRST time the import runs. The first
+ * exit in a tab's life is therefore a network request — and when the exit
+ * happens while the daemon is down (the exact H1 scenario: "leave replay,
+ * retry when the daemon reconnects"), that fetch fails, the browser records
+ * the module as failed for the tab's lifetime, and the E5 chunk-skew handler
+ * (lib/chunk-error.ts) auto-reloads the page straight onto a
+ * chrome-error:// page. The historical frame, the write lock and the Retry
+ * toast never get a chance to exist. Observed in a real Chromium tab
+ * (e2e/recovery.e2e.ts); invisible to the FakeAdapter tests, whose imports
+ * resolve from memory.
+ *
+ * Entering replay is necessarily an online moment (the session was just
+ * fetched), so resolve the exit path's imports HERE. Once a module is in the
+ * tab's module map, a later `import()` of it never touches the network. Errors
+ * are swallowed: a failure here surfaces on the real exit, where it is
+ * handled.
+ */
+function warmExitPath(): void {
+  void Promise.all([import("./connection"), import("./artifact")]).catch(() => {});
 }
 
 export const useReplayStore = create<ReplayState>((set, get) => ({
@@ -172,6 +195,7 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
     clearPlayTimer();
     clearExitRecoveryTimer();
     dismissExitRecoveryToast();
+    warmExitPath();
     set({
       active: true,
       exiting: false,
