@@ -207,6 +207,25 @@ it("the reserved-only doors keep their existing narrow contract", () => {
   expect(journal.list()[1]!.state).toBe("sending");
 });
 
+it("refuses an incomplete durable store before reserving anything", async () => {
+  // The failure paths are best-effort, so a missing method would otherwise be
+  // swallowed and silently disable a door — the drift that let two obsolete
+  // expectations keep passing behind incomplete fakes (#344 review).
+  for (const missing of ["reserve", "markSending", "failBeforeSending", "releaseUnsent",
+    "markUnknown", "succeed"] as const) {
+    let sends = 0;
+    const partial = { ...bind(journal) };
+    delete (partial as Record<string, unknown>)[missing];
+    await expect(executeDurableReviewPost({
+      store: partial as DurableReviewPostStore, identity, payload, repost: false,
+      reauthorize: () => identity, send: async () => { sends++; return result; },
+    })).rejects.toThrow(new RegExp(`missing ${missing}\\(\\)`));
+    expect(sends).toBe(0);
+    // Nothing was reserved, so no operation is left needing recovery.
+    expect(journal.list()).toEqual([]);
+  }
+});
+
 function bind(target: ReviewPostJournal): DurableReviewPostStore {
   return {
     reserve: target.reserve.bind(target), markSending: target.markSending.bind(target),

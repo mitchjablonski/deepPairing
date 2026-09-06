@@ -46,6 +46,17 @@ export async function executeDurableReviewPost(opts: {
   reauthorize: () => MaybePromise<ReviewPostIdentity>;
   send: (target: string, payload: GitHubReviewPayload) => Promise<unknown>;
 }): Promise<{ operationId: string; result: ReviewPostResult; receipt: "recorded" | "unconfirmed" }> {
+  // The failure paths below are best-effort by design, so an absent durable
+  // method would be swallowed and silently degrade a door instead of failing —
+  // twice now that has let an obsolete expectation keep passing behind an
+  // incomplete test fake. The contract allows no fallback when a durable
+  // posting method is missing, so refuse before reserving anything.
+  for (const method of ["reserve", "markSending", "failBeforeSending", "releaseUnsent",
+    "markUnknown", "succeed"] as const) {
+    if (typeof opts.store[method] !== "function") {
+      throw new Error(`Durable review-post store is missing ${method}(); refusing to post without the full durable protocol`);
+    }
+  }
   // Never retain a caller's mutable payload across an await. The digest is of
   // the exact JSON-bound payload, including commit_id when present.
   const payload = JSON.parse(JSON.stringify(opts.payload)) as GitHubReviewPayload;
@@ -58,7 +69,9 @@ export async function executeDurableReviewPost(opts: {
   const lease = await opts.store.reserve(identity, opts.repost);
   // Set BEFORE the transition is awaited, so an ambiguous markSending response
   // (a dropped daemon reply over a write that did land) still takes the door
-  // that tolerates `sending`. Everything guarded by it is still pre-POST.
+  // that tolerates `sending`. Every statement it guards precedes the send call
+  // below — that control-flow position, not the journal state, is what makes
+  // the resulting release honest.
   let sendingAttempted = false;
   try {
     const current = reviewPostIdentitySchema.parse(await opts.reauthorize());
