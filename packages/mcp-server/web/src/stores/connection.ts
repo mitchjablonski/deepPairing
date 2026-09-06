@@ -978,11 +978,10 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
 
       adapter.onConnect(() => {
         // #339 — a chunk that failed to load during the outage poisoned this
-        // document's module map; now that the origin answers again, the E5
-        // auto-reload that was deferred (lib/chunk-error.ts) can complete.
-        // The reload lands on the same URL and re-binds through the normal
-        // bootstrap. No-op unless a failure was deferred.
-        if (reloadIfChunkFailedOffline()) return;
+        // document's module map. Recheck the asset origin, which need not be
+        // this selected API daemon. Normal connection/hydration continues;
+        // the bounded probe may decline to reload and must not strand it.
+        reloadIfChunkFailedOffline();
         thisConnection = ++connectionGeneration;
         set({ connected: true, disconnectedSince: null });
         // Request notification permission on first connect

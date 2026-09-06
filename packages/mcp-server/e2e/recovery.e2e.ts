@@ -285,10 +285,29 @@ test("daemon restart: the tab reconnects to the new process and hydrates the com
   });
 });
 
-test("daemon outage while an artifact view chunk is in flight keeps the frame and recovers on reconnect", async ({ page }, testInfo) => {
+for (const closeOrder of ["before chunk failure", "after chunk failure"] as const) {
+test(`daemon outage with close delivered ${closeOrder} keeps the frame and recovers`, async ({ page }, testInfo) => {
   test.setTimeout(90_000);
   observeTab(page, testInfo);
   const forbidden = collectForbidden(page);
+
+  if (closeOrder === "after chunk failure") {
+    await page.addInitScript(() => {
+      const w = window as Window & { __delayChunkClose?: boolean; __pendingChunkClose?: Array<() => void> };
+      const descriptor = Object.getOwnPropertyDescriptor(WebSocket.prototype, "onclose");
+      if (!descriptor?.set) throw new Error("WebSocket close descriptor missing");
+      Object.defineProperty(WebSocket.prototype, "onclose", {
+        configurable: true, get: descriptor.get,
+        set(handler: ((this: WebSocket, event: CloseEvent) => unknown) | null) {
+          descriptor.set!.call(this, function (this: WebSocket, event: CloseEvent) {
+            const deliver = () => handler?.call(this, event);
+            if (w.__delayChunkClose) (w.__pendingChunkClose ??= []).push(deliver);
+            else deliver();
+          });
+        },
+      });
+    });
+  }
 
   // Controlled delayed chunk: hold the detail pane's lazy artifact-view script
   // until the daemon is gone, then fail it the way the network would. Every
@@ -313,8 +332,17 @@ test("daemon outage while an artifact view chunk is in flight keeps the frame an
   await expect(viewLoading(page)).toBeVisible();
 
   const port = portOf(daemon!.baseURL);
+  if (closeOrder === "after chunk failure") {
+    await page.evaluate(() => { (window as Window & { __delayChunkClose?: boolean }).__delayChunkClose = true; });
+  }
   await stopDaemon();
-  await expect.poll(() => storeState(page).then((s) => s.connected), { timeout: 15_000 }).toBe(false);
+  if (closeOrder === "after chunk failure") {
+    await page.waitForFunction(() => (window as Window & { __pendingChunkClose?: unknown[] }).__pendingChunkClose?.length);
+    expect((await storeState(page)).connected).toBe(true);
+  } else {
+    await expect.poll(() => storeState(page).then((s) => s.connected), { timeout: 15_000 }).toBe(false);
+  }
+  expect(await fetch(`http://localhost:${port}/api/daemon-info`).then(() => false, () => true)).toBe(true);
 
   // Now the chunk fails, during the outage. Pre-fix: vite:preloadError →
   // unconditional reload → chrome-error:// and the tab is gone.
@@ -328,6 +356,14 @@ test("daemon outage while an artifact view chunk is in flight keeps the frame an
   expect(navigations.filter((u) => u.startsWith("chrome-error://"))).toEqual([]);
   expect(page.url()).toBe(`http://localhost:${port}/?session=${LIVE}`);
   const navigationsBeforeRecovery = navigations.length;
+  if (closeOrder === "after chunk failure") {
+    await page.evaluate(() => {
+      const w = window as Window & { __delayChunkClose?: boolean; __pendingChunkClose?: Array<() => void> };
+      w.__delayChunkClose = false;
+      for (const deliver of w.__pendingChunkClose?.splice(0) ?? []) deliver();
+    });
+    await expect.poll(() => storeState(page).then((s) => s.connected)).toBe(false);
+  }
 
   // The daemon returns; the wrapper re-registers. The tab reconnects on its
   // own backoff, and the ONE deferred reload lands on the same URL, rebinding
@@ -351,6 +387,18 @@ test("daemon outage while an artifact view chunk is in flight keeps the frame an
   expect(forbidden).toEqual([]);
   // Exactly one reload, and only after the origin answered again.
   expect(navigations.length).toBe(navigationsBeforeRecovery + 1);
+});
+}
+
+test("online chunk skew reloads once, then the loop guard retains the frame", async ({ page }) => {
+  const navigations: string[] = [];
+  page.on("framenavigated", (frame) => { if (frame === page.mainFrame()) navigations.push(frame.url()); });
+  await page.route(/\/assets\/ResearchArtifact-[^/]+\.js(\?.*)?$/, route => route.abort("failed"));
+  await page.goto(`${daemon!.baseURL}/?session=${LIVE}`, { waitUntil: "domcontentloaded" });
+  await expect(chunkBoundary(page)).toHaveAttribute("data-recovery", "blocked", { timeout: 15_000 });
+  expect(navigations).toEqual([`${daemon!.baseURL}/?session=${LIVE}`, `${daemon!.baseURL}/?session=${LIVE}`]);
+  await expect(artifactRow(page, "Before restart")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Reload" })).toBeVisible();
 });
 
 test("replay exit is browser-observable: the historical frame is swapped for the live session", async ({ page }, testInfo) => {

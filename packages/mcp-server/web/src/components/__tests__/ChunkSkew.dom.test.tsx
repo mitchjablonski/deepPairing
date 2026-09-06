@@ -4,11 +4,11 @@
  * "new version deployed — reload", never as "content may be malformed".
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { ErrorBoundary } from "../ErrorBoundary";
 import {
   isChunkLoadError, handlePreloadError, reloadIfChunkFailedOffline,
-  isReloadDeferredForOutage, resetDeferredReloadForTests, daemonReachable,
+  getChunkRecoveryStatus, resetDeferredReloadForTests, probeAssetOrigin,
 } from "../../lib/chunk-error";
 
 function Bomb({ message }: { message: string }): never {
@@ -62,126 +62,219 @@ describe("E5 — isChunkLoadError", () => {
   });
 });
 
-describe("E5 — handlePreloadError (auto-reload, loop-guarded)", () => {
-  beforeEach(() => sessionStorage.clear());
+/** Settle the handler's probe chain (Promise.resolve().then(probe).catch().then()). */
+async function settle() {
+  for (let i = 0; i < 12; i++) await Promise.resolve();
+}
+const reachable = () => Promise.resolve(true);
+const unreachable = () => Promise.resolve(false);
 
-  it("first failure reloads and prevents vite's default; a second inside the window propagates instead", () => {
+describe("E5 — handlePreloadError (auto-reload, loop-guarded, origin-probed)", () => {
+  beforeEach(() => { sessionStorage.clear(); resetDeferredReloadForTests(); });
+
+  it("first failure on a LIVE origin reloads once (after the probe answers); a second inside the window is blocked", async () => {
     const reload = vi.fn();
     const e1 = { preventDefault: vi.fn() };
-    handlePreloadError(e1, reload);
+    handlePreloadError(e1, { reload, probe: reachable });
+    expect(getChunkRecoveryStatus()).toBe("probing");
+    expect(reload).not.toHaveBeenCalled(); // never on the event itself
+    await settle();
     expect(reload).toHaveBeenCalledTimes(1);
-    expect(e1.preventDefault).toHaveBeenCalled();
+    // Never preventDefault: vite would resolve the import as undefined and
+    // the lazy factory would throw a TypeError that dodges isChunkLoadError.
+    expect(e1.preventDefault).not.toHaveBeenCalled();
 
     const e2 = { preventDefault: vi.fn() };
-    handlePreloadError(e2, reload);
-    // Loop guard: no second reload, no preventDefault — the error reaches the
-    // chunk-aware boundary, which shows the manual reload CTA.
+    handlePreloadError(e2, { reload, probe: reachable });
+    await settle();
+    // Loop guard: no second reload; the boundary's manual Reload is the door.
     expect(reload).toHaveBeenCalledTimes(1);
     expect(e2.preventDefault).not.toHaveBeenCalled();
+    expect(getChunkRecoveryStatus()).toBe("blocked");
   });
 });
 
-describe("#339 — preload failure while the daemon is unreachable (outage, not skew)", () => {
+describe("#339 — preload failure while the asset origin cannot answer (outage, not skew)", () => {
   beforeEach(() => { sessionStorage.clear(); resetDeferredReloadForTests(); });
 
-  it("does NOT reload toward an unreachable origin: propagates, keeps the view, arms one deferred reload", () => {
+  it("disconnect delivered BEFORE the failed chunk: no reload toward a dead origin, propagate, arm one deferred reload", async () => {
     const reload = vi.fn();
     const e = { preventDefault: vi.fn() };
-    handlePreloadError(e, reload, () => false);
+    handlePreloadError(e, { reload, probe: unreachable });
+    await settle();
     expect(reload).not.toHaveBeenCalled();
-    expect(e.preventDefault).not.toHaveBeenCalled(); // the boundary / caller catch handles it
-    expect(isReloadDeferredForOutage()).toBe(true);
+    expect(e.preventDefault).not.toHaveBeenCalled();
+    expect(getChunkRecoveryStatus()).toBe("deferred");
   });
 
-  it("the deferred reload fires ONCE on the next successful connect, then disarms", () => {
-    const reload = vi.fn();
-    handlePreloadError({ preventDefault: vi.fn() }, reload, () => false);
-    expect(reloadIfChunkFailedOffline(reload)).toBe(true);
-    expect(reload).toHaveBeenCalledTimes(1);
-    expect(isReloadDeferredForOutage()).toBe(false);
-    expect(reloadIfChunkFailedOffline(reload)).toBe(false);
-    expect(reload).toHaveBeenCalledTimes(1);
-  });
-
-  it("a reconnect with nothing deferred is a no-op", () => {
-    const reload = vi.fn();
-    expect(reloadIfChunkFailedOffline(reload)).toBe(false);
-    expect(reload).not.toHaveBeenCalled();
-  });
-
-  it("the deferred reload honours the same 30s loop guard as the immediate one", () => {
-    const reload = vi.fn();
-    handlePreloadError({ preventDefault: vi.fn() }, reload, () => true); // online skew: reloads, stamps the guard
-    expect(reload).toHaveBeenCalledTimes(1);
-    handlePreloadError({ preventDefault: vi.fn() }, reload, () => false); // then an outage failure
-    expect(reloadIfChunkFailedOffline(reload)).toBe(false); // inside the window: no second reload
-    expect(reload).toHaveBeenCalledTimes(1);
-    expect(isReloadDeferredForOutage()).toBe(false); // consumed, not re-armed: the boundary CTA is the door now
-  });
-
-  it("the online skew path is unchanged: first failure reloads immediately and prevents vite's default", () => {
-    const reload = vi.fn();
-    const e = { preventDefault: vi.fn() };
-    handlePreloadError(e, reload, () => true);
-    expect(reload).toHaveBeenCalledTimes(1);
-    expect(e.preventDefault).toHaveBeenCalled();
-    expect(isReloadDeferredForOutage()).toBe(false);
-  });
-
-  it("daemonReachable: only a tab that HAD a socket and lost it counts as unreachable", () => {
+  it("failed chunk BEFORE the close callback is delivered (store still says connected): same outcome — the store is never consulted", async () => {
     const w = window as unknown as { __dpConnectionStore?: { getState: () => unknown } };
     const saved = w.__dpConnectionStore;
+    w.__dpConnectionStore = { getState: () => ({ connected: true, disconnectedSince: null }) };
     try {
-      delete w.__dpConnectionStore;
-      expect(daemonReachable()).toBe(true); // unknown store → plain skew policy
-      w.__dpConnectionStore = { getState: () => ({ connected: false, disconnectedSince: null }) };
-      expect(daemonReachable()).toBe(true); // never connected (bootstrap) → plain skew policy
-      w.__dpConnectionStore = { getState: () => ({ connected: false, disconnectedSince: Date.now() }) };
-      expect(daemonReachable()).toBe(false); // outage
-      w.__dpConnectionStore = { getState: () => ({ connected: true, disconnectedSince: null }) };
-      expect(daemonReachable()).toBe(true);
+      const reload = vi.fn();
+      handlePreloadError({ preventDefault: vi.fn() }, { reload, probe: unreachable });
+      await settle();
+      expect(reload).not.toHaveBeenCalled();
+      expect(getChunkRecoveryStatus()).toBe("deferred");
     } finally {
       if (saved) w.__dpConnectionStore = saved; else delete w.__dpConnectionStore;
     }
   });
 
-  it("the chunk-aware boundary names the outage and the deferred reload instead of blaming a deploy", () => {
-    handlePreloadError({ preventDefault: vi.fn() }, vi.fn(), () => false);
+  it("a probe that REJECTS is an outage too", async () => {
+    const reload = vi.fn();
+    handlePreloadError({ preventDefault: vi.fn() }, { reload, probe: () => Promise.reject(new Error("boom")) });
+    await settle();
+    expect(reload).not.toHaveBeenCalled();
+    expect(getChunkRecoveryStatus()).toBe("deferred");
+  });
+
+  it("a probe that HANGS is bounded by the default probe's timeout: no navigation, deferred", async () => {
+    vi.useFakeTimers();
+    try {
+      // The real probe: fetch never settles; the AbortController fires at the bound.
+      // Even an injected fetch that ignores abort cannot leave recovery hung.
+      const fetchSpy = vi.fn((_url: string, _init?: RequestInit) => new Promise<Response>(() => {}));
+      vi.stubGlobal("fetch", fetchSpy);
+      const reload = vi.fn();
+      handlePreloadError({ preventDefault: vi.fn() }, { reload, probe: () => probeAssetOrigin(500) });
+      await vi.advanceTimersByTimeAsync(499);
+      expect(getChunkRecoveryStatus()).toBe("probing");
+      await vi.advanceTimersByTimeAsync(2);
+      await settle();
+      expect(reload).not.toHaveBeenCalled();
+      expect(getChunkRecoveryStatus()).toBe("deferred");
+      expect(fetchSpy.mock.calls[0]?.[0]).toMatch(/\/api\/daemon-info$/);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
+  it("the deferred reload fires ONCE on the next successful connect, then disarms", async () => {
+    const reload = vi.fn();
+    handlePreloadError({ preventDefault: vi.fn() }, { reload, probe: unreachable });
+    await settle();
+    reloadIfChunkFailedOffline({ reload, probe: reachable });
+    expect(reload).not.toHaveBeenCalled();
+    await settle();
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(getChunkRecoveryStatus()).toBe("idle");
+    reloadIfChunkFailedOffline({ reload, probe: reachable });
+    await settle();
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("a connect racing the probe only queues a fresh asset check, never authorizes reload", async () => {
+    let resolveProbe!: (v: boolean) => void;
+    const probe = vi.fn().mockImplementationOnce(() => new Promise<boolean>((r) => { resolveProbe = r; })).mockResolvedValue(false);
+    const reload = vi.fn();
+    handlePreloadError({ preventDefault: vi.fn() }, { reload, probe });
+    expect(getChunkRecoveryStatus()).toBe("probing");
+    await settle();
+    reloadIfChunkFailedOffline({ reload, probe });
+    expect(reload).not.toHaveBeenCalled();
+    resolveProbe(false);
+    await settle();
+    expect(reload).not.toHaveBeenCalled();
+    expect(probe).toHaveBeenCalledTimes(2);
+    expect(getChunkRecoveryStatus()).toBe("deferred");
+  });
+
+  it("a reconnect with nothing pending is a no-op", () => {
+    const reload = vi.fn();
+    reloadIfChunkFailedOffline({ reload, probe: reachable });
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("the deferred reload honours the same 30s loop guard as the immediate one", async () => {
+    const reload = vi.fn();
+    handlePreloadError({ preventDefault: vi.fn() }, { reload, probe: reachable }); // online skew: reloads, stamps the guard
+    await settle();
+    expect(reload).toHaveBeenCalledTimes(1);
+    handlePreloadError({ preventDefault: vi.fn() }, { reload, probe: unreachable }); // then an outage failure
+    await settle();
+    reloadIfChunkFailedOffline({ reload, probe: reachable });
+    await settle(); // inside the window: no second reload
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(getChunkRecoveryStatus()).toBe("blocked"); // the boundary CTA is the door now
+  });
+
+  it("failures that arrive while a probe/deferral is pending join it instead of starting another", async () => {
+    const probe = vi.fn(unreachable);
+    const reload = vi.fn();
+    handlePreloadError({ preventDefault: vi.fn() }, { reload, probe });
+    handlePreloadError({ preventDefault: vi.fn() }, { reload, probe });
+    await settle();
+    handlePreloadError({ preventDefault: vi.fn() }, { reload, probe });
+    await settle();
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(getChunkRecoveryStatus()).toBe("deferred");
+  });
+
+  it("the chunk-aware boundary follows the handler: probing copy, then the outage copy with Reload, never a deploy blame", async () => {
+    let resolveProbe!: (v: boolean) => void;
+    handlePreloadError({ preventDefault: vi.fn() }, { reload: vi.fn(), probe: () => new Promise<boolean>((r) => { resolveProbe = r; }) });
     render(
       <ErrorBoundary>
         <Bomb message="Failed to fetch dynamically imported module: http://localhost:3847/assets/ResearchArtifact-abc123.js" />
       </ErrorBoundary>,
     );
-    expect(screen.getByText("This view couldn't load while the daemon was away")).toBeInTheDocument();
+    expect(screen.getByText("This view's code couldn't be fetched")).toBeInTheDocument();
+    await settle();
+    await act(async () => { resolveProbe(false); await settle(); });
+    expect(await screen.findByText("This view couldn't load while the daemon was away")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
     expect(screen.queryByText("A new version of the UI was deployed")).toBeNull();
+  });
+
+  it("probes the document asset origin, never the selected API daemon or a redirect", async () => {
+    const { setCurrentHost, getCurrentHost } = await import("../../lib/api");
+    const previousHost = getCurrentHost();
+    const fetchSpy = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      setCurrentHost("localhost:19099");
+      expect(await probeAssetOrigin()).toBe(true);
+      expect(fetchSpy).toHaveBeenCalledWith(`${window.location.origin}/api/daemon-info`, expect.objectContaining({
+        cache: "no-store", redirect: "error", credentials: "omit", signal: expect.any(AbortSignal),
+      }));
+    } finally {
+      setCurrentHost(previousHost);
+      vi.unstubAllGlobals();
+    }
   });
 });
 
 describe("E5 review — single-listener contract (the legacy-hook regression class)", () => {
-  beforeEach(() => sessionStorage.clear());
+  beforeEach(() => { sessionStorage.clear(); resetDeferredReloadForTests(); });
 
-  it("a second-in-window vite:preloadError ends up NOT defaultPrevented — the rejection must reach the boundary", async () => {
+  it("no vite:preloadError is ever defaultPrevented — the rejection must reach the boundary", async () => {
     // The old usePreloadErrorReload hook preventDefault'ed EVERY event, which
     // makes vite's helper resolve the failed import as undefined — the lazy
     // factory then throws an undefined-module TypeError that dodges
     // isChunkLoadError and resurrects the "malformed content" field bug.
-    // This pins the contract: after the auto-reload consumed the first event,
-    // nothing in the app swallows the second.
+    // #339 removed the last preventDefault (the reload decision is now
+    // asynchronous, after an origin probe), so this pins the contract for
+    // every event, first or later.
     const { installPreloadErrorRecovery } = await import("../../lib/chunk-error");
     const reloadSpy = vi.fn();
     const origReload = window.location.reload;
     Object.defineProperty(window.location, "reload", { value: reloadSpy, configurable: true });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
     try {
       installPreloadErrorRecovery();
       const first = new Event("vite:preloadError", { cancelable: true });
       window.dispatchEvent(first);
-      expect(first.defaultPrevented).toBe(true); // consumed by the auto-reload
-
+      expect(first.defaultPrevented).toBe(false);
+      await settle();
       const second = new Event("vite:preloadError", { cancelable: true });
       window.dispatchEvent(second);
       expect(second.defaultPrevented).toBe(false); // propagates to the boundary
+      await settle();
     } finally {
+      vi.unstubAllGlobals();
       Object.defineProperty(window.location, "reload", { value: origReload, configurable: true });
     }
   });

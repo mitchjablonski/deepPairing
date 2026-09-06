@@ -168,10 +168,11 @@ function scheduleExitRecoveryTimeout(operation: number): void {
  * module map, a later `import()` of it never touches the network. This is a
  * best-effort narrowing, not a guarantee — the daemon can still go away
  * before these few-hundred-byte fetches land. The guarantee is the offline
- * policy in lib/chunk-error.ts: a chunk that fails while the daemon is
- * unreachable no longer reloads the tab; the historical frame stays under the
- * write lock, exitReplay's catch keeps it there, and one reload is deferred to
- * the next successful connect. Errors here are swallowed for that reason.
+ * policy in lib/chunk-error.ts: a failed chunk never reloads the tab until
+ * the asset origin has answered a fresh probe; the historical frame stays
+ * under the write lock, exitReplay's catch keeps it there, and one reload is
+ * deferred to the next successful connect. Errors here are swallowed for
+ * that reason.
  */
 function warmExitPath(): void {
   void Promise.all([import("./connection"), import("./artifact")]).catch(() => {});

@@ -1226,7 +1226,8 @@ describe("connection store — deferred chunk reload on reconnect (#339)", () =>
     const { handlePreloadError, resetDeferredReloadForTests } = await import("../../lib/chunk-error");
     resetDeferredReloadForTests();
     const reloadSpy = vi.fn();
-    vi.stubGlobal("window", { location: { reload: reloadSpy } });
+    vi.stubGlobal("window", { location: { reload: reloadSpy, origin: "http://localhost:18001" } });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
     try {
       useConnectionStore.getState().connect();
       activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [], requests: [], decisions: [] } });
@@ -1235,12 +1236,16 @@ describe("connection store — deferred chunk reload on reconnect (#339)", () =>
       expect(useConnectionStore.getState().connected).toBe(false);
       expect(useConnectionStore.getState().disconnectedSince).not.toBeNull();
 
-      // A lazy chunk fails while the socket is down: no reload now.
-      handlePreloadError({ preventDefault: vi.fn() }, undefined, () => false);
+      // A lazy chunk fails while the socket is down: the origin probe fails,
+      // so no reload now.
+      handlePreloadError({ preventDefault: vi.fn() }, { probe: () => Promise.resolve(false) });
+      await flush();
       expect(reloadSpy).not.toHaveBeenCalled();
 
       // The origin answers again: the deferred reload fires exactly once.
       activeAdapter.connect();
+      expect(reloadSpy).not.toHaveBeenCalled();
+      await flush();
       expect(reloadSpy).toHaveBeenCalledTimes(1);
       activeAdapter.disconnect();
       activeAdapter.connect();
@@ -1261,6 +1266,24 @@ describe("connection store — deferred chunk reload on reconnect (#339)", () =>
     activeAdapter.connect();
     expect(reloadSpy).not.toHaveBeenCalled();
     expect(useConnectionStore.getState().connected).toBe(true);
+  });
+
+  it("a selected API reconnect still hydrates when the asset-origin probe fails", async () => {
+    const { handlePreloadError, resetDeferredReloadForTests, getChunkRecoveryStatus } = await import("../../lib/chunk-error");
+    const reloadSpy = vi.fn();
+    vi.stubGlobal("window", { location: { reload: reloadSpy, origin: "http://localhost:18001" } });
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("asset origin offline"); }));
+    useConnectionStore.getState().connect();
+    activeAdapter.disconnect();
+    handlePreloadError({ preventDefault: vi.fn() }, { probe: () => Promise.resolve(false) });
+    await flush();
+    activeAdapter.connect();
+    activeAdapter.emit({ type: "connected", state: { sessionId: "selected", artifacts: [], comments: [], requests: [], decisions: [] } });
+    await flush();
+    expect(reloadSpy).not.toHaveBeenCalled();
+    expect(getChunkRecoveryStatus()).toBe("deferred");
+    expect(useConnectionStore.getState()).toMatchObject({ connected: true, hydrated: true, sessionId: "selected" });
+    resetDeferredReloadForTests();
   });
 });
 
