@@ -81,7 +81,7 @@ describe("connection store — handleMessage dispatch", () => {
   it("C5 — hydrated flips true on the first `connected` payload", async () => {
     expect(useConnectionStore.getState().hydrated).toBe(false);
     useConnectionStore.getState().connect();
-    activeAdapter.emit({ type: "connected", projectRoot: "/p", state: { sessionId: "s", artifacts: [], comments: [] } });
+    activeAdapter.emit({ type: "connected", projectRoot: "/p", state: { sessionId: "s", artifacts: [], comments: [], requests: [], decisions: [] } });
     await flush();
     expect(useConnectionStore.getState().hydrated).toBe(true);
   });
@@ -93,6 +93,7 @@ describe("connection store — handleMessage dispatch", () => {
       projectRoot: "/home/mitch/proj",
       state: {
         sessionId: "sess_1",
+        requests: [], decisions: [],
         autonomyLevel: "balanced",
         artifacts: [
           { id: "a1", sessionId: "sess_1", type: "research", version: 1, parentId: null,
@@ -132,7 +133,7 @@ describe("connection store — handleMessage dispatch", () => {
       type: "connected",
       projectRoot: "/home/mitch/proj",
       projectHash: "abcd1234",
-      state: { sessionId: "sess_hh1", autonomyLevel: "balanced", artifacts: [], comments: [] },
+      state: { sessionId: "sess_hh1", autonomyLevel: "balanced", artifacts: [], comments: [], requests: [], decisions: [] },
     });
     await flush();
     expect(activeAdapter.refreshUrlCalls).toBe(1);
@@ -152,6 +153,7 @@ describe("connection store — handleMessage dispatch", () => {
       type: "connected",
       state: {
         sessionId: "sess_fresh",
+        comments: [], requests: [], decisions: [],
         autonomyLevel: "supervised",
         artifacts: [
           { id: "fresh", sessionId: "sess_fresh", type: "research", version: 1, parentId: null,
@@ -280,6 +282,7 @@ describe("connection store — handleMessage dispatch", () => {
       projectRoot: "/p",
       state: {
         sessionId: "sess_r",
+        requests: [],
         artifacts: [
           { id: "art_dec", sessionId: "sess_r", type: "decision", version: 1, parentId: null,
             title: "Which cache?", status: "approved", content: { decisionId: "dec_r", context: "c", options: [] },
@@ -735,7 +738,7 @@ describe("connection store — safe daemon recovery (#339)", () => {
     vi.stubGlobal("fetch", vi.fn((url: string | URL | Request) =>
       String(url).endsWith("/api/state") ? pending.promise : Promise.resolve(new Response("{}"))));
     useConnectionStore.getState().connect();
-    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [] } });
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [], requests: [], decisions: [] } });
     await flush();
     activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
     await flush();
@@ -797,7 +800,7 @@ describe("connection store — safe daemon recovery (#339)", () => {
 
   it("discards a queued dynamic-import callback after a session switch", async () => {
     useConnectionStore.getState().connect();
-    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [] } });
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [], requests: [], decisions: [] } });
     await flush();
 
     activeAdapter.emit({ type: "artifact_created", artifact: artifact("from-A", "A") });
@@ -817,7 +820,7 @@ describe("connection store — safe daemon recovery (#339)", () => {
         ? stateResponses.shift()!
         : Promise.resolve(new Response("{}"))));
     useConnectionStore.getState().connect();
-    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [] } });
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [], requests: [], decisions: [] } });
     await flush();
     activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
     await flush();
@@ -844,13 +847,13 @@ describe("connection store — safe daemon recovery (#339)", () => {
     vi.stubGlobal("fetch", vi.fn((url: string | URL | Request) =>
       String(url).endsWith("/api/state") ? pending.promise : Promise.resolve(new Response("{}"))));
     useConnectionStore.getState().connect();
-    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [] } });
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [], requests: [], decisions: [] } });
     await flush();
     activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
     await flush();
     useConnectionStore.getState().disconnect();
     useConnectionStore.getState().connect();
-    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [artifact("current", "A")], comments: [] } });
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [artifact("current", "A")], comments: [], requests: [], decisions: [] } });
     await flush();
 
     pending.resolve(new Response(JSON.stringify(snapshot("A", [artifact("obsolete", "A")])), {
@@ -865,7 +868,7 @@ describe("connection store — safe daemon recovery (#339)", () => {
     vi.stubGlobal("fetch", vi.fn((url: string | URL | Request) =>
       String(url).endsWith("/api/state") ? pending.promise : Promise.resolve(new Response("{}"))));
     useConnectionStore.getState().connect();
-    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [] } });
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [], requests: [], decisions: [] } });
     await flush();
     activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
     await flush();
@@ -909,7 +912,7 @@ describe("connection store — safe daemon recovery (#339)", () => {
       return Promise.resolve(new Response("{}"));
     }));
     useConnectionStore.getState().connect();
-    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [artifact("a", "A")], comments: [] } });
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [artifact("a", "A")], comments: [], requests: [], decisions: [] } });
     await flush();
     activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
     await flush();
@@ -938,7 +941,7 @@ describe("connection store — safe daemon recovery (#339)", () => {
       ],
     }), { status: 200, headers: { "Content-Type": "application/json" } }) : new Response("{}")));
     useConnectionStore.getState().connect();
-    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [] } });
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [], requests: [], decisions: [] } });
     await flush();
     activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
     await flush();
@@ -963,7 +966,7 @@ describe("connection store — safe daemon recovery (#339)", () => {
     vi.stubGlobal("fetch", vi.fn((url: string | URL | Request) =>
       String(url).endsWith("/api/state") ? pending.promise : Promise.resolve(new Response("{}"))));
     useConnectionStore.getState().connect();
-    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [artifact("valid", "A")], comments: [] } });
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [artifact("valid", "A")], comments: [], requests: [], decisions: [] } });
     await flush();
     activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
     await flush();
@@ -985,7 +988,7 @@ describe("connection store — safe daemon recovery (#339)", () => {
     vi.stubGlobal("fetch", vi.fn((url: string | URL | Request) =>
       String(url).endsWith("/api/state") ? pending.promise : Promise.resolve(new Response("{}"))));
     useConnectionStore.getState().connect();
-    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [] } });
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [], requests: [], decisions: [] } });
     await flush();
     activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
     await flush();
@@ -1003,7 +1006,7 @@ describe("connection store — safe daemon recovery (#339)", () => {
     const { useToastStore } = await import("../toast");
     useToastStore.getState().dismissAll();
     useConnectionStore.getState().connect();
-    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [] } });
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [], requests: [], decisions: [] } });
     await flush();
     activeAdapter.emit({ type: "ledger_write", kind: "approved", concept: "stale" });
     useConnectionStore.getState().switchSession("B");
@@ -1016,7 +1019,7 @@ describe("connection store — safe daemon recovery (#339)", () => {
     vi.stubGlobal("fetch", vi.fn((url: string | URL | Request) =>
       String(url).endsWith("/api/state") ? pending.promise : Promise.resolve(new Response("{}"))));
     useConnectionStore.getState().connect();
-    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [artifact("valid", "A")], comments: [] } });
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [artifact("valid", "A")], comments: [], requests: [], decisions: [] } });
     await flush();
     vi.useFakeTimers();
     activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
@@ -1039,16 +1042,180 @@ describe("connection store — safe daemon recovery (#339)", () => {
     useToastStore.getState().dismissAll();
     vi.stubGlobal("fetch", vi.fn(async (url: string | URL | Request) =>
       String(url).endsWith("/api/state") ? new Response("no", { status: 500 }) : new Response("{}")));
-    useArtifactStore.getState().addArtifact(artifact("valid", "A") as any);
     useConnectionStore.getState().connect();
-    activeAdapter.emit({ type: "connected", state: { sessionId: "A" } });
+    activeAdapter.emit({ type: "connected", state: snapshot("A", [artifact("valid", "A")]) });
     await flush();
-    useArtifactStore.getState().addArtifact(artifact("valid", "A") as any);
     activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
     await flush();
     expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["valid"]);
     expect(useToastStore.getState().toasts.some((t) => t.title.includes("Daemon restarted"))).toBe(true);
     expect(useToastStore.getState().toasts.some((t) => t.title.includes("session state refetched"))).toBe(false);
+  });
+});
+
+describe("connection store — stateful connected snapshot contract (#339 follow-up)", () => {
+  const artifact = (id: string, sessionId: string) => ({
+    id, sessionId, type: "research", version: 1, parentId: null,
+    title: id, status: "draft", content: {}, agentReasoning: null,
+    createdAt: "2026-04-16T10:00:00.000Z", updatedAt: "2026-04-16T10:00:00.000Z",
+  });
+  const snapshot = (sessionId: string, artifacts: any[] = []) => ({
+    sessionId, artifacts, comments: [], requests: [], decisions: [],
+  });
+  const INCOMPLETE_TITLE = "Session snapshot was incomplete";
+
+  /** Bind to A with [base], start an HTTP recovery whose fetch never lands,
+   *  and buffer one live event behind it — the R4b setup from the #373 review. */
+  async function bindWithBufferedRecovery() {
+    const pending = deferredResponse();
+    vi.stubGlobal("fetch", vi.fn((url: string | URL | Request) =>
+      String(url).endsWith("/api/state") ? pending.promise : Promise.resolve(new Response("{}"))));
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "connected", state: snapshot("A", [artifact("base", "A")]) });
+    await flush();
+    activeAdapter.emit({ type: "daemon_resumed", sessionId: "A" });
+    await flush();
+    activeAdapter.emit({ type: "artifact_created", artifact: artifact("buffered", "A") });
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["base"]);
+    return { pending, useToastStore };
+  }
+
+  it("R4b — refuses a partial stateful frame: keeps the valid frame AND applies the superseded buffer", async () => {
+    const { pending, useToastStore } = await bindWithBufferedRecovery();
+
+    // The exact frame Fable executed against #373: state present, sessionId
+    // right, but no comments/requests/decisions. Pre-fix: artifacts=[] and the
+    // buffered event gone.
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [] } });
+    await flush();
+
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["base", "buffered"]);
+    expect(useConnectionStore.getState()).toMatchObject({ sessionId: "A", hydrated: true });
+    expect(useToastStore.getState().toasts.filter((t) => t.title.includes(INCOMPLETE_TITLE))).toHaveLength(1);
+
+    // The superseded recovery's eventual response is obsolete: it must not
+    // land on top of the preserved frame either.
+    pending.resolve(new Response(JSON.stringify(snapshot("A", [artifact("obsolete", "A")])), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    }));
+    await flush();
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["base", "buffered"]);
+  });
+
+  it("refuses a stateful frame whose sessionId is missing, same preservation", async () => {
+    const { useToastStore } = await bindWithBufferedRecovery();
+    activeAdapter.emit({ type: "connected", state: { artifacts: [], comments: [], requests: [], decisions: [] } });
+    await flush();
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["base", "buffered"]);
+    expect(useConnectionStore.getState().sessionId).toBe("A");
+    expect(useToastStore.getState().toasts.some((t) => t.title.includes(INCOMPLETE_TITLE))).toBe(true);
+  });
+
+  it("rolls back a complete-shaped frame with a malformed nested entry and still applies the buffer", async () => {
+    const { useToastStore } = await bindWithBufferedRecovery();
+    activeAdapter.emit({ type: "connected", state: { ...snapshot("A", [artifact("fresh", "A")]), decisions: [null] } });
+    await flush();
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["base", "buffered"]);
+    expect(useToastStore.getState().toasts.some((t) => t.title.includes(INCOMPLETE_TITLE))).toBe(true);
+  });
+
+  it("a COMPLETE stateful frame stays authoritative: it replaces the frame and drops the older buffer", async () => {
+    const { useToastStore } = await bindWithBufferedRecovery();
+    activeAdapter.emit({ type: "connected", state: snapshot("A", [artifact("fresh", "A")]) });
+    await flush();
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["fresh"]);
+    expect(useToastStore.getState().toasts.some((t) => t.title.includes(INCOMPLETE_TITLE))).toBe(false);
+  });
+
+  it("a stateless frame is not a snapshot: no refusal toast, buffer drained, skeleton lifted", async () => {
+    const { useToastStore } = await bindWithBufferedRecovery();
+    useConnectionStore.setState({ hydrated: false });
+    activeAdapter.emit({ type: "connected" });
+    await flush();
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["base", "buffered"]);
+    expect(useConnectionStore.getState().hydrated).toBe(true);
+    expect(useToastStore.getState().toasts.some((t) => t.title.includes(INCOMPLETE_TITLE))).toBe(false);
+  });
+
+  it("a refused FIRST frame keeps the skeleton (hydrated stays false) instead of impersonating an empty session", async () => {
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "connected", projectRoot: "/p", state: { sessionId: "A", artifacts: [] } });
+    await flush();
+    expect(useConnectionStore.getState()).toMatchObject({ sessionId: "A", projectRoot: "/p", hydrated: false });
+    expect(useArtifactStore.getState().artifacts).toEqual([]);
+    expect(useToastStore.getState().toasts.some((t) => t.title.includes(INCOMPLETE_TITLE))).toBe(true);
+
+    // The complete frame that follows (e.g. the HH1 hash-refresh reconnect)
+    // hydrates normally.
+    activeAdapter.emit({ type: "connected", state: snapshot("A", [artifact("real", "A")]) });
+    await flush();
+    expect(useConnectionStore.getState().hydrated).toBe(true);
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["real"]);
+  });
+
+  it("dedupes the refusal toast across a reconnect burst", async () => {
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "connected", state: snapshot("A", [artifact("base", "A")]) });
+    await flush();
+    for (let i = 0; i < 5; i++) {
+      activeAdapter.disconnect();
+      activeAdapter.connect();
+      activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [] } });
+      await flush();
+    }
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["base"]);
+    expect(useToastStore.getState().toasts.filter((t) => t.title.includes(INCOMPLETE_TITLE))).toHaveLength(1);
+  });
+
+  it("a NEW daemon advertising a different session with a refused snapshot resets rather than showing the old session's frame", async () => {
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "connected", daemonStartedAt: "d1", state: snapshot("A", [artifact("old", "A")]) });
+    await flush();
+    activeAdapter.emit({ type: "connected", daemonStartedAt: "d2", state: { sessionId: "B", artifacts: [] } });
+    await flush();
+    // AA4: the new daemon's session is authoritative; a frame from A under
+    // sessionId B would be the mixed-frame lie.
+    expect(useConnectionStore.getState()).toMatchObject({ sessionId: "B", daemonStartedAt: "d2" });
+    expect(useArtifactStore.getState().artifacts).toEqual([]);
+    expect(useToastStore.getState().toasts.some((t) => t.title.includes(INCOMPLETE_TITLE))).toBe(true);
+  });
+
+  it("replay exit: a refused live frame keeps the historical frame locked with no extra toast (replay owns the signal)", async () => {
+    const { useReplayStore, replayRehydrateSettled } = await import("../replay");
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ annotations: [] }), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    })));
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "connected", state: snapshot("A", [artifact("live", "A")]) });
+    await flush();
+    await useReplayStore.getState().enterReplay("historic", {
+      artifacts: [artifact("historic", "historic") as any], comments: [],
+    });
+    useArtifactStore.getState().reset();
+    useArtifactStore.getState().addArtifact(artifact("historic", "historic") as any);
+    useReplayStore.getState().exitReplay();
+    await replayRehydrateSettled();
+
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [] } });
+    await flush();
+    expect(useReplayStore.getState()).toMatchObject({ active: true, exiting: true });
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["historic"]);
+    expect(useToastStore.getState().toasts.some((t) => t.title.includes(INCOMPLETE_TITLE))).toBe(false);
+
+    activeAdapter.emit({ type: "connected", state: snapshot("A", [artifact("live", "A")]) });
+    await flush();
+    expect(useReplayStore.getState()).toMatchObject({ active: false, exiting: false });
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["live"]);
   });
 });
 
@@ -1068,7 +1235,7 @@ describe("connection store — daemon-restart detection (U4)", () => {
       type: "connected",
       projectRoot: "/p",
       daemonStartedAt: "2026-04-25T12:00:00.000Z",
-      state: { sessionId: "s1", artifacts: [], comments: [] },
+      state: { sessionId: "s1", artifacts: [], comments: [], requests: [], decisions: [] },
     });
     await flush();
     expect(useConnectionStore.getState().daemonStartedAt).toBe("2026-04-25T12:00:00.000Z");
@@ -1082,7 +1249,7 @@ describe("connection store — daemon-restart detection (U4)", () => {
       type: "connected",
       projectRoot: "/p",
       daemonStartedAt: "2026-04-25T12:00:00.000Z",
-      state: { sessionId: "s1", artifacts: [], comments: [] },
+      state: { sessionId: "s1", artifacts: [], comments: [], requests: [], decisions: [] },
     });
     await flush();
     expect(useToastStore.getState().toasts).toHaveLength(0);
@@ -1099,6 +1266,7 @@ describe("connection store — daemon-restart detection (U4)", () => {
       daemonStartedAt: "2026-04-25T12:00:00.000Z",
       state: {
         sessionId: "s1",
+        requests: [], decisions: [],
         artifacts: [{ id: "a_old", sessionId: "s1", type: "research", version: 1,
           parentId: null, title: "old", status: "draft", content: {}, agentReasoning: null,
           createdAt: "2026-04-25T12:01:00.000Z", updatedAt: "2026-04-25T12:01:00.000Z" }],
@@ -1116,6 +1284,7 @@ describe("connection store — daemon-restart detection (U4)", () => {
       daemonStartedAt: "2026-04-25T13:00:00.000Z",
       state: {
         sessionId: "s1",
+        requests: [], decisions: [],
         artifacts: [{ id: "a_new", sessionId: "s1", type: "plan", version: 1,
           parentId: null, title: "new", status: "draft", content: { steps: [] }, agentReasoning: null,
           createdAt: "2026-04-25T13:00:30.000Z", updatedAt: "2026-04-25T13:00:30.000Z" }],
@@ -1160,7 +1329,7 @@ describe("connection store — daemon-restart detection (U4)", () => {
     // Daemon A booted the tab (baseline — first connect never toasts).
     activeAdapter.emit({
       type: "connected", projectRoot: "/p", daemonStartedAt: "daemon-A",
-      state: { sessionId: "s1", artifacts: [], comments: [] },
+      state: { sessionId: "s1", artifacts: [], comments: [], requests: [], decisions: [] },
     });
     await flush();
     expect(useToastStore.getState().toasts.filter((t) => t.title === "Daemon restarted")).toHaveLength(0);
@@ -1189,7 +1358,7 @@ describe("connection store — daemon-restart detection (U4)", () => {
     // stops a second toast.
     activeAdapter.emit({
       type: "connected", projectRoot: "/p", daemonStartedAt: "daemon-B",
-      state: { sessionId: "s1", artifacts: [], comments: [] },
+      state: { sessionId: "s1", artifacts: [], comments: [], requests: [], decisions: [] },
     });
     await flush();
     expect(useToastStore.getState().toasts.filter((t) => t.title === "Daemon restarted")).toHaveLength(1);
@@ -1202,12 +1371,12 @@ describe("connection store — daemon-restart detection (U4)", () => {
     const startedAt = "2026-04-25T12:00:00.000Z";
     activeAdapter.emit({
       type: "connected", projectRoot: "/p", daemonStartedAt: startedAt,
-      state: { sessionId: "s1", artifacts: [], comments: [] },
+      state: { sessionId: "s1", artifacts: [], comments: [], requests: [], decisions: [] },
     });
     await flush();
     activeAdapter.emit({
       type: "connected", projectRoot: "/p", daemonStartedAt: startedAt,
-      state: { sessionId: "s1", artifacts: [], comments: [] },
+      state: { sessionId: "s1", artifacts: [], comments: [], requests: [], decisions: [] },
     });
     await flush();
     expect(useToastStore.getState().toasts).toHaveLength(0);
@@ -1219,13 +1388,13 @@ describe("connection store — daemon-restart detection (U4)", () => {
     useConnectionStore.getState().connect();
     activeAdapter.emit({
       type: "connected", projectRoot: "/p", daemonStartedAt: "2026-04-25T12:00:00.000Z",
-      state: { sessionId: "s1", artifacts: [], comments: [] },
+      state: { sessionId: "s1", artifacts: [], comments: [], requests: [], decisions: [] },
     });
     await flush();
     // Reconnect to an older daemon with no daemonStartedAt field.
     activeAdapter.emit({
       type: "connected", projectRoot: "/p",
-      state: { sessionId: "s1", artifacts: [], comments: [] },
+      state: { sessionId: "s1", artifacts: [], comments: [], requests: [], decisions: [] },
     });
     await flush();
     expect(useToastStore.getState().toasts).toHaveLength(0);

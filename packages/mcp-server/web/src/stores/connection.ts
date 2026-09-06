@@ -163,12 +163,46 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     store.selectDefaultOnHydration();
   };
 
+  // #339 — the transport snapshot contract. Every door that REPLACES the
+  // artifact store with a session snapshot — the ordinary stateful `connected`
+  // frame, the replay-exit `connected` frame and the `daemon_resumed` HTTP
+  // refetch — accepts only a COMPLETE snapshot: the bound session's id plus all
+  // four collections that hydrateArtifactState installs (the daemon's
+  // FileStore.getFullState always emits them, and the web bundle ships inside
+  // the daemon that serves it, so a shorter frame is a truncated or malformed
+  // one, never an older daemon). An incomplete frame is refused as a whole:
+  // the current same-session frame stays on screen instead of being replaced
+  // by a partial one. Stateless `connected` frames (no `state`, e.g. the
+  // daemon's global-client greeting) are not snapshots and never reach this
+  // check. The VS Code webview adapter (#345, separately owned) forwards no
+  // state today, so it rides the stateless path; when it does forward one,
+  // that snapshot must satisfy this same predicate to replace the frame.
   const isCompleteRecoverySnapshot = (value: unknown, sessionId: string): value is RecoverySnapshot => {
     if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
     const state = value as Record<string, unknown>;
     return state.sessionId === sessionId &&
       Array.isArray(state.artifacts) && Array.isArray(state.comments) &&
       Array.isArray(state.requests) && Array.isArray(state.decisions);
+  };
+
+  // #339 — a refused snapshot must not be silent (the pre-fix failure mode was
+  // a blank panel with no explanation). One toast per burst: a flapping daemon
+  // re-sends its greeting on every reconnect, and eight identical toasts would
+  // be N1's flood. Same window as FEEDBACK_TOAST_DEBOUNCE_MS.
+  let lastIncompleteSnapshotToastAt = 0;
+  const reportIncompleteSnapshot = (connection: number, session: number) => {
+    const now = Date.now();
+    if (now - lastIncompleteSnapshotToastAt < FEEDBACK_TOAST_DEBOUNCE_MS) return;
+    lastIncompleteSnapshotToastAt = now;
+    void import("./toast").then(({ useToastStore }) => {
+      if (!isCurrent(connection, session)) return;
+      useToastStore.getState().push({
+        kind: "error",
+        title: "Session snapshot was incomplete — keeping the current view",
+        body: "The daemon sent a partial session state, so nothing on screen was replaced. Reload the page if this view looks stale.",
+        ttl: 8000,
+      });
+    });
   };
 
   const cancelPendingRecovery = () => {
@@ -296,6 +330,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           // store. The toast tells the user so they know to retry anything
           // they thought they'd done in the last few seconds.
           const previousStartedAt = get().daemonStartedAt;
+          const previousSessionId = get().sessionId;
           const newStartedAt: string | null = data.daemonStartedAt ?? null;
           const daemonRestarted =
             previousStartedAt != null &&
@@ -341,32 +376,69 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           const replay = useReplayStore.getState();
           if (data.state && (!replay.active || replay.exiting)) {
             if (connectedSnapshot !== snapshotGeneration) return;
-            const validReplayExitState =
-              !replay.exiting ||
-              (typeof connectedSid === "string" &&
-                get().sessionId === connectedSid &&
-                isCompleteRecoverySnapshot(data.state, connectedSid));
-            if (validReplayExitState) {
+            // #339 — one contract for both the ordinary and the replay-exit
+            // hydration: only a complete snapshot for the bound session may
+            // replace the frame (see isCompleteRecoverySnapshot). Pre-fix the
+            // ordinary branch hydrated from ANY `state` object, so a truncated
+            // frame such as `{sessionId, artifacts: []}` emptied the store AND
+            // discarded the recovery buffer it had just superseded.
+            const completeSnapshot =
+              typeof connectedSid === "string" &&
+              get().sessionId === connectedSid &&
+              isCompleteRecoverySnapshot(data.state, connectedSid);
+            let applied = false;
+            if (completeSnapshot) {
               const previousArtifactState = useArtifactStore.getState();
               try {
                 hydrateArtifactState(store, data.state);
+                applied = true;
                 if (replay.exiting) useReplayStore.getState().completeExit();
               } catch {
                 // A malformed nested entry can still throw after the reset.
-                // Restore the historical frame and keep replay's write lock;
-                // its bounded timeout will surface the retry path.
+                // Restore the previous frame (during replay exit: the historical
+                // one, under its write lock — the bounded exit timeout surfaces
+                // the retry path).
                 useArtifactStore.setState(previousArtifactState);
               }
             }
-          } else if (!data.state && supersededRecovery) {
-            // A stateless reconnect supersedes the HTTP recovery request but
-            // not the same-session events buffered behind it. Stateful
-            // connected frames are authoritative and intentionally discard
-            // their older buffer instead.
-            drainRecoveryMessages(supersededRecovery);
+            if (applied) {
+              // A complete snapshot is authoritative: it already contains
+              // everything the superseded recovery had buffered.
+              set({ hydrated: true });
+            } else if (previousSessionId !== get().sessionId) {
+              // A NEW daemon (AA4) advertised a different session and its
+              // snapshot was refused: the old frame belongs to a session this
+              // tab is no longer bound to, so keeping it would be the mixed-
+              // frame lie, and there is no valid state for the new session
+              // yet. The buffer (if any) was for the old session; drain is a
+              // guarded no-op there.
+              store.reset();
+              reportIncompleteSnapshot(messageConnection, messageSession);
+            } else {
+              // Refused (incomplete) or failed (malformed nested entry)
+              // replacement for the SAME session: the valid frame stays, and
+              // the same-session events buffered behind the superseded
+              // recovery are still valid against it — apply them instead of
+              // dropping them with the snapshot that never landed. `hydrated`
+              // is left as it was: a refused first frame keeps the skeleton
+              // rather than impersonating an empty session. Replay exit keeps
+              // its own bounded failure signal, so no toast there.
+              if (supersededRecovery) drainRecoveryMessages(supersededRecovery);
+              if (!replay.exiting) reportIncompleteSnapshot(messageConnection, messageSession);
+            }
+          } else if (!data.state) {
+            // A stateless reconnect (no snapshot on the wire) supersedes the
+            // HTTP recovery request but not the same-session events buffered
+            // behind it. We now KNOW this daemon's answer for the tab (no
+            // session), so the skeleton can lift.
+            if (supersededRecovery) drainRecoveryMessages(supersededRecovery);
+            set({ hydrated: true });
+          } else {
+            // Replay is active and not exiting: the historical frame stays
+            // under its write lock; the live snapshot is deliberately not
+            // installed (exiting replay performs its own hydration).
+            set({ hydrated: true });
           }
-
-          set({ hydrated: true });
 
           if (daemonRestarted) {
             // #182 — a PERSISTENT, dismissible "reload to reconnect" toast, NOT
