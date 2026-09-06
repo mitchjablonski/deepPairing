@@ -20,6 +20,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import type { DecisionOption } from "@deeppairing/shared";
 import { createDaemon, type CreateDaemonDeps, type Daemon } from "../create-daemon.js";
 import { FileStore } from "../../store/file-store.js";
@@ -600,5 +601,56 @@ describe("Q2 — createDaemon's broadcast tap writes the durable block log", () 
     });
     expect(res.status).toBe(400);
     expect(readLog(tmpDir)).toEqual([]);
+  });
+});
+
+const checkpointPath = (root: string, sid: string, relFile: string) => path.join(
+  root, ".deeppairing", "sessions", sid, "code-checkpoints",
+  crypto.createHash("sha256").update(path.resolve(root, relFile)).digest("hex") + ".json",
+);
+const internal = (h: Harness, p: string, body?: unknown) => h.daemon.app.request(p, {
+  method: "POST",
+  headers: { Authorization: "Bearer test-token", "Content-Type": "application/json" },
+  body: body === undefined ? undefined : JSON.stringify(body),
+});
+
+/**
+ * #338 (F4) — the two daemon `onError` handlers replaced Hono's default (which
+ * printed the stack) with a bare generic 500. Unexpected errors must now reach
+ * the daemon log with route + stack while the wire body stays generic.
+ */
+describe("#338 (F4) — unexpected route errors are logged, responses stay generic", () => {
+  it("logs an unexpected internal-route error and keeps the 500 body generic", async () => {
+    const h = makeDaemon();
+    const store = h.daemon.createSession("boom");
+    // A REAL unexpected error, no mock: mutating a disposed store throws.
+    store.dispose();
+    const res = await internal(h, "/api/internal/sessions/boom/artifacts",
+      { id: "x", type: "research", title: "t", content: {} });
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "Internal server error" });
+    const line = h.logs.find((l) => l.includes("[route-error]"));
+    expect(line).toBeDefined();
+    expect(line).toContain("POST /api/internal/sessions/boom/artifacts");
+    expect(line).toMatch(/disposed/);
+  });
+
+  it("logs an unexpected active-session-route error and keeps the 500 body generic", async () => {
+    const h = makeDaemon();
+    // Real fake: a genuine FileStore whose state read throws a plain Error.
+    class ExplodingStore extends FileStore {
+      override getFullState(): never { throw new Error("state read exploded: secret-detail-7"); }
+    }
+    h.daemon.sessions.set("boom", h.fx.track(new ExplodingStore(h.tmpDir, "boom")));
+    const res = await h.daemon.app.request("/api/live-session/boom", {
+      headers: { "X-Project-Hash": projectHashOf(h.tmpDir) },
+    });
+    expect(res.status).toBe(500);
+    const body = await res.text();
+    expect(JSON.parse(body)).toEqual({ error: "Internal server error" });
+    expect(body).not.toContain("secret-detail-7");
+    const line = h.logs.find((l) => l.includes("[route-error]"));
+    expect(line).toContain("GET /api/live-session/boom");
+    expect(line).toContain("secret-detail-7");
   });
 });

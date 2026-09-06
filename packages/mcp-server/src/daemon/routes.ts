@@ -164,6 +164,17 @@ type SessionMap = Map<string, FileStore>;
 type BroadcastFn = (sessionId: string, event: any) => void;
 type LogFn = (msg: string) => void;
 
+/** #338 (F4) — the generic-500 arm of the two daemon `onError` handlers. The
+ *  conflict mapping above it replaced Hono's default handler, which printed
+ *  the stack; without this the next daemon-side bug would vanish into a bare
+ *  `{error:"Internal server error"}`. The log line carries the route and the
+ *  stack; the RESPONSE stays generic so no internal detail crosses the wire. */
+function unexpectedRouteError(log: LogFn, c: Context, error: unknown): Response {
+  const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  log(`[route-error] ${c.req.method} ${c.req.path} → 500: ${detail}`);
+  return c.json({ error: "Internal server error" }, 500);
+}
+
 /**
  * Y3' — sentinel returned by `requireStore()` when the session isn't
  * registered. The caller pattern is `const r = requireStore(c, sid); if
@@ -211,13 +222,16 @@ export function createActiveSessionRoutes(
   /** D8 (M8) — registered-wrapper set for the honest `live` flag. Optional so
    *  route-logic fixtures don't thread it (undefined ⇒ every session reports live). */
   activeSessions?: Set<string>,
+  /** #338 (F4) — daemon log sink for unexpected route errors. Optional so
+   *  route-logic fixtures don't thread it (undefined ⇒ silent). */
+  logFn?: LogFn,
 ): Hono {
   const app = new Hono();
   app.onError((error, c) => {
     if (isSessionReviewConflictError(error)) {
       return c.json({ error: "session_review_conflict", code: ERROR_CODES.session_review_conflict, message: error.message }, 409);
     }
-    return c.json({ error: "Internal server error" }, 500);
+    return unexpectedRouteError(logFn ?? (() => {}), c, error);
   });
   const gate = projectHashGate(daemonHash);
   app.use("/api/active-sessions", gate);
@@ -311,7 +325,7 @@ export function createDaemonRoutes(
     if (isSessionReviewConflictError(error)) {
       return c.json({ error: "session_review_conflict", code: ERROR_CODES.session_review_conflict, message: error.message }, 409);
     }
-    return c.json({ error: "Internal server error" }, 500);
+    return unexpectedRouteError(log, c, error);
   });
 
   // II1 — auth gate. Runs before any handler. When the route construction
