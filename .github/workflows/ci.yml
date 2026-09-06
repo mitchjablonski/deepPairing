@@ -99,7 +99,11 @@ jobs:
         run: pnpm --filter @deeppairing/mcp-server exec playwright install --with-deps chromium
 
       - name: E2E (companion UI bootstrap + demo)
-        run: pnpm --filter @deeppairing/mcp-server test:e2e
+        # Temporary acceptance proof only; close this PR without merging.
+        # The existing upload allowlist below still EXCLUDES all raw traces.
+        env:
+          DP_RETRY_DIAGNOSTIC_OUTPUT: ${{ github.workspace }}/packages/mcp-server/test-results
+        run: pnpm --filter @deeppairing/mcp-server exec playwright test --config=e2e/fixtures/retry-diagnostics.config.ts
 
       - name: Upload Playwright failure diagnostics
         # A failed attempt can pass on retry while the job finishes green.
