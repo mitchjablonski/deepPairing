@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { constants as fsConstants, type Stats } from "node:fs";
 import type { TestInfo } from "@playwright/test";
 
 /** Persist only an already-redacted, bounded tail outside the raw trace archive. */
@@ -10,6 +11,53 @@ export async function attachDiagnosticFile(testInfo: TestInfo, name: string, bod
   } catch (error) {
     // Diagnostics are secondary evidence, never a replacement for the failure.
     console.warn(`[e2e] could not persist ${name}: ${redactDiagnostic(String(error))}`);
+  }
+}
+
+export type FileTail =
+  | { kind: "tail"; size: number; skipped: number; bytes: Buffer }
+  | { kind: "missing" }
+  | { kind: "not-regular"; type: string }
+  | { kind: "unreadable"; code: string };
+
+function fileType(stat: Stats): string {
+  if (stat.isSymbolicLink()) return "symlink";
+  if (stat.isFIFO()) return "fifo";
+  if (stat.isDirectory()) return "directory";
+  if (stat.isSocket()) return "socket";
+  if (stat.isCharacterDevice() || stat.isBlockDevice()) return "device";
+  return "unknown";
+}
+
+/**
+ * Read at most `maxBytes` from the END of an intended regular file. Never the
+ * whole file, never through a symlink, never a blocking open on a FIFO: the
+ * path is lstat'ed, opened O_NOFOLLOW|O_NONBLOCK, and fstat'ed again before a
+ * single positioned read. Every failure is reported, not thrown, so a
+ * diagnostic read can never replace the primary failure.
+ */
+export async function readRegularFileTail(file: string, maxBytes: number): Promise<FileTail> {
+  let handle: fs.FileHandle | undefined;
+  try {
+    const linkStat = await fs.lstat(file);
+    if (!linkStat.isFile()) return { kind: "not-regular", type: fileType(linkStat) };
+    // O_NOFOLLOW/O_NONBLOCK are absent on Windows; the lstat/fstat pair still holds.
+    const flags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
+    handle = await fs.open(file, flags);
+    const stat = await handle.stat();
+    if (!stat.isFile()) return { kind: "not-regular", type: fileType(stat) };
+    const length = Math.min(stat.size, maxBytes);
+    const skipped = stat.size - length;
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, skipped);
+    return { kind: "tail", size: stat.size, skipped, bytes: buffer.subarray(0, bytesRead) };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? "unknown";
+    if (code === "ENOENT") return { kind: "missing" };
+    if (code === "ELOOP") return { kind: "not-regular", type: "symlink" };
+    return { kind: "unreadable", code };
+  } finally {
+    await handle?.close().catch(() => undefined);
   }
 }
 

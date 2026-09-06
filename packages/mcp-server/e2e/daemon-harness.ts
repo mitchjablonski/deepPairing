@@ -1,12 +1,14 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import net from "node:net";
+import path from "node:path";
+import fs from "node:fs/promises";
 import { StringDecoder } from "node:string_decoder";
 import type { TestInfo } from "@playwright/test";
-import { attachDiagnosticFile, BoundedDiagnosticTail, redactDiagnostic } from "./diagnostics.js";
+import { attachDiagnosticFile, BoundedDiagnosticTail, readRegularFileTail, redactDiagnostic } from "./diagnostics.js";
 
 const MAX_DAEMON_DIAGNOSTIC_BYTES = 64 * 1024;
 interface DiagnosticStreamState { decoder: StringDecoder; pending: string; source: string; discarding: boolean }
-interface DiagnosticState { tail: BoundedDiagnosticTail; streams: DiagnosticStreamState[] }
+interface DiagnosticState { tail: BoundedDiagnosticTail; streams: DiagnosticStreamState[]; logFile?: string }
 const daemonOutput = new WeakMap<ChildProcess, DiagnosticState>();
 const diagnosticProcesses = new Set<ChildProcess>();
 
@@ -14,9 +16,24 @@ function retainLine(state: DiagnosticState, source: string, line: string): void 
   state.tail.record(`[${source}] ${line}`);
 }
 
-/** Capture a bounded tail of a daemon spawned with piped stdout/stderr. */
-export function captureDaemonOutput(proc: ChildProcess): void {
-  const state: DiagnosticState = { tail: new BoundedDiagnosticTail(MAX_DAEMON_DIAGNOSTIC_BYTES), streams: [] };
+/** The only on-disk source the harness reads: the daemon's own log under its project root. */
+export function daemonLogPath(projectRoot: string): string {
+  return path.join(projectRoot, ".deeppairing", "daemon.log");
+}
+
+/**
+ * Capture a bounded tail of a daemon spawned with piped stdout/stderr. The real
+ * daemon writes almost nothing to those pipes — its durable channel is
+ * `<projectRoot>/.deeppairing/daemon.log` — so when the spawn names a project
+ * root, that fixed file is also tailed at attachment time (before teardown
+ * deletes the mkdtemp root). No other path is ever read.
+ */
+export function captureDaemonOutput(proc: ChildProcess, opts: { projectRoot?: string } = {}): void {
+  const state: DiagnosticState = {
+    tail: new BoundedDiagnosticTail(MAX_DAEMON_DIAGNOSTIC_BYTES),
+    streams: [],
+    logFile: opts.projectRoot ? daemonLogPath(opts.projectRoot) : undefined,
+  };
   daemonOutput.set(proc, state);
   const watch = (source: string, stream: NodeJS.ReadableStream | null | undefined) => {
     if (!stream) return;
@@ -61,7 +78,8 @@ export function spawnDiagnosticProcess(
   options: Omit<SpawnOptions, "stdio"> = {},
 ): ChildProcess {
   const proc = spawn(command, args, { ...options, stdio: ["ignore", "pipe", "pipe"] });
-  captureDaemonOutput(proc);
+  const projectRoot = options.env?.DEEPPAIRING_PROJECT_ROOT;
+  captureDaemonOutput(proc, { projectRoot: projectRoot || undefined });
   diagnosticProcesses.add(proc);
   return proc;
 }
@@ -73,10 +91,61 @@ export function diagnosticPendingBytesForTests(proc: ChildProcess): number {
   ) ?? 0;
 }
 
+/** Attachment names for the Nth implicated daemon; both match CI's `*diagnostics*.txt` glob. */
+function diagnosticNames(index: number): { name: string; logName: string } {
+  const suffix = index === 0 ? "" : `-${index + 1}`;
+  return { name: `daemon-diagnostics${suffix}`, logName: `daemon-log-diagnostics${suffix}` };
+}
+
+const NEWLINE = 0x0a;
+
+/**
+ * Bounded, redacted tail of the daemon's on-disk log as attachment lines.
+ * Missing, rotated, unreadable and non-regular files become a one-line note
+ * instead of an error; a partial first line (mid-file start) and an
+ * unterminated last line (append in flight) are withheld, never emitted raw.
+ */
+export async function daemonLogTail(logFile: string, maxBytes = MAX_DAEMON_DIAGNOSTIC_BYTES): Promise<Buffer> {
+  const notes: string[] = [];
+  const rotated = await fs.lstat(`${logFile}.1`).then(() => true, () => false);
+  if (rotated) notes.push("[daemon.log] rotated: daemon.log.1 present (not read)");
+  const result = await readRegularFileTail(logFile, maxBytes);
+  const content = new BoundedDiagnosticTail(maxBytes);
+  switch (result.kind) {
+    case "missing":
+      notes.push("[daemon.log] missing");
+      break;
+    case "not-regular":
+      notes.push(`[daemon.log] skipped: not a regular file (${result.type})`);
+      break;
+    case "unreadable":
+      notes.push(`[daemon.log] unreadable (${result.code})`);
+      break;
+    case "tail": {
+      let bytes = result.bytes;
+      if (result.skipped > 0) {
+        notes.push(`[daemon.log] tail: last ${bytes.length} of ${result.size} bytes`);
+        const firstNewline = bytes.indexOf(NEWLINE);
+        bytes = firstNewline < 0 ? bytes.subarray(0, 0) : bytes.subarray(firstNewline + 1);
+      } else if (result.size === 0) {
+        notes.push("[daemon.log] empty");
+      }
+      const lastNewline = bytes.lastIndexOf(NEWLINE);
+      const withheld = bytes.length > 0 && lastNewline !== bytes.length - 1;
+      bytes = bytes.subarray(0, lastNewline + 1);
+      if (bytes.length) {
+        for (const line of bytes.toString("utf8").split(/\r?\n/).slice(0, -1)) content.record(line);
+      }
+      if (withheld) content.record("[daemon.log] [incomplete line withheld]");
+    }
+  }
+  return Buffer.concat([Buffer.from(notes.map((note) => `${note}\n`).join("")), content.body()]);
+}
+
 export async function attachDaemonOutput(
   proc: ChildProcess | undefined,
   testInfo: TestInfo,
-  opts: { force?: boolean; name?: string } = {},
+  opts: { force?: boolean; name?: string; logName?: string } = {},
 ): Promise<void> {
   if (!proc || (!opts.force && testInfo.status === testInfo.expectedStatus)) return;
   const state = daemonOutput.get(proc);
@@ -100,6 +169,16 @@ export async function attachDaemonOutput(
   if (snapshot.lines.length) {
     await attachDiagnosticFile(testInfo, opts.name ?? "daemon-diagnostics", snapshot.body());
   }
+  if (state.logFile) {
+    let logTail: Buffer;
+    try {
+      logTail = await daemonLogTail(state.logFile);
+    } catch (error) {
+      // The read reports failures as values; this only guards the decode path.
+      logTail = Buffer.from(`[daemon.log] unreadable (${redactDiagnostic(String(error))})\n`);
+    }
+    await attachDiagnosticFile(testInfo, opts.logName ?? "daemon-log-diagnostics", logTail);
+  }
 }
 
 export async function attachActiveDaemonOutputs(
@@ -109,10 +188,7 @@ export async function attachActiveDaemonOutputs(
   if (!opts.force && testInfo.status === testInfo.expectedStatus) return;
   let index = 0;
   for (const proc of diagnosticProcesses) {
-    await attachDaemonOutput(proc, testInfo, {
-      force: true,
-      name: index++ === 0 ? "daemon-diagnostics" : `daemon-diagnostics-${index}`,
-    });
+    await attachDaemonOutput(proc, testInfo, { force: true, ...diagnosticNames(index++) });
   }
 }
 
@@ -125,10 +201,7 @@ export async function attachSetupFailureOutputs(
   for (const proc of processes) {
     if (!proc) continue;
     try {
-      await attachDaemonOutput(proc, testInfo, {
-        force: true,
-        name: index++ === 0 ? "daemon-diagnostics" : `daemon-diagnostics-${index}`,
-      });
+      await attachDaemonOutput(proc, testInfo, { force: true, ...diagnosticNames(index++) });
     } catch (attachmentError) {
       console.warn(`[e2e] could not attach daemon diagnostics: ${redactDiagnostic(String(attachmentError))}`);
     }

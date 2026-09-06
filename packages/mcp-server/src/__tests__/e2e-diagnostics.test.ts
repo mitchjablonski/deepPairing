@@ -10,11 +10,18 @@ import type { TestInfo } from "@playwright/test";
 import {
   attachDaemonOutput,
   captureDaemonOutput,
+  daemonLogPath,
+  daemonLogTail,
   diagnosticPendingBytesForTests,
   spawnDiagnosticProcess,
   withSetupDiagnostics,
 } from "../../e2e/daemon-harness.js";
-import { attachDiagnosticFile, BoundedDiagnosticTail, redactDiagnostic } from "../../e2e/diagnostics.js";
+import {
+  attachDiagnosticFile,
+  BoundedDiagnosticTail,
+  readRegularFileTail,
+  redactDiagnostic,
+} from "../../e2e/diagnostics.js";
 
 function fakeProcess() {
   return { stdout: new PassThrough(), stderr: new PassThrough() } as unknown as ChildProcess;
@@ -25,6 +32,14 @@ const diagnosticDirs: string[] = [];
 afterEach(() => {
   for (const dir of diagnosticDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
+
+/** A throwaway fixture project root whose `.deeppairing/` exists but holds no log yet. */
+function fixtureProjectRoot(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "dp-diagnostic-root-"));
+  diagnosticDirs.push(root);
+  fs.mkdirSync(path.join(root, ".deeppairing"));
+  return root;
+}
 
 function diagnosticInfo(attach: (name: string, value: { path: string }) => Promise<void>): TestInfo {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-diagnostic-file-"));
@@ -204,6 +219,136 @@ describe("E2E daemon diagnostics", () => {
     } finally {
       fs.rmSync(outputDir, { recursive: true, force: true });
     }
+  });
+
+  describe("real daemon.log tail", () => {
+    const notWindows = process.platform !== "win32";
+
+    it("notes a missing log, and a rotated predecessor, without throwing", async () => {
+      const root = fixtureProjectRoot();
+      expect((await daemonLogTail(daemonLogPath(root))).toString()).toBe("[daemon.log] missing\n");
+      fs.writeFileSync(`${daemonLogPath(root)}.1`, "Authorization: Bearer rotated-secret\n");
+      const body = (await daemonLogTail(daemonLogPath(root))).toString();
+      expect(body).toContain("[daemon.log] rotated: daemon.log.1 present (not read)");
+      expect(body).toContain("[daemon.log] missing");
+      expect(body).not.toContain("rotated-secret");
+    });
+
+    it("redacts credentials in a regular log and withholds an unterminated last line", async () => {
+      const root = fixtureProjectRoot();
+      fs.writeFileSync(daemonLogPath(root), [
+        "[daemon] Daemon starting (PID 1)",
+        "[daemon] Authorization: Bearer file-secret",
+        '{"Cookie":"sid=unterminated-secret',
+      ].join("\n"));
+      const body = (await daemonLogTail(daemonLogPath(root))).toString();
+      expect(body).toContain("[daemon] Daemon starting (PID 1)");
+      expect(body).toContain("Authorization: Bearer [REDACTED]");
+      expect(body).toContain("[daemon.log] [incomplete line withheld]");
+      expect(body).not.toContain("file-secret");
+      expect(body).not.toContain("unterminated-secret");
+    });
+
+    it("reads only the bounded tail of an oversized log and drops the partial first line", async () => {
+      const root = fixtureProjectRoot();
+      const early = `x-api-key: early-secret ${"e".repeat(200)}\n`.repeat(400);
+      const late = Array.from({ length: 200 }, (_, i) => `[daemon] late line ${i}`).join("\n") + "\n";
+      fs.writeFileSync(daemonLogPath(root), early + late);
+      const size = fs.statSync(daemonLogPath(root)).size;
+
+      const result = await readRegularFileTail(daemonLogPath(root), 64 * 1024);
+      expect(result.kind).toBe("tail");
+      if (result.kind !== "tail") throw new Error("expected a tail");
+      expect(result.bytes.length).toBe(64 * 1024);
+      expect(result.skipped).toBe(size - 64 * 1024);
+
+      const body = (await daemonLogTail(daemonLogPath(root))).toString();
+      expect(body).toContain(`[daemon.log] tail: last ${64 * 1024} of ${size} bytes`);
+      expect(body).toContain("[daemon] late line 0\n");
+      expect(body).toContain("[daemon] late line 199\n");
+      expect(body).not.toContain("early-secret");
+      expect(Buffer.byteLength(body)).toBeLessThanOrEqual(64 * 1024 + 256);
+      // Every content line is whole: the first line in the window is either complete or dropped.
+      expect(body.split("\n").filter((line) => line.startsWith("e"))).toEqual([]);
+    });
+
+    it.skipIf(!notWindows)("refuses to follow a symlink named daemon.log", async () => {
+      const root = fixtureProjectRoot();
+      const target = path.join(root, "elsewhere.log");
+      fs.writeFileSync(target, "password=\"symlink-target-secret\"\n");
+      fs.symlinkSync(target, daemonLogPath(root));
+      const body = (await daemonLogTail(daemonLogPath(root))).toString();
+      expect(body).toBe("[daemon.log] skipped: not a regular file (symlink)\n");
+    });
+
+    it.skipIf(!notWindows)("skips a FIFO named daemon.log without blocking", async () => {
+      const root = fixtureProjectRoot();
+      const made = spawnSync("mkfifo", [daemonLogPath(root)]);
+      if (made.status !== 0) return; // mkfifo unavailable on this host
+      const started = Date.now();
+      const body = (await daemonLogTail(daemonLogPath(root))).toString();
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(body).toBe("[daemon.log] skipped: not a regular file (fifo)\n");
+    });
+
+    it("skips a directory named daemon.log", async () => {
+      const root = fixtureProjectRoot();
+      fs.mkdirSync(daemonLogPath(root));
+      expect((await daemonLogTail(daemonLogPath(root))).toString())
+        .toBe("[daemon.log] skipped: not a regular file (directory)\n");
+    });
+
+    it.skipIf(!notWindows || process.getuid?.() === 0)("notes an unreadable log instead of failing", async () => {
+      const root = fixtureProjectRoot();
+      fs.writeFileSync(daemonLogPath(root), "apiKey=\"unreadable-secret\"\n", { mode: 0o000 });
+      const body = (await daemonLogTail(daemonLogPath(root))).toString();
+      expect(body).toBe("[daemon.log] unreadable (EACCES)\n");
+      expect(body).not.toContain("unreadable-secret");
+    });
+
+    it("attaches the log tail beside the retained stdout/stderr tail", async () => {
+      const root = fixtureProjectRoot();
+      fs.writeFileSync(daemonLogPath(root), "[daemon] Daemon running on http://localhost:1\n");
+      const proc = fakeProcess();
+      captureDaemonOutput(proc, { projectRoot: root });
+      proc.stderr!.emit("data", Buffer.from("stderr still retained\n"));
+      const bodies: Record<string, string> = {};
+      const info = diagnosticInfo(async (name, value) => { bodies[name] = fs.readFileSync(value.path, "utf8"); });
+
+      await attachDaemonOutput(proc, info);
+      expect(Object.keys(bodies)).toEqual(["daemon-diagnostics", "daemon-log-diagnostics"]);
+      expect(bodies["daemon-diagnostics"]).toBe("[stderr] stderr still retained\n");
+      expect(bodies["daemon-log-diagnostics"]).toBe("[daemon] Daemon running on http://localhost:1/\n");
+    });
+
+    it("derives the log source only from the spawned daemon's own project root", async () => {
+      const root = fixtureProjectRoot();
+      fs.writeFileSync(daemonLogPath(root), "[daemon] from the spawn env\n");
+      const proc = spawnDiagnosticProcess(process.execPath, ["-e", "process.exit(0)"], {
+        env: { ...process.env, DEEPPAIRING_PROJECT_ROOT: root },
+      });
+      await once(proc, "close");
+      const names: string[] = [];
+      const info = diagnosticInfo(async (name) => { names.push(name); });
+      await attachDaemonOutput(proc, info);
+      expect(names).toEqual(["daemon-log-diagnostics"]);
+
+      const plain = spawnDiagnosticProcess(process.execPath, ["-e", "process.exit(0)"]);
+      await once(plain, "close");
+      names.length = 0;
+      await attachDaemonOutput(plain, info);
+      expect(names).toEqual([]);
+    });
+
+    it("preserves the primary setup error when the log is missing and attaching fails", async () => {
+      const root = fixtureProjectRoot();
+      const proc = fakeProcess();
+      captureDaemonOutput(proc, { projectRoot: root });
+      const primary = new Error("primary startup failure");
+      const info = diagnosticInfo(async () => { throw new Error("attachment backend failed"); });
+      await expect(withSetupDiagnostics(proc, info, async () => { throw primary; })).rejects.toBe(primary);
+      expect(fs.readFileSync(info.outputPath("daemon-log-diagnostics.txt"), "utf8")).toBe("[daemon.log] missing\n");
+    });
   });
 
   it("uploads only failure evidence even when a retry makes CI green", () => {
