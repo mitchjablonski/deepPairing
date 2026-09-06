@@ -36479,6 +36479,20 @@ function knownPrIdentityCount(artifacts) {
   }
   return identities.size;
 }
+function rawHeadSha(artifact) {
+  const rawSource = artifact.content && typeof artifact.content === "object" ? artifact.content.source : void 0;
+  return rawSource && typeof rawSource === "object" ? rawSource.headSha : void 0;
+}
+function hasShaProvenance(artifact) {
+  return rawHeadSha(artifact) !== void 0;
+}
+function unboundShaProvenanceRefusal(artifact, event, ref) {
+  const raw = rawHeadSha(artifact);
+  const url2 = coerceChangesetContent(artifact.content).source?.url;
+  const shaNote = typeof raw === "string" && FULL_GIT_SHA2.test(raw) ? `records reviewed head SHA ${raw.toLowerCase().slice(0, 12)}` : `records a malformed reviewed head SHA`;
+  const urlNote = !parsePrNumber(ref) ? `the requested PR reference (${ref}) is neither a PR number nor a full pull-request URL, so nothing can be bound to it` : url2 ? `its source.url (${url2}) is not a full canonical pull-request URL the gate can bind to ${ref}` : `it has no source.url, so the gate cannot bind it to ${ref}`;
+  return `Refusing to post a ${event}: "${artifact.title}" (${artifact.id}) ${shaNote}, but ${urlNote}. Posting without commit_id would let GitHub pin these inline comments to the PR's current head, which may not be the code your pair reviewed. Re-present that exact diff with source.url as https://github.com/<owner>/<repo>/pull/<number> (no /commits, /files or www. variants) and the exact 40-hex headSha from \`gh pr view --json headRefOid\`, get your pair's verdict again, then post. The gate never guesses which PR an unbindable source describes and never borrows another chunk's commit for it.`;
+}
 function reviewedHeadFor(artifacts, event) {
   const standing = artifacts.filter((a) => !CLOSED_CHANGESET_STATUSES.has(a.status));
   const valid = [];
@@ -36486,8 +36500,7 @@ function reviewedHeadFor(artifacts, event) {
   const malformed = [];
   let closedWithShaProvenance;
   for (const artifact of artifacts) {
-    const rawSource = artifact.content && typeof artifact.content === "object" ? artifact.content.source : void 0;
-    const rawSha = rawSource && typeof rawSource === "object" ? rawSource.headSha : void 0;
+    const rawSha = rawHeadSha(artifact);
     if (CLOSED_CHANGESET_STATUSES.has(artifact.status)) {
       if (rawSha !== void 0) closedWithShaProvenance ??= artifact;
       continue;
@@ -36579,6 +36592,7 @@ function authorizeReviewPost(state, opts) {
   const approved = findingsArtifacts.filter((a) => a.status === "approved");
   const decidedNo = findingsArtifacts.filter((a) => DECIDED_EXCLUDED_STATUSES.has(a.status));
   let targetExternals = externalChangesets(state.artifacts);
+  let closedShaLineage = [];
   if (opts.pr) {
     const fullScope = scopeExternalChangesets(targetExternals, opts.pr);
     const standing = targetExternals.filter((a) => !CLOSED_CHANGESET_STATUSES.has(a.status));
@@ -36612,6 +36626,12 @@ function authorizeReviewPost(state, opts) {
         reason: `Refusing to post an APPROVE: "${artifact.title}" (${artifact.id}) has no full, valid PR source URL, so the gate cannot prove whether it is another part of ${opts.pr} or whether the approved findings belong to it. Present every relevant chunk with its full source.url and get your pair's verdict again.`
       };
     }
+    const shaAwareUnknown = fullScope.unknown.filter(hasShaProvenance);
+    const standingUnbound = shaAwareUnknown.find((a) => !CLOSED_CHANGESET_STATUSES.has(a.status));
+    if (standingUnbound) {
+      return { ok: false, reason: unboundShaProvenanceRefusal(standingUnbound, event, opts.pr) };
+    }
+    closedShaLineage = shaAwareUnknown;
     targetExternals = fullScope.matching;
   }
   if (event === "APPROVE") {
@@ -36634,7 +36654,7 @@ function authorizeReviewPost(state, opts) {
       };
     }
   }
-  const reviewedHead = reviewedHeadFor(targetExternals, event);
+  const reviewedHead = reviewedHeadFor([...targetExternals, ...closedShaLineage], event);
   if (!reviewedHead.ok) return { ok: false, reason: reviewedHead.reason };
   const payload = buildGitHubReviewPayload({ ...state, artifacts: approved, decisions: [] }, { event });
   if (reviewedHead.headSha) payload.commit_id = reviewedHead.headSha;
