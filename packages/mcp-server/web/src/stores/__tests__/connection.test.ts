@@ -1219,6 +1219,51 @@ describe("connection store — stateful connected snapshot contract (#339 follow
   });
 });
 
+describe("connection store — deferred chunk reload on reconnect (#339)", () => {
+  // This project runs without a DOM; the reachability probe is injected and
+  // `window` is stubbed to just the reload sink the store's hook calls.
+  it("a chunk that failed during the outage reloads the tab on the next successful connect, once", async () => {
+    const { handlePreloadError, resetDeferredReloadForTests } = await import("../../lib/chunk-error");
+    resetDeferredReloadForTests();
+    const reloadSpy = vi.fn();
+    vi.stubGlobal("window", { location: { reload: reloadSpy } });
+    try {
+      useConnectionStore.getState().connect();
+      activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [], requests: [], decisions: [] } });
+      await flush();
+      activeAdapter.disconnect();
+      expect(useConnectionStore.getState().connected).toBe(false);
+      expect(useConnectionStore.getState().disconnectedSince).not.toBeNull();
+
+      // A lazy chunk fails while the socket is down: no reload now.
+      handlePreloadError({ preventDefault: vi.fn() }, undefined, () => false);
+      expect(reloadSpy).not.toHaveBeenCalled();
+
+      // The origin answers again: the deferred reload fires exactly once.
+      activeAdapter.connect();
+      expect(reloadSpy).toHaveBeenCalledTimes(1);
+      activeAdapter.disconnect();
+      activeAdapter.connect();
+      expect(reloadSpy).toHaveBeenCalledTimes(1);
+      expect(useConnectionStore.getState().connected).toBe(true);
+    } finally {
+      resetDeferredReloadForTests();
+    }
+  });
+
+  it("a plain reconnect with nothing deferred does not reload", async () => {
+    const { resetDeferredReloadForTests } = await import("../../lib/chunk-error");
+    resetDeferredReloadForTests();
+    const reloadSpy = vi.fn();
+    vi.stubGlobal("window", { location: { reload: reloadSpy } });
+    useConnectionStore.getState().connect();
+    activeAdapter.disconnect();
+    activeAdapter.connect();
+    expect(reloadSpy).not.toHaveBeenCalled();
+    expect(useConnectionStore.getState().connected).toBe(true);
+  });
+});
+
 describe("connection store — daemon-restart detection (U4)", () => {
   // The architecture review's #2 finding: when the daemon shuts down (auto-
   // shutdown after 60s idle, crash, manual kill) and a NEW daemon takes

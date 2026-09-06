@@ -163,11 +163,15 @@ function scheduleExitRecoveryTimeout(operation: number): void {
  * (e2e/recovery.e2e.ts); invisible to the FakeAdapter tests, whose imports
  * resolve from memory.
  *
- * Entering replay is necessarily an online moment (the session was just
- * fetched), so resolve the exit path's imports HERE. Once a module is in the
- * tab's module map, a later `import()` of it never touches the network. Errors
- * are swallowed: a failure here surfaces on the real exit, where it is
- * handled.
+ * Entering replay is an online moment (the session was just fetched), so
+ * start resolving the exit path's imports HERE: once a module is in the tab's
+ * module map, a later `import()` of it never touches the network. This is a
+ * best-effort narrowing, not a guarantee — the daemon can still go away
+ * before these few-hundred-byte fetches land. The guarantee is the offline
+ * policy in lib/chunk-error.ts: a chunk that fails while the daemon is
+ * unreachable no longer reloads the tab; the historical frame stays under the
+ * write lock, exitReplay's catch keeps it there, and one reload is deferred to
+ * the next successful connect. Errors here are swallowed for that reason.
  */
 function warmExitPath(): void {
   void Promise.all([import("./connection"), import("./artifact")]).catch(() => {});

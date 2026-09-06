@@ -1,4 +1,4 @@
-import { isChunkLoadError } from "../lib/chunk-error";
+import { isChunkLoadError, isReloadDeferredForOutage } from "../lib/chunk-error";
 import { Component, type ReactNode, type ErrorInfo } from "react";
 
 interface Props {
@@ -30,11 +30,20 @@ export class ErrorBoundary extends Component<Props, State> {
       // users and agents chasing the wrong suspect). Every boundary in the
       // app gets this branch for free.
       if (isChunkLoadError(this.state.error)) {
+        // #339 — the same failure during a daemon OUTAGE is not skew: the code
+        // could not be fetched because nothing was listening. Say so, and say
+        // what recovers it (the deferred reload on reconnect), instead of
+        // blaming a deploy. Reload stays available as the manual door.
+        const outage = isReloadDeferredForOutage();
         return (
-          <div className="p-4 m-4 bg-surface-secondary border border-white/[0.08] rounded-lg text-center">
-            <h3 className="text-sm font-semibold text-text-primary">A new version of the UI was deployed</h3>
+          <div className="p-4 m-4 bg-surface-secondary border border-white/[0.08] rounded-lg text-center" data-testid="chunk-boundary" data-outage={outage ? "true" : "false"}>
+            <h3 className="text-sm font-semibold text-text-primary">
+              {outage ? "This view couldn't load while the daemon was away" : "A new version of the UI was deployed"}
+            </h3>
             <p className="text-xs text-text-secondary mt-1">
-              This tab is holding the old build and can't load the new code. Reload to pick it up — your session and drafts are preserved.
+              {outage
+                ? "The rest of the session is intact. This tab reloads on its own as soon as the daemon reconnects; reload now if it is already back."
+                : "This tab is holding the old build and can't load the new code. Reload to pick it up — your session and drafts are preserved."}
             </p>
             <button
               onClick={() => window.location.reload()}

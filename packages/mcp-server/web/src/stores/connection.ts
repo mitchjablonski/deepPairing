@@ -4,6 +4,7 @@ import { apiGet, sessionHeaders, apiBase } from "../lib/api";
 import { useHookStatusStore } from "./hookStatus";
 import { isDraftAwaitingReview } from "../lib/pending";
 import { pushDaemonRestartToast } from "../lib/daemon-restart";
+import { reloadIfChunkFailedOffline } from "../lib/chunk-error";
 import { noAgentLive } from "../lib/liveness";
 import type { Artifact, Comment, Request } from "@deeppairing/shared";
 import { useReplayStore } from "./replay";
@@ -976,6 +977,12 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       set({ adapter });
 
       adapter.onConnect(() => {
+        // #339 — a chunk that failed to load during the outage poisoned this
+        // document's module map; now that the origin answers again, the E5
+        // auto-reload that was deferred (lib/chunk-error.ts) can complete.
+        // The reload lands on the same URL and re-binds through the normal
+        // bootstrap. No-op unless a failure was deferred.
+        if (reloadIfChunkFailedOffline()) return;
         thisConnection = ++connectionGeneration;
         set({ connected: true, disconnectedSince: null });
         // Request notification permission on first connect

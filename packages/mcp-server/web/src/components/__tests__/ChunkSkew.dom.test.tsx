@@ -6,7 +6,10 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { ErrorBoundary } from "../ErrorBoundary";
-import { isChunkLoadError, handlePreloadError } from "../../lib/chunk-error";
+import {
+  isChunkLoadError, handlePreloadError, reloadIfChunkFailedOffline,
+  isReloadDeferredForOutage, resetDeferredReloadForTests, daemonReachable,
+} from "../../lib/chunk-error";
 
 function Bomb({ message }: { message: string }): never {
   throw new Error(message);
@@ -75,6 +78,83 @@ describe("E5 — handlePreloadError (auto-reload, loop-guarded)", () => {
     // chunk-aware boundary, which shows the manual reload CTA.
     expect(reload).toHaveBeenCalledTimes(1);
     expect(e2.preventDefault).not.toHaveBeenCalled();
+  });
+});
+
+describe("#339 — preload failure while the daemon is unreachable (outage, not skew)", () => {
+  beforeEach(() => { sessionStorage.clear(); resetDeferredReloadForTests(); });
+
+  it("does NOT reload toward an unreachable origin: propagates, keeps the view, arms one deferred reload", () => {
+    const reload = vi.fn();
+    const e = { preventDefault: vi.fn() };
+    handlePreloadError(e, reload, () => false);
+    expect(reload).not.toHaveBeenCalled();
+    expect(e.preventDefault).not.toHaveBeenCalled(); // the boundary / caller catch handles it
+    expect(isReloadDeferredForOutage()).toBe(true);
+  });
+
+  it("the deferred reload fires ONCE on the next successful connect, then disarms", () => {
+    const reload = vi.fn();
+    handlePreloadError({ preventDefault: vi.fn() }, reload, () => false);
+    expect(reloadIfChunkFailedOffline(reload)).toBe(true);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(isReloadDeferredForOutage()).toBe(false);
+    expect(reloadIfChunkFailedOffline(reload)).toBe(false);
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("a reconnect with nothing deferred is a no-op", () => {
+    const reload = vi.fn();
+    expect(reloadIfChunkFailedOffline(reload)).toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("the deferred reload honours the same 30s loop guard as the immediate one", () => {
+    const reload = vi.fn();
+    handlePreloadError({ preventDefault: vi.fn() }, reload, () => true); // online skew: reloads, stamps the guard
+    expect(reload).toHaveBeenCalledTimes(1);
+    handlePreloadError({ preventDefault: vi.fn() }, reload, () => false); // then an outage failure
+    expect(reloadIfChunkFailedOffline(reload)).toBe(false); // inside the window: no second reload
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(isReloadDeferredForOutage()).toBe(false); // consumed, not re-armed: the boundary CTA is the door now
+  });
+
+  it("the online skew path is unchanged: first failure reloads immediately and prevents vite's default", () => {
+    const reload = vi.fn();
+    const e = { preventDefault: vi.fn() };
+    handlePreloadError(e, reload, () => true);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(e.preventDefault).toHaveBeenCalled();
+    expect(isReloadDeferredForOutage()).toBe(false);
+  });
+
+  it("daemonReachable: only a tab that HAD a socket and lost it counts as unreachable", () => {
+    const w = window as unknown as { __dpConnectionStore?: { getState: () => unknown } };
+    const saved = w.__dpConnectionStore;
+    try {
+      delete w.__dpConnectionStore;
+      expect(daemonReachable()).toBe(true); // unknown store → plain skew policy
+      w.__dpConnectionStore = { getState: () => ({ connected: false, disconnectedSince: null }) };
+      expect(daemonReachable()).toBe(true); // never connected (bootstrap) → plain skew policy
+      w.__dpConnectionStore = { getState: () => ({ connected: false, disconnectedSince: Date.now() }) };
+      expect(daemonReachable()).toBe(false); // outage
+      w.__dpConnectionStore = { getState: () => ({ connected: true, disconnectedSince: null }) };
+      expect(daemonReachable()).toBe(true);
+    } finally {
+      if (saved) w.__dpConnectionStore = saved; else delete w.__dpConnectionStore;
+    }
+  });
+
+  it("the chunk-aware boundary names the outage and the deferred reload instead of blaming a deploy", () => {
+    handlePreloadError({ preventDefault: vi.fn() }, vi.fn(), () => false);
+    render(
+      <ErrorBoundary>
+        <Bomb message="Failed to fetch dynamically imported module: http://localhost:3847/assets/ResearchArtifact-abc123.js" />
+      </ErrorBoundary>,
+    );
+    expect(screen.getByText("This view couldn't load while the daemon was away")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
+    expect(screen.queryByText("A new version of the UI was deployed")).toBeNull();
   });
 });
 
