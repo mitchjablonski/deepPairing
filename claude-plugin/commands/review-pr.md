@@ -85,8 +85,13 @@ straight from `gh pr diff`. Also pass:
 ```
 source: { kind: "github-pr", number: <N>, url: <url>, headRef: <head>, baseRef: <base>, author: <login>, headSha: <headRefOid> }
 ```
-Keep the full `source.url`: posting checks the approved changeset against the
-destination repository and PR. A number alone cannot identify the repository.
+Keep the full `source.url` in its canonical form —
+`https://github.com/<owner>/<repo>/pull/<N>` — not a `/commits/<sha>`,
+`/files/r123`, `www.` or `http://` variant: posting checks the approved
+changeset against the destination repository and PR, and a chunk whose URL
+cannot be bound to that PR is refused outright once it names a `headSha`
+(never posted without its commit). A number alone cannot identify the
+repository.
 Keep the exact 40-hex `headSha` on every changeset chunk: it binds the verdict
 to the immutable commit whose diff I saw. If the PR moves, fetch the new
 `headRefOid`, present that commit's new diff, and get a fresh verdict — never
