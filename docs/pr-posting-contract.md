@@ -36,8 +36,9 @@ exactly-once delivery**. See the [GitHub review API](https://docs.github.com/en/
 
 A `sending` operation released through the live-lease door records an
 `unsentRelease` marker naming its prior state, so `list` distinguishes "never
-left `reserved`" from "reached the pre-POST transition and still never sent".
-See [Live-lease unsent release](#live-lease-unsent-release).
+left `reserved`" from "had written its sending marker when its live coordinator
+attested it never reached POST". A `sending` state on its own never carries that
+meaning. See [Live-lease unsent release](#live-lease-unsent-release).
 
 A process dying in `sending` leaves an unresolved operation, never permission
 to retry. A timeout, dropped response, malformed success response, or failed
@@ -82,7 +83,10 @@ known-not-sent failure, including one raised after the durable `sending`
 transition; see [Live-lease unsent release](#live-lease-unsent-release) for the
 narrow conditions under which that classification is permitted. Nothing at or
 after POST invocation may be classified this way.
-No fake/in-memory fallback is allowed when durable posting methods are absent.
+No fake/in-memory fallback is allowed when durable posting methods are absent;
+the coordinator verifies the store implements every durable method and refuses
+before reserving, because its best-effort failure paths would otherwise swallow
+an absent method and silently degrade a door.
 
 The final check is an authorization snapshot, not a distributed transaction:
 a human verdict or remote head can change after it. #343 binds the POST to the
@@ -126,22 +130,30 @@ The second reauthorization runs *after* the durable `sending` transition, becaus
 that transition is itself an awaited daemon round trip during which a human can
 withdraw approval. When it fails — a revoked verdict, an `ELOCKED` authorization
 read, an unreadable journal, or an ambiguous `markSending` response — the
-coordinator has provably not invoked POST. Leaving that attempt unresolved
+coordinator has not reached its POST call, a fact established by its own control
+flow rather than by anything the journal can check. Leaving that attempt unresolved
 would demand an operator acknowledgement that accepts duplicate risk for a review
 that certainly does not exist. The coordinator therefore releases its own exact
 attempt to `failed`.
 
 This is a **trust boundary, not remote proof of non-delivery.** The journal
-cannot observe GitHub. It verifies two things and trusts a third:
+cannot observe GitHub. It verifies one thing and trusts another:
 
-1. The caller presents the exact unguessable fencing token issued to that
-   operation. The token is held only in the live coordinator's memory, is
+1. *Verified:* the caller presents the exact unguessable fencing token issued to
+   that operation. The token is held only in the live coordinator's memory, is
    persisted only as a digest, and is never logged — so a restarted process, a
-   competing process, and the operator CLI cannot produce it.
-2. The operation is still `reserved` or `sending` in this journal.
-3. *Trusted, not verified:* that the caller has not invoked POST. This is an
+   competing process, and the operator CLI cannot produce it. Holding it means
+   being the live coordinator of that attempt.
+2. *Trusted, not verified:* that the caller has not invoked POST. This is an
    in-process code-path invariant of the coordinator, whose only call site is
    the failure path of the block that precedes the single POST call.
+
+Be precise about what the journal's state check does **not** do. `sending` is
+written *before* the POST and persists across it — that is the whole point of
+the marker — so `reserved`/`sending` is **not** evidence that POST was never
+invoked. The check only rejects operations that already reached a resolved or
+uncertain outcome, which is what fences replay and any post-send downgrade.
+Non-invocation rests entirely on premise 2.
 
 Consequently the following must **not** reach this door, and do not:
 

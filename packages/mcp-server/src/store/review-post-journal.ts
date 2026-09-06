@@ -48,8 +48,10 @@ const operationSchema = z.object({
     operationDigest: digestSchema,
   }).strict().optional(),
   /** Recorded when the live coordinator released its own never-sent attempt.
-   * `priorState: "sending"` is the interesting case: it says this operation
-   * reached the durable pre-POST transition and still never left the machine. */
+   * `priorState: "sending"` is the interesting case: the operation had written
+   * its durable sending marker, and the coordinator holding its lease attests
+   * it never reached its POST call. That attestation is the coordinator's, not
+   * the journal's — `sending` alone never implies non-delivery. */
   unsentRelease: z.object({
     releasedAt: timestampSchema,
     priorState: z.enum(["reserved", "sending"]),
@@ -393,18 +395,23 @@ export class ReviewPostJournal {
    * unsent, and its authority is the lease, not this class.
    *
    * TRUST BOUNDARY. The journal cannot observe GitHub, so it cannot prove
-   * non-delivery. It proves two narrower things and trusts a third:
-   *   1. The caller presents the exact fencing token this operation was issued
-   *      (`transition`). The token is generated per reservation, is never
-   *      persisted in plaintext (only its digest) and never written to a log, so
-   *      a restarted process, a competing process and the operator CLI cannot
-   *      produce it. Holding it means being the live coordinator of THIS attempt.
-   *   2. The operation is still pre-POST in this journal (`reserved`/`sending`).
-   *   3. TRUSTED, not verified: that the caller has not invoked `send`. This is
-   *      an in-process code-path invariant of `executeDurableReviewPost`, whose
-   *      only call site is the catch of the pre-send block; every path at or
-   *      after `send` — including a timeout, a malformed response and a lost
-   *      response — goes to `markUnknown` instead.
+   * non-delivery. It VERIFIES one thing and TRUSTS another:
+   *   1. VERIFIED — the caller presents the exact fencing token this operation
+   *      was issued (`transition`). The token is generated per reservation, is
+   *      never persisted in plaintext (only its digest) and never written to a
+   *      log, so a restarted process, a competing process and the operator CLI
+   *      cannot produce it. Holding it means being the live coordinator of THIS
+   *      attempt.
+   *   2. TRUSTED, not verified — that the caller has not invoked `send`. Note
+   *      what the state check below does NOT establish: `sending` is written
+   *      BEFORE the POST and persists across it, so `sending` is not evidence
+   *      of non-delivery. The check only rejects operations that already
+   *      reached a resolved or uncertain outcome, which fences replay and any
+   *      post-send downgrade. Non-invocation is attested solely by the live
+   *      coordinator's control flow in `executeDurableReviewPost`, whose only
+   *      call site here is the failure path of the block preceding its single
+   *      `send` call; every path at or after `send` — a timeout, a malformed
+   *      response, a lost response — goes to `markUnknown` instead.
    *
    * Consequently this is NOT an operator control and is not reachable from the
    * review-posts CLI: `cancelReserved` stays `reserved`-only. Elapsed time, a
@@ -414,7 +421,8 @@ export class ReviewPostJournal {
   releaseUnsent(lease: ReviewPostLease): void {
     this.transition(lease, op => {
       if (op.state !== "reserved" && op.state !== "sending") {
-        throw new ReviewPostJournalError("stale", "Only a still-unsent reservation can be released; this operation may already have been sent");
+        // Not a pre-POST proof: see the trust boundary above.
+        throw new ReviewPostJournalError("stale", "Only an unresolved reservation can be released as unsent; this operation already reached a resolved or uncertain outcome");
       }
       op.unsentRelease = { releasedAt: new Date().toISOString(), priorState: op.state };
       op.state = "failed";
