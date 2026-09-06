@@ -27761,6 +27761,7 @@ var FileStore = class _FileStore {
   }
   // --- Artifacts ---
   createArtifact(params) {
+    this.assertAuthorizationReadable();
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const featureId = normalizeFeatureId(params.feature)?.slug;
     const secretWarnings = scanContentForSecrets(params.content);
@@ -27842,6 +27843,7 @@ var FileStore = class _FileStore {
     }
   }
   renameArtifact(artifactId, title) {
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (art) {
       art.title = title;
@@ -27855,6 +27857,7 @@ var FileStore = class _FileStore {
    *  mechanism update_plan_progress / changeset review use. No-op on a missing
    *  artifact. */
   setRetractReason(artifactId, reason) {
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (art) {
       art.content.retractReason = reason;
@@ -27863,6 +27866,7 @@ var FileStore = class _FileStore {
     }
   }
   updateArtifactStatus(artifactId, status, reason = "unspecified") {
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (art) {
       if (isCrossTerminalVerdictFlip(art.status, status, reason)) {
@@ -27908,6 +27912,7 @@ var FileStore = class _FileStore {
   }
   /** D10 (H2) — patch plan step statuses in place. See store-interface.ts. */
   updatePlanProgress(artifactId, updates) {
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (!art || art.type !== "plan") return null;
     const content = art.content;
@@ -27938,6 +27943,7 @@ var FileStore = class _FileStore {
    *  updatePlanProgress uses. Reversible: passing `null` clears the file's
    *  state (e.g. un-checking "File looks right"). */
   setChangesetFileReview(artifactId, filePath, state, reason) {
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (!art || art.type !== "changeset") return null;
     const content = art.content;
@@ -28310,6 +28316,7 @@ var FileStore = class _FileStore {
   // C6c review — the interface narrowed options to DecisionOption[] but this
   // inline param type still said any[], leaving the WRITE site unenforced.
   recordDecisionRequest(params) {
+    this.assertAuthorizationReadable();
     this.decisions.set(params.decisionId, {
       ...params,
       createdAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -28317,6 +28324,7 @@ var FileStore = class _FileStore {
     this.scheduleFlush();
   }
   resolveDecision(decisionId, optionId, reasoning, prediction) {
+    this.assertAuthorizationReadable();
     const dec = this.decisions.get(decisionId);
     if (!dec) return;
     const opts = dec.options;
@@ -28402,6 +28410,7 @@ var FileStore = class _FileStore {
   }
   // --- Plan Reviews ---
   recordPlanReview(artifactId) {
+    this.assertAuthorizationReadable();
     this.planReviews.set(artifactId, {
       artifactId,
       createdAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -28409,6 +28418,7 @@ var FileStore = class _FileStore {
     this.scheduleFlush();
   }
   resolvePlanReview(artifactId, verdict, feedback) {
+    this.assertAuthorizationReadable();
     const review = this.planReviews.get(artifactId);
     if (review) {
       review.verdict = verdict;
@@ -33579,13 +33589,19 @@ async function readJsonObject(c, opts) {
   }
   return { ok: true, body };
 }
-function createActiveSessionRoutes(sessions, sessionMeta, daemonHash, activeSessions) {
+function unexpectedRouteError(log2, c, error51) {
+  const detail = error51 instanceof Error ? error51.stack ?? error51.message : String(error51);
+  log2(`[route-error] ${c.req.method} ${c.req.path} \u2192 500: ${detail}`);
+  return c.json({ error: "Internal server error" }, 500);
+}
+function createActiveSessionRoutes(sessions, sessionMeta, daemonHash, activeSessions, logFn) {
   const app = new Hono2();
   app.onError((error51, c) => {
     if (isSessionReviewConflictError(error51)) {
       return c.json({ error: "session_review_conflict", code: ERROR_CODES.session_review_conflict, message: error51.message }, 409);
     }
-    return c.json({ error: "Internal server error" }, 500);
+    return unexpectedRouteError(logFn ?? (() => {
+    }), c, error51);
   });
   const gate = projectHashGate(daemonHash);
   app.use("/api/active-sessions", gate);
@@ -33627,7 +33643,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     if (isSessionReviewConflictError(error51)) {
       return c.json({ error: "session_review_conflict", code: ERROR_CODES.session_review_conflict, message: error51.message }, 409);
     }
-    return c.json({ error: "Internal server error" }, 500);
+    return unexpectedRouteError(log2, c, error51);
   });
   if (authToken) {
     app.use("/api/internal/*", async (c, next) => {
@@ -34948,7 +34964,7 @@ function createDaemon(deps) {
     checkAutoShutdown();
     return c.json({ sessionId, startedAt: (/* @__PURE__ */ new Date()).toISOString() });
   });
-  app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions));
+  app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions, log2));
   const __thisDir3 = path21.dirname(fileURLToPath4(import.meta.url));
   const monorepoWebDist = path21.join(__thisDir3, "../../dist/web");
   const webDistCandidates = [monorepoWebDist, path21.join(__thisDir3, "web")];
