@@ -1174,3 +1174,319 @@ describe("Q6 B1 — MUTATION PROOF: the gate does not depend on the prose", () =
     expect(calls()).toHaveLength(0);
   });
 });
+
+// --- #343 follow-up: SHA-aware unknown provenance never posts unbound ---------
+
+/**
+ * #369 MEDIUM-C, confirmed on the #375 build (issue #343, comment 5555877870):
+ * `targetExternals = fullScope.matching` dropped every `unknown` chunk BEFORE
+ * reviewedHeadFor ran, so a chunk whose stored source.url is a cosmetic or
+ * sub-page variant of the right PR link (`/pull/100/commits/<sha>`, `www.`,
+ * `http://`, `/files/r123`) — or no URL at all — lost its recorded SHA and a
+ * COMMENT / REQUEST_CHANGES went out with no commit_id. GitHub then pins those
+ * inline comments to the PR's CURRENT head, the exact line-misplacement #343
+ * exists to stop. The gate now refuses rather than guesses the identity or
+ * borrows a sibling's commit; genuinely SHA-less legacy chunks keep their
+ * narrow COMMENT compatibility.
+ */
+describe("#343 — SHA-aware unknown provenance is refused, never silently unbound", () => {
+  const PR_100 = "https://github.com/acme/widgets/pull/100";
+  const PR_200 = "https://github.com/acme/widgets/pull/200";
+  const UNBINDABLE_URLS: Array<[string, string]> = [
+    ["/commits/<sha> sub-page", `https://github.com/acme/widgets/pull/100/commits/${REVIEWED_SHA}`],
+    ["www. host", "https://www.github.com/acme/widgets/pull/100"],
+    ["http:// scheme", "http://github.com/acme/widgets/pull/100"],
+    ["/files/r123 sub-page", "https://github.com/acme/widgets/pull/100/files/r123"],
+    ["garbage", "not a pull request url"],
+  ];
+  const CANONICAL_URLS: Array<[string, string]> = [
+    ["plain", PR_100],
+    ["trailing slash", `${PR_100}/`],
+    ["/files", `${PR_100}/files`],
+    ["/files#diff", `${PR_100}/files#diff-abc`],
+    ["?query", `${PR_100}?diff=split`],
+  ];
+
+  describe.each(["COMMENT", "REQUEST_CHANGES"] as const)("%s", (event) => {
+    it.each(UNBINDABLE_URLS)("refuses a standing chunk with a valid SHA behind a %s URL and names the exit", (_label, url) => {
+      const auth = authorizeReviewPost(session([
+        findings("art_100", "approved"),
+        changesetFor("cs_odd", "approved", 100, REVIEWED_SHA, url),
+      ]), { event, pr: PR_100 });
+      expect(auth.ok).toBe(false);
+      if (auth.ok) throw new Error("unreachable");
+      expect(auth.reason).toContain(`Refusing to post a ${event}`);
+      expect(auth.reason).toContain("cs_odd");
+      expect(auth.reason).toContain(REVIEWED_SHA.slice(0, 12));
+      expect(auth.reason).toContain(url);
+      expect(auth.reason).toContain("commit_id");
+      expect(auth.reason).toContain("https://github.com/<owner>/<repo>/pull/<number>");
+      expect(auth.reason).toContain("headRefOid");
+      expect(auth.reason).toContain("never borrows another chunk's commit");
+    });
+
+    it("refuses a standing chunk with a valid SHA and NO source.url (number-only)", () => {
+      const auth = authorizeReviewPost(session([
+        findings("art_100", "approved"),
+        changesetFor("cs_nourl", "approved", 100, REVIEWED_SHA, null),
+      ]), { event, pr: PR_100 });
+      expect(auth.ok).toBe(false);
+      if (auth.ok) throw new Error("unreachable");
+      expect(auth.reason).toContain("cs_nourl");
+      expect(auth.reason).toContain("has no source.url");
+      expect(auth.reason).toContain(REVIEWED_SHA.slice(0, 12));
+    });
+
+    it.each(["not-a-sha", "0123456789abcdef", 42] as const)(
+      "refuses a standing unbindable chunk whose headSha is malformed (%j) instead of posting unbound",
+      (badSha) => {
+        const auth = authorizeReviewPost(session([
+          findings("art_100", "approved"),
+          changesetFor("cs_bad", "approved", 100, badSha, "https://www.github.com/acme/widgets/pull/100"),
+        ]), { event, pr: PR_100 });
+        expect(auth.ok).toBe(false);
+        if (auth.ok) throw new Error("unreachable");
+        expect(auth.reason).toContain("cs_bad");
+        expect(auth.reason).toContain("malformed reviewed head SHA");
+        expect(auth.reason).toContain("headRefOid");
+      },
+    );
+
+    it.each(CANONICAL_URLS)("control: a canonical %s URL still binds the reviewed commit", (_label, url) => {
+      const auth = authorizeReviewPost(session([
+        findings("art_100", "approved"),
+        changesetFor("cs_100", "approved", 100, REVIEWED_SHA, url),
+      ]), { event, pr: PR_100 });
+      expect(auth.ok).toBe(true);
+      if (!auth.ok) throw new Error("unreachable");
+      expect(auth.payload.commit_id).toBe(REVIEWED_SHA);
+      expect(auth.reviewedHeadSha).toBe(REVIEWED_SHA);
+    });
+
+    it("control: a genuinely SHA-less legacy chunk keeps its unbound COMMENT compatibility", () => {
+      const auth = authorizeReviewPost(session([
+        findings("art_100", "approved"),
+        changesetFor("cs_legacy", "approved", 100, null, "https://www.github.com/acme/widgets/pull/100"),
+      ]), { event, pr: PR_100 });
+      expect(auth.ok).toBe(true);
+      if (!auth.ok) throw new Error("unreachable");
+      expect(auth.payload.commit_id).toBeUndefined();
+      expect(auth.reviewedHeadSha).toBeUndefined();
+    });
+
+    it("never borrows a canonical sibling's SHA for an unbindable chunk — even when the SHAs agree", () => {
+      for (const sha of [REVIEWED_SHA, OTHER_SHA]) {
+        const auth = authorizeReviewPost(session([
+          findings("art_100", "approved"),
+          changesetFor("cs_100", "approved", 100, REVIEWED_SHA),
+          changesetFor("cs_odd", "approved", 100, sha, `${PR_100}/commits/${sha}`),
+        ]), { event, pr: PR_100 });
+        expect(auth.ok).toBe(false);
+        if (auth.ok) throw new Error("unreachable");
+        expect(auth.reason).toContain("cs_odd");
+        expect(auth.reason).not.toContain("cs_100");
+      }
+    });
+
+    it("a standing unbindable chunk with a SHA cannot ride beside a SHA-less legacy sibling either", () => {
+      const auth = authorizeReviewPost(session([
+        findings("art_100", "approved"),
+        changesetFor("cs_legacy", "approved", 100, null, null),
+        changesetFor("cs_odd", "approved", 100, REVIEWED_SHA, "http://github.com/acme/widgets/pull/100"),
+      ]), { event, pr: PR_100 });
+      expect(auth.ok).toBe(false);
+      if (auth.ok) throw new Error("unreachable");
+      expect(auth.reason).toContain("cs_odd");
+    });
+
+    it("an unparseable target ref can never bind a SHA-aware chunk, so it refuses instead of posting unbound", () => {
+      const auth = authorizeReviewPost(session([
+        findings("art_100", "approved"),
+        changesetFor("cs_100", "approved", 100, REVIEWED_SHA),
+      ]), { event, pr: "the auth one" });
+      expect(auth.ok).toBe(false);
+      if (auth.ok) throw new Error("unreachable");
+      expect(auth.reason).toContain("cs_100");
+      expect(auth.reason).toContain("the auth one");
+    });
+  });
+
+  describe("APPROVE keeps its stricter identity refusal", () => {
+    it.each(UNBINDABLE_URLS)("still refuses APPROVE behind a %s URL on the no-full-URL rule", (_label, url) => {
+      const auth = authorizeReviewPost(session([
+        changesetFor("cs_odd", "approved", 100, REVIEWED_SHA, url),
+      ]), { event: "APPROVE", pr: PR_100 });
+      expect(auth.ok).toBe(false);
+      if (auth.ok) throw new Error("unreachable");
+      expect(auth.reason).toContain("Refusing to post an APPROVE");
+      expect(auth.reason).toContain("no full, valid PR source URL");
+    });
+
+    it("control: canonical APPROVE stays bound", () => {
+      const auth = authorizeReviewPost(session([
+        changesetFor("cs_100", "approved", 100, REVIEWED_SHA),
+      ]), { event: "APPROVE", pr: PR_100 });
+      expect(auth.ok).toBe(true);
+      if (!auth.ok) throw new Error("unreachable");
+      expect(auth.payload.commit_id).toBe(REVIEWED_SHA);
+    });
+  });
+
+  describe("closed lineage of an unbindable SHA-aware chunk", () => {
+    const ODD_URL = `${PR_100}/commits/${REVIEWED_SHA}`;
+
+    it.each(["retracted", "superseded", "obsolete"])(
+      "the prescribed recovery works: %s the odd chunk, re-present canonically, post bound",
+      (closed) => {
+        const auth = authorizeReviewPost(session([
+          findings("art_100", "approved"),
+          changesetFor("cs_odd", closed, 100, REVIEWED_SHA, ODD_URL),
+          changesetFor("cs_100", "approved", 100, REVIEWED_SHA),
+        ]), { event: "COMMENT", pr: PR_100 });
+        expect(auth.ok).toBe(true);
+        if (!auth.ok) throw new Error("unreachable");
+        expect(auth.payload.commit_id).toBe(REVIEWED_SHA);
+      },
+    );
+
+    it("a closed odd chunk never lends its SHA: the standing canonical chunk's commit is the bound one", () => {
+      const auth = authorizeReviewPost(session([
+        findings("art_100", "approved"),
+        changesetFor("cs_odd", "superseded", 100, OTHER_SHA, ODD_URL),
+        changesetFor("cs_100", "approved", 100, REVIEWED_SHA),
+      ]), { event: "COMMENT", pr: PR_100 });
+      expect(auth.ok).toBe(true);
+      if (!auth.ok) throw new Error("unreachable");
+      expect(auth.payload.commit_id).toBe(REVIEWED_SHA);
+    });
+
+    it("a closed odd chunk that recorded a SHA makes a SHA-less standing chunk a refresh-required revision", () => {
+      const auth = authorizeReviewPost(session([
+        findings("art_100", "approved"),
+        changesetFor("cs_odd", "superseded", 100, REVIEWED_SHA, ODD_URL),
+        changesetFor("cs_100", "approved", 100, null),
+      ]), { event: "COMMENT", pr: PR_100 });
+      expect(auth.ok).toBe(false);
+      if (auth.ok) throw new Error("unreachable");
+      expect(auth.reason).toContain("refresh-required revision");
+      expect(auth.reason).toContain("cs_odd");
+    });
+
+    it("a closed odd chunk with no standing chunk at all refuses COMMENT rather than posting unbound", () => {
+      const auth = authorizeReviewPost(session([
+        findings("art_100", "approved"),
+        changesetFor("cs_odd", "retracted", 100, REVIEWED_SHA, ODD_URL),
+      ]), { event: "COMMENT", pr: PR_100 });
+      expect(auth.ok).toBe(false);
+      if (auth.ok) throw new Error("unreachable");
+      expect(auth.reason).toContain("refresh-required revision");
+    });
+
+    it("a closed SHA-less legacy chunk stays inert beside a bound standing chunk", () => {
+      const auth = authorizeReviewPost(session([
+        findings("art_100", "approved"),
+        changesetFor("cs_legacy", "obsolete", 100, null, null),
+        changesetFor("cs_100", "approved", 100, REVIEWED_SHA),
+      ]), { event: "COMMENT", pr: PR_100 });
+      expect(auth.ok).toBe(true);
+      if (!auth.ok) throw new Error("unreachable");
+      expect(auth.payload.commit_id).toBe(REVIEWED_SHA);
+    });
+
+    it("a bare APPROVE on the canonical chunk is unchanged by closed odd lineage", () => {
+      const auth = authorizeReviewPost(session([
+        changesetFor("cs_odd", "superseded", 100, REVIEWED_SHA, ODD_URL),
+        changesetFor("cs_100", "approved", 100, REVIEWED_SHA),
+      ]), { event: "APPROVE", pr: PR_100 });
+      expect(auth.ok).toBe(true);
+      if (!auth.ok) throw new Error("unreachable");
+      expect(auth.payload.commit_id).toBe(REVIEWED_SHA);
+    });
+  });
+
+  describe("the earlier identity refusals still fire first and are not weakened", () => {
+    it("an unrelated PR chunk with no matching chunk still refuses on target identity", () => {
+      const auth = authorizeReviewPost(session([
+        findings("art_100", "approved"),
+        changesetFor("cs_200", "approved", 200, OTHER_SHA),
+        changesetFor("cs_odd", "approved", 100, REVIEWED_SHA, "https://www.github.com/acme/widgets/pull/100"),
+      ]), { event: "COMMENT", pr: PR_100 });
+      expect(auth.ok).toBe(false);
+      if (auth.ok) throw new Error("unreachable");
+      expect(auth.reason).toContain(PR_200);
+      expect(auth.reason).toContain("not the requested PR");
+    });
+
+    it("a source.number contradiction still refuses on contradiction, not on provenance", () => {
+      const contradictory = changesetFor("cs_bad", "approved", 100, REVIEWED_SHA);
+      (contradictory.content as any).source.number = 999;
+      const auth = authorizeReviewPost(session([
+        findings("art_100", "approved"),
+        contradictory,
+        changesetFor("cs_odd", "approved", 100, REVIEWED_SHA, "https://www.github.com/acme/widgets/pull/100"),
+      ]), { event: "COMMENT", pr: PR_100 });
+      expect(auth.ok).toBe(false);
+      if (auth.ok) throw new Error("unreachable");
+      expect(auth.reason).toContain("contradicts");
+      expect(auth.reason).toContain("cs_bad");
+    });
+
+    it.each(["approved", "superseded"])(
+      "multi-PR findings history stays fail-closed (other chunk %s) regardless of an odd chunk",
+      (otherStatus) => {
+        const auth = authorizeReviewPost(session([
+          findings("art_100", "approved"),
+          changesetFor("cs_100", "approved", 100, REVIEWED_SHA),
+          changesetFor("cs_200", otherStatus, 200, OTHER_SHA),
+          changesetFor("cs_odd", "approved", 100, REVIEWED_SHA, "https://www.github.com/acme/widgets/pull/100"),
+        ]), { event: "COMMENT", pr: PR_100 });
+        expect(auth.ok).toBe(false);
+        if (auth.ok) throw new Error("unreachable");
+        expect(auth.reason).toContain("more than one pull request");
+      },
+    );
+
+    it("an unruled findings artifact still refuses before provenance is consulted", () => {
+      const auth = authorizeReviewPost(session([
+        findings("art_pending", "draft"),
+        changesetFor("cs_odd", "approved", 100, REVIEWED_SHA, "https://www.github.com/acme/widgets/pull/100"),
+      ]), { event: "COMMENT", pr: PR_100 });
+      expect(auth.ok).toBe(false);
+      if (auth.ok) throw new Error("unreachable");
+      expect(auth.reason).toContain("has not given a verdict");
+    });
+  });
+
+  describe("the MCP door — refused before anything leaves the machine", () => {
+    it.each(["COMMENT", "REQUEST_CHANGES"] as const)("%s behind a /commits/<sha> URL: refused, zero gh calls", async (event) => {
+      const res = await handlePostPrReview(ctxFor([
+        findings("art_100", "approved"),
+        changesetFor("cs_odd", "approved", 100, REVIEWED_SHA, `${PR_100}/commits/${REVIEWED_SHA}`),
+      ]), { pr: PR_100, event });
+      expect(res.isError).toBe(true);
+      expect(res.content[0]!.text).toContain("cs_odd");
+      expect(res.content[0]!.text).toContain("commit_id");
+      expect(calls()).toHaveLength(0);
+      expect(apiCalls()).toHaveLength(0);
+    });
+
+    it("APPROVE behind a www. URL: refused on the identity rule, zero gh calls", async () => {
+      const res = await handlePostPrReview(ctxFor([
+        changesetFor("cs_odd", "approved", 100, REVIEWED_SHA, "https://www.github.com/acme/widgets/pull/100"),
+      ]), { pr: PR_100, event: "APPROVE" });
+      expect(res.isError).toBe(true);
+      expect(res.content[0]!.text).toContain("no full, valid PR source URL");
+      expect(calls()).toHaveLength(0);
+    });
+
+    it("control: the canonical chunk posts through the door with commit_id bound", async () => {
+      const res = await handlePostPrReview(ctxFor([
+        findings("art_100", "approved"),
+        changesetFor("cs_100", "approved", 100, REVIEWED_SHA),
+      ]), { pr: PR_100, event: "COMMENT" });
+      expect(res.isError).toBeFalsy();
+      expect(apiCalls()).toHaveLength(1);
+      expect(JSON.parse(apiCalls()[0]!.stdin).commit_id).toBe(REVIEWED_SHA);
+    });
+  });
+});

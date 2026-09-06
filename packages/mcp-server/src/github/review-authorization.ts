@@ -218,6 +218,61 @@ function knownPrIdentityCount(artifacts: Artifact[]): number {
   return identities.size;
 }
 
+/** The PERSISTED `source.headSha`, read raw. The coercer intentionally drops a
+ * malformed optional field for legacy readability, but the authorization
+ * boundary must tell "never recorded" from "recorded something broken". */
+function rawHeadSha(artifact: Artifact): unknown {
+  const rawSource = artifact.content && typeof artifact.content === "object"
+    ? (artifact.content as { source?: unknown }).source
+    : undefined;
+  return rawSource && typeof rawSource === "object"
+    ? (rawSource as { headSha?: unknown }).headSha
+    : undefined;
+}
+
+/** Did this chunk record SHA provenance at all — valid or not? A chunk that
+ * claims a reviewed commit is never "legacy". */
+function hasShaProvenance(artifact: Artifact): boolean {
+  return rawHeadSha(artifact) !== undefined;
+}
+
+/**
+ * #343 follow-up (#369 MEDIUM-C, confirmed on the #375 build) — a standing
+ * chunk that RECORDED a reviewed commit but whose `source.url` cannot be bound
+ * to the requested PR (a `/commits/<sha>` or `/files/r123` sub-page link,
+ * `www.` or `http://`, a garbage URL, no URL at all) must not post at all.
+ *
+ * Before this check, `targetExternals = fullScope.matching` dropped such a
+ * chunk BEFORE reviewedHeadFor ran, so a COMMENT or REQUEST_CHANGES went out
+ * with no `commit_id` — and GitHub applies an unbound inline comment to the
+ * PR's CURRENT head, which is exactly the line-misplacement #343 exists to
+ * stop. The chunk's SHA is a fact, but WHICH PR it describes is not: binding
+ * it would be guessing the identity, and taking a sibling matching chunk's SHA
+ * instead would be borrowing a commit for a chunk that never proved it belongs
+ * here. So the honest answer is a refusal that names the exact exit. Legacy
+ * chunks with no SHA at all keep their narrow COMMENT compatibility (see
+ * reviewedHeadFor); this only bites once a chunk claims a commit.
+ */
+function unboundShaProvenanceRefusal(artifact: Artifact, event: GitHubReviewEvent, ref: string): string {
+  const raw = rawHeadSha(artifact);
+  const url = coerceChangesetContent(artifact.content).source?.url;
+  const shaNote = typeof raw === "string" && FULL_GIT_SHA.test(raw)
+    ? `records reviewed head SHA ${raw.toLowerCase().slice(0, 12)}`
+    : `records a malformed reviewed head SHA`;
+  const urlNote = !parsePrNumber(ref)
+    ? `the requested PR reference (${ref}) is neither a PR number nor a full pull-request URL, so nothing can be bound to it`
+    : url
+      ? `its source.url (${url}) is not a full canonical pull-request URL the gate can bind to ${ref}`
+      : `it has no source.url, so the gate cannot bind it to ${ref}`;
+  return (
+    `Refusing to post a ${event}: "${artifact.title}" (${artifact.id}) ${shaNote}, but ${urlNote}. ` +
+    `Posting without commit_id would let GitHub pin these inline comments to the PR's current head, which may not be the code your pair reviewed. ` +
+    `Re-present that exact diff with source.url as https://github.com/<owner>/<repo>/pull/<number> (no /commits, /files or www. variants) ` +
+    `and the exact 40-hex headSha from \`gh pr view --json headRefOid\`, get your pair's verdict again, then post. ` +
+    `The gate never guesses which PR an unbindable source describes and never borrows another chunk's commit for it.`
+  );
+}
+
 /** #343 — derive the ONE immutable commit represented by the supplied standing
  * target chunks. This reads the raw persisted value as well as the coercer:
  * coercion intentionally drops malformed optional fields for legacy
@@ -239,12 +294,7 @@ function reviewedHeadFor(
   let closedWithShaProvenance: Artifact | undefined;
 
   for (const artifact of artifacts) {
-    const rawSource = artifact.content && typeof artifact.content === "object"
-      ? (artifact.content as { source?: unknown }).source
-      : undefined;
-    const rawSha = rawSource && typeof rawSource === "object"
-      ? (rawSource as { headSha?: unknown }).headSha
-      : undefined;
+    const rawSha = rawHeadSha(artifact);
     if (CLOSED_CHANGESET_STATUSES.has(artifact.status)) {
       if (rawSha !== undefined) closedWithShaProvenance ??= artifact;
       continue;
@@ -433,6 +483,7 @@ export function authorizeReviewPost(
   // approved findings authorize an actual payload, but can never grant an
   // APPROVE because they establish neither repository nor commit identity.
   let targetExternals = externalChangesets(state.artifacts);
+  let closedShaLineage: Artifact[] = [];
   if (opts.pr) {
     const fullScope = scopeExternalChangesets(targetExternals, opts.pr);
     const standing = targetExternals.filter(a =>
@@ -478,6 +529,21 @@ export function authorizeReviewPost(
           `Present every relevant chunk with its full source.url and get your pair's verdict again.`,
       };
     }
+    // #343 — SHA-AWARE UNKNOWN PROVENANCE never posts unbound. See
+    // unboundShaProvenanceRefusal. (An APPROVE with a standing unknown chunk
+    // was already refused above, so this is the COMMENT/REQUEST_CHANGES half
+    // of the same no-silent-downgrade boundary.)
+    const shaAwareUnknown = fullScope.unknown.filter(hasShaProvenance);
+    const standingUnbound = shaAwareUnknown.find((a) => !CLOSED_CHANGESET_STATUSES.has(a.status));
+    if (standingUnbound) {
+      return { ok: false, reason: unboundShaProvenanceRefusal(standingUnbound, event, opts.pr) };
+    }
+    // What remains is CLOSED unknown chunks that once recorded a commit. They
+    // never supply a SHA (their identity is still unproven), but they are
+    // lineage: if no standing target chunk names a commit now, that is a
+    // refresh-required revision, not a wholly legacy session — the same rule
+    // reviewedHeadFor already applies to closed MATCHING chunks.
+    closedShaLineage = shaAwareUnknown;
     targetExternals = fullScope.matching;
   }
 
@@ -534,7 +600,7 @@ export function authorizeReviewPost(
     }
   }
 
-  const reviewedHead = reviewedHeadFor(targetExternals, event);
+  const reviewedHead = reviewedHeadFor([...targetExternals, ...closedShaLineage], event);
   if (!reviewedHead.ok) return { ok: false, reason: reviewedHead.reason };
 
   // (b) THE EXCLUSION, stated honestly. This product has NO per-finding verdict:

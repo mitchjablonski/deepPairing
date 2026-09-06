@@ -841,3 +841,63 @@ describe("Q6 — handlePostPrReview (the MCP tool) end to end", () => {
     expect(res.content[0]!.text).toContain("line must be part of the diff");
   });
 });
+
+// --- #343 follow-up: the CLI door refuses SHA-aware unbindable provenance ----
+
+describe("#343 — the CLI door refuses a SHA-aware chunk it cannot bind, with zero gh calls", () => {
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+  const cli = fileURLToPath(new URL("../../cli/init.ts", import.meta.url));
+
+  function externalChangeset(url: string | undefined, headSha: unknown = SHA): Artifact {
+    const base = approvedExternalChangeset();
+    return {
+      ...base,
+      content: {
+        ...(base.content as Record<string, unknown>),
+        source: { kind: "github-pr", number: 42, ...(url ? { url } : {}), ...(headSha !== null ? { headSha } : {}) },
+      },
+    } as Artifact;
+  }
+
+  function runCli(artifacts: Artifact[], event: string) {
+    const project = fs.mkdtempSync(path.join(binDir, "cli-sha-"));
+    const sessionDir = path.join(project, ".deeppairing", "sessions", "s_review");
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionDir, "artifacts.json"), JSON.stringify(artifacts));
+    return new Promise<{ code: number; output: string }>((resolve) => {
+      execFile(process.execPath, ["--import", import.meta.resolve("tsx"), cli,
+        "post-pr-review", "https://github.com/acme/widgets/pull/42", "--session-id", "s_review", "--event", event], {
+        cwd: project, timeout: 20_000,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: project, DEEPPAIRING_PROJECT_ROOT: project, DP_GH_FAKE_MODE: "ok" },
+      }, (error, stdout, stderr) => resolve({ code: error ? Number(error.code) || 1 : 0, output: stdout + stderr }));
+    });
+  }
+
+  it.each([
+    ["COMMENT", `https://github.com/acme/widgets/pull/42/commits/${SHA}`],
+    ["REQUEST_CHANGES", "https://www.github.com/acme/widgets/pull/42"],
+    ["COMMENT", undefined],
+  ])("%s with source.url %s: exit 1, refusal names the chunk, nothing reaches gh", async (event, url) => {
+    const outcome = await runCli([researchArtifact([HIGH_FINDING]), externalChangeset(url)], event);
+    expect(outcome.code, outcome.output).toBe(1);
+    expect(outcome.output).toContain(`Refusing to post a ${event}`);
+    expect(outcome.output).toContain("art_cs");
+    expect(outcome.output).toContain("commit_id");
+    expect(calls()).toHaveLength(0);
+  }, 30_000);
+
+  it("APPROVE behind an unbindable URL: exit 1 on the identity rule, nothing reaches gh", async () => {
+    const outcome = await runCli([externalChangeset("http://github.com/acme/widgets/pull/42")], "APPROVE");
+    expect(outcome.code, outcome.output).toBe(1);
+    expect(outcome.output).toContain("no full, valid PR source URL");
+    expect(calls()).toHaveLength(0);
+  }, 30_000);
+
+  it("control: the canonical chunk posts through the CLI with commit_id bound", async () => {
+    const outcome = await runCli([researchArtifact([HIGH_FINDING]), externalChangeset("https://github.com/acme/widgets/pull/42")], "COMMENT");
+    expect(outcome.code, outcome.output).toBe(0);
+    expect(outcome.output).toContain("Posted 1 inline comment");
+    expect(reviewPostCalls()).toHaveLength(1);
+    expect(JSON.parse(reviewPostCalls()[0]!.stdin).commit_id).toBe(SHA);
+  }, 30_000);
+});
