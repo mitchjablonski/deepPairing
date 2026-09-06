@@ -114,6 +114,27 @@ Both run the self-contained bundles under `server/` via
   `deeppairing://session/{id}`.
 - MCP elicitation for quick approvals in-terminal.
 
+**Operator recovery entry** (`server/review-posts.mjs`)
+
+A standalone, offline command you run yourself when a PR review post ends in an
+unresolved state — inspect the durable journal, cancel a reservation that never
+sent, release an abandoned claim, or acknowledge an uncertain result. A
+marketplace install has no `deeppairing` binary, so this ships as its own entry
+rather than as part of the CLI:
+
+```bash
+# Locate it once (CLAUDE_PLUGIN_ROOT is set for hooks, not for your shell):
+find ~/.claude/plugins -name review-posts.mjs -path '*deeppairing*'
+# Then, from the project you are recovering:
+node "<that path>" --help
+```
+
+It is deliberately **not** an MCP tool and not a daemon route: these verbs
+accept duplicate risk on your assertion, and the agent must not be able to make
+that assertion for you. It never contacts GitHub and never sends a review — the
+`reconcile` verb, which reads GitHub, stays in the full CLI. See
+[docs/pr-posting-contract.md](../docs/pr-posting-contract.md#where-the-operator-commands-live).
+
 **Companion web UI** — a deterministic per-project port in `3847-3974`,
 derived from a hash of the project path (check `.deeppairing/daemon.json`
 for this project's actual bound port). Auto-opens on first daemon start —

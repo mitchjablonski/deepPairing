@@ -15,7 +15,12 @@ The scope is deliberately one session, not all reviews in a project. Separate
 sessions can contain independent human-reviewed payloads and may post to the same
 PR. Cross-session duplicate prevention is not claimed. The CLI requires an explicit
 `--session-id` identifying the same reviewed session as MCP; it never selects the
-most recent session for an external write. Starting another session is not recovery
+most recent session for an external write. That id is validated against the
+sessions already on disk before anything constructs a store, so a typo can
+neither create a session directory nor reach `gh`. Membership is all it
+establishes: naming a *different* existing session remains the operator's
+explicit choice and gets that session's journal, with no cross-session
+deduplication implied. Starting another session is not recovery
 for an unknown result: inspect and resolve the original operation first.
 
 The remote review endpoint sends notifications and accepts `commit_id`, but
@@ -190,6 +195,40 @@ GET only. Wrong marker, edited content, missing original coordinates, unsupporte
 multi-line/reply records, changed comment order, API failure, or pagination beyond
 the safety cap leaves the operation blocked. It does not search for approximate
 matches or claim remote absence proves non-delivery.
+
+### Where the operator commands live
+
+These commands are a thing a **person** runs. They are never exposed as MCP
+tools or daemon mutation routes: they accept duplicate risk on a human's
+assertion, and an agent must not be able to make that assertion.
+
+They are runnable on every install path:
+
+| Install | Invocation |
+| --- | --- |
+| Marketplace / `--plugin-dir` plugin | `node "<plugin>/server/review-posts.mjs" <session-id> …` |
+| Source checkout | `node claude-plugin/server/review-posts.mjs <session-id> …` — or `node packages/mcp-server/dist/cli/init.js review-posts <session-id> …` |
+| npm install (when the package is installed) | `npx -y -p @deeppairing/mcp-server deeppairing review-posts <session-id> …` |
+
+`<plugin>` is the installed plugin directory. `CLAUDE_PLUGIN_ROOT` names it for
+hooks and slash commands but is **not** set in your shell, so locate it once:
+
+```bash
+find ~/.claude/plugins -name review-posts.mjs -path '*deeppairing*'
+```
+
+Run it with `--help` and it prints its own absolute path in every example, so
+the invocation is true for wherever it actually landed. It acts on the project
+at `CLAUDE_PROJECT_DIR`, else `DEEPPAIRING_PROJECT_ROOT`, else the current
+directory, and names that project on stderr — a recovery run in the wrong
+directory otherwise reads as an empty journal. `list` and `inspect` print JSON
+on stdout, so `… <session-id> | jq` works.
+
+That entry is deliberately **offline only**: it bundles
+`cli/review-posts-offline.ts`, which imports the journal and nothing else, so
+the review POST path is absent from it by construction. `reconcile` performs
+GitHub GETs and stays in the full CLI (source checkout or npm install); it is
+not available on the plugin-only path.
 
 ### Offline operator inspection and acknowledgement
 

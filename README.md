@@ -328,8 +328,14 @@ deeppairing status                        # friendly daemon picture: port, URL, 
 deeppairing team init                     # scaffold .deeppairing/team.json
 deeppairing philosophy export | import f --merge | publish on|off | remove <concept>
 deeppairing post-pr-review <pr> --session-id ID  # post the explicitly reviewed session
+deeppairing review-posts <session-id>     # inspect / recover an unresolved review post
 deeppairing export <full|pr-comments|adr|replay|learnings>
 ```
+
+The offline half of `review-posts` also ships as a standalone operator entry in
+the plugin bundle (`node claude-plugin/server/review-posts.mjs --help`), because
+a marketplace install has no `deeppairing` binary — see
+[docs/pr-posting-contract.md](docs/pr-posting-contract.md#where-the-operator-commands-live).
 
 ## How it compares
 
