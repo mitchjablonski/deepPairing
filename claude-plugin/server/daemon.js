@@ -28164,6 +28164,7 @@ var FileStore = class _FileStore {
    * acknowledgeDecisions exactly (same loop + same debounced flush).
    */
   acknowledgeStatusChanges(ids) {
+    this.assertAuthorizationReadable();
     for (const a of this.artifacts) {
       if (ids.includes(a.id)) {
         a.statusChangeUnreported = false;
@@ -28402,6 +28403,7 @@ var FileStore = class _FileStore {
     return Array.from(this.decisions.values()).filter((d) => d.response && !d.acknowledged);
   }
   acknowledgeDecisions(decisionIds) {
+    this.assertAuthorizationReadable();
     for (const id of decisionIds) {
       const dec = this.decisions.get(id);
       if (dec) dec.acknowledged = true;
