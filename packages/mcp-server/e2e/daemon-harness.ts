@@ -4,11 +4,11 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { StringDecoder } from "node:string_decoder";
 import type { TestInfo } from "@playwright/test";
-import { attachDiagnosticFile, BoundedDiagnosticTail, readRegularFileTail, redactDiagnostic } from "./diagnostics.js";
+import { attachDiagnosticFile, BoundedDiagnosticTail, readConfinedFileTail, redactDiagnostic } from "./diagnostics.js";
 
 const MAX_DAEMON_DIAGNOSTIC_BYTES = 64 * 1024;
 interface DiagnosticStreamState { decoder: StringDecoder; pending: string; source: string; discarding: boolean }
-interface DiagnosticState { tail: BoundedDiagnosticTail; streams: DiagnosticStreamState[]; logFile?: string }
+interface DiagnosticState { tail: BoundedDiagnosticTail; streams: DiagnosticStreamState[]; projectRoot?: string }
 const daemonOutput = new WeakMap<ChildProcess, DiagnosticState>();
 const diagnosticProcesses = new Set<ChildProcess>();
 
@@ -17,8 +17,9 @@ function retainLine(state: DiagnosticState, source: string, line: string): void 
 }
 
 /** The only on-disk source the harness reads: the daemon's own log under its project root. */
+const DAEMON_LOG_RELATIVE = [".deeppairing", "daemon.log"] as const;
 export function daemonLogPath(projectRoot: string): string {
-  return path.join(projectRoot, ".deeppairing", "daemon.log");
+  return path.join(projectRoot, ...DAEMON_LOG_RELATIVE);
 }
 
 /**
@@ -32,7 +33,7 @@ export function captureDaemonOutput(proc: ChildProcess, opts: { projectRoot?: st
   const state: DiagnosticState = {
     tail: new BoundedDiagnosticTail(MAX_DAEMON_DIAGNOSTIC_BYTES),
     streams: [],
-    logFile: opts.projectRoot ? daemonLogPath(opts.projectRoot) : undefined,
+    projectRoot: opts.projectRoot,
   };
   daemonOutput.set(proc, state);
   const watch = (source: string, stream: NodeJS.ReadableStream | null | undefined) => {
@@ -100,16 +101,20 @@ function diagnosticNames(index: number): { name: string; logName: string } {
 const NEWLINE = 0x0a;
 
 /**
- * Bounded, redacted tail of the daemon's on-disk log as attachment lines.
- * Missing, rotated, unreadable and non-regular files become a one-line note
- * instead of an error; a partial first line (mid-file start) and an
- * unterminated last line (append in flight) are withheld, never emitted raw.
+ * Bounded, redacted tail of the daemon's on-disk log as attachment lines,
+ * confined to the fixture's project root (see `readConfinedFileTail`).
+ * Missing, rotated, unreadable, non-regular and escaping paths become a
+ * one-line note instead of an error; a partial first line (mid-file start) and
+ * an unterminated last line (append in flight) are withheld, never emitted raw.
  */
-export async function daemonLogTail(logFile: string, maxBytes = MAX_DAEMON_DIAGNOSTIC_BYTES): Promise<Buffer> {
+export async function daemonLogTail(projectRoot: string, maxBytes = MAX_DAEMON_DIAGNOSTIC_BYTES): Promise<Buffer> {
   const notes: string[] = [];
-  const rotated = await fs.lstat(`${logFile}.1`).then(() => true, () => false);
-  if (rotated) notes.push("[daemon.log] rotated: daemon.log.1 present (not read)");
-  const result = await readRegularFileTail(logFile, maxBytes);
+  const result = await readConfinedFileTail(projectRoot, DAEMON_LOG_RELATIVE, maxBytes);
+  if (result.kind !== "escaped") {
+    // Existence only, never read: tells the reader that earlier lines rolled over.
+    const rotated = await fs.lstat(`${daemonLogPath(projectRoot)}.1`).then(() => true, () => false);
+    if (rotated) notes.push("[daemon.log] rotated: daemon.log.1 present (not read)");
+  }
   const content = new BoundedDiagnosticTail(maxBytes);
   switch (result.kind) {
     case "missing":
@@ -117,6 +122,12 @@ export async function daemonLogTail(logFile: string, maxBytes = MAX_DAEMON_DIAGN
       break;
     case "not-regular":
       notes.push(`[daemon.log] skipped: not a regular file (${result.type})`);
+      break;
+    case "escaped":
+      notes.push("[daemon.log] skipped: path escapes the fixture root (symlinked component)");
+      break;
+    case "replaced":
+      notes.push("[daemon.log] skipped: file replaced during read");
       break;
     case "unreadable":
       notes.push(`[daemon.log] unreadable (${result.code})`);
@@ -169,10 +180,10 @@ export async function attachDaemonOutput(
   if (snapshot.lines.length) {
     await attachDiagnosticFile(testInfo, opts.name ?? "daemon-diagnostics", snapshot.body());
   }
-  if (state.logFile) {
+  if (state.projectRoot) {
     let logTail: Buffer;
     try {
-      logTail = await daemonLogTail(state.logFile);
+      logTail = await daemonLogTail(state.projectRoot);
     } catch (error) {
       // The read reports failures as values; this only guards the decode path.
       logTail = Buffer.from(`[daemon.log] unreadable (${redactDiagnostic(String(error))})\n`);

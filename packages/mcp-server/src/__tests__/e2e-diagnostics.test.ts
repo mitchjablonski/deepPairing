@@ -19,7 +19,7 @@ import {
 import {
   attachDiagnosticFile,
   BoundedDiagnosticTail,
-  readRegularFileTail,
+  readConfinedFileTail,
   redactDiagnostic,
 } from "../../e2e/diagnostics.js";
 
@@ -226,9 +226,9 @@ describe("E2E daemon diagnostics", () => {
 
     it("notes a missing log, and a rotated predecessor, without throwing", async () => {
       const root = fixtureProjectRoot();
-      expect((await daemonLogTail(daemonLogPath(root))).toString()).toBe("[daemon.log] missing\n");
+      expect((await daemonLogTail(root)).toString()).toBe("[daemon.log] missing\n");
       fs.writeFileSync(`${daemonLogPath(root)}.1`, "Authorization: Bearer rotated-secret\n");
-      const body = (await daemonLogTail(daemonLogPath(root))).toString();
+      const body = (await daemonLogTail(root)).toString();
       expect(body).toContain("[daemon.log] rotated: daemon.log.1 present (not read)");
       expect(body).toContain("[daemon.log] missing");
       expect(body).not.toContain("rotated-secret");
@@ -241,7 +241,7 @@ describe("E2E daemon diagnostics", () => {
         "[daemon] Authorization: Bearer file-secret",
         '{"Cookie":"sid=unterminated-secret',
       ].join("\n"));
-      const body = (await daemonLogTail(daemonLogPath(root))).toString();
+      const body = (await daemonLogTail(root)).toString();
       expect(body).toContain("[daemon] Daemon starting (PID 1)");
       expect(body).toContain("Authorization: Bearer [REDACTED]");
       expect(body).toContain("[daemon.log] [incomplete line withheld]");
@@ -256,13 +256,13 @@ describe("E2E daemon diagnostics", () => {
       fs.writeFileSync(daemonLogPath(root), early + late);
       const size = fs.statSync(daemonLogPath(root)).size;
 
-      const result = await readRegularFileTail(daemonLogPath(root), 64 * 1024);
+      const result = await readConfinedFileTail(root, [".deeppairing", "daemon.log"], 64 * 1024);
       expect(result.kind).toBe("tail");
       if (result.kind !== "tail") throw new Error("expected a tail");
       expect(result.bytes.length).toBe(64 * 1024);
       expect(result.skipped).toBe(size - 64 * 1024);
 
-      const body = (await daemonLogTail(daemonLogPath(root))).toString();
+      const body = (await daemonLogTail(root)).toString();
       expect(body).toContain(`[daemon.log] tail: last ${64 * 1024} of ${size} bytes`);
       expect(body).toContain("[daemon] late line 0\n");
       expect(body).toContain("[daemon] late line 199\n");
@@ -277,7 +277,7 @@ describe("E2E daemon diagnostics", () => {
       const target = path.join(root, "elsewhere.log");
       fs.writeFileSync(target, "password=\"symlink-target-secret\"\n");
       fs.symlinkSync(target, daemonLogPath(root));
-      const body = (await daemonLogTail(daemonLogPath(root))).toString();
+      const body = (await daemonLogTail(root)).toString();
       expect(body).toBe("[daemon.log] skipped: not a regular file (symlink)\n");
     });
 
@@ -286,22 +286,46 @@ describe("E2E daemon diagnostics", () => {
       const made = spawnSync("mkfifo", [daemonLogPath(root)]);
       if (made.status !== 0) return; // mkfifo unavailable on this host
       const started = Date.now();
-      const body = (await daemonLogTail(daemonLogPath(root))).toString();
+      const body = (await daemonLogTail(root)).toString();
       expect(Date.now() - started).toBeLessThan(2_000);
       expect(body).toBe("[daemon.log] skipped: not a regular file (fifo)\n");
+    });
+
+    it.skipIf(!notWindows)("refuses a symlinked .deeppairing parent pointing outside the fixture root", async () => {
+      const root = fixtureProjectRoot();
+      const outside = fs.mkdtempSync(path.join(os.tmpdir(), "dp-diagnostic-outside-"));
+      diagnosticDirs.push(outside);
+      fs.writeFileSync(path.join(outside, "daemon.log"), "SYNTHETIC_OUTSIDE_REGISTERED_FIXTURE password=\"parent-link-secret\"\n");
+      fs.rmdirSync(path.join(root, ".deeppairing"));
+      fs.symlinkSync(outside, path.join(root, ".deeppairing"));
+      fs.writeFileSync(`${daemonLogPath(root)}.1`, "rotated through the link\n");
+
+      const body = (await daemonLogTail(root)).toString();
+      expect(body).toBe("[daemon.log] skipped: path escapes the fixture root (symlinked component)\n");
+      expect(body).not.toContain("SYNTHETIC_OUTSIDE_REGISTERED_FIXTURE");
+      expect(body).not.toContain("parent-link-secret");
+    });
+
+    it.skipIf(!notWindows)("still reads a fixture whose ROOT is reached through a symlink (macOS tmp)", async () => {
+      const root = fixtureProjectRoot();
+      fs.writeFileSync(daemonLogPath(root), "[daemon] via symlinked root\n");
+      const rootLink = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "dp-diagnostic-link-")), "root");
+      diagnosticDirs.push(path.dirname(rootLink));
+      fs.symlinkSync(root, rootLink);
+      expect((await daemonLogTail(rootLink)).toString()).toBe("[daemon] via symlinked root\n");
     });
 
     it("skips a directory named daemon.log", async () => {
       const root = fixtureProjectRoot();
       fs.mkdirSync(daemonLogPath(root));
-      expect((await daemonLogTail(daemonLogPath(root))).toString())
+      expect((await daemonLogTail(root)).toString())
         .toBe("[daemon.log] skipped: not a regular file (directory)\n");
     });
 
     it.skipIf(!notWindows || process.getuid?.() === 0)("notes an unreadable log instead of failing", async () => {
       const root = fixtureProjectRoot();
       fs.writeFileSync(daemonLogPath(root), "apiKey=\"unreadable-secret\"\n", { mode: 0o000 });
-      const body = (await daemonLogTail(daemonLogPath(root))).toString();
+      const body = (await daemonLogTail(root)).toString();
       expect(body).toBe("[daemon.log] unreadable (EACCES)\n");
       expect(body).not.toContain("unreadable-secret");
     });

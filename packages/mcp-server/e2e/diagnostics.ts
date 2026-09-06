@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { constants as fsConstants, type Stats } from "node:fs";
+import path from "node:path";
 import type { TestInfo } from "@playwright/test";
 
 /** Persist only an already-redacted, bounded tail outside the raw trace archive. */
@@ -18,6 +19,8 @@ export type FileTail =
   | { kind: "tail"; size: number; skipped: number; bytes: Buffer }
   | { kind: "missing" }
   | { kind: "not-regular"; type: string }
+  | { kind: "escaped" }
+  | { kind: "replaced" }
   | { kind: "unreadable"; code: string };
 
 function fileType(stat: Stats): string {
@@ -29,30 +32,68 @@ function fileType(stat: Stats): string {
   return "unknown";
 }
 
+function errnoCode(error: unknown): string {
+  return (error as NodeJS.ErrnoException).code ?? "unknown";
+}
+
 /**
- * Read at most `maxBytes` from the END of an intended regular file. Never the
- * whole file, never through a symlink, never a blocking open on a FIFO: the
- * path is lstat'ed, opened O_NOFOLLOW|O_NONBLOCK, and fstat'ed again before a
- * single positioned read. Every failure is reported, not thrown, so a
- * diagnostic read can never replace the primary failure.
+ * Read at most `maxBytes` from the END of the regular file at `root/<relative>`,
+ * confined to the fixture `root`:
+ *
+ *  1. `root` is canonicalised once (`realpath`) — the fixture's own mkdtemp may
+ *     legitimately sit under a symlinked tmp (macOS `/var` → `/private/var`).
+ *  2. `realpath(root/<relative>)` must equal `realRoot/<relative>` exactly, so
+ *     NO component below the root — parent directories included — may be a
+ *     symlink. This is what rejects a `.deeppairing` → elsewhere link.
+ *  3. The canonical path is opened `O_RDONLY|O_NOFOLLOW|O_NONBLOCK` (FIFOs
+ *     cannot block the open), the HANDLE is fstat'ed and must be a regular file,
+ *     and its (dev, ino) must match a fresh stat of the canonical path.
+ *  4. ONE positioned read of at most `maxBytes` from the end. Never the whole
+ *     file, never sliced afterwards.
+ *
+ * Every failure is returned as a value, never thrown, so a diagnostic read can
+ * never replace the primary failure.
+ *
+ * Honest limits: these are sequential syscalls, not an atomic openat walk. A
+ * same-uid writer racing between the realpath check and the open could still
+ * substitute a path component; the handle-identity check narrows but does not
+ * eliminate that window, and on Windows `ino` may be less discriminating. The
+ * fixture root is a process-private mkdtemp, so the realistic threat is the
+ * fixture's own contents, which this fully confines.
  */
-export async function readRegularFileTail(file: string, maxBytes: number): Promise<FileTail> {
+export async function readConfinedFileTail(root: string, relative: readonly string[], maxBytes: number): Promise<FileTail> {
   let handle: fs.FileHandle | undefined;
   try {
-    const linkStat = await fs.lstat(file);
-    if (!linkStat.isFile()) return { kind: "not-regular", type: fileType(linkStat) };
-    // O_NOFOLLOW/O_NONBLOCK are absent on Windows; the lstat/fstat pair still holds.
+    const realRoot = await fs.realpath(root);
+    const expected = path.join(realRoot, ...relative);
+    if (!expected.startsWith(realRoot + path.sep)) return { kind: "escaped" };
+    const leaf = await fs.lstat(path.join(root, ...relative));
+    if (!leaf.isFile()) return { kind: "not-regular", type: fileType(leaf) };
+    let real: string;
+    try {
+      real = await fs.realpath(path.join(root, ...relative));
+    } catch (error) {
+      const code = errnoCode(error);
+      if (code === "ENOENT") return { kind: "missing" };
+      if (code === "ELOOP") return { kind: "not-regular", type: "symlink" };
+      if (code === "ENOTDIR") return { kind: "not-regular", type: "not-a-directory-parent" };
+      return { kind: "unreadable", code };
+    }
+    if (real !== expected) return { kind: "escaped" };
+    // O_NOFOLLOW/O_NONBLOCK are absent on Windows; the realpath + fstat checks still hold.
     const flags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
-    handle = await fs.open(file, flags);
+    handle = await fs.open(expected, flags);
     const stat = await handle.stat();
     if (!stat.isFile()) return { kind: "not-regular", type: fileType(stat) };
+    const current = await fs.stat(expected);
+    if (current.dev !== stat.dev || current.ino !== stat.ino) return { kind: "replaced" };
     const length = Math.min(stat.size, maxBytes);
     const skipped = stat.size - length;
     const buffer = Buffer.alloc(length);
     const { bytesRead } = await handle.read(buffer, 0, length, skipped);
     return { kind: "tail", size: stat.size, skipped, bytes: buffer.subarray(0, bytesRead) };
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code ?? "unknown";
+    const code = errnoCode(error);
     if (code === "ENOENT") return { kind: "missing" };
     if (code === "ELOOP") return { kind: "not-regular", type: "symlink" };
     return { kind: "unreadable", code };
