@@ -36712,10 +36712,20 @@ var operationSchema = external_exports.object({
     acknowledgedAt: timestampSchema,
     priorState: external_exports.enum(["sending", "unknown"]),
     operationDigest: digestSchema
+  }).strict().optional(),
+  /** Recorded when the live coordinator released its own never-sent attempt.
+   * `priorState: "sending"` is the interesting case: it says this operation
+   * reached the durable pre-POST transition and still never left the machine. */
+  unsentRelease: external_exports.object({
+    releasedAt: timestampSchema,
+    priorState: external_exports.enum(["reserved", "sending"])
   }).strict().optional()
 }).strict().superRefine((value, ctx) => {
   if (value.state === "abandoned" !== (value.operatorAcknowledgement !== void 0)) {
     ctx.addIssue({ code: "custom", message: "Only operator-abandoned uncertainty carries an acknowledgement" });
+  }
+  if (value.unsentRelease && value.state !== "failed") {
+    ctx.addIssue({ code: "custom", message: "Only a definitely unsent operation carries an unsent release" });
   }
   if (value.state === "succeeded" !== (value.result !== void 0)) {
     ctx.addIssue({ code: "custom", message: "Only success carries a remote review identity" });
@@ -36808,11 +36818,13 @@ async function executeDurableReviewPost(opts) {
     throw new Error("Review-post payload does not match its authorized digest");
   }
   const lease = await opts.store.reserve(identity, opts.repost);
+  let sendingAttempted = false;
   try {
     const current = reviewPostIdentitySchema.parse(await opts.reauthorize());
     if (reviewPostDigest(current) !== reviewPostDigest(identity)) {
       throw new Error("Review authorization or content changed while reserving the post");
     }
+    sendingAttempted = true;
     await opts.store.markSending(lease, identity);
     const beforeSend = reviewPostIdentitySchema.parse(await opts.reauthorize());
     if (reviewPostDigest(beforeSend) !== reviewPostDigest(identity)) {
@@ -36821,7 +36833,8 @@ async function executeDurableReviewPost(opts) {
   } catch (err) {
     let reservationReleased = false;
     try {
-      await opts.store.failBeforeSending(lease);
+      if (sendingAttempted) await opts.store.releaseUnsent(lease);
+      else await opts.store.failBeforeSending(lease);
       reservationReleased = true;
     } catch {
     }
@@ -38470,6 +38483,9 @@ var DaemonClient = class {
     },
     failBeforeSending: async (lease) => {
       await this.post("/review-post-operations", { action: "failed", lease });
+    },
+    releaseUnsent: async (lease) => {
+      await this.post("/review-post-operations", { action: "unsent", lease });
     },
     markUnknown: async (lease) => {
       await this.post("/review-post-operations", { action: "unknown", lease });
