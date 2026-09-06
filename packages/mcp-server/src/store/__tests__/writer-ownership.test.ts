@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { FileStore } from "../file-store.js";
-import { mergeSessionRecords, withSessionFlushLock } from "../session-records.js";
+import type { Artifact } from "@deeppairing/shared";
+import { mergeSessionRecords, SessionReviewConflictError, withSessionFlushLock } from "../session-records.js";
+import crypto from "node:crypto";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 
 let fx: GlobalStoreFixture;
@@ -52,12 +54,109 @@ describe("writer-owned deltas", () => {
 
     // Mutating the frozen instance must not make its stale in-memory verdict
     // writable again. Recovery requires a fresh FileStore loaded from disk.
-    second.createArtifact({ id: "after-conflict", type: "research", title: "Must stay memory-only", content: {} });
+    // #338 (F1) — writes into the frozen lanes are REFUSED up front (the
+    // caller never holds a success receipt for a record flush() discards);
+    // independent human input still lands.
+    expect(() => second.createArtifact({ id: "after-conflict", type: "research", title: "Must stay memory-only", content: {} }))
+      .toThrow(SessionReviewConflictError);
+    second.addComment({ id: "safe-comment", artifactId: "__session__", content: "Do not lose this", author: "human" });
+    const request = second.addRequest({ text: "Keep working on the recovery", intent: "implement" });
+    expect(() => second.recordDecisionRequest({ decisionId: "safe-decision", artifactId: "plan", context: "Recovery choice", options: [] }))
+      .toThrow(SessionReviewConflictError);
+    expect(() => second.forceFlush()).toThrow(/changed content.*review verdict|review verdict.*changed content/i);
+
+    const recovered = open();
+    const persisted = recovered.getArtifacts()[0]!;
+    expect(persisted.status === "approved" && persisted.version === 2).toBe(false);
+    expect(recovered.getArtifacts().some((artifact) => artifact.id === "after-conflict")).toBe(false);
+    expect(recovered.getCommentsForArtifact("__session__").map((comment) => comment.id)).toContain("safe-comment");
+    expect(recovered.getRequests().map((item) => item.id)).toContain(request.id);
+    // decisions.json carries authorization state, so even a new pending record
+    // stays memory-only until a fresh store reconciles the artifact conflict.
+    expect(recovered.getDecision("safe-decision")).toBeUndefined();
+  });
+
+  it("does not persist a decision response after its backing artifact changed", () => {
+    const seedStore = open();
+    const cacheOption = {
+      id: "redis", title: "Redis", description: "Shared cache", pros: ["fast"], cons: ["ops"],
+      effort: "low" as const, risk: "low" as const, recommendation: true,
+    };
+    seedStore.createArtifact({
+      id: "decision-card",
+      type: "decision",
+      title: "Choose a cache",
+      content: {
+        decisionId: "cache-decision",
+        question: "Choose a cache",
+        options: [cacheOption],
+      },
+    });
+    seedStore.recordDecisionRequest({
+      decisionId: "cache-decision",
+      artifactId: "decision-card",
+      context: "Choose a cache",
+      options: [cacheOption],
+    });
+    seedStore.forceFlush();
+
+    const contentWriter = open();
+    const reviewer = open();
+    const changed = contentWriter.getArtifacts()[0]!;
+    changed.content = {
+      decisionId: "cache-decision",
+      question: "Choose a queue instead",
+      options: [cacheOption],
+    };
+    changed.version = 2;
+    contentWriter.renameArtifact("decision-card", changed.title);
+    contentWriter.forceFlush();
+
+    reviewer.resolveDecision("cache-decision", "redis", "Fits the old cache question");
+    expect(() => reviewer.forceFlush()).toThrow(/changed content.*review verdict|review verdict.*changed content/i);
+
+    const recovered = open();
+    expect(recovered.getArtifacts()[0]).toMatchObject({ status: "draft", version: 2 });
+    expect(recovered.getDecisionResponse("cache-decision")).toBeNull();
+  });
+
+  it.each([false, true])("does not graft changeset file review onto rewritten files (contentFirst=%s)", (contentFirst) => {
+    const seedStore = open();
+    seedStore.createArtifact({
+      id: "changeset",
+      type: "changeset",
+      title: "Review this diff",
+      content: { files: [{ path: "src/cache.ts", changeType: "modified", diff: "old diff" }] },
+    });
+    seedStore.forceFlush();
+
+    const contentWriter = open();
+    const reviewer = open();
+    const changed = contentWriter.getArtifacts()[0]!;
+    changed.content = { files: [{ path: "src/cache.ts", changeType: "modified", diff: "new unseen diff" }] };
+    changed.version = 2;
+    contentWriter.renameArtifact("changeset", changed.title);
+    reviewer.setChangesetFileReview("changeset", "src/cache.ts", "needs_changes", "This reason describes the old diff");
+
+    const first = contentFirst ? contentWriter : reviewer;
+    const second = contentFirst ? reviewer : contentWriter;
+    first.forceFlush();
     expect(() => second.forceFlush()).toThrow(/changed content.*review verdict|review verdict.*changed content/i);
 
     const persisted = open().getArtifacts()[0]!;
-    expect(persisted.status === "approved" && persisted.version === 2).toBe(false);
-    expect(open().getArtifacts().some((artifact) => artifact.id === "after-conflict")).toBe(false);
+    const content = persisted.content as {
+      files: Array<{ diff?: string }>;
+      reviewState?: Record<string, string>;
+      reviewReasons?: Record<string, string>;
+    };
+    expect(
+      persisted.version === 2 &&
+      content.files[0]?.diff === "new unseen diff" &&
+      content.reviewState?.["src/cache.ts"] === "needs_changes",
+    ).toBe(false);
+    expect(
+      persisted.version === 2 && content.reviewReasons?.["src/cache.ts"] === "This reason describes the old diff",
+    ).toBe(false);
   });
 
   it("allows one writer to change content and then review that same content", () => {
@@ -94,6 +193,31 @@ describe("writer-owned deltas", () => {
     progressWriter.updatePlanProgress("plan", [{ stepIndex: 0, status: "done" }]);
     expect(() => progressWriter.forceFlush()).not.toThrow();
     expect((open().getArtifacts()[0]!.content as any).steps[0].status).toBe("done");
+  });
+
+  it.each([false, true])("does not treat concurrent plan progress as a proposal/review conflict (progressFirst=%s)", (progressFirst) => {
+    const seedStore = open();
+    seedStore.createArtifact({
+      id: "plan",
+      type: "plan",
+      title: "Review this plan",
+      content: { steps: [{ title: "Execute", action: "ship safely", status: "pending" }], estimatedChanges: 1 },
+    });
+    seedStore.forceFlush();
+
+    const progressWriter = open();
+    const reviewer = open();
+    progressWriter.updatePlanProgress("plan", [{ stepIndex: 0, status: "done", statusNote: "verified" }]);
+    reviewer.updateArtifactStatus("plan", "approved", "ui_approve_button");
+
+    const first = progressFirst ? progressWriter : reviewer;
+    const second = progressFirst ? reviewer : progressWriter;
+    first.forceFlush();
+    expect(() => second.forceFlush()).not.toThrow();
+    expect(open().getArtifacts()[0]).toMatchObject({
+      status: "approved",
+      content: { steps: [{ title: "Execute", action: "ship safely", status: "done", statusNote: "verified" }] },
+    });
   });
 
   it.each([false, true])("unrelated stale comment cannot revert review state (reverse=%s)", (reverse) => {
@@ -183,11 +307,67 @@ describe("writer-owned deltas", () => {
     expect(open().getArtifacts().find((r) => r.id === "a")?.title).toBe("retry");
   });
 
+  it("does not interpret a missing observed collection as deleting every record", () => {
+    const a = seed();
+    const saved = fs.readFileSync(file("artifacts.json"), "utf8");
+    fs.unlinkSync(file("artifacts.json"));
+    a.createArtifact({ id: "d", type: "research", title: "pending", content: {} });
+
+    expect(() => a.forceFlush()).toThrow(`Previously observed session collection disappeared: ${file("artifacts.json")}`);
+    expect(fs.existsSync(file("artifacts.json"))).toBe(false);
+    expect(a.getArtifacts().map((r) => r.id)).toEqual(["a", "d"]);
+
+    fs.writeFileSync(file("artifacts.json"), saved);
+    a.forceFlush();
+    expect(open().getArtifacts().map((r) => r.id)).toEqual(["a", "d"]);
+  });
+
+  it("protects an observed empty collection while allowing a never-existing one", () => {
+    const sessionDir = path.dirname(file("artifacts.json"));
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(file("artifacts.json"), "[]");
+    const a = open();
+    fs.unlinkSync(file("artifacts.json"));
+    a.createArtifact({ id: "a", type: "research", title: "pending", content: {} });
+    expect(() => a.forceFlush()).toThrow("Previously observed session collection disappeared");
+
+    const fresh = fx.track(new FileStore(fx.dir, "never-persisted"));
+    fresh.createArtifact({ id: "new", type: "research", title: "first", content: {} });
+    fresh.addRequest({ text: "first request", intent: "explain" });
+    expect(() => fresh.forceFlush()).not.toThrow();
+    expect(fresh.getArtifacts()).toHaveLength(1);
+    expect(JSON.parse(fs.readFileSync(path.join(
+      fx.dir, ".deeppairing/sessions/never-persisted/requests.json",
+    ), "utf8"))).toHaveLength(1);
+  });
+
+  it("remembers a collection read even when it disappears before baseline capture", () => {
+    seed();
+    const artifactsPath = file("artifacts.json");
+    const originalRead = fs.readFileSync.bind(fs);
+    const readSpy = vi.spyOn(fs, "readFileSync").mockImplementation(((target: fs.PathOrFileDescriptor, ...args: unknown[]) => {
+      const value = (originalRead as (...readArgs: unknown[]) => unknown)(target, ...args);
+      if (path.resolve(String(target)) === path.resolve(artifactsPath)) fs.unlinkSync(artifactsPath);
+      return value;
+    }) as typeof fs.readFileSync);
+    let a!: FileStore;
+    try {
+      a = open();
+    } finally {
+      readSpy.mockRestore();
+    }
+    a.createArtifact({ id: "later", type: "research", title: "pending", content: {} });
+
+    expect(() => a.forceFlush()).toThrow(`Previously observed session collection disappeared: ${artifactsPath}`);
+    expect(fs.existsSync(artifactsPath)).toBe(false);
+  });
+
   it("a partial flush retry does not overwrite an intervening writer", () => {
     const retrying = seed();
     const intervening = open();
     retrying.renameArtifact("a", "partially committed");
     retrying.addComment({ id: "pending-comment", artifactId: "a", content: "retry me", author: "human" });
+    const independentRequest = retrying.addRequest({ text: "persist past a comments failure", intent: "implement" });
 
     const realRename = fs.renameSync;
     let failedComments = false;
@@ -203,6 +383,8 @@ describe("writer-owned deltas", () => {
     } finally {
       rename.mockRestore();
     }
+    expect(JSON.parse(fs.readFileSync(file("requests.json"), "utf8")).map((request: { id: string }) => request.id))
+      .toContain(independentRequest.id);
 
     // artifacts.json committed before comments.json failed. A writer that
     // loaded the old baseline now replaces that title before the retry.
@@ -213,6 +395,31 @@ describe("writer-owned deltas", () => {
     const loaded = open();
     expect(loaded.getArtifacts()[0]?.title).toBe("intervening writer");
     expect(loaded.getCommentsForArtifact("a").map((comment) => comment.id)).toContain("pending-comment");
+  });
+
+  it("preserves independent sidecars while refusing to overwrite freshly corrupted artifacts", () => {
+    const writer = seed();
+    const knownGoodArtifacts = fs.readFileSync(file("artifacts.json"), "utf8");
+    writer.renameArtifact("a", "pending artifact mutation");
+    writer.addComment({ id: "corruption-comment", artifactId: "__session__", content: "Keep this", author: "human" });
+    const request = writer.addRequest({ text: "Recover the artifact file manually", intent: "implement" });
+    writer.recordDecisionRequest({ decisionId: "corruption-decision", artifactId: "a", context: "Manual recovery", options: [] });
+    fs.writeFileSync(file("artifacts.json"), "{broken");
+
+    expect(() => writer.forceFlush()).toThrow(SyntaxError);
+    expect(fs.readFileSync(file("artifacts.json"), "utf8")).toBe("{broken");
+    expect(JSON.parse(fs.readFileSync(file("comments.json"), "utf8")).map((comment: { id: string }) => comment.id))
+      .toContain("corruption-comment");
+    expect(JSON.parse(fs.readFileSync(file("requests.json"), "utf8")).map((item: { id: string }) => item.id))
+      .toContain(request.id);
+    expect(JSON.parse(fs.readFileSync(file("decisions.json"), "utf8")).map((decision: { decisionId: string }) => decision.decisionId))
+      .not.toContain("corruption-decision");
+
+    // The failed artifact delta stays dirty: restoring the known-good bytes
+    // lets the same writer retry without another mutation.
+    fs.writeFileSync(file("artifacts.json"), knownGoodArtifacts);
+    expect(() => writer.forceFlush()).not.toThrow();
+    expect(open().getArtifacts().find((artifact) => artifact.id === "a")?.title).toBe("pending artifact mutation");
   });
 
   it("a disposed store cannot write into a replacement session directory", () => {
@@ -311,5 +518,170 @@ describe("merge and lock contract", () => {
       throw new Error("primary error");
     })).toThrow("primary error");
     expect(() => withSessionFlushLock(lock, () => fs.unlinkSync(lock))).toThrow();
+  });
+});
+
+/**
+ * #338 (F1) — the false success receipt. PR #376 froze the artifact lane in
+ * flush(), but createArtifact / updateArtifactStatus / the other authority
+ * mutators still ran their side effects and returned normally on a frozen
+ * writer: the record went into memory, checkpoint receipts and the
+ * code-change hint hit disk, and the caller (every present_* / revise_artifact
+ * after a freeze) got an artifact back that flush() then silently dropped.
+ * These pin the contract: a frozen writer refuses BEFORE any side effect and
+ * throws the same typed conflict its guarded readers throw.
+ */
+describe("#338 (F1) — a frozen writer refuses authority writes before side effects", () => {
+  const checkpointPath = (relFile: string) => path.join(
+    fx.dir, ".deeppairing/sessions/shared/code-checkpoints",
+    crypto.createHash("sha256").update(path.resolve(fx.dir, relFile)).digest("hex") + ".json",
+  );
+  const hintPath = () => path.join(fx.dir, ".deeppairing/last-code-change.json");
+  const snapshot = () => ({
+    artifacts: fs.readFileSync(file("artifacts.json"), "utf8"),
+    decisions: fs.readFileSync(file("decisions.json"), "utf8"),
+    hint: fs.readFileSync(hintPath(), "utf8"),
+    checkpoints: fs.readdirSync(path.dirname(checkpointPath("x"))).sort(),
+  });
+
+  /** Seed a code_change parent (so checkpoint receipts exist), then freeze a
+   *  reviewer by racing its approval against a concurrent content rewrite.
+   *  `capture` runs against the soon-to-be-frozen writer BEFORE the freeze so a
+   *  test can hold its LIVE in-memory records (reads are fenced afterwards). */
+  function freeze(capture?: (writer: FileStore) => void) {
+    const seedStore = open();
+    seedStore.createArtifact({
+      id: "parent", type: "code_change", title: "Swap the cache",
+      content: { filePath: "src/app.ts", diff: "-a\n+b", concept: { name: "cache swap" } },
+    });
+    seedStore.recordRenderFailure({ artifactId: "parent", visualId: "diagram-1", error: "mermaid parse error" });
+    // #338 (P2) — a consumed-once notice and a resolved decision, both still
+    // unacknowledged on disk when the freeze lands.
+    seedStore.createArtifact({ id: "notice", type: "research", title: "Reviewed notice", content: {} });
+    seedStore.updateArtifactStatus("notice", "approved", "ui_approve_button");
+    seedStore.recordDecisionRequest({ decisionId: "d", artifactId: "notice", context: "Choose", options: [
+      { id: "yes", title: "Yes", description: "Proceed", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
+    ] });
+    seedStore.resolveDecision("d", "yes");
+    seedStore.addComment({ id: "c-seed", artifactId: "parent", content: "Seed comment", author: "human" });
+    seedStore.forceFlush();
+    expect(fs.existsSync(checkpointPath("src/app.ts"))).toBe(true);
+
+    const contentWriter = open();
+    const frozen = open();
+    capture?.(frozen);
+    const changed = contentWriter.getArtifacts()[0]!;
+    changed.content = { filePath: "src/app.ts", diff: "-a\n+REWRITTEN" };
+    changed.version = 2;
+    contentWriter.renameArtifact("parent", changed.title);
+    frozen.updateArtifactStatus("parent", "approved", "ui_approve_button");
+    contentWriter.forceFlush();
+    expect(() => frozen.forceFlush()).toThrow(SessionReviewConflictError);
+    return frozen;
+  }
+
+  it("refuses createArtifact with no in-memory record, checkpoint receipt, or hint write", () => {
+    const frozen = freeze();
+    const before = snapshot();
+    expect(() => frozen.createArtifact({
+      id: "after", type: "code_change", title: "Another change",
+      content: { filePath: "src/new.ts", diff: "+x" },
+    })).toThrow(SessionReviewConflictError);
+    // No side effect leaked: no receipt for the new file, hint untouched.
+    expect(fs.existsSync(checkpointPath("src/new.ts"))).toBe(false);
+    expect(snapshot()).toEqual(before);
+    // And nothing to flush: a later forceFlush still refuses and still writes nothing.
+    expect(() => frozen.forceFlush()).toThrow(SessionReviewConflictError);
+    expect(snapshot()).toEqual(before);
+    expect(open().getArtifacts().map((a) => a.id).sort()).toEqual(["notice", "parent"]);
+  });
+
+  it("refuses a revision atomically: no v2, parent status/receipt/render-failures untouched", () => {
+    const frozen = freeze();
+    const before = snapshot();
+    // The supersede path is create-v2-then-flip-parent. Both halves refuse.
+    expect(() => frozen.createArtifact({
+      id: "v2", type: "code_change", title: "Swap the cache", parentId: "parent", version: 3,
+      content: { filePath: "src/app.ts", diff: "-a\n+c" },
+    })).toThrow(SessionReviewConflictError);
+    expect(() => frozen.updateArtifactStatus("parent", "superseded", "agent_supersede")).toThrow(SessionReviewConflictError);
+    expect(() => frozen.forceFlush()).toThrow(SessionReviewConflictError);
+    // Parent's checkpoint receipt was NOT revoked, and its render-failure
+    // record (a lane that DOES flush through a freeze) was NOT cleared.
+    expect(JSON.parse(fs.readFileSync(checkpointPath("src/app.ts"), "utf8"))).toMatchObject({ artifactId: "parent" });
+    expect(snapshot()).toEqual(before);
+    const recovered = open();
+    expect(recovered.getArtifacts().map((a) => a.id).sort()).toEqual(["notice", "parent"]);
+    expect(recovered.getArtifacts().find((a) => a.id === "parent")).toMatchObject({ status: "draft", version: 2 });
+    expect(recovered.getUnacknowledgedRenderFailures().map((r) => r.visualId)).toEqual(["diagram-1"]);
+  });
+
+  it.each<[string, (s: FileStore) => unknown]>([
+    ["renameArtifact", (s) => s.renameArtifact("parent", "Renamed")],
+    ["setRetractReason", (s) => s.setRetractReason("parent", "nope")],
+    ["updatePlanProgress", (s) => s.updatePlanProgress("parent", [{ stepIndex: 0, status: "done" }])],
+    ["setChangesetFileReview", (s) => s.setChangesetFileReview("parent", "src/app.ts", "reviewed")],
+    ["recordDecisionRequest", (s) => s.recordDecisionRequest({ decisionId: "d", artifactId: "parent", context: "?", options: [] })],
+    ["resolveDecision", (s) => s.resolveDecision("d", "o1")],
+    ["recordPlanReview", (s) => s.recordPlanReview("parent")],
+    ["resolvePlanReview", (s) => s.resolvePlanReview("parent", "approved")],
+    ["acknowledgeStatusChanges", (s) => s.acknowledgeStatusChanges(["notice"])],
+    ["acknowledgeDecisions", (s) => s.acknowledgeDecisions(["d"])],
+  ])("refuses %s on a frozen writer", (_name, call) => {
+    const frozen = freeze();
+    const before = snapshot();
+    expect(() => call(frozen)).toThrow(SessionReviewConflictError);
+    expect(snapshot()).toEqual(before);
+  });
+
+  it("P2 — refuses acknowledgements before mutating memory; disk keeps reporting the notice", () => {
+    // Hold the frozen writer's LIVE records (not disk snapshots) so a
+    // mutate-then-throw implementation is caught here, not only on disk.
+    let notice!: Artifact & { statusChangeUnreported?: boolean };
+    let decision!: { acknowledged?: boolean };
+    const frozen = freeze((writer) => {
+      notice = writer.getArtifacts().find((a) => a.id === "notice")!;
+      decision = writer.getDecision("d")!;
+    });
+    const before = snapshot();
+    expect(notice.statusChangeUnreported).toBe(true);
+    expect(decision.acknowledged ?? false).toBe(false);
+
+    expect(() => frozen.acknowledgeStatusChanges(["notice"])).toThrow(SessionReviewConflictError);
+    expect(notice.statusChangeUnreported).toBe(true);
+    expect(() => frozen.acknowledgeDecisions(["d"])).toThrow(SessionReviewConflictError);
+    expect(decision.acknowledged ?? false).toBe(false);
+    expect(() => frozen.forceFlush()).toThrow(SessionReviewConflictError);
+    expect(notice.statusChangeUnreported).toBe(true);
+    expect(decision.acknowledged ?? false).toBe(false);
+    expect(snapshot()).toEqual(before);
+
+    // A fresh writer still reports both — nothing was consumed.
+    const recovered = open();
+    expect(recovered.getUnacknowledgedStatusChanges().map((a) => a.id)).toEqual(["notice"]);
+    expect(recovered.getResolvedDecisions().map((d) => d.decisionId)).toEqual(["d"]);
+  });
+
+  it("P2 — still persists comment and render-failure acknowledgements through a freeze", () => {
+    const frozen = freeze();
+    frozen.acknowledgeComments(["c-seed"]);
+    frozen.acknowledgeRenderFailures([{ artifactId: "parent", visualId: "diagram-1" }]);
+    expect(() => frozen.forceFlush()).toThrow(SessionReviewConflictError);
+    const recovered = open();
+    expect(recovered.getCommentsForArtifact("parent").find((c) => c.id === "c-seed")?.acknowledged).toBe(true);
+    expect(recovered.getUnacknowledgedRenderFailures()).toEqual([]);
+  });
+
+  it("still persists independent comment, request, and render-failure writes", () => {
+    const frozen = freeze();
+    frozen.addComment({ id: "c-after", artifactId: "parent", content: "Still heard", author: "human" });
+    const request = frozen.addRequest({ text: "Keep going", intent: "implement" });
+    frozen.recordRenderFailure({ artifactId: "parent", visualId: "diagram-2", error: "still broken" });
+    expect(() => frozen.forceFlush()).toThrow(SessionReviewConflictError);
+    const recovered = open();
+    expect(recovered.getCommentsForArtifact("parent").map((c) => c.id)).toContain("c-after");
+    expect(recovered.getRequests().map((r) => r.id)).toContain(request.id);
+    expect(recovered.getUnacknowledgedRenderFailures().map((r) => r.visualId).sort()).toEqual(["diagram-1", "diagram-2"]);
+    expect(recovered.getArtifacts().find((a) => a.id === "parent")).toMatchObject({ status: "draft", version: 2 });
   });
 });

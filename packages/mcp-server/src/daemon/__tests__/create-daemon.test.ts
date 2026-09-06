@@ -20,8 +20,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import type { DecisionOption } from "@deeppairing/shared";
 import { createDaemon, type CreateDaemonDeps, type Daemon } from "../create-daemon.js";
+import { FileStore } from "../../store/file-store.js";
 import { projectHashOf } from "../../project-root.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { ERROR_CODES } from "../../error-codes.js";
@@ -393,6 +395,93 @@ describe("dispose() — the test-teardown seam actually clears every factory han
   });
 });
 
+describe("cleanup failure isolation", () => {
+  it("flushes later sessions and removes discovery state when one session is conflicted", () => {
+    const { daemon, tmpDir, logs } = makeDaemon();
+    const failed = daemon.createSession("failed");
+    const healthy = daemon.createSession("healthy");
+    const failure = Object.assign(new Error("review conflict"), { code: "ESESSIONREVIEWCONFLICT" });
+    vi.spyOn(failed, "forceFlush").mockImplementation(() => { throw failure; });
+    const healthyFlush = vi.spyOn(healthy, "forceFlush");
+    const daemonInfo = path.join(tmpDir, ".deeppairing", "daemon.json");
+    fs.writeFileSync(daemonInfo, "{}");
+
+    expect(() => daemon.cleanup()).not.toThrow();
+    expect(healthyFlush).toHaveBeenCalledOnce();
+    expect(fs.existsSync(daemonInfo)).toBe(false);
+    expect(logs.some((line) => line.includes("failed") && line.includes("review conflict"))).toBe(true);
+  });
+
+  it("maps a frozen internal state read to an actionable conflict response", async () => {
+    const { daemon, tmpDir, fx } = makeDaemon();
+    const local = daemon.createSession("conflicted");
+    local.createArtifact({
+      id: "plan",
+      type: "plan",
+      title: "Plan",
+      content: { steps: [{ title: "Old", status: "pending" }] },
+    });
+    local.forceFlush();
+    const external = fx.track(new FileStore(tmpDir, "conflicted"));
+    const changed = external.getArtifacts()[0]!;
+    changed.content = { steps: [{ title: "New", status: "pending" }] };
+    changed.version = 2;
+    external.renameArtifact("plan", changed.title);
+    external.forceFlush();
+    local.updateArtifactStatus("plan", "approved", "ui_approve_button");
+    expect(() => local.forceFlush()).toThrow(/changed content.*review verdict|review verdict.*changed content/i);
+
+    const response = await daemon.app.request("/api/internal/sessions/conflicted/state", {
+      headers: { Authorization: "Bearer test-token" },
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      code: ERROR_CODES.session_review_conflict,
+      message: expect.stringMatching(/restart.*review/i),
+    });
+
+    const liveResponse = await daemon.app.request("/api/live-session/conflicted", {
+      headers: { "X-Project-Hash": projectHashOf(tmpDir) },
+    });
+    expect(liveResponse.status).toBe(409);
+    expect(await liveResponse.json()).toMatchObject({ code: ERROR_CODES.session_review_conflict });
+  });
+
+  it("returns 409 before an internal decision resolution becomes durable", async () => {
+    const { daemon, tmpDir, fx } = makeDaemon();
+    const local = daemon.createSession("decision-conflict");
+    local.createArtifact({
+      id: "decision-card",
+      type: "decision",
+      title: "Which cache?",
+      content: { decisionId: "cache", question: "Which cache?", options: OPTS },
+    });
+    local.recordDecisionRequest({
+      decisionId: "cache", artifactId: "decision-card", context: "Which cache?", options: OPTS,
+    });
+    local.forceFlush();
+
+    const contentWriter = fx.track(new FileStore(tmpDir, "decision-conflict"));
+    const changed = contentWriter.getArtifacts()[0]!;
+    changed.content = { decisionId: "cache", question: "Which queue?", options: OPTS };
+    changed.version = 2;
+    contentWriter.renameArtifact("decision-card", changed.title);
+    contentWriter.forceFlush();
+
+    const response = await daemon.app.request("/api/internal/sessions/decision-conflict/decisions/cache/resolve", {
+      method: "POST",
+      headers: { Authorization: "Bearer test-token", "Content-Type": "application/json" },
+      body: JSON.stringify({ optionId: "o1", reasoning: "Fits the old cache question" }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: ERROR_CODES.session_review_conflict });
+
+    const recovered = fx.track(new FileStore(tmpDir, "decision-conflict"));
+    expect(recovered.getArtifacts()[0]).toMatchObject({ status: "draft", version: 2 });
+    expect(recovered.getDecisionResponse("cache")).toBeNull();
+  });
+});
+
 describe("#152 / R4 — the auto-open and install-health-ping guard call sites", () => {
   it("DEEPPAIRING_NO_OPEN=1 suppresses the browser open; default env opens", () => {
     const opened: string[] = [];
@@ -512,5 +601,183 @@ describe("Q2 — createDaemon's broadcast tap writes the durable block log", () 
     });
     expect(res.status).toBe(400);
     expect(readLog(tmpDir)).toEqual([]);
+  });
+});
+
+/**
+ * #338 (F1) — through the REAL factory wiring: a frozen session's artifact
+ * create/revise routes must refuse with the typed 409 and leave no receipt,
+ * while an independent comment still lands.
+ */
+const checkpointPath = (root: string, sid: string, relFile: string) => path.join(
+  root, ".deeppairing", "sessions", sid, "code-checkpoints",
+  crypto.createHash("sha256").update(path.resolve(root, relFile)).digest("hex") + ".json",
+);
+const internal = (h: Harness, p: string, body?: unknown) => h.daemon.app.request(p, {
+  method: "POST",
+  headers: { Authorization: "Bearer test-token", "Content-Type": "application/json" },
+  body: body === undefined ? undefined : JSON.stringify(body),
+});
+
+describe("#338 (F1) — frozen artifact receipts through the real factory", () => {
+
+  /** Seed a code_change parent in the daemon's own store, then freeze that
+   *  store by racing its approval against an external content rewrite. */
+  function freezeSession(h: Harness, sid: string): FileStore {
+    const local = h.daemon.createSession(sid);
+    local.createArtifact({
+      id: "parent", type: "code_change", title: "Swap the cache",
+      content: { filePath: "src/app.ts", diff: "-a\n+b" },
+    });
+    // #338 (P2) — an unreported reviewed notice, a resolved-but-unacked
+    // decision, an unacked comment, and a render failure, all durable pre-freeze.
+    local.createArtifact({ id: "notice", type: "research", title: "Reviewed notice", content: {} });
+    local.updateArtifactStatus("notice", "approved", "ui_approve_button");
+    local.recordDecisionRequest({ decisionId: "d", artifactId: "notice", context: "Choose", options: OPTS });
+    local.resolveDecision("d", "o1");
+    local.addComment({ id: "c-seed", artifactId: "parent", content: "Seed", author: "human" });
+    local.recordRenderFailure({ artifactId: "parent", visualId: "v1", error: "boom" });
+    local.forceFlush();
+    const external = h.fx.track(new FileStore(h.tmpDir, sid));
+    const changed = external.getArtifacts()[0]!;
+    changed.content = { filePath: "src/app.ts", diff: "-a\n+REWRITTEN" };
+    changed.version = 2;
+    external.renameArtifact("parent", changed.title);
+    external.forceFlush();
+    local.updateArtifactStatus("parent", "approved", "ui_approve_button");
+    expect(() => local.forceFlush()).toThrow(/changed content.*review verdict|review verdict.*changed content/i);
+    return local;
+  }
+
+  it("refuses artifact creation on a frozen session: typed 409, no artifact, no checkpoint receipt", async () => {
+    const h = makeDaemon();
+    freezeSession(h, "frozen");
+    const hintPath = path.join(h.tmpDir, ".deeppairing", "last-code-change.json");
+    const hintBefore = fs.readFileSync(hintPath, "utf8");
+
+    const res = await internal(h, "/api/internal/sessions/frozen/artifacts", {
+      id: "after", type: "code_change", title: "Another change",
+      content: { filePath: "src/new.ts", diff: "+x" },
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: ERROR_CODES.session_review_conflict });
+    expect(fs.existsSync(checkpointPath(h.tmpDir, "frozen", "src/new.ts"))).toBe(false);
+    expect(fs.readFileSync(hintPath, "utf8")).toBe(hintBefore);
+    const recovered = h.fx.track(new FileStore(h.tmpDir, "frozen"));
+    expect(recovered.getArtifacts().map((a) => a.id).sort()).toEqual(["notice", "parent"]);
+  });
+
+  it("refuses a revision on a frozen session and leaves the parent untouched", async () => {
+    const h = makeDaemon();
+    freezeSession(h, "frozen");
+    const artifactsPath = path.join(h.tmpDir, ".deeppairing", "sessions", "frozen", "artifacts.json");
+    const before = fs.readFileSync(artifactsPath, "utf8");
+
+    const v2 = await internal(h, "/api/internal/sessions/frozen/artifacts", {
+      id: "v2", type: "code_change", title: "Swap the cache", parentId: "parent", version: 3,
+      content: { filePath: "src/app.ts", diff: "-a\n+c" },
+    });
+    expect(v2.status).toBe(409);
+    const flip = await internal(h, "/api/internal/sessions/frozen/artifacts/parent/status",
+      { status: "superseded", reason: "agent_supersede" });
+    expect(flip.status).toBe(409);
+    expect(await flip.json()).toMatchObject({ code: ERROR_CODES.session_review_conflict });
+
+    expect(fs.readFileSync(artifactsPath, "utf8")).toBe(before);
+    expect(JSON.parse(fs.readFileSync(checkpointPath(h.tmpDir, "frozen", "src/app.ts"), "utf8")))
+      .toMatchObject({ artifactId: "parent" });
+    const recovered = h.fx.track(new FileStore(h.tmpDir, "frozen"));
+    expect(recovered.getArtifacts()).toHaveLength(2);
+    expect(recovered.getArtifacts().find((a) => a.id === "parent")).toMatchObject({ status: "draft", version: 2 });
+  });
+
+  it("P2 — refuses status-change and decision acknowledgements on a frozen session; disk keeps reporting both", async () => {
+    const h = makeDaemon();
+    freezeSession(h, "frozen");
+    const dir = path.join(h.tmpDir, ".deeppairing", "sessions", "frozen");
+    const before = Object.fromEntries(["artifacts.json", "decisions.json"].map((n) => [n, fs.readFileSync(path.join(dir, n), "utf8")]));
+
+    const statusAck = await internal(h, "/api/internal/sessions/frozen/artifacts/status-changes/acknowledge", { ids: ["notice"] });
+    expect(statusAck.status).toBe(409);
+    expect(await statusAck.json()).toMatchObject({ code: ERROR_CODES.session_review_conflict });
+    const decisionAck = await internal(h, "/api/internal/sessions/frozen/decisions/acknowledge", { ids: ["d"] });
+    expect(decisionAck.status).toBe(409);
+    expect(await decisionAck.json()).toMatchObject({ code: ERROR_CODES.session_review_conflict });
+
+    const flushed = await internal(h, "/api/internal/sessions/frozen/flush");
+    expect(flushed.status).toBe(409);
+    for (const [n, text] of Object.entries(before)) expect(fs.readFileSync(path.join(dir, n), "utf8")).toBe(text);
+    const recovered = h.fx.track(new FileStore(h.tmpDir, "frozen"));
+    expect(recovered.getUnacknowledgedStatusChanges().map((a) => a.id)).toEqual(["notice"]);
+    expect(recovered.getResolvedDecisions().map((d) => d.decisionId)).toEqual(["d"]);
+  });
+
+  it("P2 — comment and render-failure acknowledgements still land on a frozen session", async () => {
+    const h = makeDaemon();
+    freezeSession(h, "frozen");
+    const commentAck = await internal(h, "/api/internal/sessions/frozen/comments/acknowledge", { ids: ["c-seed"] });
+    expect(commentAck.status).toBe(200);
+    const renderAck = await internal(h, "/api/internal/sessions/frozen/render-failures/acknowledge",
+      { keys: [{ artifactId: "parent", visualId: "v1" }] });
+    expect(renderAck.status).toBe(200);
+    expect((await internal(h, "/api/internal/sessions/frozen/flush")).status).toBe(409);
+    const recovered = h.fx.track(new FileStore(h.tmpDir, "frozen"));
+    expect(recovered.getCommentsForArtifact("parent").find((c) => c.id === "c-seed")?.acknowledged).toBe(true);
+    expect(recovered.getUnacknowledgedRenderFailures()).toEqual([]);
+  });
+
+  it("still persists an independent comment on a frozen session", async () => {
+    const h = makeDaemon();
+    freezeSession(h, "frozen");
+    const res = await internal(h, "/api/internal/sessions/frozen/comments",
+      { id: "c-after", artifactId: "parent", content: "Still heard", author: "human" });
+    expect(res.status).toBe(200);
+    // The forced flush still refuses (typed) but writes the comment lane through.
+    const flushed = await internal(h, "/api/internal/sessions/frozen/flush");
+    expect(flushed.status).toBe(409);
+    const recovered = h.fx.track(new FileStore(h.tmpDir, "frozen"));
+    expect(recovered.getCommentsForArtifact("parent").map((c) => c.id)).toContain("c-after");
+  });
+
+});
+
+/**
+ * #338 (F4) — the two daemon `onError` handlers replaced Hono's default (which
+ * printed the stack) with a bare generic 500. Unexpected errors must now reach
+ * the daemon log with route + stack while the wire body stays generic.
+ */
+describe("#338 (F4) — unexpected route errors are logged, responses stay generic", () => {
+  it("logs an unexpected internal-route error and keeps the 500 body generic", async () => {
+    const h = makeDaemon();
+    const store = h.daemon.createSession("boom");
+    // A REAL unexpected error, no mock: mutating a disposed store throws.
+    store.dispose();
+    const res = await internal(h, "/api/internal/sessions/boom/artifacts",
+      { id: "x", type: "research", title: "t", content: {} });
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "Internal server error" });
+    const line = h.logs.find((l) => l.includes("[route-error]"));
+    expect(line).toBeDefined();
+    expect(line).toContain("POST /api/internal/sessions/boom/artifacts");
+    expect(line).toMatch(/disposed/);
+  });
+
+  it("logs an unexpected active-session-route error and keeps the 500 body generic", async () => {
+    const h = makeDaemon();
+    // Real fake: a genuine FileStore whose state read throws a plain Error.
+    class ExplodingStore extends FileStore {
+      override getFullState(): never { throw new Error("state read exploded: secret-detail-7"); }
+    }
+    h.daemon.sessions.set("boom", h.fx.track(new ExplodingStore(h.tmpDir, "boom")));
+    const res = await h.daemon.app.request("/api/live-session/boom", {
+      headers: { "X-Project-Hash": projectHashOf(h.tmpDir) },
+    });
+    expect(res.status).toBe(500);
+    const body = await res.text();
+    expect(JSON.parse(body)).toEqual({ error: "Internal server error" });
+    expect(body).not.toContain("secret-detail-7");
+    const line = h.logs.find((l) => l.includes("[route-error]"));
+    expect(line).toContain("GET /api/live-session/boom");
+    expect(line).toContain("secret-detail-7");
   });
 });

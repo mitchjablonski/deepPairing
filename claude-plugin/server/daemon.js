@@ -25302,6 +25302,7 @@ var USER_FACING_ERROR_CODES = [
   ERROR_CODES.daemon_auth_required,
   ERROR_CODES.project_hash_mismatch,
   ERROR_CODES.session_not_registered,
+  ERROR_CODES.session_review_conflict,
   ERROR_CODES.review_post_conflict
 ];
 var TOOL_ERROR_CODES = {
@@ -25912,9 +25913,37 @@ var REVIEWED_IDENTITY_FIELDS = ["content", "version", "type", "parentId"];
 function reviewVerdictChanged(base, candidate) {
   return JSON.stringify(base.status) !== JSON.stringify(candidate.status) && REVIEW_VERDICTS.has(String(candidate.status));
 }
+function changesetReviewChanged(base, candidate) {
+  if (base.type !== "changeset" || candidate.type !== "changeset") return false;
+  const baseContent = object2(base.content) ? base.content : {};
+  const candidateContent = object2(candidate.content) ? candidate.content : {};
+  return JSON.stringify([baseContent.reviewState, baseContent.reviewReasons]) !== JSON.stringify([candidateContent.reviewState, candidateContent.reviewReasons]);
+}
+function reviewAuthorityChanged(base, candidate) {
+  return reviewVerdictChanged(base, candidate) || changesetReviewChanged(base, candidate);
+}
+function reviewedContent(record2) {
+  const content = record2.content;
+  if (!object2(content)) return content;
+  if (record2.type === "plan" && Array.isArray(content.steps)) {
+    return {
+      ...content,
+      steps: content.steps.map((step) => {
+        if (!object2(step)) return step;
+        const { status: _status, statusNote: _statusNote, ...proposal } = step;
+        return proposal;
+      })
+    };
+  }
+  if (record2.type === "changeset") {
+    const { reviewState: _reviewState, reviewReasons: _reviewReasons, ...proposal } = content;
+    return proposal;
+  }
+  return content;
+}
 function reviewedIdentityChanged(base, candidate) {
   return REVIEWED_IDENTITY_FIELDS.some(
-    (field) => JSON.stringify(base[field]) !== JSON.stringify(candidate[field])
+    (field) => JSON.stringify(field === "content" ? reviewedContent(base) : base[field]) !== JSON.stringify(field === "content" ? reviewedContent(candidate) : candidate[field])
   );
 }
 function mergeArtifactRecords(baseline, local, disk, key) {
@@ -25928,7 +25957,7 @@ function mergeArtifactRecords(baseline, local, disk, key) {
     const base = baseValue;
     const localValue = localRecord;
     const diskValue = diskRecord;
-    if (reviewVerdictChanged(base, localValue) && reviewedIdentityChanged(base, diskValue) || reviewVerdictChanged(base, diskValue) && reviewedIdentityChanged(base, localValue)) {
+    if (reviewAuthorityChanged(base, localValue) && reviewedIdentityChanged(base, diskValue) || reviewAuthorityChanged(base, diskValue) && reviewedIdentityChanged(base, localValue)) {
       throw new SessionReviewConflictError(id);
     }
   }
@@ -27145,7 +27174,7 @@ var ReviewPostJournal = class {
     }
   }
   /** Legacy data is advisory elsewhere, but it must fail CLOSED at the posting boundary. */
-  legacy() {
+  readLegacyHistory() {
     try {
       const raw2 = fs13.readFileSync(this.legacyPath, "utf8");
       if (raw2.length > 8 * 1024 * 1024) throw new Error("History exceeds safety limit");
@@ -27212,7 +27241,7 @@ var ReviewPostJournal = class {
     const parsed = reviewPostIdentitySchema.parse(identity);
     return this.claim(() => {
       const journal = this.read();
-      const legacy = this.legacy();
+      const legacy = this.readLegacyHistory();
       const prior = journal.operations.filter((op) => op.identity.target === parsed.target);
       const unresolved = prior.find((op) => ["reserved", "sending", "unknown"].includes(op.state));
       if (unresolved) {
@@ -27381,6 +27410,7 @@ var FileStore = class _FileStore {
   persona = "auto";
   // Immutable snapshots identify local changes independently of filesystem mtimes.
   recordBaselines = {};
+  observedRecordFiles = /* @__PURE__ */ new Set();
   backedUpCorruption = {};
   // BB2 — held for FileStore.invalidateLedgerDigestCache, which is keyed
   // by projectRoot so all sessions in this project bust the same cache.
@@ -27509,6 +27539,7 @@ var FileStore = class _FileStore {
         return fallback;
       }
       bytes = fs14.readFileSync(filePath, "utf-8");
+      this.observedRecordFiles.add(path12.basename(filePath));
       return JSON.parse(bytes);
     } catch (err) {
       if (errorCode(err) === "ENOENT") {
@@ -27577,8 +27608,15 @@ var FileStore = class _FileStore {
     try {
       diskBytes = fs14.readFileSync(filePath, "utf8");
       raw2 = JSON.parse(diskBytes);
+      this.observedRecordFiles.add(file2);
     } catch (err) {
       const knownCorruption = err instanceof SyntaxError && diskBytes !== void 0 && this.backedUpCorruption[filePath] === diskBytes;
+      if (errorCode(err) === "ENOENT" && this.observedRecordFiles.has(file2)) {
+        throw Object.assign(
+          new Error(`Previously observed session collection disappeared: ${filePath}`),
+          { code: "ESESSIONFILEMISSING", path: filePath }
+        );
+      }
       if (errorCode(err) !== "ENOENT" && !knownCorruption) throw err;
       raw2 = [];
     }
@@ -27586,74 +27624,111 @@ var FileStore = class _FileStore {
     const mergedBytes = JSON.stringify(merged, null, 2);
     if (dirty && (!optional2 || merged.length > 0 || diskBytes !== void 0) && diskBytes !== mergedBytes) {
       writeStringAtomic(filePath, mergedBytes);
+      this.observedRecordFiles.add(file2);
     }
     this.recordBaselines[file2] = JSON.stringify(merged);
     delete this.backedUpCorruption[filePath];
     return merged;
   }
   flush() {
-    this.assertAuthorizationReadable();
+    const reviewConflict = this.reviewConflict;
     try {
       withSessionFlushLock(path12.join(this.sessionDir(), ".flush.lock"), () => {
-        this.artifacts = this.flushRecords(
-          "artifacts.json",
-          this.artifacts,
-          (r) => r.id,
-          (raw2) => _FileStore.salvageArray(`${this.sessionId}:artifacts.json (external)`, raw2, "id"),
-          false,
-          mergeArtifactRecords
-        );
-        this.comments = this.flushRecords(
-          "comments.json",
-          this.comments,
-          (r) => r.id,
-          (raw2) => _FileStore.salvageArray("comments.json (external)", raw2, "id")
-        );
-        this.decisions = new Map(this.flushRecords(
-          "decisions.json",
-          [...this.decisions.values()],
-          (r) => r.decisionId,
-          (raw2) => _FileStore.salvageArray("decisions.json (external)", raw2, "decisionId")
-        ).map((r) => [r.decisionId, r]));
-        this.planReviews = new Map(this.flushRecords(
-          "plan-reviews.json",
-          [...this.planReviews.values()],
-          (r) => r.artifactId,
-          (raw2) => _FileStore.salvageArray("plan-reviews.json (external)", raw2, "artifactId")
-        ).map((r) => [r.artifactId, r]));
-        this.requests = this.flushRecords(
-          "requests.json",
-          this.requests,
-          (r) => r.id,
-          (raw2) => _FileStore.salvageArray("requests.json (external)", raw2, "id"),
-          true
-        );
-        this.renderFailures = this.flushRecords(
-          "render-failures.json",
-          this.renderFailures,
-          (r) => JSON.stringify([r.artifactId, r.visualId]),
-          (raw2) => {
-            const keyed = (Array.isArray(raw2) ? raw2 : []).map((r) => ({
-              ...r,
-              __key: JSON.stringify([r?.artifactId, r?.visualId])
-            }));
-            return _FileStore.salvageArray(
-              "render-failures.json (external)",
-              keyed,
-              "__key"
-            ).map(({ __key, ...r }) => r);
-          },
-          true
-        );
-        const metricsPath2 = path12.join(this.sessionDir(), "metrics.json");
-        if (this.reviewLatencies.length > this.flushedLatencyCount) {
-          const raw2 = this.loadJsonFile(metricsPath2, []);
-          const disk = Array.isArray(raw2) ? raw2.filter((r) => r && typeof r.type === "string" && Number.isFinite(r.latencyMs)) : [];
-          const merged = [...disk, ...this.reviewLatencies.slice(this.flushedLatencyCount)];
-          writeJsonAtomic(metricsPath2, merged);
-          this.reviewLatencies = merged;
-          this.flushedLatencyCount = merged.length;
+        let firstFailure = reviewConflict;
+        let artifactWriteBlocked = !!reviewConflict;
+        const attempt = (write) => {
+          try {
+            write();
+          } catch (error51) {
+            if (firstFailure === null || firstFailure === void 0) firstFailure = error51;
+          }
+        };
+        if (!artifactWriteBlocked) {
+          attempt(() => {
+            try {
+              this.artifacts = this.flushRecords(
+                "artifacts.json",
+                this.artifacts,
+                (r) => r.id,
+                (raw2) => _FileStore.salvageArray(`${this.sessionId}:artifacts.json (external)`, raw2, "id"),
+                false,
+                mergeArtifactRecords
+              );
+            } catch (error51) {
+              artifactWriteBlocked = true;
+              if (error51 instanceof SessionReviewConflictError) {
+                this.reviewConflict = error51;
+              }
+              throw error51;
+            }
+          });
         }
+        attempt(() => {
+          this.comments = this.flushRecords(
+            "comments.json",
+            this.comments,
+            (r) => r.id,
+            (raw2) => _FileStore.salvageArray("comments.json (external)", raw2, "id")
+          );
+        });
+        if (!artifactWriteBlocked) {
+          attempt(() => {
+            this.decisions = new Map(this.flushRecords(
+              "decisions.json",
+              [...this.decisions.values()],
+              (r) => r.decisionId,
+              (raw2) => _FileStore.salvageArray("decisions.json (external)", raw2, "decisionId")
+            ).map((r) => [r.decisionId, r]));
+          });
+          attempt(() => {
+            this.planReviews = new Map(this.flushRecords(
+              "plan-reviews.json",
+              [...this.planReviews.values()],
+              (r) => r.artifactId,
+              (raw2) => _FileStore.salvageArray("plan-reviews.json (external)", raw2, "artifactId")
+            ).map((r) => [r.artifactId, r]));
+          });
+        }
+        attempt(() => {
+          this.requests = this.flushRecords(
+            "requests.json",
+            this.requests,
+            (r) => r.id,
+            (raw2) => _FileStore.salvageArray("requests.json (external)", raw2, "id"),
+            true
+          );
+        });
+        attempt(() => {
+          this.renderFailures = this.flushRecords(
+            "render-failures.json",
+            this.renderFailures,
+            (r) => JSON.stringify([r.artifactId, r.visualId]),
+            (raw2) => {
+              const keyed = (Array.isArray(raw2) ? raw2 : []).map((r) => ({
+                ...r,
+                __key: JSON.stringify([r?.artifactId, r?.visualId])
+              }));
+              return _FileStore.salvageArray(
+                "render-failures.json (external)",
+                keyed,
+                "__key"
+              ).map(({ __key, ...r }) => r);
+            },
+            true
+          );
+        });
+        const metricsPath2 = path12.join(this.sessionDir(), "metrics.json");
+        if (!artifactWriteBlocked && this.reviewLatencies.length > this.flushedLatencyCount) {
+          attempt(() => {
+            const raw2 = this.loadJsonFile(metricsPath2, []);
+            const disk = Array.isArray(raw2) ? raw2.filter((r) => r && typeof r.type === "string" && Number.isFinite(r.latencyMs)) : [];
+            const merged = [...disk, ...this.reviewLatencies.slice(this.flushedLatencyCount)];
+            writeJsonAtomic(metricsPath2, merged);
+            this.reviewLatencies = merged;
+            this.flushedLatencyCount = merged.length;
+          });
+        }
+        if (firstFailure !== null && firstFailure !== void 0) throw firstFailure;
       });
     } catch (error51) {
       if (error51 instanceof SessionReviewConflictError) this.reviewConflict = error51;
@@ -27686,6 +27761,7 @@ var FileStore = class _FileStore {
   }
   // --- Artifacts ---
   createArtifact(params) {
+    this.assertAuthorizationReadable();
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const featureId = normalizeFeatureId(params.feature)?.slug;
     const secretWarnings = scanContentForSecrets(params.content);
@@ -27767,6 +27843,7 @@ var FileStore = class _FileStore {
     }
   }
   renameArtifact(artifactId, title) {
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (art) {
       art.title = title;
@@ -27780,6 +27857,7 @@ var FileStore = class _FileStore {
    *  mechanism update_plan_progress / changeset review use. No-op on a missing
    *  artifact. */
   setRetractReason(artifactId, reason) {
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (art) {
       art.content.retractReason = reason;
@@ -27788,6 +27866,7 @@ var FileStore = class _FileStore {
     }
   }
   updateArtifactStatus(artifactId, status, reason = "unspecified") {
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (art) {
       if (isCrossTerminalVerdictFlip(art.status, status, reason)) {
@@ -27833,6 +27912,7 @@ var FileStore = class _FileStore {
   }
   /** D10 (H2) — patch plan step statuses in place. See store-interface.ts. */
   updatePlanProgress(artifactId, updates) {
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (!art || art.type !== "plan") return null;
     const content = art.content;
@@ -27863,6 +27943,7 @@ var FileStore = class _FileStore {
    *  updatePlanProgress uses. Reversible: passing `null` clears the file's
    *  state (e.g. un-checking "File looks right"). */
   setChangesetFileReview(artifactId, filePath, state, reason) {
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (!art || art.type !== "changeset") return null;
     const content = art.content;
@@ -28083,6 +28164,7 @@ var FileStore = class _FileStore {
    * acknowledgeDecisions exactly (same loop + same debounced flush).
    */
   acknowledgeStatusChanges(ids) {
+    this.assertAuthorizationReadable();
     for (const a of this.artifacts) {
       if (ids.includes(a.id)) {
         a.statusChangeUnreported = false;
@@ -28235,6 +28317,7 @@ var FileStore = class _FileStore {
   // C6c review — the interface narrowed options to DecisionOption[] but this
   // inline param type still said any[], leaving the WRITE site unenforced.
   recordDecisionRequest(params) {
+    this.assertAuthorizationReadable();
     this.decisions.set(params.decisionId, {
       ...params,
       createdAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -28242,6 +28325,7 @@ var FileStore = class _FileStore {
     this.scheduleFlush();
   }
   resolveDecision(decisionId, optionId, reasoning, prediction) {
+    this.assertAuthorizationReadable();
     const dec = this.decisions.get(decisionId);
     if (!dec) return;
     const opts = dec.options;
@@ -28319,6 +28403,7 @@ var FileStore = class _FileStore {
     return Array.from(this.decisions.values()).filter((d) => d.response && !d.acknowledged);
   }
   acknowledgeDecisions(decisionIds) {
+    this.assertAuthorizationReadable();
     for (const id of decisionIds) {
       const dec = this.decisions.get(id);
       if (dec) dec.acknowledged = true;
@@ -28327,6 +28412,7 @@ var FileStore = class _FileStore {
   }
   // --- Plan Reviews ---
   recordPlanReview(artifactId) {
+    this.assertAuthorizationReadable();
     this.planReviews.set(artifactId, {
       artifactId,
       createdAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -28334,6 +28420,7 @@ var FileStore = class _FileStore {
     this.scheduleFlush();
   }
   resolvePlanReview(artifactId, verdict, feedback) {
+    this.assertAuthorizationReadable();
     const review = this.planReviews.get(artifactId);
     if (review) {
       review.verdict = verdict;
@@ -28815,6 +28902,57 @@ var FileStore = class _FileStore {
     for (const resolve of waiters) resolve();
   }
   // --- Full state (for web UI hydration) ---
+  /** Read permission-bearing state under the cooperating writers' claim without
+   * flushing or changing the live cache/baselines. UI hydration stays cheap. */
+  getReviewPostState() {
+    if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
+    this.assertAuthorizationReadable();
+    if (this.isDemoSession) throw new Error("Demo sessions cannot authorize PR review posting");
+    try {
+      return withSessionFlushLock(path12.join(this.sessionDir(), ".flush.lock"), () => {
+        const baseline = JSON.parse(this.recordBaselines["artifacts.json"] ?? "[]");
+        let raw2;
+        try {
+          raw2 = JSON.parse(fs14.readFileSync(path12.join(this.sessionDir(), "artifacts.json"), "utf8"));
+          this.observedRecordFiles.add("artifacts.json");
+        } catch (error51) {
+          if (errorCode(error51) !== "ENOENT" || this.observedRecordFiles.has("artifacts.json")) throw error51;
+          raw2 = [];
+        }
+        if (!Array.isArray(raw2) || raw2.some((value) => !ArtifactSchema.safeParse(value).success)) {
+          throw new Error("Cannot authorize a PR review from malformed persisted artifacts");
+        }
+        const disk = raw2;
+        if (new Set(disk.map((value) => value.id)).size !== disk.length) {
+          throw new Error("Cannot authorize a PR review from duplicate persisted artifacts");
+        }
+        const before = new Map(baseline.map((value) => [value.id, value]));
+        const persisted = new Map(disk.map((value) => [value.id, value]));
+        for (const local of this.artifacts) {
+          const remote = persisted.get(local.id);
+          if (!remote) continue;
+          const base = before.get(local.id);
+          if (base && base.status !== local.status && base.status !== remote.status && local.status !== remote.status) {
+            throw new SessionReviewConflictError(local.id);
+          }
+          if (!base && ["content", "version", "type", "parentId", "status"].some(
+            (field) => JSON.stringify(local[field]) !== JSON.stringify(remote[field])
+          )) {
+            throw new SessionReviewConflictError(local.id);
+          }
+        }
+        const artifacts = mergeArtifactRecords(baseline, this.artifacts, disk, (value) => value.id);
+        return JSON.parse(JSON.stringify({
+          sessionId: this.sessionId,
+          artifacts,
+          postedReviews: this.reviewPosts.readLegacyHistory()
+        }));
+      });
+    } catch (error51) {
+      if (error51 instanceof SessionReviewConflictError) this.reviewConflict = error51;
+      throw error51;
+    }
+  }
   getFullState() {
     this.assertAuthorizationReadable();
     return {
@@ -31930,6 +32068,13 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     origin: (origin) => corsAllowedOrigin(origin)
   }));
   app.onError((err, c) => {
+    if (isSessionReviewConflictError(err)) {
+      return c.json({
+        error: "session_review_conflict",
+        code: ERROR_CODES.session_review_conflict,
+        message: err.message
+      }, 409);
+    }
     if (err instanceof SyntaxError) {
       return c.json({ error: "Invalid JSON" }, 400);
     }
@@ -32202,6 +32347,9 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       if (!decision) {
         await store.updateArtifactStatus(targetArtifactId, "approved", "ui_decision_resolve");
       }
+    }
+    await store.forceFlush();
+    if (targetArtifactId) {
       await maybeUpdateTaskStatus(null, targetArtifactId, store);
     }
     broadcast({
@@ -32359,6 +32507,16 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       await store.resolvePlanReview(artifactId, status, feedback);
     }
     await maybeUpdateTaskStatus(null, artifactId, store);
+    if (feedback) {
+      const comment = await store.addComment({
+        id: `cmt_${nanoid3(10)}`,
+        artifactId,
+        content: feedback,
+        author: "human",
+        verdictFeedback: true
+      });
+      broadcast({ type: "comment_added", comment }, sid);
+    }
     try {
       await store.forceFlush();
     } catch (err) {
@@ -32370,19 +32528,6 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
         }, 409);
       }
       console.error(`[deepPairing] verdict flush failed (verdict landed in memory; debounced flush will retry): ${err}`);
-    }
-    if (feedback) {
-      const comment = await store.addComment({
-        id: `cmt_${nanoid3(10)}`,
-        artifactId,
-        content: feedback,
-        author: "human",
-        // #187 — this is the VERDICT's own feedback note, posted AFTER the status
-        // flip above. On an "Approve with modifications" (status now `approved`)
-        // it must NOT be dressed as a late follow-up — it's review feedback.
-        verdictFeedback: true
-      });
-      broadcast({ type: "comment_added", comment }, sid);
     }
     if (status === "rejected") {
       const artifacts = await store.getArtifacts();
@@ -32488,11 +32633,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
         400
       );
     }
-    try {
-      await store.forceFlush();
-    } catch (err) {
-      console.error(`[deepPairing] changeset review flush failed (state landed in memory; debounced flush will retry): ${err}`);
-    }
+    await store.forceFlush();
     broadcast({ type: "changeset_review_updated", artifact: updated }, sid);
     return c.json({ status: "updated", artifactId });
   });
@@ -33450,8 +33591,20 @@ async function readJsonObject(c, opts) {
   }
   return { ok: true, body };
 }
-function createActiveSessionRoutes(sessions, sessionMeta, daemonHash, activeSessions) {
+function unexpectedRouteError(log2, c, error51) {
+  const detail = error51 instanceof Error ? error51.stack ?? error51.message : String(error51);
+  log2(`[route-error] ${c.req.method} ${c.req.path} \u2192 500: ${detail}`);
+  return c.json({ error: "Internal server error" }, 500);
+}
+function createActiveSessionRoutes(sessions, sessionMeta, daemonHash, activeSessions, logFn) {
   const app = new Hono2();
+  app.onError((error51, c) => {
+    if (isSessionReviewConflictError(error51)) {
+      return c.json({ error: "session_review_conflict", code: ERROR_CODES.session_review_conflict, message: error51.message }, 409);
+    }
+    return unexpectedRouteError(logFn ?? (() => {
+    }), c, error51);
+  });
   const gate = projectHashGate(daemonHash);
   app.use("/api/active-sessions", gate);
   app.use("/api/live-session/*", gate);
@@ -33488,6 +33641,12 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
   const log2 = logFn ?? (() => {
   });
   const app = new Hono2();
+  app.onError((error51, c) => {
+    if (isSessionReviewConflictError(error51)) {
+      return c.json({ error: "session_review_conflict", code: ERROR_CODES.session_review_conflict, message: error51.message }, 409);
+    }
+    return unexpectedRouteError(log2, c, error51);
+  });
   if (authToken) {
     app.use("/api/internal/*", async (c, next) => {
       const auth = c.req.header("Authorization");
@@ -33900,6 +34059,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       return c.json({ error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error }, 400);
     }
     const artifactId = r.store.getDecision(decisionId)?.artifactId;
+    await r.store.forceFlush();
     broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId, optionId, reasoning, confidence, predictedOutcome });
     return c.json({ status: "resolved" });
   });
@@ -33977,6 +34137,11 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     return c.json(r.store.getFullState());
+  });
+  app.get("/api/internal/sessions/:sessionId/review-post-state", (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    return c.json(r.store.getReviewPostState());
   });
   app.get("/api/internal/sessions/:sessionId/metrics", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -34801,7 +34966,7 @@ function createDaemon(deps) {
     checkAutoShutdown();
     return c.json({ sessionId, startedAt: (/* @__PURE__ */ new Date()).toISOString() });
   });
-  app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions));
+  app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions, log2));
   const __thisDir3 = path21.dirname(fileURLToPath4(import.meta.url));
   const monorepoWebDist = path21.join(__thisDir3, "../../dist/web");
   const webDistCandidates = [monorepoWebDist, path21.join(__thisDir3, "web")];
@@ -34813,8 +34978,12 @@ function createDaemon(deps) {
     log: log2
   });
   function cleanup() {
-    for (const store of sessions.values()) {
-      store.forceFlush();
+    for (const [sessionId, store] of sessions) {
+      try {
+        store.forceFlush();
+      } catch (error51) {
+        log2(`[cleanup] failed to flush session ${sessionId}: ${errorMessage(error51)}`);
+      }
     }
     try {
       if (fs23.existsSync(daemonInfoFile)) fs23.unlinkSync(daemonInfoFile);
@@ -34903,10 +35072,74 @@ function createDaemon(deps) {
         clients = /* @__PURE__ */ new Set();
         wsClients.set(sessionId, clients);
       }
+      let refusalDeadline = null;
+      let cleanedUp = false;
+      const cleanup2 = () => {
+        if (refusalDeadline) {
+          clearTimeout(refusalDeadline);
+          refusalDeadline = null;
+        }
+        if (cleanedUp) return;
+        cleanedUp = true;
+        clients.delete(ws);
+        if (clients.size === 0) wsClients.delete(sessionId);
+        checkAutoShutdown();
+      };
+      ws.on("error", (err) => {
+        log2(`[ws] session client error (session=${sessionId}): ${err?.code ?? errorMessage(err)}`);
+        cleanup2();
+        try {
+          ws.terminate();
+        } catch {
+        }
+      });
+      ws.on("close", cleanup2);
       clients.add(ws);
       const store = sessions.get(sessionId);
       if (store) {
-        ws.send(JSON.stringify({ type: "connected", state: store.getFullState(), projectRoot: projectRoot2, projectHash: daemonProjectHash, daemonStartedAt: startedAt2 }));
+        try {
+          ws.send(JSON.stringify({ type: "connected", state: store.getFullState(), projectRoot: projectRoot2, projectHash: daemonProjectHash, daemonStartedAt: startedAt2 }));
+        } catch (error51) {
+          const knownConflict = isSessionReviewConflictError(error51);
+          log2(knownConflict ? `[ws] initial snapshot refused: session review conflict (session=${sessionId}): ${errorMessage(error51)}` : `[ws] initial snapshot failed (session=${sessionId}): ${errorMessage(error51)}`);
+          cleanup2();
+          const refusal = knownConflict ? { type: "connection_refused", code: ERROR_CODES.session_review_conflict, message: "Session state requires review before reconnecting." } : { type: "connection_refused", message: "Session state is temporarily unavailable." };
+          refusalDeadline = setTimeout(() => {
+            log2(`[ws] initial snapshot refusal timed out (session=${sessionId}); terminating client`);
+            try {
+              ws.terminate();
+            } catch {
+            }
+          }, 1e3);
+          refusalDeadline.unref?.();
+          try {
+            ws.send(JSON.stringify(refusal), (sendError) => {
+              if (sendError) {
+                log2(`[ws] initial snapshot refusal send failed (session=${sessionId}): ${errorMessage(sendError)}`);
+                try {
+                  ws.terminate();
+                } catch {
+                }
+                return;
+              }
+              try {
+                ws.close(1011, "Initial snapshot unavailable");
+              } catch {
+                try {
+                  ws.terminate();
+                } catch {
+                }
+              }
+            });
+          } catch (sendError) {
+            log2(`[ws] initial snapshot refusal send failed (session=${sessionId}): ${errorMessage(sendError)}`);
+            try {
+              ws.terminate();
+            } catch {
+            }
+          }
+          return;
+        }
       }
       if (sessionId.startsWith("demo_")) {
         const replay = demoReplayEvents.get(sessionId);
@@ -34914,36 +35147,76 @@ function createDaemon(deps) {
           ws.send(JSON.stringify({ ...replay, sessionId, replayed: true }));
         }
       }
-      ws.on("error", (err) => {
-        log2(`[ws] session client error (session=${sessionId}): ${err?.code ?? errorMessage(err)}`);
-        try {
-          ws.terminate();
-        } catch {
-        }
-      });
-      ws.on("close", () => {
-        clients.delete(ws);
-        if (clients.size === 0) wsClients.delete(sessionId);
-        checkAutoShutdown();
-      });
     } else {
-      globalClients.add(ws);
-      const sessionList = Array.from(sessions.entries()).map(([id, store]) => ({
-        sessionId: id,
-        artifactCount: store.getArtifacts().length
-      }));
-      ws.send(JSON.stringify({ type: "connected", sessions: sessionList, projectRoot: projectRoot2, projectHash: daemonProjectHash, daemonStartedAt: startedAt2 }));
-      ws.on("error", (err) => {
-        log2(`[ws] global client error: ${err?.code ?? errorMessage(err)}`);
-        try {
-          ws.terminate();
-        } catch {
+      let refusalDeadline = null;
+      let cleanedUp = false;
+      const cleanup2 = () => {
+        if (refusalDeadline) {
+          clearTimeout(refusalDeadline);
+          refusalDeadline = null;
         }
-      });
-      ws.on("close", () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
         globalClients.delete(ws);
         checkAutoShutdown();
+      };
+      ws.on("error", (err) => {
+        log2(`[ws] global client error: ${err?.code ?? errorMessage(err)}`);
+        cleanup2();
+        try {
+          ws.terminate();
+        } catch {
+        }
       });
+      ws.on("close", cleanup2);
+      globalClients.add(ws);
+      try {
+        const sessionList = Array.from(sessions.entries()).map(([id, store]) => ({
+          sessionId: id,
+          artifactCount: store.getArtifacts().length
+        }));
+        ws.send(JSON.stringify({ type: "connected", sessions: sessionList, projectRoot: projectRoot2, projectHash: daemonProjectHash, daemonStartedAt: startedAt2 }));
+      } catch (error51) {
+        const knownConflict = isSessionReviewConflictError(error51);
+        log2(knownConflict ? `[ws] global initial snapshot refused: session review conflict: ${errorMessage(error51)}` : `[ws] global initial snapshot failed: ${errorMessage(error51)}`);
+        cleanup2();
+        const refusal = knownConflict ? { type: "connection_refused", code: ERROR_CODES.session_review_conflict, message: "Session state requires review before reconnecting." } : { type: "connection_refused", message: "Session state is temporarily unavailable." };
+        refusalDeadline = setTimeout(() => {
+          log2("[ws] global initial snapshot refusal timed out; terminating client");
+          try {
+            ws.terminate();
+          } catch {
+          }
+        }, 1e3);
+        refusalDeadline.unref?.();
+        try {
+          ws.send(JSON.stringify(refusal), (sendError) => {
+            if (sendError) {
+              log2(`[ws] global initial snapshot refusal send failed: ${errorMessage(sendError)}`);
+              try {
+                ws.terminate();
+              } catch {
+              }
+              return;
+            }
+            try {
+              ws.close(1011, "Initial snapshot unavailable");
+            } catch {
+              try {
+                ws.terminate();
+              } catch {
+              }
+            }
+          });
+        } catch (sendError) {
+          log2(`[ws] global initial snapshot refusal send failed: ${errorMessage(sendError)}`);
+          try {
+            ws.terminate();
+          } catch {
+          }
+        }
+        return;
+      }
     }
     log2(`WebSocket client connected (session: ${sessionId ?? "global"}, total: ${getClientCount()})`);
   });

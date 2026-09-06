@@ -295,6 +295,12 @@ export interface IStore {
     score: number;
     matchedVia: string[];
   }>>;
+  /** Posting-only fresh authorization projection; never a cached hydration fallback. */
+  getReviewPostState(): MaybePromise<{
+    sessionId: string;
+    artifacts: Artifact[];
+    postedReviews?: PostedReviewRecord[];
+  }>;
   getFullState(): MaybePromise<{
     sessionId: string;
     artifacts: Artifact[];

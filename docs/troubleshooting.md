@@ -171,6 +171,44 @@ MCP_TIMEOUT=60000 claude
 As with the timeout above, a native-ext4 checkout (e.g. under `~`) erases the
 latency class entirely and is the durable fix.
 
+## session_review_conflict
+
+Two session writers raced: one changed reviewed artifact identity while another
+recorded review authority (a verdict, decision response, plan review, or
+per-file changeset disposition). deepPairing refuses to combine those writes,
+freezes review-authority reads and the artifact, decision, plan-review, and
+review-metrics write lanes in that writer, and returns a structured HTTP 409.
+Independent comments, requests, and render-failure records continue to persist,
+but the affected artifact cannot be authorized from the frozen process. This is
+failure isolation across collections, not a cross-file transaction guarantee.
+
+Once a writer is frozen, every later write into those lanes is refused up
+front with the same 409, before any in-memory change, checkpoint receipt, or
+broadcast: creating an artifact (`present_*`), revising one
+(`revise_artifact`), any status transition, plan progress, per-file changeset
+review, decision or plan-review records, and the consume-once acknowledgements
+of status changes and resolved decisions (a refused acknowledgement leaves the
+notice reported on disk, so a fresh writer surfaces it again rather than losing
+it). A `present_*` or `revise_artifact`
+call that returns this error created nothing, and the artifact it tried to
+revise is exactly as it was on disk — no v2, no `superseded` flip, no comment.
+The first conflict is different only in when it is detected: the verdict route
+records its feedback comment before the flush that discovers the conflict, so
+that comment survives.
+
+A rejection that meets this 409 follows the failed-verdict contract, not the
+rejection guarantee. Its feedback comment may be preserved (first conflict) or
+refused with the verdict (already frozen), but in neither case is a
+cross-project rejection stance recorded — `recordRejectedApproach` runs only
+after a successful verdict flush. After restarting the writer, reject the
+reloaded artifact again if you want that stance remembered.
+
+Stop and restart the session writer so it reloads the persisted artifact, then
+review that exact version again before authorizing it. Do not delete or replace
+`artifacts.json` to bypass the conflict; preserve it for inspection. If the file
+is corrupt, restore or hand-repair the preserved data before retrying —
+deepPairing will not automatically overwrite unknown artifact history.
+
 ## review_post_conflict
 
 A durable review-post operation or its journal prevents another post. Preserve

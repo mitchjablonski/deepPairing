@@ -67,6 +67,7 @@ import {
 import { shouldAutoOpenBrowser } from "./auto-open.js";
 import { writeJsonAtomic } from "../store/atomic-write.js";
 import { summarizeProject } from "../store/context-bank.js";
+import { isSessionReviewConflictError } from "../store/session-records.js";
 
 /**
  * Cross-platform "open URL in default browser" without pulling in an npm
@@ -794,7 +795,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // a testable builder (see daemon-routes.ts). Without the gate, a stale tab on a
   // daemon serving a DIFFERENT project could read this project's session list +
   // full state. Mounted on "/" like the other route groups.
-  app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions));
+  app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions, log));
 
   // --- Serve static web UI ---
   // Extracted to http/static-ui.ts so the bootstrap-injection contract (the
@@ -826,8 +827,14 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
 
   function cleanup(): void {
     // Flush all sessions
-    for (const store of sessions.values()) {
-      store.forceFlush();
+    for (const [sessionId, store] of sessions) {
+      try {
+        store.forceFlush();
+      } catch (error) {
+        // One corrupt/conflicted session must not strand every later session
+        // or keep stale daemon discovery credentials on disk during shutdown.
+        log(`[cleanup] failed to flush session ${sessionId}: ${errorMessage(error)}`);
+      }
     }
     // Remove daemon info file
     try { if (fs.existsSync(daemonInfoFile)) fs.unlinkSync(daemonInfoFile); } catch {}
@@ -995,6 +1002,30 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
       // Subscribe to a specific session
       let clients = wsClients.get(sessionId);
       if (!clients) { clients = new Set(); wsClients.set(sessionId, clients); }
+      let refusalDeadline: ReturnType<typeof setTimeout> | null = null;
+      let cleanedUp = false;
+      const cleanup = () => {
+        if (refusalDeadline) {
+          clearTimeout(refusalDeadline);
+          refusalDeadline = null;
+        }
+        if (cleanedUp) return;
+        cleanedUp = true;
+        clients!.delete(ws);
+        if (clients!.size === 0) wsClients.delete(sessionId);
+        checkAutoShutdown();
+      };
+
+      // Install the terminal handlers BEFORE registration and before any
+      // snapshot access. A frozen FileStore can throw from getFullState(), and
+      // a peer can disappear while the refusal is being written; neither path
+      // may leave an unhandled socket error or a ghost subscriber behind.
+      ws.on("error", (err: any) => {
+        log(`[ws] session client error (session=${sessionId}): ${err?.code ?? errorMessage(err)}`);
+        cleanup();
+        try { ws.terminate(); } catch {}
+      });
+      ws.on("close", cleanup);
       clients.add(ws);
 
       // Send session state on connect. U4 — include `daemonStartedAt` so
@@ -1002,9 +1033,39 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
       // daemon process means stale in-memory state, force re-hydrate).
       const store = sessions.get(sessionId);
       if (store) {
-        // AA4 — include projectHash so the browser can echo it in
-        // X-Project-Hash and the per-session routes can verify.
-        ws.send(JSON.stringify({ type: "connected", state: store.getFullState(), projectRoot, projectHash: daemonProjectHash, daemonStartedAt: startedAt }));
+        try {
+          // AA4 — include projectHash so the browser can echo it in
+          // X-Project-Hash and the per-session routes can verify.
+          ws.send(JSON.stringify({ type: "connected", state: store.getFullState(), projectRoot, projectHash: daemonProjectHash, daemonStartedAt: startedAt }));
+        } catch (error) {
+          const knownConflict = isSessionReviewConflictError(error);
+          log(knownConflict
+            ? `[ws] initial snapshot refused: session review conflict (session=${sessionId}): ${errorMessage(error)}`
+            : `[ws] initial snapshot failed (session=${sessionId}): ${errorMessage(error)}`);
+          cleanup();
+          const refusal = knownConflict
+            ? { type: "connection_refused", code: ERROR_CODES.session_review_conflict, message: "Session state requires review before reconnecting." }
+            : { type: "connection_refused", message: "Session state is temporarily unavailable." };
+          refusalDeadline = setTimeout(() => {
+            log(`[ws] initial snapshot refusal timed out (session=${sessionId}); terminating client`);
+            try { ws.terminate(); } catch {}
+          }, 1000);
+          refusalDeadline.unref?.();
+          try {
+            ws.send(JSON.stringify(refusal), (sendError) => {
+              if (sendError) {
+                log(`[ws] initial snapshot refusal send failed (session=${sessionId}): ${errorMessage(sendError)}`);
+                try { ws.terminate(); } catch {}
+                return;
+              }
+              try { ws.close(1011, "Initial snapshot unavailable"); } catch { try { ws.terminate(); } catch {} }
+            });
+          } catch (sendError) {
+            log(`[ws] initial snapshot refusal send failed (session=${sessionId}): ${errorMessage(sendError)}`);
+            try { ws.terminate(); } catch {}
+          }
+          return;
+        }
       }
 
       // #168 — replay the demo's hero `preflight_blocked` to a late joiner. A
@@ -1019,43 +1080,69 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
         }
       }
 
-      // II5 — handle 'error' before 'close'. An RSV1 framing error, an
-      // EPIPE on a half-open client, or a slow consumer all emit 'error'
-      // first; with no listener the EventEmitter throws and crashes the
-      // daemon process. The wrapper has no auto-respawn for that mode.
-      // Always pair: error → log + force-close so the 'close' handler
-      // runs the standard cleanup path.
-      ws.on("error", (err: any) => {
-        log(`[ws] session client error (session=${sessionId}): ${err?.code ?? errorMessage(err)}`);
-        try { ws.terminate(); } catch {}
-      });
-      ws.on("close", () => {
-        clients!.delete(ws);
-        if (clients!.size === 0) wsClients.delete(sessionId);
-        checkAutoShutdown();
-      });
     } else {
       // Global client — sees all sessions
+      let refusalDeadline: ReturnType<typeof setTimeout> | null = null;
+      let cleanedUp = false;
+      const cleanup = () => {
+        if (refusalDeadline) {
+          clearTimeout(refusalDeadline);
+          refusalDeadline = null;
+        }
+        if (cleanedUp) return;
+        cleanedUp = true;
+        globalClients.delete(ws);
+        checkAutoShutdown();
+      };
+      // As on the session path, install handlers before any fallible store
+      // read so a frozen session cannot turn a global reconnect into a daemon
+      // crash or a leaked subscriber.
+      ws.on("error", (err: any) => {
+        log(`[ws] global client error: ${err?.code ?? errorMessage(err)}`);
+        cleanup();
+        try { ws.terminate(); } catch {}
+      });
+      ws.on("close", cleanup);
       globalClients.add(ws);
 
       // Send list of active sessions
-      const sessionList = Array.from(sessions.entries()).map(([id, store]) => ({
-        sessionId: id,
-        artifactCount: store.getArtifacts().length,
-      }));
-      // U4 — include `daemonStartedAt` so global clients also detect a
-      // daemon restart and re-hydrate session listings on reconnect.
-      ws.send(JSON.stringify({ type: "connected", sessions: sessionList, projectRoot, projectHash: daemonProjectHash, daemonStartedAt: startedAt }));
-
-      // II5 — see session-client comment above. Same crash mode applies.
-      ws.on("error", (err: any) => {
-        log(`[ws] global client error: ${err?.code ?? errorMessage(err)}`);
-        try { ws.terminate(); } catch {}
-      });
-      ws.on("close", () => {
-        globalClients.delete(ws);
-        checkAutoShutdown();
-      });
+      try {
+        const sessionList = Array.from(sessions.entries()).map(([id, store]) => ({
+          sessionId: id,
+          artifactCount: store.getArtifacts().length,
+        }));
+        // U4 — include `daemonStartedAt` so global clients also detect a
+        // daemon restart and re-hydrate session listings on reconnect.
+        ws.send(JSON.stringify({ type: "connected", sessions: sessionList, projectRoot, projectHash: daemonProjectHash, daemonStartedAt: startedAt }));
+      } catch (error) {
+        const knownConflict = isSessionReviewConflictError(error);
+        log(knownConflict
+          ? `[ws] global initial snapshot refused: session review conflict: ${errorMessage(error)}`
+          : `[ws] global initial snapshot failed: ${errorMessage(error)}`);
+        cleanup();
+        const refusal = knownConflict
+          ? { type: "connection_refused", code: ERROR_CODES.session_review_conflict, message: "Session state requires review before reconnecting." }
+          : { type: "connection_refused", message: "Session state is temporarily unavailable." };
+        refusalDeadline = setTimeout(() => {
+          log("[ws] global initial snapshot refusal timed out; terminating client");
+          try { ws.terminate(); } catch {}
+        }, 1000);
+        refusalDeadline.unref?.();
+        try {
+          ws.send(JSON.stringify(refusal), (sendError) => {
+            if (sendError) {
+              log(`[ws] global initial snapshot refusal send failed: ${errorMessage(sendError)}`);
+              try { ws.terminate(); } catch {}
+              return;
+            }
+            try { ws.close(1011, "Initial snapshot unavailable"); } catch { try { ws.terminate(); } catch {} }
+          });
+        } catch (sendError) {
+          log(`[ws] global initial snapshot refusal send failed: ${errorMessage(sendError)}`);
+          try { ws.terminate(); } catch {}
+        }
+        return;
+      }
     }
 
     log(`WebSocket client connected (session: ${sessionId ?? "global"}, total: ${getClientCount()})`);

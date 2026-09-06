@@ -38,16 +38,16 @@ export async function handlePostPrReview(ctx: ToolContext, args: any): Promise<T
   // (R1 — `repost` is NOT such a flag: it re-arms a post the human already
   // authorized once and which the gate is refusing only as a duplicate. Every
   // verdict check still runs.)
-  const state = await store.getFullState();
-  const auth = authorizeReviewPost(state as never, {
-    event: args?.event,
-    pr: ref,
-    repost: args?.repost === true,
-  });
-  if (!auth.ok) {
-    return { content: [{ type: "text", text: auth.reason }], isError: true };
-  }
   try {
+    const state = await store.getReviewPostState();
+    const auth = authorizeReviewPost(state, {
+      event: args?.event,
+      pr: ref,
+      repost: args?.repost === true,
+    });
+    if (!auth.ok) {
+      return { content: [{ type: "text", text: auth.reason }], isError: true };
+    }
     // #343 — preparation is read-only: resolve the canonical destination and
     // observe its current head. It intentionally happens BEFORE the final local
     // authorization read, so a verdict/content edit during the network wait is
@@ -59,10 +59,10 @@ export async function handlePostPrReview(ctx: ToolContext, args: any): Promise<T
     });
     const target = prepared.target;
     const options = { event: args?.event, repost: args?.repost === true };
-    const { payload, identity } = authorizeDurableReview(await store.getFullState() as never, options, prepared);
+    const { payload, identity } = authorizeDurableReview(await store.getReviewPostState(), options, prepared);
     const posted = await executeDurableReviewPost({
       store: store.reviewPosts, payload, identity, repost: options.repost,
-      reauthorize: async () => authorizeDurableReview(await store.getFullState() as never, options, prepared).identity,
+      reauthorize: async () => authorizeDurableReview(await store.getReviewPostState(), options, prepared).identity,
       send: (canonicalTarget, frozenPayload) => postPreparedPrReview({ target: canonicalTarget, payload: frozenPayload }),
     });
     const { result } = posted;

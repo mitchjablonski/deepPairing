@@ -151,7 +151,7 @@ export class ReviewPostJournal {
   }
 
   /** Legacy data is advisory elsewhere, but it must fail CLOSED at the posting boundary. */
-  private legacy(): PostedReviewRecord[] {
+  readLegacyHistory(): PostedReviewRecord[] {
     try {
       const raw = fs.readFileSync(this.legacyPath, "utf8");
       if (raw.length > 8 * 1024 * 1024) throw new Error("History exceeds safety limit");
@@ -218,7 +218,7 @@ export class ReviewPostJournal {
     const parsed = reviewPostIdentitySchema.parse(identity);
     return this.claim(() => {
       const journal = this.read();
-      const legacy = this.legacy(); // Validate even when repost was explicitly requested.
+      const legacy = this.readLegacyHistory(); // Validate even when repost was explicitly requested.
       const prior = journal.operations.filter(op => op.identity.target === parsed.target);
       const unresolved = prior.find(op => ["reserved", "sending", "unknown"].includes(op.state));
       if (unresolved) {

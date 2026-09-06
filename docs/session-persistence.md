@@ -13,11 +13,16 @@ wins, not wall-clock timestamps. Status-history append deltas are retained in
 commit order and exact duplicate entries are collapsed. A record removed on
 disk is not resurrected by a stale writer that previously loaded it. This
 replaces the old behavior of restoring every cached record after external pruning.
+Whole-file disappearance is not treated as intentional deletion: a dirty writer
+that previously observed the collection fails its flush and retains its pending
+delta until a valid file is restored. A collection that has never existed may
+still be created normally.
 
 Cooperating FileStore writers take an exclusive per-session `.flush.lock` across
 read/merge/write. Lock acquisition is bounded to 250 ms; contention never causes
 an unlocked write. Debounced contention retries with backoff capped at two
-seconds while the process remains alive. `forceFlush()` reports failure to its
+seconds while the process remains alive. Attempts continue indefinitely, but
+each acquisition attempt remains bounded. `forceFlush()` reports failure to its
 caller. Successful per-file commits advance only that file's baseline, so a
 retry after a later-file failure does not duplicate already committed deltas.
 
@@ -35,9 +40,29 @@ must use a route that performs and reports that flush.
 ## Recovering a review/content conflict
 
 When one writer changes an artifact's reviewed identity (content, version, type,
-or parent) while another records a review verdict, their stale states are not
-merged. The writer that detects the conflict freezes authorization reads and all
-later flushes so its in-memory verdict can never be committed after the fact.
+or parent) while another records review authority, their stale states are not
+merged. Review authority includes terminal verdicts, decision responses, plan
+reviews, and a changeset's per-file `reviewState` / `reviewReasons`. Plan-step
+execution `status` / `statusNote` is progress rather than proposal identity, so
+progress-only updates may still merge without transplanting a review.
+
+The writer that detects the conflict freezes authorization reads and later
+artifact, decision, plan-review, and review-metrics writes, so its stale review
+authority cannot be committed after the fact. Writes into those lanes are
+refused at the store entrypoint — `createArtifact`, `updateArtifactStatus`,
+`renameArtifact`, `setRetractReason`, `updatePlanProgress`,
+`setChangesetFileReview`, `acknowledgeStatusChanges`, `acknowledgeDecisions`,
+and the decision / plan-review record and resolve calls — before any in-memory
+mutation, checkpoint receipt, hint file, or
+render-failure clear, so no caller holds a success receipt for a record the
+flush would discard. A refused revision leaves its parent untouched. Independent
+comments, requests, and render-failure records still get their own flush
+attempts; this isolates accepted human input but does not make the files
+transactional. Affected HTTP state and review-authority surfaces return a
+structured `session_review_conflict` 409 instead of reporting success, and a
+rejection refused this way records no cross-project rejection stance (see
+`docs/troubleshooting.md`).
+
 Preserve and inspect the on-disk artifact, then stop and restart the daemon or
 other session writer to create a fresh FileStore. Review the reloaded artifact
 before authorizing it. A browser refresh alone does not recreate the daemon's

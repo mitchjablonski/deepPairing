@@ -747,6 +747,10 @@ export class DaemonClient implements IStore {
     return this.get("/state");
   }
 
+  async getReviewPostState() {
+    return this.get<Awaited<ReturnType<IStore["getReviewPostState"]>>>("/review-post-state");
+  }
+
   /** R1 (#279) — proxy the posted-review stamp to the daemon's FileStore. The
    *  READ needs no proxy: the record rides getFullState above. NOT
    *  fire-and-forget — a swallowed failure here re-arms a duplicate post, so
