@@ -7,7 +7,7 @@ var __export = (target, all) => {
 };
 
 // src/cli/review-posts-entry.ts
-import path3 from "node:path";
+import path4 from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/project-root.ts
@@ -836,10 +836,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path4) {
-  if (!path4)
+function getElementAtPath(obj, path5) {
+  if (!path5)
     return obj;
-  return path4.reduce((acc, key) => acc?.[key], obj);
+  return path5.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1248,11 +1248,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path4, issues) {
+function prefixIssues(path5, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path4);
+    iss.path.unshift(path5);
     return iss;
   });
 }
@@ -1399,16 +1399,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path4 = []) => {
+  const processError = (error52, path5 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path4, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path5, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path4, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path5, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path4, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path5, ...issue2.path]);
       } else {
-        const fullpath = [...path4, ...issue2.path];
+        const fullpath = [...path5, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -1435,17 +1435,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path4 = []) => {
+  const processError = (error52, path5 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path4, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path5, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path4, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path5, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path4, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path5, ...issue2.path]);
       } else {
-        const fullpath = [...path4, ...issue2.path];
+        const fullpath = [...path5, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -1477,8 +1477,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path4 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path4) {
+  const path5 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path5) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -14170,13 +14170,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path4 = ref.slice(1).split("/").filter(Boolean);
-  if (path4.length === 0) {
+  const path5 = ref.slice(1).split("/").filter(Boolean);
+  if (path5.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path4[0] === defsKey) {
-    const key = path4[1];
+  if (path5[0] === defsKey) {
+    const key = path5[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -14769,6 +14769,13 @@ function readBoundedFile(file2, maxBytes) {
     fs3.closeSync(fd);
   }
 }
+function validateReviewPostResult(identity, result) {
+  const parsed = resultSchema.parse(result);
+  if (!resultMatches(identity, parsed)) {
+    throw new ReviewPostJournalError("invalid", "Remote review identity does not match the attempted post");
+  }
+  return parsed;
+}
 var ReviewPostJournal = class {
   constructor(projectRoot, sessionId, persist = writeJsonAtomic) {
     this.sessionId = sessionId;
@@ -15083,7 +15090,162 @@ var ReviewPostJournal = class {
   }
 };
 
-// src/cli/review-posts-offline.ts
+// src/github/read-review.ts
+import { spawn } from "node:child_process";
+var GhMissingError = class extends Error {
+  constructor() {
+    super("The `gh` CLI is not available. Install from https://cli.github.com/ and run `gh auth login`.");
+    this.name = "GhMissingError";
+  }
+};
+function parsePrRef(ref) {
+  const parsed = parsePrReference(ref);
+  if (parsed) return parsed;
+  throw new Error(`Could not parse PR reference: "${ref}". Expected a number like "42" or a GitHub URL.`);
+}
+function requireCanonicalTarget(target) {
+  const parsed = parsePrRef(target);
+  if (!parsed.owner || !parsed.repo) {
+    throw new Error("A prepared review target must be a full canonical github.com pull-request URL.");
+  }
+  const canonical = `https://github.com/${parsed.owner}/${parsed.repo}/pull/${parsed.number}`;
+  if (target.trim().toLowerCase() !== canonical.toLowerCase()) {
+    throw new Error("A prepared review target must not contain a tab, query, fragment, or non-canonical suffix.");
+  }
+  return { owner: parsed.owner, repo: parsed.repo, number: parsed.number };
+}
+var GH_TIMEOUT_MS = Number(process.env.DEEPPAIRING_GH_TIMEOUT_MS) || 2e4;
+function run(cmd, args, stdin) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const finish = (fn) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+    const timer = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+      }
+      finish(() => reject(new Error(`gh ${args[0] ?? ""} timed out after ${GH_TIMEOUT_MS}ms`)));
+    }, GH_TIMEOUT_MS);
+    child.stdout.on("data", (d) => {
+      stdout += d.toString();
+    });
+    child.stderr.on("data", (d) => {
+      stderr += d.toString();
+    });
+    child.on("error", (err) => {
+      finish(() => {
+        if (err?.code === "ENOENT") {
+          reject(new GhMissingError());
+          return;
+        }
+        reject(err);
+      });
+    });
+    child.on("close", (code) => {
+      finish(() => resolve({ code: code ?? 1, stdout, stderr }));
+    });
+    child.stdin.on("error", () => {
+    });
+    if (stdin) {
+      child.stdin.write(stdin);
+      child.stdin.end();
+    } else {
+      child.stdin.end();
+    }
+  });
+}
+async function readReviewForReconciliation(target, reviewId) {
+  const { owner, repo, number: number4 } = requireCanonicalTarget(target);
+  if (!Number.isSafeInteger(reviewId) || reviewId <= 0) throw new Error("Invalid remote review ID");
+  const endpoint = `repos/${owner}/${repo}/pulls/${number4}/reviews/${reviewId}`;
+  const read = async (url2) => {
+    const res = await run("gh", ["api", url2, "--hostname", "github.com", "-X", "GET", "-H", "Accept: application/vnd.github+json"]);
+    if (res.code !== 0) throw new Error(`Could not verify remote review (gh exit ${res.code}); operation remains unresolved`);
+    if (res.stdout.length > 8 * 1024 * 1024) throw new Error("Remote recovery response exceeds safety limit");
+    return JSON.parse(res.stdout);
+  };
+  const review = await read(endpoint);
+  const comments = [];
+  for (let page = 1; page <= 20; page++) {
+    const rows = await read(`${endpoint}/comments?per_page=100&page=${page}`);
+    if (!Array.isArray(rows) || rows.length > 100) throw new Error("Invalid remote review comment page");
+    comments.push(...rows);
+    if (rows.length < 100) return { review, comments };
+  }
+  throw new Error("Remote review pagination exceeds safety limit; operation remains unresolved");
+}
+
+// src/github/durable-review-post.ts
+function reviewPostMarker(operationId) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(operationId)) {
+    throw new Error("Invalid durable review operation ID");
+  }
+  return `
+
+<!-- deepPairing-review-operation:${operationId} -->`;
+}
+
+// src/github/reconcile-review-post.ts
+var reviewSchema = external_exports.object({
+  id: external_exports.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  body: external_exports.string(),
+  html_url: external_exports.string(),
+  state: external_exports.string(),
+  commit_id: external_exports.string().regex(/^[0-9a-fA-F]{40}$/),
+  submitted_at: external_exports.iso.datetime()
+});
+var commentSchema = external_exports.object({
+  id: external_exports.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  pull_request_review_id: external_exports.number().int().positive(),
+  path: external_exports.string().min(1),
+  body: external_exports.string(),
+  side: external_exports.enum(["LEFT", "RIGHT"]),
+  original_line: external_exports.number().int().positive(),
+  original_commit_id: external_exports.string().regex(/^[0-9a-fA-F]{40}$/),
+  in_reply_to_id: external_exports.number().optional(),
+  original_start_line: external_exports.number().nullable().optional()
+});
+function verifyReconciledReview(operation, rawReview, rawComments) {
+  if (!["sending", "unknown", "succeeded"].includes(operation.state)) {
+    throw new Error("Only a possibly sent operation can be reconciled to a remote review");
+  }
+  const review = reviewSchema.parse(rawReview);
+  const marker = reviewPostMarker(operation.id);
+  if (!review.body.endsWith(marker)) throw new Error("Remote review does not carry this operation's correlation marker");
+  const comments = external_exports.array(commentSchema).max(2e3).parse(rawComments);
+  const seen = /* @__PURE__ */ new Set();
+  for (const comment of comments) {
+    if (seen.has(comment.id) || comment.pull_request_review_id !== review.id || comment.in_reply_to_id !== void 0 || comment.original_start_line != null || comment.original_commit_id.toLowerCase() !== review.commit_id.toLowerCase()) {
+      throw new Error("Remote inline comments do not match the original review submission");
+    }
+    seen.add(comment.id);
+  }
+  const payload = {
+    body: review.body.slice(0, -marker.length),
+    event: operation.identity.event,
+    comments: comments.map((comment) => ({ path: comment.path, body: comment.body, line: comment.original_line, side: comment.side })),
+    ...operation.identity.reviewedHeadSha ? { commit_id: review.commit_id.toLowerCase() } : {}
+  };
+  if (reviewPostDigest(payload) !== operation.identity.payloadDigest) {
+    throw new Error("Remote review content differs from the reserved payload; preserve uncertainty and inspect it");
+  }
+  return validateReviewPostResult(operation.identity, {
+    id: review.id,
+    htmlUrl: review.html_url,
+    state: review.state,
+    commitId: review.commit_id.toLowerCase()
+  });
+}
+
+// src/cli/review-posts.ts
 function reviewPostsCommand(projectRoot, args) {
   const usage = "Usage: review-posts <session-id> [list | inspect | cancel-reserved <operation-id> | release-claim <digest> --all-writers-stopped | acknowledge-unknown <operation-id> <digest> --all-writers-stopped --accept-duplicate-risk]";
   const [sessionId, action = "list", operationId, ...extra] = args;
@@ -15126,6 +15288,35 @@ function reviewPostsCommand(projectRoot, args) {
     ...op.result ? { result: op.result } : {}
   })), null, 2);
 }
+async function reconcileReviewPostCommand(projectRoot, args) {
+  const [sessionId, action, operationId, rawReviewId, ...extra] = args;
+  if (!sessionId || action !== "reconcile" || !operationId || !rawReviewId || extra.length || !/^[1-9][0-9]*$/.test(rawReviewId)) {
+    throw new Error("Usage: review-posts <session-id> reconcile <operation-id> <remote-review-id>");
+  }
+  const reviewId = Number(rawReviewId);
+  if (!Number.isSafeInteger(reviewId)) throw new Error("Invalid remote review ID");
+  const journal = new ReviewPostJournal(projectRoot, sessionId);
+  const operation = journal.list().find((op) => op.id === operationId);
+  if (!operation || !["sending", "unknown", "succeeded"].includes(operation.state)) {
+    throw new Error("No matching possibly sent operation to reconcile");
+  }
+  const remote = await readReviewForReconciliation(operation.identity.target, reviewId);
+  const result = verifyReconciledReview(operation, remote.review, remote.comments);
+  if (result.id !== reviewId) throw new Error("Remote response did not identify the selected review");
+  journal.reconcileSucceeded(operationId, operation.identity, result);
+  return `Recorded verified review ${result.htmlUrl} for operation ${operationId}. No review was posted by recovery.`;
+}
+
+// src/cli/session-selection.ts
+import fs4 from "node:fs";
+import path3 from "node:path";
+function readSessionDirectories(projectRoot) {
+  try {
+    return fs4.readdirSync(path3.join(projectRoot, ".deeppairing", "sessions"), { withFileTypes: true }).filter((entry2) => entry2.isDirectory()).map((entry2) => entry2.name);
+  } catch {
+    return [];
+  }
+}
 
 // src/cli/review-posts-entry.ts
 function describeError(err) {
@@ -15135,37 +15326,49 @@ function operatorInvocation(entryPath, suffix = "") {
   return `node "${entryPath}"${suffix ? ` ${suffix}` : ""}`;
 }
 function helpText(entryPath) {
-  const run = (suffix) => `  ${operatorInvocation(entryPath, suffix)}`;
+  const run2 = (suffix) => `  ${operatorInvocation(entryPath, suffix)}`;
   return [
     "deepPairing review-post recovery \u2014 offline operator commands.",
     "",
     "Acts on the project rooted at CLAUDE_PROJECT_DIR, else DEEPPAIRING_PROJECT_ROOT,",
     "else the current directory. Run it from the project whose review you are recovering.",
+    "It names that project on stderr and refuses a session id it cannot find there,",
+    "rather than answering a typo with an empty list. A session whose artifacts are",
+    "damaged is still reachable \u2014 only the directory has to exist.",
     "",
+    "Offline \u2014 these never open a network connection:",
     "  <session-id> [list]                     list durable operations (JSON; no tokens, no review text)",
     "  <session-id> inspect                    redacted file/claim metadata, readable even when history is not",
     "  <session-id> cancel-reserved <op-id>    fence a reserved operation that never authorized a send",
     "  <session-id> release-claim <digest> --all-writers-stopped",
     "  <session-id> acknowledge-unknown <op-id> <digest> --all-writers-stopped --accept-duplicate-risk",
     "",
+    "Read-only GitHub \u2014 needs `gh` installed and authenticated:",
+    "  <session-id> reconcile <op-id> <remote-review-id>",
+    "                                          verify the review YOU identified on the PR and",
+    "                                          record it locally. GET only; it cannot send a review",
+    "                                          and cannot turn missing evidence into a retry.",
+    "",
     "Examples:",
-    run("s_1a2b3c"),
-    run("s_1a2b3c inspect"),
-    run("s_1a2b3c cancel-reserved 8c1f\u2026"),
+    run2("s_1a2b3c"),
+    run2("s_1a2b3c inspect"),
+    run2("s_1a2b3c cancel-reserved 8c1f\u2026"),
+    run2("s_1a2b3c reconcile 8c1f\u2026 2145678"),
     "",
     "Digests come from the `operationDigest` field of `list` and the `claim.digest`",
     "field of `inspect`. Both assertion flags are your statement, not a check this",
     "can make: stop every writer (Claude Code sessions and the daemon) first.",
     "An acknowledgement records that you accept duplicate risk \u2014 it is not evidence",
-    "the uncertain review was absent.",
+    "the uncertain review was absent, and reconciling later is strictly better",
+    "information: find the review on the PR first if you can.",
     "",
-    "This entry never contacts GitHub and never sends a review. Reconciling an",
-    "operation against a review you found on the PR is a read-only GitHub GET and",
-    "lives in the full CLI: `deeppairing review-posts <session-id> reconcile",
-    "<op-id> <remote-review-id>` (source checkout or npm install)."
+    "Nothing here can submit a review. `reconcile` reads the review id you give it,",
+    "checks the correlation marker, destination, verdict, reviewed commit, body and",
+    "every inline comment, and refuses on any mismatch \u2014 leaving the operation",
+    "blocked rather than guessing."
   ].join("\n");
 }
-function main(argv, entryPath) {
+async function main(argv, entryPath) {
   if (argv[0] === "--help" || argv[0] === "-h" || argv[0] === "help") {
     console.log(helpText(entryPath));
     return 0;
@@ -15176,8 +15379,15 @@ function main(argv, entryPath) {
   }
   const resolved = resolveProjectRoot();
   console.error(`deepPairing project: ${resolved.projectRoot} (${resolved.source})`);
+  const sessionId = argv[0]?.trim();
+  const directories = readSessionDirectories(resolved.projectRoot);
+  if (sessionId && !directories.includes(sessionId)) {
+    console.error(`No session "${sessionId}" in this project \u2014 nothing was created.`);
+    console.error(directories.length > 0 ? `Sessions here: ${directories.slice(0, 20).join(", ")}${directories.length > 20 ? `, and ${directories.length - 20} more` : ""}.` : "This project has no sessions at all. Check that you are in the right directory.");
+    return 1;
+  }
   try {
-    console.log(reviewPostsCommand(resolved.projectRoot, argv));
+    console.log(argv[1] === "reconcile" ? await reconcileReviewPostCommand(resolved.projectRoot, argv) : reviewPostsCommand(resolved.projectRoot, argv));
     return 0;
   } catch (err) {
     console.error(`review-posts failed: ${describeError(err)}`);
@@ -15185,8 +15395,10 @@ function main(argv, entryPath) {
   }
 }
 var entry = fileURLToPath(import.meta.url);
-if (process.argv[1] && path3.resolve(process.argv[1]) === entry) {
-  process.exitCode = main(process.argv.slice(2), entry);
+if (process.argv[1] && path4.resolve(process.argv[1]) === entry) {
+  void main(process.argv.slice(2), entry).then((code) => {
+    process.exitCode = code;
+  });
 }
 export {
   helpText,

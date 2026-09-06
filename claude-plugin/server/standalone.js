@@ -36157,7 +36157,6 @@ async function handleWithdrawArtifact(ctx, args) {
 
 // src/github/post-review.ts
 init_dist();
-import { spawn } from "node:child_process";
 
 // src/github/pr-reference.ts
 function validRepoOwner(value) {
@@ -36181,22 +36180,8 @@ function parsePrReference(ref) {
   return { owner, repo, number: number4 };
 }
 
-// src/github/post-review.ts
-var FULL_GIT_SHA = /^[0-9a-fA-F]{40}$/;
-function canonicalSha(value) {
-  return FULL_GIT_SHA.test(value) ? value.toLowerCase() : null;
-}
-function requireCanonicalTarget(target) {
-  const parsed = parsePrRef(target);
-  if (!parsed.owner || !parsed.repo) {
-    throw new Error("A prepared review target must be a full canonical github.com pull-request URL.");
-  }
-  const canonical = `https://github.com/${parsed.owner}/${parsed.repo}/pull/${parsed.number}`;
-  if (target.trim().toLowerCase() !== canonical.toLowerCase()) {
-    throw new Error("A prepared review target must not contain a tab, query, fragment, or non-canonical suffix.");
-  }
-  return { owner: parsed.owner, repo: parsed.repo, number: parsed.number };
-}
+// src/github/read-review.ts
+import { spawn } from "node:child_process";
 var GhMissingError = class extends Error {
   constructor() {
     super("The `gh` CLI is not available. Install from https://cli.github.com/ and run `gh auth login`.");
@@ -36209,14 +36194,21 @@ var GhNotAuthedError = class extends Error {
     this.name = "GhNotAuthedError";
   }
 };
-function looksUnauthenticated(stderr) {
-  const lower = stderr.toLowerCase();
-  return lower.includes("not logged into") || lower.includes("authentication token") || lower.includes("bad credentials") || lower.includes("requires authentication");
-}
 function parsePrRef(ref) {
   const parsed = parsePrReference(ref);
   if (parsed) return parsed;
   throw new Error(`Could not parse PR reference: "${ref}". Expected a number like "42" or a GitHub URL.`);
+}
+function requireCanonicalTarget(target) {
+  const parsed = parsePrRef(target);
+  if (!parsed.owner || !parsed.repo) {
+    throw new Error("A prepared review target must be a full canonical github.com pull-request URL.");
+  }
+  const canonical = `https://github.com/${parsed.owner}/${parsed.repo}/pull/${parsed.number}`;
+  if (target.trim().toLowerCase() !== canonical.toLowerCase()) {
+    throw new Error("A prepared review target must not contain a tab, query, fragment, or non-canonical suffix.");
+  }
+  return { owner: parsed.owner, repo: parsed.repo, number: parsed.number };
 }
 var GH_TIMEOUT_MS = Number(process.env.DEEPPAIRING_GH_TIMEOUT_MS) || 2e4;
 function run(cmd, args, stdin) {
@@ -36265,6 +36257,16 @@ function run(cmd, args, stdin) {
       child.stdin.end();
     }
   });
+}
+
+// src/github/post-review.ts
+var FULL_GIT_SHA = /^[0-9a-fA-F]{40}$/;
+function canonicalSha(value) {
+  return FULL_GIT_SHA.test(value) ? value.toLowerCase() : null;
+}
+function looksUnauthenticated(stderr) {
+  const lower = stderr.toLowerCase();
+  return lower.includes("not logged into") || lower.includes("authentication token") || lower.includes("bad credentials") || lower.includes("requires authentication");
 }
 async function detectRepo() {
   const res = await run("gh", ["repo", "view", "--json", "nameWithOwner,url"]);
