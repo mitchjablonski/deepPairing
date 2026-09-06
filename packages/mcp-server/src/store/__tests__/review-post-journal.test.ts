@@ -6,7 +6,7 @@ import { fork, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { writeJsonAtomic } from "../atomic-write.js";
 import {
-  canonicalReviewTarget, reviewPostDigest, ReviewPostJournal,
+  canonicalReviewTarget, reviewPostDigest, ReviewPostJournal, ReviewPostJournalError,
   type ReviewPostIdentity,
 } from "../review-post-journal.js";
 
@@ -140,6 +140,59 @@ describe("durable review-post journal", () => {
     expect(journal().list()[0].state).toBe("succeeded");
   });
 
+  it("reconciles acknowledged evidence without reviving its lease or disturbing a later repost", () => {
+    const original = journal().reserve(identity);
+    journal().markSending(original, identity);
+    const uncertain = journal().list()[0]!;
+    const operationDigest = reviewPostDigest(uncertain);
+    journal().acknowledgeUnknown(original.operationId, operationDigest, true, true);
+    const acknowledgement = journal().list()[0]!.operatorAcknowledgement;
+
+    expect(() => journal().succeed(original, result)).toThrow(/permanently fenced/);
+    const repost = journal().reserve(identity, true);
+    journal().markSending(repost, identity);
+
+    journal().reconcileSucceeded(original.operationId, identity, result);
+    let operations = new ReviewPostJournal(root, sid).list();
+    expect(operations[0]).toMatchObject({ state: "succeeded", result, operatorAcknowledgement: acknowledgement });
+    expect(operations[0]!.operatorAcknowledgement).toEqual(acknowledgement);
+    expect(operations[1]).toMatchObject({ id: repost.operationId, state: "sending" });
+
+    // Independent reconciliation is idempotent for the same receipt, but it
+    // permanently fences the original submitter and rejects a different one.
+    journal().reconcileSucceeded(original.operationId, identity, result);
+    expect(() => journal().reconcileSucceeded(original.operationId, identity, {
+      ...result, id: 8, htmlUrl: `${target}#pullrequestreview-8`,
+    })).toThrow(/does not match/);
+    expect(() => journal().succeed(original, result)).toThrow(/permanently fenced/);
+    expect(() => journal().reserve(identity, true)).toThrow(/sending/);
+    operations = journal().list();
+    expect(operations[1]).toMatchObject({ id: repost.operationId, state: "sending" });
+  });
+
+  it("strictly limits acknowledgement audit history to abandoned or reconciled success", () => {
+    const lease = journal().reserve(identity);
+    journal().markSending(lease, identity);
+    const operation = journal().list()[0]!;
+    journal().acknowledgeUnknown(lease.operationId, reviewPostDigest(operation), true, true);
+    journal().reconcileSucceeded(lease.operationId, identity, result);
+    expect(new ReviewPostJournal(root, sid).list()[0]).toMatchObject({ state: "succeeded", operatorAcknowledgement: { priorState: "sending" } });
+
+    const raw = JSON.parse(fs.readFileSync(journal().journalPath, "utf8"));
+    const missingAudit = structuredClone(raw);
+    missingAudit.operations[0].state = "abandoned";
+    delete missingAudit.operations[0].result;
+    delete missingAudit.operations[0].operatorAcknowledgement;
+    fs.writeFileSync(journal().journalPath, JSON.stringify(missingAudit));
+    expect(() => new ReviewPostJournal(root, sid).list()).toThrow(/invalid/);
+    for (const forbidden of ["reserved", "sending", "unknown", "failed"]) {
+      raw.operations[0].state = forbidden;
+      delete raw.operations[0].result;
+      fs.writeFileSync(journal().journalPath, JSON.stringify(raw));
+      expect(() => new ReviewPostJournal(root, sid).list(), forbidden).toThrow(/invalid/);
+    }
+  });
+
   it("validates remote success identity; malformed response leaves a possibly sent operation", () => {
     const lease = journal().reserve(identity);
     journal().markSending(lease, identity);
@@ -200,6 +253,44 @@ describe("durable review-post journal", () => {
     });
     expect(() => faulty.reserve(identity)).toThrow(primary);
     expect(fs.readFileSync(journal().claimPath, "utf8")).toBe("replacement owner");
+  });
+
+  it("maps a missing operator claim to a typed actionable stale outcome", () => {
+    let caught: unknown;
+    try { journal().releaseClaim("a".repeat(64), true); }
+    catch (err) { caught = err; }
+    expect(caught).toBeInstanceOf(ReviewPostJournalError);
+    expect(caught).toMatchObject({ reason: "stale" });
+    expect((caught as Error).message).toMatch(/absent.*nothing was removed.*Re-inspect/i);
+  });
+
+  it("maps an owner claim removed during cleanup without hiding primary failures", () => {
+    const removed = new ReviewPostJournal(root, sid, (filePath, value) => {
+      writeJsonAtomic(filePath, value);
+      fs.unlinkSync(journal().claimPath);
+    });
+    let cleanup: unknown;
+    try { removed.reserve(identity); }
+    catch (err) { cleanup = err; }
+    expect(cleanup).toBeInstanceOf(ReviewPostJournalError);
+    expect(cleanup).toMatchObject({ reason: "stale" });
+    expect((cleanup as Error).message).toMatch(/claim.*removed.*inspect/i);
+
+    const replaced = new ReviewPostJournal(root, sid, (filePath, value) => {
+      writeJsonAtomic(filePath, value);
+      fs.writeFileSync(journal().claimPath, "replacement owner");
+    });
+    let replacement: unknown;
+    try { replaced.reserve({ ...identity, target: target.replace("12", "13") }); }
+    catch (err) { replacement = err; }
+    expect(replacement).toBeInstanceOf(ReviewPostJournalError);
+    expect(replacement).toMatchObject({ reason: "stale" });
+    expect(fs.readFileSync(journal().claimPath, "utf8")).toBe("replacement owner");
+    fs.unlinkSync(journal().claimPath);
+
+    const primary = new Error("primary transition failure");
+    const failed = new ReviewPostJournal(root, sid, () => { fs.unlinkSync(journal().claimPath); throw primary; });
+    expect(() => failed.reserve({ ...identity, target: target.replace("12", "14") })).toThrow(primary);
   });
 
   it("rejects path traversal without making session directories", () => {

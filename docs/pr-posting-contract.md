@@ -37,7 +37,7 @@ exactly-once delivery**. See the [GitHub review API](https://docs.github.com/en/
 | succeeded | Validated remote review identity recorded | terminal |
 | failed | This operation is known not to have invoked POST | terminal |
 | unknown | Remote acceptance cannot be established | succeeded by reconciliation, explicit operator abandonment |
-| abandoned | Operator acknowledged uncertainty and duplicate risk | terminal; fresh explicit repost required |
+| abandoned | Operator acknowledged uncertainty and duplicate risk | succeeded only by independently verified reconciliation; fresh explicit repost required |
 
 A `sending` operation released through the live-lease door records an
 `unsentRelease` marker naming its prior state, so `list` distinguishes "never
@@ -181,9 +181,13 @@ Like operator acknowledgements, the `unsentRelease` marker is a journal field an
 older binary rejects as invalid rather than ignores. That refusal is fail-closed,
 but it blocks posting for the whole session: do not downgrade a session whose
 journal records one.
-Reconciliation may record a verified matching remote review without posting
-anything. No match, unavailable API, or ambiguous matches are not evidence that
-the operation failed: leave it blocked and ask the human to inspect GitHub.
+Reconciliation may record a verified matching remote review from `sending`,
+`unknown`, or `abandoned` without posting anything. Reconciliation after an
+acknowledgement preserves that complete audit unchanged beside the remote result;
+it never revives the original lease or resolves a separately authorized repost.
+The same receipt is idempotent and a conflicting remote identity is refused.
+No match, unavailable API, or ambiguous matches are not evidence that the operation
+failed: leave it blocked and ask the human to inspect GitHub.
 Do not turn generic `repost` into an unknown-outcome bypass. Explicit human
 recovery must identify the operation and acknowledge the uncertainty.
 
@@ -277,8 +281,12 @@ and acknowledgement time as `abandoned`. A stale digest or non-uncertain state r
 It sends nothing, and late original callers are fenced. A subsequent attempt still
 requires an explicit human-authorized repost plus current target/verdict/SHA checks.
 Never run this automatically, on the agent's initiative, or as a substitute for
-checking available remote evidence. Older binaries reject this new journal state;
-do not downgrade a session containing operator acknowledgements.
+checking available remote evidence. If exact matching evidence is found later,
+`reconcile` records `succeeded` while retaining the acknowledgement; the original
+lease stays permanently fenced and any later unresolved repost remains untouched.
+Older binaries reject acknowledgement-bearing journal records, including a
+reconciled-success record: the on-disk version field cannot teach an old binary
+this schema. Stop all writers and do not downgrade such a session.
 
 ## Verification
 

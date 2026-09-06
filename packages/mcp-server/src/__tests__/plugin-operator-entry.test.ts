@@ -401,6 +401,45 @@ describe("#344 — GET-only reconciliation, executed from the plugin-only copy",
     for (const call of ghInvocations()) expect(call).toContain("-X GET");
   });
 
+  it("reconciles late evidence after acknowledgement while retaining audit, fencing the lease, and preserving a repost", () => {
+    const journal = new ReviewPostJournal(projectRoot, sid);
+    const original = journal.reserve(reconcilable);
+    journal.markSending(original, reconcilable);
+    const operation = journal.list()[0]!;
+    const digest = reviewPostDigest(operation);
+    const acknowledged = run([sid, "acknowledge-unknown", original.operationId, digest,
+      "--all-writers-stopped", "--accept-duplicate-risk"]);
+    expect(acknowledged.status).toBe(0);
+    const acknowledgement = journal.list()[0]!.operatorAcknowledgement;
+    expect(() => journal.succeed(original, {
+      id: 7, htmlUrl: `${target}#pullrequestreview-7`, state: "COMMENTED", commitId: sha,
+    })).toThrow(/permanently fenced/);
+
+    const repost = journal.reserve(reconcilable, true);
+    journal.markSending(repost, reconcilable);
+    serve(original.operationId);
+    const reconciled = run([sid, "reconcile", original.operationId, "7"]);
+    expect(reconciled.status).toBe(0);
+
+    const restarted = new ReviewPostJournal(projectRoot, sid);
+    const operations = restarted.list();
+    expect(operations[0]).toMatchObject({
+      id: original.operationId, state: "succeeded", operatorAcknowledgement: acknowledgement,
+      result: { id: 7, htmlUrl: `${target}#pullrequestreview-7`, commitId: sha },
+    });
+    expect(operations[0]!.operatorAcknowledgement).toEqual(acknowledgement);
+    expect(operations[1]).toMatchObject({ id: repost.operationId, state: "sending" });
+    expect(() => restarted.succeed(original, operations[0]!.result!)).toThrow(/permanently fenced/);
+    expect(() => restarted.reserve(reconcilable, true)).toThrow(/sending/);
+
+    const again = run([sid, "reconcile", original.operationId, "7"]);
+    expect(again.status).toBe(0);
+    for (const call of ghInvocations()) {
+      expect(call).toContain("-X GET");
+      expect(call).not.toMatch(/\bPOST\b|--method|--input|-f |--field/);
+    }
+  });
+
   it("refuses to reconcile an operation that never reached a possible send", () => {
     const { id } = seed("reserved", reconcilable);
     serve(id);

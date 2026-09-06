@@ -57,8 +57,11 @@ const operationSchema = z.object({
     priorState: z.enum(["reserved", "sending"]),
   }).strict().optional(),
 }).strict().superRefine((value, ctx) => {
-  if ((value.state === "abandoned") !== (value.operatorAcknowledgement !== undefined)) {
-    ctx.addIssue({ code: "custom", message: "Only operator-abandoned uncertainty carries an acknowledgement" });
+  if (value.state === "abandoned" && !value.operatorAcknowledgement) {
+    ctx.addIssue({ code: "custom", message: "Operator-abandoned uncertainty requires its acknowledgement audit" });
+  }
+  if (value.operatorAcknowledgement && !["abandoned", "succeeded"].includes(value.state)) {
+    ctx.addIssue({ code: "custom", message: "Only abandoned or reconciled-success history carries an operator acknowledgement" });
   }
   if (value.unsentRelease && value.state !== "failed") {
     ctx.addIssue({ code: "custom", message: "Only a definitely unsent operation carries an unsent release" });
@@ -252,7 +255,12 @@ export class ReviewPostJournal {
       } catch (err) {
         // Preserve the durable-write failure; a cleanup error must not disguise
         // whether the primary transition was confirmed. A retained lock blocks.
-        if (!primaryFailed) throw err;
+        if (!primaryFailed) {
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+            throw new ReviewPostJournalError("stale", "Review-post claim was removed while held; stop writers and inspect state before continuing.");
+          }
+          throw err;
+        }
       }
     }
   }
@@ -285,7 +293,14 @@ export class ReviewPostJournal {
   }
 
   private readClaimDigest(): string {
-    const stat = fs.lstatSync(this.claimPath);
+    let stat: fs.Stats;
+    try { stat = fs.lstatSync(this.claimPath); }
+    catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new ReviewPostJournalError("stale", "Review-post claim is absent; nothing was removed. Re-inspect state before restarting writers.");
+      }
+      throw err;
+    }
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4096) {
       throw new ReviewPostJournalError("invalid", "Claim must be a regular file of at most 4096 bytes; inspect it manually.");
     }
@@ -301,7 +316,15 @@ export class ReviewPostJournal {
     if (this.readClaimDigest() !== expectedDigest) {
       throw new ReviewPostJournalError("stale", "Claim changed since inspection; it was not removed.");
     }
-    fs.unlinkSync(this.claimPath);
+    try { fs.unlinkSync(this.claimPath); }
+    catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new ReviewPostJournalError(
+          "stale", "Review-post claim disappeared before release; nothing was removed. Re-inspect state before restarting writers.",
+        );
+      }
+      throw err;
+    }
   }
 
   /** An explicit operator accepts duplicate risk, not evidence of non-delivery.
@@ -447,6 +470,10 @@ export class ReviewPostJournal {
   succeed(lease: ReviewPostLease, result: ReviewPostResult): void {
     const parsed = resultSchema.parse(result);
     this.transition(lease, op => {
+      // An operator acknowledgement permanently revokes the original live lease.
+      if (op.operatorAcknowledgement) {
+        throw new ReviewPostJournalError("stale", "The original review-post lease was permanently fenced by operator acknowledgement");
+      }
       if (!["sending", "unknown", "succeeded"].includes(op.state) || !resultMatches(op.identity, parsed) ||
           (op.result && reviewPostDigest(op.result) !== reviewPostDigest(parsed))) {
         throw new ReviewPostJournalError("stale", "Remote review does not match this possibly sent operation");
@@ -460,7 +487,7 @@ export class ReviewPostJournal {
   reconcileSucceeded(operationId: string, identity: ReviewPostIdentity, result: ReviewPostResult): void {
     const parsed = resultSchema.parse(result);
     this.update(operationId, op => {
-      if (!["sending", "unknown", "succeeded"].includes(op.state) ||
+      if (!["sending", "unknown", "abandoned", "succeeded"].includes(op.state) ||
           reviewPostDigest(op.identity) !== reviewPostDigest(reviewPostIdentitySchema.parse(identity)) ||
           !resultMatches(op.identity, parsed) || (op.result && reviewPostDigest(op.result) !== reviewPostDigest(parsed))) {
         throw new ReviewPostJournalError("stale", "Remote review does not match the unresolved operation");

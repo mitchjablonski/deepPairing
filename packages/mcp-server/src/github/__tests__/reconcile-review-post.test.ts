@@ -45,3 +45,12 @@ it.each([
 it("does not reconcile a cancelled or never-sent operation", () => {
   expect(() => verifyReconciledReview({ ...operation, state: "reserved" }, review, comments)).toThrow();
 });
+
+it("accepts an acknowledged operation only as evidence-based reconciliation", () => {
+  const abandoned: ReviewPostOperation = { ...operation, state: "abandoned", operatorAcknowledgement: {
+    acknowledgedAt: "2026-09-04T12:02:00Z", priorState: "unknown", operationDigest: "d".repeat(64),
+  } };
+  expect(verifyReconciledReview(abandoned, review, comments)).toMatchObject({ id: 7, commitId: sha });
+  expect(() => verifyReconciledReview(abandoned, { ...review, body: payload.body }, comments)).toThrow(/marker/);
+  expect(() => verifyReconciledReview(abandoned, review, [])).toThrow(/content differs/);
+});

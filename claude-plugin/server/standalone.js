@@ -36725,8 +36725,11 @@ var operationSchema = external_exports.object({
     priorState: external_exports.enum(["reserved", "sending"])
   }).strict().optional()
 }).strict().superRefine((value, ctx) => {
-  if (value.state === "abandoned" !== (value.operatorAcknowledgement !== void 0)) {
-    ctx.addIssue({ code: "custom", message: "Only operator-abandoned uncertainty carries an acknowledgement" });
+  if (value.state === "abandoned" && !value.operatorAcknowledgement) {
+    ctx.addIssue({ code: "custom", message: "Operator-abandoned uncertainty requires its acknowledgement audit" });
+  }
+  if (value.operatorAcknowledgement && !["abandoned", "succeeded"].includes(value.state)) {
+    ctx.addIssue({ code: "custom", message: "Only abandoned or reconciled-success history carries an operator acknowledgement" });
   }
   if (value.unsentRelease && value.state !== "failed") {
     ctx.addIssue({ code: "custom", message: "Only a definitely unsent operation carries an unsent release" });
