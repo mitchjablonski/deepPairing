@@ -540,6 +540,14 @@ export class FileStore implements IStore {
     version?: number;
     feature?: string | null;
   }): Artifact {
+    // #338 (F1) — a frozen writer refuses BEFORE any side effect. Pre-this a
+    // createArtifact on a conflicted store pushed the record into memory,
+    // wrote checkpoint receipts + the code-change hint, and returned a normal
+    // artifact: a success receipt for a write flush() then discarded (the
+    // artifact lane stays blocked), so every present_* after a freeze reported
+    // success for a dropped artifact. Same contract as the guarded readers —
+    // the caller gets the typed conflict and creates nothing.
+    this.assertAuthorizationReadable();
     const now = new Date().toISOString();
     // #206 (I1) — normalize the raw feature tag to a stable slug at the single
     // create choke point (parity with the secret scan below). An empty/
@@ -644,6 +652,7 @@ export class FileStore implements IStore {
   }
 
   renameArtifact(artifactId: string, title: string): void {
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (art) {
       art.title = title;
@@ -658,6 +667,7 @@ export class FileStore implements IStore {
    *  mechanism update_plan_progress / changeset review use. No-op on a missing
    *  artifact. */
   setRetractReason(artifactId: string, reason: string): void {
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (art) {
       (art.content as Record<string, unknown>).retractReason = reason;
@@ -671,6 +681,11 @@ export class FileStore implements IStore {
     status: ArtifactStatus,
     reason: StatusTransitionReason = "unspecified",
   ): void {
+    // #338 (F1) — refuse on a frozen writer before the verdict flip, the
+    // checkpoint revoke, the metrics sample, and the feedback-waiter release.
+    // The second half of a revision (parent → superseded) and any later
+    // verdict must not land in memory when this store can never persist them.
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (art) {
       // O3 (#231) — cross-tab last-wins verdict guard (backstop). The HTTP
@@ -756,6 +771,7 @@ export class FileStore implements IStore {
     artifactId: string,
     updates: Array<{ stepIndex: number; status: "pending" | "in_progress" | "done" | "skipped"; statusNote?: string }>,
   ): Artifact | null {
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (!art || art.type !== "plan") return null;
     const content = art.content as { steps?: Array<Record<string, unknown>> };
@@ -800,6 +816,7 @@ export class FileStore implements IStore {
     state: "reviewed" | "needs_changes" | "skipped" | null,
     reason?: string,
   ): Artifact | null {
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (!art || art.type !== "changeset") return null;
     const content = art.content as {
@@ -1289,6 +1306,9 @@ export class FileStore implements IStore {
   // C6c review — the interface narrowed options to DecisionOption[] but this
   // inline param type still said any[], leaving the WRITE site unenforced.
   recordDecisionRequest(params: RecordDecisionParams): void {
+    // #338 (F1) — decisions.json is a frozen lane; refuse instead of holding
+    // a memory-only record the caller believes was persisted.
+    this.assertAuthorizationReadable();
     this.decisions.set(params.decisionId, {
       ...params,
       createdAt: new Date().toISOString(),
@@ -1302,6 +1322,7 @@ export class FileStore implements IStore {
     reasoning?: string,
     prediction?: { confidence?: "low" | "medium" | "high"; predictedOutcome?: string },
   ): void {
+    this.assertAuthorizationReadable();
     const dec = this.decisions.get(decisionId);
     if (!dec) return;
     // F2 — reject an optionId that isn't one of this decision's options. The
@@ -1422,6 +1443,7 @@ export class FileStore implements IStore {
   // --- Plan Reviews ---
 
   recordPlanReview(artifactId: string): void {
+    this.assertAuthorizationReadable();
     this.planReviews.set(artifactId, {
       artifactId,
       createdAt: new Date().toISOString(),
@@ -1430,6 +1452,7 @@ export class FileStore implements IStore {
   }
 
   resolvePlanReview(artifactId: string, verdict: "approved" | "revised" | "rejected", feedback?: string): void {
+    this.assertAuthorizationReadable();
     const review = this.planReviews.get(artifactId);
     if (review) {
       review.verdict = verdict;

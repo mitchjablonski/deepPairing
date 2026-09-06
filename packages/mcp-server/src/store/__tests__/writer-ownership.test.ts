@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { FileStore } from "../file-store.js";
-import { mergeSessionRecords, withSessionFlushLock } from "../session-records.js";
+import { mergeSessionRecords, SessionReviewConflictError, withSessionFlushLock } from "../session-records.js";
+import crypto from "node:crypto";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 
 let fx: GlobalStoreFixture;
@@ -52,10 +53,15 @@ describe("writer-owned deltas", () => {
 
     // Mutating the frozen instance must not make its stale in-memory verdict
     // writable again. Recovery requires a fresh FileStore loaded from disk.
-    second.createArtifact({ id: "after-conflict", type: "research", title: "Must stay memory-only", content: {} });
+    // #338 (F1) — writes into the frozen lanes are REFUSED up front (the
+    // caller never holds a success receipt for a record flush() discards);
+    // independent human input still lands.
+    expect(() => second.createArtifact({ id: "after-conflict", type: "research", title: "Must stay memory-only", content: {} }))
+      .toThrow(SessionReviewConflictError);
     second.addComment({ id: "safe-comment", artifactId: "__session__", content: "Do not lose this", author: "human" });
     const request = second.addRequest({ text: "Keep working on the recovery", intent: "implement" });
-    second.recordDecisionRequest({ decisionId: "safe-decision", artifactId: "plan", context: "Recovery choice", options: [] });
+    expect(() => second.recordDecisionRequest({ decisionId: "safe-decision", artifactId: "plan", context: "Recovery choice", options: [] }))
+      .toThrow(SessionReviewConflictError);
     expect(() => second.forceFlush()).toThrow(/changed content.*review verdict|review verdict.*changed content/i);
 
     const recovered = open();
@@ -511,5 +517,117 @@ describe("merge and lock contract", () => {
       throw new Error("primary error");
     })).toThrow("primary error");
     expect(() => withSessionFlushLock(lock, () => fs.unlinkSync(lock))).toThrow();
+  });
+});
+
+/**
+ * #338 (F1) — the false success receipt. PR #376 froze the artifact lane in
+ * flush(), but createArtifact / updateArtifactStatus / the other authority
+ * mutators still ran their side effects and returned normally on a frozen
+ * writer: the record went into memory, checkpoint receipts and the
+ * code-change hint hit disk, and the caller (every present_* / revise_artifact
+ * after a freeze) got an artifact back that flush() then silently dropped.
+ * These pin the contract: a frozen writer refuses BEFORE any side effect and
+ * throws the same typed conflict its guarded readers throw.
+ */
+describe("#338 (F1) — a frozen writer refuses authority writes before side effects", () => {
+  const checkpointPath = (relFile: string) => path.join(
+    fx.dir, ".deeppairing/sessions/shared/code-checkpoints",
+    crypto.createHash("sha256").update(path.resolve(fx.dir, relFile)).digest("hex") + ".json",
+  );
+  const hintPath = () => path.join(fx.dir, ".deeppairing/last-code-change.json");
+  const snapshot = () => ({
+    artifacts: fs.readFileSync(file("artifacts.json"), "utf8"),
+    hint: fs.readFileSync(hintPath(), "utf8"),
+    checkpoints: fs.readdirSync(path.dirname(checkpointPath("x"))).sort(),
+  });
+
+  /** Seed a code_change parent (so checkpoint receipts exist), then freeze a
+   *  reviewer by racing its approval against a concurrent content rewrite. */
+  function freeze() {
+    const seedStore = open();
+    seedStore.createArtifact({
+      id: "parent", type: "code_change", title: "Swap the cache",
+      content: { filePath: "src/app.ts", diff: "-a\n+b", concept: { name: "cache swap" } },
+    });
+    seedStore.recordRenderFailure({ artifactId: "parent", visualId: "diagram-1", error: "mermaid parse error" });
+    seedStore.forceFlush();
+    expect(fs.existsSync(checkpointPath("src/app.ts"))).toBe(true);
+
+    const contentWriter = open();
+    const frozen = open();
+    const changed = contentWriter.getArtifacts()[0]!;
+    changed.content = { filePath: "src/app.ts", diff: "-a\n+REWRITTEN" };
+    changed.version = 2;
+    contentWriter.renameArtifact("parent", changed.title);
+    frozen.updateArtifactStatus("parent", "approved", "ui_approve_button");
+    contentWriter.forceFlush();
+    expect(() => frozen.forceFlush()).toThrow(SessionReviewConflictError);
+    return frozen;
+  }
+
+  it("refuses createArtifact with no in-memory record, checkpoint receipt, or hint write", () => {
+    const frozen = freeze();
+    const before = snapshot();
+    expect(() => frozen.createArtifact({
+      id: "after", type: "code_change", title: "Another change",
+      content: { filePath: "src/new.ts", diff: "+x" },
+    })).toThrow(SessionReviewConflictError);
+    // No side effect leaked: no receipt for the new file, hint untouched.
+    expect(fs.existsSync(checkpointPath("src/new.ts"))).toBe(false);
+    expect(snapshot()).toEqual(before);
+    // And nothing to flush: a later forceFlush still refuses and still writes nothing.
+    expect(() => frozen.forceFlush()).toThrow(SessionReviewConflictError);
+    expect(snapshot()).toEqual(before);
+    expect(open().getArtifacts().map((a) => a.id)).toEqual(["parent"]);
+  });
+
+  it("refuses a revision atomically: no v2, parent status/receipt/render-failures untouched", () => {
+    const frozen = freeze();
+    const before = snapshot();
+    // The supersede path is create-v2-then-flip-parent. Both halves refuse.
+    expect(() => frozen.createArtifact({
+      id: "v2", type: "code_change", title: "Swap the cache", parentId: "parent", version: 3,
+      content: { filePath: "src/app.ts", diff: "-a\n+c" },
+    })).toThrow(SessionReviewConflictError);
+    expect(() => frozen.updateArtifactStatus("parent", "superseded", "agent_supersede")).toThrow(SessionReviewConflictError);
+    expect(() => frozen.forceFlush()).toThrow(SessionReviewConflictError);
+    // Parent's checkpoint receipt was NOT revoked, and its render-failure
+    // record (a lane that DOES flush through a freeze) was NOT cleared.
+    expect(JSON.parse(fs.readFileSync(checkpointPath("src/app.ts"), "utf8"))).toMatchObject({ artifactId: "parent" });
+    expect(snapshot()).toEqual(before);
+    const recovered = open();
+    expect(recovered.getArtifacts()).toHaveLength(1);
+    expect(recovered.getArtifacts()[0]).toMatchObject({ id: "parent", status: "draft", version: 2 });
+    expect(recovered.getUnacknowledgedRenderFailures().map((r) => r.visualId)).toEqual(["diagram-1"]);
+  });
+
+  it.each<[string, (s: FileStore) => unknown]>([
+    ["renameArtifact", (s) => s.renameArtifact("parent", "Renamed")],
+    ["setRetractReason", (s) => s.setRetractReason("parent", "nope")],
+    ["updatePlanProgress", (s) => s.updatePlanProgress("parent", [{ stepIndex: 0, status: "done" }])],
+    ["setChangesetFileReview", (s) => s.setChangesetFileReview("parent", "src/app.ts", "reviewed")],
+    ["recordDecisionRequest", (s) => s.recordDecisionRequest({ decisionId: "d", artifactId: "parent", context: "?", options: [] })],
+    ["resolveDecision", (s) => s.resolveDecision("d", "o1")],
+    ["recordPlanReview", (s) => s.recordPlanReview("parent")],
+    ["resolvePlanReview", (s) => s.resolvePlanReview("parent", "approved")],
+  ])("refuses %s on a frozen writer", (_name, call) => {
+    const frozen = freeze();
+    const before = snapshot();
+    expect(() => call(frozen)).toThrow(SessionReviewConflictError);
+    expect(snapshot()).toEqual(before);
+  });
+
+  it("still persists independent comment, request, and render-failure writes", () => {
+    const frozen = freeze();
+    frozen.addComment({ id: "c-after", artifactId: "parent", content: "Still heard", author: "human" });
+    const request = frozen.addRequest({ text: "Keep going", intent: "implement" });
+    frozen.recordRenderFailure({ artifactId: "parent", visualId: "diagram-2", error: "still broken" });
+    expect(() => frozen.forceFlush()).toThrow(SessionReviewConflictError);
+    const recovered = open();
+    expect(recovered.getCommentsForArtifact("parent").map((c) => c.id)).toContain("c-after");
+    expect(recovered.getRequests().map((r) => r.id)).toContain(request.id);
+    expect(recovered.getUnacknowledgedRenderFailures().map((r) => r.visualId).sort()).toEqual(["diagram-1", "diagram-2"]);
+    expect(recovered.getArtifacts()[0]).toMatchObject({ id: "parent", status: "draft", version: 2 });
   });
 });

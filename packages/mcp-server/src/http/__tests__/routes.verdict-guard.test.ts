@@ -267,3 +267,44 @@ describe("P3 — decision-resolve no-record fallback is honest about a refused w
     expect(store.getArtifacts().find((a) => a.id === "art_nr")?.status).toBe("approved");
   });
 });
+
+/**
+ * #338 (F5) — the failed-verdict contract on an ALREADY-frozen writer. The
+ * first conflict (above) is detected at flush time: the feedback comment has
+ * already been recorded and survives. Every verdict AFTER the freeze is refused
+ * up front — before the status flip, before the comment, and before the
+ * cross-project ledger — so a rejection that meets a 409 never records a
+ * rejection stance. docs/troubleshooting.md states exactly this.
+ */
+describe("#338 (F5) — a verdict on a frozen writer records no ledger stance", () => {
+  it("refuses a reject-with-feedback with 409, no stance, no status flip, no broadcast", async () => {
+    store.createArtifact({
+      id: "art_frozen", type: "plan", title: "Review this plan",
+      content: { steps: [{ title: "Original proposal", status: "pending" }], estimatedChanges: 1 },
+    });
+    store.forceFlush();
+    const contentWriter = fx.track(new FileStore(fx.dir, "test_session"));
+    const changed = contentWriter.getArtifacts()[0]!;
+    changed.content = { steps: [{ title: "Unseen replacement", status: "pending" }], estimatedChanges: 12 };
+    changed.version = 2;
+    contentWriter.renameArtifact("art_frozen", changed.title);
+    contentWriter.forceFlush();
+    // Freeze the route's writer via the first (flush-detected) conflict.
+    expect((await postStatus("art_frozen", "approved")).status).toBe(409);
+    broadcasts.length = 0;
+
+    const res = await postStatus("art_frozen", "rejected", "Do not delete production data");
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: "session_review_conflict" });
+    expect(broadcasts).toEqual([]);
+
+    const prefsPath = `${fx.dir}/.deeppairing/preferences.json`;
+    const prefs = (await import("node:fs")).existsSync(prefsPath)
+      ? JSON.parse((await import("node:fs")).readFileSync(prefsPath, "utf8")) as { rejectedApproaches?: unknown[] }
+      : {};
+    expect(prefs.rejectedApproaches ?? []).toEqual([]);
+    const recovered = fx.track(new FileStore(fx.dir, "test_session"));
+    expect(recovered.getArtifacts()[0]).toMatchObject({ id: "art_frozen", status: "draft", version: 2 });
+    expect(recovered.getRejectedApproaches?.() ?? []).toEqual([]);
+  });
+});

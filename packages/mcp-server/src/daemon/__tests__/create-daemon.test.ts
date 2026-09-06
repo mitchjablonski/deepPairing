@@ -604,6 +604,11 @@ describe("Q2 — createDaemon's broadcast tap writes the durable block log", () 
   });
 });
 
+/**
+ * #338 (F1) — through the REAL factory wiring: a frozen session's artifact
+ * create/revise routes must refuse with the typed 409 and leave no receipt,
+ * while an independent comment still lands.
+ */
 const checkpointPath = (root: string, sid: string, relFile: string) => path.join(
   root, ".deeppairing", "sessions", sid, "code-checkpoints",
   crypto.createHash("sha256").update(path.resolve(root, relFile)).digest("hex") + ".json",
@@ -612,6 +617,85 @@ const internal = (h: Harness, p: string, body?: unknown) => h.daemon.app.request
   method: "POST",
   headers: { Authorization: "Bearer test-token", "Content-Type": "application/json" },
   body: body === undefined ? undefined : JSON.stringify(body),
+});
+
+describe("#338 (F1) — frozen artifact receipts through the real factory", () => {
+
+  /** Seed a code_change parent in the daemon's own store, then freeze that
+   *  store by racing its approval against an external content rewrite. */
+  function freezeSession(h: Harness, sid: string): FileStore {
+    const local = h.daemon.createSession(sid);
+    local.createArtifact({
+      id: "parent", type: "code_change", title: "Swap the cache",
+      content: { filePath: "src/app.ts", diff: "-a\n+b" },
+    });
+    local.forceFlush();
+    const external = h.fx.track(new FileStore(h.tmpDir, sid));
+    const changed = external.getArtifacts()[0]!;
+    changed.content = { filePath: "src/app.ts", diff: "-a\n+REWRITTEN" };
+    changed.version = 2;
+    external.renameArtifact("parent", changed.title);
+    external.forceFlush();
+    local.updateArtifactStatus("parent", "approved", "ui_approve_button");
+    expect(() => local.forceFlush()).toThrow(/changed content.*review verdict|review verdict.*changed content/i);
+    return local;
+  }
+
+  it("refuses artifact creation on a frozen session: typed 409, no artifact, no checkpoint receipt", async () => {
+    const h = makeDaemon();
+    freezeSession(h, "frozen");
+    const hintPath = path.join(h.tmpDir, ".deeppairing", "last-code-change.json");
+    const hintBefore = fs.readFileSync(hintPath, "utf8");
+
+    const res = await internal(h, "/api/internal/sessions/frozen/artifacts", {
+      id: "after", type: "code_change", title: "Another change",
+      content: { filePath: "src/new.ts", diff: "+x" },
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: ERROR_CODES.session_review_conflict });
+    expect(fs.existsSync(checkpointPath(h.tmpDir, "frozen", "src/new.ts"))).toBe(false);
+    expect(fs.readFileSync(hintPath, "utf8")).toBe(hintBefore);
+    const recovered = h.fx.track(new FileStore(h.tmpDir, "frozen"));
+    expect(recovered.getArtifacts().map((a) => a.id)).toEqual(["parent"]);
+  });
+
+  it("refuses a revision on a frozen session and leaves the parent untouched", async () => {
+    const h = makeDaemon();
+    freezeSession(h, "frozen");
+    const artifactsPath = path.join(h.tmpDir, ".deeppairing", "sessions", "frozen", "artifacts.json");
+    const before = fs.readFileSync(artifactsPath, "utf8");
+
+    const v2 = await internal(h, "/api/internal/sessions/frozen/artifacts", {
+      id: "v2", type: "code_change", title: "Swap the cache", parentId: "parent", version: 3,
+      content: { filePath: "src/app.ts", diff: "-a\n+c" },
+    });
+    expect(v2.status).toBe(409);
+    const flip = await internal(h, "/api/internal/sessions/frozen/artifacts/parent/status",
+      { status: "superseded", reason: "agent_supersede" });
+    expect(flip.status).toBe(409);
+    expect(await flip.json()).toMatchObject({ code: ERROR_CODES.session_review_conflict });
+
+    expect(fs.readFileSync(artifactsPath, "utf8")).toBe(before);
+    expect(JSON.parse(fs.readFileSync(checkpointPath(h.tmpDir, "frozen", "src/app.ts"), "utf8")))
+      .toMatchObject({ artifactId: "parent" });
+    const recovered = h.fx.track(new FileStore(h.tmpDir, "frozen"));
+    expect(recovered.getArtifacts()).toHaveLength(1);
+    expect(recovered.getArtifacts()[0]).toMatchObject({ id: "parent", status: "draft", version: 2 });
+  });
+
+  it("still persists an independent comment on a frozen session", async () => {
+    const h = makeDaemon();
+    freezeSession(h, "frozen");
+    const res = await internal(h, "/api/internal/sessions/frozen/comments",
+      { id: "c-after", artifactId: "parent", content: "Still heard", author: "human" });
+    expect(res.status).toBe(200);
+    // The forced flush still refuses (typed) but writes the comment lane through.
+    const flushed = await internal(h, "/api/internal/sessions/frozen/flush");
+    expect(flushed.status).toBe(409);
+    const recovered = h.fx.track(new FileStore(h.tmpDir, "frozen"));
+    expect(recovered.getCommentsForArtifact("parent").map((c) => c.id)).toContain("c-after");
+  });
+
 });
 
 /**
