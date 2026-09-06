@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { FileStore } from "../file-store.js";
+import type { Artifact } from "@deeppairing/shared";
 import { mergeSessionRecords, SessionReviewConflictError, withSessionFlushLock } from "../session-records.js";
 import crypto from "node:crypto";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
@@ -544,8 +545,10 @@ describe("#338 (F1) — a frozen writer refuses authority writes before side eff
   });
 
   /** Seed a code_change parent (so checkpoint receipts exist), then freeze a
-   *  reviewer by racing its approval against a concurrent content rewrite. */
-  function freeze() {
+   *  reviewer by racing its approval against a concurrent content rewrite.
+   *  `capture` runs against the soon-to-be-frozen writer BEFORE the freeze so a
+   *  test can hold its LIVE in-memory records (reads are fenced afterwards). */
+  function freeze(capture?: (writer: FileStore) => void) {
     const seedStore = open();
     seedStore.createArtifact({
       id: "parent", type: "code_change", title: "Swap the cache",
@@ -566,6 +569,7 @@ describe("#338 (F1) — a frozen writer refuses authority writes before side eff
 
     const contentWriter = open();
     const frozen = open();
+    capture?.(frozen);
     const changed = contentWriter.getArtifacts()[0]!;
     changed.content = { filePath: "src/app.ts", diff: "-a\n+REWRITTEN" };
     changed.version = 2;
@@ -631,17 +635,25 @@ describe("#338 (F1) — a frozen writer refuses authority writes before side eff
   });
 
   it("P2 — refuses acknowledgements before mutating memory; disk keeps reporting the notice", () => {
-    const frozen = freeze();
+    // Hold the frozen writer's LIVE records (not disk snapshots) so a
+    // mutate-then-throw implementation is caught here, not only on disk.
+    let notice!: Artifact & { statusChangeUnreported?: boolean };
+    let decision!: { acknowledged?: boolean };
+    const frozen = freeze((writer) => {
+      notice = writer.getArtifacts().find((a) => a.id === "notice")!;
+      decision = writer.getDecision("d")!;
+    });
     const before = snapshot();
-    // Capture the live records BEFORE the guard fires (reads are fenced after).
-    const notice = JSON.parse(before.artifacts).find((a: { id: string }) => a.id === "notice");
-    const decision = JSON.parse(before.decisions).find((d: { decisionId: string }) => d.decisionId === "d");
     expect(notice.statusChangeUnreported).toBe(true);
     expect(decision.acknowledged ?? false).toBe(false);
 
     expect(() => frozen.acknowledgeStatusChanges(["notice"])).toThrow(SessionReviewConflictError);
+    expect(notice.statusChangeUnreported).toBe(true);
     expect(() => frozen.acknowledgeDecisions(["d"])).toThrow(SessionReviewConflictError);
+    expect(decision.acknowledged ?? false).toBe(false);
     expect(() => frozen.forceFlush()).toThrow(SessionReviewConflictError);
+    expect(notice.statusChangeUnreported).toBe(true);
+    expect(decision.acknowledged ?? false).toBe(false);
     expect(snapshot()).toEqual(before);
 
     // A fresh writer still reports both — nothing was consumed.
