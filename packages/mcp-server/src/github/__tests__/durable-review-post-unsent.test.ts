@@ -107,6 +107,22 @@ it("an ambiguous markSending response releases only the exact leased attempt", a
   expect(journal.list()).toMatchObject([{ state: "failed", unsentRelease: { priorState: "sending" } }]);
 });
 
+it("a markSending that never persisted releases the still-reserved attempt", async () => {
+  let sends = 0;
+  const busy: DurableReviewPostStore = {
+    ...bind(journal),
+    // A contended journal claim: the transition threw without ever committing,
+    // so the operation is still `reserved` and no POST was invoked.
+    markSending: () => { throw new ReviewPostJournalError("busy", "Review-post state is locked"); },
+  };
+  await expect(executeDurableReviewPost({
+    store: busy, identity, payload, repost: false, reauthorize: () => identity,
+    send: async () => { sends++; return result; },
+  })).rejects.toBeInstanceOf(ReviewPostNotSentError);
+  expect(sends).toBe(0);
+  expect(journal.list()).toMatchObject([{ state: "failed", unsentRelease: { priorState: "reserved" } }]);
+});
+
 it("a corrupt journal in the pre-send window stays blocking and is never rewritten", async () => {
   let sends = 0;
   let reads = 0;
