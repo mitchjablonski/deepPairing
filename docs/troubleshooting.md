@@ -182,6 +182,24 @@ Independent comments, requests, and render-failure records continue to persist,
 but the affected artifact cannot be authorized from the frozen process. This is
 failure isolation across collections, not a cross-file transaction guarantee.
 
+Once a writer is frozen, every later write into those lanes is refused up
+front with the same 409, before any in-memory change, checkpoint receipt, or
+broadcast: creating an artifact (`present_*`), revising one
+(`revise_artifact`), any status transition, plan progress, per-file changeset
+review, and decision or plan-review records. A `present_*` or `revise_artifact`
+call that returns this error created nothing, and the artifact it tried to
+revise is exactly as it was on disk — no v2, no `superseded` flip, no comment.
+The first conflict is different only in when it is detected: the verdict route
+records its feedback comment before the flush that discovers the conflict, so
+that comment survives.
+
+A rejection that meets this 409 follows the failed-verdict contract, not the
+rejection guarantee. Its feedback comment may be preserved (first conflict) or
+refused with the verdict (already frozen), but in neither case is a
+cross-project rejection stance recorded — `recordRejectedApproach` runs only
+after a successful verdict flush. After restarting the writer, reject the
+reloaded artifact again if you want that stance remembered.
+
 Stop and restart the session writer so it reloads the persisted artifact, then
 review that exact version again before authorizing it. Do not delete or replace
 `artifacts.json` to bypass the conflict; preserve it for inspection. If the file

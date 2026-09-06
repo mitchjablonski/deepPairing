@@ -48,11 +48,19 @@ progress-only updates may still merge without transplanting a review.
 
 The writer that detects the conflict freezes authorization reads and later
 artifact, decision, plan-review, and review-metrics writes, so its stale review
-authority cannot be committed after the fact. Independent comments, requests,
-and render-failure records still get their own flush attempts; this isolates
-accepted human input but does not make the files transactional. Affected HTTP
-state and review-authority surfaces return a structured
-`session_review_conflict` 409 instead of reporting success.
+authority cannot be committed after the fact. Writes into those lanes are
+refused at the store entrypoint — `createArtifact`, `updateArtifactStatus`,
+`renameArtifact`, `setRetractReason`, `updatePlanProgress`,
+`setChangesetFileReview`, and the decision / plan-review record and resolve
+calls — before any in-memory mutation, checkpoint receipt, hint file, or
+render-failure clear, so no caller holds a success receipt for a record the
+flush would discard. A refused revision leaves its parent untouched. Independent
+comments, requests, and render-failure records still get their own flush
+attempts; this isolates accepted human input but does not make the files
+transactional. Affected HTTP state and review-authority surfaces return a
+structured `session_review_conflict` 409 instead of reporting success, and a
+rejection refused this way records no cross-project rejection stance (see
+`docs/troubleshooting.md`).
 
 Preserve and inspect the on-disk artifact, then stop and restart the daemon or
 other session writer to create a fresh FileStore. Review the reloaded artifact
