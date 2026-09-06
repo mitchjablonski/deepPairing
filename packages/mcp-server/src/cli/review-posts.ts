@@ -1,15 +1,56 @@
 /**
- * The operator review-post surface. The offline half lives in
- * `review-posts-offline.ts` (re-exported here so every existing caller is
- * unchanged) and is the only half the marketplace plugin bundle ships; the
- * reconcile command below performs GitHub GETs through `gh` and stays in the
- * full CLI. See `review-posts-offline.ts` for why the split is load-bearing.
+ * The operator review-post surface: five offline verbs plus one GET-only
+ * recovery verb. All six ship in the marketplace plugin bundle through
+ * `cli/review-posts-entry.ts`, and none of them can submit a review.
+ *
+ * `reconcile` is the only one that touches the network. It imports the remote
+ * read from `github/read-review.ts` rather than `github/post-review.ts` —
+ * that boundary is what keeps `postPreparedPrReview` and the payload builder
+ * out of the operator bundle while still shipping the verb, so an operator who
+ * has independently identified the remote review can record that verified
+ * outcome instead of being pushed toward accepting duplicate risk.
  */
-import { ReviewPostJournal } from "../store/review-post-journal.js";
-import { readReviewForReconciliation } from "../github/post-review.js";
+import { ReviewPostJournal, reviewPostDigest } from "../store/review-post-journal.js";
+import { readReviewForReconciliation } from "../github/read-review.js";
 import { verifyReconciledReview } from "../github/reconcile-review-post.js";
 
-export { reviewPostsCommand } from "./review-posts-offline.js";
+/** Explicit operator controls; never sends a GitHub request or steals a live lock. */
+export function reviewPostsCommand(projectRoot: string, args: string[]): string {
+  const usage = "Usage: review-posts <session-id> [list | inspect | cancel-reserved <operation-id> | release-claim <digest> --all-writers-stopped | acknowledge-unknown <operation-id> <digest> --all-writers-stopped --accept-duplicate-risk]";
+  const [sessionId, action = "list", operationId, ...extra] = args;
+  if (!sessionId) throw new Error(usage);
+  const journal = new ReviewPostJournal(projectRoot, sessionId);
+  if (action === "release-claim") {
+    if (!operationId || extra.length !== 1 || extra[0] !== "--all-writers-stopped") throw new Error(usage);
+    journal.releaseClaim(operationId, true);
+    return "Released only the inspected claim after your all-writers-stopped assertion. Journal/history unchanged; inspect unresolved operations before restarting writers.";
+  }
+  if (action === "acknowledge-unknown") {
+    if (!operationId || extra.length !== 3 || extra[1] !== "--all-writers-stopped" || extra[2] !== "--accept-duplicate-risk") throw new Error(usage);
+    journal.acknowledgeUnknown(operationId, extra[0]!, true, true);
+    return `Recorded operator acknowledgement for ${operationId}; this does NOT prove the review was absent. History is preserved. No review was sent. A new attempt requires explicit human repost authorization and current verdict/SHA checks.`;
+  }
+  if (extra.length || !["list", "inspect", "cancel-reserved"].includes(action) ||
+      (["list", "inspect"].includes(action) && operationId !== undefined) || (action === "cancel-reserved" && !operationId)) throw new Error(usage);
+  if (action === "inspect") return JSON.stringify(journal.inspect(), null, 2);
+  if (action === "cancel-reserved") {
+    journal.cancelReserved(operationId!);
+    return `Cancelled reserved operation ${operationId}. Its original caller can no longer begin a send. Re-check human authorization before a new post.`;
+  }
+  let operations;
+  try { operations = journal.list(); journal.readLegacyHistory(); }
+  catch { return JSON.stringify({ blocked: true, inspection: journal.inspect() }, null, 2); }
+  // Do not print fencing-token digests, raw review text, or auth fingerprints.
+  return JSON.stringify(operations.map(op => ({
+    id: op.id, target: op.identity.target, event: op.identity.event,
+    reviewedHeadSha: op.identity.reviewedHeadSha, state: op.state,
+    createdAt: op.createdAt, updatedAt: op.updatedAt,
+    operationDigest: reviewPostDigest(op),
+    ...(op.operatorAcknowledgement ? { operatorAcknowledgement: op.operatorAcknowledgement } : {}),
+    ...(op.unsentRelease ? { unsentRelease: op.unsentRelease } : {}),
+    ...(op.result ? { result: op.result } : {}),
+  })), null, 2);
+}
 
 /** This explicit recovery command performs GETs only, followed by a local
  * journal commit. It cannot turn a missing or mismatched review into a retry. */
