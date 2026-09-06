@@ -175,20 +175,21 @@ const artifactRow = (page: Page, title: string) => page.getByRole("button", { na
 const exitReplayButton = (page: Page) => page.getByTitle("Exit replay (Esc)");
 
 /**
- * Let the tab finish loading before the outage begins. The detail pane's
- * artifact views are React.lazy chunks fetched on first render; a daemon
- * killed while one is still in flight fails that script fetch, and the E5
- * chunk-skew handler (lib/chunk-error.ts) auto-reloads the page — onto a
- * chrome-error:// page, because the origin is gone. That is a real product
- * gap (a mid-load outage loses the tab; reported alongside this spec), but it
- * is not the scenario under test here: these tests are about a SETTLED tab
- * surviving a restart. `networkidle` is Playwright's bounded 500ms-quiet
- * signal, not a sleep.
+ * The settled-tab scenarios wait for the detail pane's lazy artifact view to
+ * have rendered (its chunk resolved) before the outage begins — a product
+ * signal, not a network-quiet timer. The outage-DURING-load case is not
+ * excluded by this: it has its own test below with a held chunk.
  */
 async function settleTab(page: Page, detailArtifactId: string): Promise<void> {
   await expect(page.locator(`[data-artifact-id="${detailArtifactId}"]`)).toBeVisible({ timeout: 15_000 });
-  await page.waitForLoadState("networkidle");
+  // The detail container mounts before its lazy view resolves; the Suspense
+  // fallback is the honest "chunk still loading" signal.
+  await expect(viewLoading(page)).toHaveCount(0, { timeout: 15_000 });
 }
+
+const viewLoading = (page: Page) => page.getByLabel("Loading artifact view");
+
+const chunkBoundary = (page: Page) => page.getByTestId("chunk-boundary");
 
 test.describe.configure({ mode: "serial" });
 
@@ -282,6 +283,74 @@ test("daemon restart: the tab reconnects to the new process and hydrates the com
       ? "connected frame (new daemonStartedAt) + daemon_resumed refetch"
       : "daemon_resumed refetch only (socket reconnected before the wrapper re-registered)",
   });
+});
+
+test("daemon outage while an artifact view chunk is in flight keeps the frame and recovers on reconnect", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  observeTab(page, testInfo);
+  const forbidden = collectForbidden(page);
+
+  // Controlled delayed chunk: hold the detail pane's lazy artifact-view script
+  // until the daemon is gone, then fail it the way the network would. Every
+  // other request flows normally.
+  let releaseChunk: () => void = () => {};
+  const chunkHeld = new Promise<void>((resolve) => { releaseChunk = resolve; });
+  let heldUrl = "";
+  await page.route(/\/assets\/ResearchArtifact-[^/]+\.js(\?.*)?$/, async (route) => {
+    heldUrl = route.request().url();
+    await chunkHeld;
+    await route.abort("connectionrefused");
+  });
+  const navigations: string[] = [];
+  page.on("framenavigated", (f) => { if (f === page.mainFrame()) navigations.push(f.url()); });
+
+  await page.goto(`${daemon!.baseURL}/?session=${LIVE}`, { waitUntil: "domcontentloaded" });
+  await expect(artifactRow(page, "Before restart")).toBeVisible({ timeout: 15_000 });
+  await expect.poll(() => storeState(page), { timeout: 15_000 }).toMatchObject({ connected: true, hydrated: true, sessionId: LIVE });
+  // The default artifact is selected after hydration; its view's chunk request
+  // is then intercepted and held, so the pane is suspended on the skeleton.
+  await expect.poll(() => heldUrl, { timeout: 15_000 }).toMatch(/ResearchArtifact/);
+  await expect(viewLoading(page)).toBeVisible();
+
+  const port = portOf(daemon!.baseURL);
+  await stopDaemon();
+  await expect.poll(() => storeState(page).then((s) => s.connected), { timeout: 15_000 }).toBe(false);
+
+  // Now the chunk fails, during the outage. Pre-fix: vite:preloadError →
+  // unconditional reload → chrome-error:// and the tab is gone.
+  releaseChunk();
+  await expect(chunkBoundary(page)).toBeVisible({ timeout: 15_000 });
+  await expect(chunkBoundary(page)).toHaveAttribute("data-outage", "true");
+  await expect(page.getByText("This view couldn't load while the daemon was away")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Reload" })).toBeVisible();
+  // The valid frame is still on screen and the tab never navigated away.
+  await expect(artifactRow(page, "Before restart")).toBeVisible();
+  expect(navigations.filter((u) => u.startsWith("chrome-error://"))).toEqual([]);
+  expect(page.url()).toBe(`http://localhost:${port}/?session=${LIVE}`);
+  const navigationsBeforeRecovery = navigations.length;
+
+  // The daemon returns; the wrapper re-registers. The tab reconnects on its
+  // own backoff, and the ONE deferred reload lands on the same URL, rebinding
+  // through the normal bootstrap with the fresh chunk served.
+  await page.unroute(/\/assets\/ResearchArtifact-[^/]+\.js(\?.*)?$/);
+  daemon = await bootDaemon();
+  expect(portOf(daemon.baseURL)).toBe(port);
+  const live = internal(daemon, LIVE);
+  await live("register", { title: "Live session" });
+  await live("artifacts", research("res_after_outage", "After outage"));
+
+  await expect.poll(() => navigations.length, { timeout: 45_000 }).toBeGreaterThan(navigationsBeforeRecovery);
+  expect(navigations.slice(navigationsBeforeRecovery)).toEqual([`http://localhost:${port}/?session=${LIVE}`]);
+  await settleTab(page, "res_before");
+  await expect(artifactRow(page, "Before restart")).toBeVisible({ timeout: 15_000 });
+  await expect(artifactRow(page, "After outage")).toBeVisible({ timeout: 15_000 });
+  await expect(chunkBoundary(page)).toHaveCount(0);
+  await expect.poll(() => storeState(page), { timeout: 15_000 }).toMatchObject({
+    connected: true, hydrated: true, sessionId: LIVE, daemonStartedAt: daemon.startedAt,
+  });
+  expect(forbidden).toEqual([]);
+  // Exactly one reload, and only after the origin answered again.
+  expect(navigations.length).toBe(navigationsBeforeRecovery + 1);
 });
 
 test("replay exit is browser-observable: the historical frame is swapped for the live session", async ({ page }, testInfo) => {
