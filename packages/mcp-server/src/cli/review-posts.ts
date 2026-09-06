@@ -1,5 +1,17 @@
+/**
+ * The operator review-post surface: five offline verbs plus one GET-only
+ * recovery verb. All six ship in the marketplace plugin bundle through
+ * `cli/review-posts-entry.ts`, and none of them can submit a review.
+ *
+ * `reconcile` is the only one that touches the network. It imports the remote
+ * read from `github/read-review.ts` rather than `github/post-review.ts` —
+ * that boundary is what keeps `postPreparedPrReview` and the payload builder
+ * out of the operator bundle while still shipping the verb, so an operator who
+ * has independently identified the remote review can record that verified
+ * outcome instead of being pushed toward accepting duplicate risk.
+ */
 import { ReviewPostJournal, reviewPostDigest } from "../store/review-post-journal.js";
-import { readReviewForReconciliation } from "../github/post-review.js";
+import { readReviewForReconciliation } from "../github/read-review.js";
 import { verifyReconciledReview } from "../github/reconcile-review-post.js";
 
 /** Explicit operator controls; never sends a GitHub request or steals a live lock. */
@@ -35,6 +47,7 @@ export function reviewPostsCommand(projectRoot: string, args: string[]): string 
     createdAt: op.createdAt, updatedAt: op.updatedAt,
     operationDigest: reviewPostDigest(op),
     ...(op.operatorAcknowledgement ? { operatorAcknowledgement: op.operatorAcknowledgement } : {}),
+    ...(op.unsentRelease ? { unsentRelease: op.unsentRelease } : {}),
     ...(op.result ? { result: op.result } : {}),
   })), null, 2);
 }
@@ -50,7 +63,7 @@ export async function reconcileReviewPostCommand(projectRoot: string, args: stri
   if (!Number.isSafeInteger(reviewId)) throw new Error("Invalid remote review ID");
   const journal = new ReviewPostJournal(projectRoot, sessionId);
   const operation = journal.list().find(op => op.id === operationId);
-  if (!operation || !["sending", "unknown", "succeeded"].includes(operation.state)) {
+  if (!operation || !["sending", "unknown", "abandoned", "succeeded"].includes(operation.state)) {
     throw new Error("No matching possibly sent operation to reconcile");
   }
   const remote = await readReviewForReconciliation(operation.identity.target, reviewId);

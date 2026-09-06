@@ -5,6 +5,7 @@ import { FileStore } from "../file-store.js";
 import { SessionReviewConflictError } from "../session-records.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { executeDurableReviewPost } from "../../github/durable-review-post.js";
+import type { DurableReviewPostStore } from "../../github/durable-review-post.js";
 import { reviewPostDigest } from "../review-post-journal.js";
 
 let fx: GlobalStoreFixture;
@@ -38,27 +39,44 @@ describe("posting-specific fresh authorization state", () => {
       payloadDigest: reviewPostDigest(payload), authorizationDigest: "a".repeat(64),
     };
     let sends = 0;
-    await expect(executeDurableReviewPost({
-      store: {
-        reserve: (value, repost) => {
-          const lease = journal.reserve(value, repost);
-          if (phase === "reserve") fs.writeFileSync(file("posted-reviews.json"), "{broken");
-          return lease;
-        },
-        markSending: (lease, value) => {
-          journal.markSending(lease, value);
-          if (phase === "sending") fs.writeFileSync(file("posted-reviews.json"), "{broken");
-        },
-        failBeforeSending: lease => journal.failBeforeSending(lease),
-        markUnknown: lease => journal.markUnknown(lease),
-        succeed: (lease, result) => journal.succeed(lease, result),
+    // Type the fake against the real interface. The coordinator's release is
+    // best-effort, so an incomplete fake silently disables a durable door and
+    // makes an obsolete expectation keep passing (#344 review).
+    const durable: DurableReviewPostStore = {
+      reserve: (value, repost) => {
+        const lease = journal.reserve(value, repost);
+        if (phase === "reserve") fs.writeFileSync(file("posted-reviews.json"), "{broken");
+        return lease;
       },
-      payload, identity, repost: false,
+      markSending: (lease, value) => {
+        journal.markSending(lease, value);
+        if (phase === "sending") fs.writeFileSync(file("posted-reviews.json"), "{broken");
+      },
+      failBeforeSending: lease => journal.failBeforeSending(lease),
+      releaseUnsent: lease => journal.releaseUnsent(lease),
+      markUnknown: lease => journal.markUnknown(lease),
+      succeed: (lease, result) => journal.succeed(lease, result),
+    };
+    await expect(executeDurableReviewPost({
+      store: durable, payload, identity, repost: false,
       reauthorize: () => { store.getReviewPostState(); return identity; },
       send: async () => { sends++; throw new Error("Must not send"); },
     })).rejects.toThrow(/did not start its POST/);
     expect(sends).toBe(0);
-    expect(journal.list()[0]!.state).toBe(phase === "reserve" ? "failed" : "sending");
+    // Corruption after the durable transition is still a known-unsent outcome:
+    // the coordinator holds the lease and never reached its send call. Only the
+    // post-transition case carries the audit marker.
+    expect(journal.list()[0]).toMatchObject({ state: "failed" });
+    expect(journal.list()[0]!.unsentRelease).toEqual(
+      phase === "sending" ? { releasedAt: expect.any(String), priorState: "sending" } : undefined);
+    // Releasing repairs nothing: the corrupt bytes are preserved verbatim and
+    // the unreadable history still refuses the next reservation, repost or not.
+    expect(fs.readFileSync(file("posted-reviews.json"), "utf8")).toBe("{broken");
+    for (const repost of [false, true]) {
+      expect(() => journal.reserve(identity, repost)).toThrow(/history is unreadable or invalid/);
+    }
+    expect(journal.list()).toHaveLength(1);
+    expect(() => store.getReviewPostState()).toThrow(/history is unreadable or invalid/);
   });
 
   it("observes external revocation without an artifact mutation or a helpful forceFlush", () => {

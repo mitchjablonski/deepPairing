@@ -92,6 +92,45 @@ it("HTTP retries cannot authorize a second send or bypass uncertainty with repos
   expect(local.reviewPosts.list()[0].state).toBe("unknown");
 });
 
+it("the daemon-backed coordinator releases its own unsent attempt; a wrong lease cannot", async () => {
+  const lease = await client.reviewPosts.reserve(identity, false);
+  await client.reviewPosts.markSending(lease, identity);
+  // A competing process holding a different (or forged) lease is fenced out.
+  await expect(client.reviewPosts.releaseUnsent({ ...lease, token: crypto.randomUUID() }))
+    .rejects.toMatchObject({ status: 409, code: "review_post_conflict" });
+  await expect(client.reviewPosts.releaseUnsent({ operationId: crypto.randomUUID(), token: lease.token }))
+    .rejects.toMatchObject({ status: 409, code: "review_post_conflict" });
+  expect(local.reviewPosts.list()[0]!.state).toBe("sending");
+
+  await client.reviewPosts.releaseUnsent(lease);
+  expect(local.reviewPosts.list()[0]).toMatchObject({ state: "failed", unsentRelease: { priorState: "sending" } });
+  // Replay of the same transition, and any resurrection, are refused over HTTP.
+  for (const replay of [client.reviewPosts.releaseUnsent(lease), client.reviewPosts.markSending(lease, identity),
+    client.reviewPosts.markUnknown(lease), client.reviewPosts.succeed(lease, result)]) {
+    await expect(replay).rejects.toMatchObject({ status: 409 });
+  }
+  // The PR is genuinely unposted, so a fresh attempt needs no repost.
+  await expect(client.reviewPosts.reserve(identity, false)).resolves.toMatchObject({ operationId: expect.any(String) });
+  // Only the existing agent-activity heartbeat; no state mutation is published.
+  expect(broadcasts.every(event => (event as { type: string }).type === "agent_activity")).toBe(true);
+});
+
+it("a post-send unknown outcome cannot be downgraded to unsent, even with the real lease", async () => {
+  let sends = 0;
+  await expect(executeDurableReviewPost({ store: client.reviewPosts, identity, payload, repost: false,
+    reauthorize: () => identity, send: async () => { sends++; throw new Error("response lost"); } }))
+    .rejects.toThrow(/may have reached GitHub/);
+  expect(sends).toBe(1);
+  expect(local.reviewPosts.list()[0]!.state).toBe("unknown");
+  // The same door, driven by a genuine live lease over the same uncertainty.
+  const lease = await client.reviewPosts.reserve({ ...identity, target: `${target}3` }, false);
+  await client.reviewPosts.markSending(lease, { ...identity, target: `${target}3` });
+  await client.reviewPosts.markUnknown(lease);
+  await expect(client.reviewPosts.releaseUnsent(lease)).rejects.toMatchObject({ status: 409, code: "review_post_conflict" });
+  expect(local.reviewPosts.list().map(op => op.state)).toEqual(["unknown", "unknown"]);
+  expect(local.reviewPosts.list().every(op => op.unsentRelease === undefined)).toBe(true);
+});
+
 it("corrupt durable history refuses over HTTP without modifying it or broadcasting", async () => {
   fs.writeFileSync(local.reviewPosts.journalPath, "{broken");
   await expect(client.reviewPosts.reserve(identity, true)).rejects.toMatchObject({ status: 409, code: "review_post_conflict" });
@@ -105,6 +144,8 @@ it("bearer and project gates precede validation; malformed transitions never per
   expect((await app.request(url, { method: "POST", headers: { "X-Project-Hash": projectHashOf(fx.dir) }, body: "null" })).status).toBe(401);
   expect((await app.request(url, { method: "POST", headers: { ...headers, "X-Project-Hash": "wrong" }, body: "null" })).status).toBe(403);
   for (const body of ["null", "{broken", JSON.stringify({ action: "sending", lease: { operationId: "bad", token: "bad" }, identity }),
+    JSON.stringify({ action: "unsent", lease: { operationId: "bad", token: "bad" } }),
+    JSON.stringify({ action: "unsent", lease: { operationId: crypto.randomUUID(), token: crypto.randomUUID() }, extra: true }),
     JSON.stringify({ action: "reserve", identity, repost: true, extra: true })]) {
     expect((await app.request(url, { method: "POST", headers, body })).status).toBe(400);
   }

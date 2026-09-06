@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { ReviewPostJournal, reviewPostDigest, type ReviewPostIdentity } from "../../store/review-post-journal.js";
 import { writeJsonAtomic } from "../../store/atomic-write.js";
+import type { DurableReviewPostStore } from "../durable-review-post.js";
 import { executeDurableReviewPost, ReviewPostNotSentError, ReviewPostUnknownError } from "../durable-review-post.js";
 
 const target = "https://github.com/acme/widget/pull/12";
@@ -74,7 +75,7 @@ it("refuses a verdict changed while the durable sending response is in flight", 
   const response = new Promise<void>(resolve => { release = resolve; });
   let current = identity;
   let sends = 0;
-  const deferredStore = {
+  const deferredStore: DurableReviewPostStore = {
     reserve: store.reserve.bind(store),
     markSending: async (...args: Parameters<typeof store.markSending>) => {
       store.markSending(...args);
@@ -82,6 +83,7 @@ it("refuses a verdict changed while the durable sending response is in flight", 
       await response;
     },
     failBeforeSending: store.failBeforeSending.bind(store),
+    releaseUnsent: store.releaseUnsent.bind(store),
     markUnknown: store.markUnknown.bind(store),
     succeed: store.succeed.bind(store),
   };
@@ -95,9 +97,11 @@ it("refuses a verdict changed while the durable sending response is in flight", 
   release();
   await refused;
   expect(sends).toBe(0);
-  // Sending is durable; no automatic rollback can safely re-arm another caller.
-  expect(store.list()[0].state).toBe("sending");
-  expect(() => store.reserve(identity, true)).toThrow(/sending/);
+  // #344 — `sending` is durable against everything EXCEPT the live coordinator
+  // that holds this lease and provably never invoked send. It releases its own
+  // exact attempt rather than leaving an operator to guess at the duplicate risk.
+  expect(store.list()[0]).toMatchObject({ state: "failed", unsentRelease: { priorState: "sending" } });
+  expect(store.reserve(identity, false)).toMatchObject({ operationId: expect.any(String) });
 });
 
 it("returns the known remote success with an unconfirmed receipt if the local stamp fails", async () => {

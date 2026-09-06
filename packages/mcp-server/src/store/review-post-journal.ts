@@ -47,9 +47,24 @@ const operationSchema = z.object({
     priorState: z.enum(["sending", "unknown"]),
     operationDigest: digestSchema,
   }).strict().optional(),
+  /** Recorded when the live coordinator released its own never-sent attempt.
+   * `priorState: "sending"` is the interesting case: the operation had written
+   * its durable sending marker, and the coordinator holding its lease attests
+   * it never reached its POST call. That attestation is the coordinator's, not
+   * the journal's — `sending` alone never implies non-delivery. */
+  unsentRelease: z.object({
+    releasedAt: timestampSchema,
+    priorState: z.enum(["reserved", "sending"]),
+  }).strict().optional(),
 }).strict().superRefine((value, ctx) => {
-  if ((value.state === "abandoned") !== (value.operatorAcknowledgement !== undefined)) {
-    ctx.addIssue({ code: "custom", message: "Only operator-abandoned uncertainty carries an acknowledgement" });
+  if (value.state === "abandoned" && !value.operatorAcknowledgement) {
+    ctx.addIssue({ code: "custom", message: "Operator-abandoned uncertainty requires its acknowledgement audit" });
+  }
+  if (value.operatorAcknowledgement && !["abandoned", "succeeded"].includes(value.state)) {
+    ctx.addIssue({ code: "custom", message: "Only abandoned or reconciled-success history carries an operator acknowledgement" });
+  }
+  if (value.unsentRelease && value.state !== "failed") {
+    ctx.addIssue({ code: "custom", message: "Only a definitely unsent operation carries an unsent release" });
   }
   if ((value.state === "succeeded") !== (value.result !== undefined)) {
     ctx.addIssue({ code: "custom", message: "Only success carries a remote review identity" });
@@ -240,7 +255,12 @@ export class ReviewPostJournal {
       } catch (err) {
         // Preserve the durable-write failure; a cleanup error must not disguise
         // whether the primary transition was confirmed. A retained lock blocks.
-        if (!primaryFailed) throw err;
+        if (!primaryFailed) {
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+            throw new ReviewPostJournalError("stale", "Review-post claim was removed while held; stop writers and inspect state before continuing.");
+          }
+          throw err;
+        }
       }
     }
   }
@@ -273,7 +293,14 @@ export class ReviewPostJournal {
   }
 
   private readClaimDigest(): string {
-    const stat = fs.lstatSync(this.claimPath);
+    let stat: fs.Stats;
+    try { stat = fs.lstatSync(this.claimPath); }
+    catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new ReviewPostJournalError("stale", "Review-post claim is absent; nothing was removed. Re-inspect state before restarting writers.");
+      }
+      throw err;
+    }
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4096) {
       throw new ReviewPostJournalError("invalid", "Claim must be a regular file of at most 4096 bytes; inspect it manually.");
     }
@@ -289,7 +316,15 @@ export class ReviewPostJournal {
     if (this.readClaimDigest() !== expectedDigest) {
       throw new ReviewPostJournalError("stale", "Claim changed since inspection; it was not removed.");
     }
-    fs.unlinkSync(this.claimPath);
+    try { fs.unlinkSync(this.claimPath); }
+    catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new ReviewPostJournalError(
+          "stale", "Review-post claim disappeared before release; nothing was removed. Re-inspect state before restarting writers.",
+        );
+      }
+      throw err;
+    }
   }
 
   /** An explicit operator accepts duplicate risk, not evidence of non-delivery.
@@ -378,6 +413,45 @@ export class ReviewPostJournal {
     });
   }
 
+  /**
+   * #344 — the ONLY door that may reclassify a `sending` operation as definitely
+   * unsent, and its authority is the lease, not this class.
+   *
+   * TRUST BOUNDARY. The journal cannot observe GitHub, so it cannot prove
+   * non-delivery. It VERIFIES one thing and TRUSTS another:
+   *   1. VERIFIED — the caller presents the exact fencing token this operation
+   *      was issued (`transition`). The token is generated per reservation, is
+   *      never persisted in plaintext (only its digest) and never written to a
+   *      log, so a restarted process, a competing process and the operator CLI
+   *      cannot produce it. Holding it means being the live coordinator of THIS
+   *      attempt.
+   *   2. TRUSTED, not verified — that the caller has not invoked `send`. Note
+   *      what the state check below does NOT establish: `sending` is written
+   *      BEFORE the POST and persists across it, so `sending` is not evidence
+   *      of non-delivery. The check only rejects operations that already
+   *      reached a resolved or uncertain outcome, which fences replay and any
+   *      post-send downgrade. Non-invocation is attested solely by the live
+   *      coordinator's control flow in `executeDurableReviewPost`, whose only
+   *      call site here is the failure path of the block preceding its single
+   *      `send` call; every path at or after `send` — a timeout, a malformed
+   *      response, a lost response — goes to `markUnknown` instead.
+   *
+   * Consequently this is NOT an operator control and is not reachable from the
+   * review-posts CLI: `cancelReserved` stays `reserved`-only. Elapsed time, a
+   * missing remote review, a restart and a generic cancellation remain unable to
+   * classify an operation as unsent.
+   */
+  releaseUnsent(lease: ReviewPostLease): void {
+    this.transition(lease, op => {
+      if (op.state !== "reserved" && op.state !== "sending") {
+        // Not a pre-POST proof: see the trust boundary above.
+        throw new ReviewPostJournalError("stale", "Only an unresolved reservation can be released as unsent; this operation already reached a resolved or uncertain outcome");
+      }
+      op.unsentRelease = { releasedAt: new Date().toISOString(), priorState: op.state };
+      op.state = "failed";
+    });
+  }
+
   /** Explicit operator recovery. Cancelling only reserved atomically fences the original caller. */
   cancelReserved(operationId: string): void {
     this.update(operationId, op => {
@@ -396,6 +470,10 @@ export class ReviewPostJournal {
   succeed(lease: ReviewPostLease, result: ReviewPostResult): void {
     const parsed = resultSchema.parse(result);
     this.transition(lease, op => {
+      // An operator acknowledgement permanently revokes the original live lease.
+      if (op.operatorAcknowledgement) {
+        throw new ReviewPostJournalError("stale", "The original review-post lease was permanently fenced by operator acknowledgement");
+      }
       if (!["sending", "unknown", "succeeded"].includes(op.state) || !resultMatches(op.identity, parsed) ||
           (op.result && reviewPostDigest(op.result) !== reviewPostDigest(parsed))) {
         throw new ReviewPostJournalError("stale", "Remote review does not match this possibly sent operation");
@@ -409,7 +487,7 @@ export class ReviewPostJournal {
   reconcileSucceeded(operationId: string, identity: ReviewPostIdentity, result: ReviewPostResult): void {
     const parsed = resultSchema.parse(result);
     this.update(operationId, op => {
-      if (!["sending", "unknown", "succeeded"].includes(op.state) ||
+      if (!["sending", "unknown", "abandoned", "succeeded"].includes(op.state) ||
           reviewPostDigest(op.identity) !== reviewPostDigest(reviewPostIdentitySchema.parse(identity)) ||
           !resultMatches(op.identity, parsed) || (op.result && reviewPostDigest(op.result) !== reviewPostDigest(parsed))) {
         throw new ReviewPostJournalError("stale", "Remote review does not match the unresolved operation");

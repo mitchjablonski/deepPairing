@@ -1599,11 +1599,23 @@ async function postPrReviewCmd(ref: string, sessionId?: string, event?: string, 
     GhNotAuthedError,
   } = await import("../github/post-review.js");
 
-  if (!sessionId?.trim()) {
-    console.error(`  ${red("✗")} Posting requires --session-id ID. Use the exact session reviewed in the companion UI; the CLI never guesses a session for an external write.`);
+  // #344 M1 — membership check BEFORE any store is constructed. `new
+  // FileStore(cwd, id)` creates the session directory, so a typo used to
+  // manufacture a session and a fresh unguarded journal on its way to failing;
+  // and this happens before `preparePrReviewTarget`, so a bad id never reaches
+  // `gh` either. Naming a DIFFERENT existing session stays the operator's
+  // explicit choice — this establishes only that the id already exists here.
+  const { selectPostingSession, readSessionDirectories } = await import("./session-selection.js");
+  const selected = selectPostingSession({
+    requested: sessionId,
+    readable: FileStore.listSessions(cwd).map((s) => s.id),
+    directories: readSessionDirectories(cwd),
+  });
+  if (!selected.ok) {
+    console.error(`  ${red("✗")} ${selected.message}`);
     process.exit(1);
   }
-  const chosenSessionId = sessionId;
+  const chosenSessionId = selected.sessionId;
 
   // R1 (#279) — a live FileStore, not the static loadSession snapshot: this
   // door must also STAMP the landed review (see below), and the stamp writes
@@ -2076,6 +2088,10 @@ ${helpInvocations}
                                           Cancel only an operation that has not started sending
     dp review-posts <session-id> reconcile <operation-id> <remote-review-id>
                                           Verify a remote review and record it without posting
+                                          (All the review-posts verbs also ship as a standalone
+                                          operator entry inside the plugin bundle — run
+                                          \`node <plugin>/server/review-posts.mjs --help\`; a
+                                          marketplace install has no \`dp\` binary.)
     dp --help                              Show this help message
     dp --version                           Show version
 `);
@@ -2185,7 +2201,8 @@ ${helpInvocations}
   const ref = args[1];
   if (!ref) {
     console.error(`  ${red("✗")} post-pr-review requires a PR number or URL.`);
-    console.error(`  ${dim("   Example: " + cliInvocation("post-pr-review 42"))}`);
+    console.error(`  ${dim("   Example: " + cliInvocation("post-pr-review 42 --session-id <id>"))}`);
+    console.error(`  ${dim("   Session ids: " + cliInvocation("list"))}`);
     process.exit(1);
   }
   // Parse optional --session-id, --event and --repost flags

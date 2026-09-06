@@ -36158,7 +36158,6 @@ async function handleWithdrawArtifact(ctx, args) {
 
 // src/github/post-review.ts
 init_dist();
-import { spawn } from "node:child_process";
 
 // src/github/pr-reference.ts
 function validRepoOwner(value) {
@@ -36182,22 +36181,8 @@ function parsePrReference(ref) {
   return { owner, repo, number: number4 };
 }
 
-// src/github/post-review.ts
-var FULL_GIT_SHA = /^[0-9a-fA-F]{40}$/;
-function canonicalSha(value) {
-  return FULL_GIT_SHA.test(value) ? value.toLowerCase() : null;
-}
-function requireCanonicalTarget(target) {
-  const parsed = parsePrRef(target);
-  if (!parsed.owner || !parsed.repo) {
-    throw new Error("A prepared review target must be a full canonical github.com pull-request URL.");
-  }
-  const canonical = `https://github.com/${parsed.owner}/${parsed.repo}/pull/${parsed.number}`;
-  if (target.trim().toLowerCase() !== canonical.toLowerCase()) {
-    throw new Error("A prepared review target must not contain a tab, query, fragment, or non-canonical suffix.");
-  }
-  return { owner: parsed.owner, repo: parsed.repo, number: parsed.number };
-}
+// src/github/read-review.ts
+import { spawn } from "node:child_process";
 var GhMissingError = class extends Error {
   constructor() {
     super("The `gh` CLI is not available. Install from https://cli.github.com/ and run `gh auth login`.");
@@ -36210,14 +36195,21 @@ var GhNotAuthedError = class extends Error {
     this.name = "GhNotAuthedError";
   }
 };
-function looksUnauthenticated(stderr) {
-  const lower = stderr.toLowerCase();
-  return lower.includes("not logged into") || lower.includes("authentication token") || lower.includes("bad credentials") || lower.includes("requires authentication");
-}
 function parsePrRef(ref) {
   const parsed = parsePrReference(ref);
   if (parsed) return parsed;
   throw new Error(`Could not parse PR reference: "${ref}". Expected a number like "42" or a GitHub URL.`);
+}
+function requireCanonicalTarget(target) {
+  const parsed = parsePrRef(target);
+  if (!parsed.owner || !parsed.repo) {
+    throw new Error("A prepared review target must be a full canonical github.com pull-request URL.");
+  }
+  const canonical = `https://github.com/${parsed.owner}/${parsed.repo}/pull/${parsed.number}`;
+  if (target.trim().toLowerCase() !== canonical.toLowerCase()) {
+    throw new Error("A prepared review target must not contain a tab, query, fragment, or non-canonical suffix.");
+  }
+  return { owner: parsed.owner, repo: parsed.repo, number: parsed.number };
 }
 var GH_TIMEOUT_MS = Number(process.env.DEEPPAIRING_GH_TIMEOUT_MS) || 2e4;
 function run(cmd, args, stdin) {
@@ -36266,6 +36258,16 @@ function run(cmd, args, stdin) {
       child.stdin.end();
     }
   });
+}
+
+// src/github/post-review.ts
+var FULL_GIT_SHA = /^[0-9a-fA-F]{40}$/;
+function canonicalSha(value) {
+  return FULL_GIT_SHA.test(value) ? value.toLowerCase() : null;
+}
+function looksUnauthenticated(stderr) {
+  const lower = stderr.toLowerCase();
+  return lower.includes("not logged into") || lower.includes("authentication token") || lower.includes("bad credentials") || lower.includes("requires authentication");
 }
 async function detectRepo() {
   const res = await run("gh", ["repo", "view", "--json", "nameWithOwner,url"]);
@@ -36733,10 +36735,25 @@ var operationSchema = external_exports.object({
     acknowledgedAt: timestampSchema,
     priorState: external_exports.enum(["sending", "unknown"]),
     operationDigest: digestSchema
+  }).strict().optional(),
+  /** Recorded when the live coordinator released its own never-sent attempt.
+   * `priorState: "sending"` is the interesting case: the operation had written
+   * its durable sending marker, and the coordinator holding its lease attests
+   * it never reached its POST call. That attestation is the coordinator's, not
+   * the journal's — `sending` alone never implies non-delivery. */
+  unsentRelease: external_exports.object({
+    releasedAt: timestampSchema,
+    priorState: external_exports.enum(["reserved", "sending"])
   }).strict().optional()
 }).strict().superRefine((value, ctx) => {
-  if (value.state === "abandoned" !== (value.operatorAcknowledgement !== void 0)) {
-    ctx.addIssue({ code: "custom", message: "Only operator-abandoned uncertainty carries an acknowledgement" });
+  if (value.state === "abandoned" && !value.operatorAcknowledgement) {
+    ctx.addIssue({ code: "custom", message: "Operator-abandoned uncertainty requires its acknowledgement audit" });
+  }
+  if (value.operatorAcknowledgement && !["abandoned", "succeeded"].includes(value.state)) {
+    ctx.addIssue({ code: "custom", message: "Only abandoned or reconciled-success history carries an operator acknowledgement" });
+  }
+  if (value.unsentRelease && value.state !== "failed") {
+    ctx.addIssue({ code: "custom", message: "Only a definitely unsent operation carries an unsent release" });
   }
   if (value.state === "succeeded" !== (value.result !== void 0)) {
     ctx.addIssue({ code: "custom", message: "Only success carries a remote review identity" });
@@ -36822,6 +36839,18 @@ var ReviewPostUnknownError = class extends Error {
   operationId;
 };
 async function executeDurableReviewPost(opts) {
+  for (const method of [
+    "reserve",
+    "markSending",
+    "failBeforeSending",
+    "releaseUnsent",
+    "markUnknown",
+    "succeed"
+  ]) {
+    if (typeof opts.store[method] !== "function") {
+      throw new Error(`Durable review-post store is missing ${method}(); refusing to post without the full durable protocol`);
+    }
+  }
   const payload = JSON.parse(JSON.stringify(opts.payload));
   const identity = reviewPostIdentitySchema.parse(opts.identity);
   const commitId = payload.commit_id;
@@ -36829,11 +36858,13 @@ async function executeDurableReviewPost(opts) {
     throw new Error("Review-post payload does not match its authorized digest");
   }
   const lease = await opts.store.reserve(identity, opts.repost);
+  let sendingAttempted = false;
   try {
     const current = reviewPostIdentitySchema.parse(await opts.reauthorize());
     if (reviewPostDigest(current) !== reviewPostDigest(identity)) {
       throw new Error("Review authorization or content changed while reserving the post");
     }
+    sendingAttempted = true;
     await opts.store.markSending(lease, identity);
     const beforeSend = reviewPostIdentitySchema.parse(await opts.reauthorize());
     if (reviewPostDigest(beforeSend) !== reviewPostDigest(identity)) {
@@ -36842,7 +36873,8 @@ async function executeDurableReviewPost(opts) {
   } catch (err) {
     let reservationReleased = false;
     try {
-      await opts.store.failBeforeSending(lease);
+      if (sendingAttempted) await opts.store.releaseUnsent(lease);
+      else await opts.store.failBeforeSending(lease);
       reservationReleased = true;
     } catch {
     }
@@ -38491,6 +38523,9 @@ var DaemonClient = class {
     },
     failBeforeSending: async (lease) => {
       await this.post("/review-post-operations", { action: "failed", lease });
+    },
+    releaseUnsent: async (lease) => {
+      await this.post("/review-post-operations", { action: "unsent", lease });
     },
     markUnknown: async (lease) => {
       await this.post("/review-post-operations", { action: "unknown", lease });

@@ -22,7 +22,7 @@ const commentSchema = z.object({
  * mismatching result means the uncertain send failed. The caller supplies ALL
  * comment pages, without filtering, and keeps the operation unresolved on error. */
 export function verifyReconciledReview(operation: ReviewPostOperation, rawReview: unknown, rawComments: unknown) {
-  if (!["sending", "unknown", "succeeded"].includes(operation.state)) {
+  if (!["sending", "unknown", "abandoned", "succeeded"].includes(operation.state)) {
     throw new Error("Only a possibly sent operation can be reconciled to a remote review");
   }
   const review = reviewSchema.parse(rawReview);

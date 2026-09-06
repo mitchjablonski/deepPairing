@@ -15,7 +15,12 @@ The scope is deliberately one session, not all reviews in a project. Separate
 sessions can contain independent human-reviewed payloads and may post to the same
 PR. Cross-session duplicate prevention is not claimed. The CLI requires an explicit
 `--session-id` identifying the same reviewed session as MCP; it never selects the
-most recent session for an external write. Starting another session is not recovery
+most recent session for an external write. That id is validated against the
+sessions already on disk before anything constructs a store, so a typo can
+neither create a session directory nor reach `gh`. Membership is all it
+establishes: naming a *different* existing session remains the operator's
+explicit choice and gets that session's journal, with no cross-session
+deduplication implied. Starting another session is not recovery
 for an unknown result: inspect and resolve the original operation first.
 
 The remote review endpoint sends notifications and accepts `commit_id`, but
@@ -28,11 +33,17 @@ exactly-once delivery**. See the [GitHub review API](https://docs.github.com/en/
 | State | Meaning | Allowed next state |
 | --- | --- | --- |
 | reserved | Locally claimed; network POST has not begun | sending, failed |
-| sending | Durable marker written before invoking POST; may have landed | succeeded, unknown, explicit operator abandonment |
+| sending | Durable marker written before invoking POST; may have landed | succeeded, unknown, explicit operator abandonment, live-lease unsent release |
 | succeeded | Validated remote review identity recorded | terminal |
 | failed | This operation is known not to have invoked POST | terminal |
 | unknown | Remote acceptance cannot be established | succeeded by reconciliation, explicit operator abandonment |
-| abandoned | Operator acknowledged uncertainty and duplicate risk | terminal; fresh explicit repost required |
+| abandoned | Operator acknowledged uncertainty and duplicate risk | succeeded only by independently verified reconciliation; fresh explicit repost required |
+
+A `sending` operation released through the live-lease door records an
+`unsentRelease` marker naming its prior state, so `list` distinguishes "never
+left `reserved`" from "had written its sending marker when its live coordinator
+attested it never reached POST". A `sending` state on its own never carries that
+meaning. See [Live-lease unsent release](#live-lease-unsent-release).
 
 A process dying in `sending` leaves an unresolved operation, never permission
 to retry. A timeout, dropped response, malformed success response, or failed
@@ -72,11 +83,15 @@ Resolve/read remote preparation first, re-read local authorization, reserve,
 and compare the prepared payload/provenance with the current authorized result
 again before the durable `sending` transition, then re-check once more after
 that transition's response and immediately before invoking POST. The coordinator
-posts only that frozen payload. Any mismatch before `sending` is a known-not-sent
-failure. A mismatch after durable `sending` prevents POST but conservatively
-leaves the journal unresolved; it is never rolled back into automatic retry
-permission across an uncertain daemon response.
-No fake/in-memory fallback is allowed when durable posting methods are absent.
+posts only that frozen payload. Any mismatch or error before POST is invoked is a
+known-not-sent failure, including one raised after the durable `sending`
+transition; see [Live-lease unsent release](#live-lease-unsent-release) for the
+narrow conditions under which that classification is permitted. Nothing at or
+after POST invocation may be classified this way.
+No fake/in-memory fallback is allowed when durable posting methods are absent;
+the coordinator verifies the store implements every durable method and refuses
+before reserving, because its best-effort failure paths would otherwise swallow
+an absent method and silently degrade a door.
 
 The final check is an authorization snapshot, not a distributed transaction:
 a human verdict or remote head can change after it. #343 binds the POST to the
@@ -115,9 +130,66 @@ before downgrade, and do not downgrade an unresolved session.
 An abandoned `reserved` operation can be explicitly cancelled with an atomic
 state/token check, which fences any late attempt to enter `sending`. A
 `sending`/`unknown` operation cannot be cancelled as though it never sent.
-Reconciliation may record a verified matching remote review without posting
-anything. No match, unavailable API, or ambiguous matches are not evidence that
-the operation failed: leave it blocked and ask the human to inspect GitHub.
+
+### Live-lease unsent release
+
+The second reauthorization runs *after* the durable `sending` transition, because
+that transition is itself an awaited daemon round trip during which a human can
+withdraw approval. When it fails — a revoked verdict, an `ELOCKED` authorization
+read, an unreadable journal, or an ambiguous `markSending` response — the
+coordinator has not reached its POST call, a fact established by its own control
+flow rather than by anything the journal can check. Leaving that attempt unresolved
+would demand an operator acknowledgement that accepts duplicate risk for a review
+that certainly does not exist. The coordinator therefore releases its own exact
+attempt to `failed`.
+
+This is a **trust boundary, not remote proof of non-delivery.** The journal
+cannot observe GitHub. It verifies one thing and trusts another:
+
+1. *Verified:* the caller presents the exact unguessable fencing token issued to
+   that operation. The token is held only in the live coordinator's memory, is
+   persisted only as a digest, and is never logged — so a restarted process, a
+   competing process, and the operator CLI cannot produce it. Holding it means
+   being the live coordinator of that attempt.
+2. *Trusted, not verified:* that the caller has not invoked POST. This is an
+   in-process code-path invariant of the coordinator, whose only call site is
+   the failure path of the block that precedes the single POST call.
+
+Be precise about what the journal's state check does **not** do. `sending` is
+written *before* the POST and persists across it — that is the whole point of
+the marker — so `reserved`/`sending` is **not** evidence that POST was never
+invoked. The check only rejects operations that already reached a resolved or
+uncertain outcome, which is what fences replay and any post-send downgrade.
+Non-invocation rests entirely on premise 2.
+
+Consequently the following must **not** reach this door, and do not:
+
+- A crash or restart in `sending` — the lease is gone with the process.
+- A wrong, forged, stale, or replayed lease, or a second release of one already
+  released.
+- Any invocation of POST, including a timeout, a dropped response, and a
+  malformed success response; those remain `unknown`.
+- Generic operator cancellation. `cancel-reserved` stays `reserved`-only, and no
+  operator command releases an unsent attempt — the operator has no lease.
+- Elapsed time, missing remote evidence, or an absent remote review.
+
+The release is best-effort and fail-closed: if its own durable write fails, the
+operation stays blocking and the caller is told the reservation was not released.
+Over the daemon this is a distinct `unsent` protocol action, kept separate from
+the reserved-only `failed` action so an older client's narrower release keeps its
+meaning; an older daemon rejects the new action and the attempt stays blocking.
+
+Like operator acknowledgements, the `unsentRelease` marker is a journal field an
+older binary rejects as invalid rather than ignores. That refusal is fail-closed,
+but it blocks posting for the whole session: do not downgrade a session whose
+journal records one.
+Reconciliation may record a verified matching remote review from `sending`,
+`unknown`, or `abandoned` without posting anything. Reconciliation after an
+acknowledgement preserves that complete audit unchanged beside the remote result;
+it never revives the original lease or resolves a separately authorized repost.
+The same receipt is idempotent and a conflicting remote identity is refused.
+No match, unavailable API, or ambiguous matches are not evidence that the operation
+failed: leave it blocked and ask the human to inspect GitHub.
 Do not turn generic `repost` into an unknown-outcome bypass. Explicit human
 recovery must identify the operation and acknowledge the uncertainty.
 
@@ -129,6 +201,64 @@ GET only. Wrong marker, edited content, missing original coordinates, unsupporte
 multi-line/reply records, changed comment order, API failure, or pagination beyond
 the safety cap leaves the operation blocked. It does not search for approximate
 matches or claim remote absence proves non-delivery.
+
+### Where the operator commands live
+
+These commands are a thing a **person** runs. They are never exposed as MCP
+tools or daemon mutation routes: they accept duplicate risk on a human's
+assertion, and an agent must not be able to make that assertion.
+
+They are runnable on every install path:
+
+| Install | Invocation |
+| --- | --- |
+| Marketplace / `--plugin-dir` plugin | `node "<plugin>/server/review-posts.mjs" <session-id> …` |
+| Source checkout | `node claude-plugin/server/review-posts.mjs <session-id> …` — or `node packages/mcp-server/dist/cli/init.js review-posts <session-id> …` |
+| npm install (when the package is installed) | `npx -y -p @deeppairing/mcp-server deeppairing review-posts <session-id> …` |
+
+`<plugin>` is the installed plugin directory. `CLAUDE_PLUGIN_ROOT` names it for
+hooks and slash commands but is **not** set in your shell, so locate it once:
+
+```bash
+find ~/.claude/plugins -name review-posts.mjs -path '*deeppairing*'
+```
+
+Run it with `--help` and it prints its own absolute path in every example, so
+the invocation is true for wherever it actually landed. It acts on the project
+at `CLAUDE_PROJECT_DIR`, else `DEEPPAIRING_PROJECT_ROOT`, else the current
+directory, and names that project on stderr. `list` and `inspect` print JSON on
+stdout, so `… <session-id> | jq` works.
+
+A session id it cannot find in that project is **refused**, naming the ids that
+do exist — a typo, or the right id in the wrong directory, must not answer `[]`
+and exit 0, which reads exactly like "this session posted nothing". The check is
+directory existence only, never session readability: gating it on
+`FileStore.listSessions` the way the posting door does would make a session with
+corrupt artifacts unrecoverable through the one tool that exists to recover it.
+A session directory with no journal yet still answers with an empty list.
+
+The entry ships the **whole** operator surface, in two honest classes:
+
+- **Offline** — `list`, `inspect`, `cancel-reserved`, `release-claim`,
+  `acknowledge-unknown`. These open no network connection at all.
+- **Read-only GitHub** — `reconcile`, which needs `gh` installed and
+  authenticated. It issues GETs for the review id you give it and its comment
+  pages, checks the correlation marker, destination, verdict, reviewed commit,
+  body and every inline comment, and records the result locally on a match. A
+  mismatch, a missing review, or an unavailable API leaves the operation
+  blocked; recovery never sends a review.
+
+It **cannot** submit a review, and that is structural rather than promised: the
+remote read lives in `github/read-review.ts`, which `github/post-review.ts`
+imports (never the reverse), so the posting module and the payload builder are
+outside the operator bundle's module graph. The shipped file contains no HTTP
+method string but `GET` and constructs exactly one outbound command — asserted
+against the built artifact in `__tests__/plugin-operator-entry.test.ts`.
+
+Shipping only the offline verbs would have left an operator who *found* the
+review on the PR with two moves: accept duplicate risk, or install the source
+tree. Reconciling against real evidence is strictly better information than an
+acknowledgement, so the drain that uses it has to be in the box.
 
 ### Offline operator inspection and acknowledgement
 
@@ -153,8 +283,12 @@ and acknowledgement time as `abandoned`. A stale digest or non-uncertain state r
 It sends nothing, and late original callers are fenced. A subsequent attempt still
 requires an explicit human-authorized repost plus current target/verdict/SHA checks.
 Never run this automatically, on the agent's initiative, or as a substitute for
-checking available remote evidence. Older binaries reject this new journal state;
-do not downgrade a session containing operator acknowledgements.
+checking available remote evidence. If exact matching evidence is found later,
+`reconcile` records `succeeded` while retaining the acknowledgement; the original
+lease stays permanently fenced and any later unresolved repost remains untouched.
+Older binaries reject acknowledgement-bearing journal records, including a
+reconciled-success record: the on-disk version field cannot teach an old binary
+this schema. Stop all writers and do not downgrade such a session.
 
 ## Verification
 
@@ -163,6 +297,7 @@ targets; mixed event/SHA/payload and target case variants; failure before send;
 process death before/after `sending`; remote acceptance followed by timeout;
 invalid response identity; local stamp failure; corrupt legacy/new records;
 abandoned reservations and stale tokens; reauthorization after delayed remote
-preparation; and CLI/MCP parity. A restart must never turn uncertainty into a
+preparation; a real held `.flush.lock` during the second reauthorization;
+wrong/forged/replayed leases against the unsent release; and CLI/MCP parity. A restart must never turn uncertainty into a
 second POST. Source tests, typecheck/lint, clean bundle, and independent
 adversarial review are required before this draft is considered ready.

@@ -19,6 +19,10 @@ const ReviewPostOperationBody = z.discriminatedUnion("action", [
   z.object({ action: z.literal("reserve"), identity: reviewPostIdentitySchema, repost: z.boolean() }).strict(),
   z.object({ action: z.literal("sending"), lease: reviewPostLeaseSchema, identity: reviewPostIdentitySchema }).strict(),
   z.object({ action: z.literal("failed"), lease: reviewPostLeaseSchema }).strict(),
+  // #344 — the lease is the authority: only the live coordinator that holds it
+  // and never invoked send can reach this. Kept distinct from "failed" so an
+  // older client's reserved-only release keeps its narrow meaning.
+  z.object({ action: z.literal("unsent"), lease: reviewPostLeaseSchema }).strict(),
   z.object({ action: z.literal("unknown"), lease: reviewPostLeaseSchema }).strict(),
   z.object({ action: z.literal("succeeded"), lease: reviewPostLeaseSchema, result: reviewPostResultSchema }).strict(),
 ]);
@@ -683,6 +687,7 @@ export function createDaemonRoutes(
         case "reserve": return c.json(journal.reserve(body.identity, body.repost));
         case "sending": journal.markSending(body.lease, body.identity); break;
         case "failed": journal.failBeforeSending(body.lease); break;
+        case "unsent": journal.releaseUnsent(body.lease); break;
         case "unknown": journal.markUnknown(body.lease); break;
         case "succeeded": journal.succeed(body.lease, body.result); break;
       }
