@@ -36714,8 +36714,10 @@ var operationSchema = external_exports.object({
     operationDigest: digestSchema
   }).strict().optional(),
   /** Recorded when the live coordinator released its own never-sent attempt.
-   * `priorState: "sending"` is the interesting case: it says this operation
-   * reached the durable pre-POST transition and still never left the machine. */
+   * `priorState: "sending"` is the interesting case: the operation had written
+   * its durable sending marker, and the coordinator holding its lease attests
+   * it never reached its POST call. That attestation is the coordinator's, not
+   * the journal's — `sending` alone never implies non-delivery. */
   unsentRelease: external_exports.object({
     releasedAt: timestampSchema,
     priorState: external_exports.enum(["reserved", "sending"])
@@ -36811,6 +36813,18 @@ var ReviewPostUnknownError = class extends Error {
   operationId;
 };
 async function executeDurableReviewPost(opts) {
+  for (const method of [
+    "reserve",
+    "markSending",
+    "failBeforeSending",
+    "releaseUnsent",
+    "markUnknown",
+    "succeed"
+  ]) {
+    if (typeof opts.store[method] !== "function") {
+      throw new Error(`Durable review-post store is missing ${method}(); refusing to post without the full durable protocol`);
+    }
+  }
   const payload = JSON.parse(JSON.stringify(opts.payload));
   const identity = reviewPostIdentitySchema.parse(opts.identity);
   const commitId = payload.commit_id;
