@@ -1127,6 +1127,10 @@ export class FileStore implements IStore {
    * acknowledgeDecisions exactly (same loop + same debounced flush).
    */
   acknowledgeStatusChanges(ids: string[]): void {
+    // #338 (P2) — the flag lives on the artifact record, a frozen lane: an
+    // acknowledgement this writer can never persist must refuse up front, or
+    // the route returns 200 while disk keeps reporting the notice.
+    this.assertAuthorizationReadable();
     for (const a of this.artifacts) {
       if (ids.includes(a.id)) {
         (a as { statusChangeUnreported?: boolean }).statusChangeUnreported = false;
@@ -1433,6 +1437,8 @@ export class FileStore implements IStore {
   }
 
   acknowledgeDecisions(decisionIds: string[]): void {
+    // #338 (P2) — refuse BEFORE mutating, not via the route's later guarded read.
+    this.assertAuthorizationReadable();
     for (const id of decisionIds) {
       const dec = this.decisions.get(id);
       if (dec) dec.acknowledged = true;

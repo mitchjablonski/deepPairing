@@ -538,6 +538,7 @@ describe("#338 (F1) — a frozen writer refuses authority writes before side eff
   const hintPath = () => path.join(fx.dir, ".deeppairing/last-code-change.json");
   const snapshot = () => ({
     artifacts: fs.readFileSync(file("artifacts.json"), "utf8"),
+    decisions: fs.readFileSync(file("decisions.json"), "utf8"),
     hint: fs.readFileSync(hintPath(), "utf8"),
     checkpoints: fs.readdirSync(path.dirname(checkpointPath("x"))).sort(),
   });
@@ -551,6 +552,15 @@ describe("#338 (F1) — a frozen writer refuses authority writes before side eff
       content: { filePath: "src/app.ts", diff: "-a\n+b", concept: { name: "cache swap" } },
     });
     seedStore.recordRenderFailure({ artifactId: "parent", visualId: "diagram-1", error: "mermaid parse error" });
+    // #338 (P2) — a consumed-once notice and a resolved decision, both still
+    // unacknowledged on disk when the freeze lands.
+    seedStore.createArtifact({ id: "notice", type: "research", title: "Reviewed notice", content: {} });
+    seedStore.updateArtifactStatus("notice", "approved", "ui_approve_button");
+    seedStore.recordDecisionRequest({ decisionId: "d", artifactId: "notice", context: "Choose", options: [
+      { id: "yes", title: "Yes", description: "Proceed", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
+    ] });
+    seedStore.resolveDecision("d", "yes");
+    seedStore.addComment({ id: "c-seed", artifactId: "parent", content: "Seed comment", author: "human" });
     seedStore.forceFlush();
     expect(fs.existsSync(checkpointPath("src/app.ts"))).toBe(true);
 
@@ -579,7 +589,7 @@ describe("#338 (F1) — a frozen writer refuses authority writes before side eff
     // And nothing to flush: a later forceFlush still refuses and still writes nothing.
     expect(() => frozen.forceFlush()).toThrow(SessionReviewConflictError);
     expect(snapshot()).toEqual(before);
-    expect(open().getArtifacts().map((a) => a.id)).toEqual(["parent"]);
+    expect(open().getArtifacts().map((a) => a.id).sort()).toEqual(["notice", "parent"]);
   });
 
   it("refuses a revision atomically: no v2, parent status/receipt/render-failures untouched", () => {
@@ -597,8 +607,8 @@ describe("#338 (F1) — a frozen writer refuses authority writes before side eff
     expect(JSON.parse(fs.readFileSync(checkpointPath("src/app.ts"), "utf8"))).toMatchObject({ artifactId: "parent" });
     expect(snapshot()).toEqual(before);
     const recovered = open();
-    expect(recovered.getArtifacts()).toHaveLength(1);
-    expect(recovered.getArtifacts()[0]).toMatchObject({ id: "parent", status: "draft", version: 2 });
+    expect(recovered.getArtifacts().map((a) => a.id).sort()).toEqual(["notice", "parent"]);
+    expect(recovered.getArtifacts().find((a) => a.id === "parent")).toMatchObject({ status: "draft", version: 2 });
     expect(recovered.getUnacknowledgedRenderFailures().map((r) => r.visualId)).toEqual(["diagram-1"]);
   });
 
@@ -611,11 +621,43 @@ describe("#338 (F1) — a frozen writer refuses authority writes before side eff
     ["resolveDecision", (s) => s.resolveDecision("d", "o1")],
     ["recordPlanReview", (s) => s.recordPlanReview("parent")],
     ["resolvePlanReview", (s) => s.resolvePlanReview("parent", "approved")],
+    ["acknowledgeStatusChanges", (s) => s.acknowledgeStatusChanges(["notice"])],
+    ["acknowledgeDecisions", (s) => s.acknowledgeDecisions(["d"])],
   ])("refuses %s on a frozen writer", (_name, call) => {
     const frozen = freeze();
     const before = snapshot();
     expect(() => call(frozen)).toThrow(SessionReviewConflictError);
     expect(snapshot()).toEqual(before);
+  });
+
+  it("P2 — refuses acknowledgements before mutating memory; disk keeps reporting the notice", () => {
+    const frozen = freeze();
+    const before = snapshot();
+    // Capture the live records BEFORE the guard fires (reads are fenced after).
+    const notice = JSON.parse(before.artifacts).find((a: { id: string }) => a.id === "notice");
+    const decision = JSON.parse(before.decisions).find((d: { decisionId: string }) => d.decisionId === "d");
+    expect(notice.statusChangeUnreported).toBe(true);
+    expect(decision.acknowledged ?? false).toBe(false);
+
+    expect(() => frozen.acknowledgeStatusChanges(["notice"])).toThrow(SessionReviewConflictError);
+    expect(() => frozen.acknowledgeDecisions(["d"])).toThrow(SessionReviewConflictError);
+    expect(() => frozen.forceFlush()).toThrow(SessionReviewConflictError);
+    expect(snapshot()).toEqual(before);
+
+    // A fresh writer still reports both — nothing was consumed.
+    const recovered = open();
+    expect(recovered.getUnacknowledgedStatusChanges().map((a) => a.id)).toEqual(["notice"]);
+    expect(recovered.getResolvedDecisions().map((d) => d.decisionId)).toEqual(["d"]);
+  });
+
+  it("P2 — still persists comment and render-failure acknowledgements through a freeze", () => {
+    const frozen = freeze();
+    frozen.acknowledgeComments(["c-seed"]);
+    frozen.acknowledgeRenderFailures([{ artifactId: "parent", visualId: "diagram-1" }]);
+    expect(() => frozen.forceFlush()).toThrow(SessionReviewConflictError);
+    const recovered = open();
+    expect(recovered.getCommentsForArtifact("parent").find((c) => c.id === "c-seed")?.acknowledged).toBe(true);
+    expect(recovered.getUnacknowledgedRenderFailures()).toEqual([]);
   });
 
   it("still persists independent comment, request, and render-failure writes", () => {
@@ -628,6 +670,6 @@ describe("#338 (F1) — a frozen writer refuses authority writes before side eff
     expect(recovered.getCommentsForArtifact("parent").map((c) => c.id)).toContain("c-after");
     expect(recovered.getRequests().map((r) => r.id)).toContain(request.id);
     expect(recovered.getUnacknowledgedRenderFailures().map((r) => r.visualId).sort()).toEqual(["diagram-1", "diagram-2"]);
-    expect(recovered.getArtifacts()[0]).toMatchObject({ id: "parent", status: "draft", version: 2 });
+    expect(recovered.getArtifacts().find((a) => a.id === "parent")).toMatchObject({ status: "draft", version: 2 });
   });
 });

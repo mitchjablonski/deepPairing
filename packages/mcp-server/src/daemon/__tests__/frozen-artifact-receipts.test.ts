@@ -105,12 +105,19 @@ describe("#338 (F1) — frozen session over a real socket", () => {
       id: "parent", type: "code_change", title: "Swap the cache",
       content: { filePath: "src/app.ts", diff: "-a\n+b" },
     });
+    // #338 (P2) — a resolved, unacknowledged decision on a SEPARATE artifact
+    // (resolving auto-approves its backing artifact), durable before the freeze.
+    local.createArtifact({ id: "notice", type: "research", title: "Reviewed notice", content: {} });
+    local.recordDecisionRequest({ decisionId: "d", artifactId: "notice", context: "Choose", options: [
+      { id: "yes", title: "Yes", description: "Proceed", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
+    ] });
+    local.resolveDecision("d", "yes");
     local.forceFlush();
     // Subscribe BEFORE the freeze — `connected` carries getFullState().
     const sub = await subscribe();
 
     const external = fx.track(new FileStore(tmpDir, SID));
-    const changed = external.getArtifacts()[0]!;
+    const changed = external.getArtifacts().find((a) => a.id === "parent")!;
     changed.content = { filePath: "src/app.ts", diff: "-a\n+REWRITTEN" };
     changed.version = 2;
     external.renameArtifact("parent", changed.title);
@@ -140,6 +147,13 @@ describe("#338 (F1) — frozen session over a real socket", () => {
     expect(flip.status).toBe(409);
     expect(await flip.json()).toMatchObject({ code: ERROR_CODES.session_review_conflict });
 
+    // check_feedback's consume-once ack after the freeze: refused, no receipt frame.
+    const ack = await post(`/api/internal/sessions/${SID}/decisions/acknowledge`, { ids: ["d"] });
+    expect(ack.status).toBe(409);
+    expect(await ack.json()).toMatchObject({ code: ERROR_CODES.session_review_conflict });
+    const statusAck = await post(`/api/internal/sessions/${SID}/artifacts/status-changes/acknowledge`, { ids: ["notice"] });
+    expect(statusAck.status).toBe(409);
+
     // An independent comment still lands AND still broadcasts — the ordered
     // stream proves no success frame preceded it.
     const comment = await post(`/api/internal/sessions/${SID}/comments`,
@@ -149,6 +163,7 @@ describe("#338 (F1) — frozen session over a real socket", () => {
     const types = sub.frames.map((f) => f.type);
     expect(types).not.toContain("artifact_created");
     expect(types).not.toContain("artifact_updated");
+    expect(types).not.toContain("decisions_acknowledged");
     expect(types).toContain("comment_added");
     sub.close();
 
@@ -164,8 +179,10 @@ describe("#338 (F1) — frozen session over a real socket", () => {
     expect(fs.existsSync(checkpointPath("src/new.ts"))).toBe(false);
     expect(JSON.parse(fs.readFileSync(checkpointPath("src/app.ts"), "utf8"))).toMatchObject({ artifactId: "parent" });
     const recovered = fx.track(new FileStore(tmpDir, SID));
-    expect(recovered.getArtifacts()).toHaveLength(1);
-    expect(recovered.getArtifacts()[0]).toMatchObject({ id: "parent", status: "draft", version: 2 });
+    expect(recovered.getArtifacts().map((a) => a.id).sort()).toEqual(["notice", "parent"]);
+    expect(recovered.getArtifacts().find((a) => a.id === "parent")).toMatchObject({ status: "draft", version: 2 });
     expect(recovered.getCommentsForArtifact("parent").map((c) => c.id)).toContain("c-after");
+    expect(recovered.getResolvedDecisions().map((d) => d.decisionId)).toEqual(["d"]);
+    expect(recovered.getUnacknowledgedStatusChanges().map((a) => a.id)).toEqual(["notice"]);
   });
 });

@@ -629,6 +629,14 @@ describe("#338 (F1) — frozen artifact receipts through the real factory", () =
       id: "parent", type: "code_change", title: "Swap the cache",
       content: { filePath: "src/app.ts", diff: "-a\n+b" },
     });
+    // #338 (P2) — an unreported reviewed notice, a resolved-but-unacked
+    // decision, an unacked comment, and a render failure, all durable pre-freeze.
+    local.createArtifact({ id: "notice", type: "research", title: "Reviewed notice", content: {} });
+    local.updateArtifactStatus("notice", "approved", "ui_approve_button");
+    local.recordDecisionRequest({ decisionId: "d", artifactId: "notice", context: "Choose", options: OPTS });
+    local.resolveDecision("d", "o1");
+    local.addComment({ id: "c-seed", artifactId: "parent", content: "Seed", author: "human" });
+    local.recordRenderFailure({ artifactId: "parent", visualId: "v1", error: "boom" });
     local.forceFlush();
     const external = h.fx.track(new FileStore(h.tmpDir, sid));
     const changed = external.getArtifacts()[0]!;
@@ -656,7 +664,7 @@ describe("#338 (F1) — frozen artifact receipts through the real factory", () =
     expect(fs.existsSync(checkpointPath(h.tmpDir, "frozen", "src/new.ts"))).toBe(false);
     expect(fs.readFileSync(hintPath, "utf8")).toBe(hintBefore);
     const recovered = h.fx.track(new FileStore(h.tmpDir, "frozen"));
-    expect(recovered.getArtifacts().map((a) => a.id)).toEqual(["parent"]);
+    expect(recovered.getArtifacts().map((a) => a.id).sort()).toEqual(["notice", "parent"]);
   });
 
   it("refuses a revision on a frozen session and leaves the parent untouched", async () => {
@@ -679,8 +687,43 @@ describe("#338 (F1) — frozen artifact receipts through the real factory", () =
     expect(JSON.parse(fs.readFileSync(checkpointPath(h.tmpDir, "frozen", "src/app.ts"), "utf8")))
       .toMatchObject({ artifactId: "parent" });
     const recovered = h.fx.track(new FileStore(h.tmpDir, "frozen"));
-    expect(recovered.getArtifacts()).toHaveLength(1);
-    expect(recovered.getArtifacts()[0]).toMatchObject({ id: "parent", status: "draft", version: 2 });
+    expect(recovered.getArtifacts()).toHaveLength(2);
+    expect(recovered.getArtifacts().find((a) => a.id === "parent")).toMatchObject({ status: "draft", version: 2 });
+  });
+
+  it("P2 — refuses status-change and decision acknowledgements on a frozen session; disk keeps reporting both", async () => {
+    const h = makeDaemon();
+    freezeSession(h, "frozen");
+    const dir = path.join(h.tmpDir, ".deeppairing", "sessions", "frozen");
+    const before = Object.fromEntries(["artifacts.json", "decisions.json"].map((n) => [n, fs.readFileSync(path.join(dir, n), "utf8")]));
+
+    const statusAck = await internal(h, "/api/internal/sessions/frozen/artifacts/status-changes/acknowledge", { ids: ["notice"] });
+    expect(statusAck.status).toBe(409);
+    expect(await statusAck.json()).toMatchObject({ code: ERROR_CODES.session_review_conflict });
+    const decisionAck = await internal(h, "/api/internal/sessions/frozen/decisions/acknowledge", { ids: ["d"] });
+    expect(decisionAck.status).toBe(409);
+    expect(await decisionAck.json()).toMatchObject({ code: ERROR_CODES.session_review_conflict });
+
+    const flushed = await internal(h, "/api/internal/sessions/frozen/flush");
+    expect(flushed.status).toBe(409);
+    for (const [n, text] of Object.entries(before)) expect(fs.readFileSync(path.join(dir, n), "utf8")).toBe(text);
+    const recovered = h.fx.track(new FileStore(h.tmpDir, "frozen"));
+    expect(recovered.getUnacknowledgedStatusChanges().map((a) => a.id)).toEqual(["notice"]);
+    expect(recovered.getResolvedDecisions().map((d) => d.decisionId)).toEqual(["d"]);
+  });
+
+  it("P2 — comment and render-failure acknowledgements still land on a frozen session", async () => {
+    const h = makeDaemon();
+    freezeSession(h, "frozen");
+    const commentAck = await internal(h, "/api/internal/sessions/frozen/comments/acknowledge", { ids: ["c-seed"] });
+    expect(commentAck.status).toBe(200);
+    const renderAck = await internal(h, "/api/internal/sessions/frozen/render-failures/acknowledge",
+      { keys: [{ artifactId: "parent", visualId: "v1" }] });
+    expect(renderAck.status).toBe(200);
+    expect((await internal(h, "/api/internal/sessions/frozen/flush")).status).toBe(409);
+    const recovered = h.fx.track(new FileStore(h.tmpDir, "frozen"));
+    expect(recovered.getCommentsForArtifact("parent").find((c) => c.id === "c-seed")?.acknowledged).toBe(true);
+    expect(recovered.getUnacknowledgedRenderFailures()).toEqual([]);
   });
 
   it("still persists an independent comment on a frozen session", async () => {
