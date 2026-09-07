@@ -1,10 +1,10 @@
-import { test, expect, type Page } from "@playwright/test";
-import { spawn, type ChildProcess } from "node:child_process";
+import { test, expect, daemonBeforeAll, type Page } from "./test.js";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { teardownDaemon, portOf } from "./daemon-harness.js";
+import { spawnDiagnosticProcess, teardownDaemon, portOf } from "./daemon-harness.js";
 
 /**
  * #339 — real-browser evidence for session RECOVERY (the acceptance clause the
@@ -58,7 +58,7 @@ let projectRoot: string;
 let daemon: Daemon | undefined;
 
 async function bootDaemon(): Promise<Daemon> {
-  const proc = spawn(process.execPath, [daemonJs], {
+  const proc = spawnDiagnosticProcess(process.execPath, [daemonJs], {
     env: {
       ...process.env,
       HOME: home,
@@ -67,8 +67,7 @@ async function bootDaemon(): Promise<Daemon> {
       DEEPPAIRING_PORT_BASE: PORT_BASE,
       DEEPPAIRING_PORT_SPAN: PORT_SPAN,
     },
-    stdio: "ignore",
-  });
+  }, projectRoot);
   const daemonJson = path.join(projectRoot, ".deeppairing", "daemon.json");
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
@@ -193,7 +192,7 @@ const chunkBoundary = (page: Page) => page.getByTestId("chunk-boundary");
 
 test.describe.configure({ mode: "serial" });
 
-test.beforeAll(async () => {
+daemonBeforeAll(() => [daemon?.proc], async () => {
   if (!fs.existsSync(daemonJs)) {
     throw new Error(`dist/daemon/index.js missing at ${daemonJs} — run \`pnpm build\` before the e2e suite.`);
   }
