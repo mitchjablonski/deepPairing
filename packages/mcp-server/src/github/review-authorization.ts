@@ -228,23 +228,19 @@ function scopeExternalChangesets(artifacts: Artifact[], ref: string): ExternalTa
 }
 
 /**
- * #369 HIGH-A — how many DISTINCT pull requests does this session still stand
- * behind? More than one means an approved findings artifact cannot be attributed
+ * #369 HIGH-A — how many DISTINCT pull requests does this session's history
+ * identify? More than one means an approved findings artifact cannot be attributed
  * to a PR (findings record no PR of their own), so posting it anywhere could
  * publish another PR's findings — hence the refusal at the call site.
  *
- * The bug this scoping fixes: the count used to include CLOSED chunks. Present
- * the wrong PR once, retract it, present the right one — and the session is
- * bricked forever, because the retracted chunk keeps the identity count at two
- * with no in-session exit. Retraction IS the product's prescribed recovery from
- * exactly that mistake, and the rest of this file already treats it that way.
- * A chunk that was taken off the board no longer claims a PR identity, so it no
- * longer contributes one here.
+ * Findings do not record a PR identity of their own. Closing a changeset cannot
+ * prove that already-approved findings belonged to the surviving PR, so history
+ * remains relevant whenever findings would be posted. The safe exit is a fresh,
+ * single-PR review session rather than guessing reassociation.
  */
 function knownPrIdentityCount(artifacts: Artifact[]): number {
   const identities = new Set<string>();
   for (const artifact of artifacts) {
-    if (!isStandingChunk(artifact)) continue;
     const url = coerceChangesetContent(artifact.content).source?.url;
     const parsed = url ? parsePrNumber(url) : null;
     if (parsed?.owner && parsed.repo) {
@@ -524,27 +520,19 @@ export function authorizeReviewPost(
     const fullScope = scopeExternalChangesets(targetExternals, opts.pr);
     const standing = targetExternals.filter(isStandingChunk);
     const standingScope = scopeExternalChangesets(standing, opts.pr);
-    // #369 HIGH-B — STANDING ONLY. Both of the refusals below used to fall back
-    // to `fullScope` whenever any approved findings existed, which reached into
-    // CLOSED chunks and re-raised a mistake the pair had already withdrawn. The
-    // effect was the same permanent wedge as HIGH-A, and worse in one respect:
-    // the refusal text tells the agent to "present one coherent PR identity and
-    // get your pair's verdict again" / "present every relevant chunk with its
-    // full source.url" — and doing precisely that STILL refused, because the
-    // superseded original was what the gate was reading. The prescribed exit did
-    // not exist. Scoped to standing chunks, the message and the mechanism agree:
-    // supersede or retract the incoherent chunk, present a clean one, post.
-    //
-    // This does NOT open the gate. `standingScope` is `fullScope` intersected
-    // with the standing set, so every LIVE incoherent chunk — draft, reviewing,
-    // rejected, revised, approved — is caught exactly as before. Only chunks the
-    // pair or the agent already took off the board stop refusing.
-    const contradictory = standingScope.contradictory[0];
+    // Closed chunks stop governing a bare verdict, but approved findings have
+    // no PR identity of their own. In that case historical contradictory or
+    // unknown provenance remains an ambiguity boundary: closure cannot prove
+    // that those findings were reassociated with the surviving PR.
+    const contradictory = standingScope.contradictory[0] ??
+      (approved.length > 0 ? fullScope.contradictory[0] : undefined);
     if (contradictory) {
       const artifact = contradictory;
       return {
         ok: false,
-        reason: `Refusing to post: "${artifact.title}" (${artifact.id}) has a source.number that contradicts its source.url. Present one coherent PR identity and get your pair's verdict again.`,
+        reason: isStandingChunk(artifact)
+          ? `Refusing to post: "${artifact.title}" (${artifact.id}) has a source.number that contradicts its source.url. Present one coherent PR identity and get your pair's verdict again.`
+          : `Refusing to post findings: this session's historical changeset identity is contradictory, and findings artifacts do not record which pull request they belong to. Review and post one PR per fresh session; the gate cannot guess that closing a changeset reassigned already-approved findings.`,
       };
     }
     if (approved.length > 0 && knownPrIdentityCount(targetExternals) > 1) {
@@ -565,11 +553,9 @@ export function authorizeReviewPost(
           `not the requested PR ${opts.pr}. Present the requested PR with its full source.url and get your pair's verdict before posting.`,
       };
     }
-    // #369 HIGH-B, the second fallback — same scoping, same reason. An APPROVE
-    // still requires that every STANDING chunk prove its PR identity; a chunk
-    // superseded by one that carries the full canonical source.url is the fix
-    // the message asks for, and must stop being the thing that blocks it.
-    const unknownApproveChunk = event === "APPROVE" ? standingScope.unknown[0] : undefined;
+    const unknownApproveChunk = event === "APPROVE"
+      ? standingScope.unknown[0] ?? (approved.length > 0 ? fullScope.unknown[0] : undefined)
+      : undefined;
     if (unknownApproveChunk) {
       const artifact = unknownApproveChunk;
       return {
@@ -577,7 +563,9 @@ export function authorizeReviewPost(
         reason:
           `Refusing to post an APPROVE: "${artifact.title}" (${artifact.id}) has no full, valid PR source URL, ` +
           `so the gate cannot prove whether it is another part of ${opts.pr} or whether the approved findings belong to it. ` +
-          `Present every relevant chunk with its full source.url and get your pair's verdict again.`,
+          `${isStandingChunk(artifact)
+            ? `Present every relevant chunk with its full source.url and get your pair's verdict again.`
+            : `Because findings artifacts do not record a PR identity, closing this chunk cannot prove reassociation. Review and post one PR per fresh session.`}`,
       };
     }
     // #343 — SHA-AWARE UNKNOWN PROVENANCE never posts unbound. See
