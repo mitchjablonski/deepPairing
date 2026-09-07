@@ -105,10 +105,12 @@ it("the daemon-backed coordinator releases its own unsent attempt; a wrong lease
   await client.reviewPosts.releaseUnsent(lease);
   expect(local.reviewPosts.list()[0]).toMatchObject({ state: "failed", unsentRelease: { priorState: "sending" } });
   // Replay of the same transition, and any resurrection, are refused over HTTP.
-  for (const replay of [client.reviewPosts.releaseUnsent(lease), client.reviewPosts.markSending(lease, identity),
-    client.reviewPosts.markUnknown(lease), client.reviewPosts.succeed(lease, result)]) {
-    await expect(replay).rejects.toMatchObject({ status: 409 });
-  }
+  await Promise.all([
+    client.reviewPosts.releaseUnsent(lease),
+    client.reviewPosts.markSending(lease, identity),
+    client.reviewPosts.markUnknown(lease),
+    client.reviewPosts.succeed(lease, result),
+  ].map(replay => expect(replay).rejects.toMatchObject({ status: 409 })));
   // The PR is genuinely unposted, so a fresh attempt needs no repost.
   await expect(client.reviewPosts.reserve(identity, false)).resolves.toMatchObject({ operationId: expect.any(String) });
   // Only the existing agent-activity heartbeat; no state mutation is published.
