@@ -57,9 +57,9 @@ function errnoCode(error: unknown): string {
  * Honest limits: these are sequential syscalls, not an atomic openat walk. A
  * same-uid writer racing between the realpath check and the open could still
  * substitute a path component; the handle-identity check narrows but does not
- * eliminate that window, and on Windows `ino` may be less discriminating. The
- * fixture root is a process-private mkdtemp, so the realistic threat is the
- * fixture's own contents, which this fully confines.
+ * eliminate that window, and on Windows `ino` may be less discriminating.
+ * Regular files with more than one hard link are rejected, but this remains a
+ * defensive diagnostic reader rather than a complete same-uid sandbox.
  */
 export async function readConfinedFileTail(root: string, relative: readonly string[], maxBytes: number): Promise<FileTail> {
   let handle: fs.FileHandle | undefined;
@@ -69,6 +69,7 @@ export async function readConfinedFileTail(root: string, relative: readonly stri
     if (!expected.startsWith(realRoot + path.sep)) return { kind: "escaped" };
     const leaf = await fs.lstat(path.join(root, ...relative));
     if (!leaf.isFile()) return { kind: "not-regular", type: fileType(leaf) };
+    if (leaf.nlink > 1) return { kind: "not-regular", type: "hardlink" };
     let real: string;
     try {
       real = await fs.realpath(path.join(root, ...relative));
@@ -85,8 +86,10 @@ export async function readConfinedFileTail(root: string, relative: readonly stri
     handle = await fs.open(expected, flags);
     const stat = await handle.stat();
     if (!stat.isFile()) return { kind: "not-regular", type: fileType(stat) };
+    if (stat.nlink > 1) return { kind: "not-regular", type: "hardlink" };
     const current = await fs.stat(expected);
     if (current.dev !== stat.dev || current.ino !== stat.ino) return { kind: "replaced" };
+    if (current.nlink > 1) return { kind: "not-regular", type: "hardlink" };
     const length = Math.min(stat.size, maxBytes);
     const skipped = stat.size - length;
     const buffer = Buffer.alloc(length);
@@ -102,16 +105,17 @@ export async function readConfinedFileTail(root: string, relative: readonly stri
   }
 }
 
-const URL_PATTERN = /https?:\/\/[^\s<>"']+/gi;
+const URL_PATTERN = /(?:https?|wss?):\/\/[^\s<>"']+|\/(?:api\/)?ws\?[^\s<>"']+/gi;
 
 function scrubUrl(value: string): string {
   try {
-    const url = new URL(value);
+    const relative = value.startsWith("/");
+    const url = new URL(value, relative ? "http://diagnostic.invalid" : undefined);
     url.username = "";
     url.password = "";
     url.search = "";
     url.hash = "";
-    return url.toString();
+    return relative ? url.pathname : url.toString();
   } catch {
     return "[invalid URL]";
   }
@@ -155,19 +159,19 @@ export function redactDiagnostic(value: string): string {
       },
     )
     .replace(
-      /(\b"?(?:authToken|accessToken|apiKey|x-api-key|api_key|password)"?\s*[:=]\s*")((?:\\.|[^"\\])*)"/gi,
+      /(\b"?(?:authToken|accessToken|token|apiKey|x-api-key|api_key|x-deeppairing-token|password|secret|clientSecret|refreshToken|sessionToken)"?\s*[:=]\s*")((?:\\.|[^"\\])*)"/gi,
       '$1[REDACTED]"',
     )
     .replace(
-      /(\b'?(?:authToken|accessToken|apiKey|x-api-key|api_key|password)'?\s*[:=]\s*')((?:\\.|[^'\\])*)'/gi,
+      /(\b'?(?:authToken|accessToken|token|apiKey|x-api-key|api_key|x-deeppairing-token|password|secret|clientSecret|refreshToken|sessionToken)'?\s*[:=]\s*')((?:\\.|[^'\\])*)'/gi,
       "$1[REDACTED]'",
     )
     .replace(
-      /(\b"?(?:authToken|accessToken|apiKey|x-api-key|api_key|password)"?\s*[:=]\s*")[^"\r\n]*$/gim,
+      /(\b"?(?:authToken|accessToken|token|apiKey|x-api-key|api_key|x-deeppairing-token|password|secret|clientSecret|refreshToken|sessionToken)"?\s*[:=]\s*")[^"\r\n]*$/gim,
       "$1[REDACTED]",
     )
     .replace(
-      /(\b'?(?:authToken|accessToken|apiKey|x-api-key|api_key|password)'?\s*[:=]\s*')[^'\r\n]*$/gim,
+      /(\b'?(?:authToken|accessToken|token|apiKey|x-api-key|api_key|x-deeppairing-token|password|secret|clientSecret|refreshToken|sessionToken)'?\s*[:=]\s*')[^'\r\n]*$/gim,
       "$1[REDACTED]",
     )
     .replace(
@@ -181,7 +185,7 @@ export function redactDiagnostic(value: string): string {
       },
     )
     .replace(
-      /(\b"?(?:authToken|accessToken|apiKey|x-api-key|api_key|password)"?\s*[:=]\s*["']?)[^,\s;"']+/gi,
+      /(\b"?(?:authToken|accessToken|token|apiKey|x-api-key|api_key|x-deeppairing-token|password|secret|clientSecret|refreshToken|sessionToken)"?\s*[:=]\s*["']?)[^,\s;"']+/gi,
       "$1[REDACTED]",
     )
     .replace(/(\bbearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, "$1[REDACTED]");

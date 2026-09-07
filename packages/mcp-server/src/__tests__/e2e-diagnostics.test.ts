@@ -76,6 +76,11 @@ describe("E2E daemon diagnostics", () => {
       "x-api-key: x-header-secret",
       "api_key=snake-secret",
       "https://user:url-secret@example.test/path?token=query-secret#fragment-secret",
+      "ws://user:ws-secret@localhost:3901/ws?token=ws-query-secret",
+      "wss://user:wss-secret@example.test/socket?token=wss-query-secret",
+      '{"token":"token-secret","clientSecret":"client-secret","refreshToken":"refresh-secret","sessionToken":"session-secret","secret":"generic-secret"}',
+      "/api/ws?token=relative-ws-secret",
+      "x-deeppairing-token: app-header-secret",
     ].join("\n"));
 
     for (const secret of [
@@ -86,6 +91,9 @@ describe("E2E daemon diagnostics", () => {
       "cookie-secret", "set-cookie-secret", "x-header-secret", "snake-secret",
       "json-cookie-secret", "json-csrf-secret", "object-set-cookie-secret",
       "array-cookie-secret", "array-csrf-secret",
+      "ws-secret", "ws-query-secret", "wss-secret", "wss-query-secret",
+      "token-secret", "client-secret", "refresh-secret", "session-secret",
+      "generic-secret", "relative-ws-secret", "app-header-secret",
     ]) expect(output).not.toContain(secret);
     expect(output).toContain('Authorization: "Bearer [REDACTED]"');
     expect(output).toContain("Authorization='[REDACTED]'");
@@ -93,6 +101,9 @@ describe("E2E daemon diagnostics", () => {
     expect(output).toContain("{'Set-Cookie':'[REDACTED]'}");
     expect(output).toContain('{"Set-Cookie":["[REDACTED]"]}');
     expect(output).toContain("https://example.test/path");
+    expect(output).toContain("ws://localhost:3901/ws");
+    expect(output).toContain("wss://example.test/socket");
+    expect(output).toContain("/api/ws");
   });
 
   it("captures and redacts output from a real crashing child process", async () => {
@@ -221,6 +232,39 @@ describe("E2E daemon diagnostics", () => {
     }
   });
 
+  it("retains a real daemon.log when Playwright aborts a timed-out beforeAll hook", () => {
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-hook-timeout-diagnostic-"));
+    try {
+      const cli = path.join(packageRoot, "node_modules", "@playwright", "test", "cli.js");
+      const config = path.join(packageRoot, "e2e", "fixtures", "hook-timeout-diagnostics.config.ts");
+      const run = spawnSync(process.execPath, [cli, "test", "--config", config], {
+        cwd: packageRoot,
+        env: { ...process.env, DP_HOOK_TIMEOUT_DIAGNOSTIC_OUTPUT: outputDir },
+        encoding: "utf8",
+        timeout: 20_000,
+      });
+
+      const report = `${run.stdout}\n${run.stderr}`;
+      expect(run.status, report).toBe(1);
+      expect(report).toContain('"beforeAll" hook timeout of 1500ms exceeded.');
+      expect(report).toContain("daemon-log-diagnostics (text/plain)");
+      const files = fs.readdirSync(outputDir, { recursive: true })
+        .map(String)
+        .map((entry) => path.join(outputDir, entry))
+        .filter((entry) => fs.statSync(entry).isFile());
+      const log = files.find((entry) => entry.endsWith("daemon-log-diagnostics.txt"));
+      expect(log).toBeDefined();
+      const body = fs.readFileSync(log!, "utf8");
+      expect(Buffer.byteLength(body)).toBeLessThanOrEqual(64 * 1024 + 256);
+      expect(body).toContain("[daemon] Daemon starting");
+      expect(body).toContain("[daemon] Daemon running on http://localhost:");
+      expect(body).not.toMatch(/[a-f0-9]{64}/i);
+      expect(files.some((entry) => entry.endsWith("trace.zip"))).toBe(false);
+    } finally {
+      fs.rmSync(outputDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   describe("real daemon.log tail", () => {
     const notWindows = process.platform !== "win32";
 
@@ -304,6 +348,30 @@ describe("E2E daemon diagnostics", () => {
       expect(body).toBe("[daemon.log] skipped: path escapes the fixture root (symlinked component)\n");
       expect(body).not.toContain("SYNTHETIC_OUTSIDE_REGISTERED_FIXTURE");
       expect(body).not.toContain("parent-link-secret");
+    });
+
+    it.skipIf(!notWindows)("refuses a hard-linked daemon.log", async () => {
+      const root = fixtureProjectRoot();
+      const outside = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "dp-diagnostic-hardlink-")), "outside.log");
+      diagnosticDirs.push(path.dirname(outside));
+      fs.writeFileSync(outside, "HARDLINK_ESCAPE_CANARY secret=outside-secret\n");
+      fs.linkSync(outside, daemonLogPath(root));
+
+      const body = (await daemonLogTail(root)).toString();
+      expect(body).toBe("[daemon.log] skipped: not a regular file (hardlink)\n");
+      expect(body).not.toContain("HARDLINK_ESCAPE_CANARY");
+      expect(body).not.toContain("outside-secret");
+    });
+
+    it.skipIf(!notWindows)("does not probe a rotated log through a symlinked parent", async () => {
+      const root = fixtureProjectRoot();
+      const outside = fs.mkdtempSync(path.join(os.tmpdir(), "dp-diagnostic-rotation-"));
+      diagnosticDirs.push(outside);
+      fs.rmdirSync(path.join(root, ".deeppairing"));
+      fs.symlinkSync(outside, path.join(root, ".deeppairing"));
+      fs.writeFileSync(path.join(outside, "daemon.log.1"), "outside rotation\n");
+
+      expect((await daemonLogTail(root)).toString()).toBe("[daemon.log] missing\n");
     });
 
     it.skipIf(!notWindows)("still reads a fixture whose ROOT is reached through a symlink (macOS tmp)", async () => {

@@ -1,7 +1,6 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import net from "node:net";
 import path from "node:path";
-import fs from "node:fs/promises";
 import { StringDecoder } from "node:string_decoder";
 import type { TestInfo } from "@playwright/test";
 import { attachDiagnosticFile, BoundedDiagnosticTail, readConfinedFileTail, redactDiagnostic } from "./diagnostics.js";
@@ -110,11 +109,10 @@ const NEWLINE = 0x0a;
 export async function daemonLogTail(projectRoot: string, maxBytes = MAX_DAEMON_DIAGNOSTIC_BYTES): Promise<Buffer> {
   const notes: string[] = [];
   const result = await readConfinedFileTail(projectRoot, DAEMON_LOG_RELATIVE, maxBytes);
-  if (result.kind !== "escaped") {
-    // Existence only, never read: tells the reader that earlier lines rolled over.
-    const rotated = await fs.lstat(`${daemonLogPath(projectRoot)}.1`).then(() => true, () => false);
-    if (rotated) notes.push("[daemon.log] rotated: daemon.log.1 present (not read)");
-  }
+  // Probe the rotated leaf through the same canonical-root confinement as the
+  // primary log. A linked parent must not become an outside-root existence oracle.
+  const rotated = await readConfinedFileTail(projectRoot, [...DAEMON_LOG_RELATIVE.slice(0, -1), "daemon.log.1"], 0);
+  if (rotated.kind === "tail") notes.push("[daemon.log] rotated: daemon.log.1 present (not read)");
   const content = new BoundedDiagnosticTail(maxBytes);
   switch (result.kind) {
     case "missing":

@@ -21,6 +21,7 @@ import { attachDaemonOutput, spawnDiagnosticProcess, teardownDaemon } from "../.
 const __dir = path.dirname(fileURLToPath(import.meta.url));
 const daemonEntry = path.resolve(__dir, "../daemon/index.ts");
 const tsxBin = path.resolve(__dir, "../../node_modules/.bin/tsx");
+const sharedDist = path.resolve(__dir, "../../../shared/dist/index.js");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const cleanups: Array<() => Promise<void> | void> = [];
@@ -58,6 +59,9 @@ function failedTestInfo(dir: string, attached: Record<string, string>): TestInfo
 
 describe("#341 real daemon.log retention through the e2e harness", () => {
   it("attaches the real daemon's redacted log tail while alive and after SIGTERM", async () => {
+    if (!fs.existsSync(sharedDist)) {
+      throw new Error(`Missing ${sharedDist}; run \`pnpm build\` before this real-daemon test`);
+    }
     const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-341-log-"));
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "dp-341-home-"));
     const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-341-out-"));

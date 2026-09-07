@@ -64,6 +64,14 @@ export function daemonBeforeAll(
       throw error;
     }
   });
+  // Playwright can abort a timed-out hook without rejecting back into the
+  // callback above. Register this before callers register their cleanup hook,
+  // so the real daemon.log is retained while its mkdtemp root still exists.
+  test.afterAll(async ({}, testInfo) => {
+    if (testInfo.status !== testInfo.expectedStatus) {
+      await attachSetupFailureOutputs(processes(), testInfo);
+    }
+  });
 }
 
 export { expect };
