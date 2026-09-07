@@ -35288,7 +35288,7 @@ function createDaemon(deps) {
           const knownConflict = isSessionReviewConflictError(error51);
           log2(knownConflict ? `[ws] initial snapshot refused: session review conflict (session=${sessionId}): ${errorMessage(error51)}` : `[ws] initial snapshot failed (session=${sessionId}): ${errorMessage(error51)}`);
           cleanup2();
-          const refusal = knownConflict ? { type: "connection_refused", code: ERROR_CODES.session_review_conflict, message: "Session state requires review before reconnecting." } : { type: "connection_refused", message: "Session state is temporarily unavailable." };
+          const refusal = knownConflict ? { type: "connection_refused", code: ERROR_CODES.session_review_conflict, sessionId, message: "Session state requires review before reconnecting." } : { type: "connection_refused", sessionId, message: "Session state is temporarily unavailable." };
           refusalDeadline = setTimeout(() => {
             log2(`[ws] initial snapshot refusal timed out (session=${sessionId}); terminating client`);
             try {
@@ -35355,17 +35355,22 @@ function createDaemon(deps) {
       });
       ws.on("close", cleanup2);
       globalClients.add(ws);
+      let failingSessionId;
       try {
-        const sessionList = Array.from(sessions.entries()).map(([id, store]) => ({
-          sessionId: id,
-          artifactCount: store.getArtifacts().length
-        }));
+        const sessionList = [];
+        for (const [id, store] of sessions.entries()) {
+          failingSessionId = id;
+          sessionList.push({ sessionId: id, artifactCount: store.getArtifacts().length });
+        }
+        failingSessionId = void 0;
         ws.send(JSON.stringify({ type: "connected", sessions: sessionList, projectRoot: projectRoot2, projectHash: daemonProjectHash, daemonStartedAt: startedAt2 }));
       } catch (error51) {
         const knownConflict = isSessionReviewConflictError(error51);
-        log2(knownConflict ? `[ws] global initial snapshot refused: session review conflict: ${errorMessage(error51)}` : `[ws] global initial snapshot failed: ${errorMessage(error51)}`);
+        const blame = failingSessionId ? ` (session=${failingSessionId})` : "";
+        log2(knownConflict ? `[ws] global initial snapshot refused: session review conflict${blame}: ${errorMessage(error51)}` : `[ws] global initial snapshot failed${blame}: ${errorMessage(error51)}`);
         cleanup2();
-        const refusal = knownConflict ? { type: "connection_refused", code: ERROR_CODES.session_review_conflict, message: "Session state requires review before reconnecting." } : { type: "connection_refused", message: "Session state is temporarily unavailable." };
+        const scope = failingSessionId ? { sessionId: failingSessionId } : {};
+        const refusal = knownConflict ? { type: "connection_refused", code: ERROR_CODES.session_review_conflict, ...scope, message: "Session state requires review before reconnecting." } : { type: "connection_refused", ...scope, message: "Session state is temporarily unavailable." };
         refusalDeadline = setTimeout(() => {
           log2("[ws] global initial snapshot refusal timed out; terminating client");
           try {

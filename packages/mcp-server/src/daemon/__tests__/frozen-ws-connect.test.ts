@@ -124,6 +124,7 @@ describe("#338 — frozen initial WebSocket snapshots", () => {
     expect(result.frames).toEqual([{
       type: "connection_refused",
       code: ERROR_CODES.session_review_conflict,
+      sessionId: "frozen",
       message: "Session state requires review before reconnecting.",
     }]);
     expect(result.frames.some((frame) => frame.type === "connected")).toBe(false);
@@ -132,12 +133,18 @@ describe("#338 — frozen initial WebSocket snapshots", () => {
     expect(daemon.getClientCount()).toBe(0);
     expect(fs.readFileSync(artifactsPath, "utf8")).toBe(before);
     expect(logs.some((line) => line.includes("session review conflict") && line.includes("session=frozen"))).toBe(true);
+    // The GLOBAL client subscribes to every session, so its refusal must name
+    // the session that is actually blocked. Without this the companion could
+    // only report an unattributable project-wide outage — and would blank
+    // whichever unrelated session the tab happened to be showing.
     const globalResult = await refused(base, hash);
     expect(globalResult.frames).toEqual([{
       type: "connection_refused",
       code: ERROR_CODES.session_review_conflict,
+      sessionId: "frozen",
       message: "Session state requires review before reconnecting.",
     }]);
+    expect(logs.some((line) => line.includes("global initial snapshot refused") && line.includes("session=frozen"))).toBe(true);
     expect(globalResult.frames.some((frame) => frame.type === "connected")).toBe(false);
     expect(daemon.getClientCount()).toBe(0);
 
@@ -161,6 +168,7 @@ describe("#338 — frozen initial WebSocket snapshots", () => {
     const result = await refused(base, hash, "broken");
     expect(result.frames).toEqual([{
       type: "connection_refused",
+      sessionId: "broken",
       message: "Session state is temporarily unavailable.",
     }]);
     expect(JSON.stringify(result.frames)).not.toContain("private artifact secret");
@@ -178,6 +186,61 @@ describe("#338 — frozen initial WebSocket snapshots", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(daemon.getClientCount()).toBe(0);
+  });
+
+  it("blames the frozen session, not the healthy ones, on a global refusal", async () => {
+    const { fx, daemon, base, hash } = await start();
+    // Healthy session registered FIRST: the global snapshot reads it fine and
+    // only then trips on the frozen one, so naming the blame requires tracking
+    // which store was being read — not just "a global read failed".
+    const healthy = daemon.createSession("healthy");
+    healthy.createArtifact({ id: "ok", type: "research", title: "Healthy", content: {} });
+    healthy.forceFlush();
+
+    const frozen = daemon.createSession("frozen");
+    frozen.createArtifact({
+      id: "a", type: "code_change", title: "Original",
+      content: { filePath: "a.ts", diff: "-a\n+b" },
+    });
+    frozen.forceFlush();
+    const external = fx.track(new FileStore(fx.dir, "frozen"));
+    const changed = external.getArtifacts()[0]!;
+    changed.content = { filePath: "a.ts", diff: "-a\n+different" };
+    changed.version = 2;
+    external.renameArtifact("a", changed.title);
+    external.forceFlush();
+    frozen.updateArtifactStatus("a", "approved", "ui_approve_button");
+    expect(() => frozen.forceFlush()).toThrow(/changed content.*review verdict/i);
+
+    const globalResult = await refused(base, hash);
+    expect(globalResult.frames[0]).toMatchObject({ sessionId: "frozen" });
+    // The healthy session is still reachable on its own subscription — a
+    // global refusal must not be read as "this project is down".
+    const healthyFrame = await firstFrame(base, hash, "healthy");
+    expect(healthyFrame.type).toBe("connected");
+  });
+
+  it("names no session when the failure is not attributable to one", async () => {
+    const { daemon } = await start();
+    // No stores read at all — the failure is in serialising/sending the
+    // envelope, so an honest refusal says it does not know which session.
+    class FirstSendThrows extends EventEmitter {
+      sent: string[] = [];
+      private first = true;
+      send(data: string, cb?: (err?: Error) => void): void {
+        if (this.first) { this.first = false; throw new Error("socket write failed"); }
+        this.sent.push(data);
+        cb?.();
+      }
+      close(): void {}
+      terminate(): void {}
+    }
+    const socket = new FirstSendThrows();
+    daemon.wss.emit("connection", socket as unknown as WebSocket, { url: "/ws" });
+    expect(socket.sent.map((frame) => JSON.parse(frame))).toEqual([{
+      type: "connection_refused",
+      message: "Session state is temporarily unavailable.",
+    }]);
   });
 
   it("terminates a refusal whose send callback never completes", async () => {
@@ -198,6 +261,7 @@ describe("#338 — frozen initial WebSocket snapshots", () => {
     daemon.wss.emit("connection", socket as unknown as WebSocket, { url: "/ws?sessionId=stalled" });
     expect(socket.sent.map((frame) => JSON.parse(frame))).toEqual([{
       type: "connection_refused",
+      sessionId: "stalled",
       message: "Session state is temporarily unavailable.",
     }]);
     expect(daemon.getClientCount()).toBe(0);

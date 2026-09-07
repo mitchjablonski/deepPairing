@@ -733,6 +733,44 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         });
       });
 
+      // The daemon REFUSED this connection's initial snapshot. It completes
+      // the WS upgrade, sends `connection_refused`, then closes 1011 — which
+      // read to the old adapter as an ordinary flap, so `onopen` reset the
+      // backoff and the tab retried once a second, forever, showing nothing.
+      // Now the adapter latches (like II3's mismatch) and we surface the
+      // daemon's own words plus the session it blames. Sticky + a Retry action
+      // rather than a reload-only dead end: the underlying conflict is
+      // something the human resolves in this very UI, so reconnecting must be
+      // one click, and the toast is deduped by the latch (exactly one per
+      // deliberate attempt).
+      adapter.onConnectionRefused?.((info) => {
+        set({ connected: false });
+        const named = info.sessionId ?? null;
+        const mine = get().sessionId;
+        const reason =
+          info.message?.trim() || "The daemon could not assemble this session's state.";
+        // Never imply the viewed session is at fault when it isn't: a global
+        // client subscribes to every session, so an unrelated frozen one must
+        // be named, not silently blamed on whatever this tab is showing.
+        const scope = !named
+          ? "The daemon did not say which session is affected."
+          : mine && named !== mine
+            ? `The blocked session is ${named} — not ${mine}, which this tab is showing.`
+            : `Affected session: ${named}.`;
+        import("./toast").then(({ useToastStore }) => {
+          useToastStore.getState().push({
+            kind: "error",
+            title: "Daemon refused this connection",
+            body: `${reason} ${scope} Reconnect attempts are paused — retry once it is resolved, or reload the tab.`,
+            ttl: 0,
+            action: {
+              label: "Retry connecting",
+              onClick: () => adapter.retryAfterRefusal?.(),
+            },
+          });
+        });
+      });
+
       adapter.connect();
     },
 

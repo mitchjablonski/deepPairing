@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import type { ConnectionAdapter } from "../../lib/connection-adapter";
+import type { ConnectionAdapter, ConnectionRefusal } from "../../lib/connection-adapter";
 
 /**
  * FakeAdapter — a controllable ConnectionAdapter we can push messages into
@@ -31,6 +31,16 @@ class FakeAdapter implements ConnectionAdapter {
   /** Test helper: simulate the adapter detecting a cross-project daemon (II3). */
   triggerFatalMismatch(info: { liveProjectRoot?: string; liveHash: string } = { liveHash: "other-hash" }) {
     this.fatalMismatchHandler?.(info);
+  }
+
+  refusalHandler: ((info: ConnectionRefusal) => void) | null = null;
+  retryAfterRefusalCalls = 0;
+  onConnectionRefused(h: (info: ConnectionRefusal) => void) { this.refusalHandler = h; }
+  retryAfterRefusal() { this.retryAfterRefusalCalls++; }
+
+  /** Test helper: simulate the daemon refusing the initial snapshot. */
+  triggerConnectionRefused(info: ConnectionRefusal) {
+    this.refusalHandler?.(info);
   }
 }
 
@@ -748,5 +758,65 @@ describe("connection store — daemon-restart detection (U4)", () => {
     });
     await flush();
     expect(useToastStore.getState().toasts).toHaveLength(0);
+  });
+
+  describe("connection_refused — the human must see WHY and get back in", () => {
+    async function refuse(info: ConnectionRefusal) {
+      const { useToastStore } = await import("../toast");
+      useToastStore.getState().dismissAll();
+      useConnectionStore.getState().connect();
+      activeAdapter.triggerConnectionRefused(info);
+      await flush();
+      return useToastStore.getState().toasts;
+    }
+
+    it("surfaces the daemon's reason as a sticky toast with a retry affordance", async () => {
+      const toasts = await refuse({
+        code: "session_review_conflict",
+        sessionId: "s1",
+        message: "Session state requires review before reconnecting.",
+      });
+      expect(toasts).toHaveLength(1);
+      const toast = toasts[0]!;
+      expect(toast.kind).toBe("error");
+      expect(toast.title).toBe("Daemon refused this connection");
+      // The daemon's own words reach the screen — not a silent dead end.
+      expect(toast.body).toContain("Session state requires review before reconnecting.");
+      expect(toast.body).toContain("Affected session: s1.");
+      expect(toast.ttl).toBe(0); // sticky: the loop is stopped, so nothing else will remind them
+      expect(toast.action?.label).toBe("Retry connecting");
+      expect(useConnectionStore.getState().connected).toBe(false);
+
+      toast.action?.onClick();
+      expect(activeAdapter.retryAfterRefusalCalls).toBe(1);
+    });
+
+    it("names the blocked session instead of blaming the one this tab shows", async () => {
+      const { useToastStore } = await import("../toast");
+      useToastStore.getState().dismissAll();
+      useConnectionStore.getState().connect();
+      activeAdapter.emit({
+        type: "connected", projectRoot: "/p",
+        state: { sessionId: "viewed", artifacts: [], comments: [] },
+      });
+      await flush();
+      useToastStore.getState().dismissAll();
+
+      activeAdapter.triggerConnectionRefused({
+        code: "session_review_conflict",
+        sessionId: "frozen",
+        message: "Session state requires review before reconnecting.",
+      });
+      await flush();
+
+      const body = useToastStore.getState().toasts[0]!.body!;
+      expect(body).toContain("The blocked session is frozen");
+      expect(body).toContain("not viewed");
+    });
+
+    it("admits it does not know the session rather than inventing one", async () => {
+      const toasts = await refuse({ message: "Session state is temporarily unavailable." });
+      expect(toasts[0]!.body).toContain("did not say which session is affected");
+    });
   });
 });

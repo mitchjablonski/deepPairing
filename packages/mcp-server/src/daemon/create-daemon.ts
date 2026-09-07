@@ -1043,9 +1043,13 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
             ? `[ws] initial snapshot refused: session review conflict (session=${sessionId}): ${errorMessage(error)}`
             : `[ws] initial snapshot failed (session=${sessionId}): ${errorMessage(error)}`);
           cleanup();
+          // Name the offending session in the frame. Without it the companion
+          // can only say "something is wrong" — it cannot tell the human WHICH
+          // session to go unblock, and a global refusal (below) would read as
+          // if the session the tab is looking at were the broken one.
           const refusal = knownConflict
-            ? { type: "connection_refused", code: ERROR_CODES.session_review_conflict, message: "Session state requires review before reconnecting." }
-            : { type: "connection_refused", message: "Session state is temporarily unavailable." };
+            ? { type: "connection_refused", code: ERROR_CODES.session_review_conflict, sessionId, message: "Session state requires review before reconnecting." }
+            : { type: "connection_refused", sessionId, message: "Session state is temporarily unavailable." };
           refusalDeadline = setTimeout(() => {
             log(`[ws] initial snapshot refusal timed out (session=${sessionId}); terminating client`);
             try { ws.terminate(); } catch {}
@@ -1105,24 +1109,34 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
       ws.on("close", cleanup);
       globalClients.add(ws);
 
-      // Send list of active sessions
+      // Send list of active sessions. Track WHICH session's store is being
+      // read so a throw can name it: a global client subscribes to every
+      // session, and one frozen session must not present itself to the human
+      // as an unattributable, project-wide outage.
+      let failingSessionId: string | undefined;
       try {
-        const sessionList = Array.from(sessions.entries()).map(([id, store]) => ({
-          sessionId: id,
-          artifactCount: store.getArtifacts().length,
-        }));
+        const sessionList: Array<{ sessionId: string; artifactCount: number }> = [];
+        for (const [id, store] of sessions.entries()) {
+          failingSessionId = id;
+          sessionList.push({ sessionId: id, artifactCount: store.getArtifacts().length });
+        }
+        // Past every store read: a failure from here on (serialise, send) is
+        // not attributable to one session, so the refusal names none.
+        failingSessionId = undefined;
         // U4 — include `daemonStartedAt` so global clients also detect a
         // daemon restart and re-hydrate session listings on reconnect.
         ws.send(JSON.stringify({ type: "connected", sessions: sessionList, projectRoot, projectHash: daemonProjectHash, daemonStartedAt: startedAt }));
       } catch (error) {
         const knownConflict = isSessionReviewConflictError(error);
+        const blame = failingSessionId ? ` (session=${failingSessionId})` : "";
         log(knownConflict
-          ? `[ws] global initial snapshot refused: session review conflict: ${errorMessage(error)}`
-          : `[ws] global initial snapshot failed: ${errorMessage(error)}`);
+          ? `[ws] global initial snapshot refused: session review conflict${blame}: ${errorMessage(error)}`
+          : `[ws] global initial snapshot failed${blame}: ${errorMessage(error)}`);
         cleanup();
+        const scope = failingSessionId ? { sessionId: failingSessionId } : {};
         const refusal = knownConflict
-          ? { type: "connection_refused", code: ERROR_CODES.session_review_conflict, message: "Session state requires review before reconnecting." }
-          : { type: "connection_refused", message: "Session state is temporarily unavailable." };
+          ? { type: "connection_refused", code: ERROR_CODES.session_review_conflict, ...scope, message: "Session state requires review before reconnecting." }
+          : { type: "connection_refused", ...scope, message: "Session state is temporarily unavailable." };
         refusalDeadline = setTimeout(() => {
           log("[ws] global initial snapshot refusal timed out; terminating client");
           try { ws.terminate(); } catch {}
