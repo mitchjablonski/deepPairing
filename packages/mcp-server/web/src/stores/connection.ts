@@ -744,11 +744,12 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       // one click, and the toast is deduped by the latch (exactly one per
       // deliberate attempt).
       adapter.onConnectionRefused?.((info) => {
-        set({ connected: false });
+        set((state) => ({
+          connected: false,
+          disconnectedSince: state.disconnectedSince ?? Date.now(),
+        }));
         const named = info.sessionId ?? null;
         const mine = get().sessionId;
-        const reason =
-          info.message?.trim() || "The daemon could not assemble this session's state.";
         // Never imply the viewed session is at fault when it isn't: a global
         // client subscribes to every session, so an unrelated frozen one must
         // be named, not silently blamed on whatever this tab is showing.
@@ -758,10 +759,19 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             ? `The blocked session is ${named} — not ${mine}, which this tab is showing.`
             : `Affected session: ${named}.`;
         import("./toast").then(({ useToastStore }) => {
+          if (info.code !== "session_review_conflict") {
+            useToastStore.getState().push({
+              kind: "error",
+              title: "Session state temporarily unavailable",
+              body: "The daemon could not assemble the initial session snapshot. Automatic reconnect will continue with bounded backoff.",
+              ttl: 8_000,
+            });
+            return;
+          }
           useToastStore.getState().push({
             kind: "error",
-            title: "Daemon refused this connection",
-            body: `${reason} ${scope} Reconnect attempts are paused — retry once it is resolved, or reload the tab.`,
+            title: "Session review conflict",
+            body: `The persisted session state changed after review and must be inspected before reconnecting. ${scope} Reconnect attempts are paused — restart that session writer, review the persisted artifact, then retry or switch sessions.`,
             ttl: 0,
             action: {
               label: "Retry connecting",
@@ -785,14 +795,17 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     switchSession: (sessionId: string) => {
       const { adapter } = get();
       if (adapter && "switchSession" in adapter) {
-        // Reset artifact store before switching
-        import("./artifact").then(({ useArtifactStore }) => {
-          useArtifactStore.getState().reset();
-        });
-        (adapter as any).switchSession(sessionId);
         // B2 — drop the OLD session's heartbeat streak, or the TurnIndicator
         // shows "Agent working · Nm" from session A for up to 45s on session B.
         set({ sessionId, agentActivityAt: null, agentActiveSince: null });
+        // Reset before opening the replacement socket. The old ordering fired
+        // the dynamic import and immediately connected; a fast hydration could
+        // then be erased when the import's reset resolved one microtask later.
+        void import("./artifact").then(({ useArtifactStore }) => {
+          if (get().adapter !== adapter || get().sessionId !== sessionId) return;
+          useArtifactStore.getState().reset();
+          (adapter as any).switchSession(sessionId);
+        });
       }
     },
 

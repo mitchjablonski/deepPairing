@@ -83,6 +83,12 @@ class FakeWebSocket {
     this.readyState = 3;
     this.onclose?.();
   }
+  serverError(): void {
+    this.onerror?.();
+  }
+  queuedClose(): void {
+    this.onclose?.();
+  }
 }
 
 /** One full refuse cycle: upgrade, refusal frame, 1011. */
@@ -166,6 +172,23 @@ describe("WebSocketAdapter — refused reconnects", () => {
     expect(seen).toEqual([
       { code: undefined, sessionId: undefined, message: "Session state is temporarily unavailable." },
     ]);
+  });
+
+  it("keeps generic snapshot failures recoverable with bounded backoff", () => {
+    const adapter = new WebSocketAdapter("ws://127.0.0.1:9/ws", "broken");
+    adapter.connect();
+
+    refuseOnce({ type: "connection_refused", message: "private detail" });
+    vi.advanceTimersByTime(999);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+
+    refuseOnce({ type: "connection_refused" });
+    vi.advanceTimersByTime(1999);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    vi.advanceTimersByTime(1);
+    expect(FakeWebSocket.instances).toHaveLength(3);
   });
 
   it("CONTROL — an ordinary post-open drop still reconnects", () => {
@@ -252,4 +275,43 @@ describe("WebSocketAdapter — refused reconnects", () => {
     vi.advanceTimersByTime(1000);
     expect(FakeWebSocket.instances).toHaveLength(3);
   });
+
+  it.each(["before", "after"])(
+    "ignores a replaced socket's late refusal/close/error %s healthy hydration",
+    (timing) => {
+      const adapter = new WebSocketAdapter("ws://127.0.0.1:9/ws", "frozen");
+      const refusals: ConnectionRefusal[] = [];
+      const messages: unknown[] = [];
+      let disconnects = 0;
+      adapter.onConnectionRefused((info) => refusals.push(info));
+      adapter.onMessage((message) => messages.push(message));
+      adapter.onDisconnect(() => { disconnects++; });
+      adapter.connect();
+
+      const old = FakeWebSocket.last;
+      old.serverOpen();
+      adapter.switchSession("healthy");
+      const healthy = FakeWebSocket.last;
+      healthy.serverOpen();
+      const disconnectsAfterSwitch = disconnects;
+
+      const deliverOldEvents = () => {
+        old.serverSend(REFUSAL);
+        old.queuedClose();
+        old.serverError();
+      };
+      if (timing === "before") deliverOldEvents();
+      healthy.serverSend({ type: "connected", state: { sessionId: "healthy", artifacts: [{ id: "healthy" }] } });
+      if (timing === "after") deliverOldEvents();
+
+      expect(refusals).toEqual([]);
+      expect(disconnects).toBe(disconnectsAfterSwitch);
+      expect(messages).toEqual([{ type: "connected", state: { sessionId: "healthy", artifacts: [{ id: "healthy" }] } }]);
+
+      healthy.serverClose();
+      expect(disconnects).toBe(disconnectsAfterSwitch + 1);
+      vi.advanceTimersByTime(1000);
+      expect(FakeWebSocket.instances).toHaveLength(3);
+    },
+  );
 });

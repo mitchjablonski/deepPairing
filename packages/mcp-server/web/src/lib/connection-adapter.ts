@@ -59,8 +59,8 @@ export interface ConnectionAdapter {
   ): void;
   /**
    * Optional — fired when the daemon REFUSES the initial snapshot
-   * (`connection_refused`). Mirrors onFatalMismatch: the adapter latches its
-   * reconnect loop OFF and hands the reason up so the store can surface it.
+   * (`connection_refused`). Typed review conflicts latch the reconnect loop
+   * OFF; unexpected refusals remain recoverable with bounded backoff.
    * Before this the frame was handled nowhere: every refused reconnect
    * completed the upgrade, `onopen` reset the backoff, and the tab retried
    * once a second forever with nothing shown to the human.
@@ -109,7 +109,8 @@ export class WebSocketAdapter implements ConnectionAdapter {
   private fatalMismatch = false;
   private refusalHandler: ((info: ConnectionRefusal) => void) | null = null;
   /**
-   * Set once the daemon has REFUSED this connection's initial snapshot.
+   * Set once the daemon has REFUSED this connection's initial snapshot with a
+   * typed review conflict.
    * Latches the reconnect loop OFF exactly like `fatalMismatch`: the refusal
    * arrives AFTER a successful upgrade, so without this latch `onopen` resets
    * the backoff to zero on every attempt and the tab hammers a session the
@@ -186,17 +187,22 @@ export class WebSocketAdapter implements ConnectionAdapter {
   }
 
   connect(): void {
+    if (this.connectionRefused) return;
     if (this.ws && this.ws.readyState <= 1) return;
     this.closed = false; // a fresh connect re-arms the adapter
 
-    this.ws = new WebSocket(this.url);
+    const socket = new WebSocket(this.url);
+    this.ws = socket;
 
-    this.ws.onopen = () => {
-      this.reconnectAttempt = 0; // Reset backoff on successful connect
+    socket.onopen = () => {
+      if (this.ws !== socket) return;
       this.connectHandler?.();
     };
 
-    this.ws.onmessage = (event) => {
+    socket.onmessage = (event) => {
+      // A replaced socket can still have queued browser events. Never let an
+      // old session mutate the latch or hydrate the current session.
+      if (this.ws !== socket) return;
       try {
         const data = JSON.parse(event.data);
         // A refusal is a transport-level verdict, not session content: it
@@ -205,11 +211,18 @@ export class WebSocketAdapter implements ConnectionAdapter {
           this.handleRefusal(data);
           return;
         }
+        // A completed upgrade is not successful hydration. Reset only after
+        // the daemon has assembled and delivered the initial snapshot.
+        if (data?.type === "connected") this.reconnectAttempt = 0;
         this.messageHandler?.(data);
       } catch { /* ignore malformed */ }
     };
 
-    this.ws.onclose = () => {
+    socket.onclose = () => {
+      // Delayed close/error callbacks from a replaced socket must not mark the
+      // healthy replacement down or arm a second reconnect loop.
+      if (this.ws !== socket) return;
+      this.ws = null;
       this.disconnectHandler?.();
       // MP1 — a deliberate disconnect (project switch / teardown) is terminal
       // for this adapter. Don't reconnect and don't probe — the caller built (or
@@ -256,8 +269,9 @@ export class WebSocketAdapter implements ConnectionAdapter {
       this.reconnectTimer = setTimeout(() => this.connect(), delay);
     };
 
-    this.ws.onerror = () => {
-      this.ws?.close();
+    socket.onerror = () => {
+      if (this.ws !== socket) return;
+      socket.close();
     };
   }
 
@@ -312,20 +326,23 @@ export class WebSocketAdapter implements ConnectionAdapter {
   }
 
   /**
-   * Latch the loop and hand the daemon's own reason to the store. Idempotent:
-   * a duplicate frame on one connection cannot double-toast.
+   * Latch typed review conflicts and hand all refusals to the store. Generic
+   * snapshot failures keep the normal bounded recovery policy.
    */
   private handleRefusal(
     data: { code?: unknown; message?: unknown; sessionId?: unknown },
   ): void {
-    if (this.connectionRefused) return;
-    this.connectionRefused = true;
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
+    const code = typeof data?.code === "string" ? data.code : undefined;
+    if (code === "session_review_conflict") {
+      if (this.connectionRefused) return;
+      this.connectionRefused = true;
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
     }
     this.refusalHandler?.({
-      code: typeof data?.code === "string" ? data.code : undefined,
+      code,
       message: typeof data?.message === "string" ? data.message : undefined,
       sessionId: typeof data?.sessionId === "string" && data.sessionId
         ? data.sessionId

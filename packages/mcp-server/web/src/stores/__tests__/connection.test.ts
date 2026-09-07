@@ -779,9 +779,10 @@ describe("connection store — daemon-restart detection (U4)", () => {
       expect(toasts).toHaveLength(1);
       const toast = toasts[0]!;
       expect(toast.kind).toBe("error");
-      expect(toast.title).toBe("Daemon refused this connection");
-      // The daemon's own words reach the screen — not a silent dead end.
-      expect(toast.body).toContain("Session state requires review before reconnecting.");
+      expect(toast.title).toBe("Session review conflict");
+      // UI copy is fixed and safe; it never reflects arbitrary wire text.
+      expect(toast.body).toContain("persisted session state changed after review");
+      expect(toast.body).not.toContain("private server detail");
       expect(toast.body).toContain("Affected session: s1.");
       expect(toast.ttl).toBe(0); // sticky: the loop is stopped, so nothing else will remind them
       expect(toast.action?.label).toBe("Retry connecting");
@@ -816,7 +817,10 @@ describe("connection store — daemon-restart detection (U4)", () => {
 
     it("admits it does not know the session rather than inventing one", async () => {
       const toasts = await refuse({ message: "Session state is temporarily unavailable." });
-      expect(toasts[0]!.body).toContain("did not say which session is affected");
+      expect(toasts[0]!.title).toBe("Session state temporarily unavailable");
+      expect(toasts[0]!.body).toContain("bounded backoff");
+      expect(toasts[0]!.body).not.toContain("review conflict");
+      expect(toasts[0]!.body).not.toContain("Session state is temporarily unavailable.");
     });
   });
 });

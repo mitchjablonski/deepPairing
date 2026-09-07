@@ -203,6 +203,11 @@ cross-project rejection stance recorded — `recordRejectedApproach` runs only
 after a successful verdict flush. After restarting the writer, reject the
 reloaded artifact again if you want that stance remembered.
 
+If the companion UI encounters this conflict while loading, it names the
+affected session and pauses automatic reconnects instead of retrying the frozen
+writer in a loop. Restart that session writer, inspect the persisted artifact,
+then reload the page or deliberately switch to another healthy session.
+
 Stop and restart the session writer so it reloads the persisted artifact, then
 review that exact version again before authorizing it. Do not delete or replace
 `artifacts.json` to bypass the conflict; preserve it for inspection. If the file
