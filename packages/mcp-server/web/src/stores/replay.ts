@@ -2,6 +2,12 @@ import { create } from "zustand";
 import type { SessionAnnotation, DecisionOption } from "@deeppairing/shared";
 import { buildTimeline, type TimelineEvent, type TimelineInput, annotationsByEventId } from "../lib/timeline";
 import { apiBase, apiGet, sessionHeaders } from "../lib/api";
+import { useToastStore } from "./toast";
+import {
+  beginSessionTransition,
+  isCurrentSessionTransition,
+  type SessionTransitionToken,
+} from "../lib/session-transition";
 
 /**
  * Replay mode state — active when the user opens a past session from
@@ -44,6 +50,9 @@ export function replayRehydrateSettled(): Promise<void> {
 
 interface ReplayState {
   active: boolean;
+  /** Exit requested, but historical state remains read-only until it has been
+   * cleared and (for a browser tab) replaced by the live snapshot. */
+  exiting: boolean;
   sessionId: string | null;
   events: TimelineEvent[];
   /** ISO timestamp — every event with e.at <= cursor is "visible". */
@@ -54,8 +63,13 @@ interface ReplayState {
   /** Resolved-decision records; lets DecisionCard show past choices. */
   decisions: DecisionRecord[];
 
-  enterReplay: (sessionId: string, state: TimelineInput) => Promise<void>;
+  enterReplay: (
+    sessionId: string,
+    state: TimelineInput,
+    transition?: SessionTransitionToken,
+  ) => Promise<void>;
   exitReplay: () => void;
+  completeExit: () => void;
   setCursor: (cursor: string) => void;
   stepForward: () => void;
   stepBackward: () => void;
@@ -72,8 +86,12 @@ interface ReplayState {
  */
 const REPLAY_BASE_TICK_MS = 1200;
 const REPLAY_MIN_TICK_MS = 120;
+const REPLAY_EXIT_TIMEOUT_MS = 10_000;
 
 let playTimer: ReturnType<typeof setInterval> | null = null;
+let exitRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
+let exitRecoveryToastId: string | null = null;
+let replayOperation = 0;
 
 /** Stop the shared play timer (no-op when already idle). Centralized so the
  *  five previous inline `if (playTimer) { clearInterval(…); playTimer = null; }`
@@ -85,8 +103,84 @@ function clearPlayTimer(): void {
   }
 }
 
+function clearExitRecoveryTimer(): void {
+  if (exitRecoveryTimer) {
+    clearTimeout(exitRecoveryTimer);
+    exitRecoveryTimer = null;
+  }
+}
+
+function dismissExitRecoveryToast(): void {
+  const toastId = exitRecoveryToastId;
+  exitRecoveryToastId = null;
+  if (toastId) useToastStore.getState().dismiss(toastId);
+}
+
+/**
+ * Leaving replay is intentionally fail-closed: the historical frame remains
+ * visible under the replay write lock until a full live snapshot arrives.
+ * A timeout offers a retry, but never turns stale history into editable data.
+ */
+function scheduleExitRecoveryTimeout(operation: number): void {
+  clearExitRecoveryTimer();
+  dismissExitRecoveryToast();
+  exitRecoveryTimer = setTimeout(() => {
+    exitRecoveryTimer = null;
+    if (operation !== replayOperation || !useReplayStore.getState().exiting) return;
+    // Static toast import on purpose: this fires precisely when the daemon
+    // may be unreachable, and a dynamic `import("./toast")` here would be a
+    // network fetch of a Vite facade chunk that cannot succeed offline (see
+    // warmExitPath below). toast.ts imports only zustand — no cycle.
+    exitRecoveryToastId = useToastStore.getState().push({
+      kind: "error",
+      title: "Couldn't leave replay",
+      body: "Live session state has not arrived. Replay remains read-only; retry when the daemon reconnects.",
+      ttl: 0,
+      action: {
+        label: "Retry",
+        onClick: () => {
+          if (operation !== replayOperation || !useReplayStore.getState().exiting) return;
+          dismissExitRecoveryToast();
+          useReplayStore.getState().exitReplay();
+        },
+      },
+    });
+  }, REPLAY_EXIT_TIMEOUT_MS);
+}
+
+/**
+ * #339 (browser evidence) — exiting replay rehydrates through dynamic imports
+ * of the connection + artifact stores (they import this module, so a static
+ * edge would be a cycle). Vite emits those `import()`s as tiny FACADE chunks
+ * that are fetched from the daemon the FIRST time the import runs. The first
+ * exit in a tab's life is therefore a network request — and when the exit
+ * happens while the daemon is down (the exact H1 scenario: "leave replay,
+ * retry when the daemon reconnects"), that fetch fails, the browser records
+ * the module as failed for the tab's lifetime, and the E5 chunk-skew handler
+ * (lib/chunk-error.ts) auto-reloads the page straight onto a
+ * chrome-error:// page. The historical frame, the write lock and the Retry
+ * toast never get a chance to exist. Observed in a real Chromium tab
+ * (e2e/recovery.e2e.ts); invisible to the FakeAdapter tests, whose imports
+ * resolve from memory.
+ *
+ * Entering replay is an online moment (the session was just fetched), so
+ * start resolving the exit path's imports HERE: once a module is in the tab's
+ * module map, a later `import()` of it never touches the network. This is a
+ * best-effort narrowing, not a guarantee — the daemon can still go away
+ * before these few-hundred-byte fetches land. The guarantee is the offline
+ * policy in lib/chunk-error.ts: a failed chunk never reloads the tab until
+ * the asset origin has answered a fresh probe; the historical frame stays
+ * under the write lock, exitReplay's catch keeps it there, and one reload is
+ * deferred to the next successful connect. Errors here are swallowed for
+ * that reason.
+ */
+function warmExitPath(): void {
+  void Promise.all([import("./connection"), import("./artifact")]).catch(() => {});
+}
+
 export const useReplayStore = create<ReplayState>((set, get) => ({
   active: false,
+  exiting: false,
   sessionId: null,
   events: [],
   cursor: "",
@@ -95,9 +189,29 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
   annotations: [],
   decisions: [],
 
-  enterReplay: async (sessionId, state) => {
+  enterReplay: async (sessionId, state, suppliedTransition) => {
+    const operation = ++replayOperation;
+    const transition = suppliedTransition ?? beginSessionTransition(sessionId);
     const events = buildTimeline(state);
     const initialCursor = events[0]?.at ?? new Date().toISOString();
+
+    // `active` is the write lock. Commit it before annotation I/O yields and
+    // before enterSessionReplay installs any historical artifacts.
+    clearPlayTimer();
+    clearExitRecoveryTimer();
+    dismissExitRecoveryToast();
+    warmExitPath();
+    set({
+      active: true,
+      exiting: false,
+      sessionId,
+      events,
+      cursor: initialCursor,
+      playing: false,
+      speed: 1,
+      annotations: [],
+      decisions: (state.decisions ?? []) as DecisionRecord[],
+    });
 
     // Fetch annotations for this session (best-effort)
     let annotations: SessionAnnotation[] = [];
@@ -109,23 +223,25 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
       }
     } catch {}
 
-    clearPlayTimer();
-    set({
-      active: true,
-      sessionId,
-      events,
-      cursor: initialCursor,
-      playing: false,
-      speed: 1,
-      annotations,
-      decisions: (state.decisions ?? []) as DecisionRecord[],
-    });
+    if (
+      operation === replayOperation &&
+      isCurrentSessionTransition(transition) &&
+      get().active &&
+      !get().exiting &&
+      get().sessionId === sessionId
+    ) {
+      set({ annotations });
+    }
   },
 
   exitReplay: () => {
     const wasActive = get().active;
+    const operation = ++replayOperation;
+    const transition = wasActive ? beginSessionTransition(null) : null;
     clearPlayTimer();
-    set({ active: false, sessionId: null, events: [], cursor: "", playing: false, annotations: [], decisions: [] });
+    // Keep the write lock until the historical store is cleared and the live
+    // snapshot, when available, has replaced it.
+    if (wasActive) set({ exiting: true, playing: false });
     // H1 — loadSession RESET the live artifact store and filled it with the
     // historical session; exiting used to leave that store in place, so
     // historical drafts rendered with fully-mutable footers (the F12 guard
@@ -134,18 +250,44 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
     // tab re-binds (hydration resets then refills from live state); an
     // unbound one just resets. Dynamic imports keep this store cycle-free.
     if (!wasActive) return;
+    scheduleExitRecoveryTimeout(operation);
     rehydrateInFlight = Promise.all([import("./connection"), import("./artifact")]).then(
       ([{ useConnectionStore }, { useArtifactStore }]) => {
-        // Review — reset UNCONDITIONALLY first: the VS Code webview adapter
-        // has no switchSession, so the rehydrate silently no-op'd there and
-        // the historical store stayed live. A double reset is harmless (the
-        // connected handler resets again before hydration).
-        useArtifactStore.getState().reset();
-        const sid = useConnectionStore.getState().sessionId;
-        if (sid) useConnectionStore.getState().switchSession(sid);
+        if (
+          operation !== replayOperation ||
+          !get().exiting ||
+          !transition ||
+          !isCurrentSessionTransition(transition)
+        ) return;
+        const connection = useConnectionStore.getState();
+        const sid = connection.sessionId;
+        const canRehydrate = Boolean(
+          sid && connection.adapter && "switchSession" in connection.adapter,
+        );
+        if (canRehydrate && sid) {
+          // Preserve the historical frame until connected.state atomically
+          // replaces it. `active` remains the write lock throughout.
+          connection.switchSession(sid, { preserveStateUntilConnected: true });
+        } else {
+          // An adapter without session switching cannot deliver a replacement
+          // snapshot, so discard history before releasing the write lock.
+          useArtifactStore.getState().reset();
+          get().completeExit();
+        }
       },
-    );
+    ).catch(() => {
+      // The bounded recovery timer owns user-visible failure and retry. Keep
+      // the historical frame locked instead of falling through to edits.
+    });
     void rehydrateInFlight;
+  },
+
+  completeExit: () => {
+    if (!get().exiting) return;
+    clearPlayTimer();
+    clearExitRecoveryTimer();
+    dismissExitRecoveryToast();
+    set({ active: false, exiting: false, sessionId: null, events: [], cursor: "", playing: false, annotations: [], decisions: [] });
   },
 
   setCursor: (cursor) => set({ cursor }),

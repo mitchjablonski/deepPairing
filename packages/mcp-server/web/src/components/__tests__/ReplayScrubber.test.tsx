@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ReplayScrubber } from "../ReplayScrubber";
-import { useReplayStore } from "../../stores/replay";
+import { useReplayStore, replayRehydrateSettled } from "../../stores/replay";
 import type { Artifact } from "@deeppairing/shared";
 
 function artifact(id: string, createdAt: string): Artifact {
@@ -31,6 +31,7 @@ const state = {
 
 beforeEach(async () => {
   useReplayStore.getState().exitReplay();
+  await replayRehydrateSettled();
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
     ok: true,
     json: async () => ({ annotations: [] }),
@@ -39,8 +40,9 @@ beforeEach(async () => {
 });
 
 describe("ReplayScrubber", () => {
-  it("does not render when replay is inactive", () => {
+  it("does not render when replay is inactive", async () => {
     useReplayStore.getState().exitReplay();
+    await replayRehydrateSettled();
     const { container } = render(<ReplayScrubber />);
     expect(container).toBeEmptyDOMElement();
   });

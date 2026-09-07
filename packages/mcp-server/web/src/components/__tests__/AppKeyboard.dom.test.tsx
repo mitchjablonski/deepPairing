@@ -8,7 +8,7 @@ import { render, fireEvent, act, screen } from "@testing-library/react";
 import App from "../../App";
 import { useArtifactStore } from "../../stores/artifact";
 import { useConnectionStore } from "../../stores/connection";
-import { useReplayStore } from "../../stores/replay";
+import { useReplayStore, replayRehydrateSettled } from "../../stores/replay";
 
 const art = (id: string, status = "draft") =>
   ({
@@ -59,7 +59,10 @@ describe("E3 (L1) — the n shortcut", () => {
 });
 
 describe("F9 (L3) — replay clamps + Escape exit", () => {
-  afterEach(() => useReplayStore.getState().exitReplay());
+  afterEach(async () => {
+    useReplayStore.getState().exitReplay();
+    await replayRehydrateSettled();
+  });
 
   it("`a` is inert while replay is active (no shortcut event dispatched)", () => {
     render(<App />);
@@ -75,10 +78,11 @@ describe("F9 (L3) — replay clamps + Escape exit", () => {
     }
   });
 
-  it("Escape exits replay when no overlay is open", () => {
+  it("Escape exits replay when no overlay is open", async () => {
     render(<App />);
     useReplayStore.setState({ active: true } as any);
     fireEvent.keyDown(document, { key: "Escape" });
+    await replayRehydrateSettled();
     expect(useReplayStore.getState().active).toBe(false);
   });
 });
@@ -91,7 +95,10 @@ describe("#207 (I2 review) — the q QuickAsk clamp honors the write-axis", () =
     useArtifactStore.getState().reset();
     useConnectionStore.setState({ connected: true, hydrated: true } as any);
   });
-  afterEach(() => useReplayStore.getState().exitReplay());
+  afterEach(async () => {
+    useReplayStore.getState().exitReplay();
+    await replayRehydrateSettled();
+  });
 
   const openModal = () => document.querySelector('textarea[placeholder*="question" i]');
 

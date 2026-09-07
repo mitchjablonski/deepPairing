@@ -1,5 +1,18 @@
 # Troubleshooting
 
+## E2E daemon port isolation
+
+Playwright assigns each test invocation a best-effort isolated daemon port
+window starting at port 33000 or higher. This keeps browser tests out of both the normal
+3847–3974 application range and Vitest's 20000–32000 test ranges. The window is
+derived once from the GitHub run identity and process ID, then inherited by all
+Playwright workers and their daemon children. Explicit
+`DEEPPAIRING_PORT_BASE`/`DEEPPAIRING_PORT_SPAN` values are preserved.
+
+The derivation reduces interference between concurrent local runs; it does not
+reserve ports or guarantee uniqueness. Daemon bind retries remain the backstop
+when two processes select the same window.
+
 If something isn't behaving, start with:
 
 ```bash
@@ -266,6 +279,19 @@ They require all writers stopped, preserve journal history, and never send a rev
 An acknowledgement is not evidence that an uncertain review was absent.
 
 ## Still stuck?
+
+### Diagnosing an intermittent browser-test failure
+
+Playwright keeps a screenshot and local trace for each failed E2E test under
+`packages/mcp-server/test-results/`. CI uploads the screenshots plus bounded,
+credential-redacted browser and daemon diagnostics for seven days. Raw trace
+archives stay local because they can contain synthetic Authorization headers;
+do not attach a trace publicly without inspecting it for credentials first.
+
+Prefer the first failed readiness assertion and its browser/daemon timestamps
+over increasing a timeout or adding a sleep. Re-run the failing spec by itself,
+then before and after its preceding spec to distinguish a cold-start problem
+from shared fixture or teardown state.
 
 Open an issue with:
 

@@ -1,16 +1,17 @@
-import { test, expect, type Page } from "@playwright/test";
-import { spawn, type ChildProcess } from "node:child_process";
+import { test, expect, type Page } from "./test.js";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { teardownDaemon, portOf } from "./daemon-harness.js";
+import { attachDaemonOutput, teardownDaemon, portOf, spawnDiagnosticProcess, withSetupDiagnostics } from "./daemon-harness.js";
 
 /**
  * #213 (J3) — round-5 corrections-polish screenshots + smoke: the Move UNDO
  * toast (M-4), the lazy-load SKELETON fallback (L-9), and the 900px collapsed
- * rail's tooltip scent (L-8). Boots ONE daemon on the isolated e2e port window
- * (never 3847-3974), seeded with milestone/phase/ungrouped artifacts.
+ * rail's tooltip scent (L-8). Boots a fresh daemon and session for every test
+ * on the isolated e2e port window (never 3847-3974), seeded with
+ * milestone/phase/ungrouped artifacts.
  *
  * Screenshots land in $DP213_SHOTS (default: os.tmpdir()/dp-213-shots).
  */
@@ -38,18 +39,17 @@ async function waitForDaemon(r: string): Promise<string> {
   throw new Error("daemon did not come up");
 }
 
-test.beforeAll(async () => {
+test.beforeEach(async ({}, testInfo) => {
   if (!fs.existsSync(daemonJs)) {
     throw new Error(`dist/daemon/index.js missing at ${daemonJs} — run \`pnpm build\` before the e2e suite.`);
   }
   fs.mkdirSync(SHOTS, { recursive: true });
   home = fs.mkdtempSync(path.join(os.tmpdir(), "dp-213-home-"));
   root = fs.mkdtempSync(path.join(os.tmpdir(), "dp-213-root-"));
-  proc = spawn(process.execPath, [daemonJs], {
+  proc = spawnDiagnosticProcess(process.execPath, [daemonJs], {
     env: { ...process.env, HOME: home, DEEPPAIRING_PROJECT_ROOT: root, DEEPPAIRING_NO_OPEN: "1" },
-    stdio: "ignore",
   });
-  base = await waitForDaemon(root);
+  base = await withSetupDiagnostics(proc, testInfo, () => waitForDaemon(root));
 
   const token = JSON.parse(fs.readFileSync(path.join(root, ".deeppairing", "daemon.json"), "utf-8")).authToken as string;
   const h = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
@@ -84,7 +84,8 @@ test.beforeAll(async () => {
   });
 });
 
-test.afterAll(async () => {
+test.afterEach(async ({}, testInfo) => {
+  await attachDaemonOutput(proc, testInfo);
   await teardownDaemon(proc, portOf(base));
   for (const dir of [root, home]) {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
@@ -99,7 +100,7 @@ async function openFeatures(page: Page): Promise<void> {
 
 // L-5 + M-4 — the per-row Move select (revealed on row hover/focus) posts the
 // override AND raises an UNDO toast. Undo restores the prior state.
-test("#213 M-4 — moving an artifact raises an Undo toast (dark)", async ({ page }) => {
+const undoDark = async ({ page }: { page: Page }) => {
   await page.setViewportSize({ width: 1440, height: 950 });
   await openFeatures(page);
   const view = page.locator('[data-testid="features-view"]');
@@ -120,9 +121,9 @@ test("#213 M-4 — moving an artifact raises an Undo toast (dark)", async ({ pag
   await expect(
     view.locator('[data-feature-group="milestone-6"] [data-feature-artifact]'),
   ).toHaveCount(2, { timeout: 10000 });
-});
+};
 
-test("#213 M-4 — the Undo toast renders legibly (light)", async ({ page }) => {
+const undoLight = async ({ page }: { page: Page }) => {
   await page.addInitScript(() => localStorage.setItem("dp-theme", "light"));
   await page.setViewportSize({ width: 1440, height: 950 });
   await openFeatures(page);
@@ -132,7 +133,16 @@ test("#213 M-4 — the Undo toast renders legibly (light)", async ({ page }) => 
   const toast = page.locator('[data-testid="toast-region"]');
   await expect(toast.getByText(/Moved to Phase 0/i)).toBeVisible();
   await page.screenshot({ path: path.join(SHOTS, "undo-toast-light.png") });
-});
+};
+
+// #341 acceptance probe: reverse actual registration order in the same worker,
+// while the default suite and each test's fresh beforeEach seed stay unchanged.
+const undoCases = [
+  { title: "#213 M-4 — moving an artifact raises an Undo toast (dark)", run: undoDark },
+  { title: "#213 M-4 — the Undo toast renders legibly (light)", run: undoLight },
+];
+if (process.env.DP_E2E_UNDO_REVERSE === "1") undoCases.reverse();
+for (const scenario of undoCases) test(scenario.title, scenario.run);
 
 // L-9 — the lazy artifact renderer's Suspense fallback is a type-shaped skeleton
 // (title bar + prose + body + trailing blocks), not a blank grey flash. Delay

@@ -4,6 +4,12 @@ import { enterSessionReplay } from "../session-replay";
 import { useArtifactStore } from "../../stores/artifact";
 import { useReplayStore } from "../../stores/replay";
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => { resolve = res; });
+  return { promise, resolve };
+}
+
 /**
  * Fix 3 — enterSessionReplay is the shared cross-session navigation scheme
  * extracted from SessionBrowser.loadSession and reused by the project-wide
@@ -25,6 +31,9 @@ const SESSION_STATE = {
   ],
   decisions: [
     { decisionId: "d1", artifactId: "a1", context: "Which cache?", options: [], acknowledged: true, response: { optionId: "o1" }, createdAt: "2026-07-01T10:00:00Z", resolvedAt: "2026-07-01T10:05:00Z" },
+  ],
+  requests: [
+    { id: "req1", sessionId: "s1", text: "Explain this", intent: "explain", createdAt: "2026-07-01T10:02:00Z" },
   ],
   planReviews: [],
 };
@@ -51,7 +60,7 @@ beforeEach(() => {
   // Reset replay via setState (not exitReplay, whose async rehydrate would fire
   // a fetch to /api/active-sessions we don't stub).
   useReplayStore.setState({
-    active: false, sessionId: null, events: [], cursor: "", playing: false,
+    active: false, exiting: false, sessionId: null, events: [], cursor: "", playing: false,
     speed: 1, annotations: [], decisions: [],
   });
 });
@@ -72,6 +81,8 @@ describe("enterSessionReplay", () => {
     // Agent-acknowledged decision receipt re-seeded (so it doesn't show a false
     // "will pick it up").
     expect(art.acknowledgedDecisions["d1"]).toBe(true);
+    expect(art.resolvedDecisions["d1"]).toMatchObject({ optionId: "o1" });
+    expect(art.requests.map((request) => request.id)).toEqual(["req1"]);
     // Landed on the focused artifact.
     expect(art.selectedArtifactId).toBe("a1");
 
@@ -107,5 +118,37 @@ describe("enterSessionReplay", () => {
     // The live store is untouched (no reset), and replay never activated.
     expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["live_1"]);
     expect(useReplayStore.getState().active).toBe(false);
+  });
+
+  it("uses a generation, not the session string, for reversed A -> B -> A responses", async () => {
+    const firstA = deferred<any>();
+    const b = deferred<any>();
+    const lastA = deferred<any>();
+    vi.stubGlobal("fetch", vi.fn()
+      .mockReturnValueOnce(firstA.promise)
+      .mockReturnValueOnce(b.promise)
+      .mockReturnValueOnce(lastA.promise)
+      .mockResolvedValue({ ok: true, json: async () => ({ annotations: [] }) }));
+
+    const enteringA1 = enterSessionReplay("A");
+    const enteringB = enterSessionReplay("B");
+    const enteringA2 = enterSessionReplay("A");
+    lastA.resolve({ ok: true, json: async () => ({
+      ...SESSION_STATE, sessionId: "A",
+      artifacts: [{ ...SESSION_STATE.artifacts[0], id: "new-A", sessionId: "A" }],
+    }) });
+    await enteringA2;
+    b.resolve({ ok: true, json: async () => ({
+      ...SESSION_STATE, sessionId: "B",
+      artifacts: [{ ...SESSION_STATE.artifacts[0], id: "stale-B", sessionId: "B" }],
+    }) });
+    firstA.resolve({ ok: true, json: async () => ({
+      ...SESSION_STATE, sessionId: "A",
+      artifacts: [{ ...SESSION_STATE.artifacts[0], id: "old-A", sessionId: "A" }],
+    }) });
+    await Promise.all([enteringA1, enteringB]);
+
+    expect(useReplayStore.getState().sessionId).toBe("A");
+    expect(useArtifactStore.getState().artifacts.map((item) => item.id)).toEqual(["new-A"]);
   });
 });

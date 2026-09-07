@@ -2,6 +2,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { useReplayStore, replayRehydrateSettled } from "../replay";
 import type { Artifact, Comment } from "@deeppairing/shared";
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => { resolve = res; });
+  return { promise, resolve };
+}
+
 function artifact(id: string, createdAt: string, overrides: Partial<Artifact> = {}): Artifact {
   return {
     id,
@@ -62,6 +68,44 @@ afterEach(async () => {
 });
 
 describe("replay store — enterReplay", () => {
+  it("activates the replay write lock before a slow annotation read completes", async () => {
+    const annotations = deferred<any>();
+    vi.stubGlobal("fetch", vi.fn().mockReturnValue(annotations.promise));
+
+    const entering = useReplayStore.getState().enterReplay("past_session", sessionState);
+    expect(useReplayStore.getState().active).toBe(true);
+    expect(useReplayStore.getState().sessionId).toBe("past_session");
+
+    annotations.resolve({ ok: true, json: async () => ({ annotations: [] }) });
+    await entering;
+  });
+
+  it("a slow annotation response cannot overwrite newer replay navigation", async () => {
+    const slowA = deferred<any>();
+    vi.stubGlobal("fetch", vi.fn()
+      .mockReturnValueOnce(slowA.promise)
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ annotations: [{ id: "B-note" }] }) }));
+
+    const enteringA = useReplayStore.getState().enterReplay("A", sessionState);
+    await useReplayStore.getState().enterReplay("B", sessionState);
+    slowA.resolve({ ok: true, json: async () => ({ annotations: [{ id: "stale-A-note" }] }) });
+    await enteringA;
+
+    expect(useReplayStore.getState().sessionId).toBe("B");
+    expect(useReplayStore.getState().annotations).toEqual([{ id: "B-note" }]);
+  });
+
+  it("a delayed exit cannot clear a newer replay", async () => {
+    await useReplayStore.getState().enterReplay("old", sessionState);
+    useReplayStore.getState().exitReplay();
+    await useReplayStore.getState().enterReplay("new", sessionState);
+    await replayRehydrateSettled();
+
+    expect(useReplayStore.getState().active).toBe(true);
+    expect(useReplayStore.getState().exiting).toBe(false);
+    expect(useReplayStore.getState().sessionId).toBe("new");
+  });
+
   it("builds a timeline and puts the cursor at the first event", async () => {
     await useReplayStore.getState().enterReplay("past_session", sessionState);
     const s = useReplayStore.getState();

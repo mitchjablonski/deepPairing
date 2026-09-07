@@ -4,7 +4,30 @@ import { apiGet, sessionHeaders, apiBase } from "../lib/api";
 import { useHookStatusStore } from "./hookStatus";
 import { isDraftAwaitingReview } from "../lib/pending";
 import { pushDaemonRestartToast } from "../lib/daemon-restart";
+import { reloadIfChunkFailedOffline } from "../lib/chunk-error";
 import { noAgentLive } from "../lib/liveness";
+import type { Artifact, Comment, Request } from "@deeppairing/shared";
+import { useReplayStore } from "./replay";
+import {
+  beginSessionTransition,
+  captureSessionTransition,
+  isCurrentSessionTransition,
+  type SessionTransitionToken,
+} from "../lib/session-transition";
+
+type ArtifactStoreState = ReturnType<(typeof import("./artifact"))["useArtifactStore"]["getState"]>;
+interface RecoverySnapshot {
+  sessionId: string;
+  artifacts: Artifact[];
+  comments: Comment[];
+  requests: Request[];
+  decisions: Array<{
+    decisionId: string;
+    acknowledged?: boolean;
+    response?: { optionId?: string; reasoning?: string };
+    resolvedAt?: string;
+  }>;
+}
 
 /** Request notification permission and send a notification when tab is unfocused */
 function notifyIfUnfocused(title: string, body: string) {
@@ -25,6 +48,11 @@ interface ActiveSession {
   artifactCount: number;
   /** D8 (M8) — wrapper still registered on the daemon. Optional: old daemons omit it. */
   live?: boolean;
+}
+
+interface SwitchSessionOptions {
+  /** Keep the current artifact frame until connected.state replaces it. */
+  preserveStateUntilConnected?: boolean;
 }
 
 interface ConnectionState {
@@ -65,7 +93,7 @@ interface ConnectionState {
 
   connect: (sessionId?: string) => void;
   disconnect: () => void;
-  switchSession: (sessionId: string) => void;
+  switchSession: (sessionId: string, options?: SwitchSessionOptions) => void;
   /** Poll the current daemon's session list. Returns whether the fetch
    *  SUCCEEDED (Bug A — the foreign-owner guard awaits this to confirm a
    *  suspected-foreign session isn't just lagging the 10s poll; a `false`
@@ -86,6 +114,118 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
   // in quick succession sees ONE pair-tempo pip, not five.
   let lastFeedbackToastAt = 0;
   const FEEDBACK_TOAST_DEBOUNCE_MS = 8000;
+
+  // #339 — asynchronous message handling must never outlive the connection or
+  // selected-session identity it was created for. Separate monotonic counters
+  // are intentional: A -> B -> A is still a different session generation.
+  let connectionGeneration = 0;
+  let sessionGeneration = 0;
+  let snapshotGeneration = 0;
+  let pendingRecovery: {
+    connection: number;
+    session: number;
+    transition: SessionTransitionToken;
+    sessionId: string;
+    messages: any[];
+    controller: AbortController;
+    timeout?: ReturnType<typeof setTimeout>;
+    unsubscribe: () => void;
+  } | null = null;
+  const RECOVERY_TIMEOUT_MS = 10_000;
+  const recoveryMutationTypes = new Set([
+    "artifact_created", "artifact_updated", "plan_progress_updated",
+    "changeset_review_updated", "artifact_content_updated", "comment_added",
+    "comment_updated", "request_added", "request_served", "artifact_renamed",
+    "decision_resolved", "decisions_acknowledged",
+  ]);
+
+  const isCurrent = (connection: number, session: number) =>
+    connection === connectionGeneration && session === sessionGeneration;
+
+  const hydrateArtifactState = (store: ArtifactStoreState, state: RecoverySnapshot) => {
+    store.reset();
+    for (const artifact of state.artifacts ?? []) store.addArtifact(artifact);
+    for (const comment of state.comments ?? []) store.addComment(comment);
+    store.setRequests?.(state.requests ?? []);
+    const decisions = state.decisions ?? [];
+    const ackedIds = decisions
+      .filter((d) => d.acknowledged && d.decisionId)
+      .map((d) => d.decisionId);
+    if (ackedIds.length > 0) store.markDecisionsAcknowledged(ackedIds);
+    for (const d of decisions) {
+      if (d?.decisionId && d?.response?.optionId) {
+        store.recordResolvedDecision(d.decisionId, {
+          optionId: d.response.optionId,
+          reasoning: d.response.reasoning,
+          resolvedAt: d.resolvedAt,
+        });
+      }
+    }
+    store.restoreSelection();
+    store.selectDefaultOnHydration();
+  };
+
+  // #339 — the transport snapshot contract. Every door that REPLACES the
+  // artifact store with a session snapshot — the ordinary stateful `connected`
+  // frame, the replay-exit `connected` frame and the `daemon_resumed` HTTP
+  // refetch — accepts only a COMPLETE snapshot: the bound session's id plus all
+  // four collections that hydrateArtifactState installs (the daemon's
+  // FileStore.getFullState always emits them, and the web bundle ships inside
+  // the daemon that serves it, so a shorter frame is a truncated or malformed
+  // one, never an older daemon). An incomplete frame is refused as a whole:
+  // the current same-session frame stays on screen instead of being replaced
+  // by a partial one. Stateless `connected` frames (no `state`, e.g. the
+  // daemon's global-client greeting) are not snapshots and never reach this
+  // check. The VS Code webview adapter (#345, separately owned) forwards no
+  // state today, so it rides the stateless path; when it does forward one,
+  // that snapshot must satisfy this same predicate to replace the frame.
+  const isCompleteRecoverySnapshot = (value: unknown, sessionId: string): value is RecoverySnapshot => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+    const state = value as Record<string, unknown>;
+    return state.sessionId === sessionId &&
+      Array.isArray(state.artifacts) && Array.isArray(state.comments) &&
+      Array.isArray(state.requests) && Array.isArray(state.decisions);
+  };
+
+  // #339 — a refused snapshot must not be silent (the pre-fix failure mode was
+  // a blank panel with no explanation). One toast per burst: a flapping daemon
+  // re-sends its greeting on every reconnect, and eight identical toasts would
+  // be N1's flood. Same window as FEEDBACK_TOAST_DEBOUNCE_MS.
+  let lastIncompleteSnapshotToastAt = 0;
+  const reportIncompleteSnapshot = (connection: number, session: number) => {
+    const now = Date.now();
+    if (now - lastIncompleteSnapshotToastAt < FEEDBACK_TOAST_DEBOUNCE_MS) return;
+    lastIncompleteSnapshotToastAt = now;
+    void import("./toast").then(({ useToastStore }) => {
+      if (!isCurrent(connection, session)) return;
+      useToastStore.getState().push({
+        kind: "error",
+        title: "Session snapshot was incomplete — keeping the current view",
+        body: "The daemon sent a partial session state, so nothing on screen was replaced. Reload the page if this view looks stale.",
+        ttl: 8000,
+      });
+    });
+  };
+
+  const cancelPendingRecovery = () => {
+    const recovery = pendingRecovery;
+    if (!recovery) return;
+    pendingRecovery = null;
+    if (recovery.timeout !== undefined) clearTimeout(recovery.timeout);
+    recovery.unsubscribe();
+    recovery.controller.abort();
+  };
+
+  const drainRecoveryMessages = (recovery: NonNullable<typeof pendingRecovery>) => {
+    if (
+      !isCurrent(recovery.connection, recovery.session) ||
+      !isCurrentSessionTransition(recovery.transition) ||
+      get().sessionId !== recovery.sessionId
+    ) return;
+    for (const message of recovery.messages.splice(0)) {
+      handleMessage(message, recovery.connection, recovery.transition);
+    }
+  };
 
   // B2 — draft-notification dedupe + burst suppression. Dedupe is by ARTIFACT
   // ID (not event type): in daemon mode the MCP-side broadcast is a no-op, so
@@ -129,13 +269,61 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     return [d.source ?? "session", m.concept ?? "", m.proposal ?? "", m.via ?? "", m.rejectedAt ?? ""].join("|");
   };
 
-  function handleMessage(data: any) {
+  function handleMessage(
+    data: any,
+    messageConnection = connectionGeneration,
+    recoveryTransition?: SessionTransitionToken,
+  ) {
+    const inboundSid = data.type === "connected" ? data.state?.sessionId : undefined;
+    const currentSid = get().sessionId;
+    const isNewDaemon =
+      data.type === "connected" &&
+      get().daemonStartedAt != null &&
+      data.daemonStartedAt != null &&
+      get().daemonStartedAt !== data.daemonStartedAt;
+    // A late `connected(A)` from before switchSession(B) is obsolete even if
+    // its dynamic-import callback has not started yet. A genuinely new daemon
+    // is the exception: its advertised session is authoritative (AA4).
+    if (
+      typeof inboundSid === "string" &&
+      currentSid != null &&
+      inboundSid !== currentSid &&
+      !isNewDaemon
+    ) return;
+    if (
+      data.type === "daemon_resumed" &&
+      typeof data.sessionId === "string" &&
+      currentSid != null &&
+      data.sessionId !== currentSid
+    ) return;
+    if (typeof inboundSid === "string" && inboundSid !== currentSid) {
+      sessionGeneration++;
+    }
+    const messageSession = sessionGeneration;
+    if (
+      pendingRecovery &&
+      pendingRecovery.connection === messageConnection &&
+      pendingRecovery.session === messageSession &&
+      isCurrentSessionTransition(pendingRecovery.transition) &&
+      recoveryMutationTypes.has(data.type)
+    ) {
+      pendingRecovery.messages.push(data);
+      return;
+    }
     // Import artifact store lazily to avoid circular deps
     import("./artifact").then(({ useArtifactStore }) => {
+      if (!isCurrent(messageConnection, messageSession)) return;
+      if (recoveryTransition && !isCurrentSessionTransition(recoveryTransition)) return;
+      // Replay can begin while the artifact-store import is pending. Its
+      // historical frame remains protected until live hydration completes.
+      if (recoveryMutationTypes.has(data.type) && useReplayStore.getState().active) return;
       const store = useArtifactStore.getState();
 
       switch (data.type) {
         case "connected": {
+          const supersededRecovery = pendingRecovery;
+          const connectedSnapshot = ++snapshotGeneration;
+          cancelPendingRecovery();
           // U4 — daemon-restart detection. If we've connected before, compare
           // the daemon's startedAt against what we stored. A different value
           // means a NEW daemon process took over the port; in-flight UI state
@@ -144,6 +332,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           // store. The toast tells the user so they know to retry anything
           // they thought they'd done in the last few seconds.
           const previousStartedAt = get().daemonStartedAt;
+          const previousSessionId = get().sessionId;
           const newStartedAt: string | null = data.daemonStartedAt ?? null;
           const daemonRestarted =
             previousStartedAt != null &&
@@ -157,10 +346,10 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           // restart and let the daemon's new state.sessionId (if any)
           // become authoritative. Belt-and-suspenders alongside the
           // X-Project-Hash check on the daemon side.
-          const inboundSid = data.state?.sessionId ?? null;
+          const connectedSid = data.state?.sessionId ?? null;
           const sessionId = daemonRestarted
-            ? inboundSid // discard stale local sid; trust the new daemon
-            : (inboundSid ?? get().sessionId);
+            ? connectedSid // discard stale local sid; trust the new daemon
+            : (connectedSid ?? get().sessionId);
 
           set({
             sessionId,
@@ -184,52 +373,74 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           const adapter = get().adapter;
           if (adapter?.refreshUrl) adapter.refreshUrl();
 
-          // Reset before hydration to prevent duplicates on reconnect
-          if (data.state) {
-            store.reset();
-            for (const artifact of data.state.artifacts ?? []) {
-              store.addArtifact(artifact);
-            }
-            for (const comment of data.state.comments ?? []) {
-              store.addComment(comment);
-            }
-            // G1 (#198b) — hydrate human-initiated requests so the composer
-            // shows served/unserved state after a cold reload.
-            store.setRequests?.(data.state.requests ?? []);
-            // C2 — receipts survive reload: the DecisionRecord's persisted
-            // `acknowledged` flag re-seeds the consumed set on hydration.
-            const ackedIds = (data.state.decisions ?? [])
-              .filter((d: any) => d?.acknowledged && d?.decisionId)
-              .map((d: any) => d.decisionId as string);
-            if (ackedIds.length > 0) store.markDecisionsAcknowledged(ackedIds);
-            // Bug3 — seed the LIVE resolved-decision map from the persisted
-            // records so a resolved decision shows its chosen option after a
-            // cold reload (DecisionCard opens in the resolved state). Separate
-            // from the C2 acked-ids seeding above — a resolution can be
-            // recorded but not yet drained by the agent.
-            for (const d of (data.state.decisions ?? [])) {
-              if (d?.decisionId && d?.response?.optionId) {
-                store.recordResolvedDecision(d.decisionId, {
-                  optionId: d.response.optionId,
-                  reasoning: d.response.reasoning,
-                  resolvedAt: d.resolvedAt,
-                });
+          // A reconnect while browsing history must not replace the historical
+          // frame. During replay exit, however, this is the awaited live state.
+          const replay = useReplayStore.getState();
+          if (data.state && (!replay.active || replay.exiting)) {
+            if (connectedSnapshot !== snapshotGeneration) return;
+            // #339 — one contract for both the ordinary and the replay-exit
+            // hydration: only a complete snapshot for the bound session may
+            // replace the frame (see isCompleteRecoverySnapshot). Pre-fix the
+            // ordinary branch hydrated from ANY `state` object, so a truncated
+            // frame such as `{sessionId, artifacts: []}` emptied the store AND
+            // discarded the recovery buffer it had just superseded.
+            const completeSnapshot =
+              typeof connectedSid === "string" &&
+              get().sessionId === connectedSid &&
+              isCompleteRecoverySnapshot(data.state, connectedSid);
+            let applied = false;
+            if (completeSnapshot) {
+              const previousArtifactState = useArtifactStore.getState();
+              try {
+                hydrateArtifactState(store, data.state);
+                applied = true;
+                if (replay.exiting) useReplayStore.getState().completeExit();
+              } catch {
+                // A malformed nested entry can still throw after the reset.
+                // Restore the previous frame (during replay exit: the historical
+                // one, under its write lock — the bounded exit timeout surfaces
+                // the retry path).
+                useArtifactStore.setState(previousArtifactState);
               }
             }
-            // QOL — return to the artifact you were last on, now that the
-            // session has hydrated (overrides addArtifact's first-artifact pick).
-            store.restoreSelection();
-            // L1 (#218) — belt-and-suspenders: if hydration still left NOTHING
-            // selected (all-superseded edge, or any future path that doesn't
-            // route through addArtifact's first-artifact pick), land on the
-            // first draft awaiting review — else the earliest visible artifact
-            // (the served demo's hero rejected-research) — so the center pane is
-            // never a blank "Select an artifact". Guarded to null selection, so
-            // it never fights restoreSelection or steals focus mid-review.
-            store.selectDefaultOnHydration();
+            if (applied) {
+              // A complete snapshot is authoritative: it already contains
+              // everything the superseded recovery had buffered.
+              set({ hydrated: true });
+            } else if (previousSessionId !== get().sessionId) {
+              // A NEW daemon (AA4) advertised a different session and its
+              // snapshot was refused: the old frame belongs to a session this
+              // tab is no longer bound to, so keeping it would be the mixed-
+              // frame lie, and there is no valid state for the new session
+              // yet. The buffer (if any) was for the old session; drain is a
+              // guarded no-op there.
+              store.reset();
+              reportIncompleteSnapshot(messageConnection, messageSession);
+            } else {
+              // Refused (incomplete) or failed (malformed nested entry)
+              // replacement for the SAME session: the valid frame stays, and
+              // the same-session events buffered behind the superseded
+              // recovery are still valid against it — apply them instead of
+              // dropping them with the snapshot that never landed. `hydrated`
+              // is left as it was: a refused first frame keeps the skeleton
+              // rather than impersonating an empty session. Replay exit keeps
+              // its own bounded failure signal, so no toast there.
+              if (supersededRecovery) drainRecoveryMessages(supersededRecovery);
+              if (!replay.exiting) reportIncompleteSnapshot(messageConnection, messageSession);
+            }
+          } else if (!data.state) {
+            // A stateless reconnect (no snapshot on the wire) supersedes the
+            // HTTP recovery request but not the same-session events buffered
+            // behind it. We now KNOW this daemon's answer for the tab (no
+            // session), so the skeleton can lift.
+            if (supersededRecovery) drainRecoveryMessages(supersededRecovery);
+            set({ hydrated: true });
+          } else {
+            // Replay is active and not exiting: the historical frame stays
+            // under its write lock; the live snapshot is deliberately not
+            // installed (exiting replay performs its own hydration).
+            set({ hydrated: true });
           }
-
-          set({ hydrated: true });
 
           if (daemonRestarted) {
             // #182 — a PERSISTENT, dismissible "reload to reconnect" toast, NOT
@@ -369,6 +580,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           if (typeof data.globalLedgerPublish === "boolean") {
             const value = data.globalLedgerPublish;
             import("./crossProject").then(({ useCrossProjectStore }) => {
+              if (!isCurrent(messageConnection, messageSession)) return;
               useCrossProjectStore.getState().hydratePublish(value);
             });
           }
@@ -406,6 +618,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             // no live session ⇒ the message waits for a resume, not a poll.
             const agentLive = !noAgentLive(get().activeSessions);
             import("./toast").then(({ useToastStore }) => {
+              if (!isCurrent(messageConnection, messageSession)) return;
               useToastStore.getState().push({
                 kind: "info",
                 title: agentLive
@@ -427,13 +640,18 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           // seen must NOT re-fire the hero toast (or re-append the log). Skip
           // the whole case for a seen key. #169's PreflightBlockLog store ALSO
           // dedupes on its own key — belt-and-suspenders, independent lanes.
-          if (seenPreflightBlockKeys.has(preflightBlockKey(data))) break;
-          seenPreflightBlockKeys.add(preflightBlockKey(data));
+          const blockKey = preflightBlockKey(data);
+          if (seenPreflightBlockKeys.has(blockKey)) break;
+          seenPreflightBlockKeys.add(blockKey);
           const match = data.match ?? {};
           const source: "session" | "team" = data.source === "team" ? "team" : "session";
           const concept = match.concept ?? match.description ?? "this approach";
           const via = match.via ?? "surface";
           import("./toast").then(({ useToastStore }) => {
+            if (!isCurrent(messageConnection, messageSession)) {
+              seenPreflightBlockKeys.delete(blockKey);
+              return;
+            }
             const title = source === "team"
               ? "Blocked by team policy"
               : "Blocked by your taste";
@@ -462,6 +680,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           // #169 — persist the block moment past the 12s toast so the gate
           // firing survives in a header log (PreflightBlockLog).
           import("./preflightBlocks").then(({ usePreflightBlockStore }) => {
+            if (!isCurrent(messageConnection, messageSession)) return;
             usePreflightBlockStore.getState().pushBlock({
               source,
               concept,
@@ -489,6 +708,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           // the Philosophy Ledger stops being "visible on demand" and
           // becomes felt in the moment it grows.
           import("./toast").then(({ useToastStore }) => {
+            if (!isCurrent(messageConnection, messageSession)) return;
             const verb = data.kind === "approved" ? "prefer" : "avoid";
             /**
              * R2 — name the KEY, not the artifact title. Every `ledger_write`
@@ -532,6 +752,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           // The acting tab already toasted its own confirmation; here we just
           // keep OTHER tabs' ledger view consistent by refreshing the digest.
           import("./ledger").then(({ useLedgerStore }) => {
+            if (!isCurrent(messageConnection, messageSession)) return;
             void useLedgerStore.getState().refetch();
           });
           break;
@@ -540,6 +761,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           // O7: link the user back to their question so a flurry of comment
           // threads doesn't bury the one reply they were waiting on.
           import("./toast").then(({ useToastStore }) => {
+            if (!isCurrent(messageConnection, messageSession)) return;
             const excerpt = String(data.answerExcerpt ?? "").trim();
             const body = excerpt ? `"${excerpt}${excerpt.length >= 120 ? "…" : ""}"` : undefined;
             const artifactId = data.artifactId;
@@ -573,36 +795,108 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           // bundle/token aren't necessarily stale. If a write DOES 401 after a
           // resume, toastApiError's 401 identity check is the safety net that
           // upgrades it to the reload toast. Left intentionally.
-          fetch(`${apiBase()}/api/state`, {
-            headers: { ...sessionHeaders(), "X-Session-Id": data.sessionId ?? get().sessionId ?? "" },
-          })
-            .then((r) => (r.ok ? r.json() : null))
-            .then((fresh) => {
-              if (!fresh) return;
-              store.reset();
-              for (const artifact of fresh.artifacts ?? []) store.addArtifact(artifact);
-              for (const comment of fresh.comments ?? []) store.addComment(comment);
-              // Bug3 — re-seed resolved decisions after the reset so a resolved
-              // card doesn't revert to its options grid on daemon-resume refetch.
-              for (const d of fresh.decisions ?? []) {
-                if (d?.decisionId && d?.response?.optionId) {
-                  store.recordResolvedDecision(d.decisionId, {
-                    optionId: d.response.optionId,
-                    reasoning: d.response.reasoning,
-                    resolvedAt: d.resolvedAt,
-                  });
-                }
-              }
-            })
-            .catch(() => {});
-          import("./toast").then(({ useToastStore }) => {
-            useToastStore.getState().push({
-              kind: "info",
-              title: "Daemon recovered — session state refetched",
-              body: "The deepPairing daemon restarted; the wrapper auto-re-registered. Anything you submitted in the last few seconds may need to be retried.",
-              ttl: 8000,
+          {
+            // Surface the restart even if replay owns the artifact store or
+            // the best-effort state fetch fails. The success toast below is a
+            // separate claim and appears only after complete hydration.
+            void import("./toast").then(({ useToastStore }) => {
+              if (!isCurrent(messageConnection, messageSession)) return;
+              useToastStore.getState().push({
+                kind: "info",
+                title: "Daemon restarted — checking session state",
+                body: "The wrapper reconnected. Anything submitted in the last few seconds may need to be retried.",
+                ttl: 8000,
+              });
             });
-          });
+            // Replay owns the shared artifact store. A live recovery must not
+            // replace a historical frame or invalidate pending annotations;
+            // exiting replay performs its own authoritative live hydration.
+            if (useReplayStore.getState().active) break;
+            const expectedSessionId = data.sessionId ?? get().sessionId;
+            if (typeof expectedSessionId !== "string") break;
+            const previousMessages =
+              pendingRecovery &&
+              pendingRecovery.sessionId === expectedSessionId &&
+              isCurrent(pendingRecovery.connection, pendingRecovery.session) &&
+              isCurrentSessionTransition(pendingRecovery.transition)
+                ? pendingRecovery.messages
+                : [];
+            cancelPendingRecovery();
+            const recoveryConnection = messageConnection;
+            const recoverySession = messageSession;
+            const recoverySnapshot = ++snapshotGeneration;
+            const controller = new AbortController();
+            const recovery: NonNullable<typeof pendingRecovery> = {
+              connection: recoveryConnection,
+              session: recoverySession,
+              transition: beginSessionTransition(expectedSessionId),
+              sessionId: expectedSessionId,
+              messages: previousMessages,
+              controller,
+              unsubscribe: () => {},
+            };
+            pendingRecovery = recovery;
+            recovery.unsubscribe = useArtifactStore.subscribe(() => {
+              // Optimistic/local mutations are not WebSocket messages and
+              // cannot be replayed safely. Preserve them by abandoning the
+              // older snapshot, then apply any WS messages already buffered.
+              if (pendingRecovery !== recovery) return;
+              cancelPendingRecovery();
+              drainRecoveryMessages(recovery);
+            });
+            recovery.timeout = setTimeout(() => {
+              if (pendingRecovery !== recovery) return;
+              cancelPendingRecovery();
+              drainRecoveryMessages(recovery);
+            }, RECOVERY_TIMEOUT_MS);
+            fetch(`${apiBase()}/api/state`, {
+              headers: { ...sessionHeaders(), "X-Session-Id": expectedSessionId },
+              signal: controller.signal,
+            })
+            .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`state fetch failed: ${r.status}`))))
+            .then((fresh) => {
+              if (
+                pendingRecovery !== recovery ||
+                recoverySnapshot !== snapshotGeneration ||
+                !isCurrent(recoveryConnection, recoverySession) ||
+                !isCurrentSessionTransition(recovery.transition)
+              ) return;
+              if (!isCompleteRecoverySnapshot(fresh, expectedSessionId)) {
+                cancelPendingRecovery();
+                drainRecoveryMessages(recovery);
+                return;
+              }
+              if (recovery.timeout !== undefined) clearTimeout(recovery.timeout);
+              recovery.unsubscribe();
+              pendingRecovery = null;
+              const previousArtifactState = useArtifactStore.getState();
+              try {
+                hydrateArtifactState(store, fresh);
+              } catch {
+                useArtifactStore.setState(previousArtifactState);
+                drainRecoveryMessages(recovery);
+                return;
+              }
+              drainRecoveryMessages(recovery);
+              import("./toast").then(({ useToastStore }) => {
+                if (
+                  !isCurrent(recoveryConnection, recoverySession) ||
+                  !isCurrentSessionTransition(recovery.transition)
+                ) return;
+                useToastStore.getState().push({
+                  kind: "info",
+                  title: "Daemon recovered — session state refetched",
+                  body: "The deepPairing daemon restarted; the wrapper auto-re-registered. Anything you submitted in the last few seconds may need to be retried.",
+                  ttl: 8000,
+                });
+              });
+            })
+              .catch(() => {
+                if (pendingRecovery !== recovery) return;
+                cancelPendingRecovery();
+                drainRecoveryMessages(recovery);
+              });
+          }
           break;
 
         case "preflight_trace_recorded":
@@ -638,6 +932,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           // project. Setting connected=false stops the optimistic-state
           // feedback loop.
           import("./toast").then(({ useToastStore }) => {
+            if (!isCurrent(messageConnection, messageSession)) return;
             const otherProject = typeof data.projectRoot === "string" ? data.projectRoot : "another project";
             useToastStore.getState().push({
               kind: "error",
@@ -678,10 +973,17 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     connect: (sessionId?: string) => {
       if (get().adapter) return;
 
+      let thisConnection = connectionGeneration;
       const adapter = createAdapter(undefined, sessionId);
       set({ adapter });
 
       adapter.onConnect(() => {
+        // #339 — a chunk that failed to load during the outage poisoned this
+        // document's module map. Recheck the asset origin, which need not be
+        // this selected API daemon. Normal connection/hydration continues;
+        // the bounded probe may decline to reload and must not strand it.
+        reloadIfChunkFailedOffline();
+        thisConnection = ++connectionGeneration;
         set({ connected: true, disconnectedSince: null });
         // Request notification permission on first connect
         if (typeof Notification !== "undefined" && Notification.permission === "default") {
@@ -693,9 +995,22 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         useHookStatusStore.getState().load();
       });
 
-      adapter.onMessage(handleMessage);
+      adapter.onMessage((data) => handleMessage(data, thisConnection));
 
       adapter.onDisconnect(() => {
+        // A socket drop (including refreshUrl's project-hash reconnect) is a
+        // transport generation change, not a user navigation. Connection,
+        // session and snapshot generations below still fence every async WS /
+        // recovery callback and cancel its buffer. Do not invalidate the
+        // separate semantic transition token here: a same-session Features /
+        // Decisions click may have its authoritative HTTP snapshot in flight,
+        // and abandoning that user action leaves its modal silently stuck.
+        // Genuine navigation and teardown still invalidate explicitly in
+        // switchSession() and disconnect().
+        connectionGeneration++;
+        sessionGeneration++;
+        snapshotGeneration++;
+        cancelPendingRecovery();
         // D8 (H4) — stamp WHEN the outage started (first flip only) so the
         // banner can escalate: a 30-second blip and a dead daemon looked
         // identical forever.
@@ -718,6 +1033,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       adapter.onFatalMismatch?.(() => {
         set({ connected: false });
         import("./toast").then(({ useToastStore }) => {
+          if (get().adapter !== adapter) return;
           useToastStore.getState().push({
             kind: "error",
             title: "Tab is bound to a stale daemon",
@@ -726,6 +1042,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             action: {
               label: "Reload to re-bind",
               onClick: () => {
+                if (get().adapter !== adapter) return;
                 if (typeof window !== "undefined") window.location.reload();
               },
             },
@@ -733,32 +1050,18 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         });
       });
 
-      // The daemon REFUSED this connection's initial snapshot. It completes
-      // the WS upgrade, sends `connection_refused`, then closes 1011 — which
-      // read to the old adapter as an ordinary flap, so `onopen` reset the
-      // backoff and the tab retried once a second, forever, showing nothing.
-      // Now the adapter latches (like II3's mismatch) and we surface the
-      // daemon's own words plus the session it blames. Sticky + a Retry action
-      // rather than a reload-only dead end: the underlying conflict is
-      // something the human resolves in this very UI, so reconnecting must be
-      // one click, and the toast is deduped by the latch (exactly one per
-      // deliberate attempt).
       adapter.onConnectionRefused?.((info) => {
-        set((state) => ({
-          connected: false,
-          disconnectedSince: state.disconnectedSince ?? Date.now(),
-        }));
+        const transition = captureSessionTransition(get().sessionId);
+        set((state) => ({ connected: false, disconnectedSince: state.disconnectedSince ?? Date.now() }));
         const named = info.sessionId ?? null;
         const mine = get().sessionId;
-        // Never imply the viewed session is at fault when it isn't: a global
-        // client subscribes to every session, so an unrelated frozen one must
-        // be named, not silently blamed on whatever this tab is showing.
         const scope = !named
           ? "The daemon did not say which session is affected."
           : mine && named !== mine
             ? `The blocked session is ${named} — not ${mine}, which this tab is showing.`
             : `Affected session: ${named}.`;
         import("./toast").then(({ useToastStore }) => {
+          if (get().adapter !== adapter || !isCurrentSessionTransition(transition)) return;
           if (info.code !== "session_review_conflict") {
             useToastStore.getState().push({
               kind: "error",
@@ -775,7 +1078,10 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             ttl: 0,
             action: {
               label: "Retry connecting",
-              onClick: () => adapter.retryAfterRefusal?.(),
+              onClick: () => {
+                if (get().adapter !== adapter || !isCurrentSessionTransition(transition)) return;
+                adapter.retryAfterRefusal?.();
+              },
             },
           });
         });
@@ -787,23 +1093,36 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     disconnect: () => {
       const { adapter } = get();
       if (adapter) {
+        beginSessionTransition(get().sessionId);
+        connectionGeneration++;
+        sessionGeneration++;
+        snapshotGeneration++;
+        cancelPendingRecovery();
         adapter.disconnect();
         set({ connected: false, adapter: null });
       }
     },
 
-    switchSession: (sessionId: string) => {
+    switchSession: (sessionId: string, options?: SwitchSessionOptions) => {
       const { adapter } = get();
       if (adapter && "switchSession" in adapter) {
-        // B2 — drop the OLD session's heartbeat streak, or the TurnIndicator
-        // shows "Agent working · Nm" from session A for up to 45s on session B.
+        const transition = beginSessionTransition(sessionId);
+        sessionGeneration++;
+        snapshotGeneration++;
+        cancelPendingRecovery();
+        // Publish the new identity before the async reset, then open the
+        // replacement socket only after that reset has completed. This keeps a
+        // fast hydration from being erased by a late import continuation.
         set({ sessionId, agentActivityAt: null, agentActiveSince: null });
-        // Reset before opening the replacement socket. The old ordering fired
-        // the dynamic import and immediately connected; a fast hydration could
-        // then be erased when the import's reset resolved one microtask later.
         void import("./artifact").then(({ useArtifactStore }) => {
-          if (get().adapter !== adapter || get().sessionId !== sessionId) return;
-          useArtifactStore.getState().reset();
+          if (
+            get().adapter !== adapter ||
+            get().sessionId !== sessionId ||
+            !isCurrentSessionTransition(transition)
+          ) return;
+          if (!options?.preserveStateUntilConnected) {
+            useArtifactStore.getState().reset();
+          }
           (adapter as any).switchSession(sessionId);
         });
       }

@@ -1,10 +1,11 @@
-import { test } from "@playwright/test";
-import { spawn, type ChildProcess } from "node:child_process";
+import { test } from "./test.js";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { teardownDaemon } from "./daemon-harness.js";
+import { attachDaemonOutput, teardownDaemon, spawnDiagnosticProcess } from "./daemon-harness.js";
+import { redactDiagnostic } from "./diagnostics.js";
 
 /**
  * Not a regression test — a SCREENSHOT CAPTURE for the README. Boots a real
@@ -16,7 +17,8 @@ const __dir = path.dirname(fileURLToPath(import.meta.url));
 const daemonJs = path.resolve(__dir, "../dist/daemon/index.js");
 const ASSETS = path.resolve(__dir, "../../../docs/assets");
 
-test("README capture flow — selectors resolve (+ writes PNGs when CAPTURE_README=1)", async ({ browser }) => {
+test("README capture flow — selectors resolve (+ writes PNGs when CAPTURE_README=1)", async ({ browser }, testInfo) => {
+  testInfo.setTimeout(90_000);
   // K4 — this ALWAYS runs in CI now, as a selector-integrity check: it drives
   // the real rendered app through every navigation the README shots depend on
   // and ASSERTS each target renders, so selector rot (e.g. the F2 "your taste"
@@ -47,9 +49,8 @@ test("README capture flow — selectors resolve (+ writes PNGs when CAPTURE_READ
   // outside both tsconfigs; the spec is CAPTURE_README-opt-in).
   let info: any;
   try {
-    proc = spawn(process.execPath, [daemonJs], {
+    proc = spawnDiagnosticProcess(process.execPath, [daemonJs], {
       env: { ...process.env, HOME: home, DEEPPAIRING_PROJECT_ROOT: projectRoot, DEEPPAIRING_OPEN_BROWSER: "0" },
-      stdio: "ignore",
     });
 
     // wait for daemon
@@ -58,10 +59,24 @@ test("README capture flow — selectors resolve (+ writes PNGs when CAPTURE_READ
       if (fs.existsSync(infoPath)) { try { info = JSON.parse(fs.readFileSync(infoPath, "utf8")); } catch {} }
       if (!info?.port) await new Promise((r) => setTimeout(r, 100));
     }
+    if (!info?.port) throw new Error("capture daemon did not publish a port");
     const base = `http://localhost:${info.port}`;
     const di: any = await (await fetch(`${base}/api/daemon-info`)).json();
     const H = { "Content-Type": "application/json", Authorization: `Bearer ${info.authToken}`, "X-Project-Hash": di.projectHash };
-    const post = (p: string, b: unknown) => fetch(`${base}${p}`, { method: "POST", headers: H, body: JSON.stringify(b) });
+    const post = async (route: string, body: unknown): Promise<Response> => {
+      const response = await fetch(`${base}${route}`, {
+        method: "POST",
+        headers: H,
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        const diagnostic = redactDiagnostic(await response.text()).slice(0, 1_024);
+        throw new Error(
+          `seed ${route} failed: ${response.status}${diagnostic ? ` — ${diagnostic}` : ""}`,
+        );
+      }
+      return response;
+    };
     const sid = "demo";
 
     await post(`/api/internal/sessions/${sid}/register`, { title: "Auth token refresh review", project: "acme-api" });
@@ -478,6 +493,11 @@ test("README capture flow — selectors resolve (+ writes PNGs when CAPTURE_READ
     await page.waitForSelector('[data-testid="explainer-section"]', { timeout: 10_000 });
     await page.waitForTimeout(800);
     await shot("explainer.png");
+  } catch (error) {
+    // The process is torn down in finally, before the auto-fixture observes the
+    // test result, so force the bounded tail into the report while it exists.
+    await attachDaemonOutput(proc, testInfo, { force: true });
+    throw error;
   } finally {
     // I1 — teardown BARRIER: block until the daemon is fully down (process
     // exited AND port released) before removing its dirs, so this opt-in spec
