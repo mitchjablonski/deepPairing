@@ -36449,6 +36449,9 @@ function externalChangesets(artifacts) {
 }
 var CLOSED_CHANGESET_STATUSES = /* @__PURE__ */ new Set(["superseded", "retracted", "obsolete"]);
 var FULL_GIT_SHA2 = /^[0-9a-fA-F]{40}$/;
+function isStandingChunk(artifact) {
+  return !CLOSED_CHANGESET_STATUSES.has(artifact.status);
+}
 function samePrIdentity(target, reviewed) {
   return target.number === reviewed.number && (!target.owner || !!reviewed.owner && target.owner.toLowerCase() === reviewed.owner.toLowerCase()) && (!target.repo || !!reviewed.repo && target.repo.toLowerCase() === reviewed.repo.toLowerCase());
 }
@@ -36474,6 +36477,7 @@ function scopeExternalChangesets(artifacts, ref) {
 function knownPrIdentityCount(artifacts) {
   const identities = /* @__PURE__ */ new Set();
   for (const artifact of artifacts) {
+    if (!isStandingChunk(artifact)) continue;
     const url2 = coerceChangesetContent(artifact.content).source?.url;
     const parsed = url2 ? parsePrNumber(url2) : null;
     if (parsed?.owner && parsed.repo) {
@@ -36598,9 +36602,9 @@ function authorizeReviewPost(state, opts) {
   let closedShaLineage = [];
   if (opts.pr) {
     const fullScope = scopeExternalChangesets(targetExternals, opts.pr);
-    const standing = targetExternals.filter((a) => !CLOSED_CHANGESET_STATUSES.has(a.status));
+    const standing = targetExternals.filter(isStandingChunk);
     const standingScope = scopeExternalChangesets(standing, opts.pr);
-    const contradictory = standingScope.contradictory[0] ?? (approved.length > 0 ? fullScope.contradictory[0] : void 0);
+    const contradictory = standingScope.contradictory[0];
     if (contradictory) {
       const artifact = contradictory;
       return {
@@ -36621,7 +36625,7 @@ function authorizeReviewPost(state, opts) {
         reason: `Refusing to post: "${artifact.title}" identifies https://github.com/${reviewed.owner}/${reviewed.repo}/pull/${reviewed.number}, not the requested PR ${opts.pr}. Present the requested PR with its full source.url and get your pair's verdict before posting.`
       };
     }
-    const unknownApproveChunk = event === "APPROVE" ? standingScope.unknown[0] ?? (approved.length > 0 ? fullScope.unknown[0] : void 0) : void 0;
+    const unknownApproveChunk = event === "APPROVE" ? standingScope.unknown[0] : void 0;
     if (unknownApproveChunk) {
       const artifact = unknownApproveChunk;
       return {
@@ -36629,8 +36633,9 @@ function authorizeReviewPost(state, opts) {
         reason: `Refusing to post an APPROVE: "${artifact.title}" (${artifact.id}) has no full, valid PR source URL, so the gate cannot prove whether it is another part of ${opts.pr} or whether the approved findings belong to it. Present every relevant chunk with its full source.url and get your pair's verdict again.`
       };
     }
-    const shaAwareUnknown = fullScope.unknown.filter(hasShaProvenance);
-    const standingUnbound = shaAwareUnknown.find((a) => !CLOSED_CHANGESET_STATUSES.has(a.status));
+    const identityUnproven = [...fullScope.unknown, ...fullScope.contradictory];
+    const shaAwareUnknown = identityUnproven.filter(hasShaProvenance);
+    const standingUnbound = shaAwareUnknown.find(isStandingChunk);
     if (standingUnbound) {
       return { ok: false, reason: unboundShaProvenanceRefusal(standingUnbound, event, opts.pr) };
     }
@@ -37334,6 +37339,10 @@ async function handlePresentDebrief(ctx, args) {
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   await ctx.helpers.autoNameSession(artifact.title);
   const traceSummary = formatPreflightTraceSummary(pre.trace);
+  const advisory = pre.advisory ? `
+
+\u26A0 THIS DEBRIEF NARRATES SOMETHING YOUR PAIR RECORDED A STANCE AGAINST \u2014 advisory, not a block (a debrief accounts for work already done, so the record is never refused): ${pre.advisory}
+Do not leave that unsaid. Name the stance in the debrief itself \u2014 revise_artifact to add a section (or a needsYourEyes item) that quotes it and says plainly whether the work went against it, why, and what you want them to decide now. They recorded it so it would come back; surfacing it here is what makes the debrief honest.` : "";
   const nudge = await revisionNudge(ctx.store, "debrief", title, id);
   const servedNote = await linkServedRequest(ctx.store, args, artifact.id);
   const sectionCount = sections?.length ?? 0;
@@ -37351,7 +37360,7 @@ async function handlePresentDebrief(ctx, args) {
   return {
     content: [{
       type: "text",
-      text: `Debrief "${artifact.title}" presented for review (${id}) \u2014 ${sectionCount} section${sectionCount === 1 ? "" : "s"}${eyesCount > 0 ? `, ${eyesCount} item${eyesCount === 1 ? "" : "s"} flagged for your eyes` : ""}. This is the primary comprehension surface: the human reads the walk-through and can ask ANYTHING in the thread at localhost:${reviewPort}. Call check_feedback for their questions, comments, and verdict.${danglingNote}${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`
+      text: `Debrief "${artifact.title}" presented for review (${id}) \u2014 ${sectionCount} section${sectionCount === 1 ? "" : "s"}${eyesCount > 0 ? `, ${eyesCount} item${eyesCount === 1 ? "" : "s"} flagged for your eyes` : ""}. This is the primary comprehension surface: the human reads the walk-through and can ask ANYTHING in the thread at localhost:${reviewPort}. Call check_feedback for their questions, comments, and verdict.${danglingNote}${servedNote}${traceSummary}${advisory}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`
     }]
   };
 }

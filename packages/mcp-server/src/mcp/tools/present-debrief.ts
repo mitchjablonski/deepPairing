@@ -82,6 +82,30 @@ export async function handlePresentDebrief(ctx: ToolContext, args: any): Promise
   await ctx.helpers.autoNameSession(artifact.title);
 
   const traceSummary = formatPreflightTraceSummary(pre.trace);
+  // #369 MEDIUM-D — RENDER THE ADVISORY. `artifactProposal` marks every debrief
+  // `advisory: true` (a debrief reports what already happened; a recalled
+  // stance must not stop the historical record from naming the rejected path),
+  // so `preflightRejectedApproaches` hands the fired match back as
+  // `pre.advisory` instead of refusing. Nothing read it. The matcher ran, hit,
+  // and its result was dropped on the floor — so a debrief narrating a rejected
+  // approach sailed through with the stance never surfaced, where `main` had
+  // blocked it loudly. That is a FAIL-OPEN regression on the commonest debrief
+  // entry point: the moat went dark in exactly the artifact whose job is to
+  // narrate the rejection.
+  //
+  // The fix is the sibling shape, not a new one — present-changeset.ts renders
+  // its advisory the same way, and revise-artifact.ts renders the same field.
+  // Advisory stays advisory: the debrief is already recorded and the human
+  // already has it on the review surface. What returns is the SIGNAL — the
+  // agent is told which recorded stance this narrative touches and is asked to
+  // say so to their pair, in the debrief, rather than let it pass unmentioned.
+  const advisory = pre.advisory
+    ? `\n\n⚠ THIS DEBRIEF NARRATES SOMETHING YOUR PAIR RECORDED A STANCE AGAINST — advisory, not a block ` +
+      `(a debrief accounts for work already done, so the record is never refused): ${pre.advisory}\n` +
+      `Do not leave that unsaid. Name the stance in the debrief itself — revise_artifact to add a section (or a needsYourEyes item) ` +
+      `that quotes it and says plainly whether the work went against it, why, and what you want them to decide now. ` +
+      `They recorded it so it would come back; surfacing it here is what makes the debrief honest.`
+    : "";
   // Steer re-posts toward revise_artifact when a live debrief with a similar
   // title already exists (a revision that should supersede, not re-post).
   const nudge = await revisionNudge(ctx.store, "debrief", title, id);
@@ -122,7 +146,7 @@ export async function handlePresentDebrief(ctx: ToolContext, args: any): Promise
         `Debrief "${artifact.title}" presented for review (${id}) — ${sectionCount} section${sectionCount === 1 ? "" : "s"}` +
         `${eyesCount > 0 ? `, ${eyesCount} item${eyesCount === 1 ? "" : "s"} flagged for your eyes` : ""}. ` +
         `This is the primary comprehension surface: the human reads the walk-through and can ask ANYTHING in the thread at localhost:${reviewPort}. ` +
-        `Call check_feedback for their questions, comments, and verdict.${danglingNote}${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`,
+        `Call check_feedback for their questions, comments, and verdict.${danglingNote}${servedNote}${traceSummary}${advisory}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`,
     }],
   };
 }

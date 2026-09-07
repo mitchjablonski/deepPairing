@@ -598,14 +598,46 @@ describe("target-scoped external review authorization", () => {
     expect(auth.reason).toContain("could publish another PR's findings");
   });
 
+  // ---------------------------------------------------------------------------
+  // #369 HIGH-A / HIGH-B — THE PERMANENT BRICK.
+  //
+  // The three cases below used to assert the OPPOSITE. They pinned, as intended
+  // behaviour, a session that can never post again: present the wrong PR once,
+  // take it back the way the product tells you to, and every subsequent post is
+  // refused for the rest of the session with no exit that exists. The refusal
+  // text made it worse by naming a fix ("present one coherent PR identity and
+  // get your pair's verdict again") that the gate then ignored, because it was
+  // reading the artifact you had just withdrawn.
+  //
+  // `superseded` / `retracted` / `obsolete` ARE the recovery — that is what the
+  // rest of this file already means by them (reviewedHeadFor, the SHA-provenance
+  // check). These three sites had not been converted. The protective intent is
+  // preserved in full for STANDING chunks, which each case still pins.
+  // ---------------------------------------------------------------------------
   it.each(["superseded", "retracted", "obsolete"])(
-    "still refuses ambiguous cross-PR findings when the other PR changeset is %s",
+    "the wrong PR presented then %s is a recoverable mistake, not a bricked session",
     (closedStatus) => {
+      // The reviewer's exact scenario: one review, one findings artifact, and a
+      // chunk for the wrong PR that the agent took straight back.
       const auth = authorizeReviewPost(session([
         findings("findings_100", "approved", "Finding found while reviewing PR #100"),
+        changesetFor("cs_wrong", closedStatus, 200, OTHER_SHA),
         changesetFor("cs_100", "approved", 100, REVIEWED_SHA),
-        findings("findings_200", "approved", "Finding found while reviewing PR #200"),
-        changesetFor("cs_200", closedStatus, 200, OTHER_SHA),
+      ]), { event: "COMMENT", pr: PR_100 });
+      expect(auth.ok).toBe(true);
+      if (!auth.ok) throw new Error("unreachable");
+      // And the recovery binds to the reviewed commit, not the mutable head.
+      expect(auth.payload.commit_id).toBe(REVIEWED_SHA);
+    },
+  );
+
+  it.each(["draft", "approved", "rejected", "revised"])(
+    "a STANDING other-PR changeset (%s) still locks the ambiguous post out",
+    (standingStatus) => {
+      const auth = authorizeReviewPost(session([
+        findings("findings_100", "approved", "Finding found while reviewing PR #100"),
+        changesetFor("cs_200", standingStatus, 200, OTHER_SHA),
+        changesetFor("cs_100", "approved", 100, REVIEWED_SHA),
       ]), { event: "COMMENT", pr: PR_100 });
       expect(auth.ok).toBe(false);
       if (auth.ok) throw new Error("unreachable");
@@ -614,8 +646,45 @@ describe("target-scoped external review authorization", () => {
     },
   );
 
-  it("refuses findings when closed history contradicts its PR URL with another number", () => {
+  it("scoping to standing chunks accepts the stale-findings residual, deliberately", () => {
+    // Reported honestly rather than hidden: when the pair reviewed TWO PRs and
+    // then closed one, that review's approved findings artifact is still in the
+    // session, and findings record no PR of their own — so they can now ride
+    // along to the surviving target. This is the residual of the fix, not an
+    // oversight. It is bounded by the same rule everywhere else in this file:
+    // once a changeset is off the board it stops claiming a PR identity. The
+    // alternative — the previous behaviour — was a session that could never post
+    // again, which is strictly worse and had no exit at all. The pair's own
+    // remedy is unchanged and available: reject or revise the stale findings.
+    const auth = authorizeReviewPost(session([
+      findings("findings_100", "approved", "Finding found while reviewing PR #100"),
+      changesetFor("cs_100", "approved", 100, REVIEWED_SHA),
+      findings("findings_200", "approved", "Finding found while reviewing PR #200"),
+      changesetFor("cs_200", "retracted", 200, OTHER_SHA),
+    ]), { event: "COMMENT", pr: PR_100 });
+    expect(auth.ok).toBe(true);
+  });
+
+  it("a CLOSED source.number contradiction no longer refuses — the prescribed fix now works", () => {
+    // HIGH-B, first fallback. The refusal told the agent to "present one coherent
+    // PR identity and get your pair's verdict again"; doing exactly that still
+    // refused, because the gate fell back to `fullScope` and re-read the
+    // superseded incoherent chunk forever.
     const contradictory = changesetFor("cs_bad", "obsolete", 100, OTHER_SHA);
+    (contradictory.content as any).source.number = 200;
+    const auth = authorizeReviewPost(session([
+      findings("art_100", "approved"),
+      changesetFor("cs_100", "approved", 100, REVIEWED_SHA),
+      contradictory,
+    ]), { event: "COMMENT", pr: PR_100 });
+    expect(auth.ok).toBe(true);
+    if (!auth.ok) throw new Error("unreachable");
+    // The withdrawn chunk's commit is NOT borrowed; the standing target's is.
+    expect(auth.payload.commit_id).toBe(REVIEWED_SHA);
+  });
+
+  it("a STANDING source.number contradiction still refuses, naming the chunk", () => {
+    const contradictory = changesetFor("cs_bad", "draft", 100, OTHER_SHA);
     (contradictory.content as any).source.number = 200;
     const auth = authorizeReviewPost(session([
       findings("art_100", "approved"),
@@ -626,6 +695,24 @@ describe("target-scoped external review authorization", () => {
     if (auth.ok) throw new Error("unreachable");
     expect(auth.reason).toContain("contradicts");
     expect(auth.reason).toContain("cs_bad");
+  });
+
+  it("a CLOSED identity-unproven chunk that recorded a commit still cannot post unbound", () => {
+    // The rider on HIGH-B. Once the closed contradictory chunk stops REFUSING,
+    // the SHA it recorded must not be silently dropped — that is #369 MEDIUM-C's
+    // failure mode (a COMMENT pinned by GitHub to the PR's mutable head). With no
+    // standing target chunk naming a commit, this is a refresh-required revision
+    // and the gate says so instead of posting unbound.
+    const contradictory = changesetFor("cs_bad", "superseded", 100, OTHER_SHA);
+    (contradictory.content as any).source.number = 200;
+    const auth = authorizeReviewPost(session([
+      findings("art_100", "approved"),
+      changesetFor("cs_100", "approved", 100, null, PR_100),
+      contradictory,
+    ]), { event: "COMMENT", pr: PR_100 });
+    expect(auth.ok).toBe(false);
+    if (auth.ok) throw new Error("unreachable");
+    expect(auth.reason).toContain("immutable reviewed head SHA");
   });
 
   it("a bare PR number cannot collapse same-number changesets from different repositories", () => {
@@ -693,16 +780,20 @@ describe("target-scoped external review authorization", () => {
     expect(auth.reason).toContain("no full, valid PR source URL");
   });
 
-  it("closed unknown provenance blocks APPROVE-with-findings but not a target-only verdict", () => {
+  it("a CLOSED unknown-provenance chunk no longer blocks APPROVE, with or without findings", () => {
+    // HIGH-B, second fallback. This is the recovery the refusal itself asks for:
+    // the url-less chunk was superseded by one carrying the full canonical
+    // source.url, and the presence of approved findings used to reach past the
+    // standing set to re-raise the withdrawn chunk — forever. A STANDING url-less
+    // chunk is still refused (see the case directly above this one).
     const target = changesetFor("cs_100", "approved", 100, REVIEWED_SHA);
     const closedLegacy = changesetFor("cs_legacy", "obsolete", 100, null, null);
     const withFindings = authorizeReviewPost(session([
       findings("art_100", "approved"), target, closedLegacy,
     ]), { event: "APPROVE", pr: PR_100 });
-    expect(withFindings.ok).toBe(false);
-    if (withFindings.ok) throw new Error("unreachable");
-    expect(withFindings.reason).toContain("cs_legacy");
-    expect(withFindings.reason).toContain("approved findings");
+    expect(withFindings.ok).toBe(true);
+    if (!withFindings.ok) throw new Error("unreachable");
+    expect(withFindings.payload.commit_id).toBe(REVIEWED_SHA);
 
     const bare = authorizeReviewPost(session([target, closedLegacy]), { event: "APPROVE", pr: PR_100 });
     expect(bare.ok).toBe(true);
@@ -1431,9 +1522,18 @@ describe("#343 — SHA-aware unknown provenance is refused, never silently unbou
       expect(auth.reason).toContain("cs_bad");
     });
 
-    it.each(["approved", "superseded"])(
+    // #369 HIGH-A — the two rows now refuse for DIFFERENT reasons, and both are
+    // still fail-closed. With a STANDING other-PR chunk the identity ambiguity is
+    // real and wins first. Once that chunk is superseded it no longer claims a PR
+    // identity, so the `www.` odd chunk — which records a commit the gate cannot
+    // bind to any PR — becomes the first thing standing in the way. What must not
+    // change either way: this post never goes out, and never goes out unbound.
+    it.each([
+      ["approved", "more than one pull request"],
+      ["superseded", "not a full canonical pull-request URL"],
+    ])(
       "multi-PR findings history stays fail-closed (other chunk %s) regardless of an odd chunk",
-      (otherStatus) => {
+      (otherStatus, expectedReason) => {
         const auth = authorizeReviewPost(session([
           findings("art_100", "approved"),
           changesetFor("cs_100", "approved", 100, REVIEWED_SHA),
@@ -1442,7 +1542,7 @@ describe("#343 — SHA-aware unknown provenance is refused, never silently unbou
         ]), { event: "COMMENT", pr: PR_100 });
         expect(auth.ok).toBe(false);
         if (auth.ok) throw new Error("unreachable");
-        expect(auth.reason).toContain("more than one pull request");
+        expect(auth.reason).toContain(expectedReason);
       },
     );
 
