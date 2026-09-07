@@ -322,11 +322,12 @@ describe("coerceChangesetContent (#171)", () => {
     const out = coerceChangesetContent({
       files: [],
       reviewIntent: "external",
-      source: { kind: "github-pr", number: 123, url: "https://github.com/acme/w/pull/123", headRef: "feat/x", baseRef: "main", author: "dana" },
+      source: { kind: "github-pr", number: 123, url: "https://github.com/acme/w/pull/123", headRef: "feat/x", baseRef: "main", author: "dana", headSha: "ABCDEF0123456789ABCDEF0123456789ABCDEF01" },
     });
     expect(out.source).toEqual({
       kind: "github-pr", number: 123, url: "https://github.com/acme/w/pull/123",
       headRef: "feat/x", baseRef: "main", author: "dana",
+      headSha: "abcdef0123456789abcdef0123456789abcdef01",
     });
   });
 
@@ -338,6 +339,16 @@ describe("coerceChangesetContent (#171)", () => {
     // number-as-string, empty url and non-string headRef are all dropped —
     // the banner must never render a fabricated PR identity.
     expect(out.source).toEqual({ kind: "github-pr", author: "dana" });
+  });
+
+  it("#343 — drops malformed reviewed SHAs instead of guessing or repairing them", () => {
+    for (const headSha of ["abc", "g".repeat(40), 42, null]) {
+      const out = coerceChangesetContent({
+        files: [],
+        source: { kind: "github-pr", url: "https://github.com/acme/w/pull/123", headSha },
+      });
+      expect(out.source).toEqual({ kind: "github-pr", url: "https://github.com/acme/w/pull/123" });
+    }
   });
 
   it("Q6 — an unknown source kind yields NO source at all (never a half-shaped record)", () => {

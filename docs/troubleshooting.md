@@ -171,6 +171,100 @@ MCP_TIMEOUT=60000 claude
 As with the timeout above, a native-ext4 checkout (e.g. under `~`) erases the
 latency class entirely and is the durable fix.
 
+## session_review_conflict
+
+Two session writers raced: one changed reviewed artifact identity while another
+recorded review authority (a verdict, decision response, plan review, or
+per-file changeset disposition). deepPairing refuses to combine those writes,
+freezes review-authority reads and the artifact, decision, plan-review, and
+review-metrics write lanes in that writer, and returns a structured HTTP 409.
+Independent comments, requests, and render-failure records continue to persist,
+but the affected artifact cannot be authorized from the frozen process. This is
+failure isolation across collections, not a cross-file transaction guarantee.
+
+Once a writer is frozen, every later write into those lanes is refused up
+front with the same 409, before any in-memory change, checkpoint receipt, or
+broadcast: creating an artifact (`present_*`), revising one
+(`revise_artifact`), any status transition, plan progress, per-file changeset
+review, decision or plan-review records, and the consume-once acknowledgements
+of status changes and resolved decisions (a refused acknowledgement leaves the
+notice reported on disk, so a fresh writer surfaces it again rather than losing
+it). A `present_*` or `revise_artifact`
+call that returns this error created nothing, and the artifact it tried to
+revise is exactly as it was on disk — no v2, no `superseded` flip, no comment.
+The first conflict is different only in when it is detected: the verdict route
+records its feedback comment before the flush that discovers the conflict, so
+that comment survives.
+
+A rejection that meets this 409 follows the failed-verdict contract, not the
+rejection guarantee. Its feedback comment may be preserved (first conflict) or
+refused with the verdict (already frozen), but in neither case is a
+cross-project rejection stance recorded — `recordRejectedApproach` runs only
+after a successful verdict flush. After restarting the writer, reject the
+reloaded artifact again if you want that stance remembered.
+
+If the companion UI encounters this conflict while loading, it names the
+affected session and pauses automatic reconnects instead of retrying the frozen
+writer in a loop. Restart that session writer, inspect the persisted artifact,
+then reload the page or deliberately switch to another healthy session.
+
+Stop and restart the session writer so it reloads the persisted artifact, then
+review that exact version again before authorizing it. Do not delete or replace
+`artifacts.json` to bypass the conflict; preserve it for inspection. If the file
+is corrupt, restore or hand-repair the preserved data before retrying —
+deepPairing will not automatically overwrite unknown artifact history.
+
+## review_post_conflict
+
+A durable review-post operation or its journal prevents another post. Preserve
+`review-post-operations.json`, `.review-post-protocol-v1`, and any
+`.review-post.lock` in the affected session. Do not delete them, use `repost` to
+bypass them, or repeat a GitHub POST after an uncertain response.
+
+An unresolved `sending` or `unknown` operation may already have reached GitHub.
+Run the operator entry to inspect operation IDs and states. **The invocation
+depends on how deepPairing is installed** — a marketplace install has no
+`deeppairing` binary:
+
+```bash
+# Marketplace / --plugin-dir plugin install: locate the entry once...
+find ~/.claude/plugins -name review-posts.mjs -path '*deeppairing*'
+# ...then, from the project you are recovering:
+node "<that path>" <session-id>
+
+# Source checkout, from the repo:
+node claude-plugin/server/review-posts.mjs <session-id>
+# (equivalently: node packages/mcp-server/dist/cli/init.js review-posts <session-id>)
+```
+
+Pass `--help` for the full verb list; it prints its own absolute path in every
+example, and names the project it is acting on so a run from the wrong
+directory can't be mistaken for an empty journal. Five of its verbs are
+entirely offline; `reconcile` is the one that reads GitHub, and it only ever
+reads.
+
+Only a `reserved` operation can be cancelled, with
+`<entry> <session-id> cancel-reserved <operation-id>`.
+Inspect the remote review and reconcile its identity before posting again.
+Use `<entry> <session-id> reconcile <operation-id> <remote-review-id>`
+only after identifying the review on GitHub. Reconciling contacts GitHub, so it
+needs `gh` installed and authenticated — but it is GET-only and ships in the
+plugin entry alongside the offline verbs. This performs read-only verification
+of the operation marker, destination, verdict, reviewed commit, body and inline
+comments, then records the receipt locally. A mismatch or unavailable API leaves
+the operation blocked; recovery never sends another review.
+A `reserved` operation has not authorized a send; explicit cancellation must
+fence its original caller. A retained disk lock needs all writers stopped and
+inspection before any manual repair; age or a dead-looking PID is not proof
+that stealing it is safe. Corrupt history requires recovery, not a reset.
+
+Use `<entry> <session-id> inspect` for redacted file metadata, validation
+errors, and the current claim digest even when normal history cannot be read.
+Explicit offline claim release and acknowledgement of duplicate risk are described
+in the [operator recovery contract](pr-posting-contract.md#offline-operator-inspection-and-acknowledgement).
+They require all writers stopped, preserve journal history, and never send a review.
+An acknowledgement is not evidence that an uncertain review was absent.
+
 ## Still stuck?
 
 Open an issue with:

@@ -16,8 +16,17 @@ import type {
 import { projectHashOf, BASE_PORT } from "../project-root.js";
 import { cliInvocation } from "../cli-invocation.js";
 import { errorName } from "@deeppairing/shared";
+import type { DurableReviewPostStore } from "../github/durable-review-post.js";
 
 export class DaemonClient implements IStore {
+  readonly reviewPosts: DurableReviewPostStore = {
+    reserve: (identity, repost) => this.post("/review-post-operations", { action: "reserve", identity, repost }),
+    markSending: async (lease, identity) => { await this.post("/review-post-operations", { action: "sending", lease, identity }); },
+    failBeforeSending: async lease => { await this.post("/review-post-operations", { action: "failed", lease }); },
+    releaseUnsent: async lease => { await this.post("/review-post-operations", { action: "unsent", lease }); },
+    markUnknown: async lease => { await this.post("/review-post-operations", { action: "unknown", lease }); },
+    succeed: async (lease, result) => { await this.post("/review-post-operations", { action: "succeeded", lease, result }); },
+  };
   private baseUrl: string;
   private sessionId: string;
   /**
@@ -737,6 +746,10 @@ export class DaemonClient implements IStore {
 
   async getFullState() {
     return this.get("/state");
+  }
+
+  async getReviewPostState() {
+    return this.get<Awaited<ReturnType<IStore["getReviewPostState"]>>>("/review-post-state");
   }
 
   /** R1 (#279) — proxy the posted-review stamp to the daemon's FileStore. The

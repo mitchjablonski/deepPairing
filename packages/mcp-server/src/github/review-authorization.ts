@@ -66,7 +66,7 @@ import type { Artifact, Finding } from "@deeppairing/shared";
 import { coerceResearchContent, coerceChangesetContent, isPostableFinding } from "@deeppairing/shared";
 import { buildGitHubReviewPayload, type GitHubReviewPayload, type GitHubReviewEvent } from "../export/format-markdown.js";
 import type { PostedReviewRecord } from "../store/posted-reviews.js";
-import { samePrTarget } from "../store/posted-reviews.js";
+import { samePrTarget, parsePrNumber } from "../store/posted-reviews.js";
 
 /** The minimum of a session this gate reads. Structural, so both callers'
  *  slightly different state shapes (store.getFullState vs FileStore.loadSession)
@@ -82,7 +82,7 @@ export interface AuthorizableSession {
 }
 
 export type ReviewAuthorization =
-  | { ok: true; payload: GitHubReviewPayload; event: GitHubReviewEvent }
+  | { ok: true; payload: GitHubReviewPayload; event: GitHubReviewEvent; reviewedHeadSha?: string }
   | { ok: false; reason: string };
 
 /** R1 (#279) — the three events GitHub's review API accepts, and the ONLY three
@@ -160,6 +160,240 @@ function externalChangesets(artifacts: Artifact[]): Artifact[] {
   return artifacts.filter(
     (a) => a.type === "changeset" && coerceChangesetContent(a.content).reviewIntent === "external",
   );
+}
+
+const CLOSED_CHANGESET_STATUSES = new Set(["superseded", "retracted", "obsolete"]);
+const FULL_GIT_SHA = /^[0-9a-fA-F]{40}$/;
+
+/**
+ * #369 HIGH-A/HIGH-B — does this chunk still make a LIVE CLAIM on a PR identity?
+ *
+ * `superseded` / `retracted` / `obsolete` are the three ways a chunk is taken
+ * off the board, and they are the product's OWN prescribed recovery: present the
+ * wrong PR, retract it, present the right one. `rejected` and `revised` are NOT
+ * here on purpose — those are the human's VERDICT on this PR, which is very much
+ * a standing claim on its identity, and `draft`/`reviewing` are simply open.
+ *
+ * This is the same membership `reviewedHeadFor` (:290) and the SHA-provenance
+ * check (:537) already read from `CLOSED_CHANGESET_STATUSES`; the two findings
+ * below were the sites that had NOT been converted to it, and each one turned a
+ * recoverable mistake into a permanent, unexitable refusal for the whole
+ * session. Note the deliberate non-use of shared's `isClosedArtifactStatus`:
+ * that predicate counts `approved` as closed (it answers "can the human still
+ * act on this?"), and an approved chunk is the most standing claim there is.
+ */
+function isStandingChunk(artifact: Artifact): boolean {
+  return !CLOSED_CHANGESET_STATUSES.has(artifact.status);
+}
+
+type ParsedPr = NonNullable<ReturnType<typeof parsePrNumber>>;
+
+function samePrIdentity(target: ParsedPr, reviewed: ParsedPr): boolean {
+  return target.number === reviewed.number &&
+    (!target.owner || (!!reviewed.owner && target.owner.toLowerCase() === reviewed.owner.toLowerCase())) &&
+    (!target.repo || (!!reviewed.repo && target.repo.toLowerCase() === reviewed.repo.toLowerCase()));
+}
+
+interface ExternalTargetScope {
+  matching: Artifact[];
+  /** A parseable source URL for another PR. */
+  other: Array<{ artifact: Artifact; reviewed: ParsedPr }>;
+  /** A source that claims the target URL but contradicts it with source.number. */
+  contradictory: Artifact[];
+  /** Legacy/malformed source provenance cannot establish a target identity. */
+  unknown: Artifact[];
+}
+
+/** Partition external-review chunks by the requested PR. Unrelated PRs are
+ * valid session history, not contaminants of the target review. */
+function scopeExternalChangesets(artifacts: Artifact[], ref: string): ExternalTargetScope {
+  const target = parsePrNumber(ref);
+  const scope: ExternalTargetScope = { matching: [], other: [], contradictory: [], unknown: [] };
+
+  for (const artifact of artifacts) {
+    const source = coerceChangesetContent(artifact.content).source;
+    const reviewed = source?.url ? parsePrNumber(source.url) : null;
+    if (!target || !reviewed?.owner || !reviewed.repo) {
+      scope.unknown.push(artifact);
+      continue;
+    }
+    if (samePrIdentity(target, reviewed)) {
+      if (source?.number !== undefined && source.number !== reviewed.number) scope.contradictory.push(artifact);
+      else scope.matching.push(artifact);
+    } else {
+      scope.other.push({ artifact, reviewed });
+    }
+  }
+  return scope;
+}
+
+/**
+ * #369 HIGH-A — how many DISTINCT pull requests does this session's history
+ * identify? More than one means an approved findings artifact cannot be attributed
+ * to a PR (findings record no PR of their own), so posting it anywhere could
+ * publish another PR's findings — hence the refusal at the call site.
+ *
+ * Findings do not record a PR identity of their own. Closing a changeset cannot
+ * prove that already-approved findings belonged to the surviving PR, so history
+ * remains relevant whenever findings would be posted. The safe exit is a fresh,
+ * single-PR review session rather than guessing reassociation.
+ */
+function knownPrIdentityCount(artifacts: Artifact[]): number {
+  const identities = new Set<string>();
+  for (const artifact of artifacts) {
+    const url = coerceChangesetContent(artifact.content).source?.url;
+    const parsed = url ? parsePrNumber(url) : null;
+    if (parsed?.owner && parsed.repo) {
+      identities.add(`${parsed.owner.toLowerCase()}/${parsed.repo.toLowerCase()}#${parsed.number}`);
+    }
+  }
+  return identities.size;
+}
+
+/** The PERSISTED `source.headSha`, read raw. The coercer intentionally drops a
+ * malformed optional field for legacy readability, but the authorization
+ * boundary must tell "never recorded" from "recorded something broken". */
+function rawHeadSha(artifact: Artifact): unknown {
+  const rawSource = artifact.content && typeof artifact.content === "object"
+    ? (artifact.content as { source?: unknown }).source
+    : undefined;
+  return rawSource && typeof rawSource === "object"
+    ? (rawSource as { headSha?: unknown }).headSha
+    : undefined;
+}
+
+/** Did this chunk record SHA provenance at all — valid or not? A chunk that
+ * claims a reviewed commit is never "legacy". */
+function hasShaProvenance(artifact: Artifact): boolean {
+  return rawHeadSha(artifact) !== undefined;
+}
+
+/**
+ * #343 follow-up (#369 MEDIUM-C, confirmed on the #375 build) — a standing
+ * chunk that RECORDED a reviewed commit but whose `source.url` cannot be bound
+ * to the requested PR (a `/commits/<sha>` or `/files/r123` sub-page link,
+ * `www.` or `http://`, a garbage URL, no URL at all) must not post at all.
+ *
+ * Before this check, `targetExternals = fullScope.matching` dropped such a
+ * chunk BEFORE reviewedHeadFor ran, so a COMMENT or REQUEST_CHANGES went out
+ * with no `commit_id` — and GitHub applies an unbound inline comment to the
+ * PR's CURRENT head, which is exactly the line-misplacement #343 exists to
+ * stop. The chunk's SHA is a fact, but WHICH PR it describes is not: binding
+ * it would be guessing the identity, and taking a sibling matching chunk's SHA
+ * instead would be borrowing a commit for a chunk that never proved it belongs
+ * here. So the honest answer is a refusal that names the exact exit. Legacy
+ * chunks with no SHA at all keep their narrow COMMENT compatibility (see
+ * reviewedHeadFor); this only bites once a chunk claims a commit.
+ */
+function unboundShaProvenanceRefusal(artifact: Artifact, event: GitHubReviewEvent, ref: string): string {
+  const raw = rawHeadSha(artifact);
+  const url = coerceChangesetContent(artifact.content).source?.url;
+  const shaNote = typeof raw === "string" && FULL_GIT_SHA.test(raw)
+    ? `records reviewed head SHA ${raw.toLowerCase().slice(0, 12)}`
+    : `records a malformed reviewed head SHA`;
+  const urlNote = !parsePrNumber(ref)
+    ? `the requested PR reference (${ref}) is neither a PR number nor a full pull-request URL, so nothing can be bound to it`
+    : url
+      ? `its source.url (${url}) is not a full canonical pull-request URL the gate can bind to ${ref}`
+      : `it has no source.url, so the gate cannot bind it to ${ref}`;
+  return (
+    `Refusing to post a ${event}: "${artifact.title}" (${artifact.id}) ${shaNote}, but ${urlNote}. ` +
+    `Posting without commit_id would let GitHub pin these inline comments to the PR's current head, which may not be the code your pair reviewed. ` +
+    `Re-present that exact diff with source.url as https://github.com/<owner>/<repo>/pull/<number> (no /commits, /files or www. variants) ` +
+    `and the exact 40-hex headSha from \`gh pr view --json headRefOid\`, get your pair's verdict again, then post. ` +
+    `The gate never guesses which PR an unbindable source describes and never borrows another chunk's commit for it.`
+  );
+}
+
+/** #343 — derive the ONE immutable commit represented by the supplied standing
+ * target chunks. This reads the raw persisted value as well as the coercer:
+ * coercion intentionally drops malformed optional fields for legacy
+ * readability, but the authorization boundary must distinguish "old/missing"
+ * from "someone supplied a broken SHA" and fail closed.
+ *
+ * COMMENT/REQUEST_CHANGES compatibility is intentionally narrow: a wholly
+ * legacy session (all missing) remains postable without commit_id. Once any
+ * standing chunk claims SHA provenance, every standing chunk must carry the
+ * same valid SHA. APPROVE always requires that complete provenance. */
+function reviewedHeadFor(
+  artifacts: Artifact[],
+  event: GitHubReviewEvent,
+): { ok: true; headSha?: string } | { ok: false; reason: string } {
+  const standing = artifacts.filter((a) => !CLOSED_CHANGESET_STATUSES.has(a.status));
+  const valid: Array<{ artifact: Artifact; sha: string }> = [];
+  const missing: Artifact[] = [];
+  const malformed: Artifact[] = [];
+  let closedWithShaProvenance: Artifact | undefined;
+
+  for (const artifact of artifacts) {
+    const rawSha = rawHeadSha(artifact);
+    if (CLOSED_CHANGESET_STATUSES.has(artifact.status)) {
+      if (rawSha !== undefined) closedWithShaProvenance ??= artifact;
+      continue;
+    }
+    if (rawSha === undefined) {
+      missing.push(artifact);
+    } else if (typeof rawSha !== "string" || !FULL_GIT_SHA.test(rawSha)) {
+      malformed.push(artifact);
+    } else {
+      valid.push({ artifact, sha: rawSha.toLowerCase() });
+    }
+  }
+
+  if (malformed.length > 0) {
+    return {
+      ok: false,
+      reason:
+        `Refusing to post: malformed reviewed head SHA on ${malformed.map((a) => `"${a.title}" (${a.id})`).join(", ")}. ` +
+        `Capture the exact 40-hex headRefOid from GitHub, present that commit's diff, and get a fresh human verdict; the current PR head is never guessed as an old approval's commit.`,
+    };
+  }
+
+  if (valid.length === 0) {
+    if (event !== "APPROVE") {
+      if (!closedWithShaProvenance) return { ok: true };
+      return {
+        ok: false,
+        reason:
+          `Refusing to post without an immutable reviewed head SHA: an earlier version, ` +
+          `"${closedWithShaProvenance.title}" (${closedWithShaProvenance.id}), recorded SHA provenance, ` +
+          `but no standing target changeset does now. This is a refresh-required revision, not a wholly legacy session. ` +
+          `Fetch headRefOid, present that exact diff, and get fresh verdicts; never attach an old approval to the PR's mutable current head.`,
+      };
+    }
+    return {
+      ok: false,
+      reason:
+        `Refusing to post an APPROVE: ${standing.length === 0 ? "no standing external changeset" : missing.map((a) => `"${a.title}" (${a.id})`).join(", ")} ` +
+        `records the immutable reviewed head SHA. Legacy session files remain readable, but an unknown commit cannot authorize an approval. ` +
+        `Fetch headRefOid, present that exact diff as a fresh external changeset, and get your pair's verdict again; never substitute the PR's current head for an old approval.`,
+    };
+  }
+
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      reason:
+        `Refusing to post: mixed immutable-SHA provenance across the standing external changesets. ` +
+        `${valid.map(({ artifact }) => `"${artifact.title}" (${artifact.id})`).join(", ")} name a reviewed commit, but ` +
+        `${missing.map((a) => `"${a.title}" (${a.id})`).join(", ")} do not. Present every chunk from one exact head SHA and get fresh verdicts.`,
+    };
+  }
+
+  const bySha = new Map<string, Artifact[]>();
+  for (const entry of valid) bySha.set(entry.sha, [...(bySha.get(entry.sha) ?? []), entry.artifact]);
+  if (bySha.size !== 1) {
+    const detail = [...bySha.entries()]
+      .map(([sha, chunks]) => `${sha.slice(0, 12)} (${chunks.map((a) => a.id).join(", ")})`)
+      .join("; ");
+    return {
+      ok: false,
+      reason:
+        `Refusing to post: the standing external changesets describe different reviewed commits: ${detail}. ` +
+        `A review is one verdict on one immutable PR head; present every chunk from the same commit and get fresh human verdicts.`,
+    };
+  }
+  return { ok: true, headSha: valid[0]!.sha };
 }
 
 /**
@@ -275,6 +509,95 @@ export function authorizeReviewPost(
   const approved = findingsArtifacts.filter((a) => a.status === "approved");
   const decidedNo = findingsArtifacts.filter((a) => DECIDED_EXCLUDED_STATUSES.has(a.status));
 
+  // A verdict belongs to the requested PR. A session may legitimately review
+  // several PRs, so only matching chunks determine this target's verdict and
+  // immutable SHA. Legacy source-less chunks remain usable for COMMENT when
+  // approved findings authorize an actual payload, but can never grant an
+  // APPROVE because they establish neither repository nor commit identity.
+  let targetExternals = externalChangesets(state.artifacts);
+  let closedShaLineage: Artifact[] = [];
+  if (opts.pr) {
+    const fullScope = scopeExternalChangesets(targetExternals, opts.pr);
+    const standing = targetExternals.filter(isStandingChunk);
+    const standingScope = scopeExternalChangesets(standing, opts.pr);
+    // Closed chunks stop governing a bare verdict, but approved findings have
+    // no PR identity of their own. In that case historical contradictory or
+    // unknown provenance remains an ambiguity boundary: closure cannot prove
+    // that those findings were reassociated with the surviving PR.
+    const contradictory = standingScope.contradictory[0] ??
+      (approved.length > 0 ? fullScope.contradictory[0] : undefined);
+    if (contradictory) {
+      const artifact = contradictory;
+      return {
+        ok: false,
+        reason: isStandingChunk(artifact)
+          ? `Refusing to post: "${artifact.title}" (${artifact.id}) has a source.number that contradicts its source.url. Present one coherent PR identity and get your pair's verdict again.`
+          : `Refusing to post findings: this session's historical changeset identity is contradictory, and findings artifacts do not record which pull request they belong to. Review and post one PR per fresh session; the gate cannot guess that closing a changeset reassigned already-approved findings.`,
+      };
+    }
+    if (approved.length > 0 && knownPrIdentityCount(targetExternals) > 1) {
+      return {
+        ok: false,
+        reason:
+          `Refusing to post findings: this session's changeset history identifies more than one pull request, ` +
+          `but findings artifacts do not record which one they belong to. Posting them to ${opts.pr} could publish another PR's findings. ` +
+          `Review and post one PR per session, using its full pull-request URL.`,
+      };
+    }
+    if (fullScope.matching.length === 0 && fullScope.other.length > 0) {
+      const { artifact, reviewed } = fullScope.other[0]!;
+      return {
+        ok: false,
+        reason:
+          `Refusing to post: "${artifact.title}" identifies https://github.com/${reviewed.owner}/${reviewed.repo}/pull/${reviewed.number}, ` +
+          `not the requested PR ${opts.pr}. Present the requested PR with its full source.url and get your pair's verdict before posting.`,
+      };
+    }
+    const unknownApproveChunk = event === "APPROVE"
+      ? standingScope.unknown[0] ?? (approved.length > 0 ? fullScope.unknown[0] : undefined)
+      : undefined;
+    if (unknownApproveChunk) {
+      const artifact = unknownApproveChunk;
+      return {
+        ok: false,
+        reason:
+          `Refusing to post an APPROVE: "${artifact.title}" (${artifact.id}) has no full, valid PR source URL, ` +
+          `so the gate cannot prove whether it is another part of ${opts.pr} or whether the approved findings belong to it. ` +
+          `${isStandingChunk(artifact)
+            ? `Present every relevant chunk with its full source.url and get your pair's verdict again.`
+            : `Because findings artifacts do not record a PR identity, closing this chunk cannot prove reassociation. Review and post one PR per fresh session.`}`,
+      };
+    }
+    // #343 — SHA-AWARE UNKNOWN PROVENANCE never posts unbound. See
+    // unboundShaProvenanceRefusal. (An APPROVE with a standing unknown chunk
+    // was already refused above, so this is the COMMENT/REQUEST_CHANGES half
+    // of the same no-silent-downgrade boundary.)
+    //
+    // #369 HIGH-B rider — `contradictory` joins `unknown` here. Both buckets say
+    // the same thing about identity: the gate cannot prove WHICH PR the chunk
+    // describes (no bindable url / a source.number that fights its source.url).
+    // That equivalence was invisible while the contradictory fallback above
+    // refused every such chunk outright; once closed ones stop refusing, the
+    // SHA they carry has to land in the lineage below or it is silently dropped
+    // — which is #369 MEDIUM-C's exact failure mode (a COMMENT going out with no
+    // commit_id, pinned by GitHub to the PR's mutable current head). `other` is
+    // deliberately NOT here: a coherent chunk for a DIFFERENT pull request is
+    // not this review's lineage, and its commit is not this target's provenance.
+    const identityUnproven = [...fullScope.unknown, ...fullScope.contradictory];
+    const shaAwareUnknown = identityUnproven.filter(hasShaProvenance);
+    const standingUnbound = shaAwareUnknown.find(isStandingChunk);
+    if (standingUnbound) {
+      return { ok: false, reason: unboundShaProvenanceRefusal(standingUnbound, event, opts.pr) };
+    }
+    // What remains is CLOSED identity-unproven chunks that once recorded a
+    // commit. They never supply a SHA (their identity is still unproven), but
+    // they are lineage: if no standing target chunk names a commit now, that is
+    // a refresh-required revision, not a wholly legacy session — the same rule
+    // reviewedHeadFor already applies to closed MATCHING chunks.
+    closedShaLineage = shaAwareUnknown;
+    targetExternals = fullScope.matching;
+  }
+
   // (c) A BARE APPROVE IS A REAL VERDICT ON SOMEONE ELSE'S PR — and so is an
   // APPROVE that happens to carry inline comments.
   //
@@ -284,7 +607,7 @@ export function authorizeReviewPost(
   // posted another on a PR the human had explicitly REJECTED. The event is what
   // makes this a verdict, not the comment count, so the event is what gates it.
   if (event === "APPROVE") {
-    const externals = externalChangesets(state.artifacts);
+    const externals = targetExternals;
 
     // The human's "no" on the PR itself is not an exclusion — it is the
     // opposite verdict, and an APPROVE contradicts it outright.
@@ -328,6 +651,9 @@ export function authorizeReviewPost(
     }
   }
 
+  const reviewedHead = reviewedHeadFor([...targetExternals, ...closedShaLineage], event);
+  if (!reviewedHead.ok) return { ok: false, reason: reviewedHead.reason };
+
   // (b) THE EXCLUSION, stated honestly. This product has NO per-finding verdict:
   // a comment can TARGET a findingIndex but carries no accept/reject state
   // (verified — the schema has no per-finding verdict field at all). So the
@@ -343,12 +669,16 @@ export function authorizeReviewPost(
   // finding. A comment is as often agreement ("good catch, say it harder") as
   // dissent, so dropping a commented-on finding would be a guess — and guessing
   // is what this gate exists to stop.
-  const payload = buildGitHubReviewPayload({ ...state, artifacts: approved } as never, { event });
+  // The outbound title is derived only from approved research. Private
+  // decisions are unrelated session context and must never leak into a review
+  // header when no findings title is available.
+  const payload = buildGitHubReviewPayload({ ...state, artifacts: approved, decisions: [] } as never, { event });
+  if (reviewedHead.headSha) payload.commit_id = reviewedHead.headSha;
 
   if (payload.comments.length === 0) {
     // An APPROVE got here only by passing the authorization above, and a bare
     // APPROVE (no inline comments) is its normal, commonest shape.
-    if (event === "APPROVE") return { ok: true, payload, event };
+    if (event === "APPROVE") return { ok: true, payload, event, reviewedHeadSha: reviewedHead.headSha };
 
     // Zero comments on a non-APPROVE event. As in the first Q6 cut, except it
     // now also names an EXCLUDED artifact rather than looking like the findings
@@ -392,5 +722,10 @@ export function authorizeReviewPost(
     }
   }
 
-  return { ok: true, payload, event };
+  return {
+    ok: true,
+    payload,
+    event,
+    ...(reviewedHead.headSha ? { reviewedHeadSha: reviewedHead.headSha } : {}),
+  };
 }

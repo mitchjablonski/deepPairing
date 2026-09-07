@@ -10,7 +10,7 @@ export interface DemoScriptDeps {
   store: IStore;
   broadcast: (sessionId: string, event: any) => void;
   /** Defaults to setTimeout; override in tests to use fake timers. */
-  schedule?: (ms: number, fn: () => void | Promise<void>) => void;
+  schedule?: (ms: number, fn: () => void | Promise<void>) => void | (() => void);
   /** Deterministic id generator override for tests. */
   makeArtifactId?: () => string;
 }
@@ -38,11 +38,17 @@ export function runDemoScript({
   broadcast,
   schedule = defaultSchedule,
   makeArtifactId = defaultArtifactId,
-}: DemoScriptDeps): { artifactId: string } {
+}: DemoScriptDeps): { artifactId: string; cancel: () => void } {
+  let cancelled = false;
+  const cancellations: Array<() => void> = [];
+  const scheduleStep = (ms: number, fn: () => void | Promise<void>) => {
+    const cancel = schedule(ms, () => { if (!cancelled) return fn(); });
+    if (cancel) cancellations.push(cancel);
+  };
   const findingsArtifactId = makeArtifactId();
 
   // t=500ms — the agent "proposes" the first findings artifact
-  schedule(500, async () => {
+  scheduleStep(500, async () => {
     const artifact = await store.createArtifact({
       id: findingsArtifactId,
       type: "research",
@@ -63,7 +69,7 @@ export function runDemoScript({
   });
 
   // t=2500ms — the user "rejects" it
-  schedule(2500, async () => {
+  scheduleStep(2500, async () => {
     await store.updateArtifactStatus(findingsArtifactId, "rejected", "demo_script");
     await store.recordRejectedApproach({
       description: DEFAULT_REJECTION_DESCRIPTION,
@@ -87,7 +93,7 @@ export function runDemoScript({
   // money shot — what the demo exists to show. The proposal is chosen so the
   // REAL conceptMatchesProposal would block it too (see demo-script.test.ts) —
   // the demo doesn't dramatize a match the substring matcher can't make.
-  schedule(5000, () => {
+  scheduleStep(5000, () => {
     broadcast(sessionId, {
       type: "preflight_blocked",
       toolName: "present_findings",
@@ -109,7 +115,7 @@ export function runDemoScript({
   const explainerArtifactId = makeArtifactId();
   // t=6500ms — comprehension surface #1: the narrated walk-through of the
   // dependency-injected loader the agent pivoted to after the rejection.
-  schedule(6500, async () => {
+  scheduleStep(6500, async () => {
     const artifact = await store.createArtifact({
       id: explainerArtifactId,
       type: "explainer",
@@ -148,7 +154,7 @@ export function runDemoScript({
   // t=8000ms — comprehension surface #2: the DEBRIEF closes the loop with the
   // five lanes (narrative, decisions made alone, needs-your-eyes, deferred,
   // open questions), told against this demo's own story.
-  schedule(8000, async () => {
+  scheduleStep(8000, async () => {
     const artifact = await store.createArtifact({
       id: debriefArtifactId,
       type: "debrief",
@@ -189,12 +195,16 @@ export function runDemoScript({
     broadcast(sessionId, { type: "artifact_created", artifact });
   });
 
-  return { artifactId: findingsArtifactId };
+  return { artifactId: findingsArtifactId, cancel: () => {
+    cancelled = true;
+    for (const cancel of cancellations) cancel();
+  } };
 }
 
-function defaultSchedule(ms: number, fn: () => void | Promise<void>): void {
+function defaultSchedule(ms: number, fn: () => void | Promise<void>): () => void {
   const t = setTimeout(() => { void fn(); }, ms);
   t.unref?.();
+  return () => clearTimeout(t);
 }
 
 function defaultArtifactId(): string {

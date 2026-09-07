@@ -83,26 +83,24 @@ describe("FileStore", () => {
     expect(fs.statSync(artPath).mtime.getUTCFullYear()).toBeGreaterThan(2020);
   });
 
-  it("PP2 — skip does NOT defeat the U1 external-merge self-heal (no data loss)", () => {
+  it("an unrelated flush does not resurrect externally removed artifacts", () => {
     const store = createStore("pp2-merge");
     store.createArtifact({ id: "A", type: "research", title: "A", content: {} });
     store.createArtifact({ id: "B", type: "research", title: "B", content: {} });
-    store.forceFlush(); // disk = [A, B], lastSerialized = S([A,B])
+    store.forceFlush(); // disk = [A, B]
     const artPath = path.join(tmpDir, ".deeppairing", "sessions", "pp2-merge", "artifacts.json");
 
-    // A stale external writer clobbers the file back to just [A] (B survives
-    // only in our RAM). The next flush must merge B back AND actually rewrite —
-    // a naive skip-cache would see in-memory still serializes to S([A,B]) and
-    // skip, leaving B lost on disk.
+    // An external writer removes B. Cached records are no longer an authority
+    // to undo external changes: this also covers intentional prune operations.
     fs.writeFileSync(artPath, JSON.stringify([{ id: "A", type: "research", title: "A", content: {} }]));
 
     // touch the store so it flushes; the comment change is unrelated to artifacts
     store.addComment({ id: "c1", artifactId: "A", content: "hi", author: "human" });
     store.forceFlush();
 
-    // B must be back on disk (self-heal preserved despite the skip-cache).
+    // The comment writer has no artifact delta and must respect the deletion.
     const onDisk = JSON.parse(fs.readFileSync(artPath, "utf-8")).map((a: any) => a.id).sort();
-    expect(onDisk).toEqual(["A", "B"]);
+    expect(onDisk).toEqual(["A"]);
   });
 
   it("round-trips artifacts through flush + reload", () => {
@@ -869,6 +867,8 @@ describe("D1 review — flush-time external-merge salvage (the permanent-failure
 
     // Pre-fix: threw inside mergeArrayById; the debounced catch would swallow
     // it and the un-advanced watermark re-threw on EVERY later flush.
+    // Only dirty collections are merged now; trigger a local artifact delta.
+    store.renameArtifact("a_mem", "updated");
     expect(() => store.forceFlush()).not.toThrow();
     const ids = store.getArtifacts().map((a) => a.id);
     expect(ids).toContain("a_mem");

@@ -12,6 +12,20 @@ import { AutonomyLevelSchema, DetailDensitySchema, PersonaSchema, SuggestionUpda
 import { validateSuggestionTransition } from "../store/store-interface.js";
 import { recordMetricEvent } from "../store/metrics-store.js";
 import { projectHashGate } from "../http/guards.js";
+import { ReviewPostJournalError, reviewPostIdentitySchema, reviewPostLeaseSchema, reviewPostResultSchema } from "../store/review-post-journal.js";
+import { isSessionReviewConflictError } from "../store/session-records.js";
+
+const ReviewPostOperationBody = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("reserve"), identity: reviewPostIdentitySchema, repost: z.boolean() }).strict(),
+  z.object({ action: z.literal("sending"), lease: reviewPostLeaseSchema, identity: reviewPostIdentitySchema }).strict(),
+  z.object({ action: z.literal("failed"), lease: reviewPostLeaseSchema }).strict(),
+  // #344 — the lease is the authority: only the live coordinator that holds it
+  // and never invoked send can reach this. Kept distinct from "failed" so an
+  // older client's reserved-only release keeps its narrow meaning.
+  z.object({ action: z.literal("unsent"), lease: reviewPostLeaseSchema }).strict(),
+  z.object({ action: z.literal("unknown"), lease: reviewPostLeaseSchema }).strict(),
+  z.object({ action: z.literal("succeeded"), lease: reviewPostLeaseSchema, result: reviewPostResultSchema }).strict(),
+]);
 
 // BB8 — wire-input validation for the typed-object signatures AA1
 // introduced. AA1's typing protected only in-process callers; routes
@@ -154,6 +168,17 @@ type SessionMap = Map<string, FileStore>;
 type BroadcastFn = (sessionId: string, event: any) => void;
 type LogFn = (msg: string) => void;
 
+/** #338 (F4) — the generic-500 arm of the two daemon `onError` handlers. The
+ *  conflict mapping above it replaced Hono's default handler, which printed
+ *  the stack; without this the next daemon-side bug would vanish into a bare
+ *  `{error:"Internal server error"}`. The log line carries the route and the
+ *  stack; the RESPONSE stays generic so no internal detail crosses the wire. */
+function unexpectedRouteError(log: LogFn, c: Context, error: unknown): Response {
+  const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  log(`[route-error] ${c.req.method} ${c.req.path} → 500: ${detail}`);
+  return c.json({ error: "Internal server error" }, 500);
+}
+
 /**
  * Y3' — sentinel returned by `requireStore()` when the session isn't
  * registered. The caller pattern is `const r = requireStore(c, sid); if
@@ -201,8 +226,17 @@ export function createActiveSessionRoutes(
   /** D8 (M8) — registered-wrapper set for the honest `live` flag. Optional so
    *  route-logic fixtures don't thread it (undefined ⇒ every session reports live). */
   activeSessions?: Set<string>,
+  /** #338 (F4) — daemon log sink for unexpected route errors. Optional so
+   *  route-logic fixtures don't thread it (undefined ⇒ silent). */
+  logFn?: LogFn,
 ): Hono {
   const app = new Hono();
+  app.onError((error, c) => {
+    if (isSessionReviewConflictError(error)) {
+      return c.json({ error: "session_review_conflict", code: ERROR_CODES.session_review_conflict, message: error.message }, 409);
+    }
+    return unexpectedRouteError(logFn ?? (() => {}), c, error);
+  });
   const gate = projectHashGate(daemonHash);
   app.use("/api/active-sessions", gate);
   app.use("/api/live-session/*", gate);
@@ -291,6 +325,12 @@ export function createDaemonRoutes(
   // here; we want both UI clicks and agent-driven status updates in one log.
   const log: LogFn = logFn ?? (() => {});
   const app = new Hono();
+  app.onError((error, c) => {
+    if (isSessionReviewConflictError(error)) {
+      return c.json({ error: "session_review_conflict", code: ERROR_CODES.session_review_conflict, message: error.message }, 409);
+    }
+    return unexpectedRouteError(log, c, error);
+  });
 
   // II1 — auth gate. Runs before any handler. When the route construction
   // didn't supply an authToken (test fixtures), the gate is a no-op so the
@@ -633,6 +673,31 @@ export function createDaemonRoutes(
 
   // --- Comments ---
 
+  // Journal transitions are synchronous local commits, not GitHub requests.
+  // Upstream bearer/project gates and requireStore bind this to one session.
+  app.post("/api/internal/sessions/:sessionId/review-post-operations", async c => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const parsed = await parseJsonBody(c, ReviewPostOperationBody);
+    if (!parsed.ok) return parsed.res;
+    const body = parsed.data;
+    const journal = r.store.reviewPosts;
+    try {
+      switch (body.action) {
+        case "reserve": return c.json(journal.reserve(body.identity, body.repost));
+        case "sending": journal.markSending(body.lease, body.identity); break;
+        case "failed": journal.failBeforeSending(body.lease); break;
+        case "unsent": journal.releaseUnsent(body.lease); break;
+        case "unknown": journal.markUnknown(body.lease); break;
+        case "succeeded": journal.succeed(body.lease, body.result); break;
+      }
+      return c.json({ status: "recorded" });
+    } catch (err) {
+      if (!(err instanceof ReviewPostJournalError)) throw err;
+      return c.json({ error: err.message, code: ERROR_CODES.review_post_conflict, reason: err.reason }, 409);
+    }
+  });
+
   app.post("/api/internal/sessions/:sessionId/comments", async (c) => {
     const sessionId = c.req.param("sessionId");
     const r = requireStore(c, sessionId);
@@ -863,6 +928,10 @@ export function createDaemonRoutes(
     // already advanced it on disk; this closes the live-update gap that left
     // this path — unlike the public route — broadcasting no artifactId at all).
     const artifactId = r.store.getDecision(decisionId)?.artifactId;
+    // A response and its backing artifact are one authorization write. Flush
+    // before the daemon claims success; app.onError maps a concurrent proposal
+    // rewrite to the shared session_review_conflict 409, with no broadcast.
+    await r.store.forceFlush();
     broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId, optionId, reasoning, confidence, predictedOutcome });
     return c.json({ status: "resolved" });
   });
@@ -967,6 +1036,12 @@ export function createDaemonRoutes(
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     return c.json(r.store.getFullState());
+  });
+
+  app.get("/api/internal/sessions/:sessionId/review-post-state", (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    return c.json(r.store.getReviewPostState());
   });
 
   app.get("/api/internal/sessions/:sessionId/metrics", (c) => {

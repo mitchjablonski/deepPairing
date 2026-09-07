@@ -52,6 +52,7 @@ const SOURCE = {
   headRef: "feat/rate-limit",
   baseRef: "main",
   author: "dana",
+  headSha: "0123456789abcdef0123456789abcdef01234567",
 };
 
 async function presentExternal(extra: Record<string, unknown> = {}) {
@@ -106,6 +107,17 @@ describe("Q6 — present_changeset accepts and persists the external-review fiel
     expect(res.text).toContain("INPUT_VALIDATION_FAILED");
     expect(store.getArtifacts().filter((a) => a.type === "changeset")).toHaveLength(0);
   });
+
+  it("#343 normalizes a valid head SHA and rejects malformed new provenance", async () => {
+    const upper = "ABCDEF0123456789ABCDEF0123456789ABCDEF01";
+    const accepted = await presentExternal({ source: { ...SOURCE, headSha: upper } });
+    expect(accepted.isError).toBeFalsy();
+    expect(coerceChangesetContent(theChangeset().content).source?.headSha).toBe(upper.toLowerCase());
+
+    const malformed = await presentExternal({ source: { ...SOURCE, headSha: "abc123" } });
+    expect(malformed.isError).toBe(true);
+    expect(malformed.text).toContain("INPUT_VALIDATION_FAILED");
+  });
 });
 
 describe("Q6 — the closing instruction the agent is given", () => {
@@ -114,6 +126,7 @@ describe("Q6 — the closing instruction the agent is given", () => {
     expect(res.text).toContain("EXTERNAL review");
     expect(res.text).toContain("PR #123");
     expect(res.text).toContain("by dana");
+    expect(res.text).toContain("0123456789ab");
     expect(res.text).toContain("post_pr_review");
     // The three things that must not be misread.
     expect(res.text).toMatch(/stay LOCAL|stays LOCAL/);
@@ -134,7 +147,8 @@ describe("Q6 — the closing instruction the agent is given", () => {
       title: "Someone's PR", files: PR_FILES, reviewIntent: "external",
     });
     expect(res.isError).toBeFalsy();
-    expect(res.text).toContain("EXTERNAL review — the PR is someone else's code");
+    expect(res.text).toContain("EXTERNAL review — the PR with NO immutable head SHA recorded");
+    expect(res.text).toContain("is someone else's code");
     expect(res.text).not.toMatch(/PR #\d/);
   });
 });

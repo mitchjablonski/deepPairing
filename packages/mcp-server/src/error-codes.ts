@@ -51,6 +51,8 @@ export const ERROR_CODES = {
    *  (approved↔rejected↔revised). The route refuses with 409 + the current
    *  status so the stale tab refreshes to truth. See store/verdict-guard.ts. */
   verdict_already_final: "verdict_already_final",
+  /** A review verdict raced a change to the artifact content being reviewed. */
+  session_review_conflict: "session_review_conflict",
   /** F6 — decision resolve for a decision the bound session doesn't know. */
   decision_not_in_session: "decision_not_in_session",
   /** Context bank — a close-out aimed at a decision owned by ANOTHER project.
@@ -85,6 +87,8 @@ export const ERROR_CODES = {
   /** #171 — the store can't persist changeset review state (a read-only /
    *  non-FileStore implementation lacks setChangesetFileReview). */
   unsupported: "unsupported",
+  /** Durable review-post state needs inspection; do not retry an external POST. */
+  review_post_conflict: "review_post_conflict",
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
@@ -100,6 +104,8 @@ export const USER_FACING_ERROR_CODES: readonly ErrorCode[] = [
   ERROR_CODES.daemon_auth_required,
   ERROR_CODES.project_hash_mismatch,
   ERROR_CODES.session_not_registered,
+  ERROR_CODES.session_review_conflict,
+  ERROR_CODES.review_post_conflict,
 ];
 
 /**

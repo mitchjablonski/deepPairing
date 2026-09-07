@@ -2,9 +2,15 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
   push:
     branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:
@@ -27,11 +33,11 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Test
-        run: pnpm test
-
       - name: Build
         run: pnpm build
+
+      - name: Test
+        run: pnpm test
 
       # K1 (#215) — pin the npm publish SHAPE so a refactor can't silently drop the
       # runnable entrypoint. `npm pack --dry-run` runs AFTER build (dist/ exists) and
@@ -94,3 +100,39 @@ jobs:
 
       - name: E2E (companion UI bootstrap + demo)
         run: pnpm --filter @deeppairing/mcp-server test:e2e
+
+      - name: Upload Playwright failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            packages/mcp-server/test-results/
+            !packages/mcp-server/test-results/**/trace.zip
+          if-no-files-found: warn
+          retention-days: 7
+
+  hook-smoke:
+    name: Hook smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build hook runtime
+        run: pnpm build
+
+      - name: Installed hook launcher smoke
+        run: pnpm --filter @deeppairing/mcp-server exec vitest run src/cli/__tests__/hook-launch-smoke.test.ts

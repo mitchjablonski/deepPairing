@@ -24,10 +24,22 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { postPrReview, GhMissingError, GhNotAuthedError } from "../post-review.js";
+import { execFile } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import {
+  bindReviewPayloadToPreparedTarget,
+  postPreparedPrReview,
+  postPrReview,
+  GhMissingError,
+  GhNotAuthedError,
+} from "../post-review.js";
 import { buildGitHubReviewPayload, type GitHubReviewPayload } from "../../export/format-markdown.js";
 import { handlePostPrReview } from "../../mcp/tools/post-pr-review.js";
 import type { Artifact } from "@deeppairing/shared";
+import { ReviewPostJournal } from "../../store/review-post-journal.js";
+import { reconcileReviewPostCommand } from "../../cli/review-posts.js";
+import { FileStore } from "../../store/file-store.js";
+import { withGlobalStore } from "../../__tests__/global-store-fixture.js";
 
 // --- the fake gh -------------------------------------------------------------
 
@@ -42,12 +54,22 @@ let originalPath: string | undefined;
  *  a separate process, so env is the only channel). */
 type Mode =
   | "ok"
+  | "recovery-read"
+  | "head-changed"
   | "notauthed-repo"
+  | "enterprise-repo"
   | "notauthed-api"
   | "bad-credentials"
   | "pr-closed"
   | "line-not-in-diff"
   | "unparseable"
+  | "bad-success-id"
+  | "bad-success-url"
+  | "bad-success-credentials"
+  | "bad-success-port"
+  | "bad-success-query"
+  | "bad-success-state"
+  | "bad-success-commit"
   /** Exits instantly WITHOUT reading stdin — the EPIPE crasher (see below). */
   | "exit-without-reading-stdin";
 
@@ -59,6 +81,10 @@ function setMode(mode: Mode) {
 function calls(): { args: string[]; stdin: string }[] {
   if (!fs.existsSync(logPath)) return [];
   return fs.readFileSync(logPath, "utf-8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+}
+
+function reviewPostCalls(): { args: string[]; stdin: string }[] {
+  return calls().filter((c) => c.args.includes("POST"));
 }
 
 const FAKE_GH = `#!/usr/bin/env node
@@ -89,10 +115,16 @@ const NOT_LOGGED_IN = "gh: To use GitHub CLI in a GitHub Actions workflow, set t
 
 if (isRepoView) {
   if (mode === "notauthed-repo") { process.stderr.write(NOT_LOGGED_IN); process.exit(1); }
-  process.stdout.write(JSON.stringify({ nameWithOwner: "acme/widgets" }));
+  process.stdout.write(JSON.stringify({ nameWithOwner: "acme/widgets", url: mode === "enterprise-repo" ? "https://github.corp.example/acme/widgets" : "https://github.com/acme/widgets" }));
   process.exit(0);
 }
 if (isApi) {
+  if (mode === "recovery-read") {
+    if (args.includes("POST")) { process.stderr.write("Recovery must never POST"); process.exit(99); }
+    const fixture = JSON.parse(fs.readFileSync(process.env.DP_GH_RECOVERY_FIXTURE, "utf8"));
+    process.stdout.write(JSON.stringify(String(args[1]).includes("/comments?") ? fixture.comments : fixture.review));
+    process.exit(0);
+  }
   if (mode === "notauthed-api") { process.stderr.write(NOT_LOGGED_IN); process.exit(1); }
   if (mode === "bad-credentials") {
     // An expired / revoked / under-scoped token: gh is logged in, GitHub says no.
@@ -109,14 +141,34 @@ if (isApi) {
     process.exit(1);
   }
   if (mode === "unparseable") { process.stdout.write("<html>502 Bad Gateway</html>"); process.exit(0); }
+  if (!args.includes("POST")) {
+    process.stdout.write(mode === "head-changed"
+      ? "89abcdef0123456789abcdef0123456789abcdef\\n"
+      : "0123456789abcdef0123456789abcdef01234567\\n");
+    process.exit(0);
+  }
   // Success: the documented POST .../reviews response, echoing the event we got.
   const body = JSON.parse(stdin || "{}");
   const state = body.event === "REQUEST_CHANGES" ? "CHANGES_REQUESTED"
     : body.event === "APPROVE" ? "APPROVED" : "COMMENTED";
+  const target = String(args[1] || "").split("/");
+  const htmlUrl = target.length === 6
+    ? "https://github.com/" + target[1] + "/" + target[2] + "/pull/" + target[4] + "#pullrequestreview-4242"
+    : "https://github.com/acme/widgets/pull/42#pullrequestreview-4242";
+  const responseUrl = mode === "bad-success-url"
+    ? "https://github.com/attacker/wrong/pull/1"
+    : mode === "bad-success-credentials"
+      ? htmlUrl.replace("https://", "https://user:secret@")
+      : mode === "bad-success-port"
+        ? htmlUrl.replace("github.com", "github.com:443")
+        : mode === "bad-success-query"
+          ? htmlUrl.replace("#", "?transport=proxy#")
+          : htmlUrl;
   process.stdout.write(JSON.stringify({
-    id: 4242,
-    state,
-    html_url: "https://github.com/acme/widgets/pull/42#pullrequestreview-4242",
+    id: mode === "bad-success-id" ? 0 : 4242,
+    state: mode === "bad-success-state" ? "PENDING" : state,
+    html_url: responseUrl,
+    ...(body.commit_id ? { commit_id: mode === "bad-success-commit" ? "not-a-sha" : body.commit_id } : {}),
     body: body.body,
   }));
   process.exit(0);
@@ -145,6 +197,7 @@ afterAll(() => {
   delete process.env.DP_GH_FAKE_LOG;
   delete process.env.DP_GH_FAKE_MODE;
   delete process.env.DEEPPAIRING_GH_TIMEOUT_MS;
+  delete process.env.DP_GH_RECOVERY_FIXTURE;
   fs.rmSync(binDir, { recursive: true, force: true });
 });
 
@@ -200,7 +253,10 @@ function approvedExternalChangeset(): Artifact {
     title: "PR #42 — rate limiting", status: "approved",
     content: {
       files: [{ path: "auth/session.ts", changeType: "modified", hunks: [] }],
-      reviewIntent: "external", source: { kind: "github-pr", number: 42 },
+      reviewIntent: "external", source: {
+        kind: "github-pr", number: 42, url: "https://github.com/acme/widgets/pull/42",
+        headSha: "0123456789abcdef0123456789abcdef01234567",
+      },
     },
     agentReasoning: null, createdAt: "2026-08-20T10:00:00.000Z", updatedAt: "2026-08-20T10:00:00.000Z",
   } as Artifact;
@@ -217,13 +273,16 @@ function payloadFor(findings: unknown[], event?: GitHubReviewPayload["event"]): 
   );
 }
 
-/** The one method handlePostPrReview touches. A fake, not a mock: it answers
- *  getFullState() from real artifacts, exactly as FileStore would. */
+/** A fake, not a mock: fresh authorization snapshots plus the real durable
+ * journal boundary used by handlePostPrReview. */
 function fakeCtx(artifacts: Artifact[]) {
   const postedReviews: unknown[] = [];
+  const project = fs.mkdtempSync(path.join(binDir, "session-"));
+  fs.mkdirSync(path.join(project, ".deeppairing", "sessions", "s_review"), { recursive: true });
   return {
     store: {
-      getFullState: async () => ({
+      reviewPosts: new ReviewPostJournal(project, "s_review"),
+      getReviewPostState: async () => ({
         ...sessionState(artifacts),
         // R1 (#279) — the posted-review record rides full state; the fake keeps
         // what it was given, like FileStore's sidecar.
@@ -254,6 +313,7 @@ describe("Q6 — postPrReview against a real (fake) gh process", () => {
     expect(call!.args).toEqual([
       "api",
       "repos/acme/widgets/pulls/42/reviews",
+      "--hostname", "github.com",
       "-X", "POST",
       "--input", "-",
       "-H", "Accept: application/vnd.github+json",
@@ -271,7 +331,7 @@ describe("Q6 — postPrReview against a real (fake) gh process", () => {
     await postPrReview({ ref: "77", payload: payloadFor([LOW_FINDING]) });
     const log = calls();
     expect(log).toHaveLength(2);
-    expect(log[0]!.args).toEqual(["repo", "view", "--json", "nameWithOwner"]);
+    expect(log[0]!.args).toEqual(["repo", "view", "--json", "nameWithOwner,url"]);
     expect(log[1]!.args[1]).toBe("repos/acme/widgets/pulls/77/reviews");
   });
 
@@ -280,6 +340,31 @@ describe("Q6 — postPrReview against a real (fake) gh process", () => {
     const log = calls();
     expect(log).toHaveLength(1);
     expect(log[0]!.args[1]).toBe("repos/other/fork/pulls/9/reviews");
+  });
+
+  it("does not translate an enterprise repository into a public github.com target", async () => {
+    setMode("enterprise-repo");
+    await expect(postPrReview({ ref: "42", payload: payloadFor([LOW_FINDING]) })).rejects.toThrow(/github.com repository/);
+    expect(calls()).toHaveLength(1);
+    expect(calls()[0]!.args[0]).toBe("repo");
+  });
+
+  it("retains a partial owner override while detecting only the missing repository", async () => {
+    await postPrReview({ ref: "42", owner: "other", payload: payloadFor([LOW_FINDING]) });
+    expect(calls()[1]!.args[1]).toBe("repos/other/widgets/pulls/42/reviews");
+  });
+
+  it("pins a full public PR URL to github.com even with an ambient GH_HOST", async () => {
+    const previous = process.env.GH_HOST;
+    process.env.GH_HOST = "github.corp.example";
+    try {
+      await postPrReview({ ref: "https://github.com/acme/widgets/pull/42", payload: payloadFor([LOW_FINDING]) });
+      const args = calls()[0]!.args;
+      expect(args[args.indexOf("--hostname") + 1]).toBe("github.com");
+    } finally {
+      if (previous === undefined) delete process.env.GH_HOST;
+      else process.env.GH_HOST = previous;
+    }
   });
 });
 
@@ -407,6 +492,101 @@ describe("Q6 — error paths (each one executed, not assumed)", () => {
 // --- the handler -------------------------------------------------------------
 
 describe("Q6 — handlePostPrReview (the MCP tool) end to end", () => {
+  it("CLI never chooses an implicit session for an external write", async () => {
+    const project = fs.mkdtempSync(path.join(binDir, "implicit-session-"));
+    for (const session of ["reviewed", "unrelated-newer"]) {
+      const directory = path.join(project, ".deeppairing", "sessions", session);
+      fs.mkdirSync(directory, { recursive: true });
+      fs.writeFileSync(path.join(directory, "artifacts.json"), JSON.stringify([researchArtifact([HIGH_FINDING])]));
+    }
+    const cli = fileURLToPath(new URL("../../cli/init.ts", import.meta.url));
+    const outcome = await new Promise<{ code: number; output: string }>(resolve => {
+      execFile(process.execPath, ["--import", import.meta.resolve("tsx"), cli,
+        "post-pr-review", "https://github.com/acme/widgets/pull/42"], {
+        cwd: project, timeout: 20_000,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: project, DEEPPAIRING_PROJECT_ROOT: project },
+      }, (error, stdout, stderr) => resolve({ code: error ? Number(error.code) || 1 : 0, output: stdout + stderr }));
+    });
+    expect(outcome.code).toBe(1);
+    expect(outcome.output).toContain("requires --session-id");
+    expect(calls()).toHaveLength(0);
+  }, 25_000);
+
+  it("#344 separate CLI processes preserve uncertain sends and refuse --repost", async () => {
+    const project = fs.mkdtempSync(path.join(binDir, "cli-project-"));
+    const sessionDir = path.join(project, ".deeppairing", "sessions", "s_review");
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionDir, "artifacts.json"), JSON.stringify([researchArtifact([HIGH_FINDING])]));
+    const originalArtifacts = fs.readFileSync(path.join(sessionDir, "artifacts.json"), "utf8");
+    const cli = fileURLToPath(new URL("../../cli/init.ts", import.meta.url));
+    const runCli = (mode: Mode, extra: string[] = []) => new Promise<{ code: number; output: string }>((resolve) => {
+      execFile(process.execPath, ["--import", import.meta.resolve("tsx"), cli,
+        "post-pr-review", "https://github.com/acme/widgets/pull/42", "--session-id", "s_review", ...extra], {
+        cwd: project, timeout: 20_000,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: project, DEEPPAIRING_PROJECT_ROOT: project,
+          DP_GH_FAKE_MODE: mode },
+      }, (error, stdout, stderr) => resolve({ code: error ? Number(error.code) || 1 : 0, output: stdout + stderr }));
+    });
+
+    const first = await runCli("bad-success-state");
+    expect(first.code, first.output).toBe(1);
+    expect(first.output).toContain("may have reached GitHub");
+    expect(new ReviewPostJournal(project, "s_review").list()[0].state).toBe("unknown");
+    const second = await runCli("ok", ["--repost"]);
+    expect(second.code, second.output).toBe(1);
+    expect(second.output).toContain("unknown");
+    expect(reviewPostCalls()).toHaveLength(1);
+    // Read-only CLI authorization must not flush a stale FileStore snapshot.
+    expect(fs.readFileSync(path.join(sessionDir, "artifacts.json"), "utf8")).toBe(originalArtifacts);
+  }, 45_000);
+
+  it("#344 explicit remote reconciliation verifies the marked review using GETs only", async () => {
+    const ctx = fakeCtx([researchArtifact([HIGH_FINDING])]);
+    setMode("bad-success-state");
+    await handlePostPrReview(ctx, { pr: "42" });
+    const journal = (ctx as any).store.reviewPosts as ReviewPostJournal;
+    const operation = journal.list()[0]!;
+    expect(operation.state).toBe("unknown");
+    const sent = JSON.parse(reviewPostCalls()[0]!.stdin);
+    const commit = "0123456789abcdef0123456789abcdef01234567";
+    const fixture = {
+      review: { id: 4242, html_url: "https://github.com/acme/widgets/pull/42#pullrequestreview-4242",
+        state: "COMMENTED", body: sent.body, commit_id: commit, submitted_at: new Date().toISOString() },
+      comments: sent.comments.map((comment: any, index: number) => ({ ...comment,
+        id: index + 1, pull_request_review_id: 4242, original_line: comment.line, original_commit_id: commit })),
+    };
+    const fixturePath = path.join(binDir, "recovery.json");
+    fs.writeFileSync(fixturePath, JSON.stringify(fixture));
+    process.env.DP_GH_RECOVERY_FIXTURE = fixturePath;
+    setMode("recovery-read");
+    const project = path.resolve(path.dirname(journal.journalPath), "..", "..", "..");
+    const text = await reconcileReviewPostCommand(project, ["s_review", "reconcile", operation.id, "4242"]);
+    expect(text).toContain("No review was posted by recovery");
+    expect(journal.list()[0].state).toBe("succeeded");
+    expect(reviewPostCalls()).toHaveLength(1);
+    expect(calls().slice(-2).every(call => call.args.includes("GET"))).toBe(true);
+  });
+
+  it("#344 concurrent MCP posts share one durable send reservation", async () => {
+    const ctx = fakeCtx([researchArtifact([HIGH_FINDING])]);
+    const results = await Promise.all([0, 1].map(() => handlePostPrReview(ctx, { pr: "42" })));
+    expect(results.filter(result => !result.isError)).toHaveLength(1);
+    expect(reviewPostCalls()).toHaveLength(1);
+  });
+
+  it("#344 an unconfirmed remote response blocks another actual POST even with repost", async () => {
+    const ctx = fakeCtx([researchArtifact([HIGH_FINDING])]);
+    setMode("bad-success-state");
+    const first = await handlePostPrReview(ctx, { pr: "42" });
+    expect(first.isError).toBe(true);
+    expect(first.content[0]!.text).toContain("may have reached GitHub");
+    setMode("ok");
+    const again = await handlePostPrReview(ctx, { pr: "42", repost: true });
+    expect(again.isError).toBe(true);
+    expect(again.content[0]!.text).toContain("unknown");
+    expect(reviewPostCalls()).toHaveLength(1);
+  });
+
   it("posts and reports the review URL", async () => {
     const res = await handlePostPrReview(fakeCtx([researchArtifact([HIGH_FINDING])]), {
       pr: "https://github.com/acme/widgets/pull/42",
@@ -416,7 +596,7 @@ describe("Q6 — handlePostPrReview (the MCP tool) end to end", () => {
     expect(res.content[0]!.text).toContain("Posted 1 inline comment on PR");
     expect(res.content[0]!.text).toContain("as REQUEST_CHANGES");
     expect(res.content[0]!.text).toContain("#pullrequestreview-4242");
-    expect(JSON.parse(calls()[0]!.stdin).event).toBe("REQUEST_CHANGES");
+    expect(JSON.parse(reviewPostCalls()[0]!.stdin).event).toBe("REQUEST_CHANGES");
   });
 
   it("event mapping: absent and case-variant events resolve; an UNKNOWN one is refused", async () => {
@@ -435,7 +615,7 @@ describe("Q6 — handlePostPrReview (the MCP tool) end to end", () => {
         ...(given === undefined ? {} : { event: given }),
       });
       expect(res.isError, `event=${given}`).toBeFalsy();
-      expect(JSON.parse(calls()[0]!.stdin).event, `event=${given}`).toBe(expected);
+      expect(JSON.parse(reviewPostCalls()[0]!.stdin).event, `event=${given}`).toBe(expected);
     }
 
     // APPROVE needs the human's approval of the PR itself, so it is exercised
@@ -445,7 +625,7 @@ describe("Q6 — handlePostPrReview (the MCP tool) end to end", () => {
       pr: "https://github.com/acme/widgets/pull/42", event: "approve",
     });
     expect(approve.isError).toBeFalsy();
-    expect(JSON.parse(calls()[0]!.stdin).event).toBe("APPROVE");
+    expect(JSON.parse(reviewPostCalls()[0]!.stdin).event).toBe("APPROVE");
 
     fs.writeFileSync(logPath, "");
     const unknown = await handlePostPrReview(fakeCtx([researchArtifact([LOW_FINDING])]), {
@@ -485,8 +665,124 @@ describe("Q6 — handlePostPrReview (the MCP tool) end to end", () => {
     expect(res.content[0]!.text).not.toContain("Posted 0 inline comments");
     const sent = JSON.parse(calls().at(-1)!.stdin);
     expect(sent.event).toBe("APPROVE");
+    expect(sent.commit_id).toBe("0123456789abcdef0123456789abcdef01234567");
     expect(sent.comments).toEqual([]);
     expect(sent.body).toContain("deepPairing notes"); // still says where it came from
+  });
+
+  it("#343 prepared send returns GitHub's validated immutable commit binding", async () => {
+    const reviewed = "0123456789ABCDEF0123456789ABCDEF01234567";
+    const payload = bindReviewPayloadToPreparedTarget(
+      { ...payloadFor([HIGH_FINDING], "REQUEST_CHANGES"), commit_id: reviewed },
+      reviewed,
+      {
+        target: "https://github.com/acme/widgets/pull/42",
+        currentHeadSha: reviewed,
+      },
+    );
+    const result = await postPreparedPrReview({
+      target: "https://github.com/acme/widgets/pull/42",
+      payload,
+    });
+
+    expect(result.commitId).toBe(reviewed.toLowerCase());
+    expect(JSON.parse(reviewPostCalls()[0]!.stdin).commit_id).toBe(reviewed.toLowerCase());
+  });
+
+  it("#343 rejects malformed success identity instead of stamping uncertain metadata", async () => {
+    const target = "https://github.com/acme/widgets/pull/42";
+    for (const mode of [
+      "bad-success-id",
+      "bad-success-url",
+      "bad-success-credentials",
+      "bad-success-port",
+      "bad-success-query",
+      "bad-success-state",
+      "bad-success-commit",
+    ] as const) {
+      fs.writeFileSync(logPath, "");
+      setMode(mode);
+      await expect(postPreparedPrReview({
+        target,
+        payload: { ...payloadFor([LOW_FINDING]), commit_id: "0123456789abcdef0123456789abcdef01234567" },
+      })).rejects.toThrow(/Posted, but could not parse/);
+    }
+  });
+
+  it("#343 documents the unavoidable push-after-read race as bound-commit semantics", () => {
+    const reviewed = "0123456789abcdef0123456789abcdef01234567";
+    // A push can occur after this prepared snapshot and before the POST. There
+    // is no GitHub compare-and-post transaction to close that window. The
+    // safety property is that we still send the reviewed SHA as commit_id;
+    // the later branch head is never substituted into an old verdict.
+    const payload = bindReviewPayloadToPreparedTarget(
+      payloadFor([LOW_FINDING]),
+      reviewed,
+      { target: "https://github.com/acme/widgets/pull/42", currentHeadSha: reviewed },
+    );
+    expect(payload.commit_id).toBe(reviewed);
+  });
+
+  it("#343 refuses when the PR head changed after the reviewed artifact was approved", async () => {
+    setMode("head-changed");
+    const res = await handlePostPrReview(fakeCtx([approvedExternalChangeset()]), { pr: "42", event: "APPROVE" });
+    expect(res.isError).toBe(true);
+    expect(res.content[0]!.text).toContain("changed since your pair reviewed it");
+    expect(res.content[0]!.text).toContain("0123456");
+    expect(res.content[0]!.text).toContain("89abcde");
+    expect(reviewPostCalls()).toHaveLength(0);
+  });
+
+  it("#343 rebuilds authorization from fresh local state after the remote head read", async () => {
+    let reads = 0;
+    const approved = approvedExternalChangeset();
+    const withdrawn = { ...approved, status: "revised" as const };
+    const ctx = {
+      store: {
+        getReviewPostState: async () => sessionState(reads++ === 0 ? [approved] : [withdrawn]),
+        recordPostedReview: async () => {},
+      },
+    } as never;
+
+    const res = await handlePostPrReview(ctx, { pr: "42", event: "APPROVE" });
+    expect(res.isError).toBe(true);
+    expect(res.content[0]!.text).toContain("sent back for changes");
+    expect(reads).toBe(2);
+    expect(calls().some((c) => c.args[0] === "api" && !c.args.includes("POST"))).toBe(true);
+    expect(reviewPostCalls()).toHaveLength(0);
+  });
+
+  it("refuses a real FileStore's external revocation after the initial MCP gate", async () => {
+    const fx = withGlobalStore("dp-mcp-fresh-post-");
+    try {
+      const stale = fx.track(new FileStore(fx.dir, "s_review"));
+      const approved = approvedExternalChangeset();
+      stale.createArtifact({ id: approved.id, type: approved.type, title: approved.title, content: approved.content });
+      stale.updateArtifactStatus(approved.id, "approved", "ui_approve_button");
+      stale.forceFlush();
+      const external = fx.track(new FileStore(fx.dir, "s_review"));
+      let reads = 0;
+      const ctx = { store: {
+        reviewPosts: stale.reviewPosts,
+        getReviewPostState: async () => {
+          const state = stale.getReviewPostState();
+          if (++reads === 1) {
+            external.updateArtifactStatus(approved.id, "obsolete", "agent_obsolete");
+            external.forceFlush();
+          }
+          return state;
+        },
+        recordPostedReview: () => { throw new Error("Must not post"); },
+      } } as never;
+      const res = await handlePostPrReview(ctx, { pr: "42", event: "APPROVE" });
+      expect(res.isError).toBe(true);
+      expect(reads).toBe(2);
+      expect(stale.getFullState().artifacts[0]!.status).toBe("approved");
+      expect(reviewPostCalls()).toHaveLength(0);
+      expect(stale.reviewPosts.list()).toEqual([]);
+    } finally {
+      fx.dispose();
+    }
   });
 
   it("…but a zero-comment REQUEST_CHANGES is still refused — blocking someone without saying why", async () => {
@@ -544,4 +840,64 @@ describe("Q6 — handlePostPrReview (the MCP tool) end to end", () => {
     // the agent can only recover (re-anchor the finding) if it is told.
     expect(res.content[0]!.text).toContain("line must be part of the diff");
   });
+});
+
+// --- #343 follow-up: the CLI door refuses SHA-aware unbindable provenance ----
+
+describe("#343 — the CLI door refuses a SHA-aware chunk it cannot bind, with zero gh calls", () => {
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+  const cli = fileURLToPath(new URL("../../cli/init.ts", import.meta.url));
+
+  function externalChangeset(url: string | undefined, headSha: unknown = SHA): Artifact {
+    const base = approvedExternalChangeset();
+    return {
+      ...base,
+      content: {
+        ...(base.content as Record<string, unknown>),
+        source: { kind: "github-pr", number: 42, ...(url ? { url } : {}), ...(headSha !== null ? { headSha } : {}) },
+      },
+    } as Artifact;
+  }
+
+  function runCli(artifacts: Artifact[], event: string) {
+    const project = fs.mkdtempSync(path.join(binDir, "cli-sha-"));
+    const sessionDir = path.join(project, ".deeppairing", "sessions", "s_review");
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionDir, "artifacts.json"), JSON.stringify(artifacts));
+    return new Promise<{ code: number; output: string }>((resolve) => {
+      execFile(process.execPath, ["--import", import.meta.resolve("tsx"), cli,
+        "post-pr-review", "https://github.com/acme/widgets/pull/42", "--session-id", "s_review", "--event", event], {
+        cwd: project, timeout: 20_000,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: project, DEEPPAIRING_PROJECT_ROOT: project, DP_GH_FAKE_MODE: "ok" },
+      }, (error, stdout, stderr) => resolve({ code: error ? Number(error.code) || 1 : 0, output: stdout + stderr }));
+    });
+  }
+
+  it.each([
+    ["COMMENT", `https://github.com/acme/widgets/pull/42/commits/${SHA}`],
+    ["REQUEST_CHANGES", "https://www.github.com/acme/widgets/pull/42"],
+    ["COMMENT", undefined],
+  ])("%s with source.url %s: exit 1, refusal names the chunk, nothing reaches gh", async (event, url) => {
+    const outcome = await runCli([researchArtifact([HIGH_FINDING]), externalChangeset(url)], event);
+    expect(outcome.code, outcome.output).toBe(1);
+    expect(outcome.output).toContain(`Refusing to post a ${event}`);
+    expect(outcome.output).toContain("art_cs");
+    expect(outcome.output).toContain("commit_id");
+    expect(calls()).toHaveLength(0);
+  }, 30_000);
+
+  it("APPROVE behind an unbindable URL: exit 1 on the identity rule, nothing reaches gh", async () => {
+    const outcome = await runCli([externalChangeset("http://github.com/acme/widgets/pull/42")], "APPROVE");
+    expect(outcome.code, outcome.output).toBe(1);
+    expect(outcome.output).toContain("no full, valid PR source URL");
+    expect(calls()).toHaveLength(0);
+  }, 30_000);
+
+  it("control: the canonical chunk posts through the CLI with commit_id bound", async () => {
+    const outcome = await runCli([researchArtifact([HIGH_FINDING]), externalChangeset("https://github.com/acme/widgets/pull/42")], "COMMENT");
+    expect(outcome.code, outcome.output).toBe(0);
+    expect(outcome.output).toContain("Posted 1 inline comment");
+    expect(reviewPostCalls()).toHaveLength(1);
+    expect(JSON.parse(reviewPostCalls()[0]!.stdin).commit_id).toBe(SHA);
+  }, 30_000);
 });

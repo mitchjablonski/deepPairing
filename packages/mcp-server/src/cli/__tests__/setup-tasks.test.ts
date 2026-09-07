@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { execSync } from "node:child_process";
 import fs from "node:fs";
+import crypto from "node:crypto";
+import { deriveSessionId } from "../../session-id.js";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -540,12 +542,15 @@ describe("Checkpoint hook script — executable behavior (V2)", () => {
     fs.writeFileSync(path.join(sessionDir, "artifacts.json"), JSON.stringify(artifacts));
   }
 
-  // PP1 — the checkpoint now reads a tiny project-level marker instead of
-  // scanning every session's artifacts.json. Ensure the sessions dir exists
-  // (so the "no sessions → skip" guard doesn't fire) + stamp the marker.
-  function writeMarker(at: string) {
-    fs.mkdirSync(path.join(tmpDir, ".deeppairing", "sessions"), { recursive: true });
-    fs.writeFileSync(path.join(tmpDir, ".deeppairing", "last-code-change.json"), JSON.stringify({ at }));
+  // A receipt identifies the exact file and session; the legacy global
+  // timestamp cannot establish that an edit was presented.
+  function writeMarker(at: string, file = "src/x.ts") {
+    const sessionId = deriveSessionId(tmpDir, process.env.CLAUDE_CODE_SESSION_ID).sessionId;
+    const filePath = path.resolve(tmpDir, file);
+    const key = crypto.createHash("sha256").update(filePath).digest("hex");
+    const dir = path.join(tmpDir, ".deeppairing", "sessions", sessionId, "code-checkpoints");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, key + ".json"), JSON.stringify({ version: 1, at, filePath, sessionId, artifactId: "a1" }));
   }
 
   it("exits 0 when the tool is not Write/Edit/MultiEdit (Read/Bash etc. are no-ops)", () => {
@@ -571,7 +576,7 @@ describe("Checkpoint hook script — executable behavior (V2)", () => {
   });
 
   it("PP1 — nags when the marker's code_change is older than the freshness window", () => {
-    writeMarker(new Date(Date.now() - 5 * 60 * 1000).toISOString());
+    writeMarker(new Date(Date.now() - 5 * 60 * 1000).toISOString(), "src/y.ts");
     const r = runHookWith({ tool_name: "MultiEdit", tool_input: { file_path: "src/y.ts" } });
     expect(r.exitCode).toBe(0); // non-blocking; nag goes to stderr
     expect(r.stdout).toMatch(/Per-Edit Checkpoint/i);

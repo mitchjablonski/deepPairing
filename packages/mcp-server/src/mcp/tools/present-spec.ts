@@ -1,4 +1,5 @@
 import { nanoid } from "nanoid";
+import { preflightArtifact } from "../artifact-preflight.js";
 import { validatePresentSpecInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
@@ -10,14 +11,7 @@ export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<To
   const { title, objective, context, requirements, design, tasks, openQuestions, visuals } = validated.data;
   const requirementsArr = requirements;
   const tasksArr = tasks ?? [];
-  const proposals: string[] = [
-    title,
-    objective,
-    ...requirementsArr.map((r) => r.statement),
-    ...requirementsArr.map((r) => r.rationale),
-    ...tasksArr.map((t) => t.description),
-  ].filter(Boolean);
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_spec", proposals);
+  const pre = (await preflightArtifact(ctx, "present_spec", "spec", title, validated.data))!;
   if (!pre.ok) return pre.response;
 
   // N2 (#226) — short-window de-dup for an identical, still-draft present_spec.

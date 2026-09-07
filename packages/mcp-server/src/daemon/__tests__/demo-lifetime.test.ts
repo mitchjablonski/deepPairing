@@ -16,6 +16,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { serve } from "@hono/node-server";
 import WebSocket from "ws";
+import fs from "node:fs";
+import path from "node:path";
+import { readSessionCeremony } from "../../cli/preflight-hook-core.js";
 import type { AddressInfo } from "node:net";
 import { createDaemon, type CreateDaemonDeps, type Daemon } from "../create-daemon.js";
 import { projectHashOf } from "../../project-root.js";
@@ -69,6 +72,37 @@ const PREFLIGHT = {
     via: "concept",
   },
 };
+
+describe("demo isolation and retention", () => {
+  it("refuses hostile-origin POSTs before creating a session", async () => {
+    const { daemon } = makeDaemon();
+    const response = await daemon.app.request("http://localhost/api/demo/run", { method: "POST", headers: { Host: "localhost", Origin: "https://untrusted.example" } });
+    expect(response.status).toBe(403);
+    expect(daemon.sessions.size).toBe(0);
+  });
+
+  it("caps disk sessions, cancels evicted scripts, and excludes demos from real ceremony", async () => {
+    vi.useFakeTimers();
+    const { daemon, tmpDir } = makeDaemon();
+    const sessionRoot = path.join(tmpDir, ".deeppairing", "sessions");
+    // Previous process's demo is also counted by retention.
+    fs.mkdirSync(path.join(sessionRoot, "demo_1"), { recursive: true });
+    for (let i = 0; i < 7; i++) {
+      const response = await daemon.app.request("http://localhost/api/demo/run", { method: "POST", headers: { Host: "localhost" } });
+      expect(response.status).toBe(200);
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    await vi.advanceTimersByTimeAsync(900);
+    expect(readSessionCeremony(tmpDir).hasLiveCeremony).toBe(false);
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(daemon.sessions.size).toBe(5);
+    expect(fs.readdirSync(sessionRoot)).toHaveLength(5);
+    expect(fs.existsSync(path.join(sessionRoot, "demo_1"))).toBe(false);
+    for (const id of fs.readdirSync(sessionRoot)) {
+      expect(JSON.parse(fs.readFileSync(path.join(sessionRoot, id, "artifacts.json"), "utf8"))).toHaveLength(3);
+    }
+  });
+});
 
 describe("#168 demo idle grace", () => {
   beforeEach(() => { vi.useFakeTimers(); });

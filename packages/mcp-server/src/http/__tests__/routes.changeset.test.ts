@@ -133,6 +133,36 @@ describe("#171 per-file review-state persistence", () => {
     const res = await review("art_missing", { filePath: "a.ts", state: "reviewed" });
     expect(res.status).toBe(404);
   });
+
+  it("returns 409 and emits no review success after the changeset files changed", async () => {
+    const id = await createChangeset("art_cs_race");
+    store.forceFlush();
+    const contentWriter = fx.track(new FileStore(tmpDir, "test_session"));
+    const changed = contentWriter.getArtifacts().find((artifact) => artifact.id === id)!;
+    changed.content = {
+      files: [{ path: "auth/middleware.ts", changeType: "modified", hunks: [{ lines: [{ kind: "add", content: "unseen", newLine: 99 }] }] }],
+      risks: ["different proposal"],
+    };
+    changed.version = 2;
+    contentWriter.renameArtifact(id, changed.title);
+    contentWriter.forceFlush();
+    broadcasts.length = 0;
+
+    const res = await review(id, {
+      filePath: "auth/middleware.ts",
+      state: "needs_changes",
+      reason: "This describes the old diff",
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: "session_review_conflict" });
+    expect(broadcasts.find((event) => event.type === "changeset_review_updated")).toBeUndefined();
+
+    const recovered = fx.track(new FileStore(tmpDir, "test_session"));
+    const persisted = recovered.getArtifacts().find((artifact) => artifact.id === id)!;
+    expect(persisted).toMatchObject({ status: "draft", version: 2 });
+    expect((persisted.content as any).reviewState).toBeUndefined();
+    expect((persisted.content as any).reviewReasons).toBeUndefined();
+  });
 });
 
 describe("#171 rejecting a changeset records ONE framing entry", () => {

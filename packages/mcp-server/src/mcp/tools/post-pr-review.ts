@@ -1,7 +1,15 @@
 import type { ToolContext, ToolResult } from "./types.js";
-import { postPrReview, parsePrRef, GhMissingError, GhNotAuthedError } from "../../github/post-review.js";
+import {
+  postPreparedPrReview,
+  preparePrReviewTarget,
+  parsePrRef,
+  GhMissingError,
+  GhNotAuthedError,
+} from "../../github/post-review.js";
 import { authorizeReviewPost } from "../../github/review-authorization.js";
 import { errorMessage } from "@deeppairing/shared";
+import { authorizeDurableReview } from "../../github/authorized-durable-review.js";
+import { executeDurableReviewPost } from "../../github/durable-review-post.js";
 
 /** B3 — post_pr_review, extracted verbatim from the server.ts switch.
  *  Q6 (#232) B1 — the payload is no longer built here: it comes from
@@ -30,35 +38,47 @@ export async function handlePostPrReview(ctx: ToolContext, args: any): Promise<T
   // (R1 — `repost` is NOT such a flag: it re-arms a post the human already
   // authorized once and which the gate is refusing only as a duplicate. Every
   // verdict check still runs.)
-  const state = await store.getFullState();
-  const auth = authorizeReviewPost(state as never, {
-    event: args?.event,
-    pr: ref,
-    repost: args?.repost === true,
-  });
-  if (!auth.ok) {
-    return { content: [{ type: "text", text: auth.reason }], isError: true };
-  }
-  const { payload } = auth;
-
   try {
-    const result = await postPrReview({
-      ref,
-      payload,
-      owner: typeof args?.owner === "string" ? args.owner : undefined,
-      repo: typeof args?.repo === "string" ? args.repo : undefined,
+    const state = await store.getReviewPostState();
+    const auth = authorizeReviewPost(state, {
+      event: args?.event,
+      pr: ref,
+      repost: args?.repost === true,
     });
+    if (!auth.ok) {
+      return { content: [{ type: "text", text: auth.reason }], isError: true };
+    }
+    // #343 — preparation is read-only: resolve the canonical destination and
+    // observe its current head. It intentionally happens BEFORE the final local
+    // authorization read, so a verdict/content edit during the network wait is
+    // rebuilt into (or removes authorization from) the actual outbound payload.
+    const prepared = await preparePrReviewTarget({
+      ref,
+      ...(typeof args?.owner === "string" ? { owner: args.owner } : {}),
+      ...(typeof args?.repo === "string" ? { repo: args.repo } : {}),
+    });
+    const target = prepared.target;
+    const options = { event: args?.event, repost: args?.repost === true };
+    const { payload, identity } = authorizeDurableReview(await store.getReviewPostState(), options, prepared);
+    const posted = await executeDurableReviewPost({
+      store: store.reviewPosts, payload, identity, repost: options.repost,
+      reauthorize: async () => authorizeDurableReview(await store.getReviewPostState(), options, prepared).identity,
+      send: (canonicalTarget, frozenPayload) => postPreparedPrReview({ target: canonicalTarget, payload: frozenPayload }),
+    });
+    const { result } = posted;
     // R1 (#279) — record the landed review BEFORE reporting success, so a
     // second call refuses instead of notifying the author again. Awaited (not
     // fire-and-forget): if the stamp fails, the agent should hear about it in
     // the same breath as the URL, because the next call will be allowed
     // through. Never fatal — the review IS posted, and saying otherwise would
     // send the agent to re-post it.
-    let stampNote = "";
+    let stampNote = posted.receipt === "unconfirmed"
+      ? ` Review ${posted.operationId} posted, but its durable receipt is unconfirmed. Do not retry or repost; reconcile this operation first.`
+      : "";
     try {
-      const parsed = parsePrRef(ref);
-      const owner = typeof args?.owner === "string" ? args.owner : parsed.owner;
-      const repo = typeof args?.repo === "string" ? args.repo : parsed.repo;
+      const parsed = parsePrRef(target);
+      const owner = parsed.owner;
+      const repo = parsed.repo;
       await store.recordPostedReview({
         pr: ref,
         prNumber: parsed.number,
@@ -71,7 +91,7 @@ export async function handlePostPrReview(ctx: ToolContext, args: any): Promise<T
         commentCount: payload.comments.length,
       });
     } catch (stampErr) {
-      stampNote = ` (note: the review posted, but recording it locally failed — ${errorMessage(stampErr)}. Do NOT call post_pr_review again for this PR unless your pair asks.)`;
+      stampNote += ` (Legacy history update failed — ${errorMessage(stampErr)}. The durable journal still prevents another post.)`;
     }
     return {
       content: [{

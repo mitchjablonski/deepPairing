@@ -18,6 +18,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { writeJsonAtomic } from "./atomic-write.js";
+import { parsePrReference } from "../github/pr-reference.js";
 
 export interface PostedReviewRecord {
   /** The PR reference as the caller gave it ("42", "#42", or a full URL). */
@@ -55,7 +56,8 @@ export function samePrTarget(record: PostedReviewRecord, ref: string): boolean {
   const parsed = parsePrNumber(ref);
   if (parsed === null || parsed.number !== record.prNumber) return false;
   if (parsed.owner && parsed.repo && record.owner && record.repo) {
-    return parsed.owner === record.owner && parsed.repo === record.repo;
+    return parsed.owner.toLowerCase() === record.owner.toLowerCase() &&
+      parsed.repo.toLowerCase() === record.repo.toLowerCase();
   }
   return true;
 }
@@ -64,17 +66,12 @@ export function samePrTarget(record: PostedReviewRecord, ref: string): boolean {
  *  parser (it THROWS on a bad ref, which is right at the call site); this one
  *  is used for matching, where "unparseable" just means "no match". */
 export function parsePrNumber(ref: string): { owner?: string; repo?: string; number: number } | null {
-  const urlMatch = ref.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
-  if (urlMatch) return { owner: urlMatch[1], repo: urlMatch[2], number: parseInt(urlMatch[3]!, 10) };
-  const numMatch = ref.replace(/^#/, "").trim().match(/^(\d+)$/);
-  if (numMatch) return { number: parseInt(numMatch[1]!, 10) };
-  return null;
+  return parsePrReference(ref);
 }
 
-/** Read the sidecar. Absent or corrupt → empty: a lost record can only cause a
- *  duplicate post to be *allowed*, never a legitimate one to be refused, so
- *  failing open here is the safe direction (the human's verdict checks, which
- *  fail CLOSED, are untouched by this file). */
+/** Best-effort sidecar read for hydration and the legacy compatibility mirror.
+ * Posting authorization must use ReviewPostJournal.readLegacyHistory instead:
+ * malformed history is never permission to post another review. */
 export function readPostedReviews(projectRoot: string, sessionId: string): PostedReviewRecord[] {
   try {
     const raw = fs.readFileSync(postedReviewsPath(projectRoot, sessionId), "utf-8");

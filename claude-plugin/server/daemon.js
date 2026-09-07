@@ -291,9 +291,9 @@ function floatSafeRemainder(val, step) {
     return 0;
   return ratio - roundedRatio;
 }
-function defineLazy(object2, key, getter) {
+function defineLazy(object3, key, getter) {
   let value = void 0;
-  Object.defineProperty(object2, key, {
+  Object.defineProperty(object3, key, {
     get() {
       if (value === EVALUATING) {
         return void 0;
@@ -305,7 +305,7 @@ function defineLazy(object2, key, getter) {
       return value;
     },
     set(v) {
-      Object.defineProperty(object2, key, {
+      Object.defineProperty(object3, key, {
         value: v
         // configurable: true,
       });
@@ -335,10 +335,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj2, path22) {
-  if (!path22)
+function getElementAtPath(obj2, path23) {
+  if (!path23)
     return obj2;
-  return path22.reduce((acc, key) => acc?.[key], obj2);
+  return path23.reduce((acc, key) => acc?.[key], obj2);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -666,11 +666,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path22, issues) {
+function prefixIssues(path23, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path22);
+    iss.path.unshift(path23);
     return iss;
   });
 }
@@ -887,16 +887,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path22 = []) => {
+  const processError = (error52, path23 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path22, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path23, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path23, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path23, ...issue2.path]);
       } else {
-        const fullpath = [...path22, ...issue2.path];
+        const fullpath = [...path23, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -923,17 +923,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path22 = []) => {
+  const processError = (error52, path23 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path22, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path23, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path23, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path22, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path23, ...issue2.path]);
       } else {
-        const fullpath = [...path22, ...issue2.path];
+        const fullpath = [...path23, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -965,8 +965,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path22 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path22) {
+  const path23 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path23) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -4219,8 +4219,8 @@ var init_az = __esm({
 });
 
 // ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/be.js
-function getBelarusianPlural(count, one, few, many) {
-  const absCount = Math.abs(count);
+function getBelarusianPlural(count2, one, few, many) {
+  const absCount = Math.abs(count2);
   const lastDigit = absCount % 10;
   const lastTwoDigits = absCount % 100;
   if (lastTwoDigits >= 11 && lastTwoDigits <= 19) {
@@ -6400,8 +6400,8 @@ var init_hu = __esm({
 });
 
 // ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/hy.js
-function getArmenianPlural(count, one, many) {
-  return Math.abs(count) === 1 ? one : many;
+function getArmenianPlural(count2, one, many) {
+  return Math.abs(count2) === 1 ? one : many;
 }
 function withDefiniteArticle(word) {
   if (!word)
@@ -8642,8 +8642,8 @@ var init_ro = __esm({
 });
 
 // ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ru.js
-function getRussianPlural(count, one, few, many) {
-  const absCount = Math.abs(count);
+function getRussianPlural(count2, one, few, many) {
+  const absCount = Math.abs(count2);
   const lastDigit = absCount % 10;
   const lastTwoDigits = absCount % 100;
   if (lastTwoDigits >= 11 && lastTwoDigits <= 19) {
@@ -14396,13 +14396,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path22 = ref.slice(1).split("/").filter(Boolean);
-  if (path22.length === 0) {
+  const path23 = ref.slice(1).split("/").filter(Boolean);
+  if (path23.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path22[0] === defsKey) {
-    const key = path22[1];
+  if (path23[0] === defsKey) {
+    const key = path23[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -15548,7 +15548,8 @@ var init_content_types = __esm({
       url: external_exports.string().optional().describe("Full PR URL \u2014 the banner links it"),
       headRef: external_exports.string().optional().describe("Source branch, e.g. 'feat/rate-limit'"),
       baseRef: external_exports.string().optional().describe("Target branch, e.g. 'main'"),
-      author: external_exports.string().optional().describe("PR author's GitHub login")
+      author: external_exports.string().optional().describe("PR author's GitHub login"),
+      headSha: external_exports.string().regex(/^[0-9a-fA-F]{40}$/).transform((sha) => sha.toLowerCase()).optional().describe("Immutable 40-hex Git commit SHA returned by gh pr view --json headRefOid for the exact diff shown to the human")
     });
     ChangesetContentSchema = external_exports.object({
       summary: external_exports.string().optional(),
@@ -15566,7 +15567,7 @@ var init_content_types = __esm({
        *  ChangesetReviewIntentSchema for exactly what "external" changes. */
       reviewIntent: ChangesetReviewIntentSchema.optional().describe("Set to 'external' when this diff is SOMEONE ELSE'S code you are reviewing (a GitHub PR you were pinged on), not a change you are proposing. Omit for your own work. An external changeset's approve/needs-changes is the human's REVIEW VERDICT \u2014 it stays local until they say to post it, and it never means 'this code lands'."),
       /** Q6 (#232) — where an external changeset came from (the PR). */
-      source: ChangesetSourceSchema.optional().describe("Provenance of an external changeset \u2014 the PR it was pulled from: { kind: 'github-pr', number, url, headRef, baseRef, author }. Fill in whatever `gh pr view` gave you; the review surface names and links it."),
+      source: ChangesetSourceSchema.optional().describe("Provenance of an external changeset \u2014 the PR and immutable commit it was pulled from: { kind: 'github-pr', number, url, headRef, baseRef, author, headSha }. Capture headSha from `gh pr view --json headRefOid`; an APPROVE without it is refused rather than guessed from the PR's later head."),
       /**
        * R4 P-B (#284) — a changeset-level visual: "the shape of what this PR
        * touches" — a diagram or file map that frames the whole diff before the
@@ -16581,6 +16582,9 @@ function coerceChangesetSource(v) {
     out.baseRef = v.baseRef;
   if (typeof v.author === "string" && v.author.length > 0)
     out.author = v.author;
+  if (typeof v.headSha === "string" && /^[0-9a-fA-F]{40}$/.test(v.headSha)) {
+    out.headSha = v.headSha.toLowerCase();
+  }
   return out;
 }
 function coerceChangesetContent(raw2) {
@@ -17231,6 +17235,38 @@ var init_prose_lint = __esm({
   }
 });
 
+// ../shared/dist/schemas/ledger-digest.js
+var count, LedgerDigestSchema;
+var init_ledger_digest = __esm({
+  "../shared/dist/schemas/ledger-digest.js"() {
+    "use strict";
+    init_zod();
+    count = external_exports.number().finite().nonnegative();
+    LedgerDigestSchema = external_exports.object({
+      shapedThisProject: count,
+      nearMissesThisProject: count,
+      blockedThisProject: count,
+      sessionsTouched: count,
+      topCitedStances: external_exports.array(external_exports.object({
+        concept: external_exports.string(),
+        source: external_exports.enum(["session", "team"]),
+        citationCount: count,
+        globalCitationCount: count.optional(),
+        sampleArtifactId: external_exports.string().optional(),
+        sampleSessionId: external_exports.string().optional()
+      })),
+      seededStances: external_exports.array(external_exports.object({
+        concept: external_exports.string(),
+        stance: external_exports.enum(["avoid", "prefer", "mixed"]),
+        citedTimesElsewhere: count,
+        sampleArtifactId: external_exports.string().optional(),
+        sampleSessionId: external_exports.string().optional()
+      })).optional(),
+      globalLedger: external_exports.object({ concepts: count, projects: count, multiProjectConcepts: count })
+    });
+  }
+});
+
 // ../shared/dist/index.js
 var init_dist = __esm({
   "../shared/dist/index.js"() {
@@ -17256,6 +17292,7 @@ var init_dist = __esm({
     init_request();
     init_errors3();
     init_prose_lint();
+    init_ledger_digest();
   }
 });
 
@@ -19553,7 +19590,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net2 = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes2, createHash } = __require("crypto");
+    var { randomBytes: randomBytes3, createHash: createHash2 } = __require("crypto");
     var { Duplex, Readable: Readable2 } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -20091,7 +20128,7 @@ var require_websocket = __commonJS({
         }
       }
       const defaultPort = isSecure ? 443 : 80;
-      const key = randomBytes2(16).toString("base64");
+      const key = randomBytes3(16).toString("base64");
       const request = isSecure ? https.request : http.request;
       const protocolSet = /* @__PURE__ */ new Set();
       let perMessageDeflate;
@@ -20221,7 +20258,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest = createHash("sha1").update(key + GUID).digest("base64");
+        const digest = createHash2("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -20590,7 +20627,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash } = __require("crypto");
+    var { createHash: createHash2 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -20897,7 +20934,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest = createHash("sha1").update(key + GUID).digest("base64");
+        const digest = createHash2("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -21009,29 +21046,29 @@ var init_version = __esm({
 });
 
 // src/daemon/token.ts
-import fs19 from "node:fs";
+import fs21 from "node:fs";
 import os4 from "node:os";
-import path18 from "node:path";
+import path19 from "node:path";
 function fsHonorsPosixMode(dir) {
   let probe = null;
   try {
-    fs19.mkdirSync(dir, { recursive: true });
-    probe = path18.join(dir, `.dp-mode-probe-${process.pid}-${Date.now()}`);
-    const fd = fs19.openSync(probe, "w", 384);
-    fs19.closeSync(fd);
+    fs21.mkdirSync(dir, { recursive: true });
+    probe = path19.join(dir, `.dp-mode-probe-${process.pid}-${Date.now()}`);
+    const fd = fs21.openSync(probe, "w", 384);
+    fs21.closeSync(fd);
     try {
-      fs19.chmodSync(probe, 384);
+      fs21.chmodSync(probe, 384);
     } catch {
       return false;
     }
-    const mode = fs19.statSync(probe).mode & 511;
+    const mode = fs21.statSync(probe).mode & 511;
     return (mode & 63) === 0;
   } catch {
     return false;
   } finally {
     if (probe) {
       try {
-        fs19.unlinkSync(probe);
+        fs21.unlinkSync(probe);
       } catch {
       }
     }
@@ -21043,53 +21080,53 @@ function tokenPlacement(opts) {
 }
 function runtimeBaseDir() {
   const xdg = process.env.XDG_RUNTIME_DIR?.trim();
-  if (xdg && path18.isAbsolute(xdg)) {
+  if (xdg && path19.isAbsolute(xdg)) {
     try {
-      if (fs19.statSync(xdg).isDirectory()) return path18.join(xdg, "deeppairing");
+      if (fs21.statSync(xdg).isDirectory()) return path19.join(xdg, "deeppairing");
     } catch {
     }
   }
-  return path18.join(os4.tmpdir(), "deeppairing");
+  return path19.join(os4.tmpdir(), "deeppairing");
 }
 function tokenSidecarPath(projectRoot2) {
-  return path18.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
+  return path19.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
 }
 function writeTokenSidecar(projectRoot2, payload) {
   const file2 = tokenSidecarPath(projectRoot2);
-  const dir = path18.dirname(file2);
-  fs19.mkdirSync(dir, { recursive: true, mode: 448 });
+  const dir = path19.dirname(file2);
+  fs21.mkdirSync(dir, { recursive: true, mode: 448 });
   try {
-    fs19.chmodSync(dir, 448);
+    fs21.chmodSync(dir, 448);
   } catch {
   }
   const uid = typeof process.getuid === "function" ? process.getuid() : void 0;
   try {
-    const dstat = fs19.lstatSync(dir);
+    const dstat = fs21.lstatSync(dir);
     if (dstat.isSymbolicLink() || uid !== void 0 && dstat.uid !== uid) {
       return { path: file2, mode: dstat.mode & 511, honored: false, refused: true };
     }
   } catch {
     return { path: file2, mode: 511, honored: false, refused: true };
   }
-  const O_NOFOLLOW = fs19.constants.O_NOFOLLOW ?? 0;
+  const O_NOFOLLOW = fs21.constants.O_NOFOLLOW ?? 0;
   let fd;
   try {
-    fd = fs19.openSync(file2, fs19.constants.O_WRONLY | fs19.constants.O_CREAT | fs19.constants.O_TRUNC | O_NOFOLLOW, 384);
+    fd = fs21.openSync(file2, fs21.constants.O_WRONLY | fs21.constants.O_CREAT | fs21.constants.O_TRUNC | O_NOFOLLOW, 384);
   } catch {
     return { path: file2, mode: 511, honored: false, refused: true };
   }
   try {
-    fs19.writeFileSync(fd, JSON.stringify({ ...payload, projectRoot: projectRoot2 }, null, 2));
+    fs21.writeFileSync(fd, JSON.stringify({ ...payload, projectRoot: projectRoot2 }, null, 2));
   } finally {
-    fs19.closeSync(fd);
+    fs21.closeSync(fd);
   }
   try {
-    fs19.chmodSync(file2, 384);
+    fs21.chmodSync(file2, 384);
   } catch {
   }
   let mode = 511;
   try {
-    mode = fs19.statSync(file2).mode & 511;
+    mode = fs21.statSync(file2).mode & 511;
   } catch {
   }
   return { path: file2, mode, honored: (mode & 63) === 0 };
@@ -21097,15 +21134,15 @@ function writeTokenSidecar(projectRoot2, payload) {
 function readTokenSidecar(projectRoot2) {
   try {
     const file2 = tokenSidecarPath(projectRoot2);
-    if (!fs19.existsSync(file2)) return null;
-    return JSON.parse(fs19.readFileSync(file2, "utf-8"));
+    if (!fs21.existsSync(file2)) return null;
+    return JSON.parse(fs21.readFileSync(file2, "utf-8"));
   } catch {
     return null;
   }
 }
 function unlinkTokenSidecar(projectRoot2) {
   try {
-    fs19.unlinkSync(tokenSidecarPath(projectRoot2));
+    fs21.unlinkSync(tokenSidecarPath(projectRoot2));
   } catch {
   }
 }
@@ -21138,9 +21175,9 @@ __export(lifecycle_exports, {
   waitForPortRelease: () => waitForPortRelease
 });
 import { spawn, execFileSync } from "node:child_process";
-import fs20 from "node:fs";
+import fs22 from "node:fs";
 import net from "node:net";
-import path19 from "node:path";
+import path20 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 function logStale(msg) {
   try {
@@ -21150,13 +21187,13 @@ function logStale(msg) {
   }
 }
 function daemonInfoPath(projectRoot2) {
-  return path19.join(projectRoot2, ".deeppairing", DAEMON_FILE);
+  return path20.join(projectRoot2, ".deeppairing", DAEMON_FILE);
 }
 function readDaemonInfo(projectRoot2) {
   const infoPath = daemonInfoPath(projectRoot2);
   try {
-    if (!fs20.existsSync(infoPath)) return null;
-    const info = JSON.parse(fs20.readFileSync(infoPath, "utf-8"));
+    if (!fs22.existsSync(infoPath)) return null;
+    const info = JSON.parse(fs22.readFileSync(infoPath, "utf-8"));
     if (!info.authToken) {
       const sidecar = readTokenSidecar(projectRoot2);
       if (sidecar?.authToken && (sidecar.pid === void 0 || sidecar.pid === info.pid)) {
@@ -21274,7 +21311,7 @@ async function isDaemonRunning(projectRoot2, range = { start: preferredPortFor(p
   }
   if (info) {
     try {
-      fs20.unlinkSync(daemonInfoPath(projectRoot2));
+      fs22.unlinkSync(daemonInfoPath(projectRoot2));
     } catch {
     }
   }
@@ -21318,8 +21355,8 @@ function buildReadinessTimeoutMessage(args) {
     `deepPairing daemon did not become ready within ${timeoutMs}ms (probed this project's ports ${first}\u2013${last}).`,
     hint
   ];
-  const logPath2 = path19.join(projectRoot2, ".deeppairing", "daemon.log");
-  if (fs20.existsSync(logPath2)) {
+  const logPath2 = path20.join(projectRoot2, ".deeppairing", "daemon.log");
+  if (fs22.existsSync(logPath2)) {
     lines.push(`See ${logPath2} for the daemon's own startup log.`);
   }
   lines.push(`To diagnose: ${cliInvocation("doctor")}`);
@@ -21361,8 +21398,8 @@ async function describePortHolders(projectRoot2) {
   return parts.join("\n");
 }
 function spawnDaemon(projectRoot2) {
-  const daemonScript = path19.join(__thisDir2, "../../dist/daemon/index.js");
-  const scriptPath = fs20.existsSync(daemonScript) ? daemonScript : path19.join(__thisDir2, "daemon.js");
+  const daemonScript = path20.join(__thisDir2, "../../dist/daemon/index.js");
+  const scriptPath = fs22.existsSync(daemonScript) ? daemonScript : path20.join(__thisDir2, "daemon.js");
   const child = spawn("node", [scriptPath], {
     cwd: projectRoot2,
     detached: true,
@@ -21458,7 +21495,7 @@ function pidIsGone(pid) {
 function readProcessStartTime(pid) {
   try {
     if (process.platform === "linux") {
-      const stat = fs20.readFileSync(`/proc/${pid}/stat`, "utf-8");
+      const stat = fs22.readFileSync(`/proc/${pid}/stat`, "utf-8");
       const rparen = stat.lastIndexOf(")");
       if (rparen === -1) return null;
       const rest = stat.slice(rparen + 1).trim().split(/\s+/);
@@ -21604,7 +21641,7 @@ var init_lifecycle = __esm({
     init_version();
     init_cli_invocation();
     init_dist();
-    __thisDir2 = path19.dirname(fileURLToPath3(import.meta.url));
+    __thisDir2 = path20.dirname(fileURLToPath3(import.meta.url));
     DAEMON_FILE = "daemon.json";
     DEFAULT_PORT = BASE_PORT;
     MAX_PORT_ATTEMPTS = 10;
@@ -22258,9 +22295,9 @@ var serve = (options, listeningListener) => {
 };
 
 // src/daemon/index.ts
-import crypto5 from "node:crypto";
-import fs22 from "node:fs";
-import path21 from "node:path";
+import crypto6 from "node:crypto";
+import fs24 from "node:fs";
+import path22 from "node:path";
 
 // src/cli/setup-tasks.ts
 init_cli_invocation();
@@ -22269,6 +22306,12 @@ import fs2 from "node:fs";
 import os from "node:os";
 import path2 from "node:path";
 import { fileURLToPath as fileURLToPath2, pathToFileURL } from "node:url";
+
+// src/cli/hook-scripts.generated.ts
+var STOP_HOOK_SCRIPT = '#!/usr/bin/env node\n// deepPairing Stop hook \u2014 installed by ensureStopHook (X7 / X9).\n// GENERATED \u2014 do not edit. Source: packages/mcp-server/src/cli/stop-hook-entry.ts\n// Regenerate: pnpm --filter @deeppairing/mcp-server gen:hooks\n// src/hooks/stop-hook.ts\nimport fs2 from "node:fs";\nimport path2 from "node:path";\n\n// src/debrief-gate.ts\nvar CODE_CLOSED_STATUSES = ["superseded", "retracted", "obsolete"];\nvar DEBRIEF_DEAD_STATUSES = ["superseded", "retracted", "obsolete", "rejected"];\nvar CEREMONY_TYPES = ["decision", "spec", "plan"];\nfunction isExternalReview(a) {\n  if (a?.type !== "changeset") return false;\n  const content = a?.content;\n  return !!content && typeof content === "object" && content.reviewIntent === "external";\n}\nfunction sessionOwesDebrief(artifacts, isRecent = () => true) {\n  const hasLiveDebrief = artifacts.some(\n    (a) => a?.type === "debrief" && !DEBRIEF_DEAD_STATUSES.includes(a?.status ?? "")\n  );\n  if (hasLiveDebrief) return false;\n  const recentCode = artifacts.filter(\n    (a) => (a?.type === "code_change" || a?.type === "changeset") && !isExternalReview(a) && !CODE_CLOSED_STATUSES.includes(a?.status ?? "") && isRecent(a)\n  );\n  if (recentCode.length === 0) return false;\n  const changesets = recentCode.filter((a) => a?.type === "changeset").length;\n  const codeChanges = recentCode.filter((a) => a?.type === "code_change").length;\n  const hasCeremony = artifacts.some((a) => CEREMONY_TYPES.includes(a?.type ?? "")) || artifacts.some((a) => a?.type === "debrief");\n  const trivial = changesets === 0 && codeChanges === 1 && !hasCeremony;\n  return !trivial;\n}\n\n// src/hooks/hook-state.ts\nimport fs from "node:fs";\nimport path from "node:path";\nvar FIRE_LOG_CAP = 50;\nvar LOCK_STALE_MS = 5e3;\nvar LOCK_SPIN_MS = 2;\nvar LOCK_MAX_WAIT_MS = 500;\nfunction errnoCode(err) {\n  if (typeof err === "object" && err !== null && "code" in err) {\n    const code = err.code;\n    if (typeof code === "string") return code;\n  }\n  return void 0;\n}\nfunction hookErrorMessage(err) {\n  if (typeof err === "object" && err !== null && "message" in err) {\n    const message = err.message;\n    if (typeof message === "string") return message;\n  }\n  return String(err);\n}\nfunction resolveHookProjectRoot(eventCwd) {\n  return process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || (typeof eventCwd === "string" && eventCwd ? eventCwd : "") || process.cwd();\n}\nfunction sleepSync(ms) {\n  try {\n    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);\n  } catch {\n  }\n}\nfunction acquireHookStateLock(statePath, now = Date.now()) {\n  const lock = `${statePath}.lock`;\n  const deadline = now + LOCK_MAX_WAIT_MS;\n  let brokeStale = false;\n  for (; ; ) {\n    try {\n      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));\n      return lock;\n    } catch (error) {\n      if (errnoCode(error) !== "EEXIST") return null;\n      try {\n        if (!brokeStale && Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {\n          brokeStale = true;\n          fs.unlinkSync(lock);\n          continue;\n        }\n      } catch (staleErr) {\n        if (errnoCode(staleErr) !== "ENOENT") return null;\n      }\n      if (Date.now() >= deadline) return null;\n      sleepSync(LOCK_SPIN_MS);\n    }\n  }\n}\nfunction releaseHookStateLock(lock) {\n  if (!lock) return;\n  try {\n    fs.unlinkSync(lock);\n  } catch {\n  }\n}\nfunction readHookState(statePath) {\n  let raw;\n  try {\n    raw = fs.readFileSync(statePath, "utf-8");\n  } catch {\n    return { version: 1 };\n  }\n  try {\n    const parsed = JSON.parse(raw);\n    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;\n  } catch {\n  }\n  try {\n    const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");\n    fs.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);\n  } catch {\n  }\n  return { version: 1 };\n}\nfunction writeHookStateAtomic(statePath, state) {\n  const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 10)}`;\n  try {\n    fs.writeFileSync(tmp, JSON.stringify(state));\n    fs.renameSync(tmp, statePath);\n  } catch (err) {\n    try {\n      fs.unlinkSync(tmp);\n    } catch {\n    }\n    throw err;\n  }\n}\nfunction appendHookFire(statePath, fire, mutate) {\n  try {\n    fs.mkdirSync(path.dirname(statePath), { recursive: true });\n    const lock = acquireHookStateLock(statePath);\n    try {\n      const state = readHookState(statePath);\n      state.version = 1;\n      const fires = Array.isArray(state.fires) ? state.fires : [];\n      fires.push(fire);\n      state.fires = fires.slice(-FIRE_LOG_CAP);\n      mutate?.(state);\n      writeHookStateAtomic(statePath, state);\n    } finally {\n      releaseHookStateLock(lock);\n    }\n  } catch {\n  }\n}\nfunction hookStatePath(projectRoot) {\n  return path.join(projectRoot, ".deeppairing", "hooks-state.json");\n}\n\n// src/hooks/stop-hook.ts\nvar HOOK_NAME = "stop";\nvar MAX_AGE_MS = 30 * 60 * 1e3;\nvar BLOCKING_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset"];\nfunction runStopHook(now = Date.now()) {\n  const projectRoot = resolveHookProjectRoot();\n  function exit(code, reason) {\n    appendHookFire(hookStatePath(projectRoot), {\n      at: (/* @__PURE__ */ new Date()).toISOString(),\n      hook: HOOK_NAME,\n      exitCode: code,\n      reason\n    });\n    process.exit(code);\n  }\n  try {\n    const sessionsDir = path2.join(projectRoot, ".deeppairing", "sessions");\n    if (!fs2.existsSync(sessionsDir)) exit(0, "no sessions dir");\n    let owesDebriefSession = null;\n    for (const id of fs2.readdirSync(sessionsDir)) {\n      const af = path2.join(sessionsDir, id, "artifacts.json");\n      if (!fs2.existsSync(af)) continue;\n      let arr;\n      try {\n        arr = JSON.parse(fs2.readFileSync(af, "utf-8"));\n      } catch {\n        continue;\n      }\n      if (!Array.isArray(arr)) continue;\n      const artifacts = arr;\n      const blocking = artifacts.some((x) => {\n        if (x?.status !== "draft") return false;\n        if (!x?.type || !BLOCKING_TYPES.includes(x.type)) return false;\n        const t = x?.createdAt ? new Date(x.createdAt).getTime() : 0;\n        if (t && now - t > MAX_AGE_MS) return false;\n        return true;\n      });\n      if (blocking) {\n        process.stderr.write("deepPairing: pending artifacts need review \\u2014 call check_feedback\\n");\n        exit(0, "pending artifacts in " + id);\n      }\n      if (owesDebriefSession === null) {\n        const owes = sessionOwesDebrief(artifacts, (x) => {\n          const t = x?.createdAt ? new Date(x.createdAt).getTime() : 0;\n          return !t || now - t <= MAX_AGE_MS;\n        });\n        if (owes) owesDebriefSession = id;\n      }\n    }\n    if (owesDebriefSession !== null) {\n      process.stderr.write(\n        "deepPairing: code was presented but no present_debrief yet \\u2014 end the run with one so your pair gets the walk-through\\n"\n      );\n      exit(0, "owes debrief in " + owesDebriefSession);\n    }\n    exit(0, "pass: no blocking drafts");\n  } catch (err) {\n    exit(0, "error: " + hookErrorMessage(err));\n  }\n}\n\n// src/cli/stop-hook-entry.ts\nrunStopHook();\n';
+var CHECKPOINT_HOOK_SCRIPT = '#!/usr/bin/env node\n// deepPairing checkpoint hook (V2) \u2014 installed by ensureCheckpointHook.\n// GENERATED \u2014 do not edit. Source: packages/mcp-server/src/cli/checkpoint-hook-entry.ts\n// Regenerate: pnpm --filter @deeppairing/mcp-server gen:hooks\n// src/hooks/checkpoint-hook.ts\nimport fs2 from "node:fs";\nimport path3 from "node:path";\nimport crypto2 from "node:crypto";\n\n// src/session-id.ts\nimport crypto from "node:crypto";\nimport path from "node:path";\nfunction deriveSessionId(projectRoot, claudeSessionIdRaw) {\n  const projectName = path.basename(projectRoot);\n  const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);\n  const projectHash = crypto.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);\n  const base = `session_${safeProjectName}_${projectHash}`;\n  const sanitized = (claudeSessionIdRaw ?? "").replace(/[^a-zA-Z0-9-]/g, "").slice(0, 64);\n  if (sanitized.length === 0) {\n    return { sessionId: base, mode: "fallback" };\n  }\n  return { sessionId: `${base}_${sanitized}`, mode: "split", claudeSessionId: sanitized };\n}\n\n// src/hooks/hook-state.ts\nimport fs from "node:fs";\nimport path2 from "node:path";\nvar FIRE_LOG_CAP = 50;\nvar LOCK_STALE_MS = 5e3;\nvar LOCK_SPIN_MS = 2;\nvar LOCK_MAX_WAIT_MS = 500;\nfunction errnoCode(err) {\n  if (typeof err === "object" && err !== null && "code" in err) {\n    const code = err.code;\n    if (typeof code === "string") return code;\n  }\n  return void 0;\n}\nfunction hookErrorMessage(err) {\n  if (typeof err === "object" && err !== null && "message" in err) {\n    const message = err.message;\n    if (typeof message === "string") return message;\n  }\n  return String(err);\n}\nfunction resolveHookProjectRoot(eventCwd) {\n  return process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || (typeof eventCwd === "string" && eventCwd ? eventCwd : "") || process.cwd();\n}\nfunction sleepSync(ms) {\n  try {\n    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);\n  } catch {\n  }\n}\nfunction acquireHookStateLock(statePath, now = Date.now()) {\n  const lock = `${statePath}.lock`;\n  const deadline = now + LOCK_MAX_WAIT_MS;\n  let brokeStale = false;\n  for (; ; ) {\n    try {\n      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));\n      return lock;\n    } catch (error) {\n      if (errnoCode(error) !== "EEXIST") return null;\n      try {\n        if (!brokeStale && Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {\n          brokeStale = true;\n          fs.unlinkSync(lock);\n          continue;\n        }\n      } catch (staleErr) {\n        if (errnoCode(staleErr) !== "ENOENT") return null;\n      }\n      if (Date.now() >= deadline) return null;\n      sleepSync(LOCK_SPIN_MS);\n    }\n  }\n}\nfunction releaseHookStateLock(lock) {\n  if (!lock) return;\n  try {\n    fs.unlinkSync(lock);\n  } catch {\n  }\n}\nfunction readHookState(statePath) {\n  let raw;\n  try {\n    raw = fs.readFileSync(statePath, "utf-8");\n  } catch {\n    return { version: 1 };\n  }\n  try {\n    const parsed = JSON.parse(raw);\n    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;\n  } catch {\n  }\n  try {\n    const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");\n    fs.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);\n  } catch {\n  }\n  return { version: 1 };\n}\nfunction writeHookStateAtomic(statePath, state) {\n  const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 10)}`;\n  try {\n    fs.writeFileSync(tmp, JSON.stringify(state));\n    fs.renameSync(tmp, statePath);\n  } catch (err) {\n    try {\n      fs.unlinkSync(tmp);\n    } catch {\n    }\n    throw err;\n  }\n}\nfunction appendHookFire(statePath, fire, mutate) {\n  try {\n    fs.mkdirSync(path2.dirname(statePath), { recursive: true });\n    const lock = acquireHookStateLock(statePath);\n    try {\n      const state = readHookState(statePath);\n      state.version = 1;\n      const fires = Array.isArray(state.fires) ? state.fires : [];\n      fires.push(fire);\n      state.fires = fires.slice(-FIRE_LOG_CAP);\n      mutate?.(state);\n      writeHookStateAtomic(statePath, state);\n    } finally {\n      releaseHookStateLock(lock);\n    }\n  } catch {\n  }\n}\nfunction hookStatePath(projectRoot) {\n  return path2.join(projectRoot, ".deeppairing", "hooks-state.json");\n}\n\n// src/hooks/checkpoint-hook.ts\nvar HOOK_NAME = "checkpoint";\nvar EDIT_TOOLS = ["Write", "Edit", "MultiEdit"];\nvar RECEIPT_TTL_MS = 60 * 1e3;\nvar SKIP_BASENAMES = /* @__PURE__ */ new Set([\n  // Lockfiles only \u2014 manifest files (package.json, Cargo.toml, etc.) are\n  // policy and should still nag.\n  "package-lock.json",\n  "pnpm-lock.yaml",\n  "yarn.lock",\n  "bun.lockb",\n  "uv.lock",\n  "poetry.lock",\n  "Cargo.lock",\n  "Gemfile.lock",\n  "go.sum",\n  "composer.lock"\n]);\nvar SKIP_PATH_PREFIXES = [\n  // Generated / vendored output \u2014 not human-authored source.\n  "dist/",\n  "build/",\n  "node_modules/",\n  ".deeppairing/",\n  ".next/",\n  ".turbo/",\n  ".cache/",\n  "coverage/",\n  ".nyc_output/",\n  // IDE-local config \u2014 workspace settings, not project decisions.\n  ".vscode/",\n  ".idea/"\n];\nfunction isTrivialFile(filePath) {\n  if (!filePath || filePath === "(unknown)") return false;\n  const norm = filePath.replace(/\\\\/g, "/");\n  const base = norm.split("/").pop() || "";\n  if (SKIP_BASENAMES.has(base)) return true;\n  for (const prefix of SKIP_PATH_PREFIXES) {\n    if (norm.includes("/" + prefix) || norm.startsWith(prefix)) return true;\n  }\n  return false;\n}\nvar NAG = "deepPairing: {TOOL} on {FILE} with no present_code_change for it. Present EVERY code change BEFORE the Write/Edit \\u2014 including small follow-on edits, new files (tests, configs), and each file of a multi-file change, not just the \'main\' one. A write straight to disk never reaches the human\'s review surface; they can\'t see or comment on it. If you skipped this for prior edits this session, backfill them now with present_code_change. (Per-Edit Checkpoint rule. Lockfiles and generated paths are auto-skipped.)\\n";\nfunction claimReceipt(dpDir, sessionId, absolutePath, now) {\n  const key = crypto2.createHash("sha256").update(absolutePath).digest("hex");\n  const markerPath = path3.join(dpDir, "sessions", sessionId, "code-checkpoints", key + ".json");\n  const claimPath = markerPath + ".claim." + process.pid + "." + crypto2.randomBytes(8).toString("hex");\n  fs2.renameSync(markerPath, claimPath);\n  try {\n    const m = JSON.parse(fs2.readFileSync(claimPath, "utf8"));\n    if (!m || typeof m !== "object") return false;\n    const r = m;\n    const at = typeof r.at === "string" ? Date.parse(r.at) : NaN;\n    const expiresAt = r.expiresAt === void 0 ? at + RECEIPT_TTL_MS : typeof r.expiresAt === "string" ? Date.parse(r.expiresAt) : NaN;\n    return r.version === 1 && r.sessionId === sessionId && r.filePath === absolutePath && typeof r.artifactId === "string" && r.artifactId.length > 0 && Number.isFinite(at) && Number.isFinite(expiresAt) && expiresAt >= at && now >= at && // a future-dated receipt is a clock fault, not coverage\n    now <= expiresAt;\n  } finally {\n    try {\n      fs2.unlinkSync(claimPath);\n    } catch {\n    }\n  }\n}\nfunction runCheckpointHook(stdin2, now = Date.now()) {\n  let statePath = hookStatePath(resolveHookProjectRoot());\n  let resolvedCandidateIds = [];\n  function exit(code, reason) {\n    appendHookFire(statePath, { at: (/* @__PURE__ */ new Date()).toISOString(), hook: HOOK_NAME, exitCode: code, reason, resolvedCandidateIds });\n    process.exit(code);\n  }\n  try {\n    const ev = stdin2 ? JSON.parse(stdin2) : {};\n    const projectRoot = path3.resolve(resolveHookProjectRoot(ev.cwd));\n    statePath = hookStatePath(projectRoot);\n    const tool = typeof ev.tool_name === "string" && ev.tool_name || typeof ev.toolName === "string" && ev.toolName || "";\n    if (!EDIT_TOOLS.includes(tool)) exit(0, "skip: tool=" + (tool || "(unknown)"));\n    const rawFilePath = (ev.tool_input && (ev.tool_input.file_path ?? ev.tool_input.filePath)) ?? (ev.input && ev.input.file_path);\n    const filePath = typeof rawFilePath === "string" && rawFilePath ? rawFilePath : "(unknown)";\n    if (isTrivialFile(filePath)) exit(0, "skip: trivial file " + filePath);\n    const dpDir = path3.join(projectRoot, ".deeppairing");\n    if (!fs2.existsSync(path3.join(dpDir, "sessions"))) exit(0, "skip: no sessions dir");\n    const eventHasIdentity = Object.prototype.hasOwnProperty.call(ev, "session_id");\n    const malformedEventIdentity = eventHasIdentity && ev.session_id !== "" && typeof ev.session_id !== "string";\n    const rawCandidates = [ev.session_id, process.env.CLAUDE_CODE_SESSION_ID];\n    const anyNonemptyIdentity = rawCandidates.some((value) => typeof value === "string" && value.length > 0);\n    for (const raw of rawCandidates) {\n      if (typeof raw !== "string" || !raw) continue;\n      const derived = deriveSessionId(projectRoot, raw);\n      if (derived.mode !== "split") continue;\n      if (!resolvedCandidateIds.includes(derived.sessionId)) resolvedCandidateIds.push(derived.sessionId);\n    }\n    if (resolvedCandidateIds.length === 0 && !anyNonemptyIdentity && !malformedEventIdentity) {\n      resolvedCandidateIds = [deriveSessionId(projectRoot, "").sessionId];\n    }\n    let covered = false;\n    if (filePath !== "(unknown)" && filePath.trim()) {\n      for (const sessionId of resolvedCandidateIds) {\n        try {\n          covered = claimReceipt(dpDir, sessionId, path3.resolve(projectRoot, filePath), now);\n        } catch {\n        }\n        if (covered) break;\n      }\n    }\n    if (!covered) {\n      process.stderr.write(NAG.replace("{TOOL}", tool).replace("{FILE}", filePath));\n      exit(0, "nag: " + tool + " on " + filePath);\n    }\n    exit(0, "pass: fresh checkpoint covers " + filePath);\n  } catch (err) {\n    exit(0, "error: " + hookErrorMessage(err));\n  }\n}\n\n// src/cli/checkpoint-hook-entry.ts\nvar stdin = "";\nprocess.stdin.setEncoding("utf-8");\nprocess.stdin.on("data", (c) => {\n  stdin += c;\n});\nprocess.stdin.on("end", () => {\n  runCheckpointHook(stdin);\n});\n';
+
+// src/cli/setup-tasks.ts
 function scopeFiles(projectRoot2) {
   return [
     { scope: "user", path: path2.join(os.homedir(), ".claude", "settings.json") },
@@ -22344,159 +22387,6 @@ function ensureGitignoreEntry(projectRoot2) {
     return { ok: false, message: `Could not update .gitignore: ${errorMessage(err)}` };
   }
 }
-var STOP_HOOK_SCRIPT = `#!/usr/bin/env node
-// deepPairing Stop hook \u2014 installed by ensureStopHook (X7 / X9).
-// ESM (.mjs).
-import fs from "node:fs";
-import path from "node:path";
-
-const HOOK_NAME = "stop";
-const STATE_PATH = path.join(process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || process.cwd(), ".deeppairing", "hooks-state.json");
-const STATE_CAP = 50;
-// Q1 \u2014 durable hooks-state writes, mirrored from preflight-hook-core's
-// readHookState / writeHookStateAtomic / acquireHookStateLock. Pre-Q1 every
-// writer of this file did a plain read-modify-writeFileSync: two hooks firing
-// at once could tear the JSON, and the next reader's catch reset it to
-// {version:1}, DISCARDING the whole fire log with no backup. Atomic rename
-// fixes the torn read but NOT the lost update (M1: 8 parallel invocations kept
-// only 4 records), so the whole read-modify-write runs under an O_EXCL
-// lockfile with a stale-breaker and a bounded spin. Failing to acquire proceeds
-// unsynchronized rather than dropping the record.
-function readState(statePath) {
-  let raw;
-  try { raw = fs.readFileSync(statePath, "utf-8"); } catch { return { version: 1 }; }
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
-  } catch {}
-  try { fs.writeFileSync(statePath + ".corrupt-" + new Date().toISOString().replace(/[:.]/g, "-"), raw); } catch {}
-  return { version: 1 };
-}
-function writeStateAtomic(statePath, state) {
-  const tmp = statePath + ".tmp." + process.pid + "." + Date.now() + "." + Math.random().toString(16).slice(2, 10);
-  try {
-    fs.writeFileSync(tmp, JSON.stringify(state));
-    fs.renameSync(tmp, statePath);
-  } catch (err) {
-    try { fs.unlinkSync(tmp); } catch {}
-    throw err;
-  }
-}
-function acquireLock(statePath) {
-  const lock = statePath + ".lock";
-  const deadline = Date.now() + 500;
-  for (;;) {
-    try {
-      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
-      return lock;
-    } catch {
-      try {
-        if (Date.now() - fs.statSync(lock).mtimeMs > 5000) { fs.unlinkSync(lock); continue; }
-      } catch { continue; }
-      if (Date.now() >= deadline) return null; // degraded beats dropping the record
-      try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2); } catch {}
-    }
-  }
-}
-function releaseLock(lock) { if (lock) { try { fs.unlinkSync(lock); } catch {} } }
-function recordFire(exitCode, reason) {
-  try {
-    fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true }); // before O_EXCL
-    const lock = acquireLock(STATE_PATH);
-    try {
-      const state = readState(STATE_PATH);
-      state.version = 1;
-      state.fires = Array.isArray(state.fires) ? state.fires : [];
-      state.fires.push({
-        at: new Date().toISOString(),
-        hook: HOOK_NAME,
-        exitCode,
-        reason,
-      });
-      if (state.fires.length > STATE_CAP) state.fires = state.fires.slice(-STATE_CAP);
-      writeStateAtomic(STATE_PATH, state);
-    } finally { releaseLock(lock); }
-  } catch {
-    // Recording must never fail the hook itself.
-  }
-}
-function exit(code, reason) {
-  recordFire(code, reason);
-  process.exit(code);
-}
-
-try {
-  const sessionsDir = path.join(process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || process.cwd(), ".deeppairing", "sessions");
-  if (!fs.existsSync(sessionsDir)) exit(0, "no sessions dir");
-
-  const MAX_AGE_MS = 30 * 60 * 1000;
-  const now = Date.now();
-  // #195 F1 \u2014 remember the first session that owes a debrief (recent code work,
-  // no debrief). Only surfaced if NO blocking draft fired (blocking wins).
-  let owesDebriefSession = null;
-  for (const id of fs.readdirSync(sessionsDir)) {
-    const af = path.join(sessionsDir, id, "artifacts.json");
-    if (!fs.existsSync(af)) continue;
-    let arr;
-    try { arr = JSON.parse(fs.readFileSync(af, "utf-8")); } catch { continue; }
-    if (!Array.isArray(arr)) continue;
-    const blocking = arr.some((x) => {
-      if (x.status !== "draft") return false;
-      if (!["research", "spec", "plan", "decision", "code_change", "changeset"].includes(x.type)) return false;
-      const t = x.createdAt ? new Date(x.createdAt).getTime() : 0;
-      if (t && now - t > MAX_AGE_MS) return false; // abandoned, no longer blocks
-      return true;
-    });
-    if (blocking) {
-      process.stderr.write("deepPairing: pending artifacts need review \u2014 call check_feedback\\n");
-      // Non-blocking reminder: surface on stderr, exit 0. A stdout message +
-      // exit 2 showed Claude only an empty-stderr "Stop hook error".
-      exit(0, "pending artifacts in " + id);
-    }
-    // #195 F1 + J2a (#210) \u2014 debrief-owed: ceremony scales with task size.
-    // INLINE TWIN of sessionOwesDebrief (debrief-gate.ts) \u2014 kept in lock-step
-    // with the bundled copy by stop-hook-debrief-parity.test.ts. Count LIVE
-    // artifacts: a LIVE debrief (not superseded/retracted/obsolete/rejected)
-    // closes the loop; code counts LIVE code_change/changeset (rejected KEPT,
-    // superseded/retracted/obsolete dropped); a decision/spec/plan (any status)
-    // OR a dead-but-attempted debrief is feature-shaping ceremony that escalates
-    // even a single-file fix. research/findings is NOT ceremony. Trivial: exactly
-    // one live single-file code_change, no changeset, no ceremony.
-    // Q6 (#232) \u2014 a changeset with content.reviewIntent === "external" is a
-    // colleague's PR on the review surface, not code the pair wrote: it is
-    // skipped entirely (never counted as "code was presented").
-    if (owesDebriefSession === null) {
-      const CODE_CLOSED = ["superseded", "retracted", "obsolete"];
-      const DEBRIEF_DEAD = ["superseded", "retracted", "obsolete", "rejected"];
-      const isExternalReview = (x) =>
-        x.type === "changeset" && !!x.content && typeof x.content === "object" &&
-        x.content.reviewIntent === "external";
-      const hasLiveDebrief = arr.some((x) => x.type === "debrief" && !DEBRIEF_DEAD.includes(x.status));
-      const recentCode = arr.filter((x) => {
-        if (!["code_change", "changeset"].includes(x.type)) return false;
-        if (isExternalReview(x)) return false;
-        if (CODE_CLOSED.includes(x.status)) return false;
-        const t = x.createdAt ? new Date(x.createdAt).getTime() : 0;
-        return !t || now - t <= MAX_AGE_MS;
-      });
-      const changesets = recentCode.filter((x) => x.type === "changeset").length;
-      const codeChanges = recentCode.filter((x) => x.type === "code_change").length;
-      const hasCeremony =
-        arr.some((x) => ["decision", "spec", "plan"].includes(x.type)) ||
-        arr.some((x) => x.type === "debrief");
-      const trivial = changesets === 0 && codeChanges === 1 && !hasCeremony;
-      if (!hasLiveDebrief && recentCode.length > 0 && !trivial) owesDebriefSession = id;
-    }
-  }
-  if (owesDebriefSession !== null) {
-    process.stderr.write("deepPairing: code was presented but no present_debrief yet \u2014 end the run with one so your pair gets the walk-through\\n");
-    exit(0, "owes debrief in " + owesDebriefSession);
-  }
-  exit(0, "pass: no blocking drafts");
-} catch (err) {
-  exit(0, "error: " + (errorMessage(err)));
-}
-`;
 var STOP_SCRIPT_REL_PATH = ".deeppairing/hooks/stop.mjs";
 var STOP_HOOK_COMMAND = `node "$CLAUDE_PROJECT_DIR/${STOP_SCRIPT_REL_PATH}"`;
 function ensureStopHook(projectRoot2) {
@@ -22551,178 +22441,6 @@ function ensureStopHook(projectRoot2) {
     return { ok: false, message: `Could not configure Stop hook: ${errorMessage(err)}` };
   }
 }
-var CHECKPOINT_HOOK_SCRIPT = `#!/usr/bin/env node
-// deepPairing checkpoint hook (V2) \u2014 installed by ensureCheckpointHook.
-// ESM (.mjs): use import, not require.
-import fs from "node:fs";
-import path from "node:path";
-
-// V2.1 \u2014 skip-list for files that are unambiguously NOT worth a per-edit
-// checkpoint. Scope is deliberately narrow: only generated/vendored paths
-// and auto-generated lockfiles. Config / policy files (.gitignore,
-// package.json, .npmrc, .prettierrc) DO get nagged \u2014 those represent real
-// decisions a paired human should react to.
-//
-// Categories:
-//   - Lockfiles: regenerated from a manifest, reviewing them is busy-work
-//     (the manifest change is the real decision; deps are mechanical).
-//   - Generated / vendored paths: outputs of a build, not human-authored.
-//   - IDE-only dirs: editor settings; not the project's code.
-//
-// If a team wants stricter checkpointing they can edit this file directly
-// (.deeppairing/hooks/checkpoint.mjs). To LOOSEN it (e.g. also auto-skip
-// .gitignore), add the basename / prefix here.
-const SKIP_BASENAMES = new Set([
-  // Lockfiles only \u2014 manifest files (package.json, Cargo.toml, etc.) are
-  // policy and should still nag.
-  "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb",
-  "uv.lock", "poetry.lock", "Cargo.lock", "Gemfile.lock", "go.sum",
-  "composer.lock",
-]);
-const SKIP_PATH_PREFIXES = [
-  // Generated / vendored output \u2014 not human-authored source.
-  "dist/", "build/", "node_modules/", ".deeppairing/", ".next/",
-  ".turbo/", ".cache/", "coverage/", ".nyc_output/",
-  // IDE-local config \u2014 workspace settings, not project decisions.
-  ".vscode/", ".idea/",
-];
-
-function isTrivialFile(filePath) {
-  if (!filePath || filePath === "(unknown)") return false;
-  const norm = filePath.replace(/\\\\/g, "/");
-  const base = norm.split("/").pop() || "";
-  if (SKIP_BASENAMES.has(base)) return true;
-  // Match prefixes either at the start of the path or after the project root.
-  for (const prefix of SKIP_PATH_PREFIXES) {
-    if (norm.includes("/" + prefix) || norm.startsWith(prefix)) return true;
-  }
-  return false;
-}
-
-// X7 \u2014 record every fire to .deeppairing/hooks-state.json so the
-// companion UI's HookStatus can show "hook stack working" feedback.
-const STATE_PATH = path.join(process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || process.cwd(), ".deeppairing", "hooks-state.json");
-// Q1 \u2014 durable hooks-state writes, mirrored from preflight-hook-core's
-// readHookState / writeHookStateAtomic / acquireHookStateLock. Pre-Q1 every
-// writer of this file did a plain read-modify-writeFileSync: two hooks firing
-// at once could tear the JSON, and the next reader's catch reset it to
-// {version:1}, DISCARDING the whole fire log with no backup. Atomic rename
-// fixes the torn read but NOT the lost update (M1: 8 parallel invocations kept
-// only 4 records), so the whole read-modify-write runs under an O_EXCL
-// lockfile with a stale-breaker and a bounded spin. Failing to acquire proceeds
-// unsynchronized rather than dropping the record.
-function readState(statePath) {
-  let raw;
-  try { raw = fs.readFileSync(statePath, "utf-8"); } catch { return { version: 1 }; }
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
-  } catch {}
-  try { fs.writeFileSync(statePath + ".corrupt-" + new Date().toISOString().replace(/[:.]/g, "-"), raw); } catch {}
-  return { version: 1 };
-}
-function writeStateAtomic(statePath, state) {
-  const tmp = statePath + ".tmp." + process.pid + "." + Date.now() + "." + Math.random().toString(16).slice(2, 10);
-  try {
-    fs.writeFileSync(tmp, JSON.stringify(state));
-    fs.renameSync(tmp, statePath);
-  } catch (err) {
-    try { fs.unlinkSync(tmp); } catch {}
-    throw err;
-  }
-}
-function acquireLock(statePath) {
-  const lock = statePath + ".lock";
-  const deadline = Date.now() + 500;
-  for (;;) {
-    try {
-      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
-      return lock;
-    } catch {
-      try {
-        if (Date.now() - fs.statSync(lock).mtimeMs > 5000) { fs.unlinkSync(lock); continue; }
-      } catch { continue; }
-      if (Date.now() >= deadline) return null; // degraded beats dropping the record
-      try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2); } catch {}
-    }
-  }
-}
-function releaseLock(lock) { if (lock) { try { fs.unlinkSync(lock); } catch {} } }
-function recordFire(exitCode, reason) {
-  try {
-    fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true }); // before O_EXCL
-    const lock = acquireLock(STATE_PATH);
-    try {
-      const state = readState(STATE_PATH);
-      state.version = 1;
-      state.fires = Array.isArray(state.fires) ? state.fires : [];
-      state.fires.push({ at: new Date().toISOString(), hook: "checkpoint", exitCode, reason });
-      if (state.fires.length > 50) state.fires = state.fires.slice(-50);
-      writeStateAtomic(STATE_PATH, state);
-    } finally { releaseLock(lock); }
-  } catch { /* recording must never fail the hook itself */ }
-}
-function exit(code, reason) {
-  recordFire(code, reason);
-  process.exit(code);
-}
-
-let stdin = "";
-process.stdin.setEncoding("utf-8");
-process.stdin.on("data", (c) => { stdin += c; });
-process.stdin.on("end", () => {
-  try {
-    const ev = stdin ? JSON.parse(stdin) : {};
-    const tool = ev.tool_name || ev.toolName || "";
-    if (!["Write", "Edit", "MultiEdit"].includes(tool)) exit(0, "skip: tool=" + (tool || "(unknown)"));
-    const filePath =
-      (ev.tool_input && (ev.tool_input.file_path || ev.tool_input.filePath)) ||
-      (ev.input && ev.input.file_path) ||
-      "(unknown)";
-
-    // V2.1 \u2014 trivial files (gitignore, lockfiles, generated paths) auto-pass.
-    if (isTrivialFile(filePath)) exit(0, "skip: trivial file " + filePath);
-
-    const dpDir = path.join(process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || process.cwd(), ".deeppairing");
-    if (!fs.existsSync(path.join(dpDir, "sessions"))) exit(0, "skip: no sessions dir");
-
-    // PP1 \u2014 read the most-recent code_change timestamp from a tiny marker the
-    // store writes on each present_code_change, instead of readdir-ing +
-    // JSON.parsing every session's (multi-MB, diff-bearing) artifacts.json on
-    // every Write/Edit. Absent marker \u2192 0 \u2192 falls through to the nag (safe).
-    let mostRecentCheckpoint = 0;
-    try {
-      const m = JSON.parse(fs.readFileSync(path.join(dpDir, "last-code-change.json"), "utf-8"));
-      const t = new Date(m.at).getTime();
-      if (Number.isFinite(t)) mostRecentCheckpoint = t;
-    } catch { /* no marker yet \u2014 treat as no recent checkpoint */ }
-
-    // Threshold rule: every Write needs a code_change artifact created in
-    // the last FRESH_MS window.
-    const FRESH_MS = 60 * 1000;
-    const ageMs = Date.now() - mostRecentCheckpoint;
-    if (mostRecentCheckpoint === 0 || ageMs > FRESH_MS) {
-      process.stderr.write(
-        "deepPairing: " + tool + " on " + filePath +
-        " with no present_code_change for it. Present EVERY code change BEFORE " +
-        "the Write/Edit \u2014 including small follow-on edits, new files (tests, " +
-        "configs), and each file of a multi-file change, not just the 'main' " +
-        "one. A write straight to disk never reaches the human's review surface; " +
-        "they can't see or comment on it. If you skipped this for prior edits " +
-        "this session, backfill them now with present_code_change. " +
-        "(Per-Edit Checkpoint rule. Config / generated files like .gitignore are auto-skipped.)\\n"
-      );
-      // Non-blocking reminder: surface on stderr, exit 0. A stdout message +
-      // exit 2 showed Claude only an empty-stderr "blocking error" with no reason.
-      exit(0, "nag: " + tool + " on " + filePath);
-    }
-    exit(0, "pass: fresh checkpoint covers " + filePath);
-  } catch (err) {
-    // Never block the agent on a hook bug. Exit 0 on any unexpected error.
-    exit(0, "error: " + (errorMessage(err)));
-  }
-});
-`;
 var CHECKPOINT_SCRIPT_REL_PATH = ".deeppairing/hooks/checkpoint.mjs";
 function ensureCheckpointHook(projectRoot2) {
   const claudeDir = path2.join(projectRoot2, ".claude");
@@ -23456,26 +23174,26 @@ var handleParsingNestedValues = (form, key, value) => {
 };
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/utils/url.js
-var splitPath = (path22) => {
-  const paths = path22.split("/");
+var splitPath = (path23) => {
+  const paths = path23.split("/");
   if (paths[0] === "") {
     paths.shift();
   }
   return paths;
 };
 var splitRoutingPath = (routePath) => {
-  const { groups, path: path22 } = extractGroupsFromPath(routePath);
-  const paths = splitPath(path22);
+  const { groups, path: path23 } = extractGroupsFromPath(routePath);
+  const paths = splitPath(path23);
   return replaceGroupMarks(paths, groups);
 };
-var extractGroupsFromPath = (path22) => {
+var extractGroupsFromPath = (path23) => {
   const groups = [];
-  path22 = path22.replace(/\{[^}]+\}/g, (match2, index) => {
+  path23 = path23.replace(/\{[^}]+\}/g, (match2, index) => {
     const mark = `@${index}`;
     groups.push([mark, match2]);
     return mark;
   });
-  return { groups, path: path22 };
+  return { groups, path: path23 };
 };
 var replaceGroupMarks = (paths, groups) => {
   for (let i = groups.length - 1; i >= 0; i--) {
@@ -23532,8 +23250,8 @@ var getPath = (request) => {
       const queryIndex = url2.indexOf("?", i);
       const hashIndex = url2.indexOf("#", i);
       const end = queryIndex === -1 ? hashIndex === -1 ? void 0 : hashIndex : hashIndex === -1 ? queryIndex : Math.min(queryIndex, hashIndex);
-      const path22 = url2.slice(start, end);
-      return tryDecodeURI(path22.includes("%25") ? path22.replace(/%25/g, "%2525") : path22);
+      const path23 = url2.slice(start, end);
+      return tryDecodeURI(path23.includes("%25") ? path23.replace(/%25/g, "%2525") : path23);
     } else if (charCode === 63 || charCode === 35) {
       break;
     }
@@ -23550,11 +23268,11 @@ var mergePath = (base, sub, ...rest) => {
   }
   return `${base?.[0] === "/" ? "" : "/"}${base}${sub === "/" ? "" : `${base?.at(-1) === "/" ? "" : "/"}${sub?.[0] === "/" ? sub.slice(1) : sub}`}`;
 };
-var checkOptionalParameter = (path22) => {
-  if (path22.charCodeAt(path22.length - 1) !== 63 || !path22.includes(":")) {
+var checkOptionalParameter = (path23) => {
+  if (path23.charCodeAt(path23.length - 1) !== 63 || !path23.includes(":")) {
     return null;
   }
-  const segments = path22.split("/");
+  const segments = path23.split("/");
   const results = [];
   let basePath = "";
   segments.forEach((segment) => {
@@ -23695,9 +23413,9 @@ var HonoRequest = class {
    */
   path;
   bodyCache = {};
-  constructor(request, path22 = "/", matchResult = [[]]) {
+  constructor(request, path23 = "/", matchResult = [[]]) {
     this.raw = request;
-    this.path = path22;
+    this.path = path23;
     this.#matchResult = matchResult;
     this.#validatedData = {};
   }
@@ -24337,9 +24055,9 @@ var Context = class {
    * })
    * ```
    */
-  json = (object2, arg, headers) => {
+  json = (object3, arg, headers) => {
     return this.#newResponse(
-      JSON.stringify(object2),
+      JSON.stringify(object3),
       arg,
       setDefaultContentType("application/json", headers)
     );
@@ -24449,8 +24167,8 @@ var Hono = class _Hono {
         return this;
       };
     });
-    this.on = (method, path22, ...handlers) => {
-      for (const p of [path22].flat()) {
+    this.on = (method, path23, ...handlers) => {
+      for (const p of [path23].flat()) {
         this.#path = p;
         for (const m of [method].flat()) {
           handlers.map((handler) => {
@@ -24507,8 +24225,8 @@ var Hono = class _Hono {
    * app.route("/api", app2) // GET /api/user
    * ```
    */
-  route(path22, app) {
-    const subApp = this.basePath(path22);
+  route(path23, app) {
+    const subApp = this.basePath(path23);
     app.routes.map((r) => {
       let handler;
       if (app.errorHandler === errorHandler) {
@@ -24534,9 +24252,9 @@ var Hono = class _Hono {
    * const api = new Hono().basePath('/api')
    * ```
    */
-  basePath(path22) {
+  basePath(path23) {
     const subApp = this.#clone();
-    subApp._basePath = mergePath(this._basePath, path22);
+    subApp._basePath = mergePath(this._basePath, path23);
     return subApp;
   }
   /**
@@ -24610,7 +24328,7 @@ var Hono = class _Hono {
    * })
    * ```
    */
-  mount(path22, applicationHandler, options) {
+  mount(path23, applicationHandler, options) {
     let replaceRequest;
     let optionHandler;
     if (options) {
@@ -24637,7 +24355,7 @@ var Hono = class _Hono {
       return [c.env, executionContext];
     };
     replaceRequest ||= (() => {
-      const mergedPath = mergePath(this._basePath, path22);
+      const mergedPath = mergePath(this._basePath, path23);
       const pathPrefixLength = mergedPath === "/" ? 0 : mergedPath.length;
       return (request) => {
         const url2 = new URL(request.url);
@@ -24652,19 +24370,19 @@ var Hono = class _Hono {
       }
       await next();
     };
-    this.#addRoute(METHOD_NAME_ALL, mergePath(path22, "*"), handler);
+    this.#addRoute(METHOD_NAME_ALL, mergePath(path23, "*"), handler);
     return this;
   }
-  #addRoute(method, path22, handler, baseRoutePath) {
+  #addRoute(method, path23, handler, baseRoutePath) {
     method = method.toUpperCase();
-    path22 = mergePath(this._basePath, path22);
+    path23 = mergePath(this._basePath, path23);
     const r = {
       basePath: baseRoutePath !== void 0 ? mergePath(this._basePath, baseRoutePath) : this._basePath,
-      path: path22,
+      path: path23,
       method,
       handler
     };
-    this.router.add(method, path22, [handler, r]);
+    this.router.add(method, path23, [handler, r]);
     this.routes.push(r);
   }
   #handleError(err, c) {
@@ -24677,10 +24395,10 @@ var Hono = class _Hono {
     if (method === "HEAD") {
       return (async () => new Response(null, await this.#dispatch(request, executionCtx, env, "GET")))();
     }
-    const path22 = this.getPath(request, { env });
-    const matchResult = this.router.match(method, path22);
+    const path23 = this.getPath(request, { env });
+    const matchResult = this.router.match(method, path23);
     const c = new Context(request, {
-      path: path22,
+      path: path23,
       matchResult,
       env,
       executionCtx,
@@ -24780,15 +24498,15 @@ var Hono = class _Hono {
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/router/reg-exp-router/matcher.js
 var emptyParam = [];
-function match(method, path22) {
+function match(method, path23) {
   const matchers = this.buildAllMatchers();
-  const match2 = ((method2, path23) => {
+  const match2 = ((method2, path24) => {
     const matcher = matchers[method2] || matchers[METHOD_NAME_ALL];
-    const staticMatch = matcher[2][path23];
+    const staticMatch = matcher[2][path24];
     if (staticMatch) {
       return staticMatch;
     }
-    const match3 = path23.match(matcher[0]);
+    const match3 = path24.match(matcher[0]);
     if (!match3) {
       return [[], emptyParam];
     }
@@ -24796,7 +24514,7 @@ function match(method, path22) {
     return [matcher[1][index], match3];
   });
   this.match = match2;
-  return match2(method, path22);
+  return match2(method, path23);
 }
 
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/router/reg-exp-router/node.js
@@ -24911,12 +24629,12 @@ var Node = class _Node {
 var Trie = class {
   #context = { varIndex: 0 };
   #root = new Node();
-  insert(path22, index, pathErrorCheckOnly) {
+  insert(path23, index, pathErrorCheckOnly) {
     const paramAssoc = [];
     const groups = [];
     for (let i = 0; ; ) {
       let replaced = false;
-      path22 = path22.replace(/\{[^}]+\}/g, (m) => {
+      path23 = path23.replace(/\{[^}]+\}/g, (m) => {
         const mark = `@\\${i}`;
         groups[i] = [mark, m];
         i++;
@@ -24927,7 +24645,7 @@ var Trie = class {
         break;
       }
     }
-    const tokens = path22.match(/(?::[^\/]+)|(?:\/\*$)|./g) || [];
+    const tokens = path23.match(/(?::[^\/]+)|(?:\/\*$)|./g) || [];
     for (let i = groups.length - 1; i >= 0; i--) {
       const [mark] = groups[i];
       for (let j = tokens.length - 1; j >= 0; j--) {
@@ -24966,9 +24684,9 @@ var Trie = class {
 // ../../node_modules/.pnpm/hono@4.12.27/node_modules/hono/dist/router/reg-exp-router/router.js
 var nullMatcher = [/^$/, [], /* @__PURE__ */ Object.create(null)];
 var wildcardRegExpCache = /* @__PURE__ */ Object.create(null);
-function buildWildcardRegExp(path22) {
-  return wildcardRegExpCache[path22] ??= new RegExp(
-    path22 === "*" ? "" : `^${path22.replace(
+function buildWildcardRegExp(path23) {
+  return wildcardRegExpCache[path23] ??= new RegExp(
+    path23 === "*" ? "" : `^${path23.replace(
       /\/\*$|([.\\+*[^\]$()])/g,
       (_, metaChar) => metaChar ? `\\${metaChar}` : "(?:|/.*)"
     )}$`
@@ -24990,17 +24708,17 @@ function buildMatcherFromPreprocessedRoutes(routes) {
   );
   const staticMap = /* @__PURE__ */ Object.create(null);
   for (let i = 0, j = -1, len = routesWithStaticPathFlag.length; i < len; i++) {
-    const [pathErrorCheckOnly, path22, handlers] = routesWithStaticPathFlag[i];
+    const [pathErrorCheckOnly, path23, handlers] = routesWithStaticPathFlag[i];
     if (pathErrorCheckOnly) {
-      staticMap[path22] = [handlers.map(([h]) => [h, /* @__PURE__ */ Object.create(null)]), emptyParam];
+      staticMap[path23] = [handlers.map(([h]) => [h, /* @__PURE__ */ Object.create(null)]), emptyParam];
     } else {
       j++;
     }
     let paramAssoc;
     try {
-      paramAssoc = trie.insert(path22, j, pathErrorCheckOnly);
+      paramAssoc = trie.insert(path23, j, pathErrorCheckOnly);
     } catch (e) {
-      throw e === PATH_ERROR ? new UnsupportedPathError(path22) : e;
+      throw e === PATH_ERROR ? new UnsupportedPathError(path23) : e;
     }
     if (pathErrorCheckOnly) {
       continue;
@@ -25034,12 +24752,12 @@ function buildMatcherFromPreprocessedRoutes(routes) {
   }
   return [regexp, handlerMap, staticMap];
 }
-function findMiddleware(middleware, path22) {
+function findMiddleware(middleware, path23) {
   if (!middleware) {
     return void 0;
   }
   for (const k of Object.keys(middleware).sort((a, b) => b.length - a.length)) {
-    if (buildWildcardRegExp(k).test(path22)) {
+    if (buildWildcardRegExp(k).test(path23)) {
       return [...middleware[k]];
     }
   }
@@ -25053,7 +24771,7 @@ var RegExpRouter = class {
     this.#middleware = { [METHOD_NAME_ALL]: /* @__PURE__ */ Object.create(null) };
     this.#routes = { [METHOD_NAME_ALL]: /* @__PURE__ */ Object.create(null) };
   }
-  add(method, path22, handler) {
+  add(method, path23, handler) {
     const middleware = this.#middleware;
     const routes = this.#routes;
     if (!middleware || !routes) {
@@ -25068,18 +24786,18 @@ var RegExpRouter = class {
         });
       });
     }
-    if (path22 === "/*") {
-      path22 = "*";
+    if (path23 === "/*") {
+      path23 = "*";
     }
-    const paramCount = (path22.match(/\/:/g) || []).length;
-    if (/\*$/.test(path22)) {
-      const re = buildWildcardRegExp(path22);
+    const paramCount = (path23.match(/\/:/g) || []).length;
+    if (/\*$/.test(path23)) {
+      const re = buildWildcardRegExp(path23);
       if (method === METHOD_NAME_ALL) {
         Object.keys(middleware).forEach((m) => {
-          middleware[m][path22] ||= findMiddleware(middleware[m], path22) || findMiddleware(middleware[METHOD_NAME_ALL], path22) || [];
+          middleware[m][path23] ||= findMiddleware(middleware[m], path23) || findMiddleware(middleware[METHOD_NAME_ALL], path23) || [];
         });
       } else {
-        middleware[method][path22] ||= findMiddleware(middleware[method], path22) || findMiddleware(middleware[METHOD_NAME_ALL], path22) || [];
+        middleware[method][path23] ||= findMiddleware(middleware[method], path23) || findMiddleware(middleware[METHOD_NAME_ALL], path23) || [];
       }
       Object.keys(middleware).forEach((m) => {
         if (method === METHOD_NAME_ALL || method === m) {
@@ -25097,15 +24815,15 @@ var RegExpRouter = class {
       });
       return;
     }
-    const paths = checkOptionalParameter(path22) || [path22];
+    const paths = checkOptionalParameter(path23) || [path23];
     for (let i = 0, len = paths.length; i < len; i++) {
-      const path23 = paths[i];
+      const path24 = paths[i];
       Object.keys(routes).forEach((m) => {
         if (method === METHOD_NAME_ALL || method === m) {
-          routes[m][path23] ||= [
-            ...findMiddleware(middleware[m], path23) || findMiddleware(middleware[METHOD_NAME_ALL], path23) || []
+          routes[m][path24] ||= [
+            ...findMiddleware(middleware[m], path24) || findMiddleware(middleware[METHOD_NAME_ALL], path24) || []
           ];
-          routes[m][path23].push([handler, paramCount - len + i + 1]);
+          routes[m][path24].push([handler, paramCount - len + i + 1]);
         }
       });
     }
@@ -25124,13 +24842,13 @@ var RegExpRouter = class {
     const routes = [];
     let hasOwnRoute = method === METHOD_NAME_ALL;
     [this.#middleware, this.#routes].forEach((r) => {
-      const ownRoute = r[method] ? Object.keys(r[method]).map((path22) => [path22, r[method][path22]]) : [];
+      const ownRoute = r[method] ? Object.keys(r[method]).map((path23) => [path23, r[method][path23]]) : [];
       if (ownRoute.length !== 0) {
         hasOwnRoute ||= true;
         routes.push(...ownRoute);
       } else if (method !== METHOD_NAME_ALL) {
         routes.push(
-          ...Object.keys(r[METHOD_NAME_ALL]).map((path22) => [path22, r[METHOD_NAME_ALL][path22]])
+          ...Object.keys(r[METHOD_NAME_ALL]).map((path23) => [path23, r[METHOD_NAME_ALL][path23]])
         );
       }
     });
@@ -25150,13 +24868,13 @@ var SmartRouter = class {
   constructor(init) {
     this.#routers = init.routers;
   }
-  add(method, path22, handler) {
+  add(method, path23, handler) {
     if (!this.#routes) {
       throw new Error(MESSAGE_MATCHER_IS_ALREADY_BUILT);
     }
-    this.#routes.push([method, path22, handler]);
+    this.#routes.push([method, path23, handler]);
   }
-  match(method, path22) {
+  match(method, path23) {
     if (!this.#routes) {
       throw new Error("Fatal error");
     }
@@ -25171,7 +24889,7 @@ var SmartRouter = class {
         for (let i2 = 0, len2 = routes.length; i2 < len2; i2++) {
           router.add(...routes[i2]);
         }
-        res = router.match(method, path22);
+        res = router.match(method, path23);
       } catch (e) {
         if (e instanceof UnsupportedPathError) {
           continue;
@@ -25221,10 +24939,10 @@ var Node2 = class _Node2 {
     }
     this.#patterns = [];
   }
-  insert(method, path22, handler) {
+  insert(method, path23, handler) {
     this.#order = ++this.#order;
     let curNode = this;
-    const parts = splitRoutingPath(path22);
+    const parts = splitRoutingPath(path23);
     const possibleKeys = [];
     for (let i = 0, len = parts.length; i < len; i++) {
       const p = parts[i];
@@ -25273,12 +24991,12 @@ var Node2 = class _Node2 {
       }
     }
   }
-  search(method, path22) {
+  search(method, path23) {
     const handlerSets = [];
     this.#params = emptyParams;
     const curNode = this;
     let curNodes = [curNode];
-    const parts = splitPath(path22);
+    const parts = splitPath(path23);
     const curNodesQueue = [];
     const len = parts.length;
     let partOffsets = null;
@@ -25320,13 +25038,13 @@ var Node2 = class _Node2 {
           if (matcher instanceof RegExp) {
             if (partOffsets === null) {
               partOffsets = new Array(len);
-              let offset = path22[0] === "/" ? 1 : 0;
+              let offset = path23[0] === "/" ? 1 : 0;
               for (let p = 0; p < len; p++) {
                 partOffsets[p] = offset;
                 offset += parts[p].length + 1;
               }
             }
-            const restPathString = path22.substring(partOffsets[i]);
+            const restPathString = path23.substring(partOffsets[i]);
             const m = matcher.exec(restPathString);
             if (m) {
               params[name] = m[0];
@@ -25379,18 +25097,18 @@ var TrieRouter = class {
   constructor() {
     this.#node = new Node2();
   }
-  add(method, path22, handler) {
-    const results = checkOptionalParameter(path22);
+  add(method, path23, handler) {
+    const results = checkOptionalParameter(path23);
     if (results) {
       for (let i = 0, len = results.length; i < len; i++) {
         this.#node.insert(method, results[i], handler);
       }
       return;
     }
-    this.#node.insert(method, path22, handler);
+    this.#node.insert(method, path23, handler);
   }
-  match(method, path22) {
-    return this.#node.search(method, path22);
+  match(method, path23) {
+    return this.#node.search(method, path23);
   }
 };
 
@@ -25503,9 +25221,10 @@ var import_websocket_server = __toESM(require_websocket_server(), 1);
 
 // src/daemon/create-daemon.ts
 import { fileURLToPath as fileURLToPath4 } from "node:url";
-import fs21 from "node:fs";
-import path20 from "node:path";
+import fs23 from "node:fs";
+import path21 from "node:path";
 import { spawn as spawn2 } from "node:child_process";
+import { randomBytes as randomBytes2 } from "node:crypto";
 
 // src/error-codes.ts
 var ERROR_CODES = {
@@ -25540,6 +25259,8 @@ var ERROR_CODES = {
    *  (approved↔rejected↔revised). The route refuses with 409 + the current
    *  status so the stale tab refreshes to truth. See store/verdict-guard.ts. */
   verdict_already_final: "verdict_already_final",
+  /** A review verdict raced a change to the artifact content being reviewed. */
+  session_review_conflict: "session_review_conflict",
   /** F6 — decision resolve for a decision the bound session doesn't know. */
   decision_not_in_session: "decision_not_in_session",
   /** Context bank — a close-out aimed at a decision owned by ANOTHER project.
@@ -25573,12 +25294,16 @@ var ERROR_CODES = {
   not_a_changeset_file: "not_a_changeset_file",
   /** #171 — the store can't persist changeset review state (a read-only /
    *  non-FileStore implementation lacks setChangesetFileReview). */
-  unsupported: "unsupported"
+  unsupported: "unsupported",
+  /** Durable review-post state needs inspection; do not retry an external POST. */
+  review_post_conflict: "review_post_conflict"
 };
 var USER_FACING_ERROR_CODES = [
   ERROR_CODES.daemon_auth_required,
   ERROR_CODES.project_hash_mismatch,
-  ERROR_CODES.session_not_registered
+  ERROR_CODES.session_not_registered,
+  ERROR_CODES.session_review_conflict,
+  ERROR_CODES.review_post_conflict
 ];
 var TOOL_ERROR_CODES = {
   /** Zod validation failed on tool input — agent should fix the shape and retry. */
@@ -25625,8 +25350,9 @@ var TOOL_ERROR_RETRYABLE = {
 
 // src/store/file-store.ts
 init_dist();
-import fs12 from "node:fs";
-import path11 from "node:path";
+import fs14 from "node:fs";
+import path12 from "node:path";
+import crypto4 from "node:crypto";
 
 // ../../node_modules/.pnpm/nanoid@5.1.7/node_modules/nanoid/index.js
 import { webcrypto as crypto3 } from "node:crypto";
@@ -26116,9 +25842,170 @@ function capConceptLength(concept) {
   return `${concept.slice(0, MAX_PUBLISHED_CONCEPT_CHARS - 1).trimEnd()}\u2026`;
 }
 
+// src/store/session-records.ts
+import fs7 from "node:fs";
+import { performance } from "node:perf_hooks";
+var SessionReviewConflictError = class extends Error {
+  constructor(artifactId) {
+    super(
+      `Artifact ${artifactId} has changed content and a concurrent review verdict. Stop and restart the session writer, then review the persisted artifact before authorizing it.`
+    );
+    this.artifactId = artifactId;
+    this.name = "SessionReviewConflictError";
+  }
+  artifactId;
+  code = "ESESSIONREVIEWCONFLICT";
+};
+function isSessionReviewConflictError(error51) {
+  return error51 instanceof SessionReviewConflictError || !!error51 && typeof error51 === "object" && error51.code === "ESESSIONREVIEWCONFLICT";
+}
+function object2(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function mergeValue(base, local, disk, field) {
+  if (JSON.stringify(base) === JSON.stringify(local)) return disk;
+  if (field === "statusHistory" && Array.isArray(local) && Array.isArray(disk)) {
+    const prior = Array.isArray(base) ? base : [];
+    if (prior.every((entry, i) => JSON.stringify(entry) === JSON.stringify(local[i]))) {
+      const history = [...disk];
+      const seen = new Set(history.map((entry) => JSON.stringify(entry)));
+      for (const entry of local.slice(prior.length)) {
+        const encoded = JSON.stringify(entry);
+        if (!seen.has(encoded)) {
+          history.push(entry);
+          seen.add(encoded);
+        }
+      }
+      return history;
+    }
+  }
+  if (object2(base) && object2(local) && object2(disk)) {
+    const merged = { ...disk };
+    for (const key of /* @__PURE__ */ new Set([...Object.keys(base), ...Object.keys(local)])) {
+      if (JSON.stringify(base[key]) === JSON.stringify(local[key])) continue;
+      if (!Object.hasOwn(local, key)) delete merged[key];
+      else Object.defineProperty(merged, key, {
+        value: mergeValue(base[key], local[key], disk[key], key),
+        enumerable: true,
+        configurable: true,
+        writable: true
+      });
+    }
+    return merged;
+  }
+  return local;
+}
+function mergeSessionRecords(baseline, local, disk, key) {
+  const before = new Map(baseline.map((record2) => [key(record2), record2]));
+  const current = new Map(local.map((record2) => [key(record2), record2]));
+  const merged = new Map(disk.map((record2) => [key(record2), record2]));
+  for (const id of before.keys()) {
+    if (!current.has(id)) merged.delete(id);
+  }
+  for (const [id, record2] of current) {
+    if (!before.has(id)) merged.set(id, record2);
+    else if (merged.has(id)) merged.set(id, mergeValue(before.get(id), record2, merged.get(id)));
+  }
+  return [...merged.values()];
+}
+var REVIEW_VERDICTS = /* @__PURE__ */ new Set(["approved", "rejected", "revised"]);
+var REVIEWED_IDENTITY_FIELDS = ["content", "version", "type", "parentId"];
+function reviewVerdictChanged(base, candidate) {
+  return JSON.stringify(base.status) !== JSON.stringify(candidate.status) && REVIEW_VERDICTS.has(String(candidate.status));
+}
+function changesetReviewChanged(base, candidate) {
+  if (base.type !== "changeset" || candidate.type !== "changeset") return false;
+  const baseContent = object2(base.content) ? base.content : {};
+  const candidateContent = object2(candidate.content) ? candidate.content : {};
+  return JSON.stringify([baseContent.reviewState, baseContent.reviewReasons]) !== JSON.stringify([candidateContent.reviewState, candidateContent.reviewReasons]);
+}
+function reviewAuthorityChanged(base, candidate) {
+  return reviewVerdictChanged(base, candidate) || changesetReviewChanged(base, candidate);
+}
+function reviewedContent(record2) {
+  const content = record2.content;
+  if (!object2(content)) return content;
+  if (record2.type === "plan" && Array.isArray(content.steps)) {
+    return {
+      ...content,
+      steps: content.steps.map((step) => {
+        if (!object2(step)) return step;
+        const { status: _status, statusNote: _statusNote, ...proposal } = step;
+        return proposal;
+      })
+    };
+  }
+  if (record2.type === "changeset") {
+    const { reviewState: _reviewState, reviewReasons: _reviewReasons, ...proposal } = content;
+    return proposal;
+  }
+  return content;
+}
+function reviewedIdentityChanged(base, candidate) {
+  return REVIEWED_IDENTITY_FIELDS.some(
+    (field) => JSON.stringify(field === "content" ? reviewedContent(base) : base[field]) !== JSON.stringify(field === "content" ? reviewedContent(candidate) : candidate[field])
+  );
+}
+function mergeArtifactRecords(baseline, local, disk, key) {
+  const before = new Map(baseline.map((record2) => [key(record2), record2]));
+  const current = new Map(local.map((record2) => [key(record2), record2]));
+  const persisted = new Map(disk.map((record2) => [key(record2), record2]));
+  for (const [id, baseValue] of before) {
+    const localRecord = current.get(id);
+    const diskRecord = persisted.get(id);
+    if (!localRecord || !diskRecord) continue;
+    const base = baseValue;
+    const localValue = localRecord;
+    const diskValue = diskRecord;
+    if (reviewAuthorityChanged(base, localValue) && reviewedIdentityChanged(base, diskValue) || reviewAuthorityChanged(base, diskValue) && reviewedIdentityChanged(base, localValue)) {
+      throw new SessionReviewConflictError(id);
+    }
+  }
+  return mergeSessionRecords(baseline, local, disk, key);
+}
+function withSessionFlushLock(filePath, run) {
+  const deadline = performance.now() + 250;
+  const waitArray = new Int32Array(new SharedArrayBuffer(4));
+  let fd;
+  for (; ; ) {
+    try {
+      fd = fs7.openSync(filePath, "wx", 384);
+      break;
+    } catch (err) {
+      if (err.code !== "EEXIST") throw err;
+      if (performance.now() >= deadline) {
+        throw Object.assign(new Error(`Session flush lock busy: ${filePath}. Stop all writers before removing an abandoned lock.`), { code: "ELOCKED" });
+      }
+      Atomics.wait(waitArray, 0, 0, 10);
+    }
+  }
+  let result;
+  let failed = false;
+  let failure;
+  try {
+    fs7.writeFileSync(fd, JSON.stringify({ pid: process.pid, createdAt: (/* @__PURE__ */ new Date()).toISOString() }));
+    result = run();
+  } catch (err) {
+    failed = true;
+    failure = err;
+  }
+  for (const cleanup of [() => fs7.closeSync(fd), () => fs7.unlinkSync(filePath)]) {
+    try {
+      cleanup();
+    } catch (err) {
+      if (!failed) {
+        failed = true;
+        failure = err;
+      }
+    }
+  }
+  if (failed) throw failure;
+  return result;
+}
+
 // src/store/project-signals.ts
 init_dist();
-import fs7 from "node:fs";
+import fs8 from "node:fs";
 import path6 from "node:path";
 
 // src/guardrail-rules.ts
@@ -26176,7 +26063,7 @@ var FILE_SCAN_DIRS = ["", "config"];
 function senseProjectGuardrails(projectRoot2) {
   const isDir = (rel) => {
     try {
-      return fs7.statSync(path6.join(projectRoot2, rel)).isDirectory();
+      return fs8.statSync(path6.join(projectRoot2, rel)).isDirectory();
     } catch {
       return false;
     }
@@ -26184,7 +26071,7 @@ function senseProjectGuardrails(projectRoot2) {
   const candidates = [];
   for (const dir of FILE_SCAN_DIRS) {
     try {
-      for (const name of fs7.readdirSync(path6.join(projectRoot2, dir) || projectRoot2)) {
+      for (const name of fs8.readdirSync(path6.join(projectRoot2, dir) || projectRoot2)) {
         candidates.push(dir ? `${dir}/${name}` : name);
       }
     } catch {
@@ -26208,8 +26095,8 @@ function stripJsoncComments(src) {
 function loadTeamPreferences(basePath) {
   const filePath = path6.join(basePath, "team.json");
   try {
-    if (!fs7.existsSync(filePath)) return [];
-    const raw2 = JSON.parse(stripJsoncComments(fs7.readFileSync(filePath, "utf-8")));
+    if (!fs8.existsSync(filePath)) return [];
+    const raw2 = JSON.parse(stripJsoncComments(fs8.readFileSync(filePath, "utf-8")));
     const parsed = parseTeamPreferencesFile(raw2);
     if (!parsed) {
       console.warn(`[deepPairing] team.json failed schema validation; ignoring`);
@@ -26339,27 +26226,27 @@ function scanContentForSecrets(content, maxDepth = DEFAULT_SCAN_DEPTH) {
 
 // src/store/session-scan.ts
 init_dist();
-import fs8 from "node:fs";
+import fs9 from "node:fs";
 import path7 from "node:path";
 function listSessions(projectRoot2) {
   const sessionsDir = path7.join(projectRoot2, ".deeppairing", "sessions");
-  if (!fs8.existsSync(sessionsDir)) return [];
-  const entries = fs8.readdirSync(sessionsDir, { withFileTypes: true });
+  if (!fs9.existsSync(sessionsDir)) return [];
+  const entries = fs9.readdirSync(sessionsDir, { withFileTypes: true });
   const sessions = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const sessionDir = path7.join(sessionsDir, entry.name);
     try {
       const artFile = path7.join(sessionDir, "artifacts.json");
-      if (!fs8.existsSync(artFile)) continue;
+      if (!fs9.existsSync(artFile)) continue;
       const artifacts = salvageArray(
         `${entry.name}/artifacts.json`,
-        JSON.parse(fs8.readFileSync(artFile, "utf-8")),
+        JSON.parse(fs9.readFileSync(artFile, "utf-8")),
         "id"
       );
       if (artifacts.length === 0) continue;
       const decFile = path7.join(sessionDir, "decisions.json");
-      const decRaw = fs8.existsSync(decFile) ? JSON.parse(fs8.readFileSync(decFile, "utf-8")) : [];
+      const decRaw = fs9.existsSync(decFile) ? JSON.parse(fs9.readFileSync(decFile, "utf-8")) : [];
       const hasDecisions = Array.isArray(decRaw) && decRaw.length > 0;
       const sorted = [...artifacts].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
       const firstArtifact = sorted[0];
@@ -26386,18 +26273,18 @@ function searchAll(projectRoot2, query, limit = 50) {
   for (const session of sessions) {
     const sessionDir = path7.join(projectRoot2, ".deeppairing", "sessions", session.id);
     const artFile = path7.join(sessionDir, "artifacts.json");
-    if (!fs8.existsSync(artFile)) continue;
+    if (!fs9.existsSync(artFile)) continue;
     let artifacts;
     try {
-      artifacts = salvageArray(`${session.id}/artifacts.json`, JSON.parse(fs8.readFileSync(artFile, "utf-8")), "id");
+      artifacts = salvageArray(`${session.id}/artifacts.json`, JSON.parse(fs9.readFileSync(artFile, "utf-8")), "id");
     } catch {
       continue;
     }
     const prefsFile = path7.join(projectRoot2, ".deeppairing", "preferences.json");
     let rejected = [];
     try {
-      if (fs8.existsSync(prefsFile)) {
-        const prefs = JSON.parse(fs8.readFileSync(prefsFile, "utf-8"));
+      if (fs9.existsSync(prefsFile)) {
+        const prefs = JSON.parse(fs9.readFileSync(prefsFile, "utf-8"));
         const raw2 = prefs.rejectedApproaches ?? [];
         rejected = Array.isArray(raw2) ? raw2.map((r) => typeof r === "string" ? { description: r } : r) : [];
       }
@@ -26505,9 +26392,9 @@ function listAllDecisions(projectRoot2, liveSessions = []) {
   const consumedLive = /* @__PURE__ */ new Set();
   const sidecarSessions = [];
   let entries = [];
-  if (fs8.existsSync(sessionsDir)) {
+  if (fs9.existsSync(sessionsDir)) {
     try {
-      entries = fs8.readdirSync(sessionsDir, { withFileTypes: true });
+      entries = fs9.readdirSync(sessionsDir, { withFileTypes: true });
     } catch {
       entries = [];
     }
@@ -26518,7 +26405,7 @@ function listAllDecisions(projectRoot2, liveSessions = []) {
     const sessionDir = path7.join(sessionsDir, sessionId);
     const decFile = path7.join(sessionDir, "decisions.json");
     try {
-      if (fs8.existsSync(decFile + ".corrupt")) sidecarSessions.push(sessionId);
+      if (fs9.existsSync(decFile + ".corrupt")) sidecarSessions.push(sessionId);
     } catch {
     }
     const liveSrc = liveById.get(sessionId);
@@ -26527,13 +26414,13 @@ function listAllDecisions(projectRoot2, liveSessions = []) {
       pushSession(sessionId, liveSrc.decisions, liveSrc.artifacts);
       continue;
     }
-    if (!fs8.existsSync(decFile)) continue;
+    if (!fs9.existsSync(decFile)) continue;
     let raw2;
     try {
-      raw2 = JSON.parse(fs8.readFileSync(decFile, "utf-8"));
+      raw2 = JSON.parse(fs9.readFileSync(decFile, "utf-8"));
     } catch (err) {
       try {
-        fs8.copyFileSync(decFile, decFile + ".corrupt");
+        fs9.copyFileSync(decFile, decFile + ".corrupt");
       } catch {
       }
       failedSessions.push({ sessionId, reason: errorMessage(err, "unreadable decisions.json"), kind: "unreadable" });
@@ -26559,11 +26446,11 @@ function listAllDecisions(projectRoot2, liveSessions = []) {
     }
     let artifacts = [];
     const artFile = path7.join(sessionDir, "artifacts.json");
-    if (fs8.existsSync(artFile)) {
+    if (fs9.existsSync(artFile)) {
       try {
         artifacts = salvageArray(
           `${sessionId}/artifacts.json`,
-          JSON.parse(fs8.readFileSync(artFile, "utf-8")),
+          JSON.parse(fs9.readFileSync(artFile, "utf-8")),
           "id"
         );
       } catch {
@@ -26672,9 +26559,9 @@ function groupByFeature(projectRoot2, overrides = {}) {
   const failedSessions = [];
   const scans = [];
   let entries = [];
-  if (fs8.existsSync(sessionsDir)) {
+  if (fs9.existsSync(sessionsDir)) {
     try {
-      entries = fs8.readdirSync(sessionsDir, { withFileTypes: true });
+      entries = fs9.readdirSync(sessionsDir, { withFileTypes: true });
     } catch {
       entries = [];
     }
@@ -26684,12 +26571,12 @@ function groupByFeature(projectRoot2, overrides = {}) {
     const sessionId = entry.name;
     const sessionDir = path7.join(sessionsDir, sessionId);
     const artFile = path7.join(sessionDir, "artifacts.json");
-    if (!fs8.existsSync(artFile)) continue;
+    if (!fs9.existsSync(artFile)) continue;
     let artifacts;
     try {
       artifacts = salvageArray(
         `${sessionId}/artifacts.json`,
-        JSON.parse(fs8.readFileSync(artFile, "utf-8")),
+        JSON.parse(fs9.readFileSync(artFile, "utf-8")),
         "id"
       );
     } catch (err) {
@@ -26699,9 +26586,9 @@ function groupByFeature(projectRoot2, overrides = {}) {
     if (artifacts.length === 0) continue;
     let decisions = [];
     const decFile = path7.join(sessionDir, "decisions.json");
-    if (fs8.existsSync(decFile)) {
+    if (fs9.existsSync(decFile)) {
       try {
-        const raw2 = JSON.parse(fs8.readFileSync(decFile, "utf-8"));
+        const raw2 = JSON.parse(fs9.readFileSync(decFile, "utf-8"));
         if (Array.isArray(raw2)) {
           decisions = salvageArray(`${sessionId}/decisions.json`, raw2, "decisionId");
         }
@@ -26710,9 +26597,9 @@ function groupByFeature(projectRoot2, overrides = {}) {
     }
     let comments = [];
     const cmtFile = path7.join(sessionDir, "comments.json");
-    if (fs8.existsSync(cmtFile)) {
+    if (fs9.existsSync(cmtFile)) {
       try {
-        const raw2 = JSON.parse(fs8.readFileSync(cmtFile, "utf-8"));
+        const raw2 = JSON.parse(fs9.readFileSync(cmtFile, "utf-8"));
         if (Array.isArray(raw2)) {
           comments = salvageArray(`${sessionId}/comments.json`, raw2, "id");
         }
@@ -26892,7 +26779,7 @@ function groupByFeature(projectRoot2, overrides = {}) {
 }
 
 // src/store/ledger-digest.ts
-import fs9 from "node:fs";
+import fs10 from "node:fs";
 import path8 from "node:path";
 var ledgerDigestCache = /* @__PURE__ */ new Map();
 var DIGEST_CACHE_TTL_MS = 2e3;
@@ -26905,7 +26792,7 @@ function ledgerDigest(projectRoot2) {
     return cached2.result;
   }
   const sessionsDir = path8.join(projectRoot2, ".deeppairing", "sessions");
-  if (!fs9.existsSync(sessionsDir)) {
+  if (!fs10.existsSync(sessionsDir)) {
     const empty = {
       shapedThisProject: 0,
       nearMissesThisProject: 0,
@@ -26921,13 +26808,13 @@ function ledgerDigest(projectRoot2) {
   let blockedThisProject = 0;
   let sessionsTouched = 0;
   const cites = /* @__PURE__ */ new Map();
-  for (const entry of fs9.readdirSync(sessionsDir, { withFileTypes: true })) {
+  for (const entry of fs10.readdirSync(sessionsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const tracesPath = path8.join(sessionsDir, entry.name, "preflight-traces.json");
-    if (!fs9.existsSync(tracesPath)) continue;
+    if (!fs10.existsSync(tracesPath)) continue;
     let map2;
     try {
-      map2 = salvageRecord("preflight-traces.json", JSON.parse(fs9.readFileSync(tracesPath, "utf-8")), {});
+      map2 = salvageRecord("preflight-traces.json", JSON.parse(fs10.readFileSync(tracesPath, "utf-8")), {});
     } catch {
       continue;
     }
@@ -26975,7 +26862,7 @@ function ledgerDigest(projectRoot2) {
 }
 
 // src/store/preflight-residual.ts
-import fs10 from "node:fs";
+import fs11 from "node:fs";
 import path9 from "node:path";
 
 // src/mcp/preflight-validator.ts
@@ -27051,14 +26938,14 @@ function appendResidual(projectRoot2, entry) {
   const p = residualPath(projectRoot2);
   let file2 = { version: 1, escapes: [] };
   try {
-    const raw2 = JSON.parse(fs10.readFileSync(p, "utf-8"));
+    const raw2 = JSON.parse(fs11.readFileSync(p, "utf-8"));
     if (raw2?.version === 1 && Array.isArray(raw2.escapes)) file2 = raw2;
   } catch {
   }
   file2.escapes.push(entry);
   file2.escapes = file2.escapes.slice(-RESIDUAL_CAP);
   try {
-    fs10.mkdirSync(path9.dirname(p), { recursive: true });
+    fs11.mkdirSync(path9.dirname(p), { recursive: true });
     writeJsonAtomic(p, file2);
   } catch {
   }
@@ -27111,14 +26998,49 @@ function isCrossTerminalVerdictFlip(from, to, reason) {
 }
 
 // src/store/posted-reviews.ts
-import fs11 from "node:fs";
+import fs12 from "node:fs";
 import path10 from "node:path";
+
+// src/github/pr-reference.ts
+function validRepoOwner(value) {
+  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(value);
+}
+function validRepoName(value) {
+  return /^(?!\.{1,2}$)[a-z0-9_.-]+$/i.test(value);
+}
+function parsePrReference(ref) {
+  const value = ref.trim();
+  const bare = /^#?(\d+)$/.exec(value);
+  if (bare) {
+    const number5 = Number(bare[1]);
+    return Number.isSafeInteger(number5) && number5 > 0 ? { number: number5 } : null;
+  }
+  const match2 = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/(?:files|commits|checks))?\/?(?:[?#][^\s]*)?$/i.exec(value);
+  if (!match2) return null;
+  const [, owner, repo, digits] = match2;
+  const number4 = Number(digits);
+  if (!owner || !repo || !validRepoOwner(owner) || !validRepoName(repo) || !Number.isSafeInteger(number4) || number4 < 1) return null;
+  return { owner, repo, number: number4 };
+}
+
+// src/store/posted-reviews.ts
 function postedReviewsPath(projectRoot2, sessionId) {
   return path10.join(projectRoot2, ".deeppairing", "sessions", sessionId, "posted-reviews.json");
 }
+function samePrTarget(record2, ref) {
+  const parsed = parsePrNumber(ref);
+  if (parsed === null || parsed.number !== record2.prNumber) return false;
+  if (parsed.owner && parsed.repo && record2.owner && record2.repo) {
+    return parsed.owner.toLowerCase() === record2.owner.toLowerCase() && parsed.repo.toLowerCase() === record2.repo.toLowerCase();
+  }
+  return true;
+}
+function parsePrNumber(ref) {
+  return parsePrReference(ref);
+}
 function readPostedReviews(projectRoot2, sessionId) {
   try {
-    const raw2 = fs11.readFileSync(postedReviewsPath(projectRoot2, sessionId), "utf-8");
+    const raw2 = fs12.readFileSync(postedReviewsPath(projectRoot2, sessionId), "utf-8");
     const parsed = JSON.parse(raw2);
     return Array.isArray(parsed) ? parsed : [];
   } catch {
@@ -27131,6 +27053,468 @@ function appendPostedReview(projectRoot2, sessionId, record2) {
   writeJsonAtomic(postedReviewsPath(projectRoot2, sessionId), all);
   return all;
 }
+
+// src/store/review-post-journal.ts
+init_zod();
+import fs13 from "node:fs";
+import path11 from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+var digestSchema = external_exports.string().regex(/^[0-9a-f]{64}$/);
+var eventSchema = external_exports.enum(["COMMENT", "REQUEST_CHANGES", "APPROVE"]);
+var timestampSchema = external_exports.iso.datetime();
+var reviewPostResultSchema = external_exports.object({
+  id: external_exports.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  htmlUrl: external_exports.string(),
+  state: external_exports.enum(["COMMENTED", "CHANGES_REQUESTED", "APPROVED"]),
+  commitId: external_exports.string().regex(/^[0-9a-f]{40}$/).optional()
+}).strict();
+var resultSchema = reviewPostResultSchema;
+var reviewPostLeaseSchema = external_exports.object({ operationId: external_exports.uuid(), token: external_exports.uuid() }).strict();
+var reviewPostIdentitySchema = external_exports.object({
+  target: external_exports.string(),
+  event: eventSchema,
+  reviewedHeadSha: external_exports.string().regex(/^[0-9a-f]{40}$/).optional(),
+  payloadDigest: digestSchema,
+  authorizationDigest: digestSchema
+}).strict().superRefine((value, ctx) => {
+  if (canonicalReviewTarget(value.target) !== value.target) {
+    ctx.addIssue({ code: "custom", message: "Expected a canonical GitHub PR target" });
+  }
+  if (value.event === "APPROVE" && !value.reviewedHeadSha) {
+    ctx.addIssue({ code: "custom", message: "Approval requires reviewed commit identity" });
+  }
+});
+var operationSchema = external_exports.object({
+  id: external_exports.uuid(),
+  tokenDigest: digestSchema,
+  sessionId: external_exports.string().min(1),
+  identity: reviewPostIdentitySchema,
+  state: external_exports.enum(["reserved", "sending", "succeeded", "failed", "unknown", "abandoned"]),
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+  result: resultSchema.optional(),
+  operatorAcknowledgement: external_exports.object({
+    acknowledgedAt: timestampSchema,
+    priorState: external_exports.enum(["sending", "unknown"]),
+    operationDigest: digestSchema
+  }).strict().optional(),
+  /** Recorded when the live coordinator released its own never-sent attempt.
+   * `priorState: "sending"` is the interesting case: the operation had written
+   * its durable sending marker, and the coordinator holding its lease attests
+   * it never reached its POST call. That attestation is the coordinator's, not
+   * the journal's — `sending` alone never implies non-delivery. */
+  unsentRelease: external_exports.object({
+    releasedAt: timestampSchema,
+    priorState: external_exports.enum(["reserved", "sending"])
+  }).strict().optional()
+}).strict().superRefine((value, ctx) => {
+  if (value.state === "abandoned" && !value.operatorAcknowledgement) {
+    ctx.addIssue({ code: "custom", message: "Operator-abandoned uncertainty requires its acknowledgement audit" });
+  }
+  if (value.operatorAcknowledgement && !["abandoned", "succeeded"].includes(value.state)) {
+    ctx.addIssue({ code: "custom", message: "Only abandoned or reconciled-success history carries an operator acknowledgement" });
+  }
+  if (value.unsentRelease && value.state !== "failed") {
+    ctx.addIssue({ code: "custom", message: "Only a definitely unsent operation carries an unsent release" });
+  }
+  if (value.state === "succeeded" !== (value.result !== void 0)) {
+    ctx.addIssue({ code: "custom", message: "Only success carries a remote review identity" });
+  }
+  if (value.result && !resultMatches(value.identity, value.result)) {
+    ctx.addIssue({ code: "custom", message: "Remote review identity does not match the operation" });
+  }
+});
+var journalSchema = external_exports.object({
+  version: external_exports.literal(1),
+  operations: external_exports.array(operationSchema).max(4096)
+}).strict();
+var ReviewPostJournalError = class extends Error {
+  constructor(reason, message) {
+    super(message);
+    this.reason = reason;
+    this.name = "ReviewPostJournalError";
+  }
+  reason;
+};
+function canonicalReviewTarget(ref) {
+  const parsed = parsePrReference(ref);
+  return parsed?.owner && parsed.repo ? `https://github.com/${parsed.owner.toLowerCase()}/${parsed.repo.toLowerCase()}/pull/${parsed.number}` : null;
+}
+function reviewPostDigest(value) {
+  const stable = (v) => {
+    if (Array.isArray(v)) return v.map(stable);
+    if (v && typeof v === "object") {
+      return Object.fromEntries(Object.keys(v).sort().map((k) => [k, stable(v[k])]));
+    }
+    return v;
+  };
+  return createHash("sha256").update(JSON.stringify(stable(value))).digest("hex");
+}
+function resultMatches(identity, result) {
+  const states = { COMMENT: "COMMENTED", REQUEST_CHANGES: "CHANGES_REQUESTED", APPROVE: "APPROVED" };
+  return result.state === states[identity.event] && (!identity.reviewedHeadSha || result.commitId === identity.reviewedHeadSha) && result.htmlUrl.toLowerCase() === `${identity.target}#pullrequestreview-${result.id}`;
+}
+function readBoundedFile(file2, maxBytes) {
+  const entry = fs13.lstatSync(file2);
+  if (!entry.isFile() || entry.isSymbolicLink()) throw new Error("Inspection requires a regular non-symlink file");
+  const fd = fs13.openSync(file2, fs13.constants.O_RDONLY | (fs13.constants.O_NONBLOCK ?? 0));
+  try {
+    const stat = fs13.fstatSync(fd);
+    if (!stat.isFile() || stat.size > maxBytes) throw new Error("File exceeds inspection safety limit or is not regular");
+    const chunks = [];
+    let total = 0;
+    while (total <= maxBytes) {
+      const chunk = Buffer.alloc(Math.min(64 * 1024, maxBytes + 1 - total));
+      const count2 = fs13.readSync(fd, chunk, 0, chunk.length, null);
+      if (count2 === 0) return Buffer.concat(chunks, total);
+      total += count2;
+      if (total > maxBytes) throw new Error("File exceeds inspection safety limit");
+      chunks.push(chunk.subarray(0, count2));
+    }
+    throw new Error("File exceeds inspection safety limit");
+  } finally {
+    fs13.closeSync(fd);
+  }
+}
+var ReviewPostJournal = class {
+  constructor(projectRoot2, sessionId, persist = writeJsonAtomic) {
+    this.sessionId = sessionId;
+    this.persist = persist;
+    if (!sessionId || sessionId === "." || sessionId.includes("..") || /[/\\\0]/.test(sessionId) || sessionId.trim() !== sessionId || /[. ]$/.test(sessionId)) {
+      throw new ReviewPostJournalError("invalid", "Invalid session ID for review-post journal");
+    }
+    const dir = path11.join(projectRoot2, ".deeppairing", "sessions", sessionId);
+    this.journalPath = path11.join(dir, "review-post-operations.json");
+    this.claimPath = path11.join(dir, ".review-post.lock");
+    this.legacyPath = path11.join(dir, "posted-reviews.json");
+    this.markerPath = path11.join(dir, ".review-post-protocol-v1");
+  }
+  sessionId;
+  persist;
+  journalPath;
+  claimPath;
+  legacyPath;
+  markerPath;
+  read() {
+    try {
+      const raw2 = readBoundedFile(this.journalPath, 8 * 1024 * 1024).toString("utf8");
+      const journal = journalSchema.parse(JSON.parse(raw2));
+      const ids = /* @__PURE__ */ new Set();
+      const activeTargets = /* @__PURE__ */ new Set();
+      for (const op of journal.operations) {
+        if (op.sessionId !== this.sessionId || ids.has(op.id)) throw new Error("Invalid operation/session identity");
+        ids.add(op.id);
+        if (["reserved", "sending", "unknown"].includes(op.state)) {
+          if (activeTargets.has(op.identity.target)) throw new Error("Overlapping unresolved operations");
+          activeTargets.add(op.identity.target);
+        }
+      }
+      return journal;
+    } catch (err) {
+      if (err.code === "ENOENT" && !fs13.existsSync(this.markerPath)) {
+        return { version: 1, operations: [] };
+      }
+      throw new ReviewPostJournalError("corrupt", `Review-post journal is unreadable or invalid: ${this.journalPath}. Preserve it and inspect before posting.`);
+    }
+  }
+  /** Legacy data is advisory elsewhere, but it must fail CLOSED at the posting boundary. */
+  readLegacyHistory() {
+    try {
+      const raw2 = readBoundedFile(this.legacyPath, 8 * 1024 * 1024).toString("utf8");
+      return external_exports.array(external_exports.object({
+        pr: external_exports.string().refine((v) => parsePrReference(v) !== null),
+        prNumber: external_exports.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+        owner: external_exports.string().refine(validRepoOwner).optional(),
+        repo: external_exports.string().refine(validRepoName).optional(),
+        event: eventSchema,
+        reviewId: external_exports.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+        url: external_exports.url(),
+        postedAt: timestampSchema,
+        commentCount: external_exports.number().int().nonnegative()
+      }).passthrough().refine((v) => {
+        const parsed = parsePrReference(v.pr);
+        const posted = parsePrReference(v.url);
+        return parsed?.number === v.prNumber && posted?.number === v.prNumber && !!posted.owner && !!posted.repo && (!v.owner || !parsed.owner || v.owner.toLowerCase() === parsed.owner.toLowerCase()) && (!v.repo || !parsed.repo || v.repo.toLowerCase() === parsed.repo.toLowerCase()) && (!v.owner || v.owner.toLowerCase() === posted.owner.toLowerCase()) && (!v.repo || v.repo.toLowerCase() === posted.repo.toLowerCase()) && (!parsed.owner || parsed.owner.toLowerCase() === posted.owner.toLowerCase()) && (!parsed.repo || parsed.repo.toLowerCase() === posted.repo.toLowerCase());
+      })).parse(JSON.parse(raw2));
+    } catch (err) {
+      if (err.code === "ENOENT") return [];
+      throw new ReviewPostJournalError("corrupt", `Posted-review history is unreadable or invalid: ${this.legacyPath}. Preserve it and inspect before posting.`);
+    }
+  }
+  claim(fn) {
+    const token = randomUUID();
+    let fd;
+    try {
+      fd = fs13.openSync(this.claimPath, "wx", 384);
+    } catch (err) {
+      if (err.code === "EEXIST") {
+        throw new ReviewPostJournalError("busy", "Review-post state is locked. Retry later; never remove a claim while a writer may still be running.");
+      }
+      throw err;
+    }
+    try {
+      fs13.writeFileSync(fd, token);
+    } catch (err) {
+      fs13.closeSync(fd);
+      fs13.unlinkSync(this.claimPath);
+      throw err;
+    }
+    fs13.closeSync(fd);
+    let primaryFailed = false;
+    try {
+      return fn();
+    } catch (err) {
+      primaryFailed = true;
+      throw err;
+    } finally {
+      try {
+        if (fs13.readFileSync(this.claimPath, "utf8") !== token) {
+          throw new ReviewPostJournalError("stale", "Review-post claim changed while held; stop writers and inspect state.");
+        }
+        fs13.unlinkSync(this.claimPath);
+      } catch (err) {
+        if (!primaryFailed) {
+          if (err.code === "ENOENT") {
+            throw new ReviewPostJournalError("stale", "Review-post claim was removed while held; stop writers and inspect state before continuing.");
+          }
+          throw err;
+        }
+      }
+    }
+  }
+  list() {
+    return this.read().operations;
+  }
+  /** Read-only diagnostics. Never print raw bytes, fencing tokens, or payloads. */
+  inspect() {
+    const metadata = (file2) => {
+      try {
+        const stat = fs13.lstatSync(file2);
+        return {
+          path: file2,
+          exists: true,
+          bytes: stat.size,
+          modifiedAt: stat.mtime.toISOString(),
+          regularFile: stat.isFile() && !stat.isSymbolicLink()
+        };
+      } catch (err) {
+        return { path: file2, exists: err.code !== "ENOENT", unreadable: true };
+      }
+    };
+    const validate = (read) => {
+      try {
+        read();
+        return { valid: true };
+      } catch (err) {
+        return { valid: false, error: err instanceof ReviewPostJournalError ? err.message : "Unreadable state" };
+      }
+    };
+    let claimDigest;
+    try {
+      claimDigest = this.readClaimDigest();
+    } catch {
+    }
+    return {
+      journal: { ...metadata(this.journalPath), ...validate(() => this.read()) },
+      legacyHistory: { ...metadata(this.legacyPath), ...validate(() => this.readLegacyHistory()) },
+      protocolMarker: metadata(this.markerPath),
+      claim: { ...metadata(this.claimPath), ...claimDigest ? { digest: claimDigest } : {} }
+    };
+  }
+  readClaimDigest() {
+    let stat;
+    try {
+      stat = fs13.lstatSync(this.claimPath);
+    } catch (err) {
+      if (err.code === "ENOENT") {
+        throw new ReviewPostJournalError("stale", "Review-post claim is absent; nothing was removed. Re-inspect state before restarting writers.");
+      }
+      throw err;
+    }
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4096) {
+      throw new ReviewPostJournalError("invalid", "Claim must be a regular file of at most 4096 bytes; inspect it manually.");
+    }
+    return createHash("sha256").update(readBoundedFile(this.claimPath, 4096)).digest("hex");
+  }
+  /** Operator-only, offline coordination: this is NOT a process-liveness proof.
+   * The explicit assertion excludes concurrent replacement after comparison. */
+  releaseClaim(expectedDigest, allWritersStopped) {
+    if (allWritersStopped !== true || !digestSchema.safeParse(expectedDigest).success) {
+      throw new ReviewPostJournalError("invalid", "Claim release requires all writers stopped and the inspected claim digest.");
+    }
+    if (this.readClaimDigest() !== expectedDigest) {
+      throw new ReviewPostJournalError("stale", "Claim changed since inspection; it was not removed.");
+    }
+    try {
+      fs13.unlinkSync(this.claimPath);
+    } catch (err) {
+      if (err.code === "ENOENT") {
+        throw new ReviewPostJournalError(
+          "stale",
+          "Review-post claim disappeared before release; nothing was removed. Re-inspect state before restarting writers."
+        );
+      }
+      throw err;
+    }
+  }
+  /** An explicit operator accepts duplicate risk, not evidence of non-delivery.
+   * Never exposed to MCP/daemon mutation routes or automatic retry logic. */
+  acknowledgeUnknown(operationId, expectedDigest, allWritersStopped, acceptDuplicateRisk) {
+    if (allWritersStopped !== true || acceptDuplicateRisk !== true || !digestSchema.safeParse(expectedDigest).success) {
+      throw new ReviewPostJournalError("invalid", "Acknowledgement requires all writers stopped, duplicate-risk acceptance, and the inspected operation digest.");
+    }
+    this.update(operationId, (op) => {
+      if (!["sending", "unknown"].includes(op.state) || reviewPostDigest(op) !== expectedDigest) {
+        throw new ReviewPostJournalError("stale", "Operation changed or is not uncertain; no acknowledgement recorded.");
+      }
+      op.operatorAcknowledgement = {
+        acknowledgedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        priorState: op.state,
+        operationDigest: expectedDigest
+      };
+      op.state = "abandoned";
+    });
+  }
+  reserve(identity, repost = false) {
+    const parsed = reviewPostIdentitySchema.parse(identity);
+    return this.claim(() => {
+      const journal = this.read();
+      const legacy = this.readLegacyHistory();
+      const prior = journal.operations.filter((op) => op.identity.target === parsed.target);
+      const unresolved = prior.find((op) => ["reserved", "sending", "unknown"].includes(op.state));
+      if (unresolved) {
+        throw new ReviewPostJournalError("blocked", `Review operation ${unresolved.id} is ${unresolved.state}; reconcile it before another post. Repost does not bypass uncertainty.`);
+      }
+      if (!repost && (prior.some((op) => op.state === "succeeded" || op.state === "abandoned") || legacy.some((op) => samePrTarget(op, parsed.target)))) {
+        throw new ReviewPostJournalError("blocked", "This session already posted or acknowledged an uncertain post to that PR; fresh human repost authorization is required.");
+      }
+      if (journal.operations.length >= 4096) throw new ReviewPostJournalError("blocked", "Review-post journal is full; stop writers and perform a history-preserving migration before posting. Do not delete or reset the journal.");
+      const lease = { operationId: randomUUID(), token: randomUUID() };
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      journal.operations.push({
+        id: lease.operationId,
+        tokenDigest: reviewPostDigest(lease.token),
+        sessionId: this.sessionId,
+        identity: parsed,
+        state: "reserved",
+        createdAt: now,
+        updatedAt: now
+      });
+      if (!fs13.existsSync(this.markerPath)) {
+        fs13.writeFileSync(this.markerPath, "1\n", { flag: "wx", mode: 384 });
+      }
+      this.persist(this.journalPath, journal);
+      return lease;
+    });
+  }
+  update(operationId, mutate) {
+    this.claim(() => {
+      const journal = this.read();
+      const op = journal.operations.find((op2) => op2.id === operationId);
+      if (!op) throw new ReviewPostJournalError("stale", "Review-post reservation is absent");
+      mutate(op);
+      op.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+      this.persist(this.journalPath, journalSchema.parse(journal));
+    });
+  }
+  transition(lease, mutate) {
+    this.update(lease.operationId, (op) => {
+      if (op.tokenDigest !== reviewPostDigest(lease.token)) {
+        throw new ReviewPostJournalError("stale", "Review-post reservation belongs to another caller");
+      }
+      mutate(op);
+    });
+  }
+  /** Deliberately not idempotent: a repeated sending response must NEVER authorize a second POST. */
+  markSending(lease, identity) {
+    this.transition(lease, (op) => {
+      if (op.state !== "reserved" || reviewPostDigest(op.identity) !== reviewPostDigest(reviewPostIdentitySchema.parse(identity))) {
+        throw new ReviewPostJournalError("stale", "Review-post reservation changed or may already have been sent");
+      }
+      op.state = "sending";
+    });
+  }
+  failBeforeSending(lease) {
+    this.transition(lease, (op) => {
+      if (op.state !== "reserved") throw new ReviewPostJournalError("stale", "A possibly sent review cannot be marked failed");
+      op.state = "failed";
+    });
+  }
+  /**
+   * #344 — the ONLY door that may reclassify a `sending` operation as definitely
+   * unsent, and its authority is the lease, not this class.
+   *
+   * TRUST BOUNDARY. The journal cannot observe GitHub, so it cannot prove
+   * non-delivery. It VERIFIES one thing and TRUSTS another:
+   *   1. VERIFIED — the caller presents the exact fencing token this operation
+   *      was issued (`transition`). The token is generated per reservation, is
+   *      never persisted in plaintext (only its digest) and never written to a
+   *      log, so a restarted process, a competing process and the operator CLI
+   *      cannot produce it. Holding it means being the live coordinator of THIS
+   *      attempt.
+   *   2. TRUSTED, not verified — that the caller has not invoked `send`. Note
+   *      what the state check below does NOT establish: `sending` is written
+   *      BEFORE the POST and persists across it, so `sending` is not evidence
+   *      of non-delivery. The check only rejects operations that already
+   *      reached a resolved or uncertain outcome, which fences replay and any
+   *      post-send downgrade. Non-invocation is attested solely by the live
+   *      coordinator's control flow in `executeDurableReviewPost`, whose only
+   *      call site here is the failure path of the block preceding its single
+   *      `send` call; every path at or after `send` — a timeout, a malformed
+   *      response, a lost response — goes to `markUnknown` instead.
+   *
+   * Consequently this is NOT an operator control and is not reachable from the
+   * review-posts CLI: `cancelReserved` stays `reserved`-only. Elapsed time, a
+   * missing remote review, a restart and a generic cancellation remain unable to
+   * classify an operation as unsent.
+   */
+  releaseUnsent(lease) {
+    this.transition(lease, (op) => {
+      if (op.state !== "reserved" && op.state !== "sending") {
+        throw new ReviewPostJournalError("stale", "Only an unresolved reservation can be released as unsent; this operation already reached a resolved or uncertain outcome");
+      }
+      op.unsentRelease = { releasedAt: (/* @__PURE__ */ new Date()).toISOString(), priorState: op.state };
+      op.state = "failed";
+    });
+  }
+  /** Explicit operator recovery. Cancelling only reserved atomically fences the original caller. */
+  cancelReserved(operationId) {
+    this.update(operationId, (op) => {
+      if (op.state !== "reserved") throw new ReviewPostJournalError("stale", "A possibly sent review cannot be cancelled");
+      op.state = "failed";
+    });
+  }
+  markUnknown(lease) {
+    this.transition(lease, (op) => {
+      if (op.state !== "sending" && op.state !== "unknown") throw new ReviewPostJournalError("stale", "Only a possibly sent review can become unknown");
+      op.state = "unknown";
+    });
+  }
+  succeed(lease, result) {
+    const parsed = resultSchema.parse(result);
+    this.transition(lease, (op) => {
+      if (op.operatorAcknowledgement) {
+        throw new ReviewPostJournalError("stale", "The original review-post lease was permanently fenced by operator acknowledgement");
+      }
+      if (!["sending", "unknown", "succeeded"].includes(op.state) || !resultMatches(op.identity, parsed) || op.result && reviewPostDigest(op.result) !== reviewPostDigest(parsed)) {
+        throw new ReviewPostJournalError("stale", "Remote review does not match this possibly sent operation");
+      }
+      op.state = "succeeded";
+      op.result = parsed;
+    });
+  }
+  /** No POST: caller must independently verify the remote review before recording recovery. */
+  reconcileSucceeded(operationId, identity, result) {
+    const parsed = resultSchema.parse(result);
+    this.update(operationId, (op) => {
+      if (!["sending", "unknown", "abandoned", "succeeded"].includes(op.state) || reviewPostDigest(op.identity) !== reviewPostDigest(reviewPostIdentitySchema.parse(identity)) || !resultMatches(op.identity, parsed) || op.result && reviewPostDigest(op.result) !== reviewPostDigest(parsed)) {
+        throw new ReviewPostJournalError("stale", "Remote review does not match the unresolved operation");
+      }
+      op.state = "succeeded";
+      op.result = parsed;
+    });
+  }
+};
 
 // src/store/file-store.ts
 var LEDGER_EXEMPT_REJECT_TYPES = /* @__PURE__ */ new Set([
@@ -27202,36 +27586,10 @@ var FileStore = class _FileStore {
   // which persona does not read or write). See readSessionPrefs/writeSessionPrefs
   // below — that pair is the single swap point if the scope ever changes again.
   persona = "auto";
-  /**
-   * U1 — per-file change watermarks tracked since last load. Before each
-   * flush we re-stat each session JSON; if EITHER mtime has advanced OR
-   * size has changed beyond what we last saw, another writer (CLI command,
-   * second daemon during a race, external editor) has touched the file
-   * and our in-memory copy is no longer the full truth. We re-read the
-   * disk version and merge by id before writing — in-memory wins on key
-   * collisions because those are the user's latest actions, but records
-   * added by the other writer survive instead of being clobbered.
-   *
-   * Why two signals: mtime granularity is FS-dependent (WSL2 and some
-   * older Linux/Windows give second-only resolution), so two writes in
-   * the same second produce identical mtimeMs even though content
-   * differs. Falling back to size catches that — it's not a perfect
-   * checksum, but two distinct sets of artifacts almost always serialize
-   * to different lengths. Together they give good-enough defense in depth
-   * on top of the U0.6 deterministic-sessionId fix that already
-   * collapses intra-daemon races to zero.
-   */
-  fileMtimeMs = {};
-  fileSizes = {};
-  // PP2 — last serialized bytes we wrote per file, so flush() can skip the disk
-  // write (and the temp+rename) when a file is byte-identical to what's already
-  // there. Kills the write-amplification where a single comment rewrote the
-  // multi-MB artifacts.json: now only the file(s) that actually changed hit disk.
-  // Cost: holds a serialized copy of each session file in RAM (grows with
-  // artifacts.json size) — an accepted trade for the I/O savings. flush() drops
-  // an entry whenever readIfChanged detects an external write, so the skip can
-  // never defeat the U1 merge self-heal.
-  lastSerialized = {};
+  // Immutable snapshots identify local changes independently of filesystem mtimes.
+  recordBaselines = {};
+  observedRecordFiles = /* @__PURE__ */ new Set();
+  backedUpCorruption = {};
   // BB2 — held for FileStore.invalidateLedgerDigestCache, which is keyed
   // by projectRoot so all sessions in this project bust the same cache.
   // BB4 — also read by the recall mode='ledger' handler to call
@@ -27239,8 +27597,8 @@ var FileStore = class _FileStore {
   projectRoot;
   constructor(projectRoot2, sessionId) {
     this.projectRoot = projectRoot2;
-    this.basePath = path11.join(projectRoot2, ".deeppairing");
-    this.projectHint = path11.basename(projectRoot2);
+    this.basePath = path12.join(projectRoot2, ".deeppairing");
+    this.projectHint = path12.basename(projectRoot2);
     this.guardrails = senseProjectGuardrails(projectRoot2);
     this.teamPreferences = loadTeamPreferences(this.basePath);
     this.sessionId = sessionId ?? `session_${Date.now()}`;
@@ -27251,18 +27609,19 @@ var FileStore = class _FileStore {
     if (this.isDemoSession) this.demoPreferences = {};
     this.ensureDir();
     this.load();
+    this.captureRecordBaselines();
     this.loadPreferences();
     this.loadSessionPrefs();
   }
   ensureDir() {
-    const sessionDir = path11.join(this.basePath, "sessions", this.sessionId);
-    fs12.mkdirSync(sessionDir, { recursive: true });
+    const sessionDir = path12.join(this.basePath, "sessions", this.sessionId);
+    fs14.mkdirSync(sessionDir, { recursive: true });
   }
   sessionDir() {
-    return path11.join(this.basePath, "sessions", this.sessionId);
+    return path12.join(this.basePath, "sessions", this.sessionId);
   }
   loadPreferences() {
-    const prefsPath = path11.join(this.basePath, "preferences.json");
+    const prefsPath = path12.join(this.basePath, "preferences.json");
     const prefs = _FileStore.salvageRecord(
       // G6 — labels are the once-per-process suppression KEY: session-scope
       // them (F10's sid:file format) so a second corrupt session still logs.
@@ -27291,27 +27650,27 @@ var FileStore = class _FileStore {
     const dir = this.sessionDir();
     this.artifacts = _FileStore.salvageArray(
       `${this.sessionId}:artifacts.json`,
-      this.loadJsonFile(path11.join(dir, "artifacts.json"), []),
+      this.loadJsonFile(path12.join(dir, "artifacts.json"), []),
       "id"
     );
     this.comments = _FileStore.salvageArray(
       `${this.sessionId}:comments.json`,
-      this.loadJsonFile(path11.join(dir, "comments.json"), []),
+      this.loadJsonFile(path12.join(dir, "comments.json"), []),
       "id"
     );
     const decArr = _FileStore.salvageArray(
       `${this.sessionId}:decisions.json`,
-      this.loadJsonFile(path11.join(dir, "decisions.json"), []),
+      this.loadJsonFile(path12.join(dir, "decisions.json"), []),
       "decisionId"
     );
     this.decisions = new Map(decArr.map((d) => [d.decisionId, d]));
     const planArr = _FileStore.salvageArray(
       `${this.sessionId}:plan-reviews.json`,
-      this.loadJsonFile(path11.join(dir, "plan-reviews.json"), []),
+      this.loadJsonFile(path12.join(dir, "plan-reviews.json"), []),
       "artifactId"
     );
     this.planReviews = new Map(planArr.map((p) => [p.artifactId, p]));
-    const rawFailures = this.loadJsonFile(path11.join(dir, "render-failures.json"), []);
+    const rawFailures = this.loadJsonFile(path12.join(dir, "render-failures.json"), []);
     const keyedFailures = (Array.isArray(rawFailures) ? rawFailures : []).map((r) => ({
       ...r,
       __key: `${r?.artifactId} ${r?.visualId}`
@@ -27323,11 +27682,11 @@ var FileStore = class _FileStore {
     ).map(({ __key, ...r }) => r);
     this.requests = _FileStore.salvageArray(
       `${this.sessionId}:requests.json`,
-      this.loadJsonFile(path11.join(dir, "requests.json"), []),
+      this.loadJsonFile(path12.join(dir, "requests.json"), []),
       "id"
     );
     this.postedReviews = readPostedReviews(this.projectRoot, this.sessionId);
-    const rawMetrics = this.loadJsonFile(path11.join(dir, "metrics.json"), []);
+    const rawMetrics = this.loadJsonFile(path12.join(dir, "metrics.json"), []);
     if (Array.isArray(rawMetrics)) {
       const kept = rawMetrics.filter(
         (e) => !!e && typeof e === "object" && typeof e.type === "string" && typeof e.latencyMs === "number" && Number.isFinite(e.latencyMs)
@@ -27342,6 +27701,7 @@ var FileStore = class _FileStore {
       }
       this.reviewLatencies = [];
     }
+    this.flushedLatencyCount = this.reviewLatencies.length;
   }
   // D1 — the salvage helpers (disk trust boundary) live in salvage.ts since
   // the G10 decomposition. These statics are byte-compatible delegates so
@@ -27349,164 +27709,214 @@ var FileStore = class _FileStore {
   static salvageLog = salvageLog;
   static salvageArray = salvageArray;
   static salvageRecord = salvageRecord;
-  /** Load a JSON file with graceful error handling. Records mtime + size so a
-   *  later flush can detect external writes and merge instead of clobber. */
+  /** Load a JSON file with graceful error handling and best-effort backup. */
   loadJsonFile(filePath, fallback) {
+    let bytes;
     try {
-      if (!fs12.existsSync(filePath)) {
-        delete this.fileMtimeMs[filePath];
-        delete this.fileSizes[filePath];
+      if (!fs14.existsSync(filePath)) {
         return fallback;
       }
-      const stat = fs12.statSync(filePath);
-      this.fileMtimeMs[filePath] = stat.mtimeMs;
-      this.fileSizes[filePath] = stat.size;
-      return JSON.parse(fs12.readFileSync(filePath, "utf-8"));
+      bytes = fs14.readFileSync(filePath, "utf-8");
+      this.observedRecordFiles.add(path12.basename(filePath));
+      return JSON.parse(bytes);
     } catch (err) {
       if (errorCode(err) === "ENOENT") {
-        delete this.fileMtimeMs[filePath];
-        delete this.fileSizes[filePath];
         return fallback;
       }
       console.error(`[deepPairing] Corrupted file ${filePath}: ${errorMessage(err)}`);
       try {
-        fs12.copyFileSync(filePath, filePath + ".corrupt");
+        fs14.copyFileSync(filePath, filePath + ".corrupt");
+        if (err instanceof SyntaxError && bytes !== void 0) this.backedUpCorruption[filePath] = bytes;
       } catch {
       }
       return fallback;
     }
   }
-  /**
-   * U1 — return the on-disk version of `filePath` IFF the file was modified
-   * by another writer since we last loaded it; otherwise null. Caller uses
-   * the result to merge external changes into in-memory state before flush.
-   *
-   * Change detection is OR(mtimeMs > lastSeen, size != lastSeen). Either
-   * signal alone is unreliable (WSL2 mtime is second-resolution; size
-   * could match by coincidence on a same-length swap), but together they
-   * catch the realistic external-write cases we care about.
-   */
-  readIfChanged(filePath) {
-    try {
-      if (!fs12.existsSync(filePath)) return null;
-      const stat = fs12.statSync(filePath);
-      const lastMtime = this.fileMtimeMs[filePath] ?? 0;
-      const lastSize = this.fileSizes[filePath];
-      const mtimeAdvanced = stat.mtimeMs > lastMtime;
-      const sizeChanged = lastSize !== void 0 && stat.size !== lastSize;
-      const sizeFirstSeen = lastSize === void 0;
-      if (!mtimeAdvanced && !sizeChanged && !sizeFirstSeen) return null;
-      const parsed = JSON.parse(fs12.readFileSync(filePath, "utf-8"));
-      return parsed;
-    } catch {
-      return null;
-    }
-  }
   flushFailureLogged = false;
-  scheduleFlush() {
+  flushRetryDelay = 100;
+  reviewConflict = null;
+  disposed = false;
+  assertAuthorizationReadable() {
+    if (this.reviewConflict) throw this.reviewConflict;
+  }
+  scheduleFlush(delay = 100) {
+    if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
     if (this.flushTimer) return;
     this.flushTimer = setTimeout(() => {
+      let retry = false;
       try {
         this.flush();
         this.flushFailureLogged = false;
+        this.flushRetryDelay = 100;
       } catch (err) {
         const code = err?.code;
+        retry = code === "ELOCKED";
         if (code !== "ENOENT" && !this.flushFailureLogged) {
           this.flushFailureLogged = true;
           console.error(`[deepPairing] debounced flush failed for session ${this.sessionId}:`, err);
         }
       }
       this.flushTimer = null;
-    }, 100);
+      if (retry) {
+        this.flushRetryDelay = Math.min(this.flushRetryDelay * 2, 2e3);
+        this.scheduleFlush(this.flushRetryDelay);
+      }
+    }, delay);
+    if (delay > 100) this.flushTimer.unref?.();
   }
-  /** Atomic write: delegates to writeJsonAtomic (PID+TS+random temp suffix
-   *  so concurrent flushes to the same path can't truncate each other's tmp).
-   *  Refreshes mtime+size watermark after rename so the next external-change
-   *  check uses the new baseline. */
-  atomicWrite(filePath, data) {
-    const serialized = JSON.stringify(data, null, 2);
-    if (this.lastSerialized[filePath] === serialized) return;
-    writeStringAtomic(filePath, serialized);
-    this.lastSerialized[filePath] = serialized;
+  captureRecordBaselines() {
+    const records = {
+      "artifacts.json": this.artifacts,
+      "comments.json": this.comments,
+      "decisions.json": [...this.decisions.values()],
+      "plan-reviews.json": [...this.planReviews.values()],
+      "requests.json": this.requests,
+      "render-failures.json": this.renderFailures
+    };
+    for (const [file2, values] of Object.entries(records)) this.recordBaselines[file2] = JSON.stringify(values);
+  }
+  flushRecords(file2, local, key, salvage, optional2 = false, merge2 = mergeSessionRecords) {
+    const baseline = this.recordBaselines[file2] ?? "[]";
+    const serialized = JSON.stringify(local);
+    const dirty = serialized !== baseline;
+    if (!dirty) return local;
+    const filePath = path12.join(this.sessionDir(), file2);
+    let raw2;
+    let diskBytes;
     try {
-      const stat = fs12.statSync(filePath);
-      this.fileMtimeMs[filePath] = stat.mtimeMs;
-      this.fileSizes[filePath] = stat.size;
-    } catch {
+      diskBytes = fs14.readFileSync(filePath, "utf8");
+      raw2 = JSON.parse(diskBytes);
+      this.observedRecordFiles.add(file2);
+    } catch (err) {
+      const knownCorruption = err instanceof SyntaxError && diskBytes !== void 0 && this.backedUpCorruption[filePath] === diskBytes;
+      if (errorCode(err) === "ENOENT" && this.observedRecordFiles.has(file2)) {
+        throw Object.assign(
+          new Error(`Previously observed session collection disappeared: ${filePath}`),
+          { code: "ESESSIONFILEMISSING", path: filePath }
+        );
+      }
+      if (errorCode(err) !== "ENOENT" && !knownCorruption) throw err;
+      raw2 = [];
     }
-  }
-  /**
-   * U1 — merge-by-id helper. If another writer touched the file, union the
-   * on-disk records with our in-memory ones; in-memory wins on key
-   * collisions because those are the user's most recent actions. Records
-   * the other writer added that we never saw still survive instead of
-   * being overwritten.
-   */
-  mergeArrayById(inMemory, onDisk, keyField) {
-    if (!onDisk || !Array.isArray(onDisk)) return inMemory;
-    const seen = new Set(inMemory.map((r) => r[keyField]).filter(Boolean));
-    const additions = onDisk.filter((r) => r[keyField] && !seen.has(r[keyField]));
-    if (additions.length === 0) return inMemory;
-    return [...additions, ...inMemory];
+    const merged = merge2(JSON.parse(baseline), local, salvage(raw2), key);
+    const mergedBytes = JSON.stringify(merged, null, 2);
+    if (dirty && (!optional2 || merged.length > 0 || diskBytes !== void 0) && diskBytes !== mergedBytes) {
+      writeStringAtomic(filePath, mergedBytes);
+      this.observedRecordFiles.add(file2);
+    }
+    this.recordBaselines[file2] = JSON.stringify(merged);
+    delete this.backedUpCorruption[filePath];
+    return merged;
   }
   flush() {
-    const dir = this.sessionDir();
-    const artifactsPath = path11.join(dir, "artifacts.json");
-    const commentsPath = path11.join(dir, "comments.json");
-    const decisionsPath = path11.join(dir, "decisions.json");
-    const plansPath = path11.join(dir, "plan-reviews.json");
-    const diskArtifacts = this.readIfChanged(artifactsPath);
-    if (diskArtifacts) {
-      this.artifacts = this.mergeArrayById(
-        this.artifacts,
-        _FileStore.salvageArray(`${this.sessionId}:artifacts.json (external)`, diskArtifacts, "id"),
-        "id"
-      );
-      delete this.lastSerialized[artifactsPath];
-    }
-    const diskComments = this.readIfChanged(commentsPath);
-    if (diskComments) {
-      this.comments = this.mergeArrayById(
-        this.comments,
-        _FileStore.salvageArray("comments.json (external)", diskComments, "id"),
-        "id"
-      );
-      delete this.lastSerialized[commentsPath];
-    }
-    const diskDecisions = this.readIfChanged(decisionsPath);
-    if (diskDecisions) {
-      for (const d of _FileStore.salvageArray("decisions.json (external)", diskDecisions, "decisionId")) {
-        if (!this.decisions.has(d.decisionId)) {
-          this.decisions.set(d.decisionId, d);
+    const reviewConflict = this.reviewConflict;
+    try {
+      withSessionFlushLock(path12.join(this.sessionDir(), ".flush.lock"), () => {
+        let firstFailure = reviewConflict;
+        let artifactWriteBlocked = !!reviewConflict;
+        const attempt = (write) => {
+          try {
+            write();
+          } catch (error51) {
+            if (firstFailure === null || firstFailure === void 0) firstFailure = error51;
+          }
+        };
+        if (!artifactWriteBlocked) {
+          attempt(() => {
+            try {
+              this.artifacts = this.flushRecords(
+                "artifacts.json",
+                this.artifacts,
+                (r) => r.id,
+                (raw2) => _FileStore.salvageArray(`${this.sessionId}:artifacts.json (external)`, raw2, "id"),
+                false,
+                mergeArtifactRecords
+              );
+            } catch (error51) {
+              artifactWriteBlocked = true;
+              if (error51 instanceof SessionReviewConflictError) {
+                this.reviewConflict = error51;
+              }
+              throw error51;
+            }
+          });
         }
-      }
-      delete this.lastSerialized[decisionsPath];
-    }
-    const diskPlans = this.readIfChanged(plansPath);
-    if (diskPlans) {
-      for (const p of _FileStore.salvageArray("plan-reviews.json (external)", diskPlans, "artifactId")) {
-        if (!this.planReviews.has(p.artifactId)) {
-          this.planReviews.set(p.artifactId, p);
+        attempt(() => {
+          this.comments = this.flushRecords(
+            "comments.json",
+            this.comments,
+            (r) => r.id,
+            (raw2) => _FileStore.salvageArray("comments.json (external)", raw2, "id")
+          );
+        });
+        if (!artifactWriteBlocked) {
+          attempt(() => {
+            this.decisions = new Map(this.flushRecords(
+              "decisions.json",
+              [...this.decisions.values()],
+              (r) => r.decisionId,
+              (raw2) => _FileStore.salvageArray("decisions.json (external)", raw2, "decisionId")
+            ).map((r) => [r.decisionId, r]));
+          });
+          attempt(() => {
+            this.planReviews = new Map(this.flushRecords(
+              "plan-reviews.json",
+              [...this.planReviews.values()],
+              (r) => r.artifactId,
+              (raw2) => _FileStore.salvageArray("plan-reviews.json (external)", raw2, "artifactId")
+            ).map((r) => [r.artifactId, r]));
+          });
         }
-      }
-      delete this.lastSerialized[plansPath];
-    }
-    this.atomicWrite(artifactsPath, this.artifacts);
-    this.atomicWrite(commentsPath, this.comments);
-    this.atomicWrite(decisionsPath, Array.from(this.decisions.values()));
-    this.atomicWrite(plansPath, Array.from(this.planReviews.values()));
-    if (this.reviewLatencies.length > 0) {
-      this.atomicWrite(path11.join(dir, "metrics.json"), this.reviewLatencies);
-    }
-    if (this.renderFailures.length > 0) {
-      this.atomicWrite(path11.join(dir, "render-failures.json"), this.renderFailures);
-    }
-    if (this.requests.length > 0) {
-      this.atomicWrite(path11.join(dir, "requests.json"), this.requests);
+        attempt(() => {
+          this.requests = this.flushRecords(
+            "requests.json",
+            this.requests,
+            (r) => r.id,
+            (raw2) => _FileStore.salvageArray("requests.json (external)", raw2, "id"),
+            true
+          );
+        });
+        attempt(() => {
+          this.renderFailures = this.flushRecords(
+            "render-failures.json",
+            this.renderFailures,
+            (r) => JSON.stringify([r.artifactId, r.visualId]),
+            (raw2) => {
+              const keyed = (Array.isArray(raw2) ? raw2 : []).map((r) => ({
+                ...r,
+                __key: JSON.stringify([r?.artifactId, r?.visualId])
+              }));
+              return _FileStore.salvageArray(
+                "render-failures.json (external)",
+                keyed,
+                "__key"
+              ).map(({ __key, ...r }) => r);
+            },
+            true
+          );
+        });
+        const metricsPath2 = path12.join(this.sessionDir(), "metrics.json");
+        if (!artifactWriteBlocked && this.reviewLatencies.length > this.flushedLatencyCount) {
+          attempt(() => {
+            const raw2 = this.loadJsonFile(metricsPath2, []);
+            const disk = Array.isArray(raw2) ? raw2.filter((r) => r && typeof r.type === "string" && Number.isFinite(r.latencyMs)) : [];
+            const merged = [...disk, ...this.reviewLatencies.slice(this.flushedLatencyCount)];
+            writeJsonAtomic(metricsPath2, merged);
+            this.reviewLatencies = merged;
+            this.flushedLatencyCount = merged.length;
+          });
+        }
+        if (firstFailure !== null && firstFailure !== void 0) throw firstFailure;
+      });
+    } catch (error51) {
+      if (error51 instanceof SessionReviewConflictError) this.reviewConflict = error51;
+      throw error51;
     }
   }
+  flushedLatencyCount = 0;
   /** Force an immediate flush — call before process exit */
   forceFlush() {
+    if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
@@ -27518,6 +27928,7 @@ var FileStore = class _FileStore {
    *  (or has been) removed. Unlike forceFlush(), this deliberately discards the
    *  pending write; the caller is disposing the store. Idempotent. */
   dispose() {
+    this.disposed = true;
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
@@ -27528,6 +27939,7 @@ var FileStore = class _FileStore {
   }
   // --- Artifacts ---
   createArtifact(params) {
+    this.assertAuthorizationReadable();
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const featureId = normalizeFeatureId(params.feature)?.slug;
     const secretWarnings = scanContentForSecrets(params.content);
@@ -27552,25 +27964,64 @@ var FileStore = class _FileStore {
     };
     this.artifacts.push(artifact);
     if (params.type === "code_change") this.touchCodeChangeMarker(now);
+    this.writeCodeCheckpoints(artifact);
     if (params.parentId) this.clearRenderFailuresFor(params.parentId);
     this.scheduleFlush();
     return artifact;
   }
   /**
-   * PP1 — a tiny project-level marker the per-edit checkpoint hook reads instead
-   * of readdir-ing + JSON.parsing every session's (potentially multi-MB,
-   * diff-bearing) artifacts.json on every Write/Edit. Last write wins = the
-   * most-recent code_change across all sessions, which is exactly what the
-   * checkpoint's freshness rule needs. Best-effort: if it's missing the hook
-   * just falls back to nagging (the safe default).
+   * Compatibility hint for older installed checkpoint hooks. Current hooks
+   * use file/session receipts and deliberately ignore this global timestamp.
    */
   touchCodeChangeMarker(at) {
     try {
-      writeJsonAtomic(path11.join(this.basePath, "last-code-change.json"), { at });
+      writeJsonAtomic(path12.join(this.basePath, "last-code-change.json"), { at });
     } catch {
     }
   }
+  /** Local reminder receipts, separate from the legacy project-wide hint. */
+  checkpointFiles(artifact) {
+    if (this.isDemoSession || !artifact.content || typeof artifact.content !== "object") return [];
+    const content = artifact.content;
+    if (content.reviewIntent === "external") return [];
+    const files = artifact.type === "code_change" ? [content.filePath] : artifact.type === "changeset" && Array.isArray(content.files) ? content.files.map((f) => f?.path) : [];
+    return [...new Set(files.filter((f) => typeof f === "string" && f.trim().length > 0).map((f) => path12.resolve(this.projectRoot, f)))];
+  }
+  codeCheckpointPath(filePath) {
+    const key = crypto4.createHash("sha256").update(filePath).digest("hex");
+    return path12.join(this.basePath, "sessions", this.sessionId, "code-checkpoints", key + ".json");
+  }
+  writeCodeCheckpoints(artifact) {
+    const ttlMs = artifact.type === "changeset" ? 10 * 60 * 1e3 : 60 * 1e3;
+    const expiresAt = new Date(Date.parse(artifact.createdAt) + ttlMs).toISOString();
+    for (const filePath of this.checkpointFiles(artifact)) {
+      try {
+        const markerPath = this.codeCheckpointPath(filePath);
+        fs14.mkdirSync(path12.dirname(markerPath), { recursive: true });
+        writeJsonAtomic(markerPath, {
+          version: 1,
+          at: artifact.createdAt,
+          expiresAt,
+          sessionId: this.sessionId,
+          artifactId: artifact.id,
+          filePath
+        });
+      } catch {
+      }
+    }
+  }
+  revokeCodeCheckpoints(artifact) {
+    for (const filePath of this.checkpointFiles(artifact)) {
+      try {
+        const markerPath = this.codeCheckpointPath(filePath);
+        const marker = JSON.parse(fs14.readFileSync(markerPath, "utf8"));
+        if (marker.artifactId === artifact.id) fs14.unlinkSync(markerPath);
+      } catch {
+      }
+    }
+  }
   renameArtifact(artifactId, title) {
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (art) {
       art.title = title;
@@ -27584,6 +28035,7 @@ var FileStore = class _FileStore {
    *  mechanism update_plan_progress / changeset review use. No-op on a missing
    *  artifact. */
   setRetractReason(artifactId, reason) {
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (art) {
       art.content.retractReason = reason;
@@ -27592,6 +28044,7 @@ var FileStore = class _FileStore {
     }
   }
   updateArtifactStatus(artifactId, status, reason = "unspecified") {
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (art) {
       if (isCrossTerminalVerdictFlip(art.status, status, reason)) {
@@ -27604,6 +28057,12 @@ var FileStore = class _FileStore {
       const now = (/* @__PURE__ */ new Date()).toISOString();
       const fromStatus = art.status;
       art.status = status;
+      if (["rejected", "revised", "superseded", "retracted", "obsolete"].includes(status)) {
+        try {
+          this.revokeCodeCheckpoints(art);
+        } catch {
+        }
+      }
       art.updatedAt = now;
       const history = art.statusHistory ?? [];
       if (history.length === 0 && art.createdAt) {
@@ -27631,6 +28090,7 @@ var FileStore = class _FileStore {
   }
   /** D10 (H2) — patch plan step statuses in place. See store-interface.ts. */
   updatePlanProgress(artifactId, updates) {
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (!art || art.type !== "plan") return null;
     const content = art.content;
@@ -27661,6 +28121,7 @@ var FileStore = class _FileStore {
    *  updatePlanProgress uses. Reversible: passing `null` clears the file's
    *  state (e.g. un-checking "File looks right"). */
   setChangesetFileReview(artifactId, filePath, state, reason) {
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (!art || art.type !== "changeset") return null;
     const content = art.content;
@@ -27685,6 +28146,7 @@ var FileStore = class _FileStore {
     return art;
   }
   getArtifacts() {
+    this.assertAuthorizationReadable();
     return this.artifacts;
   }
   // --- Comments ---
@@ -27869,6 +28331,7 @@ var FileStore = class _FileStore {
    * appear here. Old artifacts lacking the field simply don't match.
    */
   getUnacknowledgedStatusChanges() {
+    this.assertAuthorizationReadable();
     return this.artifacts.filter(
       (a) => a.statusChangeUnreported === true
     );
@@ -27879,6 +28342,7 @@ var FileStore = class _FileStore {
    * acknowledgeDecisions exactly (same loop + same debounced flush).
    */
   acknowledgeStatusChanges(ids) {
+    this.assertAuthorizationReadable();
     for (const a of this.artifacts) {
       if (ids.includes(a.id)) {
         a.statusChangeUnreported = false;
@@ -28031,6 +28495,7 @@ var FileStore = class _FileStore {
   // C6c review — the interface narrowed options to DecisionOption[] but this
   // inline param type still said any[], leaving the WRITE site unenforced.
   recordDecisionRequest(params) {
+    this.assertAuthorizationReadable();
     this.decisions.set(params.decisionId, {
       ...params,
       createdAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -28038,6 +28503,7 @@ var FileStore = class _FileStore {
     this.scheduleFlush();
   }
   resolveDecision(decisionId, optionId, reasoning, prediction) {
+    this.assertAuthorizationReadable();
     const dec = this.decisions.get(decisionId);
     if (!dec) return;
     const opts = dec.options;
@@ -28059,6 +28525,7 @@ var FileStore = class _FileStore {
     this.notifyFeedbackWaiters();
   }
   getDecisionResponse(decisionId) {
+    this.assertAuthorizationReadable();
     return this.decisions.get(decisionId)?.response ?? null;
   }
   /** An artifact whose review can never resolve normally any more — it was
@@ -28100,17 +28567,21 @@ var FileStore = class _FileStore {
     return isClosedArtifactStatus(art.status);
   }
   getPendingDecisions() {
+    this.assertAuthorizationReadable();
     return Array.from(this.decisions.values()).filter(
       (d) => !d.response && !this.isArtifactClosed(d.artifactId)
     );
   }
   getDecision(decisionId) {
+    this.assertAuthorizationReadable();
     return this.decisions.get(decisionId);
   }
   getResolvedDecisions() {
+    this.assertAuthorizationReadable();
     return Array.from(this.decisions.values()).filter((d) => d.response && !d.acknowledged);
   }
   acknowledgeDecisions(decisionIds) {
+    this.assertAuthorizationReadable();
     for (const id of decisionIds) {
       const dec = this.decisions.get(id);
       if (dec) dec.acknowledged = true;
@@ -28119,6 +28590,7 @@ var FileStore = class _FileStore {
   }
   // --- Plan Reviews ---
   recordPlanReview(artifactId) {
+    this.assertAuthorizationReadable();
     this.planReviews.set(artifactId, {
       artifactId,
       createdAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -28126,6 +28598,7 @@ var FileStore = class _FileStore {
     this.scheduleFlush();
   }
   resolvePlanReview(artifactId, verdict, feedback) {
+    this.assertAuthorizationReadable();
     const review = this.planReviews.get(artifactId);
     if (review) {
       review.verdict = verdict;
@@ -28136,11 +28609,13 @@ var FileStore = class _FileStore {
     }
   }
   getPlanReviewVerdict(artifactId) {
+    this.assertAuthorizationReadable();
     const review = this.planReviews.get(artifactId);
     if (!review?.verdict) return null;
     return { verdict: review.verdict, feedback: review.feedback };
   }
   getPendingPlanReviews() {
+    this.assertAuthorizationReadable();
     return Array.from(this.planReviews.values()).filter(
       (p) => !p.verdict && !this.isArtifactClosed(p.artifactId)
     );
@@ -28376,7 +28851,7 @@ var FileStore = class _FileStore {
   }
   readPreferences() {
     if (this.demoPreferences) return this.demoPreferences;
-    const prefsPath = path11.join(this.basePath, "preferences.json");
+    const prefsPath = path12.join(this.basePath, "preferences.json");
     return _FileStore.salvageRecord("preferences.json", this.loadJsonFile(prefsPath, {}), {});
   }
   writePreferences(prefs) {
@@ -28384,7 +28859,7 @@ var FileStore = class _FileStore {
       this.demoPreferences = prefs;
       return;
     }
-    const prefsPath = path11.join(this.basePath, "preferences.json");
+    const prefsPath = path12.join(this.basePath, "preferences.json");
     writeJsonAtomic(prefsPath, prefs);
   }
   // --- Session annotations (learner's replay notes) ---
@@ -28395,7 +28870,7 @@ var FileStore = class _FileStore {
    * accidentally becoming agent context.
    */
   annotationsPath() {
-    return path11.join(this.sessionDir(), "annotations.json");
+    return path12.join(this.sessionDir(), "annotations.json");
   }
   getAnnotations() {
     return this.loadJsonFile(this.annotationsPath(), []);
@@ -28422,6 +28897,10 @@ var FileStore = class _FileStore {
     return true;
   }
   // --- Posted reviews (R1 #279) ---
+  /** Fresh journal reads and short disk claims are shared with CLI processes. */
+  get reviewPosts() {
+    return new ReviewPostJournal(this.projectRoot, this.sessionId);
+  }
   /**
    * R1 (#279) — record that a review LANDED on a PR. Called only after `gh`
    * returned success, by whichever door posted; the authorization gate reads
@@ -28501,7 +28980,7 @@ var FileStore = class _FileStore {
    * evolves separately if needed).
    */
   preflightTracesPath() {
-    return path11.join(this.sessionDir(), "preflight-traces.json");
+    return path12.join(this.sessionDir(), "preflight-traces.json");
   }
   recordPreflightTrace(artifactId, trace) {
     const map2 = _FileStore.salvageRecord(
@@ -28565,7 +29044,7 @@ var FileStore = class _FileStore {
   // cross-session moat (rejectedApproaches / approvedPatterns / guardrails /
   // globalLedgerPublish) that project preferences.json owns.
   sessionPrefsPath() {
-    return path11.join(this.sessionDir(), "session-prefs.json");
+    return path12.join(this.sessionDir(), "session-prefs.json");
   }
   readSessionPrefs() {
     return _FileStore.salvageRecord(
@@ -28601,7 +29080,59 @@ var FileStore = class _FileStore {
     for (const resolve of waiters) resolve();
   }
   // --- Full state (for web UI hydration) ---
+  /** Read permission-bearing state under the cooperating writers' claim without
+   * flushing or changing the live cache/baselines. UI hydration stays cheap. */
+  getReviewPostState() {
+    if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
+    this.assertAuthorizationReadable();
+    if (this.isDemoSession) throw new Error("Demo sessions cannot authorize PR review posting");
+    try {
+      return withSessionFlushLock(path12.join(this.sessionDir(), ".flush.lock"), () => {
+        const baseline = JSON.parse(this.recordBaselines["artifacts.json"] ?? "[]");
+        let raw2;
+        try {
+          raw2 = JSON.parse(fs14.readFileSync(path12.join(this.sessionDir(), "artifacts.json"), "utf8"));
+          this.observedRecordFiles.add("artifacts.json");
+        } catch (error51) {
+          if (errorCode(error51) !== "ENOENT" || this.observedRecordFiles.has("artifacts.json")) throw error51;
+          raw2 = [];
+        }
+        if (!Array.isArray(raw2) || raw2.some((value) => !ArtifactSchema.safeParse(value).success)) {
+          throw new Error("Cannot authorize a PR review from malformed persisted artifacts");
+        }
+        const disk = raw2;
+        if (new Set(disk.map((value) => value.id)).size !== disk.length) {
+          throw new Error("Cannot authorize a PR review from duplicate persisted artifacts");
+        }
+        const before = new Map(baseline.map((value) => [value.id, value]));
+        const persisted = new Map(disk.map((value) => [value.id, value]));
+        for (const local of this.artifacts) {
+          const remote = persisted.get(local.id);
+          if (!remote) continue;
+          const base = before.get(local.id);
+          if (base && base.status !== local.status && base.status !== remote.status && local.status !== remote.status) {
+            throw new SessionReviewConflictError(local.id);
+          }
+          if (!base && ["content", "version", "type", "parentId", "status"].some(
+            (field) => JSON.stringify(local[field]) !== JSON.stringify(remote[field])
+          )) {
+            throw new SessionReviewConflictError(local.id);
+          }
+        }
+        const artifacts = mergeArtifactRecords(baseline, this.artifacts, disk, (value) => value.id);
+        return JSON.parse(JSON.stringify({
+          sessionId: this.sessionId,
+          artifacts,
+          postedReviews: this.reviewPosts.readLegacyHistory()
+        }));
+      });
+    } catch (error51) {
+      if (error51 instanceof SessionReviewConflictError) this.reviewConflict = error51;
+      throw error51;
+    }
+  }
   getFullState() {
+    this.assertAuthorizationReadable();
     return {
       sessionId: this.sessionId,
       artifacts: this.artifacts,
@@ -28665,13 +29196,13 @@ var FileStore = class _FileStore {
 };
 
 // src/http/routes.ts
-import fs17 from "node:fs";
-import path16 from "node:path";
+import fs19 from "node:fs";
+import path17 from "node:path";
 
 // src/store/context-bank.ts
 init_dist();
-import fs13 from "node:fs";
-import path12 from "node:path";
+import fs15 from "node:fs";
+import path13 from "node:path";
 var RUNG_QUALITY = {
   "debrief-summary": "rich",
   "changeset-summary": "medium",
@@ -28799,12 +29330,12 @@ function deriveSalience(input) {
   return tags;
 }
 function readJsonArray(label, file2, idField) {
-  if (!fs13.existsSync(file2)) return [];
-  return salvageArray(label, JSON.parse(fs13.readFileSync(file2, "utf-8")), idField);
+  if (!fs15.existsSync(file2)) return [];
+  return salvageArray(label, JSON.parse(fs15.readFileSync(file2, "utf-8")), idField);
 }
 function mtimeIso(file2) {
   try {
-    return fs13.statSync(file2).mtime.toISOString();
+    return fs15.statSync(file2).mtime.toISOString();
   } catch {
     return null;
   }
@@ -28827,11 +29358,11 @@ function scanProject(entry, opts) {
     waitingOnAgentCount: 0
   };
   if (entry.stale) return project;
-  const sessionsDir = path12.join(entry.projectRoot, ".deeppairing", "sessions");
+  const sessionsDir = path13.join(entry.projectRoot, ".deeppairing", "sessions");
   let dirNames;
   try {
-    if (!fs13.existsSync(sessionsDir)) return project;
-    dirNames = fs13.readdirSync(sessionsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    if (!fs15.existsSync(sessionsDir)) return project;
+    dirNames = fs15.readdirSync(sessionsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
   } catch (err) {
     project.degraded = true;
     project.degradedReason = `sessions dir unreadable: ${String(err)}`;
@@ -28871,9 +29402,9 @@ function groupBySession(decisions) {
 }
 function scanSession(input) {
   const { sessionId, sessionsDir, project, now, staleAfterDays } = input;
-  const dir = path12.join(sessionsDir, sessionId);
-  const artFile = path12.join(dir, "artifacts.json");
-  const commentsFile = path12.join(dir, "comments.json");
+  const dir = path13.join(sessionsDir, sessionId);
+  const artFile = path13.join(dir, "artifacts.json");
+  const commentsFile = path13.join(dir, "comments.json");
   let artifacts = [];
   let degraded = false;
   let degradedReason;
@@ -28911,7 +29442,7 @@ function scanSession(input) {
   } catch {
     unansweredQuestionCount = 0;
   }
-  const lastActivity = deriveLastActivity(artifacts, [artFile, commentsFile, path12.join(dir, "decisions.json")]);
+  const lastActivity = deriveLastActivity(artifacts, [artFile, commentsFile, path13.join(dir, "decisions.json")]);
   const { oneLiner, rung, quality } = deriveOneLiner(artifacts, open);
   const needsYou = open.length + draftReviewCount;
   const session = {
@@ -29023,7 +29554,7 @@ function clearContextBankCache() {
 function summarizeProject(projectRoot2, opts = {}) {
   try {
     const summary = scanProject(
-      { projectRoot: projectRoot2, name: path12.basename(projectRoot2), lastSeen: (/* @__PURE__ */ new Date(0)).toISOString(), stale: false },
+      { projectRoot: projectRoot2, name: path13.basename(projectRoot2), lastSeen: (/* @__PURE__ */ new Date(0)).toISOString(), stale: false },
       { now: opts.now ?? /* @__PURE__ */ new Date(), staleAfterDays: DEFAULT_STALE_AFTER_DAYS }
     );
     return { lastActivity: summary.lastActivity, openDecisionCount: summary.openDecisionCount };
@@ -29033,13 +29564,13 @@ function summarizeProject(projectRoot2, opts = {}) {
 }
 
 // src/store/feature-overrides.ts
-import fs14 from "node:fs";
-import path13 from "node:path";
+import fs16 from "node:fs";
+import path14 from "node:path";
 var VERSION2 = 1;
 var loggedUnknownVersion = false;
 var TITLE_MAX = 120;
 function overridesPath(projectRoot2) {
-  return path13.join(projectRoot2, ".deeppairing", "feature-overrides.json");
+  return path14.join(projectRoot2, ".deeppairing", "feature-overrides.json");
 }
 function emptyOverrides() {
   return { version: VERSION2, groupTitles: {}, artifactAssignments: {} };
@@ -29057,8 +29588,8 @@ function sanitizeRecord(raw2) {
 function readFeatureOverridesFile(projectRoot2) {
   const file2 = overridesPath(projectRoot2);
   try {
-    if (!fs14.existsSync(file2)) return emptyOverrides();
-    const parsed = JSON.parse(fs14.readFileSync(file2, "utf-8"));
+    if (!fs16.existsSync(file2)) return emptyOverrides();
+    const parsed = JSON.parse(fs16.readFileSync(file2, "utf-8"));
     if (parsed?.version !== VERSION2) {
       if (!loggedUnknownVersion) {
         loggedUnknownVersion = true;
@@ -29085,7 +29616,7 @@ function readFeatureOverrides(projectRoot2) {
 }
 function writeFeatureOverridesFile(projectRoot2, data) {
   const file2 = overridesPath(projectRoot2);
-  fs14.mkdirSync(path13.dirname(file2), { recursive: true });
+  fs16.mkdirSync(path14.dirname(file2), { recursive: true });
   writeJsonAtomic(file2, data);
 }
 function setFeatureGroupTitle(projectRoot2, groupKey, title) {
@@ -29511,7 +30042,7 @@ ${SIZE_CLIPPED_NOTE}` : "";
   return `${head}<pre class="code"${langAttr}><code>${fitted.text}${trunc}${sizeTrunc}</code></pre>`;
 }
 function diffBlock(file2, includeCode, projectRoot2) {
-  const path22 = sanitizePath(file2.path, projectRoot2);
+  const path23 = sanitizePath(file2.path, projectRoot2);
   const changeType = esc2(file2.changeType ?? "modified");
   const hunks = Array.isArray(file2.hunks) ? file2.hunks : [];
   const stats = file2.stats;
@@ -29528,7 +30059,7 @@ function diffBlock(file2, includeCode, projectRoot2) {
   const additions = stats?.additions ?? derived.additions;
   const deletions = stats?.deletions ?? derived.deletions;
   const statLine = `<span class="diffstat"><span class="add">+${additions}</span> <span class="del">\u2212${deletions}</span></span>`;
-  const header = `<div class="file-head"><code class="path">${esc2(path22)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
+  const header = `<div class="file-head"><code class="path">${esc2(path23)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
   if (!includeCode) {
     return `<div class="file">${header}<p class="redacted">Diff omitted from this export.</p></div>`;
   }
@@ -29647,9 +30178,9 @@ function evidenceBlock(evidence, includeCode, projectRoot2) {
     }
     if (!ev || typeof ev !== "object") continue;
     const e = ev;
-    const path22 = sanitizePath(e.filePath, projectRoot2);
+    const path23 = sanitizePath(e.filePath, projectRoot2);
     const range = e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null && e.lineEnd !== e.lineStart ? `-${e.lineEnd}` : ""}` : "";
-    let anchor = path22 ? `<p class="anchor"><code>${esc2(path22 + range)}</code></p>` : "";
+    let anchor = path23 ? `<p class="anchor"><code>${esc2(path23 + range)}</code></p>` : "";
     if (!anchor && e.locator && typeof e.locator.value === "string" && e.locator.value.length > 0) {
       const loc = e.locator;
       const label = loc.kind === "url" ? loc.href && loc.href.length > 0 ? `${loc.value} (${loc.href})` : loc.value : loc.kind === "charRange" ? `chars ${loc.value}` : loc.kind === "quote" ? `\u201C${loc.value}\u201D` : loc.value;
@@ -29806,9 +30337,9 @@ function decisionBody(a, ctx) {
 }
 function codeChangeBody(a, ctx) {
   const content = coerceCodeChangeContent(a.content);
-  const path22 = sanitizePath(content.filePath, ctx.projectRoot);
+  const path23 = sanitizePath(content.filePath, ctx.projectRoot);
   const parts = [
-    `<div class="file-head"><code class="path">${esc2(path22)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
+    `<div class="file-head"><code class="path">${esc2(path23)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
   ];
   if (content.reasoning) parts.push(`<p class="why">Why: ${renderInline(content.reasoning)}</p>`);
   if (content.concept?.name) {
@@ -31253,9 +31784,9 @@ function formatLearnings(state) {
 }
 
 // src/export/html-export.ts
-import crypto4 from "node:crypto";
-import fs15 from "node:fs";
-import path14 from "node:path";
+import crypto5 from "node:crypto";
+import fs17 from "node:fs";
+import path15 from "node:path";
 var MAX_TRACE_LOOKUPS = 200;
 async function gatherPreflightTraces(store, artifacts) {
   if (!store?.getPreflightTrace) return [];
@@ -31274,8 +31805,8 @@ async function gatherPreflightTraces(store, artifacts) {
 function readGuardrailFires(projectRoot2) {
   if (!projectRoot2) return [];
   try {
-    const p = path14.join(projectRoot2, ".deeppairing", "hooks-state.json");
-    const parsed = JSON.parse(fs15.readFileSync(p, "utf-8"));
+    const p = path15.join(projectRoot2, ".deeppairing", "hooks-state.json");
+    const parsed = JSON.parse(fs17.readFileSync(p, "utf-8"));
     const fires = Array.isArray(parsed?.fires) ? parsed.fires : [];
     const out = [];
     for (const raw2 of fires) {
@@ -31348,11 +31879,11 @@ async function assembleSessionHtml(state, options = {}) {
     ...renderOptions,
     secretLabels,
     secretCount,
-    projectName: renderOptions.projectName ?? (projectRoot2 ? path14.basename(projectRoot2) : void 0)
+    projectName: renderOptions.projectName ?? (projectRoot2 ? path15.basename(projectRoot2) : void 0)
   });
 }
 function htmlExportFileName(sessionId, generatedAt = (/* @__PURE__ */ new Date()).toISOString()) {
-  const token = crypto4.createHash("sha1").update(String(sessionId)).digest("hex").slice(0, 8);
+  const token = crypto5.createHash("sha1").update(String(sessionId)).digest("hex").slice(0, 8);
   const day = generatedAt.slice(0, 10);
   return `deeppairing-session-${day}-${token}.html`;
 }
@@ -31379,19 +31910,19 @@ async function recordRejectedOptionConcept(store, broadcast, params) {
 init_project_root();
 
 // src/store/preflight-block-log.ts
-import fs16 from "node:fs";
-import path15 from "node:path";
+import fs18 from "node:fs";
+import path16 from "node:path";
 var MAX_BLOCKS = 50;
 var VERSION3 = 1;
 function logPath(projectRoot2) {
-  return path15.join(projectRoot2, ".deeppairing", "preflight-blocks.json");
+  return path16.join(projectRoot2, ".deeppairing", "preflight-blocks.json");
 }
 function readPreflightBlocks(projectRoot2) {
   const file2 = logPath(projectRoot2);
   let raw2;
   try {
-    if (!fs16.existsSync(file2)) return [];
-    raw2 = fs16.readFileSync(file2, "utf-8");
+    if (!fs18.existsSync(file2)) return [];
+    raw2 = fs18.readFileSync(file2, "utf-8");
   } catch {
     return [];
   }
@@ -31407,7 +31938,7 @@ function readPreflightBlocks(projectRoot2) {
   if (raw2.trim().length > 0) {
     try {
       const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-      fs16.writeFileSync(`${file2}.corrupt-${stamp}`, raw2);
+      fs18.writeFileSync(`${file2}.corrupt-${stamp}`, raw2);
     } catch {
     }
   }
@@ -31444,7 +31975,7 @@ function recordPreflightBlock(projectRoot2, sessionId, event) {
   try {
     const blocks = [entry, ...readPreflightBlocks(projectRoot2)].slice(0, MAX_BLOCKS);
     const file2 = logPath(projectRoot2);
-    fs16.mkdirSync(path15.dirname(file2), { recursive: true });
+    fs18.mkdirSync(path16.dirname(file2), { recursive: true });
     writeJsonAtomic(file2, { version: VERSION3, blocks });
     return entry;
   } catch {
@@ -31637,7 +32168,7 @@ var EMPTY_STATE = {
 function sessionDirExists(projectRoot2, sessionId) {
   if (!sessionId || sessionId.includes("/") || sessionId.includes("\\") || sessionId.includes("..")) return false;
   try {
-    return fs17.existsSync(path16.join(projectRoot2, ".deeppairing", "sessions", sessionId));
+    return fs19.existsSync(path17.join(projectRoot2, ".deeppairing", "sessions", sessionId));
   } catch {
     return false;
   }
@@ -31715,6 +32246,13 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     origin: (origin) => corsAllowedOrigin(origin)
   }));
   app.onError((err, c) => {
+    if (isSessionReviewConflictError(err)) {
+      return c.json({
+        error: "session_review_conflict",
+        code: ERROR_CODES.session_review_conflict,
+        message: err.message
+      }, 409);
+    }
     if (err instanceof SyntaxError) {
       return c.json({ error: "Invalid JSON" }, 400);
     }
@@ -31987,6 +32525,9 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       if (!decision) {
         await store.updateArtifactStatus(targetArtifactId, "approved", "ui_decision_resolve");
       }
+    }
+    await store.forceFlush();
+    if (targetArtifactId) {
       await maybeUpdateTaskStatus(null, targetArtifactId, store);
     }
     broadcast({
@@ -32005,7 +32546,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const parsed = DecisionCloseOutBodySchema.safeParse(bodyVal.value);
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
     const { projectRoot: targetRoot, sessionId: bodySessionId, note } = parsed.data;
-    if (targetRoot && (!projectRoot2 || path16.resolve(targetRoot) !== path16.resolve(projectRoot2))) {
+    if (targetRoot && (!projectRoot2 || path17.resolve(targetRoot) !== path17.resolve(projectRoot2))) {
       return c.json(
         {
           error: "cross_project_close_out_unsupported",
@@ -32144,23 +32685,27 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       await store.resolvePlanReview(artifactId, status, feedback);
     }
     await maybeUpdateTaskStatus(null, artifactId, store);
-    try {
-      await store.forceFlush();
-    } catch (err) {
-      console.error(`[deepPairing] verdict flush failed (verdict landed in memory; debounced flush will retry): ${err}`);
-    }
     if (feedback) {
       const comment = await store.addComment({
         id: `cmt_${nanoid3(10)}`,
         artifactId,
         content: feedback,
         author: "human",
-        // #187 — this is the VERDICT's own feedback note, posted AFTER the status
-        // flip above. On an "Approve with modifications" (status now `approved`)
-        // it must NOT be dressed as a late follow-up — it's review feedback.
         verdictFeedback: true
       });
       broadcast({ type: "comment_added", comment }, sid);
+    }
+    try {
+      await store.forceFlush();
+    } catch (err) {
+      if (isSessionReviewConflictError(err)) {
+        return c.json({
+          error: "session_review_conflict",
+          code: ERROR_CODES.session_review_conflict,
+          message: err.message
+        }, 409);
+      }
+      console.error(`[deepPairing] verdict flush failed (verdict landed in memory; debounced flush will retry): ${err}`);
     }
     if (status === "rejected") {
       const artifacts = await store.getArtifacts();
@@ -32266,11 +32811,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
         400
       );
     }
-    try {
-      await store.forceFlush();
-    } catch (err) {
-      console.error(`[deepPairing] changeset review flush failed (state landed in memory; debounced flush will retry): ${err}`);
-    }
+    await store.forceFlush();
     broadcast({ type: "changeset_review_updated", artifact: updated }, sid);
     return c.json({ status: "updated", artifactId });
   });
@@ -32739,33 +33280,33 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (!filePath || !projectRoot2) {
       return c.json({ error: "path parameter required" }, 400);
     }
-    const resolved = path16.resolve(projectRoot2, filePath.startsWith("/") ? filePath.slice(1) : filePath);
-    const resolvedRoot = path16.resolve(projectRoot2);
-    if (!resolved.startsWith(resolvedRoot + path16.sep) && resolved !== resolvedRoot) {
+    const resolved = path17.resolve(projectRoot2, filePath.startsWith("/") ? filePath.slice(1) : filePath);
+    const resolvedRoot = path17.resolve(projectRoot2);
+    if (!resolved.startsWith(resolvedRoot + path17.sep) && resolved !== resolvedRoot) {
       return c.json({ error: "Path outside project root" }, 403);
     }
     let realResolved;
     let realRoot;
     try {
-      realResolved = fs17.realpathSync(resolved);
-      realRoot = fs17.realpathSync(resolvedRoot);
+      realResolved = fs19.realpathSync(resolved);
+      realRoot = fs19.realpathSync(resolvedRoot);
     } catch (err) {
       if (errorCode(err) === "ENOENT") return c.json({ error: "File not found" }, 404);
       return c.json({ error: "Cannot read file" }, 500);
     }
-    if (!realResolved.startsWith(realRoot + path16.sep) && realResolved !== realRoot) {
+    if (!realResolved.startsWith(realRoot + path17.sep) && realResolved !== realRoot) {
       return c.json({ error: "Path outside project root" }, 403);
     }
     try {
       const MAX_FILE_BYTES = 5 * 1024 * 1024;
-      const size = fs17.statSync(realResolved).size;
+      const size = fs19.statSync(realResolved).size;
       if (size > MAX_FILE_BYTES) {
         return c.json(
           { error: `File too large to view (${size} bytes > ${MAX_FILE_BYTES}-byte cap).`, code: ERROR_CODES.body_too_large },
           413
         );
       }
-      const content = fs17.readFileSync(realResolved, "utf-8");
+      const content = fs19.readFileSync(realResolved, "utf-8");
       return c.json({ content, filePath, lines: content.split("\n").length });
     } catch (err) {
       if (errorCode(err) === "ENOENT") return c.json({ error: "File not found" }, 404);
@@ -32779,10 +33320,10 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
   });
   app.get("/api/hook-state", (c) => {
     if (!projectRoot2) return c.json({ version: 1, fires: [] });
-    const statePath = path16.join(projectRoot2, ".deeppairing", "hooks-state.json");
-    if (!fs17.existsSync(statePath)) return c.json({ version: 1, fires: [] });
+    const statePath = path17.join(projectRoot2, ".deeppairing", "hooks-state.json");
+    if (!fs19.existsSync(statePath)) return c.json({ version: 1, fires: [] });
     try {
-      const raw2 = JSON.parse(fs17.readFileSync(statePath, "utf-8"));
+      const raw2 = JSON.parse(fs19.readFileSync(statePath, "utf-8"));
       const fires = Array.isArray(raw2?.fires) ? raw2.fires.slice(-25) : [];
       return c.json({ version: 1, fires });
     } catch {
@@ -32907,28 +33448,28 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     const sessionTag = sanitize(body?.sessionId);
     const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
     const filename = [ts, sessionTag, decisionTag].filter(Boolean).join("_") + ".md";
-    const promptsDir = path16.join(projectRoot2, ".deeppairing", "prompts");
+    const promptsDir = path17.join(projectRoot2, ".deeppairing", "prompts");
     try {
-      fs17.mkdirSync(promptsDir, { recursive: true });
-      const fullPath = path16.join(promptsDir, filename);
-      const resolved = path16.resolve(fullPath);
-      const resolvedDir = path16.resolve(promptsDir);
-      if (!resolved.startsWith(resolvedDir + path16.sep)) {
+      fs19.mkdirSync(promptsDir, { recursive: true });
+      const fullPath = path17.join(promptsDir, filename);
+      const resolved = path17.resolve(fullPath);
+      const resolvedDir = path17.resolve(promptsDir);
+      if (!resolved.startsWith(resolvedDir + path17.sep)) {
         return c.json({ error: "invalid path" }, 400);
       }
       try {
-        const stat = fs17.lstatSync(resolved);
+        const stat = fs19.lstatSync(resolved);
         if (stat.isSymbolicLink()) return c.json({ error: "invalid path" }, 400);
       } catch (err) {
         if (errorCode(err) !== "ENOENT") throw err;
       }
-      const realDir = fs17.realpathSync(resolvedDir);
-      const realRoot = fs17.realpathSync(path16.resolve(projectRoot2));
-      if (!realDir.startsWith(realRoot + path16.sep) && realDir !== realRoot) {
+      const realDir = fs19.realpathSync(resolvedDir);
+      const realRoot = fs19.realpathSync(path17.resolve(projectRoot2));
+      if (!realDir.startsWith(realRoot + path17.sep) && realDir !== realRoot) {
         return c.json({ error: "invalid path" }, 400);
       }
-      fs17.writeFileSync(resolved, content, "utf-8");
-      const relPath = path16.relative(projectRoot2, resolved);
+      fs19.writeFileSync(resolved, content, "utf-8");
+      const relPath = path17.relative(projectRoot2, resolved);
       return c.json({ status: "saved", path: resolved, relPath });
     } catch (err) {
       return c.json({ error: errorMessage(err, "Save failed") }, 500);
@@ -32949,8 +33490,8 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
 }
 
 // src/http/static-ui.ts
-import fs18 from "node:fs";
-import path17 from "node:path";
+import fs20 from "node:fs";
+import path18 from "node:path";
 var MIME_TYPES = {
   html: "text/html",
   js: "application/javascript",
@@ -32962,9 +33503,9 @@ var MIME_TYPES = {
 };
 function mountStaticUi(app, opts) {
   const { webDistPath, authToken, projectHash, log: log2 } = opts;
-  if (!fs18.existsSync(webDistPath)) return;
+  if (!fs20.existsSync(webDistPath)) return;
   const serveInjectedIndex = (indexPath) => {
-    const html = fs18.readFileSync(indexPath, "utf-8");
+    const html = fs20.readFileSync(indexPath, "utf-8");
     const tokenJson = JSON.stringify(authToken);
     const hashJson = JSON.stringify(projectHash);
     const injection = `<script>window.__deepPairingToken = ${tokenJson}; window.__dpProjectHash = ${hashJson};</script>`;
@@ -32986,22 +33527,22 @@ function mountStaticUi(app, opts) {
   app.get("/*", async (c, next) => {
     if (c.req.path.startsWith("/api/")) return next();
     const filePath = c.req.path === "/" ? "/index.html" : c.req.path;
-    const fullPath = path17.join(webDistPath, filePath);
-    const resolvedPath = path17.resolve(fullPath);
-    const resolvedBase = path17.resolve(webDistPath);
-    if (!resolvedPath.startsWith(resolvedBase + path17.sep) && resolvedPath !== resolvedBase) {
+    const fullPath = path18.join(webDistPath, filePath);
+    const resolvedPath = path18.resolve(fullPath);
+    const resolvedBase = path18.resolve(webDistPath);
+    if (!resolvedPath.startsWith(resolvedBase + path18.sep) && resolvedPath !== resolvedBase) {
       return c.notFound();
     }
-    if (fs18.existsSync(fullPath)) {
-      const ext = path17.extname(filePath).slice(1);
+    if (fs20.existsSync(fullPath)) {
+      const ext = path18.extname(filePath).slice(1);
       if (ext === "html") return serveInjectedIndex(fullPath);
-      const content = fs18.readFileSync(fullPath);
+      const content = fs20.readFileSync(fullPath);
       return new Response(content, {
         headers: { "Content-Type": MIME_TYPES[ext] ?? "application/octet-stream" }
       });
     }
-    const indexPath = path17.join(webDistPath, "index.html");
-    if (fs18.existsSync(indexPath)) {
+    const indexPath = path18.join(webDistPath, "index.html");
+    if (fs20.existsSync(indexPath)) {
       return serveInjectedIndex(indexPath);
     }
     return c.notFound();
@@ -33147,6 +33688,17 @@ function applyTopLevelGuards(app, opts) {
 }
 
 // src/daemon/routes.ts
+var ReviewPostOperationBody = external_exports.discriminatedUnion("action", [
+  external_exports.object({ action: external_exports.literal("reserve"), identity: reviewPostIdentitySchema, repost: external_exports.boolean() }).strict(),
+  external_exports.object({ action: external_exports.literal("sending"), lease: reviewPostLeaseSchema, identity: reviewPostIdentitySchema }).strict(),
+  external_exports.object({ action: external_exports.literal("failed"), lease: reviewPostLeaseSchema }).strict(),
+  // #344 — the lease is the authority: only the live coordinator that holds it
+  // and never invoked send can reach this. Kept distinct from "failed" so an
+  // older client's reserved-only release keeps its narrow meaning.
+  external_exports.object({ action: external_exports.literal("unsent"), lease: reviewPostLeaseSchema }).strict(),
+  external_exports.object({ action: external_exports.literal("unknown"), lease: reviewPostLeaseSchema }).strict(),
+  external_exports.object({ action: external_exports.literal("succeeded"), lease: reviewPostLeaseSchema, result: reviewPostResultSchema }).strict()
+]);
 var RecordRejectedBody = external_exports.object({
   description: external_exports.string().min(1),
   reason: external_exports.string().optional(),
@@ -33221,8 +33773,20 @@ async function readJsonObject(c, opts) {
   }
   return { ok: true, body };
 }
-function createActiveSessionRoutes(sessions, sessionMeta, daemonHash, activeSessions) {
+function unexpectedRouteError(log2, c, error51) {
+  const detail = error51 instanceof Error ? error51.stack ?? error51.message : String(error51);
+  log2(`[route-error] ${c.req.method} ${c.req.path} \u2192 500: ${detail}`);
+  return c.json({ error: "Internal server error" }, 500);
+}
+function createActiveSessionRoutes(sessions, sessionMeta, daemonHash, activeSessions, logFn) {
   const app = new Hono2();
+  app.onError((error51, c) => {
+    if (isSessionReviewConflictError(error51)) {
+      return c.json({ error: "session_review_conflict", code: ERROR_CODES.session_review_conflict, message: error51.message }, 409);
+    }
+    return unexpectedRouteError(logFn ?? (() => {
+    }), c, error51);
+  });
   const gate = projectHashGate(daemonHash);
   app.use("/api/active-sessions", gate);
   app.use("/api/live-session/*", gate);
@@ -33259,6 +33823,12 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
   const log2 = logFn ?? (() => {
   });
   const app = new Hono2();
+  app.onError((error51, c) => {
+    if (isSessionReviewConflictError(error51)) {
+      return c.json({ error: "session_review_conflict", code: ERROR_CODES.session_review_conflict, message: error51.message }, 409);
+    }
+    return unexpectedRouteError(log2, c, error51);
+  });
   if (authToken) {
     app.use("/api/internal/*", async (c, next) => {
       const auth = c.req.header("Authorization");
@@ -33488,6 +34058,39 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     r.store.recordPostedReview(parsed.data);
     return c.json({ status: "recorded" });
   });
+  app.post("/api/internal/sessions/:sessionId/review-post-operations", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const parsed = await parseJsonBody(c, ReviewPostOperationBody);
+    if (!parsed.ok) return parsed.res;
+    const body = parsed.data;
+    const journal = r.store.reviewPosts;
+    try {
+      switch (body.action) {
+        case "reserve":
+          return c.json(journal.reserve(body.identity, body.repost));
+        case "sending":
+          journal.markSending(body.lease, body.identity);
+          break;
+        case "failed":
+          journal.failBeforeSending(body.lease);
+          break;
+        case "unsent":
+          journal.releaseUnsent(body.lease);
+          break;
+        case "unknown":
+          journal.markUnknown(body.lease);
+          break;
+        case "succeeded":
+          journal.succeed(body.lease, body.result);
+          break;
+      }
+      return c.json({ status: "recorded" });
+    } catch (err) {
+      if (!(err instanceof ReviewPostJournalError)) throw err;
+      return c.json({ error: err.message, code: ERROR_CODES.review_post_conflict, reason: err.reason }, 409);
+    }
+  });
   app.post("/api/internal/sessions/:sessionId/comments", async (c) => {
     const sessionId = c.req.param("sessionId");
     const r = requireStore(c, sessionId);
@@ -33641,6 +34244,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       return c.json({ error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error }, 400);
     }
     const artifactId = r.store.getDecision(decisionId)?.artifactId;
+    await r.store.forceFlush();
     broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId, optionId, reasoning, confidence, predictedOutcome });
     return c.json({ status: "resolved" });
   });
@@ -33718,6 +34322,11 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
     return c.json(r.store.getFullState());
+  });
+  app.get("/api/internal/sessions/:sessionId/review-post-state", (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    return c.json(r.store.getReviewPostState());
   });
   app.get("/api/internal/sessions/:sessionId/metrics", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -33891,8 +34500,16 @@ function runDemoScript({
   schedule = defaultSchedule,
   makeArtifactId = defaultArtifactId
 }) {
+  let cancelled = false;
+  const cancellations = [];
+  const scheduleStep = (ms, fn) => {
+    const cancel = schedule(ms, () => {
+      if (!cancelled) return fn();
+    });
+    if (cancel) cancellations.push(cancel);
+  };
   const findingsArtifactId = makeArtifactId();
-  schedule(500, async () => {
+  scheduleStep(500, async () => {
     const artifact = await store.createArtifact({
       id: findingsArtifactId,
       type: "research",
@@ -33911,7 +34528,7 @@ function runDemoScript({
     });
     broadcast(sessionId, { type: "artifact_created", artifact });
   });
-  schedule(2500, async () => {
+  scheduleStep(2500, async () => {
     await store.updateArtifactStatus(findingsArtifactId, "rejected", "demo_script");
     await store.recordRejectedApproach({
       description: DEFAULT_REJECTION_DESCRIPTION,
@@ -33929,7 +34546,7 @@ function runDemoScript({
       sourceArtifactId: findingsArtifactId
     });
   });
-  schedule(5e3, () => {
+  scheduleStep(5e3, () => {
     broadcast(sessionId, {
       type: "preflight_blocked",
       toolName: "present_findings",
@@ -33944,7 +34561,7 @@ function runDemoScript({
     });
   });
   const explainerArtifactId = makeArtifactId();
-  schedule(6500, async () => {
+  scheduleStep(6500, async () => {
     const artifact = await store.createArtifact({
       id: explainerArtifactId,
       type: "explainer",
@@ -33977,7 +34594,7 @@ function runDemoScript({
     broadcast(sessionId, { type: "artifact_created", artifact });
   });
   const debriefArtifactId = makeArtifactId();
-  schedule(8e3, async () => {
+  scheduleStep(8e3, async () => {
     const artifact = await store.createArtifact({
       id: debriefArtifactId,
       type: "debrief",
@@ -34016,13 +34633,17 @@ function runDemoScript({
     });
     broadcast(sessionId, { type: "artifact_created", artifact });
   });
-  return { artifactId: findingsArtifactId };
+  return { artifactId: findingsArtifactId, cancel: () => {
+    cancelled = true;
+    for (const cancel of cancellations) cancel();
+  } };
 }
 function defaultSchedule(ms, fn) {
   const t = setTimeout(() => {
     void fn();
   }, ms);
   t.unref?.();
+  return () => clearTimeout(t);
 }
 function defaultArtifactId() {
   return `art_demo_${Math.random().toString(36).slice(2, 8)}`;
@@ -34189,16 +34810,17 @@ function createDaemon(deps) {
     env = process.env,
     version: version2 = SERVER_VERSION,
     openBrowser = defaultOpenBrowser,
-    watch = (dir, listener) => fs21.watch(dir, listener),
+    watch = (dir, listener) => fs23.watch(dir, listener),
     heartbeatIntervalMs = 3e4
   } = deps;
   const daemonProjectHash = projectHashOf(projectRoot2);
   let boundPort = 0;
-  const dpDir2 = path20.join(projectRoot2, ".deeppairing");
-  const daemonInfoFile = path20.join(dpDir2, "daemon.json");
+  const dpDir2 = path21.join(projectRoot2, ".deeppairing");
+  const daemonInfoFile = path21.join(dpDir2, "daemon.json");
   const sessions = /* @__PURE__ */ new Map();
   const sessionMeta = /* @__PURE__ */ new Map();
   const activeSessions = /* @__PURE__ */ new Set();
+  const demoRuns = /* @__PURE__ */ new Map();
   function createSession(sessionId) {
     log2(`Creating session: ${sessionId}`);
     const store = new FileStore(projectRoot2, sessionId);
@@ -34276,11 +34898,12 @@ function createDaemon(deps) {
     }
   }
   function getClientCount() {
-    let count = globalClients.size;
-    for (const clients of wsClients.values()) count += clients.size;
-    return count;
+    let count2 = globalClients.size;
+    for (const clients of wsClients.values()) count2 += clients.size;
+    return count2;
   }
   let shutdownTimer = null;
+  let disposed = false;
   const DEMO_IDLE_GRACE_MS = 10 * 6e4;
   function demoGraceActive(nowMs = Date.now()) {
     for (const [sessionId, meta3] of sessionMeta.entries()) {
@@ -34292,6 +34915,7 @@ function createDaemon(deps) {
     return false;
   }
   function checkAutoShutdown() {
+    if (disposed) return;
     if (activeSessions.size === 0 && getClientCount() === 0 && demoGraceActive()) {
       if (shutdownTimer) {
         clearTimeout(shutdownTimer);
@@ -34460,11 +35084,11 @@ function createDaemon(deps) {
     return c.json({ status: "evicting", pid: process.pid });
   });
   app.get("/api/skill-status", (c) => {
-    const claudeMdPath = path20.join(projectRoot2, "CLAUDE.md");
+    const claudeMdPath = path21.join(projectRoot2, "CLAUDE.md");
     let claudeMdHasMarker = false;
     try {
-      if (fs21.existsSync(claudeMdPath)) {
-        claudeMdHasMarker = fs21.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
+      if (fs23.existsSync(claudeMdPath)) {
+        claudeMdHasMarker = fs23.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
       }
     } catch {
     }
@@ -34496,31 +35120,42 @@ function createDaemon(deps) {
     });
   });
   app.post("/api/demo/run", (c) => {
+    if (!isAllowedWsOrigin(c.req.header("Origin"), c.req.header("Host"))) {
+      return c.json({ error: "Demo requests must come from the companion UI." }, 403);
+    }
     const MAX_DEMO_SESSIONS = 5;
-    const demoIds = Array.from(sessions.keys()).filter((id) => id.startsWith("demo_")).sort();
+    const sessionRoot = path21.resolve(dpDir2, "sessions");
+    const diskIds = fs23.existsSync(sessionRoot) ? fs23.readdirSync(sessionRoot).filter((id) => /^demo_\d+(?:_[a-f0-9]+)?$/.test(id)) : [];
+    const demoIds = [.../* @__PURE__ */ new Set([...diskIds, ...Array.from(sessions.keys()).filter((id) => /^demo_\d+(?:_[a-f0-9]+)?$/.test(id))])].sort();
     while (demoIds.length >= MAX_DEMO_SESSIONS) {
       const oldest = demoIds.shift();
+      demoRuns.get(oldest)?.();
+      demoRuns.delete(oldest);
+      sessions.get(oldest)?.dispose();
+      const demoDir = path21.resolve(sessionRoot, oldest);
+      if (path21.dirname(demoDir) !== sessionRoot) throw new Error("Invalid demo session path");
+      fs23.rmSync(demoDir, { recursive: true, force: true });
       sessions.delete(oldest);
       sessionMeta.delete(oldest);
       activeSessions.delete(oldest);
       demoReplayEvents.delete(oldest);
     }
-    const sessionId = `demo_${Date.now()}`;
+    const sessionId = `demo_${Date.now()}_${randomBytes2(4).toString("hex")}`;
     const store = createSession(sessionId);
     sessionMeta.set(sessionId, {
       title: "deepPairing demo",
       project: "demo",
       registeredAt: (/* @__PURE__ */ new Date()).toISOString()
     });
-    runDemoScript({ sessionId, store, broadcast });
+    demoRuns.set(sessionId, runDemoScript({ sessionId, store, broadcast }).cancel);
     checkAutoShutdown();
     return c.json({ sessionId, startedAt: (/* @__PURE__ */ new Date()).toISOString() });
   });
-  app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions));
-  const __thisDir3 = path20.dirname(fileURLToPath4(import.meta.url));
-  const monorepoWebDist = path20.join(__thisDir3, "../../dist/web");
-  const webDistCandidates = [monorepoWebDist, path20.join(__thisDir3, "web")];
-  const webDistPath = webDistCandidates.find((p) => fs21.existsSync(p)) ?? monorepoWebDist;
+  app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions, log2));
+  const __thisDir3 = path21.dirname(fileURLToPath4(import.meta.url));
+  const monorepoWebDist = path21.join(__thisDir3, "../../dist/web");
+  const webDistCandidates = [monorepoWebDist, path21.join(__thisDir3, "web")];
+  const webDistPath = webDistCandidates.find((p) => fs23.existsSync(p)) ?? monorepoWebDist;
   mountStaticUi(app, {
     webDistPath,
     authToken: daemonAuthToken2,
@@ -34528,11 +35163,15 @@ function createDaemon(deps) {
     log: log2
   });
   function cleanup() {
-    for (const store of sessions.values()) {
-      store.forceFlush();
+    for (const [sessionId, store] of sessions) {
+      try {
+        store.forceFlush();
+      } catch (error51) {
+        log2(`[cleanup] failed to flush session ${sessionId}: ${errorMessage(error51)}`);
+      }
     }
     try {
-      if (fs21.existsSync(daemonInfoFile)) fs21.unlinkSync(daemonInfoFile);
+      if (fs23.existsSync(daemonInfoFile)) fs23.unlinkSync(daemonInfoFile);
     } catch {
     }
     try {
@@ -34556,7 +35195,7 @@ function createDaemon(deps) {
   function writeDaemonInfo(port) {
     const discovery = { pid: process.pid, port, startedAt: startedAt2, projectRoot: projectRoot2, version: version2 };
     try {
-      fs21.mkdirSync(dpDir2, { recursive: true });
+      fs23.mkdirSync(dpDir2, { recursive: true });
       if (resolveTokenPlacement() === "in-repo") {
         writeFile0600(daemonInfoFile, { ...discovery, authToken: daemonAuthToken2 });
         return;
@@ -34618,10 +35257,74 @@ function createDaemon(deps) {
         clients = /* @__PURE__ */ new Set();
         wsClients.set(sessionId, clients);
       }
+      let refusalDeadline = null;
+      let cleanedUp = false;
+      const cleanup2 = () => {
+        if (refusalDeadline) {
+          clearTimeout(refusalDeadline);
+          refusalDeadline = null;
+        }
+        if (cleanedUp) return;
+        cleanedUp = true;
+        clients.delete(ws);
+        if (clients.size === 0) wsClients.delete(sessionId);
+        checkAutoShutdown();
+      };
+      ws.on("error", (err) => {
+        log2(`[ws] session client error (session=${sessionId}): ${err?.code ?? errorMessage(err)}`);
+        cleanup2();
+        try {
+          ws.terminate();
+        } catch {
+        }
+      });
+      ws.on("close", cleanup2);
       clients.add(ws);
       const store = sessions.get(sessionId);
       if (store) {
-        ws.send(JSON.stringify({ type: "connected", state: store.getFullState(), projectRoot: projectRoot2, projectHash: daemonProjectHash, daemonStartedAt: startedAt2 }));
+        try {
+          ws.send(JSON.stringify({ type: "connected", state: store.getFullState(), projectRoot: projectRoot2, projectHash: daemonProjectHash, daemonStartedAt: startedAt2 }));
+        } catch (error51) {
+          const knownConflict = isSessionReviewConflictError(error51);
+          log2(knownConflict ? `[ws] initial snapshot refused: session review conflict (session=${sessionId}): ${errorMessage(error51)}` : `[ws] initial snapshot failed (session=${sessionId}): ${errorMessage(error51)}`);
+          cleanup2();
+          const refusal = knownConflict ? { type: "connection_refused", code: ERROR_CODES.session_review_conflict, sessionId, message: "Session state requires review before reconnecting." } : { type: "connection_refused", sessionId, message: "Session state is temporarily unavailable." };
+          refusalDeadline = setTimeout(() => {
+            log2(`[ws] initial snapshot refusal timed out (session=${sessionId}); terminating client`);
+            try {
+              ws.terminate();
+            } catch {
+            }
+          }, 1e3);
+          refusalDeadline.unref?.();
+          try {
+            ws.send(JSON.stringify(refusal), (sendError) => {
+              if (sendError) {
+                log2(`[ws] initial snapshot refusal send failed (session=${sessionId}): ${errorMessage(sendError)}`);
+                try {
+                  ws.terminate();
+                } catch {
+                }
+                return;
+              }
+              try {
+                ws.close(1011, "Initial snapshot unavailable");
+              } catch {
+                try {
+                  ws.terminate();
+                } catch {
+                }
+              }
+            });
+          } catch (sendError) {
+            log2(`[ws] initial snapshot refusal send failed (session=${sessionId}): ${errorMessage(sendError)}`);
+            try {
+              ws.terminate();
+            } catch {
+            }
+          }
+          return;
+        }
       }
       if (sessionId.startsWith("demo_")) {
         const replay = demoReplayEvents.get(sessionId);
@@ -34629,36 +35332,81 @@ function createDaemon(deps) {
           ws.send(JSON.stringify({ ...replay, sessionId, replayed: true }));
         }
       }
-      ws.on("error", (err) => {
-        log2(`[ws] session client error (session=${sessionId}): ${err?.code ?? errorMessage(err)}`);
-        try {
-          ws.terminate();
-        } catch {
-        }
-      });
-      ws.on("close", () => {
-        clients.delete(ws);
-        if (clients.size === 0) wsClients.delete(sessionId);
-        checkAutoShutdown();
-      });
     } else {
-      globalClients.add(ws);
-      const sessionList = Array.from(sessions.entries()).map(([id, store]) => ({
-        sessionId: id,
-        artifactCount: store.getArtifacts().length
-      }));
-      ws.send(JSON.stringify({ type: "connected", sessions: sessionList, projectRoot: projectRoot2, projectHash: daemonProjectHash, daemonStartedAt: startedAt2 }));
-      ws.on("error", (err) => {
-        log2(`[ws] global client error: ${err?.code ?? errorMessage(err)}`);
-        try {
-          ws.terminate();
-        } catch {
+      let refusalDeadline = null;
+      let cleanedUp = false;
+      const cleanup2 = () => {
+        if (refusalDeadline) {
+          clearTimeout(refusalDeadline);
+          refusalDeadline = null;
         }
-      });
-      ws.on("close", () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
         globalClients.delete(ws);
         checkAutoShutdown();
+      };
+      ws.on("error", (err) => {
+        log2(`[ws] global client error: ${err?.code ?? errorMessage(err)}`);
+        cleanup2();
+        try {
+          ws.terminate();
+        } catch {
+        }
       });
+      ws.on("close", cleanup2);
+      globalClients.add(ws);
+      let failingSessionId;
+      try {
+        const sessionList = [];
+        for (const [id, store] of sessions.entries()) {
+          failingSessionId = id;
+          sessionList.push({ sessionId: id, artifactCount: store.getArtifacts().length });
+        }
+        failingSessionId = void 0;
+        ws.send(JSON.stringify({ type: "connected", sessions: sessionList, projectRoot: projectRoot2, projectHash: daemonProjectHash, daemonStartedAt: startedAt2 }));
+      } catch (error51) {
+        const knownConflict = isSessionReviewConflictError(error51);
+        const blame = failingSessionId ? ` (session=${failingSessionId})` : "";
+        log2(knownConflict ? `[ws] global initial snapshot refused: session review conflict${blame}: ${errorMessage(error51)}` : `[ws] global initial snapshot failed${blame}: ${errorMessage(error51)}`);
+        cleanup2();
+        const scope = failingSessionId ? { sessionId: failingSessionId } : {};
+        const refusal = knownConflict ? { type: "connection_refused", code: ERROR_CODES.session_review_conflict, ...scope, message: "Session state requires review before reconnecting." } : { type: "connection_refused", ...scope, message: "Session state is temporarily unavailable." };
+        refusalDeadline = setTimeout(() => {
+          log2("[ws] global initial snapshot refusal timed out; terminating client");
+          try {
+            ws.terminate();
+          } catch {
+          }
+        }, 1e3);
+        refusalDeadline.unref?.();
+        try {
+          ws.send(JSON.stringify(refusal), (sendError) => {
+            if (sendError) {
+              log2(`[ws] global initial snapshot refusal send failed: ${errorMessage(sendError)}`);
+              try {
+                ws.terminate();
+              } catch {
+              }
+              return;
+            }
+            try {
+              ws.close(1011, "Initial snapshot unavailable");
+            } catch {
+              try {
+                ws.terminate();
+              } catch {
+              }
+            }
+          });
+        } catch (sendError) {
+          log2(`[ws] global initial snapshot refusal send failed: ${errorMessage(sendError)}`);
+          try {
+            ws.terminate();
+          } catch {
+          }
+        }
+        return;
+      }
     }
     log2(`WebSocket client connected (session: ${sessionId ?? "global"}, total: ${getClientCount()})`);
   });
@@ -34684,11 +35432,11 @@ function createDaemon(deps) {
   let hooksWatcher = null;
   function startHooksWatcher() {
     let lastFireSeen = 0;
-    const hooksStatePath = path20.join(projectRoot2, ".deeppairing", "hooks-state.json");
+    const hooksStatePath = path21.join(projectRoot2, ".deeppairing", "hooks-state.json");
     const broadcastNewFires = () => {
       try {
-        if (!fs21.existsSync(hooksStatePath)) return;
-        const raw2 = JSON.parse(fs21.readFileSync(hooksStatePath, "utf-8"));
+        if (!fs23.existsSync(hooksStatePath)) return;
+        const raw2 = JSON.parse(fs23.readFileSync(hooksStatePath, "utf-8"));
         const fires = Array.isArray(raw2?.fires) ? raw2.fires : [];
         for (const f of fires) {
           const t = new Date(f.at).getTime();
@@ -34700,8 +35448,8 @@ function createDaemon(deps) {
       }
     };
     try {
-      if (fs21.existsSync(hooksStatePath)) {
-        const raw2 = JSON.parse(fs21.readFileSync(hooksStatePath, "utf-8"));
+      if (fs23.existsSync(hooksStatePath)) {
+        const raw2 = JSON.parse(fs23.readFileSync(hooksStatePath, "utf-8"));
         const fires = Array.isArray(raw2?.fires) ? raw2.fires : [];
         for (const f of fires) {
           const t = new Date(f.at).getTime();
@@ -34711,10 +35459,10 @@ function createDaemon(deps) {
     } catch {
     }
     try {
-      const hooksDir = path20.dirname(hooksStatePath);
-      fs21.mkdirSync(hooksDir, { recursive: true });
+      const hooksDir = path21.dirname(hooksStatePath);
+      fs23.mkdirSync(hooksDir, { recursive: true });
       const watcher = watch(hooksDir, (_event, filename) => {
-        if (filename === "hooks-state.json" || filename === path20.basename(hooksStatePath)) {
+        if (filename === "hooks-state.json" || filename === path21.basename(hooksStatePath)) {
           broadcastNewFires();
         }
       });
@@ -34737,11 +35485,11 @@ function createDaemon(deps) {
     const pingDecision = decidePing(env);
     if (pingDecision.shouldSend) {
       pingTimer = setTimeout(() => {
-        const claudeMdPath = path20.join(projectRoot2, "CLAUDE.md");
+        const claudeMdPath = path21.join(projectRoot2, "CLAUDE.md");
         let claudeMdHasMarker = false;
         try {
-          if (fs21.existsSync(claudeMdPath)) {
-            claudeMdHasMarker = fs21.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
+          if (fs23.existsSync(claudeMdPath)) {
+            claudeMdHasMarker = fs23.readFileSync(claudeMdPath, "utf-8").includes("<!-- deepPairing -->");
           }
         } catch {
         }
@@ -34776,6 +35524,10 @@ function createDaemon(deps) {
     }
   }
   function dispose() {
+    disposed = true;
+    for (const cancel of demoRuns.values()) cancel();
+    demoRuns.clear();
+    for (const [id, store] of sessions) if (id.startsWith("demo_")) store.dispose();
     if (shutdownTimer) {
       clearTimeout(shutdownTimer);
       shutdownTimer = null;
@@ -34830,21 +35582,21 @@ function createDaemon(deps) {
 // src/daemon/index.ts
 var MAX_PORT_ATTEMPTS2 = 10;
 var projectRoot = process.env.DEEPPAIRING_PROJECT_ROOT ?? process.cwd();
-var dpDir = path21.join(projectRoot, ".deeppairing");
-var logFile = path21.join(dpDir, "daemon.log");
+var dpDir = path22.join(projectRoot, ".deeppairing");
+var logFile = path22.join(dpDir, "daemon.log");
 var startedAt = (/* @__PURE__ */ new Date()).toISOString();
-var daemonAuthToken = crypto5.randomBytes(32).toString("hex");
+var daemonAuthToken = crypto6.randomBytes(32).toString("hex");
 var LOG_MAX_BYTES = 1024 * 1024;
 var LOG_KEEP_FILES = 3;
 function maybeRotateLog() {
   try {
-    const stat = fs22.statSync(logFile);
+    const stat = fs24.statSync(logFile);
     if (stat.size < LOG_MAX_BYTES) return;
     for (let i = LOG_KEEP_FILES - 1; i >= 1; i--) {
       const src = i === 1 ? logFile : `${logFile}.${i - 1}`;
       const dst = `${logFile}.${i}`;
       try {
-        if (fs22.existsSync(src)) fs22.renameSync(src, dst);
+        if (fs24.existsSync(src)) fs24.renameSync(src, dst);
       } catch {
       }
     }
@@ -34855,9 +35607,9 @@ function log(msg) {
   const line = `[${(/* @__PURE__ */ new Date()).toISOString()}] [daemon] ${msg}
 `;
   try {
-    fs22.mkdirSync(path21.dirname(logFile), { recursive: true });
+    fs24.mkdirSync(path22.dirname(logFile), { recursive: true });
     maybeRotateLog();
-    fs22.appendFileSync(logFile, line);
+    fs24.appendFileSync(logFile, line);
   } catch {
   }
 }
