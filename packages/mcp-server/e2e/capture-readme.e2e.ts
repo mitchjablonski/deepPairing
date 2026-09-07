@@ -1,10 +1,10 @@
 import { test } from "./test.js";
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { attachDaemonOutput, captureDaemonOutput, teardownDaemon } from "./daemon-harness.js";
+import { attachDaemonOutput, teardownDaemon, spawnDiagnosticProcess } from "./daemon-harness.js";
 import { redactDiagnostic } from "./diagnostics.js";
 
 /**
@@ -49,11 +49,9 @@ test("README capture flow — selectors resolve (+ writes PNGs when CAPTURE_READ
   // outside both tsconfigs; the spec is CAPTURE_README-opt-in).
   let info: any;
   try {
-    proc = spawn(process.execPath, [daemonJs], {
+    proc = spawnDiagnosticProcess(process.execPath, [daemonJs], {
       env: { ...process.env, HOME: home, DEEPPAIRING_PROJECT_ROOT: projectRoot, DEEPPAIRING_OPEN_BROWSER: "0" },
-      stdio: ["ignore", "pipe", "pipe"],
     });
-    captureDaemonOutput(proc);
 
     // wait for daemon
     const infoPath = path.join(projectRoot, ".deeppairing", "daemon.json");
@@ -495,17 +493,18 @@ test("README capture flow — selectors resolve (+ writes PNGs when CAPTURE_READ
     await page.waitForSelector('[data-testid="explainer-section"]', { timeout: 10_000 });
     await page.waitForTimeout(800);
     await shot("explainer.png");
+  } catch (error) {
+    // The process is torn down in finally, before the auto-fixture observes the
+    // test result, so force the bounded tail into the report while it exists.
+    await attachDaemonOutput(proc, testInfo, { force: true });
+    throw error;
   } finally {
     // I1 — teardown BARRIER: block until the daemon is fully down (process
     // exited AND port released) before removing its dirs, so this opt-in spec
     // can't leave a LISTENING daemon behind. See daemon-harness.ts.
-    try {
-      await attachDaemonOutput(proc, testInfo);
-    } finally {
-      await teardownDaemon(proc, info?.port);
-      fs.rmSync(home, { recursive: true, force: true });
-      fs.rmSync(projectRoot, { recursive: true, force: true });
-      await context.close();
-    }
+    await teardownDaemon(proc, info?.port);
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+    await context.close();
   }
 });

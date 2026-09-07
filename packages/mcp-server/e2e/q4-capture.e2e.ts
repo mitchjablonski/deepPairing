@@ -1,10 +1,10 @@
-import { test, expect } from "./test.js";
-import { spawn, type ChildProcess } from "node:child_process";
+import { test, daemonBeforeAll, expect } from "./test.js";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { teardownDaemon, portOf } from "./daemon-harness.js";
+import { teardownDaemon, portOf, spawnDiagnosticProcess, withSetupDiagnostics } from "./daemon-harness.js";
 
 /**
  * Q4 (round-12 "the UX rider") — SCREENSHOT CAPTURE + live measurement for the
@@ -81,15 +81,14 @@ async function waitForDaemon(root: string): Promise<{ base: string; token: strin
   throw new Error("daemon did not start");
 }
 
-test.beforeAll(async () => {
+daemonBeforeAll(() => [proc], async (testInfo) => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), "dp-q4-home-"));
   projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-q4-"));
   if (process.env.CAPTURE_Q4) fs.mkdirSync(OUT, { recursive: true });
-  proc = spawn(process.execPath, [daemonJs], {
+  proc = spawnDiagnosticProcess(process.execPath, [daemonJs], {
     env: { ...process.env, HOME: home, DEEPPAIRING_PROJECT_ROOT: projectRoot, DEEPPAIRING_NO_OPEN: "1" },
-    stdio: "ignore",
   });
-  const daemon = await waitForDaemon(projectRoot);
+  const daemon = await withSetupDiagnostics(proc, testInfo, () => waitForDaemon(projectRoot));
   baseURL = daemon.base;
   const h = { "Content-Type": "application/json", Authorization: `Bearer ${daemon.token}` };
 

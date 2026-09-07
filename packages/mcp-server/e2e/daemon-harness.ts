@@ -1,21 +1,39 @@
-import type { ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import net from "node:net";
+import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { TestInfo } from "@playwright/test";
-import { BoundedDiagnosticTail } from "./diagnostics.js";
+import { attachDiagnosticFile, BoundedDiagnosticTail, readConfinedFileTail, redactDiagnostic } from "./diagnostics.js";
 
 const MAX_DAEMON_DIAGNOSTIC_BYTES = 64 * 1024;
 interface DiagnosticStreamState { decoder: StringDecoder; pending: string; source: string; discarding: boolean }
-interface DiagnosticState { tail: BoundedDiagnosticTail; streams: DiagnosticStreamState[] }
+interface DiagnosticState { tail: BoundedDiagnosticTail; streams: DiagnosticStreamState[]; projectRoot?: string }
 const daemonOutput = new WeakMap<ChildProcess, DiagnosticState>();
+const diagnosticProcesses = new Set<ChildProcess>();
 
 function retainLine(state: DiagnosticState, source: string, line: string): void {
   state.tail.record(`[${source}] ${line}`);
 }
 
-/** Capture a bounded tail of a daemon spawned with piped stdout/stderr. */
-export function captureDaemonOutput(proc: ChildProcess): void {
-  const state: DiagnosticState = { tail: new BoundedDiagnosticTail(MAX_DAEMON_DIAGNOSTIC_BYTES), streams: [] };
+/** The only on-disk source the harness reads: the daemon's own log under its project root. */
+const DAEMON_LOG_RELATIVE = [".deeppairing", "daemon.log"] as const;
+export function daemonLogPath(projectRoot: string): string {
+  return path.join(projectRoot, ...DAEMON_LOG_RELATIVE);
+}
+
+/**
+ * Capture a bounded tail of a daemon spawned with piped stdout/stderr. The real
+ * daemon writes almost nothing to those pipes — its durable channel is
+ * `<projectRoot>/.deeppairing/daemon.log` — so when the spawn names a project
+ * root, that fixed file is also tailed at attachment time (before teardown
+ * deletes the mkdtemp root). No other path is ever read.
+ */
+export function captureDaemonOutput(proc: ChildProcess, opts: { projectRoot?: string } = {}): void {
+  const state: DiagnosticState = {
+    tail: new BoundedDiagnosticTail(MAX_DAEMON_DIAGNOSTIC_BYTES),
+    streams: [],
+    projectRoot: opts.projectRoot,
+  };
   daemonOutput.set(proc, state);
   const watch = (source: string, stream: NodeJS.ReadableStream | null | undefined) => {
     if (!stream) return;
@@ -38,9 +56,32 @@ export function captureDaemonOutput(proc: ChildProcess): void {
         streamState.discarding = true;
       }
     });
+    stream.once("end", () => {
+      const tail = streamState.decoder.end();
+      if (streamState.discarding) {
+        streamState.pending = "";
+        return;
+      }
+      streamState.pending += tail;
+      if (streamState.pending) retainLine(state, source, "[incomplete line withheld]");
+      streamState.pending = "";
+    });
   };
   watch("stdout", proc.stdout);
   watch("stderr", proc.stderr);
+}
+
+/** Spawn an E2E child with bounded, redacted stdout/stderr capture enabled. */
+export function spawnDiagnosticProcess(
+  command: string,
+  args: readonly string[],
+  options: Omit<SpawnOptions, "stdio"> = {},
+): ChildProcess {
+  const proc = spawn(command, args, { ...options, stdio: ["ignore", "pipe", "pipe"] });
+  const projectRoot = options.env?.DEEPPAIRING_PROJECT_ROOT;
+  captureDaemonOutput(proc, { projectRoot: projectRoot || undefined });
+  diagnosticProcesses.add(proc);
+  return proc;
 }
 
 /** Test-only observation of bounded pre-newline state. */
@@ -50,26 +91,143 @@ export function diagnosticPendingBytesForTests(proc: ChildProcess): number {
   ) ?? 0;
 }
 
-export async function attachDaemonOutput(proc: ChildProcess | undefined, testInfo: TestInfo): Promise<void> {
-  if (!proc || testInfo.status === testInfo.expectedStatus) return;
-  const state = daemonOutput.get(proc);
-  if (state) {
-    for (const stream of state.streams) {
-      const tail = stream.decoder.end();
-      if (stream.discarding) {
-        stream.pending = "";
-        continue;
+/** Attachment names for the Nth implicated daemon; both match CI's `*diagnostics*.txt` glob. */
+function diagnosticNames(index: number): { name: string; logName: string } {
+  const suffix = index === 0 ? "" : `-${index + 1}`;
+  return { name: `daemon-diagnostics${suffix}`, logName: `daemon-log-diagnostics${suffix}` };
+}
+
+const NEWLINE = 0x0a;
+
+/**
+ * Bounded, redacted tail of the daemon's on-disk log as attachment lines,
+ * confined to the fixture's project root (see `readConfinedFileTail`).
+ * Missing, rotated, unreadable, non-regular and escaping paths become a
+ * one-line note instead of an error; a partial first line (mid-file start) and
+ * an unterminated last line (append in flight) are withheld, never emitted raw.
+ */
+export async function daemonLogTail(projectRoot: string, maxBytes = MAX_DAEMON_DIAGNOSTIC_BYTES): Promise<Buffer> {
+  const notes: string[] = [];
+  const result = await readConfinedFileTail(projectRoot, DAEMON_LOG_RELATIVE, maxBytes);
+  // Probe the rotated leaf through the same canonical-root confinement as the
+  // primary log. A linked parent must not become an outside-root existence oracle.
+  const rotated = await readConfinedFileTail(projectRoot, [...DAEMON_LOG_RELATIVE.slice(0, -1), "daemon.log.1"], 0);
+  if (rotated.kind === "tail") notes.push("[daemon.log] rotated: daemon.log.1 present (not read)");
+  const content = new BoundedDiagnosticTail(maxBytes);
+  switch (result.kind) {
+    case "missing":
+      notes.push("[daemon.log] missing");
+      break;
+    case "not-regular":
+      notes.push(`[daemon.log] skipped: not a regular file (${result.type})`);
+      break;
+    case "escaped":
+      notes.push("[daemon.log] skipped: path escapes the fixture root (symlinked component)");
+      break;
+    case "replaced":
+      notes.push("[daemon.log] skipped: file replaced during read");
+      break;
+    case "unreadable":
+      notes.push(`[daemon.log] unreadable (${result.code})`);
+      break;
+    case "tail": {
+      let bytes = result.bytes;
+      if (result.skipped > 0) {
+        notes.push(`[daemon.log] tail: last ${bytes.length} of ${result.size} bytes`);
+        const firstNewline = bytes.indexOf(NEWLINE);
+        bytes = firstNewline < 0 ? bytes.subarray(0, 0) : bytes.subarray(firstNewline + 1);
+      } else if (result.size === 0) {
+        notes.push("[daemon.log] empty");
       }
-      stream.pending += tail;
-      if (stream.pending) retainLine(state, stream.source, stream.pending);
-      stream.pending = "";
+      const lastNewline = bytes.lastIndexOf(NEWLINE);
+      const withheld = bytes.length > 0 && lastNewline !== bytes.length - 1;
+      bytes = bytes.subarray(0, lastNewline + 1);
+      if (bytes.length) {
+        for (const line of bytes.toString("utf8").split(/\r?\n/).slice(0, -1)) content.record(line);
+      }
+      if (withheld) content.record("[daemon.log] [incomplete line withheld]");
     }
   }
-  if (state?.tail.lines.length) {
-    await testInfo.attach("daemon-diagnostics", {
-      body: state.tail.body(),
-      contentType: "text/plain",
-    });
+  return Buffer.concat([Buffer.from(notes.map((note) => `${note}\n`).join("")), content.body()]);
+}
+
+export async function attachDaemonOutput(
+  proc: ChildProcess | undefined,
+  testInfo: TestInfo,
+  opts: { force?: boolean; name?: string; logName?: string } = {},
+): Promise<void> {
+  if (!proc || (!opts.force && testInfo.status === testInfo.expectedStatus)) return;
+  const state = daemonOutput.get(proc);
+  if (!state) return;
+
+  // Snapshot without consuming StringDecoder or pending state. Attachments can
+  // happen more than once while a process is alive (setup catch, then teardown);
+  // clearing a credential prefix here would let its later suffix through raw.
+  const snapshot = new BoundedDiagnosticTail(MAX_DAEMON_DIAGNOSTIC_BYTES);
+  for (const line of state.tail.lines) {
+    snapshot.record(line.toString("utf8").replace(/\n$/, ""));
+  }
+  // Do not expose unterminated lines. A pending JSON/header credential may not
+  // match a redactor until its closing quote arrives; the completed line will
+  // be retained and scrubbed on the next newline/data event.
+  for (const stream of state.streams) {
+    if (stream.discarding || stream.pending) {
+      snapshot.record(`[${stream.source}] [incomplete line withheld]`);
+    }
+  }
+  if (snapshot.lines.length) {
+    await attachDiagnosticFile(testInfo, opts.name ?? "daemon-diagnostics", snapshot.body());
+  }
+  if (state.projectRoot) {
+    let logTail: Buffer;
+    try {
+      logTail = await daemonLogTail(state.projectRoot);
+    } catch (error) {
+      // The read reports failures as values; this only guards the decode path.
+      logTail = Buffer.from(`[daemon.log] unreadable (${redactDiagnostic(String(error))})\n`);
+    }
+    await attachDiagnosticFile(testInfo, opts.logName ?? "daemon-log-diagnostics", logTail);
+  }
+}
+
+export async function attachActiveDaemonOutputs(
+  testInfo: TestInfo,
+  opts: { force?: boolean } = {},
+): Promise<void> {
+  if (!opts.force && testInfo.status === testInfo.expectedStatus) return;
+  let index = 0;
+  for (const proc of diagnosticProcesses) {
+    await attachDaemonOutput(proc, testInfo, { force: true, ...diagnosticNames(index++) });
+  }
+}
+
+/** Attach all processes implicated in a setup hook without replacing its error. */
+export async function attachSetupFailureOutputs(
+  processes: Iterable<ChildProcess | undefined>,
+  testInfo: TestInfo,
+): Promise<void> {
+  let index = 0;
+  for (const proc of processes) {
+    if (!proc) continue;
+    try {
+      await attachDaemonOutput(proc, testInfo, { force: true, ...diagnosticNames(index++) });
+    } catch (attachmentError) {
+      console.warn(`[e2e] could not attach daemon diagnostics: ${redactDiagnostic(String(attachmentError))}`);
+    }
+  }
+}
+
+/** Preserve a setup failure's process tail before Playwright skips test fixtures. */
+export async function withSetupDiagnostics<T>(
+  proc: ChildProcess,
+  testInfo: TestInfo,
+  setup: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await setup();
+  } catch (error) {
+    await attachSetupFailureOutputs([proc], testInfo);
+    throw error;
   }
 }
 
@@ -174,7 +332,10 @@ export async function teardownDaemon(
   proc.kill("SIGTERM");
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (await isDown()) return;
+    if (await isDown()) {
+      diagnosticProcesses.delete(proc);
+      return;
+    }
     await sleep(50);
   }
 
@@ -187,7 +348,10 @@ export async function teardownDaemon(
   }
   const killDeadline = Date.now() + 2000;
   while (Date.now() < killDeadline) {
-    if (await isDown()) return;
+    if (await isDown()) {
+      diagnosticProcesses.delete(proc);
+      return;
+    }
     await sleep(50);
   }
   // Review NIT — a silent give-up reproduces the original flake with zero
@@ -195,6 +359,7 @@ export async function teardownDaemon(
   console.warn(
     `[e2e] teardownDaemon gave up: pid=${pid} port=${port} still up after SIGKILL — the next spec may flake`,
   );
+  diagnosticProcesses.delete(proc);
 }
 
 /** Parse the daemon port out of a `http://localhost:PORT` base URL. */

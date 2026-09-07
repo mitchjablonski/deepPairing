@@ -1,5 +1,7 @@
 import { test as base, expect } from "@playwright/test";
-import { BoundedDiagnosticTail } from "./diagnostics.js";
+import type { ChildProcess } from "node:child_process";
+import { attachDiagnosticFile, BoundedDiagnosticTail } from "./diagnostics.js";
+import { attachActiveDaemonOutputs, attachSetupFailureOutputs } from "./daemon-harness.js";
 
 const MAX_DIAGNOSTIC_BYTES = 64 * 1024;
 
@@ -41,15 +43,36 @@ export const test = base.extend<{ browserDiagnostics: void }>({
       await use();
     } finally {
       mutableBrowser.newContext = originalNewContext;
+      await attachActiveDaemonOutputs(testInfo);
       if (testInfo.status !== testInfo.expectedStatus && diagnostics.lines.length) {
-        await testInfo.attach("browser-diagnostics", {
-          body: diagnostics.body(),
-          contentType: "text/plain",
-        });
+        await attachDiagnosticFile(testInfo, "browser-diagnostics", diagnostics.body());
       }
     }
   }, { auto: true }],
 });
+
+/** Register a complete beforeAll setup with causal daemon diagnostics. */
+export function daemonBeforeAll(
+  processes: () => Iterable<ChildProcess | undefined>,
+  setup: (testInfo: import("@playwright/test").TestInfo) => Promise<void>,
+): void {
+  test.beforeAll(async ({}, testInfo) => {
+    try {
+      await setup(testInfo);
+    } catch (error) {
+      await attachSetupFailureOutputs(processes(), testInfo);
+      throw error;
+    }
+  });
+  // Playwright can abort a timed-out hook without rejecting back into the
+  // callback above. Register this before callers register their cleanup hook,
+  // so the real daemon.log is retained while its mkdtemp root still exists.
+  test.afterAll(async ({}, testInfo) => {
+    if (testInfo.status !== testInfo.expectedStatus) {
+      await attachSetupFailureOutputs(processes(), testInfo);
+    }
+  });
+}
 
 export { expect };
 export type { Page, Locator, Browser, BrowserContext, TestInfo } from "@playwright/test";

@@ -14,6 +14,8 @@ const STD_EXCLUDE = [
 // concurrent tsx cold-starts were the main latency-straggler source.
 const SPAWN_SUITES = [
   "src/__tests__/daemon-sigterm-port-release.test.ts",
+  // #341 — real daemon.log retention through the e2e diagnostics harness.
+  "src/__tests__/e2e-daemon-log-retention.test.ts",
   "src/__tests__/daemon-version-exposure.test.ts",
   "src/__tests__/ensure-daemon-version-gate.test.ts",
   "src/__tests__/fixture-ttl.test.ts",

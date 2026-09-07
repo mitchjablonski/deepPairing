@@ -1,10 +1,10 @@
-import { test, expect } from "./test.js";
-import { spawn, type ChildProcess } from "node:child_process";
+import { test, daemonBeforeAll, expect } from "./test.js";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { teardownDaemon, portOf } from "./daemon-harness.js";
+import { teardownDaemon, portOf, spawnDiagnosticProcess, withSetupDiagnostics } from "./daemon-harness.js";
 
 /**
  * The real-browser regression guard for the companion UI bootstrap (II2.2 /
@@ -35,46 +35,44 @@ let home: string;
 let baseURL: string;
 let expectedHash: string;
 
-test.beforeAll(async () => {
+daemonBeforeAll(() => [proc], async (testInfo) => {
   if (!fs.existsSync(daemonJs)) {
     throw new Error(`dist/daemon/index.js missing at ${daemonJs} — run \`pnpm build\` before the e2e suite.`);
   }
   home = fs.mkdtempSync(path.join(os.tmpdir(), "dp-e2e-home-"));
   projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-e2e-"));
-  proc = spawn(process.execPath, [daemonJs], {
+  proc = spawnDiagnosticProcess(process.execPath, [daemonJs], {
     // #152 — DEEPPAIRING_NO_OPEN: this is a scripted daemon start; without it
     // the daemon xdg-opens a real browser on every CI/local suite run (and on
     // WSL2 leaves Chrome crashpad orphans behind).
     env: { ...process.env, HOME: home, DEEPPAIRING_PROJECT_ROOT: projectRoot, DEEPPAIRING_NO_OPEN: "1" },
-    stdio: "ignore",
   });
 
-  // The daemon scans 3847+ for a free port and writes the bound one to
-  // .deeppairing/daemon.json. Wait until it's written AND reachable.
-  const infoPath = path.join(projectRoot, ".deeppairing", "daemon.json");
-  let port = 0;
-  for (let i = 0; i < 100 && !port; i++) {
-    if (fs.existsSync(infoPath)) {
-      try {
-        const info = JSON.parse(fs.readFileSync(infoPath, "utf-8"));
-        if (info.port) {
-          // daemon.json carries port/pid but not the hash; /api/daemon-info
-          // (public post-II2.2) is the source of truth for projectHash.
-          const res = await fetch(`http://localhost:${info.port}/api/daemon-info`).catch(() => null);
-          if (res?.ok) {
-            const di = (await res.json()) as { projectHash?: string };
-            port = info.port;
-            expectedHash = di.projectHash ?? "";
+  await withSetupDiagnostics(proc, testInfo, async () => {
+    // Wait until daemon.json is written AND its advertised port is reachable.
+    const infoPath = path.join(projectRoot, ".deeppairing", "daemon.json");
+    let port = 0;
+    for (let i = 0; i < 100 && !port; i++) {
+      if (fs.existsSync(infoPath)) {
+        try {
+          const info = JSON.parse(fs.readFileSync(infoPath, "utf-8"));
+          if (info.port) {
+            const res = await fetch(`http://localhost:${info.port}/api/daemon-info`).catch(() => null);
+            if (res?.ok) {
+              const di = (await res.json()) as { projectHash?: string };
+              port = info.port;
+              expectedHash = di.projectHash ?? "";
+            }
           }
+        } catch {
+          /* daemon.json mid-write — retry */
         }
-      } catch {
-        /* daemon.json mid-write — retry */
       }
+      if (!port) await new Promise((r) => setTimeout(r, 100));
     }
-    if (!port) await new Promise((r) => setTimeout(r, 100));
-  }
-  if (!port) throw new Error("daemon did not become reachable within 10s");
-  baseURL = `http://localhost:${port}`;
+    if (!port) throw new Error("daemon did not become reachable within 10s");
+    baseURL = `http://localhost:${port}`;
+  });
 });
 
 test.afterAll(async () => {
