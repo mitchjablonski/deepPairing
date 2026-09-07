@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   WalkMeThroughButton,
@@ -337,14 +337,36 @@ describe("WalkMeThroughButton", () => {
     await userEvent.click(screen.getByTestId("walk-me-through-file"));
     unmount();
     timeoutSpy.mockClear();
-    resolveRequest(new Response(JSON.stringify({
-      request: { id: "req_late", text: "x", intent: "explain", createdAt: new Date().toISOString() },
-    }), { status: 200, headers: { "Content-Type": "application/json" } }));
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await act(async () => {
+      resolveRequest(new Response(JSON.stringify({
+        request: { id: "req_late", text: "x", intent: "explain", createdAt: new Date().toISOString() },
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+      // #390 — this used to be three bare `await Promise.resolve()`, a GUESSED
+      // microtask count that never reached the awaiting continuation inside
+      // onClick: the whole assertion below ran before the code under test did,
+      // so the suite stayed 26/26 with the mounted guard DELETED. Drain to an
+      // OBSERVABLE completion instead of a fixed tick count.
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    // submitRequest's last act before resolving is to swap the provisional
+    // record for the server-id'd one, so `req_late` in the store IS the
+    // request's completion — the caller's continuation is next in line.
+    await waitFor(() =>
+      expect(useArtifactStore.getState().requests.some((r) => r.id === "req_late")).toBe(true),
+    );
+    // One more act-wrapped macrotask: enough for that continuation (and
+    // anything it would schedule) to run. Deterministic and bounded — no
+    // polling for an absence.
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 
     expect(timeoutSpy.mock.calls.some(([, delay]) => delay === 2500)).toBe(false);
+    // Toast suppression is a DELIBERATE product choice (#355's body, re-ratified
+    // in #390's acceptance: "do not schedule local UI/timer updates or success
+    // toasts after this component unmounts"), not an accident of the guard. The
+    // #355 M2 counter-proposal — fire the global, store-level toast even after
+    // unmount, since the toast store outlives the component and the request did
+    // land — is a live UX question, explicitly OUT of scope for this test-only
+    // correction. Whoever settles it flips this line on purpose.
     expect(useToastStore.getState().toasts).toHaveLength(0);
   });
 
