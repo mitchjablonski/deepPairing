@@ -997,7 +997,15 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       adapter.onMessage((data) => handleMessage(data, thisConnection));
 
       adapter.onDisconnect(() => {
-        beginSessionTransition(get().sessionId);
+        // A socket drop (including refreshUrl's project-hash reconnect) is a
+        // transport generation change, not a user navigation. Connection,
+        // session and snapshot generations below still fence every async WS /
+        // recovery callback and cancel its buffer. Do not invalidate the
+        // separate semantic transition token here: a same-session Features /
+        // Decisions click may have its authoritative HTTP snapshot in flight,
+        // and abandoning that user action leaves its modal silently stuck.
+        // Genuine navigation and teardown still invalidate explicitly in
+        // switchSession() and disconnect().
         connectionGeneration++;
         sessionGeneration++;
         snapshotGeneration++;

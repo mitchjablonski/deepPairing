@@ -309,6 +309,9 @@ export interface IStore {
     // G1 (#198b) — human-initiated requests. Optional in the return type so a
     // read-only replay store that omits it still satisfies the interface; the
     // real stores (FileStore + DaemonClient's /api/state) always include it.
+    // The browser's stateful `connected` recovery snapshot deliberately
+    // requires this array; a future read-only store used on that live path must
+    // include `requests: []` even though replay-only implementations may omit it.
     requests?: Request[];
     sessionMemory: { rejectedApproaches: RejectedApproach[]; approvedPatterns: string[] };
     engagementMetrics: {

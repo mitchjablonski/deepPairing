@@ -179,6 +179,66 @@ test("#203 — the Features view groups artifacts, Ungrouped last, with open ite
   await expect(page.locator('[data-testid="features-view"]')).toHaveCount(0, { timeout: 15000 });
 });
 
+test("#339 — transport reconnect preserves an in-flight Features replay entry", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 950 });
+  await openFeatures(page, fullBase, "feat");
+  await page.waitForFunction(() => {
+    const state = (window as any).__dpConnectionStore.getState();
+    return state.connected === true && state.hydrated === true && state.sessionId === "feat";
+  });
+
+  let releaseSessionRead!: () => void;
+  const held = new Promise<void>((resolve) => { releaseSessionRead = resolve; });
+  let sawSessionRead!: () => void;
+  const requested = new Promise<void>((resolve) => { sawSessionRead = resolve; });
+  const sessionRoute = "**/api/sessions/feat";
+  await page.route(sessionRoute, async (route) => {
+    sawSessionRead();
+    await held;
+    await route.continue();
+  });
+
+  try {
+    const intendedArtifact = page
+      .locator('[data-testid="features-view"] [data-feature-artifact]')
+      .filter({ hasText: "Milestone 6 — content quota backfill" });
+    const click = intendedArtifact.click();
+    await requested;
+    await page.evaluate(() => {
+      const state = (window as any).__dpConnectionStore.getState();
+      // Exercise the real adapter disconnect used by refreshUrl while the
+      // semantic replay request remains held at its authoritative HTTP read.
+      state.adapter.disconnect();
+    });
+    await page.waitForFunction(() => (window as any).__dpConnectionStore.getState().connected === false);
+
+    releaseSessionRead();
+    await click;
+    await expect(page.locator('[data-testid="features-view"]')).toHaveCount(0);
+    await expect(page.getByText("Replay mode", { exact: true })).toBeVisible();
+    await expect(page.locator('[data-artifact-id="m6_plan"]')).toContainText(
+      "Milestone 6 — content quota backfill",
+    );
+    await expect(page.getByText(/Replay — read-only/i).first()).toBeVisible();
+
+    // A transport reconnect must remain healthy without replacing the replayed
+    // frame: wait for the store's connected + hydrated contract, then verify
+    // the intended artifact and read-only gate still render.
+    await page.evaluate(() => (window as any).__dpConnectionStore.getState().adapter.connect());
+    await page.waitForFunction(() => {
+      const state = (window as any).__dpConnectionStore.getState();
+      return state.connected === true && state.hydrated === true && state.sessionId === "feat";
+    });
+    await expect(page.locator('[data-artifact-id="m6_plan"]')).toContainText(
+      "Milestone 6 — content quota backfill",
+    );
+    await expect(page.getByText(/Replay — read-only/i).first()).toBeVisible();
+  } finally {
+    releaseSessionRead();
+    await page.unroute(sessionRoute);
+  }
+});
+
 test("#203 — light theme renders the Features view legibly", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("dp-theme", "light"));
   await page.setViewportSize({ width: 1440, height: 950 });

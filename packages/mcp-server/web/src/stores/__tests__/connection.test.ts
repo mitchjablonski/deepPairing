@@ -63,6 +63,32 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("semantic session transitions across transport reconnects", () => {
+  it("keeps an in-flight same-session navigation current across a transport reconnect", async () => {
+    const { beginSessionTransition, isCurrentSessionTransition } = await import("../../lib/session-transition");
+    useConnectionStore.getState().connect("A");
+    const navigation = beginSessionTransition("A");
+
+    // The concrete adapter pair used by refreshUrl after learning projectHash.
+    activeAdapter.disconnect();
+    activeAdapter.connect();
+
+    expect(isCurrentSessionTransition(navigation)).toBe(true);
+  });
+
+  it("still invalidates stale work on a genuine session switch or explicit teardown", async () => {
+    const { beginSessionTransition, isCurrentSessionTransition } = await import("../../lib/session-transition");
+    useConnectionStore.getState().connect("A");
+    const beforeSwitch = beginSessionTransition("A");
+    useConnectionStore.getState().switchSession("B");
+    expect(isCurrentSessionTransition(beforeSwitch)).toBe(false);
+
+    const beforeTeardown = beginSessionTransition("B");
+    useConnectionStore.getState().disconnect();
+    expect(isCurrentSessionTransition(beforeTeardown)).toBe(false);
+  });
+});
+
 /** Give the dynamic import("./artifact") inside handleMessage a tick to resolve. */
 async function flush() {
   // The store does an ESM dynamic import per message; microtasks + a macrotask

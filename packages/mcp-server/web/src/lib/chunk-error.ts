@@ -192,5 +192,8 @@ export function resetDeferredReloadForTests(): void {
 }
 
 export function installPreloadErrorRecovery(): void {
+  // Keep the event parameter in the handler contract even though recovery must
+  // not preventDefault: doing so makes Vite resolve a failed import as
+  // `undefined`, obscuring the chunk error before the boundary can explain it.
   window.addEventListener("vite:preloadError", (e) => handlePreloadError(e));
 }
