@@ -165,6 +165,27 @@ function externalChangesets(artifacts: Artifact[]): Artifact[] {
 const CLOSED_CHANGESET_STATUSES = new Set(["superseded", "retracted", "obsolete"]);
 const FULL_GIT_SHA = /^[0-9a-fA-F]{40}$/;
 
+/**
+ * #369 HIGH-A/HIGH-B — does this chunk still make a LIVE CLAIM on a PR identity?
+ *
+ * `superseded` / `retracted` / `obsolete` are the three ways a chunk is taken
+ * off the board, and they are the product's OWN prescribed recovery: present the
+ * wrong PR, retract it, present the right one. `rejected` and `revised` are NOT
+ * here on purpose — those are the human's VERDICT on this PR, which is very much
+ * a standing claim on its identity, and `draft`/`reviewing` are simply open.
+ *
+ * This is the same membership `reviewedHeadFor` (:290) and the SHA-provenance
+ * check (:537) already read from `CLOSED_CHANGESET_STATUSES`; the two findings
+ * below were the sites that had NOT been converted to it, and each one turned a
+ * recoverable mistake into a permanent, unexitable refusal for the whole
+ * session. Note the deliberate non-use of shared's `isClosedArtifactStatus`:
+ * that predicate counts `approved` as closed (it answers "can the human still
+ * act on this?"), and an approved chunk is the most standing claim there is.
+ */
+function isStandingChunk(artifact: Artifact): boolean {
+  return !CLOSED_CHANGESET_STATUSES.has(artifact.status);
+}
+
 type ParsedPr = NonNullable<ReturnType<typeof parsePrNumber>>;
 
 function samePrIdentity(target: ParsedPr, reviewed: ParsedPr): boolean {
@@ -206,9 +227,24 @@ function scopeExternalChangesets(artifacts: Artifact[], ref: string): ExternalTa
   return scope;
 }
 
+/**
+ * #369 HIGH-A — how many DISTINCT pull requests does this session still stand
+ * behind? More than one means an approved findings artifact cannot be attributed
+ * to a PR (findings record no PR of their own), so posting it anywhere could
+ * publish another PR's findings — hence the refusal at the call site.
+ *
+ * The bug this scoping fixes: the count used to include CLOSED chunks. Present
+ * the wrong PR once, retract it, present the right one — and the session is
+ * bricked forever, because the retracted chunk keeps the identity count at two
+ * with no in-session exit. Retraction IS the product's prescribed recovery from
+ * exactly that mistake, and the rest of this file already treats it that way.
+ * A chunk that was taken off the board no longer claims a PR identity, so it no
+ * longer contributes one here.
+ */
 function knownPrIdentityCount(artifacts: Artifact[]): number {
   const identities = new Set<string>();
   for (const artifact of artifacts) {
+    if (!isStandingChunk(artifact)) continue;
     const url = coerceChangesetContent(artifact.content).source?.url;
     const parsed = url ? parsePrNumber(url) : null;
     if (parsed?.owner && parsed.repo) {
@@ -486,11 +522,24 @@ export function authorizeReviewPost(
   let closedShaLineage: Artifact[] = [];
   if (opts.pr) {
     const fullScope = scopeExternalChangesets(targetExternals, opts.pr);
-    const standing = targetExternals.filter(a =>
-      !CLOSED_CHANGESET_STATUSES.has(a.status));
+    const standing = targetExternals.filter(isStandingChunk);
     const standingScope = scopeExternalChangesets(standing, opts.pr);
-    const contradictory = standingScope.contradictory[0] ??
-      (approved.length > 0 ? fullScope.contradictory[0] : undefined);
+    // #369 HIGH-B — STANDING ONLY. Both of the refusals below used to fall back
+    // to `fullScope` whenever any approved findings existed, which reached into
+    // CLOSED chunks and re-raised a mistake the pair had already withdrawn. The
+    // effect was the same permanent wedge as HIGH-A, and worse in one respect:
+    // the refusal text tells the agent to "present one coherent PR identity and
+    // get your pair's verdict again" / "present every relevant chunk with its
+    // full source.url" — and doing precisely that STILL refused, because the
+    // superseded original was what the gate was reading. The prescribed exit did
+    // not exist. Scoped to standing chunks, the message and the mechanism agree:
+    // supersede or retract the incoherent chunk, present a clean one, post.
+    //
+    // This does NOT open the gate. `standingScope` is `fullScope` intersected
+    // with the standing set, so every LIVE incoherent chunk — draft, reviewing,
+    // rejected, revised, approved — is caught exactly as before. Only chunks the
+    // pair or the agent already took off the board stop refusing.
+    const contradictory = standingScope.contradictory[0];
     if (contradictory) {
       const artifact = contradictory;
       return {
@@ -516,9 +565,11 @@ export function authorizeReviewPost(
           `not the requested PR ${opts.pr}. Present the requested PR with its full source.url and get your pair's verdict before posting.`,
       };
     }
-    const unknownApproveChunk = event === "APPROVE"
-      ? standingScope.unknown[0] ?? (approved.length > 0 ? fullScope.unknown[0] : undefined)
-      : undefined;
+    // #369 HIGH-B, the second fallback — same scoping, same reason. An APPROVE
+    // still requires that every STANDING chunk prove its PR identity; a chunk
+    // superseded by one that carries the full canonical source.url is the fix
+    // the message asks for, and must stop being the thing that blocks it.
+    const unknownApproveChunk = event === "APPROVE" ? standingScope.unknown[0] : undefined;
     if (unknownApproveChunk) {
       const artifact = unknownApproveChunk;
       return {
@@ -533,15 +584,27 @@ export function authorizeReviewPost(
     // unboundShaProvenanceRefusal. (An APPROVE with a standing unknown chunk
     // was already refused above, so this is the COMMENT/REQUEST_CHANGES half
     // of the same no-silent-downgrade boundary.)
-    const shaAwareUnknown = fullScope.unknown.filter(hasShaProvenance);
-    const standingUnbound = shaAwareUnknown.find((a) => !CLOSED_CHANGESET_STATUSES.has(a.status));
+    //
+    // #369 HIGH-B rider — `contradictory` joins `unknown` here. Both buckets say
+    // the same thing about identity: the gate cannot prove WHICH PR the chunk
+    // describes (no bindable url / a source.number that fights its source.url).
+    // That equivalence was invisible while the contradictory fallback above
+    // refused every such chunk outright; once closed ones stop refusing, the
+    // SHA they carry has to land in the lineage below or it is silently dropped
+    // — which is #369 MEDIUM-C's exact failure mode (a COMMENT going out with no
+    // commit_id, pinned by GitHub to the PR's mutable current head). `other` is
+    // deliberately NOT here: a coherent chunk for a DIFFERENT pull request is
+    // not this review's lineage, and its commit is not this target's provenance.
+    const identityUnproven = [...fullScope.unknown, ...fullScope.contradictory];
+    const shaAwareUnknown = identityUnproven.filter(hasShaProvenance);
+    const standingUnbound = shaAwareUnknown.find(isStandingChunk);
     if (standingUnbound) {
       return { ok: false, reason: unboundShaProvenanceRefusal(standingUnbound, event, opts.pr) };
     }
-    // What remains is CLOSED unknown chunks that once recorded a commit. They
-    // never supply a SHA (their identity is still unproven), but they are
-    // lineage: if no standing target chunk names a commit now, that is a
-    // refresh-required revision, not a wholly legacy session — the same rule
+    // What remains is CLOSED identity-unproven chunks that once recorded a
+    // commit. They never supply a SHA (their identity is still unproven), but
+    // they are lineage: if no standing target chunk names a commit now, that is
+    // a refresh-required revision, not a wholly legacy session — the same rule
     // reviewedHeadFor already applies to closed MATCHING chunks.
     closedShaLineage = shaAwareUnknown;
     targetExternals = fullScope.matching;

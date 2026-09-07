@@ -50,6 +50,64 @@ describe("present_debrief — non-blocking record", () => {
   });
 });
 
+describe("present_debrief — the recalled stance is SURFACED, never swallowed (#369 MEDIUM-D)", () => {
+  const REJECTION = {
+    description: "in-process rate limiting",
+    reason: "we standardised on the edge limiter; in-process drifts per instance",
+    concept: "in-process rate limiting",
+  };
+
+  it("renders the advisory when the debrief narrates an approach the pair rejected", async () => {
+    // THE FAIL-OPEN THIS PINS. `artifactProposal` marks every debrief
+    // `advisory: true`, so the matcher runs and hands the fired match back as
+    // `pre.advisory` instead of refusing — correct, because a debrief is the
+    // historical record and must not be blocked from naming a rejected path.
+    // But nothing in present-debrief.ts ever READ `pre.advisory`. The matcher
+    // hit and the result was dropped: the debrief sailed through with the
+    // stance never mentioned to anyone, where `main` had blocked it loudly.
+    // The moat went dark on the commonest debrief entry point — in the one
+    // artifact whose whole job is to narrate the rejection.
+    store.recordRejectedApproach(REJECTION);
+
+    const res = await callTool("present_debrief", {
+      title: "Debrief — the rate limiter",
+      summary: "We added in-process rate limiting to every route.",
+      sections: [{ title: "The limiter", body: "Each instance keeps its own buckets." }],
+    });
+
+    // Still non-blocking: the record exists and the tool did not refuse.
+    expect(res.isError).toBeFalsy();
+    expect(store.getArtifacts().filter((a) => a.type === "debrief")).toHaveLength(1);
+
+    // …and the signal is BACK. The matched stance is named, framed as advice,
+    // and turned into the one thing the agent should do with it.
+    expect(res.text).toContain("advisory, not a block");
+    expect(res.text).toContain("in-process rate limiting");
+    expect(res.text).toContain("revise_artifact");
+    // Advisory means advisory — never dressed as a refusal.
+    expect(res.text).not.toMatch(/REJECTED_APPROACH_BLOCKED[\s\S]*Refusing/);
+  });
+
+  it("CONTROL — an unrelated debrief is untouched, no advisory invented", async () => {
+    // If this one grew an advisory too, the render would be noise rather than
+    // signal and the pin above would prove nothing.
+    store.recordRejectedApproach(REJECTION);
+
+    const res = await callTool("present_debrief", {
+      title: "Debrief — timezone rendering",
+      summary: "We moved date formatting into one helper so the footer matches the header.",
+    });
+
+    expect(res.isError).toBeFalsy();
+    expect(res.text).not.toContain("advisory, not a block");
+    expect(res.text).not.toContain("RECORDED A STANCE AGAINST");
+    // (The first-call preamble lists the ledger verbatim for every tool call, so
+    // the rejected phrase itself appears in BOTH responses — asserting on its
+    // absence here would test the preamble, not the advisory. The advisory's own
+    // wording is what separates the two.)
+  });
+});
+
 describe("present_debrief — dangling drill-in refs (#225 N1, item 4)", () => {
   it("WARNS (not rejects) about refs that resolve to no artifact, naming only the fabricated ones", async () => {
     // A real, live artifact to reference (its ref must NOT warn).
