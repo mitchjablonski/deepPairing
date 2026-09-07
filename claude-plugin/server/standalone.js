@@ -2885,10 +2885,10 @@ var init_schemas = __esm({
         const shape = def.shape;
         const propValues = {};
         for (const key in shape) {
-          const field = shape[key]._zod;
-          if (field.values) {
+          const field2 = shape[key]._zod;
+          if (field2.values) {
             propValues[key] ?? (propValues[key] = /* @__PURE__ */ new Set());
-            for (const v2 of field.values)
+            for (const v2 of field2.values)
               propValues[key].add(v2);
           }
         }
@@ -4173,8 +4173,8 @@ var init_az = __esm({
 });
 
 // ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/be.js
-function getBelarusianPlural(count, one, few, many) {
-  const absCount = Math.abs(count);
+function getBelarusianPlural(count2, one, few, many) {
+  const absCount = Math.abs(count2);
   const lastDigit = absCount % 10;
   const lastTwoDigits = absCount % 100;
   if (lastTwoDigits >= 11 && lastTwoDigits <= 19) {
@@ -6354,8 +6354,8 @@ var init_hu = __esm({
 });
 
 // ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/hy.js
-function getArmenianPlural(count, one, many) {
-  return Math.abs(count) === 1 ? one : many;
+function getArmenianPlural(count2, one, many) {
+  return Math.abs(count2) === 1 ? one : many;
 }
 function withDefiniteArticle(word) {
   if (!word)
@@ -8596,8 +8596,8 @@ var init_ro = __esm({
 });
 
 // ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ru.js
-function getRussianPlural(count, one, few, many) {
-  const absCount = Math.abs(count);
+function getRussianPlural(count2, one, few, many) {
+  const absCount = Math.abs(count2);
   const lastDigit = absCount % 10;
   const lastTwoDigits = absCount % 100;
   if (lastTwoDigits >= 11 && lastTwoDigits <= 19) {
@@ -17302,20 +17302,20 @@ var require_resolve = __commonJS({
       return false;
     }
     function countKeys(schema) {
-      let count = 0;
+      let count2 = 0;
       for (const key in schema) {
         if (key === "$ref")
           return Infinity;
-        count++;
+        count2++;
         if (SIMPLE_INLINED.has(key))
           continue;
         if (typeof schema[key] == "object") {
-          (0, util_1.eachItem)(schema[key], (sch) => count += countKeys(sch));
+          (0, util_1.eachItem)(schema[key], (sch) => count2 += countKeys(sch));
         }
-        if (count === Infinity)
+        if (count2 === Infinity)
           return Infinity;
       }
-      return count;
+      return count2;
     }
     function getFullPath(resolver, id = "", normalize) {
       if (normalize !== false)
@@ -20400,8 +20400,8 @@ var require_contains = __commonJS({
         cxt.result(valid, () => cxt.reset());
         function validateItemsWithCount() {
           const schValid = gen.name("_valid");
-          const count = gen.let("count", 0);
-          validateItems(schValid, () => gen.if(schValid, () => checkLimits(count)));
+          const count2 = gen.let("count", 0);
+          validateItems(schValid, () => gen.if(schValid, () => checkLimits(count2)));
         }
         function validateItems(_valid, block) {
           gen.forRange("i", 0, len, (i) => {
@@ -20414,16 +20414,16 @@ var require_contains = __commonJS({
             block();
           });
         }
-        function checkLimits(count) {
-          gen.code((0, codegen_1._)`${count}++`);
+        function checkLimits(count2) {
+          gen.code((0, codegen_1._)`${count2}++`);
           if (max === void 0) {
-            gen.if((0, codegen_1._)`${count} >= ${min}`, () => gen.assign(valid, true).break());
+            gen.if((0, codegen_1._)`${count2} >= ${min}`, () => gen.assign(valid, true).break());
           } else {
-            gen.if((0, codegen_1._)`${count} > ${max}`, () => gen.assign(valid, false).break());
+            gen.if((0, codegen_1._)`${count2} > ${max}`, () => gen.assign(valid, false).break());
             if (min === 1)
               gen.assign(valid, true);
             else
-              gen.if((0, codegen_1._)`${count} >= ${min}`, () => gen.assign(valid, true));
+              gen.if((0, codegen_1._)`${count2} >= ${min}`, () => gen.assign(valid, true));
           }
         }
       }
@@ -21858,8 +21858,8 @@ var require_dist = __commonJS({
         return ajv;
       }
       const [formats, exportName] = opts.mode === "fast" ? [formats_1.fastFormats, fastName] : [formats_1.fullFormats, fullName];
-      const list = opts.formats || formats_1.formatNames;
-      addFormats(ajv, list, formats, exportName);
+      const list2 = opts.formats || formats_1.formatNames;
+      addFormats(ajv, list2, formats, exportName);
       if (opts.keywords)
         (0, limit_1.default)(ajv);
       return ajv;
@@ -21871,11 +21871,11 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list, fs11, exportName) {
+    function addFormats(ajv, list2, fs11, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
-      for (const f of list)
+      for (const f of list2)
         ajv.addFormat(f, fs11[f]);
     }
     module.exports = exports = formatsPlugin;
@@ -22274,7 +22274,8 @@ var init_content_types = __esm({
       url: external_exports.string().optional().describe("Full PR URL \u2014 the banner links it"),
       headRef: external_exports.string().optional().describe("Source branch, e.g. 'feat/rate-limit'"),
       baseRef: external_exports.string().optional().describe("Target branch, e.g. 'main'"),
-      author: external_exports.string().optional().describe("PR author's GitHub login")
+      author: external_exports.string().optional().describe("PR author's GitHub login"),
+      headSha: external_exports.string().regex(/^[0-9a-fA-F]{40}$/).transform((sha) => sha.toLowerCase()).optional().describe("Immutable 40-hex Git commit SHA returned by gh pr view --json headRefOid for the exact diff shown to the human")
     });
     ChangesetContentSchema = external_exports.object({
       summary: external_exports.string().optional(),
@@ -22292,7 +22293,7 @@ var init_content_types = __esm({
        *  ChangesetReviewIntentSchema for exactly what "external" changes. */
       reviewIntent: ChangesetReviewIntentSchema.optional().describe("Set to 'external' when this diff is SOMEONE ELSE'S code you are reviewing (a GitHub PR you were pinged on), not a change you are proposing. Omit for your own work. An external changeset's approve/needs-changes is the human's REVIEW VERDICT \u2014 it stays local until they say to post it, and it never means 'this code lands'."),
       /** Q6 (#232) — where an external changeset came from (the PR). */
-      source: ChangesetSourceSchema.optional().describe("Provenance of an external changeset \u2014 the PR it was pulled from: { kind: 'github-pr', number, url, headRef, baseRef, author }. Fill in whatever `gh pr view` gave you; the review surface names and links it."),
+      source: ChangesetSourceSchema.optional().describe("Provenance of an external changeset \u2014 the PR and immutable commit it was pulled from: { kind: 'github-pr', number, url, headRef, baseRef, author, headSha }. Capture headSha from `gh pr view --json headRefOid`; an APPROVE without it is refused rather than guessed from the PR's later head."),
       /**
        * R4 P-B (#284) — a changeset-level visual: "the shape of what this PR
        * touches" — a diagram or file map that frames the whole diff before the
@@ -23304,6 +23305,9 @@ function coerceChangesetSource(v2) {
     out.baseRef = v2.baseRef;
   if (typeof v2.author === "string" && v2.author.length > 0)
     out.author = v2.author;
+  if (typeof v2.headSha === "string" && /^[0-9a-fA-F]{40}$/.test(v2.headSha)) {
+    out.headSha = v2.headSha.toLowerCase();
+  }
   return out;
 }
 function coerceChangesetContent(raw) {
@@ -25175,6 +25179,38 @@ var init_prose_lint = __esm({
   }
 });
 
+// ../shared/dist/schemas/ledger-digest.js
+var count, LedgerDigestSchema;
+var init_ledger_digest = __esm({
+  "../shared/dist/schemas/ledger-digest.js"() {
+    "use strict";
+    init_zod();
+    count = external_exports.number().finite().nonnegative();
+    LedgerDigestSchema = external_exports.object({
+      shapedThisProject: count,
+      nearMissesThisProject: count,
+      blockedThisProject: count,
+      sessionsTouched: count,
+      topCitedStances: external_exports.array(external_exports.object({
+        concept: external_exports.string(),
+        source: external_exports.enum(["session", "team"]),
+        citationCount: count,
+        globalCitationCount: count.optional(),
+        sampleArtifactId: external_exports.string().optional(),
+        sampleSessionId: external_exports.string().optional()
+      })),
+      seededStances: external_exports.array(external_exports.object({
+        concept: external_exports.string(),
+        stance: external_exports.enum(["avoid", "prefer", "mixed"]),
+        citedTimesElsewhere: count,
+        sampleArtifactId: external_exports.string().optional(),
+        sampleSessionId: external_exports.string().optional()
+      })).optional(),
+      globalLedger: external_exports.object({ concepts: count, projects: count, multiProjectConcepts: count })
+    });
+  }
+});
+
 // ../shared/dist/index.js
 var init_dist = __esm({
   "../shared/dist/index.js"() {
@@ -25200,6 +25236,7 @@ var init_dist = __esm({
     init_request();
     init_errors3();
     init_prose_lint();
+    init_ledger_digest();
   }
 });
 
@@ -27760,7 +27797,7 @@ var Protocol = class {
         }
         await this.notification(notification, notificationOptions);
       },
-      sendRequest: async (r, resultSchema, options) => {
+      sendRequest: async (r, resultSchema2, options) => {
         if (abortController.signal.aborted) {
           throw new McpError(ErrorCode.ConnectionClosed, "Request was cancelled");
         }
@@ -27772,7 +27809,7 @@ var Protocol = class {
         if (effectiveTaskId && taskStore) {
           await taskStore.updateTaskStatus(effectiveTaskId, "input_required");
         }
-        return await this.request(r, resultSchema, requestOptions);
+        return await this.request(r, resultSchema2, requestOptions);
       },
       authInfo: extra?.authInfo,
       requestId: request.id,
@@ -27933,11 +27970,11 @@ var Protocol = class {
    *
    * @experimental Use `client.experimental.tasks.requestStream()` to access this method.
    */
-  async *requestStream(request, resultSchema, options) {
+  async *requestStream(request, resultSchema2, options) {
     const { task } = options ?? {};
     if (!task) {
       try {
-        const result = await this.request(request, resultSchema, options);
+        const result = await this.request(request, resultSchema2, options);
         yield { type: "result", result };
       } catch (error51) {
         yield {
@@ -27961,7 +27998,7 @@ var Protocol = class {
         yield { type: "taskStatus", task: task2 };
         if (isTerminal(task2.status)) {
           if (task2.status === "completed") {
-            const result = await this.getTaskResult({ taskId }, resultSchema, options);
+            const result = await this.getTaskResult({ taskId }, resultSchema2, options);
             yield { type: "result", result };
           } else if (task2.status === "failed") {
             yield {
@@ -27977,7 +28014,7 @@ var Protocol = class {
           return;
         }
         if (task2.status === "input_required") {
-          const result = await this.getTaskResult({ taskId }, resultSchema, options);
+          const result = await this.getTaskResult({ taskId }, resultSchema2, options);
           yield { type: "result", result };
           return;
         }
@@ -27997,7 +28034,7 @@ var Protocol = class {
    *
    * Do not use this method to emit notifications! Use notification() instead.
    */
-  request(request, resultSchema, options) {
+  request(request, resultSchema2, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
     return new Promise((resolve, reject) => {
       const earlyReject = (error51) => {
@@ -28073,7 +28110,7 @@ var Protocol = class {
           return reject(response);
         }
         try {
-          const parseResult = safeParse2(resultSchema, response.result);
+          const parseResult = safeParse2(resultSchema2, response.result);
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
@@ -28129,8 +28166,8 @@ var Protocol = class {
    *
    * @experimental Use `client.experimental.tasks.getTaskResult()` to access this method.
    */
-  async getTaskResult(params, resultSchema, options) {
-    return this.request({ method: "tasks/result", params }, resultSchema, options);
+  async getTaskResult(params, resultSchema2, options) {
+    return this.request({ method: "tasks/result", params }, resultSchema2, options);
   }
   /**
    * Lists tasks, optionally starting from a pagination cursor.
@@ -28523,8 +28560,8 @@ var ExperimentalServerTasks = class {
    *
    * @experimental
    */
-  requestStream(request, resultSchema, options) {
-    return this._server.requestStream(request, resultSchema, options);
+  requestStream(request, resultSchema2, options) {
+    return this._server.requestStream(request, resultSchema2, options);
   }
   /**
    * Sends a sampling request and returns an AsyncGenerator that yields response messages.
@@ -28689,8 +28726,8 @@ var ExperimentalServerTasks = class {
    *
    * @experimental
    */
-  async getTaskResult(taskId, resultSchema, options) {
-    return this._server.getTaskResult({ taskId }, resultSchema, options);
+  async getTaskResult(taskId, resultSchema2, options) {
+    return this._server.getTaskResult({ taskId }, resultSchema2, options);
   }
   /**
    * Lists tasks with optional pagination.
@@ -30776,7 +30813,7 @@ Prior rejection reason: "${match.rejected.reason}"` : "";
 Matched on underlying concept: "${match.rejected.concept}". A paraphrased proposal still counts \u2014 the user has rejected this kind of approach.` : "";
       const message = `REJECTED_APPROACH_BLOCKED: ${toolName} refused \u2014 your proposal contains "${match.proposal}" which the user previously rejected ("${match.rejected.description}").${reasonLine}${conceptLine}
 
-Do NOT retry with this approach. Revise your proposal to exclude it, or \u2014 if you believe conditions have changed \u2014 present_findings first to make the case for reconsidering, then wait for the human's response via check_feedback. The artifact was NOT created.`;
+Do NOT retry with this approach. Propose an alternative. If this is a false positive or conditions have changed, ask the human to override this block in the companion UI's Ledger before retrying. Mentioning the rejected concept in present_findings is checked by this same gate. The artifact was NOT created.`;
       return {
         blocked: true,
         block: {
@@ -31314,6 +31351,8 @@ var ERROR_CODES = {
    *  (approved↔rejected↔revised). The route refuses with 409 + the current
    *  status so the stale tab refreshes to truth. See store/verdict-guard.ts. */
   verdict_already_final: "verdict_already_final",
+  /** A review verdict raced a change to the artifact content being reviewed. */
+  session_review_conflict: "session_review_conflict",
   /** F6 — decision resolve for a decision the bound session doesn't know. */
   decision_not_in_session: "decision_not_in_session",
   /** Context bank — a close-out aimed at a decision owned by ANOTHER project.
@@ -31347,12 +31386,16 @@ var ERROR_CODES = {
   not_a_changeset_file: "not_a_changeset_file",
   /** #171 — the store can't persist changeset review state (a read-only /
    *  non-FileStore implementation lacks setChangesetFileReview). */
-  unsupported: "unsupported"
+  unsupported: "unsupported",
+  /** Durable review-post state needs inspection; do not retry an external POST. */
+  review_post_conflict: "review_post_conflict"
 };
 var USER_FACING_ERROR_CODES = [
   ERROR_CODES.daemon_auth_required,
   ERROR_CODES.project_hash_mismatch,
-  ERROR_CODES.session_not_registered
+  ERROR_CODES.session_not_registered,
+  ERROR_CODES.session_review_conflict,
+  ERROR_CODES.review_post_conflict
 ];
 var TOOL_ERROR_CODES = {
   /** Zod validation failed on tool input — agent should fix the shape and retry. */
@@ -31430,7 +31473,7 @@ function receivedSize(input, path12) {
   return void 0;
 }
 function scalarIssueClause(i, input) {
-  const field = `\`${i.path.join(".") || "(root)"}\``;
+  const field2 = `\`${i.path.join(".") || "(root)"}\``;
   if (isScalarBoundIssue(i)) {
     const isString = i.origin === "string";
     const isArray = i.origin === "array";
@@ -31438,11 +31481,11 @@ function scalarIssueClause(i, input) {
     const size = receivedSize(input, i.path);
     const got = size !== void 0 ? `, got ${size}` : "";
     if (i.code === "too_big") {
-      return `${field}: too long (max ${i.maximum}${unit}${got})`;
+      return `${field2}: too long (max ${i.maximum}${unit}${got})`;
     }
-    return `${field}: too short (min ${i.minimum}${unit}${got})`;
+    return `${field2}: too short (min ${i.minimum}${unit}${got})`;
   }
-  return `${field} (${scalarTypeTag(i)})`;
+  return `${field2} (${scalarTypeTag(i)})`;
 }
 function collapsePath(path12) {
   return path12.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
@@ -31695,10 +31738,10 @@ var EXAMPLE_EXPLAINER = `{
 }`;
 var prop = (v2, key) => v2 && typeof v2 === "object" ? v2[key] : void 0;
 var normEcho = (v2) => typeof v2 === "string" ? v2.trim().toLowerCase() : "";
-var pluckSet = (v2, listKey, field) => {
-  const list = prop(v2, listKey);
-  const items = Array.isArray(list) ? list : [];
-  return items.map((x) => normEcho(prop(x, field))).filter((s) => s.length > 0).sort();
+var pluckSet = (v2, listKey, field2) => {
+  const list2 = prop(v2, listKey);
+  const items = Array.isArray(list2) ? list2 : [];
+  return items.map((x) => normEcho(prop(x, field2))).filter((s) => s.length > 0).sort();
 };
 var echoSetEq = (a, b) => a.length > 0 && a.length === b.length && a.every((v2, i) => v2 === b[i]);
 var EX_OPTIONS = JSON.parse(EXAMPLE_OPTIONS);
@@ -32913,10 +32956,10 @@ function planBody(a, ctx) {
 }
 function decisionBody(a, ctx) {
   const content = coerceDecisionContent(a.content);
-  const record2 = ctx.state.decisions.find(
+  const record3 = ctx.state.decisions.find(
     (d) => d.decisionId === content.decisionId || d.artifactId === a.id
   );
-  const chosenId = record2?.response?.optionId;
+  const chosenId = record3?.response?.optionId;
   const parts = [];
   if (content.context) parts.push(renderMarkdown(content.context, 4, ctx.includeCode));
   parts.push(`<div class="options">`);
@@ -32932,10 +32975,10 @@ function decisionBody(a, ctx) {
     );
   }
   parts.push(`</div>`);
-  if (record2?.response) {
+  if (record3?.response) {
     const chosenOption = (content.options ?? []).find((o) => o.id === chosenId);
     parts.push(
-      `<div class="verdict verdict--chosen"><strong>The human chose:</strong> ${escText(chosenOption?.title ?? chosenId ?? "")}` + (record2.response.reasoning ? ` \u2014 \u201C${renderInline(record2.response.reasoning)}\u201D` : "") + `</div>`
+      `<div class="verdict verdict--chosen"><strong>The human chose:</strong> ${escText(chosenOption?.title ?? chosenId ?? "")}` + (record3.response.reasoning ? ` \u2014 \u201C${renderInline(record3.response.reasoning)}\u201D` : "") + `</div>`
     );
   } else {
     parts.push(`<p class="pending">No answer recorded for this fork.</p>`);
@@ -33481,9 +33524,9 @@ function renderSessionPage(state, options) {
   for (const c of state.comments ?? []) {
     const id = c.target?.artifactId;
     if (id && artifactIds.has(id)) {
-      const list = commentsByArtifact.get(id) ?? [];
-      list.push(c);
-      commentsByArtifact.set(id, list);
+      const list2 = commentsByArtifact.get(id) ?? [];
+      list2.push(c);
+      commentsByArtifact.set(id, list2);
     } else {
       looseComments.push(c);
     }
@@ -34127,9 +34170,9 @@ function formatReplay(state) {
   });
   const annotationsByEvent = /* @__PURE__ */ new Map();
   for (const ann of state.annotations ?? []) {
-    const list = annotationsByEvent.get(ann.targetEventId) ?? [];
-    list.push(ann);
-    annotationsByEvent.set(ann.targetEventId, list);
+    const list2 = annotationsByEvent.get(ann.targetEventId) ?? [];
+    list2.push(ann);
+    annotationsByEvent.set(ann.targetEventId, list2);
   }
   if (events.length === 0) {
     sections.push("_No events recorded in this session._");
@@ -34307,9 +34350,9 @@ function formatPrComments(state) {
     const evidence = entry.finding.evidence;
     const firstPath = Array.isArray(evidence) && evidence[0] && typeof evidence[0] === "object" ? evidence[0].filePath : void 0;
     const key = firstPath ?? "General";
-    const list = byFile.get(key) ?? [];
-    list.push(entry);
-    byFile.set(key, list);
+    const list2 = byFile.get(key) ?? [];
+    list2.push(entry);
+    byFile.set(key, list2);
   }
   for (const [filePath, entries] of byFile.entries()) {
     sections.push(`### ${filePath}`);
@@ -34653,21 +34696,71 @@ Tell the human this before they send it.
   };
 }
 
+// src/mcp/artifact-preflight.ts
+var record2 = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {};
+var list = (value) => Array.isArray(value) ? value : [];
+var strings = (values) => values.filter((v2) => typeof v2 === "string").map((v2) => v2.trim()).filter((v2) => v2.length > 0);
+var field = (values, key) => list(values).map((v2) => record2(v2)[key]);
+function artifactProposal(type, title, value) {
+  const c = record2(value);
+  let text = [];
+  let paths = [];
+  let concepts = [];
+  switch (type) {
+    case "research":
+      text = [title, c.summary, ...field(c.findings, "title"), ...field(c.findings, "recommendation")];
+      paths = list(c.findings).flatMap((f) => field(record2(f).evidence, "filePath"));
+      break;
+    case "decision":
+      text = [c.context, ...field(c.options, "title"), ...field(c.options, "description")];
+      concepts = field(c.options, "concept").map((v2) => record2(v2).name);
+      break;
+    case "spec":
+      text = [title, c.objective, ...field(c.requirements, "statement"), ...field(c.requirements, "rationale"), ...field(c.tasks, "description")];
+      break;
+    case "plan":
+      paths = list(c.steps).flatMap((s) => list(record2(s).files).map((f) => typeof f === "string" ? f : record2(f).filePath));
+      text = [title, ...field(c.steps, "description"), ...field(c.steps, "reasoning"), ...paths];
+      break;
+    case "code_change":
+      text = [c.filePath, c.reasoning];
+      paths = [c.filePath];
+      concepts = [record2(c.concept).name];
+      break;
+    case "changeset":
+      text = [title, c.summary, ...list(c.risks)];
+      paths = field(c.files, "path");
+      break;
+    case "debrief":
+      text = [title, c.summary, ...field(c.sections, "title"), ...field(c.decisionsMade, "what")];
+      concepts = list(c.sections).flatMap((s) => field(record2(s).concepts, "name"));
+      break;
+    case "explainer":
+      text = [title, c.overview, ...field(c.sections, "heading")];
+      break;
+    default:
+      return null;
+  }
+  return {
+    text: strings(text),
+    paths: strings(paths),
+    concepts: strings(concepts),
+    // A debrief reports what already happened; it is not a fresh proposal.
+    // Recalled rejections still surface as advice, but cannot prevent the
+    // historical record from naming the rejected path.
+    advisory: type === "debrief" || type === "changeset" && c.reviewIntent === "external"
+  };
+}
+function preflightArtifact(ctx, toolName, type, title, content) {
+  const proposal = artifactProposal(type, title, content);
+  return proposal ? ctx.helpers.preflightRejectedApproaches(toolName, proposal.text, proposal.paths, proposal.concepts, { advisory: proposal.advisory }) : null;
+}
+
 // src/mcp/tools/present-findings.ts
 async function handlePresentFindings(ctx, args) {
   const validated = validatePresentFindingsInput(args);
   if (!validated.ok) return validated.error;
-  const findings = validated.data.findings;
-  const proposals = [
-    args?.title ?? "",
-    validated.data.summary,
-    ...findings.map((f) => f?.title ?? ""),
-    ...findings.map((f) => f?.recommendation ?? "")
-  ].filter(Boolean);
-  const proposalPaths = findings.flatMap(
-    (f) => Array.isArray(f?.evidence) ? f.evidence.map((e) => typeof e === "object" && e?.filePath || "").filter(Boolean) : []
-  );
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_findings", proposals, proposalPaths);
+  const pre = await preflightArtifact(ctx, "present_findings", "research", args?.title ?? "", validated.data);
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_findings", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
@@ -34744,13 +34837,7 @@ async function handlePresentOptions(ctx, args) {
   const proposedOptions = validatedOptions.map(
     (o) => o.visuals?.length ? { ...o, visuals: o.visuals.map((v2, i) => ({ ...v2, id: v2.id ?? `${o.id}_visual_${i}` })) } : o
   );
-  const proposals = [
-    context,
-    ...proposedOptions.map((o) => o.title),
-    ...proposedOptions.map((o) => o.description)
-  ].filter(Boolean);
-  const proposalConcepts = proposedOptions.map((o) => o.concept?.name).filter((n) => Boolean(n && n.trim()));
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_options", proposals, [], proposalConcepts);
+  const pre = await preflightArtifact(ctx, "present_options", "decision", artifactTitle, validated.data);
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_options", hashPresentArgs(args));
   if (dedup.duplicate) {
@@ -35214,9 +35301,9 @@ ${lines.join("\n")}`
   } catch {
   }
   if (freshlyRejected.length > 0) {
-    const list = freshlyRejected.map((a) => `"${a.title}" (${a.type})`).join(", ");
+    const list2 = freshlyRejected.map((a) => `"${a.title}" (${a.type})`).join(", ");
     parts.push(
-      `\u274C REJECTED (${freshlyRejected.length}): ${list}
+      `\u274C REJECTED (${freshlyRejected.length}): ${list2}
 The human rejected ${freshlyRejected.length === 1 ? "this" : "these"} \u2014 do NOT apply. Revise the approach or propose a different one (see their comment above for why).`
     );
   }
@@ -35826,6 +35913,7 @@ async function handleUpdatePlanProgress(ctx, args) {
 }
 
 // src/mcp/tools/revise-artifact.ts
+init_dist();
 var SUPERSEDE_VALIDATORS = {
   research: validatePresentFindingsInput,
   spec: validatePresentSpecInput,
@@ -35856,8 +35944,8 @@ async function handleReviseArtifact(ctx, args) {
     };
   }
   if (mode === "supersede") {
-    const content = args?.content && typeof args.content === "object" ? args.content : null;
-    if (!content) {
+    const suppliedContent = args?.content && typeof args.content === "object" && !Array.isArray(args.content) ? args.content : null;
+    if (!suppliedContent) {
       return {
         content: [{ type: "text", text: "revise_artifact with mode='supersede' requires a `content` object (same shape the original present_* tool accepts)." }],
         isError: true
@@ -35877,13 +35965,27 @@ async function handleReviseArtifact(ctx, args) {
         isError: true
       };
     }
+    const content = { ...suppliedContent };
+    if (old.type === "changeset") {
+      const oldChangeset = coerceChangesetContent(old.content);
+      if (oldChangeset.reviewIntent === "external") {
+        content.reviewIntent = "external";
+        if (content.source === void 0 && oldChangeset.source) {
+          const { headSha: _reviewedCommit, ...displayProvenance } = oldChangeset.source;
+          content.source = displayProvenance;
+        }
+      }
+    }
     const supersedeValidator = SUPERSEDE_VALIDATORS[old.type];
     if (supersedeValidator) {
       const v2 = supersedeValidator({ title: args?.title ?? old.title, ...content });
       if (!v2.ok) return v2.error;
     }
-    if (old.type === "changeset" && content && typeof content === "object") {
+    const pre = await preflightArtifact(ctx, "revise_artifact", old.type, String(args?.title ?? old.title), content);
+    if (pre && !pre.ok) return pre.response;
+    if (old.type === "changeset") {
       delete content.reviewState;
+      delete content.reviewReasons;
     }
     const title = String(args?.title ?? old.title);
     const newId = `art_${nanoid3(10)}`;
@@ -35934,11 +36036,15 @@ async function handleReviseArtifact(ctx, args) {
     if (old.type === "plan") {
       await store.recordPlanReview(newId);
     }
+    if (pre?.ok) await persistPreflightTrace(store, broadcast, newArtifact, "revise_artifact", pre.trace);
     broadcast({ type: "artifact_created", artifact: newArtifact });
     broadcast({ type: "artifact_updated", artifactId: old.id, status: "superseded" });
     notifyResourcesListChanged(server);
+    const advisory = pre?.ok && pre.advisory ? `
+
+\u26A0 Recalled stance \u2014 advisory, not a block (this revision records external or historical material rather than proposing that approach): ${pre.advisory}` : "";
     return {
-      content: [{ type: "text", text: `Superseded ${artifactId} \u2192 ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${formatStyleWarnings(newArtifact.type, newArtifact.content)}` }]
+      content: [{ type: "text", text: `Superseded ${artifactId} \u2192 ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${formatStyleWarnings(newArtifact.type, newArtifact.content)}${advisory}` }]
     };
   }
   const artifacts = await store.getArtifacts();
@@ -36052,6 +36158,30 @@ async function handleWithdrawArtifact(ctx, args) {
 
 // src/github/post-review.ts
 init_dist();
+
+// src/github/pr-reference.ts
+function validRepoOwner(value) {
+  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(value);
+}
+function validRepoName(value) {
+  return /^(?!\.{1,2}$)[a-z0-9_.-]+$/i.test(value);
+}
+function parsePrReference(ref) {
+  const value = ref.trim();
+  const bare = /^#?(\d+)$/.exec(value);
+  if (bare) {
+    const number5 = Number(bare[1]);
+    return Number.isSafeInteger(number5) && number5 > 0 ? { number: number5 } : null;
+  }
+  const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/(?:files|commits|checks))?\/?(?:[?#][^\s]*)?$/i.exec(value);
+  if (!match) return null;
+  const [, owner, repo, digits] = match;
+  const number4 = Number(digits);
+  if (!owner || !repo || !validRepoOwner(owner) || !validRepoName(repo) || !Number.isSafeInteger(number4) || number4 < 1) return null;
+  return { owner, repo, number: number4 };
+}
+
+// src/github/read-review.ts
 import { spawn } from "node:child_process";
 var GhMissingError = class extends Error {
   constructor() {
@@ -36065,20 +36195,21 @@ var GhNotAuthedError = class extends Error {
     this.name = "GhNotAuthedError";
   }
 };
-function looksUnauthenticated(stderr) {
-  const lower = stderr.toLowerCase();
-  return lower.includes("not logged into") || lower.includes("authentication token") || lower.includes("bad credentials") || lower.includes("requires authentication");
-}
 function parsePrRef(ref) {
-  const urlMatch = ref.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
-  if (urlMatch) {
-    return { owner: urlMatch[1], repo: urlMatch[2], number: parseInt(urlMatch[3], 10) };
-  }
-  const numMatch = ref.replace(/^#/, "").match(/^(\d+)$/);
-  if (numMatch) {
-    return { number: parseInt(numMatch[1], 10) };
-  }
+  const parsed = parsePrReference(ref);
+  if (parsed) return parsed;
   throw new Error(`Could not parse PR reference: "${ref}". Expected a number like "42" or a GitHub URL.`);
+}
+function requireCanonicalTarget(target) {
+  const parsed = parsePrRef(target);
+  if (!parsed.owner || !parsed.repo) {
+    throw new Error("A prepared review target must be a full canonical github.com pull-request URL.");
+  }
+  const canonical = `https://github.com/${parsed.owner}/${parsed.repo}/pull/${parsed.number}`;
+  if (target.trim().toLowerCase() !== canonical.toLowerCase()) {
+    throw new Error("A prepared review target must not contain a tab, query, fragment, or non-canonical suffix.");
+  }
+  return { owner: parsed.owner, repo: parsed.repo, number: parsed.number };
 }
 var GH_TIMEOUT_MS = Number(process.env.DEEPPAIRING_GH_TIMEOUT_MS) || 2e4;
 function run(cmd, args, stdin) {
@@ -36128,8 +36259,18 @@ function run(cmd, args, stdin) {
     }
   });
 }
+
+// src/github/post-review.ts
+var FULL_GIT_SHA = /^[0-9a-fA-F]{40}$/;
+function canonicalSha(value) {
+  return FULL_GIT_SHA.test(value) ? value.toLowerCase() : null;
+}
+function looksUnauthenticated(stderr) {
+  const lower = stderr.toLowerCase();
+  return lower.includes("not logged into") || lower.includes("authentication token") || lower.includes("bad credentials") || lower.includes("requires authentication");
+}
 async function detectRepo() {
-  const res = await run("gh", ["repo", "view", "--json", "nameWithOwner"]);
+  const res = await run("gh", ["repo", "view", "--json", "nameWithOwner,url"]);
   if (res.code !== 0) {
     if (looksUnauthenticated(res.stderr)) throw new GhNotAuthedError();
     throw new Error(`gh repo view failed: ${res.stderr.trim() || res.stdout.trim()}`);
@@ -36137,26 +36278,89 @@ async function detectRepo() {
   try {
     const parsed = JSON.parse(res.stdout);
     const [owner, repo] = String(parsed.nameWithOwner).split("/");
-    if (!owner || !repo) throw new Error("gh repo view returned unexpected shape");
+    const identity = typeof parsed.url === "string" ? parsePrReference(`${parsed.url}/pull/1`) : null;
+    if (!owner || !repo || identity?.owner?.toLowerCase() !== owner.toLowerCase() || identity?.repo?.toLowerCase() !== repo.toLowerCase()) {
+      throw new Error("Repository detection must identify an HTTPS github.com repository; pass a full supported PR URL.");
+    }
     return { owner, repo };
   } catch (err) {
     throw new Error(`Could not parse gh repo view output: ${errorMessage(err)}`);
   }
 }
-async function postPrReview(opts) {
-  const parsed = parsePrRef(opts.ref);
-  let owner = opts.owner ?? parsed.owner;
-  let repo = opts.repo ?? parsed.repo;
-  if (!owner || !repo) {
-    const detected = await detectRepo();
-    owner = detected.owner;
-    repo = detected.repo;
+async function resolvePrTarget(ref, owner, repo) {
+  const parsed = parsePrRef(ref);
+  if (owner !== void 0 && !validRepoOwner(owner) || repo !== void 0 && !validRepoName(repo)) {
+    throw new Error("Invalid GitHub owner/repo override; supply repository names, not URL components.");
   }
+  const targetOwner = owner ?? parsed.owner;
+  const targetRepo = repo ?? parsed.repo;
+  const detected = !targetOwner || !targetRepo ? await detectRepo() : null;
+  const target = `https://github.com/${targetOwner ?? detected.owner}/${targetRepo ?? detected.repo}/pull/${parsed.number}`;
+  parsePrRef(target);
+  return target;
+}
+async function preparePrReviewTarget(opts) {
+  const target = await resolvePrTarget(opts.ref, opts.owner, opts.repo);
+  const parsed = parsePrRef(target);
+  const endpoint = `repos/${parsed.owner}/${parsed.repo}/pulls/${parsed.number}`;
+  const res = await run("gh", [
+    "api",
+    endpoint,
+    "--hostname",
+    "github.com",
+    "-H",
+    "Accept: application/vnd.github+json",
+    "--jq",
+    ".head.sha"
+  ]);
+  if (res.code !== 0) {
+    if (looksUnauthenticated(res.stderr)) throw new GhNotAuthedError();
+    throw new Error(`gh api failed while reading the PR head (exit ${res.code}): ${res.stderr.trim() || res.stdout.trim()}`);
+  }
+  const currentHeadSha = canonicalSha(res.stdout.trim());
+  if (!currentHeadSha) {
+    throw new Error(`Could not read a valid 40-hex head SHA for ${target}; refusing to prepare a review.`);
+  }
+  return { target, currentHeadSha };
+}
+function bindReviewPayloadToPreparedTarget(payload, reviewedHeadSha, prepared) {
+  if (!reviewedHeadSha) {
+    if (payload.event === "APPROVE") {
+      throw new Error("Refusing to post an APPROVE without an immutable reviewed head SHA.");
+    }
+    const { commit_id: _ignored, ...legacyPayload } = payload;
+    return legacyPayload;
+  }
+  const canonicalReviewed = canonicalSha(reviewedHeadSha);
+  if (!canonicalReviewed) {
+    throw new Error("Refusing to post: the locally authorized reviewed head SHA is malformed.");
+  }
+  const payloadCommit = payload.commit_id ? canonicalSha(payload.commit_id) : void 0;
+  if (payload.commit_id && !payloadCommit) {
+    throw new Error("Refusing to post: the authorized payload contains a malformed commit SHA.");
+  }
+  if (payloadCommit && payloadCommit !== canonicalReviewed) {
+    throw new Error("Refusing to post: the authorized payload and reviewed changeset disagree on commit SHA.");
+  }
+  const canonicalCurrent = canonicalSha(prepared.currentHeadSha);
+  if (!canonicalCurrent) {
+    throw new Error("Refusing to post: remote preparation did not return a valid 40-hex PR head SHA.");
+  }
+  if (canonicalCurrent !== canonicalReviewed) {
+    throw new Error(
+      `Refusing to post: PR ${prepared.target} changed since your pair reviewed it (reviewed ${canonicalReviewed.slice(0, 12)}, current ${canonicalCurrent.slice(0, 12)}). Fetch and present the new head, then get a fresh verdict. The current head is never substituted for the reviewed commit.`
+    );
+  }
+  return { ...payload, commit_id: canonicalReviewed };
+}
+async function postPreparedPrReview(opts) {
+  const parsed = requireCanonicalTarget(opts.target);
+  const { owner, repo } = parsed;
   const endpoint = `repos/${owner}/${repo}/pulls/${parsed.number}/reviews`;
   const body = JSON.stringify(opts.payload);
   const res = await run(
     "gh",
-    ["api", endpoint, "-X", "POST", "--input", "-", "-H", "Accept: application/vnd.github+json"],
+    ["api", endpoint, "--hostname", "github.com", "-X", "POST", "--input", "-", "-H", "Accept: application/vnd.github+json"],
     body
   );
   if (res.code !== 0) {
@@ -36165,10 +36369,39 @@ async function postPrReview(opts) {
   }
   try {
     const parsedBody = JSON.parse(res.stdout);
+    if (!parsedBody || typeof parsedBody !== "object") {
+      throw new Error("response is not an object");
+    }
+    if (!Number.isSafeInteger(parsedBody.id) || parsedBody.id <= 0) {
+      throw new Error("review id is not a positive integer");
+    }
+    const expectedState = opts.payload.event === "APPROVE" ? "APPROVED" : opts.payload.event === "REQUEST_CHANGES" ? "CHANGES_REQUESTED" : "COMMENTED";
+    if (parsedBody.state !== expectedState) {
+      throw new Error(`review state ${JSON.stringify(parsedBody.state)} does not match ${opts.payload.event}`);
+    }
+    if (typeof parsedBody.html_url !== "string") {
+      throw new Error("review URL is missing");
+    }
+    let reviewUrl;
+    try {
+      reviewUrl = new URL(parsedBody.html_url);
+    } catch {
+      throw new Error("review URL is malformed");
+    }
+    const expectedPath = `/${owner}/${repo}/pull/${parsed.number}`.toLowerCase();
+    const canonicalReviewUrl = `https://github.com/${owner}/${repo}/pull/${parsed.number}#pullrequestreview-${parsedBody.id}`;
+    if (reviewUrl.protocol !== "https:" || reviewUrl.hostname.toLowerCase() !== "github.com" || reviewUrl.pathname.toLowerCase() !== expectedPath || reviewUrl.hash !== `#pullrequestreview-${parsedBody.id}` || parsedBody.html_url.toLowerCase() !== canonicalReviewUrl.toLowerCase()) {
+      throw new Error("review URL does not identify the posted review on the prepared target");
+    }
+    const commitId = parsedBody.commit_id === void 0 ? void 0 : typeof parsedBody.commit_id === "string" ? canonicalSha(parsedBody.commit_id) : null;
+    if (commitId === null) {
+      throw new Error("review commit_id is malformed");
+    }
     return {
-      htmlUrl: parsedBody.html_url ?? "",
-      state: parsedBody.state ?? "COMMENTED",
-      id: parsedBody.id ?? 0
+      htmlUrl: reviewUrl.toString(),
+      state: parsedBody.state,
+      id: parsedBody.id,
+      ...commitId ? { commitId } : {}
     };
   } catch (err) {
     throw new Error(`Posted, but could not parse gh response: ${errorMessage(err)}`);
@@ -36179,20 +36412,16 @@ async function postPrReview(opts) {
 init_dist();
 
 // src/store/posted-reviews.ts
-function samePrTarget(record2, ref) {
+function samePrTarget(record3, ref) {
   const parsed = parsePrNumber(ref);
-  if (parsed === null || parsed.number !== record2.prNumber) return false;
-  if (parsed.owner && parsed.repo && record2.owner && record2.repo) {
-    return parsed.owner === record2.owner && parsed.repo === record2.repo;
+  if (parsed === null || parsed.number !== record3.prNumber) return false;
+  if (parsed.owner && parsed.repo && record3.owner && record3.repo) {
+    return parsed.owner.toLowerCase() === record3.owner.toLowerCase() && parsed.repo.toLowerCase() === record3.repo.toLowerCase();
   }
   return true;
 }
 function parsePrNumber(ref) {
-  const urlMatch = ref.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
-  if (urlMatch) return { owner: urlMatch[1], repo: urlMatch[2], number: parseInt(urlMatch[3], 10) };
-  const numMatch = ref.replace(/^#/, "").trim().match(/^(\d+)$/);
-  if (numMatch) return { number: parseInt(numMatch[1], 10) };
-  return null;
+  return parsePrReference(ref);
 }
 
 // src/github/review-authorization.ts
@@ -36217,6 +36446,114 @@ function externalChangesets(artifacts) {
   return artifacts.filter(
     (a) => a.type === "changeset" && coerceChangesetContent(a.content).reviewIntent === "external"
   );
+}
+var CLOSED_CHANGESET_STATUSES = /* @__PURE__ */ new Set(["superseded", "retracted", "obsolete"]);
+var FULL_GIT_SHA2 = /^[0-9a-fA-F]{40}$/;
+function isStandingChunk(artifact) {
+  return !CLOSED_CHANGESET_STATUSES.has(artifact.status);
+}
+function samePrIdentity(target, reviewed) {
+  return target.number === reviewed.number && (!target.owner || !!reviewed.owner && target.owner.toLowerCase() === reviewed.owner.toLowerCase()) && (!target.repo || !!reviewed.repo && target.repo.toLowerCase() === reviewed.repo.toLowerCase());
+}
+function scopeExternalChangesets(artifacts, ref) {
+  const target = parsePrNumber(ref);
+  const scope = { matching: [], other: [], contradictory: [], unknown: [] };
+  for (const artifact of artifacts) {
+    const source = coerceChangesetContent(artifact.content).source;
+    const reviewed = source?.url ? parsePrNumber(source.url) : null;
+    if (!target || !reviewed?.owner || !reviewed.repo) {
+      scope.unknown.push(artifact);
+      continue;
+    }
+    if (samePrIdentity(target, reviewed)) {
+      if (source?.number !== void 0 && source.number !== reviewed.number) scope.contradictory.push(artifact);
+      else scope.matching.push(artifact);
+    } else {
+      scope.other.push({ artifact, reviewed });
+    }
+  }
+  return scope;
+}
+function knownPrIdentityCount(artifacts) {
+  const identities = /* @__PURE__ */ new Set();
+  for (const artifact of artifacts) {
+    const url2 = coerceChangesetContent(artifact.content).source?.url;
+    const parsed = url2 ? parsePrNumber(url2) : null;
+    if (parsed?.owner && parsed.repo) {
+      identities.add(`${parsed.owner.toLowerCase()}/${parsed.repo.toLowerCase()}#${parsed.number}`);
+    }
+  }
+  return identities.size;
+}
+function rawHeadSha(artifact) {
+  const rawSource = artifact.content && typeof artifact.content === "object" ? artifact.content.source : void 0;
+  return rawSource && typeof rawSource === "object" ? rawSource.headSha : void 0;
+}
+function hasShaProvenance(artifact) {
+  return rawHeadSha(artifact) !== void 0;
+}
+function unboundShaProvenanceRefusal(artifact, event, ref) {
+  const raw = rawHeadSha(artifact);
+  const url2 = coerceChangesetContent(artifact.content).source?.url;
+  const shaNote = typeof raw === "string" && FULL_GIT_SHA2.test(raw) ? `records reviewed head SHA ${raw.toLowerCase().slice(0, 12)}` : `records a malformed reviewed head SHA`;
+  const urlNote = !parsePrNumber(ref) ? `the requested PR reference (${ref}) is neither a PR number nor a full pull-request URL, so nothing can be bound to it` : url2 ? `its source.url (${url2}) is not a full canonical pull-request URL the gate can bind to ${ref}` : `it has no source.url, so the gate cannot bind it to ${ref}`;
+  return `Refusing to post a ${event}: "${artifact.title}" (${artifact.id}) ${shaNote}, but ${urlNote}. Posting without commit_id would let GitHub pin these inline comments to the PR's current head, which may not be the code your pair reviewed. Re-present that exact diff with source.url as https://github.com/<owner>/<repo>/pull/<number> (no /commits, /files or www. variants) and the exact 40-hex headSha from \`gh pr view --json headRefOid\`, get your pair's verdict again, then post. The gate never guesses which PR an unbindable source describes and never borrows another chunk's commit for it.`;
+}
+function reviewedHeadFor(artifacts, event) {
+  const standing = artifacts.filter((a) => !CLOSED_CHANGESET_STATUSES.has(a.status));
+  const valid = [];
+  const missing = [];
+  const malformed = [];
+  let closedWithShaProvenance;
+  for (const artifact of artifacts) {
+    const rawSha = rawHeadSha(artifact);
+    if (CLOSED_CHANGESET_STATUSES.has(artifact.status)) {
+      if (rawSha !== void 0) closedWithShaProvenance ??= artifact;
+      continue;
+    }
+    if (rawSha === void 0) {
+      missing.push(artifact);
+    } else if (typeof rawSha !== "string" || !FULL_GIT_SHA2.test(rawSha)) {
+      malformed.push(artifact);
+    } else {
+      valid.push({ artifact, sha: rawSha.toLowerCase() });
+    }
+  }
+  if (malformed.length > 0) {
+    return {
+      ok: false,
+      reason: `Refusing to post: malformed reviewed head SHA on ${malformed.map((a) => `"${a.title}" (${a.id})`).join(", ")}. Capture the exact 40-hex headRefOid from GitHub, present that commit's diff, and get a fresh human verdict; the current PR head is never guessed as an old approval's commit.`
+    };
+  }
+  if (valid.length === 0) {
+    if (event !== "APPROVE") {
+      if (!closedWithShaProvenance) return { ok: true };
+      return {
+        ok: false,
+        reason: `Refusing to post without an immutable reviewed head SHA: an earlier version, "${closedWithShaProvenance.title}" (${closedWithShaProvenance.id}), recorded SHA provenance, but no standing target changeset does now. This is a refresh-required revision, not a wholly legacy session. Fetch headRefOid, present that exact diff, and get fresh verdicts; never attach an old approval to the PR's mutable current head.`
+      };
+    }
+    return {
+      ok: false,
+      reason: `Refusing to post an APPROVE: ${standing.length === 0 ? "no standing external changeset" : missing.map((a) => `"${a.title}" (${a.id})`).join(", ")} records the immutable reviewed head SHA. Legacy session files remain readable, but an unknown commit cannot authorize an approval. Fetch headRefOid, present that exact diff as a fresh external changeset, and get your pair's verdict again; never substitute the PR's current head for an old approval.`
+    };
+  }
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      reason: `Refusing to post: mixed immutable-SHA provenance across the standing external changesets. ${valid.map(({ artifact }) => `"${artifact.title}" (${artifact.id})`).join(", ")} name a reviewed commit, but ${missing.map((a) => `"${a.title}" (${a.id})`).join(", ")} do not. Present every chunk from one exact head SHA and get fresh verdicts.`
+    };
+  }
+  const bySha = /* @__PURE__ */ new Map();
+  for (const entry of valid) bySha.set(entry.sha, [...bySha.get(entry.sha) ?? [], entry.artifact]);
+  if (bySha.size !== 1) {
+    const detail = [...bySha.entries()].map(([sha, chunks]) => `${sha.slice(0, 12)} (${chunks.map((a) => a.id).join(", ")})`).join("; ");
+    return {
+      ok: false,
+      reason: `Refusing to post: the standing external changesets describe different reviewed commits: ${detail}. A review is one verdict on one immutable PR head; present every chunk from the same commit and get fresh human verdicts.`
+    };
+  }
+  return { ok: true, headSha: valid[0].sha };
 }
 function normalizeEvent(raw) {
   if (raw === void 0 || raw === null || typeof raw === "string" && raw.trim() === "") {
@@ -36260,8 +36597,52 @@ function authorizeReviewPost(state, opts) {
   }
   const approved = findingsArtifacts.filter((a) => a.status === "approved");
   const decidedNo = findingsArtifacts.filter((a) => DECIDED_EXCLUDED_STATUSES.has(a.status));
+  let targetExternals = externalChangesets(state.artifacts);
+  let closedShaLineage = [];
+  if (opts.pr) {
+    const fullScope = scopeExternalChangesets(targetExternals, opts.pr);
+    const standing = targetExternals.filter(isStandingChunk);
+    const standingScope = scopeExternalChangesets(standing, opts.pr);
+    const contradictory = standingScope.contradictory[0] ?? (approved.length > 0 ? fullScope.contradictory[0] : void 0);
+    if (contradictory) {
+      const artifact = contradictory;
+      return {
+        ok: false,
+        reason: isStandingChunk(artifact) ? `Refusing to post: "${artifact.title}" (${artifact.id}) has a source.number that contradicts its source.url. Present one coherent PR identity and get your pair's verdict again.` : `Refusing to post findings: this session's historical changeset identity is contradictory, and findings artifacts do not record which pull request they belong to. Review and post one PR per fresh session; the gate cannot guess that closing a changeset reassigned already-approved findings.`
+      };
+    }
+    if (approved.length > 0 && knownPrIdentityCount(targetExternals) > 1) {
+      return {
+        ok: false,
+        reason: `Refusing to post findings: this session's changeset history identifies more than one pull request, but findings artifacts do not record which one they belong to. Posting them to ${opts.pr} could publish another PR's findings. Review and post one PR per session, using its full pull-request URL.`
+      };
+    }
+    if (fullScope.matching.length === 0 && fullScope.other.length > 0) {
+      const { artifact, reviewed } = fullScope.other[0];
+      return {
+        ok: false,
+        reason: `Refusing to post: "${artifact.title}" identifies https://github.com/${reviewed.owner}/${reviewed.repo}/pull/${reviewed.number}, not the requested PR ${opts.pr}. Present the requested PR with its full source.url and get your pair's verdict before posting.`
+      };
+    }
+    const unknownApproveChunk = event === "APPROVE" ? standingScope.unknown[0] ?? (approved.length > 0 ? fullScope.unknown[0] : void 0) : void 0;
+    if (unknownApproveChunk) {
+      const artifact = unknownApproveChunk;
+      return {
+        ok: false,
+        reason: `Refusing to post an APPROVE: "${artifact.title}" (${artifact.id}) has no full, valid PR source URL, so the gate cannot prove whether it is another part of ${opts.pr} or whether the approved findings belong to it. ${isStandingChunk(artifact) ? `Present every relevant chunk with its full source.url and get your pair's verdict again.` : `Because findings artifacts do not record a PR identity, closing this chunk cannot prove reassociation. Review and post one PR per fresh session.`}`
+      };
+    }
+    const identityUnproven = [...fullScope.unknown, ...fullScope.contradictory];
+    const shaAwareUnknown = identityUnproven.filter(hasShaProvenance);
+    const standingUnbound = shaAwareUnknown.find(isStandingChunk);
+    if (standingUnbound) {
+      return { ok: false, reason: unboundShaProvenanceRefusal(standingUnbound, event, opts.pr) };
+    }
+    closedShaLineage = shaAwareUnknown;
+    targetExternals = fullScope.matching;
+  }
   if (event === "APPROVE") {
-    const externals = externalChangesets(state.artifacts);
+    const externals = targetExternals;
     const refused = externals.filter((a) => a.status === "rejected" || a.status === "revised");
     if (refused.length > 0) {
       const first = refused[0];
@@ -36280,9 +36661,12 @@ function authorizeReviewPost(state, opts) {
       };
     }
   }
-  const payload = buildGitHubReviewPayload({ ...state, artifacts: approved }, { event });
+  const reviewedHead = reviewedHeadFor([...targetExternals, ...closedShaLineage], event);
+  if (!reviewedHead.ok) return { ok: false, reason: reviewedHead.reason };
+  const payload = buildGitHubReviewPayload({ ...state, artifacts: approved, decisions: [] }, { event });
+  if (reviewedHead.headSha) payload.commit_id = reviewedHead.headSha;
   if (payload.comments.length === 0) {
-    if (event === "APPROVE") return { ok: true, payload, event };
+    if (event === "APPROVE") return { ok: true, payload, event, reviewedHeadSha: reviewedHead.headSha };
     const excludedNote = decidedNo.length > 0 ? ` (${decidedNo.length} findings artifact${decidedNo.length === 1 ? " was" : "s were"} excluded \u2014 ${decidedNo.map((a) => `"${a.title}" is ${a.status}`).join(", ")})` : "";
     return {
       ok: false,
@@ -36303,11 +36687,235 @@ function authorizeReviewPost(state, opts) {
       };
     }
   }
-  return { ok: true, payload, event };
+  return {
+    ok: true,
+    payload,
+    event,
+    ...reviewedHead.headSha ? { reviewedHeadSha: reviewedHead.headSha } : {}
+  };
 }
 
 // src/mcp/tools/post-pr-review.ts
 init_dist();
+
+// src/store/review-post-journal.ts
+init_zod();
+import { createHash as createHash2, randomUUID } from "node:crypto";
+var digestSchema = external_exports.string().regex(/^[0-9a-f]{64}$/);
+var eventSchema = external_exports.enum(["COMMENT", "REQUEST_CHANGES", "APPROVE"]);
+var timestampSchema = external_exports.iso.datetime();
+var reviewPostResultSchema = external_exports.object({
+  id: external_exports.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  htmlUrl: external_exports.string(),
+  state: external_exports.enum(["COMMENTED", "CHANGES_REQUESTED", "APPROVED"]),
+  commitId: external_exports.string().regex(/^[0-9a-f]{40}$/).optional()
+}).strict();
+var resultSchema = reviewPostResultSchema;
+var reviewPostLeaseSchema = external_exports.object({ operationId: external_exports.uuid(), token: external_exports.uuid() }).strict();
+var reviewPostIdentitySchema = external_exports.object({
+  target: external_exports.string(),
+  event: eventSchema,
+  reviewedHeadSha: external_exports.string().regex(/^[0-9a-f]{40}$/).optional(),
+  payloadDigest: digestSchema,
+  authorizationDigest: digestSchema
+}).strict().superRefine((value, ctx) => {
+  if (canonicalReviewTarget(value.target) !== value.target) {
+    ctx.addIssue({ code: "custom", message: "Expected a canonical GitHub PR target" });
+  }
+  if (value.event === "APPROVE" && !value.reviewedHeadSha) {
+    ctx.addIssue({ code: "custom", message: "Approval requires reviewed commit identity" });
+  }
+});
+var operationSchema = external_exports.object({
+  id: external_exports.uuid(),
+  tokenDigest: digestSchema,
+  sessionId: external_exports.string().min(1),
+  identity: reviewPostIdentitySchema,
+  state: external_exports.enum(["reserved", "sending", "succeeded", "failed", "unknown", "abandoned"]),
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+  result: resultSchema.optional(),
+  operatorAcknowledgement: external_exports.object({
+    acknowledgedAt: timestampSchema,
+    priorState: external_exports.enum(["sending", "unknown"]),
+    operationDigest: digestSchema
+  }).strict().optional(),
+  /** Recorded when the live coordinator released its own never-sent attempt.
+   * `priorState: "sending"` is the interesting case: the operation had written
+   * its durable sending marker, and the coordinator holding its lease attests
+   * it never reached its POST call. That attestation is the coordinator's, not
+   * the journal's — `sending` alone never implies non-delivery. */
+  unsentRelease: external_exports.object({
+    releasedAt: timestampSchema,
+    priorState: external_exports.enum(["reserved", "sending"])
+  }).strict().optional()
+}).strict().superRefine((value, ctx) => {
+  if (value.state === "abandoned" && !value.operatorAcknowledgement) {
+    ctx.addIssue({ code: "custom", message: "Operator-abandoned uncertainty requires its acknowledgement audit" });
+  }
+  if (value.operatorAcknowledgement && !["abandoned", "succeeded"].includes(value.state)) {
+    ctx.addIssue({ code: "custom", message: "Only abandoned or reconciled-success history carries an operator acknowledgement" });
+  }
+  if (value.unsentRelease && value.state !== "failed") {
+    ctx.addIssue({ code: "custom", message: "Only a definitely unsent operation carries an unsent release" });
+  }
+  if (value.state === "succeeded" !== (value.result !== void 0)) {
+    ctx.addIssue({ code: "custom", message: "Only success carries a remote review identity" });
+  }
+  if (value.result && !resultMatches(value.identity, value.result)) {
+    ctx.addIssue({ code: "custom", message: "Remote review identity does not match the operation" });
+  }
+});
+var journalSchema = external_exports.object({
+  version: external_exports.literal(1),
+  operations: external_exports.array(operationSchema).max(4096)
+}).strict();
+var ReviewPostJournalError = class extends Error {
+  constructor(reason, message) {
+    super(message);
+    this.reason = reason;
+    this.name = "ReviewPostJournalError";
+  }
+  reason;
+};
+function canonicalReviewTarget(ref) {
+  const parsed = parsePrReference(ref);
+  return parsed?.owner && parsed.repo ? `https://github.com/${parsed.owner.toLowerCase()}/${parsed.repo.toLowerCase()}/pull/${parsed.number}` : null;
+}
+function reviewPostDigest(value) {
+  const stable = (v2) => {
+    if (Array.isArray(v2)) return v2.map(stable);
+    if (v2 && typeof v2 === "object") {
+      return Object.fromEntries(Object.keys(v2).sort().map((k) => [k, stable(v2[k])]));
+    }
+    return v2;
+  };
+  return createHash2("sha256").update(JSON.stringify(stable(value))).digest("hex");
+}
+function resultMatches(identity, result) {
+  const states = { COMMENT: "COMMENTED", REQUEST_CHANGES: "CHANGES_REQUESTED", APPROVE: "APPROVED" };
+  return result.state === states[identity.event] && (!identity.reviewedHeadSha || result.commitId === identity.reviewedHeadSha) && result.htmlUrl.toLowerCase() === `${identity.target}#pullrequestreview-${result.id}`;
+}
+function validateReviewPostResult(identity, result) {
+  const parsed = resultSchema.parse(result);
+  if (!resultMatches(identity, parsed)) {
+    throw new ReviewPostJournalError("invalid", "Remote review identity does not match the attempted post");
+  }
+  return parsed;
+}
+
+// src/github/authorized-durable-review.ts
+function authorizeDurableReview(state, options, prepared) {
+  const target = canonicalReviewTarget(prepared.target);
+  if (!target) throw new Error("Prepared review destination is not a canonical GitHub PR");
+  const auth = authorizeReviewPost(state, { event: options.event, repost: options.repost, pr: target });
+  if (!auth.ok) throw new Error(auth.reason);
+  const payload = bindReviewPayloadToPreparedTarget(auth.payload, auth.reviewedHeadSha, prepared);
+  const identity = {
+    target,
+    event: auth.event,
+    ...auth.reviewedHeadSha ? { reviewedHeadSha: auth.reviewedHeadSha } : {},
+    payloadDigest: reviewPostDigest(payload),
+    // These are the gate's permission-bearing inputs. Deliberately conservative:
+    // any artifact change during reservation requires fresh human-state review.
+    authorizationDigest: reviewPostDigest({ sessionId: state.sessionId, artifacts: state.artifacts })
+  };
+  return { payload, identity };
+}
+
+// src/github/durable-review-post.ts
+var ReviewPostNotSentError = class extends Error {
+  constructor(operationId, cause, reservationReleased) {
+    super(`Review operation ${operationId} did not start its POST. ` + (reservationReleased ? "Its reservation was released; re-check authorization before trying again." : "Its local reservation needs inspection before trying again."), { cause });
+    this.operationId = operationId;
+    this.reservationReleased = reservationReleased;
+    this.name = "ReviewPostNotSentError";
+  }
+  operationId;
+  reservationReleased;
+};
+var ReviewPostUnknownError = class extends Error {
+  constructor(operationId, cause) {
+    super(`Review operation ${operationId} may have reached GitHub. Do not retry or use repost; reconcile this operation first.`, { cause });
+    this.operationId = operationId;
+    this.name = "ReviewPostUnknownError";
+  }
+  operationId;
+};
+async function executeDurableReviewPost(opts) {
+  for (const method of [
+    "reserve",
+    "markSending",
+    "failBeforeSending",
+    "releaseUnsent",
+    "markUnknown",
+    "succeed"
+  ]) {
+    if (typeof opts.store[method] !== "function") {
+      throw new Error(`Durable review-post store is missing ${method}(); refusing to post without the full durable protocol`);
+    }
+  }
+  const payload = JSON.parse(JSON.stringify(opts.payload));
+  const identity = reviewPostIdentitySchema.parse(opts.identity);
+  const commitId = payload.commit_id;
+  if (identity.payloadDigest !== reviewPostDigest(payload) || identity.event !== payload.event || commitId !== identity.reviewedHeadSha) {
+    throw new Error("Review-post payload does not match its authorized digest");
+  }
+  const lease = await opts.store.reserve(identity, opts.repost);
+  let sendingAttempted = false;
+  try {
+    const current = reviewPostIdentitySchema.parse(await opts.reauthorize());
+    if (reviewPostDigest(current) !== reviewPostDigest(identity)) {
+      throw new Error("Review authorization or content changed while reserving the post");
+    }
+    sendingAttempted = true;
+    await opts.store.markSending(lease, identity);
+    const beforeSend = reviewPostIdentitySchema.parse(await opts.reauthorize());
+    if (reviewPostDigest(beforeSend) !== reviewPostDigest(identity)) {
+      throw new Error("Review authorization or content changed during the sending transition");
+    }
+  } catch (err) {
+    let reservationReleased = false;
+    try {
+      if (sendingAttempted) await opts.store.releaseUnsent(lease);
+      else await opts.store.failBeforeSending(lease);
+      reservationReleased = true;
+    } catch {
+    }
+    throw new ReviewPostNotSentError(lease.operationId, err, reservationReleased);
+  }
+  let result;
+  try {
+    const wirePayload = { ...payload, body: payload.body + reviewPostMarker(lease.operationId) };
+    result = validateReviewPostResult(identity, await opts.send(identity.target, wirePayload));
+  } catch (err) {
+    try {
+      await opts.store.markUnknown(lease);
+    } catch {
+    }
+    throw new ReviewPostUnknownError(lease.operationId, err);
+  }
+  try {
+    await opts.store.succeed(lease, result);
+    return { operationId: lease.operationId, result, receipt: "recorded" };
+  } catch {
+    try {
+      await opts.store.markUnknown(lease);
+    } catch {
+    }
+    return { operationId: lease.operationId, result, receipt: "unconfirmed" };
+  }
+}
+function reviewPostMarker(operationId) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(operationId)) {
+    throw new Error("Invalid durable review operation ID");
+  }
+  return `
+
+<!-- deepPairing-review-operation:${operationId} -->`;
+}
+
+// src/mcp/tools/post-pr-review.ts
 async function handlePostPrReview(ctx, args) {
   const { store } = ctx;
   const ref = String(args?.pr ?? "").trim();
@@ -36317,28 +36925,38 @@ async function handlePostPrReview(ctx, args) {
       isError: true
     };
   }
-  const state = await store.getFullState();
-  const auth = authorizeReviewPost(state, {
-    event: args?.event,
-    pr: ref,
-    repost: args?.repost === true
-  });
-  if (!auth.ok) {
-    return { content: [{ type: "text", text: auth.reason }], isError: true };
-  }
-  const { payload } = auth;
   try {
-    const result = await postPrReview({
-      ref,
-      payload,
-      owner: typeof args?.owner === "string" ? args.owner : void 0,
-      repo: typeof args?.repo === "string" ? args.repo : void 0
+    const state = await store.getReviewPostState();
+    const auth = authorizeReviewPost(state, {
+      event: args?.event,
+      pr: ref,
+      repost: args?.repost === true
     });
-    let stampNote = "";
+    if (!auth.ok) {
+      return { content: [{ type: "text", text: auth.reason }], isError: true };
+    }
+    const prepared = await preparePrReviewTarget({
+      ref,
+      ...typeof args?.owner === "string" ? { owner: args.owner } : {},
+      ...typeof args?.repo === "string" ? { repo: args.repo } : {}
+    });
+    const target = prepared.target;
+    const options = { event: args?.event, repost: args?.repost === true };
+    const { payload, identity } = authorizeDurableReview(await store.getReviewPostState(), options, prepared);
+    const posted = await executeDurableReviewPost({
+      store: store.reviewPosts,
+      payload,
+      identity,
+      repost: options.repost,
+      reauthorize: async () => authorizeDurableReview(await store.getReviewPostState(), options, prepared).identity,
+      send: (canonicalTarget, frozenPayload) => postPreparedPrReview({ target: canonicalTarget, payload: frozenPayload })
+    });
+    const { result } = posted;
+    let stampNote = posted.receipt === "unconfirmed" ? ` Review ${posted.operationId} posted, but its durable receipt is unconfirmed. Do not retry or repost; reconcile this operation first.` : "";
     try {
-      const parsed = parsePrRef(ref);
-      const owner = typeof args?.owner === "string" ? args.owner : parsed.owner;
-      const repo = typeof args?.repo === "string" ? args.repo : parsed.repo;
+      const parsed = parsePrRef(target);
+      const owner = parsed.owner;
+      const repo = parsed.repo;
       await store.recordPostedReview({
         pr: ref,
         prNumber: parsed.number,
@@ -36351,7 +36969,7 @@ async function handlePostPrReview(ctx, args) {
         commentCount: payload.comments.length
       });
     } catch (stampErr) {
-      stampNote = ` (note: the review posted, but recording it locally failed \u2014 ${errorMessage(stampErr)}. Do NOT call post_pr_review again for this PR unless your pair asks.)`;
+      stampNote += ` (Legacy history update failed \u2014 ${errorMessage(stampErr)}. The durable journal still prevents another post.)`;
     }
     return {
       content: [{
@@ -36382,14 +37000,7 @@ async function handlePresentSpec(ctx, args) {
   const { title, objective, context, requirements, design, tasks, openQuestions, visuals } = validated.data;
   const requirementsArr = requirements;
   const tasksArr = tasks ?? [];
-  const proposals = [
-    title,
-    objective,
-    ...requirementsArr.map((r) => r.statement),
-    ...requirementsArr.map((r) => r.rationale),
-    ...tasksArr.map((t) => t.description)
-  ].filter(Boolean);
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_spec", proposals);
+  const pre = await preflightArtifact(ctx, "present_spec", "spec", title, validated.data);
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_spec", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
@@ -36458,18 +37069,7 @@ async function handlePresentPlan(ctx, args) {
   const validated = validatePresentPlanInput(args);
   if (!validated.ok) return validated.error;
   const { title, steps: planSteps, estimatedChanges, visuals } = validated.data;
-  const proposals = [
-    title,
-    ...planSteps.map((s) => s.description),
-    ...planSteps.map((s) => s.reasoning),
-    ...planSteps.flatMap(
-      (s) => Array.isArray(s.files) ? s.files.map((f) => String(typeof f === "string" ? f : f?.filePath ?? "")) : []
-    )
-  ].filter(Boolean);
-  const proposalPaths = planSteps.flatMap(
-    (s) => Array.isArray(s.files) ? s.files.map((f) => typeof f === "string" ? f : f?.filePath).filter(Boolean) : []
-  );
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_plan", proposals, proposalPaths);
+  const pre = await preflightArtifact(ctx, "present_plan", "plan", title, validated.data);
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_plan", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
@@ -36547,10 +37147,7 @@ async function handlePresentCodeChange(ctx, args) {
   if (effectiveBefore && effectiveChangeType === "create") {
     effectiveChangeType = "modify";
   }
-  const proposals = [filePath, reasoning].filter(Boolean);
-  const proposalPaths = [filePath];
-  const proposalConcepts = [concept?.name].filter((n) => Boolean(n && n.trim()));
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_code_change", proposals, proposalPaths, proposalConcepts);
+  const pre = await preflightArtifact(ctx, "present_code_change", "code_change", "", validated.data);
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_code_change", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
@@ -36623,13 +37220,7 @@ async function handlePresentChangeset(ctx, args) {
   if (!validated.ok) return validated.error;
   const { title, summary, files, risks, reviewIntent, source, visuals } = validated.data;
   const isExternal = reviewIntent === "external";
-  const pre = await ctx.helpers.preflightRejectedApproaches(
-    "present_changeset",
-    [title, summary ?? "", ...risks ?? []].filter(Boolean),
-    files.map((f) => f.path).filter(Boolean),
-    [],
-    { advisory: isExternal }
-  );
+  const pre = await preflightArtifact(ctx, "present_changeset", "changeset", title, validated.data);
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_changeset", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
@@ -36686,7 +37277,8 @@ Raise it WITH THEM, not on the PR: one present_findings entry with audience: "in
   const nudge = await revisionNudge(ctx.store, "changeset", title, id);
   const fileCount = files.length;
   const prLabel2 = source?.number ? `PR #${source.number}` : "the PR";
-  const closing = isExternal ? `This is an EXTERNAL review \u2014 ${prLabel2}${source?.author ? ` by ${source.author}` : ""} is someone else's code. Their per-file verdicts are their REVIEW OPINION and stay LOCAL: nothing is posted and nothing lands until they say to post it. Do NOT apply, revise, or "fix" these files. Keep polling check_feedback and answer what they ask \u2014 trace callers, read the surrounding code, run a safe test \u2014 and when they say to post it, call post_pr_review (REQUEST_CHANGES only if a surviving finding is high/critical \u2014 the tool CHECKS this now and refuses otherwise \u2014 else COMMENT). No present_debrief is owed for a review of code you did not write.` : `When the feature wraps, end with present_debrief.`;
+  const reviewedCommit = source?.headSha ? ` at immutable commit ${source.headSha.slice(0, 12)}` : ` with NO immutable head SHA recorded (legacy-readable, but APPROVE will be refused until the current headRefOid is presented and reviewed)`;
+  const closing = isExternal ? `This is an EXTERNAL review \u2014 ${prLabel2}${source?.author ? ` by ${source.author}` : ""}${reviewedCommit} is someone else's code. Their per-file verdicts are their REVIEW OPINION and stay LOCAL: nothing is posted and nothing lands until they say to post it. Do NOT apply, revise, or "fix" these files. Keep polling check_feedback and answer what they ask \u2014 trace callers, read the surrounding code, run a safe test \u2014 and when they say to post it, call post_pr_review (REQUEST_CHANGES only if a surviving finding is high/critical \u2014 the tool CHECKS this now and refuses otherwise \u2014 else COMMENT). No present_debrief is owed for a review of code you did not write.` : `When the feature wraps, end with present_debrief.`;
   return {
     content: [{
       type: "text",
@@ -36700,14 +37292,7 @@ async function handlePresentDebrief(ctx, args) {
   const validated = validatePresentDebriefInput(args);
   if (!validated.ok) return validated.error;
   const { title, summary, sections, decisionsMade, needsYourEyes, deferred, openQuestions, visuals } = validated.data;
-  const proposals = [
-    title,
-    summary,
-    ...(sections ?? []).map((s) => s.title),
-    ...(decisionsMade ?? []).map((d) => d.what)
-  ].filter(Boolean);
-  const proposalConcepts = (sections ?? []).flatMap((s) => (s.concepts ?? []).map((c) => c.name)).filter(Boolean);
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_debrief", proposals, [], proposalConcepts);
+  const pre = await preflightArtifact(ctx, "present_debrief", "debrief", title, validated.data);
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_debrief", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
@@ -36753,6 +37338,10 @@ async function handlePresentDebrief(ctx, args) {
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   await ctx.helpers.autoNameSession(artifact.title);
   const traceSummary = formatPreflightTraceSummary(pre.trace);
+  const advisory = pre.advisory ? `
+
+\u26A0 THIS DEBRIEF NARRATES SOMETHING YOUR PAIR RECORDED A STANCE AGAINST \u2014 advisory, not a block (a debrief accounts for work already done, so the record is never refused): ${pre.advisory}
+Do not leave that unsaid. Name the stance in the debrief itself \u2014 revise_artifact to add a section (or a needsYourEyes item) that quotes it and says plainly whether the work went against it, why, and what you want them to decide now. They recorded it so it would come back; surfacing it here is what makes the debrief honest.` : "";
   const nudge = await revisionNudge(ctx.store, "debrief", title, id);
   const servedNote = await linkServedRequest(ctx.store, args, artifact.id);
   const sectionCount = sections?.length ?? 0;
@@ -36770,7 +37359,7 @@ async function handlePresentDebrief(ctx, args) {
   return {
     content: [{
       type: "text",
-      text: `Debrief "${artifact.title}" presented for review (${id}) \u2014 ${sectionCount} section${sectionCount === 1 ? "" : "s"}${eyesCount > 0 ? `, ${eyesCount} item${eyesCount === 1 ? "" : "s"} flagged for your eyes` : ""}. This is the primary comprehension surface: the human reads the walk-through and can ask ANYTHING in the thread at localhost:${reviewPort}. Call check_feedback for their questions, comments, and verdict.${danglingNote}${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`
+      text: `Debrief "${artifact.title}" presented for review (${id}) \u2014 ${sectionCount} section${sectionCount === 1 ? "" : "s"}${eyesCount > 0 ? `, ${eyesCount} item${eyesCount === 1 ? "" : "s"} flagged for your eyes` : ""}. This is the primary comprehension surface: the human reads the walk-through and can ask ANYTHING in the thread at localhost:${reviewPort}. Call check_feedback for their questions, comments, and verdict.${danglingNote}${servedNote}${traceSummary}${advisory}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`
     }]
   };
 }
@@ -36780,12 +37369,7 @@ async function handlePresentExplainer(ctx, args) {
   const validated = validatePresentExplainerInput(args);
   if (!validated.ok) return validated.error;
   const { title, overview, sections, relatedArtifactIds, suggestedQuestions, visuals, unknowns } = validated.data;
-  const proposals = [
-    title,
-    overview,
-    ...(sections ?? []).map((s) => s.heading)
-  ].filter(Boolean);
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_explainer", proposals, [], []);
+  const pre = await preflightArtifact(ctx, "present_explainer", "explainer", title, validated.data);
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_explainer", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
@@ -37344,7 +37928,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "present_changeset",
         annotations: { title: "Present changeset", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-        description: "Present a change that spans 2+ FILES as ONE reviewable artifact \u2014 unified diffs per file, per-file review state, and comments that can anchor across files. Use this for multi-file changes (a refactor, a feature touching several modules); a SINGLE-file change stays present_code_change.\n\nSchema note: `title` (artifact-level) and `files` are REQUIRED. Each file has `path`, `changeType` ('modified'|'added'|'deleted'), and `hunks` (unified-diff shaped: an optional `header` plus `lines`, each `{ kind: 'ctx'|'add'|'del', content, oldLine?, newLine? }`). Give it a one-line `summary` \u2014 what changed, in a sentence \u2014 it is the human's WHAT-at-a-glance, rendered above the diff. Also optional: `risks[]` (e.g. 'touches auth') and per-file `stats` ({additions, deletions}). Optional `visuals[]` \u2014 DRAW THE BLAST RADIUS: a diagram or file_map of the shape of what this change touches, rendered above the file rail so the human sees the scope before diving into hunks. INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: SINGLE REVIEW SURFACE \u2014 the human dispositions each file (looks-right, or needs-changes with a reason) and the whole-changeset verdict is DERIVED (all look-right \u2192 approve; any flagged \u2192 send those files back for revision). Review happens in the companion UI; don't paste diffs in chat. Non-blocking: it records + returns immediately. Call check_feedback for their per-file disposition, reasons, comments, and verdict \u2014 a send-back arrives as a `revised` status with feedback naming which files to revise and why.\n\nREVIEWING SOMEONE ELSE'S PR (`reviewIntent: 'external'`): when the human was pinged to review a GitHub PR, feed THE PR'S DIFF in here \u2014 one changeset file per changed file, hunks straight from `gh pr diff <N>` \u2014 and set `reviewIntent: 'external'` plus `source: { kind: 'github-pr', number, url, headRef, baseRef, author }`. That is what puts their colleague's diff on the rich surface: per-hunk comments, walk-me-through per hunk, findings anchored to real lines. Semantics change with the flag and you must honour them: the verdict is the HUMAN'S REVIEW OPINION, not a landing gate \u2014 it stays LOCAL until they tell you to post it (post_pr_review), nothing here is on their disk, and you must NOT apply, revise, or 'fix' these files or send yourself back to redraft them. No closing present_debrief is owed for code the pair did not write; the session's output is the posted review. Omit `reviewIntent` for your own work \u2014 absent means local, exactly as before.\n\n`reviewIntent: 'external'` IS AN ASSERTION WITH CONSEQUENCES, and nothing can verify it from here: it exempts the session from the closing-debrief gate and it is what lets post_pr_review send an APPROVE. Set it ONLY for code your pair genuinely did not write (a colleague's PR you fetched with `gh`). Their recorded stances are still weighed against an external diff \u2014 you get them back as an ADVISORY on this call rather than a refusal, because a stance about their codebase must not stop you SHOWING them someone else's. Raise any such match with them as a finding with `audience: 'internal'`; it is their private history and it must never be quoted to the PR author.",
+        description: "Present a change that spans 2+ FILES as ONE reviewable artifact \u2014 unified diffs per file, per-file review state, and comments that can anchor across files. Use this for multi-file changes (a refactor, a feature touching several modules); a SINGLE-file change stays present_code_change.\n\nSchema note: `title` (artifact-level) and `files` are REQUIRED. Each file has `path`, `changeType` ('modified'|'added'|'deleted'), and `hunks` (unified-diff shaped: an optional `header` plus `lines`, each `{ kind: 'ctx'|'add'|'del', content, oldLine?, newLine? }`). Give it a one-line `summary` \u2014 what changed, in a sentence \u2014 it is the human's WHAT-at-a-glance, rendered above the diff. Also optional: `risks[]` (e.g. 'touches auth') and per-file `stats` ({additions, deletions}). Optional `visuals[]` \u2014 DRAW THE BLAST RADIUS: a diagram or file_map of the shape of what this change touches, rendered above the file rail so the human sees the scope before diving into hunks. INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: SINGLE REVIEW SURFACE \u2014 the human dispositions each file (looks-right, or needs-changes with a reason) and the whole-changeset verdict is DERIVED (all look-right \u2192 approve; any flagged \u2192 send those files back for revision). Review happens in the companion UI; don't paste diffs in chat. Non-blocking: it records + returns immediately. Call check_feedback for their per-file disposition, reasons, comments, and verdict \u2014 a send-back arrives as a `revised` status with feedback naming which files to revise and why.\n\nREVIEWING SOMEONE ELSE'S PR (`reviewIntent: 'external'`): when the human was pinged to review a GitHub PR, fetch metadata with `gh pr view <N> --json number,url,headRefName,baseRefName,author,headRefOid`, then feed THE SAME COMMIT'S DIFF in here \u2014 one changeset file per changed file, hunks straight from `gh pr diff <N>` \u2014 and set `reviewIntent: 'external'` plus `source: { kind: 'github-pr', number, url, headRef, baseRef, author, headSha: headRefOid }`. `headSha` is the immutable commit the human is reviewing: preserve it on every chunk and supply the newly fetched value on any revised/current diff. Never guess it from the branch later; APPROVE without it is refused. That is what puts their colleague's diff on the rich surface: per-hunk comments, walk-me-through per hunk, findings anchored to real lines. Semantics change with the flag and you must honour them: the verdict is the HUMAN'S REVIEW OPINION, not a landing gate \u2014 it stays LOCAL until they tell you to post it (post_pr_review), nothing here is on their disk, and you must NOT apply, revise, or 'fix' these files or send yourself back to redraft them. No closing present_debrief is owed for code the pair did not write; the session's output is the posted review. Omit `reviewIntent` for your own work \u2014 absent means local, exactly as before.\n\n`reviewIntent: 'external'` IS AN ASSERTION WITH CONSEQUENCES, and nothing can verify it from here: it exempts the session from the closing-debrief gate and it is what lets post_pr_review send an APPROVE. Set it ONLY for code your pair genuinely did not write (a colleague's PR you fetched with `gh`). Their recorded stances are still weighed against an external diff \u2014 you get them back as an ADVISORY on this call rather than a refusal, because a stance about their codebase must not stop you SHOWING them someone else's. Raise any such match with them as a finding with `audience: 'internal'`; it is their private history and it must never be quoted to the PR author.",
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_changeset)
@@ -37395,7 +37979,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "post_pr_review",
         annotations: { title: "Post PR review", readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-        description: 'Post this session\'s approved findings as inline comments on a GitHub PR via the `gh` CLI. Only findings with structured evidence (filePath + lineStart) anchor as inline comments; rejected / retracted / superseded artifacts are omitted.\n\nCall this ONLY when the human has explicitly told you to post ("post the review", "ship the review"). "We\'re done here" ends the discussion, NOT the review \u2014 it is not permission to write into someone else\'s repository. If it is ambiguous, ask them.\n\nAUTHORIZATION IS CHECKED, not assumed: before anything reaches GitHub the tool verifies the human\'s recorded verdicts in the session store. A findings artifact they never ruled on (draft/reviewing/revised) REFUSES the whole post and is named in the error \u2014 go and get their verdict, don\'t try to route around it. Findings they rejected are excluded automatically, and findings marked `audience: "internal"` NEVER post at all. An APPROVE \u2014 with or without inline comments \u2014 requires them to have APPROVED every live external changeset for this PR (the PR on the review surface); if they REJECTED it, the APPROVE is refused outright. There is no force flag and no bypass; if it refuses, the answer is a human verdict, not a retry.\n\nPOSTS ONCE. A landed review is recorded in the session, and a second call for the same PR refuses with the URL of the first \u2014 a re-post notifies the author again. If the human explicitly asks you to post again, pass `repost: true`.',
+        description: 'Post this session\'s approved findings as inline comments on a GitHub PR via the `gh` CLI. Only findings with structured evidence (filePath + lineStart) anchor as inline comments; rejected / retracted / superseded artifacts are omitted.\n\nCall this ONLY when the human has explicitly told you to post ("post the review", "ship the review"). "We\'re done here" ends the discussion, NOT the review \u2014 it is not permission to write into someone else\'s repository. If it is ambiguous, ask them.\n\nAUTHORIZATION IS CHECKED, not assumed: before anything reaches GitHub the tool verifies the human\'s recorded verdicts in the session store. A findings artifact they never ruled on (draft/reviewing/revised) REFUSES the whole post and is named in the error \u2014 go and get their verdict, don\'t try to route around it. Findings they rejected are excluded automatically, and findings marked `audience: "internal"` NEVER post at all. An APPROVE \u2014 with or without inline comments \u2014 requires them to have APPROVED every live external changeset for this exact repository, PR, and immutable `source.headSha`; missing/mixed SHAs or a changed remote head refuse. COMMENT/REQUEST_CHANGES keep all-legacy no-SHA sessions working, but mixed provenance refuses. The outbound `commit_id` is the reviewed SHA, never a guessed current head. GitHub offers no atomic lock between the final head read and POST, so this is bound-commit semantics, not a promise that a push cannot race the read. There is no force flag and no bypass; if it refuses, the answer is a human verdict, not a retry.\n\nPOSTS ONCE. A landed review is recorded in the session, and a second call for the same PR refuses with the URL of the first \u2014 a re-post notifies the author again. If the human explicitly asks you to post again, pass `repost: true`.',
         inputSchema: {
           type: "object",
           properties: {
@@ -37545,7 +38129,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "revise_artifact",
         annotations: { title: "Revise artifact", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-        description: "Revise a prior artifact. `mode: 'supersede'` creates a v(N+1) draft linked via parentId (requires new `content`); the old flips to 'superseded'. `mode: 'retract'` marks the artifact 'retracted' with the reason.\n\nUN-ARMING A REVIEW (R1): normally only a draft/reviewing artifact can be retracted \u2014 an approved one is the human's standing verdict. The one exception is a PR-review session (a changeset with reviewIntent: 'external' present): there, `mode: 'retract'` on an APPROVED findings artifact is how the human's \"actually, don't send that one\" gets expressed, because approval in that session is what ARMS the findings for posting. Use it when they say so; the artifact then cannot be posted.",
+        description: "Revise a prior artifact. `mode: 'supersede'` creates a v(N+1) draft linked via parentId (requires new `content`); the old flips to 'superseded'. `mode: 'retract'` marks the artifact 'retracted' with the reason.\n\nUN-ARMING A REVIEW (R1): normally only a draft/reviewing artifact can be retracted \u2014 an approved one is the human's standing verdict. The one exception is a PR-review session (a changeset with reviewIntent: 'external' present): there, `mode: 'retract'` on an APPROVED findings artifact is how the human's \"actually, don't send that one\" gets expressed, because approval in that session is what ARMS the findings for posting. Use it when they say so; the artifact then cannot be posted.\n\nREVISING AN EXTERNAL CHANGESET (#343): preserve its full GitHub source provenance, including the exact `headSha`, only when the revised surface still represents that same commit. If the PR changed, fetch the new `headRefOid`, present the new diff with that SHA, and get a fresh verdict. Never carry an old SHA onto new code or omit it to fall back to the branch head.",
         inputSchema: {
           type: "object",
           properties: {
@@ -37940,6 +38524,24 @@ init_project_root();
 init_cli_invocation();
 init_dist();
 var DaemonClient = class {
+  reviewPosts = {
+    reserve: (identity, repost) => this.post("/review-post-operations", { action: "reserve", identity, repost }),
+    markSending: async (lease, identity) => {
+      await this.post("/review-post-operations", { action: "sending", lease, identity });
+    },
+    failBeforeSending: async (lease) => {
+      await this.post("/review-post-operations", { action: "failed", lease });
+    },
+    releaseUnsent: async (lease) => {
+      await this.post("/review-post-operations", { action: "unsent", lease });
+    },
+    markUnknown: async (lease) => {
+      await this.post("/review-post-operations", { action: "unknown", lease });
+    },
+    succeed: async (lease, result) => {
+      await this.post("/review-post-operations", { action: "succeeded", lease, result });
+    }
+  };
   baseUrl;
   sessionId;
   /**
@@ -38445,12 +39047,15 @@ var DaemonClient = class {
   async getFullState() {
     return this.get("/state");
   }
+  async getReviewPostState() {
+    return this.get("/review-post-state");
+  }
   /** R1 (#279) — proxy the posted-review stamp to the daemon's FileStore. The
    *  READ needs no proxy: the record rides getFullState above. NOT
    *  fire-and-forget — a swallowed failure here re-arms a duplicate post, so
    *  the caller awaits it before reporting success. */
-  async recordPostedReview(record2) {
-    await this.post("/posted-reviews", record2);
+  async recordPostedReview(record3) {
+    await this.post("/posted-reviews", record3);
   }
   async forceFlush() {
     await this.post("/flush");

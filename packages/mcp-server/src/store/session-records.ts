@@ -3,6 +3,27 @@ import { performance } from "node:perf_hooks";
 
 type RecordValue = Record<string, unknown>;
 
+<<<<<<< HEAD
+=======
+export class SessionReviewConflictError extends Error {
+  readonly code = "ESESSIONREVIEWCONFLICT";
+
+  constructor(readonly artifactId: string) {
+    super(
+      `Artifact ${artifactId} has changed content and a concurrent review verdict. ` +
+      "Stop and restart the session writer, then review the persisted artifact before authorizing it.",
+    );
+    this.name = "SessionReviewConflictError";
+  }
+}
+
+export function isSessionReviewConflictError(error: unknown): error is SessionReviewConflictError {
+  return error instanceof SessionReviewConflictError ||
+    (!!error && typeof error === "object" &&
+      (error as { code?: unknown }).code === "ESESSIONREVIEWCONFLICT");
+}
+
+>>>>>>> origin/main
 function object(value: unknown): value is RecordValue {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -55,6 +76,90 @@ export function mergeSessionRecords<T>(
   return [...merged.values()];
 }
 
+<<<<<<< HEAD
+=======
+const REVIEW_VERDICTS = new Set(["approved", "rejected", "revised"]);
+const REVIEWED_IDENTITY_FIELDS = ["content", "version", "type", "parentId"] as const;
+
+function reviewVerdictChanged(base: RecordValue, candidate: RecordValue): boolean {
+  return JSON.stringify(base.status) !== JSON.stringify(candidate.status) &&
+    REVIEW_VERDICTS.has(String(candidate.status));
+}
+
+function changesetReviewChanged(base: RecordValue, candidate: RecordValue): boolean {
+  if (base.type !== "changeset" || candidate.type !== "changeset") return false;
+  const baseContent = object(base.content) ? base.content : {};
+  const candidateContent = object(candidate.content) ? candidate.content : {};
+  return JSON.stringify([baseContent.reviewState, baseContent.reviewReasons]) !==
+    JSON.stringify([candidateContent.reviewState, candidateContent.reviewReasons]);
+}
+
+function reviewAuthorityChanged(base: RecordValue, candidate: RecordValue): boolean {
+  return reviewVerdictChanged(base, candidate) || changesetReviewChanged(base, candidate);
+}
+
+/** Plan execution progress and changeset file dispositions are not proposal
+ * identity. Reviewers approve plan step text/order/action and changeset file
+ * contents; execution status and reviewState/reviewReasons are authority
+ * layered onto that proposal. Identically named fields in other artifact
+ * types remain review-bearing content. */
+function reviewedContent(record: RecordValue): unknown {
+  const content = record.content;
+  if (!object(content)) return content;
+  if (record.type === "plan" && Array.isArray(content.steps)) {
+    return {
+      ...content,
+      steps: content.steps.map((step) => {
+        if (!object(step)) return step;
+        const { status: _status, statusNote: _statusNote, ...proposal } = step;
+        return proposal;
+      }),
+    };
+  }
+  if (record.type === "changeset") {
+    const { reviewState: _reviewState, reviewReasons: _reviewReasons, ...proposal } = content;
+    return proposal;
+  }
+  return content;
+}
+
+function reviewedIdentityChanged(base: RecordValue, candidate: RecordValue): boolean {
+  return REVIEWED_IDENTITY_FIELDS.some(
+    (field) => JSON.stringify(field === "content" ? reviewedContent(base) : base[field]) !==
+      JSON.stringify(field === "content" ? reviewedContent(candidate) : candidate[field]),
+  );
+}
+
+/** Artifact records need one safety rule beyond the generic deterministic
+ * last-flush policy: a review verdict cannot be transplanted onto proposal
+ * content that the reviewer did not see. Metadata such as title and featureId
+ * remains independently mergeable. */
+export function mergeArtifactRecords<T extends object>(
+  baseline: T[], local: T[], disk: T[], key: (value: T) => string,
+): T[] {
+  const before = new Map(baseline.map((record) => [key(record), record]));
+  const current = new Map(local.map((record) => [key(record), record]));
+  const persisted = new Map(disk.map((record) => [key(record), record]));
+
+  for (const [id, baseValue] of before) {
+    const localRecord = current.get(id);
+    const diskRecord = persisted.get(id);
+    if (!localRecord || !diskRecord) continue;
+    const base = baseValue as RecordValue;
+    const localValue = localRecord as RecordValue;
+    const diskValue = diskRecord as RecordValue;
+    if (
+      (reviewAuthorityChanged(base, localValue) && reviewedIdentityChanged(base, diskValue)) ||
+      (reviewAuthorityChanged(base, diskValue) && reviewedIdentityChanged(base, localValue))
+    ) {
+      throw new SessionReviewConflictError(id);
+    }
+  }
+
+  return mergeSessionRecords(baseline, local, disk, key);
+}
+
+>>>>>>> origin/main
 /** Cooperating FileStore writers serialize the complete read/merge/write
  * section. Never break locks by age: a paused live writer could still commit.
  * After a crash, an operator may remove the lock ONLY after stopping writers.

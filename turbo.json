@@ -5,6 +5,10 @@
       "dependsOn": ["^build"],
       "outputs": ["dist/**"]
     },
+    "deeppairing-vscode#build": {
+      "dependsOn": ["@deeppairing/mcp-server#build"],
+      "outputs": ["dist/**", "web-dist/**"]
+    },
     "dev": {
       "cache": false,
       "persistent": true

@@ -837,6 +837,11 @@ export interface GitHubReviewPayload {
   body: string;
   event: GitHubReviewEvent;
   comments: GitHubReviewComment[];
+  /** #343 — GitHub applies the review to this exact commit. Optional only for
+   *  backward-compatible COMMENT/REQUEST_CHANGES from legacy sessions whose
+   *  external provenance predates immutable-SHA capture. APPROVE never leaves
+   *  authorization without it. */
+  commit_id?: string;
 }
 
 /**

@@ -31,6 +31,7 @@ import { getGlobalStore } from "../store/global-store.js";
 import { buildLedgerHealthReport, shQuote } from "../store/ledger-health.js";
 import { cliInvocation, mcpServerConfigFor, isInstalledPackage } from "../cli-invocation.js";
 import { writeJsonAtomic } from "../store/atomic-write.js";
+import { withSessionFlushLock } from "../store/session-records.js";
 import { errorMessage } from "@deeppairing/shared";
 
 /**
@@ -1580,34 +1581,56 @@ async function demoCmd(): Promise<void> {
 }
 
 /**
- * `deeppairing post-pr-review <pr> [--session-id ID] [--event EVENT] [--repost]`
- *  — post the current (or specified) pairing session's findings as inline
+ * `deeppairing post-pr-review <pr> --session-id ID [--event EVENT] [--repost]`
+ *  — post the explicitly specified pairing session's findings as inline
  *  comments on a GitHub PR. Uses the `gh` CLI.
  */
 async function postPrReviewCmd(ref: string, sessionId?: string, event?: string, repost = false) {
   const { FileStore } = await import("../store/file-store.js");
   const { authorizeReviewPost } = await import("../github/review-authorization.js");
-  const { postPrReview, parsePrRef, GhMissingError, GhNotAuthedError } = await import("../github/post-review.js");
+  const { authorizeDurableReview } = await import("../github/authorized-durable-review.js");
+  const { executeDurableReviewPost } = await import("../github/durable-review-post.js");
+  const { ReviewPostJournal } = await import("../store/review-post-journal.js");
+  const {
+    postPreparedPrReview,
+    preparePrReviewTarget,
+    parsePrRef,
+    GhMissingError,
+    GhNotAuthedError,
+  } = await import("../github/post-review.js");
 
-  let chosenSessionId = sessionId;
-  if (!chosenSessionId) {
-    const [firstSession] = FileStore.listSessions(cwd);
-    if (!firstSession) {
-      console.error(`  ${red("✗")} No sessions found in this project. Start a deepPairing session first.`);
-      process.exit(1);
-    }
-    chosenSessionId = firstSession.id;
+  // #344 M1 — membership check BEFORE any store is constructed. `new
+  // FileStore(cwd, id)` creates the session directory, so a typo used to
+  // manufacture a session and a fresh unguarded journal on its way to failing;
+  // and this happens before `preparePrReviewTarget`, so a bad id never reaches
+  // `gh` either. Naming a DIFFERENT existing session stays the operator's
+  // explicit choice — this establishes only that the id already exists here.
+  const { selectPostingSession, readSessionDirectories } = await import("./session-selection.js");
+  const selected = selectPostingSession({
+    requested: sessionId,
+    readable: FileStore.listSessions(cwd).map((s) => s.id),
+    directories: readSessionDirectories(cwd),
+  });
+  if (!selected.ok) {
+    console.error(`  ${red("✗")} ${selected.message}`);
+    process.exit(1);
   }
+  const chosenSessionId = selected.sessionId;
 
   // R1 (#279) — a live FileStore, not the static loadSession snapshot: this
   // door must also STAMP the landed review (see below), and the stamp writes
   // its own sidecar file. Nothing else about the session is mutated here, so
   // sharing the directory with a running daemon stays safe.
-  let store: InstanceType<typeof FileStore>;
   let state: any;
   try {
-    store = new FileStore(cwd, chosenSessionId);
-    state = store.getFullState();
+    const initialReader = new FileStore(cwd, chosenSessionId);
+    try {
+      state = initialReader.getReviewPostState();
+    } finally {
+      // Read-only snapshots are disposed, never force-flushed: flushing a
+      // stale cache here could overwrite a daemon verdict that arrived later.
+      initialReader.dispose();
+    }
   } catch (err) {
     console.error(`  ${red("✗")} Could not load session "${chosenSessionId}": ${errorMessage(err)}`);
     process.exit(1);
@@ -1629,28 +1652,55 @@ async function postPrReviewCmd(ref: string, sessionId?: string, event?: string, 
     console.error(`  ${red("✗")} ${auth.reason}`);
     process.exit(1);
   }
-  const { payload } = auth;
 
   try {
-    const result = await postPrReview({ ref, payload });
+    const prepared = await preparePrReviewTarget({ ref });
+    const target = prepared.target;
+    // #343 — use a genuinely new disk snapshot after every remote preparation
+    // await. The earlier reader may be stale while the daemon records a new
+    // verdict, and forceFlush would be actively unsafe here. Dispose this
+    // read-only instance before the final authorization gate and network send.
+    const authorizeFresh = () => {
+      const finalReader = new FileStore(cwd, chosenSessionId);
+      try {
+        return authorizeDurableReview(finalReader.getReviewPostState(), { event, repost }, prepared);
+      } finally {
+        finalReader.dispose();
+      }
+    };
+    const { payload, identity } = authorizeFresh();
+    const posted = await executeDurableReviewPost({
+      store: new ReviewPostJournal(cwd, chosenSessionId), payload, identity, repost,
+      reauthorize: () => authorizeFresh().identity,
+      send: (canonicalTarget, frozenPayload) => postPreparedPrReview({ target: canonicalTarget, payload: frozenPayload }),
+    });
+    const { result } = posted;
     console.log(`  ${green("✓")} Posted ${payload.comments.length} inline comment${payload.comments.length === 1 ? "" : "s"} on PR ${ref}`);
     if (result.htmlUrl) console.log(`    ${dim(result.htmlUrl)}`);
+    if (posted.receipt === "unconfirmed") {
+      console.error(`  ${red("!")} Review ${posted.operationId} posted, but its durable receipt is unconfirmed. Do not retry or repost; reconcile this operation first.`);
+    }
     // R1 (#279) — same stamp the MCP door writes, into the same sidecar, so a
     // duplicate post is refused no matter which door it comes from.
     try {
-      const parsed = parsePrRef(ref);
-      store.recordPostedReview({
-        pr: ref,
-        prNumber: parsed.number,
-        ...(parsed.owner ? { owner: parsed.owner } : {}),
-        ...(parsed.repo ? { repo: parsed.repo } : {}),
-        event: payload.event,
-        reviewId: result.id,
-        url: result.htmlUrl,
-        postedAt: new Date().toISOString(),
-        commentCount: payload.comments.length,
-      });
-      console.log(`    ${dim("Recorded — a second post to this PR needs --repost.")}`);
+      const parsed = parsePrRef(target);
+      const recorder = new FileStore(cwd, chosenSessionId);
+      try {
+        recorder.recordPostedReview({
+          pr: ref,
+          prNumber: parsed.number,
+          ...(parsed.owner ? { owner: parsed.owner } : {}),
+          ...(parsed.repo ? { repo: parsed.repo } : {}),
+          event: payload.event,
+          reviewId: result.id,
+          url: result.htmlUrl,
+          postedAt: new Date().toISOString(),
+          commentCount: payload.comments.length,
+        });
+      } finally {
+        recorder.dispose();
+      }
+      console.log(`    ${dim(posted.receipt === "recorded" ? "Recorded — a second post to this PR needs --repost." : "Legacy history recorded; durable operation still needs reconciliation.")}`);
     } catch (stampErr) {
       console.error(`  ${red("!")} The review posted, but recording it locally failed: ${errorMessage(stampErr)}`);
     }
@@ -1710,9 +1760,18 @@ async function sessionsCmd(sub: string | undefined, rest: string[]): Promise<voi
       console.error(`  ${red("✗")} from and into must differ.`);
       process.exit(1);
     }
+    if (!/^[a-zA-Z0-9_-]+$/.test(fromId) || !/^[a-zA-Z0-9_-]+$/.test(intoId)) {
+      console.error(`  ${red("✗")} Session ids may contain only letters, numbers, underscores, and hyphens.`);
+      process.exit(1);
+    }
     const sessionsDir = path.join(cwd, ".deeppairing", "sessions");
-    const fromDir = path.join(sessionsDir, fromId);
-    const intoDir = path.join(sessionsDir, intoId);
+    const resolvedSessionsDir = path.resolve(sessionsDir);
+    const fromDir = path.resolve(resolvedSessionsDir, fromId);
+    const intoDir = path.resolve(resolvedSessionsDir, intoId);
+    if (path.dirname(fromDir) !== resolvedSessionsDir || path.dirname(intoDir) !== resolvedSessionsDir) {
+      console.error(`  ${red("✗")} Session path escaped the sessions directory.`);
+      process.exit(1);
+    }
     if (!fs.existsSync(fromDir)) {
       console.error(`  ${red("✗")} Source session directory not found: ${fromDir}`);
       process.exit(1);
@@ -1725,38 +1784,43 @@ async function sessionsCmd(sub: string | undefined, rest: string[]): Promise<voi
     // The merge is shape-aware per file. Each session JSON is an array of
     // records; we concat + dedupe on `id` (target wins on collisions because
     // the user explicitly chose it as the canonical store).
-    const filesToMerge = ["artifacts.json", "comments.json", "decisions.json", "plan-reviews.json", "retrospectives.json"];
+    const filesToMerge = ["artifacts.json", "comments.json", "decisions.json", "plan-reviews.json", "requests.json", "retrospectives.json"];
     const summary: Record<string, { from: number; into: number; merged: number }> = {};
-
-    for (const file of filesToMerge) {
-      const fromPath = path.join(fromDir, file);
-      const intoPath = path.join(intoDir, file);
-      if (!fs.existsSync(fromPath)) continue;
-
-      let fromArr: any[] = [];
-      let intoArr: any[] = [];
-      try { fromArr = JSON.parse(fs.readFileSync(fromPath, "utf-8")); } catch { continue; }
-      try { if (fs.existsSync(intoPath)) intoArr = JSON.parse(fs.readFileSync(intoPath, "utf-8")); } catch {}
-      if (!Array.isArray(fromArr) || !Array.isArray(intoArr)) continue;
-
-      const seen = new Set(intoArr.map((r) => r.id ?? r.decisionId ?? r.artifactId).filter(Boolean));
-      const additions = fromArr.filter((r) => {
-        const key = r.id ?? r.decisionId ?? r.artifactId;
-        return key && !seen.has(key);
+    const claimDirs = [fromDir, intoDir].sort((a, b) => a.localeCompare(b));
+    withSessionFlushLock(path.join(claimDirs[0]!, ".flush.lock"), () => {
+      withSessionFlushLock(path.join(claimDirs[1]!, ".flush.lock"), () => {
+        const plans: Array<{ file: string; intoPath: string; merged: any[]; from: number; into: number; added: number }> = [];
+        // Validate every managed array before the first replacement. The merge
+        // still is not cross-file transactional, but malformed late files can
+        // no longer leave earlier files changed before the command refuses.
+        for (const file of filesToMerge) {
+          const fromPath = path.join(fromDir, file);
+          const intoPath = path.join(intoDir, file);
+          if (!fs.existsSync(fromPath)) continue;
+          const fromArr: unknown = JSON.parse(fs.readFileSync(fromPath, "utf-8"));
+          const intoArr: unknown = fs.existsSync(intoPath)
+            ? JSON.parse(fs.readFileSync(intoPath, "utf-8"))
+            : [];
+          if (!Array.isArray(fromArr) || !Array.isArray(intoArr)) {
+            throw new Error(`Cannot merge ${file}: source and target must both contain JSON arrays`);
+          }
+          const seen = new Set(intoArr.map((r) => r?.id ?? r?.decisionId ?? r?.artifactId).filter(Boolean));
+          const additions = fromArr.filter((r) => {
+            const key = r?.id ?? r?.decisionId ?? r?.artifactId;
+            return key && !seen.has(key);
+          }).map((record) => {
+            const copy = { ...record };
+            if (copy.sessionId) copy.sessionId = intoId;
+            return copy;
+          });
+          plans.push({ file, intoPath, merged: [...intoArr, ...additions], from: fromArr.length, into: intoArr.length, added: additions.length });
+        }
+        for (const plan of plans) {
+          writeJsonAtomic(plan.intoPath, plan.merged);
+          summary[plan.file] = { from: plan.from, into: plan.into, merged: plan.added };
+        }
       });
-      // Rewrite the sessionId field so artifacts/comments report the new home.
-      for (const a of additions) {
-        if (a.sessionId) a.sessionId = intoId;
-      }
-      const merged = [...intoArr, ...additions];
-      // Q1 item 9 — SECURITY.md claims "all session and ledger writes go through
-      // writeJsonAtomic". This hand-rolled `+ ".tmp"` was the one exception: a
-      // FIXED tmp name, so two concurrent merges could truncate each other's
-      // temp file, and it left the claim false. Use the real writer.
-      writeJsonAtomic(intoPath, merged);
-
-      summary[file] = { from: fromArr.length, into: intoArr.length, merged: additions.length };
-    }
+    });
 
     console.log(bold("\n  deepPairing sessions merge"));
     console.log(`  ${green("✓")} Merged ${fromId} → ${intoId}`);
@@ -2016,8 +2080,18 @@ ${helpInvocations}
                                            (format: full | pr-description | pr-comments | adr | replay | learnings)
     dp export html [--redact-code]         Write a self-contained shareable HTML page to .deeppairing/exports/
                                            and print its path (--redact-code drops the code bodies)
-    dp post-pr-review <pr>                 Post the pairing session's findings as inline comments
+    dp post-pr-review <pr> --session-id ID  Post the explicitly reviewed session's findings
                                            on a GitHub PR. Requires \`gh\` CLI installed + authed.
+    dp review-posts <session-id>           Inspect durable review-post operations
+    dp review-posts <session-id> inspect   Inspect validity and redacted file/claim metadata
+    dp review-posts <session-id> cancel-reserved <operation-id>
+                                          Cancel only an operation that has not started sending
+    dp review-posts <session-id> reconcile <operation-id> <remote-review-id>
+                                          Verify a remote review and record it without posting
+                                          (All the review-posts verbs also ship as a standalone
+                                          operator entry inside the plugin bundle — run
+                                          \`node <plugin>/server/review-posts.mjs --help\`; a
+                                          marketplace install has no \`dp\` binary.)
     dp --help                              Show this help message
     dp --version                           Show version
 `);
@@ -2114,11 +2188,21 @@ ${helpInvocations}
     console.error(`  ${red("✗")} list failed: ${errorMessage(err)}`);
     process.exit(1);
   });
+} else if (cmd === "review-posts") {
+  import("./review-posts.js").then(async ({ reviewPostsCommand, reconcileReviewPostCommand }) => {
+    console.log(args[2] === "reconcile"
+      ? await reconcileReviewPostCommand(cwd, args.slice(1))
+      : reviewPostsCommand(cwd, args.slice(1)));
+  }).catch(err => {
+    console.error(`  ${red("✗")} review-posts failed: ${errorMessage(err)}`);
+    process.exitCode = 1;
+  });
 } else if (cmd === "post-pr-review") {
   const ref = args[1];
   if (!ref) {
     console.error(`  ${red("✗")} post-pr-review requires a PR number or URL.`);
-    console.error(`  ${dim("   Example: " + cliInvocation("post-pr-review 42"))}`);
+    console.error(`  ${dim("   Example: " + cliInvocation("post-pr-review 42 --session-id <id>"))}`);
+    console.error(`  ${dim("   Session ids: " + cliInvocation("list"))}`);
     process.exit(1);
   }
   // Parse optional --session-id, --event and --repost flags

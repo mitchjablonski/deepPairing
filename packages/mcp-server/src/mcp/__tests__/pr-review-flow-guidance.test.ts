@@ -99,6 +99,8 @@ describe("Q6 — review-pr.md carries the whole in-tandem arc, in order", () => 
     expect(text).toContain("present_changeset");
     expect(text).toContain('reviewIntent: "external"');
     expect(text).toContain('kind: "github-pr"');
+    expect(text).toContain("headRefOid");
+    expect(text).toContain("headSha");
     // (d) findings + the ledger sweep.
     expect(text).toContain("present_findings");
     expect(text).toContain("recall");
@@ -180,6 +182,7 @@ describe("Q6 — review-pr.md carries the whole in-tandem arc, in order", () => 
     expect(text).toMatch(/checks my recorded verdicts/i);
     expect(text).toMatch(/blocks the post/i);
     expect(text).toMatch(/approved the PR changeset/i);
+    expect(text).toContain("headSha");
     // And post-pr.md says there is no way around it.
     expect(flat(postPr())).toMatch(/no override flag/i);
   });
@@ -215,6 +218,8 @@ describe("Q6 — SKILL.md's PR section agrees with the command", () => {
     expect(section).toContain("/deeppairing:review-pr");
     expect(section).toContain("present_explainer");
     expect(section).toContain('reviewIntent: "external"');
+    expect(section).toContain("headRefOid");
+    expect(section).toContain("headSha");
     expect(section).toContain("recall");
     expect(section).toContain("post_pr_review");
     expect(section).toContain("APPROVE");

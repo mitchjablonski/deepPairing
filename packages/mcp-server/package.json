@@ -34,6 +34,7 @@
   "scripts": {
     "prebuild": "node -e \"require('node:fs').rmSync('dist', {recursive: true, force: true})\"",
     "build": "tsc && cd web && npx vite build && cd .. && node scripts/bundle-plugin.mjs",
+    "gen:hooks": "node scripts/generate-hook-scripts.mjs",
     "start": "tsx src/standalone.ts",
     "test": "vitest run",
     "test:e2e": "playwright test",

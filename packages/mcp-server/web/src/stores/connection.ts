@@ -1047,6 +1047,38 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         });
       });
 
+      adapter.onConnectionRefused?.((info) => {
+        set((state) => ({ connected: false, disconnectedSince: state.disconnectedSince ?? Date.now() }));
+        const named = info.sessionId ?? null;
+        const mine = get().sessionId;
+        const scope = !named
+          ? "The daemon did not say which session is affected."
+          : mine && named !== mine
+            ? `The blocked session is ${named} — not ${mine}, which this tab is showing.`
+            : `Affected session: ${named}.`;
+        import("./toast").then(({ useToastStore }) => {
+          if (info.code !== "session_review_conflict") {
+            useToastStore.getState().push({
+              kind: "error",
+              title: "Session state temporarily unavailable",
+              body: "The daemon could not assemble the initial session snapshot. Automatic reconnect will continue with bounded backoff.",
+              ttl: 8_000,
+            });
+            return;
+          }
+          useToastStore.getState().push({
+            kind: "error",
+            title: "Session review conflict",
+            body: `The persisted session state changed after review and must be inspected before reconnecting. ${scope} Reconnect attempts are paused — restart that session writer, review the persisted artifact, then retry or switch sessions.`,
+            ttl: 0,
+            action: {
+              label: "Retry connecting",
+              onClick: () => adapter.retryAfterRefusal?.(),
+            },
+          });
+        });
+      });
+
       adapter.connect();
     },
 
@@ -1072,17 +1104,21 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         cancelPendingRecovery();
         const switchConnection = connectionGeneration;
         const switchSessionGeneration = sessionGeneration;
-        if (!options?.preserveStateUntilConnected) {
-          // Ordinary navigation clears the previous session immediately.
-          import("./artifact").then(({ useArtifactStore }) => {
-            if (!isCurrent(switchConnection, switchSessionGeneration)) return;
-            useArtifactStore.getState().reset();
-          });
-        }
-        (adapter as any).switchSession(sessionId);
-        // B2 — drop the OLD session's heartbeat streak, or the TurnIndicator
-        // shows "Agent working · Nm" from session A for up to 45s on session B.
+        // Publish the new identity before the async reset, then open the
+        // replacement socket only after that reset has completed. This keeps a
+        // fast hydration from being erased by a late import continuation.
         set({ sessionId, agentActivityAt: null, agentActiveSince: null });
+        void import("./artifact").then(({ useArtifactStore }) => {
+          if (
+            get().adapter !== adapter ||
+            get().sessionId !== sessionId ||
+            !isCurrent(switchConnection, switchSessionGeneration)
+          ) return;
+          if (!options?.preserveStateUntilConnected) {
+            useArtifactStore.getState().reset();
+          }
+          (adapter as any).switchSession(sessionId);
+        });
       }
     },
 

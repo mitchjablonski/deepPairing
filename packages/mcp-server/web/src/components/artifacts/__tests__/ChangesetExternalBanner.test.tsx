@@ -50,6 +50,7 @@ const FULL_SOURCE = {
   headRef: "feat/rate-limit",
   baseRef: "main",
   author: "dana",
+  headSha: "0123456789abcdef0123456789abcdef01234567",
 };
 
 function renderChangeset(content: Record<string, unknown>) {
@@ -80,6 +81,7 @@ describe("Q6 — external-review banner", () => {
     expect(banner).toHaveTextContent("#123");
     expect(banner).toHaveTextContent("by dana");
     expect(banner).toHaveTextContent("feat/rate-limit → main");
+    expect(banner).toHaveTextContent("reviewed 0123456789ab");
 
     const link = screen.getByRole("link", { name: "#123" });
     expect(link).toHaveAttribute("href", FULL_SOURCE.url);

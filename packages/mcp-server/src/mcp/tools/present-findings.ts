@@ -1,4 +1,5 @@
 import { nanoid } from "nanoid";
+import { preflightArtifact } from "../artifact-preflight.js";
 import { validatePresentFindingsInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
@@ -9,20 +10,7 @@ export async function handlePresentFindings(ctx: ToolContext, args: any): Promis
   // instead of an array) cannot land on disk and break the renderer.
   const validated = validatePresentFindingsInput(args);
   if (!validated.ok) return validated.error;
-  const findings = validated.data.findings;
-  const proposals: string[] = [
-    args?.title ?? "",
-    validated.data.summary,
-    ...findings.map((f) => f?.title ?? ""),
-    ...findings.map((f) => f?.recommendation ?? ""),
-  ].filter(Boolean);
-  // Paths from structured evidence feed scope-aware team-pref enforcement.
-  const proposalPaths: string[] = findings.flatMap((f) =>
-    Array.isArray(f?.evidence)
-      ? f.evidence.map((e: any) => (typeof e === "object" && e?.filePath) || "").filter(Boolean)
-      : [],
-  );
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_findings", proposals, proposalPaths);
+  const pre = (await preflightArtifact(ctx, "present_findings", "research", args?.title ?? "", validated.data))!;
   if (!pre.ok) return pre.response;
 
   // N2 (#226) — short-window de-dup: an identical present_findings still in

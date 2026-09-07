@@ -2,12 +2,21 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
-import { suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode } from "@deeppairing/shared";
+import { ArtifactSchema, suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { capConceptLength } from "./concept-hygiene.js";
 import { writeJsonAtomic, writeStringAtomic } from "./atomic-write.js";
+<<<<<<< HEAD
 import { mergeSessionRecords, withSessionFlushLock } from "./session-records.js";
+=======
+import {
+  mergeArtifactRecords,
+  mergeSessionRecords,
+  SessionReviewConflictError,
+  withSessionFlushLock,
+} from "./session-records.js";
+>>>>>>> origin/main
 import { salvageArray, salvageRecord, salvageLog } from "./salvage.js";
 import { senseProjectGuardrails, loadTeamPreferences } from "./project-signals.js";
 import type { ProjectGuardrail } from "./project-signals.js";
@@ -18,6 +27,7 @@ import { ledgerDigest, invalidateLedgerDigestCache } from "./ledger-digest.js";
 import { detectAndRecordGateEscape } from "./preflight-residual.js";
 import { isCrossTerminalVerdictFlip } from "./verdict-guard.js";
 import { readPostedReviews, appendPostedReview, type PostedReviewRecord } from "./posted-reviews.js";
+import { ReviewPostJournal } from "./review-post-journal.js";
 import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, RenderFailureRecord, StatusTransitionReason , RecordDecisionParams } from "./store-interface.js";
 
 export type { DecisionRecord, PlanReviewRecord };
@@ -307,8 +317,20 @@ export class FileStore implements IStore {
 
   private flushFailureLogged = false;
   private flushRetryDelay = 100;
+<<<<<<< HEAD
 
   private scheduleFlush(delay = 100): void {
+=======
+  private reviewConflict: SessionReviewConflictError | null = null;
+  private disposed = false;
+
+  private assertAuthorizationReadable(): void {
+    if (this.reviewConflict) throw this.reviewConflict;
+  }
+
+  private scheduleFlush(delay = 100): void {
+    if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
+>>>>>>> origin/main
     if (this.flushTimer) return;
     this.flushTimer = setTimeout(() => {
       // C3 — a throwing timer callback is an UNCAUGHT EXCEPTION that kills
@@ -360,6 +382,10 @@ export class FileStore implements IStore {
   private flushRecords<T>(
     file: string, local: T[], key: (value: T) => string, salvage: (raw: unknown) => T[],
     optional = false,
+<<<<<<< HEAD
+=======
+    merge: (baseline: T[], local: T[], disk: T[], key: (value: T) => string) => T[] = mergeSessionRecords,
+>>>>>>> origin/main
   ): T[] {
     const baseline = this.recordBaselines[file] ?? "[]";
     const serialized = JSON.stringify(local);
@@ -386,7 +412,11 @@ export class FileStore implements IStore {
       if (errorCode(err) !== "ENOENT" && !knownCorruption) throw err;
       raw = [];
     }
+<<<<<<< HEAD
     const merged = mergeSessionRecords(JSON.parse(baseline) as T[], local, salvage(raw), key);
+=======
+    const merged = merge(JSON.parse(baseline) as T[], local, salvage(raw), key);
+>>>>>>> origin/main
     const mergedBytes = JSON.stringify(merged, null, 2);
     if (dirty && (!optional || merged.length > 0 || diskBytes !== undefined) && diskBytes !== mergedBytes) {
       writeStringAtomic(filePath, mergedBytes);
@@ -399,6 +429,7 @@ export class FileStore implements IStore {
   }
 
   private flush(): void {
+<<<<<<< HEAD
     withSessionFlushLock(path.join(this.sessionDir(), ".flush.lock"), () => {
       this.artifacts = this.flushRecords("artifacts.json", this.artifacts, (r) => r.id,
         (raw) => FileStore.salvageArray<Artifact>(`${this.sessionId}:artifacts.json (external)`, raw, "id"));
@@ -429,12 +460,99 @@ export class FileStore implements IStore {
         this.flushedLatencyCount = merged.length;
       }
     });
+=======
+    // A conflicted writer still holds the stale in-memory verdict that caused
+    // the safety failure. Never write its artifacts again: only a newly created
+    // FileStore may reload the persisted artifact and resume authorization.
+    // Independent human input is different. Comments and requests remain
+    // durable even while the artifact lane is frozen. Decision records and
+    // plan reviews can authorize artifact content, so they freeze with it.
+    const reviewConflict = this.reviewConflict;
+    try {
+      withSessionFlushLock(path.join(this.sessionDir(), ".flush.lock"), () => {
+        let firstFailure: unknown = reviewConflict;
+        let artifactWriteBlocked = !!reviewConflict;
+        const attempt = (write: () => void): void => {
+          try {
+            write();
+          } catch (error) {
+            if (firstFailure === null || firstFailure === undefined) firstFailure = error;
+          }
+        };
+
+        if (!artifactWriteBlocked) {
+          attempt(() => {
+            try {
+              this.artifacts = this.flushRecords("artifacts.json", this.artifacts, (r) => r.id,
+                (raw) => FileStore.salvageArray<Artifact>(`${this.sessionId}:artifacts.json (external)`, raw, "id"), false,
+                mergeArtifactRecords);
+            } catch (error) {
+              artifactWriteBlocked = true;
+              if (error instanceof SessionReviewConflictError) {
+                this.reviewConflict = error;
+              }
+              throw error;
+            }
+          });
+        }
+        attempt(() => {
+          this.comments = this.flushRecords("comments.json", this.comments, (r) => r.id,
+            (raw) => FileStore.salvageArray<Comment>("comments.json (external)", raw, "id"));
+        });
+        // Decision responses and plan-review verdicts are coupled to artifact
+        // authorization. Do not persist either after an artifact ownership
+        // conflict; a fresh store must reconcile the proposal before that
+        // authority can become durable.
+        if (!artifactWriteBlocked) {
+          attempt(() => {
+            this.decisions = new Map(this.flushRecords("decisions.json", [...this.decisions.values()], (r) => r.decisionId,
+              (raw) => FileStore.salvageArray<DecisionRecord>("decisions.json (external)", raw, "decisionId")).map((r) => [r.decisionId, r]));
+          });
+          attempt(() => {
+            this.planReviews = new Map(this.flushRecords("plan-reviews.json", [...this.planReviews.values()], (r) => r.artifactId,
+              (raw) => FileStore.salvageArray<PlanReviewRecord>("plan-reviews.json (external)", raw, "artifactId")).map((r) => [r.artifactId, r]));
+          });
+        }
+        attempt(() => {
+          this.requests = this.flushRecords("requests.json", this.requests, (r) => r.id,
+            (raw) => FileStore.salvageArray<Request>("requests.json (external)", raw, "id"), true);
+        });
+        attempt(() => {
+          this.renderFailures = this.flushRecords("render-failures.json", this.renderFailures,
+            (r) => JSON.stringify([r.artifactId, r.visualId]), (raw) => {
+              const keyed = (Array.isArray(raw) ? raw : []).map((r) => ({
+                ...r, __key: JSON.stringify([r?.artifactId, r?.visualId]),
+              }));
+              return FileStore.salvageArray<RenderFailureRecord & { __key: string }>(
+                "render-failures.json (external)", keyed, "__key").map(({ __key, ...r }) => r);
+            }, true);
+        });
+        // Metrics lack stable IDs: append only this writer's new observations.
+        const metricsPath = path.join(this.sessionDir(), "metrics.json");
+        if (!artifactWriteBlocked && this.reviewLatencies.length > this.flushedLatencyCount) {
+          attempt(() => {
+            const raw = this.loadJsonFile<unknown>(metricsPath, []);
+            const disk = Array.isArray(raw) ? raw.filter((r) => r && typeof r.type === "string" && Number.isFinite(r.latencyMs)) : [];
+            const merged = [...disk, ...this.reviewLatencies.slice(this.flushedLatencyCount)];
+            writeJsonAtomic(metricsPath, merged);
+            this.reviewLatencies = merged;
+            this.flushedLatencyCount = merged.length;
+          });
+        }
+        if (firstFailure !== null && firstFailure !== undefined) throw firstFailure;
+      });
+    } catch (error) {
+      if (error instanceof SessionReviewConflictError) this.reviewConflict = error;
+      throw error;
+    }
+>>>>>>> origin/main
   }
 
   private flushedLatencyCount = 0;
 
   /** Force an immediate flush — call before process exit */
   forceFlush(): void {
+    if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
@@ -447,6 +565,7 @@ export class FileStore implements IStore {
    *  (or has been) removed. Unlike forceFlush(), this deliberately discards the
    *  pending write; the caller is disposing the store. Idempotent. */
   dispose(): void {
+    this.disposed = true;
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
@@ -470,6 +589,14 @@ export class FileStore implements IStore {
     version?: number;
     feature?: string | null;
   }): Artifact {
+    // #338 (F1) — a frozen writer refuses BEFORE any side effect. Pre-this a
+    // createArtifact on a conflicted store pushed the record into memory,
+    // wrote checkpoint receipts + the code-change hint, and returned a normal
+    // artifact: a success receipt for a write flush() then discarded (the
+    // artifact lane stays blocked), so every present_* after a freeze reported
+    // success for a dropped artifact. Same contract as the guarded readers —
+    // the caller gets the typed conflict and creates nothing.
+    this.assertAuthorizationReadable();
     const now = new Date().toISOString();
     // #206 (I1) — normalize the raw feature tag to a stable slug at the single
     // create choke point (parity with the secret scan below). An empty/
@@ -536,10 +663,17 @@ export class FileStore implements IStore {
   /** Local reminder receipts, separate from the legacy project-wide hint. */
   private checkpointFiles(artifact: Artifact): string[] {
     if (this.isDemoSession || !artifact.content || typeof artifact.content !== "object") return [];
+<<<<<<< HEAD
     const content = artifact.content as { filePath?: unknown; files?: { filePath?: unknown }[]; reviewIntent?: unknown };
     if (content.reviewIntent === "external") return [];
     const files = artifact.type === "code_change" ? [content.filePath]
       : artifact.type === "changeset" && Array.isArray(content.files) ? content.files.map(f => f?.filePath) : [];
+=======
+    const content = artifact.content as { filePath?: unknown; files?: { path?: unknown }[]; reviewIntent?: unknown };
+    if (content.reviewIntent === "external") return [];
+    const files = artifact.type === "code_change" ? [content.filePath]
+      : artifact.type === "changeset" && Array.isArray(content.files) ? content.files.map(f => f?.path) : [];
+>>>>>>> origin/main
     return [...new Set(files.filter((f): f is string => typeof f === "string" && f.trim().length > 0)
       .map(f => path.resolve(this.projectRoot, f)))];
   }
@@ -574,6 +708,7 @@ export class FileStore implements IStore {
   }
 
   renameArtifact(artifactId: string, title: string): void {
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (art) {
       art.title = title;
@@ -588,6 +723,7 @@ export class FileStore implements IStore {
    *  mechanism update_plan_progress / changeset review use. No-op on a missing
    *  artifact. */
   setRetractReason(artifactId: string, reason: string): void {
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (art) {
       (art.content as Record<string, unknown>).retractReason = reason;
@@ -601,6 +737,11 @@ export class FileStore implements IStore {
     status: ArtifactStatus,
     reason: StatusTransitionReason = "unspecified",
   ): void {
+    // #338 (F1) — refuse on a frozen writer before the verdict flip, the
+    // checkpoint revoke, the metrics sample, and the feedback-waiter release.
+    // The second half of a revision (parent → superseded) and any later
+    // verdict must not land in memory when this store can never persist them.
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (art) {
       // O3 (#231) — cross-tab last-wins verdict guard (backstop). The HTTP
@@ -686,6 +827,7 @@ export class FileStore implements IStore {
     artifactId: string,
     updates: Array<{ stepIndex: number; status: "pending" | "in_progress" | "done" | "skipped"; statusNote?: string }>,
   ): Artifact | null {
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (!art || art.type !== "plan") return null;
     const content = art.content as { steps?: Array<Record<string, unknown>> };
@@ -730,6 +872,7 @@ export class FileStore implements IStore {
     state: "reviewed" | "needs_changes" | "skipped" | null,
     reason?: string,
   ): Artifact | null {
+    this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (!art || art.type !== "changeset") return null;
     const content = art.content as {
@@ -763,6 +906,7 @@ export class FileStore implements IStore {
   }
 
   getArtifacts(): Artifact[] {
+    this.assertAuthorizationReadable();
     return this.artifacts;
   }
 
@@ -1027,6 +1171,7 @@ export class FileStore implements IStore {
    * appear here. Old artifacts lacking the field simply don't match.
    */
   getUnacknowledgedStatusChanges(): Artifact[] {
+    this.assertAuthorizationReadable();
     return this.artifacts.filter(
       (a) => (a as { statusChangeUnreported?: boolean }).statusChangeUnreported === true,
     );
@@ -1038,6 +1183,10 @@ export class FileStore implements IStore {
    * acknowledgeDecisions exactly (same loop + same debounced flush).
    */
   acknowledgeStatusChanges(ids: string[]): void {
+    // #338 (P2) — the flag lives on the artifact record, a frozen lane: an
+    // acknowledgement this writer can never persist must refuse up front, or
+    // the route returns 200 while disk keeps reporting the notice.
+    this.assertAuthorizationReadable();
     for (const a of this.artifacts) {
       if (ids.includes(a.id)) {
         (a as { statusChangeUnreported?: boolean }).statusChangeUnreported = false;
@@ -1217,6 +1366,9 @@ export class FileStore implements IStore {
   // C6c review — the interface narrowed options to DecisionOption[] but this
   // inline param type still said any[], leaving the WRITE site unenforced.
   recordDecisionRequest(params: RecordDecisionParams): void {
+    // #338 (F1) — decisions.json is a frozen lane; refuse instead of holding
+    // a memory-only record the caller believes was persisted.
+    this.assertAuthorizationReadable();
     this.decisions.set(params.decisionId, {
       ...params,
       createdAt: new Date().toISOString(),
@@ -1230,6 +1382,7 @@ export class FileStore implements IStore {
     reasoning?: string,
     prediction?: { confidence?: "low" | "medium" | "high"; predictedOutcome?: string },
   ): void {
+    this.assertAuthorizationReadable();
     const dec = this.decisions.get(decisionId);
     if (!dec) return;
     // F2 — reject an optionId that isn't one of this decision's options. The
@@ -1279,6 +1432,7 @@ export class FileStore implements IStore {
   }
 
   getDecisionResponse(decisionId: string): { optionId: string; reasoning?: string } | null {
+    this.assertAuthorizationReadable();
     return this.decisions.get(decisionId)?.response ?? null;
   }
 
@@ -1322,20 +1476,25 @@ export class FileStore implements IStore {
   }
 
   getPendingDecisions(): DecisionRecord[] {
+    this.assertAuthorizationReadable();
     return Array.from(this.decisions.values()).filter(
       (d) => !d.response && !this.isArtifactClosed(d.artifactId),
     );
   }
 
   getDecision(decisionId: string): DecisionRecord | undefined {
+    this.assertAuthorizationReadable();
     return this.decisions.get(decisionId);
   }
 
   getResolvedDecisions(): DecisionRecord[] {
+    this.assertAuthorizationReadable();
     return Array.from(this.decisions.values()).filter((d) => d.response && !d.acknowledged);
   }
 
   acknowledgeDecisions(decisionIds: string[]): void {
+    // #338 (P2) — refuse BEFORE mutating, not via the route's later guarded read.
+    this.assertAuthorizationReadable();
     for (const id of decisionIds) {
       const dec = this.decisions.get(id);
       if (dec) dec.acknowledged = true;
@@ -1346,6 +1505,7 @@ export class FileStore implements IStore {
   // --- Plan Reviews ---
 
   recordPlanReview(artifactId: string): void {
+    this.assertAuthorizationReadable();
     this.planReviews.set(artifactId, {
       artifactId,
       createdAt: new Date().toISOString(),
@@ -1354,6 +1514,7 @@ export class FileStore implements IStore {
   }
 
   resolvePlanReview(artifactId: string, verdict: "approved" | "revised" | "rejected", feedback?: string): void {
+    this.assertAuthorizationReadable();
     const review = this.planReviews.get(artifactId);
     if (review) {
       review.verdict = verdict;
@@ -1365,12 +1526,14 @@ export class FileStore implements IStore {
   }
 
   getPlanReviewVerdict(artifactId: string): { verdict: string; feedback?: string } | null {
+    this.assertAuthorizationReadable();
     const review = this.planReviews.get(artifactId);
     if (!review?.verdict) return null;
     return { verdict: review.verdict, feedback: review.feedback };
   }
 
   getPendingPlanReviews(): PlanReviewRecord[] {
+    this.assertAuthorizationReadable();
     return Array.from(this.planReviews.values()).filter(
       (p) => !p.verdict && !this.isArtifactClosed(p.artifactId),
     );
@@ -1784,6 +1947,11 @@ export class FileStore implements IStore {
 
   // --- Posted reviews (R1 #279) ---
 
+  /** Fresh journal reads and short disk claims are shared with CLI processes. */
+  get reviewPosts(): ReviewPostJournal {
+    return new ReviewPostJournal(this.projectRoot, this.sessionId);
+  }
+
   /**
    * R1 (#279) — record that a review LANDED on a PR. Called only after `gh`
    * returned success, by whichever door posted; the authorization gate reads
@@ -2006,7 +2174,63 @@ export class FileStore implements IStore {
 
   // --- Full state (for web UI hydration) ---
 
+  /** Read permission-bearing state under the cooperating writers' claim without
+   * flushing or changing the live cache/baselines. UI hydration stays cheap. */
+  getReviewPostState() {
+    if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
+    this.assertAuthorizationReadable();
+    if (this.isDemoSession) throw new Error("Demo sessions cannot authorize PR review posting");
+    try {
+      return withSessionFlushLock(path.join(this.sessionDir(), ".flush.lock"), () => {
+        const baseline: Artifact[] = JSON.parse(this.recordBaselines["artifacts.json"] ?? "[]");
+        let raw: unknown;
+        try {
+          raw = JSON.parse(fs.readFileSync(path.join(this.sessionDir(), "artifacts.json"), "utf8"));
+          this.observedRecordFiles.add("artifacts.json");
+        } catch (error) {
+          // A new, never-persisted session may have only pending local artifacts.
+          // Losing an observed collection must never restore its cached approvals.
+          if (errorCode(error) !== "ENOENT" || this.observedRecordFiles.has("artifacts.json")) throw error;
+          raw = [];
+        }
+        if (!Array.isArray(raw) || raw.some(value => !ArtifactSchema.safeParse(value).success)) {
+          throw new Error("Cannot authorize a PR review from malformed persisted artifacts");
+        }
+        const disk = raw as Artifact[];
+        if (new Set(disk.map(value => value.id)).size !== disk.length) {
+          throw new Error("Cannot authorize a PR review from duplicate persisted artifacts");
+        }
+        const before = new Map(baseline.map(value => [value.id, value]));
+        const persisted = new Map(disk.map(value => [value.id, value]));
+        for (const local of this.artifacts) {
+          const remote = persisted.get(local.id);
+          if (!remote) continue;
+          const base = before.get(local.id);
+          // Posting has stricter conflict semantics than ordinary last-flush-wins
+          // persistence: a pending approval cannot override another writer's
+          // revocation, including obsolete/retracted/superseded statuses.
+          if (base && base.status !== local.status && base.status !== remote.status && local.status !== remote.status) {
+            throw new SessionReviewConflictError(local.id);
+          }
+          if (!base && (["content", "version", "type", "parentId", "status"] as const).some(
+            field => JSON.stringify(local[field]) !== JSON.stringify(remote[field]),
+          )) {
+            throw new SessionReviewConflictError(local.id);
+          }
+        }
+        const artifacts = mergeArtifactRecords(baseline, this.artifacts, disk, value => value.id);
+        return JSON.parse(JSON.stringify({
+          sessionId: this.sessionId, artifacts, postedReviews: this.reviewPosts.readLegacyHistory(),
+        })) as { sessionId: string; artifacts: Artifact[]; postedReviews: PostedReviewRecord[] };
+      });
+    } catch (error) {
+      if (error instanceof SessionReviewConflictError) this.reviewConflict = error;
+      throw error;
+    }
+  }
+
   getFullState() {
+    this.assertAuthorizationReadable();
     return {
       sessionId: this.sessionId,
       artifacts: this.artifacts,

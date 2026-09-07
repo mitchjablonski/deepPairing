@@ -5,6 +5,27 @@
  */
 import { wsBase } from "./api";
 
+/**
+ * A daemon refusal of the INITIAL hydration snapshot (`connection_refused`).
+ * The daemon completes the upgrade, sends this frame, then closes 1011 — so
+ * to a naive reconnect loop a refusal is indistinguishable from a flap, and
+ * `onopen` has already reset the backoff. Carries the daemon's own reason and
+ * the session it blames so the UI can say WHY and WHICH, rather than dying
+ * quietly at one attempt per second.
+ */
+export interface ConnectionRefusal {
+  /** Machine code, e.g. "session_review_conflict". Absent for generic refusals. */
+  code?: string;
+  /** The daemon's human-readable reason. Absent only from a malformed frame. */
+  message?: string;
+  /**
+   * The session whose state could not be assembled. Absent when the daemon
+   * cannot attribute the failure to one session (or predates scoped refusals),
+   * in which case the UI must NOT imply the viewed session is the broken one.
+   */
+  sessionId?: string;
+}
+
 export interface ConnectionAdapter {
   connect(): void;
   disconnect(): void;
@@ -36,6 +57,22 @@ export interface ConnectionAdapter {
   onFatalMismatch?(
     handler: (info: { liveProjectRoot?: string; liveHash: string }) => void,
   ): void;
+  /**
+   * Optional — fired when the daemon REFUSES the initial snapshot
+   * (`connection_refused`). Typed review conflicts latch the reconnect loop
+   * OFF; unexpected refusals remain recoverable with bounded backoff.
+   * Before this the frame was handled nowhere: every refused reconnect
+   * completed the upgrade, `onopen` reset the backoff, and the tab retried
+   * once a second forever with nothing shown to the human.
+   */
+  onConnectionRefused?(handler: (info: ConnectionRefusal) => void): void;
+  /**
+   * Optional — the recovery affordance paired with onConnectionRefused.
+   * Clears the refusal latch and reconnects once, so a human who has resolved
+   * the underlying conflict is not forced to reload. A still-refusing daemon
+   * simply re-latches after one attempt.
+   */
+  retryAfterRefusal?(): void;
 }
 
 /**
@@ -62,6 +99,18 @@ export class WebSocketAdapter implements ConnectionAdapter {
    * re-bind" action), never silently.
    */
   private fatalMismatch = false;
+  private refusalHandler: ((info: ConnectionRefusal) => void) | null = null;
+  /**
+   * Set once the daemon has REFUSED this connection's initial snapshot with a
+   * typed review conflict.
+   * Latches the reconnect loop OFF exactly like `fatalMismatch`: the refusal
+   * arrives AFTER a successful upgrade, so without this latch `onopen` resets
+   * the backoff to zero on every attempt and the tab hammers a session the
+   * daemon has already said it will not serve — one attempt per second, with
+   * no reason on screen. Cleared only by `retryAfterRefusal()` (the toast's
+   * Retry action) or `switchSession()`, never silently.
+   */
+  private connectionRefused = false;
 
   // HH1 — track the base separately so we can rebuild this.url whenever
   // the connection store learns projectHash. Pre-HH1 the URL was
@@ -81,6 +130,9 @@ export class WebSocketAdapter implements ConnectionAdapter {
 
   /** Reconnect to a different session */
   switchSession(sessionId: string): void {
+    // A refusal is scoped to the session that was refused; moving to another
+    // one must not inherit its latch.
+    this.connectionRefused = false;
     this.sessionId = sessionId;
     this.url = WebSocketAdapter.appendQuery(this.baseUrl, sessionId);
     this.disconnect();
@@ -127,6 +179,7 @@ export class WebSocketAdapter implements ConnectionAdapter {
   }
 
   connect(): void {
+    if (this.connectionRefused) return;
     if (this.ws && this.ws.readyState <= 1) return;
     // An explicit connect supersedes any backoff owned by the prior socket.
     // Clearing here also prevents that timer from later erasing a successor's
@@ -141,7 +194,6 @@ export class WebSocketAdapter implements ConnectionAdapter {
 
     socket.onopen = () => {
       if (this.ws !== socket || this.lifecycleGeneration !== generation) return;
-      this.reconnectAttempt = 0; // Reset backoff on successful connect
       this.connectHandler?.();
     };
 
@@ -149,6 +201,15 @@ export class WebSocketAdapter implements ConnectionAdapter {
       if (this.ws !== socket || this.lifecycleGeneration !== generation) return;
       try {
         const data = JSON.parse(event.data);
+        // A refusal is a transport-level verdict, not session content: it
+        // never reaches the artifact reducer. Latch and surface it here.
+        if (data?.type === "connection_refused") {
+          this.handleRefusal(data);
+          return;
+        }
+        // A completed upgrade is not successful hydration. Reset only after
+        // the daemon has assembled and delivered the initial snapshot.
+        if (data?.type === "connected") this.reconnectAttempt = 0;
         this.messageHandler?.(data);
       } catch { /* ignore malformed */ }
     };
@@ -168,6 +229,11 @@ export class WebSocketAdapter implements ConnectionAdapter {
       // and will only ever 403 our stale hash. The user must reload to
       // re-bind (the toast the store pushes on onFatalMismatch).
       if (this.fatalMismatch) return;
+      // A daemon refusal latches the loop OFF the same way. The daemon has
+      // already told us it cannot serve this session; retrying it once a
+      // second changes nothing and hides the reason. The store has surfaced a
+      // sticky toast with Retry, which is the only way back in.
+      if (this.connectionRefused) return;
       // Auto-reconnect with exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s...
       this.reconnectAttempt++;
       const delay = Math.min(
@@ -230,6 +296,53 @@ export class WebSocketAdapter implements ConnectionAdapter {
     handler: (info: { liveProjectRoot?: string; liveHash: string }) => void,
   ): void {
     this.fatalMismatchHandler = handler;
+  }
+
+  onConnectionRefused(handler: (info: ConnectionRefusal) => void): void {
+    this.refusalHandler = handler;
+  }
+
+  /**
+   * Recovery affordance for a latched refusal — a single deliberate attempt.
+   * Fail-safe by construction: the tab is never stuck (the human can retry
+   * once they have cleared the conflict, and reload still works), and a daemon
+   * that refuses again simply re-latches after one attempt instead of
+   * resuming the loop.
+   */
+  retryAfterRefusal(): void {
+    if (!this.connectionRefused) return;
+    this.connectionRefused = false;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnectAttempt = 0;
+    this.connect();
+  }
+
+  /**
+   * Latch typed review conflicts and hand all refusals to the store. Generic
+   * snapshot failures keep the normal bounded recovery policy.
+   */
+  private handleRefusal(
+    data: { code?: unknown; message?: unknown; sessionId?: unknown },
+  ): void {
+    const code = typeof data?.code === "string" ? data.code : undefined;
+    if (code === "session_review_conflict") {
+      if (this.connectionRefused) return;
+      this.connectionRefused = true;
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+    }
+    this.refusalHandler?.({
+      code,
+      message: typeof data?.message === "string" ? data.message : undefined,
+      sessionId: typeof data?.sessionId === "string" && data.sessionId
+        ? data.sessionId
+        : undefined,
+    });
   }
 
   /**

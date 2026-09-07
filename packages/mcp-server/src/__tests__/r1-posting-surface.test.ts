@@ -28,6 +28,7 @@ import { handleReviseArtifact } from "../mcp/tools/revise-artifact.js";
 import { handlePresentChangeset } from "../mcp/tools/present-changeset.js";
 import { projectHashOf } from "../project-root.js";
 import { withGlobalStore, type GlobalStoreFixture } from "./global-store-fixture.js";
+import { CHECKPOINT_HOOK_SCRIPT, STOP_HOOK_SCRIPT } from "../cli/hook-scripts.generated.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const srcDir = path.resolve(here, "..");
@@ -471,14 +472,29 @@ describe("R1 riders — the documented project-root env chain", () => {
     expect(init).not.toContain("const cwd = process.cwd();");
   });
 
-  it("both stop-hook twins honour CLAUDE_PROJECT_DIR then DEEPPAIRING_PROJECT_ROOT", () => {
-    const bundleEntry = fs.readFileSync(path.join(srcDir, "cli", "stop-hook-entry.ts"), "utf-8");
-    const initGenerated = fs.readFileSync(path.join(srcDir, "cli", "setup-tasks.ts"), "utf-8");
-    const CHAIN = "process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || process.cwd()";
-    expect(bundleEntry).toContain(CHAIN);
-    // The init-generated script is a hand-maintained twin; it must not drift.
-    expect(initGenerated).toContain(CHAIN);
-    expect(initGenerated).not.toContain("process.env.CLAUDE_PROJECT_DIR || process.cwd()");
+  /**
+   * #342 — there are no longer two Stop twins to keep in lock-step: the
+   * plugin-bundled entry and the init-generated script are esbuild output of
+   * the SAME source, so the chain is asserted once at its definition and then
+   * on the artifacts that actually ship. Checking the emitted scripts rather
+   * than a second source file is strictly stronger than the grep this replaced
+   * — a generated script that was never regenerated fails here.
+   */
+  it("the project-root chain is defined once and reaches every emitted hook", () => {
+    const definition = fs.readFileSync(path.join(srcDir, "hooks", "hook-state.ts"), "utf-8");
+    const CHAIN = "process.env.CLAUDE_PROJECT_DIR ||\n    process.env.DEEPPAIRING_PROJECT_ROOT ||";
+    expect(definition).toContain(CHAIN);
+    // The pre-R1 line that ignored DEEPPAIRING_PROJECT_ROOT, anywhere in the
+    // hook lane, would mean a hook writing into whatever directory it was
+    // launched from.
+    for (const file of ["hooks/hook-state.ts", "hooks/stop-hook.ts", "hooks/checkpoint-hook.ts", "cli/setup-tasks.ts"]) {
+      expect(fs.readFileSync(path.join(srcDir, file), "utf-8")).not.toContain(
+        "process.env.CLAUDE_PROJECT_DIR || process.cwd()",
+      );
+    }
+    for (const script of [STOP_HOOK_SCRIPT, CHECKPOINT_HOOK_SCRIPT]) {
+      expect(script).toContain("process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT");
+    }
   });
 
   it("both preflight twins carry the same chain ahead of the event cwd", () => {

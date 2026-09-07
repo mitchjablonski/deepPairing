@@ -31,6 +31,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { ERROR_CODES } from "../error-codes.js";
 import { FileStore } from "../store/file-store.js";
 import type { LiveDecisionSource } from "../store/session-scan.js";
@@ -66,6 +67,7 @@ import {
 import { shouldAutoOpenBrowser } from "./auto-open.js";
 import { writeJsonAtomic } from "../store/atomic-write.js";
 import { summarizeProject } from "../store/context-bank.js";
+import { isSessionReviewConflictError } from "../store/session-records.js";
 
 /**
  * Cross-platform "open URL in default browser" without pulling in an npm
@@ -204,6 +206,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // + the client count; `sessions.size` is monotonic and never reaches 0, which
   // is why the daemon used to leak a process per project forever.
   const activeSessions = new Set<string>();
+  const demoRuns = new Map<string, () => void>();
 
   function createSession(sessionId: string): FileStore {
     log(`Creating session: ${sessionId}`);
@@ -330,6 +333,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // index.ts — timers that only exist to run forever belong to the entry.)
 
   let shutdownTimer: ReturnType<typeof setInterval> | null = null;
+  let disposed = false;
 
   // #168 — demo-aware idle grace. A `deeppairing demo` run creates a demo
   // session but registers NO wrapper (activeSessions stays empty) and, once the
@@ -357,6 +361,9 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   }
 
   function checkAutoShutdown(): void {
+    // WebSocket close callbacks can arrive after dispose() has cleared the
+    // timers. They must not re-arm idle cleanup against released stores.
+    if (disposed) return;
     // #168 — while a freshly-created demo session is inside its grace window,
     // hold the daemon open even with no clients so a late click on the printed
     // URL still connects. The 30s cadence (index.ts) re-invokes this, so once
@@ -743,26 +750,38 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // requiring Claude Code to be connected. This is the PMF-thesis validator:
   // a fresh-install user must SEE the block fire, not just read about it.
   app.post("/api/demo/run", (c) => {
+    if (!isAllowedWsOrigin(c.req.header("Origin"), c.req.header("Host"))) {
+      return c.json({ error: "Demo requests must come from the companion UI." }, 403);
+    }
     // S5 — bound demo-session minting. This route is intentionally unauthenticated
     // (the cold-clone hero demo), so a loop could otherwise accumulate unbounded
     // in-memory sessions. Evict the oldest demo sessions to keep at most a handful.
     const MAX_DEMO_SESSIONS = 5;
-    const demoIds = Array.from(sessions.keys()).filter((id) => id.startsWith("demo_")).sort();
+    const sessionRoot = path.resolve(dpDir, "sessions");
+    // Include previous daemon runs so restarting does not reset the disk cap.
+    const diskIds = fs.existsSync(sessionRoot) ? fs.readdirSync(sessionRoot).filter(id => /^demo_\d+(?:_[a-f0-9]+)?$/.test(id)) : [];
+    const demoIds = [...new Set([...diskIds, ...Array.from(sessions.keys()).filter(id => /^demo_\d+(?:_[a-f0-9]+)?$/.test(id))])].sort();
     while (demoIds.length >= MAX_DEMO_SESSIONS) {
       const oldest = demoIds.shift()!;
+      demoRuns.get(oldest)?.();
+      demoRuns.delete(oldest);
+      sessions.get(oldest)?.dispose();
+      const demoDir = path.resolve(sessionRoot, oldest);
+      if (path.dirname(demoDir) !== sessionRoot) throw new Error("Invalid demo session path");
+      fs.rmSync(demoDir, { recursive: true, force: true });
       sessions.delete(oldest);
       sessionMeta.delete(oldest);
       activeSessions.delete(oldest);
       demoReplayEvents.delete(oldest); // #168 — don't leak the stashed hero event
     }
-    const sessionId = `demo_${Date.now()}`;
+    const sessionId = `demo_${Date.now()}_${randomBytes(4).toString("hex")}`;
     const store = createSession(sessionId);
     sessionMeta.set(sessionId, {
       title: "deepPairing demo",
       project: "demo",
       registeredAt: new Date().toISOString(),
     });
-    runDemoScript({ sessionId, store, broadcast });
+    demoRuns.set(sessionId, runDemoScript({ sessionId, store, broadcast }).cancel);
     // #168 — disarm any idle-shutdown timer already armed before this request:
     // the new demo session is inside its grace, so the daemon must not shut
     // down. checkAutoShutdown() sees demoGraceActive() and clears the timer
@@ -776,7 +795,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // a testable builder (see daemon-routes.ts). Without the gate, a stale tab on a
   // daemon serving a DIFFERENT project could read this project's session list +
   // full state. Mounted on "/" like the other route groups.
-  app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions));
+  app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions, log));
 
   // --- Serve static web UI ---
   // Extracted to http/static-ui.ts so the bootstrap-injection contract (the
@@ -808,8 +827,14 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
 
   function cleanup(): void {
     // Flush all sessions
-    for (const store of sessions.values()) {
-      store.forceFlush();
+    for (const [sessionId, store] of sessions) {
+      try {
+        store.forceFlush();
+      } catch (error) {
+        // One corrupt/conflicted session must not strand every later session
+        // or keep stale daemon discovery credentials on disk during shutdown.
+        log(`[cleanup] failed to flush session ${sessionId}: ${errorMessage(error)}`);
+      }
     }
     // Remove daemon info file
     try { if (fs.existsSync(daemonInfoFile)) fs.unlinkSync(daemonInfoFile); } catch {}
@@ -977,6 +1002,30 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
       // Subscribe to a specific session
       let clients = wsClients.get(sessionId);
       if (!clients) { clients = new Set(); wsClients.set(sessionId, clients); }
+      let refusalDeadline: ReturnType<typeof setTimeout> | null = null;
+      let cleanedUp = false;
+      const cleanup = () => {
+        if (refusalDeadline) {
+          clearTimeout(refusalDeadline);
+          refusalDeadline = null;
+        }
+        if (cleanedUp) return;
+        cleanedUp = true;
+        clients!.delete(ws);
+        if (clients!.size === 0) wsClients.delete(sessionId);
+        checkAutoShutdown();
+      };
+
+      // Install the terminal handlers BEFORE registration and before any
+      // snapshot access. A frozen FileStore can throw from getFullState(), and
+      // a peer can disappear while the refusal is being written; neither path
+      // may leave an unhandled socket error or a ghost subscriber behind.
+      ws.on("error", (err: any) => {
+        log(`[ws] session client error (session=${sessionId}): ${err?.code ?? errorMessage(err)}`);
+        cleanup();
+        try { ws.terminate(); } catch {}
+      });
+      ws.on("close", cleanup);
       clients.add(ws);
 
       // Send session state on connect. U4 — include `daemonStartedAt` so
@@ -984,9 +1033,43 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
       // daemon process means stale in-memory state, force re-hydrate).
       const store = sessions.get(sessionId);
       if (store) {
-        // AA4 — include projectHash so the browser can echo it in
-        // X-Project-Hash and the per-session routes can verify.
-        ws.send(JSON.stringify({ type: "connected", state: store.getFullState(), projectRoot, projectHash: daemonProjectHash, daemonStartedAt: startedAt }));
+        try {
+          // AA4 — include projectHash so the browser can echo it in
+          // X-Project-Hash and the per-session routes can verify.
+          ws.send(JSON.stringify({ type: "connected", state: store.getFullState(), projectRoot, projectHash: daemonProjectHash, daemonStartedAt: startedAt }));
+        } catch (error) {
+          const knownConflict = isSessionReviewConflictError(error);
+          log(knownConflict
+            ? `[ws] initial snapshot refused: session review conflict (session=${sessionId}): ${errorMessage(error)}`
+            : `[ws] initial snapshot failed (session=${sessionId}): ${errorMessage(error)}`);
+          cleanup();
+          // Name the offending session in the frame. Without it the companion
+          // can only say "something is wrong" — it cannot tell the human WHICH
+          // session to go unblock, and a global refusal (below) would read as
+          // if the session the tab is looking at were the broken one.
+          const refusal = knownConflict
+            ? { type: "connection_refused", code: ERROR_CODES.session_review_conflict, sessionId, message: "Session state requires review before reconnecting." }
+            : { type: "connection_refused", sessionId, message: "Session state is temporarily unavailable." };
+          refusalDeadline = setTimeout(() => {
+            log(`[ws] initial snapshot refusal timed out (session=${sessionId}); terminating client`);
+            try { ws.terminate(); } catch {}
+          }, 1000);
+          refusalDeadline.unref?.();
+          try {
+            ws.send(JSON.stringify(refusal), (sendError) => {
+              if (sendError) {
+                log(`[ws] initial snapshot refusal send failed (session=${sessionId}): ${errorMessage(sendError)}`);
+                try { ws.terminate(); } catch {}
+                return;
+              }
+              try { ws.close(1011, "Initial snapshot unavailable"); } catch { try { ws.terminate(); } catch {} }
+            });
+          } catch (sendError) {
+            log(`[ws] initial snapshot refusal send failed (session=${sessionId}): ${errorMessage(sendError)}`);
+            try { ws.terminate(); } catch {}
+          }
+          return;
+        }
       }
 
       // #168 — replay the demo's hero `preflight_blocked` to a late joiner. A
@@ -1001,43 +1084,79 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
         }
       }
 
-      // II5 — handle 'error' before 'close'. An RSV1 framing error, an
-      // EPIPE on a half-open client, or a slow consumer all emit 'error'
-      // first; with no listener the EventEmitter throws and crashes the
-      // daemon process. The wrapper has no auto-respawn for that mode.
-      // Always pair: error → log + force-close so the 'close' handler
-      // runs the standard cleanup path.
-      ws.on("error", (err: any) => {
-        log(`[ws] session client error (session=${sessionId}): ${err?.code ?? errorMessage(err)}`);
-        try { ws.terminate(); } catch {}
-      });
-      ws.on("close", () => {
-        clients!.delete(ws);
-        if (clients!.size === 0) wsClients.delete(sessionId);
-        checkAutoShutdown();
-      });
     } else {
       // Global client — sees all sessions
-      globalClients.add(ws);
-
-      // Send list of active sessions
-      const sessionList = Array.from(sessions.entries()).map(([id, store]) => ({
-        sessionId: id,
-        artifactCount: store.getArtifacts().length,
-      }));
-      // U4 — include `daemonStartedAt` so global clients also detect a
-      // daemon restart and re-hydrate session listings on reconnect.
-      ws.send(JSON.stringify({ type: "connected", sessions: sessionList, projectRoot, projectHash: daemonProjectHash, daemonStartedAt: startedAt }));
-
-      // II5 — see session-client comment above. Same crash mode applies.
-      ws.on("error", (err: any) => {
-        log(`[ws] global client error: ${err?.code ?? errorMessage(err)}`);
-        try { ws.terminate(); } catch {}
-      });
-      ws.on("close", () => {
+      let refusalDeadline: ReturnType<typeof setTimeout> | null = null;
+      let cleanedUp = false;
+      const cleanup = () => {
+        if (refusalDeadline) {
+          clearTimeout(refusalDeadline);
+          refusalDeadline = null;
+        }
+        if (cleanedUp) return;
+        cleanedUp = true;
         globalClients.delete(ws);
         checkAutoShutdown();
+      };
+      // As on the session path, install handlers before any fallible store
+      // read so a frozen session cannot turn a global reconnect into a daemon
+      // crash or a leaked subscriber.
+      ws.on("error", (err: any) => {
+        log(`[ws] global client error: ${err?.code ?? errorMessage(err)}`);
+        cleanup();
+        try { ws.terminate(); } catch {}
       });
+      ws.on("close", cleanup);
+      globalClients.add(ws);
+
+      // Send list of active sessions. Track WHICH session's store is being
+      // read so a throw can name it: a global client subscribes to every
+      // session, and one frozen session must not present itself to the human
+      // as an unattributable, project-wide outage.
+      let failingSessionId: string | undefined;
+      try {
+        const sessionList: Array<{ sessionId: string; artifactCount: number }> = [];
+        for (const [id, store] of sessions.entries()) {
+          failingSessionId = id;
+          sessionList.push({ sessionId: id, artifactCount: store.getArtifacts().length });
+        }
+        // Past every store read: a failure from here on (serialise, send) is
+        // not attributable to one session, so the refusal names none.
+        failingSessionId = undefined;
+        // U4 — include `daemonStartedAt` so global clients also detect a
+        // daemon restart and re-hydrate session listings on reconnect.
+        ws.send(JSON.stringify({ type: "connected", sessions: sessionList, projectRoot, projectHash: daemonProjectHash, daemonStartedAt: startedAt }));
+      } catch (error) {
+        const knownConflict = isSessionReviewConflictError(error);
+        const blame = failingSessionId ? ` (session=${failingSessionId})` : "";
+        log(knownConflict
+          ? `[ws] global initial snapshot refused: session review conflict${blame}: ${errorMessage(error)}`
+          : `[ws] global initial snapshot failed${blame}: ${errorMessage(error)}`);
+        cleanup();
+        const scope = failingSessionId ? { sessionId: failingSessionId } : {};
+        const refusal = knownConflict
+          ? { type: "connection_refused", code: ERROR_CODES.session_review_conflict, ...scope, message: "Session state requires review before reconnecting." }
+          : { type: "connection_refused", ...scope, message: "Session state is temporarily unavailable." };
+        refusalDeadline = setTimeout(() => {
+          log("[ws] global initial snapshot refusal timed out; terminating client");
+          try { ws.terminate(); } catch {}
+        }, 1000);
+        refusalDeadline.unref?.();
+        try {
+          ws.send(JSON.stringify(refusal), (sendError) => {
+            if (sendError) {
+              log(`[ws] global initial snapshot refusal send failed: ${errorMessage(sendError)}`);
+              try { ws.terminate(); } catch {}
+              return;
+            }
+            try { ws.close(1011, "Initial snapshot unavailable"); } catch { try { ws.terminate(); } catch {} }
+          });
+        } catch (sendError) {
+          log(`[ws] global initial snapshot refusal send failed: ${errorMessage(sendError)}`);
+          try { ws.terminate(); } catch {}
+        }
+        return;
+      }
     }
 
     log(`WebSocket client connected (session: ${sessionId ?? "global"}, total: ${getClientCount()})`);
@@ -1219,6 +1338,10 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   }
 
   function dispose(): void {
+    disposed = true;
+    for (const cancel of demoRuns.values()) cancel();
+    demoRuns.clear();
+    for (const [id, store] of sessions) if (id.startsWith("demo_")) store.dispose();
     if (shutdownTimer) { clearTimeout(shutdownTimer); shutdownTimer = null; }
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
     if (pingTimer) { clearTimeout(pingTimer); pingTimer = null; }

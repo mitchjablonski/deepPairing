@@ -1,6 +1,7 @@
 import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SuggestionState, SuggestionCounter, DecisionOption, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
 
 import type { PostedReviewRecord } from "./posted-reviews.js";
+import type { DurableReviewPostStore } from "../github/durable-review-post.js";
 
 /** Allows both sync (FileStore) and async (DaemonClient) implementations */
 type MaybePromise<T> = T | Promise<T>;
@@ -238,6 +239,8 @@ export interface RejectedApproach {
  * returns Promises. Callers should always `await` the result.
  */
 export interface IStore {
+  /** Durable cross-process posting boundary; never substitute an in-memory fallback. */
+  readonly reviewPosts: DurableReviewPostStore;
   // Session
   getSessionId(): string;
   /**
@@ -292,6 +295,12 @@ export interface IStore {
     score: number;
     matchedVia: string[];
   }>>;
+  /** Posting-only fresh authorization projection; never a cached hydration fallback. */
+  getReviewPostState(): MaybePromise<{
+    sessionId: string;
+    artifacts: Artifact[];
+    postedReviews?: PostedReviewRecord[];
+  }>;
   getFullState(): MaybePromise<{
     sessionId: string;
     artifacts: Artifact[];

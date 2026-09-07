@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { randomBytes } from "node:crypto";
 import { runPreflight } from "../mcp/preflight-validator.js";
 import { sessionHasLivePreWorkCeremony } from "../debrief-gate.js";
+import { appendHookFire, hookStatePath } from "../hooks/hook-state.js";
 // Q1 — the ONE guardrail rule table, in a Node-builtins-only leaf module that
 // store/project-signals.ts, setup-tasks.ts and both hook entries also import.
 // F14's hand-written "loose superset" prefilter is GONE: the hook entries call
@@ -331,6 +331,7 @@ export function readSessionCeremony(projectRoot: string, now: number = Date.now(
   let storesSeen = 0;
   let storesParsed = 0;
   for (const id of ids) {
+    if (id.startsWith("demo_")) continue; // Demo fiction cannot authorize real work.
     let arr: unknown;
     try {
       const af = path.join(sessionsDir, id, "artifacts.json");
@@ -426,24 +427,25 @@ function stampGuardrailAsk(state: Record<string, unknown>, match: GuardrailMatch
   state.guardrailAsks = asks;
 }
 
-const FIRE_LOG_CAP = 50;
-
 /**
- * Q1 item 4 — the atomic write, ported into the hook lane.
+ * #342 — the hooks-state lock / read / atomic-write machinery moved to
+ * `src/hooks/hook-state.ts` and is re-exported here under its existing names.
  *
- * hooks-state.json had FOUR unlocked read-modify-write writers — this one, both
- * Stop copies (the plugin-bundled entry and setup-tasks' generated twin), and
- * the generated checkpoint script — all ending in a plain `fs.writeFileSync`. Two hooks firing in the same instant could interleave a
- * torn write, and the next reader's `JSON.parse` throws — at which point the
- * catch below used to reset the file to `{version:1}`, DISCARDING every prior
- * fire with no backup. That is the exact failure the project's own salvage rule
- * forbids ("back up before any committing drop").
+ * It used to live in FOUR places: this file, stop-hook-entry.ts, and untyped JS
+ * text inside setup-tasks.ts's two template literals. #332 had to repair the
+ * bounded-retry loop in all four; #333 shipped a `ReferenceError` because the
+ * emitted text called an identifier that only existed in the generator's module
+ * scope. One implementation removes the category.
  *
- * Same tmp+rename guarantee as store/atomic-write.ts's writeStringAtomic, but
- * re-implemented here in Node builtins only: this module is dynamically
- * imported by the init-generated `.mjs` under plain `node`, so it cannot reach
- * into the store layer. (Same discipline as readTeamPreferences above.)
+ * These re-exports are deliberate, not vestigial: this module is dynamically
+ * imported BY the init-generated `.mjs` under plain `node` (setup-tasks stamps
+ * its on-disk URL as CORE_URL), and the emitted preflight hook calls these
+ * names. They are also part of the module's tested surface
+ * (preflight-hook-core.test.ts, hook-lock-retry.test.ts). esbuild inlines
+ * hook-state.ts into `claude-plugin/server/preflight-hook-core.js`, so the
+ * bundled copy stays dependency-free.
  */
+<<<<<<< HEAD
 export function writeHookStateAtomic(statePath: string, state: unknown): void {
   const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${randomBytes(4).toString("hex")}`;
   try {
@@ -557,6 +559,14 @@ export function readHookState(statePath: string): Record<string, unknown> {
   }
   return { version: 1 };
 }
+=======
+export {
+  acquireHookStateLock,
+  releaseHookStateLock,
+  readHookState,
+  writeHookStateAtomic,
+} from "../hooks/hook-state.js";
+>>>>>>> origin/main
 
 /**
  * The single hooks-state writer for the preflight lane (F11/F12). Appends the
@@ -582,30 +592,22 @@ export function readHookState(statePath: string): Record<string, unknown> {
  * typed where the fire log is read.
  */
 export function recordHookFire(projectRoot: string, decision: HookDecision, now: number = Date.now()): void {
-  try {
-    const sp = path.join(projectRoot, ".deeppairing", "hooks-state.json");
-    // Before the lock — O_EXCL needs the directory to exist.
-    fs.mkdirSync(path.dirname(sp), { recursive: true });
-    const lock = acquireHookStateLock(sp);
-    try {
-      const state = readHookState(sp);
-      state.version = 1;
-      const fires = Array.isArray(state.fires) ? state.fires : [];
-      fires.push({
-        at: new Date(now).toISOString(),
-        hook: "preflight",
-        kind: "ask" as const,
-        reason: decision.guardrail ? `guardrail:${decision.guardrail.category}` : decision.source || "blocked",
-      });
-      state.fires = fires.slice(-FIRE_LOG_CAP);
+  // appendHookFire owns the mkdir, the lock, the capped append and the atomic
+  // write, and never throws. The guardrail dedup stamp rides in the SAME
+  // read-modify-write via `mutate` — a second lock/RMW pair would reintroduce
+  // exactly the lost-update the lock exists to prevent.
+  appendHookFire(
+    hookStatePath(projectRoot),
+    {
+      at: new Date(now).toISOString(),
+      hook: "preflight",
+      kind: "ask" as const,
+      reason: decision.guardrail ? `guardrail:${decision.guardrail.category}` : decision.source || "blocked",
+    },
+    (state) => {
       if (decision.guardrail) stampGuardrailAsk(state, decision.guardrail, now);
-      writeHookStateAtomic(sp, state);
-    } finally {
-      releaseHookStateLock(lock);
-    }
-  } catch {
-    /* recording must never fail the hook itself */
-  }
+    },
+  );
 }
 
 /**

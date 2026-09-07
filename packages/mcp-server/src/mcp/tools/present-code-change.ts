@@ -1,4 +1,5 @@
 import { nanoid } from "nanoid";
+import { preflightArtifact } from "../artifact-preflight.js";
 import { validatePresentCodeChangeInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
@@ -39,13 +40,7 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
     effectiveChangeType = "modify";
   }
 
-  const proposals: string[] = [filePath, reasoning].filter(Boolean);
-  const proposalPaths: string[] = [filePath];
-  // (A) — the agent's named concept (e.g. { name: "in-process LRU" }) goes into
-  // the concept↔concept lane, compared short-vs-short against stored concepts
-  // instead of only fuzzy-matching the reasoning prose.
-  const proposalConcepts: string[] = [concept?.name].filter((n): n is string => Boolean(n && n.trim()));
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_code_change", proposals, proposalPaths, proposalConcepts);
+  const pre = (await preflightArtifact(ctx, "present_code_change", "code_change", "", validated.data))!;
   if (!pre.ok) return pre.response;
 
   // N2 (#226) — short-window de-dup: an identical present_code_change still in

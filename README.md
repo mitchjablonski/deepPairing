@@ -327,9 +327,17 @@ deeppairing port                          # bare daemon port to stdout (scriptab
 deeppairing status                        # friendly daemon picture: port, URL, pid, version, running/alive
 deeppairing team init                     # scaffold .deeppairing/team.json
 deeppairing philosophy export | import f --merge | publish on|off | remove <concept>
-deeppairing post-pr-review <pr>           # post pair findings as PR comments
+deeppairing post-pr-review <pr> --session-id ID  # post the explicitly reviewed session
+deeppairing review-posts <session-id>     # inspect / recover an unresolved review post
 deeppairing export <full|pr-comments|adr|replay|learnings>
 ```
+
+`review-posts` also ships whole as a standalone operator entry in the plugin
+bundle (`node claude-plugin/server/review-posts.mjs --help`), because a
+marketplace install has no `deeppairing` binary. Five of its verbs are offline;
+`reconcile` reads GitHub and only reads — the entry carries no way to submit a
+review. See
+[docs/pr-posting-contract.md](docs/pr-posting-contract.md#where-the-operator-commands-live).
 
 ## How it compares
 

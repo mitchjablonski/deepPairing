@@ -45,6 +45,21 @@ const childProgram = String.raw`
     store.dispose();
 `;
 
+<<<<<<< HEAD
+=======
+const lockHolderProgram = String.raw`
+  import { withSessionFlushLock } from ${JSON.stringify(pathToFileURL(path.resolve("dist/store/session-records.js")).href)};
+  const [root] = process.argv.slice(1);
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const sessionDir = path.join(root, ".deeppairing", "sessions", ${JSON.stringify(SESSION)});
+  withSessionFlushLock(path.join(sessionDir, ".flush.lock"), () => {
+    fs.writeFileSync(path.join(root, ".lock-ready"), "ready");
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+  });
+`;
+
+>>>>>>> origin/main
 function startWriter(role: "A" | "B"): ChildProcessWithoutNullStreams {
   return spawn(process.execPath, [
     "--input-type=module", "--eval", childProgram,
@@ -57,6 +72,18 @@ function startWriter(role: "A" | "B"): ChildProcessWithoutNullStreams {
   });
 }
 
+<<<<<<< HEAD
+=======
+function startLockHolder(): ChildProcessWithoutNullStreams {
+  return spawn(process.execPath, [
+    "--input-type=module", "--eval", lockHolderProgram, fx.dir,
+  ], {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env },
+  });
+}
+
+>>>>>>> origin/main
 function waitForExit(child: ChildProcessWithoutNullStreams): Promise<void> {
   return new Promise((resolve, reject) => {
     let stderr = "";
@@ -131,4 +158,32 @@ describe("FileStore cooperative cross-process writers", () => {
       await finished;
     }
   });
+<<<<<<< HEAD
+=======
+
+  it("fails closed after a lock owner dies until an operator removes the orphaned claim", async () => {
+    const seed = fx.track(new FileStore(fx.dir, SESSION));
+    seed.createArtifact({ id: "artifact-a", type: "research", title: "Baseline", content: {} });
+    seed.forceFlush();
+
+    const holder = startLockHolder();
+    try {
+      await waitForFiles([path.join(fx.dir, ".lock-ready")], () => undefined);
+      await stopChild(holder);
+
+      const claim = path.join(fx.dir, ".deeppairing", "sessions", SESSION, ".flush.lock");
+      expect(fs.existsSync(claim)).toBe(true);
+      seed.renameArtifact("artifact-a", "Pending recovery");
+      expect(() => seed.forceFlush()).toThrow(/flush lock busy/i);
+      expect(fs.existsSync(claim)).toBe(true);
+
+      // Explicit recovery is safe only now that the owning process is gone.
+      fs.unlinkSync(claim);
+      seed.forceFlush();
+      expect(fx.track(new FileStore(fx.dir, SESSION)).getArtifacts()[0]?.title).toBe("Pending recovery");
+    } finally {
+      await stopChild(holder);
+    }
+  });
+>>>>>>> origin/main
 });

@@ -1,4 +1,5 @@
 import { nanoid } from "nanoid";
+import { preflightArtifact } from "../artifact-preflight.js";
 import { validatePresentOptionsInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
@@ -23,20 +24,7 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
       ? { ...o, visuals: o.visuals.map((v, i) => ({ ...v, id: v.id ?? `${o.id}_visual_${i}` })) }
       : o,
   );
-  const proposals: string[] = [
-    context,
-    ...proposedOptions.map((o) => o.title),
-    ...proposedOptions.map((o) => o.description),
-  ].filter(Boolean);
-  // (A) — feed the agent's OWN named concepts into the concept↔concept lane.
-  // Pre-Phase-1 `o.concept.name` was thrown away: preflight only saw the raw
-  // prose (context/title/description), so a concept the agent itself named
-  // ("pay-per-request hosting") was never compared short-vs-short against a
-  // stored rejected/team concept.
-  const proposalConcepts: string[] = proposedOptions
-    .map((o) => o.concept?.name)
-    .filter((n): n is string => Boolean(n && n.trim()));
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_options", proposals, [], proposalConcepts);
+  const pre = (await preflightArtifact(ctx, "present_options", "decision", artifactTitle, validated.data))!;
   if (!pre.ok) return pre.response;
 
   // N2 (#226) — short-window de-dup: an identical present_options still in

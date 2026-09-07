@@ -14,6 +14,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { cliInvocation } from "../cli-invocation.js";
 import { errorMessage } from "@deeppairing/shared";
+import { CHECKPOINT_HOOK_SCRIPT, STOP_HOOK_SCRIPT } from "./hook-scripts.generated.js";
 // P1 — the guardrail backstop's zero-I/O prefilter. The generated hook script is
 // self-contained and cannot import at runtime, so we INTERPOLATE this literal
 // into its source at generation time: the init-path copy and the plugin-bundled
@@ -254,18 +255,17 @@ export function ensureGitignoreEntry(projectRoot: string): SetupResult {
  * human review. Without it, the agent can fire-and-forget present_findings
  * and exit before the user has a chance to triage in the companion UI.
  *
- * U0.4 / U0.6 — age guard: drafts older than DRAFT_MAX_AGE_MS are treated as
- * abandoned (user moved on, agent shouldn't stay stuck forever). The default
- * is 30 minutes.
+ * X9 — a real .mjs file, not an inline `node -e "..."`: editable, debuggable,
+ * no shell+JSON+JS triple-escaping.
  *
- * X7 — every fire (pass OR nag) appends an entry to
- * .deeppairing/hooks-state.json. The companion UI's HookStatus component
- * reads + listens to that file to surface "hook stack working" feedback.
- *
- * X9 (partial) — converted from inline `node -e "..."` to a real .mjs file
- * (matches the checkpoint hook's pattern). Editable, debuggable, no
- * shell+JSON+JS triple-escaping.
+ * #342 — the script is no longer a template literal here. It is esbuild output
+ * of `src/cli/stop-hook-entry.ts` (the SAME entry the plugin's
+ * `server/stop.mjs` is built from), embedded by
+ * `scripts/generate-hook-scripts.mjs`. The behaviour, the age guard and the
+ * hooks-state fire log all live in `src/hooks/stop-hook.ts` and are
+ * typechecked and unit-testable there.
  */
+<<<<<<< HEAD
 const STOP_HOOK_SCRIPT = `#!/usr/bin/env node
 // deepPairing Stop hook — installed by ensureStopHook (X7 / X9).
 // ESM (.mjs).
@@ -421,6 +421,8 @@ try {
   exit(0, "error: " + (err instanceof Error ? err.message : String(err)));
 }
 `;
+=======
+>>>>>>> origin/main
 const STOP_SCRIPT_REL_PATH = ".deeppairing/hooks/stop.mjs";
 // Anchor the command at $CLAUDE_PROJECT_DIR, NOT a bare relative path: Claude
 // Code runs hooks with whatever cwd the session is in, which is not guaranteed
@@ -538,27 +540,25 @@ export function ensureStopHook(projectRoot: string): SetupResult {
 
 /**
  * V2 — PostToolUse "checkpoint" hook. Fires after every Write/Edit/MultiEdit
- * and exits 2 to nag the agent into calling present_code_change BEFORE the
- * next edit. The threshold is 1 (deliberately strict): the protocol says
- * "before each Write/Edit", so the FIRST Write without a preceding
- * code_change is already a violation.
+ * and nags the agent into calling present_code_change BEFORE the next edit.
+ * The threshold is 1 (deliberately strict): the protocol says "before each
+ * Write/Edit", so the FIRST Write without a preceding code_change is already
+ * a violation.
  *
  * Why a real script file (not an inline `node -e "..."`):
  * shell+JSON+JS triple-escaping made the inline version unmaintainable and
- * silently broke. Writing to disk gives us:
- *   - debuggable (the script is in .deeppairing/hooks/, run it directly)
- *   - editable (a team can soften the rule by tweaking the file)
- *   - tested via execSync without escape gymnastics
+ * silently broke. Writing to disk gives us a hook that is debuggable (run
+ * .deeppairing/hooks/checkpoint.mjs directly), editable (a team can soften the
+ * rule by tweaking the file), and testable via execSync without escape
+ * gymnastics.
  *
- * Implementation:
- *   - Read .deeppairing/sessions/&#x2A;/artifacts.json to find the most-recent
- *     code_change artifact's createdAt as the "last checkpoint" timestamp.
- *   - Read PostToolUse event payload from stdin (Claude Code's hook protocol).
- *   - If the tool isn't Write/Edit/MultiEdit, exit 0 (the matcher should
- *     have filtered, but we're belt-and-suspenders here).
- *   - If no code_change artifact exists OR the most recent one predates
- *     this PostToolUse event, exit 2 with a nag.
+ * #342 — the script is no longer a template literal here. It is esbuild output
+ * of `src/cli/checkpoint-hook-entry.ts`, embedded by
+ * `scripts/generate-hook-scripts.mjs`. The skip-list, the #335 one-shot
+ * file/session receipt claim and the hooks-state fire log all live in
+ * `src/hooks/checkpoint-hook.ts`, typechecked and unit-testable.
  */
+<<<<<<< HEAD
 const CHECKPOINT_HOOK_SCRIPT = `#!/usr/bin/env node
 // deepPairing checkpoint hook (V2) — installed by ensureCheckpointHook.
 // ESM (.mjs): use import, not require.
@@ -769,6 +769,8 @@ process.stdin.on("end", () => {
   }
 });
 `;
+=======
+>>>>>>> origin/main
 
 const CHECKPOINT_SCRIPT_REL_PATH = ".deeppairing/hooks/checkpoint.mjs";
 

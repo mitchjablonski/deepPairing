@@ -1,4 +1,5 @@
 import { nanoid } from "nanoid";
+import { preflightArtifact } from "../artifact-preflight.js";
 import { validatePresentPlanInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
@@ -8,22 +9,7 @@ export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<To
   const validated = validatePresentPlanInput(args);
   if (!validated.ok) return validated.error;
   const { title, steps: planSteps, estimatedChanges, visuals } = validated.data;
-  const proposals: string[] = [
-    title,
-    ...planSteps.map((s) => s.description),
-    ...planSteps.map((s) => s.reasoning),
-    ...planSteps.flatMap((s) =>
-      Array.isArray((s as any).files)
-        ? (s as any).files.map((f: any) => String(typeof f === "string" ? f : f?.filePath ?? ""))
-        : [],
-    ),
-  ].filter(Boolean);
-  const proposalPaths: string[] = planSteps.flatMap((s) =>
-    Array.isArray((s as any).files)
-      ? (s as any).files.map((f: any) => (typeof f === "string" ? f : f?.filePath)).filter(Boolean)
-      : [],
-  );
-  const pre = await ctx.helpers.preflightRejectedApproaches("present_plan", proposals, proposalPaths);
+  const pre = (await preflightArtifact(ctx, "present_plan", "plan", title, validated.data))!;
   if (!pre.ok) return pre.response;
 
   // N2 (#226) — short-window de-dup for an identical, still-draft present_plan.

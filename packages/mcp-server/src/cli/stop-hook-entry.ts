@@ -1,22 +1,24 @@
 /**
- * deepPairing Stop hook — plugin-bundled entry (I6).
+ * deepPairing Stop hook — THE Stop entrypoint (I6, #342).
  *
- * A faithful semantic port of setup-tasks.ts STOP_HOOK_SCRIPT so the
- * marketplace / `--plugin-dir` install ships the SAME "don't declare done
- * while artifacts await review" checkpoint the `init` path wires into
- * .claude/settings.local.json. Self-contained (Node builtins only) so esbuild
- * emits a zero-dependency file beside daemon.js that the plugin's
- * hooks/hooks.json invokes as `node "${CLAUDE_PLUGIN_ROOT}/server/stop.mjs"`.
+ * esbuild bundles this file into both hook lanes, from the same source:
+ *   - `claude-plugin/server/stop.mjs`, which the plugin's hooks/hooks.json
+ *     invokes as `node "${CLAUDE_PLUGIN_ROOT}/server/stop.mjs"` — so a
+ *     marketplace / `--plugin-dir` install gets the enforcement layer with no
+ *     init and no session restart;
+ *   - the text `ensureStopHook` writes to `.deeppairing/hooks/stop.mjs` (via
+ *     `scripts/generate-hook-scripts.mjs` → `hook-scripts.generated.ts`).
  *
- * Behaviour must stay in lock-step with the init-path script:
- *   - surfaces unreviewed blocking drafts on stderr, exit 0 (non-blocking nag);
- *   - age-guards drafts older than 30 min as abandoned;
- *   - records every fire to .deeppairing/hooks-state.json for the UI.
+ * Before #342 the second lane was a hand-maintained template literal in
+ * setup-tasks.ts and the two could — and did — drift. They are now one file.
+ *
+ * Self-contained by construction: `runStopHook` and everything it reaches use
+ * Node builtins only, so esbuild emits a zero-dependency script that runs under
+ * plain `node` with no project-local node_modules.
  */
-import fs from "node:fs";
-import path from "node:path";
-import { sessionOwesDebrief } from "../debrief-gate.js";
+import { runStopHook } from "../hooks/stop-hook.js";
 
+<<<<<<< HEAD
 const HOOK_NAME = "stop";
 const STATE_CAP = 50;
 const MAX_AGE_MS = 30 * 60 * 1000;
@@ -201,3 +203,6 @@ try {
 } catch (err) {
   exit(0, "error: " + (err instanceof Error ? err.message : String(err)));
 }
+=======
+runStopHook();
+>>>>>>> origin/main
