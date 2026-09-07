@@ -445,128 +445,12 @@ function stampGuardrailAsk(state: Record<string, unknown>, match: GuardrailMatch
  * hook-state.ts into `claude-plugin/server/preflight-hook-core.js`, so the
  * bundled copy stays dependency-free.
  */
-<<<<<<< HEAD
-export function writeHookStateAtomic(statePath: string, state: unknown): void {
-  const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${randomBytes(4).toString("hex")}`;
-  try {
-    fs.writeFileSync(tmp, JSON.stringify(state));
-    fs.renameSync(tmp, statePath);
-  } catch (err) {
-    try { fs.unlinkSync(tmp); } catch { /* never mask the real error */ }
-    throw err;
-  }
-}
-
-/**
- * M1 (round-12 adversarial review) — the atomic write was necessary and NOT
- * sufficient.
- *
- * tmp+rename guarantees no reader ever sees a torn file. It does NOT serialize
- * read-modify-write: two hooks that both read state N and both rename their
- * N+1 leave one of the two updates gone. Measured with 8 parallel invocations:
- * 8 asks were emitted, but only 4 fire records and — the part that matters — 4
- * DEDUP STAMPS survived. A dropped stamp means the same file asks again inside
- * its 30-minute window, which is the spurious-ask failure H1 is about.
- *
- * So the whole RMW runs under an O_EXCL lockfile. Hooks are sub-100 ms
- * processes, so a short spin is the right shape (no async, no dependency):
- *   - O_EXCL create is the atomic test-and-set;
- *   - a lock older than LOCK_STALE_MS is BROKEN, so a hook killed mid-write
- *     cannot wedge every later one;
- *   - failing to acquire within LOCK_MAX_WAIT_MS proceeds UNSYNCHRONIZED
- *     rather than dropping the record — degraded beats silent, and a hook may
- *     never fail the tool call it is gating.
- */
-const LOCK_STALE_MS = 5_000;
-const LOCK_SPIN_MS = 2;
-const LOCK_MAX_WAIT_MS = 500;
-
-/** Synchronous sleep — the hook lane has no async seam to yield through. */
-function sleepSync(ms: number): void {
-  try {
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-  } catch {
-    /* SharedArrayBuffer unavailable — spin-free fallback: just retry */
-  }
-}
-
-/** Returns the lock path on success, or null to proceed unsynchronized. */
-export function acquireHookStateLock(statePath: string, now: number = Date.now()): string | null {
-  const lock = `${statePath}.lock`;
-  const deadline = now + LOCK_MAX_WAIT_MS;
-  for (;;) {
-    try {
-      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
-      return lock;
-    } catch (error) {
-      // Only EEXIST is contention. Other failures cannot improve by spinning.
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") return null;
-      if (Date.now() >= deadline) return null;
-      try {
-        if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {
-          fs.unlinkSync(lock); // a crashed hook must not wedge the next one
-          continue;
-        }
-      } catch (error) {
-        // ENOENT means the holder released the lock; retry with the same
-        // deadline and backoff. A stat/unlink permission error is terminal.
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
-      }
-      if (Date.now() >= deadline) return null;
-      sleepSync(LOCK_SPIN_MS);
-    }
-  }
-}
-
-export function releaseHookStateLock(lock: string | null): void {
-  if (!lock) return;
-  try {
-    fs.unlinkSync(lock);
-  } catch {
-    /* already gone */
-  }
-}
-
-/**
- * Q1 item 4 — read hooks-state.json, and NEVER silently discard history.
- *
- * Three outcomes:
- *   - absent            → a fresh `{version:1}`, no backup (nothing was lost);
- *   - present + valid   → the parsed object;
- *   - present + corrupt → a fresh object, but the bytes are first copied to
- *     `hooks-state.json.corrupt-<ISO>` so the fire log is recoverable by hand.
- *     The backup is best-effort: if it fails we still reset, because a hook may
- *     never fail the tool call it is gating.
- */
-export function readHookState(statePath: string): Record<string, unknown> {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(statePath, "utf-8");
-  } catch {
-    return { version: 1 }; // absent / unreadable — nothing to salvage
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
-  } catch {
-    /* fall through to the salvage copy */
-  }
-  try {
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    fs.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);
-  } catch {
-    /* best-effort */
-  }
-  return { version: 1 };
-}
-=======
 export {
   acquireHookStateLock,
   releaseHookStateLock,
   readHookState,
   writeHookStateAtomic,
 } from "../hooks/hook-state.js";
->>>>>>> origin/main
 
 /**
  * The single hooks-state writer for the preflight lane (F11/F12). Appends the

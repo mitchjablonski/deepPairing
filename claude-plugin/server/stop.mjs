@@ -127,20 +127,6 @@ function appendHookFire(statePath, fire, mutate) {
     fs.mkdirSync(path.dirname(statePath), { recursive: true });
     const lock = acquireHookStateLock(statePath);
     try {
-<<<<<<< HEAD
-      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
-      return lock;
-    } catch (error) {
-      if (error.code !== "EEXIST") return null;
-      if (Date.now() >= deadline) return null;
-      try {
-        if (Date.now() - fs.statSync(lock).mtimeMs > 5e3) {
-          fs.unlinkSync(lock);
-          continue;
-        }
-      } catch (error2) {
-        if (error2.code !== "ENOENT") return null;
-=======
       const state = readHookState(statePath);
       state.version = 1;
       const fires = Array.isArray(state.fires) ? state.fires : [];
@@ -185,7 +171,6 @@ function runStopHook(now = Date.now()) {
         arr = JSON.parse(fs2.readFileSync(af, "utf-8"));
       } catch {
         continue;
->>>>>>> origin/main
       }
       if (!Array.isArray(arr)) continue;
       const artifacts = arr;

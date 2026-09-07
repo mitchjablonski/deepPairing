@@ -42,13 +42,6 @@ describe("standalone generated hook error handlers", () => {
   it.each(["new Error('read denied')", "'read denied'"])("Stop records thrown %s and exits cleanly", value => {
     expect(run("stop", "", value)).toBe("error: read denied");
   });
-<<<<<<< HEAD
-  it("Stop records malformed artifact entries without throwing a second error", () => {
-    const session = path.join(root, ".deeppairing/sessions/test");
-    fs.mkdirSync(session);
-    fs.writeFileSync(path.join(session, "artifacts.json"), "[null]");
-    expect(run("stop", "")).toMatch(/^error: /);
-=======
   /**
    * #342 — the two Stop lanes DISAGREED here and consolidation had to pick one.
    * The generated template read `x.status` (TypeError on a null entry, taking
@@ -94,7 +87,6 @@ describe("standalone generated hook error handlers", () => {
    */
   it("Stop records a duck-typed thrown object's message", () => {
     expect(run("stop", "", "({message: 'duck-typed error', code: 'EDUCK'})")).toBe("error: duck-typed error");
->>>>>>> origin/main
   });
   it("checkpoint still records a normal reminder", () => {
     expect(run("checkpoint", JSON.stringify({tool_name: "Edit", tool_input: {file_path: "src/app.ts"}})))

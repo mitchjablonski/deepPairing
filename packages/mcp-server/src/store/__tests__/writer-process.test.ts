@@ -45,8 +45,6 @@ const childProgram = String.raw`
     store.dispose();
 `;
 
-<<<<<<< HEAD
-=======
 const lockHolderProgram = String.raw`
   import { withSessionFlushLock } from ${JSON.stringify(pathToFileURL(path.resolve("dist/store/session-records.js")).href)};
   const [root] = process.argv.slice(1);
@@ -59,7 +57,6 @@ const lockHolderProgram = String.raw`
   });
 `;
 
->>>>>>> origin/main
 function startWriter(role: "A" | "B"): ChildProcessWithoutNullStreams {
   return spawn(process.execPath, [
     "--input-type=module", "--eval", childProgram,
@@ -72,8 +69,6 @@ function startWriter(role: "A" | "B"): ChildProcessWithoutNullStreams {
   });
 }
 
-<<<<<<< HEAD
-=======
 function startLockHolder(): ChildProcessWithoutNullStreams {
   return spawn(process.execPath, [
     "--input-type=module", "--eval", lockHolderProgram, fx.dir,
@@ -83,7 +78,6 @@ function startLockHolder(): ChildProcessWithoutNullStreams {
   });
 }
 
->>>>>>> origin/main
 function waitForExit(child: ChildProcessWithoutNullStreams): Promise<void> {
   return new Promise((resolve, reject) => {
     let stderr = "";
@@ -158,8 +152,6 @@ describe("FileStore cooperative cross-process writers", () => {
       await finished;
     }
   });
-<<<<<<< HEAD
-=======
 
   it("fails closed after a lock owner dies until an operator removes the orphaned claim", async () => {
     const seed = fx.track(new FileStore(fx.dir, SESSION));
@@ -185,5 +177,4 @@ describe("FileStore cooperative cross-process writers", () => {
       await stopChild(holder);
     }
   });
->>>>>>> origin/main
 });

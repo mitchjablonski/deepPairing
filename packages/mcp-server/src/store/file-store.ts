@@ -7,16 +7,12 @@ import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { capConceptLength } from "./concept-hygiene.js";
 import { writeJsonAtomic, writeStringAtomic } from "./atomic-write.js";
-<<<<<<< HEAD
-import { mergeSessionRecords, withSessionFlushLock } from "./session-records.js";
-=======
 import {
   mergeArtifactRecords,
   mergeSessionRecords,
   SessionReviewConflictError,
   withSessionFlushLock,
 } from "./session-records.js";
->>>>>>> origin/main
 import { salvageArray, salvageRecord, salvageLog } from "./salvage.js";
 import { senseProjectGuardrails, loadTeamPreferences } from "./project-signals.js";
 import type { ProjectGuardrail } from "./project-signals.js";
@@ -317,10 +313,6 @@ export class FileStore implements IStore {
 
   private flushFailureLogged = false;
   private flushRetryDelay = 100;
-<<<<<<< HEAD
-
-  private scheduleFlush(delay = 100): void {
-=======
   private reviewConflict: SessionReviewConflictError | null = null;
   private disposed = false;
 
@@ -330,7 +322,6 @@ export class FileStore implements IStore {
 
   private scheduleFlush(delay = 100): void {
     if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
->>>>>>> origin/main
     if (this.flushTimer) return;
     this.flushTimer = setTimeout(() => {
       // C3 — a throwing timer callback is an UNCAUGHT EXCEPTION that kills
@@ -382,10 +373,7 @@ export class FileStore implements IStore {
   private flushRecords<T>(
     file: string, local: T[], key: (value: T) => string, salvage: (raw: unknown) => T[],
     optional = false,
-<<<<<<< HEAD
-=======
     merge: (baseline: T[], local: T[], disk: T[], key: (value: T) => string) => T[] = mergeSessionRecords,
->>>>>>> origin/main
   ): T[] {
     const baseline = this.recordBaselines[file] ?? "[]";
     const serialized = JSON.stringify(local);
@@ -412,11 +400,7 @@ export class FileStore implements IStore {
       if (errorCode(err) !== "ENOENT" && !knownCorruption) throw err;
       raw = [];
     }
-<<<<<<< HEAD
-    const merged = mergeSessionRecords(JSON.parse(baseline) as T[], local, salvage(raw), key);
-=======
     const merged = merge(JSON.parse(baseline) as T[], local, salvage(raw), key);
->>>>>>> origin/main
     const mergedBytes = JSON.stringify(merged, null, 2);
     if (dirty && (!optional || merged.length > 0 || diskBytes !== undefined) && diskBytes !== mergedBytes) {
       writeStringAtomic(filePath, mergedBytes);
@@ -429,38 +413,6 @@ export class FileStore implements IStore {
   }
 
   private flush(): void {
-<<<<<<< HEAD
-    withSessionFlushLock(path.join(this.sessionDir(), ".flush.lock"), () => {
-      this.artifacts = this.flushRecords("artifacts.json", this.artifacts, (r) => r.id,
-        (raw) => FileStore.salvageArray<Artifact>(`${this.sessionId}:artifacts.json (external)`, raw, "id"));
-      this.comments = this.flushRecords("comments.json", this.comments, (r) => r.id,
-        (raw) => FileStore.salvageArray<Comment>("comments.json (external)", raw, "id"));
-      this.decisions = new Map(this.flushRecords("decisions.json", [...this.decisions.values()], (r) => r.decisionId,
-        (raw) => FileStore.salvageArray<DecisionRecord>("decisions.json (external)", raw, "decisionId")).map((r) => [r.decisionId, r]));
-      this.planReviews = new Map(this.flushRecords("plan-reviews.json", [...this.planReviews.values()], (r) => r.artifactId,
-        (raw) => FileStore.salvageArray<PlanReviewRecord>("plan-reviews.json (external)", raw, "artifactId")).map((r) => [r.artifactId, r]));
-      this.requests = this.flushRecords("requests.json", this.requests, (r) => r.id,
-        (raw) => FileStore.salvageArray<Request>("requests.json (external)", raw, "id"), true);
-      this.renderFailures = this.flushRecords("render-failures.json", this.renderFailures,
-        (r) => JSON.stringify([r.artifactId, r.visualId]), (raw) => {
-          const keyed = (Array.isArray(raw) ? raw : []).map((r) => ({
-            ...r, __key: JSON.stringify([r?.artifactId, r?.visualId]),
-          }));
-          return FileStore.salvageArray<RenderFailureRecord & { __key: string }>(
-            "render-failures.json (external)", keyed, "__key").map(({ __key, ...r }) => r);
-        }, true);
-      // Metrics lack stable IDs: append only this writer's new observations.
-      const metricsPath = path.join(this.sessionDir(), "metrics.json");
-      if (this.reviewLatencies.length > this.flushedLatencyCount) {
-        const raw = this.loadJsonFile<unknown>(metricsPath, []);
-        const disk = Array.isArray(raw) ? raw.filter((r) => r && typeof r.type === "string" && Number.isFinite(r.latencyMs)) : [];
-        const merged = [...disk, ...this.reviewLatencies.slice(this.flushedLatencyCount)];
-        writeJsonAtomic(metricsPath, merged);
-        this.reviewLatencies = merged;
-        this.flushedLatencyCount = merged.length;
-      }
-    });
-=======
     // A conflicted writer still holds the stale in-memory verdict that caused
     // the safety failure. Never write its artifacts again: only a newly created
     // FileStore may reload the persisted artifact and resume authorization.
@@ -545,7 +497,6 @@ export class FileStore implements IStore {
       if (error instanceof SessionReviewConflictError) this.reviewConflict = error;
       throw error;
     }
->>>>>>> origin/main
   }
 
   private flushedLatencyCount = 0;
@@ -663,17 +614,10 @@ export class FileStore implements IStore {
   /** Local reminder receipts, separate from the legacy project-wide hint. */
   private checkpointFiles(artifact: Artifact): string[] {
     if (this.isDemoSession || !artifact.content || typeof artifact.content !== "object") return [];
-<<<<<<< HEAD
-    const content = artifact.content as { filePath?: unknown; files?: { filePath?: unknown }[]; reviewIntent?: unknown };
-    if (content.reviewIntent === "external") return [];
-    const files = artifact.type === "code_change" ? [content.filePath]
-      : artifact.type === "changeset" && Array.isArray(content.files) ? content.files.map(f => f?.filePath) : [];
-=======
     const content = artifact.content as { filePath?: unknown; files?: { path?: unknown }[]; reviewIntent?: unknown };
     if (content.reviewIntent === "external") return [];
     const files = artifact.type === "code_change" ? [content.filePath]
       : artifact.type === "changeset" && Array.isArray(content.files) ? content.files.map(f => f?.path) : [];
->>>>>>> origin/main
     return [...new Set(files.filter((f): f is string => typeof f === "string" && f.trim().length > 0)
       .map(f => path.resolve(this.projectRoot, f)))];
   }

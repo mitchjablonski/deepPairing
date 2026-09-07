@@ -3,8 +3,6 @@ import { performance } from "node:perf_hooks";
 
 type RecordValue = Record<string, unknown>;
 
-<<<<<<< HEAD
-=======
 export class SessionReviewConflictError extends Error {
   readonly code = "ESESSIONREVIEWCONFLICT";
 
@@ -23,7 +21,6 @@ export function isSessionReviewConflictError(error: unknown): error is SessionRe
       (error as { code?: unknown }).code === "ESESSIONREVIEWCONFLICT");
 }
 
->>>>>>> origin/main
 function object(value: unknown): value is RecordValue {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -76,8 +73,6 @@ export function mergeSessionRecords<T>(
   return [...merged.values()];
 }
 
-<<<<<<< HEAD
-=======
 const REVIEW_VERDICTS = new Set(["approved", "rejected", "revised"]);
 const REVIEWED_IDENTITY_FIELDS = ["content", "version", "type", "parentId"] as const;
 
@@ -159,7 +154,6 @@ export function mergeArtifactRecords<T extends object>(
   return mergeSessionRecords(baseline, local, disk, key);
 }
 
->>>>>>> origin/main
 /** Cooperating FileStore writers serialize the complete read/merge/write
  * section. Never break locks by age: a paused live writer could still commit.
  * After a crash, an operator may remove the lock ONLY after stopping writers.

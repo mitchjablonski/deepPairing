@@ -28,8 +28,6 @@ beforeAll(() => {
 }, 30_000);
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
-<<<<<<< HEAD
-=======
 /** Fire-log length, or 0 before any hook has written one. */
 function firesLength(): number {
   try {
@@ -40,7 +38,6 @@ function firesLength(): number {
   }
 }
 
->>>>>>> origin/main
 describe.each(["generated stop", "generated checkpoint", "bundled stop", "core"])("%s lock retries", lane => {
   it.each([false, true])("acquires and releases a real lock (stale=%s)", stale => {
     const statePath = path.join(root, ".deeppairing/hooks-state.json");
@@ -92,14 +89,11 @@ describe.each(["generated stop", "generated checkpoint", "bundled stop", "core"]
     } else {
       args.push(entries[lane]!);
     }
-<<<<<<< HEAD
-=======
     // #332 review M2 — `root` is created once in beforeAll and the fire log is
     // never reset, so `fires.at(-1)` can be a record an EARLIER case wrote. Snapshot
     // the length and assert the delta, so the assertion is sensitive to the
     // thing it claims to check: that THIS hook recorded THIS fire.
     const before = firesLength();
->>>>>>> origin/main
     const result = spawnSync(process.execPath, args, {
       cwd: root, encoding: "utf8", input: "{}", timeout: 5000,
       env: {...process.env, CLAUDE_PROJECT_DIR: root, DEEPPAIRING_PROJECT_ROOT: root},
@@ -109,10 +103,7 @@ describe.each(["generated stop", "generated checkpoint", "bundled stop", "core"]
     if (lane === "core") expect(result.stdout.trim()).toBe("null");
     else {
       const state = JSON.parse(fs.readFileSync(path.join(root, ".deeppairing/hooks-state.json"), "utf8"));
-<<<<<<< HEAD
-=======
       expect(state.fires.length - before, "the hook recorded no fire of its own").toBe(1);
->>>>>>> origin/main
       expect(state.fires.at(-1).exitCode).toBe(0);
     }
   });

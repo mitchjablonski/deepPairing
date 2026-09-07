@@ -2,13 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { FileStore } from "../file-store.js";
-<<<<<<< HEAD
-import { mergeSessionRecords, withSessionFlushLock } from "../session-records.js";
-=======
 import type { Artifact } from "@deeppairing/shared";
 import { mergeSessionRecords, SessionReviewConflictError, withSessionFlushLock } from "../session-records.js";
 import crypto from "node:crypto";
->>>>>>> origin/main
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 
 let fx: GlobalStoreFixture;
@@ -26,8 +22,6 @@ function seed() {
 }
 
 describe("writer-owned deltas", () => {
-<<<<<<< HEAD
-=======
   it.each([false, true])("does not combine an approval with concurrently changed content (contentFirst=%s)", (contentFirst) => {
     const seedStore = open();
     seedStore.createArtifact({
@@ -226,7 +220,6 @@ describe("writer-owned deltas", () => {
     });
   });
 
->>>>>>> origin/main
   it.each([false, true])("unrelated stale comment cannot revert review state (reverse=%s)", (reverse) => {
     const a = seed();
     const b = open();
@@ -369,8 +362,6 @@ describe("writer-owned deltas", () => {
     expect(fs.existsSync(artifactsPath)).toBe(false);
   });
 
-<<<<<<< HEAD
-=======
   it("a partial flush retry does not overwrite an intervening writer", () => {
     const retrying = seed();
     const intervening = open();
@@ -446,7 +437,6 @@ describe("writer-owned deltas", () => {
     expect(open().getArtifacts().map((artifact) => artifact.id)).toEqual(["fresh"]);
   });
 
->>>>>>> origin/main
   it.each([false, true])("preserves concurrent status audit entries (reverse=%s)", (reverse) => {
     const a = seed();
     const b = open();
@@ -530,8 +520,6 @@ describe("merge and lock contract", () => {
     expect(() => withSessionFlushLock(lock, () => fs.unlinkSync(lock))).toThrow();
   });
 });
-<<<<<<< HEAD
-=======
 
 /**
  * #338 (F1) — the false success receipt. PR #376 froze the artifact lane in
@@ -697,4 +685,3 @@ describe("#338 (F1) — a frozen writer refuses authority writes before side eff
     expect(recovered.getArtifacts().find((a) => a.id === "parent")).toMatchObject({ status: "draft", version: 2 });
   });
 });
->>>>>>> origin/main
