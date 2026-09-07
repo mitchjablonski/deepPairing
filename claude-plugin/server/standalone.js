@@ -36477,7 +36477,6 @@ function scopeExternalChangesets(artifacts, ref) {
 function knownPrIdentityCount(artifacts) {
   const identities = /* @__PURE__ */ new Set();
   for (const artifact of artifacts) {
-    if (!isStandingChunk(artifact)) continue;
     const url2 = coerceChangesetContent(artifact.content).source?.url;
     const parsed = url2 ? parsePrNumber(url2) : null;
     if (parsed?.owner && parsed.repo) {
@@ -36604,12 +36603,12 @@ function authorizeReviewPost(state, opts) {
     const fullScope = scopeExternalChangesets(targetExternals, opts.pr);
     const standing = targetExternals.filter(isStandingChunk);
     const standingScope = scopeExternalChangesets(standing, opts.pr);
-    const contradictory = standingScope.contradictory[0];
+    const contradictory = standingScope.contradictory[0] ?? (approved.length > 0 ? fullScope.contradictory[0] : void 0);
     if (contradictory) {
       const artifact = contradictory;
       return {
         ok: false,
-        reason: `Refusing to post: "${artifact.title}" (${artifact.id}) has a source.number that contradicts its source.url. Present one coherent PR identity and get your pair's verdict again.`
+        reason: isStandingChunk(artifact) ? `Refusing to post: "${artifact.title}" (${artifact.id}) has a source.number that contradicts its source.url. Present one coherent PR identity and get your pair's verdict again.` : `Refusing to post findings: this session's historical changeset identity is contradictory, and findings artifacts do not record which pull request they belong to. Review and post one PR per fresh session; the gate cannot guess that closing a changeset reassigned already-approved findings.`
       };
     }
     if (approved.length > 0 && knownPrIdentityCount(targetExternals) > 1) {
@@ -36625,12 +36624,12 @@ function authorizeReviewPost(state, opts) {
         reason: `Refusing to post: "${artifact.title}" identifies https://github.com/${reviewed.owner}/${reviewed.repo}/pull/${reviewed.number}, not the requested PR ${opts.pr}. Present the requested PR with its full source.url and get your pair's verdict before posting.`
       };
     }
-    const unknownApproveChunk = event === "APPROVE" ? standingScope.unknown[0] : void 0;
+    const unknownApproveChunk = event === "APPROVE" ? standingScope.unknown[0] ?? (approved.length > 0 ? fullScope.unknown[0] : void 0) : void 0;
     if (unknownApproveChunk) {
       const artifact = unknownApproveChunk;
       return {
         ok: false,
-        reason: `Refusing to post an APPROVE: "${artifact.title}" (${artifact.id}) has no full, valid PR source URL, so the gate cannot prove whether it is another part of ${opts.pr} or whether the approved findings belong to it. Present every relevant chunk with its full source.url and get your pair's verdict again.`
+        reason: `Refusing to post an APPROVE: "${artifact.title}" (${artifact.id}) has no full, valid PR source URL, so the gate cannot prove whether it is another part of ${opts.pr} or whether the approved findings belong to it. ${isStandingChunk(artifact) ? `Present every relevant chunk with its full source.url and get your pair's verdict again.` : `Because findings artifacts do not record a PR identity, closing this chunk cannot prove reassociation. Review and post one PR per fresh session.`}`
       };
     }
     const identityUnproven = [...fullScope.unknown, ...fullScope.contradictory];
