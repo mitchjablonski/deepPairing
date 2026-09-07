@@ -8,15 +8,19 @@ External PR reviews and demo artifacts do not create receipts.
 Receipts live under
 `.deeppairing/sessions/<session-id>/code-checkpoints/<path-sha256>.json`.
 Each includes the normalized absolute file path, session ID, artifact ID,
-presentation timestamp, and format version. The hook reads only the matching
-file, rather than scanning artifact histories. A receipt is valid for 60 seconds
+presentation timestamp, expiry timestamp, and format version. The hook reads
+only the event/environment candidates, rather than scanning artifact histories
+or arbitrary session directories. A code-change receipt is valid for 60 seconds;
+a changeset receipt is valid for 10 minutes
 and is atomically claimed once. A second edit needs a new presentation, even
 within that window. Rejection, revision requests, retraction, obsolescence, and
 supersession revoke the artifact's unused receipts.
 
-The hook uses the event's `session_id`, then `CLAUDE_CODE_SESSION_ID` when the
-event omits it. Its session derivation matches the MCP wrapper. When neither
-is available, only the wrapper's legacy per-project session can supply a
+The hook tries the event's `session_id`, then a distinct
+`CLAUDE_CODE_SESSION_ID`. A missing, corrupt, or expired first candidate does
+not hide a valid second candidate; after the first valid claim, later receipts
+remain untouched. Its session derivation matches the MCP wrapper. When both
+identities are absent or empty, only the wrapper's legacy per-project session can supply a
 receipt; other sessions are never searched. Malformed nonempty identities do
 not fall back to that shared session. Relative and absolute file paths resolve
 against the selected project root.
@@ -24,7 +28,9 @@ against the selected project root.
 The old project-wide `last-code-change.json` timestamp is still written for
 older hook installations, but current hooks ignore it. Regenerating the hooks
 through normal setup enables the scoped behavior; legacy timestamps cannot
-identify a reviewed file. Missing, expired, future-dated, corrupt, or already
+identify a reviewed file. Version-1 receipts without `expiresAt` retain the
+legacy 60-second lifetime. Missing, expired, future-dated, invalid-expiry,
+corrupt, or already
 consumed receipts produce a reminder and exit 0. Lockfiles and generated paths
 keep their existing exemptions; config files such as `.gitignore` are included.
 

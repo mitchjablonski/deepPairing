@@ -33,12 +33,36 @@ function env() {
 function event(filePath: string, session: string | undefined = "session-a") {
   return JSON.stringify({tool_name: "Edit", session_id: session, tool_input: {file_path: filePath}});
 }
+function fireCount() {
+  try {
+    const state = JSON.parse(fs.readFileSync(path.join(root, ".deeppairing/hooks-state.json"), "utf8"));
+    return Array.isArray(state.fires) ? state.fires.length : 0;
+  } catch { return 0; }
+}
+function expectOneCheckpointFire(before: number) {
+  const state = JSON.parse(fs.readFileSync(path.join(root, ".deeppairing/hooks-state.json"), "utf8"));
+  expect(state.fires).toHaveLength(before + 1);
+  expect(state.fires.at(-1)).toMatchObject({hook: "checkpoint", exitCode: 0});
+  expect(state.fires.at(-1).reason).not.toMatch(/^error:/);
+}
 function hook(filePath = "src/a.ts", session: string | undefined = "session-a") {
+  const before = fireCount();
   const r = spawnSync(process.execPath, [path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
     input: event(filePath, session), encoding: "utf8", timeout: 5000, cwd: root, env: env(),
   });
   expect(r.error).toBeUndefined();
   expect(r.status, r.stderr).toBe(0);
+  expectOneCheckpointFire(before);
+  return r.stderr;
+}
+function runHook(payload: Record<string, unknown>, childEnv: NodeJS.ProcessEnv) {
+  const before = fireCount();
+  const r = spawnSync(process.execPath, [path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
+    input: JSON.stringify(payload), encoding: "utf8", timeout: 5000, cwd: root, env: childEnv,
+  });
+  expect(r.error).toBeUndefined();
+  expect(r.status, r.stderr).toBe(0);
+  expectOneCheckpointFire(before);
   return r.stderr;
 }
 function marker(file = "src/a.ts", session = "session-a") {
@@ -98,6 +122,9 @@ describe("file/session checkpoint receipts", () => {
     const p = marker();
     const m = JSON.parse(fs.readFileSync(p, "utf8"));
     m.at = Number.isNaN(offset) ? "invalid" : new Date(Date.now() + offset).toISOString();
+    // Exercise the legacy v1 policy: receipts without an owned expiry retain
+    // the historical 60-second lifetime derived from `at`.
+    delete m.expiresAt;
     fs.writeFileSync(p, JSON.stringify(m));
     expect(hook()).toContain("present_code_change");
   });
@@ -153,6 +180,25 @@ describe("file/session checkpoint receipts", () => {
     expect(r.stderr).toBe("");
     expect(fs.existsSync(marker())).toBe(false);
   });
+  it("falls through a missing event receipt to a valid environment receipt", () => {
+    present();
+    expect(runHook({tool_name: "Edit", session_id: "missing", tool_input: {file_path: "src/a.ts"}},
+      {...env(), CLAUDE_CODE_SESSION_ID: "session-a"})).toBe("");
+  });
+  it("falls through a corrupt event receipt to a valid environment receipt", () => {
+    const bad = fx.track(new FileStore(root, deriveSessionId(root, "bad").sessionId));
+    present("src/a.ts", bad); present();
+    fs.writeFileSync(marker("src/a.ts", "bad"), "{bad");
+    expect(runHook({tool_name: "Edit", session_id: "bad", tool_input: {file_path: "src/a.ts"}},
+      {...env(), CLAUDE_CODE_SESSION_ID: "session-a"})).toBe("");
+  });
+  it("event priority consumes only its valid receipt", () => {
+    const other = fx.track(new FileStore(root, deriveSessionId(root, "session-b").sessionId));
+    present(); present("src/a.ts", other);
+    expect(runHook({tool_name: "Edit", session_id: "session-a", tool_input: {file_path: "src/a.ts"}},
+      {...env(), CLAUDE_CODE_SESSION_ID: "session-b"})).toBe("");
+    expect(fs.existsSync(marker("src/a.ts", "session-b"))).toBe(true);
+  });
   it("uses the environment session when the event omits its identity", () => {
     present();
     const r = spawnSync(process.execPath, [path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
@@ -194,6 +240,53 @@ describe("file/session checkpoint receipts", () => {
     present("src/a.ts", legacy);
     expect(hook("src/a.ts", "../")).toContain("present_code_change");
     expect(hook("src/a.ts", "")).toBe("");
+  });
+  it.each([null, 42, {}])("does not map malformed event identity %j into the fallback session", session_id => {
+    const legacy = fx.track(new FileStore(root, deriveSessionId(root).sessionId));
+    present("src/a.ts", legacy);
+    expect(runHook({tool_name: "Edit", session_id, tool_input: {file_path: "src/a.ts"}}, env()))
+      .toContain("present_code_change");
+    expect(fs.existsSync(marker("src/a.ts", ""))).toBe(true);
+  });
+  it("does not scan an unrelated third session", () => {
+    const third = fx.track(new FileStore(root, deriveSessionId(root, "third").sessionId));
+    present("src/a.ts", third);
+    expect(runHook({tool_name: "Edit", session_id: "missing", tool_input: {file_path: "src/a.ts"}}, env()))
+      .toContain("present_code_change");
+    expect(fs.existsSync(marker("src/a.ts", "third"))).toBe(true);
+  });
+  it("resolves a project root with a trailing separator identically", () => {
+    present();
+    expect(runHook({tool_name: "Edit", session_id: "session-a", tool_input: {file_path: "src/a.ts"}},
+      {...env(), CLAUDE_PROJECT_DIR: root + path.sep})).toBe("");
+  });
+  it("honors explicit expiry while legacy receipts keep the 60-second default", () => {
+    present();
+    let m = JSON.parse(fs.readFileSync(marker(), "utf8"));
+    expect(Date.parse(m.expiresAt) - Date.parse(m.at)).toBe(60_000);
+    m.at = new Date(Date.now() - 90_000).toISOString();
+    m.expiresAt = new Date(Date.now() + 10_000).toISOString();
+    fs.writeFileSync(marker(), JSON.stringify(m));
+    expect(hook()).toBe("");
+    present();
+    m = JSON.parse(fs.readFileSync(marker(), "utf8"));
+    m.at = new Date(Date.now() - 61_000).toISOString();
+    delete m.expiresAt;
+    fs.writeFileSync(marker(), JSON.stringify(m));
+    expect(hook()).toContain("present_code_change");
+  });
+  it("stamps changeset receipts with a ten-minute expiry", () => {
+    store.createArtifact({id: "long", type: "changeset", title: "long",
+      content: {files: [{filePath: "src/a.ts"}]}});
+    const m = JSON.parse(fs.readFileSync(marker(), "utf8"));
+    expect(Date.parse(m.expiresAt) - Date.parse(m.at)).toBe(10 * 60_000);
+  });
+  it.each(["invalid", new Date(Date.now() - 1).toISOString()])("rejects invalid or expired explicit expiry %s", expiresAt => {
+    present();
+    const m = JSON.parse(fs.readFileSync(marker(), "utf8"));
+    m.expiresAt = expiresAt;
+    fs.writeFileSync(marker(), JSON.stringify(m));
+    expect(hook()).toContain("present_code_change");
   });
   it("lets only one concurrent hook claim a receipt", async () => {
     present();

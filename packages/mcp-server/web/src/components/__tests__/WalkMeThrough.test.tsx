@@ -312,6 +312,42 @@ describe("WalkMeThroughButton", () => {
     expect(toast.body).toMatch(/sidebar/i);
   });
 
+  it("clears the sent-state timer when unmounted", async () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const clearSpy = vi.spyOn(globalThis, "clearTimeout");
+    const { unmount } = render(<WalkMeThroughButton target={{ kind: "file", filePath: "a.ts" }} />);
+    await userEvent.click(screen.getByTestId("walk-me-through-file"));
+    await screen.findByText(/posting in the sidebar/i);
+    const sentTimerIndex = timeoutSpy.mock.calls.findIndex(([, delay]) => delay === 2500);
+    expect(sentTimerIndex).toBeGreaterThanOrEqual(0);
+    const sentTimer = timeoutSpy.mock.results[sentTimerIndex]?.value;
+
+    unmount();
+
+    expect(clearSpy).toHaveBeenCalledWith(sentTimer);
+  });
+
+  it("does not schedule sent-state work when the request resolves after unmount", async () => {
+    let resolveRequest!: (response: Response) => void;
+    const pendingRequest = new Promise<Response>((resolve) => { resolveRequest = resolve; });
+    vi.stubGlobal("fetch", vi.fn(() => pendingRequest));
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const { unmount } = render(<WalkMeThroughButton target={{ kind: "file", filePath: "late.ts" }} />);
+
+    await userEvent.click(screen.getByTestId("walk-me-through-file"));
+    unmount();
+    timeoutSpy.mockClear();
+    resolveRequest(new Response(JSON.stringify({
+      request: { id: "req_late", text: "x", intent: "explain", createdAt: new Date().toISOString() },
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(timeoutSpy.mock.calls.some(([, delay]) => delay === 2500)).toBe(false);
+    expect(useToastStore.getState().toasts).toHaveLength(0);
+  });
+
   it("reads as an ACTION, not file metadata: UI font, keyboard-reachable, no wrap", () => {
     render(<WalkMeThroughButton target={{ kind: "file", filePath: "deep/nested/path/to/auth/middleware.ts" }} />);
     const btn = screen.getByTestId("walk-me-through-file");

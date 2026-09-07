@@ -659,6 +659,7 @@ function acquireLock(statePath) {
   }
 }
 function releaseLock(lock) { if (lock) { try { fs.unlinkSync(lock); } catch {} } }
+let RESOLVED_CANDIDATE_IDS = [];
 function recordFire(exitCode, reason) {
   try {
     fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true }); // before O_EXCL
@@ -667,7 +668,8 @@ function recordFire(exitCode, reason) {
       const state = readState(STATE_PATH);
       state.version = 1;
       state.fires = Array.isArray(state.fires) ? state.fires : [];
-      state.fires.push({ at: new Date().toISOString(), hook: "checkpoint", exitCode, reason });
+      state.fires.push({ at: new Date().toISOString(), hook: "checkpoint", exitCode, reason,
+        resolvedCandidateIds: RESOLVED_CANDIDATE_IDS });
       if (state.fires.length > 50) state.fires = state.fires.slice(-50);
       writeStateAtomic(STATE_PATH, state);
     } finally { releaseLock(lock); }
@@ -684,7 +686,7 @@ process.stdin.on("data", (c) => { stdin += c; });
 process.stdin.on("end", () => {
   try {
     const ev = stdin ? JSON.parse(stdin) : {};
-    const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || ev.cwd || process.cwd();
+    const projectRoot = path.resolve(process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || ev.cwd || process.cwd());
     STATE_PATH = path.join(projectRoot, ".deeppairing", "hooks-state.json");
     const tool = ev.tool_name || ev.toolName || "";
     if (!["Write", "Edit", "MultiEdit"].includes(tool)) exit(0, "skip: tool=" + (tool || "(unknown)"));
@@ -701,17 +703,30 @@ process.stdin.on("end", () => {
 
     // Mirrors deriveSessionId; store-to-emitted-hook tests pin their parity.
     // Prefer the actual hook event over a potentially stale inherited env.
-    const rawSessionId = ev.session_id ?? process.env.CLAUDE_CODE_SESSION_ID ?? "";
-    const sid = typeof rawSessionId === "string" ? rawSessionId.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 64) : "";
     const projectName = path.basename(projectRoot).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
     const projectHash = crypto.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);
-    const sessionId = "session_" + projectName + "_" + projectHash + (sid ? "_" + sid : "");
+    const legacySessionId = "session_" + projectName + "_" + projectHash;
+    const eventHasIdentity = Object.prototype.hasOwnProperty.call(ev, "session_id");
+    const malformedEventIdentity = eventHasIdentity && ev.session_id !== "" &&
+      typeof ev.session_id !== "string";
+    const rawCandidates = [ev.session_id, process.env.CLAUDE_CODE_SESSION_ID];
+    const anyNonemptyIdentity = rawCandidates.some(v => typeof v === "string" && v.length > 0);
+    const candidateIds = [];
+    for (const raw of rawCandidates) {
+      if (typeof raw !== "string" || !raw) continue;
+      const sid = raw.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 64);
+      if (!sid) continue;
+      const id = legacySessionId + "_" + sid;
+      if (!candidateIds.includes(id)) candidateIds.push(id);
+    }
+    if (candidateIds.length === 0 && !anyNonemptyIdentity && !malformedEventIdentity) candidateIds.push(legacySessionId);
+    RESOLVED_CANDIDATE_IDS = candidateIds;
     let covered = false;
-    try {
-      if (typeof filePath === "string" && filePath !== "(unknown)" && filePath.trim() &&
-          typeof rawSessionId === "string" && (!rawSessionId || sid)) {
-        const absolutePath = path.resolve(projectRoot, filePath);
-        const key = crypto.createHash("sha256").update(absolutePath).digest("hex");
+    if (typeof filePath === "string" && filePath !== "(unknown)" && filePath.trim()) {
+      const absolutePath = path.resolve(projectRoot, filePath);
+      const key = crypto.createHash("sha256").update(absolutePath).digest("hex");
+      for (const sessionId of candidateIds) {
+        try {
         const markerPath = path.join(dpDir, "sessions", sessionId, "code-checkpoints", key + ".json");
         const claimPath = markerPath + ".claim." + process.pid + "." + crypto.randomBytes(8).toString("hex");
         // Atomic claim: one receipt covers one edit. Concurrent hooks cannot
@@ -719,13 +734,19 @@ process.stdin.on("end", () => {
         fs.renameSync(markerPath, claimPath);
         try {
           const m = JSON.parse(fs.readFileSync(claimPath, "utf8"));
-          const age = typeof m.at === "string" ? Date.now() - Date.parse(m.at) : NaN;
+          const now = Date.now();
+          const at = typeof m.at === "string" ? Date.parse(m.at) : NaN;
+          const expiresAt = m.expiresAt === undefined ? at + 60 * 1000
+            : typeof m.expiresAt === "string" ? Date.parse(m.expiresAt) : NaN;
           covered = m.version === 1 && m.sessionId === sessionId && m.filePath === absolutePath &&
             typeof m.artifactId === "string" && m.artifactId.length > 0 &&
-            Number.isFinite(age) && age >= 0 && age <= 60 * 1000;
+            Number.isFinite(at) && Number.isFinite(expiresAt) && expiresAt >= at &&
+            now >= at && now <= expiresAt;
         } finally { try { fs.unlinkSync(claimPath); } catch {} }
+        } catch { /* try the next candidate */ }
+        if (covered) break;
       }
-    } catch { /* missing/corrupt/legacy receipt: remind, never block */ }
+    }
     if (!covered) {
       process.stderr.write(
         "deepPairing: " + tool + " on " + filePath +

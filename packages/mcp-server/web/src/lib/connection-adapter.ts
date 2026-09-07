@@ -52,16 +52,8 @@ export class WebSocketAdapter implements ConnectionAdapter {
     | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
+  private lifecycleGeneration = 0;
   private readonly maxReconnectDelay = 30000;
-  /**
-   * MP1 — set by disconnect(): a DELIBERATE close (e.g. a project switch tears
-   * down this adapter and builds a fresh one for the new daemon). onclose must
-   * then NOT re-arm reconnect or run the cross-project mismatch probe — without
-   * this, switching projects looked like a dropped connection, the old
-   * adapter's probe saw the NEW daemon's different hash, and fired the false
-   * "tab is bound to a stale daemon" toast.
-   */
-  private closed = false;
   /**
    * II3 — set once the probe confirms the live daemon serves a different
    * project. Latches the reconnect loop OFF: `onclose` will not re-arm
@@ -136,28 +128,41 @@ export class WebSocketAdapter implements ConnectionAdapter {
 
   connect(): void {
     if (this.ws && this.ws.readyState <= 1) return;
-    this.closed = false; // a fresh connect re-arms the adapter
+    // An explicit connect supersedes any backoff owned by the prior socket.
+    // Clearing here also prevents that timer from later erasing a successor's
+    // reconnectTimer handle.
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    const socket = new WebSocket(this.url);
+    this.ws = socket;
+    const generation = ++this.lifecycleGeneration;
 
-    this.ws = new WebSocket(this.url);
-
-    this.ws.onopen = () => {
+    socket.onopen = () => {
+      if (this.ws !== socket || this.lifecycleGeneration !== generation) return;
       this.reconnectAttempt = 0; // Reset backoff on successful connect
       this.connectHandler?.();
     };
 
-    this.ws.onmessage = (event) => {
+    socket.onmessage = (event) => {
+      if (this.ws !== socket || this.lifecycleGeneration !== generation) return;
       try {
         const data = JSON.parse(event.data);
         this.messageHandler?.(data);
       } catch { /* ignore malformed */ }
     };
 
-    this.ws.onclose = () => {
+    socket.onclose = () => {
+      // A replaced socket may deliver `close` after its successor has opened
+      // and sent state. It no longer owns adapter lifecycle: in particular it
+      // must not invalidate the successor's connection generation or arm a
+      // second reconnect timer.
+      if (this.ws !== socket || this.lifecycleGeneration !== generation) return;
+      this.ws = null;
       this.disconnectHandler?.();
-      // MP1 — a deliberate disconnect (project switch / teardown) is terminal
-      // for this adapter. Don't reconnect and don't probe — the caller built (or
-      // will build) a fresh adapter for the target daemon.
-      if (this.closed) return;
+      // The handler is public and may synchronously install a successor.
+      if (this.lifecycleGeneration !== generation || this.ws !== null) return;
       // II3 — a confirmed cross-project mismatch latches the loop OFF.
       // Don't re-arm: the daemon on this port serves a different project
       // and will only ever 403 our stale hash. The user must reload to
@@ -179,34 +184,34 @@ export class WebSocketAdapter implements ConnectionAdapter {
       //   - probe ok, hash differs → cross-bind; II3 fires onFatalMismatch
       //     and clears the timer below instead of silently rebinding.
       if (this.reconnectAttempt >= 3) {
-        void this.probeDaemonAndMaybeRefresh();
+        void this.probeDaemonAndMaybeRefresh(generation);
       }
-      // probeDaemonAndMaybeRefresh may have set fatalMismatch synchronously
-      // before this line on a fast (mocked/test) fetch; guard again so we
-      // never arm a timer the probe just decided to kill.
-      if (this.fatalMismatch) {
-        if (this.reconnectTimer) {
-          clearTimeout(this.reconnectTimer);
-          this.reconnectTimer = null;
-        }
-        return;
-      }
-      this.reconnectTimer = setTimeout(() => this.connect(), delay);
+      this.reconnectTimer = setTimeout(() => {
+        if (this.lifecycleGeneration !== generation) return;
+        this.reconnectTimer = null;
+        // Another caller may already have installed a successor while this
+        // current-socket reconnect was waiting in backoff.
+        if (this.ws === null) this.connect();
+      }, delay);
     };
 
-    this.ws.onerror = () => {
-      this.ws?.close();
+    socket.onerror = () => {
+      if (this.ws !== socket || this.lifecycleGeneration !== generation) return;
+      socket.close();
     };
   }
 
   disconnect(): void {
-    this.closed = true; // MP1 — mark terminal so onclose doesn't reconnect/probe
+    this.lifecycleGeneration++;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    this.ws?.close();
+    const socket = this.ws;
+    // Retire identity before close(): browser delivery is asynchronous, but
+    // controllable/test transports may invoke onclose synchronously.
     this.ws = null;
+    socket?.close();
   }
 
   onMessage(handler: (data: any) => void): void {
@@ -248,7 +253,7 @@ export class WebSocketAdapter implements ConnectionAdapter {
    * Localhost-only fetch; on (a) we fall through silently so the
    * existing reconnect timer still fires.
    */
-  private async probeDaemonAndMaybeRefresh(): Promise<void> {
+  private async probeDaemonAndMaybeRefresh(generation: number): Promise<void> {
     let body: any;
     try {
       const host = this.baseUrl.replace(/^ws/, "http").replace(/\/ws$/, "");
@@ -261,6 +266,7 @@ export class WebSocketAdapter implements ConnectionAdapter {
       // reconnect timer continues; we'll try again next cycle.
       return;
     }
+    if (this.lifecycleGeneration !== generation || this.ws !== null) return;
 
     const liveHash = typeof body?.projectHash === "string" ? body.projectHash : null;
     if (!liveHash) return;
@@ -269,6 +275,8 @@ export class WebSocketAdapter implements ConnectionAdapter {
 
     // (b) Same project — let the reconnect loop proceed unchanged.
     if (cachedHash === liveHash) return;
+
+    if (this.lifecycleGeneration !== generation || this.ws !== null) return;
 
     // (c) Cross-bind. Latch the loop OFF and surface the mismatch instead
     // of silently rebinding to a different project.

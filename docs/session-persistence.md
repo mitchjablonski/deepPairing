@@ -13,11 +13,16 @@ wins, not wall-clock timestamps. Status-history append deltas are retained in
 commit order and exact duplicate entries are collapsed. A record removed on
 disk is not resurrected by a stale writer that previously loaded it. This
 replaces the old behavior of restoring every cached record after external pruning.
+Whole-file disappearance is not treated as intentional deletion: a dirty writer
+that previously observed the collection fails its flush and retains its pending
+delta until a valid file is restored. A collection that has never existed may
+still be created normally.
 
 Cooperating FileStore writers take an exclusive per-session `.flush.lock` across
 read/merge/write. Lock acquisition is bounded to 250 ms; contention never causes
 an unlocked write. Debounced contention retries with backoff capped at two
-seconds while the process remains alive. `forceFlush()` reports failure to its
+seconds while the process remains alive. Attempts continue indefinitely, but
+each acquisition attempt remains bounded. `forceFlush()` reports failure to its
 caller. Successful per-file commits advance only that file's baseline, so a
 retry after a later-file failure does not duplicate already committed deltas.
 

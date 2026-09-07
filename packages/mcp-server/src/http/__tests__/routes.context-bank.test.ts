@@ -80,18 +80,28 @@ describe("GET /api/context-bank", () => {
   });
 
   it("?fresh=1 reflects a mutation the cached read would not", async () => {
-    upsertProject(ctx.tmpDir);
-    const before = await (await ctx.app.request("/api/context-bank")).json();
-    expect(before.totals.openDecisions).toBe(0);
+    const initialNow = new Date();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(initialNow);
+    try {
+      upsertProject(ctx.tmpDir);
+      const before = await (await ctx.app.request("/api/context-bank")).json();
+      expect(before.totals.openDecisions).toBe(0);
 
-    seedOpenDecision();
-    // The cache is intentionally sticky…
-    expect((await (await ctx.app.request("/api/context-bank")).json()).totals.openDecisions).toBe(0);
-    // …until asked for fresh data. (The route's fresh path has a 2s min-age
-    // floor; `before` above was built by an earlier request in this test, which
-    // is why the floor has to be waited out rather than assumed away.)
-    await new Promise((r) => setTimeout(r, BANK_FRESH_FLOOR_MS + 50));
-    expect((await (await ctx.app.request("/api/context-bank?fresh=1")).json()).totals.openDecisions).toBe(1);
+      seedOpenDecision();
+      // The cache is intentionally sticky, including for a fresh request just
+      // inside the route's minimum-age floor.
+      expect((await (await ctx.app.request("/api/context-bank")).json()).totals.openDecisions).toBe(0);
+      vi.setSystemTime(new Date(initialNow.getTime() + BANK_FRESH_FLOOR_MS - 1));
+      expect((await (await ctx.app.request("/api/context-bank?fresh=1")).json()).totals.openDecisions).toBe(0);
+
+      // One millisecond past the floor, fresh data must be rebuilt. Faking Date
+      // only keeps this boundary deterministic while leaving async timers real.
+      vi.setSystemTime(new Date(initialNow.getTime() + BANK_FRESH_FLOOR_MS + 1));
+      expect((await (await ctx.app.request("/api/context-bank?fresh=1")).json()).totals.openDecisions).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
