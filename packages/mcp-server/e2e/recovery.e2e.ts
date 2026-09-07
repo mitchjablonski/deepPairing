@@ -56,6 +56,7 @@ interface Daemon {
 let home: string;
 let projectRoot: string;
 let daemon: Daemon | undefined;
+let bootingProc: ChildProcess | undefined;
 
 async function bootDaemon(): Promise<Daemon> {
   const proc = spawnDiagnosticProcess(process.execPath, [daemonJs], {
@@ -67,7 +68,10 @@ async function bootDaemon(): Promise<Daemon> {
       DEEPPAIRING_PORT_BASE: PORT_BASE,
       DEEPPAIRING_PORT_SPAN: PORT_SPAN,
     },
-  }, projectRoot);
+  });
+  // Publish ownership before readiness polling so a failed/timed-out beforeAll
+  // can still attach output and tear down the child it actually spawned.
+  bootingProc = proc;
   const daemonJson = path.join(projectRoot, ".deeppairing", "daemon.json");
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
@@ -97,9 +101,12 @@ async function bootDaemon(): Promise<Daemon> {
 }
 
 async function stopDaemon(): Promise<void> {
-  if (!daemon) return;
-  await teardownDaemon(daemon.proc, portOf(daemon.baseURL));
-  daemon = undefined;
+  const current = daemon;
+  const proc = current?.proc ?? bootingProc;
+  if (!proc) return;
+  await teardownDaemon(proc, current ? portOf(current.baseURL) : undefined);
+  if (daemon?.proc === proc) daemon = undefined;
+  if (bootingProc === proc) bootingProc = undefined;
 }
 
 function internal(d: Daemon, sid: string) {
@@ -192,7 +199,7 @@ const chunkBoundary = (page: Page) => page.getByTestId("chunk-boundary");
 
 test.describe.configure({ mode: "serial" });
 
-daemonBeforeAll(() => [daemon?.proc], async () => {
+daemonBeforeAll(() => [daemon?.proc ?? bootingProc], async () => {
   if (!fs.existsSync(daemonJs)) {
     throw new Error(`dist/daemon/index.js missing at ${daemonJs} — run \`pnpm build\` before the e2e suite.`);
   }

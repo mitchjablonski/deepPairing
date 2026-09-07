@@ -443,6 +443,14 @@ describe("E2E daemon diagnostics", () => {
     });
   });
 
+  it("recovery setup exposes its spawned child before readiness and tears that child down on setup failure", () => {
+    const source = fs.readFileSync(path.resolve(packageRoot, "e2e/recovery.e2e.ts"), "utf8");
+    expect(source).toContain("bootingProc = proc;");
+    expect(source).toContain("daemon?.proc ?? bootingProc");
+    expect(source).toContain("current ? portOf(current.baseURL) : undefined");
+    expect(source).not.toContain("}, projectRoot);");
+  });
+
   it("uploads only failure evidence even when a retry makes CI green", () => {
     const workflow = fs.readFileSync(path.resolve(packageRoot, "../../.github/workflows/ci.yml"), "utf8");
     const upload = workflow.split("- name: Upload Playwright failure diagnostics")[1]?.split("\n  hook-smoke:")[0] ?? "";

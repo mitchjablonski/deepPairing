@@ -14,6 +14,10 @@ export function beginSessionTransition(sessionId: string | null): SessionTransit
   return { generation: ++generation, sessionId };
 }
 
+export function captureSessionTransition(sessionId: string | null): SessionTransitionToken {
+  return { generation, sessionId };
+}
+
 export function isCurrentSessionTransition(token: SessionTransitionToken): boolean {
   return token.generation === generation;
 }

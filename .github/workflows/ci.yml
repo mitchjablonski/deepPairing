@@ -102,14 +102,17 @@ jobs:
         run: pnpm --filter @deeppairing/mcp-server test:e2e
 
       - name: Upload Playwright failure diagnostics
-        if: failure()
+        # A failed attempt can pass on retry while the job finishes green.
+        # Collect only failure evidence; raw trace archives stay local.
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-failure-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            packages/mcp-server/test-results/
-            !packages/mcp-server/test-results/**/trace.zip
-          if-no-files-found: warn
+            packages/mcp-server/test-results/**/test-failed-*.png
+            packages/mcp-server/test-results/**/error-context.md
+            packages/mcp-server/test-results/**/*diagnostics*.txt
+          if-no-files-found: ignore
           retention-days: 7
 
   hook-smoke:

@@ -201,9 +201,9 @@ test("#339 — transport reconnect preserves an in-flight Features replay entry"
     await requested;
     await page.evaluate(() => {
       const state = (window as any).__dpConnectionStore.getState();
-      // Exercise the real adapter disconnect used by refreshUrl while the
-      // semantic replay request remains held at its authoritative HTTP read.
-      state.adapter.disconnect();
+      // Close the adapter's actual current transport. Deliberate adapter
+      // teardown retires callback ownership and intentionally emits no outage.
+      state.adapter.ws.close();
     });
     await page.waitForFunction(() => (window as any).__dpConnectionStore.getState().connected === false);
 
@@ -219,7 +219,6 @@ test("#339 — transport reconnect preserves an in-flight Features replay entry"
     // A transport reconnect must remain healthy without replacing the replayed
     // frame: wait for the store's connected + hydrated contract, then verify
     // the intended artifact and read-only gate still render.
-    await page.evaluate(() => (window as any).__dpConnectionStore.getState().adapter.connect());
     await page.waitForFunction(() => {
       const state = (window as any).__dpConnectionStore.getState();
       return state.connected === true && state.hydrated === true && state.sessionId === "feat";

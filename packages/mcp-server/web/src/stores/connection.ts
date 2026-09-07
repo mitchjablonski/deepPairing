@@ -10,6 +10,7 @@ import type { Artifact, Comment, Request } from "@deeppairing/shared";
 import { useReplayStore } from "./replay";
 import {
   beginSessionTransition,
+  captureSessionTransition,
   isCurrentSessionTransition,
   type SessionTransitionToken,
 } from "../lib/session-transition";
@@ -1032,6 +1033,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       adapter.onFatalMismatch?.(() => {
         set({ connected: false });
         import("./toast").then(({ useToastStore }) => {
+          if (get().adapter !== adapter) return;
           useToastStore.getState().push({
             kind: "error",
             title: "Tab is bound to a stale daemon",
@@ -1040,6 +1042,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             action: {
               label: "Reload to re-bind",
               onClick: () => {
+                if (get().adapter !== adapter) return;
                 if (typeof window !== "undefined") window.location.reload();
               },
             },
@@ -1048,6 +1051,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       });
 
       adapter.onConnectionRefused?.((info) => {
+        const transition = captureSessionTransition(get().sessionId);
         set((state) => ({ connected: false, disconnectedSince: state.disconnectedSince ?? Date.now() }));
         const named = info.sessionId ?? null;
         const mine = get().sessionId;
@@ -1057,6 +1061,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             ? `The blocked session is ${named} — not ${mine}, which this tab is showing.`
             : `Affected session: ${named}.`;
         import("./toast").then(({ useToastStore }) => {
+          if (get().adapter !== adapter || !isCurrentSessionTransition(transition)) return;
           if (info.code !== "session_review_conflict") {
             useToastStore.getState().push({
               kind: "error",
@@ -1073,7 +1078,10 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             ttl: 0,
             action: {
               label: "Retry connecting",
-              onClick: () => adapter.retryAfterRefusal?.(),
+              onClick: () => {
+                if (get().adapter !== adapter || !isCurrentSessionTransition(transition)) return;
+                adapter.retryAfterRefusal?.();
+              },
             },
           });
         });
@@ -1098,12 +1106,10 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     switchSession: (sessionId: string, options?: SwitchSessionOptions) => {
       const { adapter } = get();
       if (adapter && "switchSession" in adapter) {
-        beginSessionTransition(sessionId);
+        const transition = beginSessionTransition(sessionId);
         sessionGeneration++;
         snapshotGeneration++;
         cancelPendingRecovery();
-        const switchConnection = connectionGeneration;
-        const switchSessionGeneration = sessionGeneration;
         // Publish the new identity before the async reset, then open the
         // replacement socket only after that reset has completed. This keeps a
         // fast hydration from being erased by a late import continuation.
@@ -1112,7 +1118,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           if (
             get().adapter !== adapter ||
             get().sessionId !== sessionId ||
-            !isCurrent(switchConnection, switchSessionGeneration)
+            !isCurrentSessionTransition(transition)
           ) return;
           if (!options?.preserveStateUntilConnected) {
             useArtifactStore.getState().reset();

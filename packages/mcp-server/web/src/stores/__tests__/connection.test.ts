@@ -13,6 +13,7 @@ class FakeAdapter implements ConnectionAdapter {
   connected = false;
   refreshUrlCalls = 0;
   switchedSessions: string[] = [];
+  switchHandler: ((sessionId: string) => void) | null = null;
 
   connect() { this.connected = true; this.connectHandler?.(); }
   disconnect() { this.connected = false; this.disconnectHandler?.(); }
@@ -20,7 +21,10 @@ class FakeAdapter implements ConnectionAdapter {
   onConnect(h: () => void) { this.connectHandler = h; }
   onDisconnect(h: () => void) { this.disconnectHandler = h; }
   refreshUrl() { this.refreshUrlCalls++; }
-  switchSession(sessionId: string) { this.switchedSessions.push(sessionId); }
+  switchSession(sessionId: string) {
+    this.switchedSessions.push(sessionId);
+    this.switchHandler?.(sessionId);
+  }
 
   fatalMismatchHandler: ((info: { liveProjectRoot?: string; liveHash: string }) => void) | null = null;
   onFatalMismatch(h: (info: { liveProjectRoot?: string; liveHash: string }) => void) { this.fatalMismatchHandler = h; }
@@ -96,6 +100,43 @@ describe("semantic session transitions across transport reconnects", () => {
     const beforeTeardown = beginSessionTransition("B");
     useConnectionStore.getState().disconnect();
     expect(isCurrentSessionTransition(beforeTeardown)).toBe(false);
+  });
+
+  it("completes a selected switch after the current transport drops", async () => {
+    useConnectionStore.getState().connect("A");
+    activeAdapter.emit({ type: "connected", state: { sessionId: "A", artifacts: [], comments: [], requests: [], decisions: [] } });
+    await flush();
+
+    useConnectionStore.getState().switchSession("B");
+    activeAdapter.disconnect();
+    await vi.waitFor(() => expect(activeAdapter.switchedSessions).toEqual(["B"]));
+    expect(useConnectionStore.getState().sessionId).toBe("B");
+  });
+
+  it("cancels a queued switch on a newer navigation or explicit teardown", async () => {
+    useConnectionStore.getState().connect("A");
+    useConnectionStore.getState().switchSession("B");
+    useConnectionStore.getState().switchSession("A");
+    await vi.waitFor(() => expect(activeAdapter.switchedSessions).toEqual(["A"]));
+
+    activeAdapter.switchedSessions.length = 0;
+    useConnectionStore.getState().switchSession("B");
+    useConnectionStore.getState().disconnect();
+    await flush();
+    expect(activeAdapter.switchedSessions).toEqual([]);
+  });
+
+  it("resets before switching so synchronous hydration is retained", async () => {
+    useConnectionStore.getState().connect("A");
+    useArtifactStore.getState().addArtifact({ id: "old", sessionId: "A", type: "research", version: 1, parentId: null, title: "old", status: "draft", content: {}, agentReasoning: null, createdAt: "now", updatedAt: "now" } as any);
+    activeAdapter.switchHandler = (sessionId) => activeAdapter.emit({
+      type: "connected",
+      state: { sessionId, artifacts: [{ id: "fresh", sessionId, type: "research", version: 1, parentId: null, title: "fresh", status: "draft", content: {}, agentReasoning: null, createdAt: "now", updatedAt: "now" }], comments: [], requests: [], decisions: [] },
+    });
+
+    useConnectionStore.getState().switchSession("B");
+    await vi.waitFor(() => expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["fresh"]));
+    expect(activeAdapter.switchedSessions).toEqual(["B"]);
   });
 });
 
@@ -440,6 +481,39 @@ describe("connection store — handleMessage dispatch", () => {
       expect(useConnectionStore.getState().connected).toBe(false);
     });
 
+    it("keeps a project mismatch warning across session navigation but drops it after adapter teardown", async () => {
+      const { useToastStore } = await import("../toast");
+      useToastStore.getState().dismissAll();
+      useConnectionStore.getState().connect("A");
+      activeAdapter.triggerFatalMismatch();
+      useConnectionStore.getState().switchSession("B");
+      await flush();
+      expect(useToastStore.getState().toasts.some((t) => /stale daemon/i.test(t.title))).toBe(true);
+
+      useToastStore.getState().dismissAll();
+      activeAdapter.triggerFatalMismatch();
+      useConnectionStore.getState().disconnect();
+      await flush();
+      expect(useToastStore.getState().toasts.some((t) => /stale daemon/i.test(t.title))).toBe(false);
+    });
+
+    it("drops a queued refusal toast after navigation but keeps the same-session refusal across transport close", async () => {
+      const { useToastStore } = await import("../toast");
+      useToastStore.getState().dismissAll();
+      useConnectionStore.getState().connect("A");
+      activeAdapter.triggerConnectionRefused({ code: "session_review_conflict", sessionId: "A" });
+      useConnectionStore.getState().switchSession("B");
+      await flush();
+      expect(useToastStore.getState().toasts.some((t) => /review conflict/i.test(t.title))).toBe(false);
+
+      useToastStore.getState().dismissAll();
+      await vi.waitFor(() => expect(activeAdapter.switchedSessions).toContain("B"));
+      activeAdapter.triggerConnectionRefused({ code: "session_review_conflict", sessionId: "B" });
+      activeAdapter.disconnect();
+      await flush();
+      expect(useToastStore.getState().toasts.some((t) => /review conflict/i.test(t.title))).toBe(true);
+    });
+
     it("pushes an info toast on `ledger_write` naming the CONCEPT, with the reason as the body", async () => {
       const { useToastStore } = await import("../toast");
       useToastStore.getState().dismissAll();
@@ -681,7 +755,7 @@ describe("connection store — safe daemon recovery (#339)", () => {
     vi.useFakeTimers();
     useReplayStore.getState().exitReplay();
     await replayRehydrateSettled();
-    expect(activeAdapter.switchedSessions).toEqual(["A"]);
+    await vi.waitFor(() => expect(activeAdapter.switchedSessions).toEqual(["A"]));
     expect(useReplayStore.getState()).toMatchObject({ active: true, exiting: true });
     expect(useArtifactStore.getState().artifacts.map((item) => item.id)).toEqual(["historic"]);
 
@@ -718,7 +792,7 @@ describe("connection store — safe daemon recovery (#339)", () => {
 
     recovery!.action!.onClick();
     await replayRehydrateSettled();
-    expect(activeAdapter.switchedSessions).toEqual(["A", "A"]);
+    await vi.waitFor(() => expect(activeAdapter.switchedSessions).toEqual(["A", "A"]));
     activeAdapter.emit({ type: "connected", state: snapshot("A", [artifact("live-after-retry", "A")]) });
     await vi.runAllTimersAsync();
     expect(useReplayStore.getState()).toMatchObject({ active: false, exiting: false });
