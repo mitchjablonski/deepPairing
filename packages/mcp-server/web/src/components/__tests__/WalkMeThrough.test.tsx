@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   WalkMeThroughButton,
@@ -340,9 +340,26 @@ describe("WalkMeThroughButton", () => {
     resolveRequest(new Response(JSON.stringify({
       request: { id: "req_late", text: "x", intent: "explain", createdAt: new Date().toISOString() },
     }), { status: 200, headers: { "Content-Type": "application/json" } }));
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+
+    // #390 — settle on an OBSERVABLE completion, never a guessed microtask
+    // budget. The three `await Promise.resolve()` this replaces could not reach
+    // the click handler's continuation (submitRequest awaits safeFetch, then
+    // res.json(), then its own set, and only then returns into the awaiting
+    // caller), so both assertions below passed whether or not the guard existed
+    // — the test was vacuous and deleting the guard it exists for did not fail
+    // it. Waiting for the store to hold the SERVER-ASSIGNED record is the right
+    // signal twice over: that swap is the last thing submitRequest does, so it
+    // lands exactly one continuation before the post-await mounted guard, and
+    // it is also the product contract this must not regress — an unmount
+    // suppresses local UI work, it never drops the request.
+    await waitFor(() => {
+      const requests = useArtifactStore.getState().requests;
+      expect(requests.some((r) => r.id === "req_late")).toBe(true);
+      expect(requests.some((r) => r.id.startsWith("local_req_"))).toBe(false);
+    });
+    // Then hand React its own boundary so the caller's continuation actually
+    // runs. Without it the assertions would race the very code they measure.
+    await act(async () => {});
 
     expect(timeoutSpy.mock.calls.some(([, delay]) => delay === 2500)).toBe(false);
     expect(useToastStore.getState().toasts).toHaveLength(0);
