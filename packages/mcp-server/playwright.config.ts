@@ -1,8 +1,9 @@
 import { defineConfig } from "@playwright/test";
 import { playwrightPortEnv } from "./e2e/playwright-port-window.js";
 
-// Resolve once in Playwright's parent process. Every worker and every daemon it
-// spawns inherits the same noncanonical window for the lifetime of this run.
+// Resolve once in Playwright's parent process. Every worker and daemon inherits
+// that window; the default is noncanonical, while a valid explicit override may
+// intentionally select any supported production window.
 Object.assign(process.env, playwrightPortEnv(process.env, process.pid));
 
 /**
