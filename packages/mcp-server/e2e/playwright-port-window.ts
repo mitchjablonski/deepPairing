@@ -13,15 +13,25 @@ function hash(value: string): number {
 }
 
 function usableSpan(value: string | undefined): number {
-  if (!value || !/^\d+$/.test(value)) return DEFAULT_SPAN;
-  const parsed = Number(value);
-  return parsed >= 1 && parsed <= 4096 ? parsed : DEFAULT_SPAN;
+  if (value === undefined || value.trim() === "") return DEFAULT_SPAN;
+  const parsed = Number(value.trim());
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 4096
+    ? parsed : DEFAULT_SPAN;
+}
+
+function usableBase(value: string | undefined, span: number): number | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  const parsed = Number(value.trim());
+  return Number.isInteger(parsed) &&
+    parsed >= 1024 && parsed <= MAX_BASE && parsed + span - 1 <= MAX_PORT
+    ? parsed : undefined;
 }
 
 /**
  * Give one Playwright invocation a stable, best-effort-isolated daemon window.
- * Explicit caller values always win. The daemon's bind retry remains the final
- * authority if two independently-derived windows happen to collide.
+ * A valid explicit base wins; an invalid or overflowing base safely re-derives.
+ * Invalid spans normalize to the test default. The daemon's bind retry remains
+ * the final authority if independently-derived windows collide.
  */
 export function playwrightPortEnv(
   env: NodeJS.ProcessEnv,
@@ -34,9 +44,10 @@ export function playwrightPortEnv(
   const windowCount = Math.floor((lastBase - E2E_PORT_FLOOR) / span) + 1;
   const identity = [env.GITHUB_RUN_ID, env.GITHUB_RUN_ATTEMPT, pid].filter(Boolean).join(":");
   const derivedBase = E2E_PORT_FLOOR + (hash(identity) % windowCount) * span;
+  const base = usableBase(env.DEEPPAIRING_PORT_BASE, span) ?? derivedBase;
 
   return {
-    DEEPPAIRING_PORT_BASE: env.DEEPPAIRING_PORT_BASE ?? String(derivedBase),
-    DEEPPAIRING_PORT_SPAN: env.DEEPPAIRING_PORT_SPAN ?? String(DEFAULT_SPAN),
+    DEEPPAIRING_PORT_BASE: String(base),
+    DEEPPAIRING_PORT_SPAN: String(span),
   };
 }
