@@ -282,6 +282,12 @@ evidence. You comment, pick, ask "why", request revisions; every rejection
 becomes a gate in this project, and — once you enable cross-project publishing —
 joins the ledger your other projects read.
 
+**VS Code extension — experimental preview.** Claude Code plus the browser
+companion is the supported workflow. The extension in
+`packages/vscode-extension/` is an experimental preview. There is no parity
+commitment and no date for one. Its known limitations are listed in
+[packages/vscode-extension/README.md](packages/vscode-extension/README.md).
+
 ## How it fits together
 
 ```

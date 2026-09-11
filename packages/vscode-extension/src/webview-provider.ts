@@ -11,6 +11,9 @@ import * as path from "path";
  * - Bridges WebSocket messages between the webview and the deepPairing daemon
  * - Discovers the daemon port from .deeppairing/daemon.json
  * - Shows VS Code notifications when decisions/plans arrive
+ *
+ * Experimental preview. The supported workflow is Claude Code plus the browser
+ * companion. See ../README.md for the known limitations.
  */
 export class DeepPairingViewProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
@@ -64,6 +67,8 @@ export class DeepPairingViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.html = this.getHtml(webviewView.webview);
   }
 
+  // Port discovery reads .deeppairing/daemon.json directly. There is no
+  // authenticated bootstrap and no token on the connection that follows.
   private discoverPort(): void {
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders) return;
@@ -141,6 +146,8 @@ export class DeepPairingViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  // The URL carries a project hash and no session id, so the webview receives
+  // the project's stream rather than a session you selected.
   private openWebSocket(webview: vscode.Webview, url: string): void {
     if (this.ws && this.ws.readyState <= 1) return;
     try {
