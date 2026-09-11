@@ -35,7 +35,14 @@ function lastRequestPost(): any {
 
 beforeEach(() => {
   useArtifactStore.getState().reset();
-  useConnectionStore.setState({ connected: true, activeSessions: [{ sessionId: "s1", live: true }] } as any);
+  // #393 — `sessionId` is pinned explicitly (not inherited from whatever the
+  // previous test left behind): the send confirmation is now session-aware, so
+  // which session the UI is bound to is load-bearing setup, not incidental.
+  useConnectionStore.setState({
+    connected: true,
+    sessionId: "s1",
+    activeSessions: [{ sessionId: "s1", live: true }],
+  } as any);
   useReplayStore.setState({ active: false } as any);
   useToastStore.setState({ toasts: [] } as any);
   vi.stubGlobal(
@@ -327,7 +334,7 @@ describe("WalkMeThroughButton", () => {
     expect(clearSpy).toHaveBeenCalledWith(sentTimer);
   });
 
-  it("does not schedule sent-state work when the request resolves after unmount", async () => {
+  it("suppresses sent-state work but STILL confirms globally when the request resolves after unmount in the same session", async () => {
     let resolveRequest!: (response: Response) => void;
     const pendingRequest = new Promise<Response>((resolve) => { resolveRequest = resolve; });
     vi.stubGlobal("fetch", vi.fn(() => pendingRequest));
@@ -362,7 +369,102 @@ describe("WalkMeThroughButton", () => {
     await act(async () => {});
 
     expect(timeoutSpy.mock.calls.some(([, delay]) => delay === 2500)).toBe(false);
+    // #393 — the two halves this guard used to conflate are now separate. The
+    // component-local half stays suppressed (above): no `setSent`, no 2500ms
+    // reset timer after unmount, exactly as #355/#390 established. The GLOBAL
+    // half no longer is: the toast store outlives the component, the request
+    // demonstrably landed (asserted above), and the UI is still bound to the
+    // session it was sent into — so the user who clicked and moved on to the
+    // next hunk gets their one confirmation. This assertion previously read
+    // `toHaveLength(0)`; #393 is the product decision that changed it.
+    const toasts = useToastStore.getState().toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]!.kind).toBe("success");
+    expect(toasts[0]!.title).toMatch(/Sent to Claude/i);
+  });
+
+  it("#393 — an unmounted completion whose session CHANGED mid-flight confirms nothing", async () => {
+    let resolveRequest!: (response: Response) => void;
+    const pendingRequest = new Promise<Response>((resolve) => { resolveRequest = resolve; });
+    vi.stubGlobal("fetch", vi.fn(() => pendingRequest));
+    const { unmount } = render(<WalkMeThroughButton target={{ kind: "file", filePath: "late.ts" }} />);
+
+    await userEvent.click(screen.getByTestId("walk-me-through-file"));
+    unmount();
+    // The user switched sessions while the request was in the air. The request
+    // still lands (below) — only the acknowledgement is withheld, because an
+    // unlabeled "Sent to Claude" would read as belonging to session s2.
+    act(() => {
+      useConnectionStore.setState({
+        sessionId: "s2",
+        activeSessions: [{ sessionId: "s2", live: true }],
+      } as any);
+    });
+    resolveRequest(new Response(JSON.stringify({
+      request: { id: "req_switched", text: "x", intent: "explain", createdAt: new Date().toISOString() },
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+
+    // Same observable-completion settle as the same-session case: wait for the
+    // server-assigned record to replace the provisional one, then hand React a
+    // boundary so the click handler's continuation actually runs. Without this
+    // the assertion would pass on a continuation that never executed.
+    await waitFor(() => {
+      const requests = useArtifactStore.getState().requests;
+      expect(requests.some((r) => r.id === "req_switched")).toBe(true);
+      expect(requests.some((r) => r.id.startsWith("local_req_"))).toBe(false);
+    });
+    await act(async () => {});
+
     expect(useToastStore.getState().toasts).toHaveLength(0);
+  });
+
+  it("#393 — still mounted in the SAME session: ✓ state, the 2500ms reset timer, and exactly one toast", async () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    render(<WalkMeThroughButton target={{ kind: "file", filePath: "a.ts" }} />);
+    await userEvent.click(screen.getByTestId("walk-me-through-file"));
+
+    // The mounted path is unchanged by #393 on all three counts.
+    expect(await screen.findByText(/Sent — posting in the sidebar/i)).toBeInTheDocument();
+    expect(timeoutSpy.mock.calls.some(([, delay]) => delay === 2500)).toBe(true);
+    const toasts = useToastStore.getState().toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]!.kind).toBe("success");
+  });
+
+  it("#393 — still mounted but REBOUND to another session: no ✓, no timer, no toast", async () => {
+    let resolveRequest!: (response: Response) => void;
+    const pendingRequest = new Promise<Response>((resolve) => { resolveRequest = resolve; });
+    vi.stubGlobal("fetch", vi.fn(() => pendingRequest));
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    render(<WalkMeThroughButton target={{ kind: "file", filePath: "late.ts" }} />);
+
+    await userEvent.click(screen.getByTestId("walk-me-through-file"));
+    // The component survived the switch (a reused instance under a new session)
+    // — contract point 5: it must not apply the old completion to its own state.
+    act(() => {
+      useConnectionStore.setState({
+        sessionId: "s2",
+        activeSessions: [{ sessionId: "s2", live: true }],
+      } as any);
+    });
+    timeoutSpy.mockClear();
+    resolveRequest(new Response(JSON.stringify({
+      request: { id: "req_rebound", text: "x", intent: "explain", createdAt: new Date().toISOString() },
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+
+    await waitFor(() => {
+      const requests = useArtifactStore.getState().requests;
+      expect(requests.some((r) => r.id === "req_rebound")).toBe(true);
+      expect(requests.some((r) => r.id.startsWith("local_req_"))).toBe(false);
+    });
+    await act(async () => {});
+
+    expect(screen.queryByText(/Sent — posting in the sidebar/i)).not.toBeInTheDocument();
+    expect(timeoutSpy.mock.calls.some(([, delay]) => delay === 2500)).toBe(false);
+    expect(useToastStore.getState().toasts).toHaveLength(0);
+    // The button is usable again — the withheld confirmation must not leave it
+    // stuck disabled.
+    expect(screen.getByTestId("walk-me-through-file")).not.toBeDisabled();
   });
 
   it("reads as an ACTION, not file metadata: UI font, keyboard-reachable, no wrap", () => {
