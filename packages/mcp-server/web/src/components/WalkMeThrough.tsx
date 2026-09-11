@@ -329,7 +329,18 @@ export function WalkMeThroughButton({
       // on screen said WHERE the answer lands, so the click felt like a shout
       // into the void.
       const pushToast = useToastStore.getState().push;
-      if (noAgentLive(activeSessions)) {
+      // #393 review (Sol finding 1) — the liveness that decides this wording is
+      // the ORIGINATING session's, not the whole list's. `activeSessions` holds
+      // every retained session with a per-session `live`, so passing the list
+      // whole let a live SIBLING stand in as proof that the session this
+      // request belongs to was live: an origin at `live:false` alongside a live
+      // s2 was confirmed "Sent to Claude" when the honest answer was "queued".
+      // Filtering to the origin also handles the origin being absent from the
+      // list entirely — `noAgentLive([])` is `true` by construction (see
+      // lib/liveness.ts: an empty list is "no agent"), so an unlistable origin
+      // gets the queued wording rather than a borrowed confirmation.
+      const originSessions = activeSessions.filter((s) => s.sessionId === originSessionId);
+      if (noAgentLive(originSessions)) {
         pushToast({
           kind: "info",
           title: "Saved — Claude will explain when the session resumes",

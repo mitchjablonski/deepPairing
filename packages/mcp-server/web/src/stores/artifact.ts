@@ -9,6 +9,24 @@ import { isDraftAwaitingReview } from "../lib/pending";
 let localCommentSeq = 0;
 
 /**
+ * #393 review (Sol finding 2) — store-boundary generation.
+ *
+ * `reset()` means "everything this store held is discarded": a real
+ * `switchSession` publishes the new session id and then resets, and a
+ * hydration installs a whole authoritative snapshot the same way. An
+ * optimistic mutation that was in the air across that boundary belongs to the
+ * contents that were thrown away — reconciling it afterwards paints an OLD
+ * session's record into the NEW session's list (the executed control: submit
+ * in s1, switch to s2, resolve → `req_old_session` appeared in s2's requests).
+ *
+ * Bumped on every `reset()`; captured before the fetch and compared after, so
+ * the completion path can tell "the store I started against is still the store
+ * I'm finishing into" without importing the connection store (which lazily
+ * imports THIS module — the cycle the codebase deliberately avoids).
+ */
+let storeGeneration = 0;
+
+/**
  * U3 — surface a mutation failure as a toast. Pulled out of every catch
  * block so the message wording stays consistent and the import isn't
  * top-of-file (toast store is lazy-loaded to avoid Zustand circular-import
@@ -698,6 +716,9 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       ...originFields,
     };
     set((state) => ({ requests: [...state.requests, provisional] }));
+    // #393 review (Sol finding 2) — the binding this completion is allowed to
+    // write back into. Captured BEFORE the fetch; see `storeGeneration`.
+    const generationAtSubmit = storeGeneration;
     try {
       const res = await safeFetch(`${apiBase()}/api/requests`, {
         method: "POST",
@@ -706,6 +727,19 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       });
       let serverRequest: Request | null = null;
       try { serverRequest = (await res.json())?.request ?? null; } catch { /* keep provisional */ }
+      // #393 review (Sol finding 2) — the store was reset while this was in
+      // the air (a real session switch, or a snapshot hydration). The
+      // provisional is already gone with everything else, and the server
+      // record describes the session we LEFT, so inserting it now would be an
+      // old completion landing in the new session's UI. The submission itself
+      // stays durable — the POST carried the originating X-Session-Id and the
+      // server kept it; the caller still gets the record back. We only refuse
+      // to repaint it here. (A same-session hydration is the same call: the
+      // snapshot it installed is authoritative, and the `request_added`
+      // broadcast re-adds the record by id.)
+      if (storeGeneration !== generationAtSubmit) {
+        return serverRequest ?? provisional;
+      }
       set((state) => {
         const withoutProvisional = state.requests.filter((r) => r.id !== provisional.id);
         const next =
@@ -1108,7 +1142,12 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     }
   },
 
-  reset: () => set({ artifacts: [], comments: {}, selectedArtifactId: null, unreadIds: [], acknowledgedDecisions: {}, resolvedDecisions: {}, requests: [] }),
+  reset: () => {
+    // #393 review (Sol finding 2) — crossing this boundary invalidates any
+    // in-flight optimistic reconciliation. See `storeGeneration` above.
+    storeGeneration++;
+    set({ artifacts: [], comments: {}, selectedArtifactId: null, unreadIds: [], acknowledgedDecisions: {}, resolvedDecisions: {}, requests: [] });
+  },
 
   markDecisionsAcknowledged: (decisionIds) =>
     set((s) => {

@@ -42,6 +42,9 @@ beforeEach(() => {
     connected: true,
     sessionId: "s1",
     activeSessions: [{ sessionId: "s1", live: true }],
+    // Zustand's setState MERGES, so an adapter installed by the real-switch
+    // test below would leak into every later test. Pinned null here.
+    adapter: null,
   } as any);
   useReplayStore.setState({ active: false } as any);
   useToastStore.setState({ toasts: [] } as any);
@@ -383,6 +386,13 @@ describe("WalkMeThroughButton", () => {
     expect(toasts[0]!.title).toMatch(/Sent to Claude/i);
   });
 
+  // The next two cases flip the CONNECTION store only, deliberately: they pin
+  // the component's own session compare, and their observable completion
+  // signal is the server record replacing the provisional in the artifact
+  // store — which only exists when the artifact store was NOT reset. The real
+  // `switchSession` (which resets it, and whose completion is now fenced) is
+  // covered by the "#393 review (Sol 2)" case below and by the store-level
+  // regression in stores/__tests__/artifact.test.ts.
   it("#393 — an unmounted completion whose session CHANGED mid-flight confirms nothing", async () => {
     let resolveRequest!: (response: Response) => void;
     const pendingRequest = new Promise<Response>((resolve) => { resolveRequest = resolve; });
@@ -465,6 +475,82 @@ describe("WalkMeThroughButton", () => {
     // The button is usable again — the withheld confirmation must not leave it
     // stuck disabled.
     expect(screen.getByTestId("walk-me-through-file")).not.toBeDisabled();
+  });
+
+  it("#393 review (Sol 1) — queued wording follows the ORIGINATING session's liveness, not a live sibling's", async () => {
+    // The daemon's active-sessions list carries EVERY retained session with a
+    // per-session `live`. Reading the whole list let a live sibling stand in as
+    // proof that the session this request belongs to was live, so a request
+    // queued against an exited wrapper was confirmed as "Sent to Claude".
+    useConnectionStore.setState({
+      sessionId: "s1",
+      activeSessions: [
+        { sessionId: "s1", live: false }, // the origin — its wrapper exited
+        { sessionId: "s2", live: true }, // a live sibling, irrelevant here
+      ],
+    } as any);
+    render(<WalkMeThroughButton target={{ kind: "file", filePath: "a.ts" }} />);
+    await userEvent.click(screen.getByTestId("walk-me-through-file"));
+
+    await waitFor(() => expect(useToastStore.getState().toasts).toHaveLength(1));
+    const toast = useToastStore.getState().toasts[0]!;
+    expect(toast.kind).toBe("info");
+    expect(toast.title).toMatch(/Claude will explain when the session resumes/i);
+    expect(toast.body).toMatch(/queued/i);
+  });
+
+  it("#393 review (Sol 1) — an origin ABSENT from the fresh list is queued, not confirmed live", async () => {
+    // `noAgentLive([])` is `true` by construction (see lib/liveness.ts): an
+    // empty list is "no agent". So an origin the daemon no longer lists at all
+    // gets the honest queued wording rather than a sibling's liveness.
+    useConnectionStore.setState({
+      sessionId: "s1",
+      activeSessions: [{ sessionId: "s2", live: true }],
+    } as any);
+    render(<WalkMeThroughButton target={{ kind: "file", filePath: "a.ts" }} />);
+    await userEvent.click(screen.getByTestId("walk-me-through-file"));
+
+    await waitFor(() => expect(useToastStore.getState().toasts).toHaveLength(1));
+    expect(useToastStore.getState().toasts[0]!.kind).toBe("info");
+  });
+
+  it("#393 review (Sol 2) — a REAL switchSession mid-flight keeps the old completion out of the new session's requests", async () => {
+    let resolveRequest!: (response: Response) => void;
+    const pendingRequest = new Promise<Response>((resolve) => { resolveRequest = resolve; });
+    vi.stubGlobal("fetch", vi.fn(() => pendingRequest));
+    // The REAL switchSession only runs when a switch-capable adapter is bound.
+    // A minimal fake is enough — everything under test is store-side, and the
+    // adapter call is the last thing switchSession does, AFTER the reset.
+    const switched: string[] = [];
+    useConnectionStore.setState({
+      adapter: { switchSession: (id: string) => switched.push(id) },
+    } as any);
+    render(<WalkMeThroughButton target={{ kind: "file", filePath: "late.ts" }} />);
+
+    await userEvent.click(screen.getByTestId("walk-me-through-file"));
+    expect(useArtifactStore.getState().requests.some((r) => r.id.startsWith("local_req_"))).toBe(true);
+
+    // Not a connection-store flip: the real entry point, which publishes the
+    // new session id and then RESETS the artifact store.
+    act(() => { useConnectionStore.getState().switchSession("s2"); });
+    // `adapter.switchSession` runs one statement after `reset()`, so observing
+    // it is an observable settle for the reset — no guessed microtask budget.
+    await waitFor(() => expect(switched).toEqual(["s2"]));
+    expect(useArtifactStore.getState().requests).toHaveLength(0);
+
+    resolveRequest(new Response(JSON.stringify({
+      request: { id: "req_old_session", text: "x", intent: "explain", createdAt: new Date().toISOString() },
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+
+    // The button re-enabling is the observable completion: it happens in the
+    // click handler's `finally`, one continuation AFTER submitRequest returned.
+    await waitFor(() => expect(screen.getByTestId("walk-me-through-file")).not.toBeDisabled());
+    await act(async () => {});
+
+    // s1's request must not be painted into s2's list, and no confirmation.
+    expect(useArtifactStore.getState().requests).toHaveLength(0);
+    expect(useToastStore.getState().toasts).toHaveLength(0);
+    expect(screen.queryByText(/Sent — posting in the sidebar/i)).not.toBeInTheDocument();
   });
 
   it("reads as an ACTION, not file metadata: UI font, keyboard-reachable, no wrap", () => {
