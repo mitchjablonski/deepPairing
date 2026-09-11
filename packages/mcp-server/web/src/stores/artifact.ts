@@ -750,6 +750,20 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       });
       return serverRequest ?? provisional;
     } catch (err) {
+      // #393 review (Sol finding 3) — the FAILURE half of the same fence. The
+      // store was reset while this was in the air, so there is nothing here to
+      // roll back: this provisional went with everything else. Filtering the
+      // CURRENT list by its id is worse than a no-op — provisional ids are
+      // `Date.now()`-derived only, so a request started in the new session in
+      // the same millisecond carries the SAME id and would be deleted by this
+      // rejection (Sol's executed repro). And an old session's failure must not
+      // announce itself in the new session's context, for the same reason its
+      // success doesn't (contract points 3 and 5). So: touch nothing, toast
+      // nothing, and rethrow the original error — the caller still learns its
+      // own request failed. Stated plainly because it IS a behaviour change: a
+      // request whose generation moved before it failed is rolled back nowhere
+      // and shows no error toast.
+      if (storeGeneration !== generationAtSubmit) throw err;
       // Roll back only the provisional.
       set((state) => ({ requests: state.requests.filter((r) => r.id !== provisional.id) }));
       await toastApiError("Send request", err);

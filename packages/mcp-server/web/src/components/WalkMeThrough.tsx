@@ -355,7 +355,16 @@ export function WalkMeThroughButton({
       }
     } catch {
       if (!mounted.current) return;
-      /* store rolled back + toasted the error */
+      // On the ordinary path the store rolled the provisional back and toasted
+      // the error, so there is nothing left to do here but stop sending.
+      // #393 review (Sol 3) — NOT always, though: if the store generation moved
+      // while this request was in the air (a real session switch, a snapshot
+      // hydration), the store deliberately rolls back nothing and toasts
+      // nothing, and the rejection still lands here. That stale case is
+      // therefore SILENT by design — the same rule as the success half, where
+      // an old session's outcome must not notify in a new session's context.
+      // Do not add a toast here to "fix" it; that would put the old session's
+      // failure on the new session's screen.
     } finally {
       if (mounted.current) setSending(false);
     }

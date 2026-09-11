@@ -553,6 +553,33 @@ describe("WalkMeThroughButton", () => {
     expect(screen.queryByText(/Sent — posting in the sidebar/i)).not.toBeInTheDocument();
   });
 
+  it("#393 review (Sol 3) — a FAILURE after a real switchSession is silent here too (no error toast in the new session)", async () => {
+    let rejectRequest!: (err: unknown) => void;
+    const pendingRequest = new Promise<Response>((_resolve, reject) => { rejectRequest = reject; });
+    vi.stubGlobal("fetch", vi.fn(() => pendingRequest));
+    const switched: string[] = [];
+    useConnectionStore.setState({
+      adapter: { switchSession: (id: string) => switched.push(id) },
+    } as any);
+    render(<WalkMeThroughButton target={{ kind: "file", filePath: "doomed.ts" }} />);
+
+    await userEvent.click(screen.getByTestId("walk-me-through-file"));
+    act(() => { useConnectionStore.getState().switchSession("s2"); });
+    await waitFor(() => expect(switched).toEqual(["s2"]));
+
+    rejectRequest(new TypeError("Failed to fetch"));
+
+    await waitFor(() => expect(screen.getByTestId("walk-me-through-file")).not.toBeDisabled());
+    await act(async () => {});
+
+    // The store neither rolled anything back nor toasted, and the component's
+    // catch deliberately adds nothing: an old session's FAILURE must not
+    // announce itself in the new session's context, exactly as its success
+    // doesn't. Documented silence, not a swallowed bug.
+    expect(useToastStore.getState().toasts).toHaveLength(0);
+    expect(useArtifactStore.getState().requests).toHaveLength(0);
+  });
+
   it("reads as an ACTION, not file metadata: UI font, keyboard-reachable, no wrap", () => {
     render(<WalkMeThroughButton target={{ kind: "file", filePath: "deep/nested/path/to/auth/middleware.ts" }} />);
     const btn = screen.getByTestId("walk-me-through-file");
