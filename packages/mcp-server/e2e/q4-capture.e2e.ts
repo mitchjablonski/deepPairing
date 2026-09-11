@@ -534,7 +534,11 @@ test("Q4 review (M3) — the keyboard path and the locator list are reachable wi
   const composer = page.locator("textarea:focus");
   await composer.waitFor({ timeout: 15000 });
   await composer.fill("Does this branch need an audit line?");
+  const commentPosted = page.waitForResponse(
+    (response) => response.request().method() === "POST" && new URL(response.url()).pathname === "/api/comments",
+  );
   await composer.press("ControlOrMeta+Enter");
+  expect((await commentPosted).status(), "comment posting must succeed before locator measurements").toBe(200);
 
   const row = page.getByTestId("dp-region-thread-anchor").first();
   await row.waitFor({ timeout: 15000 });
@@ -550,17 +554,114 @@ test("Q4 review (M3) — the keyboard path and the locator list are reachable wi
   // WELL to bring the region into view; because the list now sits OUTSIDE the
   // well, the row you clicked doesn't ride away with it — it is still exactly
   // where it was, ready for the next one.
-  const rowYBefore = await row.evaluate((el) => el.getBoundingClientRect().top);
-  const wellBefore = await page.evaluate(() => (document.querySelector(".dp-mermaid-well") as HTMLElement).scrollTop);
+  const highlight = page.getByTestId("dp-region-highlight").first();
+  await highlight.waitFor({ timeout: 15000 });
+
+  // The locator starts below the detail viewport in this fixture. Normalize
+  // Playwright's actionability scroll BEFORE taking the baseline, so its
+  // automatic outer-pane scroll is not mistaken for region navigation.
+  await row.scrollIntoViewIfNeeded();
+  await expect(row).toBeInViewport();
+
+  const before = await page.evaluate(() => {
+    const detail = document.querySelector('[data-artifact-id="plan_q4"]') as HTMLElement;
+    const well = document.querySelector(".dp-mermaid-well") as HTMLElement;
+    const row = document.querySelector('[data-testid="dp-region-thread-anchor"]') as HTMLElement;
+    const target = document.querySelector('[data-testid="dp-region-highlight"]') as HTMLElement;
+    well.scrollTop = well.scrollHeight - well.clientHeight;
+    const detailRect = detail.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    const wellRect = well.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    return {
+      geometryReady:
+        detail.isConnected &&
+        well.isConnected &&
+        row.isConnected &&
+        target.isConnected &&
+        detailRect.width > 0 &&
+        detailRect.height > 0 &&
+        wellRect.width > 0 &&
+        wellRect.height > 0 &&
+        rowRect.width > 0 &&
+        rowRect.height > 0 &&
+        targetRect.width > 0 &&
+        targetRect.height > 0,
+      rowContentY: rowRect.top - detailRect.top + detail.scrollTop,
+      wellScroll: well.scrollTop,
+      targetOutsideWell: targetRect.bottom <= wellRect.top || targetRect.top >= wellRect.bottom,
+    };
+  });
+  expect(before.geometryReady, "the detail, locator, well, and posted region must have measurable geometry").toBe(
+    true,
+  );
+  expect(before.wellScroll, "the well must start genuinely scrolled away from the target").toBeGreaterThan(100);
+  expect(before.targetOutsideWell, "the posted region must start outside the visible well").toBe(true);
+
   await row.click();
-  await page.waitForTimeout(900);
-  const wellAfter = await page.evaluate(() => (document.querySelector(".dp-mermaid-well") as HTMLElement).scrollTop);
-  const rowYAfter = await row.evaluate((el) => el.getBoundingClientRect().top);
+  await expect
+    .poll(async () => {
+      return page.evaluate(() => {
+        const well = document.querySelector(".dp-mermaid-well") as HTMLElement;
+        const target = document.querySelector('[data-testid="dp-region-highlight"]') as HTMLElement;
+        const wellRect = well.getBoundingClientRect();
+        const targetRect = target.getBoundingClientRect();
+        const geometryReady =
+          well.isConnected &&
+          target.isConnected &&
+          wellRect.width > 0 &&
+          wellRect.height > 0 &&
+          targetRect.width > 0 &&
+          targetRect.height > 0;
+        const intersection = Math.max(
+          0,
+          Math.min(wellRect.bottom, targetRect.bottom) - Math.max(wellRect.top, targetRect.top),
+        );
+        return {
+          moved: well.scrollTop < well.scrollHeight - well.clientHeight - 1,
+          targetVisible: geometryReady && intersection >= Math.min(targetRect.height, wellRect.height) - 1,
+        };
+      });
+    }, "reverse-nav must move the well until the posted region is visible")
+    .toEqual({ moved: true, targetVisible: true });
+
   await expect(row).toBeVisible();
-  expect(Math.abs(rowYAfter - rowYBefore), "the locator row must not move when it scrolls the well").toBeLessThan(4);
+  const after = await page.evaluate(() => {
+    const detail = document.querySelector('[data-artifact-id="plan_q4"]') as HTMLElement;
+    const well = document.querySelector(".dp-mermaid-well") as HTMLElement;
+    const row = document.querySelector('[data-testid="dp-region-thread-anchor"]') as HTMLElement;
+    const target = document.querySelector('[data-testid="dp-region-highlight"]') as HTMLElement;
+    const detailRect = detail.getBoundingClientRect();
+    const wellRect = well.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    return {
+      geometryReady:
+        detail.isConnected &&
+        well.isConnected &&
+        row.isConnected &&
+        target.isConnected &&
+        detailRect.width > 0 &&
+        detailRect.height > 0 &&
+        wellRect.width > 0 &&
+        wellRect.height > 0 &&
+        rowRect.width > 0 &&
+        rowRect.height > 0 &&
+        targetRect.width > 0 &&
+        targetRect.height > 0,
+      rowContentY: rowRect.top - detailRect.top + detail.scrollTop,
+      wellScroll: well.scrollTop,
+    };
+  });
+  expect(after.geometryReady, "the post-navigation geometry must remain measurable and connected").toBe(true);
+  expect(after.wellScroll, "reverse-nav must actually change the well scroll position").toBeLessThan(before.wellScroll);
+  expect(
+    Math.abs(after.rowContentY - before.rowContentY),
+    "the locator row must not move in outer content when it scrolls the well",
+  ).toBeLessThan(4);
   console.log(
-    `[q4 review M3] locator click moved the well ${wellBefore} → ${wellAfter}; ` +
-      `the row itself stayed put (${rowYBefore.toFixed(0)} → ${rowYAfter.toFixed(0)}px)`,
+    `[q4 review M3] locator click moved the well ${before.wellScroll} → ${after.wellScroll}; ` +
+      `the row itself stayed put in outer content (${before.rowContentY.toFixed(0)} → ${after.rowContentY.toFixed(0)}px)`,
   );
 
   await shot(page, "region-chrome-after.png");
