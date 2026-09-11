@@ -101,6 +101,12 @@ UI with structured evidence. You comment, pick options, ask "why", and request
 revisions; every rejection becomes a hard gate in this project — and (if you've
 opted into publishing) an advisory flag on your other projects.
 
+**VS Code extension — experimental preview.** Open the companion in your
+browser. The extension in `packages/vscode-extension/` is an experimental
+preview with no parity commitment and no date, and it is not part of a supported
+install. What it does not do is listed in
+[packages/vscode-extension/README.md](packages/vscode-extension/README.md).
+
 If something misbehaves, [docs/troubleshooting.md](docs/troubleshooting.md) is
 keyed on the actual error strings, and `deeppairing doctor` diagnoses common
 install issues.
