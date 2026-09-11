@@ -465,7 +465,8 @@ describe("E2E daemon diagnostics", () => {
       let importsRawSpawn = false;
       for (const statement of parsed.statements) {
         if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
-        const bindings = statement.importClause?.namedBindings;
+        const importClause = statement.importClause;
+        const bindings = importClause?.isTypeOnly ? undefined : importClause?.namedBindings;
         if (!bindings || !ts.isNamedImports(bindings)) continue;
         const importedNames = bindings.elements
           .filter((element) => !element.isTypeOnly)
