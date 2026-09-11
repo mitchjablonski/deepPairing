@@ -771,3 +771,135 @@ describe("F12 — the store refuses ALL mutations during replay (the mouse path)
     expect(fetchSpy).toHaveBeenCalled();
   });
 });
+
+describe("#393 review (Sol 2) — submitRequest reconciliation is fenced at the store boundary", () => {
+  afterEach(async () => {
+    const { useConnectionStore } = await import("../connection");
+    useConnectionStore.setState({ adapter: null, sessionId: null } as any);
+  });
+
+  it("a real switchSession mid-flight keeps the OLD session's request out of the NEW session's store", async () => {
+    const { useConnectionStore } = await import("../connection");
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+
+    let resolveRequest!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => { resolveRequest = resolve; });
+    vi.stubGlobal("fetch", vi.fn(() => pending));
+
+    // The real switchSession only runs with a switch-capable adapter bound;
+    // a minimal fake is enough, and its call is the last statement AFTER the
+    // artifact-store reset, so it doubles as an observable settle for it.
+    const switched: string[] = [];
+    useConnectionStore.setState({
+      sessionId: "s1",
+      adapter: { switchSession: (id: string) => switched.push(id) },
+    } as any);
+
+    const submitted = useArtifactStore.getState().submitRequest("explain this", "explain");
+    expect(useArtifactStore.getState().requests).toHaveLength(1); // optimistic provisional
+
+    useConnectionStore.getState().switchSession("s2");
+    await vi.waitFor(() => expect(switched).toEqual(["s2"]));
+    // The real reset wiped the provisional along with everything else.
+    expect(useArtifactStore.getState().requests).toHaveLength(0);
+
+    resolveRequest(new Response(JSON.stringify({
+      request: { id: "req_old_session", text: "explain this", intent: "explain", createdAt: new Date().toISOString() },
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+
+    // Awaiting the submitRequest promise itself is the completion signal —
+    // fully deterministic, no guessed microtask budget.
+    const record = await submitted;
+
+    // The submission stays DURABLE: the POST carried s1's X-Session-Id, the
+    // server kept it, and the caller still gets the server record back.
+    expect(record.id).toBe("req_old_session");
+    // ...but it is not painted into s2's UI, and nothing is announced there.
+    expect(useArtifactStore.getState().requests).toHaveLength(0);
+    expect(useToastStore.getState().toasts).toHaveLength(0);
+  });
+
+  it("without a reset in between, the provisional is still reconciled to the server record", async () => {
+    // The control case: the fence must not break the ordinary path.
+    const { useConnectionStore } = await import("../connection");
+    useConnectionStore.setState({ sessionId: "s1", adapter: null } as any);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      request: { id: "req_same_session", text: "explain this", intent: "explain", createdAt: new Date().toISOString() },
+    }), { status: 200, headers: { "Content-Type": "application/json" } })));
+
+    await useArtifactStore.getState().submitRequest("explain this", "explain");
+
+    const requests = useArtifactStore.getState().requests;
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.id).toBe("req_same_session");
+  });
+
+  // #393 review (Sol 3) — the FAILURE half of the same fence.
+  it("a rejection AFTER a real switchSession leaves the NEW session's request alone, even when the provisional ids collide", async () => {
+    const { useConnectionStore } = await import("../connection");
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+
+    // Provisional ids are `local_req_${Date.now().toString(36)}` and nothing
+    // else, so two submits in the same millisecond collide. Pinning Date.now
+    // makes that collision deterministic instead of a timing accident — it is
+    // exactly the state Sol reproduced, forced rather than waited for.
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    try {
+      let rejectA!: (err: unknown) => void;
+      const pendingA = new Promise<Response>((_resolve, reject) => { rejectA = reject; });
+      vi.stubGlobal("fetch", vi.fn()
+        .mockReturnValueOnce(pendingA)
+        .mockReturnValueOnce(new Promise<Response>(() => { /* B stays in flight */ })));
+
+      const switched: string[] = [];
+      useConnectionStore.setState({
+        sessionId: "s1",
+        adapter: { switchSession: (id: string) => switched.push(id) },
+      } as any);
+
+      const submittedA = useArtifactStore.getState().submitRequest("A's request", "explain");
+      const provisionalA = useArtifactStore.getState().requests[0]!.id;
+
+      useConnectionStore.getState().switchSession("s2");
+      await vi.waitFor(() => expect(switched).toEqual(["s2"]));
+      expect(useArtifactStore.getState().requests).toHaveLength(0);
+
+      const submittedB = useArtifactStore.getState().submitRequest("B's request", "explain");
+      const provisionalB = useArtifactStore.getState().requests[0]!.id;
+      expect(provisionalB).toBe(provisionalA); // the same-millisecond collision, forced
+
+      rejectA(new TypeError("Failed to fetch"));
+      // A's rejection still propagates to ITS caller, unchanged.
+      await expect(submittedA).rejects.toMatchObject({ code: "network_error" });
+
+      // ...but it must not roll back B's optimistic request, and must not
+      // announce an old session's failure in the new session's context.
+      const requests = useArtifactStore.getState().requests;
+      expect(requests).toHaveLength(1);
+      expect(requests[0]!.text).toBe("B's request");
+      expect(useToastStore.getState().toasts).toHaveLength(0);
+      void submittedB;
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("without a reset in between, a rejection still rolls the provisional back and toasts (positive control)", async () => {
+    const { useConnectionStore } = await import("../connection");
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    useConnectionStore.setState({ sessionId: "s1", adapter: null } as any);
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+
+    await expect(
+      useArtifactStore.getState().submitRequest("explain this", "explain"),
+    ).rejects.toMatchObject({ code: "network_error" });
+
+    expect(useArtifactStore.getState().requests).toHaveLength(0);
+    const toasts = useToastStore.getState().toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]!.kind).toBe("error");
+  });
+});

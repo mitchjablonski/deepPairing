@@ -260,9 +260,11 @@ export function WalkMeThroughButton({
   compact?: boolean;
 }) {
   const submitRequest = useArtifactStore((s) => s.submitRequest);
-  const activeSessions = useConnectionStore((s) => s.activeSessions);
   const replayActive = useReplayStore((s) => s.active);
-  const pushToast = useToastStore((s) => s.push);
+  // #393 — the session and the toast store are read with `getState()` at
+  // COMPLETION, not subscribed at render: a confirmation that outlives the
+  // component must not be decided by a closure as old as the click. Nothing in
+  // this component's render depends on either, so the subscriptions are gone.
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
   const sentResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -290,24 +292,55 @@ export function WalkMeThroughButton({
   const onClick = async () => {
     if (sending) return;
     setSending(true);
+    // #393(1) — capture the session this request BELONGS to, before the await.
+    // Everything the completion does downstream is judged against it.
+    const originSessionId = useConnectionStore.getState().sessionId;
     try {
       // P2 fix 3 — the prose AND the data. `source` marks this as a one-click
       // scoped ask (not a hand-typed composer request); `scope` is what the
       // agent scopes the explainer to (and links relatedArtifactIds at).
       await submitRequest(requestText, "explain", { source: "walk_me_through", scope });
-      if (!mounted.current) return;
-      setSent(true);
-      if (sentResetTimer.current !== null) clearTimeout(sentResetTimer.current);
-      sentResetTimer.current = setTimeout(() => {
-        sentResetTimer.current = null;
-        setSent(false);
-      }, 2500);
+      // #393(4) — the session and the liveness are read FRESH here. The click's
+      // render closure is stale by exactly the length of the request.
+      const { sessionId: currentSessionId, activeSessions } = useConnectionStore.getState();
+      const sameSession = currentSessionId === originSessionId;
+      // #393(2,5) — component-local state stays suppressed after unmount, the
+      // #355/#390 lifecycle correction preserved intact; and a button still
+      // mounted but rebound to a DIFFERENT session must not apply the old
+      // session's completion to its own ✓ either.
+      if (mounted.current && sameSession) {
+        setSent(true);
+        if (sentResetTimer.current !== null) clearTimeout(sentResetTimer.current);
+        sentResetTimer.current = setTimeout(() => {
+          sentResetTimer.current = null;
+          setSent(false);
+        }, 2500);
+      }
+      // #393(3) — an unlabeled confirmation must never land in another
+      // session's context. Silence beats a misleading toast.
+      if (!sameSession) return;
+      // #393(2,6) — the toast store OUTLIVES the component, so the one global
+      // confirmation survives navigating between files and hunks. One push on
+      // one branch: no duplicate across the mounted/unmounted paths.
+      //
       // Liveness-branched confirmation — the same predicate the request composer
       // uses, so the two surfaces can't disagree about whether an agent is live.
       // P2 fix 4 — both branches now name the DESTINATION: round 11 found nothing
       // on screen said WHERE the answer lands, so the click felt like a shout
       // into the void.
-      if (noAgentLive(activeSessions)) {
+      const pushToast = useToastStore.getState().push;
+      // #393 review (Sol finding 1) — the liveness that decides this wording is
+      // the ORIGINATING session's, not the whole list's. `activeSessions` holds
+      // every retained session with a per-session `live`, so passing the list
+      // whole let a live SIBLING stand in as proof that the session this
+      // request belongs to was live: an origin at `live:false` alongside a live
+      // s2 was confirmed "Sent to Claude" when the honest answer was "queued".
+      // Filtering to the origin also handles the origin being absent from the
+      // list entirely — `noAgentLive([])` is `true` by construction (see
+      // lib/liveness.ts: an empty list is "no agent"), so an unlistable origin
+      // gets the queued wording rather than a borrowed confirmation.
+      const originSessions = activeSessions.filter((s) => s.sessionId === originSessionId);
+      if (noAgentLive(originSessions)) {
         pushToast({
           kind: "info",
           title: "Saved — Claude will explain when the session resumes",
@@ -322,7 +355,16 @@ export function WalkMeThroughButton({
       }
     } catch {
       if (!mounted.current) return;
-      /* store rolled back + toasted the error */
+      // On the ordinary path the store rolled the provisional back and toasted
+      // the error, so there is nothing left to do here but stop sending.
+      // #393 review (Sol 3) — NOT always, though: if the store generation moved
+      // while this request was in the air (a real session switch, a snapshot
+      // hydration), the store deliberately rolls back nothing and toasts
+      // nothing, and the rejection still lands here. That stale case is
+      // therefore SILENT by design — the same rule as the success half, where
+      // an old session's outcome must not notify in a new session's context.
+      // Do not add a toast here to "fix" it; that would put the old session's
+      // failure on the new session's screen.
     } finally {
       if (mounted.current) setSending(false);
     }
