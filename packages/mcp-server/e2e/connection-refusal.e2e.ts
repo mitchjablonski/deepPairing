@@ -1,12 +1,12 @@
-import { test, expect } from "@playwright/test";
-import { spawn, type ChildProcess } from "node:child_process";
+import { test, daemonBeforeAll, expect } from "./test.js";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { FileStore } from "../src/store/file-store.js";
 import { setGlobalStoreForTests } from "../src/store/global-store.js";
-import { teardownDaemon, portOf } from "./daemon-harness.js";
+import { teardownDaemon, portOf, spawnDiagnosticProcess, withSetupDiagnostics } from "./daemon-harness.js";
 
 const __dir = path.dirname(fileURLToPath(import.meta.url));
 const daemonJs = path.resolve(__dir, "../dist/daemon/index.js");
@@ -32,38 +32,48 @@ async function post(sessionId: string, suffix: string, body: unknown): Promise<R
   });
 }
 
-test.beforeAll(async () => {
+daemonBeforeAll(() => [proc], async (testInfo) => {
   if (!fs.existsSync(daemonJs)) throw new Error(`Missing ${daemonJs}; run pnpm build first.`);
   home = fs.mkdtempSync(path.join(os.tmpdir(), "dp-refusal-home-"));
   projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-refusal-browser-"));
   setGlobalStoreForTests(path.join(home, "test-ledger.json"));
-  proc = spawn(process.execPath, [daemonJs], {
+  proc = spawnDiagnosticProcess(process.execPath, [daemonJs], {
     env: {
       ...process.env,
       HOME: home,
       DEEPPAIRING_PROJECT_ROOT: projectRoot,
       DEEPPAIRING_NO_OPEN: "1",
-      DEEPPAIRING_PORT_BASE: "53000",
-      DEEPPAIRING_PORT_SPAN: "1000",
     },
-    stdio: "ignore",
   });
 
   const infoPath = path.join(projectRoot, ".deeppairing", "daemon.json");
-  for (let i = 0; i < 120 && !baseURL; i++) {
-    try {
-      const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      const response = await fetch(`http://localhost:${info.port}/api/daemon-info`).catch(() => null);
-      if (response?.ok && info.authToken) {
-        const daemonInfo = await response.json() as { projectHash: string };
-        baseURL = `http://localhost:${info.port}`;
-        authToken = info.authToken;
-        projectHash = daemonInfo.projectHash;
+  await withSetupDiagnostics(proc, testInfo, async () => {
+    for (let i = 0; i < 120 && !baseURL; i++) {
+      let info: { port?: number; authToken?: string } | undefined;
+      try {
+        info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
+      } catch {
+        // daemon.json is absent or mid-write while the daemon starts.
       }
-    } catch {}
-    if (!baseURL) await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  if (!baseURL) throw new Error("daemon did not become reachable within 12s");
+      if (info?.port && info.authToken) {
+        const response = await fetch(`http://localhost:${info.port}/api/daemon-info`).catch(() => null);
+        if (response?.ok) {
+          const daemonInfo = await response.json() as { projectHash: string };
+          const portBase = Number(process.env.DEEPPAIRING_PORT_BASE);
+          const portSpan = Number(process.env.DEEPPAIRING_PORT_SPAN);
+          expect(info.port, "daemon bound inside the inherited Playwright port window")
+            .toBeGreaterThanOrEqual(portBase);
+          expect(info.port, "daemon bound inside the inherited Playwright port window")
+            .toBeLessThan(portBase + portSpan);
+          baseURL = `http://localhost:${info.port}`;
+          authToken = info.authToken;
+          projectHash = daemonInfo.projectHash;
+        }
+      }
+      if (!baseURL) await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (!baseURL) throw new Error("daemon did not become reachable within 12s");
+  });
 
   for (const sessionId of [FROZEN, HEALTHY]) {
     const registered = await post(sessionId, "register", { title: sessionId });
