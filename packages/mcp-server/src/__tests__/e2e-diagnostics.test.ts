@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import type { TestInfo } from "@playwright/test";
 import {
   attachDaemonOutput,
@@ -449,6 +450,41 @@ describe("E2E daemon diagnostics", () => {
     expect(source).toContain("daemon?.proc ?? bootingProc");
     expect(source).toContain("current ? portOf(current.baseURL) : undefined");
     expect(source).not.toContain("}, projectRoot);");
+  });
+
+  it("routes every browser spec through shared diagnostics and forbids raw daemon spawn imports", () => {
+    const e2eRoot = path.resolve(packageRoot, "e2e");
+    const specs = fs.readdirSync(e2eRoot).filter((name) => name.endsWith(".e2e.ts"));
+    const missingSharedTest: string[] = [];
+    const rawSpawnImports: string[] = [];
+
+    for (const name of specs) {
+      const source = fs.readFileSync(path.join(e2eRoot, name), "utf8");
+      const parsed = ts.createSourceFile(name, source, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+      let importsSharedTest = false;
+      let importsRawSpawn = false;
+      for (const statement of parsed.statements) {
+        if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
+        const importClause = statement.importClause;
+        const bindings = importClause?.isTypeOnly ? undefined : importClause?.namedBindings;
+        if (!bindings || !ts.isNamedImports(bindings)) continue;
+        const importedNames = bindings.elements
+          .filter((element) => !element.isTypeOnly)
+          .map((element) => element.propertyName?.text ?? element.name.text);
+        if (statement.moduleSpecifier.text === "./test.js" && importedNames.includes("test")) {
+          importsSharedTest = true;
+        }
+        if (statement.moduleSpecifier.text === "node:child_process" && importedNames.includes("spawn")) {
+          importsRawSpawn = true;
+        }
+      }
+      if (!importsSharedTest) missingSharedTest.push(name);
+      if (importsRawSpawn) rawSpawnImports.push(name);
+    }
+
+    expect(specs.length).toBeGreaterThan(0);
+    expect(missingSharedTest, "specs bypassing the shared browser-diagnostics fixture").toEqual([]);
+    expect(rawSpawnImports, "specs bypassing spawnDiagnosticProcess").toEqual([]);
   });
 
   it("uploads only failure evidence even when a retry makes CI green", () => {
