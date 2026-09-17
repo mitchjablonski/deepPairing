@@ -71,8 +71,8 @@ Release version bumps must update all four version sources in one commit — `sr
 {
   "mcpServers": {
     "deeppairing": {
-      "command": "npx",
-      "args": ["tsx", "packages/mcp-server/src/standalone.ts"]
+      "command": "node",
+      "args": ["packages/mcp-server/node_modules/tsx/dist/cli.mjs", "packages/mcp-server/src/standalone.ts"]
     }
   }
 }
