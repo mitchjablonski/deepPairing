@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { MermaidDiagram } from "../MermaidDiagram";
 import { useArtifactStore } from "../../stores/artifact";
+import { POPOVER_GAP } from "../../lib/popoverPosition";
 
 /** #185 — deterministic matchMedia: `narrow` drives useIsNarrowViewport
  *  (max-width:900px) so a test can force the popover vs legacy-block choice;
@@ -553,6 +554,26 @@ describe("DiagramRegionLayer (region-anchored diagram comments)", () => {
       fireEvent.pointerMove(handle, { pointerId: 9, clientX: 12000, clientY: 0 , buttons: 1 });
       expect(popover.style.left).toBe("736px");
       expect(800 - 736).toBeGreaterThanOrEqual(64);
+    });
+
+    // --- Behavior 5: a long thread stays READABLE (cap + inner scroll) -----
+    it("LONG THREAD: a thread taller than the visible well no longer chases the scrollport", async () => {
+      mockGeometry(800, 300); // visible well: 300px tall
+      const region = { x: 0.1, y: 0.15, w: 0.2, h: 0.2, labels: ["Target"] };
+      // Enough comments that a real (measured) popover would out-grow the well.
+      for (let i = 0; i < 12; i += 1) addRegion(`rc_long_${i}`, region);
+      const { overlay } = await mountInteractive();
+      clickAt(overlay, 150, 75); // inside the region → reopen its thread
+      const popover = await screen.findByTestId("dp-region-popover");
+      // 1 — the popover is CAPPED to the visible well, so the placement math
+      //     always finds a fitting spot instead of falling through to the
+      //     clamp-to-0 last resort that re-pins the box to the scrollport top.
+      expect(popover.style.maxHeight).toBe(`${Math.max(160, 300 - 2 * POPOVER_GAP)}px`);
+      // 2 — the overflow moved INSIDE: the thread scrolls in its own body, so
+      //     the newest comments and the composer stay reachable.
+      const body = popover.querySelector('[data-testid="dp-region-popover-body"]');
+      expect(body).not.toBeNull();
+      expect(body?.className).toContain("overflow-y-auto");
     });
 
     // --- Behavior 4: click a posted region highlight → reopen its thread ----

@@ -4,7 +4,7 @@ import type { Comment } from "@deeppairing/shared";
 import { useChainComments } from "../hooks/useChainComments";
 import { useMediaQuery, useIsNarrowViewport } from "../hooks/useMediaQuery";
 import { CommentThread } from "./CommentThread";
-import { positionPopover } from "../lib/popoverPosition";
+import { positionPopover, POPOVER_GAP } from "../lib/popoverPosition";
 import {
   collectDiagramNodes,
   isClickDrag,
@@ -285,6 +285,9 @@ export function DiagramRegionLayer({
     width: POPOVER_WIDTH,
     height: 200,
   });
+  /** #185 long-thread fix — the popover's SCROLLING body (the thread). The box
+   *  itself is capped to the visible well, so the overflow has to live here. */
+  const popoverBodyRef = useRef<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
     if (!active || narrow) return;
     const el = composerRef.current;
@@ -299,6 +302,17 @@ export function DiagramRegionLayer({
       );
     }
   }, [active, narrow, wellSize.width, wellSize.height, box.left, box.top]);
+
+  // #185 long-thread fix — the composer textarea is the LAST thing in the
+  // thread, so a capped popover opens showing the oldest comments with the
+  // composer below the fold. Scroll the popover's own body (NOT scrollIntoView,
+  // which would move the well/page and re-break the preventScroll contract).
+  useLayoutEffect(() => {
+    if (!active || narrow) return;
+    const body = popoverBodyRef.current;
+    if (!body) return;
+    body.scrollTop = body.scrollHeight;
+  }, [active, narrow]);
 
   // The selection rect in well-local px (same conversion the highlights use).
   const activePxRect = active
@@ -318,6 +332,13 @@ export function DiagramRegionLayer({
   const scrollTop = port?.scrollTop ?? 0;
   const scrollLeft = port?.scrollLeft ?? 0;
   const popoverWidth = Math.min(POPOVER_WIDTH, viewBounds.width || POPOVER_WIDTH);
+  // #185 long-thread fix — the popover may never be taller than what you can
+  // SEE. Without this cap a long thread measures taller than viewBounds, every
+  // placement in positionPopover fails to fit, and the last-resort clamp pins
+  // top to 0 — i.e. the top of the scrollport — so the box CHASES the scroll and
+  // its bottom (newest comments + composer) is unreachable. Capped, a placement
+  // always fits and the overflow scrolls inside the box instead.
+  const popoverMaxHeight = Math.max(160, viewBounds.height - 2 * POPOVER_GAP);
   const anchoredPos = (() => {
     if (!activePxRect || narrow) return null;
     // Into scrollport coordinates, place, then back into content coordinates
@@ -329,7 +350,12 @@ export function DiagramRegionLayer({
       width: activePxRect.width,
       height: activePxRect.height,
     };
-    const p = positionPopover(rectInView, viewBounds, { width: popoverWidth, height: popoverSize.height });
+    const p = positionPopover(rectInView, viewBounds, {
+      width: popoverWidth,
+      // The measured height settles under the cap after the next layout pass;
+      // the min makes the math right on the FIRST pass too.
+      height: Math.min(popoverSize.height, popoverMaxHeight),
+    });
     return { ...p, left: p.left + scrollLeft, top: p.top + scrollTop };
   })();
 
@@ -574,6 +600,18 @@ export function DiagramRegionLayer({
 
   // #185 — the composer's contents, shared verbatim by the popover and the
   // narrow-viewport fallback block so both placements are byte-identical inside.
+  // #185 long-thread fix — in the ANCHORED popover the thread scrolls inside a
+  // capped box (the header stays put, so it is always visible and draggable).
+  // The narrow-viewport block placement is in-flow and must stay unwrapped.
+  const wrapThread = (draggable: boolean, thread: React.ReactNode): React.ReactNode =>
+    draggable ? (
+      <div className="min-h-0 overflow-y-auto" data-testid="dp-region-popover-body" ref={popoverBodyRef}>
+        {thread}
+      </div>
+    ) : (
+      thread
+    );
+
   const renderComposerInner = (draggable: boolean) => active ? (
     <>
       <div
@@ -599,20 +637,23 @@ export function DiagramRegionLayer({
           Cancel
         </button>
       </div>
-      <CommentThread
-        artifactId={artifactId}
-        comments={regionComments.filter((c) => sameRegion(c.target.region as RegionTarget, active))}
-        // #173 — carry optionId when this is a decision focused view, so the
-        // posted comment anchors to optionId + visualId + region together.
-        target={{ visualId, region: active, ...(optionId ? { optionId } : {}) }}
-        roomy
-        /* Diagrams are where people actually ask things ("why does auth verify
-           happen before the cache check?" — a real comment from the dry-run
-           data, posted through THIS composer with no intent because there was
-           no Ask button to press). */
-        secondarySubmitLabel="Ask"
-        secondarySubmitTitle="Post as a question about this region — the agent owes you an answer"
-      />
+      {wrapThread(
+        draggable,
+        <CommentThread
+          artifactId={artifactId}
+          comments={regionComments.filter((c) => sameRegion(c.target.region as RegionTarget, active))}
+          // #173 — carry optionId when this is a decision focused view, so the
+          // posted comment anchors to optionId + visualId + region together.
+          target={{ visualId, region: active, ...(optionId ? { optionId } : {}) }}
+          roomy
+          /* Diagrams are where people actually ask things ("why does auth verify
+             happen before the cache check?" — a real comment from the dry-run
+             data, posted through THIS composer with no intent because there was
+             no Ask button to press). */
+          secondarySubmitLabel="Ask"
+          secondarySubmitTitle="Post as a question about this region — the agent owes you an answer"
+        />,
+      )}
     </>
   ) : null;
 
@@ -697,8 +738,8 @@ export function DiagramRegionLayer({
           data-testid="dp-region-popover"
           data-placement={popoverPos.placement}
           onKeyDown={onComposerKeyDown}
-          className="absolute z-[3] p-2.5 bg-surface-elevated border border-accent-blue/30 rounded-lg shadow-lg space-y-2"
-          style={{ left: popoverPos.left, top: popoverPos.top, width: popoverWidth }}
+          className="absolute z-[3] p-2.5 bg-surface-elevated border border-accent-blue/30 rounded-lg shadow-lg flex flex-col gap-2"
+          style={{ left: popoverPos.left, top: popoverPos.top, width: popoverWidth, maxHeight: popoverMaxHeight }}
         >
           {renderComposerInner(true)}
         </div>
