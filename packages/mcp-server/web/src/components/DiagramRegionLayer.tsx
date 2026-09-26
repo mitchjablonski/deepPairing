@@ -4,7 +4,7 @@ import type { Comment } from "@deeppairing/shared";
 import { useChainComments } from "../hooks/useChainComments";
 import { useMediaQuery, useIsNarrowViewport } from "../hooks/useMediaQuery";
 import { CommentThread } from "./CommentThread";
-import { positionPopover } from "../lib/popoverPosition";
+import { positionPopover, POPOVER_GAP } from "../lib/popoverPosition";
 import {
   collectDiagramNodes,
   isClickDrag,
@@ -186,8 +186,14 @@ export function DiagramRegionLayer({
     const el = svgEl();
     if (el) ro.observe(el);
     if (overlayRef.current?.parentElement) ro.observe(overlayRef.current.parentElement);
+    // #185 long-thread fix (review) — the popover cap is derived from the
+    // SCROLLPORT's clientHeight, and resizing the window resizes the 60vh
+    // scrollport without necessarily resizing the diagram or its wrapper, so
+    // watch it too or the well height and the cap go stale.
+    const p = scrollPortEl();
+    if (p) ro.observe(p);
     return () => ro.disconnect();
-  }, [measure, svgEl, svg]);
+  }, [measure, svgEl, scrollPortEl, svg]);
 
   // Q4 review (H2) — measure() listened to resize + a new svg only, so a popover
   // anchored before a scroll kept its pre-scroll clamp. Track the scrollport.
@@ -285,8 +291,16 @@ export function DiagramRegionLayer({
     width: POPOVER_WIDTH,
     height: 200,
   });
-  useLayoutEffect(() => {
-    if (!active || narrow) return;
+  /** #185 long-thread fix — the popover's SCROLLING body (the thread). The box
+   *  itself is capped to the visible well, so the overflow has to live here. */
+  const popoverBodyRef = useRef<HTMLDivElement | null>(null);
+  /** #185 long-thread fix (review) — the smallest cap that still shows the whole
+   *  composer: the box's chrome (header, padding, gap) plus the composer itself.
+   *  A tiny well (a two-node LR diagram is ~87px) would otherwise cap BELOW an
+   *  empty composer's natural height and open with the textarea clipped. 0 until
+   *  measured (jsdom), where the fixed 160 floor below applies. */
+  const [popoverFloor, setPopoverFloor] = useState(0);
+  const measurePopover = useCallback(() => {
     const el = composerRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
@@ -298,7 +312,44 @@ export function DiagramRegionLayer({
         prev.width === r.width && prev.height === r.height ? prev : { width: r.width, height: r.height },
       );
     }
-  }, [active, narrow, wellSize.width, wellSize.height, box.left, box.top]);
+    const body = popoverBodyRef.current;
+    const composer = el.querySelector("textarea")?.parentElement;
+    if (r.height > 0 && body && composer) {
+      const floor = Math.ceil(r.height - body.getBoundingClientRect().height + composer.getBoundingClientRect().height);
+      if (floor > 0) setPopoverFloor((prev) => (prev === floor ? prev : floor));
+    }
+  }, []);
+  useLayoutEffect(() => {
+    if (!active || narrow) return;
+    measurePopover();
+  }, [active, narrow, measurePopover, wellSize.width, wellSize.height, box.left, box.top]);
+  // #185 long-thread fix (review) — the layout effect above only re-measures
+  // on open/resize, so a thread that GROWS while you post kept the empty-
+  // composer height (~180px): an "above" placement kept its top pinned while
+  // the box grew down over its own anchor and pushed the composer below the
+  // well. Re-measure whenever the box (thread growth) or the composer
+  // (auto-growing draft → the floor) changes size.
+  useEffect(() => {
+    if (!active || narrow || typeof ResizeObserver === "undefined") return;
+    const el = composerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => measurePopover());
+    ro.observe(el);
+    const composer = el.querySelector("textarea")?.parentElement;
+    if (composer) ro.observe(composer);
+    return () => ro.disconnect();
+  }, [active, narrow, measurePopover]);
+
+  // #185 long-thread fix — the composer textarea is the LAST thing in the
+  // thread, so a capped popover opens showing the oldest comments with the
+  // composer below the fold. Scroll the popover's own body (NOT scrollIntoView,
+  // which would move the well/page and re-break the preventScroll contract).
+  useLayoutEffect(() => {
+    if (!active || narrow) return;
+    const body = popoverBodyRef.current;
+    if (!body) return;
+    body.scrollTop = body.scrollHeight;
+  }, [active, narrow]);
 
   // The selection rect in well-local px (same conversion the highlights use).
   const activePxRect = active
@@ -318,6 +369,16 @@ export function DiagramRegionLayer({
   const scrollTop = port?.scrollTop ?? 0;
   const scrollLeft = port?.scrollLeft ?? 0;
   const popoverWidth = Math.min(POPOVER_WIDTH, viewBounds.width || POPOVER_WIDTH);
+  // #185 long-thread fix — the popover may never be taller than what you can
+  // SEE. Without this cap a long thread measures taller than viewBounds, every
+  // placement in positionPopover fails to fit, and the last-resort clamp pins
+  // top to 0 — i.e. the top of the scrollport — so the box CHASES the scroll and
+  // its bottom (newest comments + composer) is unreachable. Capped, a placement
+  // always fits and the overflow scrolls inside the box instead.
+  // Floored at the measured header+composer height (review): in a well too
+  // short for even that, the composer stays whole and the box overflows the
+  // well instead of clipping the textarea behind an inner scrollbar.
+  const popoverMaxHeight = Math.max(160, popoverFloor, viewBounds.height - 2 * POPOVER_GAP);
   const anchoredPos = (() => {
     if (!activePxRect || narrow) return null;
     // Into scrollport coordinates, place, then back into content coordinates
@@ -329,7 +390,12 @@ export function DiagramRegionLayer({
       width: activePxRect.width,
       height: activePxRect.height,
     };
-    const p = positionPopover(rectInView, viewBounds, { width: popoverWidth, height: popoverSize.height });
+    const p = positionPopover(rectInView, viewBounds, {
+      width: popoverWidth,
+      // The measured height settles under the cap after the next layout pass;
+      // the min makes the math right on the FIRST pass too.
+      height: Math.min(popoverSize.height, popoverMaxHeight),
+    });
     return { ...p, left: p.left + scrollLeft, top: p.top + scrollTop };
   })();
 
@@ -435,20 +501,58 @@ export function DiagramRegionLayer({
     ? activeRegionComments.reduce((a, b) => (b.createdAt > a.createdAt ? b : a)).author
     : null;
   const sentBaseline = useRef<{ key: string; count: number }>({ key: activeKey, count: activeThreadCount });
+  // The pending wait for the send's disabled textarea to re-enable (see below).
+  const refocusWait = useRef<MutationObserver | null>(null);
+  useEffect(
+    () => () => {
+      refocusWait.current?.disconnect();
+      refocusWait.current = null;
+    },
+    [],
+  );
   useEffect(() => {
     const base = sentBaseline.current;
     if (base.key !== activeKey) {
       // A different region (or closed): re-baseline; open-focus handles focus.
+      refocusWait.current?.disconnect();
+      refocusWait.current = null;
       sentBaseline.current = { key: activeKey, count: activeThreadCount };
       return;
     }
     if (activeThreadCount > base.count && newestAuthor === "human") {
-      const ae = typeof document !== "undefined" ? document.activeElement : null;
       const popover = composerRef.current;
+      // #185 long-thread fix (review) — a capped popover's body only scrolled
+      // to the bottom on OPEN, so after a send your new comment and the
+      // composer sat below the fold of the box. Follow your own send (never an
+      // agent reply, which may land while you're reading older comments).
+      const body = popoverBodyRef.current;
+      if (body) body.scrollTop = body.scrollHeight;
       // Reclaim focus ONLY if the send lost it (fell to <body>) or it's still in
       // the popover — never if the user has moved into some other field.
-      const reclaimable = !ae || ae === document.body || (popover != null && popover.contains(ae));
-      if (reclaimable) popover?.querySelector("textarea")?.focus({ preventScroll: true });
+      const reclaimable = () => {
+        const ae = typeof document !== "undefined" ? document.activeElement : null;
+        return !ae || ae === document.body || (popover != null && popover.contains(ae));
+      };
+      const ta = popover?.querySelector("textarea");
+      if (ta && reclaimable()) {
+        // Review (real Chromium) — the send's optimistic provisional lands in
+        // the SAME render that disables the textarea, so this effect runs
+        // while it is still disabled and focus() on a disabled control is a
+        // no-op: focus stayed on <body>. Wait for the re-enable instead.
+        if (!ta.disabled || typeof MutationObserver === "undefined") {
+          ta.focus({ preventScroll: true });
+        } else {
+          refocusWait.current?.disconnect();
+          const mo = new MutationObserver(() => {
+            if (ta.disabled) return;
+            mo.disconnect();
+            if (refocusWait.current === mo) refocusWait.current = null;
+            if (ta.isConnected && reclaimable()) ta.focus({ preventScroll: true });
+          });
+          mo.observe(ta, { attributes: true, attributeFilter: ["disabled"] });
+          refocusWait.current = mo;
+        }
+      }
     }
     sentBaseline.current = { key: activeKey, count: activeThreadCount };
   }, [activeKey, activeThreadCount, newestAuthor]);
@@ -574,6 +678,18 @@ export function DiagramRegionLayer({
 
   // #185 — the composer's contents, shared verbatim by the popover and the
   // narrow-viewport fallback block so both placements are byte-identical inside.
+  // #185 long-thread fix — in the ANCHORED popover the thread scrolls inside a
+  // capped box (the header stays put, so it is always visible and draggable).
+  // The narrow-viewport block placement is in-flow and must stay unwrapped.
+  const wrapThread = (draggable: boolean, thread: React.ReactNode): React.ReactNode =>
+    draggable ? (
+      <div className="min-h-0 overflow-y-auto" data-testid="dp-region-popover-body" ref={popoverBodyRef}>
+        {thread}
+      </div>
+    ) : (
+      thread
+    );
+
   const renderComposerInner = (draggable: boolean) => active ? (
     <>
       <div
@@ -599,20 +715,23 @@ export function DiagramRegionLayer({
           Cancel
         </button>
       </div>
-      <CommentThread
-        artifactId={artifactId}
-        comments={regionComments.filter((c) => sameRegion(c.target.region as RegionTarget, active))}
-        // #173 — carry optionId when this is a decision focused view, so the
-        // posted comment anchors to optionId + visualId + region together.
-        target={{ visualId, region: active, ...(optionId ? { optionId } : {}) }}
-        roomy
-        /* Diagrams are where people actually ask things ("why does auth verify
-           happen before the cache check?" — a real comment from the dry-run
-           data, posted through THIS composer with no intent because there was
-           no Ask button to press). */
-        secondarySubmitLabel="Ask"
-        secondarySubmitTitle="Post as a question about this region — the agent owes you an answer"
-      />
+      {wrapThread(
+        draggable,
+        <CommentThread
+          artifactId={artifactId}
+          comments={regionComments.filter((c) => sameRegion(c.target.region as RegionTarget, active))}
+          // #173 — carry optionId when this is a decision focused view, so the
+          // posted comment anchors to optionId + visualId + region together.
+          target={{ visualId, region: active, ...(optionId ? { optionId } : {}) }}
+          roomy
+          /* Diagrams are where people actually ask things ("why does auth verify
+             happen before the cache check?" — a real comment from the dry-run
+             data, posted through THIS composer with no intent because there was
+             no Ask button to press). */
+          secondarySubmitLabel="Ask"
+          secondarySubmitTitle="Post as a question about this region — the agent owes you an answer"
+        />,
+      )}
     </>
   ) : null;
 
@@ -697,8 +816,8 @@ export function DiagramRegionLayer({
           data-testid="dp-region-popover"
           data-placement={popoverPos.placement}
           onKeyDown={onComposerKeyDown}
-          className="absolute z-[3] p-2.5 bg-surface-elevated border border-accent-blue/30 rounded-lg shadow-lg space-y-2"
-          style={{ left: popoverPos.left, top: popoverPos.top, width: popoverWidth }}
+          className="absolute z-[3] p-2.5 bg-surface-elevated border border-accent-blue/30 rounded-lg shadow-lg flex flex-col gap-2"
+          style={{ left: popoverPos.left, top: popoverPos.top, width: popoverWidth, maxHeight: popoverMaxHeight }}
         >
           {renderComposerInner(true)}
         </div>

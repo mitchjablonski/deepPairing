@@ -71,12 +71,13 @@ Release version bumps must update all four version sources in one commit — `sr
 {
   "mcpServers": {
     "deeppairing": {
-      "command": "npx",
-      "args": ["tsx", "packages/mcp-server/src/standalone.ts"]
+      "command": "node",
+      "args": ["packages/mcp-server/node_modules/tsx/dist/cli.mjs", "packages/mcp-server/src/standalone.ts"]
     }
   }
 }
 ```
+Run `pnpm install && pnpm build` first — the server imports `@deeppairing/shared` from its `dist/`, and the daemon it spawns always runs the built `dist/daemon/index.js` (so rebuild after daemon changes, or it runs stale code).
 
 **From another project** — use `node` with the built dist and absolute path:
 ```json

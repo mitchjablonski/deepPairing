@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { MermaidDiagram } from "../MermaidDiagram";
 import { useArtifactStore } from "../../stores/artifact";
+import { POPOVER_GAP } from "../../lib/popoverPosition";
 
 /** #185 — deterministic matchMedia: `narrow` drives useIsNarrowViewport
  *  (max-width:900px) so a test can force the popover vs legacy-block choice;
@@ -379,6 +380,9 @@ describe("DiagramRegionLayer (region-anchored diagram comments)", () => {
       // Restore the getBoundingClientRect / focus spies these tests install
       // (vitest has no restoreMocks here; the matchMedia stub is untouched).
       vi.restoreAllMocks();
+      // The fake ResizeObserver below; the top-level beforeEach re-stubs
+      // matchMedia + fetch for the next test.
+      vi.unstubAllGlobals();
     });
 
     async function mountInteractive(opts?: { narrow?: boolean; optionId?: string }) {
@@ -555,6 +559,148 @@ describe("DiagramRegionLayer (region-anchored diagram comments)", () => {
       expect(800 - 736).toBeGreaterThanOrEqual(64);
     });
 
+    // --- Behavior 5: a long thread stays READABLE (cap + inner scroll) -----
+    it("LONG THREAD: a thread taller than the visible well no longer chases the scrollport", async () => {
+      mockGeometry(800, 300); // visible well: 300px tall
+      const region = { x: 0.1, y: 0.15, w: 0.2, h: 0.2, labels: ["Target"] };
+      // Enough comments that a real (measured) popover would out-grow the well.
+      for (let i = 0; i < 12; i += 1) addRegion(`rc_long_${i}`, region);
+      const { overlay } = await mountInteractive();
+      clickAt(overlay, 150, 75); // inside the region → reopen its thread
+      const popover = await screen.findByTestId("dp-region-popover");
+      // 1 — the popover is CAPPED to the visible well, so the placement math
+      //     always finds a fitting spot instead of falling through to the
+      //     clamp-to-0 last resort that re-pins the box to the scrollport top.
+      expect(popover.style.maxHeight).toBe(`${Math.max(160, 300 - 2 * POPOVER_GAP)}px`);
+      // 2 — the overflow moved INSIDE: the thread scrolls in its own body, so
+      //     the newest comments and the composer stay reachable.
+      const body = popover.querySelector('[data-testid="dp-region-popover-body"]');
+      expect(body).not.toBeNull();
+      expect(body?.className).toContain("overflow-y-auto");
+    });
+
+    // --- Review follow-ups: the popover tracks a GROWING thread + a resized well --
+    // happy-dom's ResizeObserver never fires, so a fake records what is
+    // observed and lets a test fire it for one target — an unobserved element
+    // resizing is exactly the stale-measurement bug.
+    function installFakeResizeObserver() {
+      const instances: { cb: ResizeObserverCallback; targets: Set<Element> }[] = [];
+      class FakeResizeObserver {
+        cb: ResizeObserverCallback;
+        targets = new Set<Element>();
+        constructor(cb: ResizeObserverCallback) {
+          this.cb = cb;
+          instances.push(this);
+        }
+        observe(t: Element) {
+          this.targets.add(t);
+        }
+        unobserve(t: Element) {
+          this.targets.delete(t);
+        }
+        disconnect() {
+          this.targets.clear();
+        }
+      }
+      vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+      return (target: Element) =>
+        act(() => {
+          for (const i of instances) {
+            if (i.targets.has(target)) i.cb([{ target } as ResizeObserverEntry], i as unknown as ResizeObserver);
+          }
+        });
+    }
+    // mockGeometry plus live heights for the popover, its scrolling body and the
+    // composer (the textarea's wrapper) — read at call time so a test can grow them.
+    function mockPopoverGeometry(W: number, H: number, h: { popover: number; body: number; composer: number }) {
+      const rect = (w: number, hh: number) =>
+        ({ x: 0, y: 0, left: 0, top: 0, right: w, bottom: hh, width: w, height: hh, toJSON() {} }) as DOMRect;
+      return vi
+        .spyOn(Element.prototype, "getBoundingClientRect")
+        .mockImplementation(function (this: Element) {
+          const id = this.getAttribute?.("data-testid");
+          if (id === "dp-region-popover") return rect(400, h.popover);
+          if (id === "dp-region-popover-body") return rect(400, h.body);
+          if (this.firstElementChild?.tagName === "TEXTAREA") return rect(400, h.composer);
+          if (this.getAttribute?.("aria-label") === "diagram") return rect(W, H);
+          if (this.querySelector?.('[data-testid="dp-region-overlay"]')) return rect(W, H);
+          return rect(0, 0);
+        });
+    }
+    // A region near the BOTTOM of a 600px well: no room below, so it opens ABOVE.
+    // Well-local rect = { top: 480, height: 60 } on the 800x600 box.
+    const LOW_REGION = { x: 0.1, y: 0.8, w: 0.2, h: 0.1, labels: ["Low"] };
+
+    it("GROWING THREAD: an ABOVE popover re-measures as the thread grows, so it never grows down over its anchor", async () => {
+      const fire = installFakeResizeObserver();
+      const h = { popover: 180, body: 140, composer: 120 };
+      mockPopoverGeometry(800, 600, h);
+      addRegion("rc_low_0", LOW_REGION);
+      const { overlay } = await mountInteractive();
+      clickAt(overlay, 150, 510); // inside LOW_REGION → reopen its thread
+      const popover = await screen.findByTestId("dp-region-popover");
+      expect(popover.dataset.placement).toBe("above");
+      // Empty-ish composer: top = anchorTop(480) - gap - 180.
+      expect(popover.style.top).toBe(`${480 - POPOVER_GAP - 180}px`);
+      // You post: the thread grows the box to 400px. The box resizing is the
+      // only signal (the well, the diagram and the anchor are all unchanged).
+      act(() => addRegion("rc_low_1", LOW_REGION, undefined, { createdAt: "2026-06-19T00:00:00.000Z" }));
+      h.popover = 400;
+      fire(popover);
+      // The bottom edge stays gap-above the anchor — not top-pinned and 220px
+      // taller, which buried the anchor and pushed the composer out of the well.
+      expect(popover.style.top).toBe(`${480 - POPOVER_GAP - 400}px`);
+    });
+
+    it("GROWING THREAD: your own send scrolls the capped body to the bottom; an agent reply does not", async () => {
+      mockPopoverGeometry(800, 600, { popover: 180, body: 140, composer: 120 });
+      addRegion("rc_low_0", LOW_REGION);
+      const { overlay } = await mountInteractive();
+      clickAt(overlay, 150, 510);
+      const popover = await screen.findByTestId("dp-region-popover");
+      const body = popover.querySelector('[data-testid="dp-region-popover-body"]') as HTMLElement;
+      let scrollHeight = 900;
+      Object.defineProperty(body, "scrollHeight", { configurable: true, get: () => scrollHeight });
+      // An AGENT reply lands while you read older comments: leave your scroll alone.
+      body.scrollTop = 0;
+      act(() =>
+        addRegion("rc_low_agent", LOW_REGION, undefined, { author: "agent", createdAt: "2026-06-19T00:00:00.000Z" }),
+      );
+      expect(body.scrollTop).toBe(0);
+      // Your own comment lands: follow it, so it and the composer are in view.
+      scrollHeight = 1100;
+      act(() => addRegion("rc_low_mine", LOW_REGION, undefined, { createdAt: "2026-06-20T00:00:00.000Z" }));
+      expect(body.scrollTop).toBe(1100);
+    });
+
+    it("RESIZED WELL: the cap follows the SCROLLPORT when the window resizes it (not only the diagram)", async () => {
+      const fire = installFakeResizeObserver();
+      mockPopoverGeometry(800, 600, { popover: 180, body: 140, composer: 120 });
+      addRegion("rc_low_0", LOW_REGION);
+      const { overlay } = await mountInteractive();
+      clickAt(overlay, 150, 510);
+      const popover = await screen.findByTestId("dp-region-popover");
+      const port = document.querySelector("[data-dp-scrollport]") as HTMLElement;
+      let clientHeight = 500;
+      Object.defineProperty(port, "clientWidth", { configurable: true, get: () => 800 });
+      Object.defineProperty(port, "clientHeight", { configurable: true, get: () => clientHeight });
+      // The window shrinks the 60vh scrollport; the diagram and its wrapper don't change.
+      fire(port);
+      expect(popover.style.maxHeight).toBe(`${500 - 2 * POPOVER_GAP}px`);
+      clientHeight = 300;
+      fire(port);
+      expect(popover.style.maxHeight).toBe(`${300 - 2 * POPOVER_GAP}px`);
+    });
+
+    it("TINY WELL: the cap never drops below the header + composer, so the textarea is never clipped", async () => {
+      // A two-node LR diagram: ~87px well. header/padding = 230-190 = 40, composer 150.
+      mockPopoverGeometry(800, 87, { popover: 230, body: 190, composer: 150 });
+      const { overlay } = await mountInteractive();
+      completeDrag(overlay, { x: 10, y: 10 }, { x: 200, y: 60 });
+      const popover = await screen.findByTestId("dp-region-popover");
+      expect(popover.style.maxHeight).toBe(`${230 - 190 + 150}px`);
+    });
+
     // --- Behavior 4: click a posted region highlight → reopen its thread ----
     it("CLICK-TO-REOPEN: clicking inside a posted region re-opens that region's thread", async () => {
       mockGeometry(800, 600);
@@ -620,6 +766,44 @@ describe("DiagramRegionLayer (region-anchored diagram comments)", () => {
       // <body> and doing nothing.
       await user.keyboard("{Escape}");
       expect(screen.queryByTestId("dp-region-popover")).not.toBeInTheDocument();
+    });
+
+    it("FOCUS-AFTER-SEND: focus really lands back in the textarea, even though the send disables it first", async () => {
+      // Review (real Chromium): the provisional comment lands in the same render
+      // that disables the textarea, and focus() on a disabled control is a no-op
+      // — so a real send left focus on <body>. The spy above only counts calls.
+      // happy-dom focuses disabled controls and never blurs one that becomes
+      // disabled, so restore both browser rules: disabling the focused control
+      // drops focus to <body> (the "focus fixup" — React writes `disabled` as an
+      // attribute, so it hooks setAttribute), and a disabled control is not
+      // focusable.
+      const realSetAttribute = Element.prototype.setAttribute;
+      vi.spyOn(Element.prototype, "setAttribute").mockImplementation(function (
+        this: Element,
+        name: string,
+        value: string,
+      ) {
+        if (name === "disabled" && document.activeElement === this) (this as HTMLElement).blur();
+        realSetAttribute.call(this, name, value);
+      });
+      const realFocus = HTMLTextAreaElement.prototype.focus;
+      vi.spyOn(HTMLTextAreaElement.prototype, "focus").mockImplementation(function (
+        this: HTMLTextAreaElement,
+        opts?: FocusOptions,
+      ) {
+        if (this.disabled) return;
+        realFocus.call(this, opts);
+      });
+      const user = userEvent.setup();
+      const { overlay } = await mountInteractive();
+      completeDrag(overlay);
+      await screen.findByTestId("dp-region-popover");
+      const box = screen.getByPlaceholderText(/add a comment/i);
+      await user.type(box, "needs a retry");
+      await user.keyboard("{Meta>}{Enter}{/Meta}");
+      await waitFor(() => expect(fetch).toHaveBeenCalled());
+      await waitFor(() => expect(box).not.toBeDisabled());
+      await waitFor(() => expect(box).toHaveFocus());
     });
 
     // --- Fix (review): focus-after-send must not STEAL focus -----------------
