@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { Artifact } from "@deeppairing/shared";
-import { useArtifactStore, getStoreGeneration } from "../../stores/artifact";
+import { useArtifactStore } from "../../stores/artifact";
+import { useToastStore } from "../../stores/toast";
 import { useConnectionStore } from "../../stores/connection";
 import { useReplayStore } from "../../stores/replay";
 import { useCrossProjectStore } from "../../stores/crossProject";
@@ -491,13 +492,23 @@ export function ArtifactStatusActions({
       // Submit comment alongside the action if the user typed one
       const trimmedComment = comment.trim();
       if (trimmedComment) {
-        const generation = getStoreGeneration();
+        const sessionAtComment = useConnectionStore.getState().sessionId;
         await submitComment(artifact.id, trimmedComment);
-        // #407 review — the session changed while the comment was in the air
-        // (it still went to THIS artifact's session). The status half must not
-        // follow: it would post this artifact's id under the NEW binding. Stop
-        // without claiming success — no actionSucceeded, so the draft is kept.
-        if (getStoreGeneration() !== generation) return;
+        // #407 review — the tab SWITCHED sessions while the comment was in the
+        // air (it still went to this artifact's session). The status half must
+        // not follow: it would post this artifact's id under the NEW binding.
+        // Keyed on session IDENTITY, not the store generation: a same-session
+        // reconnect also reloads the store, and there the status must still go
+        // (review round 3 — the generation check silently dropped it). Say so
+        // out loud rather than fail silently; the draft stays for a retry.
+        if (useConnectionStore.getState().sessionId !== sessionAtComment) {
+          useToastStore.getState().push({
+            kind: "error",
+            title: `${action === "approved" ? "Approval" : action === "rejected" ? "Rejection" : "Request for changes"} not applied`,
+            body: "You switched sessions while your comment was sending. The comment was posted; the status change was not. Switch back to apply it.",
+          });
+          return;
+        }
       }
       // On reject, carry the human-named pattern as the ledger key (empty →
       // server falls back to the agent's concept, then the title).

@@ -451,47 +451,68 @@ describe("F8 (M3) — Escape cancels the armed countdown (the help finally tells
   });
 });
 
-describe("#407 review — a comment+status chain stops if the session changed in between", () => {
+describe("#407 review — the comment→status chain follows the SESSION, not the store generation", () => {
   afterEach(() => {
     useConnectionStore.setState({ adapter: null, sessionId: null } as any);
   });
-
-  it("Request changes: the comment settles after an A→B switch → NO status POST, no success claimed (draft kept)", async () => {
-    const switched: string[] = [];
-    useConnectionStore.setState({ sessionId: "s1", adapter: { switchSession: (id: string) => switched.push(id) } } as any);
-    let resolveComment!: (r: Response) => void;
+  const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { "Content-Type": "application/json" } });
+  /** fetch fake: the comment POST is held until the test releases it. */
+  function holdComment() {
+    let release!: () => void;
     const fetchSpy = vi.fn((url: string) =>
       String(url).includes("/api/comments")
-        ? new Promise<Response>((res) => { resolveComment = res; })
-        : Promise.resolve(new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } })),
+        ? new Promise<Response>((res) => { release = () => res(json({ comment: null })); })
+        : Promise.resolve(json({})),
     );
     vi.stubGlobal("fetch", fetchSpy);
+    const statusPosts = () => fetchSpy.mock.calls.map((c) => String(c[0])).filter((u) => u.includes("/api/artifacts/art_x/status"));
+    return { fetchSpy, release: () => release(), statusPosts };
+  }
+  async function requestChanges(fetchSpy: ReturnType<typeof vi.fn>) {
     useArtifactStore.setState({ artifacts: [artifact()] });
     render(<ArtifactStatusActions artifact={artifact()} />);
     await userEvent.type(screen.getByRole("textbox"), "please re-do");
     await userEvent.click(screen.getByRole("button", { name: /Request changes/i }));
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+  }
 
+  it("a SAME-SESSION reconnect (store reloaded) mid-comment still posts the status, exactly once", async () => {
+    const { useToastStore } = await import("../../../stores/toast");
+    useToastStore.getState().dismissAll();
+    useConnectionStore.setState({ sessionId: "s1", adapter: null } as any);
+    const { fetchSpy, release, statusPosts } = holdComment();
+    await requestChanges(fetchSpy);
+    // The reconnect reloads s1's snapshot: the store resets, the session doesn't change.
+    act(() => useArtifactStore.getState().reset());
+    await act(async () => release());
+    await waitFor(() => expect(statusPosts()).toHaveLength(1));
+    expect(useToastStore.getState().toasts).toHaveLength(0);
+  });
+
+  it("a real A→B SWITCH mid-comment posts NO status and says so in a toast (draft kept)", async () => {
+    const { useToastStore } = await import("../../../stores/toast");
+    useToastStore.getState().dismissAll();
+    const switched: string[] = [];
+    useConnectionStore.setState({ sessionId: "s1", adapter: { switchSession: (id: string) => switched.push(id) } } as any);
+    const { fetchSpy, release, statusPosts } = holdComment();
+    await requestChanges(fetchSpy);
     useConnectionStore.getState().switchSession("s2");
     await vi.waitFor(() => expect(switched).toEqual(["s2"]));
-    await act(async () => {
-      resolveComment(new Response(JSON.stringify({ comment: null }), { status: 200, headers: { "Content-Type": "application/json" } }));
-    });
-    await waitFor(() => expect(screen.getByRole("button", { name: /Request changes/i })).not.toBeDisabled());
-    // Only the comment went out; A's artifact status was never posted under B.
-    expect(fetchSpy.mock.calls.map((c) => String(c[0])).filter((u) => u.includes("/status"))).toEqual([]);
+    await act(async () => release());
+    await waitFor(() => expect(useToastStore.getState().toasts.some((t) => /not applied/i.test(t.title))).toBe(true));
+    expect(statusPosts()).toEqual([]);
     expect(screen.getByRole("textbox")).toHaveValue("please re-do");
   });
 
-  it("same session: the chain still posts the comment, then the status", async () => {
+  it("same session, no reconnect: the chain still posts the comment, then the status", async () => {
     useConnectionStore.setState({ sessionId: "s1", adapter: null } as any);
-    const fetchSpy = vi.fn().mockResolvedValue(new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const fetchSpy = vi.fn().mockResolvedValue(json({}));
     vi.stubGlobal("fetch", fetchSpy);
     render(<ArtifactStatusActions artifact={artifact()} />);
     await userEvent.type(screen.getByRole("textbox"), "please re-do");
     await userEvent.click(screen.getByRole("button", { name: /Request changes/i }));
     await waitFor(() =>
-      expect(fetchSpy.mock.calls.map((c) => String(c[0])).some((u) => u.includes("/api/artifacts/art_x/status"))).toBe(true),
+      expect(fetchSpy.mock.calls.map((c) => String(c[0])).filter((u) => u.includes("/api/artifacts/art_x/status"))).toHaveLength(1),
     );
   });
 });

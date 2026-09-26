@@ -25,11 +25,6 @@ let localCommentSeq = 0;
  * imports THIS module — the cycle the codebase deliberately avoids).
  */
 let storeGeneration = 0;
-/** #407 — read-only view of the fence for callers that CHAIN mutations (the
- *  review footer posts a comment, then a status): if the store moved while
- *  the first was in the air, the second must not run against the new one. */
-export const getStoreGeneration = (): number => storeGeneration;
-
 /** #407 — the tab's session binding RIGHT NOW. Captured at a call's start so a
  *  request whose routing falls back to the tab (no owner) still goes to the
  *  session it was started in, even if an await inside lets a switch land. */
