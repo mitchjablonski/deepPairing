@@ -21418,7 +21418,7 @@ function spawnDaemon(projectRoot2) {
   child.stderr?.on("data", onData);
   child.unref();
   let released = false;
-  const release = () => {
+  const release2 = () => {
     if (released) return;
     released = true;
     try {
@@ -21432,7 +21432,7 @@ function spawnDaemon(projectRoot2) {
     } catch {
     }
   };
-  return { stderrTail: () => stderrBuf, release };
+  return { stderrTail: () => stderrBuf, release: release2 };
 }
 function classifyDaemonVersion(runningVersion, myVersion) {
   if (runningVersion === void 0 || runningVersion === null || runningVersion === "") {
@@ -21616,14 +21616,14 @@ async function ensureDaemon(projectRoot2, opts = {}) {
     const outcome = await resolveStaleDaemon(existing, SERVER_VERSION, projectRoot2, { log: logStale });
     if (outcome === "adopt") return existing;
   }
-  const { stderrTail, release } = spawnDaemon(projectRoot2);
+  const { stderrTail, release: release2 } = spawnDaemon(projectRoot2);
   try {
     const info = await waitForDaemon(projectRoot2, { onProgress: opts.onProgress });
-    release();
+    release2();
     return info;
   } catch (err) {
     const tail = stderrTail().trim();
-    release();
+    release2();
     if (tail) {
       throw new Error(`${errorMessage(err)}
 Daemon stderr:
@@ -25416,43 +25416,66 @@ function readStartTime(pid) {
     return null;
   }
 }
-var selfStartTime;
-function ownBody() {
-  if (selfStartTime === void 0) selfStartTime = readStartTime(process.pid);
-  return {
-    pid: process.pid,
-    hostname: os3.hostname(),
-    processStartTime: selfStartTime,
-    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-    nonce: randomBytes2(8).toString("hex")
-  };
-}
-function parseOwner(raw2) {
+function currentHostIdentity() {
   try {
-    const v = JSON.parse(raw2);
-    if (!v || typeof v !== "object") return null;
-    if (!Number.isInteger(v.pid) || v.pid <= 0) return null;
-    if (typeof v.hostname !== "string" || !v.hostname) return null;
+    if (process.platform === "linux") {
+      return {
+        platform: "linux",
+        hostname: os3.hostname(),
+        bootId: fs6.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(),
+        pidNamespace: fs6.readlinkSync("/proc/self/ns/pid")
+      };
+    }
     return {
-      pid: v.pid,
-      hostname: v.hostname,
-      processStartTime: typeof v.processStartTime === "string" ? v.processStartTime : null,
-      createdAt: typeof v.createdAt === "string" ? v.createdAt : "",
-      nonce: typeof v.nonce === "string" ? v.nonce : ""
+      platform: process.platform,
+      hostname: os3.hostname(),
+      bootId: `uptime-boot:${Math.round((Date.now() / 1e3 - os3.uptime()) / 60)}`,
+      pidNamespace: "host"
     };
   } catch {
     return null;
   }
 }
+var selfIdentity;
+function self() {
+  if (!selfIdentity) selfIdentity = { host: currentHostIdentity(), startTime: readStartTime(process.pid) };
+  return selfIdentity;
+}
+function ownLockIdentity() {
+  const me = self();
+  if (!me.host) return null;
+  return { pid: process.pid, ...me.host, processStartTime: me.startTime };
+}
+function ownBody() {
+  const id = ownLockIdentity();
+  return JSON.stringify({
+    ...id ?? { pid: process.pid },
+    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+    nonce: randomBytes2(8).toString("hex")
+  });
+}
+var IDENTITY_FIELDS = ["platform", "hostname", "bootId", "pidNamespace"];
 function ownerState(raw2) {
-  const owner = parseOwner(raw2);
-  if (!owner) return { state: "unknown", owner: null, why: "unreadable or legacy lock body (no pid/hostname)" };
-  if (owner.hostname !== os3.hostname()) {
-    return { state: "unknown", owner, why: `owned by another host (${owner.hostname})` };
+  let v;
+  try {
+    v = JSON.parse(raw2);
+  } catch {
+    return { state: "unknown", owner: null, why: "unreadable lock body" };
   }
-  if (owner.pid === process.pid) {
-    return { state: "alive", owner };
+  if (!v || typeof v !== "object" || !Number.isInteger(v.pid) || v.pid <= 0) {
+    return { state: "unknown", owner: null, why: "unreadable lock body (no pid)" };
   }
+  const here = self().host;
+  if (!here) return { state: "unknown", owner: v, why: "this process cannot determine its own host identity" };
+  for (const field of IDENTITY_FIELDS) {
+    if (typeof v[field] !== "string" || !v[field]) {
+      return { state: "unknown", owner: v, why: `legacy lock body (no ${field}) \u2014 owner unverifiable` };
+    }
+    if (v[field] !== here[field]) {
+      return { state: "unknown", owner: v, why: `owned by another ${field === "hostname" ? "host" : field === "platform" ? "OS" : field === "bootId" ? "boot / kernel (e.g. WSL vs Windows, or a VM)" : "pid namespace (e.g. a container)"} \u2014 owner unverifiable` };
+    }
+  }
+  const owner = v;
   try {
     process.kill(owner.pid, 0);
   } catch (err) {
@@ -25461,7 +25484,7 @@ function ownerState(raw2) {
     if (code === "EPERM") return { state: "alive", owner };
     return { state: "unknown", owner, why: `liveness probe failed (${code ?? String(err)})` };
   }
-  if (owner.processStartTime) {
+  if (typeof owner.processStartTime === "string" && owner.processStartTime) {
     const current = readStartTime(owner.pid);
     if (current && current !== owner.processStartTime) {
       return { state: "dead", owner, why: `pid ${owner.pid} was reused by a newer process` };
@@ -25469,41 +25492,86 @@ function ownerState(raw2) {
   }
   return { state: "alive", owner };
 }
-function breakDeadLock(lockPath) {
-  let raw2;
+function claim(file2) {
+  let fd;
   try {
-    raw2 = fs6.readFileSync(lockPath, "utf8");
+    fd = fs6.openSync(file2, "wx", 384);
   } catch (err) {
-    if (err.code === "ENOENT") return { broken: false, state: null };
+    if (err.code === "EEXIST") return null;
     throw err;
   }
+  const body = ownBody();
+  try {
+    fs6.writeFileSync(fd, body);
+  } catch (err) {
+    fs6.closeSync(fd);
+    try {
+      fs6.unlinkSync(file2);
+    } catch {
+    }
+    throw err;
+  }
+  fs6.closeSync(fd);
+  return body;
+}
+function release(file2, body, label) {
+  let current;
+  try {
+    current = fs6.readFileSync(file2, "utf8");
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+    current = null;
+  }
+  if (current !== body) {
+    console.error(
+      `[deepPairing] WARNING: ${label} at ${file2} was ${current === null ? "removed" : "replaced"} while this process held it. The write under it completed; another writer may have overlapped it. Stop all writers and check the protected file if this repeats.`
+    );
+    return false;
+  }
+  fs6.unlinkSync(file2);
+  return true;
+}
+function unlinkIfUnchanged(file2, judged, guard) {
+  const mine = claim(guard);
+  if (mine === null) return false;
+  try {
+    let now;
+    try {
+      now = fs6.readFileSync(file2, "utf8");
+    } catch (err) {
+      if (err.code === "ENOENT") return false;
+      throw err;
+    }
+    if (now !== judged) return false;
+    fs6.unlinkSync(file2);
+    return true;
+  } finally {
+    release(guard, mine, "lock-break guard");
+  }
+}
+function readIfExists(file2) {
+  try {
+    return fs6.readFileSync(file2, "utf8");
+  } catch (err) {
+    if (err.code === "ENOENT") return null;
+    throw err;
+  }
+}
+function breakDeadLock(lockPath) {
+  const raw2 = readIfExists(lockPath);
+  if (raw2 === null) return { broken: false, state: null };
   const state = ownerState(raw2);
   if (state.state !== "dead") return { broken: false, state };
-  const tomb = `${lockPath}.dead-${process.pid}-${randomBytes2(4).toString("hex")}`;
-  try {
-    fs6.renameSync(lockPath, tomb);
-  } catch (err) {
-    if (err.code === "ENOENT") return { broken: false, state };
-    throw err;
+  const guard = `${lockPath}.break`;
+  if (unlinkIfUnchanged(lockPath, raw2, guard)) {
+    console.error(`[deepPairing] recovered lock ${lockPath}: ${state.why} (created ${state.owner.createdAt || "?"}).`);
+    return { broken: true, state };
   }
-  let taken;
-  try {
-    taken = fs6.readFileSync(tomb, "utf8");
-  } catch {
-    taken = "";
+  const guardRaw = readIfExists(guard);
+  if (guardRaw !== null && ownerState(guardRaw).state === "dead") {
+    unlinkIfUnchanged(guard, guardRaw, `${guard}.recover`);
   }
-  if (taken !== raw2) {
-    try {
-      fs6.linkSync(tomb, lockPath);
-      fs6.unlinkSync(tomb);
-    } catch (err) {
-      console.error(`[deepPairing] lock ${lockPath}: could not restore a live lock moved during dead-owner recovery (${String(err)}); its owner will fail loudly on release.`);
-    }
-    return { broken: false, state };
-  }
-  fs6.unlinkSync(tomb);
-  console.error(`[deepPairing] recovered lock ${lockPath}: ${state.why} (created ${state.owner.createdAt || "?"}).`);
-  return { broken: true, state };
+  return { broken: false, state };
 }
 function withFileLock(lockPath, run, opts = {}) {
   const key = path5.resolve(lockPath);
@@ -25511,60 +25579,43 @@ function withFileLock(lockPath, run, opts = {}) {
   const label = opts.label ?? "File lock";
   const deadline = performance.now() + (opts.timeoutMs ?? DEFAULT_FILE_LOCK_TIMEOUT_MS);
   const waitArray = new Int32Array(new SharedArrayBuffer(4));
-  let fd;
+  let body;
   let lastState = null;
   for (; ; ) {
-    try {
-      fd = fs6.openSync(lockPath, "wx", 384);
-      break;
-    } catch (err) {
-      if (err.code !== "EEXIST") throw err;
-      const attempt = breakDeadLock(lockPath);
-      if (attempt.broken) continue;
-      lastState = attempt.state ?? lastState;
-      if (performance.now() >= deadline) {
-        const owner = lastState?.owner;
-        const who = owner ? ` Held by pid ${owner.pid} on ${owner.hostname} since ${owner.createdAt || "?"}.` : "";
-        throw Object.assign(
-          new Error(
-            `${label} busy: ${lockPath}.${who} If no deepPairing daemon or CLI is running, run \`deeppairing doctor\` to inspect it; remove an abandoned lock only after stopping all writers.`
-          ),
-          { code: "ELOCKED", path: lockPath }
-        );
-      }
-      Atomics.wait(waitArray, 0, 0, 10);
+    body = claim(lockPath);
+    if (body !== null) break;
+    const attempt = breakDeadLock(lockPath);
+    if (attempt.broken) continue;
+    lastState = attempt.state ?? lastState;
+    if (performance.now() >= deadline) {
+      const owner = lastState?.owner;
+      const who = owner?.pid ? ` Held by pid ${owner.pid}${owner.hostname ? ` on ${owner.hostname}` : ""} since ${owner.createdAt || "?"}.` : "";
+      throw Object.assign(
+        new Error(
+          `${label} busy: ${lockPath}.${who} If no deepPairing daemon or CLI is running, run \`deeppairing doctor\` to inspect it; remove an abandoned lock only after stopping all writers.`
+        ),
+        { code: "ELOCKED", path: lockPath }
+      );
     }
+    Atomics.wait(waitArray, 0, 0, 10);
   }
   heldLocks.add(key);
-  const body = JSON.stringify(ownBody());
   let result;
   let failed = false;
   let failure;
   try {
-    fs6.writeFileSync(fd, body);
     result = run();
   } catch (err) {
     failed = true;
     failure = err;
   }
   heldLocks.delete(key);
-  const cleanups = [
-    () => fs6.closeSync(fd),
-    () => {
-      if (fs6.readFileSync(lockPath, "utf8") !== body) {
-        throw Object.assign(new Error(`${label} was replaced while held: ${lockPath}. Stop all writers and inspect the protected file.`), { code: "ELOCKSTOLEN" });
-      }
-      fs6.unlinkSync(lockPath);
-    }
-  ];
-  for (const cleanup of cleanups) {
-    try {
-      cleanup();
-    } catch (err) {
-      if (!failed) {
-        failed = true;
-        failure = err;
-      }
+  try {
+    release(lockPath, body, label);
+  } catch (err) {
+    if (!failed) {
+      failed = true;
+      failure = err;
     }
   }
   if (failed) throw failure;
@@ -28928,6 +28979,42 @@ var FileStore = class _FileStore {
         _FileStore.logLedgerMirrorFailure("rejected", err);
       }
     }
+  }
+  /** #408 review (M1) — would committing `status` on this artifact conflict
+   *  with the persisted record (a concurrent proposal rewrite)? Same rule the
+   *  flush applies (mergeArtifactRecords), evaluated read-only BEFORE the
+   *  verdict route records anything. Also surfaces a frozen writer. */
+  previewReviewConflict(artifactId, status) {
+    if (this.reviewConflict) return this.reviewConflict;
+    const local = this.artifacts.find((a) => a.id === artifactId);
+    const baseline = JSON.parse(this.recordBaselines["artifacts.json"] ?? "[]").find((a) => a.id === artifactId);
+    if (!local || !baseline) return null;
+    let disk;
+    try {
+      const raw2 = JSON.parse(fs14.readFileSync(path13.join(this.sessionDir(), "artifacts.json"), "utf8"));
+      disk = _FileStore.salvageArray(`${this.sessionId}:artifacts.json (preview)`, raw2, "id").find((a) => a.id === artifactId);
+    } catch {
+      return null;
+    }
+    if (!disk) return null;
+    try {
+      mergeArtifactRecords([baseline], [{ ...local, status }], [disk], (r) => r.id);
+      return null;
+    } catch (err) {
+      return err instanceof Error ? err : new Error(String(err));
+    }
+  }
+  /** #408 review (M1) — remove a project-local rejected-approach row by exact
+   *  description (compensation for a verdict that 409'd after recording). No
+   *  ledger mirror, no counter-instance: this undoes, it does not override. */
+  retractRejectedApproach(description) {
+    this.mutatePreferences((prefs) => {
+      const rejected = this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []);
+      const keep = rejected.filter((r) => r.description !== description);
+      if (keep.length === rejected.length) return false;
+      prefs.rejectedApproaches = keep;
+      return true;
+    });
   }
   /** Migrate legacy string[] into RejectedApproach[] so downstream code sees one shape. */
   normalizeRejectedApproaches(raw2) {
@@ -32913,7 +33000,15 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
         rejection = { description: artifact.title, reason: feedback?.trim() || void 0, sourceArtifactId: artifactId, concept };
       }
     }
-    if (rejection) await store.recordRejectedApproach(rejection);
+    let retractOnConflict = null;
+    let recordAfterFlush = false;
+    if (rejection && await store.previewReviewConflict?.(artifactId, status)) {
+      recordAfterFlush = true;
+    } else if (rejection) {
+      const had = (await store.getSessionMemory()).rejectedApproaches.some((r) => r.description === rejection.description);
+      await store.recordRejectedApproach(rejection);
+      if (!had) retractOnConflict = rejection.description;
+    }
     await store.updateArtifactStatus(artifactId, status, reason);
     if (status !== "obsolete") {
       await store.resolvePlanReview(artifactId, status, feedback);
@@ -32933,6 +33028,13 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       await store.forceFlush();
     } catch (err) {
       if (isSessionReviewConflictError(err)) {
+        if (retractOnConflict) {
+          try {
+            await store.retractRejectedApproach?.(retractOnConflict);
+          } catch (retractErr) {
+            console.error(`[deepPairing] could not retract rejection after a review conflict: ${retractErr}`);
+          }
+        }
         return c.json({
           error: "session_review_conflict",
           code: ERROR_CODES.session_review_conflict,
@@ -32941,6 +33043,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       }
       console.error(`[deepPairing] verdict flush failed (verdict landed in memory; debounced flush will retry): ${err}`);
     }
+    if (rejection && recordAfterFlush) await store.recordRejectedApproach(rejection);
     if (rejection) broadcast({ type: "ledger_write", kind: "rejected", ...rejection }, sid);
     broadcast({ type: "artifact_updated", artifactId, status }, sid);
     return c.json({ status: "updated", artifactId });

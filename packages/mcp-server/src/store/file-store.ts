@@ -1708,6 +1708,46 @@ export class FileStore implements IStore {
     }
   }
 
+  /** #408 review (M1) — would committing `status` on this artifact conflict
+   *  with the persisted record (a concurrent proposal rewrite)? Same rule the
+   *  flush applies (mergeArtifactRecords), evaluated read-only BEFORE the
+   *  verdict route records anything. Also surfaces a frozen writer. */
+  previewReviewConflict(artifactId: string, status: string): Error | null {
+    if (this.reviewConflict) return this.reviewConflict;
+    const local = this.artifacts.find((a) => a.id === artifactId);
+    const baseline = (JSON.parse(this.recordBaselines["artifacts.json"] ?? "[]") as Artifact[])
+      .find((a) => a.id === artifactId);
+    if (!local || !baseline) return null;
+    let disk: Artifact | undefined;
+    try {
+      const raw = JSON.parse(fs.readFileSync(path.join(this.sessionDir(), "artifacts.json"), "utf8"));
+      disk = FileStore.salvageArray<Artifact>(`${this.sessionId}:artifacts.json (preview)`, raw, "id")
+        .find((a) => a.id === artifactId);
+    } catch {
+      return null; // unreadable/absent: the real flush decides
+    }
+    if (!disk) return null;
+    try {
+      mergeArtifactRecords([baseline], [{ ...local, status } as Artifact], [disk], (r) => r.id);
+      return null;
+    } catch (err) {
+      return err instanceof Error ? err : new Error(String(err));
+    }
+  }
+
+  /** #408 review (M1) — remove a project-local rejected-approach row by exact
+   *  description (compensation for a verdict that 409'd after recording). No
+   *  ledger mirror, no counter-instance: this undoes, it does not override. */
+  retractRejectedApproach(description: string): void {
+    this.mutatePreferences((prefs) => {
+      const rejected = this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []);
+      const keep = rejected.filter((r) => r.description !== description);
+      if (keep.length === rejected.length) return false;
+      prefs.rejectedApproaches = keep;
+      return true;
+    });
+  }
+
   /** Migrate legacy string[] into RejectedApproach[] so downstream code sees one shape. */
   private normalizeRejectedApproaches(raw: unknown): RejectedApproach[] {
     if (!Array.isArray(raw)) return [];

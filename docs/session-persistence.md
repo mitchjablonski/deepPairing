@@ -96,17 +96,26 @@ every daemon and CLI writer, then remove only the named lock file.
 ## Recovering an abandoned flush lock
 
 A crash can leave `.deeppairing/sessions/<session-id>/.flush.lock` behind.
-The lock records its creator's host, PID, process start time (on Linux) and
-creation time. It is never broken by age, because a paused live writer could
-otherwise resume and overwrite a newer commit. The next writer recovers it
-only when the owner is provably dead: the lock is from this host, and the PID
-no longer exists or (on Linux) now belongs to a process with a different start
-time. Recovery renames the lock to a unique tombstone and checks the bytes, so
-two recovering writers cannot both win. The owner re-checks its lock before
-releasing it, so a lock removed or replaced while it was held fails loudly.
+The lock records its creator's full process identity: platform, hostname, boot
+ID, PID namespace, PID and (on Linux) process start time. It is never broken by
+age, because a paused live writer could otherwise resume and overwrite a newer
+commit. The next writer recovers it only when the identity matches its own
+operating-system instance exactly and the owner is provably dead: the PID no
+longer exists, or (on Linux) it now belongs to a process with a different start
+time. WSL2 and Windows share a hostname but not a PID space, and a container
+shares a boot but not a PID namespace. Any missing or mismatched identity field
+therefore leaves the lock in place.
 
-A lock with a live owner, from another host, or with an unreadable or
-older-format body still fails closed with an `ELOCKED` error that names the
+Recovering writers are serialized through `<lock>.break`. Under it, a writer
+re-reads the lock and removes it only if its bytes are unchanged, so two
+recovering writers cannot both win. A `.break` left by a crashed recoverer is
+recovered by the same rule through `<lock>.break.recover`, which is never
+removed automatically. On release the owner checks the lock is still its own.
+If it is not, the owner logs a warning; the write under the lock has already
+completed.
+
+A lock with a live owner, from another operating-system instance, or with an
+unreadable or older-format body still fails closed with an `ELOCKED` error that names the
 exact path. `deeppairing doctor` lists every lock with its owner and liveness,
 and `doctor --fix` removes only dead-owner locks. For any other lock, first
 stop **all** daemons, CLI commands and other writers for this project. Then

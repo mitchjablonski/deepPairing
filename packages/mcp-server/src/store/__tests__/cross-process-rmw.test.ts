@@ -22,7 +22,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { FileStore } from "../file-store.js";
 import { GlobalStore } from "../global-store.js";
-import { breakDeadLock, inspectLocks, ownerState, withFileLock } from "../file-lock.js";
+import { breakDeadLock, inspectLocks, ownerState, ownLockIdentity, withFileLock } from "../file-lock.js";
 import { withSessionFlushLock } from "../session-records.js";
 import { readRejectedApproaches } from "../../cli/preflight-hook-core.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
@@ -46,15 +46,17 @@ afterEach(() => {
   fx.dispose();
 });
 
-/** A lock body naming a LIVE owner on this host that is not this process. */
+const IDENTITY = ownLockIdentity()!;
+
+/** A lock body naming a LIVE owner in this OS instance that is not this process. */
 function liveOwnerBody(): string {
-  return JSON.stringify({ pid: process.ppid, hostname: os.hostname(), processStartTime: null, createdAt: new Date().toISOString(), nonce: "live" });
+  return JSON.stringify({ ...IDENTITY, pid: process.ppid, processStartTime: null, createdAt: new Date().toISOString(), nonce: "live" });
 }
 
 /** A lock body naming an owner that has provably exited (a crashed writer). */
-function deadOwnerBody(): string {
+function deadOwnerBody(extra: Record<string, unknown> = {}): string {
   const { pid } = spawnSync(process.execPath, ["-e", ""]);
-  return JSON.stringify({ pid, hostname: os.hostname(), processStartTime: null, createdAt: "2020-01-01T00:00:00.000Z", nonce: "dead" });
+  return JSON.stringify({ ...IDENTITY, pid, processStartTime: null, createdAt: "2020-01-01T00:00:00.000Z", nonce: `dead-${pid}`, ...extra });
 }
 
 // argv: root ledgerPath mode role n
@@ -100,6 +102,31 @@ const childProgram = String.raw`
         fs.renameSync(tmp, file);
       }, { timeoutMs: 10000 });
     }
+  } else if (mode === "stress") {
+    // H4 — every round starts with ALL children racing to break the same
+    // orphaned lock. Inside the critical section, an O_EXCL "inside" marker
+    // detects any second holder.
+    const rounds = n;
+    const inside = path.join(root, "inside");
+    let overlaps = 0;
+    for (let r = 0; r < rounds; r++) {
+      while (!fs.existsSync(path.join(root, ".round-" + r))) {
+        if (Date.now() >= deadline) process.exit(6);
+        Atomics.wait(waiter, 0, 0, 1);
+      }
+      withFileLock(path.join(root, "stress.lock"), () => {
+        try { fs.closeSync(fs.openSync(inside, "wx")); } catch { overlaps++; }
+        const file = path.join(root, "counter.json");
+        const v = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")).v : 0;
+        Atomics.wait(waiter, 0, 0, 2); // hold long enough for late breakers to act
+        const tmp = file + "." + process.pid + ".tmp";
+        fs.writeFileSync(tmp, JSON.stringify({ v: v + 1 }));
+        fs.renameSync(tmp, file);
+        try { fs.unlinkSync(inside); } catch { overlaps++; }
+      }, { timeoutMs: 20000 });
+      fs.writeFileSync(path.join(root, ".done-" + role + "-" + r), "");
+    }
+    fs.writeFileSync(path.join(root, ".overlaps-" + role), String(overlaps));
   } else if (role === "daemon") {
     // Daemon-equivalent: the rejection route's FileStore.
     const store = new FileStore(root, "daemon-session");
@@ -199,29 +226,113 @@ describe("cross-process read-modify-write (#406 ledger, #408 preferences)", () =
   }, 90_000);
 });
 
+describe("H4: breaker serialization under stress", () => {
+  it("8 processes racing to break a fresh orphaned lock every round never overlap", async () => {
+    const PROCS = 8;
+    const ROUNDS = 12;
+    const lock = path.join(fx.dir, "stress.lock");
+    const roles = Array.from({ length: PROCS }, (_, i) => `s${i}`);
+    const children = roles.map((role) => start("stress", role, ROUNDS));
+    let failure: unknown;
+    const finished = Promise.all(children.map(waitForExit)).catch((err: unknown) => { failure = err; });
+    const waitFor = async (files: string[]) => {
+      const deadline = Date.now() + CHILD_TIMEOUT_MS;
+      while (!files.every((f) => fs.existsSync(path.join(fx.dir, f)))) {
+        if (failure) throw failure;
+        if (Date.now() > deadline) throw new Error(`timeout waiting for ${files[0]}`);
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      }
+    };
+    await waitFor(roles.map((r) => `.ready-${r}`));
+    fs.writeFileSync(path.join(fx.dir, ".go"), "go");
+    for (let r = 0; r < ROUNDS; r++) {
+      fs.writeFileSync(lock, deadOwnerBody()); // a writer "crashed" holding it
+      fs.writeFileSync(path.join(fx.dir, `.round-${r}`), "");
+      await waitFor(roles.map((role) => `.done-${role}-${r}`));
+    }
+    await finished;
+    if (failure) throw failure;
+
+    const overlaps = roles.map((role) => Number(fs.readFileSync(path.join(fx.dir, `.overlaps-${role}`), "utf8")));
+    expect(overlaps).toEqual(roles.map(() => 0));
+    expect(JSON.parse(fs.readFileSync(path.join(fx.dir, "counter.json"), "utf8")).v).toBe(PROCS * ROUNDS);
+    expect(fs.readdirSync(fx.dir).filter((f) => f.startsWith("stress.lock"))).toEqual([]);
+  }, 120_000);
+});
+
 describe("lock owner classification", () => {
   it("only a provably dead same-host owner is breakable", () => {
     expect(ownerState(deadOwnerBody()).state).toBe("dead");
     expect(ownerState(liveOwnerBody()).state).toBe("alive");
     // This process itself is alive (a nested non-reentrant acquisition).
-    expect(ownerState(JSON.stringify({ pid: process.pid, hostname: os.hostname() })).state).toBe("alive");
+    expect(ownerState(JSON.stringify({ ...IDENTITY, createdAt: "", nonce: "" })).state).toBe("alive");
     // Foreign host, unreadable and legacy bodies stay fail-closed.
     const dead = JSON.parse(deadOwnerBody());
     expect(ownerState(JSON.stringify({ ...dead, hostname: "some-other-host" })).state).toBe("unknown");
+    expect(ownerState(JSON.stringify({ pid: dead.pid, hostname: os.hostname() })).state).toBe("unknown"); // pre-identity body
     expect(ownerState("").state).toBe("unknown");
     expect(ownerState("held").state).toBe("unknown");
     expect(ownerState(JSON.stringify({ pid: dead.pid, createdAt: "x" })).state).toBe("unknown");
   });
 
   it.runIf(process.platform === "linux")("a live pid with a different start time is a reused pid (dead owner)", () => {
-    const body = JSON.stringify({ pid: process.ppid, hostname: os.hostname(), processStartTime: "1", createdAt: "", nonce: "" });
+    const body = JSON.stringify({ ...IDENTITY, pid: process.ppid, processStartTime: "1", createdAt: "", nonce: "" });
     expect(ownerState(body).state).toBe("dead");
   });
 
-  it("release refuses to delete a lock replaced while held", () => {
+  it("release never deletes a lock replaced while held; lost ownership is a logged warning, not an error", () => {
     const lock = path.join(fx.dir, "stolen.lock");
-    expect(() => withFileLock(lock, () => { fs.writeFileSync(lock, "someone else"); })).toThrow(expect.objectContaining({ code: "ELOCKSTOLEN" }));
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(withFileLock(lock, () => { fs.writeFileSync(lock, "someone else"); return "applied"; })).toBe("applied");
     expect(fs.readFileSync(lock, "utf8")).toBe("someone else");
+    expect(warn.mock.calls.some((call) => /replaced while this process held it/.test(String(call[0])))).toBe(true);
+  });
+
+  it("H3: a dead pid under a foreign OS instance (same hostname) is NEVER broken", () => {
+    // WSL2 and Windows share a hostname but not a pid space; a container shares
+    // a boot but not a pid namespace. Any identity mismatch is unverifiable.
+    const lock = path.join(fx.dir, "foreign.lock");
+    for (const foreign of [
+      { platform: IDENTITY.platform === "win32" ? "linux" : "win32" },
+      { bootId: "00000000-0000-0000-0000-000000000000" },
+      { pidNamespace: "pid:[1]" },
+      { bootId: undefined },
+      { pidNamespace: undefined },
+    ]) {
+      const body = deadOwnerBody(foreign);
+      expect(JSON.parse(body).hostname).toBe(os.hostname());
+      expect(ownerState(body).state).toBe("unknown");
+      fs.writeFileSync(lock, body);
+      expect(breakDeadLock(lock).broken).toBe(false);
+      expect(fs.readFileSync(lock, "utf8")).toBe(body);
+    }
+    // Control: the SAME dead pid with a full identity match is recoverable.
+    fs.writeFileSync(lock, deadOwnerBody());
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(breakDeadLock(lock).broken).toBe(true);
+  });
+
+  it("L2: our own pid with a different start time is a previous incarnation (dead), with the same start time alive", () => {
+    if (!IDENTITY.processStartTime) return; // start times exist only on Linux
+    const mine = { ...IDENTITY, createdAt: "", nonce: "" };
+    expect(ownerState(JSON.stringify(mine)).state).toBe("alive");
+    expect(ownerState(JSON.stringify({ ...mine, processStartTime: "1" })).state).toBe("dead");
+  });
+
+  it("a .break stranded by a crashed breaker is recovered; a stranded .recover fails closed (doctor reports it)", () => {
+    const lock = path.join(fx.dir, "guarded.lock");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    fs.writeFileSync(lock, deadOwnerBody());
+    fs.writeFileSync(`${lock}.break`, deadOwnerBody());
+    expect(withFileLock(lock, () => "entered", { timeoutMs: 2000 })).toBe("entered");
+    expect(fs.readdirSync(fx.dir).filter((f) => f.startsWith("guarded.lock"))).toEqual([]);
+
+    fs.writeFileSync(lock, deadOwnerBody());
+    fs.writeFileSync(`${lock}.break`, deadOwnerBody());
+    fs.writeFileSync(`${lock}.break.recover`, deadOwnerBody());
+    expect(() => withFileLock(lock, () => "entered", { timeoutMs: 100 })).toThrow(expect.objectContaining({ code: "ELOCKED" }));
+    const kinds = inspectLocks([fx.dir]).filter((r) => path.basename(r.path).startsWith("guarded")).map((r) => `${r.kind}:${r.state}`).sort();
+    expect(kinds).toEqual(["break:dead", "lock:dead", "recover:dead"]);
   });
 
   it("inspectLocks reports owner and liveness; breakDeadLock removes only dead owners", () => {

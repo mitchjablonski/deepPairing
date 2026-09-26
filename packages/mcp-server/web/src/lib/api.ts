@@ -189,7 +189,10 @@ export async function safeFetch(input: RequestInfo, init?: RequestInit): Promise
   try {
     const body = await res.clone().json();
     if (typeof body?.code === "string") code = body.code;
-    if (typeof body?.error === "string") message = body.error;
+    // #408 review (L1) — prefer the human-readable `message` when the daemon
+    // sends one (`error` is often just the code, e.g. "lock_busy").
+    if (typeof body?.message === "string" && body.message) message = body.message;
+    else if (typeof body?.error === "string") message = body.error;
   } catch {
     // non-JSON body; keep the generic message
   }

@@ -1051,7 +1051,8 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
   // 6c. Cross-process locks (#406/#408). A write that returns 503 lock_busy
   // names a lock; list every *.lock under this project's .deeppairing and the
   // global philosophy dir with its owner and liveness. --fix removes ONLY locks
-  // whose owner is provably dead (same host, pid gone or reused) — through the
+  // whose owner is provably dead (same platform/host/boot/pid-namespace
+  // identity, pid gone or reused) — through the
   // same atomic breakDeadLock the writers use, so it can't race a live writer.
   try {
     const { inspectLocks, breakDeadLock } = await import("../store/file-lock.js");
@@ -1065,7 +1066,13 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
         const owner = lock.owner ? `pid ${lock.owner.pid} on ${lock.owner.hostname}` : "unknown owner";
         const mark = lock.state === "dead" ? yellow("!") : lock.state === "alive" ? dim("·") : yellow("?");
         console.log(`  ${mark} Lock ${lock.path} ${dim(`(${owner}, ${lock.state}${lock.why ? ` — ${lock.why}` : ""}, age ${age})`)}`);
-        if (lock.state === "dead") {
+        if (lock.state === "dead" && lock.kind !== "lock") {
+          // A breaker guard left by a crashed breaker. `.break` is recovered by
+          // the next writer that needs it; `.recover` is never auto-broken.
+          console.log(`    ${dim(lock.kind === "break"
+            ? "Stranded breaker guard — the next write to this lock recovers it automatically."
+            : "Stranded recovery guard (needs two crashes) — stop every deepPairing daemon/CLI for this project, then delete it by hand.")}`);
+        } else if (lock.state === "dead") {
           fixes.push({
             label: `Remove dead-owner lock ${lock.path}`,
             apply: () => {

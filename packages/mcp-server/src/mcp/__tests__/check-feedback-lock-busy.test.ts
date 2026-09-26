@@ -7,10 +7,10 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { FileStore } from "../../store/file-store.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
+import { ownLockIdentity } from "../../store/file-lock.js";
 
 const ctx = setupServerTest();
 const callTool = makeCallTool(ctx);
@@ -33,7 +33,7 @@ describe("check_feedback under a busy preferences lock", () => {
     store.resolveDecision(dec.decisionId, "a", "we already run redis");
 
     const lock = path.join(ctx.tmpDir, ".deeppairing", "preferences.json.lock");
-    fs.writeFileSync(lock, JSON.stringify({ pid: process.ppid, hostname: os.hostname(), processStartTime: null, createdAt: new Date().toISOString(), nonce: "live" }));
+    fs.writeFileSync(lock, JSON.stringify({ ...ownLockIdentity()!, pid: process.ppid, processStartTime: null, createdAt: new Date().toISOString(), nonce: "live" }));
     let first;
     try {
       first = await callTool("check_feedback");

@@ -517,7 +517,16 @@ describe("merge and lock contract", () => {
       fs.unlinkSync(lock); // simulate an external cleanup racing this writer
       throw new Error("primary error");
     })).toThrow("primary error");
-    expect(() => withSessionFlushLock(lock, () => fs.unlinkSync(lock))).toThrow();
+    // #406/#408 review — a lock removed while held no longer throws: the write
+    // under it already landed (a "not saved" error would be false), so lost
+    // ownership is a loud logged warning instead.
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(withSessionFlushLock(lock, () => { fs.unlinkSync(lock); return "applied"; })).toBe("applied");
+      expect(warn.mock.calls.some((call) => /removed while this process held it/.test(String(call[0])))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

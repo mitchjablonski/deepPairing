@@ -292,11 +292,18 @@ cross-project ledger `~/.deeppairing/philosophy/v1.json`, and a session's
 records. The companion UI rolls its change back. Retry once the other writer
 finishes; brief contention clears by itself.
 
-The response's `lockPath` names the lock. Its body records the owner's host,
-pid and start time. A lock whose owner has died on this machine is recovered
-automatically on the next write. The lock stays in place, and `lock_busy`
-persists, when its owner is still running, is on another host, or the body is
-unreadable (for example, from an older version). To inspect it:
+The response's `lockPath` names the lock. Its body records the owner's
+platform, host, boot ID, PID namespace, PID and start time. A lock whose owner
+has died in this same operating-system instance is recovered automatically on
+the next write. The lock stays in place, and `lock_busy` persists, in any of
+these cases:
+
+- its owner is still running;
+- it belongs to another OS instance (for example, Windows versus WSL on the same
+  machine, or a container);
+- its body is unreadable, for example because an older version wrote it.
+
+To inspect it:
 
 ```bash
 deeppairing doctor          # lists every *.lock with owner pid, liveness and age

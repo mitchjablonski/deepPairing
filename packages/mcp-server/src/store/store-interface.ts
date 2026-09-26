@@ -480,6 +480,16 @@ export interface IStore {
     concept?: string;
   }): MaybePromise<void>;
   /**
+   * #408 review (M1) — the verdict route records a rejection BEFORE committing
+   * the status (so a busy lock commits nothing). To keep a 409
+   * session_review_conflict from leaving a rejection behind, it first asks
+   * whether this verdict would conflict with the persisted artifact, and
+   * retracts a row it added if a conflict still lands in the ms before flush.
+   * Optional: stores without a disk-backed session skip both.
+   */
+  previewReviewConflict?(artifactId: string, status: string): MaybePromise<Error | null>;
+  retractRejectedApproach?(description: string): MaybePromise<void>;
+  /**
    * Scope-down a personal rejected-approach the pre-flight gate matched as a
    * false positive. Retires the matching local entry (so it stops blocking in
    * THIS project immediately) and records an `approved` counter-instance in the

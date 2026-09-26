@@ -1207,7 +1207,22 @@ export function createHttpRoutes(
         rejection = { description: artifact.title, reason: feedback?.trim() || undefined, sourceArtifactId: artifactId, concept };
       }
     }
-    if (rejection) await store.recordRejectedApproach(rejection);
+    // #408 review (M1) — the conflict check comes BEFORE recording: a verdict
+    // that will 409 session_review_conflict must leave preferences untouched,
+    // exactly as on main (which returned before recording). A predicted
+    // conflict skips the record and falls through unchanged, so the flush
+    // below still produces the 409 and keeps the human's feedback comment
+    // durable, as before.
+    let retractOnConflict: string | null = null;
+    let recordAfterFlush = false;
+    if (rejection && await store.previewReviewConflict?.(artifactId, status)) {
+      recordAfterFlush = true; // predicted 409; if the flush unexpectedly succeeds, record then
+    } else if (rejection) {
+      const had = (await store.getSessionMemory()).rejectedApproaches
+        .some((r) => r.description === rejection!.description);
+      await store.recordRejectedApproach(rejection);
+      if (!had) retractOnConflict = rejection.description;
+    }
 
     await store.updateArtifactStatus(artifactId, status, reason as any);
     // "obsolete" is a dismissal, not a plan-review verdict — don't resolve a
@@ -1248,6 +1263,12 @@ export function createHttpRoutes(
       await store.forceFlush();
     } catch (err) {
       if (isSessionReviewConflictError(err)) {
+        // A concurrent rewrite landed in the ms between the preview and this
+        // flush: undo the local rejection row this request added.
+        if (retractOnConflict) {
+          try { await store.retractRejectedApproach?.(retractOnConflict); }
+          catch (retractErr) { console.error(`[deepPairing] could not retract rejection after a review conflict: ${retractErr}`); }
+        }
         return c.json({
           error: "session_review_conflict",
           code: ERROR_CODES.session_review_conflict,
@@ -1257,6 +1278,7 @@ export function createHttpRoutes(
       console.error(`[deepPairing] verdict flush failed (verdict landed in memory; debounced flush will retry): ${err}`);
     }
 
+    if (rejection && recordAfterFlush) await store.recordRejectedApproach(rejection);
     if (rejection) broadcast({ type: "ledger_write", kind: "rejected", ...rejection }, sid);
     broadcast({ type: "artifact_updated", artifactId, status }, sid);
 

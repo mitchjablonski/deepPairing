@@ -16159,12 +16159,12 @@ var require_util = __commonJS({
     }
     exports.alwaysValidSchema = alwaysValidSchema;
     function checkUnknownRules(it, schema = it.schema) {
-      const { opts, self } = it;
+      const { opts, self: self2 } = it;
       if (!opts.strictSchema)
         return;
       if (typeof schema === "boolean")
         return;
-      const rules = self.RULES.keywords;
+      const rules = self2.RULES.keywords;
       for (const key in schema) {
         if (!rules[key])
           checkStrictMode(it, `unknown keyword: "${key}"`);
@@ -16550,8 +16550,8 @@ var require_applicability = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.shouldUseRule = exports.shouldUseGroup = exports.schemaHasRulesForType = void 0;
-    function schemaHasRulesForType({ schema, self }, type) {
-      const group = self.RULES.types[type];
+    function schemaHasRulesForType({ schema, self: self2 }, type) {
+      const group = self2.RULES.types[type];
       return group && group !== true && shouldUseGroup(schema, group);
     }
     exports.schemaHasRulesForType = schemaHasRulesForType;
@@ -17016,7 +17016,7 @@ var require_keyword = __commonJS({
       return !schemaType.length || schemaType.some((st) => st === "array" ? Array.isArray(schema) : st === "object" ? schema && typeof schema == "object" && !Array.isArray(schema) : typeof schema == st || allowUndefined && typeof schema == "undefined");
     }
     exports.validSchemaType = validSchemaType;
-    function validateKeywordUsage({ schema, opts, self, errSchemaPath }, def, keyword) {
+    function validateKeywordUsage({ schema, opts, self: self2, errSchemaPath }, def, keyword) {
       if (Array.isArray(def.keyword) ? !def.keyword.includes(keyword) : def.keyword !== keyword) {
         throw new Error("ajv implementation error");
       }
@@ -17027,9 +17027,9 @@ var require_keyword = __commonJS({
       if (def.validateSchema) {
         const valid = def.validateSchema(schema[keyword]);
         if (!valid) {
-          const msg = `keyword "${keyword}" value is invalid at path "${errSchemaPath}": ` + self.errorsText(def.validateSchema.errors);
+          const msg = `keyword "${keyword}" value is invalid at path "${errSchemaPath}": ` + self2.errorsText(def.validateSchema.errors);
           if (opts.validateSchema === "log")
-            self.logger.error(msg);
+            self2.logger.error(msg);
           else
             throw new Error(msg);
         }
@@ -17496,11 +17496,11 @@ var require_validate = __commonJS({
       }
       (0, boolSchema_1.boolOrEmptySchema)(it, valid);
     }
-    function schemaCxtHasRules({ schema, self }) {
+    function schemaCxtHasRules({ schema, self: self2 }) {
       if (typeof schema == "boolean")
         return !schema;
       for (const key in schema)
-        if (self.RULES.all[key])
+        if (self2.RULES.all[key])
           return true;
       return false;
     }
@@ -17529,9 +17529,9 @@ var require_validate = __commonJS({
       schemaKeywords(it, types, !checkedTypes, errsCount);
     }
     function checkRefsAndKeywords(it) {
-      const { schema, errSchemaPath, opts, self } = it;
-      if (schema.$ref && opts.ignoreKeywordsWithRef && (0, util_1.schemaHasRulesButRef)(schema, self.RULES)) {
-        self.logger.warn(`$ref: keywords ignored in schema at path "${errSchemaPath}"`);
+      const { schema, errSchemaPath, opts, self: self2 } = it;
+      if (schema.$ref && opts.ignoreKeywordsWithRef && (0, util_1.schemaHasRulesButRef)(schema, self2.RULES)) {
+        self2.logger.warn(`$ref: keywords ignored in schema at path "${errSchemaPath}"`);
       }
     }
     function checkNoDefault(it) {
@@ -17577,8 +17577,8 @@ var require_validate = __commonJS({
         gen.assign((0, codegen_1._)`${evaluated}.items`, items);
     }
     function schemaKeywords(it, types, typeErrors, errsCount) {
-      const { gen, schema, data, allErrors, opts, self } = it;
-      const { RULES } = self;
+      const { gen, schema, data, allErrors, opts, self: self2 } = it;
+      const { RULES } = self2;
       if (schema.$ref && (opts.ignoreKeywordsWithRef || !(0, util_1.schemaHasRulesButRef)(schema, RULES))) {
         gen.block(() => keywordCode(it, "$ref", RULES.all.$ref.definition));
         return;
@@ -19561,11 +19561,11 @@ var require_ref = __commonJS({
       schemaType: "string",
       code(cxt) {
         const { gen, schema: $ref, it } = cxt;
-        const { baseId, schemaEnv: env, validateName, opts, self } = it;
+        const { baseId, schemaEnv: env, validateName, opts, self: self2 } = it;
         const { root } = env;
         if (($ref === "#" || $ref === "#/") && baseId === root.baseId)
           return callRootRef();
-        const schOrEnv = compile_1.resolveRef.call(self, root, baseId, $ref);
+        const schOrEnv = compile_1.resolveRef.call(self2, root, baseId, $ref);
         if (schOrEnv === void 0)
           throw new ref_error_1.default(it.opts.uriResolver, baseId, $ref);
         if (schOrEnv instanceof compile_1.SchemaEnv)
@@ -21093,7 +21093,7 @@ var require_format = __commonJS({
       error: error51,
       code(cxt, ruleType) {
         const { gen, data, $data, schema, schemaCode, it } = cxt;
-        const { opts, errSchemaPath, schemaEnv, self } = it;
+        const { opts, errSchemaPath, schemaEnv, self: self2 } = it;
         if (!opts.validateFormats)
           return;
         if ($data)
@@ -21102,7 +21102,7 @@ var require_format = __commonJS({
           validateFormat();
         function validate$DataFormat() {
           const fmts = gen.scopeValue("formats", {
-            ref: self.formats,
+            ref: self2.formats,
             code: opts.code.formats
           });
           const fDef = gen.const("fDef", (0, codegen_1._)`${fmts}[${schemaCode}]`);
@@ -21122,7 +21122,7 @@ var require_format = __commonJS({
           }
         }
         function validateFormat() {
-          const formatDef = self.formats[schema];
+          const formatDef = self2.formats[schema];
           if (!formatDef) {
             unknownFormat();
             return;
@@ -21134,7 +21134,7 @@ var require_format = __commonJS({
             cxt.pass(validCondition());
           function unknownFormat() {
             if (opts.strictSchema === false) {
-              self.logger.warn(unknownMsg());
+              self2.logger.warn(unknownMsg());
               return;
             }
             throw new Error(unknownMsg());
@@ -21797,17 +21797,17 @@ var require_limit = __commonJS({
       error: error51,
       code(cxt) {
         const { gen, data, schemaCode, keyword, it } = cxt;
-        const { opts, self } = it;
+        const { opts, self: self2 } = it;
         if (!opts.validateFormats)
           return;
-        const fCxt = new ajv_1.KeywordCxt(it, self.RULES.all.format.definition, "format");
+        const fCxt = new ajv_1.KeywordCxt(it, self2.RULES.all.format.definition, "format");
         if (fCxt.$data)
           validate$DataFormat();
         else
           validateFormat();
         function validate$DataFormat() {
           const fmts = gen.scopeValue("formats", {
-            ref: self.formats,
+            ref: self2.formats,
             code: opts.code.formats
           });
           const fmt = gen.const("fmt", (0, codegen_1._)`${fmts}[${fCxt.schemaCode}]`);
@@ -21815,7 +21815,7 @@ var require_limit = __commonJS({
         }
         function validateFormat() {
           const format = fCxt.schema;
-          const fmtDef = self.formats[format];
+          const fmtDef = self2.formats[format];
           if (!fmtDef || fmtDef === true)
             return;
           if (typeof fmtDef != "object" || fmtDef instanceof RegExp || typeof fmtDef.compare != "function") {
@@ -25670,7 +25670,7 @@ function spawnDaemon(projectRoot2) {
   child.stderr?.on("data", onData);
   child.unref();
   let released = false;
-  const release = () => {
+  const release2 = () => {
     if (released) return;
     released = true;
     try {
@@ -25684,7 +25684,7 @@ function spawnDaemon(projectRoot2) {
     } catch {
     }
   };
-  return { stderrTail: () => stderrBuf, release };
+  return { stderrTail: () => stderrBuf, release: release2 };
 }
 function classifyDaemonVersion(runningVersion, myVersion) {
   if (runningVersion === void 0 || runningVersion === null || runningVersion === "") {
@@ -25868,14 +25868,14 @@ async function ensureDaemon(projectRoot2, opts = {}) {
     const outcome = await resolveStaleDaemon(existing, SERVER_VERSION, projectRoot2, { log: logStale });
     if (outcome === "adopt") return existing;
   }
-  const { stderrTail, release } = spawnDaemon(projectRoot2);
+  const { stderrTail, release: release2 } = spawnDaemon(projectRoot2);
   try {
     const info = await waitForDaemon(projectRoot2, { onProgress: opts.onProgress });
-    release();
+    release2();
     return info;
   } catch (err) {
     const tail = stderrTail().trim();
-    release();
+    release2();
     if (tail) {
       throw new Error(`${errorMessage(err)}
 Daemon stderr:
@@ -29319,43 +29319,66 @@ function readStartTime(pid) {
     return null;
   }
 }
-var selfStartTime;
-function ownBody() {
-  if (selfStartTime === void 0) selfStartTime = readStartTime(process.pid);
-  return {
-    pid: process.pid,
-    hostname: os.hostname(),
-    processStartTime: selfStartTime,
-    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-    nonce: randomBytes2(8).toString("hex")
-  };
-}
-function parseOwner(raw) {
+function currentHostIdentity() {
   try {
-    const v2 = JSON.parse(raw);
-    if (!v2 || typeof v2 !== "object") return null;
-    if (!Number.isInteger(v2.pid) || v2.pid <= 0) return null;
-    if (typeof v2.hostname !== "string" || !v2.hostname) return null;
+    if (process.platform === "linux") {
+      return {
+        platform: "linux",
+        hostname: os.hostname(),
+        bootId: fs2.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(),
+        pidNamespace: fs2.readlinkSync("/proc/self/ns/pid")
+      };
+    }
     return {
-      pid: v2.pid,
-      hostname: v2.hostname,
-      processStartTime: typeof v2.processStartTime === "string" ? v2.processStartTime : null,
-      createdAt: typeof v2.createdAt === "string" ? v2.createdAt : "",
-      nonce: typeof v2.nonce === "string" ? v2.nonce : ""
+      platform: process.platform,
+      hostname: os.hostname(),
+      bootId: `uptime-boot:${Math.round((Date.now() / 1e3 - os.uptime()) / 60)}`,
+      pidNamespace: "host"
     };
   } catch {
     return null;
   }
 }
+var selfIdentity;
+function self() {
+  if (!selfIdentity) selfIdentity = { host: currentHostIdentity(), startTime: readStartTime(process.pid) };
+  return selfIdentity;
+}
+function ownLockIdentity() {
+  const me = self();
+  if (!me.host) return null;
+  return { pid: process.pid, ...me.host, processStartTime: me.startTime };
+}
+function ownBody() {
+  const id = ownLockIdentity();
+  return JSON.stringify({
+    ...id ?? { pid: process.pid },
+    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+    nonce: randomBytes2(8).toString("hex")
+  });
+}
+var IDENTITY_FIELDS = ["platform", "hostname", "bootId", "pidNamespace"];
 function ownerState(raw) {
-  const owner = parseOwner(raw);
-  if (!owner) return { state: "unknown", owner: null, why: "unreadable or legacy lock body (no pid/hostname)" };
-  if (owner.hostname !== os.hostname()) {
-    return { state: "unknown", owner, why: `owned by another host (${owner.hostname})` };
+  let v2;
+  try {
+    v2 = JSON.parse(raw);
+  } catch {
+    return { state: "unknown", owner: null, why: "unreadable lock body" };
   }
-  if (owner.pid === process.pid) {
-    return { state: "alive", owner };
+  if (!v2 || typeof v2 !== "object" || !Number.isInteger(v2.pid) || v2.pid <= 0) {
+    return { state: "unknown", owner: null, why: "unreadable lock body (no pid)" };
   }
+  const here = self().host;
+  if (!here) return { state: "unknown", owner: v2, why: "this process cannot determine its own host identity" };
+  for (const field2 of IDENTITY_FIELDS) {
+    if (typeof v2[field2] !== "string" || !v2[field2]) {
+      return { state: "unknown", owner: v2, why: `legacy lock body (no ${field2}) \u2014 owner unverifiable` };
+    }
+    if (v2[field2] !== here[field2]) {
+      return { state: "unknown", owner: v2, why: `owned by another ${field2 === "hostname" ? "host" : field2 === "platform" ? "OS" : field2 === "bootId" ? "boot / kernel (e.g. WSL vs Windows, or a VM)" : "pid namespace (e.g. a container)"} \u2014 owner unverifiable` };
+    }
+  }
+  const owner = v2;
   try {
     process.kill(owner.pid, 0);
   } catch (err) {
@@ -29364,7 +29387,7 @@ function ownerState(raw) {
     if (code === "EPERM") return { state: "alive", owner };
     return { state: "unknown", owner, why: `liveness probe failed (${code ?? String(err)})` };
   }
-  if (owner.processStartTime) {
+  if (typeof owner.processStartTime === "string" && owner.processStartTime) {
     const current = readStartTime(owner.pid);
     if (current && current !== owner.processStartTime) {
       return { state: "dead", owner, why: `pid ${owner.pid} was reused by a newer process` };
@@ -29372,41 +29395,86 @@ function ownerState(raw) {
   }
   return { state: "alive", owner };
 }
-function breakDeadLock(lockPath) {
-  let raw;
+function claim(file2) {
+  let fd;
   try {
-    raw = fs2.readFileSync(lockPath, "utf8");
+    fd = fs2.openSync(file2, "wx", 384);
   } catch (err) {
-    if (err.code === "ENOENT") return { broken: false, state: null };
+    if (err.code === "EEXIST") return null;
     throw err;
   }
+  const body = ownBody();
+  try {
+    fs2.writeFileSync(fd, body);
+  } catch (err) {
+    fs2.closeSync(fd);
+    try {
+      fs2.unlinkSync(file2);
+    } catch {
+    }
+    throw err;
+  }
+  fs2.closeSync(fd);
+  return body;
+}
+function release(file2, body, label) {
+  let current;
+  try {
+    current = fs2.readFileSync(file2, "utf8");
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+    current = null;
+  }
+  if (current !== body) {
+    console.error(
+      `[deepPairing] WARNING: ${label} at ${file2} was ${current === null ? "removed" : "replaced"} while this process held it. The write under it completed; another writer may have overlapped it. Stop all writers and check the protected file if this repeats.`
+    );
+    return false;
+  }
+  fs2.unlinkSync(file2);
+  return true;
+}
+function unlinkIfUnchanged(file2, judged, guard) {
+  const mine = claim(guard);
+  if (mine === null) return false;
+  try {
+    let now;
+    try {
+      now = fs2.readFileSync(file2, "utf8");
+    } catch (err) {
+      if (err.code === "ENOENT") return false;
+      throw err;
+    }
+    if (now !== judged) return false;
+    fs2.unlinkSync(file2);
+    return true;
+  } finally {
+    release(guard, mine, "lock-break guard");
+  }
+}
+function readIfExists(file2) {
+  try {
+    return fs2.readFileSync(file2, "utf8");
+  } catch (err) {
+    if (err.code === "ENOENT") return null;
+    throw err;
+  }
+}
+function breakDeadLock(lockPath) {
+  const raw = readIfExists(lockPath);
+  if (raw === null) return { broken: false, state: null };
   const state = ownerState(raw);
   if (state.state !== "dead") return { broken: false, state };
-  const tomb = `${lockPath}.dead-${process.pid}-${randomBytes2(4).toString("hex")}`;
-  try {
-    fs2.renameSync(lockPath, tomb);
-  } catch (err) {
-    if (err.code === "ENOENT") return { broken: false, state };
-    throw err;
+  const guard = `${lockPath}.break`;
+  if (unlinkIfUnchanged(lockPath, raw, guard)) {
+    console.error(`[deepPairing] recovered lock ${lockPath}: ${state.why} (created ${state.owner.createdAt || "?"}).`);
+    return { broken: true, state };
   }
-  let taken;
-  try {
-    taken = fs2.readFileSync(tomb, "utf8");
-  } catch {
-    taken = "";
+  const guardRaw = readIfExists(guard);
+  if (guardRaw !== null && ownerState(guardRaw).state === "dead") {
+    unlinkIfUnchanged(guard, guardRaw, `${guard}.recover`);
   }
-  if (taken !== raw) {
-    try {
-      fs2.linkSync(tomb, lockPath);
-      fs2.unlinkSync(tomb);
-    } catch (err) {
-      console.error(`[deepPairing] lock ${lockPath}: could not restore a live lock moved during dead-owner recovery (${String(err)}); its owner will fail loudly on release.`);
-    }
-    return { broken: false, state };
-  }
-  fs2.unlinkSync(tomb);
-  console.error(`[deepPairing] recovered lock ${lockPath}: ${state.why} (created ${state.owner.createdAt || "?"}).`);
-  return { broken: true, state };
+  return { broken: false, state };
 }
 function withFileLock(lockPath, run2, opts = {}) {
   const key = path.resolve(lockPath);
@@ -29414,60 +29482,43 @@ function withFileLock(lockPath, run2, opts = {}) {
   const label = opts.label ?? "File lock";
   const deadline = performance.now() + (opts.timeoutMs ?? DEFAULT_FILE_LOCK_TIMEOUT_MS);
   const waitArray = new Int32Array(new SharedArrayBuffer(4));
-  let fd;
+  let body;
   let lastState = null;
   for (; ; ) {
-    try {
-      fd = fs2.openSync(lockPath, "wx", 384);
-      break;
-    } catch (err) {
-      if (err.code !== "EEXIST") throw err;
-      const attempt = breakDeadLock(lockPath);
-      if (attempt.broken) continue;
-      lastState = attempt.state ?? lastState;
-      if (performance.now() >= deadline) {
-        const owner = lastState?.owner;
-        const who = owner ? ` Held by pid ${owner.pid} on ${owner.hostname} since ${owner.createdAt || "?"}.` : "";
-        throw Object.assign(
-          new Error(
-            `${label} busy: ${lockPath}.${who} If no deepPairing daemon or CLI is running, run \`deeppairing doctor\` to inspect it; remove an abandoned lock only after stopping all writers.`
-          ),
-          { code: "ELOCKED", path: lockPath }
-        );
-      }
-      Atomics.wait(waitArray, 0, 0, 10);
+    body = claim(lockPath);
+    if (body !== null) break;
+    const attempt = breakDeadLock(lockPath);
+    if (attempt.broken) continue;
+    lastState = attempt.state ?? lastState;
+    if (performance.now() >= deadline) {
+      const owner = lastState?.owner;
+      const who = owner?.pid ? ` Held by pid ${owner.pid}${owner.hostname ? ` on ${owner.hostname}` : ""} since ${owner.createdAt || "?"}.` : "";
+      throw Object.assign(
+        new Error(
+          `${label} busy: ${lockPath}.${who} If no deepPairing daemon or CLI is running, run \`deeppairing doctor\` to inspect it; remove an abandoned lock only after stopping all writers.`
+        ),
+        { code: "ELOCKED", path: lockPath }
+      );
     }
+    Atomics.wait(waitArray, 0, 0, 10);
   }
   heldLocks.add(key);
-  const body = JSON.stringify(ownBody());
   let result;
   let failed = false;
   let failure;
   try {
-    fs2.writeFileSync(fd, body);
     result = run2();
   } catch (err) {
     failed = true;
     failure = err;
   }
   heldLocks.delete(key);
-  const cleanups = [
-    () => fs2.closeSync(fd),
-    () => {
-      if (fs2.readFileSync(lockPath, "utf8") !== body) {
-        throw Object.assign(new Error(`${label} was replaced while held: ${lockPath}. Stop all writers and inspect the protected file.`), { code: "ELOCKSTOLEN" });
-      }
-      fs2.unlinkSync(lockPath);
-    }
-  ];
-  for (const cleanup of cleanups) {
-    try {
-      cleanup();
-    } catch (err) {
-      if (!failed) {
-        failed = true;
-        failure = err;
-      }
+  try {
+    release(lockPath, body, label);
+  } catch (err) {
+    if (!failed) {
+      failed = true;
+      failure = err;
     }
   }
   if (failed) throw failure;
