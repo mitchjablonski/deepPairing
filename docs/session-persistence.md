@@ -68,6 +68,29 @@ other session writer to create a fresh FileStore. Review the reloaded artifact
 before authorizing it. A browser refresh alone does not recreate the daemon's
 FileStore and therefore does not clear the freeze.
 
+## Project preferences and the philosophy ledger
+
+Two whole-file records outside the session directory use the same lock
+mechanism (`src/store/file-lock.ts`), because separate processes write them:
+
+- `.deeppairing/preferences.json` (rejected approaches, approved patterns,
+  publish opt-in, autonomy and density) is written by the project's daemon and
+  by CLI commands such as `philosophy publish on|off`. Every mutation holds
+  `.deeppairing/preferences.json.lock` across read, change and atomic replace.
+- `~/.deeppairing/philosophy/v1.json`, the cross-project ledger, is written by
+  every project's daemon and by `philosophy import` / `philosophy remove`. Every
+  mutation holds `~/.deeppairing/philosophy/v1.json.lock`.
+
+Acquisition waits at most one second, then throws `ELOCKED`. The mutation is
+not applied, and the error reaches the HTTP route or CLI command. The one
+exception is the ledger mirror inside a rejection or approval: it logs the
+failure, and the project-local record still lands. Readers, including the
+preflight hook, never take these locks; they read the atomically replaced file.
+Concurrent `philosophy remove` and a new instance for the same concept are
+serialized: whichever commits second wins, so a record after a remove creates
+the concept again. An abandoned lock is recovered the same way as a flush
+lock: stop every daemon and CLI writer, then remove only the named lock file.
+
 ## Recovering an abandoned flush lock
 
 A crash can leave `.deeppairing/sessions/<session-id>/.flush.lock` behind.

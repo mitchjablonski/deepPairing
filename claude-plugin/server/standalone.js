@@ -289,10 +289,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj2, path12) {
-  if (!path12)
+function getElementAtPath(obj2, path13) {
+  if (!path13)
     return obj2;
-  return path12.reduce((acc, key) => acc?.[key], obj2);
+  return path13.reduce((acc, key) => acc?.[key], obj2);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -620,11 +620,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path12, issues) {
+function prefixIssues(path13, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path12);
+    iss.path.unshift(path13);
     return iss;
   });
 }
@@ -841,16 +841,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path12 = []) => {
+  const processError = (error52, path13 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path12, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path13, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path12, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path13, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path12, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path13, ...issue2.path]);
       } else {
-        const fullpath = [...path12, ...issue2.path];
+        const fullpath = [...path13, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -877,17 +877,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path12 = []) => {
+  const processError = (error52, path13 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path12, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path13, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path12, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path13, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path12, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path13, ...issue2.path]);
       } else {
-        const fullpath = [...path12, ...issue2.path];
+        const fullpath = [...path13, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -919,8 +919,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path12 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path12) {
+  const path13 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path13) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -14350,13 +14350,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path12 = ref.slice(1).split("/").filter(Boolean);
-  if (path12.length === 0) {
+  const path13 = ref.slice(1).split("/").filter(Boolean);
+  if (path13.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path12[0] === defsKey) {
-    const key = path12[1];
+  if (path13[0] === defsKey) {
+    const key = path13[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -18308,8 +18308,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path12) {
-      let input = path12;
+    function removeDotSegments(path13) {
+      let input = path13;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -18508,8 +18508,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path12, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path12 && path12 !== "/" ? path12 : void 0;
+        const [path13, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path13 && path13 !== "/" ? path13 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -21871,12 +21871,12 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list2, fs11, exportName) {
+    function addFormats(ajv, list2, fs12, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list2)
-        ajv.addFormat(f, fs11[f]);
+        ajv.addFormat(f, fs12[f]);
     }
     module.exports = exports = formatsPlugin;
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -25241,19 +25241,19 @@ var init_dist = __esm({
 });
 
 // src/cli-invocation.ts
-import fs3 from "node:fs";
-import path2 from "node:path";
+import fs4 from "node:fs";
+import path3 from "node:path";
 import { fileURLToPath } from "node:url";
 function isInstalledPackage(modulePath = __thisFile) {
   return modulePath.split(/[\\/]/).includes("node_modules");
 }
 function resolveCompiledCliPath() {
   const candidates = [
-    path2.join(__thisDir, "cli", "init.js"),
+    path3.join(__thisDir, "cli", "init.js"),
     // dist/ → dist/cli/init.js
-    path2.join(__thisDir, "..", "cli", "init.js")
+    path3.join(__thisDir, "..", "cli", "init.js")
   ];
-  return candidates.find((p) => fs3.existsSync(p)) ?? null;
+  return candidates.find((p) => fs4.existsSync(p)) ?? null;
 }
 function cliInvocation(subcommand = "") {
   return formatCliInvocation({
@@ -25275,14 +25275,14 @@ var init_cli_invocation = __esm({
   "src/cli-invocation.ts"() {
     "use strict";
     __thisFile = fileURLToPath(import.meta.url);
-    __thisDir = path2.dirname(__thisFile);
+    __thisDir = path3.dirname(__thisFile);
     PACKAGE_NAME = "@deeppairing/mcp-server";
   }
 });
 
 // src/project-root.ts
-import path4 from "node:path";
-import fs5 from "node:fs";
+import path5 from "node:path";
+import fs6 from "node:fs";
 import crypto3 from "node:crypto";
 function projectHashOf(projectRoot2) {
   return crypto3.createHash("sha256").update(projectRoot2).digest("hex").slice(0, 8);
@@ -25326,15 +25326,15 @@ function resolveProjectRoot(opts = {}) {
   for (const c of candidates) {
     const v2 = c.value?.trim();
     if (!v2) continue;
-    if (!path4.isAbsolute(v2)) continue;
+    if (!path5.isAbsolute(v2)) continue;
     try {
-      if (!fs5.statSync(v2).isDirectory()) continue;
+      if (!fs6.statSync(v2).isDirectory()) continue;
     } catch {
       continue;
     }
-    return { projectRoot: path4.resolve(v2), source: c.source };
+    return { projectRoot: path5.resolve(v2), source: c.source };
   }
-  return { projectRoot: path4.resolve(cwd()), source: "cwd" };
+  return { projectRoot: path5.resolve(cwd()), source: "cwd" };
 }
 var DEFAULT_BASE_PORT, DEFAULT_PORT_SPAN, portWindow, BASE_PORT, PORT_SPAN;
 var init_project_root = __esm({
@@ -25373,27 +25373,27 @@ var init_version = __esm({
 });
 
 // src/daemon/token.ts
-import fs7 from "node:fs";
+import fs8 from "node:fs";
 import os2 from "node:os";
-import path7 from "node:path";
+import path8 from "node:path";
 function runtimeBaseDir() {
   const xdg = process.env.XDG_RUNTIME_DIR?.trim();
-  if (xdg && path7.isAbsolute(xdg)) {
+  if (xdg && path8.isAbsolute(xdg)) {
     try {
-      if (fs7.statSync(xdg).isDirectory()) return path7.join(xdg, "deeppairing");
+      if (fs8.statSync(xdg).isDirectory()) return path8.join(xdg, "deeppairing");
     } catch {
     }
   }
-  return path7.join(os2.tmpdir(), "deeppairing");
+  return path8.join(os2.tmpdir(), "deeppairing");
 }
 function tokenSidecarPath(projectRoot2) {
-  return path7.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
+  return path8.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
 }
 function readTokenSidecar(projectRoot2) {
   try {
     const file2 = tokenSidecarPath(projectRoot2);
-    if (!fs7.existsSync(file2)) return null;
-    return JSON.parse(fs7.readFileSync(file2, "utf-8"));
+    if (!fs8.existsSync(file2)) return null;
+    return JSON.parse(fs8.readFileSync(file2, "utf-8"));
   } catch {
     return null;
   }
@@ -25427,9 +25427,9 @@ __export(lifecycle_exports, {
   waitForPortRelease: () => waitForPortRelease
 });
 import { spawn as spawn2, execFileSync } from "node:child_process";
-import fs8 from "node:fs";
+import fs9 from "node:fs";
 import net from "node:net";
-import path8 from "node:path";
+import path9 from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function logStale(msg) {
   try {
@@ -25439,13 +25439,13 @@ function logStale(msg) {
   }
 }
 function daemonInfoPath(projectRoot2) {
-  return path8.join(projectRoot2, ".deeppairing", DAEMON_FILE);
+  return path9.join(projectRoot2, ".deeppairing", DAEMON_FILE);
 }
 function readDaemonInfo(projectRoot2) {
   const infoPath = daemonInfoPath(projectRoot2);
   try {
-    if (!fs8.existsSync(infoPath)) return null;
-    const info = JSON.parse(fs8.readFileSync(infoPath, "utf-8"));
+    if (!fs9.existsSync(infoPath)) return null;
+    const info = JSON.parse(fs9.readFileSync(infoPath, "utf-8"));
     if (!info.authToken) {
       const sidecar = readTokenSidecar(projectRoot2);
       if (sidecar?.authToken && (sidecar.pid === void 0 || sidecar.pid === info.pid)) {
@@ -25563,7 +25563,7 @@ async function isDaemonRunning(projectRoot2, range = { start: preferredPortFor(p
   }
   if (info) {
     try {
-      fs8.unlinkSync(daemonInfoPath(projectRoot2));
+      fs9.unlinkSync(daemonInfoPath(projectRoot2));
     } catch {
     }
   }
@@ -25607,8 +25607,8 @@ function buildReadinessTimeoutMessage(args) {
     `deepPairing daemon did not become ready within ${timeoutMs}ms (probed this project's ports ${first}\u2013${last}).`,
     hint
   ];
-  const logPath = path8.join(projectRoot2, ".deeppairing", "daemon.log");
-  if (fs8.existsSync(logPath)) {
+  const logPath = path9.join(projectRoot2, ".deeppairing", "daemon.log");
+  if (fs9.existsSync(logPath)) {
     lines.push(`See ${logPath} for the daemon's own startup log.`);
   }
   lines.push(`To diagnose: ${cliInvocation("doctor")}`);
@@ -25650,8 +25650,8 @@ async function describePortHolders(projectRoot2) {
   return parts.join("\n");
 }
 function spawnDaemon(projectRoot2) {
-  const daemonScript = path8.join(__thisDir2, "../../dist/daemon/index.js");
-  const scriptPath = fs8.existsSync(daemonScript) ? daemonScript : path8.join(__thisDir2, "daemon.js");
+  const daemonScript = path9.join(__thisDir2, "../../dist/daemon/index.js");
+  const scriptPath = fs9.existsSync(daemonScript) ? daemonScript : path9.join(__thisDir2, "daemon.js");
   const child = spawn2("node", [scriptPath], {
     cwd: projectRoot2,
     detached: true,
@@ -25747,7 +25747,7 @@ function pidIsGone(pid) {
 function readProcessStartTime(pid) {
   try {
     if (process.platform === "linux") {
-      const stat = fs8.readFileSync(`/proc/${pid}/stat`, "utf-8");
+      const stat = fs9.readFileSync(`/proc/${pid}/stat`, "utf-8");
       const rparen = stat.lastIndexOf(")");
       if (rparen === -1) return null;
       const rest = stat.slice(rparen + 1).trim().split(/\s+/);
@@ -25893,7 +25893,7 @@ var init_lifecycle = __esm({
     init_version();
     init_cli_invocation();
     init_dist();
-    __thisDir2 = path8.dirname(fileURLToPath2(import.meta.url));
+    __thisDir2 = path9.dirname(fileURLToPath2(import.meta.url));
     DAEMON_FILE = "daemon.json";
     DEFAULT_PORT = BASE_PORT;
     MAX_PORT_ATTEMPTS = 10;
@@ -29262,9 +29262,9 @@ var StdioServerTransport = class {
 };
 
 // src/store/global-store.ts
-import fs2 from "node:fs";
+import fs3 from "node:fs";
 import os from "node:os";
-import path from "node:path";
+import path2 from "node:path";
 
 // src/store/atomic-write.ts
 import fs from "node:fs";
@@ -29301,6 +29301,60 @@ function writeStringAtomic(filePath, data, opts) {
   }
 }
 
+// src/store/file-lock.ts
+import fs2 from "node:fs";
+import path from "node:path";
+import { performance } from "node:perf_hooks";
+var DEFAULT_FILE_LOCK_TIMEOUT_MS = 250;
+var heldLocks = /* @__PURE__ */ new Set();
+function withFileLock(lockPath, run2, opts = {}) {
+  const key = path.resolve(lockPath);
+  if (opts.reentrant && heldLocks.has(key)) return run2();
+  const label = opts.label ?? "File lock";
+  const deadline = performance.now() + (opts.timeoutMs ?? DEFAULT_FILE_LOCK_TIMEOUT_MS);
+  const waitArray = new Int32Array(new SharedArrayBuffer(4));
+  let fd;
+  for (; ; ) {
+    try {
+      fd = fs2.openSync(lockPath, "wx", 384);
+      break;
+    } catch (err) {
+      if (err.code !== "EEXIST") throw err;
+      if (performance.now() >= deadline) {
+        throw Object.assign(
+          new Error(`${label} busy: ${lockPath}. Stop all writers before removing an abandoned lock.`),
+          { code: "ELOCKED", path: lockPath }
+        );
+      }
+      Atomics.wait(waitArray, 0, 0, 10);
+    }
+  }
+  heldLocks.add(key);
+  let result;
+  let failed = false;
+  let failure;
+  try {
+    fs2.writeFileSync(fd, JSON.stringify({ pid: process.pid, createdAt: (/* @__PURE__ */ new Date()).toISOString() }));
+    result = run2();
+  } catch (err) {
+    failed = true;
+    failure = err;
+  }
+  heldLocks.delete(key);
+  for (const cleanup of [() => fs2.closeSync(fd), () => fs2.unlinkSync(lockPath)]) {
+    try {
+      cleanup();
+    } catch (err) {
+      if (!failed) {
+        failed = true;
+        failure = err;
+      }
+    }
+  }
+  if (failed) throw failure;
+  return result;
+}
+
 // src/store/salvage.ts
 var salvageLogged = /* @__PURE__ */ new Set();
 function salvageLog(label, message) {
@@ -29312,8 +29366,9 @@ function salvageLog(label, message) {
 // src/store/global-store.ts
 init_dist();
 var LEDGER_VERSION = 1;
+var LEDGER_LOCK_TIMEOUT_MS = 1e3;
 function realHomeLedgerPath() {
-  return path.join(os.homedir(), ".deeppairing", "philosophy", `v${LEDGER_VERSION}.json`);
+  return path2.join(os.homedir(), ".deeppairing", "philosophy", `v${LEDGER_VERSION}.json`);
 }
 function defaultLedgerPath() {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
@@ -29393,7 +29448,7 @@ var GlobalStore = class _GlobalStore {
   snapshotLedger(prefix = "corrupt") {
     const backup = `${this.ledgerPath}.${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     try {
-      fs2.copyFileSync(this.ledgerPath, backup);
+      fs3.copyFileSync(this.ledgerPath, backup);
       return backup;
     } catch {
       return null;
@@ -29456,13 +29511,13 @@ var GlobalStore = class _GlobalStore {
     this.lastReadCorrupt = false;
     this.lastReadCorruptReason = void 0;
     this.lastReadDroppedEntries = false;
-    if (!fs2.existsSync(this.ledgerPath)) {
+    if (!fs3.existsSync(this.ledgerPath)) {
       corruptSnapshots.delete(this.ledgerPath);
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
     let raw;
     try {
-      raw = fs2.readFileSync(this.ledgerPath, "utf-8");
+      raw = fs3.readFileSync(this.ledgerPath, "utf-8");
     } catch (err) {
       this.markCorrupt(err);
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
@@ -29504,6 +29559,24 @@ var GlobalStore = class _GlobalStore {
     }
     return { version: LEDGER_VERSION, concepts };
   }
+  /**
+   * #406 — every ledger mutation is ONE cross-process transaction: the read,
+   * the mutation and the atomic replace all run under `<ledger>.lock` (the
+   * shared file-lock.ts boundary). Concurrent project daemons each read the
+   * whole file and rename a whole new one; without this, the later rename
+   * erased the earlier daemon's append (measured: ~45% of 2×100 appends lost).
+   * Readers (get/query/export/getHealth, the hooks) stay lock-free — the file
+   * is always replaced atomically. A busy lock past LEDGER_LOCK_TIMEOUT_MS
+   * throws ELOCKED; it is never broken by age (see file-lock.ts).
+   */
+  transact(mutate) {
+    fs3.mkdirSync(path2.dirname(this.ledgerPath), { recursive: true });
+    return withFileLock(`${this.ledgerPath}.lock`, mutate, {
+      label: "Philosophy ledger lock",
+      timeoutMs: LEDGER_LOCK_TIMEOUT_MS,
+      reentrant: true
+    });
+  }
   write(ledger) {
     if (this.lastReadCorrupt) {
       const snap = corruptSnapshots.get(this.ledgerPath);
@@ -29516,7 +29589,7 @@ var GlobalStore = class _GlobalStore {
       this.snapshotLedger();
     }
     try {
-      fs2.mkdirSync(path.dirname(this.ledgerPath), { recursive: true });
+      fs3.mkdirSync(path2.dirname(this.ledgerPath), { recursive: true });
       writeJsonAtomic(this.ledgerPath, ledger);
       corruptSnapshots.delete(this.ledgerPath);
     } catch {
@@ -29548,6 +29621,9 @@ var GlobalStore = class _GlobalStore {
   static DEDUPE_WINDOW_MS = 5e3;
   recordInstance(concept, instance) {
     if (!concept.trim()) return;
+    this.transact(() => this.recordInstanceLocked(concept, instance));
+  }
+  recordInstanceLocked(concept, instance) {
     const key = normalizeKey(concept);
     const ledger = this.read();
     const now = instance.at ?? (/* @__PURE__ */ new Date()).toISOString();
@@ -29615,6 +29691,9 @@ var GlobalStore = class _GlobalStore {
    * are actually preserved inside the unreadable file.
    */
   removeConcept(concept) {
+    return this.transact(() => this.removeConceptLocked(concept));
+  }
+  removeConceptLocked(concept) {
     const key = normalizeKey(concept);
     const ledger = this.read();
     if (this.lastReadCorrupt) {
@@ -29691,6 +29770,9 @@ var GlobalStore = class _GlobalStore {
   importLedger(incoming) {
     const parsed = this.validateIncoming(incoming);
     if (!parsed) throw new Error("Import rejected: not a valid deepPairing ledger export (expected { version: 1, concepts: {...} })");
+    return this.transact(() => this.importLocked(parsed));
+  }
+  importLocked(parsed) {
     const current = this.read();
     let conceptsAdded = 0;
     let conceptsMerged = 0;
@@ -30437,11 +30519,11 @@ Each is a continuation of an existing thread (parentCommentId points at one of y
   } catch {
   }
   try {
-    const fs11 = await import("node:fs");
-    const path12 = await import("node:path");
-    const claudeMd = path12.join(process.cwd(), "CLAUDE.md");
-    if (fs11.existsSync(claudeMd)) {
-      const content = fs11.readFileSync(claudeMd, "utf-8");
+    const fs12 = await import("node:fs");
+    const path13 = await import("node:path");
+    const claudeMd = path13.join(process.cwd(), "CLAUDE.md");
+    if (fs12.existsSync(claudeMd)) {
+      const content = fs12.readFileSync(claudeMd, "utf-8");
       if (!content.includes("<!-- deepPairing -->")) {
         contextualParts.push(
           "\n\u{1F4A1} Tip: run `" + cliInvocation("init") + "` to add the deepPairing protocol to CLAUDE.md so the agent follows it on every session (optional \u2014 the plugin's pairing-protocol skill covers most of this already)."
@@ -31131,7 +31213,7 @@ function formatStyleWarnings(type, content) {
   located.sort((a, b) => bySeverity(a.v, b.v));
   const { shown } = topDistinctStyleLines(located, MAX_STYLE_LINES);
   const rest = located.length - shown.length;
-  const lines = shown.map(({ path: path12, v: v2 }) => `- ${path12}: ${v2.message}`);
+  const lines = shown.map(({ path: path13, v: v2 }) => `- ${path13}: ${v2.message}`);
   return styleBlock(result.score, lines, rest);
 }
 function formatProseStyleWarnings(label, text, mode = "strict") {
@@ -31145,7 +31227,7 @@ function formatProseStyleWarnings(label, text, mode = "strict") {
   const located = [...result.violations].sort(bySeverity).map((v2) => ({ path: label, v: v2 }));
   const { shown } = topDistinctStyleLines(located, MAX_STYLE_LINES);
   const rest = located.length - shown.length;
-  return styleBlock(result.score, shown.map(({ path: path12, v: v2 }) => `- ${path12}: ${v2.message}`), rest);
+  return styleBlock(result.score, shown.map(({ path: path13, v: v2 }) => `- ${path13}: ${v2.message}`), rest);
 }
 function styleBlock(score, lines, rest) {
   const tail = rest > 0 ? ` (+${rest} more)` : "";
@@ -31462,9 +31544,9 @@ function scalarTypeTag(i) {
 function isScalarBoundIssue(i) {
   return i.code === "too_big" || i.code === "too_small";
 }
-function receivedSize(input, path12) {
+function receivedSize(input, path13) {
   let cur = input;
-  for (const seg of path12) {
+  for (const seg of path13) {
     if (cur == null || typeof cur !== "object") return void 0;
     cur = cur[seg];
   }
@@ -31487,8 +31569,8 @@ function scalarIssueClause(i, input) {
   }
   return `${field2} (${scalarTypeTag(i)})`;
 }
-function collapsePath(path12) {
-  return path12.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
+function collapsePath(path13) {
+  return path13.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
 }
 function formatValidationError(toolName, err, example, input) {
   const raw = err.issues;
@@ -31514,9 +31596,9 @@ function formatValidationError(toolName, err, example, input) {
   }
   const groupArr = [...groups.values()];
   const issues = groupArr.slice(0, 5).map((g) => {
-    const path12 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
+    const path13 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
     const suffix = g.count > 1 ? ` (${g.count}\xD7)` : "";
-    return `  \u2022 ${path12}: ${g.first.message}${suffix}`;
+    return `  \u2022 ${path13}: ${g.first.message}${suffix}`;
   });
   const more = groupArr.length > 5 ? `
   \u2022 \u2026and ${groupArr.length - 5} more` : "";
@@ -32211,7 +32293,7 @@ async function handleLogReasoning(ctx, args) {
 }
 
 // src/mcp/tools/export-session.ts
-import path5 from "node:path";
+import path6 from "node:path";
 
 // src/export/format-markdown.ts
 init_dist();
@@ -32692,7 +32774,7 @@ ${SIZE_CLIPPED_NOTE}` : "";
   return `${head}<pre class="code"${langAttr}><code>${fitted.text}${trunc}${sizeTrunc}</code></pre>`;
 }
 function diffBlock(file2, includeCode, projectRoot2) {
-  const path12 = sanitizePath(file2.path, projectRoot2);
+  const path13 = sanitizePath(file2.path, projectRoot2);
   const changeType = esc2(file2.changeType ?? "modified");
   const hunks = Array.isArray(file2.hunks) ? file2.hunks : [];
   const stats = file2.stats;
@@ -32709,7 +32791,7 @@ function diffBlock(file2, includeCode, projectRoot2) {
   const additions = stats?.additions ?? derived.additions;
   const deletions = stats?.deletions ?? derived.deletions;
   const statLine = `<span class="diffstat"><span class="add">+${additions}</span> <span class="del">\u2212${deletions}</span></span>`;
-  const header = `<div class="file-head"><code class="path">${esc2(path12)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
+  const header = `<div class="file-head"><code class="path">${esc2(path13)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
   if (!includeCode) {
     return `<div class="file">${header}<p class="redacted">Diff omitted from this export.</p></div>`;
   }
@@ -32828,9 +32910,9 @@ function evidenceBlock(evidence, includeCode, projectRoot2) {
     }
     if (!ev || typeof ev !== "object") continue;
     const e = ev;
-    const path12 = sanitizePath(e.filePath, projectRoot2);
+    const path13 = sanitizePath(e.filePath, projectRoot2);
     const range = e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null && e.lineEnd !== e.lineStart ? `-${e.lineEnd}` : ""}` : "";
-    let anchor = path12 ? `<p class="anchor"><code>${esc2(path12 + range)}</code></p>` : "";
+    let anchor = path13 ? `<p class="anchor"><code>${esc2(path13 + range)}</code></p>` : "";
     if (!anchor && e.locator && typeof e.locator.value === "string" && e.locator.value.length > 0) {
       const loc = e.locator;
       const label = loc.kind === "url" ? loc.href && loc.href.length > 0 ? `${loc.value} (${loc.href})` : loc.value : loc.kind === "charRange" ? `chars ${loc.value}` : loc.kind === "quote" ? `\u201C${loc.value}\u201D` : loc.value;
@@ -32987,9 +33069,9 @@ function decisionBody(a, ctx) {
 }
 function codeChangeBody(a, ctx) {
   const content = coerceCodeChangeContent(a.content);
-  const path12 = sanitizePath(content.filePath, ctx.projectRoot);
+  const path13 = sanitizePath(content.filePath, ctx.projectRoot);
   const parts = [
-    `<div class="file-head"><code class="path">${esc2(path12)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
+    `<div class="file-head"><code class="path">${esc2(path13)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
   ];
   if (content.reasoning) parts.push(`<p class="why">Why: ${renderInline(content.reasoning)}</p>`);
   if (content.concept?.name) {
@@ -34518,8 +34600,8 @@ function formatLearnings(state) {
 
 // src/export/html-export.ts
 import crypto2 from "node:crypto";
-import fs4 from "node:fs";
-import path3 from "node:path";
+import fs5 from "node:fs";
+import path4 from "node:path";
 var MAX_TRACE_LOOKUPS = 200;
 async function gatherPreflightTraces(store, artifacts) {
   if (!store?.getPreflightTrace) return [];
@@ -34538,8 +34620,8 @@ async function gatherPreflightTraces(store, artifacts) {
 function readGuardrailFires(projectRoot2) {
   if (!projectRoot2) return [];
   try {
-    const p = path3.join(projectRoot2, ".deeppairing", "hooks-state.json");
-    const parsed = JSON.parse(fs4.readFileSync(p, "utf-8"));
+    const p = path4.join(projectRoot2, ".deeppairing", "hooks-state.json");
+    const parsed = JSON.parse(fs5.readFileSync(p, "utf-8"));
     const fires = Array.isArray(parsed?.fires) ? parsed.fires : [];
     const out = [];
     for (const raw of fires) {
@@ -34614,7 +34696,7 @@ async function assembleSessionHtml(state, options = {}) {
     ...renderOptions,
     secretLabels,
     secretCount,
-    projectName: renderOptions.projectName ?? (projectRoot2 ? path3.basename(projectRoot2) : void 0)
+    projectName: renderOptions.projectName ?? (projectRoot2 ? path4.basename(projectRoot2) : void 0)
   });
 }
 function htmlExportFileName(sessionId, generatedAt = (/* @__PURE__ */ new Date()).toISOString()) {
@@ -34623,10 +34705,10 @@ function htmlExportFileName(sessionId, generatedAt = (/* @__PURE__ */ new Date()
   return `deeppairing-session-${day}-${token}.html`;
 }
 function writeSessionHtml(projectRoot2, sessionId, html, generatedAt) {
-  const dir = path3.join(projectRoot2, ".deeppairing", "exports");
-  fs4.mkdirSync(dir, { recursive: true });
-  const file2 = path3.join(dir, htmlExportFileName(sessionId, generatedAt));
-  fs4.writeFileSync(file2, html, "utf-8");
+  const dir = path4.join(projectRoot2, ".deeppairing", "exports");
+  fs5.mkdirSync(dir, { recursive: true });
+  const file2 = path4.join(dir, htmlExportFileName(sessionId, generatedAt));
+  fs5.writeFileSync(file2, html, "utf-8");
   return file2;
 }
 
@@ -34667,7 +34749,7 @@ async function handleExportSession(ctx, args) {
       secretCount: secretCountOf(secretMatches)
     });
     const file2 = writeSessionHtml(projectRoot2, state.sessionId, html, generatedAt);
-    const relative = path5.relative(projectRoot2, file2) || path5.basename(file2);
+    const relative = path6.relative(projectRoot2, file2) || path6.basename(file2);
     const kb = Math.max(1, Math.round(Buffer.byteLength(html, "utf-8") / 1024));
     const narrativeNote = narrative ? "Your narrative leads the page." : "No narrative was supplied, so the page opens with an auto-generated summary \u2014 compose one and re-export for a page a stranger can actually follow (see /deeppairing:share).";
     const secretWarning = secretMatches.length ? secretWarningFor(state, { narrative }) : null;
@@ -37614,22 +37696,22 @@ Read a full session via resource deeppairing://session/{id} or an artifact via d
 
 // src/daemon/status.ts
 init_project_root();
-import fs6 from "node:fs";
-import path6 from "node:path";
+import fs7 from "node:fs";
+import path7 from "node:path";
 function findDaemonJson(startDir) {
-  let dir = path6.resolve(startDir);
+  let dir = path7.resolve(startDir);
   for (; ; ) {
-    const candidate = path6.join(dir, ".deeppairing", "daemon.json");
-    if (fs6.existsSync(candidate)) {
+    const candidate = path7.join(dir, ".deeppairing", "daemon.json");
+    if (fs7.existsSync(candidate)) {
       try {
-        const parsed = JSON.parse(fs6.readFileSync(candidate, "utf-8"));
+        const parsed = JSON.parse(fs7.readFileSync(candidate, "utf-8"));
         const info = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
         return { dir, info };
       } catch {
         return { dir, info: {} };
       }
     }
-    const parent = path6.dirname(dir);
+    const parent = path7.dirname(dir);
     if (parent === dir) return null;
     dir = parent;
   }
@@ -38626,11 +38708,11 @@ var DaemonClient = class {
   async refreshAuthTokenFromDaemonInfo() {
     if (!this.projectRoot) return false;
     try {
-      const fs11 = await import("node:fs");
-      const path12 = await import("node:path");
-      const infoPath = path12.join(this.projectRoot, ".deeppairing", "daemon.json");
-      if (!fs11.existsSync(infoPath)) return false;
-      const raw = fs11.readFileSync(infoPath, "utf-8");
+      const fs12 = await import("node:fs");
+      const path13 = await import("node:path");
+      const infoPath = path13.join(this.projectRoot, ".deeppairing", "daemon.json");
+      if (!fs12.existsSync(infoPath)) return false;
+      const raw = fs12.readFileSync(infoPath, "utf-8");
       const info = JSON.parse(raw);
       if (typeof info.authToken !== "string" || !info.authToken) return false;
       if (info.authToken === this.authToken) return false;
@@ -38685,7 +38767,7 @@ var DaemonClient = class {
    * with the stored meta and retry the original call. Other non-2xx
    * statuses throw with a structured error so caller bugs surface.
    */
-  async request(path12, init, isRetry = false) {
+  async request(path13, init, isRetry = false) {
     const extraHeaders = {};
     if (this.projectHash) extraHeaders["X-Project-Hash"] = this.projectHash;
     if (this.authToken) extraHeaders["Authorization"] = `Bearer ${this.authToken}`;
@@ -38695,12 +38777,12 @@ var DaemonClient = class {
     };
     let res;
     try {
-      res = await fetch(`${this.baseUrl}${path12}`, initWithHash);
+      res = await fetch(`${this.baseUrl}${path13}`, initWithHash);
     } catch (err2) {
       if (errorName(err2) === "AbortError" || errorName(err2) === "TimeoutError") throw err2;
       if (!isRetry) {
         const recovered = await this.recoverDaemonConnection();
-        if (recovered) return this.request(path12, init, true);
+        if (recovered) return this.request(path13, init, true);
       }
       throw new Error(
         `[deepPairing] daemon connection lost (likely after host sleep). Reconnect failed \u2014 run \`${cliInvocation("doctor")}\` to diagnose, or restart Claude Code.`
@@ -38715,7 +38797,7 @@ var DaemonClient = class {
     if (res.status === 401 && body?.code === "daemon_auth_required" && !isRetry) {
       const rotated = await this.refreshAuthTokenFromDaemonInfo();
       if (rotated) {
-        return this.request(path12, init, true);
+        return this.request(path13, init, true);
       }
     }
     if (res.status === 404 && body?.code === "session_not_registered" && !isRetry) {
@@ -38727,7 +38809,7 @@ var DaemonClient = class {
       await this.register(this.lastRegisterMeta);
       void fetch(`${this.baseUrl}/recovered`, { method: "POST" }).catch(() => {
       });
-      return this.request(path12, init, true);
+      return this.request(path13, init, true);
     }
     const msg = body?.error ?? `request failed (${res.status})`;
     const err = new Error(`[deepPairing] ${msg}`);
@@ -38735,15 +38817,15 @@ var DaemonClient = class {
     if (typeof body?.code === "string") err.code = body.code;
     throw err;
   }
-  async post(path12, body) {
-    return this.request(path12, {
+  async post(path13, body) {
+    return this.request(path13, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: body != null ? JSON.stringify(body) : void 0
     });
   }
-  async get(path12) {
-    return this.request(path12, {});
+  async get(path13) {
+    return this.request(path13, {});
   }
   // --- Session lifecycle ---
   /**
@@ -39069,9 +39151,9 @@ var DaemonClient = class {
    * 5xx from the daemon used to flow back as `data.results === undefined`
    * and the caller fell back to `[]` silently. Now non-2xx throws.
    */
-  async requestPublic(path12) {
+  async requestPublic(path13) {
     const init = this.projectHash ? { headers: { "X-Project-Hash": this.projectHash } } : {};
-    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path12}`, init);
+    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path13}`, init);
     if (res.ok) return res.json();
     let body = {};
     try {
@@ -39118,12 +39200,12 @@ var DaemonClient = class {
 init_project_root();
 
 // src/store/project-registry.ts
-import fs9 from "node:fs";
+import fs10 from "node:fs";
 import os3 from "node:os";
-import path9 from "node:path";
+import path10 from "node:path";
 var REGISTRY_VERSION = 1;
 function realHomeRegistryPath() {
-  return path9.join(os3.homedir(), ".deeppairing", "projects.json");
+  return path10.join(os3.homedir(), ".deeppairing", "projects.json");
 }
 var testPathOverride = null;
 function projectRegistryPath() {
@@ -39147,8 +39229,8 @@ function readFile() {
   }
   let raw;
   try {
-    if (!fs9.existsSync(filePath)) return emptyFile();
-    raw = JSON.parse(fs9.readFileSync(filePath, "utf-8"));
+    if (!fs10.existsSync(filePath)) return emptyFile();
+    raw = JSON.parse(fs10.readFileSync(filePath, "utf-8"));
   } catch (err) {
     salvageLog("projects.json", `unreadable/unparseable \u2014 starting from empty (${String(err)})`);
     return emptyFile();
@@ -39172,7 +39254,7 @@ function readFile() {
     }
     projects[key] = {
       projectRoot: v2.projectRoot,
-      name: typeof v2.name === "string" && v2.name ? v2.name : path9.basename(v2.projectRoot),
+      name: typeof v2.name === "string" && v2.name ? v2.name : path10.basename(v2.projectRoot),
       lastSeen: typeof v2.lastSeen === "string" ? v2.lastSeen : (/* @__PURE__ */ new Date(0)).toISOString()
     };
   }
@@ -39183,13 +39265,13 @@ function upsertProject(projectRoot2, now = /* @__PURE__ */ new Date()) {
   try {
     const filePath = projectRegistryPath();
     const file2 = readFile();
-    const key = path9.resolve(projectRoot2);
+    const key = path10.resolve(projectRoot2);
     file2.projects[key] = {
       projectRoot: key,
-      name: path9.basename(key) || key,
+      name: path10.basename(key) || key,
       lastSeen: now.toISOString()
     };
-    fs9.mkdirSync(path9.dirname(filePath), { recursive: true });
+    fs10.mkdirSync(path10.dirname(filePath), { recursive: true });
     writeJsonAtomic(filePath, file2);
     return true;
   } catch (err) {
@@ -39204,9 +39286,9 @@ init_cli_invocation();
 
 // src/session-id.ts
 import crypto4 from "node:crypto";
-import path10 from "node:path";
+import path11 from "node:path";
 function deriveSessionId(projectRoot2, claudeSessionIdRaw) {
-  const projectName = path10.basename(projectRoot2);
+  const projectName = path11.basename(projectRoot2);
   const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
   const projectHash = crypto4.createHash("sha256").update(projectRoot2).digest("hex").slice(0, 8);
   const base = `session_${safeProjectName}_${projectHash}`;
@@ -39218,17 +39300,17 @@ function deriveSessionId(projectRoot2, claudeSessionIdRaw) {
 }
 
 // src/standalone.ts
-import fs10 from "node:fs";
-import path11 from "node:path";
+import fs11 from "node:fs";
+import path12 from "node:path";
 var { projectRoot, source: projectRootSource } = resolveProjectRoot();
-var dpDir = path11.join(projectRoot, ".deeppairing");
-var logFile = path11.join(dpDir, "server.log");
+var dpDir = path12.join(projectRoot, ".deeppairing");
+var logFile = path12.join(dpDir, "server.log");
 function log(msg) {
   const line = `[${(/* @__PURE__ */ new Date()).toISOString()}] [mcp] ${msg}
 `;
   try {
-    fs10.mkdirSync(path11.dirname(logFile), { recursive: true });
-    fs10.appendFileSync(logFile, line);
+    fs11.mkdirSync(path12.dirname(logFile), { recursive: true });
+    fs11.appendFileSync(logFile, line);
   } catch {
   }
 }
@@ -39246,7 +39328,7 @@ async function main() {
     log(`WARN: daemon at port ${port} did not advertise authToken \u2014 internal calls will 401. Run \`${cliInvocation("doctor")}\` to refresh daemon.json.`);
   }
   log(`Daemon ready on port ${port}`);
-  const projectName = path11.basename(projectRoot);
+  const projectName = path12.basename(projectRoot);
   const claudeSessionIdEnv = process.env.CLAUDE_CODE_SESSION_ID;
   const derived = deriveSessionId(projectRoot, claudeSessionIdEnv);
   const sessionId = derived.sessionId;

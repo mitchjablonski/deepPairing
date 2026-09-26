@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { writeJsonAtomic } from "./atomic-write.js";
+import { withFileLock } from "./file-lock.js";
 import { salvageLog } from "./salvage.js";
 import { normalizeConceptKey } from "@deeppairing/shared";
 
@@ -54,6 +55,11 @@ interface LedgerFile {
 }
 
 const LEDGER_VERSION = 1 as const;
+/** #406 — bounded wait for the ledger transaction lock. The critical section
+ *  is one small JSON read + atomic replace; a second of contention means a
+ *  wedged or crashed writer, so fail closed (ELOCKED) rather than block a
+ *  daemon event loop longer. */
+const LEDGER_LOCK_TIMEOUT_MS = 1000;
 
 function realHomeLedgerPath(): string {
   return path.join(os.homedir(), ".deeppairing", "philosophy", `v${LEDGER_VERSION}.json`);
@@ -344,6 +350,25 @@ export class GlobalStore {
     return { version: LEDGER_VERSION, concepts };
   }
 
+  /**
+   * #406 — every ledger mutation is ONE cross-process transaction: the read,
+   * the mutation and the atomic replace all run under `<ledger>.lock` (the
+   * shared file-lock.ts boundary). Concurrent project daemons each read the
+   * whole file and rename a whole new one; without this, the later rename
+   * erased the earlier daemon's append (measured: ~45% of 2×100 appends lost).
+   * Readers (get/query/export/getHealth, the hooks) stay lock-free — the file
+   * is always replaced atomically. A busy lock past LEDGER_LOCK_TIMEOUT_MS
+   * throws ELOCKED; it is never broken by age (see file-lock.ts).
+   */
+  private transact<T>(mutate: () => T): T {
+    fs.mkdirSync(path.dirname(this.ledgerPath), { recursive: true });
+    return withFileLock(`${this.ledgerPath}.lock`, mutate, {
+      label: "Philosophy ledger lock",
+      timeoutMs: LEDGER_LOCK_TIMEOUT_MS,
+      reentrant: true,
+    });
+  }
+
   private write(ledger: LedgerFile): void {
     // H1-5 — REFUSE to overwrite a ledger the most recent read couldn't trust.
     // Writing the (empty) fallback shape here is exactly the permanent
@@ -411,6 +436,10 @@ export class GlobalStore {
 
   recordInstance(concept: string, instance: Omit<PhilosophyInstance, "at"> & { at?: string }): void {
     if (!concept.trim()) return;
+    this.transact(() => this.recordInstanceLocked(concept, instance));
+  }
+
+  private recordInstanceLocked(concept: string, instance: Omit<PhilosophyInstance, "at"> & { at?: string }): void {
     const key = normalizeKey(concept);
     const ledger = this.read();
     const now = instance.at ?? new Date().toISOString();
@@ -499,6 +528,10 @@ export class GlobalStore {
    * are actually preserved inside the unreadable file.
    */
   removeConcept(concept: string): { concept: string; instanceCount: number; backupPath: string } | null {
+    return this.transact(() => this.removeConceptLocked(concept));
+  }
+
+  private removeConceptLocked(concept: string): { concept: string; instanceCount: number; backupPath: string } | null {
     const key = normalizeKey(concept);
     const ledger = this.read();
     if (this.lastReadCorrupt) {
@@ -599,7 +632,10 @@ export class GlobalStore {
   importLedger(incoming: unknown): { conceptsAdded: number; conceptsMerged: number; instancesAdded: number } {
     const parsed = this.validateIncoming(incoming);
     if (!parsed) throw new Error("Import rejected: not a valid deepPairing ledger export (expected { version: 1, concepts: {...} })");
+    return this.transact(() => this.importLocked(parsed));
+  }
 
+  private importLocked(parsed: LedgerFile): { conceptsAdded: number; conceptsMerged: number; instancesAdded: number } {
     const current = this.read();
     let conceptsAdded = 0;
     let conceptsMerged = 0;
