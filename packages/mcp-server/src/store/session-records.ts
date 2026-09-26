@@ -155,9 +155,10 @@ export function mergeArtifactRecords<T extends object>(
 
 /** Cooperating FileStore writers serialize the complete read/merge/write
  * section. Never break locks by age: a paused live writer could still commit.
- * After a crash, an operator may remove the lock ONLY after stopping writers.
- * Timeout/failure throws; callers must never continue with an unlocked write.
- * The mechanism is the shared cross-process lock in file-lock.ts. */
+ * A lock whose owner is provably dead (same host, pid gone or reused) is
+ * recovered atomically by file-lock.ts; a live, foreign-host or legacy-body
+ * owner stays fail-closed until an operator stops the writers and removes it.
+ * Timeout/failure throws; callers must never continue with an unlocked write. */
 export function withSessionFlushLock<T>(filePath: string, run: () => T): T {
   return withFileLock(filePath, run, { label: "Session flush lock" });
 }

@@ -82,22 +82,33 @@ mechanism (`src/store/file-lock.ts`), because separate processes write them:
   mutation holds `~/.deeppairing/philosophy/v1.json.lock`.
 
 Acquisition waits at most one second, then throws `ELOCKED`. The mutation is
-not applied, and the error reaches the HTTP route or CLI command. The one
+not applied. Routes answer HTTP 503 `lock_busy`, and CLI commands print the
+error. The one
 exception is the ledger mirror inside a rejection or approval: it logs the
 failure, and the project-local record still lands. Readers, including the
 preflight hook, never take these locks; they read the atomically replaced file.
 Concurrent `philosophy remove` and a new instance for the same concept are
 serialized: whichever commits second wins, so a record after a remove creates
 the concept again. An abandoned lock is recovered the same way as a flush
-lock: stop every daemon and CLI writer, then remove only the named lock file.
+lock. A dead owner's lock is recovered automatically. For any other lock, stop
+every daemon and CLI writer, then remove only the named lock file.
 
 ## Recovering an abandoned flush lock
 
 A crash can leave `.deeppairing/sessions/<session-id>/.flush.lock` behind.
-The lock contains its creator's PID and creation time. It is never broken by
-age: a paused live writer could otherwise resume and overwrite a newer commit.
-An `ELOCKED` error identifies the exact path. First stop **all** daemons, CLI
-commands, and other writers for this project. Inspect the named lock, remove
-only that session's `.flush.lock`, then restart the writer. Do not remove locks
-while writers are running, and do not infer ownership from PID alone (PIDs can
-be reused). This recovery does not delete session records.
+The lock records its creator's host, PID, process start time (on Linux) and
+creation time. It is never broken by age, because a paused live writer could
+otherwise resume and overwrite a newer commit. The next writer recovers it
+only when the owner is provably dead: the lock is from this host, and the PID
+no longer exists or (on Linux) now belongs to a process with a different start
+time. Recovery renames the lock to a unique tombstone and checks the bytes, so
+two recovering writers cannot both win. The owner re-checks its lock before
+releasing it, so a lock removed or replaced while it was held fails loudly.
+
+A lock with a live owner, from another host, or with an unreadable or
+older-format body still fails closed with an `ELOCKED` error that names the
+exact path. `deeppairing doctor` lists every lock with its owner and liveness,
+and `doctor --fix` removes only dead-owner locks. For any other lock, first
+stop **all** daemons, CLI commands and other writers for this project. Then
+inspect the named lock, remove only that lock, and restart the writer. This
+recovery does not delete session records.

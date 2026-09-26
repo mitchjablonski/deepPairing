@@ -25374,7 +25374,7 @@ var init_version = __esm({
 
 // src/daemon/token.ts
 import fs8 from "node:fs";
-import os2 from "node:os";
+import os3 from "node:os";
 import path8 from "node:path";
 function runtimeBaseDir() {
   const xdg = process.env.XDG_RUNTIME_DIR?.trim();
@@ -25384,7 +25384,7 @@ function runtimeBaseDir() {
     } catch {
     }
   }
-  return path8.join(os2.tmpdir(), "deeppairing");
+  return path8.join(os3.tmpdir(), "deeppairing");
 }
 function tokenSidecarPath(projectRoot2) {
   return path8.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
@@ -25776,7 +25776,7 @@ async function waitForPortRelease(port, pid, opts = {}) {
   });
   const probeIdentity = opts.probeIdentity ?? probeDaemonIdentity;
   const pidGone = opts.pidGone ?? pidIsGone;
-  const readStartTime = opts.readStartTime ?? readProcessStartTime;
+  const readStartTime2 = opts.readStartTime ?? readProcessStartTime;
   const isDown = async () => pidGone(pid) && await portRefusesConnections(port);
   const graceDeadline = Date.now() + graceMs;
   while (Date.now() < graceDeadline) {
@@ -25790,7 +25790,7 @@ async function waitForPortRelease(port, pid, opts = {}) {
     );
     return;
   }
-  const liveStart = readStartTime(pid);
+  const liveStart = readStartTime2(pid);
   if (opts.targetStartTime == null || liveStart == null || liveStart !== opts.targetStartTime) {
     log2(
       `[deepPairing] waitForPortRelease: NOT escalating to SIGKILL on pid ${pid} (:${port})${opts.expectedProjectRoot ? ` for ${opts.expectedProjectRoot}` : ""} \u2014 cannot prove it is still our SIGTERM'd daemon (start-time baseline=${opts.targetStartTime ?? "unreadable"}, now=${liveStart ?? "unreadable"}). The pid may have been recycled into an unrelated process; leaving it alone.`
@@ -25817,12 +25817,12 @@ async function resolveStaleDaemon(existing, myVersion, projectRoot2, deps = {}) 
   });
   const log2 = deps.log ?? (() => {
   });
-  const readStartTime = deps.readStartTime ?? readProcessStartTime;
+  const readStartTime2 = deps.readStartTime ?? readProcessStartTime;
   const waitForRelease = deps.waitForRelease ?? ((port, pid, startTime) => waitForPortRelease(port, pid, {
     log: log2,
     expectedProjectRoot: projectRoot2,
     targetStartTime: startTime,
-    readStartTime
+    readStartTime: readStartTime2
   }));
   const verdict = classifyDaemonVersion(existing.version, myVersion);
   if (!verdictIsStale(verdict)) {
@@ -25857,7 +25857,7 @@ async function resolveStaleDaemon(existing, myVersion, projectRoot2, deps = {}) 
   log2(
     `[deepPairing] restarting stale daemon: pid ${existing.pid} on :${existing.port} for project ${projectRoot2} was running v${runningLabel}, plugin is v${myVersion} \u2014 sending SIGTERM (identity HTTP-reconfirmed as ours). A running Node process keeps serving old code after a plugin update; every shipped fix would be invisible until this restart.`
   );
-  const targetStartTime = readStartTime(existing.pid);
+  const targetStartTime = readStartTime2(existing.pid);
   kill(existing.pid, "SIGTERM");
   await waitForRelease(existing.port, existing.pid, targetStartTime);
   return "restarted";
@@ -29263,7 +29263,7 @@ var StdioServerTransport = class {
 
 // src/store/global-store.ts
 import fs3 from "node:fs";
-import os from "node:os";
+import os2 from "node:os";
 import path2 from "node:path";
 
 // src/store/atomic-write.ts
@@ -29303,10 +29303,111 @@ function writeStringAtomic(filePath, data, opts) {
 
 // src/store/file-lock.ts
 import fs2 from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { randomBytes as randomBytes2 } from "node:crypto";
 import { performance } from "node:perf_hooks";
 var DEFAULT_FILE_LOCK_TIMEOUT_MS = 250;
 var heldLocks = /* @__PURE__ */ new Set();
+function readStartTime(pid) {
+  if (process.platform !== "linux") return null;
+  try {
+    const stat = fs2.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    return fields[22 - 3] ?? null;
+  } catch {
+    return null;
+  }
+}
+var selfStartTime;
+function ownBody() {
+  if (selfStartTime === void 0) selfStartTime = readStartTime(process.pid);
+  return {
+    pid: process.pid,
+    hostname: os.hostname(),
+    processStartTime: selfStartTime,
+    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+    nonce: randomBytes2(8).toString("hex")
+  };
+}
+function parseOwner(raw) {
+  try {
+    const v2 = JSON.parse(raw);
+    if (!v2 || typeof v2 !== "object") return null;
+    if (!Number.isInteger(v2.pid) || v2.pid <= 0) return null;
+    if (typeof v2.hostname !== "string" || !v2.hostname) return null;
+    return {
+      pid: v2.pid,
+      hostname: v2.hostname,
+      processStartTime: typeof v2.processStartTime === "string" ? v2.processStartTime : null,
+      createdAt: typeof v2.createdAt === "string" ? v2.createdAt : "",
+      nonce: typeof v2.nonce === "string" ? v2.nonce : ""
+    };
+  } catch {
+    return null;
+  }
+}
+function ownerState(raw) {
+  const owner = parseOwner(raw);
+  if (!owner) return { state: "unknown", owner: null, why: "unreadable or legacy lock body (no pid/hostname)" };
+  if (owner.hostname !== os.hostname()) {
+    return { state: "unknown", owner, why: `owned by another host (${owner.hostname})` };
+  }
+  if (owner.pid === process.pid) {
+    return { state: "alive", owner };
+  }
+  try {
+    process.kill(owner.pid, 0);
+  } catch (err) {
+    const code = err.code;
+    if (code === "ESRCH") return { state: "dead", owner, why: `pid ${owner.pid} is not running` };
+    if (code === "EPERM") return { state: "alive", owner };
+    return { state: "unknown", owner, why: `liveness probe failed (${code ?? String(err)})` };
+  }
+  if (owner.processStartTime) {
+    const current = readStartTime(owner.pid);
+    if (current && current !== owner.processStartTime) {
+      return { state: "dead", owner, why: `pid ${owner.pid} was reused by a newer process` };
+    }
+  }
+  return { state: "alive", owner };
+}
+function breakDeadLock(lockPath) {
+  let raw;
+  try {
+    raw = fs2.readFileSync(lockPath, "utf8");
+  } catch (err) {
+    if (err.code === "ENOENT") return { broken: false, state: null };
+    throw err;
+  }
+  const state = ownerState(raw);
+  if (state.state !== "dead") return { broken: false, state };
+  const tomb = `${lockPath}.dead-${process.pid}-${randomBytes2(4).toString("hex")}`;
+  try {
+    fs2.renameSync(lockPath, tomb);
+  } catch (err) {
+    if (err.code === "ENOENT") return { broken: false, state };
+    throw err;
+  }
+  let taken;
+  try {
+    taken = fs2.readFileSync(tomb, "utf8");
+  } catch {
+    taken = "";
+  }
+  if (taken !== raw) {
+    try {
+      fs2.linkSync(tomb, lockPath);
+      fs2.unlinkSync(tomb);
+    } catch (err) {
+      console.error(`[deepPairing] lock ${lockPath}: could not restore a live lock moved during dead-owner recovery (${String(err)}); its owner will fail loudly on release.`);
+    }
+    return { broken: false, state };
+  }
+  fs2.unlinkSync(tomb);
+  console.error(`[deepPairing] recovered lock ${lockPath}: ${state.why} (created ${state.owner.createdAt || "?"}).`);
+  return { broken: true, state };
+}
 function withFileLock(lockPath, run2, opts = {}) {
   const key = path.resolve(lockPath);
   if (opts.reentrant && heldLocks.has(key)) return run2();
@@ -29314,15 +29415,23 @@ function withFileLock(lockPath, run2, opts = {}) {
   const deadline = performance.now() + (opts.timeoutMs ?? DEFAULT_FILE_LOCK_TIMEOUT_MS);
   const waitArray = new Int32Array(new SharedArrayBuffer(4));
   let fd;
+  let lastState = null;
   for (; ; ) {
     try {
       fd = fs2.openSync(lockPath, "wx", 384);
       break;
     } catch (err) {
       if (err.code !== "EEXIST") throw err;
+      const attempt = breakDeadLock(lockPath);
+      if (attempt.broken) continue;
+      lastState = attempt.state ?? lastState;
       if (performance.now() >= deadline) {
+        const owner = lastState?.owner;
+        const who = owner ? ` Held by pid ${owner.pid} on ${owner.hostname} since ${owner.createdAt || "?"}.` : "";
         throw Object.assign(
-          new Error(`${label} busy: ${lockPath}. Stop all writers before removing an abandoned lock.`),
+          new Error(
+            `${label} busy: ${lockPath}.${who} If no deepPairing daemon or CLI is running, run \`deeppairing doctor\` to inspect it; remove an abandoned lock only after stopping all writers.`
+          ),
           { code: "ELOCKED", path: lockPath }
         );
       }
@@ -29330,18 +29439,28 @@ function withFileLock(lockPath, run2, opts = {}) {
     }
   }
   heldLocks.add(key);
+  const body = JSON.stringify(ownBody());
   let result;
   let failed = false;
   let failure;
   try {
-    fs2.writeFileSync(fd, JSON.stringify({ pid: process.pid, createdAt: (/* @__PURE__ */ new Date()).toISOString() }));
+    fs2.writeFileSync(fd, body);
     result = run2();
   } catch (err) {
     failed = true;
     failure = err;
   }
   heldLocks.delete(key);
-  for (const cleanup of [() => fs2.closeSync(fd), () => fs2.unlinkSync(lockPath)]) {
+  const cleanups = [
+    () => fs2.closeSync(fd),
+    () => {
+      if (fs2.readFileSync(lockPath, "utf8") !== body) {
+        throw Object.assign(new Error(`${label} was replaced while held: ${lockPath}. Stop all writers and inspect the protected file.`), { code: "ELOCKSTOLEN" });
+      }
+      fs2.unlinkSync(lockPath);
+    }
+  ];
+  for (const cleanup of cleanups) {
     try {
       cleanup();
     } catch (err) {
@@ -29368,7 +29487,7 @@ init_dist();
 var LEDGER_VERSION = 1;
 var LEDGER_LOCK_TIMEOUT_MS = 1e3;
 function realHomeLedgerPath() {
-  return path2.join(os.homedir(), ".deeppairing", "philosophy", `v${LEDGER_VERSION}.json`);
+  return path2.join(os2.homedir(), ".deeppairing", "philosophy", `v${LEDGER_VERSION}.json`);
 }
 function defaultLedgerPath() {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
@@ -31470,14 +31589,20 @@ var ERROR_CODES = {
    *  non-FileStore implementation lacks setChangesetFileReview). */
   unsupported: "unsupported",
   /** Durable review-post state needs inspection; do not retry an external POST. */
-  review_post_conflict: "review_post_conflict"
+  review_post_conflict: "review_post_conflict",
+  /** #406/#408 — a cross-process file lock (preferences.json, the philosophy
+   *  ledger, a session flush) stayed held past its bounded wait by a LIVE (or
+   *  unverifiable) owner. Nothing was committed; retry, or inspect with
+   *  `deeppairing doctor` (dead-owner locks are recovered automatically). */
+  lock_busy: "lock_busy"
 };
 var USER_FACING_ERROR_CODES = [
   ERROR_CODES.daemon_auth_required,
   ERROR_CODES.project_hash_mismatch,
   ERROR_CODES.session_not_registered,
   ERROR_CODES.session_review_conflict,
-  ERROR_CODES.review_post_conflict
+  ERROR_CODES.review_post_conflict,
+  ERROR_CODES.lock_busy
 ];
 var TOOL_ERROR_CODES = {
   /** Zod validation failed on tool input — agent should fix the shape and retry. */
@@ -35401,37 +35526,19 @@ ${lines.join("\n")}`
   }
   const resolved = newResolved;
   if (resolved.length > 0) {
-    await store.acknowledgeDecisions(resolved.map((d) => d.decisionId));
     const formattedDecisions = [];
+    const recordedIds = [];
+    const deferred = [];
     for (const d of resolved) {
+      try {
+        await recordDecisionLedger(d);
+      } catch (err) {
+        deferred.push(`- Decision "${d.title?.trim() || d.context}": the human's pick is saved, but recording it in the project ledger failed (${errorMessage(err)}). It will be delivered again on the next check_feedback \u2014 call it again shortly.`);
+        continue;
+      }
+      recordedIds.push(d.decisionId);
       const option = d.options.find((o) => o.id === d.response?.optionId);
       const decisionLabel = d.title?.trim() || d.context;
-      if (option) {
-        const approvedDescription = `${decisionLabel}: ${option.title}`;
-        const approvedConcept = option.concept?.name ?? option.description ?? void 0;
-        await store.recordApprovedPattern({
-          description: approvedDescription,
-          concept: approvedConcept
-        });
-        broadcast({
-          type: "ledger_write",
-          kind: "approved",
-          description: approvedDescription,
-          concept: approvedConcept,
-          sourceArtifactId: d.artifactId
-        });
-        const rejected = d.options.filter((o) => o.id !== d.response?.optionId);
-        for (const rej of rejected) {
-          const pickContext = d.response?.reasoning ? ` \u2014 picked "${option.title}": ${d.response.reasoning}` : "";
-          const rejectReason = composeOptionRejectReason(rej, pickContext, d.response?.reasoning);
-          await recordRejectedOption(store, broadcast, {
-            context: decisionLabel,
-            option: rej,
-            reason: rejectReason,
-            sourceArtifactId: d.artifactId
-          });
-        }
-      }
       formattedDecisions.push(`- Decision "${decisionLabel}": selected "${option?.title ?? d.response?.optionId}"${d.response?.reasoning ? ` (reasoning: ${d.response.reasoning})` : ""}`);
       structuredDecisions.push({
         decisionId: d.decisionId,
@@ -35442,8 +35549,41 @@ ${lines.join("\n")}`
         reasoning: d.response?.reasoning
       });
     }
-    parts.push(`Decision selections:
+    if (recordedIds.length > 0) await store.acknowledgeDecisions(recordedIds);
+    if (formattedDecisions.length > 0) parts.push(`Decision selections:
 ${formattedDecisions.join("\n")}`);
+    if (deferred.length > 0) parts.push(`\u23F3 Decision ledger writes deferred (${deferred.length}):
+${deferred.join("\n")}`);
+  }
+  async function recordDecisionLedger(d) {
+    const option = d.options.find((o) => o.id === d.response?.optionId);
+    const decisionLabel = d.title?.trim() || d.context;
+    if (option) {
+      const approvedDescription = `${decisionLabel}: ${option.title}`;
+      const approvedConcept = option.concept?.name ?? option.description ?? void 0;
+      await store.recordApprovedPattern({
+        description: approvedDescription,
+        concept: approvedConcept
+      });
+      broadcast({
+        type: "ledger_write",
+        kind: "approved",
+        description: approvedDescription,
+        concept: approvedConcept,
+        sourceArtifactId: d.artifactId
+      });
+      const rejected = d.options.filter((o) => o.id !== d.response?.optionId);
+      for (const rej of rejected) {
+        const pickContext = d.response?.reasoning ? ` \u2014 picked "${option.title}": ${d.response.reasoning}` : "";
+        const rejectReason = composeOptionRejectReason(rej, pickContext, d.response?.reasoning);
+        await recordRejectedOption(store, broadcast, {
+          context: decisionLabel,
+          option: rej,
+          reason: rejectReason,
+          sourceArtifactId: d.artifactId
+        });
+      }
+    }
   }
   const pendingPlans = await store.getPendingPlanReviews();
   const planArtifacts = postWakeArtifacts.filter((a) => a.type === "plan");
@@ -39201,11 +39341,11 @@ init_project_root();
 
 // src/store/project-registry.ts
 import fs10 from "node:fs";
-import os3 from "node:os";
+import os4 from "node:os";
 import path10 from "node:path";
 var REGISTRY_VERSION = 1;
 function realHomeRegistryPath() {
-  return path10.join(os3.homedir(), ".deeppairing", "projects.json");
+  return path10.join(os4.homedir(), ".deeppairing", "projects.json");
 }
 var testPathOverride = null;
 function projectRegistryPath() {

@@ -153,7 +153,12 @@ describe("FileStore cooperative cross-process writers", () => {
     }
   });
 
-  it("fails closed after a lock owner dies until an operator removes the orphaned claim", async () => {
+  // #406/#408 review — this used to pin "a dead owner's lock fails closed
+  // until an operator removes it". The rationale for never stealing was a
+  // PAUSED LIVE writer that could still commit; a provably dead owner (same
+  // host, pid gone) cannot, so the shared file-lock recovers it atomically.
+  // The live-owner half of the old contract is pinned here instead.
+  it("stays fail-closed while the lock owner lives, then recovers once it provably dies", async () => {
     const seed = fx.track(new FileStore(fx.dir, SESSION));
     seed.createArtifact({ id: "artifact-a", type: "research", title: "Baseline", content: {} });
     seed.forceFlush();
@@ -161,17 +166,19 @@ describe("FileStore cooperative cross-process writers", () => {
     const holder = startLockHolder();
     try {
       await waitForFiles([path.join(fx.dir, ".lock-ready")], () => undefined);
-      await stopChild(holder);
-
       const claim = path.join(fx.dir, ".deeppairing", "sessions", SESSION, ".flush.lock");
-      expect(fs.existsSync(claim)).toBe(true);
       seed.renameArtifact("artifact-a", "Pending recovery");
+      // Live owner (blocked forever inside the critical section): fail closed.
       expect(() => seed.forceFlush()).toThrow(/flush lock busy/i);
       expect(fs.existsSync(claim)).toBe(true);
 
-      // Explicit recovery is safe only now that the owning process is gone.
-      fs.unlinkSync(claim);
+      holder.kill("SIGKILL");
+      await stopChild(holder);
+      expect(fs.existsSync(claim)).toBe(true); // orphaned by the kill
+
+      // Dead owner: the next writer recovers the orphan by itself.
       seed.forceFlush();
+      expect(fs.existsSync(claim)).toBe(false);
       expect(fx.track(new FileStore(fx.dir, SESSION)).getArtifacts()[0]?.title).toBe("Pending recovery");
     } finally {
       await stopChild(holder);

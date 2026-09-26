@@ -1614,6 +1614,48 @@ export class FileStore implements IStore {
         // Telemetry only — never let it interfere with the rejection.
       }
     }
+    // #408 review — the project-local record lands FIRST. If the preferences
+    // lock is busy this throws before anything is written anywhere, so a
+    // failed rejection never leaves a cross-project instance behind without
+    // the local row the preflight gate actually reads.
+    this.mutatePreferences((prefs) => {
+      const rejected = this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []);
+      // Dedupe on the EXACT description. P3 note (deliberate, not an oversight):
+      // this means a pre-P3 decision key ("<background paragraph>: Redis") and its
+      // post-P3 equivalent ("Cache backend: Redis") can coexist as two rows for
+      // the same stance in a long-lived project. That is the conservative choice —
+      // deduping on the post-colon noun instead would silently MERGE genuinely
+      // different stances that happen to share a noun ("Deploy: Railway" vs
+      // "Logging: Railway"), and merging is lossy where a duplicate is only
+      // cosmetic. The gate is unaffected either way: both rows match the same
+      // proposals (same specificNoun, same concept), so the extra row costs a
+      // little display/near-miss noise, never a wrong block. If the duplicate ever
+      // bothers a user, `deeppairing philosophy remove <concept>` drops it.
+      const existing = rejected.find((r) => r.description === description);
+      if (existing) {
+        // Enrich incrementally — each new signal (reason, concept, source) is
+        // additive so we never overwrite prior context with a blank update.
+        let changed = false;
+        if (reason && !existing.reason) { existing.reason = reason; changed = true; }
+        if (concept && !existing.concept) { existing.concept = concept; changed = true; }
+        if (sourceArtifactId && !existing.sourceArtifactId) { existing.sourceArtifactId = sourceArtifactId; changed = true; }
+        if (changed) {
+          existing.rejectedAt = existing.rejectedAt ?? new Date().toISOString();
+          prefs.rejectedApproaches = rejected;
+        }
+        return changed;
+      }
+      rejected.push({
+        description,
+        reason: reason || undefined,
+        concept: concept || undefined,
+        rejectedAt: new Date().toISOString(),
+        sourceArtifactId,
+      });
+      prefs.rejectedApproaches = rejected;
+      return true;
+    });
+
     // Mirror into the user-global philosophy ledger. The session-scoped
     // preferences.json remains the source of truth for THIS project's
     // pre-flight; the global ledger is additive context for future sessions
@@ -1624,7 +1666,7 @@ export class FileStore implements IStore {
     // and never compounded across projects. Typed-object signature here
     // makes the next refactor's regression visible.
     // III8 — gate on the per-project publish opt-in. Reads still work,
-    // local preferences.json is still updated below; only the global
+    // local preferences.json was already updated above; only the global
     // mirror is gated.
     // Demo isolation — a demo session's scripted rejection must NEVER reach
     // the real cross-project ledger. NOTE: the three `!this.isDemoSession`
@@ -1664,44 +1706,6 @@ export class FileStore implements IStore {
         FileStore.logLedgerMirrorFailure("rejected", err);
       }
     }
-
-    this.mutatePreferences((prefs) => {
-      const rejected = this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []);
-      // Dedupe on the EXACT description. P3 note (deliberate, not an oversight):
-      // this means a pre-P3 decision key ("<background paragraph>: Redis") and its
-      // post-P3 equivalent ("Cache backend: Redis") can coexist as two rows for
-      // the same stance in a long-lived project. That is the conservative choice —
-      // deduping on the post-colon noun instead would silently MERGE genuinely
-      // different stances that happen to share a noun ("Deploy: Railway" vs
-      // "Logging: Railway"), and merging is lossy where a duplicate is only
-      // cosmetic. The gate is unaffected either way: both rows match the same
-      // proposals (same specificNoun, same concept), so the extra row costs a
-      // little display/near-miss noise, never a wrong block. If the duplicate ever
-      // bothers a user, `deeppairing philosophy remove <concept>` drops it.
-      const existing = rejected.find((r) => r.description === description);
-      if (existing) {
-        // Enrich incrementally — each new signal (reason, concept, source) is
-        // additive so we never overwrite prior context with a blank update.
-        let changed = false;
-        if (reason && !existing.reason) { existing.reason = reason; changed = true; }
-        if (concept && !existing.concept) { existing.concept = concept; changed = true; }
-        if (sourceArtifactId && !existing.sourceArtifactId) { existing.sourceArtifactId = sourceArtifactId; changed = true; }
-        if (changed) {
-          existing.rejectedAt = existing.rejectedAt ?? new Date().toISOString();
-          prefs.rejectedApproaches = rejected;
-        }
-        return changed;
-      }
-      rejected.push({
-        description,
-        reason: reason || undefined,
-        concept: concept || undefined,
-        rejectedAt: new Date().toISOString(),
-        sourceArtifactId,
-      });
-      prefs.rejectedApproaches = rejected;
-      return true;
-    });
   }
 
   /** Migrate legacy string[] into RejectedApproach[] so downstream code sees one shape. */
@@ -1733,6 +1737,15 @@ export class FileStore implements IStore {
     // same approval in project B.
     // III8 — same per-project publish opt-in gate as the rejected path.
     // Demo isolation — same never-mirror gate as the rejected path.
+    // #408 review — local record first (a busy lock throws before the mirror).
+    this.mutatePreferences((prefs) => {
+      const approved: string[] = prefs.approvedPatterns ?? [];
+      if (approved.includes(description)) return false;
+      approved.push(description);
+      prefs.approvedPatterns = approved;
+      return true;
+    });
+
     const conceptKey = concept?.trim() || description.trim();
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
@@ -1747,14 +1760,6 @@ export class FileStore implements IStore {
         FileStore.logLedgerMirrorFailure("approved", err);
       }
     }
-
-    this.mutatePreferences((prefs) => {
-      const approved: string[] = prefs.approvedPatterns ?? [];
-      if (approved.includes(description)) return false;
-      approved.push(description);
-      prefs.approvedPatterns = approved;
-      return true;
-    });
   }
 
   /**
@@ -1784,6 +1789,20 @@ export class FileStore implements IStore {
   overrideRejectedApproach(params: { description?: string; concept?: string }): { retired: number } {
     const { description, concept } = params;
     // Demo isolation — same never-mirror gate as the record paths.
+    // #408 review — local retire first (a busy lock throws before the mirror).
+    let retired = 0;
+    this.mutatePreferences((prefs) => {
+      const rejected = this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []);
+      const keep = rejected.filter(
+        (r) =>
+          !((description && r.description === description) || (concept && r.concept === concept)),
+      );
+      retired = rejected.length - keep.length;
+      if (retired === 0) return false;
+      prefs.rejectedApproaches = keep;
+      return true;
+    });
+
     const conceptKey = concept?.trim() || description?.trim() || "";
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
@@ -1804,19 +1823,6 @@ export class FileStore implements IStore {
         FileStore.logLedgerMirrorFailure("override", err);
       }
     }
-
-    let retired = 0;
-    this.mutatePreferences((prefs) => {
-      const rejected = this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []);
-      const keep = rejected.filter(
-        (r) =>
-          !((description && r.description === description) || (concept && r.concept === concept)),
-      );
-      retired = rejected.length - keep.length;
-      if (retired === 0) return false;
-      prefs.rejectedApproaches = keep;
-      return true;
-    });
     return { retired };
   }
 
@@ -2050,11 +2056,12 @@ export class FileStore implements IStore {
   // --- Autonomy Level ---
 
   setAutonomyLevel(level: "supervised" | "balanced" | "autonomous"): void {
-    this.autonomyLevel = level;
+    // Persist first: a busy lock (ELOCKED) must not leave memory ahead of disk.
     this.mutatePreferences((prefs) => {
       prefs.autonomyLevel = level;
       return true;
     });
+    this.autonomyLevel = level;
   }
 
   getAutonomyLevel(): "supervised" | "balanced" | "autonomous" {
@@ -2064,11 +2071,12 @@ export class FileStore implements IStore {
   // --- Detail Density (#139) ---
 
   setDetailDensity(density: "rich" | "terse"): void {
-    this.detailDensity = density;
+    // Persist first: a busy lock (ELOCKED) must not leave memory ahead of disk.
     this.mutatePreferences((prefs) => {
       prefs.detailDensity = density;
       return true;
     });
+    this.detailDensity = density;
   }
 
   getDetailDensity(): "rich" | "terse" {

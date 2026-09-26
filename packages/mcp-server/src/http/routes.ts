@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { isFileLockError, lockBusyBody } from "../store/file-lock.js";
 import type { Context } from "hono";
 import { cors } from "hono/cors";
 import { nanoid } from "nanoid";
@@ -425,6 +426,7 @@ export function createHttpRoutes(
   }));
 
   app.onError((err, c) => {
+    if (isFileLockError(err)) return c.json(lockBusyBody(err), 503);
     if (isSessionReviewConflictError(err)) {
       return c.json({
         error: "session_review_conflict",
@@ -529,6 +531,32 @@ export function createHttpRoutes(
       }
     }
 
+    // #408 review — RECORD BEFORE COMMITTING THE COMMENT. The send-back's
+    // per-option rejections used to be written after addComment; a busy
+    // preferences lock (503 lock_busy) then left the comment saved but the
+    // rejections unwritten, and the UI's retry was deduped as a replay so they
+    // were never written. Recording first means a lock failure commits
+    // nothing (the retry is a clean first attempt), and recordRejectedApproach
+    // is idempotent on description so a replayed send-back adds no rows.
+    const sendBackLedgerEvents: Parameters<LedgerRejectionBroadcast>[0][] = [];
+    if ((target as { sectionId?: string } | undefined)?.sectionId === "decision_revision_requested") {
+      const arts = await store.getArtifacts();
+      const decision = arts.find((a) => a.id === artifactId && a.type === "decision");
+      const dContent = decision?.content as { context?: string; options?: DecisionOption[] } | null;
+      const options = Array.isArray(dContent?.options) ? dContent.options : [];
+      if (decision && options.length > 0) {
+        const reason = content.trim() || undefined;
+        const buffered: LedgerRejectionBroadcast = (event) => { sendBackLedgerEvents.push(event); };
+        for (const option of options) {
+          await recordRejectedOptionConcept(store, buffered, {
+            option,
+            reason,
+            sourceArtifactId: artifactId,
+          });
+        }
+      }
+    }
+
     const newId = `cmt_${nanoid(10)}`;
     const comment = await store.addComment({
       id: newId,
@@ -579,26 +607,13 @@ export function createHttpRoutes(
     // (per-option keys are `${context}: ${title}`; new titles don't collide).
     // This is deliberately the per-option path; the whole-card
     // status:"rejected" gesture records ONE framing entry instead (status
-    // route above). Only on a genuinely NEW comment — never a dedupe replay.
+    // route above). Recorded before the comment (idempotent on description);
+    // broadcast only for a genuinely NEW comment — never a dedupe replay.
+    // #408 review — the rejections themselves were recorded BEFORE the
+    // comment (above); only their ledger_write broadcasts wait for a genuinely
+    // new comment, so a dedupe replay stays silent.
     if (isNew) {
-      const sectionId = (target as { sectionId?: string } | undefined)?.sectionId;
-      if (sectionId === "decision_revision_requested") {
-        const arts = await store.getArtifacts();
-        const decision = arts.find((a) => a.id === artifactId && a.type === "decision");
-        const dContent = decision?.content as { context?: string; options?: DecisionOption[] } | null;
-        const options = Array.isArray(dContent?.options) ? dContent.options : [];
-        if (decision && options.length > 0) {
-          const reason = content.trim() || undefined;
-          const scopedBroadcast: LedgerRejectionBroadcast = (event) => broadcast(event, sid);
-          for (const option of options) {
-            await recordRejectedOptionConcept(store, scopedBroadcast, {
-              option,
-              reason,
-              sourceArtifactId: artifactId,
-            });
-          }
-        }
-      }
+      for (const event of sendBackLedgerEvents) broadcast(event, sid);
     }
     // R1: Q3's horizon-check trigger fires as a question-intent comment
     // with sectionId "horizon_check:request:<horizon>". The broadcast
@@ -1113,6 +1128,87 @@ export function createHttpRoutes(
       );
     }
 
+    // #408 review — RECORD FIRST, then commit the verdict. The rejected
+    // approach is what makes the gate remember; recording it after the status
+    // flip meant a busy preferences lock (ELOCKED → 503) left the artifact
+    // `rejected` with no memory of it and no artifact_updated broadcast, while
+    // the UI rolled its optimistic patch back. Now a lock failure throws here,
+    // before anything is committed, and the route's onError answers 503
+    // lock_busy — status, plan review and comment all stay unchanged, so the
+    // UI rollback is the truth and a retry is clean. (recordRejectedApproach is
+    // idempotent on description, so a retry never duplicates the row.)
+    // When an artifact is rejected, remember the approach so pre-flight blocks
+    // any future re-proposal. reason is the feedback comment (required
+    // client-side).
+    let rejection: { description: string; reason?: string; sourceArtifactId: string; concept?: string } | null = null;
+    if (status === "rejected") {
+      const artifact = target;
+      // #193 E2 — the comprehension surfaces capture NO taste stance on reject
+      // (see LEDGER_EXEMPT_REJECT_TYPES): an explainer teaches existing code, a
+      // debrief accounts for finished work — neither proposes an approach. The
+      // plain `rejected` status still lands below; here we skip BOTH the
+      // ledger write and its `ledger_write` broadcast so nothing misreports a
+      // stance being remembered. recordRejectedApproach guards this
+      // authoritatively too — this is the belt to its suspenders.
+      if (artifact && LEDGER_EXEMPT_REJECT_TYPES.has(artifact.type)) {
+        // no-op — status flip only, no cross-project stance
+      } else if (artifact && artifact.type !== "decision") {
+        // The cross-project ledger key, in priority order:
+        //   1. the HUMAN-named concept from the reject prompt (the whole point
+        //      — the user phrases the pattern they're rejecting, so a future
+        //      paraphrase gets caught), then
+        //   2. AA1 — the artifact's own Y5-style concept (code_change carries
+        //      one today; spec/plan may in future), then
+        //   3. #171 — for a changeset, the changeset TITLE (it carries no
+        //      top-level concept). This records exactly ONE framing entry —
+        //      NO per-file fan-out, the exact over-block class #195's review
+        //      killed; demo isolation is inherited via recordRejectedApproach.
+        const artConcept: string | undefined = (artifact.content as any)?.concept?.name;
+        // Q2 review H2 — the changeset fallback is the ONE key here that no
+        // human ever authored: agents title changesets after the file they
+        // touch, so this used to publish "packages/api/src/auth/
+        // session-store.ts — swap Redis for a Map" verbatim into the shared
+        // ledger, from a UI promising no file paths leave the project. Strip
+        // the machine-generated path prefix (see concept-hygiene.ts for why
+        // this cannot cost recall — a path-laden key could never match another
+        // project's proposal in the first place). Applied ONLY here: a concept
+        // the human typed, or one the agent named via Y5, is kept verbatim.
+        const changesetFallback =
+          artifact.type === "changeset" ? stripLeadingPathToken(artifact.title) : undefined;
+        const concept = humanConcept?.trim() || artConcept || changesetFallback || undefined;
+        rejection = { description: artifact.title, reason: feedback?.trim() || undefined, sourceArtifactId: artifactId, concept };
+      } else if (artifact && artifact.type === "decision") {
+        // #169 (+F1) — a WHOLE-CARD decision rejection is the "wrong question /
+        // don't do this at all" gesture: the human rejects the FRAMING, not the
+        // individual options. So record ONE framing-level entry, NOT one per
+        // option. Fanning out per option (an earlier cut) poisoned every
+        // option's surface noun project-wide: rejecting "Which cache backend?"
+        // (Redis/Memcached/…) then surface-blocked a Redis job-queue edit, a
+        // docker `redis:` service, an `lru-cache` import — because the matcher
+        // pulls the post-colon noun ("…: Redis" → "redis") and matches it
+        // everywhere. Keying on the QUESTION instead means the concept lane
+        // catches a re-proposal of the same framing ("cache backend") while an
+        // unrelated Redis edit sails through. The per-option-with-a-pick signal
+        // still lives on the unchosen-losers path (check_feedback) and the
+        // "none of these fit" send-back — both of which name specific options.
+        //
+        // Concept key priority mirrors the non-decision path: (1) the
+        // HUMAN-named concept from the reject prompt (F3 — the whole point of
+        // the field; earlier this branch discarded it), then (2) the card's
+        // M1.1 SHORT title (the fork-naming question — a far tighter framing key
+        // than the full-paragraph context), then (3) the context/question.
+        // BACKCOMPAT: on a pre-M1 decision (no content.title) this collapses to
+        // `humanConcept?.trim() || context || undefined` — byte-identical to
+        // before, so no EXISTING ledger entry is re-keyed and the #195
+        // one-framing-entry semantics are untouched.
+        const content = artifact.content as { context?: string; title?: string } | null;
+        const context = content?.context?.trim() || artifact.title;
+        const concept = humanConcept?.trim() || content?.title?.trim() || context || undefined;
+        rejection = { description: artifact.title, reason: feedback?.trim() || undefined, sourceArtifactId: artifactId, concept };
+      }
+    }
+    if (rejection) await store.recordRejectedApproach(rejection);
+
     await store.updateArtifactStatus(artifactId, status, reason as any);
     // "obsolete" is a dismissal, not a plan-review verdict — don't resolve a
     // plan review with it (and it narrows status to the three verdicts).
@@ -1161,103 +1257,7 @@ export function createHttpRoutes(
       console.error(`[deepPairing] verdict flush failed (verdict landed in memory; debounced flush will retry): ${err}`);
     }
 
-    // When an artifact is rejected, remember the approach so pre-flight blocks
-    // any future re-proposal. reason is the feedback comment (required
-    // client-side).
-    if (status === "rejected") {
-      const artifacts = await store.getArtifacts();
-      const artifact = artifacts.find((a) => a.id === artifactId);
-      // #193 E2 — the comprehension surfaces capture NO taste stance on reject
-      // (see LEDGER_EXEMPT_REJECT_TYPES): an explainer teaches existing code, a
-      // debrief accounts for finished work — neither proposes an approach. The
-      // plain `rejected` status already landed above; here we skip BOTH the
-      // ledger write and its `ledger_write` broadcast so nothing misreports a
-      // stance being remembered. recordRejectedApproach guards this
-      // authoritatively too — this is the belt to its suspenders.
-      if (artifact && LEDGER_EXEMPT_REJECT_TYPES.has(artifact.type)) {
-        // no-op — status flip only, no cross-project stance
-      } else if (artifact && artifact.type !== "decision") {
-        // The cross-project ledger key, in priority order:
-        //   1. the HUMAN-named concept from the reject prompt (the whole point
-        //      — the user phrases the pattern they're rejecting, so a future
-        //      paraphrase gets caught), then
-        //   2. AA1 — the artifact's own Y5-style concept (code_change carries
-        //      one today; spec/plan may in future), then
-        //   3. #171 — for a changeset, the changeset TITLE (it carries no
-        //      top-level concept). This records exactly ONE framing entry —
-        //      NO per-file fan-out, the exact over-block class #195's review
-        //      killed; demo isolation is inherited via recordRejectedApproach.
-        const artConcept: string | undefined = (artifact.content as any)?.concept?.name;
-        // Q2 review H2 — the changeset fallback is the ONE key here that no
-        // human ever authored: agents title changesets after the file they
-        // touch, so this used to publish "packages/api/src/auth/
-        // session-store.ts — swap Redis for a Map" verbatim into the shared
-        // ledger, from a UI promising no file paths leave the project. Strip
-        // the machine-generated path prefix (see concept-hygiene.ts for why
-        // this cannot cost recall — a path-laden key could never match another
-        // project's proposal in the first place). Applied ONLY here: a concept
-        // the human typed, or one the agent named via Y5, is kept verbatim.
-        const changesetFallback =
-          artifact.type === "changeset" ? stripLeadingPathToken(artifact.title) : undefined;
-        const concept = humanConcept?.trim() || artConcept || changesetFallback || undefined;
-        await store.recordRejectedApproach({
-          description: artifact.title,
-          reason: feedback?.trim() || undefined,
-          sourceArtifactId: artifactId,
-          concept,
-        });
-        broadcast({
-          type: "ledger_write",
-          kind: "rejected",
-          description: artifact.title,
-          concept,
-          reason: feedback?.trim() || undefined,
-          sourceArtifactId: artifactId,
-        }, sid);
-      } else if (artifact && artifact.type === "decision") {
-        // #169 (+F1) — a WHOLE-CARD decision rejection is the "wrong question /
-        // don't do this at all" gesture: the human rejects the FRAMING, not the
-        // individual options. So record ONE framing-level entry, NOT one per
-        // option. Fanning out per option (an earlier cut) poisoned every
-        // option's surface noun project-wide: rejecting "Which cache backend?"
-        // (Redis/Memcached/…) then surface-blocked a Redis job-queue edit, a
-        // docker `redis:` service, an `lru-cache` import — because the matcher
-        // pulls the post-colon noun ("…: Redis" → "redis") and matches it
-        // everywhere. Keying on the QUESTION instead means the concept lane
-        // catches a re-proposal of the same framing ("cache backend") while an
-        // unrelated Redis edit sails through. The per-option-with-a-pick signal
-        // still lives on the unchosen-losers path (check_feedback) and the
-        // "none of these fit" send-back — both of which name specific options.
-        //
-        // Concept key priority mirrors the non-decision path: (1) the
-        // HUMAN-named concept from the reject prompt (F3 — the whole point of
-        // the field; earlier this branch discarded it), then (2) the card's
-        // M1.1 SHORT title (the fork-naming question — a far tighter framing key
-        // than the full-paragraph context), then (3) the context/question.
-        // BACKCOMPAT: on a pre-M1 decision (no content.title) this collapses to
-        // `humanConcept?.trim() || context || undefined` — byte-identical to
-        // before, so no EXISTING ledger entry is re-keyed and the #195
-        // one-framing-entry semantics are untouched.
-        const content = artifact.content as { context?: string; title?: string } | null;
-        const context = content?.context?.trim() || artifact.title;
-        const concept = humanConcept?.trim() || content?.title?.trim() || context || undefined;
-        await store.recordRejectedApproach({
-          description: artifact.title,
-          reason: feedback?.trim() || undefined,
-          sourceArtifactId: artifactId,
-          concept,
-        });
-        broadcast({
-          type: "ledger_write",
-          kind: "rejected",
-          description: artifact.title,
-          concept,
-          reason: feedback?.trim() || undefined,
-          sourceArtifactId: artifactId,
-        }, sid);
-      }
-    }
-
+    if (rejection) broadcast({ type: "ledger_write", kind: "rejected", ...rejection }, sid);
     broadcast({ type: "artifact_updated", artifactId, status }, sid);
 
     return c.json({ status: "updated", artifactId });

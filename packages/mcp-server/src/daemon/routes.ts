@@ -2,6 +2,7 @@
  * Internal API routes for daemon ↔ MCP wrapper communication.
  * These are called by DaemonClient, not by the web UI.
  */
+import { isFileLockError, lockBusyBody } from "../store/file-lock.js";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { z } from "zod";
@@ -179,6 +180,14 @@ function unexpectedRouteError(log: LogFn, c: Context, error: unknown): Response 
   return c.json({ error: "Internal server error" }, 500);
 }
 
+/** #406/#408 review — a busy cross-process lock is an operational state, not
+ *  a bug: answer 503 `lock_busy` (naming the lock and `deeppairing doctor`)
+ *  instead of a generic 500, and leave a line in daemon.log. */
+function lockBusyRouteError(log: LogFn, c: Context, error: NodeJS.ErrnoException & { path?: string }): Response {
+  log(`[route-error] ${c.req.method} ${c.req.path} → 503 lock_busy: ${error.message}`);
+  return c.json(lockBusyBody(error), 503);
+}
+
 /**
  * Y3' — sentinel returned by `requireStore()` when the session isn't
  * registered. The caller pattern is `const r = requireStore(c, sid); if
@@ -232,6 +241,7 @@ export function createActiveSessionRoutes(
 ): Hono {
   const app = new Hono();
   app.onError((error, c) => {
+    if (isFileLockError(error)) return lockBusyRouteError(logFn ?? (() => {}), c, error);
     if (isSessionReviewConflictError(error)) {
       return c.json({ error: "session_review_conflict", code: ERROR_CODES.session_review_conflict, message: error.message }, 409);
     }
@@ -326,6 +336,7 @@ export function createDaemonRoutes(
   const log: LogFn = logFn ?? (() => {});
   const app = new Hono();
   app.onError((error, c) => {
+    if (isFileLockError(error)) return lockBusyRouteError(log, c, error);
     if (isSessionReviewConflictError(error)) {
       return c.json({ error: "session_review_conflict", code: ERROR_CODES.session_review_conflict, message: error.message }, 409);
     }
