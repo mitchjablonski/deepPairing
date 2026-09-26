@@ -10,7 +10,7 @@ has the short version; this page is the detail, the caveats, and the
 > the hero flow against a real companion UI in ~90 seconds, no Claude Code
 > install needed.
 
-All the "from a clone" paths need the build first (Node 20.11+, 22+ recommended; pnpm 10+):
+All the "from a clone" paths need the build first — that requires **Node 20.19+ or 22.12+** (pnpm 10+), the floor set by the locked Vite 8/rolldown build toolchain. This is stricter than the runtime the *prebuilt* plugin below needs (Node 20.11+, see [option 1](#1-marketplace-plugin-recommended)) — building from source and running the shipped bundle have different Node requirements:
 
 ```bash
 git clone https://github.com/mitchjablonski/deepPairing.git

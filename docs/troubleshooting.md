@@ -135,7 +135,9 @@ persists, the daemon's bundled `dist/web` is stale — rebuild with
 ## Build / install fails on a fresh clone
 
 * **`pnpm install` fails with peer dependency warnings:** harmless on
-  Node 20.11+/pnpm 10+. The build still produces a working dist.
+  Node 20.19+/pnpm 10+ (the source-build floor set by the locked Vite
+  8/rolldown toolchain — see [INSTALL.md](../INSTALL.md)). The build still
+  produces a working dist.
 * **`pnpm build` succeeds but `node packages/mcp-server/dist/cli/init.js`
   errors:** check that `pnpm build` actually ran for the
   `@deeppairing/mcp-server` workspace. `pnpm --filter @deeppairing/mcp-server build`

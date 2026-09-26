@@ -32,7 +32,9 @@ Fires the hero flow against a real companion UI (auto-opens your browser), so
 you feel the whole loop before installing anything — the review surface, the
 read-only explainer walk-through and end-of-run debrief that make the change
 comprehensible, and the rejection gate that blocks a re-proposed approach.
-Node 20.11+ (22+ recommended, and what CI runs), pnpm 10+. (The ~90s assumes a
+Building from source (as above) needs Node 20.19+ or 22.12+ — the locked Vite
+8/rolldown toolchain's floor, not the 20.11+ the prebuilt plugin runs on — plus
+pnpm 10+. CI runs Node 22. (The ~90s assumes a
 warm pnpm store; a first-ever install adds ~60-90s of dependency downloads —
 see [the FAQ](docs/faq.md#whats-the-install-size-cold-clone-time).) Then, to use
 it in your own project: **[install in Claude Code ↓](#install-in-claude-code)**.
