@@ -773,6 +773,11 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
 
   submitComment: async (artifactId, content, target, options) => {
     assertNotReplay("Commenting");
+    // #407 — the same store-boundary fence as submitRequest (#393/#397): the
+    // binding this completion may write back into. Captured at the CALL, before
+    // the foreign-owner guard's await, so a switch during that await is
+    // fenced too. See `storeGeneration`.
+    const generationAtSubmit = storeGeneration;
     // Bug A — session-level (__session__) comments keep the tab binding and are
     // never foreign; artifact comments route to the owner, so guard on it.
     // Await only on the suspected-foreign path (keeps the provisional insert
@@ -807,7 +812,9 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       ...(options?.intent ? { intent: options.intent } : {}),
       ...(options?.suggestion ? { suggestion: options.suggestion } : {}),
     } as Comment;
-    useArtifactStore.getState().addComment(provisional);
+    // A reset during the guard's await means this call started in a store that
+    // is gone: still send it (the caller asked for it), but paint nothing here.
+    if (storeGeneration === generationAtSubmit) useArtifactStore.getState().addComment(provisional);
     try {
       const res = await safeFetch(`${apiBase()}/api/comments`, {
         method: "POST",
@@ -830,6 +837,15 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       // Reconcile: swap the provisional for the real (server-id'd) comment.
       let serverComment: Comment | null = null;
       try { serverComment = (await res.json())?.comment ?? null; } catch { /* keep provisional */ }
+      // #407 — the store was reset while this was in the air (a session switch,
+      // or a snapshot hydration). The provisional went with everything else,
+      // and the server comment belongs to the session we LEFT: reconciling it
+      // now painted A's comment into B's store, where the conversation rail
+      // shows every bucket, even one whose artifact B doesn't have. The POST
+      // itself stays durable (it carried A's routing header and the server kept
+      // it); a same-session hydration re-adds it from its snapshot or the
+      // `comment_added` echo, deduped by id.
+      if (storeGeneration !== generationAtSubmit) return;
       set((state) => {
         const list = (state.comments[artifactId] ?? []).filter((c) => c.id !== provisional.id);
         const next =
@@ -839,6 +855,12 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
         return { comments: { ...state.comments, [artifactId]: next } };
       });
     } catch (err) {
+      // #407 — the FAILURE half of the fence (as submitRequest's): nothing of
+      // this call is left to roll back, and the rollback's `[artifactId]: []`
+      // would plant an empty stale bucket in the new store; an old session's
+      // failure must not toast in the new one either. Rethrow unchanged so the
+      // caller (the composer keeps its draft) still learns it failed.
+      if (storeGeneration !== generationAtSubmit) throw err;
       // Roll back ONLY the provisional so a failed send doesn't leave a phantom
       // — without discarding comments that arrived over the WS in the meantime.
       set((state) => ({

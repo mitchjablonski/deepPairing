@@ -903,3 +903,142 @@ describe("#393 review (Sol 2) — submitRequest reconciliation is fenced at the 
     expect(toasts[0]!.kind).toBe("error");
   });
 });
+
+describe("#407 — submitComment reconciliation is fenced at the store boundary", () => {
+  const ok = (body: unknown) =>
+    new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+  const serverComment = (id: string, artifactId: string, content: string, extra: Partial<Comment> = {}) =>
+    comment(id, artifactId, { content, ...extra });
+  function deferred() {
+    let resolve!: (r: Response) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<Response>((res, rej) => { resolve = res; reject = rej; });
+    return { promise, resolve, reject };
+  }
+  async function bindS1() {
+    const { useConnectionStore } = await import("../connection");
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    const switched: string[] = [];
+    useConnectionStore.setState({
+      sessionId: "s1",
+      adapter: { switchSession: (id: string) => switched.push(id) },
+    } as any);
+    const switchTo = async (id: string) => {
+      const n = switched.length;
+      useConnectionStore.getState().switchSession(id);
+      await vi.waitFor(() => expect(switched).toHaveLength(n + 1));
+    };
+    return { switchTo, toasts: () => useToastStore.getState().toasts };
+  }
+  afterEach(async () => {
+    const { useConnectionStore } = await import("../connection");
+    useConnectionStore.setState({ adapter: null, sessionId: null } as any);
+  });
+
+  it("SUCCESS after a real switchSession: A's comment is NOT painted into B's store", async () => {
+    const { switchTo, toasts } = await bindS1();
+    const d = deferred();
+    vi.stubGlobal("fetch", vi.fn(() => d.promise));
+    const submitted = useArtifactStore.getState().submitComment("a_old", "A's note");
+    expect(useArtifactStore.getState().comments.a_old).toHaveLength(1); // provisional
+    await switchTo("s2");
+    expect(useArtifactStore.getState().comments).toEqual({});
+    d.resolve(ok({ comment: serverComment("c_old_session", "a_old", "A's note") }));
+    await expect(submitted).resolves.toBeUndefined(); // the caller's success is unchanged
+    expect(useArtifactStore.getState().comments).toEqual({});
+    expect(toasts()).toHaveLength(0);
+  });
+
+  it("SUCCESS in the same session: the provisional still reconciles to the server comment", async () => {
+    await bindS1();
+    const d = deferred();
+    vi.stubGlobal("fetch", vi.fn(() => d.promise));
+    const submitted = useArtifactStore.getState().submitComment("a1", "note");
+    d.resolve(ok({ comment: serverComment("c_same", "a1", "note") }));
+    await submitted;
+    expect(useArtifactStore.getState().comments.a1!.map((c) => c.id)).toEqual(["c_same"]);
+    // The WS echo still collapses into the one record (dedupe by id).
+    useArtifactStore.getState().addComment(serverComment("c_same", "a1", "note"));
+    expect(useArtifactStore.getState().comments.a1).toHaveLength(1);
+  });
+
+  it("FAILURE after a real switchSession: no rollback bucket, no toast in B, B's own comment untouched; the caller still rejects", async () => {
+    const { switchTo, toasts } = await bindS1();
+    const dA = deferred();
+    vi.stubGlobal("fetch", vi.fn()
+      .mockReturnValueOnce(dA.promise)
+      .mockReturnValueOnce(new Promise<Response>(() => { /* B stays in flight */ })));
+    const submittedA = useArtifactStore.getState().submitComment("a_shared", "A's note");
+    await switchTo("s2");
+    void useArtifactStore.getState().submitComment("a_shared", "B's note");
+    dA.reject(new TypeError("Failed to fetch"));
+    await expect(submittedA).rejects.toMatchObject({ code: "network_error" });
+    const list = useArtifactStore.getState().comments.a_shared!;
+    expect(list.map((c) => c.content)).toEqual(["B's note"]);
+    expect(toasts()).toHaveLength(0);
+  });
+
+  it("FAILURE after a switch leaves no empty stale bucket for an artifact B never had", async () => {
+    const { switchTo } = await bindS1();
+    const d = deferred();
+    vi.stubGlobal("fetch", vi.fn(() => d.promise));
+    const submitted = useArtifactStore.getState().submitComment("a_only_in_A", "A's note");
+    await switchTo("s2");
+    d.reject(new TypeError("Failed to fetch"));
+    await expect(submitted).rejects.toBeTruthy();
+    expect("a_only_in_A" in useArtifactStore.getState().comments).toBe(false);
+  });
+
+  it("FAILURE in the same session: surgical rollback + an error toast (unchanged)", async () => {
+    const { toasts } = await bindS1();
+    useArtifactStore.getState().addComment(comment("c_keep", "a1"));
+    const d = deferred();
+    vi.stubGlobal("fetch", vi.fn(() => d.promise));
+    const submitted = useArtifactStore.getState().submitComment("a1", "doomed");
+    d.reject(new TypeError("Failed to fetch"));
+    await expect(submitted).rejects.toBeTruthy();
+    expect(useArtifactStore.getState().comments.a1!.map((c) => c.id)).toEqual(["c_keep"]);
+    expect(toasts().some((t) => /comment/i.test(t.title))).toBe(true);
+  });
+
+  it("a session-level (__session__) reply started in A stays out of B", async () => {
+    const { switchTo, toasts } = await bindS1();
+    const d = deferred();
+    vi.stubGlobal("fetch", vi.fn(() => d.promise));
+    const submitted = useArtifactStore.getState().submitComment("__session__", "A's reply", undefined, { parentCommentId: "q_A" });
+    await switchTo("s2");
+    d.resolve(ok({ comment: serverComment("c_sess_A", "__session__", "A's reply", { parentCommentId: "q_A" }) }));
+    await submitted;
+    expect(useArtifactStore.getState().comments.__session__).toBeUndefined();
+    expect(toasts()).toHaveLength(0);
+  });
+
+  it("A → B → A: the late completion does not repaint; the returning session's echo adds it exactly once", async () => {
+    const { switchTo } = await bindS1();
+    const d = deferred();
+    vi.stubGlobal("fetch", vi.fn(() => d.promise));
+    const submitted = useArtifactStore.getState().submitComment("a1", "round trip");
+    await switchTo("s2");
+    await switchTo("s1");
+    d.resolve(ok({ comment: serverComment("c_rt", "a1", "round trip") }));
+    await submitted;
+    expect(useArtifactStore.getState().comments.a1).toBeUndefined();
+    // Back in A, the record arrives through A's snapshot / comment_added echo.
+    useArtifactStore.getState().addComment(serverComment("c_rt", "a1", "round trip"));
+    useArtifactStore.getState().addComment(serverComment("c_rt", "a1", "round trip"));
+    expect(useArtifactStore.getState().comments.a1!.map((c) => c.id)).toEqual(["c_rt"]);
+  });
+
+  it("a same-session HYDRATION (reset) mid-flight is fenced too; the snapshot is authoritative", async () => {
+    await bindS1();
+    const d = deferred();
+    vi.stubGlobal("fetch", vi.fn(() => d.promise));
+    const submitted = useArtifactStore.getState().submitComment("a1", "hydrated");
+    useArtifactStore.getState().reset();
+    useArtifactStore.getState().addComment(serverComment("c_h", "a1", "hydrated")); // from the snapshot
+    d.resolve(ok({ comment: serverComment("c_h", "a1", "hydrated") }));
+    await submitted;
+    expect(useArtifactStore.getState().comments.a1!.map((c) => c.id)).toEqual(["c_h"]);
+  });
+});
