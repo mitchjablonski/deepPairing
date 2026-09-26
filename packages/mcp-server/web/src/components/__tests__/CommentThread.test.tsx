@@ -113,7 +113,7 @@ describe("AskTrigger popover — U3 outside-click / Escape dismiss", () => {
     await userEvent.click(screen.getByRole("button", { name: /ask the agent/i }));
     expect(screen.getByPlaceholderText(/ask the agent to explain/i)).toBeInTheDocument();
 
-    fireEvent.mouseDown(screen.getByRole("button", { name: "outside" }));
+    await userEvent.click(screen.getByRole("button", { name: "outside" }));
     expect(screen.queryByPlaceholderText(/ask the agent to explain/i)).not.toBeInTheDocument();
 
     // reopen, then Escape
