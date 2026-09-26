@@ -13,6 +13,13 @@ import { useEffect, useRef, type RefObject } from "react";
  * from one comment box to the next one below it. The mousedown is still
  * recorded so a press that STARTED inside (a text selection dragged past the
  * edge) doesn't count as an outside click.
+ *
+ * Both listeners run in the CAPTURE phase. Many outside controls call
+ * `stopPropagation()` in their onClick (e.g. OptionCard's Ask wrapper), and in
+ * the bubble phase that silently kept this popover open, so two popovers stacked
+ * up. Capture also runs before any React handler, so the target can't have been
+ * detached yet, and the click that OPENED the popover has already passed
+ * the document by the time this listener attaches.
  */
 export function useDismissOnOutside(
   ref: RefObject<HTMLElement | null>,
@@ -36,12 +43,12 @@ export function useDismissOnOutside(
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") cb.current();
     };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("click", onClick);
+    document.addEventListener("mousedown", onDown, true);
+    document.addEventListener("click", onClick, true);
     document.addEventListener("keydown", onKey);
     return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("click", onClick);
+      document.removeEventListener("mousedown", onDown, true);
+      document.removeEventListener("click", onClick, true);
       document.removeEventListener("keydown", onKey);
     };
   }, [ref, active]);

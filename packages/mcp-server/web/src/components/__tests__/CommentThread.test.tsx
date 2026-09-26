@@ -123,6 +123,38 @@ describe("AskTrigger popover — U3 outside-click / Escape dismiss", () => {
     expect(screen.queryByPlaceholderText(/ask the agent to explain/i)).not.toBeInTheDocument();
   });
 
+  it("opening a second Ask closes the first even when its wrapper stops propagation (OptionCard pattern)", async () => {
+    render(
+      <div>
+        <div onClick={(e) => e.stopPropagation()}>
+          <AskTrigger artifactId="art_1" target={{ optionId: "a" }} />
+        </div>
+        <div onClick={(e) => e.stopPropagation()}>
+          <AskTrigger artifactId="art_1" target={{ optionId: "b" }} />
+        </div>
+      </div>,
+    );
+    const [a, b] = screen.getAllByRole("button", { name: /ask the agent/i });
+    await userEvent.click(a!);
+    expect(screen.getAllByPlaceholderText(/ask the agent to explain/i)).toHaveLength(1);
+    await userEvent.click(b!);
+    // a bubble-phase document listener never saw this click → both stayed open
+    expect(screen.getAllByPlaceholderText(/ask the agent to explain/i)).toHaveLength(1);
+  });
+
+  it("a CommentTrigger closes when an outside control stops propagation", async () => {
+    render(
+      <div>
+        <CommentTrigger artifactId="art_1" target={{ stepIndex: 0 }} existingCount={0} />
+        <button onClick={(e) => e.stopPropagation()}>chip</button>
+      </div>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /add a comment/i }));
+    expect(screen.getByRole("textbox")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "chip" }));
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
   it("keeps the popover open + text on a failed send (no stuck 'sending')", async () => {
     const { useArtifactStore } = await import("../../stores/artifact");
     vi.spyOn(useArtifactStore.getState(), "submitComment").mockRejectedValue(new Error("network"));
