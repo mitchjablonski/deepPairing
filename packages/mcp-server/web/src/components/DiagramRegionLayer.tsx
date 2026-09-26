@@ -105,6 +105,9 @@ export function DiagramRegionLayer({
   // #185 — the WELL's own size (the positioned wrapper, overlay inset-0), so the
   // popover math clamps to the well the pins are drawn in. jsdom returns zeros.
   const [wellSize, setWellSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  // #410 — the diagram host's own height (the wrapper minus the tiny-well
+  // spacer below), so the spacer can be sized without measuring itself.
+  const [hostHeight, setHostHeight] = useState(0);
   /**
    * Q4 review (H2) — the VISIBLE window onto the well.
    *
@@ -239,6 +242,8 @@ export function DiagramRegionLayer({
     if (wrap) {
       const w = wrap.getBoundingClientRect();
       setWellSize({ width: w.width, height: w.height });
+      const hh = hostRef.current?.getBoundingClientRect().height ?? 0;
+      setHostHeight((prev) => (prev === hh ? prev : hh));
       if (el) {
         const s = el.getBoundingClientRect();
         setBox({ left: s.left - w.left, top: s.top - w.top, width: s.width, height: s.height });
@@ -246,7 +251,7 @@ export function DiagramRegionLayer({
     }
     syncScroll();
     measureInsets();
-  }, [svgEl, syncScroll, measureInsets]);
+  }, [svgEl, syncScroll, measureInsets, hostRef]);
 
   useLayoutEffect(() => {
     measure();
@@ -497,6 +502,19 @@ export function DiagramRegionLayer({
   // short for even that, the composer stays whole and the box overflows the
   // well instead of clipping the textarea behind an inner scrollbar.
   const popoverMaxHeight = Math.max(160, popoverFloor, usable.height - 2 * POPOVER_GAP);
+  // #410 — a TINY diagram (a two-node LR graph renders an ~88px well) is
+  // shorter than the popover's floor (header + composer, ~181px), so no
+  // placement fits and the scrollport clipped the box: Send sat 83px below the
+  // well's bottom, reachable only by scrolling a well nothing said could
+  // scroll. Rather than let the box escape the well (and lose the #405
+  // bounds), GROW the well while a popover is open: an in-flow spacer under
+  // the diagram tops the wrapper up to floor + 2·gap, the scrollport follows
+  // (it is content-sized up to its 60vh cap), and the box fits by the same
+  // math as everywhere else. Sized from the HOST, not the wrapper it grows,
+  // so it never measures itself; 0 for any diagram already tall enough, and
+  // gone on close, so the well returns to its natural height.
+  const wellSpacer =
+    active && !narrow ? Math.max(0, Math.ceil(Math.max(160, popoverFloor) + 2 * POPOVER_GAP - hostHeight)) : 0;
   // #403 review — the cap now moves with the PAGE (scrolling the pane slides
   // the Approve bar over the well), but the body only scrolled to its bottom on
   // open and after your own send: a shrinking cap kept scrollTop, so the
@@ -974,6 +992,7 @@ export function DiagramRegionLayer({
           {renderComposerInner(true)}
         </div>
       )}
+      {wellSpacer > 0 && <div aria-hidden="true" data-testid="dp-region-well-spacer" style={{ height: wellSpacer }} />}
     </>
   );
 
