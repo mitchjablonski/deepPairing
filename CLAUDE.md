@@ -77,6 +77,7 @@ Release version bumps must update all four version sources in one commit — `sr
   }
 }
 ```
+Run `pnpm install && pnpm build` first — the server imports `@deeppairing/shared` from its `dist/`, and the daemon it spawns always runs the built `dist/daemon/index.js` (so rebuild after daemon changes, or it runs stale code).
 
 **From another project** — use `node` with the built dist and absolute path:
 ```json
