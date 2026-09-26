@@ -60,6 +60,15 @@ const clamp = (v: number, min: number, max: number): number =>
  *
  * The horizontal position for below/above aligns the popover's left edge to the
  * rect's left, then clamps so the popover never spills past the well's edges.
+ *
+ * #403 — the rect may lie OUTSIDE the well: the caller passes it in scrollport
+ * coordinates, so a region scrolled out of view (then the well shrunk by a
+ * window resize) has rect.top > well.height or a negative bottom. "Above" only
+ * checked its top edge (≥ 0), so it returned a box whose bottom sat gap-above
+ * an off-screen anchor — measured 83px, then 195px, past the well. Every
+ * vertical result is therefore clamped into the well too; for an in-view rect
+ * the fit checks already guarantee this, so the clamp is a no-op there, and
+ * for an off-screen one it follows the region's nearest visible edge.
  */
 export function positionPopover(
   rect: PopoverRect,
@@ -69,34 +78,37 @@ export function positionPopover(
 ): PopoverPosition {
   const maxLeft = Math.max(0, well.width - popover.width);
   const alignedLeft = clamp(rect.left, 0, maxLeft);
+  const maxTop = Math.max(0, well.height - popover.height);
 
-  // 1 — below
+  // 1 — below (clamped: a rect scrolled out ABOVE the well has belowTop < 0)
   const belowTop = rect.top + rect.height + gap;
   if (belowTop + popover.height <= well.height) {
-    return { left: alignedLeft, top: belowTop, placement: "below" };
+    return { left: alignedLeft, top: clamp(belowTop, 0, maxTop), placement: "below" };
   }
 
-  // 2 — above
+  // 2 — above (clamped: a rect scrolled out BELOW the well puts this box's
+  // bottom past the well's — #403)
   const aboveTop = rect.top - gap - popover.height;
   if (aboveTop >= 0) {
-    return { left: alignedLeft, top: aboveTop, placement: "above" };
+    return { left: alignedLeft, top: clamp(aboveTop, 0, maxTop), placement: "above" };
   }
 
-  // 3 — beside (right, else left). Vertically clamped into the well.
-  const besideTop = clamp(rect.top, 0, Math.max(0, well.height - popover.height));
+  // 3 — beside (right, else left). Clamped into the well on both axes (the
+  // horizontal clamp only bites for a rect scrolled out sideways).
+  const besideTop = clamp(rect.top, 0, maxTop);
   const rightLeft = rect.left + rect.width + gap;
   if (rightLeft + popover.width <= well.width) {
-    return { left: rightLeft, top: besideTop, placement: "right" };
+    return { left: clamp(rightLeft, 0, maxLeft), top: besideTop, placement: "right" };
   }
   const leftLeft = rect.left - gap - popover.width;
   if (leftLeft >= 0) {
-    return { left: leftLeft, top: besideTop, placement: "left" };
+    return { left: clamp(leftLeft, 0, maxLeft), top: besideTop, placement: "left" };
   }
 
   // 4 — nothing fits: clamp a below placement so the coords stay in-bounds.
   return {
     left: alignedLeft,
-    top: clamp(belowTop, 0, Math.max(0, well.height - popover.height)),
+    top: clamp(belowTop, 0, maxTop),
     placement: "below",
   };
 }

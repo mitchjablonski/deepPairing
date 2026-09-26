@@ -600,7 +600,9 @@ export function ArtifactStatusActions({
     return (
       <>
         <div ref={sentinelRef} aria-hidden className="h-px" />
-        <div className="sticky bottom-0 z-10 -mb-1 pb-1 bg-surface-primary pt-3 border-t border-border-default">
+        {/* #403 — data-dp-sticky-chrome: pinned over the pane, so a diagram
+            popover measures it out of its usable bounds (DiagramRegionLayer). */}
+        <div data-dp-sticky-chrome="" className="sticky bottom-0 z-10 -mb-1 pb-1 bg-surface-primary pt-3 border-t border-border-default">
           <div className="flex items-center gap-2 pb-1">
             <button
               onClick={handleAcknowledge}
@@ -643,7 +645,8 @@ export function ArtifactStatusActions({
           ⇒ show the full panel. While it's off-screen the footer floats in
           compact form. */}
       <div ref={sentinelRef} aria-hidden className="h-px" />
-      <div className="sticky bottom-0 z-10 -mb-1 pb-1 bg-surface-primary pt-3 border-t border-border-default space-y-2" /* solid bg: content ghosted readably through the old /95+blur edge */>
+      {/* #403 — pinned over the pane: a diagram popover keeps clear of it. */}
+      <div data-dp-sticky-chrome="" className="sticky bottom-0 z-10 -mb-1 pb-1 bg-surface-primary pt-3 border-t border-border-default space-y-2" /* solid bg: content ghosted readably through the old /95+blur edge */>
       {/* H1 (#202) — the open-suggestion approve gate. Shown in place of a silent
           commit; naming the open states so the human knows what approving
           abandons. "Approve anyway" is their explicit call (bypasses the gate);
