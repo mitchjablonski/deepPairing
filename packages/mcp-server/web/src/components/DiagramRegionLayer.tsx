@@ -415,6 +415,15 @@ export function DiagramRegionLayer({
     return () => ro.disconnect();
   }, [active, narrow, measurePopover]);
 
+  /** #403 review — whether the thread body was scrolled to its bottom (the
+   *  composer in view) as of its last scroll. Read by the cap effect below,
+   *  which runs AFTER the box has already shrunk — too late to measure then. */
+  const bodyAtBottom = useRef(true);
+  const onBodyScroll = useCallback(() => {
+    const body = popoverBodyRef.current;
+    if (body) bodyAtBottom.current = body.scrollHeight - body.clientHeight - body.scrollTop <= 4;
+  }, []);
+
   // #185 long-thread fix — the composer textarea is the LAST thing in the
   // thread, so a capped popover opens showing the oldest comments with the
   // composer below the fold. Scroll the popover's own body (NOT scrollIntoView,
@@ -424,6 +433,7 @@ export function DiagramRegionLayer({
     const body = popoverBodyRef.current;
     if (!body) return;
     body.scrollTop = body.scrollHeight;
+    bodyAtBottom.current = true;
   }, [active, narrow]);
 
   // #403 — keep the insets live while a popover is open: any ancestor scroll
@@ -487,6 +497,17 @@ export function DiagramRegionLayer({
   // short for even that, the composer stays whole and the box overflows the
   // well instead of clipping the textarea behind an inner scrollbar.
   const popoverMaxHeight = Math.max(160, popoverFloor, usable.height - 2 * POPOVER_GAP);
+  // #403 review — the cap now moves with the PAGE (scrolling the pane slides
+  // the Approve bar over the well), but the body only scrolled to its bottom on
+  // open and after your own send: a shrinking cap kept scrollTop, so the
+  // composer sank below the body's fold (measured 101 → 2.5px visible). Stick
+  // to the bottom when you were there; a reader scrolled up to older comments
+  // is left where they are.
+  useLayoutEffect(() => {
+    if (!active || narrow) return;
+    const body = popoverBodyRef.current;
+    if (body && bodyAtBottom.current) body.scrollTop = body.scrollHeight;
+  }, [active, narrow, popoverMaxHeight]);
   const anchoredPos = (() => {
     if (!activePxRect || narrow) return null;
     // Into usable-area coordinates (scrollport, less the #403 insets), place,
@@ -792,7 +813,12 @@ export function DiagramRegionLayer({
   // The narrow-viewport block placement is in-flow and must stay unwrapped.
   const wrapThread = (draggable: boolean, thread: React.ReactNode): React.ReactNode =>
     draggable ? (
-      <div className="min-h-0 overflow-y-auto" data-testid="dp-region-popover-body" ref={popoverBodyRef}>
+      <div
+        className="min-h-0 overflow-y-auto"
+        data-testid="dp-region-popover-body"
+        ref={popoverBodyRef}
+        onScroll={onBodyScroll}
+      >
         {thread}
       </div>
     ) : (

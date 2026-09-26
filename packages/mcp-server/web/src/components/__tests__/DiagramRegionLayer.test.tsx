@@ -766,6 +766,47 @@ describe("DiagramRegionLayer (region-anchored diagram comments)", () => {
       expect(bottomOf(popover)).toBeLessThanOrEqual(420);
     });
 
+    /** Open HIGH_REGION in a pane, then give the thread body a real scroll
+     *  box (900px of thread in a 400px body) scrolled to `scrollTop`. */
+    async function openScrolledBody(footer: { top: number }, scrollTop: number) {
+      mountInPane(footer);
+      await waitFor(() => expect(document.querySelector(".dp-mermaid svg")).not.toBeNull());
+      clickAt(screen.getByTestId("dp-region-overlay"), 150, 90);
+      const popover = await screen.findByTestId("dp-region-popover");
+      const body = popover.querySelector('[data-testid="dp-region-popover-body"]') as HTMLElement;
+      let scrollHeight = 900;
+      Object.defineProperty(body, "scrollHeight", { configurable: true, get: () => scrollHeight });
+      Object.defineProperty(body, "clientHeight", { configurable: true, get: () => 400 });
+      body.scrollTop = scrollTop;
+      fireEvent.scroll(body);
+      return { popover, body, setScrollHeight: (h: number) => (scrollHeight = h) };
+    }
+    const scrollPane = () =>
+      act(() => {
+        (document.querySelector("[data-dp-pane]") as HTMLElement).dispatchEvent(new Event("scroll"));
+      });
+
+    it("PAGE-SCROLL CAP: a cap shrinking under the page keeps a bottom-scrolled thread stuck to its composer", async () => {
+      const footer = { top: 700 };
+      const { popover, body, setScrollHeight } = await openScrolledBody(footer, 500); // at the bottom
+      // The pane scrolls the Approve bar over the well: the cap shrinks, the
+      // body's fold rises — scrollTop must follow the bottom, or Send sinks.
+      setScrollHeight(950);
+      footer.top = 450;
+      scrollPane();
+      expect(popover.style.maxHeight).toBe(`${450 - 2 * POPOVER_GAP}px`);
+      expect(body.scrollTop).toBe(950);
+    });
+
+    it("PAGE-SCROLL CAP: a reader scrolled UP to older comments is not yanked when the cap changes", async () => {
+      const footer = { top: 700 };
+      const { popover, body } = await openScrolledBody(footer, 100); // reading older comments
+      footer.top = 450;
+      scrollPane();
+      expect(popover.style.maxHeight).toBe(`${450 - 2 * POPOVER_GAP}px`);
+      expect(body.scrollTop).toBe(100);
+    });
+
     it("SHRUNKEN WELL: a region scrolled out below a well the window then shrinks never pushes the popover past it", async () => {
       const fire = installFakeResizeObserver();
       mockPopoverGeometry(800, 600, { popover: 180, body: 140, composer: 120 });
