@@ -77,6 +77,29 @@ jobs:
         # porcelain catches both modified and untracked.
         run: test -z "$(git -c core.filemode=false status --porcelain -- claude-plugin/server)" || (git -c core.filemode=false status --porcelain -- claude-plugin/server && echo "::error::claude-plugin/server is stale — run 'pnpm build:clean' (NOT a warm 'pnpm build', which can serve a cached bundle CI can't reproduce) and commit the result" && exit 1)
 
+  # #409 — continuously enforce the documented source-install Node floor
+  # (INSTALL.md), rather than letting it drift back into a one-off local
+  # verification. No test suite here on purpose: keep this job cheap.
+  node-floor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20.19.0
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Lint (locked eslint is the tightest constraint at this floor)
+        run: pnpm lint
+
   e2e:
     runs-on: ubuntu-latest
     steps:
