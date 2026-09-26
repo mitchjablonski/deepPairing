@@ -662,7 +662,9 @@ describe("DiagramRegionLayer (region-anchored diagram comments)", () => {
       let scrollHeight = 900;
       Object.defineProperty(body, "scrollHeight", { configurable: true, get: () => scrollHeight });
       // An AGENT reply lands while you read older comments: leave your scroll alone.
+      // (The scroll event is what a real browser fires for that scroll-up.)
       body.scrollTop = 0;
+      fireEvent.scroll(body);
       act(() =>
         addRegion("rc_low_agent", LOW_REGION, undefined, { author: "agent", createdAt: "2026-06-19T00:00:00.000Z" }),
       );
@@ -804,6 +806,24 @@ describe("DiagramRegionLayer (region-anchored diagram comments)", () => {
       footer.top = 450;
       scrollPane();
       expect(popover.style.maxHeight).toBe(`${450 - 2 * POPOVER_GAP}px`);
+      expect(body.scrollTop).toBe(100);
+    });
+
+    it("PINNED THREAD: an AGENT reply landing while you sit at the composer keeps the body pinned to it", async () => {
+      const { body, setScrollHeight } = await openScrolledBody({ top: 700 }, 500); // at the bottom
+      setScrollHeight(1100);
+      act(() =>
+        addRegion("rc_high_agent", HIGH_REGION, undefined, { author: "agent", createdAt: "2026-06-19T00:00:00.000Z" }),
+      );
+      expect(body.scrollTop).toBe(1100);
+    });
+
+    it("PINNED THREAD: an agent reply does NOT yank a reader scrolled up to older comments", async () => {
+      const { body, setScrollHeight } = await openScrolledBody({ top: 700 }, 100);
+      setScrollHeight(1100);
+      act(() =>
+        addRegion("rc_high_agent", HIGH_REGION, undefined, { author: "agent", createdAt: "2026-06-19T00:00:00.000Z" }),
+      );
       expect(body.scrollTop).toBe(100);
     });
 

@@ -631,6 +631,23 @@ export function DiagramRegionLayer({
     ? activeRegionComments.reduce((a, b) => (b.createdAt > a.createdAt ? b : a)).author
     : null;
   const sentBaseline = useRef<{ key: string; count: number }>({ key: activeKey, count: activeThreadCount });
+  // #405 review — a comment landing while the body is PINNED at its bottom
+  // (you're at the composer) keeps it pinned, whoever wrote it. Without this, an
+  // agent reply grew the thread under a pinned body and Chromium's scroll
+  // anchoring held the old content in place: the composer slid down to 60px
+  // visible, Send covered, and the anchoring's own scroll event then recorded
+  // "not at bottom" so nothing re-pinned it. A LAYOUT effect reads the flag
+  // after the DOM grows but before the browser lays out and dispatches that
+  // scroll event, so the flag is still the pre-growth truth. A reader scrolled
+  // up (flag false) stays put — the reason #185 followed human sends only.
+  const pinBaseline = useRef<{ key: string; count: number }>({ key: activeKey, count: activeThreadCount });
+  useLayoutEffect(() => {
+    const base = pinBaseline.current;
+    pinBaseline.current = { key: activeKey, count: activeThreadCount };
+    if (!active || narrow || base.key !== activeKey || activeThreadCount <= base.count) return;
+    const body = popoverBodyRef.current;
+    if (body && bodyAtBottom.current) body.scrollTop = body.scrollHeight;
+  }, [active, narrow, activeKey, activeThreadCount]);
   // The pending wait for the send's disabled textarea to re-enable (see below).
   const refocusWait = useRef<MutationObserver | null>(null);
   useEffect(
