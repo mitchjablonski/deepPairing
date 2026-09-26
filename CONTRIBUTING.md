@@ -33,7 +33,7 @@ cd packages/mcp-server && npx vitest
 node packages/mcp-server/dist/cli/init.js demo
 ```
 
-Requires Node 20.19+ or 22.12+ (the locked build toolchain's floor; CI runs Node 22) and pnpm 10+. Cold-clone wall time is ~60-90s on `pnpm install`, ~10s on the build, ~5s on the demo.
+Requires Node 20.19+, 22.13+, or 24+ (the locked toolchain's floor — see [INSTALL.md](INSTALL.md); CI runs Node 22) and pnpm 10+. Cold-clone wall time is ~60-90s on `pnpm install`, ~10s on the build, ~5s on the demo.
 
 ### Regenerating the committed plugin bundle
 
