@@ -845,6 +845,46 @@ describe("DiagramRegionLayer (region-anchored diagram comments)", () => {
       expect(parseFloat(popover.style.top) + 180).toBeLessThanOrEqual(336);
     });
 
+    // --- #410: a diagram shorter than the popover's floor GROWS its well ----
+    /** mockPopoverGeometry plus the diagram HOST's own height (the `.dp-mermaid`
+     *  div) — the natural well before any spacer. */
+    function mockHostGeometry(hostH: number, h: { popover: number; body: number; composer: number }) {
+      const rect = (w: number, hh: number) =>
+        ({ x: 0, y: 0, left: 0, top: 0, right: w, bottom: hh, width: w, height: hh, toJSON() {} }) as DOMRect;
+      vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+        const id = this.getAttribute?.("data-testid");
+        if (id === "dp-region-popover") return rect(400, h.popover);
+        if (id === "dp-region-popover-body") return rect(400, h.body);
+        if (this.firstElementChild?.tagName === "TEXTAREA") return rect(400, h.composer);
+        if (this.classList?.contains("dp-mermaid")) return rect(800, hostH);
+        if (this.getAttribute?.("aria-label") === "diagram") return rect(800, hostH);
+        if (this.querySelector?.('[data-testid="dp-region-overlay"]')) return rect(800, hostH);
+        return rect(0, 0);
+      });
+    }
+
+    it("TINY WELL: an open popover grows the well to its floor + 2·gap, and the well shrinks back on close", async () => {
+      // A two-node LR diagram: ~87px. Floor = header/padding (230-190) + composer 150 = 190.
+      mockHostGeometry(87, { popover: 230, body: 190, composer: 150 });
+      const { overlay } = await mountInteractive();
+      completeDrag(overlay, { x: 10, y: 10 }, { x: 200, y: 60 });
+      await screen.findByTestId("dp-region-popover");
+      const spacer = screen.getByTestId("dp-region-well-spacer");
+      // In flow under the diagram (NOT absolute), so the content-sized scrollport grows with it.
+      expect(spacer.style.position).toBe("");
+      expect(spacer.style.height).toBe(`${190 + 2 * POPOVER_GAP - 87}px`);
+      fireEvent.click(screen.getByRole("button", { name: /cancel region comment/i }));
+      expect(screen.queryByTestId("dp-region-well-spacer")).toBeNull();
+    });
+
+    it("TALL WELL: a diagram already taller than the floor gets no spacer (the #401 cap path is unchanged)", async () => {
+      mockHostGeometry(600, { popover: 230, body: 190, composer: 150 });
+      const { overlay } = await mountInteractive();
+      completeDrag(overlay);
+      await screen.findByTestId("dp-region-popover");
+      expect(screen.queryByTestId("dp-region-well-spacer")).toBeNull();
+    });
+
     // --- Behavior 4: click a posted region highlight → reopen its thread ----
     it("CLICK-TO-REOPEN: clicking inside a posted region re-opens that region's thread", async () => {
       mockGeometry(800, 600);
