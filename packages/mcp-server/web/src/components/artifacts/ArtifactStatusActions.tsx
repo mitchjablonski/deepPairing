@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { Artifact } from "@deeppairing/shared";
-import { useArtifactStore } from "../../stores/artifact";
+import { useArtifactStore, getStoreGeneration } from "../../stores/artifact";
 import { useConnectionStore } from "../../stores/connection";
 import { useReplayStore } from "../../stores/replay";
 import { useCrossProjectStore } from "../../stores/crossProject";
@@ -491,7 +491,13 @@ export function ArtifactStatusActions({
       // Submit comment alongside the action if the user typed one
       const trimmedComment = comment.trim();
       if (trimmedComment) {
+        const generation = getStoreGeneration();
         await submitComment(artifact.id, trimmedComment);
+        // #407 review — the session changed while the comment was in the air
+        // (it still went to THIS artifact's session). The status half must not
+        // follow: it would post this artifact's id under the NEW binding. Stop
+        // without claiming success — no actionSucceeded, so the draft is kept.
+        if (getStoreGeneration() !== generation) return;
       }
       // On reject, carry the human-named pattern as the ledger key (empty →
       // server falls back to the agent's concept, then the title).

@@ -450,3 +450,48 @@ describe("F8 (M3) — Escape cancels the armed countdown (the help finally tells
     }
   });
 });
+
+describe("#407 review — a comment+status chain stops if the session changed in between", () => {
+  afterEach(() => {
+    useConnectionStore.setState({ adapter: null, sessionId: null } as any);
+  });
+
+  it("Request changes: the comment settles after an A→B switch → NO status POST, no success claimed (draft kept)", async () => {
+    const switched: string[] = [];
+    useConnectionStore.setState({ sessionId: "s1", adapter: { switchSession: (id: string) => switched.push(id) } } as any);
+    let resolveComment!: (r: Response) => void;
+    const fetchSpy = vi.fn((url: string) =>
+      String(url).includes("/api/comments")
+        ? new Promise<Response>((res) => { resolveComment = res; })
+        : Promise.resolve(new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } })),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+    useArtifactStore.setState({ artifacts: [artifact()] });
+    render(<ArtifactStatusActions artifact={artifact()} />);
+    await userEvent.type(screen.getByRole("textbox"), "please re-do");
+    await userEvent.click(screen.getByRole("button", { name: /Request changes/i }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+
+    useConnectionStore.getState().switchSession("s2");
+    await vi.waitFor(() => expect(switched).toEqual(["s2"]));
+    await act(async () => {
+      resolveComment(new Response(JSON.stringify({ comment: null }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    });
+    await waitFor(() => expect(screen.getByRole("button", { name: /Request changes/i })).not.toBeDisabled());
+    // Only the comment went out; A's artifact status was never posted under B.
+    expect(fetchSpy.mock.calls.map((c) => String(c[0])).filter((u) => u.includes("/status"))).toEqual([]);
+    expect(screen.getByRole("textbox")).toHaveValue("please re-do");
+  });
+
+  it("same session: the chain still posts the comment, then the status", async () => {
+    useConnectionStore.setState({ sessionId: "s1", adapter: null } as any);
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchSpy);
+    render(<ArtifactStatusActions artifact={artifact()} />);
+    await userEvent.type(screen.getByRole("textbox"), "please re-do");
+    await userEvent.click(screen.getByRole("button", { name: /Request changes/i }));
+    await waitFor(() =>
+      expect(fetchSpy.mock.calls.map((c) => String(c[0])).some((u) => u.includes("/api/artifacts/art_x/status"))).toBe(true),
+    );
+  });
+});

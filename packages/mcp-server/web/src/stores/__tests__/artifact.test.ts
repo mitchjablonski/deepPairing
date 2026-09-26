@@ -1042,3 +1042,94 @@ describe("#407 — submitComment reconciliation is fenced at the store boundary"
     expect(useArtifactStore.getState().comments.a1!.map((c) => c.id)).toEqual(["c_h"]);
   });
 });
+
+describe("#407 review — resolveSuggestion + markQuestionResolved are fenced at the store boundary", () => {
+  const ok = (body: unknown) =>
+    new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+    return { promise, resolve, reject };
+  }
+  async function bind() {
+    const { useConnectionStore } = await import("../connection");
+    const { useToastStore } = await import("../toast");
+    useToastStore.getState().dismissAll();
+    const switched: string[] = [];
+    useConnectionStore.setState({
+      sessionId: "s1",
+      adapter: { switchSession: (id: string) => switched.push(id) },
+    } as any);
+    const switchTo = async (id: string) => {
+      const n = switched.length;
+      useConnectionStore.getState().switchSession(id);
+      await vi.waitFor(() => expect(switched).toHaveLength(n + 1));
+    };
+    return { switchTo, toasts: () => useToastStore.getState().toasts };
+  }
+  afterEach(async () => {
+    const { useConnectionStore } = await import("../connection");
+    useConnectionStore.setState({ adapter: null, sessionId: null } as any);
+  });
+
+  const withSuggestion = (id: string) =>
+    comment(id, "a1", {
+      suggestion: { originalText: "x", replacementText: "y", lineStart: 1, lineEnd: 1, state: "pending" },
+    } as Partial<Comment>);
+
+  it("resolveSuggestion: a late SUCCESS after a switch does not upsert A's comment into B", async () => {
+    const { switchTo } = await bind();
+    useArtifactStore.setState({ artifacts: [artifact("a1", { sessionId: "s1" })] });
+    useArtifactStore.getState().addComment(withSuggestion("sugA"));
+    const d = deferred<Response>();
+    vi.stubGlobal("fetch", vi.fn(() => d.promise));
+    const resolving = useArtifactStore.getState().resolveSuggestion("sugA", "take_counter");
+    await switchTo("s2");
+    d.resolve(ok({ comment: withSuggestion("sugA") }));
+    await resolving;
+    expect(useArtifactStore.getState().comments).toEqual({});
+  });
+
+  it("resolveSuggestion: a late FAILURE after a switch neither upserts A's comment nor toasts in B; the caller still rejects", async () => {
+    const { switchTo, toasts } = await bind();
+    useArtifactStore.setState({ artifacts: [artifact("a1", { sessionId: "s1" })] });
+    useArtifactStore.getState().addComment(withSuggestion("sugA"));
+    const d = deferred<Response>();
+    vi.stubGlobal("fetch", vi.fn(() => d.promise));
+    const resolving = useArtifactStore.getState().resolveSuggestion("sugA", "take_counter");
+    await switchTo("s2");
+    d.reject(new TypeError("Failed to fetch"));
+    await expect(resolving).rejects.toBeTruthy();
+    expect(useArtifactStore.getState().comments).toEqual({});
+    expect(toasts()).toHaveLength(0);
+  });
+
+  it("resolveSuggestion: same-session success/failure are unchanged (reconcile, then rollback + toast)", async () => {
+    const { toasts } = await bind();
+    useArtifactStore.setState({ artifacts: [artifact("a1", { sessionId: "s1" })] });
+    useArtifactStore.getState().addComment(withSuggestion("sugA"));
+    const applied = { ...withSuggestion("sugA"), suggestion: { ...withSuggestion("sugA").suggestion!, state: "applied" } } as Comment;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok({ comment: applied })));
+    await useArtifactStore.getState().resolveSuggestion("sugA", "take_counter");
+    expect(useArtifactStore.getState().comments.a1![0]!.suggestion!.state).toBe("applied");
+    useArtifactStore.getState().updateComment(withSuggestion("sugA"));
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    await expect(useArtifactStore.getState().resolveSuggestion("sugA", "take_counter")).rejects.toBeTruthy();
+    expect(useArtifactStore.getState().comments.a1![0]!.suggestion!.state).toBe("pending");
+    expect(toasts().some((t) => /suggestion/i.test(t.title))).toBe(true);
+  });
+
+  it("markQuestionResolved: a late FAILURE after a switch does not toast in B; the caller still rejects", async () => {
+    const { switchTo, toasts } = await bind();
+    useArtifactStore.getState().addComment(comment("qA", "a1", { intent: "question" } as Partial<Comment>));
+    const d = deferred<Response>();
+    vi.stubGlobal("fetch", vi.fn(() => d.promise));
+    const resolving = useArtifactStore.getState().markQuestionResolved("qA");
+    await switchTo("s2");
+    d.reject(new TypeError("Failed to fetch"));
+    await expect(resolving).rejects.toBeTruthy();
+    expect(useArtifactStore.getState().comments).toEqual({});
+    expect(toasts()).toHaveLength(0);
+  });
+});

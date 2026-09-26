@@ -25,6 +25,16 @@ let localCommentSeq = 0;
  * imports THIS module — the cycle the codebase deliberately avoids).
  */
 let storeGeneration = 0;
+/** #407 — read-only view of the fence for callers that CHAIN mutations (the
+ *  review footer posts a comment, then a status): if the store moved while
+ *  the first was in the air, the second must not run against the new one. */
+export const getStoreGeneration = (): number => storeGeneration;
+
+/** #407 — the tab's session binding RIGHT NOW. Captured at a call's start so a
+ *  request whose routing falls back to the tab (no owner) still goes to the
+ *  session it was started in, even if an await inside lets a switch land. */
+const tabSessionAtCall = (): string | undefined =>
+  (typeof window !== "undefined" && (window as any).__dpConnectionStore?.getState?.().sessionId) || undefined;
 
 /**
  * U3 — surface a mutation failure as a toast. Pulled out of every catch
@@ -782,10 +792,14 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     // never foreign; artifact comments route to the owner, so guard on it.
     // Await only on the suspected-foreign path (keeps the provisional insert
     // synchronous — the U3 optimistic-comment contract).
-    {
-      const owner = artifactId === "__session__" ? undefined : get().owningSession(artifactId);
-      if (isForeignSession(owner)) await guardForeignOwner("Commenting", owner);
-    }
+    // #407 review — the ROUTING is resolved here too, before that await: the
+    // guard can wait up to 4s, and re-deriving the owner from the store after
+    // it read the NEW session's store (the artifact gone → the tab fallback →
+    // X-Session-Id of B), so A's comment was stored in B server-side.
+    const owner = artifactId === "__session__" ? undefined : get().owningSession(artifactId);
+    const tabSession = tabSessionAtCall();
+    const routeTo = owner ?? tabSession;
+    if (isForeignSession(owner)) await guardForeignOwner("Commenting", owner);
     // Optimistic: render the comment immediately instead of waiting on the
     // session-scoped `comment_added` WS broadcast. Pre-this, submitComment was
     // the last broadcast-only mutation — the user hit send and nothing appeared
@@ -797,9 +811,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     // removes only this provisional from the *current* state, so a comment or
     // artifact that arrived over the WS while the POST was in flight isn't wiped
     // by restoring a stale whole-collection snapshot.
-    const sid =
-      (typeof window !== "undefined" &&
-        (window as any).__dpConnectionStore?.getState?.().sessionId) || "";
+    const sid = tabSession ?? "";
     const provisional: Comment = {
       id: `local_${Date.now().toString(36)}_${++localCommentSeq}`,
       sessionId: sid,
@@ -813,7 +825,8 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       ...(options?.suggestion ? { suggestion: options.suggestion } : {}),
     } as Comment;
     // A reset during the guard's await means this call started in a store that
-    // is gone: still send it (the caller asked for it), but paint nothing here.
+    // is gone: still send it — to the session it was started in (`routeTo`,
+    // resolved before the await) — but paint nothing in the store that replaced it.
     if (storeGeneration === generationAtSubmit) useArtifactStore.getState().addComment(provisional);
     try {
       const res = await safeFetch(`${apiBase()}/api/comments`, {
@@ -821,10 +834,9 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
         // F6 — comments on merged artifacts were STORED IN THE WRONG SESSION
         // (looked successful in the UI forever; the owning agent's
         // check_feedback never saw them). Route by the artifact's owner;
-        // session-level (__session__) comments keep the tab binding.
-        headers: sessionHeaders(
-          artifactId === "__session__" ? undefined : useArtifactStore.getState().owningSession(artifactId),
-        ),
+        // session-level (__session__) comments keep the tab binding — both as
+        // they were when the call STARTED (#407 review, see `routeTo`).
+        headers: sessionHeaders(routeTo),
         body: JSON.stringify({
           artifactId,
           content,
@@ -884,7 +896,13 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       if (hit) { found = hit; break; }
     }
     if (!found?.suggestion) return;
+    // #407 review — the same store-boundary fence as submitComment. Every write
+    // below goes through updateComment, which UPSERTS: after a switch, a late
+    // success or rollback inserted A's comment into B (and a failure toasted
+    // there). Routing is pinned before the guard's await for the same reason.
+    const generationAtSubmit = storeGeneration;
     const owner = found.target.artifactId === "__session__" ? undefined : get().owningSession(found.target.artifactId);
+    const routeTo = owner ?? tabSessionAtCall();
     if (isForeignSession(owner)) await guardForeignOwner("Resolving a suggestion", owner);
 
     const optimistic: Comment = {
@@ -892,17 +910,19 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       acknowledged: false,
       suggestion: { ...found.suggestion, state: action === "insist" ? "insisted" : "applied" },
     };
-    get().updateComment(optimistic);
+    if (storeGeneration === generationAtSubmit) get().updateComment(optimistic);
     try {
       const res = await safeFetch(`${apiBase()}/api/comments/${commentId}/suggestion`, {
         method: "POST",
-        headers: sessionHeaders(owner),
+        headers: sessionHeaders(routeTo),
         body: JSON.stringify({ action }),
       });
       let serverComment: Comment | null = null;
       try { serverComment = (await res.json())?.comment ?? null; } catch { /* keep optimistic */ }
+      if (storeGeneration !== generationAtSubmit) return;
       if (serverComment) get().updateComment(serverComment);
     } catch (err) {
+      if (storeGeneration !== generationAtSubmit) throw err;
       get().updateComment(found); // roll back to the pre-action comment
       await toastApiError("Resolve suggestion", err);
       throw err;
@@ -1130,17 +1150,20 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     assertNotReplay("Resolving a question");
     // Bug A — guard on the comment's owning session before the optimistic
     // stamp; await only on the suspected-foreign path.
-    {
-      const owner = Object.values(get().comments).flat().find((c) => c.id === commentId)?.sessionId || undefined;
-      if (isForeignSession(owner)) await guardForeignOwner("Resolving a question", owner);
-    }
+    // #407 review — fence + routing pinned at the call, as in submitComment:
+    // after an A→B switch during the guard the owner lookup found nothing in
+    // B and fell back to B's binding, and a failure toasted in B.
+    const generationAtSubmit = storeGeneration;
+    const owner = Object.values(get().comments).flat().find((c) => c.id === commentId)?.sessionId || undefined;
+    const routeTo = owner ?? tabSessionAtCall();
+    if (isForeignSession(owner)) await guardForeignOwner("Resolving a question", owner);
     const resolvedAt = new Date().toISOString();
     // Optimistic: stamp humanResolvedAt locally so the waiting signal clears
     // immediately. SURGICAL rollback: remember only this comment's prior
     // humanResolvedAt and revert just that field on failure, so comments that
     // arrived over the WS in the meantime aren't discarded.
     const stamp = (c: Comment): Comment => ({ ...c, humanResolvedAt: resolvedAt });
-    set((state) => {
+    if (storeGeneration === generationAtSubmit) set((state) => {
       const nextComments: Record<string, Comment[]> = {};
       for (const [key, list] of Object.entries(state.comments)) {
         nextComments[key] = list.map((c) => (c.id === commentId ? stamp(c) : c));
@@ -1153,12 +1176,11 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
         // F6 review — the FIFTH route with the silent-no-op class: a comment
         // on a merged foreign artifact lives in the OWNER's session; routing
         // by the tab resolved nothing and the question resurrected on reload.
-        headers: sessionHeaders(
-          Object.values(get().comments).flat().find((c) => c.id === commentId)?.sessionId || undefined,
-        ),
+        headers: sessionHeaders(routeTo),
         body: JSON.stringify({ resolvedAt }),
       });
     } catch (err) {
+      if (storeGeneration !== generationAtSubmit) throw err;
       // Roll back only this comment's resolved stamp (we set it to `resolvedAt`
       // above, so clearing that exact value is the inverse) without discarding
       // concurrent WS updates.
