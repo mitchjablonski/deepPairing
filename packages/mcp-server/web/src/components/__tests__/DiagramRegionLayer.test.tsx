@@ -199,6 +199,44 @@ describe("DiagramRegionLayer (region-anchored diagram comments)", () => {
     expect(authBtn).toHaveFocus();
   });
 
+  it("closing from a KEYBOARD trigger restores focus and scrolls it back into view (nearest), never jumping", async () => {
+    // Review (Chromium): after scrolling the page while composing, Escape put
+    // focus on the off-screen node button and nothing brought it back.
+    const user = userEvent.setup();
+    render(<MermaidDiagram source="graph TD; AuthGate-->Login" region={{ artifactId: "a", visualId: "vis_1" }} />);
+    await waitFor(() => expect(document.querySelector(".dp-mermaid svg")).not.toBeNull());
+    await user.click(screen.getByText(/comment on a node/i));
+    const authBtn = screen.getByRole("button", { name: "AuthGate" });
+    authBtn.focus();
+    await user.keyboard("{Enter}");
+    const scrollSpy = vi.fn();
+    authBtn.scrollIntoView = scrollSpy;
+    await user.keyboard("{Escape}");
+    expect(authBtn).toHaveFocus();
+    expect(scrollSpy).toHaveBeenCalledWith({ block: "nearest" });
+  });
+
+  it("closing from a mouse drag (trigger = the WELL) restores focus with preventScroll and never scrolls the page", async () => {
+    // Real Chromium: a plain focus() on the tabIndex=0 well scrolled the pane −59px.
+    render(<MermaidDiagram source="graph TD; AuthGate-->Login" region={{ artifactId: "a", visualId: "vis_1" }} />);
+    await waitFor(() => expect(document.querySelector(".dp-mermaid svg")).not.toBeNull());
+    const well = document.querySelector("[data-dp-scrollport]") as HTMLElement;
+    well.focus(); // what mousedown on the overlay does in a browser
+    const overlay = screen.getByTestId("dp-region-overlay");
+    fireEvent.pointerDown(overlay, { button: 0, pointerId: 1, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(overlay, { pointerId: 1, clientX: 200, clientY: 150 });
+    fireEvent.pointerUp(overlay, { pointerId: 1, clientX: 200, clientY: 150 });
+    await screen.findByPlaceholderText(/add a comment/i);
+    const focusSpy = vi.spyOn(well, "focus");
+    const scrollSpy = vi.fn();
+    well.scrollIntoView = scrollSpy;
+    fireEvent.keyDown(screen.getByPlaceholderText(/add a comment/i), { key: "Escape" });
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
+    expect(scrollSpy).not.toHaveBeenCalled();
+    expect(well).toHaveFocus();
+    focusSpy.mockRestore();
+  });
+
   it("renders an EXISTING region comment back onto the diagram (highlight + text referent), NOT flagged missing across a re-render", async () => {
     // Stored under a DIFFERENT render prefix than the current SVG emits — the
     // node is the same (label AuthGate), so it must NOT be flagged missing.
