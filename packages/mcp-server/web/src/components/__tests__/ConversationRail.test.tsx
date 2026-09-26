@@ -10,7 +10,7 @@
  *   - Esc closes; click-outside closes.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Artifact, Comment } from "@deeppairing/shared";
 import { ConversationRail } from "../ConversationRail";
@@ -558,5 +558,68 @@ describe("ConversationRail — W2 (filter, unread badges)", () => {
     expect(screen.getByLabelText(/^2 new$/)).toBeInTheDocument();
     // Header total-unread badge has the longer label and shows up too.
     expect(screen.getByLabelText(/2 new since last open/i)).toBeInTheDocument();
+  });
+});
+
+describe("#407 — a rail reply started in one session never lands in the next", () => {
+  afterEach(async () => {
+    const { useConnectionStore } = await import("../../stores/connection");
+    useConnectionStore.setState({ adapter: null, sessionId: null } as any);
+  });
+
+  it("a session-level (__session__) Reply resolved after switching A → B does not appear in B's rail, and nothing toasts", async () => {
+    const { useConnectionStore } = await import("../../stores/connection");
+    const { useToastStore } = await import("../../stores/toast");
+    useToastStore.getState().dismissAll();
+    const switched: string[] = [];
+    useConnectionStore.setState({
+      sessionId: "s1",
+      adapter: { switchSession: (id: string) => switched.push(id) },
+    } as any);
+
+    // Session A: a session-level question the agent answered — Reply shows.
+    const s = useArtifactStore.getState();
+    s.addComment(comment({
+      id: "qA", artifactId: "__session__", author: "human", intent: "question",
+      content: "A's question", createdAt: "2026-04-26T10:00:00.000Z",
+    }));
+    s.addComment(comment({
+      id: "ansA", artifactId: "__session__", author: "agent", parentCommentId: "qA",
+      content: "A's answer", createdAt: "2026-04-26T10:01:00.000Z",
+    }));
+
+    let resolveA!: (r: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((res) => { resolveA = res; })));
+
+    render(<ConversationRail onClose={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: /reply in this thread/i }));
+    await userEvent.type(screen.getByPlaceholderText(/continue the thread/i), "A's late reply");
+    const submitBtns = screen.getAllByRole("button", { name: /^Reply$/ });
+    await userEvent.click(submitBtns[submitBtns.length - 1]!);
+
+    // The real switch: publishes s2, resets the artifact store.
+    useConnectionStore.getState().switchSession("s2");
+    await vi.waitFor(() => expect(switched).toEqual(["s2"]));
+    // Session B has its own thread, so the rail is live (not the empty state).
+    act(() => {
+      useArtifactStore.getState().addArtifact(artifact("bArt", { sessionId: "s2", title: "B's artifact" }));
+      useArtifactStore.getState().addComment(comment({
+        id: "cB", artifactId: "bArt", author: "human", content: "B's note", createdAt: "2026-04-26T11:00:00.000Z",
+      }));
+    });
+    expect(screen.getByText("B's note")).toBeTruthy();
+
+    await act(async () => {
+      resolveA(new Response(JSON.stringify({
+        comment: comment({
+          id: "replyA", artifactId: "__session__", author: "human", parentCommentId: "ansA",
+          content: "A's late reply", createdAt: "2026-04-26T10:02:00.000Z",
+        }),
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    });
+
+    expect(screen.queryByText("A's late reply")).toBeNull();
+    expect(useArtifactStore.getState().comments.__session__).toBeUndefined();
+    expect(useToastStore.getState().toasts).toHaveLength(0);
   });
 });
