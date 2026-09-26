@@ -321,6 +321,9 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
       // X10 — scoping attribute used by scrollToAnchor() to disambiguate
       // anchors when two artifacts are on the page during transitions.
       data-artifact-id={artifact.id}
+      // #403 — the scrolling pane a diagram popover must stay visible inside
+      // (with the sticky chrome marked below): DiagramRegionLayer measures it.
+      data-dp-pane=""
       className={`flex-1 overflow-y-auto p-4 space-y-4 scroll-shadow w-full ${
         contentWidth === "constrained" ? "max-w-4xl mx-auto" : ""
       }`}

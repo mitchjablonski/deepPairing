@@ -701,6 +701,89 @@ describe("DiagramRegionLayer (region-anchored diagram comments)", () => {
       expect(popover.style.maxHeight).toBe(`${230 - 190 + 150}px`);
     });
 
+    // --- #403: the popover's usable bounds are what the PAGE leaves visible ---
+    // A region near the TOP of an 800x600 well: well-local rect { top: 60, height: 60 }.
+    const HIGH_REGION = { x: 0.1, y: 0.1, w: 0.2, h: 0.1, labels: ["High"] };
+    /** The well inside a marked page pane, with a sticky footer over it whose
+     *  top edge (viewport px) a test can move — the page scrolling the well
+     *  under the Approve bar. The pane and the well both span 0..600. */
+    function mountInPane(footer: { top: number }) {
+      const rect = (l: number, t: number, w: number, h: number) =>
+        ({ x: l, y: t, left: l, top: t, right: l + w, bottom: t + h, width: w, height: h, toJSON() {} }) as DOMRect;
+      vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+        const id = this.getAttribute?.("data-testid");
+        if (id === "dp-region-popover") return rect(0, 0, 400, 400);
+        if (id === "dp-region-popover-body") return rect(0, 0, 400, 300);
+        if (this.firstElementChild?.tagName === "TEXTAREA") return rect(0, 0, 400, 120);
+        if (this.hasAttribute?.("data-dp-sticky-chrome")) return rect(0, footer.top, 800, 50);
+        if (this.getAttribute?.("aria-label") === "diagram") return rect(0, 0, 800, 600);
+        if (this.querySelector?.('[data-testid="dp-region-overlay"]')) return rect(0, 0, 800, 600);
+        return rect(0, 0, 0, 0);
+      });
+      addRegion("rc_high_0", HIGH_REGION);
+      const region = { artifactId: "a", visualId: "vis_1" };
+      render(
+        <div data-dp-pane="">
+          <MermaidDiagram source="graph TD; AuthGate-->Login" region={region} />
+          <div data-dp-sticky-chrome="" data-testid="sticky-footer" />
+        </div>,
+      );
+    }
+    const bottomOf = (el: HTMLElement) => parseFloat(el.style.top) + 400;
+
+    it("STICKY CHROME: a footer scrolled over the well shrinks the popover's bounds, so Send stays uncovered", async () => {
+      const footer = { top: 700 }; // below the well: covers nothing yet
+      mountInPane(footer);
+      await waitFor(() => expect(document.querySelector(".dp-mermaid svg")).not.toBeNull());
+      clickAt(screen.getByTestId("dp-region-overlay"), 150, 90); // inside HIGH_REGION
+      const popover = await screen.findByTestId("dp-region-popover");
+      // Room below the region in the whole well: below at 60+60+gap.
+      expect(popover.dataset.placement).toBe("below");
+      expect(popover.style.maxHeight).toBe(`${600 - 2 * POPOVER_GAP}px`);
+      // The page pane scrolls: the sticky footer now covers the well from 450 down.
+      footer.top = 450;
+      act(() => {
+        (document.querySelector("[data-dp-pane]") as HTMLElement).dispatchEvent(new Event("scroll"));
+      });
+      // Bounds are 0..450 now: capped to them and placed wholly above the footer
+      // (below would end at 528, under it — where the composer's Send lives).
+      expect(popover.style.maxHeight).toBe(`${450 - 2 * POPOVER_GAP}px`);
+      expect(bottomOf(popover)).toBeLessThanOrEqual(450);
+      expect(parseFloat(popover.style.top)).toBeGreaterThanOrEqual(0);
+    });
+
+    it("STICKY CHROME: the bounds follow the chrome RESIZING (compact → full Approve bar), not only scrolls", async () => {
+      const fire = installFakeResizeObserver();
+      const footer = { top: 560 };
+      mountInPane(footer);
+      await waitFor(() => expect(document.querySelector(".dp-mermaid svg")).not.toBeNull());
+      clickAt(screen.getByTestId("dp-region-overlay"), 150, 90);
+      const popover = await screen.findByTestId("dp-region-popover");
+      expect(popover.style.maxHeight).toBe(`${560 - 2 * POPOVER_GAP}px`);
+      footer.top = 420; // the bar expands upward; nothing scrolled
+      fire(screen.getByTestId("sticky-footer"));
+      expect(popover.style.maxHeight).toBe(`${420 - 2 * POPOVER_GAP}px`);
+      expect(bottomOf(popover)).toBeLessThanOrEqual(420);
+    });
+
+    it("SHRUNKEN WELL: a region scrolled out below a well the window then shrinks never pushes the popover past it", async () => {
+      const fire = installFakeResizeObserver();
+      mockPopoverGeometry(800, 600, { popover: 180, body: 140, composer: 120 });
+      addRegion("rc_low_0", LOW_REGION); // well-local { top: 480, height: 60 }
+      const { overlay } = await mountInteractive();
+      clickAt(overlay, 150, 510);
+      const popover = await screen.findByTestId("dp-region-popover");
+      expect(popover.dataset.placement).toBe("above");
+      // The window shrinks the scrollport to 336px: the region (top 480) is now
+      // out of view below it. "Above" alone put the box at 292..472 — 136px past.
+      const port = document.querySelector("[data-dp-scrollport]") as HTMLElement;
+      Object.defineProperty(port, "clientWidth", { configurable: true, get: () => 800 });
+      Object.defineProperty(port, "clientHeight", { configurable: true, get: () => 336 });
+      fire(port);
+      expect(parseFloat(popover.style.top)).toBeGreaterThanOrEqual(0);
+      expect(parseFloat(popover.style.top) + 180).toBeLessThanOrEqual(336);
+    });
+
     // --- Behavior 4: click a posted region highlight → reopen its thread ----
     it("CLICK-TO-REOPEN: clicking inside a posted region re-opens that region's thread", async () => {
       mockGeometry(800, 600);

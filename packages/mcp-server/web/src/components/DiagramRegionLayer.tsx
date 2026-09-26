@@ -25,6 +25,7 @@ const REGION_FLASH_MS = 1600;
 // #185 feel round — 288 was cramped for real comments (same lesson as the
 // workbench's roomy composer): 400 default, still clamped to the well width.
 const POPOVER_WIDTH = 400;
+const NO_INSETS = { top: 0, right: 0, bottom: 0, left: 0 };
 
 /**
  * #140 — region-anchored comments on a rendered Mermaid diagram.
@@ -119,6 +120,18 @@ export function DiagramRegionLayer({
    * exactly what it was.
    */
   const [port, setPort] = useState<{ width: number; height: number; scrollTop: number; scrollLeft: number } | null>(null);
+  /**
+   * #403 — how much of each edge of that visible window is NOT usable, in px.
+   *
+   * The scrollport is only what the WELL shows; the page can still hide part of
+   * it. The artifact pane's sticky Approve bar sits over the pane's bottom, and
+   * the pane itself ends above the agent message dock, so a popover clamped to
+   * the scrollport alone put Send at y≈656 under a footer starting at y=641 —
+   * unclickable until you scrolled the page. The popover bounds are the well
+   * minus these insets: the well ∩ the pane ∩ the window, less any sticky
+   * chrome overlapping it. All zeros without layout (jsdom) or without a pane.
+   */
+  const [insets, setInsets] = useState<{ top: number; right: number; bottom: number; left: number }>(NO_INSETS);
   // The region being commented on (from a drag or a node pick). Null = idle.
   const [active, setActive] = useState<RegionTarget | null>(null);
   // Live drag rectangle in wrapper-local px, for the marquee outline.
@@ -158,6 +171,67 @@ export function DiagramRegionLayer({
     );
   }, [scrollPortEl]);
 
+  /** #403 — measure `insets`. Cheap (a few rects, no node walk), so it runs on
+   *  every scroll of any ancestor while a popover is open. The pane and its
+   *  sticky chrome are found by markers, like the scrollport: `data-dp-pane` on
+   *  the scrolling artifact pane, `data-dp-sticky-chrome` on anything pinned
+   *  over it. No pane (the decision focus modal, tests) → the window alone. */
+  const measureInsets = useCallback(() => {
+    const el = scrollPortEl() ?? overlayRef.current?.parentElement ?? null;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    // The client box (inside borders, excluding scrollbars) — the same box the
+    // popover math uses via clientWidth/Height.
+    const top = r.top + el.clientTop;
+    const left = r.left + el.clientLeft;
+    const bottom = top + (el.clientHeight || r.height);
+    const right = left + (el.clientWidth || r.width);
+    let next = NO_INSETS;
+    if (bottom > top && right > left) {
+      const doc = document.documentElement;
+      let clipTop = 0;
+      let clipLeft = 0;
+      let clipBottom = doc.clientHeight || window.innerHeight;
+      let clipRight = doc.clientWidth || window.innerWidth;
+      const pane = el.parentElement?.closest("[data-dp-pane]") as HTMLElement | null;
+      const pr = pane?.getBoundingClientRect();
+      if (pane && pr && pr.width > 0 && pr.height > 0) {
+        const pTop = pr.top + pane.clientTop;
+        const pLeft = pr.left + pane.clientLeft;
+        clipTop = Math.max(clipTop, pTop);
+        clipLeft = Math.max(clipLeft, pLeft);
+        clipBottom = Math.min(clipBottom, pTop + (pane.clientHeight || pr.height));
+        clipRight = Math.min(clipRight, pLeft + (pane.clientWidth || pr.width));
+        // Sticky chrome over the well: cut the edge it is pinned to. Chrome that
+        // is not over the well (a footer back in flow at the artifact's end, a
+        // collapsed bar) misses the overlap test and cuts nothing.
+        for (const c of pane.querySelectorAll("[data-dp-sticky-chrome]")) {
+          if (c.contains(el)) continue;
+          const cr = c.getBoundingClientRect();
+          if (cr.height <= 0 || cr.right <= left || cr.left >= right) continue;
+          if (cr.bottom <= Math.max(top, clipTop) || cr.top >= Math.min(bottom, clipBottom)) continue;
+          if (cr.top + cr.height / 2 > (clipTop + clipBottom) / 2) clipBottom = Math.min(clipBottom, cr.top);
+          else clipTop = Math.max(clipTop, cr.bottom);
+        }
+      }
+      // Rounded UP: a sub-pixel edge must not leave the box's border under chrome.
+      const cand = {
+        top: Math.ceil(Math.max(0, clipTop - top)),
+        right: Math.ceil(Math.max(0, right - clipRight)),
+        bottom: Math.ceil(Math.max(0, bottom - clipBottom)),
+        left: Math.ceil(Math.max(0, clipLeft - left)),
+      };
+      // A well scrolled (almost) entirely out of the pane leaves no usable area;
+      // keep the well's own bounds there rather than clamping into nothing.
+      if (cand.top + cand.bottom < bottom - top && cand.left + cand.right < right - left) next = cand;
+    }
+    setInsets((prev) =>
+      prev.top === next.top && prev.right === next.right && prev.bottom === next.bottom && prev.left === next.left
+        ? prev
+        : next,
+    );
+  }, [scrollPortEl]);
+
   const measure = useCallback(() => {
     const el = svgEl();
     setNodes(collectDiagramNodes(el));
@@ -171,7 +245,8 @@ export function DiagramRegionLayer({
       }
     }
     syncScroll();
-  }, [svgEl, syncScroll]);
+    measureInsets();
+  }, [svgEl, syncScroll, measureInsets]);
 
   useLayoutEffect(() => {
     measure();
@@ -351,6 +426,31 @@ export function DiagramRegionLayer({
     body.scrollTop = body.scrollHeight;
   }, [active, narrow]);
 
+  // #403 — keep the insets live while a popover is open: any ancestor scroll
+  // (the page pane moving the well under the footer — a capturing listener
+  // sees every scroll without knowing which element scrolls), the window
+  // resizing, and the pane or its sticky chrome changing size (the Approve bar
+  // grows from compact to full at the artifact's end). The well's own resize
+  // already reaches measure() via the observer above.
+  useLayoutEffect(() => {
+    if (!active || narrow) return;
+    measureInsets();
+    window.addEventListener("scroll", measureInsets, { capture: true, passive: true });
+    window.addEventListener("resize", measureInsets);
+    let ro: ResizeObserver | null = null;
+    const pane = (scrollPortEl() ?? overlayRef.current?.parentElement)?.parentElement?.closest("[data-dp-pane]");
+    if (pane && typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(() => measureInsets());
+      ro.observe(pane);
+      for (const c of pane.querySelectorAll("[data-dp-sticky-chrome]")) ro.observe(c);
+    }
+    return () => {
+      window.removeEventListener("scroll", measureInsets, { capture: true });
+      window.removeEventListener("resize", measureInsets);
+      ro?.disconnect();
+    };
+  }, [active, narrow, measureInsets, scrollPortEl]);
+
   // The selection rect in well-local px (same conversion the highlights use).
   const activePxRect = active
     ? {
@@ -368,7 +468,15 @@ export function DiagramRegionLayer({
     : wellSize;
   const scrollTop = port?.scrollTop ?? 0;
   const scrollLeft = port?.scrollLeft ?? 0;
-  const popoverWidth = Math.min(POPOVER_WIDTH, viewBounds.width || POPOVER_WIDTH);
+  // #403 — the part of viewBounds the page doesn't cover (the insets are 0 or
+  // leave a non-empty box, by construction in measureInsets).
+  const usable = {
+    top: insets.top,
+    left: insets.left,
+    width: Math.max(0, viewBounds.width - insets.left - insets.right),
+    height: Math.max(0, viewBounds.height - insets.top - insets.bottom),
+  };
+  const popoverWidth = Math.min(POPOVER_WIDTH, usable.width || POPOVER_WIDTH);
   // #185 long-thread fix — the popover may never be taller than what you can
   // SEE. Without this cap a long thread measures taller than viewBounds, every
   // placement in positionPopover fails to fit, and the last-resort clamp pins
@@ -378,25 +486,26 @@ export function DiagramRegionLayer({
   // Floored at the measured header+composer height (review): in a well too
   // short for even that, the composer stays whole and the box overflows the
   // well instead of clipping the textarea behind an inner scrollbar.
-  const popoverMaxHeight = Math.max(160, popoverFloor, viewBounds.height - 2 * POPOVER_GAP);
+  const popoverMaxHeight = Math.max(160, popoverFloor, usable.height - 2 * POPOVER_GAP);
   const anchoredPos = (() => {
     if (!activePxRect || narrow) return null;
-    // Into scrollport coordinates, place, then back into content coordinates
-    // (the popover is positioned inside the scrolling wrapper, so it must be
-    // expressed in the same space as the highlights it sits beside).
+    // Into usable-area coordinates (scrollport, less the #403 insets), place,
+    // then back into content coordinates (the popover is positioned inside the
+    // scrolling wrapper, so it must be expressed in the same space as the
+    // highlights it sits beside).
     const rectInView = {
-      left: activePxRect.left - scrollLeft,
-      top: activePxRect.top - scrollTop,
+      left: activePxRect.left - scrollLeft - usable.left,
+      top: activePxRect.top - scrollTop - usable.top,
       width: activePxRect.width,
       height: activePxRect.height,
     };
-    const p = positionPopover(rectInView, viewBounds, {
+    const p = positionPopover(rectInView, usable, {
       width: popoverWidth,
       // The measured height settles under the cap after the next layout pass;
       // the min makes the math right on the FIRST pass too.
       height: Math.min(popoverSize.height, popoverMaxHeight),
     });
-    return { ...p, left: p.left + scrollLeft, top: p.top + scrollTop };
+    return { ...p, left: p.left + scrollLeft + usable.left, top: p.top + scrollTop + usable.top };
   })();
 
   // #185 feel round — the popover is user-draggable by its header (the flip

@@ -105,4 +105,34 @@ describe("positionPopover (#185 region-composer placement)", () => {
     expect(pos.top).toBeGreaterThanOrEqual(0);
     expect(pos.top + capped.height).toBeLessThanOrEqual(well.height);
   });
+
+  // #403 — the rect arrives in SCROLLPORT coordinates, so a region scrolled out
+  // of view lies outside the well. Measured in Chromium: region scrolled below a
+  // well that a window resize then shrank → "above" put the box's bottom
+  // gap-above the off-screen anchor, 83-195px past the well's bottom.
+  it("a rect scrolled out BELOW a shrunken well never overflows it (clamps to the bottom edge)", () => {
+    const well: PopoverSize = { width: 800, height: 336 };
+    const pop: PopoverSize = { width: 400, height: 318 };
+    const rect: PopoverRect = { left: 420, top: 536, width: 117, height: 55 }; // 200px below the well
+    const pos = positionPopover(rect, well, pop);
+    expect(pos.top).toBeGreaterThanOrEqual(0);
+    expect(pos.top + pop.height).toBeLessThanOrEqual(well.height);
+    // Follows the region's nearest visible edge: flush with the well bottom.
+    expect(pos.top).toBe(well.height - pop.height);
+  });
+
+  it("a rect scrolled out ABOVE the well never overflows it (clamps to the top edge)", () => {
+    const pos = positionPopover({ left: 120, top: -400, width: 160, height: 60 }, WELL, POP);
+    expect(pos.top).toBe(0);
+    expect(pos.top + POP.height).toBeLessThanOrEqual(WELL.height);
+  });
+
+  it("a rect scrolled out SIDEWAYS never pushes a beside placement past the well", () => {
+    const shortWell: PopoverSize = { width: 400, height: 200 };
+    const tallPop: PopoverSize = { width: 200, height: 190 };
+    // Off the right edge: "left" fits by its own check (leftLeft ≥ 0) but would spill right.
+    const pos = positionPopover({ left: 700, top: 20, width: 120, height: 160 }, shortWell, tallPop);
+    expect(pos.left).toBeGreaterThanOrEqual(0);
+    expect(pos.left + tallPop.width).toBeLessThanOrEqual(shortWell.width);
+  });
 });
