@@ -88,4 +88,21 @@ describe("positionPopover (#185 region-composer placement)", () => {
     expect(Number.isNaN(pos.left)).toBe(false);
     expect(Number.isNaN(pos.top)).toBe(false);
   });
+
+  // #185 long-thread fix — the CALLER contract. The component now caps the
+  // popover to the visible well (viewBounds.height - 2*GAP) before handing the
+  // height here. At the cap a placement always exists, so we never hit the
+  // last-resort clamp that pins a "below" to top 0 while the box overflows —
+  // the clamp is what made a long thread chase the scrollport.
+  it("a CAPPED height (= well - 2*gap) near the bottom places above/beside, never a pinned-to-0 below", () => {
+    const well: PopoverSize = { width: 800, height: 300 };
+    const capped: PopoverSize = { width: 400, height: 300 - 2 * POPOVER_GAP };
+    const rect: PopoverRect = { left: 120, top: 220, width: 160, height: 60 }; // near the bottom
+    const pos = positionPopover(rect, well, capped);
+    expect(["above", "right", "left"]).toContain(pos.placement);
+    // Whatever it picked, the box fits inside the well — no overflow, and no
+    // degenerate top-0 pin.
+    expect(pos.top).toBeGreaterThanOrEqual(0);
+    expect(pos.top + capped.height).toBeLessThanOrEqual(well.height);
+  });
 });
