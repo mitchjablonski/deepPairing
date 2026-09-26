@@ -1,1 +1,0 @@
-import{o as e}from"./pending-DQbvMcLw.js";import{C as t}from"./index-joi1ed_4.js";function n(n){let r=t(n,e(e=>e.active));return r===`closed`||r===`frozen`}export{n as t};

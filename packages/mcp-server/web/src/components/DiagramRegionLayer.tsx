@@ -310,7 +310,17 @@ export function DiagramRegionLayer({
     setActive(null);
     const t = triggerRef.current;
     triggerRef.current = null;
-    if (t && t.isConnected) t.focus?.();
+    if (!t || !t.isConnected) return;
+    // Never scroll FOR the well: a mouse drag's trigger is the well itself
+    // (mousedown focuses the tabIndex=0 scrollport), and a plain focus()
+    // scrolled the page pane to reveal it — measured −59px on close when the
+    // well's top sat above the pane. You were looking at the diagram already.
+    t.focus?.({ preventScroll: true });
+    // Any OTHER trigger (the keyboard "Comment on a node" list) may have
+    // scrolled away while you composed; focus landing off-screen is a keyboard
+    // trap you can't see (review: the button at 813px under a pane ending at
+    // 706). Bring it back with the least movement.
+    if (!t.hasAttribute("data-dp-scrollport")) t.scrollIntoView?.({ block: "nearest" });
   }, []);
   // #185 — Esc cancels the composer and restores focus to its trigger. On the
   // popover this is the keyboard dismissal a floating surface needs; inside the
