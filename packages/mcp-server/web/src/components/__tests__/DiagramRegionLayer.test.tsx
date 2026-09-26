@@ -199,6 +199,25 @@ describe("DiagramRegionLayer (region-anchored diagram comments)", () => {
     expect(authBtn).toHaveFocus();
   });
 
+  it("closing restores focus WITHOUT scrolling (preventScroll) — the restore never moves the page pane", async () => {
+    // Real Chromium: a mouse drag's trigger is the tabIndex=0 well; a plain
+    // focus() on close scrolled the pane −59px to reveal it. jsdom has no
+    // scrolling, so pin the option the browser honours.
+    const user = userEvent.setup();
+    render(<MermaidDiagram source="graph TD; AuthGate-->Login" region={{ artifactId: "a", visualId: "vis_1" }} />);
+    await waitFor(() => expect(document.querySelector(".dp-mermaid svg")).not.toBeNull());
+    await user.click(screen.getByText(/comment on a node/i));
+    const authBtn = screen.getByRole("button", { name: "AuthGate" });
+    authBtn.focus();
+    await user.keyboard("{Enter}");
+    const focusSpy = vi.spyOn(authBtn, "focus");
+    await user.keyboard("{Escape}");
+    expect(focusSpy).toHaveBeenCalled();
+    for (const call of focusSpy.mock.calls) expect(call[0]).toEqual({ preventScroll: true });
+    expect(authBtn).toHaveFocus();
+    focusSpy.mockRestore();
+  });
+
   it("renders an EXISTING region comment back onto the diagram (highlight + text referent), NOT flagged missing across a re-render", async () => {
     // Stored under a DIFFERENT render prefix than the current SVG emits — the
     // node is the same (label AuthGate), so it must NOT be flagged missing.

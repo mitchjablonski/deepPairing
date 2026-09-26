@@ -310,7 +310,12 @@ export function DiagramRegionLayer({
     setActive(null);
     const t = triggerRef.current;
     triggerRef.current = null;
-    if (t && t.isConnected) t.focus?.();
+    // preventScroll: a mouse drag's trigger is the well itself (mousedown
+    // focuses the tabIndex=0 scrollport), and a plain focus() scrolled the page
+    // pane to reveal it — measured −59px on close when the well's top sat above
+    // the pane. Restoring focus must not move what you are looking at (the same
+    // contract as the open-focus below).
+    if (t && t.isConnected) t.focus?.({ preventScroll: true });
   }, []);
   // #185 — Esc cancels the composer and restores focus to its trigger. On the
   // popover this is the keyboard dismissal a floating surface needs; inside the
