@@ -131,7 +131,10 @@ recovered by the same rule through `<lock>.break.recover`. Writers never remove
 removes it when its owner is provably dead. Concurrent `doctor --fix` runs take
 turns through their own `<lock>.doctor` guard, so removing a `.recover` is
 byte-exact and never deletes a live one. A file another run already removed
-is reported as "already removed".
+is reported as "already removed". A `.doctor` left by a crashed doctor is
+cleared the same byte-exact way, one doctor at a time, through
+`<lock>.doctor.clear`. A stranded `.doctor.clear` needs a second crash, and
+`doctor` reports it for manual removal.
 
 On release the owner checks the lock is still its own. If it is not, the owner
 logs a warning; the write under the lock has already completed.

@@ -296,7 +296,7 @@ function isEnoent(err: unknown): boolean {
 
 /** The writer lock a guard file belongs to (`x.lock.break.recover` → `x.lock`). */
 function lockBaseOf(file: string): string {
-  return file.replace(/\.(break\.recover|break|doctor)$/, "");
+  return file.replace(/\.(break\.recover|break|doctor\.clear|doctor)$/, "");
 }
 
 /**
@@ -307,7 +307,10 @@ function lockBaseOf(file: string): string {
  *                                as a writer recovers it
  *   - `<x>.lock.break.recover` → re-read and unlinked only if its bytes still
  *                                equal what was judged dead
- *   - `<x>.lock.doctor`        → a doctor that crashed inside its own guard
+ *   - `<x>.lock.doctor`        → a doctor that crashed inside its own guard;
+ *                                serialized through `.doctor.clear`, byte-exact
+ *   - `<x>.lock.doctor.clear`  → reported only (needs a crash while clearing a
+ *                                crash leftover); removed by hand
  * Callers should clear `.doctor`, then `.recover`, then `.break`, then the lock.
  *
  * #418 — every removal (except a stranded `.doctor`) runs under the doctor's
@@ -321,19 +324,28 @@ function lockBaseOf(file: string): string {
  * removal now means "already removed", never an error.
  */
 export function clearDeadLockFile(file: string): { removed: boolean; reason: string } {
+  if (file.endsWith(".lock.doctor.clear")) {
+    // Stranding this needs a doctor crash inside its microsecond clear of a
+    // stranded `.doctor` — itself a crash leftover. Report; remove by hand.
+    return { removed: false, reason: "stranded doctor clear guard — stop every doctor/writer, then delete it by hand" };
+  }
   if (file.endsWith(".lock.doctor")) {
-    // Recovering a stranded doctor guard needs a doctor crash inside a
-    // microsecond window first; same identity rule, byte-exact re-read.
+    // #421 review — a stranded doctor guard is cleared through the same
+    // serialized byte-exact path as `.break`: two doctors both judging the
+    // same dead `.doctor` would otherwise let the second unlink the FRESH
+    // guard the first just claimed for its next file.
     const raw = readIfExists(file);
     if (raw === null) return { removed: false, reason: "already removed" };
     const state = ownerState(raw);
     if (state.state !== "dead") return { removed: false, reason: `owner is ${state.state}` };
-    if (readIfExists(file) !== raw) return { removed: false, reason: "changed while inspecting" };
-    try { fs.unlinkSync(file); } catch (err) {
+    try {
+      return unlinkIfUnchanged(file, raw, `${file}.clear`)
+        ? { removed: true, reason: state.why }
+        : { removed: false, reason: readIfExists(file) === null ? "already removed" : "busy or changed; re-run doctor" };
+    } catch (err) {
       if (isEnoent(err)) return { removed: false, reason: "already removed" };
       throw err;
     }
-    return { removed: true, reason: state.why };
   }
   const guard = `${lockBaseOf(file)}.doctor`;
   let mine: string | null;
@@ -439,7 +451,7 @@ export interface LockReport {
   /** "lock" = a writer lock; "break" / "recover" = the breaker guards;
    *  "doctor" = `doctor --fix`'s own per-lock guard (#418). doctor --fix
    *  removes any of them only when its owner is provably dead. */
-  kind: "lock" | "break" | "recover" | "doctor";
+  kind: "lock" | "break" | "recover" | "doctor" | "clear";
 }
 
 /** List every `*.lock` (and breaker-guard) file under the given roots (recursively, bounded depth)
@@ -453,8 +465,9 @@ export function inspectLocks(roots: string[], maxDepth = 4): LockReport[] {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         if (depth < maxDepth) walk(full, depth + 1);
-      } else if (entry.isFile() && /\.lock(\.break(\.recover)?|\.doctor)?$/.test(entry.name)) {
-        const kind = entry.name.endsWith(".recover") ? "recover"
+      } else if (entry.isFile() && /\.lock(\.break(\.recover)?|\.doctor(\.clear)?)?$/.test(entry.name)) {
+        const kind = entry.name.endsWith(".clear") ? "clear"
+          : entry.name.endsWith(".recover") ? "recover"
           : entry.name.endsWith(".break") ? "break"
           : entry.name.endsWith(".doctor") ? "doctor" : "lock";
         let raw = "";

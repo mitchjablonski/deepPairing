@@ -26,9 +26,6 @@ import { clearDeadLockFile, inspectLocks, ownLockIdentity } from "../file-lock.j
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 
 const CHILD_TIMEOUT_MS = 60_000;
-const DOCTORS = 3;
-const WRITERS = 4;
-const ROUNDS = 10;
 const here = path.dirname(fileURLToPath(import.meta.url));
 const LOCK_MODULE = JSON.stringify(pathToFileURL(path.resolve(here, "../file-lock.ts")).href);
 const TSX = import.meta.resolve("tsx");
@@ -68,9 +65,11 @@ const childProgram = String.raw`
     }
     if (role.startsWith("doctor")) {
       // The doctor --fix pass: guards before the lock, dead owners only.
-      const rank = { doctor: -1, recover: 0, break: 1, lock: 2 };
+      const rank = { clear: -2, doctor: -1, recover: 0, break: 1, lock: 2 };
       for (let pass = 0; pass < 40; pass++) {
         const locks = inspectLocks([root]).sort((a, b) => (rank[a.kind] ?? 3) - (rank[b.kind] ?? 3));
+        // Stop once nothing dead is left (keeps CPU low for the rest of the suite).
+        if (!locks.some((l) => l.state === "dead")) break;
         for (const l of locks) {
           if (l.state !== "dead") continue;
           try {
@@ -96,11 +95,11 @@ const childProgram = String.raw`
   fs.writeFileSync(path.join(root, ".result-" + role), JSON.stringify(result));
 `;
 
-function start(role: string): ChildProcessWithoutNullStreams {
+function start(role: string, rounds: number): ChildProcessWithoutNullStreams {
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: fx.dir, USERPROFILE: fx.dir };
   delete env.VITEST;
   delete env.NODE_ENV;
-  return spawn(process.execPath, ["--import", TSX, "--input-type=module", "--eval", childProgram, fx.dir, role, String(ROUNDS)], {
+  return spawn(process.execPath, ["--import", TSX, "--input-type=module", "--eval", childProgram, fx.dir, role, String(rounds)], {
     stdio: ["pipe", "pipe", "pipe"], env,
   });
 }
@@ -118,44 +117,56 @@ function waitForExit(child: ChildProcessWithoutNullStreams): Promise<void> {
   });
 }
 
+async function race(opts: { doctors: number; writers: number; rounds: number; seedDoctorGuard: boolean }) {
+  const lock = path.join(fx.dir, "chain.lock");
+  const roles = [
+    ...Array.from({ length: opts.doctors }, (_, i) => `doctor${i}`),
+    ...Array.from({ length: opts.writers }, (_, i) => `writer${i}`),
+  ];
+  const children = roles.map((role) => start(role, opts.rounds));
+  let failure: unknown;
+  const finished = Promise.all(children.map(waitForExit)).catch((err: unknown) => { failure = err; });
+  const waitFor = async (files: string[]) => {
+    const deadline = Date.now() + CHILD_TIMEOUT_MS;
+    while (!files.every((f) => fs.existsSync(path.join(fx.dir, f)))) {
+      if (failure) throw failure;
+      if (Date.now() > deadline) throw new Error(`timeout waiting for ${files.find((f) => !fs.existsSync(path.join(fx.dir, f)))}`);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+  };
+  await waitFor(roles.map((r) => `.ready-${r}`));
+  for (let r = 0; r < opts.rounds; r++) {
+    // A double crash left the whole chain behind; every writer is blocked
+    // until a doctor clears `.recover`.
+    fs.writeFileSync(lock, deadOwnerBody());
+    fs.writeFileSync(`${lock}.break`, deadOwnerBody());
+    fs.writeFileSync(`${lock}.break.recover`, deadOwnerBody());
+    // A doctor that crashed inside its own guard, too.
+    if (opts.seedDoctorGuard) fs.writeFileSync(`${lock}.doctor`, deadOwnerBody());
+    fs.writeFileSync(path.join(fx.dir, `.round-${r}`), "");
+    await waitFor(roles.map((role) => `.done-${role}-${r}`));
+  }
+  await finished;
+  if (failure) throw failure;
+
+  const results = Object.fromEntries(roles.map((role) => [role, JSON.parse(fs.readFileSync(path.join(fx.dir, `.result-${role}`), "utf8"))]));
+  const rawErrors = roles.flatMap((role) => results[role].rawErrors as string[]);
+  expect(rawErrors).toEqual([]);
+  // A "replaced/removed while this process held it" release warning in ANY
+  // child — writer or doctor — means two holders of the same guard.
+  expect(roles.map((role) => results[role].stolenGuards)).toEqual(roles.map(() => 0));
+  expect(roles.map((role) => results[role].overlaps)).toEqual(roles.map(() => 0));
+  expect(roles.filter((r) => r.startsWith("writer")).reduce((n, role) => n + results[role].entered, 0)).toBe(opts.writers * opts.rounds);
+  expect(fs.readdirSync(fx.dir).filter((f) => f.startsWith("chain.lock"))).toEqual([]);
+}
+
 describe("#418 — concurrent doctor --fix over a dead guard chain", () => {
   it("serializes doctors: no raw ENOENT, no live guard removed, never two holders", async () => {
-    const lock = path.join(fx.dir, "chain.lock");
-    const roles = [
-      ...Array.from({ length: DOCTORS }, (_, i) => `doctor${i}`),
-      ...Array.from({ length: WRITERS }, (_, i) => `writer${i}`),
-    ];
-    const children = roles.map(start);
-    let failure: unknown;
-    const finished = Promise.all(children.map(waitForExit)).catch((err: unknown) => { failure = err; });
-    const waitFor = async (files: string[]) => {
-      const deadline = Date.now() + CHILD_TIMEOUT_MS;
-      while (!files.every((f) => fs.existsSync(path.join(fx.dir, f)))) {
-        if (failure) throw failure;
-        if (Date.now() > deadline) throw new Error(`timeout waiting for ${files.find((f) => !fs.existsSync(path.join(fx.dir, f)))}`);
-        await new Promise((resolve) => setTimeout(resolve, 2));
-      }
-    };
-    await waitFor(roles.map((r) => `.ready-${r}`));
-    for (let r = 0; r < ROUNDS; r++) {
-      // A double crash left the whole chain behind; every writer is blocked
-      // until a doctor clears `.recover`.
-      fs.writeFileSync(lock, deadOwnerBody());
-      fs.writeFileSync(`${lock}.break`, deadOwnerBody());
-      fs.writeFileSync(`${lock}.break.recover`, deadOwnerBody());
-      fs.writeFileSync(path.join(fx.dir, `.round-${r}`), "");
-      await waitFor(roles.map((role) => `.done-${role}-${r}`));
-    }
-    await finished;
-    if (failure) throw failure;
+    await race({ doctors: 3, writers: 4, rounds: 10, seedDoctorGuard: false });
+  }, 180_000);
 
-    const results = Object.fromEntries(roles.map((role) => [role, JSON.parse(fs.readFileSync(path.join(fx.dir, `.result-${role}`), "utf8"))]));
-    const rawErrors = roles.flatMap((role) => results[role].rawErrors as string[]);
-    expect(rawErrors).toEqual([]);
-    expect(roles.map((role) => results[role].stolenGuards)).toEqual(roles.map(() => 0));
-    expect(roles.map((role) => results[role].overlaps)).toEqual(roles.map(() => 0));
-    expect(roles.filter((r) => r.startsWith("writer")).reduce((n, role) => n + results[role].entered, 0)).toBe(WRITERS * ROUNDS);
-    expect(fs.readdirSync(fx.dir).filter((f) => f.startsWith("chain.lock"))).toEqual([]);
+  it("#421 review: clearing a stranded .doctor is serialized too — never two doctor-guard holders", async () => {
+    await race({ doctors: 6, writers: 4, rounds: 40, seedDoctorGuard: true });
   }, 180_000);
 });
 
@@ -181,5 +192,19 @@ describe("#418 — doctor guard unit behaviour", () => {
     expect(clearDeadLockFile(`${lock}.doctor`).removed).toBe(true);
     expect(clearDeadLockFile(`${lock}.break.recover`).removed).toBe(true);
     expect(fs.readdirSync(fx.dir).filter((f) => f.startsWith("d.lock"))).toEqual([]);
+  });
+
+  it("a stranded .doctor.clear is listed and left for a human; a live one makes .doctor clearing defer", () => {
+    const lock = path.join(fx.dir, "c.lock");
+    fs.writeFileSync(`${lock}.doctor`, deadOwnerBody());
+    const live = JSON.stringify({ ...IDENTITY, pid: process.ppid, processStartTime: null, createdAt: "", nonce: "live" });
+    fs.writeFileSync(`${lock}.doctor.clear`, live);
+    expect(clearDeadLockFile(`${lock}.doctor`)).toMatchObject({ removed: false, reason: expect.stringMatching(/busy/) });
+    expect(fs.existsSync(`${lock}.doctor`)).toBe(true);
+
+    fs.writeFileSync(`${lock}.doctor.clear`, deadOwnerBody());
+    expect(inspectLocks([fx.dir]).map((r) => `${r.kind}:${r.state}`).sort()).toEqual(["clear:dead", "doctor:dead"]);
+    expect(clearDeadLockFile(`${lock}.doctor.clear`).removed).toBe(false);
+    expect(fs.existsSync(`${lock}.doctor.clear`)).toBe(true);
   });
 });
