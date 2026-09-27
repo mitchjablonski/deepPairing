@@ -290,34 +290,97 @@ export function breakDeadLock(lockPath: string): { broken: boolean; state: FileL
   return { broken: false, state };
 }
 
+function isEnoent(err: unknown): boolean {
+  return (err as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+}
+
+/** The writer lock a guard file belongs to (`x.lock.break.recover` → `x.lock`). */
+function lockBaseOf(file: string): string {
+  return file.replace(/\.(break\.recover|break|doctor\.clear|doctor)$/, "");
+}
+
 /**
  * `deeppairing doctor --fix` — remove ONE dead-owner lock file of any kind,
  * under the same ownerState rule (live and unknown owners are refused):
  *   - `<x>.lock`               → breakDeadLock (writers' own path)
  *   - `<x>.lock.break`         → serialized through `.break.recover`, exactly
  *                                as a writer recovers it
- *   - `<x>.lock.break.recover` → re-read and unlinked if unchanged. Writers
- *                                never remove `.recover`; doctor is its only
- *                                remover, so this cannot race a writer.
- * Callers should clear `.recover` before `.break` before the lock.
+ *   - `<x>.lock.break.recover` → re-read and unlinked only if its bytes still
+ *                                equal what was judged dead
+ *   - `<x>.lock.doctor`        → a doctor that crashed inside its own guard;
+ *                                serialized through `.doctor.clear`, byte-exact
+ *   - `<x>.lock.doctor.clear`  → reported only (needs a crash while clearing a
+ *                                crash leftover); removed by hand
+ * Callers should clear `.doctor`, then `.recover`, then `.break`, then the lock.
+ *
+ * #418 — every removal (except a stranded `.doctor`) runs under the doctor's
+ * own O_EXCL `<x>.lock.doctor` claim, so concurrent `doctor --fix` runs are
+ * serialized per lock. That is what makes the `.recover` unlink byte-exact:
+ * only doctors ever remove `.recover`, and no writer can claim a new one while
+ * the judged-dead file exists, so between the re-read and the unlink nobody
+ * can swap it for a live one. Before this, two doctors could both judge the
+ * same dead `.recover`; the second unlinked a LIVE claim created in between
+ * (a writer's, or another doctor's) or hit a raw ENOENT. ENOENT during
+ * removal now means "already removed", never an error.
  */
 export function clearDeadLockFile(file: string): { removed: boolean; reason: string } {
-  const raw = readIfExists(file);
-  if (raw === null) return { removed: false, reason: "already gone" };
-  const state = ownerState(raw);
-  if (state.state !== "dead") return { removed: false, reason: `owner is ${state.state}` };
-  if (file.endsWith(".lock.break.recover")) {
-    if (readIfExists(file) !== raw) return { removed: false, reason: "changed while inspecting" };
-    fs.unlinkSync(file);
-    return { removed: true, reason: state.why };
+  if (file.endsWith(".lock.doctor.clear")) {
+    // Stranding this needs a doctor crash inside its microsecond clear of a
+    // stranded `.doctor` — itself a crash leftover. Report; remove by hand.
+    return { removed: false, reason: "stranded doctor clear guard — stop every doctor/writer, then delete it by hand" };
   }
-  if (file.endsWith(".lock.break")) {
-    return unlinkIfUnchanged(file, raw, `${file}.recover`)
+  if (file.endsWith(".lock.doctor")) {
+    // #421 review — a stranded doctor guard is cleared through the same
+    // serialized byte-exact path as `.break`: two doctors both judging the
+    // same dead `.doctor` would otherwise let the second unlink the FRESH
+    // guard the first just claimed for its next file.
+    const raw = readIfExists(file);
+    if (raw === null) return { removed: false, reason: "already removed" };
+    const state = ownerState(raw);
+    if (state.state !== "dead") return { removed: false, reason: `owner is ${state.state}` };
+    try {
+      return unlinkIfUnchanged(file, raw, `${file}.clear`)
+        ? { removed: true, reason: state.why }
+        : { removed: false, reason: readIfExists(file) === null ? "already removed" : "busy or changed; re-run doctor" };
+    } catch (err) {
+      if (isEnoent(err)) return { removed: false, reason: "already removed" };
+      throw err;
+    }
+  }
+  const guard = `${lockBaseOf(file)}.doctor`;
+  let mine: string | null;
+  try {
+    mine = claim(guard);
+  } catch (err) {
+    if (isEnoent(err)) return { removed: false, reason: "already removed" }; // the directory is gone
+    throw err;
+  }
+  if (mine === null) return { removed: false, reason: "another doctor is fixing this lock; re-run doctor" };
+  try {
+    const raw = readIfExists(file);
+    if (raw === null) return { removed: false, reason: "already removed" };
+    const state = ownerState(raw);
+    if (state.state !== "dead") return { removed: false, reason: `owner is ${state.state}` };
+    if (file.endsWith(".lock.break.recover")) {
+      if (readIfExists(file) !== raw) return { removed: false, reason: "changed while inspecting" };
+      fs.unlinkSync(file);
+      return { removed: true, reason: state.why };
+    }
+    if (file.endsWith(".lock.break")) {
+      return unlinkIfUnchanged(file, raw, `${file}.recover`)
+        ? { removed: true, reason: state.why }
+        : { removed: false, reason: readIfExists(file) === null ? "already removed" : "busy or changed; re-run doctor" };
+    }
+    const r = breakDeadLock(file);
+    return r.broken
       ? { removed: true, reason: state.why }
-      : { removed: false, reason: "busy or changed; re-run doctor" };
+      : { removed: false, reason: readIfExists(file) === null ? "already removed" : "busy or changed; re-run doctor" };
+  } catch (err) {
+    if (isEnoent(err)) return { removed: false, reason: "already removed" };
+    throw err;
+  } finally {
+    release(guard, mine, "doctor guard");
   }
-  const r = breakDeadLock(file);
-  return r.broken ? { removed: true, reason: state.why } : { removed: false, reason: "busy or changed; re-run doctor" };
 }
 
 export function withFileLock<T>(lockPath: string, run: () => T, opts: FileLockOptions = {}): T {
@@ -385,9 +448,10 @@ export interface LockReport {
   state: FileLockOwnerState["state"];
   owner: Partial<FileLockOwner> | null;
   why?: string;
-  /** "lock" = a writer lock (doctor --fix may break it when dead); "break" /
-   *  "recover" = the breaker guards (reported; recovered by writers or by hand). */
-  kind: "lock" | "break" | "recover";
+  /** "lock" = a writer lock; "break" / "recover" = the breaker guards;
+   *  "doctor" = `doctor --fix`'s own per-lock guard (#418). doctor --fix
+   *  removes any of them only when its owner is provably dead. */
+  kind: "lock" | "break" | "recover" | "doctor" | "clear";
 }
 
 /** List every `*.lock` (and breaker-guard) file under the given roots (recursively, bounded depth)
@@ -401,8 +465,11 @@ export function inspectLocks(roots: string[], maxDepth = 4): LockReport[] {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         if (depth < maxDepth) walk(full, depth + 1);
-      } else if (entry.isFile() && /\.lock(\.break(\.recover)?)?$/.test(entry.name)) {
-        const kind = entry.name.endsWith(".recover") ? "recover" : entry.name.endsWith(".break") ? "break" : "lock";
+      } else if (entry.isFile() && /\.lock(\.break(\.recover)?|\.doctor(\.clear)?)?$/.test(entry.name)) {
+        const kind = entry.name.endsWith(".clear") ? "clear"
+          : entry.name.endsWith(".recover") ? "recover"
+          : entry.name.endsWith(".break") ? "break"
+          : entry.name.endsWith(".doctor") ? "doctor" : "lock";
         let raw = "";
         let ageMs: number | null = null;
         try {

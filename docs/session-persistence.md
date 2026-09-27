@@ -128,9 +128,16 @@ re-reads the lock and removes it only if its bytes are unchanged, so two
 recovering writers cannot both win. A `.break` left by a crashed recoverer is
 recovered by the same rule through `<lock>.break.recover`. Writers never remove
 `.recover`. Stranding it takes two crashes, and `deeppairing doctor --fix`
-removes it when its owner is provably dead. On release the owner checks the lock is still its own.
-If it is not, the owner logs a warning; the write under the lock has already
-completed.
+removes it when its owner is provably dead. Concurrent `doctor --fix` runs take
+turns through their own `<lock>.doctor` guard, so removing a `.recover` is
+byte-exact and never deletes a live one. A file another run already removed
+is reported as "already removed". A `.doctor` left by a crashed doctor is
+cleared the same byte-exact way, one doctor at a time, through
+`<lock>.doctor.clear`. A stranded `.doctor.clear` needs a second crash, and
+`doctor` reports it for manual removal.
+
+On release the owner checks the lock is still its own. If it is not, the owner
+logs a warning; the write under the lock has already completed.
 
 A lock with a live owner, from another operating-system instance, or with an
 unreadable or older-format body still fails closed with an `ELOCKED` error that names the

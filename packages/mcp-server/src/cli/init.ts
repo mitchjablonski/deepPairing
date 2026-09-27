@@ -1059,7 +1059,7 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
     const { inspectLocks, clearDeadLockFile } = await import("../store/file-lock.js");
     const roots = [dpDir, path.dirname(getGlobalStore().getLedgerPath())];
     // Fix order matters for a stranded chain: .recover, then .break, then the lock.
-    const rank = { recover: 0, break: 1, lock: 2 } as const;
+    const rank = { clear: 0, doctor: 1, recover: 2, break: 3, lock: 4 } as const;
     const locks = inspectLocks(roots).sort((a, b) => rank[a.kind] - rank[b.kind]);
     if (locks.length === 0) {
       console.log(`  ${green("✓")} No cross-process locks held`);
@@ -1068,9 +1068,14 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
         const age = lock.ageMs === null ? "?" : `${Math.round(lock.ageMs / 1000)}s`;
         const owner = lock.owner?.pid ? `pid ${lock.owner.pid}${lock.owner.hostname ? ` on ${lock.owner.hostname}` : ""}` : "unknown owner";
         const mark = lock.state === "dead" ? yellow("!") : lock.state === "alive" ? dim("·") : yellow("?");
-        const what = lock.kind === "lock" ? "Lock" : lock.kind === "break" ? "Breaker guard" : "Recovery guard";
+        const what = lock.kind === "lock" ? "Lock"
+          : lock.kind === "break" ? "Breaker guard"
+          : lock.kind === "recover" ? "Recovery guard"
+          : lock.kind === "doctor" ? "Doctor guard" : "Doctor clear guard";
         console.log(`  ${mark} ${what} ${lock.path} ${dim(`(${owner}, ${lock.state}${lock.why ? ` — ${lock.why}` : ""}, age ${age})`)}`);
-        if (lock.state === "dead") {
+        if (lock.state === "dead" && lock.kind === "clear") {
+          console.log(`    ${dim("Stranded doctor clear guard (needs a crash while clearing a crash leftover) — stop every deepPairing daemon/CLI/doctor for this project, then delete it by hand.")}`);
+        } else if (lock.state === "dead") {
           fixes.push({
             label: `Remove dead-owner ${what.toLowerCase()} ${lock.path}`,
             apply: () => {
