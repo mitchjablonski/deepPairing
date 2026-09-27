@@ -51,6 +51,7 @@ import {
   tokenPlacement,
   writeTokenSidecar,
   unlinkTokenSidecar,
+  readTokenSidecar,
 } from "./token.js";
 // AA4 — projectHash is the deterministic short identity advertised on
 // /api/daemon-info + the WS `connected` event. The browser echoes it
@@ -195,6 +196,12 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   let boundPort = 0;
   const dpDir = path.join(projectRoot, ".deeppairing");
   const daemonInfoFile = path.join(dpDir, "daemon.json");
+  // #425 review — per-instance identity stamped into daemon.json. The pid alone
+  // can't prove ownership: in-process daemons (tests, the factory seam) share a
+  // pid, and pids get reused. cleanup() unlinks daemon.json only while it still
+  // names THIS instance — a daemon that lost the port, or bound a fallback,
+  // must never delete the live daemon's discovery file.
+  const instanceId = randomBytes(12).toString("hex");
 
   // --- Session management ---
 
@@ -836,11 +843,18 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
         log(`[cleanup] failed to flush session ${sessionId}: ${errorMessage(error)}`);
       }
     }
-    // Remove daemon info file
-    try { if (fs.existsSync(daemonInfoFile)) fs.unlinkSync(daemonInfoFile); } catch {}
+    // Remove daemon info file — only if it still names THIS instance. The
+    // field-exact re-read sits immediately before the unlink.
+    try {
+      const info = JSON.parse(fs.readFileSync(daemonInfoFile, "utf-8")) as { pid?: unknown; instanceId?: unknown };
+      if (info?.pid === process.pid && info?.instanceId === instanceId) fs.unlinkSync(daemonInfoFile);
+    } catch { /* absent, unreadable or not ours: leave it */ }
     // III9 — and the token sidecar, if we relocated the token off a non-POSIX
-    // project dir (no-op when the token lived in daemon.json).
-    try { unlinkTokenSidecar(projectRoot); } catch {}
+    // project dir (no-op when the token lived in daemon.json). Same rule: the
+    // sidecar carries this daemon's own bearer token, which proves ownership.
+    try {
+      if (readTokenSidecar(projectRoot)?.authToken === daemonAuthToken) unlinkTokenSidecar(projectRoot);
+    } catch {}
   }
 
   /** III3 — write `obj` to `file`, opening at mode 0600 so the TOCTOU window
@@ -887,7 +901,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     // ensureDaemon can read it WITHOUT an HTTP round-trip and decide whether to
     // adopt (same/newer) or restart (older/absent) the running daemon. Absence
     // of this field on a discovered daemon ⇒ pre-#136 build ⇒ definitely stale.
-    const discovery = { pid: process.pid, port, startedAt, projectRoot, version };
+    const discovery = { pid: process.pid, instanceId, port, startedAt, projectRoot, version };
     try {
       fs.mkdirSync(dpDir, { recursive: true });
 
