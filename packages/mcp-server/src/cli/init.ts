@@ -1048,6 +1048,47 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
     console.log(`  ${dim(`· Could not check philosophy ledger health: ${err}`)}`);
   }
 
+  // 6c. Cross-process locks (#406/#408). A write that returns 503 lock_busy
+  // names a lock; list every *.lock under this project's .deeppairing and the
+  // global philosophy dir with its owner and liveness. --fix removes ONLY locks
+  // whose owner is provably dead (same platform/host/boot/pid-namespace
+  // identity, pid gone or reused) — the lock via the writers' own
+  // breakDeadLock, a stranded `.break` via the writers' `.recover` guard, and a
+  // stranded `.break.recover` (a double crash; doctor is its ONLY remover).
+  try {
+    const { inspectLocks, clearDeadLockFile } = await import("../store/file-lock.js");
+    const roots = [dpDir, path.dirname(getGlobalStore().getLedgerPath())];
+    // Fix order matters for a stranded chain: .recover, then .break, then the lock.
+    const rank = { recover: 0, break: 1, lock: 2 } as const;
+    const locks = inspectLocks(roots).sort((a, b) => rank[a.kind] - rank[b.kind]);
+    if (locks.length === 0) {
+      console.log(`  ${green("✓")} No cross-process locks held`);
+    } else {
+      for (const lock of locks) {
+        const age = lock.ageMs === null ? "?" : `${Math.round(lock.ageMs / 1000)}s`;
+        const owner = lock.owner?.pid ? `pid ${lock.owner.pid}${lock.owner.hostname ? ` on ${lock.owner.hostname}` : ""}` : "unknown owner";
+        const mark = lock.state === "dead" ? yellow("!") : lock.state === "alive" ? dim("·") : yellow("?");
+        const what = lock.kind === "lock" ? "Lock" : lock.kind === "break" ? "Breaker guard" : "Recovery guard";
+        console.log(`  ${mark} ${what} ${lock.path} ${dim(`(${owner}, ${lock.state}${lock.why ? ` — ${lock.why}` : ""}, age ${age})`)}`);
+        if (lock.state === "dead") {
+          fixes.push({
+            label: `Remove dead-owner ${what.toLowerCase()} ${lock.path}`,
+            apply: () => {
+              try {
+                const r = clearDeadLockFile(lock.path);
+                return { ok: r.removed, message: r.removed ? "Removed" : `Not removed (${r.reason})` };
+              } catch (e) { return { ok: false, message: errorMessage(e) }; }
+            },
+          });
+        } else if (lock.state === "unknown") {
+          console.log(`    ${dim("Owner can't be verified (another OS instance, or an unreadable/older lock) — doctor will not remove it. Stop every deepPairing daemon/CLI for this project, then delete it by hand.")}`);
+        }
+      }
+    }
+  } catch (err) {
+    console.log(`  ${dim(`· Could not inspect locks: ${err}`)}`);
+  }
+
   // 7. Overall verdict
   console.log();
   if (probeOk && daemonFatalHint) {

@@ -3,7 +3,7 @@ import { PENDING_DRAFT_TYPES, WAITING_DRAFT_TYPES, ACKNOWLEDGE_ONLY_DRAFT_TYPES 
 import type { Artifact, Request } from "@deeppairing/shared";
 import { deliverComment, commentSecretNote, requestSecretNote, requestScopeNote, artifactHumanLabel } from "./check-feedback-delivery.js";
 import { SERVER_VERSION } from "../../version.js";
-import { collectUnansweredQuestions, describeRequestIntent, isClosedArtifactStatus, coerceChangesetContent } from "@deeppairing/shared";
+import { collectUnansweredQuestions, describeRequestIntent, isClosedArtifactStatus, coerceChangesetContent, errorMessage } from "@deeppairing/shared";
 import { getGlobalStore } from "../../store/global-store.js";
 import { composeOptionRejectReason, recordRejectedOption } from "../../store/rejected-option-recorder.js";
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
@@ -697,84 +697,26 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   // acknowledge ran between the snapshot and here, so it is the same set.
   const resolved = newResolved;
   if (resolved.length > 0) {
-    await store.acknowledgeDecisions(resolved.map((d) => d.decisionId));
+    // #408 review — RECORD, THEN ACK. Acking first meant a busy preferences
+    // lock (ELOCKED from recordApprovedPattern / recordRejectedOption) failed
+    // the whole tool AFTER the decision was acked: the next check_feedback
+    // never mentioned the pick and the unchosen options' rejections were never
+    // written. Now each decision is acked only once its ledger writes succeed;
+    // a failed one stays un-acked and is re-delivered (and re-recorded — both
+    // writes dedupe on description) by the next call.
     const formattedDecisions: string[] = [];
+    const recordedIds: string[] = [];
+    const deferred: string[] = [];
     for (const d of resolved) {
-      const option = d.options.find((o) => o.id === d.response?.optionId);
-      // P3 — the DECISION LABEL for every human-facing key this block mints.
-      // M1.1 gave present_options a short fork-naming `title` and made it the
-      // artifact/card/session heading, but this block kept keying on the full
-      // `context` PARAGRAPH — so the ledger (and export-learnings) showed
-      // "<three-line background paragraph>: Redis" where every other surface
-      // showed "Cache backend: Redis". Same label everywhere now.
-      //
-      // BACKWARD COMPAT (load-bearing, and stated precisely because the first
-      // cut of this comment overclaimed): this changes what NEW entries RECORD.
-      // The BLOCKING lanes that carry the moat are key-length-invariant —
-      //   - the post-colon `specificNoun` lane (findRejectedApproachMatch) sees
-      //     the option title under BOTH the old paragraph-prefixed key and the
-      //     new title-prefixed one, so a re-proposal of a rejected option
-      //     blocks identically either way; and
-      //   - the concept lane keys on option.concept.name, untouched here, so
-      //     the paraphrase catch is unaffected.
-      // The one lane that DID read the whole description — the reverse-phrase
-      // check — was prefix-sensitive in both directions (a long key blocked any
-      // short proposal appearing in the background paragraph, INCLUDING the
-      // chosen winner; a short key would block a later option titled with the
-      // generic fork words). It is now scoped to `specificNoun` too
-      // (preflight-validator.ts), which removes both false-block classes and
-      // makes this key change genuinely behavior-neutral for legitimate
-      // proposals. Divergence cases pinned in
-      // check-feedback-decision-title.test.ts.
-      const decisionLabel = d.title?.trim() || d.context;
-      if (option) {
-        const approvedDescription = `${decisionLabel}: ${option.title}`;
-        // AA1 — concept.name (from Y5) is the cross-project ledger key.
-        // Pre-AA1 we passed option.description here, which is prose
-        // and broke compounding (every project minted unique long
-        // keys instead of bucketing under e.g. "argon2id for password
-        // hashing"). Fall back to description for older agents that
-        // don't supply concept.
-        const approvedConcept: string | undefined =
-          option.concept?.name ?? option.description ?? undefined;
-        await store.recordApprovedPattern({
-          description: approvedDescription,
-          concept: approvedConcept,
-        });
-        broadcast({
-          type: "ledger_write",
-          kind: "approved",
-          description: approvedDescription,
-          concept: approvedConcept,
-          sourceArtifactId: d.artifactId,
-        });
-        const rejected = d.options.filter((o) => o.id !== d.response?.optionId);
-        for (const rej of rejected) {
-          // SP2 — per-option rejection reason. Pre-SP2 every rejected
-          // option was stamped with the human's single overall
-          // pick-reasoning ("why I chose the winner"), so B and C — often
-          // rejected for DIFFERENT reasons — compounded the same blurred
-          // signal in the ledger. Prefer THIS option's own cons (its
-          // specific "why it's the worse fit"); keep the winner + the
-          // human's reasoning as shared context when present.
-          //
-          // #169 — the compose + concept-key + record/broadcast is now shared
-          // with the WHOLE-CARD rejection path (rejected-option-recorder.ts):
-          // recordRejectedOption keys the session ledger on
-          // `${context}: ${option.title}` and the cross-project ledger on the
-          // REJECTED option's own concept, so the two paths can't drift.
-          const pickContext = d.response?.reasoning
-            ? ` — picked "${option.title}": ${d.response.reasoning}`
-            : "";
-          const rejectReason = composeOptionRejectReason(rej, pickContext, d.response?.reasoning);
-          await recordRejectedOption(store, broadcast, {
-            context: decisionLabel,
-            option: rej,
-            reason: rejectReason,
-            sourceArtifactId: d.artifactId,
-          });
-        }
+      try {
+        await recordDecisionLedger(d);
+      } catch (err) {
+        deferred.push(`- Decision "${d.title?.trim() || d.context}": the human's pick is saved, but recording it in the project ledger failed (${errorMessage(err)}). It will be delivered again on the next check_feedback — call it again shortly.`);
+        continue;
       }
+      recordedIds.push(d.decisionId);
+      const option = d.options.find((o) => o.id === d.response?.optionId);
+      const decisionLabel = d.title?.trim() || d.context;
       formattedDecisions.push(`- Decision "${decisionLabel}": selected "${option?.title ?? d.response?.optionId}"${d.response?.reasoning ? ` (reasoning: ${d.response.reasoning})` : ""}`);
       structuredDecisions.push({
         decisionId: d.decisionId,
@@ -785,7 +727,87 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
         reasoning: d.response?.reasoning,
       });
     }
-    parts.push(`Decision selections:\n${formattedDecisions.join("\n")}`);
+    if (recordedIds.length > 0) await store.acknowledgeDecisions(recordedIds);
+    if (formattedDecisions.length > 0) parts.push(`Decision selections:\n${formattedDecisions.join("\n")}`);
+    if (deferred.length > 0) parts.push(`⏳ Decision ledger writes deferred (${deferred.length}):\n${deferred.join("\n")}`);
+  }
+
+  async function recordDecisionLedger(d: (typeof resolved)[number]): Promise<void> {
+    const option = d.options.find((o) => o.id === d.response?.optionId);
+    // P3 — the DECISION LABEL for every human-facing key this block mints.
+    // M1.1 gave present_options a short fork-naming `title` and made it the
+    // artifact/card/session heading, but this block kept keying on the full
+    // `context` PARAGRAPH — so the ledger (and export-learnings) showed
+    // "<three-line background paragraph>: Redis" where every other surface
+    // showed "Cache backend: Redis". Same label everywhere now.
+    //
+    // BACKWARD COMPAT (load-bearing, and stated precisely because the first
+    // cut of this comment overclaimed): this changes what NEW entries RECORD.
+    // The BLOCKING lanes that carry the moat are key-length-invariant —
+    //   - the post-colon `specificNoun` lane (findRejectedApproachMatch) sees
+    //     the option title under BOTH the old paragraph-prefixed key and the
+    //     new title-prefixed one, so a re-proposal of a rejected option
+    //     blocks identically either way; and
+    //   - the concept lane keys on option.concept.name, untouched here, so
+    //     the paraphrase catch is unaffected.
+    // The one lane that DID read the whole description — the reverse-phrase
+    // check — was prefix-sensitive in both directions (a long key blocked any
+    // short proposal appearing in the background paragraph, INCLUDING the
+    // chosen winner; a short key would block a later option titled with the
+    // generic fork words). It is now scoped to `specificNoun` too
+    // (preflight-validator.ts), which removes both false-block classes and
+    // makes this key change genuinely behavior-neutral for legitimate
+    // proposals. Divergence cases pinned in
+    // check-feedback-decision-title.test.ts.
+    const decisionLabel = d.title?.trim() || d.context;
+    if (option) {
+      const approvedDescription = `${decisionLabel}: ${option.title}`;
+      // AA1 — concept.name (from Y5) is the cross-project ledger key.
+      // Pre-AA1 we passed option.description here, which is prose
+      // and broke compounding (every project minted unique long
+      // keys instead of bucketing under e.g. "argon2id for password
+      // hashing"). Fall back to description for older agents that
+      // don't supply concept.
+      const approvedConcept: string | undefined =
+        option.concept?.name ?? option.description ?? undefined;
+      await store.recordApprovedPattern({
+        description: approvedDescription,
+        concept: approvedConcept,
+      });
+      broadcast({
+        type: "ledger_write",
+        kind: "approved",
+        description: approvedDescription,
+        concept: approvedConcept,
+        sourceArtifactId: d.artifactId,
+      });
+      const rejected = d.options.filter((o) => o.id !== d.response?.optionId);
+      for (const rej of rejected) {
+        // SP2 — per-option rejection reason. Pre-SP2 every rejected
+        // option was stamped with the human's single overall
+        // pick-reasoning ("why I chose the winner"), so B and C — often
+        // rejected for DIFFERENT reasons — compounded the same blurred
+        // signal in the ledger. Prefer THIS option's own cons (its
+        // specific "why it's the worse fit"); keep the winner + the
+        // human's reasoning as shared context when present.
+        //
+        // #169 — the compose + concept-key + record/broadcast is now shared
+        // with the WHOLE-CARD rejection path (rejected-option-recorder.ts):
+        // recordRejectedOption keys the session ledger on
+        // `${context}: ${option.title}` and the cross-project ledger on the
+        // REJECTED option's own concept, so the two paths can't drift.
+        const pickContext = d.response?.reasoning
+          ? ` — picked "${option.title}": ${d.response.reasoning}`
+          : "";
+        const rejectReason = composeOptionRejectReason(rej, pickContext, d.response?.reasoning);
+        await recordRejectedOption(store, broadcast, {
+          context: decisionLabel,
+          option: rej,
+          reason: rejectReason,
+          sourceArtifactId: d.artifactId,
+        });
+      }
+    }
   }
 
   // Plan review verdicts

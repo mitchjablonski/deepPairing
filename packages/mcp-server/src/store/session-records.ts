@@ -1,5 +1,4 @@
-import fs from "node:fs";
-import { performance } from "node:perf_hooks";
+import { withFileLock } from "./file-lock.js";
 
 type RecordValue = Record<string, unknown>;
 
@@ -156,41 +155,10 @@ export function mergeArtifactRecords<T extends object>(
 
 /** Cooperating FileStore writers serialize the complete read/merge/write
  * section. Never break locks by age: a paused live writer could still commit.
- * After a crash, an operator may remove the lock ONLY after stopping writers.
+ * A lock whose owner is provably dead (same host, pid gone or reused) is
+ * recovered atomically by file-lock.ts; a live, foreign-host or legacy-body
+ * owner stays fail-closed until an operator stops the writers and removes it.
  * Timeout/failure throws; callers must never continue with an unlocked write. */
 export function withSessionFlushLock<T>(filePath: string, run: () => T): T {
-  const deadline = performance.now() + 250;
-  const waitArray = new Int32Array(new SharedArrayBuffer(4));
-  let fd: number;
-  for (;;) {
-    try {
-      fd = fs.openSync(filePath, "wx", 0o600);
-      break;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      if (performance.now() >= deadline) {
-        throw Object.assign(new Error(`Session flush lock busy: ${filePath}. Stop all writers before removing an abandoned lock.`), { code: "ELOCKED" });
-      }
-      Atomics.wait(waitArray, 0, 0, 10);
-    }
-  }
-  let result!: T;
-  let failed = false;
-  let failure: unknown;
-  try {
-    fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }));
-    result = run();
-  } catch (err) {
-    failed = true;
-    failure = err;
-  }
-  // Always attempt both cleanup operations, but preserve the original failure.
-  // A cleanup-only failure still propagates (an orphan lock needs attention).
-  for (const cleanup of [() => fs.closeSync(fd), () => fs.unlinkSync(filePath)]) {
-    try { cleanup(); } catch (err) {
-      if (!failed) { failed = true; failure = err; }
-    }
-  }
-  if (failed) throw failure;
-  return result;
+  return withFileLock(filePath, run, { label: "Session flush lock" });
 }

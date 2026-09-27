@@ -283,6 +283,51 @@ in the [operator recovery contract](pr-posting-contract.md#offline-operator-insp
 They require all writers stopped, preserve journal history, and never send a review.
 An acknowledgement is not evidence that an uncertain review was absent.
 
+## lock_busy
+
+HTTP 503. A write to a file that several processes share could not take that
+file's cross-process lock within its bounded wait, so **the write did not
+happen**. The files are the project's `.deeppairing/preferences.json`, the
+cross-project ledger `~/.deeppairing/philosophy/v1.json`, and a session's
+records. The companion UI rolls its change back. Retry once the other writer
+finishes; brief contention clears by itself.
+
+The response's `lockPath` names the lock. Its body records the owner's
+platform, host, boot ID, PID namespace, PID and start time. A lock whose owner
+has died in this same operating-system instance is recovered automatically on
+the next write. The lock stays in place, and `lock_busy` persists, in any of
+these cases:
+
+- its owner is still running;
+- it belongs to another OS instance (for example, Windows versus WSL on the same
+  machine, or a container);
+- its body is unreadable, for example because an older version wrote it.
+
+To inspect it:
+
+```bash
+deeppairing doctor          # lists every *.lock with owner pid, liveness and age
+deeppairing doctor --fix    # removes only locks whose owner is provably dead
+```
+
+`doctor --fix` also removes stranded breaker guards (`<lock>.break`,
+`<lock>.break.recover`) whose owner is provably dead. It never removes a lock
+or guard with a live or unverifiable owner, and it never touches
+`.review-post.lock` (see `review_post_conflict`).
+
+Known residual cases, described in
+[session persistence](session-persistence.md#known-residual-cases):
+
+- A reject can return 503 after its status was saved. Rejecting again records
+  the approach.
+- With cross-project publish on, a millisecond review-conflict race can leave a
+  ledger entry behind.
+- On Windows, sleep or a clock step can make a lock's owner "unknown". The lock
+  then stays until `doctor` or a manual delete removes it. If doctor
+reports a live owner, stop that daemon or CLI command first. Remove a lock by
+hand only after you have stopped every deepPairing daemon and CLI writer for
+the project.
+
 ## Still stuck?
 
 ### Diagnosing an intermittent browser-test failure

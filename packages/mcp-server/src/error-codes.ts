@@ -89,6 +89,11 @@ export const ERROR_CODES = {
   unsupported: "unsupported",
   /** Durable review-post state needs inspection; do not retry an external POST. */
   review_post_conflict: "review_post_conflict",
+  /** #406/#408 — a cross-process file lock (preferences.json, the philosophy
+   *  ledger, a session flush) stayed held past its bounded wait by a LIVE (or
+   *  unverifiable) owner. Nothing was committed; retry, or inspect with
+   *  `deeppairing doctor` (dead-owner locks are recovered automatically). */
+  lock_busy: "lock_busy",
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
@@ -106,6 +111,7 @@ export const USER_FACING_ERROR_CODES: readonly ErrorCode[] = [
   ERROR_CODES.session_not_registered,
   ERROR_CODES.session_review_conflict,
   ERROR_CODES.review_post_conflict,
+  ERROR_CODES.lock_busy,
 ];
 
 /**

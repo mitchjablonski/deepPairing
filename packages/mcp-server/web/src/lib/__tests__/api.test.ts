@@ -146,6 +146,18 @@ describe("safeFetch (U3)", () => {
     }
   });
 
+  it("#408 review (L1): toasts the daemon's human-readable message, not the bare code", async () => {
+    mockFetch(() => new Response(
+      JSON.stringify({ error: "lock_busy", code: "lock_busy", message: "Project preferences lock busy: /p/.deeppairing/preferences.json.lock. This write did not complete; retry in a moment." }),
+      { status: 503, headers: { "Content-Type": "application/json" } },
+    ));
+    await expect(safeFetch("/x", { method: "POST" })).rejects.toMatchObject({
+      status: 503,
+      code: "lock_busy",
+      message: expect.stringMatching(/preferences lock busy.*retry in a moment/),
+    });
+  });
+
   it("throws a generic ApiError when the body isn't JSON", async () => {
     mockFetch(() => new Response("Internal Server Error", { status: 500 }));
     await expect(safeFetch("/x", { method: "POST" })).rejects.toMatchObject({
