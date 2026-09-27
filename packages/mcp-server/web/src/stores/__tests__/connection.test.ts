@@ -329,6 +329,26 @@ describe("connection store — handleMessage dispatch", () => {
     expect(useArtifactStore.getState().artifacts[0]!.title).toBe("New title");
   });
 
+  it("#424 review — an `artifact_renamed` broadcast survives an older local rename failing afterwards", async () => {
+    useArtifactStore.getState().addArtifact({
+      id: "a1", sessionId: "s1", type: "research", version: 1, parentId: null,
+      title: "Original", status: "draft", content: {}, agentReasoning: null,
+      createdAt: "2026-04-16T10:00:00.000Z", updatedAt: "2026-04-16T10:00:00.000Z",
+    });
+    const pending = deferredResponse();
+    vi.stubGlobal("fetch", vi.fn(() => pending.promise));
+    const renaming = useArtifactStore.getState().renameArtifact("a1", "Mine");
+
+    useConnectionStore.getState().connect();
+    activeAdapter.emit({ type: "artifact_renamed", artifactId: "a1", title: "Theirs" });
+    await flush();
+    pending.resolve(new Response(JSON.stringify({ error: "boom" }), { status: 500, headers: { "Content-Type": "application/json" } }));
+    await expect(renaming).rejects.toBeTruthy();
+
+    expect(useArtifactStore.getState().artifacts[0]!.title).toBe("Theirs");
+    vi.unstubAllGlobals();
+  });
+
   it("updates autonomyLevel on `preference_changed`", async () => {
     useConnectionStore.getState().connect();
     activeAdapter.emit({ type: "preference_changed", autonomyLevel: "autonomous" });
