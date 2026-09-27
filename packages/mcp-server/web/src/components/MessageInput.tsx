@@ -5,7 +5,7 @@ import { apiBase, sessionHeaders, safeFetch, ApiError } from "../lib/api";
 import { useToastStore } from "../stores/toast";
 import { useConnectionStore } from "../stores/connection";
 import { useReplayStore } from "../stores/replay";
-import { useDraft } from "../hooks/useDraft";
+import { useDraft, clearDraftIfUnchanged, isDraftSending, markDraftSending, useDraftSending } from "../hooks/useDraft";
 import { useAgentRecentlyActive } from "../hooks/useAgentRecentlyActive";
 import { useSentFlash } from "../hooks/useSentFlash";
 
@@ -13,6 +13,17 @@ import { useSentFlash } from "../hooks/useSentFlash";
 // a fresh `[]` on every render (which would trigger an infinite loop via
 // useSyncExternalStore).
 const EMPTY_COMMENTS: Comment[] = [];
+
+/**
+ * #417 review — give up on a send after this long. safeFetch has no timeout,
+ * and the per-draft in-flight marker (below) now outlives a remount, so a POST
+ * that never settles would keep this session's composer disabled until a
+ * reload. The route is a local file write whose locks are bounded (250ms
+ * store lock, 1s ledger lock → 503 lock_busy), so a healthy daemon answers in
+ * well under a second even on slow disks (WSL /mnt/c); 30s is far past any
+ * legitimate reply and short enough that a wedge is noticed.
+ */
+const SEND_TIMEOUT_MS = 30_000;
 
 /**
  * Free-form message composer at the bottom of the companion UI.
@@ -37,8 +48,12 @@ export function MessageInput() {
   // D9 (H5) — survives reloads; keyed per session so a draft can never
   // follow you across a session switch (M5).
   const sessionId = useConnectionStore((st) => st.sessionId);
-  const [message, setMessage] = useDraft(`msg:${sessionId ?? "unbound"}`);
-  const [sending, setSending] = useState(false);
+  const draftKey = `msg:${sessionId ?? "unbound"}`;
+  const [message, setMessage] = useDraft(draftKey);
+  // #417 review — keyed per draft and held outside this instance (see
+  // markDraftSending): a composer that remounts mid-send stays "sending", and
+  // a send pending in session A no longer locks session B's composer.
+  const sending = useDraftSending(draftKey);
   const { sent, flash } = useSentFlash();
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -103,46 +118,91 @@ export function MessageInput() {
     });
   };
 
-  // U0.1 — sync guard backed by a ref. The previous `if (sending) return`
-  // read React state, which doesn't flush until after the event handler;
-  // a rapid Cmd+Enter could fire handleSend several times before
-  // setSending(true) propagated, producing duplicate POSTs. The ref is
-  // synchronous, so the second tap short-circuits immediately.
-  const inFlightRef = useRef(false);
+  // U0.1 — the double-submit guard must be SYNCHRONOUS: React state doesn't
+  // flush until after the event handler, so a rapid Cmd+Enter could fire
+  // handleSend several times. `isDraftSending` reads a plain Set, so the second
+  // tap short-circuits immediately — and (#417 review) across a remount too.
+
+  // #417 — a send's completion must land on the composer it came FROM. This
+  // component is not keyed by session: switching sessions re-keys the draft
+  // in place, so a send started in A that settled after a switch to B ran
+  // `setMessage("")` against B's draft (deleting it after the debounce) and
+  // flashed "Sent" in B. Completion is bound to the originating session by
+  // IDENTITY — the tab's sessionId, not the store generation (#415 round 3:
+  // a same-session reconnect must still clear and flash) — plus this
+  // instance's lifetime, and the text that was sent.
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
+  const messageRef = useRef(message);
+  messageRef.current = message;
 
   const handleSend = async () => {
-    if (!message.trim() || inFlightRef.current) return;
-    inFlightRef.current = true;
-    setSending(true);
+    if (!message.trim() || isDraftSending(draftKey)) return;
+    const release = markDraftSending(draftKey);
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, SEND_TIMEOUT_MS);
+    const origin = { sessionId, draftKey, text: message };
+    const stillHere = () => mountedRef.current && useConnectionStore.getState().sessionId === origin.sessionId;
 
     try {
       await safeFetch(`${apiBase()}/api/comments`, {
         method: "POST",
-        headers: sessionHeaders(),
+        headers: sessionHeaders(origin.sessionId ?? undefined),
+        signal: controller.signal,
         body: JSON.stringify({
           artifactId: "__session__",
           content: message.trim(),
           target: { artifactId: "__session__" },
         }),
       });
-      setMessage("");
-      flash();
+      if (stillHere()) {
+        // Clear only the text that was sent (the textarea is disabled while
+        // sending, so in practice it is; an A→B→A round trip reloads A's
+        // saved draft, which is that same text).
+        if (messageRef.current === origin.text) setMessage("");
+        flash();
+      } else {
+        // Moved on (switched away, or unmounted): touch nothing on screen and
+        // say nothing here. Retire the ORIGIN session's saved draft if it is
+        // still exactly the sent text, so it doesn't resurrect as unsent when
+        // you return; anything written since is kept.
+        clearDraftIfUnchanged(origin.draftKey, origin.text);
+      }
     } catch (err) {
       // U3 — surface the failure as a toast and keep the message in the
       // composer so the user can retry. Pre-U3 this swallowed the error
       // entirely; the user thought their message went through and only
       // realized minutes later (when the agent never responded) that it
       // hadn't.
+      // #417 — still toast after a switch (a silent failure is exactly the U3
+      // trap: you left believing it went), but name it as the PREVIOUS
+      // session's so it can't read as a failure of anything in this one. The
+      // draft stays saved there for the retry.
       const apiErr = err instanceof ApiError ? err : null;
+      const detail = apiErr?.message ?? (err instanceof Error ? err.message : "Unknown error");
+      const switched = useConnectionStore.getState().sessionId !== origin.sessionId;
+      if (timedOut) {
+        // The POST may still have landed. The server only dedupes an identical
+        // comment within 5s and the payload carries no client id, so a resend
+        // now could post twice: say so instead of implying a clean failure.
+        useToastStore.getState().push({
+          kind: "error",
+          title: switched ? "Message to your previous session timed out" : "Send timed out",
+          body: "It may or may not have reached the agent — check the recent messages before resending. Your draft is kept.",
+          ttl: 0,
+        });
+        return;
+      }
       useToastStore.getState().push({
         kind: "error",
-        title: "Send failed",
-        body: apiErr?.message ?? (err instanceof Error ? err.message : "Unknown error"),
+        title: switched ? "Message to your previous session wasn't sent" : "Send failed",
+        body: switched ? `${detail} — your draft is still saved there; switch back to retry.` : detail,
         ttl: 7000,
       });
     } finally {
-      inFlightRef.current = false;
-      setSending(false);
+      clearTimeout(timer);
+      release();
     }
   };
 

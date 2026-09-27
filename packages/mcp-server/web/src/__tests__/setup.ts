@@ -24,3 +24,8 @@ import { beforeEach as __dpBeforeEach } from "vitest";
 __dpBeforeEach(() => {
   try { sessionStorage.clear(); } catch { /* no storage in this env */ }
 });
+
+// #417 review — the draft in-flight marker is module state; a send a test left
+// unsettled must not keep the next test's composer disabled.
+import { __resetDraftSendingForTests } from "../hooks/useDraft";
+afterEach(() => __resetDraftSendingForTests());

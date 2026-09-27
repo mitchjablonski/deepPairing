@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { buildThreads } from "../lib/threading";
 import { formatClockTime as formatTime } from "../lib/time";
-import { useDraft } from "../hooks/useDraft";
+import { useDraft, clearDraftIfUnchanged } from "../hooks/useDraft";
 import { useDismissOnOutside } from "../hooks/useDismissOnOutside";
 import type { Comment, CommentTarget } from "@deeppairing/shared";
 import { useArtifactStore, rootArtifactId, commentPriorVersion } from "../stores/artifact";
@@ -223,7 +223,8 @@ export function CommentThread({
   // rootArtifactId(v2), so the in-progress draft survives the auto-advance.
   const artifacts = useArtifactStore((s) => s.artifacts);
   const rootId = rootArtifactId(artifacts, artifactId);
-  const [input, setInput] = useDraft(`comment:${rootId}:${JSON.stringify(target ?? {})}`);
+  const draftKey = `comment:${rootId}:${JSON.stringify(target ?? {})}`;
+  const [input, setInput] = useDraft(draftKey);
   const [submitting, setSubmitting] = useState(false);
   const submitComment = useArtifactStore((s) => s.submitComment);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -272,6 +273,7 @@ export function CommentThread({
   const handleSubmit = async (intent?: "question") => {
     if (!input.trim() || submitting) return;
     setSubmitting(true);
+    const sent = input;
     try {
       await submitComment(
         artifactId,
@@ -280,6 +282,11 @@ export function CommentThread({
         intent === "question" ? { intent } : undefined,
       );
       setInput(""); // clear only on success; keep the draft for retry on failure
+      // #417 review — a session switch UNMOUNTS this thread, and the unmount
+      // saved the draft; the setter above can't reach it any more, so the sent
+      // text came back as unsent on return (inviting a duplicate). Retire the
+      // saved copy too, only while it is still exactly what was sent.
+      clearDraftIfUnchanged(draftKey, sent);
     } catch {
       /* store surfaced the error toast */
     } finally {

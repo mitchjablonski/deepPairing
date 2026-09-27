@@ -1,10 +1,72 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 function writeDraft(key: string, value: string): void {
   try {
     if (value) sessionStorage.setItem(key, value);
     else sessionStorage.removeItem(key);
   } catch { /* quota/denied — draft just won't persist */ }
+}
+
+const DRAFT_SENT_EVENT = "dp:draft-sent";
+
+/**
+ * #417 review — "a send of THIS draft is in flight", keyed by draft key and
+ * held OUTSIDE any component. A per-instance ref guard reset whenever the
+ * composer remounted mid-send (a reconnect can unmount it), so the new
+ * instance offered Send again and a second click posted twice. Module-level,
+ * the marker outlives the instance; the sender releases it in `finally`, so a
+ * failed or rejected send can't wedge it.
+ */
+const sendingKeys = new Set<string>();
+const sendingListeners = new Set<() => void>();
+const notifySending = () => { for (const l of sendingListeners) l(); };
+export function isDraftSending(key: string): boolean {
+  return sendingKeys.has(key);
+}
+/** Mark `key` as sending; returns an idempotent release. */
+export function markDraftSending(key: string): () => void {
+  sendingKeys.add(key);
+  notifySending();
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    sendingKeys.delete(key);
+    notifySending();
+  };
+}
+/** Test-only: the marker is module state, so a send a test leaves unsettled
+ *  would otherwise leak into the next test (web setup resets it). */
+export function __resetDraftSendingForTests(): void {
+  sendingKeys.clear();
+  notifySending();
+}
+const subscribeSending = (cb: () => void) => {
+  sendingListeners.add(cb);
+  return () => { sendingListeners.delete(cb); };
+};
+/** Re-renders when a send of `key` starts or settles, from any instance. */
+export function useDraftSending(key: string): boolean {
+  return useSyncExternalStore(subscribeSending, () => sendingKeys.has(key), () => false);
+}
+
+/**
+ * #417 — compare-and-delete a PERSISTED draft. For a send that completes after
+ * its composer moved on (session switch, unmount): the submitted text is gone
+ * from the server's point of view, so its saved draft must not resurrect when
+ * you come back — but only if it is still exactly what was sent, never text
+ * written after it.
+ */
+export function clearDraftIfUnchanged(key: string, sent: string): void {
+  const storageKey = `dp:draft:${key}`;
+  try {
+    if (sessionStorage.getItem(storageKey) === sent) sessionStorage.removeItem(storageKey);
+  } catch { /* storage denied — nothing persisted to clear */ }
+  // A composer that REMOUNTED on this same key (a reconnect can unmount the
+  // composer mid-send) already loaded the sent text into its state; tell it.
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(DRAFT_SENT_EVENT, { detail: { storageKey, sent } }));
+  }
 }
 
 /**
@@ -49,6 +111,17 @@ export function useDraft(key: string): [string, (v: string) => void] {
     const t = setTimeout(() => writeDraft(storageKey, value), 300);
     return () => clearTimeout(t);
   }, [value, storageKey]);
+
+  // #417 — a send that settled elsewhere (see clearDraftIfUnchanged) retires
+  // this draft only if it is on the same key and still exactly the sent text.
+  useEffect(() => {
+    const onSent = (e: Event) => {
+      const { storageKey: k, sent } = (e as CustomEvent<{ storageKey: string; sent: string }>).detail;
+      if (k === latest.current.key && latest.current.value === sent) setValue("");
+    };
+    window.addEventListener(DRAFT_SENT_EVENT, onSent);
+    return () => window.removeEventListener(DRAFT_SENT_EVENT, onSent);
+  }, []);
 
   // Flush on unmount and on reload/navigation (pagehide covers both).
   useEffect(() => {

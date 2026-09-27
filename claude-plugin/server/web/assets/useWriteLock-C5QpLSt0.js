@@ -1,1 +1,0 @@
-import{o as e}from"./pending--__dqA2s.js";import{C as t}from"./index-DnSo_cbj.js";function n(n){let r=t(n,e(e=>e.active));return r===`closed`||r===`frozen`}export{n as t};

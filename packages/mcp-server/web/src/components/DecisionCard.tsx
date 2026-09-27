@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { useDraft } from "../hooks/useDraft";
+import { useDraft, clearDraftIfUnchanged } from "../hooks/useDraft";
 // B5 — `m` + LazyMotion (App loads domAnimation) instead of the full
 // `motion` component: drops ~40kB gzip of animation features nothing uses
 // from the ENTRY bundle. Same animations.
@@ -185,6 +185,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     if (inFlightRef.current) return;
     inFlightRef.current = true;
     setPhase({ kind: "submitting" });
+    const sentReasoning = reasoningDraft;
     try {
       const id = decisionId ?? event.decisionId;
       await resolveDecision(id, optionId, reasoning.trim() || undefined);
@@ -192,6 +193,9 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
       // then clear the draft so it can't shadow future resolved views.
       setSubmittedReasoning(reasoning.trim());
       setReasoningDraft("");
+      // #417 review — also retire the SAVED copy: a session switch unmounts
+      // this card mid-POST and the unmount persisted the draft.
+      clearDraftIfUnchanged(`dec-reason:${decisionId}`, sentReasoning);
       setPhase({ kind: "resolved", optionId });
       onResolved?.();
     } catch {
@@ -393,6 +397,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     if (writeLocked) return;
     if (!artifactId || !text || phase.kind !== "idle" || inFlightRef.current) return;
     inFlightRef.current = true;
+    const sentDraft = sendBackText;
     try {
       await submitComment(
         artifactId,
@@ -403,6 +408,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
       setPhase({ kind: "sentBack" });
       setShowSendBack(false);
       setSendBackText("");
+      clearDraftIfUnchanged(`dec-sendback:${decisionId}`, sentDraft); // #417 review, as above
     } catch {
       // UX7d — store surfaced the error toast; keep the composer open + text for
       // retry (don't advance to sentBack) instead of an unhandled rejection.
