@@ -35120,6 +35120,7 @@ function createDaemon(deps) {
   let boundPort = 0;
   const dpDir2 = path22.join(projectRoot2, ".deeppairing");
   const daemonInfoFile = path22.join(dpDir2, "daemon.json");
+  const instanceId = randomBytes3(12).toString("hex");
   const sessions = /* @__PURE__ */ new Map();
   const sessionMeta = /* @__PURE__ */ new Map();
   const activeSessions = /* @__PURE__ */ new Set();
@@ -35474,11 +35475,12 @@ function createDaemon(deps) {
       }
     }
     try {
-      if (fs23.existsSync(daemonInfoFile)) fs23.unlinkSync(daemonInfoFile);
+      const info = JSON.parse(fs23.readFileSync(daemonInfoFile, "utf-8"));
+      if (info?.pid === process.pid && info?.instanceId === instanceId) fs23.unlinkSync(daemonInfoFile);
     } catch {
     }
     try {
-      unlinkTokenSidecar(projectRoot2);
+      if (readTokenSidecar(projectRoot2)?.authToken === daemonAuthToken2) unlinkTokenSidecar(projectRoot2);
     } catch {
     }
   }
@@ -35496,7 +35498,7 @@ function createDaemon(deps) {
     return tokenPlacementCached;
   }
   function writeDaemonInfo(port) {
-    const discovery = { pid: process.pid, port, startedAt: startedAt2, projectRoot: projectRoot2, version: version2 };
+    const discovery = { pid: process.pid, instanceId, port, startedAt: startedAt2, projectRoot: projectRoot2, version: version2 };
     try {
       fs23.mkdirSync(dpDir2, { recursive: true });
       if (resolveTokenPlacement() === "in-repo") {
