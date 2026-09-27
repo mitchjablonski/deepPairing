@@ -21158,6 +21158,7 @@ var lifecycle_exports = {};
 __export(lifecycle_exports, {
   DEFAULT_PORT: () => DEFAULT_PORT,
   DEFAULT_READINESS_TIMEOUT_MS: () => DEFAULT_READINESS_TIMEOUT_MS,
+  DaemonExitedDuringStartupError: () => DaemonExitedDuringStartupError,
   MAX_PORT_ATTEMPTS: () => MAX_PORT_ATTEMPTS,
   READINESS_PROGRESS_AFTER_MS: () => READINESS_PROGRESS_AFTER_MS,
   READINESS_PROGRESS_MESSAGE: () => READINESS_PROGRESS_MESSAGE,
@@ -21335,14 +21336,20 @@ async function waitForDaemon(projectRoot2, opts = {}) {
   const describeHolders = opts.describeHolders ?? describePortHolders;
   const start = now();
   let progressShown = false;
+  let exited = null;
+  opts.childExit?.then((e) => {
+    exited = e;
+  }, () => {
+  });
   while (now() - start < timeoutMs) {
     const info = await isRunning(projectRoot2);
     if (info) return info;
+    if (exited) throw new DaemonExitedDuringStartupError(exited);
     if (!progressShown && now() - start >= progressAfterMs) {
       progressShown = true;
       onProgress(READINESS_PROGRESS_MESSAGE);
     }
-    await doSleep(pollIntervalMs);
+    await (opts.childExit ? Promise.race([doSleep(pollIntervalMs), opts.childExit]) : doSleep(pollIntervalMs));
   }
   const hint = await describeHolders(projectRoot2);
   throw new Error(buildReadinessTimeoutMessage({ timeoutMs, projectRoot: projectRoot2, hint }));
@@ -21416,11 +21423,26 @@ function spawnDaemon(projectRoot2) {
     if (stderrBuf.length > 4096) stderrBuf = stderrBuf.slice(-4096);
   };
   child.stderr?.on("data", onData);
+  let resolveExit;
+  const exited = new Promise((r) => {
+    resolveExit = r;
+  });
+  const onExit = (code, signal) => {
+    const report = () => resolveExit({ code, signal });
+    const cap = setTimeout(report, 250);
+    cap.unref?.();
+    child.once("close", () => {
+      clearTimeout(cap);
+      report();
+    });
+  };
+  child.once("exit", onExit);
   child.unref();
   let released = false;
   const release2 = () => {
     if (released) return;
     released = true;
+    child.removeListener("exit", onExit);
     try {
       child.stderr?.removeListener("data", onData);
       child.stderr?.destroy();
@@ -21432,7 +21454,7 @@ function spawnDaemon(projectRoot2) {
     } catch {
     }
   };
-  return { stderrTail: () => stderrBuf, release: release2 };
+  return { stderrTail: () => stderrBuf, release: release2, exited };
 }
 function classifyDaemonVersion(runningVersion, myVersion) {
   if (runningVersion === void 0 || runningVersion === null || runningVersion === "") {
@@ -21616,9 +21638,9 @@ async function ensureDaemon(projectRoot2, opts = {}) {
     const outcome = await resolveStaleDaemon(existing, SERVER_VERSION, projectRoot2, { log: logStale });
     if (outcome === "adopt") return existing;
   }
-  const { stderrTail, release: release2 } = spawnDaemon(projectRoot2);
+  const { stderrTail, release: release2, exited } = spawnDaemon(projectRoot2);
   try {
-    const info = await waitForDaemon(projectRoot2, { onProgress: opts.onProgress });
+    const info = await waitForDaemon(projectRoot2, { onProgress: opts.onProgress, childExit: exited });
     release2();
     return info;
   } catch (err) {
@@ -21632,7 +21654,7 @@ ${tail}`);
     throw err;
   }
 }
-var __thisDir2, DAEMON_FILE, DEFAULT_PORT, MAX_PORT_ATTEMPTS, DEFAULT_READINESS_TIMEOUT_MS, READINESS_PROGRESS_AFTER_MS, READINESS_PROGRESS_MESSAGE, realSleep, sleep;
+var __thisDir2, DAEMON_FILE, DEFAULT_PORT, MAX_PORT_ATTEMPTS, DEFAULT_READINESS_TIMEOUT_MS, READINESS_PROGRESS_AFTER_MS, READINESS_PROGRESS_MESSAGE, DaemonExitedDuringStartupError, realSleep, sleep;
 var init_lifecycle = __esm({
   "src/daemon/lifecycle.ts"() {
     "use strict";
@@ -21648,6 +21670,16 @@ var init_lifecycle = __esm({
     DEFAULT_READINESS_TIMEOUT_MS = 4e4;
     READINESS_PROGRESS_AFTER_MS = 5e3;
     READINESS_PROGRESS_MESSAGE = "daemon starting \u2014 first run on this filesystem can take ~30s\u2026";
+    DaemonExitedDuringStartupError = class extends Error {
+      constructor(exit) {
+        super(
+          `deepPairing daemon exited during startup (${exit.signal ? `signal ${exit.signal}` : `exit code ${exit.code}`}) before it became ready.`
+        );
+        this.exit = exit;
+        this.name = "DaemonExitedDuringStartupError";
+      }
+      exit;
+    };
     realSleep = (ms) => new Promise((r) => setTimeout(r, ms));
     sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   }

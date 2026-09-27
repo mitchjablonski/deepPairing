@@ -288,6 +288,19 @@ export const READINESS_PROGRESS_AFTER_MS = 5_000;
 export const READINESS_PROGRESS_MESSAGE =
   "daemon starting — first run on this filesystem can take ~30s…";
 
+/** #426 — how a spawned daemon child ended. */
+export interface ChildExit { code: number | null; signal: NodeJS.Signals | null }
+
+/** Thrown when the spawned daemon exits before it became ready. */
+export class DaemonExitedDuringStartupError extends Error {
+  constructor(readonly exit: ChildExit) {
+    super(
+      `deepPairing daemon exited during startup (${exit.signal ? `signal ${exit.signal}` : `exit code ${exit.code}`}) before it became ready.`,
+    );
+    this.name = "DaemonExitedDuringStartupError";
+  }
+}
+
 export interface WaitForDaemonOptions {
   timeoutMs?: number;
   pollIntervalMs?: number;
@@ -295,6 +308,11 @@ export interface WaitForDaemonOptions {
    *  hung. Defaults to a stderr writer (visible in Claude Code's MCP panel). */
   onProgress?: (msg: string) => void;
   progressAfterMs?: number;
+  /** #426 — resolves when the daemon child WE spawned exits. The wait then
+   *  stops at once (after one last readiness check) instead of polling a dead
+   *  process until the ceiling. Absent for waits that adopt a daemon they did
+   *  not spawn. */
+  childExit?: Promise<ChildExit>;
   /** Injectable seams so the readiness/progress/timeout logic is unit-testable
    *  with fakes (a fake clock + a fake slow-boot probe) — no real daemon spawn. */
   isRunning?: (projectRoot: string) => Promise<DaemonInfo | null>;
@@ -326,14 +344,20 @@ export async function waitForDaemon(
 
   const start = now();
   let progressShown = false;
+  let exited: ChildExit | null = null;
+  opts.childExit?.then((e) => { exited = e; }, () => { /* never rejects */ });
   while (now() - start < timeoutMs) {
     const info = await isRunning(projectRoot);
     if (info) return info;
+    // #426 — our child is gone: one last check above (another wrapper's
+    // daemon may have come up meanwhile), then fail NOW with the reason
+    // instead of polling a dead process until the ceiling.
+    if (exited) throw new DaemonExitedDuringStartupError(exited);
     if (!progressShown && now() - start >= progressAfterMs) {
       progressShown = true;
       onProgress(READINESS_PROGRESS_MESSAGE);
     }
-    await doSleep(pollIntervalMs);
+    await (opts.childExit ? Promise.race([doSleep(pollIntervalMs), opts.childExit]) : doSleep(pollIntervalMs));
   }
 
   const hint = await describeHolders(projectRoot);
@@ -411,7 +435,7 @@ async function describePortHolders(projectRoot: string): Promise<string> {
 }
 
 /** Spawn the daemon as a detached background process. */
-function spawnDaemon(projectRoot: string): { stderrTail: () => string; release: () => void } {
+function spawnDaemon(projectRoot: string): { stderrTail: () => string; release: () => void; exited: Promise<ChildExit> } {
   // F4 — this file lives in src/daemon/ (or dist/daemon/) now: the tsc-built
   // entry is two levels up at dist/daemon/index.js. The flat-bundle fallback
   // below is unchanged (esbuild inlines this file beside daemon.js).
@@ -439,6 +463,20 @@ function spawnDaemon(projectRoot: string): { stderrTail: () => string; release: 
   };
   child.stderr?.on("data", onData);
 
+  // #426 — surface an early death (bind failure exit 2/3, a signal during
+  // module load, a missing entry) at once. 'exit' can fire before the last
+  // stderr chunk is read, so wait for 'close' (stdio drained) with a short cap
+  // — a grandchild holding the pipe must not delay the report.
+  let resolveExit!: (e: ChildExit) => void;
+  const exited = new Promise<ChildExit>((r) => { resolveExit = r; });
+  const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+    const report = () => resolveExit({ code, signal });
+    const cap = setTimeout(report, 250);
+    cap.unref?.();
+    child.once("close", () => { clearTimeout(cap); report(); });
+  };
+  child.once("exit", onExit);
+
   child.unref();
 
   // #168 — THE HANG FIX. `child.unref()` unrefs the child PROCESS handle, but
@@ -458,6 +496,9 @@ function spawnDaemon(projectRoot: string): { stderrTail: () => string; release: 
   const release = () => {
     if (released) return;
     released = true;
+    // #426 — stop watching for exit once adopted (or failed): no listener
+    // outlives the wait.
+    child.removeListener("exit", onExit);
     try {
       child.stderr?.removeListener("data", onData);
       child.stderr?.destroy();
@@ -465,7 +506,7 @@ function spawnDaemon(projectRoot: string): { stderrTail: () => string; release: 
     } catch { /* pipe already gone */ }
     try { child.unref(); } catch { /* already unref'd */ }
   };
-  return { stderrTail: () => stderrBuf, release };
+  return { stderrTail: () => stderrBuf, release, exited };
 }
 
 /**
@@ -913,11 +954,11 @@ export async function ensureDaemon(
   }
 
   // Spawn daemon
-  const { stderrTail, release } = spawnDaemon(projectRoot);
+  const { stderrTail, release, exited } = spawnDaemon(projectRoot);
 
-  // Wait for it to be ready
+  // Wait for it to be ready — or for our child to die (#426).
   try {
-    const info = await waitForDaemon(projectRoot, { onProgress: opts.onProgress });
+    const info = await waitForDaemon(projectRoot, { onProgress: opts.onProgress, childExit: exited });
     // #168 — daemon adopted: release the stderr pipe so it stops pinning the
     // parent event loop (otherwise a cold `demo`/wrapper start never exits).
     release();
