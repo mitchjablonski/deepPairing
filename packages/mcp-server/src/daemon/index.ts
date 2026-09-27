@@ -160,6 +160,11 @@ function gracefulShutdown(signal: string): void {
   if (shuttingDown) return;
   shuttingDown = true;
   log(`Shutting down (${signal})`);
+  if (!httpServer) {
+    // #423 — signalled during startup, before the port was bound: nothing of
+    // ours to release or flush, and daemon.json is not ours yet.
+    process.exit(0);
+  }
   releaseListenSocket();
   daemon.cleanup();
   process.exit(0);
@@ -175,6 +180,24 @@ setInterval(() => daemon.checkAutoShutdown(), 30000);
 async function main() {
   log(`Daemon starting (PID ${process.pid})`);
   log(`Project root: ${projectRoot}`);
+
+  // Graceful shutdown — installed FIRST, before the port is bound or
+  // daemon.json is written (#423). They used to be installed as the LAST step
+  // of main(), after the accept socket was listening and daemon.json existed —
+  // exactly the readiness signals doctor, the lifecycle restart path and the
+  // tests use. A SIGTERM landing in that window (heartbeat/watcher/auto-open
+  // startup, widened by host load) hit Node's DEFAULT action: the daemon died
+  // by signal with no cleanup and a stale daemon.json. gracefulShutdown is safe
+  // this early: before the port is bound it exits without cleanup (nothing of
+  // ours to flush, and daemon.json may still belong to the previous daemon),
+  // and the shuttingDown guard still makes a second signal a no-op. The
+  // exit-time cleanup listener stays at the end of main(): the bind-failure
+  // exits (2/3) must not delete another live daemon's daemon.json.
+  // I5 — gracefulShutdown closes the LISTEN socket BEFORE the flush (prompt
+  // port release for the next binder), guards against a double signal, and
+  // preserves the existing "Shutting down (SIG…)" log + exit-0.
+  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 
   // III4 — process-level error guards. II5 added per-ws + wss error
   // listeners, but the daemon process itself had zero global async-error
@@ -376,13 +399,9 @@ async function main() {
     // R4 — opt-in install-health ping (env-gated; see factory).
     daemon.scheduleInstallHealthPing();
 
-  // Graceful shutdown
+  // Exit-time cleanup — only once THIS daemon owns the port and daemon.json.
   process.on("exit", () => daemon.cleanup());
-  // I5 — gracefulShutdown closes the LISTEN socket BEFORE the flush (prompt
-  // port release for the next binder), guards against a double signal, and
-  // preserves the existing "Shutting down (SIG…)" log + exit-0.
-  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
-  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+
 }
 
 main().catch((err) => {

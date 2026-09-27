@@ -35944,6 +35944,9 @@ function gracefulShutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   log(`Shutting down (${signal})`);
+  if (!httpServer) {
+    process.exit(0);
+  }
   releaseListenSocket();
   daemon.cleanup();
   process.exit(0);
@@ -35952,6 +35955,8 @@ setInterval(() => daemon.checkAutoShutdown(), 3e4);
 async function main() {
   log(`Daemon starting (PID ${process.pid})`);
   log(`Project root: ${projectRoot}`);
+  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
   const REJECTION_THRESHOLD = 100;
   const REJECTION_WINDOW_MS = 6e4;
   const rejectionTimes = [];
@@ -36054,8 +36059,6 @@ Run \`${cliInvocation("doctor --fix")}\` to diagnose and heal common causes.
   daemon.maybeAutoOpenBrowser(port);
   daemon.scheduleInstallHealthPing();
   process.on("exit", () => daemon.cleanup());
-  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
-  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 }
 main().catch((err) => {
   log(`Fatal: ${err}`);

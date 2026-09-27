@@ -19,8 +19,19 @@
  * signal a no-op (still a clean exit-0, no double-close throw).
  *
  * Reuses the port-probe approach from e2e/daemon-harness.ts. Runs the daemon
- * under tsx so it needs no prior `pnpm build` (the vitest suite runs before the
- * e2e build step).
+ * from source through tsx's LOADER (`node --import tsx`) so it needs no prior
+ * `pnpm build` (the vitest suite runs before the e2e build step).
+ *
+ * #423 — it must be the loader, never the `tsx` CLI. The CLI is a supervisor
+ * process: it relays a SIGTERM to its child, waits ~30 ms for the child to
+ * acknowledge over IPC, re-sends, waits ~30 ms more, and then SIGKILLs the
+ * child and exits 128+15 = 143. A daemon whose event loop is busy for >60 ms
+ * (host load, a flush, GC) cannot acknowledge in time, so the test observed
+ * tsx's force-kill (exit 143) instead of the daemon's graceful shutdown. The
+ * double-SIGTERM case doubled the exposure. Production spawns the daemon as a
+ * plain `node dist/daemon/index.js` (lifecycle.ts spawnDaemon) with no
+ * supervisor, so `node --import tsx` is also the faithful launch: the signal
+ * lands on the daemon process itself.
  */
 import { describe, it, expect } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -33,9 +44,9 @@ import { fileURLToPath } from "node:url";
 const __dir = path.dirname(fileURLToPath(import.meta.url));
 // src/__tests__ -> src/daemon/index.ts (the same entry e2e builds to dist/daemon/index.js).
 const daemonEntry = path.resolve(__dir, "../daemon/index.ts");
-// packages/mcp-server/node_modules/.bin/tsx — package.json's `start`/.mcp.json
-// run the daemon exactly this way, so tsx resolves its .js->.ts import graph.
-const tsxBin = path.resolve(__dir, "../../node_modules/.bin/tsx");
+// tsx's ESM loader (resolves the .js->.ts import graph) registered in THIS
+// node process — no tsx CLI supervisor between the test and the daemon (#423).
+const tsxLoader = import.meta.resolve("tsx");
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -74,7 +85,7 @@ function portBindable(port: number): Promise<boolean> {
 /** Spawn the real daemon on a mkdtemp projectRoot; resolve once it's bound + reachable. */
 async function startDaemon(): Promise<{ proc: ChildProcess; port: number; projectRoot: string }> {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-i5-"));
-  const proc = spawn(tsxBin, [daemonEntry], {
+  const proc = spawn(process.execPath, ["--import", tsxLoader, daemonEntry], {
     env: {
       ...process.env,
       DEEPPAIRING_PROJECT_ROOT: projectRoot,
@@ -174,4 +185,33 @@ describe("I5 — daemon releases the LISTEN socket on SIGTERM before flush/exit"
       fs.rmSync(projectRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }, 60_000);
+
+  it("#423: a SIGTERM the moment daemon.json appears still shuts down gracefully (handlers precede readiness)", async () => {
+    // The SIGTERM/SIGINT handlers used to be installed as main()'s LAST step,
+    // after the port was listening and daemon.json existed. A signal in that
+    // window hit Node's default action: death by SIGTERM (exit code null) and
+    // a stale daemon.json. Five back-to-back races make a regression near-certain
+    // to show (3/8 on the old code even on an idle host).
+    for (let i = 0; i < 5; i++) {
+      const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-i5-early-"));
+      const proc = spawn(process.execPath, ["--import", tsxLoader, daemonEntry], {
+        env: { ...process.env, DEEPPAIRING_PROJECT_ROOT: projectRoot, DEEPPAIRING_OPEN_BROWSER: "0" },
+        stdio: "ignore",
+      });
+      const infoPath = path.join(projectRoot, ".deeppairing", "daemon.json");
+      try {
+        const deadline = Date.now() + 35_000;
+        while (!fs.existsSync(infoPath)) {
+          if (Date.now() > deadline) throw new Error("daemon.json never appeared");
+          await sleep(1);
+        }
+        proc.kill("SIGTERM");
+        expect(await waitExit(proc, 8000)).toBe(0);
+        expect(fs.existsSync(infoPath)).toBe(false);
+      } finally {
+        try { proc.kill("SIGKILL"); } catch { /* already gone */ }
+        fs.rmSync(projectRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
+    }
+  }, 120_000);
 });
