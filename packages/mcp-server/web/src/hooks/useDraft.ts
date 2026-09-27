@@ -35,6 +35,12 @@ export function markDraftSending(key: string): () => void {
     notifySending();
   };
 }
+/** Test-only: the marker is module state, so a send a test leaves unsettled
+ *  would otherwise leak into the next test (web setup resets it). */
+export function __resetDraftSendingForTests(): void {
+  sendingKeys.clear();
+  notifySending();
+}
 const subscribeSending = (cb: () => void) => {
   sendingListeners.add(cb);
   return () => { sendingListeners.delete(cb); };

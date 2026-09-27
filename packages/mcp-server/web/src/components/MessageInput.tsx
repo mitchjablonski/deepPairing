@@ -15,6 +15,17 @@ import { useSentFlash } from "../hooks/useSentFlash";
 const EMPTY_COMMENTS: Comment[] = [];
 
 /**
+ * #417 review — give up on a send after this long. safeFetch has no timeout,
+ * and the per-draft in-flight marker (below) now outlives a remount, so a POST
+ * that never settles would keep this session's composer disabled until a
+ * reload. The route is a local file write whose locks are bounded (250ms
+ * store lock, 1s ledger lock → 503 lock_busy), so a healthy daemon answers in
+ * well under a second even on slow disks (WSL /mnt/c); 30s is far past any
+ * legitimate reply and short enough that a wedge is noticed.
+ */
+const SEND_TIMEOUT_MS = 30_000;
+
+/**
  * Free-form message composer at the bottom of the companion UI.
  * Sends steering messages to the agent via the comment system, stored with
  * artifactId: "__session__" and delivered as "Human directive" in
@@ -128,6 +139,9 @@ export function MessageInput() {
   const handleSend = async () => {
     if (!message.trim() || isDraftSending(draftKey)) return;
     const release = markDraftSending(draftKey);
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, SEND_TIMEOUT_MS);
     const origin = { sessionId, draftKey, text: message };
     const stillHere = () => mountedRef.current && useConnectionStore.getState().sessionId === origin.sessionId;
 
@@ -135,6 +149,7 @@ export function MessageInput() {
       await safeFetch(`${apiBase()}/api/comments`, {
         method: "POST",
         headers: sessionHeaders(origin.sessionId ?? undefined),
+        signal: controller.signal,
         body: JSON.stringify({
           artifactId: "__session__",
           content: message.trim(),
@@ -167,6 +182,18 @@ export function MessageInput() {
       const apiErr = err instanceof ApiError ? err : null;
       const detail = apiErr?.message ?? (err instanceof Error ? err.message : "Unknown error");
       const switched = useConnectionStore.getState().sessionId !== origin.sessionId;
+      if (timedOut) {
+        // The POST may still have landed. The server only dedupes an identical
+        // comment within 5s and the payload carries no client id, so a resend
+        // now could post twice: say so instead of implying a clean failure.
+        useToastStore.getState().push({
+          kind: "error",
+          title: switched ? "Message to your previous session timed out" : "Send timed out",
+          body: "It may or may not have reached the agent — check the recent messages before resending. Your draft is kept.",
+          ttl: 0,
+        });
+        return;
+      }
       useToastStore.getState().push({
         kind: "error",
         title: switched ? "Message to your previous session wasn't sent" : "Send failed",
@@ -174,6 +201,7 @@ export function MessageInput() {
         ttl: 7000,
       });
     } finally {
+      clearTimeout(timer);
       release();
     }
   };

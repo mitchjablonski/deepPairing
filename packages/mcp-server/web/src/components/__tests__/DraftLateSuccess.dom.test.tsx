@@ -142,4 +142,27 @@ describe("#417 review (2) — MessageInput's in-flight guard survives a remount"
     fireEvent.click(send());
     expect(fetch).toHaveBeenCalledTimes(2);
   });
+
+  it("a POST that NEVER settles times out: marker released, composer re-enabled, draft kept, timeout toast shown", async () => {
+    vi.useFakeTimers();
+    try {
+      // A fetch that only ends if aborted — what a hung daemon looks like.
+      vi.stubGlobal("fetch", vi.fn((_u: unknown, init?: RequestInit) => new Promise<Response>((_res, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      })));
+      render(<MessageInput />);
+      fireEvent.change(box(), { target: { value: "hung send" } });
+      fireEvent.click(send());
+      expect(box()).toBeDisabled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      expect(box()).not.toBeDisabled();
+      expect(box().value).toBe("hung send");
+      const titles = useToastStore.getState().toasts.map((t) => t.title);
+      expect(titles).toEqual(["Send timed out"]);
+      expect(useToastStore.getState().toasts[0]!.body).toMatch(/may or may not have reached/i);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
+
