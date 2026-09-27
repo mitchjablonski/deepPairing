@@ -335,6 +335,30 @@ describe("lock owner classification", () => {
     expect(kinds).toEqual(["break:dead", "lock:dead", "recover:dead"]);
   });
 
+  it("a triple-dead chain (lock + .break + .break.recover) is cleared by `doctor --fix`, and the next write succeeds", () => {
+    const project = path.join(fx.dir, "proj");
+    const dp = path.join(project, ".deeppairing");
+    fs.mkdirSync(dp, { recursive: true });
+    const lock = path.join(dp, "preferences.json.lock");
+    fs.writeFileSync(lock, deadOwnerBody());
+    fs.writeFileSync(`${lock}.break`, deadOwnerBody());
+    fs.writeFileSync(`${lock}.break.recover`, deadOwnerBody());
+    // A LIVE owner's guard elsewhere must survive the same --fix.
+    const liveLock = path.join(dp, "other.lock");
+    const liveBody = liveOwnerBody();
+    fs.writeFileSync(liveLock, liveBody);
+    expect(() => withFileLock(lock, () => "entered", { timeoutMs: 100 })).toThrow(expect.objectContaining({ code: "ELOCKED" }));
+
+    const out = spawnSync(process.execPath, ["--import", TSX, path.resolve(here, "../../cli/init.ts"), "doctor", "--fix", "--yes"], {
+      cwd: project, encoding: "utf8", timeout: 60_000,
+      env: { ...childEnv(), CLAUDE_PROJECT_DIR: project },
+    });
+    expect(out.status, out.stderr).toBe(0);
+    expect(fs.readdirSync(dp).filter((f) => f.startsWith("preferences.json.lock"))).toEqual([]);
+    expect(fs.readFileSync(liveLock, "utf8")).toBe(liveBody);
+    expect(withFileLock(lock, () => "entered", { timeoutMs: 100 })).toBe("entered");
+  }, 90_000);
+
   it("inspectLocks reports owner and liveness; breakDeadLock removes only dead owners", () => {
     const dp = path.join(fx.dir, ".deeppairing");
     fs.mkdirSync(path.join(dp, "sessions", "s"), { recursive: true });

@@ -93,6 +93,23 @@ the concept again. An abandoned lock is recovered the same way as a flush
 lock. A dead owner's lock is recovered automatically. For any other lock, stop
 every daemon and CLI writer, then remove only the named lock file.
 
+### Known residual cases
+
+- **Mispredicted conflict with a busy lock.** The reject route checks for a
+  review conflict before recording. If it predicts a conflict that the save
+  then does not hit, it records after the save. If the preferences lock is busy
+  at that point, the status is `rejected`, the route returns 503, and the
+  approach is not remembered. Rejecting again records it.
+- **Conflict race with publish on.** A review conflict that lands in the
+  milliseconds between that check and the save removes the local rejection row.
+  With cross-project publish on, the ledger entry already mirrored for it stays
+  in the ledger.
+- **Windows boot-ID drift.** On Windows the boot ID is derived from uptime,
+  rounded to the minute. Sleep, a clock step, or a minute boundary (about 0.05%
+  of locks) can make two processes disagree about it. The owner is then
+  "unknown", and the lock stays fail-closed until `doctor` or a manual delete
+  removes it.
+
 ## Recovering an abandoned flush lock
 
 A crash can leave `.deeppairing/sessions/<session-id>/.flush.lock` behind.
@@ -109,8 +126,9 @@ therefore leaves the lock in place.
 Recovering writers are serialized through `<lock>.break`. Under it, a writer
 re-reads the lock and removes it only if its bytes are unchanged, so two
 recovering writers cannot both win. A `.break` left by a crashed recoverer is
-recovered by the same rule through `<lock>.break.recover`, which is never
-removed automatically. On release the owner checks the lock is still its own.
+recovered by the same rule through `<lock>.break.recover`. Writers never remove
+`.recover`. Stranding it takes two crashes, and `deeppairing doctor --fix`
+removes it when its owner is provably dead. On release the owner checks the lock is still its own.
 If it is not, the owner logs a warning; the write under the lock has already
 completed.
 

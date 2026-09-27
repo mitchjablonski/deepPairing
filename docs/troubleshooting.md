@@ -310,8 +310,20 @@ deeppairing doctor          # lists every *.lock with owner pid, liveness and ag
 deeppairing doctor --fix    # removes only locks whose owner is provably dead
 ```
 
-`doctor --fix` never removes a lock with a live or unverifiable owner, and it
-never touches `.review-post.lock` (see `review_post_conflict`). If doctor
+`doctor --fix` also removes stranded breaker guards (`<lock>.break`,
+`<lock>.break.recover`) whose owner is provably dead. It never removes a lock
+or guard with a live or unverifiable owner, and it never touches
+`.review-post.lock` (see `review_post_conflict`).
+
+Known residual cases, described in
+[session persistence](session-persistence.md#known-residual-cases):
+
+- A reject can return 503 after its status was saved. Rejecting again records
+  the approach.
+- With cross-project publish on, a millisecond review-conflict race can leave a
+  ledger entry behind.
+- On Windows, sleep or a clock step can make a lock's owner "unknown". The lock
+  then stays until `doctor` or a manual delete removes it. If doctor
 reports a live owner, stop that daemon or CLI command first. Remove a lock by
 hand only after you have stopped every deepPairing daemon and CLI writer for
 the project.

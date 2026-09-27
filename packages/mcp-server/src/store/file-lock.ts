@@ -37,8 +37,9 @@ import { performance } from "node:perf_hooks";
  *     for a fresh one between the re-read and the unlink.
  *   - A `.break` left by a crashed breaker is itself recovered by the same
  *     identity rule, serialized through `<lock>.break.recover` (O_EXCL). That
- *     last level is never broken automatically: it needs a SECOND crash inside
- *     a microsecond window to strand, and `deeppairing doctor` reports it.
+ *     last level is never broken by writers: it needs a SECOND crash inside a
+ *     microsecond window to strand, and `deeppairing doctor --fix` removes it
+ *     (dead owner only) — doctor is its only remover.
  *   - Release verifies the body is still ours before unlinking. If it is not
  *     (an operator removed it, or an identity was misjudged), the protected
  *     write has ALREADY been applied atomically — reporting "not saved" would
@@ -287,6 +288,36 @@ export function breakDeadLock(lockPath: string): { broken: boolean; state: FileL
     unlinkIfUnchanged(guard, guardRaw, `${guard}.recover`);
   }
   return { broken: false, state };
+}
+
+/**
+ * `deeppairing doctor --fix` — remove ONE dead-owner lock file of any kind,
+ * under the same ownerState rule (live and unknown owners are refused):
+ *   - `<x>.lock`               → breakDeadLock (writers' own path)
+ *   - `<x>.lock.break`         → serialized through `.break.recover`, exactly
+ *                                as a writer recovers it
+ *   - `<x>.lock.break.recover` → re-read and unlinked if unchanged. Writers
+ *                                never remove `.recover`; doctor is its only
+ *                                remover, so this cannot race a writer.
+ * Callers should clear `.recover` before `.break` before the lock.
+ */
+export function clearDeadLockFile(file: string): { removed: boolean; reason: string } {
+  const raw = readIfExists(file);
+  if (raw === null) return { removed: false, reason: "already gone" };
+  const state = ownerState(raw);
+  if (state.state !== "dead") return { removed: false, reason: `owner is ${state.state}` };
+  if (file.endsWith(".lock.break.recover")) {
+    if (readIfExists(file) !== raw) return { removed: false, reason: "changed while inspecting" };
+    fs.unlinkSync(file);
+    return { removed: true, reason: state.why };
+  }
+  if (file.endsWith(".lock.break")) {
+    return unlinkIfUnchanged(file, raw, `${file}.recover`)
+      ? { removed: true, reason: state.why }
+      : { removed: false, reason: "busy or changed; re-run doctor" };
+  }
+  const r = breakDeadLock(file);
+  return r.broken ? { removed: true, reason: state.why } : { removed: false, reason: "busy or changed; re-run doctor" };
 }
 
 export function withFileLock<T>(lockPath: string, run: () => T, opts: FileLockOptions = {}): T {

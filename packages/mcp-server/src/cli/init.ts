@@ -1052,40 +1052,36 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
   // names a lock; list every *.lock under this project's .deeppairing and the
   // global philosophy dir with its owner and liveness. --fix removes ONLY locks
   // whose owner is provably dead (same platform/host/boot/pid-namespace
-  // identity, pid gone or reused) — through the
-  // same atomic breakDeadLock the writers use, so it can't race a live writer.
+  // identity, pid gone or reused) — the lock via the writers' own
+  // breakDeadLock, a stranded `.break` via the writers' `.recover` guard, and a
+  // stranded `.break.recover` (a double crash; doctor is its ONLY remover).
   try {
-    const { inspectLocks, breakDeadLock } = await import("../store/file-lock.js");
+    const { inspectLocks, clearDeadLockFile } = await import("../store/file-lock.js");
     const roots = [dpDir, path.dirname(getGlobalStore().getLedgerPath())];
-    const locks = inspectLocks(roots);
+    // Fix order matters for a stranded chain: .recover, then .break, then the lock.
+    const rank = { recover: 0, break: 1, lock: 2 } as const;
+    const locks = inspectLocks(roots).sort((a, b) => rank[a.kind] - rank[b.kind]);
     if (locks.length === 0) {
       console.log(`  ${green("✓")} No cross-process locks held`);
     } else {
       for (const lock of locks) {
         const age = lock.ageMs === null ? "?" : `${Math.round(lock.ageMs / 1000)}s`;
-        const owner = lock.owner ? `pid ${lock.owner.pid} on ${lock.owner.hostname}` : "unknown owner";
+        const owner = lock.owner?.pid ? `pid ${lock.owner.pid}${lock.owner.hostname ? ` on ${lock.owner.hostname}` : ""}` : "unknown owner";
         const mark = lock.state === "dead" ? yellow("!") : lock.state === "alive" ? dim("·") : yellow("?");
-        console.log(`  ${mark} Lock ${lock.path} ${dim(`(${owner}, ${lock.state}${lock.why ? ` — ${lock.why}` : ""}, age ${age})`)}`);
-        if (lock.state === "dead" && lock.kind !== "lock") {
-          // A breaker guard left by a crashed breaker. `.break` is recovered by
-          // the next writer that needs it; `.recover` is never auto-broken.
-          console.log(`    ${dim(lock.kind === "break"
-            ? "Stranded breaker guard — the next write to this lock recovers it automatically."
-            : "Stranded recovery guard (needs two crashes) — stop every deepPairing daemon/CLI for this project, then delete it by hand.")}`);
-        } else if (lock.state === "dead") {
+        const what = lock.kind === "lock" ? "Lock" : lock.kind === "break" ? "Breaker guard" : "Recovery guard";
+        console.log(`  ${mark} ${what} ${lock.path} ${dim(`(${owner}, ${lock.state}${lock.why ? ` — ${lock.why}` : ""}, age ${age})`)}`);
+        if (lock.state === "dead") {
           fixes.push({
-            label: `Remove dead-owner lock ${lock.path}`,
+            label: `Remove dead-owner ${what.toLowerCase()} ${lock.path}`,
             apply: () => {
               try {
-                const r = breakDeadLock(lock.path);
-                return r.broken
-                  ? { ok: true, message: "Removed" }
-                  : { ok: false, message: `Not removed (${r.state ? r.state.state : "already gone"})` };
+                const r = clearDeadLockFile(lock.path);
+                return { ok: r.removed, message: r.removed ? "Removed" : `Not removed (${r.reason})` };
               } catch (e) { return { ok: false, message: errorMessage(e) }; }
             },
           });
         } else if (lock.state === "unknown") {
-          console.log(`    ${dim("Owner can't be verified — doctor will not remove it. Stop every deepPairing daemon/CLI for this project, then delete it by hand.")}`);
+          console.log(`    ${dim("Owner can't be verified (another OS instance, or an unreadable/older lock) — doctor will not remove it. Stop every deepPairing daemon/CLI for this project, then delete it by hand.")}`);
         }
       }
     }
