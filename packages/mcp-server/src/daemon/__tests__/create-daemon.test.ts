@@ -404,12 +404,41 @@ describe("cleanup failure isolation", () => {
     vi.spyOn(failed, "forceFlush").mockImplementation(() => { throw failure; });
     const healthyFlush = vi.spyOn(healthy, "forceFlush");
     const daemonInfo = path.join(tmpDir, ".deeppairing", "daemon.json");
-    fs.writeFileSync(daemonInfo, "{}");
+    daemon.writeDaemonInfo(45123);
 
     expect(() => daemon.cleanup()).not.toThrow();
     expect(healthyFlush).toHaveBeenCalledOnce();
     expect(fs.existsSync(daemonInfo)).toBe(false);
     expect(logs.some((line) => line.includes("failed") && line.includes("review conflict"))).toBe(true);
+  });
+
+  it("#425 review: cleanup never deletes ANOTHER daemon's daemon.json", () => {
+    const { daemon, tmpDir } = makeDaemon();
+    const daemonInfo = path.join(tmpDir, ".deeppairing", "daemon.json");
+    daemon.writeDaemonInfo(45123);
+    const mine = JSON.parse(fs.readFileSync(daemonInfo, "utf-8"));
+
+    // The live daemon (a different process, or a later daemon in this same
+    // process) has since overwritten the discovery file.
+    for (const foreign of [
+      { ...mine, pid: mine.pid + 1 },
+      { ...mine, instanceId: "0".repeat(24) },
+      { pid: mine.pid, port: 45124 }, // no instance id at all
+    ]) {
+      const bytes = JSON.stringify(foreign);
+      fs.writeFileSync(daemonInfo, bytes);
+      daemon.cleanup();
+      expect(fs.readFileSync(daemonInfo, "utf-8")).toBe(bytes);
+    }
+
+    // Two daemons in one process (same pid): each removes only its own file.
+    const other = makeDaemon({ projectRoot: tmpDir } as Partial<CreateDaemonDeps>);
+    other.daemon.writeDaemonInfo(45125);
+    daemon.cleanup();
+    expect(JSON.parse(fs.readFileSync(daemonInfo, "utf-8")).port).toBe(45125);
+    other.daemon.cleanup();
+    expect(fs.existsSync(daemonInfo)).toBe(false);
+    expect(mine).toMatchObject({ pid: process.pid, instanceId: expect.stringMatching(/^[0-9a-f]{24}$/) });
   });
 
   it("maps a frozen internal state read to an actionable conflict response", async () => {
