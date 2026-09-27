@@ -5,7 +5,7 @@ import { apiBase, sessionHeaders, safeFetch, ApiError } from "../lib/api";
 import { useToastStore } from "../stores/toast";
 import { useConnectionStore } from "../stores/connection";
 import { useReplayStore } from "../stores/replay";
-import { useDraft, clearDraftIfUnchanged } from "../hooks/useDraft";
+import { useDraft, clearDraftIfUnchanged, isDraftSending, markDraftSending, useDraftSending } from "../hooks/useDraft";
 import { useAgentRecentlyActive } from "../hooks/useAgentRecentlyActive";
 import { useSentFlash } from "../hooks/useSentFlash";
 
@@ -39,7 +39,10 @@ export function MessageInput() {
   const sessionId = useConnectionStore((st) => st.sessionId);
   const draftKey = `msg:${sessionId ?? "unbound"}`;
   const [message, setMessage] = useDraft(draftKey);
-  const [sending, setSending] = useState(false);
+  // #417 review — keyed per draft and held outside this instance (see
+  // markDraftSending): a composer that remounts mid-send stays "sending", and
+  // a send pending in session A no longer locks session B's composer.
+  const sending = useDraftSending(draftKey);
   const { sent, flash } = useSentFlash();
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -104,12 +107,10 @@ export function MessageInput() {
     });
   };
 
-  // U0.1 — sync guard backed by a ref. The previous `if (sending) return`
-  // read React state, which doesn't flush until after the event handler;
-  // a rapid Cmd+Enter could fire handleSend several times before
-  // setSending(true) propagated, producing duplicate POSTs. The ref is
-  // synchronous, so the second tap short-circuits immediately.
-  const inFlightRef = useRef(false);
+  // U0.1 — the double-submit guard must be SYNCHRONOUS: React state doesn't
+  // flush until after the event handler, so a rapid Cmd+Enter could fire
+  // handleSend several times. `isDraftSending` reads a plain Set, so the second
+  // tap short-circuits immediately — and (#417 review) across a remount too.
 
   // #417 — a send's completion must land on the composer it came FROM. This
   // component is not keyed by session: switching sessions re-keys the draft
@@ -125,9 +126,8 @@ export function MessageInput() {
   messageRef.current = message;
 
   const handleSend = async () => {
-    if (!message.trim() || inFlightRef.current) return;
-    inFlightRef.current = true;
-    setSending(true);
+    if (!message.trim() || isDraftSending(draftKey)) return;
+    const release = markDraftSending(draftKey);
     const origin = { sessionId, draftKey, text: message };
     const stillHere = () => mountedRef.current && useConnectionStore.getState().sessionId === origin.sessionId;
 
@@ -174,8 +174,7 @@ export function MessageInput() {
         ttl: 7000,
       });
     } finally {
-      inFlightRef.current = false;
-      setSending(false);
+      release();
     }
   };
 

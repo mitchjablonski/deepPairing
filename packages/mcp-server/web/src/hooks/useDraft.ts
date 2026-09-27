@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 function writeDraft(key: string, value: string): void {
   try {
@@ -8,6 +8,41 @@ function writeDraft(key: string, value: string): void {
 }
 
 const DRAFT_SENT_EVENT = "dp:draft-sent";
+
+/**
+ * #417 review — "a send of THIS draft is in flight", keyed by draft key and
+ * held OUTSIDE any component. A per-instance ref guard reset whenever the
+ * composer remounted mid-send (a reconnect can unmount it), so the new
+ * instance offered Send again and a second click posted twice. Module-level,
+ * the marker outlives the instance; the sender releases it in `finally`, so a
+ * failed or rejected send can't wedge it.
+ */
+const sendingKeys = new Set<string>();
+const sendingListeners = new Set<() => void>();
+const notifySending = () => { for (const l of sendingListeners) l(); };
+export function isDraftSending(key: string): boolean {
+  return sendingKeys.has(key);
+}
+/** Mark `key` as sending; returns an idempotent release. */
+export function markDraftSending(key: string): () => void {
+  sendingKeys.add(key);
+  notifySending();
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    sendingKeys.delete(key);
+    notifySending();
+  };
+}
+const subscribeSending = (cb: () => void) => {
+  sendingListeners.add(cb);
+  return () => { sendingListeners.delete(cb); };
+};
+/** Re-renders when a send of `key` starts or settles, from any instance. */
+export function useDraftSending(key: string): boolean {
+  return useSyncExternalStore(subscribeSending, () => sendingKeys.has(key), () => false);
+}
 
 /**
  * #417 — compare-and-delete a PERSISTED draft. For a send that completes after
