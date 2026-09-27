@@ -311,7 +311,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       return;
     }
     // Import artifact store lazily to avoid circular deps
-    import("./artifact").then(({ useArtifactStore }) => {
+    import("./artifact").then(({ useArtifactStore, snapshotRollbacks, restoreRollbacks }) => {
       if (!isCurrent(messageConnection, messageSession)) return;
       if (recoveryTransition && !isCurrentSessionTransition(recoveryTransition)) return;
       // Replay can begin while the artifact-store import is pending. Its
@@ -391,6 +391,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             let applied = false;
             if (completeSnapshot) {
               const previousArtifactState = useArtifactStore.getState();
+              const previousRollbacks = snapshotRollbacks();
               try {
                 hydrateArtifactState(store, data.state);
                 applied = true;
@@ -399,8 +400,10 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
                 // A malformed nested entry can still throw after the reset.
                 // Restore the previous frame (during replay exit: the historical
                 // one, under its write lock — the bounded exit timeout surfaces
-                // the retry path).
+                // the retry path). #424 review — and the rollback chains its
+                // optimistic values still need.
                 useArtifactStore.setState(previousArtifactState);
+                restoreRollbacks(previousRollbacks);
               }
             }
             if (applied) {
@@ -548,11 +551,9 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           break;
 
         case "artifact_renamed":
-          useArtifactStore.setState((s) => ({
-            artifacts: s.artifacts.map((a) =>
-              a.id === data.artifactId ? { ...a, title: data.title } : a,
-            ),
-          }));
+          // #424 review — through the authoritative path, so an in-flight local
+          // rename's rollback can't revert another tab's broadcast title.
+          useArtifactStore.getState().applyArtifactRename(data.artifactId, data.title);
           break;
 
         // B2 — these only reach the browser in standalone/test wiring (the
@@ -870,10 +871,12 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
               recovery.unsubscribe();
               pendingRecovery = null;
               const previousArtifactState = useArtifactStore.getState();
+              const previousRollbacks = snapshotRollbacks();
               try {
                 hydrateArtifactState(store, fresh);
               } catch {
                 useArtifactStore.setState(previousArtifactState);
+                restoreRollbacks(previousRollbacks); // #424 review — with the frame
                 drainRecoveryMessages(recovery);
                 return;
               }

@@ -206,3 +206,145 @@ describe("#422 — siblings with the same unconditional-restore catch", () => {
     expect(useArtifactStore.getState().comments.a1![0]!.suggestion!.state).toBe("applied");
   });
 });
+
+describe("#424 review — every settle order rolls back to the last SERVER-CONFIRMED value", () => {
+  beforeEach(() => useArtifactStore.setState({ artifacts: [artifact("cs")] }));
+  const file = () => content().reviewState?.["x.ts"];
+  const reason = () => content().reviewReasons?.["x.ts"];
+
+  it("file review: A then B, BOTH fail, A first → back to the original (never A's phantom value)", async () => {
+    const s = useArtifactStore.getState();
+    const a = s.setChangesetFileReview("cs", "x.ts", "reviewed");
+    const b = s.setChangesetFileReview("cs", "x.ts", "needs_changes", "why");
+    calls[0]!.resolve(fail());
+    await expect(a).rejects.toBeTruthy();
+    expect(file()).toBe("needs_changes"); // B is still pending and on screen
+    calls[1]!.resolve(fail());
+    await expect(b).rejects.toBeTruthy();
+    expect(file()).toBeUndefined();
+    expect(reason()).toBeUndefined();
+  });
+
+  it("file review: BOTH fail, B first → shows A while A is pending, then the original when A fails", async () => {
+    const s = useArtifactStore.getState();
+    const a = s.setChangesetFileReview("cs", "x.ts", "reviewed");
+    const b = s.setChangesetFileReview("cs", "x.ts", "needs_changes", "why");
+    calls[1]!.resolve(fail());
+    await expect(b).rejects.toBeTruthy();
+    expect(file()).toBe("reviewed");
+    calls[0]!.resolve(fail());
+    await expect(a).rejects.toBeTruthy();
+    expect(file()).toBeUndefined();
+  });
+
+  it("file review: B fails while A is pending, then A SUCCEEDS → A's value (now confirmed)", async () => {
+    const s = useArtifactStore.getState();
+    const a = s.setChangesetFileReview("cs", "x.ts", "reviewed");
+    const b = s.setChangesetFileReview("cs", "x.ts", "needs_changes", "why");
+    calls[1]!.resolve(fail());
+    await expect(b).rejects.toBeTruthy();
+    calls[0]!.resolve(ok());
+    await a;
+    expect(file()).toBe("reviewed");
+  });
+
+  it("CONTROL — file review: A succeeds, then B fails → A's value (the confirmed base)", async () => {
+    useArtifactStore.setState({ artifacts: [artifact("cs", {
+      content: { files: [], reviewState: { "x.ts": "needs_changes" }, reviewReasons: { "x.ts": "orig" } } as any,
+    })] });
+    const s = useArtifactStore.getState();
+    const a = s.setChangesetFileReview("cs", "x.ts", "reviewed");
+    const b = s.setChangesetFileReview("cs", "x.ts", "needs_changes", "second");
+    calls[0]!.resolve(ok());
+    await a;
+    calls[1]!.resolve(fail());
+    await expect(b).rejects.toBeTruthy();
+    expect(file()).toBe("reviewed");
+    expect(reason()).toBeUndefined();
+  });
+
+  it("CONTROL — file review: A fails, then B succeeds → B", async () => {
+    const s = useArtifactStore.getState();
+    const a = s.setChangesetFileReview("cs", "x.ts", "reviewed");
+    const b = s.setChangesetFileReview("cs", "x.ts", "needs_changes", "why");
+    calls[0]!.resolve(fail());
+    await expect(a).rejects.toBeTruthy();
+    calls[1]!.resolve(ok());
+    await b;
+    expect(file()).toBe("needs_changes");
+    expect(reason()).toBe("why");
+  });
+
+  it("status: two clicks, both fail (either order) → back to draft", async () => {
+    for (const order of [[0, 1], [1, 0]]) {
+      useArtifactStore.setState({ artifacts: [artifact("a1")] });
+      calls = [];
+      const s = useArtifactStore.getState();
+      const p = [s.updateArtifactStatus("a1", "approved"), s.updateArtifactStatus("a1", "revised", "redo")];
+      for (const i of order) {
+        calls[i]!.resolve(fail());
+        await expect(p[i]).rejects.toBeTruthy();
+      }
+      expect(useArtifactStore.getState().artifacts.find((a) => a.id === "a1")!.status).toBe("draft");
+    }
+  });
+
+  it("rename: two renames, both fail (either order) → the original title", async () => {
+    for (const order of [[0, 1], [1, 0]]) {
+      useArtifactStore.setState({ artifacts: [artifact("a1")] });
+      calls = [];
+      const s = useArtifactStore.getState();
+      const p = [s.renameArtifact("a1", "First"), s.renameArtifact("a1", "Second")];
+      for (const i of order) {
+        calls[i]!.resolve(fail());
+        await expect(p[i]).rejects.toBeTruthy();
+      }
+      expect(useArtifactStore.getState().artifacts.find((a) => a.id === "a1")!.title).toBe("Artifact a1");
+    }
+  });
+
+  it("rename: another tab's artifact_renamed broadcast survives an older local rename failing", async () => {
+    useArtifactStore.setState({ artifacts: [artifact("a1")] });
+    const a = useArtifactStore.getState().renameArtifact("a1", "Mine");
+    useArtifactStore.getState().applyArtifactRename("a1", "Theirs");
+    calls[0]!.resolve(fail());
+    await expect(a).rejects.toBeTruthy();
+    expect(useArtifactStore.getState().artifacts[0]!.title).toBe("Theirs");
+  });
+
+  it("decision: two resolves, both fail (either order) → no record, status draft", async () => {
+    for (const order of [[0, 1], [1, 0]]) {
+      useArtifactStore.getState().reset();
+      useArtifactStore.setState({ artifacts: [artifact("dec_art", { type: "decision", content: { decisionId: "d1" } as any })] });
+      calls = [];
+      const s = useArtifactStore.getState();
+      const p = [s.resolveDecision("d1", "o1"), s.resolveDecision("d1", "o2")];
+      for (const i of order) {
+        calls[i]!.resolve(fail());
+        await expect(p[i]).rejects.toBeTruthy();
+      }
+      expect(useArtifactStore.getState().resolvedDecisions.d1).toBeUndefined();
+      expect(useArtifactStore.getState().artifacts[0]!.status).toBe("draft");
+    }
+  });
+
+  it("suggestion: two actions, both fail (either order) → the original pending suggestion", async () => {
+    for (const order of [[0, 1], [1, 0]]) {
+      useArtifactStore.getState().reset();
+      calls = [];
+      const sug = {
+        id: "sg1", sessionId: "s1", target: { artifactId: "a1" }, parentCommentId: null, author: "human",
+        content: "edit", acknowledged: false, createdAt: "2026-04-16T10:00:00.000Z",
+        suggestion: { originalText: "x", replacementText: "y", lineStart: 1, lineEnd: 1, state: "pending" },
+      } as Comment;
+      useArtifactStore.getState().addComment(sug);
+      const s = useArtifactStore.getState();
+      const p = [s.resolveSuggestion("sg1", "insist"), s.resolveSuggestion("sg1", "take_counter")];
+      for (const i of order) {
+        calls[i]!.resolve(fail());
+        await expect(p[i]).rejects.toBeTruthy();
+      }
+      expect(useArtifactStore.getState().comments.a1![0]!.suggestion!.state).toBe("pending");
+    }
+  });
+});
