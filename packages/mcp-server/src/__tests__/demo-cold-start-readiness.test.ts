@@ -19,6 +19,7 @@ import {
   DEFAULT_READINESS_TIMEOUT_MS,
   READINESS_PROGRESS_MESSAGE,
   MAX_PORT_ATTEMPTS,
+  DaemonExitedDuringStartupError,
   type DaemonInfo,
 } from "../daemon/lifecycle.js";
 import { preferredPortFor } from "../project-root.js";
@@ -137,3 +138,40 @@ describe("#168 buildReadinessTimeoutMessage — truthful on every clause", () =>
 // cli-invocation helper (one source of truth for source-vs-installed form).
 // The buildReadinessTimeoutMessage tests above still pin the diagnostic's
 // truthfulness; cli-invocation.test.ts pins the helper's per-layout output.
+
+describe("#426 waitForDaemon — the spawned child's exit ends the wait", () => {
+  it("rejects at the next poll once the child exits, naming the code/signal", async () => {
+    const clock = fakeClock();
+    let polls = 0;
+    const err = await waitForDaemon("/proj", {
+      isRunning: async () => { polls++; return null; },
+      now: clock.now,
+      sleep: clock.sleep,
+      onProgress: () => {},
+      childExit: Promise.resolve({ code: 2, signal: null }),
+    }).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(DaemonExitedDuringStartupError);
+    expect((err as Error).message).toContain("exit code 2");
+    expect(clock.now()).toBeLessThan(1_000); // not the 40 s ceiling
+    expect(polls).toBeLessThanOrEqual(2);
+
+    const bySignal = await waitForDaemon("/proj", {
+      isRunning: async () => null, now: clock.now, sleep: clock.sleep, onProgress: () => {},
+      childExit: Promise.resolve({ code: null, signal: "SIGTERM" }),
+    }).then(() => null, (e: unknown) => e as Error);
+    expect(bySignal?.message).toContain("signal SIGTERM");
+  });
+
+  it("still adopts a daemon that is ready at the final check (e.g. another wrapper's)", async () => {
+    const clock = fakeClock();
+    let exited = false;
+    const info = await waitForDaemon("/proj", {
+      isRunning: async () => (exited ? infoAt(29124) : null),
+      now: clock.now,
+      sleep: async (ms) => { await clock.sleep(ms); exited = true; },
+      onProgress: () => {},
+      childExit: new Promise((r) => setTimeout(() => r({ code: 0, signal: null }), 0)),
+    });
+    expect(info.port).toBe(29124);
+  });
+});
