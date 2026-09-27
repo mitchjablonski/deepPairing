@@ -32,6 +32,42 @@ const tabSessionAtCall = (): string | undefined =>
   (typeof window !== "undefined" && (window as any).__dpConnectionStore?.getState?.().sessionId) || undefined;
 
 /**
+ * #422 — who may still ROLL BACK an optimistic write. Every optimistic action
+ * used to snapshot the prior value and restore it unconditionally on failure,
+ * so an OLDER request failing after a NEWER one succeeded (or after an
+ * authoritative WS update) reverted the newer value in the UI while the server
+ * kept it — e.g. a file flagged "needs changes" silently lost its flag.
+ *
+ * Each optimistic write now claims its slot (`art:<id>:status`,
+ * `art:<id>:file:<path>`, `dec:<id>:resolved`, `cmt:<id>:suggestion`, …) with a
+ * fresh token right AFTER writing. A newer local write claims over it; an
+ * authoritative write (the WS/hydration paths: addArtifact, updateArtifact,
+ * replaceArtifact, updateComment, recordResolvedDecision) and reset() drop the
+ * claims it supersedes. A failing request restores only while it still holds
+ * its token — so it can only undo state it still owns. The error toast is
+ * independent of this (a failure stays visible), except after a real session
+ * SWITCH, where it belongs to a session this tab has left (#415/#420 rule:
+ * session identity, not the store generation).
+ */
+let rollbackOwners: Record<string, symbol> = {};
+function claimRollback(key: string): symbol {
+  const token = Symbol(key);
+  rollbackOwners[key] = token;
+  return token;
+}
+function ownsRollback(key: string, token: symbol): boolean {
+  return rollbackOwners[key] === token;
+}
+function settleRollback(key: string, token: symbol): void {
+  if (rollbackOwners[key] === token) delete rollbackOwners[key];
+}
+function supersedeRollbacks(prefix: string): void {
+  for (const k of Object.keys(rollbackOwners)) if (k.startsWith(prefix)) delete rollbackOwners[k];
+}
+/** True when the tab is no longer on the session a request started in. */
+const switchedAwayFrom = (sessionAtCall: string | undefined): boolean => tabSessionAtCall() !== sessionAtCall;
+
+/**
  * U3 — surface a mutation failure as a toast. Pulled out of every catch
  * block so the message wording stays consistent and the import isn't
  * top-of-file (toast store is lazy-loaded to avoid Zustand circular-import
@@ -233,21 +269,30 @@ async function optimisticArtifactPatch<K extends keyof Artifact>(
   request: () => Promise<unknown>,
   errorLabel: string,
 ): Promise<void> {
+  const sessionAtCall = tabSessionAtCall();
   const prior = new Map(
     useArtifactStore.getState().artifacts.filter(match).map((a) => [a.id, a[field]] as const),
   );
   useArtifactStore.setState((state) => ({
     artifacts: state.artifacts.map((a) => (match(a) ? ({ ...a, [field]: value } as Artifact) : a)),
   }));
+  // #422 — claim each slot we just wrote; restore only the ones still ours.
+  const claims = new Map([...prior.keys()].map((id) => [id, claimRollback(`art:${id}:${String(field)}`)] as const));
+  const settleAll = () => { for (const [id, t] of claims) settleRollback(`art:${id}:${String(field)}`, t); };
   try {
     await request();
+    settleAll();
   } catch (err) {
-    useArtifactStore.setState((state) => ({
-      artifacts: state.artifacts.map((a) =>
-        prior.has(a.id) ? ({ ...a, [field]: prior.get(a.id)! } as Artifact) : a,
-      ),
-    }));
-    await toastApiError(errorLabel, err);
+    const owned = new Set([...claims].filter(([id, t]) => ownsRollback(`art:${id}:${String(field)}`, t)).map(([id]) => id));
+    settleAll();
+    if (owned.size > 0) {
+      useArtifactStore.setState((state) => ({
+        artifacts: state.artifacts.map((a) =>
+          owned.has(a.id) ? ({ ...a, [field]: prior.get(a.id)! } as Artifact) : a,
+        ),
+      }));
+    }
+    if (!switchedAwayFrom(sessionAtCall)) await toastApiError(errorLabel, err);
     throw err;
   }
 }
@@ -550,6 +595,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   // any redelivery (planned or accidental) into a single visible record.
   addArtifact: (artifact) =>
     set((state) => {
+      supersedeRollbacks(`art:${artifact.id}:`); // #422 — authoritative
       const idx = state.artifacts.findIndex((a) => a.id === artifact.id);
       if (idx >= 0) {
         const next = state.artifacts.slice();
@@ -572,6 +618,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
 
   updateArtifact: (id, status, version) =>
     set((state) => {
+      supersedeRollbacks(`art:${id}:status`); // #422 — authoritative
       const artifacts = state.artifacts.map((a) =>
         a.id === id ? { ...a, status, ...(version != null ? { version } : {}) } : a,
       );
@@ -592,6 +639,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
 
   replaceArtifact: (artifact) =>
     set((state) => {
+      supersedeRollbacks(`art:${artifact.id}:`); // #422 — authoritative
       const idx = state.artifacts.findIndex((a) => a.id === artifact.id);
       if (idx === -1) return state;
       const next = [...state.artifacts];
@@ -629,6 +677,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
 
   updateComment: (comment) =>
     set((state) => {
+      supersedeRollbacks(`cmt:${comment.id}:`); // #422 — authoritative (or a newer local write, which re-claims)
       const key = comment.target.artifactId;
       const existing = state.comments[key] ?? [];
       const idx = existing.findIndex((c) => c.id === comment.id);
@@ -906,6 +955,8 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       suggestion: { ...found.suggestion, state: action === "insist" ? "insisted" : "applied" },
     };
     if (storeGeneration === generationAtSubmit) get().updateComment(optimistic);
+    const slot = `cmt:${commentId}:suggestion`;
+    const claim = claimRollback(slot); // #422 — after the write (updateComment clears older claims)
     try {
       const res = await safeFetch(`${apiBase()}/api/comments/${commentId}/suggestion`, {
         method: "POST",
@@ -914,11 +965,15 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       });
       let serverComment: Comment | null = null;
       try { serverComment = (await res.json())?.comment ?? null; } catch { /* keep optimistic */ }
+      settleRollback(slot, claim);
       if (storeGeneration !== generationAtSubmit) return;
       if (serverComment) get().updateComment(serverComment);
     } catch (err) {
+      const owned = ownsRollback(slot, claim);
+      settleRollback(slot, claim);
       if (storeGeneration !== generationAtSubmit) throw err;
-      get().updateComment(found); // roll back to the pre-action comment
+      // #422 — only if no newer write/broadcast has replaced ours since.
+      if (owned) get().updateComment(found); // roll back to the pre-action comment
       await toastApiError("Resolve suggestion", err);
       throw err;
     }
@@ -1023,6 +1078,8 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       reasoning: reasoning?.trim() || undefined,
       resolvedAt: new Date().toISOString(),
     });
+    const resolvedSlot = `dec:${decisionId}:resolved`;
+    const resolvedClaim = claimRollback(resolvedSlot); // #422 — after the write
     // Optimistic: flip the decision artifact to "approved" locally so it leaves
     // the "waiting for you" set the instant you choose — don't wait on the
     // session-scoped `decision_resolved` WS broadcast (which never reaches a
@@ -1048,7 +1105,11 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
         }),
       "Resolve decision",
     );
+    settleRollback(resolvedSlot, resolvedClaim);
     } catch (err) {
+      const owned = ownsRollback(resolvedSlot, resolvedClaim);
+      settleRollback(resolvedSlot, resolvedClaim);
+      if (!owned) throw err; // #422 — a newer resolve or the broadcast owns it now
       // Roll the optimistic resolved-record back in lockstep with the status
       // rollback optimisticArtifactPatch already performed.
       set((s) => {
@@ -1083,6 +1144,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
 
   setChangesetFileReview: async (artifactId, filePath, state, reason) => {
     assertNotReplay("Reviewing a file");
+    const sessionAtCall = tabSessionAtCall();
     {
       const owner = get().owningSession(artifactId);
       if (isForeignSession(owner)) await guardForeignOwner("Reviewing a file", owner);
@@ -1116,16 +1178,24 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
         a.id === artifactId ? { ...a, content: patch(a.content as Record<string, unknown>) } : a,
       ),
     }));
+    // #422 — this file's disposition + reason are now OURS until a newer click
+    // on the same file or an authoritative update (the review broadcast, a
+    // hydration) takes them; only then-still-ours state may be rolled back.
+    const slot = `art:${artifactId}:file:${filePath}`;
+    const claim = claimRollback(slot);
     try {
       await safeFetch(`${apiBase()}/api/artifacts/${artifactId}/changeset-review`, {
         method: "POST",
         headers: sessionHeaders(get().owningSession(artifactId)),
         body: JSON.stringify({ filePath, state, reason: nextReason }),
       });
+      settleRollback(slot, claim);
     } catch (err) {
+      const owned = ownsRollback(slot, claim);
+      settleRollback(slot, claim);
       // Roll back only this file's entries against the CURRENT state so a WS
       // update that landed mid-request isn't wiped.
-      set((s) => ({
+      if (owned) set((s) => ({
         artifacts: s.artifacts.map((a) => {
           if (a.id !== artifactId) return a;
           const content = a.content as { reviewState?: Record<string, unknown>; reviewReasons?: Record<string, unknown> };
@@ -1136,7 +1206,9 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
           return { ...a, content: { ...(a.content as Record<string, unknown>), reviewState: rs, reviewReasons: rr } };
         }),
       }));
-      await toastApiError("Mark file reviewed", err);
+      // The failure stays visible even when a newer write kept the UI right —
+      // unless the tab has since switched sessions (it isn't this session's).
+      if (!switchedAwayFrom(sessionAtCall)) await toastApiError("Mark file reviewed", err);
       throw err;
     }
   },
@@ -1199,6 +1271,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     // #393 review (Sol finding 2) — crossing this boundary invalidates any
     // in-flight optimistic reconciliation. See `storeGeneration` above.
     storeGeneration++;
+    rollbackOwners = {}; // #422 — nothing from before the boundary may roll back into it
     set({ artifacts: [], comments: {}, selectedArtifactId: null, unreadIds: [], acknowledgedDecisions: {}, resolvedDecisions: {}, requests: [] });
   },
 
@@ -1210,7 +1283,8 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     }),
 
   recordResolvedDecision: (decisionId, info) =>
-    set((s) => ({
-      resolvedDecisions: { ...s.resolvedDecisions, [decisionId]: info },
-    })),
+    set((s) => {
+      supersedeRollbacks(`dec:${decisionId}:`); // #422 — authoritative (or a newer local write, which re-claims)
+      return { resolvedDecisions: { ...s.resolvedDecisions, [decisionId]: info } };
+    }),
 }));
