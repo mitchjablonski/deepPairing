@@ -890,7 +890,7 @@ export function ArtifactStatusActions({
           <label htmlFor="reject-concept" className="block text-2xs font-medium text-text-secondary">
             What pattern are you rejecting?{" "}
             <span className="font-normal text-text-muted">
-              This becomes your cross-project memory key — so the agent can’t paraphrase past it later.
+              This is the key later proposals are matched against, by words and a short synonym list, not meaning. Name it in the words the agent would reuse.
             </span>
           </label>
           <input
@@ -917,7 +917,7 @@ export function ArtifactStatusActions({
               disabled={submitting}
               className="px-2.5 py-1 text-2xs font-medium text-white bg-accent-red rounded
                          hover:bg-accent-red/80 disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
-              title="Reject and remember this pattern across every project"
+              title="Reject and remember this pattern in this project (shared with your other projects as an advisory nudge only if cross-project publishing is on)"
             >
               Reject &amp; remember
             </button>

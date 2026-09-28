@@ -1132,7 +1132,7 @@ function formatLearnings(state: SessionState): string {
   sections.push(`# Learnings — ${title}`);
   sections.push("");
   sections.push(
-    "*Teaching artifact: concepts named and approaches you won't re-propose.*",
+    "*Teaching artifact: concepts named and approaches you rejected.*",
   );
   sections.push("");
 
@@ -1212,7 +1212,7 @@ function formatLearnings(state: SessionState): string {
     }
   }
   if (rows.length > 0) {
-    sections.push("## Approaches you won't re-propose");
+    sections.push("## Approaches you rejected");
     sections.push("");
     rows.forEach((r) => sections.push(r));
     sections.push("");

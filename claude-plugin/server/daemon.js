@@ -29450,7 +29450,7 @@ function looseCommentBeat(c, ctx, seq) {
 }
 function stanceBeat(r, seq) {
   const reason = r.reason ? `<blockquote class="human-reason">${renderInline(r.reason)}</blockquote>` : "";
-  const concept = r.concept ? `<p class="gate-note">Recorded as the concept <code>${esc2(r.concept)}</code> \u2014 a paraphrase of the same idea is caught too.</p>` : "";
+  const concept = r.concept ? `<p class="gate-note">Recorded as the concept <code>${esc2(r.concept)}</code> \u2014 later proposals that reuse its words (or a listed synonym) are refused in this project; a rewording that shares no words is not caught.</p>` : "";
   return beat(
     r.rejectedAt ?? "",
     seq,
@@ -30563,7 +30563,7 @@ function formatLearnings(state) {
   sections.push(`# Learnings \u2014 ${title}`);
   sections.push("");
   sections.push(
-    "*Teaching artifact: concepts named and approaches you won't re-propose.*"
+    "*Teaching artifact: concepts named and approaches you rejected.*"
   );
   sections.push("");
   const reasoningArtifacts = state.artifacts.filter(
@@ -30630,7 +30630,7 @@ function formatLearnings(state) {
     }
   }
   if (rows.length > 0) {
-    sections.push("## Approaches you won't re-propose");
+    sections.push("## Approaches you rejected");
     sections.push("");
     rows.forEach((r) => sections.push(r));
     sections.push("");

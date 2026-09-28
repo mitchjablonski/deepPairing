@@ -1565,7 +1565,7 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
             <div className="space-y-1.5 p-2.5 rounded border border-accent-red/30 bg-accent-red-dim/15">
               <label htmlFor="cs-reject-concept" className="block text-2xs font-medium text-text-secondary">
                 What approach are you rejecting?{" "}
-                <span className="font-normal text-text-muted">This becomes your cross-project memory key — so the agent can’t paraphrase past it later.</span>
+                <span className="font-normal text-text-muted">This is the key later proposals are matched against, by words and a short synonym list, not meaning. Name it in the words the agent would reuse.</span>
               </label>
               <input
                 id="cs-reject-concept"
@@ -1588,7 +1588,7 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                   onClick={() => void runWhole("rejected")}
                   disabled={submitting || !feedback.trim()}
                   className="px-2.5 py-1 text-2xs font-medium text-white bg-accent-red rounded hover:bg-accent-red/80 disabled:opacity-50 transition-colors"
-                  title="Reject and remember this approach across every project"
+                  title="Reject and remember this approach in this project (shared with your other projects as an advisory nudge only if cross-project publishing is on)"
                 >
                   Reject &amp; remember
                 </button>

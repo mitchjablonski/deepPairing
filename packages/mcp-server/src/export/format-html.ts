@@ -1649,7 +1649,7 @@ function looseCommentBeat(c: Comment, ctx: RenderCtx, seq: number): Beat {
 function stanceBeat(r: HtmlRejectedApproach, seq: number): Beat {
   const reason = r.reason ? `<blockquote class="human-reason">${renderInline(r.reason)}</blockquote>` : "";
   const concept = r.concept
-    ? `<p class="gate-note">Recorded as the concept <code>${esc(r.concept)}</code> — a paraphrase of the same idea is caught too.</p>`
+    ? `<p class="gate-note">Recorded as the concept <code>${esc(r.concept)}</code> — later proposals that reuse its words (or a listed synonym) are refused in this project; a rewording that shares no words is not caught.</p>`
     : "";
   return beat(
     r.rejectedAt ?? "",

@@ -5,14 +5,14 @@
     "url": "https://github.com/mitchjablonski"
   },
   "metadata": {
-    "description": "Block Claude Code from re-proposing an approach you rejected — it refuses and quotes your reason back — then pair on findings, options, and plans in a rich local review UI.",
+    "description": "Delegate implementation to Claude Code without losing the decisions that matter: review its findings, options, and plans in a local UI, and have rejected approaches checked (by words, not meaning) when it proposes again.",
     "version": "0.1.0"
   },
   "plugins": [
     {
       "name": "deeppairing",
       "source": "./claude-plugin",
-      "description": "A rejection gate that stops a concept you've turned down before the edit lands: the tool call is refused and your own reason is quoted back, in the project where you rejected it — and, once you enable cross-project publishing, flagged (advisory) on your other projects too. Around it, a local companion UI where structured findings / specs / options / plans are shaped with you, with concept-naming for learning — so your taste compounds.",
+      "description": "Delegate implementation without losing the decisions that matter: a local companion UI where Claude Code's findings, specs, options, and plans are shaped with you. Rejected approaches are checked by words and a short synonym list, not meaning: a matching present_* proposal is refused with your reason quoted back, a matching direct edit gets a permission prompt (it asks, it doesn't refuse), and, once you enable cross-project publishing, other projects get an advisory nudge, never a block.",
       "homepage": "https://github.com/mitchjablonski/deepPairing",
       "license": "MIT",
       "keywords": [
