@@ -6,13 +6,17 @@ import { ArtifactPanel } from "../ArtifactPanel";
 /**
  * The sidebar keeps a deep session scannable: only the most-recent N artifacts
  * show by default; older ones collapse behind a "Show N older" toggle.
+ *
+ * #430 PR 0 — the cutoff applies to NON-pending items only (a draft awaiting
+ * review never collapses; see SidebarAttention.test.tsx), so this fixture is
+ * approved artifacts: the collapse behaviour it pins is unchanged for them.
  */
 const mk = (i: number) =>
   ({
     id: `art_${i}`,
     type: "research",
     title: `Artifact ${i}`,
-    status: "draft",
+    status: "approved",
     version: 1,
     createdAt: `2026-06-01T00:${String(i).padStart(2, "0")}:00.000Z`,
     content: { summary: "s", findings: [] },
