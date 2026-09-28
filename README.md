@@ -1,24 +1,53 @@
 # deepPairing
 
-**Block Claude Code from re-proposing an approach you rejected — it refuses and
-quotes your reason back — then pair on findings, options, and plans in a rich
-local review UI.**
+**Hand Claude Code the implementation without handing it the decisions that
+matter. It shows you the evidence, you make the call in a local review UI, and
+what you turn down is checked against what the agent proposes next in that
+repo.**
 
-Reject an approach with your reason and deepPairing turns it into a gate: the
-next time the agent reaches for that concept — even reworded — the tool call is
-*refused* before the edit lands, and it tells you why, in your words. Around
-that gate is the pairing surface it exists to protect: before it writes code,
-Claude Code shows you what it found, the options it weighed, and the plan it'll
-follow, as structured artifacts you approve or redirect in a local UI instead of
-a wall of terminal text.
+**Who it's for:** engineers who let Claude Code write most of the code but want
+to own the architecture — the calls that are expensive to reverse.
+
+**The expensive problem:** an agent working alone quietly makes the
+load-bearing choices (a global singleton for config, a new queue, a schema
+change). You meet them in a 500-line diff, after the code is built on top of
+them. Or you reject an idea on Tuesday, and on Thursday a fresh session
+proposes it again.
+
+**What you get instead:** before it builds, Claude Code shows you what it found
+(with file:line evidence), the options it weighed, and the plan. You comment,
+pick, or reject in the companion UI. When you reject an approach with a reason,
+this project's gate checks later proposals against it and refuses a match,
+quoting your reason back. The run ends with a debrief of what changed and what
+still needs your eyes.
+
+**What the gate does, and what it doesn't** (the details are in
+[Your taste compounds](#your-taste-compounds)):
+
+- **In-protocol (`present_*` tools) — refused.** Reject *"global mutable state
+  for config"*, and *"keep config in global mutable states"* is refused before
+  the artifact is recorded.
+- **Matching is on words, not meaning.** It uses stemmed words plus a small,
+  hand-audited synonym list (*delete*↔*remove*, *directory*↔*folder*). *"A
+  module-level mutable settings object"* shares too few words with that
+  concept, so it gets through. False positives happen too: *"remove global
+  mutable state from config"* is refused, because it contains every word of
+  the concept. One click on "Retire this stance" clears it.
+- **Direct `Edit`/`Write`/`MultiEdit` — you're asked, not refused.** A `PreToolUse`
+  hook pauses a matching edit with a permission prompt, and you decide. It does
+  not see `Bash` or notebook edits, and if it breaks, it lets the edit
+  through.
+- **Other projects — a nudge only.** It's off until you turn on cross-project
+  publishing, and it never blocks.
 
 *MIT · no account · no telemetry · 3,000+ tests · everything stays on your disk.*
 
 ![The enforcement moment — the agent re-proposes a concept you rejected ("global mutable state for config"), and a "Blocked by your taste" card stops it before the edit lands, showing the reason you gave and a one-click override.](docs/assets/enforcement.png)
 
-**Who it's for:** engineers who don't trust an autonomous agent with the
-architecture, and want to stay in the loop at the *decision* level — not the
-keystroke level, and not a 500-line diff after the fact.
+**Poor fit:** one-line fixes and throwaway scripts (the review is heavier than
+the change). Fully unattended runs where nobody will look at the UI. Teams that
+need a hard policy engine: the gate is a local word matcher, not a security
+boundary. Editors other than Claude Code.
 
 ### See it in ~90 seconds
 
@@ -42,12 +71,13 @@ it in your own project: **[install in Claude Code ↓](#install-in-claude-code)*
 
 ## What you get
 
-- **The rejection gate — the thing nothing else does.** Reject an approach with
-  a reason and a pre-flight gate stops the agent from re-proposing that concept
-  here, before the edit lands: the tool call is refused and your reason is
-  quoted back. A `PreToolUse` hook catches a direct edit that tries to skip the
-  protocol. And once you enable cross-project publishing, the same stance is
-  flagged — advisory, never a block — on your other projects too.
+- **The rejection gate.** Reject an approach with a reason, and in this
+  project a `present_*` call that matches it is refused, with your reason
+  quoted back. A direct `Edit`/`Write` that matches is paused for your approval
+  by a `PreToolUse` hook rather than refused. Once you enable cross-project
+  publishing, your other projects get an advisory nudge about the same stance,
+  never a block. Matching is on words and a short synonym list, not meaning
+  ([limits](#your-taste-compounds)).
 - **Decision cards.** Options arrive as cards you pick in the UI — pros, cons,
   effort, and risk laid out side by side. Hard-to-reverse calls are flagged
   "high stakes" so you see at a glance which choices are load-bearing.
@@ -160,25 +190,46 @@ separate orchestrator) and serves the UI on a deterministic per-project port in
 
 So you never have to make the same call twice:
 
-- **You're not silently re-proposed past.** In the project where you rejected a
-  concept, re-proposing it is **stopped**: the `present_*` tool refuses
-  (`REJECTED_APPROACH_BLOCKED`) and a **PreToolUse hook** catches a *direct*
-  edit that tries to skip the protocol. The match is on the concept's *words*:
-  reject *"global mutable state for config"* and *"add a global mutable state
-  singleton to hold config"* gets caught. Turn on **cross-project publishing**
-  (off by default — see below) and reaching for that same concept **in another
-  project** is **flagged, not stopped** — an advisory nudge ("you avoided this
-  in `<project>` — still want it here?") that you can promote to a hard block by
-  rejecting it locally. The match is token-based, widened by a small **curated
-  synonym layer** (e.g. *delete*↔*remove*, *directory*↔*folder* — with
-  authentication kept deliberately distinct from authorization) so common
-  rewordings are caught too. It's a hand-audited starter set, not full semantic
-  understanding: an un-listed synonym that shares no words won't trip it *yet* —
-  so name the concept for what it is and it generalizes across the instances
-  that reuse it. **False positives are one click away:**
-  "Retire this stance" in the block card deletes it from this project's stances
-  and lets the proposal through. (Blocks from a committed **team rule** point you to
-  `.deeppairing/team.json` instead.)
+- **You're not silently re-proposed past.** Four surfaces, four different
+  guarantees:
+  - **`present_*` tools, this project: refused.** A matching proposal gets a
+    `REJECTED_APPROACH_BLOCKED` error, the artifact is not recorded, and your
+    reason is quoted back. `revise_artifact` runs the same check. For
+    `present_debrief` and an external-PR `present_changeset`, a match is
+    reported as advice instead, because those describe work that already
+    exists.
+  - **Direct `Edit`/`Write`/`MultiEdit`, this project: asked.** The
+    `PreToolUse` hook runs the same matcher on the new text and file path,
+    and a match becomes a Claude Code permission prompt (`ask`). It never
+    returns `deny`, so you can allow the edit. It doesn't see `Bash` or
+    `NotebookEdit`. It only reads this project's stances, and it fails open:
+    if it errors, or the stance file can't be parsed, the edit proceeds.
+  - **Other projects: a nudge, never a block.** Turn on **cross-project
+    publishing** (off by default; see below) and a matching proposal elsewhere
+    gets an advisory note ("you avoided this in `<project>` — still want it
+    here?"). Reject it there as well to make it block there. If the
+    cross-project ledger can't be read, the note is skipped.
+  - **What counts as a match.** Every word of the concept (after light
+    stemming, so *state*/*states* match) must appear in the proposal, or the
+    rejected phrase itself must. A small, hand-audited **synonym list** widens
+    that: *delete*↔*remove*, *directory*↔*folder*, *cache*↔*memoize*,
+    *env*↔*environment*, *authentication*↔*login*↔*signin*, and
+    *authorization*↔*authz*. Authentication and authorization are kept
+    apart on purpose. That's the whole list. It is not semantic understanding.
+    Reject *"global mutable state for config"*, and *"keep config in global
+    mutable states"* is caught, while *"a module-level mutable settings
+    object"* is not. A partial overlap, such as *"global state for config"*,
+    goes through, with a near-miss note in the trace. So name the concept in
+    the words the agent will reuse.
+  - **False positives and overrides.** A proposal to *remove* global mutable
+    state from config is refused too, because it contains every word of the
+    concept. **"Retire this stance"** on the block card deletes the stance
+    from this project and lets the proposal through. (Blocks from a committed
+    **team rule** point you to `.deeppairing/team.json` instead.) Tests:
+    [preflight-validator](packages/mcp-server/src/mcp/__tests__/preflight-validator.test.ts),
+    [paraphrase-alias](packages/mcp-server/src/mcp/__tests__/paraphrase-alias.test.ts),
+    [preflight-hook-core](packages/mcp-server/src/cli/__tests__/preflight-hook-core.test.ts),
+    [tool-helpers-global-advisory](packages/mcp-server/src/mcp/__tests__/tool-helpers-global-advisory.test.ts).
 - **A backstop on the paths you can't undo.** The same PreToolUse hook also
   watches your guardrail paths — migrations, CI config, infrastructure, `.env`
   and other secret files. If the agent starts writing to one of them without
@@ -210,13 +261,13 @@ So you never have to make the same call twice:
   the code is being written; a PR is just a surface to share what you paired on.
 - **Not an autonomous agent.** The Autonomy dial goes Full / Light / Minimal —
   and even Minimal stops at the architectural decisions.
-- **Not another cross-session memory feature.** Copilot/Cursor memory *recalls*
-  your preferences as passive context the model may or may not consult;
-  deepPairing turns a past decision into **a gate** — a hard block in the repo
-  where you rejected it, and (once you enable cross-project publishing) an
-  active nudge on your other projects, which you can promote to a hard block by
-  rejecting it locally. Still stronger than passive recall: we *surface* it
-  every time, you don't hope the model remembers.
+- **Not just a memory file.** Claude Code's CLAUDE.md and auto memory are
+  context the model is asked to follow, and its docs point you to a
+  `PreToolUse` hook when you need a hard stop
+  ([memory docs](https://code.claude.com/docs/en/memory), checked 2026-09-27).
+  deepPairing ties the rejection to the decision you made in the review UI and
+  checks every later proposal in that repo against it. The check is a word
+  matcher, so it's a strong default, not a guarantee.
 - **Not a skin over MCP elicitation.** The async review loop is standard
   protocol now — server-initiated requests went non-blocking in the
   [2026-07-28 spec](https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/)
@@ -233,9 +284,8 @@ So you never have to make the same call twice:
   cross-file comments and suggested edits the agent has to answer, the decision
   workbench with per-part comments and version carryover, region-anchored
   diagram comments, and the debrief/explainer comprehension pair with an
-  answer-back question loop. It's the only tool with a structured, commentable
-  understanding artifact anchored to a live agent session with an answer-back
-  loop. The review surface is the product; the loop is plumbing.
+  answer-back question loop. The review surface is the product; the loop is
+  plumbing.
 
 ## Beyond Plan Mode
 
@@ -246,9 +296,11 @@ makes the plan a *thing you work*: it lands in the companion UI as a checklist
 you comment on line by line, pick between options on, and reject approaches in —
 and the same review surface extends past the plan to the findings, the
 decisions, and the diffs. Your calls don't evaporate when the session ends:
-reject an approach with a reason and it's remembered per-repo, and an enforced
-in-loop gate stops the agent from re-attempting what you already turned down —
-before the edit lands, not in the diff after. Plan Mode gets you one gate at the
+reject an approach with a reason and it's remembered per-repo. A matching
+`present_*` proposal is refused, and a matching direct edit is paused for your
+approval, before the change lands rather than in the diff after. (Plan Mode in
+other tools has grown too: Cursor saves plans as editable Markdown files —
+[docs](https://cursor.com/docs/agent/plan-mode), checked 2026-09-27.) Plan Mode gets you one gate at the
 start; deepPairing keeps you in the loop at every decision that matters and
 remembers where you stood.
 
@@ -257,7 +309,7 @@ remembers where you stood.
 | Where the plan lives           | Terminal text      | Commentable artifact in a local UI   |
 | You respond by                 | Approving/retyping | Inline comments, option picks, "why" |
 | Covers                         | The initial plan   | Findings, options, plans, diffs      |
-| Remembers your calls next time | No                 | Yes — per-repo, with a rejection gate |
+| Remembers your calls next time | No                 | Per-repo, with a word-matched gate   |
 
 ## Install in Claude Code
 
@@ -350,14 +402,17 @@ review. See
 
 ## How it compares
 
-Cursor's canvases and Claude Code's auto-memory look similar on the surface, but
-neither turns a past decision into a *gate*: canvases are a presentation surface
-with no constraint on the tool call, and auto-memory is context the model is
-*encouraged* to consult, not a rule it's stopped by. deepPairing is the one
-where a decision you already made becomes a hard constraint the agent is refused
-by — and, once you enable cross-project publishing, an active flag on your other
-projects — and where the collaboration is the point, not a bolt-on. (More detail, including the
-honest limits of the concept match, in [docs/faq.md](docs/faq.md).)
+Planning, memory, and blocking each exist elsewhere already, as of 2026-09-27.
+Cursor's [Plan Mode](https://cursor.com/docs/agent/plan-mode) saves editable
+plans. Claude Code's [memory](https://code.claude.com/docs/en/memory) carries
+your instructions across sessions, and its
+[hooks](https://code.claude.com/docs/en/hooks-guide) can deterministically
+block a tool call. deepPairing doesn't claim any one of those alone. What it
+adds is the workflow that joins them: evidence you can comment on, then a
+decision you make on a card, then a review of the change, and a rejection that
+comes back as a checked stance the next time the agent reaches for the same
+thing. (The honest limits of the concept match are above and in
+[docs/faq.md](docs/faq.md).)
 
 ## Status
 

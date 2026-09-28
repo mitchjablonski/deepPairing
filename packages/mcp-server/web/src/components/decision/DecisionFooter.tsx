@@ -265,7 +265,7 @@ export function DecisionFooter({
             <button
               onClick={() => { setShowReject(true); setShowSendBack(false); setShowReasoning(false); }}
               className="hover:text-accent-red transition-colors"
-              title="Reject this whole framing — you don't want any version of this. Remembered so the agent can't re-propose the same question."
+              title="Reject this whole framing — you don't want any version of this. Remembered, so a re-proposal of the same framing is refused in this project."
               aria-label="Reject this framing — wrong question"
             >
               ✕ Reject

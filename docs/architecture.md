@@ -11,8 +11,11 @@ Claude Code. Claude Code IS the agent — deepPairing is the *protocol +
 review surface* that turns one-shot tool calls into pair-programming.
 Findings, decisions, plans, and code changes go through structured
 artifacts that the human reviews in a local web UI; every rejection
-becomes a typed entry that this project's pre-flight gate hard-blocks
-before the agent can reword past you. If the project has opted in
+becomes a typed entry that this project's pre-flight gate checks later
+`present_*` proposals against, refusing a match (a direct edit that matches
+gets a permission prompt instead). Matching is on stemmed words plus a short
+curated synonym list, not meaning, so a rewording that shares no words
+gets through; see the README's "Your taste compounds". If the project has opted in
 to publish (one prompt at `init`, default OFF), the rejection also
 mirrors into a cross-project Philosophy Ledger — which other projects
 surface as an **advisory** nudge, never a hard block.

@@ -13,10 +13,11 @@ ledger of stances you've rejected, using concept-token + scope-glob
 rules from [`runPreflight`](../packages/mcp-server/src/mcp/preflight-validator.ts).
 What makes it work isn't ML magic; it's that the match happens
 **before** the artifact is created and the tool returns an error the
-agent has to react to. Cursor's canvases let the agent ship the
-artifact and ask the human to reject again. Claude Code's auto-memory
-hopes the model consults the right context. deepPairing makes the
-rejection a hard gate: the `present_*` tool refuses
+agent has to react to. Claude Code's memory is context the model is asked
+to follow, and its own docs point to a `PreToolUse` hook for a hard stop
+([memory docs](https://code.claude.com/docs/en/memory), checked
+2026-09-27). deepPairing wires that up from your review decisions: the
+`present_*` tool refuses
 (`REJECTED_APPROACH_BLOCKED`), and a PreToolUse hook catches a *direct*
 edit that tries to skip the protocol and surfaces it for your decision.
 The same hook carries a second prompt class — a *guardrail backstop* that
@@ -226,8 +227,8 @@ defensible — the cross-project ledger isn't the moat. Rich cross-session
 recall is table stakes now (Copilot/Cursor memory, CodeRabbit
 Learnings). What's hard to copy is the composed review system and the
 in-loop pre-execution gate that *acts* on a stance the moment the agent
-re-proposes it — a `PreToolUse` block that stops-and-asks before the
-edit lands, in the project where you made the call. We think honesty
+re-proposes it — a refused `present_*` call, or a `PreToolUse`
+permission prompt before a direct edit lands, in the project where you made the call. We think honesty
 about the trust model beats a frictionless poisoning surface.
 
 ## "Does it phone home? What's stored where?"

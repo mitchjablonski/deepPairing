@@ -890,7 +890,7 @@ export function ArtifactStatusActions({
           <label htmlFor="reject-concept" className="block text-2xs font-medium text-text-secondary">
             What pattern are you rejecting?{" "}
             <span className="font-normal text-text-muted">
-              This becomes your cross-project memory key — so the agent can’t paraphrase past it later.
+              This is the key later proposals are matched against, by words and a short synonym list, not meaning. Name it in the words the agent would reuse.
             </span>
           </label>
           <input
