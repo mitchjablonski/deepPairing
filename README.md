@@ -220,7 +220,10 @@ So you never have to make the same call twice:
     mutable states"* is caught, while *"a module-level mutable settings
     object"* is not. A partial overlap, such as *"global state for config"*,
     goes through, with a near-miss note in the trace. So name the concept in
-    the words the agent will reuse.
+    the words the agent will reuse. Word matching needs a named concept: if
+    you reject a finding, plan, or spec without typing one, the stance is
+    just its title, and only that phrase (word-bounded) is matched. None of
+    the rewordings above would be caught.
   - **False positives and overrides.** A proposal to *remove* global mutable
     state from config is refused too, because it contains every word of the
     concept. **"Retire this stance"** on the block card deletes the stance

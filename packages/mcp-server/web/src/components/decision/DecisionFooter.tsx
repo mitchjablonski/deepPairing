@@ -126,8 +126,8 @@ export function DecisionFooter({
       {!locked && showReject && !rejectSent && (
         <div className="space-y-2 mb-2 p-2.5 rounded border border-accent-red/30 bg-accent-red-dim/15">
           <label className="block text-2xs text-text-muted">
-            Why is this the wrong question? The agent will remember not to
-            re-propose this framing.
+            Why is this the wrong question? A re-proposal of this framing
+            will be refused in this project.
           </label>
           <textarea
             rows={2}
@@ -220,8 +220,8 @@ export function DecisionFooter({
         <div className="flex items-center gap-2 text-2xs text-accent-red">
           <span aria-hidden>✕</span>
           <span>
-            You rejected this framing — the agent won't re-propose it. Your
-            reason is remembered across sessions.
+            You rejected this framing — a re-proposal of it is refused in this
+            project. Your reason is remembered across sessions.
           </span>
         </div>
       ) : sendBackSent ? (

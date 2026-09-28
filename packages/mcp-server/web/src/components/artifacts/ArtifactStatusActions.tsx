@@ -917,7 +917,7 @@ export function ArtifactStatusActions({
               disabled={submitting}
               className="px-2.5 py-1 text-2xs font-medium text-white bg-accent-red rounded
                          hover:bg-accent-red/80 disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
-              title="Reject and remember this pattern across every project"
+              title="Reject and remember this pattern in this project (shared with your other projects as an advisory nudge only if cross-project publishing is on)"
             >
               Reject &amp; remember
             </button>

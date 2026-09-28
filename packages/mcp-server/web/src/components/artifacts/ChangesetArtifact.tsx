@@ -1588,7 +1588,7 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                   onClick={() => void runWhole("rejected")}
                   disabled={submitting || !feedback.trim()}
                   className="px-2.5 py-1 text-2xs font-medium text-white bg-accent-red rounded hover:bg-accent-red/80 disabled:opacity-50 transition-colors"
-                  title="Reject and remember this approach across every project"
+                  title="Reject and remember this approach in this project (shared with your other projects as an advisory nudge only if cross-project publishing is on)"
                 >
                   Reject &amp; remember
                 </button>

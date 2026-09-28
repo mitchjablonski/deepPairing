@@ -33,6 +33,7 @@ import { cliInvocation, mcpServerConfigFor, isInstalledPackage } from "../cli-in
 import { writeJsonAtomic } from "../store/atomic-write.js";
 import { withSessionFlushLock } from "../store/session-records.js";
 import { errorMessage } from "@deeppairing/shared";
+import { demoNarrationLines } from "../demo-script.js";
 
 /**
  * The project this CLI acts on.
@@ -1608,15 +1609,14 @@ async function demoCmd(): Promise<void> {
   console.log(`    ${dim("→")} ${url}`);
   console.log();
   console.log(`  ${dim("Script:")}`);
-  console.log(`    ${dim("t+0.5s")}  Agent proposes a global mutable ConfigStore singleton.`);
-  console.log(`    ${dim("t+2.5s")}  You reject it with reason "${"breaks testability"}".`);
-  console.log(`    ${dim("        →")} Added to Your taste (the ledger grows).`);
-  console.log(`    ${dim("t+5.0s")}  Agent tries a paraphrase: "Add a global config cache".`);
-  console.log(`    ${dim("        →")} ${bold("🛡 Pre-flight catches it by concept. Hero toast fires.")}`);
+  for (const line of demoNarrationLines()) {
+    const at = dim(line.at.padEnd(6));
+    console.log(`    ${at}  ${line.text.startsWith("→ 🛡") ? bold(line.text) : line.text}`);
+  }
   console.log();
-  console.log(`  ${dim("That toast is the single most distinctive deepPairing moment —")}`);
-  console.log(`  ${dim("the moat the product is built around. It compounds: today it's one")}`);
-  console.log(`  ${dim("project; after a few sessions it spans every deepPairing project.")}`);
+  console.log(`  ${dim("The match is on words (plus a short synonym list), not meaning — a")}`);
+  console.log(`  ${dim("rewording that shares no words gets through. It blocks in this project;")}`);
+  console.log(`  ${dim("turn on cross-project publishing and your other projects get a nudge.")}`);
   console.log();
   console.log(`  ${green("Session:")} ${data.sessionId}`);
   console.log();

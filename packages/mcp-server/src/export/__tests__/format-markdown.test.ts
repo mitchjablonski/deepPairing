@@ -285,7 +285,7 @@ describe("formatSessionMarkdown", () => {
         },
       };
       const md = formatSessionMarkdown(state, "learnings");
-      expect(md).toContain("## Approaches you won't re-propose");
+      expect(md).toContain("## Approaches you rejected");
       expect(md).toContain("**Deploy: Railway**");
       expect(md).toContain("_(concept: pay-per-request hosting)_");
       expect(md).toContain("too expensive");

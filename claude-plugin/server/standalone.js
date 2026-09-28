@@ -33500,7 +33500,7 @@ function looseCommentBeat(c, ctx, seq) {
 }
 function stanceBeat(r, seq) {
   const reason = r.reason ? `<blockquote class="human-reason">${renderInline(r.reason)}</blockquote>` : "";
-  const concept = r.concept ? `<p class="gate-note">Recorded as the concept <code>${esc2(r.concept)}</code> \u2014 a paraphrase of the same idea is caught too.</p>` : "";
+  const concept = r.concept ? `<p class="gate-note">Recorded as the concept <code>${esc2(r.concept)}</code> \u2014 later proposals that reuse its words (or a listed synonym) are refused in this project; a rewording that shares no words is not caught.</p>` : "";
   return beat(
     r.rejectedAt ?? "",
     seq,
@@ -34697,7 +34697,7 @@ function formatLearnings(state) {
   sections.push(`# Learnings \u2014 ${title}`);
   sections.push("");
   sections.push(
-    "*Teaching artifact: concepts named and approaches you won't re-propose.*"
+    "*Teaching artifact: concepts named and approaches you rejected.*"
   );
   sections.push("");
   const reasoningArtifacts = state.artifacts.filter(
@@ -34764,7 +34764,7 @@ function formatLearnings(state) {
     }
   }
   if (rows.length > 0) {
-    sections.push("## Approaches you won't re-propose");
+    sections.push("## Approaches you rejected");
     sections.push("");
     rows.forEach((r) => sections.push(r));
     sections.push("");
@@ -38638,7 +38638,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
         // an "approve this pattern" prompt would dilute the meaning.
         {
           name: "seed",
-          description: "Encode a stance you want the cross-project ledger to remember. The agent calls /api/philosophy/seed with what you provide; future preflights catch paraphrases of this stance across every deepPairing project on this machine.",
+          description: "Encode a stance you want the cross-project ledger to remember. The agent calls /api/philosophy/seed with what you provide; future proposals in any deepPairing project on this machine that reuse its words (plus a short synonym list) get an advisory nudge, never a block. To block it in a project, reject it there.",
           arguments: [
             {
               name: "concept",
@@ -38647,7 +38647,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
             },
             {
               name: "reason",
-              description: "Why you're rejecting it. One sentence is fine \u2014 the agent surfaces this in future preflight blocks so the future-you remembers the WHY.",
+              description: "Why you're rejecting it. One sentence is fine \u2014 the agent surfaces this in future advisory preflight nudges so the future-you remembers the WHY.",
               required: false
             }
           ]
@@ -38689,7 +38689,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
             role: "user",
             content: {
               type: "text",
-              text: `POST to /api/philosophy/seed with body {"verdict": "rejected", "concept": ${JSON.stringify(concept)}` + (reason ? `, "reason": ${JSON.stringify(reason)}` : ``) + `} so the cross-project ledger records the stance. ` + reasonClause + ` After the POST succeeds, confirm to the user: "Seeded \u2014 future preflights across every deepPairing project will catch paraphrases of this." If the POST fails (validation error or daemon unreachable), surface the exact error rather than retrying silently.`
+              text: `POST to /api/philosophy/seed with body {"verdict": "rejected", "concept": ${JSON.stringify(concept)}` + (reason ? `, "reason": ${JSON.stringify(reason)}` : ``) + `} so the cross-project ledger records the stance. ` + reasonClause + ` After the POST succeeds, confirm to the user: "Seeded \u2014 proposals in your deepPairing projects that reuse these words (matched on words, not meaning) will get an advisory nudge; it won't block. Reject it in a project to block it there." If the POST fails (validation error or daemon unreachable), surface the exact error rather than retrying silently.`
             }
           }
         ]

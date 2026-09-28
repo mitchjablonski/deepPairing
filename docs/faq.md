@@ -175,7 +175,10 @@ different semantics:
   tries to re-propose it → `runPreflight` matches **this project's**
   rejections (or a committed `team.json` rule) → the tool returns
   `REJECTED_APPROACH_BLOCKED` → the artifact is never created. The
-  agent has to revise or escalate; it cannot silently proceed.
+  agent has to revise or escalate. (Outside `present_*` there are gaps:
+  a matching direct `Edit`/`Write` gets a permission prompt you can allow,
+  and edits made through `Bash`, or while the hook is erroring, are not
+  checked.)
 - deepPairing, on your *other* projects — **once you've enabled
   cross-project publishing** in the project where you made the call
   (Autonomy → Cross-project memory in the companion UI, the one-time
