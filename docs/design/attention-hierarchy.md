@@ -1,6 +1,9 @@
 # Attention hierarchy — one next-action surface (proposal, #430)
 
-> **Status: PROPOSAL for review and approval. No UI code changes are included.**
+> **Status: PROPOSAL, revision 2. No UI code changes are included.**
+> Revision 2 records the user's decisions on §10 and applies the independent
+> design review (inventory gaps, the false secret-warning line, lane
+> precedence, one-line bar, live-region reconciliation, a split migration).
 > Refs #430. Source audited at `main` 2dfeeb58 (v0.1.56). Screenshots in
 > `docs/design/attention-hierarchy/` were captured headless in real Chromium
 > against a seeded daemon (temp HOME, isolated port window, no auto-open).
@@ -18,25 +21,29 @@ what happens when you answer* — has **no dedicated home** and can even be
 behind `▾ Show 6 older` on landing, wearing the same amber dot as twelve
 low-stakes findings and an FYI explainer (`before-00-urgent-landing.png`).
 
-**Proposal:** add one **Next-up bar** directly under the header that always
-answers three questions — *what is next, why it matters, what happens after you
-respond* — ordered by a single shared attention model with four lanes that keep
-the existing distinctions intact:
+**Proposal (approved in principle, §10):** add one **Next-up bar** directly
+under the session tabs. It is **one line by default** and always answers three
+questions — *what is next, why it matters, what happens after you respond* —
+from a single shared attention model with four lanes that keep the existing
+distinctions intact:
 
 | Lane | Colour | Meaning | Examples |
 |---|---|---|---|
-| **Decide** | amber, strong | needs your judgment and blocks the agent | open decision, draft plan/changeset/spec/research, secret warning |
+| **Decide** | amber | your verdict or choice is owed; acting on it always clears it | open decision; draft plan / changeset / code_change (**the agent is blocked**); draft research / spec / debrief (verdict owed, **the agent is not blocked**) |
 | **Read** | neutral | for you, blocks nothing | explainer, reasoning, "Added to your Ledger" |
-| **Waiting on the agent** | blue | your move is done; the agent owes you | unanswered questions, pending requests, revision requested |
-| **System** | red / muted | connection, failure, gate | disconnected, stale daemon, send failed, gate block |
+| **Waiting on the agent** | blue (everywhere, incl. `revised`) | your move is done; the agent owes you | unanswered questions, pending requests, revision requested |
+| **System** | red / muted | connection, failure, gate, flags | disconnected, stale daemon, replay, send failed, a stance hold, a possible-secret flag |
 
 The bar **absorbs** the pending banner, the resume-questions banner and the
 "your turn" half of the header pill; everything else becomes secondary behind
 progressive disclosure or is removed as a duplicate (§5). Nothing pending is
 hidden, nothing is auto-approved, no failure is suppressed.
 
-**What I need from you (§10):** approve the lane model and the bar's position,
-choose the ordering rule for Decide, and pick the migration start (§8, PR 1).
+**Decided (§10):** the lanes, the placement under the session tabs,
+**oldest-first** ordering (with a "+N high" indicator so a second high-stakes
+item is never hidden), keeping the stance-hold record in the bar, and starting
+with the split PR 1a (§8). The acute bug — Decide items collapsing behind
+"Show older" — is fixed first and unflagged (§8, PR 0).
 
 ---
 
@@ -81,9 +88,9 @@ Up to **seven full-width rows** can stack above the artifact before you read a w
 | Signal | file:line | Says | Class |
 |---|---|---|---|
 | Tab title "(N) Your turn — deepPairing" | hooks/useDocumentTitleBadge.ts:19-21 | N drafts wait | A |
-| OS notification "deepPairing — your turn" | stores/connection.ts:33-42, 248 (called 483, 564, 571) | new draft while unfocused | A |
-| ProjectSwitcher amber count | ProjectSwitcher.tsx:105-130, 156-164 | pending in *other* projects | A |
-| Threads button count | App.tsx:132, 585-596 | threads needing you, all projects | A |
+| OS notification "deepPairing — your turn" | stores/connection.ts:33-42, 240-249 (called 483, 564, 571) | new draft while unfocused. **`notifyDraft` throttles to one alert per 5s (:246)**, so a decision that arrives right after a finding gets **no** OS alert | A |
+| ProjectSwitcher amber count | ProjectSwitcher.tsx:105-130, 156-164 | pending in *other* projects — counted **server-side** by `computeDaemonPendingCount` (packages/mcp-server/src/daemon/create-daemon.ts:522-530, its own `PENDING_REVIEWABLE` set mirroring lib/pending.ts) | A |
+| Threads button count | App.tsx:132, 585-596 | threads needing you, all projects (server-derived bank) | A |
 | TurnIndicator "Your turn — 1 finding, 1 plan…" (pulsing) | TurnIndicator.tsx:189-190, 244-278 (click cycles pending 237-242) | your turn | A |
 | …collapsed "Your turn" / "N for you" | TurnIndicator.tsx:272-275; gated App.tsx:100-101 | dedup with banner | A |
 | TurnIndicator ❓ "N questions waiting/unanswered" | TurnIndicator.tsx:94-111, 195-225 | agent owes you answers | C |
@@ -117,7 +124,7 @@ Up to **seven full-width rows** can stack above the artifact before you read a w
 | HydrationSkeleton / WaitingForClaude / FirstRunWalkthrough / IdleHome | App.tsx:858-882, 959-968; WaitingForClaude.tsx:67-112; WalkthroughCards.tsx:39-60; IdleHome.tsx:39-106 | loading / waiting / empty / disconnected | C/D |
 | `Agents:` filter row | ArtifactPanel.tsx:1237-1268 | per-session counts | B |
 | Grouping Type/Flow/Time; "▾ Show N older" (keeps 10 most recent) | ArtifactPanel.tsx:561, 804-828, 864-893 | view / **can hide pending work** | B |
-| Status glyph (● draft amber, ⧗, ✓, ↻, ✗, ⇈, ↩, ⊘) | ArtifactPanel.tsx:50-106, 972-1007 | status (**same amber for decision, finding, explainer**) | A/B |
+| Status glyph (● draft amber, ⧗, ✓, ↻ `revised` **violet** — ArtifactPanel.tsx:62 "violet = the agent's-turn family", ✗, ⇈, ↩, ⊘) | ArtifactPanel.tsx:50-106, 972-1007 | status (**same amber for decision, finding, explainer and reasoning**) | A/B |
 | Unread dot, arrival glow, off-screen pip, sr-only "New artifact" | ArtifactPanel.tsx:600-703, 745-783, 931-971, 1009-1050, 1226-1234 | new since you looked | B |
 | ⚠ secret marker / SecretWarningBanner | ArtifactPanel.tsx:992-1000; SecretWarningBanner.tsx:27, 44-65 | possible secret | A |
 | Status chip ("Draft, awaiting review" / "New — for you to read") | ArtifactPanel.tsx:113-121, 336-341 | status | A/B |
@@ -155,7 +162,7 @@ Up to **seven full-width rows** can stack above the artifact before you read a w
 
 1. **"N drafts wait for you" — 9 surfaces:** tab title, OS notification, TurnIndicator, PendingBanner, sidebar dots, status chip, review footer, Threads badge, ContextBank. Only the pill↔banner pair is deduped (App.tsx:100-101; lib/pending.ts:132-138). Counting rules differ: palette approve-all counts every non-decision draft (incl. explainer/reasoning); ProjectSwitcher counts other projects; Threads counts all projects.
 2. **"Questions waiting on the agent" — 10+ surfaces;** the TurnIndicator ❓ badge and the Comment-threads badge show simultaneously.
-3. **"Agent is working" — three idle windows:** 45s (TurnIndicator.tsx:137), 60s (hooks/useAgentRecentlyActive.ts:11), 90s (RequestComposerBanner.tsx:48). The active session dot always pulses regardless.
+3. **"Agent is working" — two activity windows plus one deliberate hysteresis:** 45s (TurnIndicator.tsx:137) and 60s (hooks/useAgentRecentlyActive.ts:11) answer the *same* question and can disagree for 15s — that is drift. The 90s window (RequestComposerBanner.tsx:40-48) is **not** drift: it is #204's deliberate hysteresis ("~3 poll cycles" and "never seen poll ⇒ not idle") so the resume bridge needs positive evidence of staleness; collapsing it to 60s would bring the premature resume nag back. The active session dot always pulses regardless.
 4. **"Agent exited" — 10+ surfaces** (pill, session dot, wrap card, resume banner, composer, request bridge, plan strip, rail rows, receipts, decision receipt, "Saved…" toast).
 5. **Gate blocks — 4 surfaces;** the ⋯ dot keys on *total* blocks (never clears, DiagnosticsMenu.tsx:45), the chip on *unread*.
 6. **Hook nag — 2 surfaces, 2 rules** (`exitCode===2` vs `kind==="ask"`; DiagnosticsMenu.tsx:46 vs HookStatus.tsx:51).
@@ -166,9 +173,12 @@ Up to **seven full-width rows** can stack above the artifact before you read a w
 
 ### 2.8 Inconsistencies found
 
-- **Explainer (and likely reasoning) drafts** are excluded from pending (lib/pending.ts:35) yet show the amber "● Draft, awaiting review" dot in the sidebar (ArtifactPanel.tsx:942, 973, 1002); the header chip says "New — for you to read"; ExplainerArtifact.tsx:387's comment still calls it a "waiting on you" item.
-- **"Waiting on the agent" colour:** violet (TurnIndicator, rail, resume banner) vs blue (ContextBank, Comment-threads badge).
-- **Pending order is creation order** (lib/pending.ts `computePending`), not stakes; `n` therefore visits a HIGH-stakes decision no sooner than a low-significance finding.
+- **Explainer and reasoning drafts** are excluded from pending (lib/pending.ts:35) yet show the amber "● Draft, awaiting review" dot in the sidebar (ArtifactPanel.tsx:942, 973, 1002). Reasoning is created as `status: "draft"` by the store (packages/mcp-server/src/store/file-store.ts:581, via the `log_reasoning` tool). The explainer's header chip says "New — for you to read"; ExplainerArtifact.tsx:387's comment still calls it a "waiting on you" item.
+- **"Waiting on the agent" colour:** violet (TurnIndicator, rail, resume banner, and the `revised` sidebar dot at ArtifactPanel.tsx:62) vs blue (ContextBank, Comment-threads badge).
+- **OS alerts can drop a decision:** `notifyDraft`'s 5s throttle (stores/connection.ts:246) is type-blind.
+- **The server counts pending separately** (`computeDaemonPendingCount`, create-daemon.ts:522-530) for ProjectSwitcher/Threads; any web-only selector cannot unify it — the web↔server parity test must stay.
+- **Secret warnings** (SecretWarningBanner.tsx:44-70) are non-dismissable, have **no resolve action**, and can sit on non-draft artifacts; the text is already stored and will appear in exports (:65-70).
+- **Pending order is creation order** (lib/pending.ts `computePending`) and nothing signals stakes outside the artifact itself; `n` visits a HIGH-stakes decision no sooner than a low-significance finding, and nothing says one is waiting. (Revision 2 keeps oldest-first by decision and adds the "+N high" indicator, §4.3.)
 - **The 10-most-recent sidebar cutoff can hide pending work** (ArtifactPanel.tsx:561, 804-828) — including the only decision (`before-00`).
 - Receipt wording differs for plain comments (LineComments.tsx:295 vs CommentThread.tsx:175); AskTrigger uses a flat unanswered filter (CommentThread.tsx:463) instead of the thread-aware rule.
 
@@ -187,157 +197,189 @@ Up to **seven full-width rows** can stack above the artifact before you read a w
 
 ## 4. The proposal: the Next-up bar
 
-### 4.1 One attention model, computed once
+### 4.1 One attention model, computed once (web)
 
 A pure selector `lib/attention.ts → computeAttention(state)` (no React) returns:
 
 ```ts
 interface Attention {
-  next: AttentionItem | null;          // the single most consequential Decide item
+  next: AttentionItem | null;          // oldest Decide item (§4.3)
+  highBeyondNext: number;              // other HIGH-stakes Decide items not shown ("+N high")
   lanes: {
-    decide:  AttentionItem[];          // ranked (§4.3)
+    decide:  AttentionItem[];          // oldest-first (§4.3)
     read:    AttentionItem[];          // explainer, reasoning, FYI drafts
     waiting: AttentionItem[];          // unanswered questions, open requests, revised-awaiting-agent
-    system:  SystemState | null;       // disconnected / stale / replay / exited / gate block (latest unread)
+    system:  SystemItem[];             // connection / replay / stale / stance hold / secret flags
   };
-  agent: "working" | "idle" | "first-move" | "exited";  // ONE idle window (proposal: 60s)
+  agent: "working" | "idle" | "first-move" | "exited";  // ONE activity window (reconciles 45s vs 60s)
 }
 interface AttentionItem {
-  id: string; title: string; kind: "decision" | "review" | "question" | "request" | "read" | "secret";
-  why: string;          // one line: decision context / finding significance+title / "you asked: …"
+  id: string; title: string;
+  kind: "decision" | "review-blocking" | "review" | "question" | "request" | "read";
+  why: string;          // one line: decision context / finding significance / "you asked: …"
   after: string;        // one line: what responding does (§4.4)
   stakes?: "high" | "medium" | "low";
+  flags?: ("possible-secret")[];       // annotations, never a separate Decide item
   sessionLabel?: string; // only when >1 session is merged
 }
 ```
 
-Every existing counter (tab title, TurnIndicator, PendingBanner, Threads bank
-lanes in-session, palette, `n`) reads this selector — fixing the counting drift
-in §2.7/§2.8 in one place.
+- Every **web** counter (tab title, TurnIndicator, PendingBanner, palette, `n`)
+  reads this selector.
+- The **server** keeps its own `computeDaemonPendingCount`
+  (create-daemon.ts:522-530) for ProjectSwitcher and Threads — the web cannot
+  compute other projects. The existing web↔server type-set parity test stays and
+  is extended to the lane membership.
+- The #204 **resume hysteresis (90s)** stays a separate, named threshold; it
+  is not the "agent working" window.
 
-### 4.2 Where it lives
+### 4.2 Where it lives, and how big it is
 
-A single row **between the session bar and the content**, replacing the
-PendingBanner / ResumeQuestionsBanner rows (net: one row fewer in the common
-case, three fewer when the demo CTA/wrap card/request banner collapse per §5).
-It is always present when a session is bound (never "pops in" and shifts the
-layout), and its left edge is the first thing after the session tabs.
+A single row **under the session tabs** (decided), replacing the PendingBanner
+and ResumeQuestionsBanner rows. It is **one line by default in every state,
+including idle**; `⌄` expands the lane lists and the full Why/After text.
 
-### 4.3 Ordering rule for Decide (needs your approval, §10)
+Row count, honestly: when something is pending, the bar replaces the pending
+banner (no change in rows). **When idle, the bar adds one row** that today
+does not exist ("○ Nothing needs you"); the net reduction only comes in PR 5,
+and only with the setting on, when the request banner / demo CTA / wrap card
+rows collapse into it.
 
-1. Secret warnings (they are about to leave the machine).
-2. Open decisions, **high stakes first**.
-3. Drafts the agent is *blocked* on (plan awaiting approval before execution; changeset; code_change).
-4. Remaining drafts by significance (high finding > medium > low), then oldest first.
+### 4.3 Ordering and precedence
 
-`n` / Shift+`n` walk this order; the sidebar never hides an item in Decide
-(the 10-most-recent cutoff applies only to non-pending items).
+**Order within Decide (decided): oldest-first.** `next` is the oldest Decide
+item; `n` / Shift+`n` walk the same order. To keep the reviewer's safety
+point, the bar shows **"+N high"** whenever high-stakes Decide items exist
+beyond `next`, and clicking it opens the queue filtered to them — a second
+high-stakes item is never hidden by the order. The sidebar never collapses a
+Decide item (the 10-most-recent cutoff applies to non-pending items only).
+
+**Precedence when lanes coincide (one line, one primary slot):**
+
+| Situation | Primary slot shows | The others |
+|---|---|---|
+| Decide non-empty, nothing else | `next` | summary: `Decide N · +H high · Read R` |
+| Decide non-empty **and** System (disconnected / stale / replay) | a System **prefix** plus `next`: `⚠ Disconnected · ▲ Which store…` | act buttons disable with the reason; `next` is still named |
+| Decide non-empty **and** a stance hold (F) | `next` — **a hold never covers a pending decision** | summary gains `Held 1` (opens its record) |
+| Decide non-empty **and** Waiting (E) | `next` | summary gains `Waiting W` |
+| Decide non-empty **and** a possible-secret flag | `next`, with a ⚠ marker if the flagged artifact is `next` | summary gains `⚠ 1 flag` |
+| Decide empty, Waiting non-empty | Waiting (E / D) | `Read R` |
+| Decide and Waiting empty, stance hold | Held (F), read-only | `Read R` |
+| Everything empty | `○ Nothing needs you` | `Read R` |
+
+**Every Decide item can always clear by acting on it.** That is why possible-
+secret warnings are **not** Decide items: the banner has no resolve action, is
+non-dismissable and can sit on non-draft artifacts (SecretWarningBanner.tsx:
+44-70). They are **System flags**: counted in the summary, marked on the
+artifact (and on `next` when it is the flagged artifact), and they link to the
+banner. Clearing a flag is out of scope here (it would change enforcement
+semantics).
+
+**A change of `next` never moves the selection or the scroll.** Opening is
+always an explicit ⏎ / click / `n`.
 
 ### 4.4 "What happens after you respond" — derived, never invented
 
-| Item | `after` line (examples) |
+| Item | `after` text (examples) |
 |---|---|
-| decision | "Claude continues with the option you pick" · if agent exited: "Saved — Claude sees your choice when the session resumes" |
-| plan draft | "Approve → Claude executes 5 steps · Request changes → Claude revises the plan" |
-| changeset | "Your per-file verdicts go back as one review" |
-| research / spec | "Claude gets your verdict on its next check (usually < 30s)" |
-| secret warning | "Nothing is sent until you resolve this" |
+| decision | "Claude continues with the option you pick" · agent exited: "Saved — Claude sees your choice when the session resumes" |
+| plan draft (blocking) | "Approve → Claude executes 5 steps · Request changes → Claude revises the plan" |
+| changeset / code_change (blocking) | "Your verdicts go back as one review; Claude is waiting on it" |
+| research / spec / debrief (not blocking) | "Your verdict reaches Claude on its next check (usually < 30s)" |
 | waiting: question | "You asked 4m ago — Claude answers on its next check" / "agent exited — copy the resume prompt" |
+| possible-secret flag | "Already stored and will appear in exports — if it's a real credential, rotate it" (the banner's own words) |
 
 These strings come from existing honest copy (MessageInput latency line,
-ResolvedDecisionView receipts, ResumeQuestionsBanner) — the bar reuses them,
-it does not add promises.
+ResolvedDecisionView receipts, ResumeQuestionsBanner, SecretWarningBanner) —
+the bar reuses them; it adds no promises.
 
-### 4.5 Low-fidelity mockups (1280–1440 wide)
+### 4.5 Low-fidelity mockups (1280–1440 wide; one line, `⌄` expands)
 
-**A. Urgent decision pending (in a busy multi-session project)**
+Truncation priority on the one line: lane word > title > `after` > `why`; the
+full text is in the accessible name, a tooltip and the `⌄` expansion.
+
+**A. Urgent decision pending, and it is the oldest Decide item (busy multi-session project)**
 
 ```
 ┌ deepPairing  [Threads 1]                                 Decisions  Features  ⌘K  ⚙  ?  ⋯ ┐
 ├ ▣ Session cache design 3 │ Refresh path walkthrough 1 │ Orders schema migration 13 │ … ┤
 ├───────────────────────────────────────────────────────────────────────────────────────────┤
-│ ▲ DECIDE  Which store backs the session cache?   HIGH STAKES · Session cache design      │
-│   Why  Needed before Thursday's rollout; hard to reverse once sessions persist.          │
-│   After  Claude continues with the option you pick.            [ Open  ⏎ ]  next n  ⌄   │
-│   Decide 15 · Read 2 · Waiting on Claude 0                                               │
+│ ▲ DECIDE  Which store backs the session cache? · HIGH · Claude continues with your pick  [Open ⏎]  +1 high · Decide 15 · Read 2 ⌄ │
 ├──────────────┬────────────────────────────────────────────────────────────────────────────┤
 │ ▲ Which store │  (DecisionCard exactly as today)                                         │
-│ ● Session c…  │                                                                           │
-│ ● Index str…  │                                                                           │
+```
+`⌄` expanded:
+```
+│   Why    Needed before Thursday's rollout; hard to reverse once sessions persist.        │
+│   After  Claude continues with the option you pick.     Session: Session cache design   │
+│   Queue  1. Which store…  HIGH   2. Session cache hit rate…   3. Backfill plan…  …        │
 ```
 
-**B. Review queue, nothing high-stakes (long queue, 1280×800)**
+**B. Review queue, oldest-first, a high-stakes item later in the queue**
 
 ```
-│ ● REVIEW  Orders table has three nullable FKs that should be NOT NULL     high · 1 of 13 │
-│   After  Claude gets your verdict on its next check.     [ Open ⏎ ]  next n   [Queue ⌄] │
+│ ● REVIEW  Session cache hit rate is 12% · verdict reaches Claude on its next check  [Open ⏎]  +1 high · 1 of 15 ⌄ │
 ```
-`[Queue ⌄]` expands an in-place ranked list (the old chip strip, but complete
-and ordered) — progressive disclosure instead of "+12 more".
 
-**C. Info only**
+**C. Info only / idle**
 
 ```
-│ ○ NOTHING NEEDS YOU   2 to read when you like:  How the token refresh path works  ⌄     │
+│ ○ Nothing needs you                                                         Read 2 ⌄ │
 ```
-Neutral colour, no pulse, no count in the tab title.
 
 **D. Agent working (your move is done)**
 
 ```
-│ ◌ WAITING ON CLAUDE   Working · 2m — "Adding a parallel-401 test"          Read 1  ⌄   │
+│ ◌ WAITING ON CLAUDE  Working · 2m — "Adding a parallel-401 test"            Read 1 ⌄ │
 ```
-Blue; the header TurnIndicator shrinks to the agent-state word only.
 
 **E. Agent exited with your questions open**
 
 ```
-│ ◌ WAITING ON CLAUDE   Claude exited with 2 of your questions unanswered.               │
-│   After  They'll be answered when the session resumes.        [ Copy resume prompt ]    │
+│ ◌ WAITING ON CLAUDE  Exited with 2 of your questions open — answered when it resumes  [Copy resume prompt] ⌄ │
 ```
 
-**F. An action was blocked by your stance**
+**F. Held by your stance (read-only record; never covers a pending decision)**
 
 ```
-│ ■ HELD BY YOUR STANCE  "global mutable state for config" stopped: Add a ConfigStore …  │
-│   Nothing to do unless you want to retire the stance.   [ Why ]  [ Retire… ]  [ ✕ ]    │
+│ ■ HELD  "global mutable state for config" stopped: Add a ConfigStore singleton…   [Why] ⌄ │
 ```
-The hero toast still fires (it is the product's proof moment); the bar keeps a
-non-expiring, dismissible record so the block is not lost when the 12s toast ends.
+No Retire control in the bar (principle 5 — the bar routes, it does not act —
+and misclick safety); **Retire stays in the ⋯ gate log.** The hero toast still
+fires. The record clears when the agent next acts or once you have opened it.
 
-**G. Disconnected / stale**
+**G. Disconnected with work pending**
 
 ```
-│ ⚠ DISCONNECTED  Reconnecting… your queue below is the last known state.  [ doctor --fix ] │
+│ ⚠ DISCONNECTED · ▲ Which store backs the session cache? (last known)   [doctor --fix]  Decide 15 ⌄ │
 ```
-Decide items stay listed (never blanked); act buttons disable with a reason.
 
-(Simple SVG versions can follow in PR 2 with the prototype; ASCII keeps this review cheap.)
+(SVG versions follow in PR 2 with the prototype; ASCII keeps this review cheap.)
 
 ### 4.6 Several sessions / agents
 
-The bar ranks across **all merged sessions** (today's sidebar already merges
-them) and names the session on the item (`· Session cache design`). The
-`Agents:` row becomes a filter menu in the sidebar header (it filters, it does
-not signal). Cross-project attention stays in **Threads** (unchanged), which is
-already the model this bar mirrors in-session.
-
----
+The bar orders across **all merged sessions** (today's sidebar already merges
+them) and names the session on the item in the expansion. The `Agents:` row
+becomes a filter menu in the sidebar header (it filters, it does not signal).
+Cross-project attention stays in **Threads** (server-derived, unchanged), which
+is the model this bar mirrors in-session.
 
 ## 5. Signal disposition
 
 | Signal (§2) | Disposition | Why |
 |---|---|---|
-| PendingBanner (+chips, "+N more") | **Absorbed** into bar (Decide next + `[Queue ⌄]`) | same fact, better ranked, complete |
+| PendingBanner (+chips, "+N more") | **Absorbed** into bar (Decide next + "+N high" + `⌄` queue) | same fact, complete, high stakes never hidden |
 | ResumeQuestionsBanner | **Absorbed** (state E) | same fact |
-| TurnIndicator "Your turn — …" | **Absorbed**; TurnIndicator keeps agent state only (working / idle / exited / narration) | removes the 3rd copy of the count |
+| TurnIndicator "Your turn — …" | **Absorbed**; TurnIndicator keeps agent state only (working / idle / exited / narration), as a **non-live** status when the bar is on (§7) | removes the 3rd copy of the count and a 2nd announcer |
 | TurnIndicator ❓ + Comment-threads count | **Merge** into one blue count on the Comment-threads button; bar shows Waiting lane | duplicate |
 | Tab title badge, OS notification | **Keep** (secondary, off-screen channels); read `attention.lanes.decide.length` | you're not looking at the page |
-| Sidebar status glyphs | **Keep, re-coded by lane**: ▲ decision, ● review, ○ read (neutral), ◌ waiting (blue) | fixes explainer/reasoning amber |
-| "Show N older" | **Keep** for non-pending only | never hide Decide |
+| Sidebar status glyphs | **Keep, re-coded by lane**: ▲ decision, ● review, ○ read (neutral), ◌ waiting (blue, incl. `revised`) | fixes explainer/reasoning amber; one waiting colour |
+| "Show N older" | **Keep** for non-pending only (**PR 0, unflagged**) | it hid the only high-stakes decision |
+| SecretWarningBanner / ⚠ marker | **Keep unchanged**; surfaced as a System flag in the bar summary | no resolve action exists; it must not become an uncleared Decide item |
+| OS notification throttle | **Exempt decisions** from `notifyDraft`'s 5s throttle | a decision's alert must not be swallowed by a finding's |
 | Status chip, review footer, DecisionCard, changeset/research/debrief triage | **Keep unchanged** — the act surfaces the bar routes to | anchored comments + keyboard preserved |
-| RequestComposerBanner row | **Secondary**: collapse to an "Ask" button in the header; request pips move to the Waiting lane | initiation ≠ attention |
-| Demo CTA, SessionWrapCard | **Secondary**: render inside the bar's quiet state (C), dismissible | they are FYI, not rows of chrome |
+| RequestComposerBanner row | **Only with the bar setting ON**: collapse to an "Ask" button in the header; request pips move to the Waiting lane. **Unchanged while the bar is off.** | initiation ≠ attention; never strand pips in a hidden bar |
+| Demo CTA, SessionWrapCard | **Only with the bar setting ON**: render inside the bar's quiet state (C), dismissible. **Unchanged while off.** | same |
 | SkillLoadBanner, DisconnectBanner, ReplayScrubber | **Keep** as System state (bar shows state; replay keeps its scrubber) | failures must not be hidden |
 | ClarityChip, PreflightBreadcrumb, ConceptBadge, CompoundingBadge, HookStatus, PreflightBlockLog | **Keep secondary** (unchanged location) | provenance / diagnostics |
 | ⋯ DiagnosticsMenu dot | **Fix**: key on unread blocks + both nag kinds | never clears today |
@@ -352,7 +394,7 @@ already the model this bar mirrors in-session.
 
 **One session, one high-stakes decision among findings**
 - *Now:* land on a finding (default selection) → read banner "15 items" → scan chips (decision is chip 2 of 3, truncated) or expand "Show 6 older" → open decision → context → choose. The consequence of choosing is only visible after choosing (receipt).
-- *Proposed:* land → bar reads "▲ DECIDE Which store… HIGH STAKES · Why … · After …" → ⏎ opens the DecisionCard → choose. One read, one keystroke.
+- *Proposed (oldest-first, decided):* land → the bar names the oldest item, "● REVIEW Session cache hit rate is 12% … **+1 high**" (state B) → click "+1 high" (or `⌄`) → the DecisionCard → choose. The high-stakes item is announced on landing and reachable in one step, and the decision's `after` line says what choosing does before you choose. If the decision is the oldest item, state A applies: one read, one keystroke.
 
 **Several sessions / agents**
 - *Now:* per-session tabs with counts + merged sidebar + `Agents:` row + banner total; which session owns the next blocker is inferred.
@@ -360,14 +402,16 @@ already the model this bar mirrors in-session.
 
 **Long review queue (13+)**
 - *Now:* 3 chips + "+12 more", identical dots, `n` in creation order, older items collapse.
-- *Proposed:* `[Queue ⌄]` shows the complete ranked list in place; `n`/Shift+`n` follow the same ranking; position "1 of 13" is always visible; nothing collapses out of Decide.
+- *Proposed:* `⌄` shows the complete oldest-first queue in place; `n`/Shift+`n` follow the same order; "+N high" opens the high-stakes subset; position "1 of 13" is always visible; nothing collapses out of Decide.
 
 ---
 
 ## 7. Accessibility
 
 - Bar is `<section role="region" aria-label="Next up">`, placed first in the tab order after the session nav, with a skip link "Jump to next up" (the first focusable element in the page).
-- Lane changes announce through **one** polite live region ("Next up: decision — Which store backs the session cache?"); never `assertive` (alerts stay reserved for failures, as today).
+- **Announcements:** the bar announces **only when `next.id` changes** ("Next up: decision — Which store backs the session cache?"), politely, never `assertive` (alerts stay reserved for failures, as today). Counts changing do not announce.
+- **One polite announcer per event, not three.** Today TurnIndicator's pill is `role="status" aria-live="polite"` (TurnIndicator.tsx:245, 289) and ArtifactPanel has an arrival live region (ArtifactPanel.tsx:1226-1232). With the bar on: TurnIndicator becomes a plain (non-live) status; the arrival region keeps announcing arrivals **except** when the arrival *is* the new `next` (the bar says it once).
+- **A `next` change never moves selection, focus or scroll.**
 - Every state has a text label (DECIDE / REVIEW / NOTHING NEEDS YOU / WAITING ON CLAUDE / HELD / DISCONNECTED) and an icon; colour is redundant. Waiting-on-agent is one colour everywhere (blue, matching ContextBank).
 - No pulsing in the bar; `prefers-reduced-motion` already honoured elsewhere stays honoured.
 - Long titles truncate visually with the full title in the accessible name and a tooltip; "Why"/"After" wrap to two lines max at 1280 wide.
@@ -378,23 +422,53 @@ already the model this bar mirrors in-session.
 
 ## 8. Migration plan (small PRs, each independently reviewable)
 
-1. **`computeAttention` selector + parity tests (no visible change).** One module feeding today's counters; fixes the counting drift (explainer/reasoning, one idle window, thread-aware unanswered rule) behind tests that pin current behaviour where it was right.
-2. **Next-up bar prototype behind a setting (default OFF).** Renders states A–G from the selector; a11y + keyboard; before/after screenshots at 1280×800 and 1920×1080; SVG mockups replace ASCII.
-3. **Absorb PendingBanner + ResumeQuestionsBanner + TurnIndicator "your turn" when the setting is ON;** merge the two question badges; palette commands.
-4. **Sidebar lane glyphs + never-hide-Decide** (Show-older applies to non-pending only); explainer/reasoning go neutral.
-5. **Collapse secondary rows** (request banner → header button + Waiting lane; demo CTA/wrap card into quiet state; `Agents:` row → sidebar filter menu); fix the ⋯ dot, session-dot pulse, duplicate toasts/countdowns.
-6. **Pilot + flip the default** after task-based walkthroughs (§9) with independent review; then delete the old banner components.
+**PR 0 — the acute fix, unflagged, first.** Decide items never collapse behind
+"Show N older" (the cutoff applies to non-pending items only); explainer and
+reasoning drafts get a neutral "for you to read" glyph instead of the amber
+"awaiting review" dot. This is the bug that hid the only high-stakes decision.
 
-Each PR: focused tests, full `web/src` suite, typecheck, lint, `pnpm build:clean` bundle, and independent sign-off (per #430).
+**PR 1a — `computeAttention` pure selector + parity tests. Truly invisible:**
+no component reads it yet. Tests pin today's counters' outputs where they are
+correct, and web↔server parity with `computeDaemonPendingCount`.
 
----
+**Behaviour fixes, one PR each, unflagged (each visible, each small):**
+- **1b** — reconcile the two *activity* windows (45s TurnIndicator vs 60s
+  `useAgentRecentlyActive`) into one; the #204 90s resume hysteresis stays.
+- **1c** — one thread-aware "unanswered question" rule (AskTrigger's flat
+  filter, receipt wording); merge the double question badge.
+- **1d** — waiting-on-agent is blue everywhere, including the `revised`
+  sidebar dot.
+- **1e** — exempt decisions from `notifyDraft`'s 5s throttle.
+
+**PR 2 — the Next-up bar behind a setting (default OFF).** States A–G from the
+selector, precedence table (§4.3), one line + `⌄`, a11y and keyboard;
+before/after screenshots at 1280×800 and 1920×1080; SVG mockups.
+
+**PR 3 — with the setting ON:** the bar absorbs PendingBanner,
+ResumeQuestionsBanner and TurnIndicator's "your turn"; palette commands "Next
+pending" / "Open review queue"; live-region reconciliation (§7).
+
+**PR 4 — sidebar lane glyphs** (▲ ● ○ ◌), building on PR 0 and 1d.
+
+**PR 5 — secondary rows, setting-gated:** only with the bar ON do the request
+pips, demo CTA and wrap card move into the bar and the `Agents:` row become a
+filter menu; with it OFF they stay where they are. Unflagged in the same PR:
+the ⋯ dot keys on unread blocks + both nag kinds, the session dot pulses only
+when the agent is working, duplicate stale-daemon toasts and the two approve
+countdowns are unified.
+
+**PR 6 — pilot, then flip the default** after the task-based walkthroughs (§9)
+with independent review; then delete the old banner components.
+
+Each PR: focused tests, full `web/src` suite, typecheck, lint, `pnpm
+build:clean` bundle, and independent sign-off (per #430).
 
 ## 9. Validation plan (before calling anything validated)
 
 Task-based walkthroughs, before vs after, recorded at 1280×800 and 1920×1080, keyboard-only and with a screen reader:
 1. "What does Claude need from you right now, and what happens when you answer?" (target: answer from the bar alone, no panel opened.)
 2. "Which session is blocked on you?" (3 sessions, 1 blocker.)
-3. "Clear a 13-item queue, highest stakes first." (count keystrokes / panels opened.)
+3. "Clear a 13-item queue; find the one high-stakes item among them." (count keystrokes / panels opened; did "+N high" get noticed?)
 4. "Claude exited — is anything still owed to you?" (Waiting lane honesty.)
 5. Edge states: empty, disconnected, replay, long titles, a blocked action.
 
@@ -402,12 +476,14 @@ Findings from the external pilot feed back into #430; screenshots alone do not v
 
 ---
 
-## 10. Decisions requested from you
+## 10. Decisions (recorded)
 
-1. **Lane model** — Decide / Read / Waiting on the agent / System: approve, or adjust names/colours?
-2. **Placement** — a persistent bar under the session tabs (proposed) vs. inside the header vs. top of the detail pane?
-3. **Ordering rule** (§4.3) — stakes-first as proposed, or plain oldest-first?
-4. **Held-by-stance record** (state F) — keep it in the bar after the toast, or leave blocks only in the ⋯ log?
-5. **Start** — begin with PR 1 (selector, no visible change) as proposed?
+| # | Question | Decision |
+|---|---|---|
+| 1 | Lane model | **Approved:** Decide / Read / Waiting / System. |
+| 2 | Placement | **Approved:** a persistent one-line bar under the session tabs. |
+| 3 | Ordering within Decide | **Oldest-first** (chosen over stakes-first). Safety kept: the bar shows "+N high" so a second high-stakes item is never hidden (§4.3). |
+| 4 | Stance-hold record | **Approved:** kept in the bar, read-only with "Why"; Retire stays in ⋯; never covers a pending decision. |
+| 5 | Start | **Approved**, using the split plan: PR 0 (acute, unflagged), then PR 1a (invisible selector), then the 1b–1e behaviour fixes (§8). |
 
 No UI code is changed by this document.
