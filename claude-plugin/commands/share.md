@@ -21,8 +21,9 @@ wasn't here and doesn't use deepPairing:
   and *why*. Quote my reasons verbatim where I gave them; my words carry more
   than your paraphrase.
 - **What got rejected** — say plainly what was proposed and turned down, and
-  why. If a rejection was recorded as a stance, say that the tooling now blocks
-  it from coming back, so a reader understands it isn't just a note.
+  why. If a rejection was recorded as a stance, say that later proposals in this
+  project that reuse its words are refused, so a reader understands it isn't
+  just a note (it matches words, not meaning).
 - **What shipped** — what actually landed, and anything still open or needing
   eyes.
 
