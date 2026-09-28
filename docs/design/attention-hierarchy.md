@@ -1,6 +1,9 @@
 # Attention hierarchy — one next-action surface (proposal, #430)
 
-> **Status: PROPOSAL, revision 2. No UI code changes are included.**
+> **Status: PROPOSAL, revision 3. No UI code changes are included.**
+> Revision 3: "+N high decision" is pinned and counts decisions only; the
+> precedence rules cover every lane combination; §7 wording matches the
+> one-line bar.
 > Revision 2 records the user's decisions on §10 and applies the independent
 > design review (inventory gaps, the false secret-warning line, lane
 > precedence, one-line bar, live-region reconciliation, a split migration).
@@ -40,7 +43,7 @@ progressive disclosure or is removed as a duplicate (§5). Nothing pending is
 hidden, nothing is auto-approved, no failure is suppressed.
 
 **Decided (§10):** the lanes, the placement under the session tabs,
-**oldest-first** ordering (with a "+N high" indicator so a second high-stakes
+**oldest-first** ordering (with a "+N high decision" indicator so a second high-stakes
 item is never hidden), keeping the stance-hold record in the bar, and starting
 with the split PR 1a (§8). The acute bug — Decide items collapsing behind
 "Show older" — is fixed first and unflagged (§8, PR 0).
@@ -178,7 +181,7 @@ Up to **seven full-width rows** can stack above the artifact before you read a w
 - **OS alerts can drop a decision:** `notifyDraft`'s 5s throttle (stores/connection.ts:246) is type-blind.
 - **The server counts pending separately** (`computeDaemonPendingCount`, create-daemon.ts:522-530) for ProjectSwitcher/Threads; any web-only selector cannot unify it — the web↔server parity test must stay.
 - **Secret warnings** (SecretWarningBanner.tsx:44-70) are non-dismissable, have **no resolve action**, and can sit on non-draft artifacts; the text is already stored and will appear in exports (:65-70).
-- **Pending order is creation order** (lib/pending.ts `computePending`) and nothing signals stakes outside the artifact itself; `n` visits a HIGH-stakes decision no sooner than a low-significance finding, and nothing says one is waiting. (Revision 2 keeps oldest-first by decision and adds the "+N high" indicator, §4.3.)
+- **Pending order is creation order** (lib/pending.ts `computePending`) and nothing signals stakes outside the artifact itself; `n` visits a HIGH-stakes decision no sooner than a low-significance finding, and nothing says one is waiting. (Revision 2 keeps oldest-first by decision and adds the "+N high decision" indicator, §4.3.)
 - **The 10-most-recent sidebar cutoff can hide pending work** (ArtifactPanel.tsx:561, 804-828) — including the only decision (`before-00`).
 - Receipt wording differs for plain comments (LineComments.tsx:295 vs CommentThread.tsx:175); AskTrigger uses a flat unanswered filter (CommentThread.tsx:463) instead of the thread-aware rule.
 
@@ -204,7 +207,7 @@ A pure selector `lib/attention.ts → computeAttention(state)` (no React) return
 ```ts
 interface Attention {
   next: AttentionItem | null;          // oldest Decide item (§4.3)
-  highBeyondNext: number;              // other HIGH-stakes Decide items not shown ("+N high")
+  highDecisionsBeyondNext: number;     // open decisions with stakes === "high", other than `next` ("+N high decision")
   lanes: {
     decide:  AttentionItem[];          // oldest-first (§4.3)
     read:    AttentionItem[];          // explainer, reasoning, FYI drafts
@@ -249,23 +252,55 @@ rows collapse into it.
 
 **Order within Decide (decided): oldest-first.** `next` is the oldest Decide
 item; `n` / Shift+`n` walk the same order. To keep the reviewer's safety
-point, the bar shows **"+N high"** whenever high-stakes Decide items exist
+point, the bar shows **"+N high decision"** whenever high-stakes decisions exist
 beyond `next`, and clicking it opens the queue filtered to them — a second
-high-stakes item is never hidden by the order. The sidebar never collapses a
+high-stakes decision is never hidden by the order.
+
+**What counts as "high":** only **open decisions whose `stakes` is `"high"`**
+(the decision content's optional `stakes` field; a missing value is not high).
+Findings' `significance` is a different axis and is **not** counted, so one
+high-stakes decision among five high-significance findings reads "+1 high
+decision", never "+6 high". High-significance findings are still visible: the
+`⌄` queue marks them and shows their own count ("3 high findings") on a
+separate line. The sidebar never collapses a
 Decide item (the 10-most-recent cutoff applies to non-pending items only).
 
-**Precedence when lanes coincide (one line, one primary slot):**
+**Precedence when lanes coincide (one line, one primary slot).** Three rules
+cover every combination:
 
-| Situation | Primary slot shows | The others |
-|---|---|---|
-| Decide non-empty, nothing else | `next` | summary: `Decide N · +H high · Read R` |
-| Decide non-empty **and** System (disconnected / stale / replay) | a System **prefix** plus `next`: `⚠ Disconnected · ▲ Which store…` | act buttons disable with the reason; `next` is still named |
-| Decide non-empty **and** a stance hold (F) | `next` — **a hold never covers a pending decision** | summary gains `Held 1` (opens its record) |
-| Decide non-empty **and** Waiting (E) | `next` | summary gains `Waiting W` |
-| Decide non-empty **and** a possible-secret flag | `next`, with a ⚠ marker if the flagged artifact is `next` | summary gains `⚠ 1 flag` |
-| Decide empty, Waiting non-empty | Waiting (E / D) | `Read R` |
-| Decide and Waiting empty, stance hold | Held (F), read-only | `Read R` |
-| Everything empty | `○ Nothing needs you` | `Read R` |
+1. **System failure prefix — always.** If any connection/failure state is
+   active (disconnected, stale daemon, replay, snapshot unavailable, session
+   conflict), the line starts with its prefix (`⚠ DISCONNECTED ·`, `REPLAY ·`,
+   …) **whatever else is true**, including when every other lane is empty. A
+   failure is never hidden and never replaces the primary item; act buttons
+   disable with the reason.
+2. **Primary slot = the first non-empty of:** Decide (`next`) → possible-secret
+   flag → Waiting on the agent → Held (stance record) → `○ Nothing needs you`.
+3. **Summary = every other non-empty lane**, in a fixed order: `+N high
+   decision` (only when Decide is primary) · `Decide N` · `⚠ flags F` ·
+   `Waiting W` · `Held H` · `Read R`. No non-empty lane is ever omitted.
+
+So a stance hold can never cover a pending decision or an open question, and a
+secret flag is only primary when nothing is owed by you.
+
+Worked combinations (the prefix column applies on top of any row):
+
+| System failure | Decide | Flag | Waiting | Held | Line reads (prefix · primary · summary) |
+|---|---|---|---|---|---|
+| — | ✓ | any | any | any | `▲ next` · `+N high decision · Decide N · [⚠ flags] · [Waiting] · [Held] · Read` |
+| ✓ | ✓ | any | any | any | `⚠ DISCONNECTED · ▲ next (last known)` · same summary |
+| — | — | ✓ | any | any | `⚠ Possible secret in <artifact> — already stored; rotate if real [Why]` · `[Waiting] · [Held] · Read` |
+| ✓ | — | ✓ | any | any | `⚠ STALE DAEMON · ⚠ Possible secret in …` · same summary |
+| — | — | — | ✓ | — | `◌ WAITING ON CLAUDE …` (D/E) · `Read` |
+| — | — | — | ✓ | ✓ | `◌ WAITING ON CLAUDE …` · `Held 1 · Read` |
+| ✓ | — | — | ✓ | any | `⚠ DISCONNECTED · ◌ WAITING ON CLAUDE …` · `[Held] · Read` |
+| — | — | — | — | ✓ | `■ HELD …` (F, read-only) · `Read` |
+| ✓ | — | — | — | ✓ | `REPLAY · ■ HELD …` · `Read` |
+| — | — | — | — | — | `○ Nothing needs you` · `Read` |
+| ✓ | — | — | — | — | `⚠ DISCONNECTED · ○ Nothing needs you (last known)` · `Read` |
+
+"any" = present or absent; when present it appears in the summary. "Read" is
+shown only when non-empty.
 
 **Every Decide item can always clear by acting on it.** That is why possible-
 secret warnings are **not** Decide items: the banner has no resolve action, is
@@ -295,8 +330,13 @@ the bar reuses them; it adds no promises.
 
 ### 4.5 Low-fidelity mockups (1280–1440 wide; one line, `⌄` expands)
 
-Truncation priority on the one line: lane word > title > `after` > `why`; the
-full text is in the accessible name, a tooltip and the `⌄` expansion.
+**Pinned (never truncated):** the System prefix, the lane word, the **"+N
+high decision"** indicator, the primary action button and the summary counts
+(which may shrink to icon+number at narrow widths, but never drop a lane).
+**Truncates, in this order:** `why` first, then `after`, then the title
+(ellipsis). At 1280 wide the lines below therefore lose their tail text,
+never "+N high decision". The full text is in the accessible name, a tooltip
+and the `⌄` expansion.
 
 **A. Urgent decision pending, and it is the oldest Decide item (busy multi-session project)**
 
@@ -304,7 +344,7 @@ full text is in the accessible name, a tooltip and the `⌄` expansion.
 ┌ deepPairing  [Threads 1]                                 Decisions  Features  ⌘K  ⚙  ?  ⋯ ┐
 ├ ▣ Session cache design 3 │ Refresh path walkthrough 1 │ Orders schema migration 13 │ … ┤
 ├───────────────────────────────────────────────────────────────────────────────────────────┤
-│ ▲ DECIDE  Which store backs the session cache? · HIGH · Claude continues with your pick  [Open ⏎]  +1 high · Decide 15 · Read 2 ⌄ │
+│ ▲ DECIDE  Which store backs the session cache? · HIGH · Claude continues with your pick  [Open ⏎]  +1 high decision · Decide 15 · Read 2 ⌄ │
 ├──────────────┬────────────────────────────────────────────────────────────────────────────┤
 │ ▲ Which store │  (DecisionCard exactly as today)                                         │
 ```
@@ -315,10 +355,10 @@ full text is in the accessible name, a tooltip and the `⌄` expansion.
 │   Queue  1. Which store…  HIGH   2. Session cache hit rate…   3. Backfill plan…  …        │
 ```
 
-**B. Review queue, oldest-first, a high-stakes item later in the queue**
+**B. Review queue, oldest-first, a high-stakes decision later in the queue**
 
 ```
-│ ● REVIEW  Session cache hit rate is 12% · verdict reaches Claude on its next check  [Open ⏎]  +1 high · 1 of 15 ⌄ │
+│ ● REVIEW  Session cache hit rate is 12% · verdict reaches Claude on its next check  [Open ⏎]  +1 high decision · 1 of 15 ⌄ │
 ```
 
 **C. Info only / idle**
@@ -368,7 +408,7 @@ is the model this bar mirrors in-session.
 
 | Signal (§2) | Disposition | Why |
 |---|---|---|
-| PendingBanner (+chips, "+N more") | **Absorbed** into bar (Decide next + "+N high" + `⌄` queue) | same fact, complete, high stakes never hidden |
+| PendingBanner (+chips, "+N more") | **Absorbed** into bar (Decide next + "+N high decision" + `⌄` queue) | same fact, complete, high stakes never hidden |
 | ResumeQuestionsBanner | **Absorbed** (state E) | same fact |
 | TurnIndicator "Your turn — …" | **Absorbed**; TurnIndicator keeps agent state only (working / idle / exited / narration), as a **non-live** status when the bar is on (§7) | removes the 3rd copy of the count and a 2nd announcer |
 | TurnIndicator ❓ + Comment-threads count | **Merge** into one blue count on the Comment-threads button; bar shows Waiting lane | duplicate |
@@ -394,7 +434,7 @@ is the model this bar mirrors in-session.
 
 **One session, one high-stakes decision among findings**
 - *Now:* land on a finding (default selection) → read banner "15 items" → scan chips (decision is chip 2 of 3, truncated) or expand "Show 6 older" → open decision → context → choose. The consequence of choosing is only visible after choosing (receipt).
-- *Proposed (oldest-first, decided):* land → the bar names the oldest item, "● REVIEW Session cache hit rate is 12% … **+1 high**" (state B) → click "+1 high" (or `⌄`) → the DecisionCard → choose. The high-stakes item is announced on landing and reachable in one step, and the decision's `after` line says what choosing does before you choose. If the decision is the oldest item, state A applies: one read, one keystroke.
+- *Proposed (oldest-first, decided):* land → the bar names the oldest item, "● REVIEW Session cache hit rate is 12% … **+1 high decision**" (state B) → click "+1 high decision" (or `⌄`) → the DecisionCard → choose. The high-stakes item is announced on landing and reachable in one step, and the decision's `after` line says what choosing does before you choose. If the decision is the oldest item, state A applies: one read, one keystroke.
 
 **Several sessions / agents**
 - *Now:* per-session tabs with counts + merged sidebar + `Agents:` row + banner total; which session owns the next blocker is inferred.
@@ -402,7 +442,7 @@ is the model this bar mirrors in-session.
 
 **Long review queue (13+)**
 - *Now:* 3 chips + "+12 more", identical dots, `n` in creation order, older items collapse.
-- *Proposed:* `⌄` shows the complete oldest-first queue in place; `n`/Shift+`n` follow the same order; "+N high" opens the high-stakes subset; position "1 of 13" is always visible; nothing collapses out of Decide.
+- *Proposed:* `⌄` shows the complete oldest-first queue in place; `n`/Shift+`n` follow the same order; "+N high decision" opens the high-stakes decisions; position "1 of 13" is always visible; nothing collapses out of Decide.
 
 ---
 
@@ -414,7 +454,7 @@ is the model this bar mirrors in-session.
 - **A `next` change never moves selection, focus or scroll.**
 - Every state has a text label (DECIDE / REVIEW / NOTHING NEEDS YOU / WAITING ON CLAUDE / HELD / DISCONNECTED) and an icon; colour is redundant. Waiting-on-agent is one colour everywhere (blue, matching ContextBank).
 - No pulsing in the bar; `prefers-reduced-motion` already honoured elsewhere stays honoured.
-- Long titles truncate visually with the full title in the accessible name and a tooltip; "Why"/"After" wrap to two lines max at 1280 wide.
+- On the one-line bar, long text truncates in the §4.5 order (never the prefix, lane word, "+N high decision" or counts), with the full text in the accessible name and a tooltip. In the `⌄` **expanded view**, Why and After each wrap to at most two lines at 1280 wide.
 - Keyboard: ⏎ open next, `n`/Shift+`n` next/previous in rank order, `⌄` toggles the queue (arrow keys inside, Esc closes and returns focus), existing `a`/`r`/`q`/`j`/`k` unchanged.
 - Existing gates stay: `e2e/a11y.e2e.ts` axe scans (dark + light) extend to every bar state; the bar is added to the keyboard-only walkthrough.
 
@@ -468,7 +508,7 @@ build:clean` bundle, and independent sign-off (per #430).
 Task-based walkthroughs, before vs after, recorded at 1280×800 and 1920×1080, keyboard-only and with a screen reader:
 1. "What does Claude need from you right now, and what happens when you answer?" (target: answer from the bar alone, no panel opened.)
 2. "Which session is blocked on you?" (3 sessions, 1 blocker.)
-3. "Clear a 13-item queue; find the one high-stakes item among them." (count keystrokes / panels opened; did "+N high" get noticed?)
+3. "Clear a 13-item queue; find the one high-stakes item among them." (count keystrokes / panels opened; did "+N high decision" get noticed?)
 4. "Claude exited — is anything still owed to you?" (Waiting lane honesty.)
 5. Edge states: empty, disconnected, replay, long titles, a blocked action.
 
@@ -482,7 +522,7 @@ Findings from the external pilot feed back into #430; screenshots alone do not v
 |---|---|---|
 | 1 | Lane model | **Approved:** Decide / Read / Waiting / System. |
 | 2 | Placement | **Approved:** a persistent one-line bar under the session tabs. |
-| 3 | Ordering within Decide | **Oldest-first** (chosen over stakes-first). Safety kept: the bar shows "+N high" so a second high-stakes item is never hidden (§4.3). |
+| 3 | Ordering within Decide | **Oldest-first** (chosen over stakes-first). Safety kept: the bar shows "+N high decision" (decisions with `stakes: "high"` only) so a second high-stakes decision is never hidden, and the indicator is never truncated (§4.3, §4.5). |
 | 4 | Stance-hold record | **Approved:** kept in the bar, read-only with "Why"; Retire stays in ⋯; never covers a pending decision. |
 | 5 | Start | **Approved**, using the split plan: PR 0 (acute, unflagged), then PR 1a (invisible selector), then the 1b–1e behaviour fixes (§8). |
 
