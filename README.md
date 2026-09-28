@@ -268,7 +268,8 @@ remembers where you stood.
   pnpm, a clone or a build.
 - **What you get:** the plugin runs the server bundle committed in
   `claude-plugin/server/`. It also installs the MCP tools, the slash commands
-  (`/deeppairing:start`, `:review`, `:stance`, `:review-pr`, `:post-pr`) and
+  (`/deeppairing:start`, `:review`, `:stance`, `:share`, `:review-pr`,
+  `:post-pr`) and
   the rejection-gate and checkpoint hooks.
 - **What it is not:** there is no npm package. deepPairing is distributed only
   as this plugin and this repository.
@@ -343,16 +344,22 @@ node packages/mcp-server/dist/cli/init.js init
 
 ### How long it takes
 
-These figures were measured on 2026-09-27 with throwaway `HOME` and project
-directories. Your times depend on your network, disk and machine.
+**Indicative only.** Once the plugin is installed, its server, the daemon and
+the companion are ready in about half a second on Linux and in under 2 s on
+Windows. Times vary by machine: an independent re-run on the same kind of setup
+was 20–40% slower.
+
+The ranges below are exactly what three runs measured on 2026-09-27, using
+throwaway `HOME` and project directories. Your times depend on your network,
+disk and machine.
 
 | Step | Linux (WSL2 ext4, Node 20.20) | Windows (Node 24.18, project on a `\\wsl.localhost` share) |
 |---|---|---|
 | Fetch the repo (what `/plugin marketplace add` downloads) | 1.1–1.4 s | not measured |
-| Plugin server and daemon up, MCP `initialize` answered | 0.37–0.43 s | 1.05–1.11 s |
-| Companion page served | 0.42–0.49 s | 1.23–1.31 s |
-| First artifact visible in the companion | 0.44–0.51 s | 1.35–1.48 s |
-| A companion comment reaches Claude's `check_feedback` | 0.46–0.54 s | 1.64–1.74 s |
+| Plugin server and daemon up, MCP `initialize` answered | 406–428 ms | 1047–1113 ms |
+| Companion page served | 467–489 ms | 1234–1307 ms |
+| First artifact visible in the companion | 487–514 ms | 1349–1482 ms |
+| A companion comment reaches Claude's `check_feedback` | 509–538 ms | 1644–1741 ms |
 | Source build, cold pnpm store: clone, install, build, demo | 1.4 + 6.0 + 8.3 + 1.9 ≈ 18 s | not measured |
 | Source build, warm pnpm store | 1.3 + 2.1 + 8.3 + 1.9 ≈ 14 s | not measured |
 
@@ -397,7 +404,7 @@ research brief is [docs/research-brief.md](docs/research-brief.md) (historical).
   (React + Vite + Zustand).
 - **`packages/shared/`** — Zod schemas + fixtures both server and UI import.
 - **`claude-plugin/`** — the Claude Code plugin: `.mcp.json`, slash commands
-  (`/deeppairing:start`, `:review`, `:stance`, `:review-pr`, `:post-pr`), the
+  (`/deeppairing:start`, `:review`, `:stance`, `:share`, `:review-pr`, `:post-pr`), the
   `pairing-protocol` skill, and the rejection-gate + checkpoint hooks.
 
 18 MCP tools: `present_findings`, `present_options`, `present_spec`,

@@ -39,7 +39,7 @@ GitHub SSH keys. The `owner/repo` shorthand can resolve to SSH and fail with
      plugin hooks. -->
 
 This adds the slash commands (`/deeppairing:start`, `:review`, `:stance`,
-`:review-pr`, `:post-pr`), the proactively-loaded `pairing-protocol` skill, and
+`:share`, `:review-pr`, `:post-pr`), the proactively-loaded `pairing-protocol` skill, and
 — as of v0.1.1 — the **PreToolUse rejection-gate + Stop checkpoint hooks
 natively** (declared in `claude-plugin/hooks/hooks.json`, active the moment the
 plugin loads — no `init`, no `.mcp.json`, no session restart).

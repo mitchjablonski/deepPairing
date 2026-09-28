@@ -9,7 +9,7 @@
  * Resolution order:
  *   1. ./server/standalone.js                          — bundled into the plugin (marketplace pack)
  *   2. ../packages/mcp-server/dist/standalone.js       — monorepo dev checkout
- *   3. require.resolve("@deeppairing/mcp-server")      — globally / locally npm-installed package
+ *   3. require.resolve("@deeppairing/mcp-server")      — a locally linked build (not published to npm)
  *
  * On failure we print every path we tried so the user can fix their install
  * instead of staring at an opaque "module not found" error.
@@ -43,9 +43,9 @@ if (!target) {
       candidates.map((p) => `  - ${p}`).join("\n") + "\n" +
       "  - require.resolve(\"@deeppairing/mcp-server\")\n\n" +
       "Fix one of:\n" +
-      "  • From a monorepo checkout: run `pnpm --filter @deeppairing/mcp-server build`.\n" +
-      "  • From a published install: run `npm i -g @deeppairing/mcp-server`.\n" +
-      "  • From a marketplace plugin: re-install the plugin (server bundle is missing).\n",
+      "  • From a marketplace plugin: re-install the plugin (the server bundle is missing).\n" +
+      "  • From a clone: run `pnpm install && pnpm build` at the repo root.\n" +
+      "(deepPairing is not published to npm; there is no package to install.)\n",
     );
     process.exit(1);
   }
