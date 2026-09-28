@@ -69,6 +69,9 @@ import { shouldAutoOpenBrowser } from "./auto-open.js";
 import { writeJsonAtomic } from "../store/atomic-write.js";
 import { summarizeProject } from "../store/context-bank.js";
 import { isSessionReviewConflictError } from "../store/session-records.js";
+// Static on purpose — see the note in client.ts (a dynamic import of
+// lifecycle.ts broke the plugin bundle's module initialisation order).
+import { probeDaemonIdentity } from "./lifecycle.js";
 
 /**
  * Cross-platform "open URL in default browser" without pulling in an npm
@@ -613,7 +616,6 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   });
 
   async function sweepProjects(): Promise<unknown> {
-    const { probeDaemonIdentity } = await import("./lifecycle.js");
     const probes: Array<Promise<{ port: number; identity: any | null }>> = [];
     for (let port = BASE_PORT; port < BASE_PORT + PORT_SPAN; port++) {
       probes.push(probeDaemonIdentity(port, 300).then((identity) => ({ port, identity })));
