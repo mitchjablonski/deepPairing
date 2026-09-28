@@ -21,6 +21,8 @@ const SPAWN_SUITES = [
   "src/__tests__/fixture-ttl.test.ts",
   // #168 — real cold `deeppairing demo` spawn (CLI-exits + NO_OPEN check).
   "src/__tests__/demo-cli-exit.test.ts",
+  // The shipped claude-plugin bundle boots with plain node (spawns a daemon).
+  "src/__tests__/plugin-bundle-boot.test.ts",
   // #426 — a real daemon that dies during startup must fail ensureDaemon fast.
   "src/__tests__/ensure-daemon-early-exit.test.ts",
 ];
