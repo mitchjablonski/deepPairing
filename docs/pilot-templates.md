@@ -23,6 +23,7 @@ placeholders, not observations or claims that the pilot has started.
 - Existing model-provider data flow explained:
 - No raw code/transcripts/recordings requested; storage/access explained:
 - Withdrawal method, aggregation cutoff and exact deletion date supplied:
+- Permission to retain/disclose anonymous cohort counts after withdrawal:
 - Aggregate-only publication plan and separate observation opt-in explained:
 - Participant consent/date; observation consent or decline/date:
 - Participant has permission to use the chosen project; no employer identity:
@@ -51,8 +52,12 @@ placeholders, not observations or claims that the pilot has started.
 ## Aggregate report (privacy-reviewed before publication)
 
 - Protocol commit, product version(s), observation window:
-- Enrollment N before withdrawals / analyzable N (if disclosure consented):
-- Missing interviews, known opportunities, abandonment; denominator policy:
+- Fixed enrolled N (frozen at enrollment close; all four gates use N):
+- Withdrawals: any / none / unavailable; any makes gate outcome inconclusive:
+- Anonymous cohort-count retention/disclosure permitted; otherwise unavailable:
+- O (known >=1 opportunity), confirmed zero, unknown, and missing interviews:
+- Coverage: O >= max(5, ceil(0.60 x N)); >=5 members of O interviewed:
+- Abandonment/non-response stay in N; no survivor-denominator recomputation:
 - Activation count/N; unassisted count; within-20-minute count; missing times:
 - Voluntary repeat count/N and count/known-opportunity participants:
 - Decision-value count/N, split observed/reported; inferred claims separate:
@@ -60,7 +65,8 @@ placeholders, not observations or claims that the pilot has started.
 - Review-time/interruptions summary, sources, missingness, comparability limits:
 - Baseline comparison limitations; no causal time-savings claim:
 - Most useful workflows; counterexamples and reversion reasons:
-- Each predeclared gate: pass / fail / insufficient evidence, with counts:
+- Each predeclared gate: pass / fail / not evaluated, with counts; do not
+  evaluate gates after withdrawal or insufficient opportunity coverage:
 - Outcome: go / narrow / pivot-stop / inconclusive; rationale:
 - Version changes, protocol deviations, exploratory analyses:
 - Small-sample/selection/self-report limitations; no PMF claim:

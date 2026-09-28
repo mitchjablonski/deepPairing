@@ -96,17 +96,30 @@ rework/time as participant estimates, never as measured causal savings.
 
 ## Predeclared interpretation (requires approval)
 
-Let **N** be the number of consenting enrolled participants whose data remain
-available for analysis. Count non-response and abandonment in N; they do not
-count as successes. Disclose the original enrollment count and withdrawals
-in aggregate if consent permits. Never invent zero-minute times for missing
-observations. Record counts with denominators, not percentages alone.
+Let **N** be the fixed total enrolled cohort count, frozen when enrollment
+closes. All four numerical gates below use this same N, never a smaller
+respondent or survivor denominator. Non-response and abandonment without a
+withdrawal stay in N and do not count as successes. Never invent zero-minute
+times for missing observations; report counts with denominators.
 
-An interpretable cohort needs N >= 5, plus at least five participants with
-known suitable follow-up opportunities and completed end interviews. Otherwise
-the result is **inconclusive**, regardless of favorable anecdotes. Report
-repeat use both over N and over those with known opportunities; never silently
-drop non-users from the main denominator.
+Let **O** count participants known to have at least one suitable follow-up
+task. A confirmed zero-opportunity participant is not in O; unknown opportunity
+is also not in O but is reported separately. Both remain in N and neither
+counts as a repeat success. This deliberately measures adoption in the selected
+audience, not only willingness to return among those who found an opportunity.
+
+An interpretable cohort needs N >= 5, **O >= max(5, ceil(0.60 x N))**, and
+completed end interviews for at least five members of O. Otherwise the result
+is **inconclusive**, regardless of favorable anecdotes. This coverage minimum
+makes the N-wide repeat gate attainable. Also report repeat count/O as a
+secondary descriptive measure; it cannot replace the N-wide gate.
+
+**Any data withdrawal makes the gate outcome inconclusive.** Delete/exclude
+that person's observations as promised; do not shrink N and rerun gates on
+the survivors. Remaining consented qualitative findings may still inform a
+future study. Retain/disclose only consent-permitted anonymous cohort counts;
+if even those counts cannot be retained or safely disclosed, report them as
+unavailable and do not evaluate gates. Withdrawal is not a product failure.
 
 Provisional thresholds, fixed before enrollment:
 
@@ -129,11 +142,19 @@ version/protocol breaks, or conflicting evidence without a coherent segment.
 Do not retrospectively change a gate or remove a dropout to obtain a go.
 Exploratory subgroups must be labeled exploratory and cannot count as proof.
 
+Protocol dry-run examples (synthetic, not pilot results): N=5, O=5 requires
+3 repeaters; N=10, O=5 is inconclusive before checking gates; N=10, O=6 can
+satisfy the repeat gate with 6 repeaters. With any withdrawal, none of those
+cohorts receives a Go by recomputing N. Unknown/missing responses are never
+imputed as successful activation, return, value, or low burden.
+
 ## Consent and data handling
 
 Before consent, explain purpose, duration, voluntary participation, requested
 fields, storage/access, deletion/withdrawal dates, and the limited reporting
-plan. Participation is not a condition of product support. Obtain separate
+plan, including whether anonymous enrollment/withdrawal counts may be retained
+after individual records are deleted. Participation is not a condition of
+product support. Obtain separate
 opt-in for any observation; declining it is not a disqualifier. Do not record
 screens/audio or ask for raw source, paths, secrets, prompts, transcripts,
 session exports, repository URLs, or employer/customer names.
