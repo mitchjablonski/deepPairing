@@ -10,6 +10,7 @@ import { usePreferencesStore, SIDEBAR_WIDTHS } from "../stores/preferences";
 import { useReplayStore } from "../stores/replay";
 import { useConnectionStore } from "../stores/connection";
 import { reviewLifecycle } from "../lib/reviewLifecycle";
+import { isDraftAwaitingReview } from "../lib/pending";
 import { useIsNarrowViewport, useMediaQuery } from "../hooks/useMediaQuery";
 // D6 (P2) — the artifact renderers are LAZY: statically importing all seven
 // kept them (and, via their coerce*Content imports, the whole Zod runtime)
@@ -104,6 +105,20 @@ const statusLabels: Record<string, string> = {
   retracted: "Retracted by agent",
   obsolete: "Overcome by new information",
 };
+
+/**
+ * #430 PR 0 (docs/design/attention-hierarchy.md §2.8, §8) — the SIDEBAR dot must
+ * agree with what is actually pending. Explainer and reasoning drafts are not
+ * pending (lib/pending.ts REVIEWABLE_TYPES) yet wore the amber "Draft, awaiting
+ * review" dot every reviewable draft wears. A draft that is NOT awaiting review
+ * gets a neutral "for you to read" dot instead; every other artifact keeps its
+ * status dot, glyph and label.
+ */
+const READ_DOT = { dot: "bg-text-muted", glyph: "○", label: "New — for you to read" };
+function sidebarStatus(a: Artifact): { dot: string | undefined; glyph: string; label: string } {
+  if (a.status === "draft" && !isDraftAwaitingReview(a)) return READ_DOT;
+  return { dot: statusDots[a.status], glyph: statusGlyph[a.status] ?? "•", label: statusLabels[a.status] ?? a.status };
+}
 
 /** #193 E2 — the status label, type-aware. A DRAFT explainer is not "awaiting
  *  review" — it's a read-only walk-through the human should READ; the verdict
@@ -805,6 +820,10 @@ function ArtifactSidebar({
   // only the most-recent N artifacts by default, collapse the rest behind a
   // "Show N older" toggle. The currently-selected artifact is always kept
   // visible even if it's old, so the list never hides where you are.
+  // #430 PR 0 (docs/design/attention-hierarchy.md §4.3) — and neither does it
+  // hide what is WAITING ON YOU: every draft awaiting review is kept too. The
+  // cutoff hid the only high-stakes decision behind "Show 6 older"; it now
+  // applies to non-pending items only.
   const [showAllOlder, setShowAllOlder] = useState(false);
   const recentIds = useMemo(() => {
     const ids = new Set(
@@ -814,6 +833,7 @@ function ArtifactSidebar({
         .map((a) => a.id),
     );
     if (selectedArtifactId) ids.add(selectedArtifactId);
+    for (const a of artifacts) if (isDraftAwaitingReview(a)) ids.add(a.id);
     return ids;
   }, [artifacts, selectedArtifactId]);
   const olderCount = artifacts.filter((a) => !recentIds.has(a.id)).length;
@@ -939,7 +959,8 @@ function ArtifactSidebar({
             // BUTTON itself (title + aria-label) when collapsed — the icon column
             // is unreadable without it. Expanded rows show the title inline, so
             // they keep the plain `a.title` tooltip.
-            const collapsedLabel = `${typeLabels[a.type] ?? a.type}: ${a.title} — ${statusLabels[a.status] ?? a.status}`;
+            const sb = sidebarStatus(a);
+            const collapsedLabel = `${typeLabels[a.type] ?? a.type}: ${a.title} — ${sb.label}`;
 
             return (
               <button
@@ -970,10 +991,10 @@ function ArtifactSidebar({
                       </span>
                     )}
                     <span
-                      aria-label={statusLabels[a.status]}
-                      className={`absolute -bottom-1 -right-1 w-3 h-3 rounded-full flex items-center justify-center text-[8px] leading-none ${statusDots[a.status]} text-white`}
+                      aria-label={sb.label}
+                      className={`absolute -bottom-1 -right-1 w-3 h-3 rounded-full flex items-center justify-center text-[8px] leading-none ${sb.dot} text-white`}
                     >
-                      {statusGlyph[a.status] ?? "•"}
+                      {sb.glyph}
                     </span>
                   </div>
                 ) : (
@@ -999,11 +1020,11 @@ function ArtifactSidebar({
                       </span>
                     )}
                     <span
-                      aria-label={statusLabels[a.status]}
-                      title={statusLabels[a.status]}
-                      className={`shrink-0 w-4 h-4 rounded-full flex items-center justify-center text-[9px] leading-none ${statusDots[a.status]} text-white`}
+                      aria-label={sb.label}
+                      title={sb.label}
+                      className={`shrink-0 w-4 h-4 rounded-full flex items-center justify-center text-[9px] leading-none ${sb.dot} text-white`}
                     >
-                      {statusGlyph[a.status] ?? "•"}
+                      {sb.glyph}
                     </span>
                     {/* Q4 — same unread dot, expanded-rail variant. */}
                     {isUnread && (
