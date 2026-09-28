@@ -20,25 +20,21 @@ a wall of terminal text.
 architecture, and want to stay in the loop at the *decision* level — not the
 keystroke level, and not a 500-line diff after the fact.
 
-### See it in ~90 seconds
+### Get started
+
+Install the plugin inside Claude Code. It needs no clone and no build: the
+plugin ships a prebuilt server that runs on Node 20.11+.
 
 ```bash
-git clone https://github.com/mitchjablonski/deepPairing.git
-cd deepPairing && pnpm install && pnpm build
-node packages/mcp-server/dist/cli/init.js demo
+/plugin marketplace add https://github.com/mitchjablonski/deepPairing
+/plugin install deeppairing@deeppairing
 ```
 
-Fires the hero flow against a real companion UI (auto-opens your browser), so
-you feel the whole loop before installing anything — the review surface, the
-read-only explainer walk-through and end-of-run debrief that make the change
-comprehensible, and the rejection gate that blocks a re-proposed approach.
-Building from source (as above) needs Node 20.19+, 22.13+, or 24+ — the
-locked toolchain's floor (Vite/rolldown *and* eslint, see
-[INSTALL.md](INSTALL.md) for the exact range), not the 20.11+ the prebuilt
-plugin runs on — plus pnpm 10+. CI runs Node 22. (The ~90s assumes a
-warm pnpm store; a first-ever install adds ~60-90s of dependency downloads —
-see [the FAQ](docs/faq.md#whats-the-install-size-cold-clone-time).) Then, to use
-it in your own project: **[install in Claude Code ↓](#install-in-claude-code)**.
+Then open Claude Code in your own project and ask for real work, for example
+*"Analyze the auth module and propose options."* The first steps are in
+**[Your first review ↓](#your-first-review)**. To look around before
+installing, the **[seeded demo ↓](#watch-the-seeded-demo-source-build)** runs
+without Claude Code but needs a source build.
 
 ## What you get
 
@@ -261,33 +257,121 @@ remembers where you stood.
 
 ## Install in Claude Code
 
-Three ways in, fastest first — all give you the same MCP tools + companion UI.
-Full setup details, the SSH note, and the `init`-vs-plugin comparison live in
-**[INSTALL.md](INSTALL.md)**.
+**Supported path: the prebuilt plugin.** Inside Claude Code:
 
 ```bash
-# 1. Marketplace (recommended) — inside Claude Code, no build step. Ships the
-#    rejection-gate + checkpoint hooks, so the enforcement layer is on:
 /plugin marketplace add https://github.com/mitchjablonski/deepPairing
 /plugin install deeppairing@deeppairing
+```
 
-# 2. Local plugin — same, from a clone (slash commands + skill + hooks):
-claude --plugin-dir ./claude-plugin
+- **What you need:** Claude Code and Node 20.11+ on your `PATH`. You don't need
+  pnpm, a clone or a build.
+- **What you get:** the plugin runs the server bundle committed in
+  `claude-plugin/server/`. It also installs the MCP tools, the slash commands
+  (`/deeppairing:start`, `:review`, `:stance`, `:review-pr`, `:post-pr`) and
+  the rejection-gate and checkpoint hooks.
+- **What it is not:** there is no npm package. deepPairing is distributed only
+  as this plugin and this repository.
 
-# 3. From source — writes .mcp.json + hooks into this project (no plugin):
+To load the same plugin from a clone for one session, use
+`claude --plugin-dir ./claude-plugin`. That also needs no build: the committed
+bundle is used when `packages/mcp-server/dist` is absent. Setup details, the SSH
+note and the `init`-vs-plugin comparison are in **[INSTALL.md](INSTALL.md)**.
+
+### Your first review
+
+Each step names where it happens and what to do next.
+
+1. **Terminal: start Claude Code in your project.** When the plugin's MCP
+   server starts, it starts a local daemon for the project. On the daemon's
+   first start it opens the companion in your browser. The companion runs on a per-project port in `3847-3974`. If no
+   tab opens, run `/deeppairing:start` and Claude gives you the URL. The daemon
+   records its port in `.deeppairing/daemon.json`.
+2. **Companion: wait for the first artifact.** Until Claude presents something,
+   the companion shows *Waiting for Claude*. **Next:** go back to the terminal
+   and ask for real work, such as an analysis, a set of options or a plan.
+3. **Companion: review.** Findings, options, plans and changes arrive as
+   artifacts. **Next:** comment on a line, pick an option, ask "why", approve,
+   or reject with a reason. A rejection becomes a gate in this project.
+4. **Terminal: Claude picks up your feedback.** Claude doesn't block while you
+   review. It reads your comments and decisions with `check_feedback`, which it
+   calls after presenting and whenever it next pauses. If you answered while
+   it was busy, your feedback waits in the session. **Next:** if Claude
+   hasn't responded, tell it in the terminal to *"check feedback"*.
+
+**Where each part goes.**
+
+- **Terminal chat:** direction and quick questions.
+- **Companion:** anything tied to an artifact, such as line comments, option
+  picks and verdicts.
+- **Late feedback:** you don't need to re-type it in the terminal. It stays
+  queued in the session until Claude next checks.
+
+**If something is stuck,** run the checks in
+[docs/troubleshooting.md](docs/troubleshooting.md). It covers the companion
+staying on *Waiting for Claude*, a daemon that won't start, and MCP startup
+timeouts on WSL `/mnt/c`.
+
+### Watch the seeded demo (source build)
+
+The demo drives a scripted session against a real companion. It shows the
+review surface, the explainer walk-through, the end-of-run debrief, and the
+rejection gate blocking a re-proposed approach. It doesn't need Claude Code,
+but it is a **developer path**: it needs a clone and a build.
+
+```bash
+git clone https://github.com/mitchjablonski/deepPairing.git
+cd deepPairing && pnpm install && pnpm build
+node packages/mcp-server/dist/cli/init.js demo
+```
+
+- **What you need:** Node 20.19+, 22.13+ or 24+, and pnpm 10+. This is stricter
+  than the plugin's runtime floor because the locked toolchain requires it; see
+  [INSTALL.md](INSTALL.md).
+- **Demo data:** it runs in a throwaway `demo_…` session. It never writes to
+  your project's preferences or to the cross-project ledger.
+
+### From source (developer path)
+
+Use this path to work on deepPairing itself or to run it without the plugin.
+`init` writes `.mcp.json` and the hooks into the current project:
+
+```bash
 pnpm install && pnpm build
 node packages/mcp-server/dist/cli/init.js init
 ```
 
-Then just work normally — *"Let's analyze the auth module"* — and Claude routes
-findings, decisions, plans, and changes through the companion UI with structured
-evidence. You comment, pick, ask "why", request revisions; every rejection
-becomes a gate in this project, and — once you enable cross-project publishing —
-joins the ledger your other projects read.
+### How long it takes
 
-**VS Code extension — experimental preview.** Claude Code plus the browser
-companion is the supported workflow. The extension in
-`packages/vscode-extension/` is an experimental preview. There is no parity
+These figures were measured on 2026-09-27 with throwaway `HOME` and project
+directories. Your times depend on your network, disk and machine.
+
+| Step | Linux (WSL2 ext4, Node 20.20) | Windows (Node 24.18, project on a `\\wsl.localhost` share) |
+|---|---|---|
+| Fetch the repo (what `/plugin marketplace add` downloads) | 1.1–1.4 s | not measured |
+| Plugin server and daemon up, MCP `initialize` answered | 0.37–0.43 s | 1.05–1.11 s |
+| Companion page served | 0.42–0.49 s | 1.23–1.31 s |
+| First artifact visible in the companion | 0.44–0.51 s | 1.35–1.48 s |
+| A companion comment reaches Claude's `check_feedback` | 0.46–0.54 s | 1.64–1.74 s |
+| Source build, cold pnpm store: clone, install, build, demo | 1.4 + 6.0 + 8.3 + 1.9 ≈ 18 s | not measured |
+| Source build, warm pnpm store | 1.3 + 2.1 + 8.3 + 1.9 ≈ 14 s | not measured |
+
+How these were measured:
+
+- **Plugin rows:** the times are from launching the plugin's `server.mjs` with
+  plain `node`. A scripted MCP client stood in for Claude Code and an HTTP
+  client stood in for the browser. A separate headless-browser check confirmed
+  that the companion renders the artifact.
+- **What they leave out:** installing the plugin inside Claude Code, Claude
+  Code's own start-up, and the model's thinking time.
+- **Cold install:** it downloaded 506 packages on a fast connection. A slow
+  network adds to it.
+- **WSL `/mnt/c`:** a first start there is much slower; see
+  [troubleshooting](docs/troubleshooting.md#claude-codes-mcp-startup-times-out-on-mntc).
+
+**VS Code extension (experimental preview).** The supported workflow is Claude
+Code plus the browser companion. The extension in
+`packages/vscode-extension/` is an experimental preview, with no parity
 commitment and no date for one. Its known limitations are listed in
 [packages/vscode-extension/README.md](packages/vscode-extension/README.md).
 

@@ -254,17 +254,20 @@ See [SECURITY.md](../SECURITY.md) for the threat model in full.
 
 ## "What's the install size? Cold-clone time?"
 
-- Repo: ~12 MB unpacked; built dist is ~12 MB (most of which is the
-  bundled Shiki language grammars for syntax highlighting in the
-  companion UI).
-- Cold `pnpm install`: 60-90s on a normal laptop (Turborepo + a few
-  hundred deps).
-- Build: ~10s for the monorepo, ~7s for the companion UI alone.
-- Demo: ~5s end-to-end once built.
+- **Plugin (the supported path):** no build. The committed server bundle
+  starts with plain `node`. Once the repo is fetched (1.1–1.4 s on a fast
+  connection), the daemon and MCP server are up in about 0.4 s on Linux and
+  about 1.1 s on Windows.
+- **Source build (the developer path):** from a cold pnpm store, install took
+  6.0 s (506 packages downloaded), the build took 8.3 s and the demo took 1.9 s.
+  With a warm store, install took 2.1 s.
 
-We've measured these numbers on a recent MacBook Pro and a Linux
-desktop. Slower hardware (or first-time `pnpm setup`) adds maybe
-30s. If your numbers are dramatically worse, that's worth an issue.
+The full table and how it was measured are in
+[the README](../README.md#how-long-it-takes). Those figures come from
+2026-09-27, on Linux (WSL2 ext4, Node 20.20, 16 cores) and Windows (Node 24.18),
+using throwaway directories. A slow network, a slow disk, or a first start on
+WSL `/mnt/c` takes noticeably longer. If your numbers are dramatically worse,
+please open an issue.
 
 ## "Is it stable enough for daily use?"
 
