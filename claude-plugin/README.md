@@ -53,14 +53,16 @@ The plugin's `.mcp.json` invokes a small launcher (`server.mjs`) that
 resolves the MCP server entry point across three install layouts:
 
 1. **Bundled** — `${CLAUDE_PLUGIN_ROOT}/server/standalone.js`. This is
-   what the marketplace pack will ship: the compiled server lives inside
-   the plugin so it has zero external dependencies.
+   what a marketplace install runs. The compiled server lives inside the
+   plugin, so it has no external dependencies.
 2. **Monorepo dev checkout** —
    `${CLAUDE_PLUGIN_ROOT}/../packages/mcp-server/dist/standalone.js`.
    What you're using when you `claude --plugin-dir ./claude-plugin` from
    this repo after `pnpm build`.
-3. **npm-installed package** — `require.resolve("@deeppairing/mcp-server")`.
-   Use `npm i -g @deeppairing/mcp-server` once the package is published.
+3. **A locally linked package** — `require.resolve("@deeppairing/mcp-server")`.
+   deepPairing is **not published to npm**. This candidate resolves only if
+   you have linked a local build yourself, for example with
+   `pnpm link --global`.
 
 If none resolve, the launcher prints a clear message naming each path it
 tried and the recovery command, so install failures don't show up as

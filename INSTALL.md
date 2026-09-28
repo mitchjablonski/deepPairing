@@ -6,9 +6,11 @@ has the short version; this page is the detail, the caveats, and the
 `init`-vs-plugin comparison.
 
 > **Just want to watch it first?** The
-> [demo command](README.md#see-it-in-90-seconds) fires
-> the hero flow against a real companion UI in ~90 seconds, no Claude Code
-> install needed.
+> [seeded demo](README.md#watch-the-seeded-demo-source-build) runs the hero
+> flow against a real companion UI without Claude Code. It needs a source build
+> (about 14–18 s measured end to end; see
+> [How long it takes](README.md#how-long-it-takes)). The plugin path below
+> needs no build.
 
 All the "from a clone" paths need the build first — that requires **Node 20.19+, 22.13+, or 24+** (pnpm 10+), the floor set by the locked toolchain: `pnpm build` alone only needs Vite 8/rolldown's `^20.19.0 || >=22.12.0`, but `pnpm install` also pulls in eslint (run by `pnpm lint`, which CI runs on every PR), whose locked `^20.19.0 || ^22.13.0 || >=24` is tighter on the 22.x line — so Node 22.12.x and all of Node 23.x are *not* supported by the contributor toolchain even though they'd satisfy Vite alone. This is stricter than the runtime the *prebuilt* plugin below needs (Node 20.11+, see [option 1](#1-marketplace-plugin-recommended)) — building from source and running the shipped bundle have different Node requirements:
 
@@ -37,7 +39,7 @@ GitHub SSH keys. The `owner/repo` shorthand can resolve to SSH and fail with
      plugin hooks. -->
 
 This adds the slash commands (`/deeppairing:start`, `:review`, `:stance`,
-`:review-pr`, `:post-pr`), the proactively-loaded `pairing-protocol` skill, and
+`:share`, `:review-pr`, `:post-pr`), the proactively-loaded `pairing-protocol` skill, and
 — as of v0.1.1 — the **PreToolUse rejection-gate + Stop checkpoint hooks
 natively** (declared in `claude-plugin/hooks/hooks.json`, active the moment the
 plugin loads — no `init`, no `.mcp.json`, no session restart).
