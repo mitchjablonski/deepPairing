@@ -111,7 +111,7 @@ export function TurnIndicator({
     return out;
   }, [comments]);
 
-  // U2 — liveness: the newest artifact/comment timestamp. After AGENT_IDLE_MS
+  // U2 — liveness: the newest artifact/comment timestamp. After AGENT_ACTIVE_WINDOW_MS
   // with no new activity we stop claiming "Agent working" (the old behavior
   // pulsed forever, telling the human to keep waiting on an idle/finished
   // agent). A timer flips `idle` so it updates even without a re-render.
@@ -135,8 +135,6 @@ export function TurnIndicator({
     return max;
   }, [artifacts, comments]);
 
-  // #430 PR 1b — the shared activity window (was a local 45s; see lib/agentActivity).
-  const AGENT_IDLE_MS = AGENT_ACTIVE_WINDOW_MS;
   // B2 — liveness = max(artifact/comment timestamps, heartbeat). Either signal
   // keeps "Agent working" honest; the heartbeat covers the artifact-quiet gaps.
   const effectiveActivityMs = Math.max(lastActivityMs, agentActivityAt ?? 0);
@@ -150,7 +148,8 @@ export function TurnIndicator({
   useEffect(() => {
     setIdle(false);
     if (!effectiveActivityMs) return;
-    const remaining = AGENT_IDLE_MS - (Date.now() - effectiveActivityMs);
+    // #430 PR 1b — the shared activity window (was a local 45s; see lib/agentActivity).
+    const remaining = AGENT_ACTIVE_WINDOW_MS - (Date.now() - effectiveActivityMs);
     if (remaining <= 0) { setIdle(true); return; }
     const t = setTimeout(() => setIdle(true), remaining);
     return () => clearTimeout(t);
