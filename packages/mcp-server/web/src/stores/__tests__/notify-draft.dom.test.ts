@@ -26,11 +26,11 @@ class FakeAdapter implements ConnectionAdapter {
 let adapter: FakeAdapter;
 vi.mock("../../lib/connection-adapter", () => ({ createAdapter: () => adapter }));
 
-const shown: { title: string; body?: string }[] = [];
+const shown: { title: string; body?: string; tag?: string }[] = [];
 class FakeNotification {
   static permission = "granted";
   static requestPermission() { return Promise.resolve("granted"); }
-  constructor(title: string, opts?: { body?: string }) { shown.push({ title, body: opts?.body }); }
+  constructor(title: string, opts?: { body?: string; tag?: string }) { shown.push({ title, body: opts?.body, tag: opts?.tag }); }
 }
 
 let seq = 0;
@@ -44,13 +44,14 @@ const draft = (type: string, title: string) => ({
 /** The store handles each message after a dynamic import — give it a tick. */
 const flush = async () => { await new Promise((r) => setTimeout(r, 0)); await new Promise((r) => setTimeout(r, 0)); };
 
+let useConnectionStore: typeof import("../connection").useConnectionStore;
 beforeEach(async () => {
   adapter = new FakeAdapter();
   shown.length = 0;
   vi.resetModules();
   vi.stubGlobal("Notification", FakeNotification);
   vi.spyOn(document, "hasFocus").mockReturnValue(false); // the tab is in the background
-  const { useConnectionStore } = await import("../connection");
+  ({ useConnectionStore } = await import("../connection"));
   const { useArtifactStore } = await import("../artifact");
   useArtifactStore.getState().reset();
   useConnectionStore.getState().connect();
@@ -102,4 +103,48 @@ describe("#430 PR 1e — a decision always gets its OS alert", () => {
     await flush();
     expect(shown).toHaveLength(1);
   });
+
+  it("decision alerts share the OS tag 'dp-decision' (a burst collapses); other drafts stay untagged", async () => {
+    adapter.emit(draft("research", "A finding"));
+    await flush();
+    adapter.emit(draft("decision", "First decision"));
+    await flush();
+    adapter.emit(draft("decision", "Second decision"));
+    await flush();
+    expect(shown.map((n) => [n.body, n.tag])).toEqual([
+      ["Findings ready for review: A finding", undefined],
+      ["Decision needed: First decision", "dp-decision"],
+      ["Decision needed: Second decision", "dp-decision"],
+    ]);
+  });
 });
+
+describe("#430 PR 1e review — the working streak uses the shared 60s activity window", () => {
+  it("a heartbeat gap under 60s continues the streak; over 60s starts a new one", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const st = () => useConnectionStore.getState();
+      // (vi.waitFor nudges a faked clock, so read times back instead of assuming them.)
+      const beat = async () => {
+        const before = st().agentActivityAt;
+        adapter.emit({ type: "agent_activity" });
+        await vi.waitFor(() => expect(st().agentActivityAt).not.toBe(before));
+        return st().agentActivityAt!;
+      };
+      vi.setSystemTime(new Date("2026-06-01T00:00:00.000Z"));
+      const first = await beat();
+      const since = st().agentActiveSince;
+      expect(since).toBe(first);
+      vi.setSystemTime(first + 59_000);
+      await beat();
+      expect(st().agentActiveSince).toBe(since); // < 60s gap: same streak
+      const last = st().agentActivityAt!;
+      vi.setSystemTime(last + 61_000);
+      const fresh = await beat();
+      expect(st().agentActiveSince).toBe(fresh); // > 60s gap: a new streak
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+

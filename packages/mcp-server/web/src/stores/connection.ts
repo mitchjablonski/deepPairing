@@ -6,6 +6,7 @@ import { isDraftAwaitingReview } from "../lib/pending";
 import { pushDaemonRestartToast } from "../lib/daemon-restart";
 import { reloadIfChunkFailedOffline } from "../lib/chunk-error";
 import { noAgentLive } from "../lib/liveness";
+import { AGENT_ACTIVE_WINDOW_MS } from "../lib/agentActivity";
 import type { Artifact, Comment, Request } from "@deeppairing/shared";
 import { useReplayStore } from "./replay";
 import {
@@ -29,13 +30,16 @@ interface RecoverySnapshot {
   }>;
 }
 
-/** Request notification permission and send a notification when tab is unfocused */
-function notifyIfUnfocused(title: string, body: string) {
+/** Request notification permission and send a notification when tab is unfocused.
+ *  #430 PR 1e review — `tag` lets the OS replace instead of stack: decision
+ *  alerts share "dp-decision" (they bypass the burst throttle, so a burst of
+ *  decisions collapses to the newest one in the notification centre). */
+function notifyIfUnfocused(title: string, body: string, tag?: string) {
   if (typeof Notification === "undefined") return;
   if (document.hasFocus()) return;
 
   if (Notification.permission === "granted") {
-    new Notification(title, { body, icon: "/favicon.ico" });
+    new Notification(title, { body, icon: "/favicon.ico", ...(tag ? { tag } : {}) });
   } else if (Notification.permission === "default") {
     Notification.requestPermission();
   }
@@ -253,7 +257,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       if (now - lastDraftNotifyAt < 5_000) return;
       lastDraftNotifyAt = now;
     }
-    notifyIfUnfocused("deepPairing — your turn", body);
+    notifyIfUnfocused("deepPairing — your turn", body, opts?.decision ? "dp-decision" : undefined);
   };
 
   // #168 — hero-toast dedupe. The demo (and a sleep/blip reconnect on any
@@ -506,12 +510,14 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           // call the agent's wrapper makes. A gap >60s starts a new activity
           // streak (check_feedback polls ~30s, so a live agent pings at least
           // that often); agentActiveSince drives "Agent working · Nm".
+          // #430 PR 1b/1e review — the streak gap IS the shared activity window,
+          // so "Agent working · Nm" and the pill agree on "still working".
           const now = Date.now();
           const prev = get().agentActivityAt;
           set({
             agentActivityAt: now,
             agentActiveSince:
-              prev !== null && now - prev < 60_000 ? (get().agentActiveSince ?? now) : now,
+              prev !== null && now - prev < AGENT_ACTIVE_WINDOW_MS ? (get().agentActiveSince ?? now) : now,
           });
           break;
         }
