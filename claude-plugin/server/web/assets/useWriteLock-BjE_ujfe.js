@@ -1,1 +1,0 @@
-import{o as e}from"./pending-Dhgg6Z9V.js";import{w as t}from"./index-DkVE57f-.js";function n(n){let r=t(n,e(e=>e.active));return r===`closed`||r===`frozen`}export{n as t};
