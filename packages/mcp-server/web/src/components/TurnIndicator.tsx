@@ -5,6 +5,7 @@ import { useConnectionStore } from "../stores/connection";
 import { computePending, summarizeTurnParts } from "../lib/pending";
 import { isUnansweredQuestion } from "../lib/unanswered";
 import { buildThreads } from "../lib/threading";
+import { AGENT_ACTIVE_WINDOW_MS } from "../lib/agentActivity";
 
 /**
  * Top-header turn indicator + agent narration pill.
@@ -134,7 +135,8 @@ export function TurnIndicator({
     return max;
   }, [artifacts, comments]);
 
-  const AGENT_IDLE_MS = 45_000;
+  // #430 PR 1b — the shared activity window (was a local 45s; see lib/agentActivity).
+  const AGENT_IDLE_MS = AGENT_ACTIVE_WINDOW_MS;
   // B2 — liveness = max(artifact/comment timestamps, heartbeat). Either signal
   // keeps "Agent working" honest; the heartbeat covers the artifact-quiet gaps.
   const effectiveActivityMs = Math.max(lastActivityMs, agentActivityAt ?? 0);
