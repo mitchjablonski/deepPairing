@@ -7,6 +7,7 @@ import { useReplayStore } from "../../stores/replay";
 import { useCrossProjectStore } from "../../stores/crossProject";
 import { useChainComments } from "../../hooks/useChainComments";
 import { summarizeOpenSuggestions, openSuggestionsConfirmLabel } from "../../lib/openSuggestions";
+import { WAITING_TONE } from "../../lib/waitingTone";
 
 interface ArtifactStatusActionsProps {
   artifact: Artifact;
@@ -434,9 +435,10 @@ export function ArtifactStatusActions({
       <div className="flex items-center gap-2 pt-2 border-t border-border-default">
         {/* UX7b — same glyph as the sidebar/header statusGlyph.revised (↻),
             not a pencil, so "revised" reads consistently across surfaces. */}
-        {/* F8 (L4) — violet with the panel dot: revised = agent's turn. */}
-        <span className="text-accent-violet text-sm">↻</span>
-        <span className="text-xs text-accent-violet font-medium">Revision requested</span>
+        {/* F8 (L4) + #430 PR 1d — the panel dot's colour: revised = agent's
+            turn = the one waiting blue. */}
+        <span className={`${WAITING_TONE.text} text-sm`}>↻</span>
+        <span className={`text-xs ${WAITING_TONE.text} font-medium`}>Revision requested</span>
         <span className="text-2xs text-text-muted ml-1">awaiting agent</span>
       </div>
     );

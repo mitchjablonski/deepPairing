@@ -4,6 +4,7 @@ import { suggestionSummary } from "@deeppairing/shared";
 import { useArtifactStore, commentPriorVersion } from "../stores/artifact";
 import { isSessionLive } from "../stores/connection";
 import { ReplyModeToggle, type ReplyMode } from "./ReplyModeToggle";
+import { WAITING_TONE } from "../lib/waitingTone";
 
 /**
  * Shared per-line comment surface: the hover gutter (+ comment / ? ask /
@@ -272,7 +273,7 @@ export function LineCommentChips({
               <span className="text-text-muted italic">resolved by you</span>
             ) : answered ? null : (
               <>
-                <span className="text-accent-violet">⏳ awaiting answer</span>
+                <span className={WAITING_TONE.text}>⏳ awaiting answer</span>
                 <button
                   type="button"
                   onClick={(e) => {
