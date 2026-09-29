@@ -168,7 +168,7 @@ describe("§4.3 worked table — the doc's rows, literally", () => {
       artifacts.push(art("explainer", "draft", { id: "e1" }));
       artifacts.push(art("reasoning", "draft", { id: "e2" }));
     }
-    const comments = st.waiting ? { a: [question("q1", "a")], b: [question("q2", "b")] } : {};
+    const comments: Record<string, Comment[]> = st.waiting ? { a: [question("q1", "a")], b: [question("q2", "b")] } : {};
     const holds = st.held ? [{ id: "h1", title: "held one", at: ts() }, { id: "h2", title: "held two", at: ts() }] : [];
     return { artifacts, comments, system: { ...(st.failure ? { [st.failure]: true } : {}), holds } };
   }
