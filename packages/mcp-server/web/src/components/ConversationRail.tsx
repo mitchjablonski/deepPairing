@@ -48,6 +48,9 @@ function saveLastOpenedAt(ms: number): void {
 
 interface ConversationRailProps {
   onClose: () => void;
+  /** #430 PR 1c — open on the Unanswered filter (the Comment-threads button
+   *  does, when questions are waiting). Defaults to "all". */
+  initialFilter?: FilterMode;
 }
 
 interface ThreadedRow {
@@ -77,7 +80,7 @@ function targetLabel(c: Comment, artifact?: Artifact): string {
 
 type FilterMode = "all" | "unanswered";
 
-export function ConversationRail({ onClose }: ConversationRailProps) {
+export function ConversationRail({ onClose, initialFilter = "all" }: ConversationRailProps) {
   // D8 (M4) — relative timestamps froze at render ("30s ago" forever).
   // 30s tick, TurnIndicator's idiom; drives re-render only while mounted.
   const [, setNowTick] = useState(0);
@@ -92,7 +95,7 @@ export function ConversationRail({ onClose }: ConversationRailProps) {
   // first-time opener sees the full feed; switching to "unanswered"
   // collapses the list to just the human questions still waiting on a
   // reply, which is the triage surface most users will reach for.
-  const [filter, setFilter] = useState<FilterMode>("all");
+  const [filter, setFilter] = useState<FilterMode>(initialFilter);
 
   // W2 — capture the previous "last opened" once on mount; we use it to
   // diff which comments arrived since. Then UPDATE the persisted value to

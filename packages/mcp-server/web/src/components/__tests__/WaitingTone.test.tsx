@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { ArtifactPanel } from "../ArtifactPanel";
-import { TurnIndicator } from "../TurnIndicator";
 import { useArtifactStore } from "../../stores/artifact";
 import { useConnectionStore } from "../../stores/connection";
 import { WAITING_TONE } from "../../lib/waitingTone";
@@ -40,16 +39,4 @@ describe("#430 PR 1d — the waiting-on-agent colour token", () => {
     expect(chip.className).toContain(WAITING_TONE.chip);
   });
 
-  it("the header's questions-waiting badge uses the waiting token", () => {
-    useConnectionStore.setState({ connected: true } as any);
-    useArtifactStore.getState().addArtifact(art("a1", "approved", "A"));
-    useArtifactStore.getState().addComment({
-      id: "q", sessionId: "s1", target: { artifactId: "a1" }, parentCommentId: null, author: "human",
-      content: "why?", acknowledged: false, createdAt: "2026-06-01T00:01:00.000Z", intent: "question",
-    } as any);
-    render(<TurnIndicator />);
-    const badge = screen.getByText(/1 question waiting/i).closest("button")!;
-    expect(badge.className).toContain(WAITING_TONE.chip);
-    expect(badge.textContent).toContain("❓");
-  });
 });

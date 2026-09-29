@@ -107,3 +107,43 @@ describe("#430 PR 1c — a human-resolved question is cleared everywhere", () =>
     expect(waitingQuestions(comments())).toBe(0);
   });
 });
+
+describe("#448 review — the rule is PER QUESTION: a follow-up never hides the question before it", () => {
+  // Q1, then the human's follow-up Q2 as a reply in the SAME thread.
+  const followUp = (over: Partial<Comment> = {}) => q("q2", { parentCommentId: "q1", ...over });
+
+  it("two consecutive open questions in one thread are BOTH open everywhere", () => {
+    const comments = [q("q1"), followUp()];
+    seed(comments);
+    const { unmount } = render(<AskTrigger artifactId="a1" target={{ findingIndex: 0 }} />);
+    expect(askButton().getAttribute("aria-label")).toBe("Ask the agent — 2 unanswered question");
+    unmount();
+    const r = render(<CommentThread artifactId="a1" comments={comments} />);
+    expect(screen.getAllByText(/delivered · (awaiting agent|agent exited)/)).toHaveLength(2);
+    expect(screen.queryByText("✓ answered")).not.toBeInTheDocument();
+    r.unmount();
+    const line = comments.map((c) => ({ ...c, target: { artifactId: "a1", lineStart: 3, lineEnd: 3 } }));
+    render(<LineCommentChips comments={line} lineNum={3} artifactId="a1" />);
+    expect(screen.getAllByText(/awaiting answer/i)).toHaveLength(2);
+    expect([...unansweredQuestionIds(comments)].sort()).toEqual(["q1", "q2"]);
+    expect(waitingQuestions(comments)).toBe(2);
+  });
+
+  it("Q1 + a human-RESOLVED follow-up Q2: Q1 is still open", () => {
+    const comments = [q("q1"), followUp({ humanResolvedAt: at() } as Partial<Comment>)];
+    seed(comments);
+    render(<AskTrigger artifactId="a1" target={{ findingIndex: 0 }} />);
+    expect(askButton().getAttribute("aria-label")).toBe("Ask the agent — 1 unanswered question");
+    expect([...unansweredQuestionIds(comments)]).toEqual(["q1"]);
+    expect(waitingQuestions(comments)).toBe(1);
+  });
+
+  it("an agent reply AFTER both answers both", () => {
+    const comments = [q("q1"), followUp(), agentReply("r", "q2")];
+    seed(comments);
+    render(<AskTrigger artifactId="a1" target={{ findingIndex: 0 }} />);
+    expect(askButton().getAttribute("aria-label")).toBe("Ask the agent about this");
+    expect(unansweredQuestionIds(comments).size).toBe(0);
+    expect(waitingQuestions(comments)).toBe(0);
+  });
+});

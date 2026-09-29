@@ -10,7 +10,7 @@ import { useAgentRecentlyActive } from "./hooks/useAgentRecentlyActive";
 import { WaitingForClaude } from "./components/WaitingForClaude";
 import { TurnIndicator } from "./components/TurnIndicator";
 import { PendingBanner } from "./components/PendingBanner";
-import { ResumeQuestionsBanner, countResumeQuestions, noAgentLive } from "./components/ResumeQuestionsBanner";
+import { ResumeQuestionsBanner } from "./components/ResumeQuestionsBanner";
 import { RequestComposerBanner } from "./components/RequestComposerBanner";
 import { KeyboardShortcutHelp } from "./components/KeyboardShortcutHelp";
 import { MessageInput } from "./components/MessageInput";
@@ -39,9 +39,11 @@ import { useContextBankStore } from "./stores/contextBank";
 import { displayCounts, shouldLandOnBank } from "./lib/bank";
 import { scrollToAnchor } from "./lib/comment-anchor";
 import { reviewLifecycle } from "./lib/reviewLifecycle";
+import { countUnansweredQuestions } from "./lib/unanswered";
 import { useOverlayStore } from "./stores/overlay";
 import { usePollingWhenVisible } from "./hooks/usePollingWhenVisible";
 import { useDocumentTitleBadge } from "./hooks/useDocumentTitleBadge";
+import { WAITING_TONE } from "./lib/waitingTone";
 
 function App() {
   const connected = useConnectionStore((s) => s.connected);
@@ -90,7 +92,6 @@ function App() {
   // suppress the verbatim duplicate (computed with the banners' OWN predicates
   // so they can't drift). Both banners self-hide when their count is 0.
   const artifactsList = useArtifactStore((s) => s.artifacts);
-  const commentsMap = useArtifactStore((s) => s.comments);
   // J2b (#212) — lite-frame step-down. When the ONE pending draft is the card
   // in view, the card is the CTA; the PendingBanner suppresses (below) and the
   // header pill collapses to a bare count. Computed with the SHARED predicate so
@@ -98,9 +99,17 @@ function App() {
   const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
   const singlePendingInView = isSinglePendingInView(artifactsList, selectedArtifactId);
   const pendingBannerVisible = computePending(artifactsList).total > 0 && !singlePendingInView;
-  const questionsBannerVisible =
-    connected && noAgentLive(activeSessions) && countResumeQuestions(commentsMap) > 0;
 
+  // U7 — at-rest signal on the Conversation button: how many human questions
+  // are still awaiting the agent. Uses the SHARED predicate (lib/unanswered)
+  // that ConversationRail's pill/filter/marker use, so the badge can't drift
+  // from the rail. Without it the cross-artifact triage surface gave no hint.
+  // C1 — select the derived NUMBER, not the comments record: the record gets
+  // a new identity on every comment event, re-rendering the whole App shell;
+  // a primitive selector only re-renders when the count actually changes.
+  const unansweredCount = useArtifactStore((s) =>
+    countUnansweredQuestions(Object.values(s.comments).flat()),
+  );
   /**
    * THE CONTEXT BANK — "what am I doing across all my projects".
    *
@@ -205,6 +214,7 @@ function App() {
   // header button toggles, dp:open-conversation event lets toasts open it,
   // Esc closes via the drawer's own keydown.
   const [showConversation, setShowConversation] = useState(false);
+  const [conversationFilter, setConversationFilter] = useState<"all" | "unanswered">("all");
   // U3 — themed "ask about this artifact" composer for the `q` shortcut.
   const [askArtifact, setAskArtifact] = useState<{ id: string; title: string } | null>(null);
 
@@ -586,7 +596,6 @@ function App() {
           </button>
           <TurnIndicator
             pendingBannerVisible={pendingBannerVisible}
-            questionsBannerVisible={questionsBannerVisible}
             pendingCardInView={singlePendingInView}
           />
         </div>
@@ -597,21 +606,35 @@ function App() {
               Diagnostics entry is now THE single ledger entry; the drawer itself
               is unchanged, still reachable from the ⌘K palette + the taste
               toasts (dp:open-your-taste). */}
+          {/* #430 PR 1c — THE one unanswered-question count (design §5; the
+              header pill's duplicate ❓ badge is gone). With questions open,
+              the button opens the rail on its Unanswered filter, where each
+              question jumps to its artifact — the old badge's jump, one step. */}
           <button
-            onClick={() => setShowConversation(true)}
+            onClick={() => {
+              setConversationFilter(unansweredCount > 0 ? "unanswered" : "all");
+              setShowConversation(true);
+            }}
             className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
-            title="Comment threads — every comment + reply across artifacts (read-only)"
-            aria-label="Open comment threads rail"
+            title={unansweredCount > 0
+              ? `Comment threads — ${unansweredCount} question${unansweredCount === 1 ? "" : "s"} waiting on the agent; opens the unanswered ones`
+              : "Comment threads — every comment + reply across artifacts (read-only)"}
+            aria-label={unansweredCount > 0
+              ? `Open comment threads rail — ${unansweredCount} unanswered question${unansweredCount === 1 ? "" : "s"}`
+              : "Open comment threads rail"}
           >
             <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M2 3.5h8v4H6.5L4.5 9.5V7.5H2V3.5Z" />
             </svg>
             <span className="hidden min-[1100px]:inline">Comment threads</span>
-            {/* #430 PR 1c — no second question count here. The header's ❓
-                badge (TurnIndicator) is THE unanswered-question count: same
-                thread-aware rule, plus jump-to-question and the exited-agent
-                wording this chip never had. Two counts for one fact is the
-                duplicate the attention audit flagged (§2.7 item 2). */}
+            {unansweredCount > 0 && (
+              <span
+                className={`ml-0.5 min-w-[15px] h-[15px] px-1 inline-flex items-center justify-center rounded-full ${WAITING_TONE.dot} text-white text-[9px] font-semibold leading-none`}
+                aria-label={`${unansweredCount} unanswered question${unansweredCount === 1 ? "" : "s"}`}
+              >
+                {unansweredCount}
+              </span>
+            )}
           </button>
           <span className="text-2xs text-text-muted mx-1">·</span>
           {/* #138 — project-wide decisions view: every decision across all
@@ -912,7 +935,7 @@ function App() {
           onClose={closeTaste}
         />
       )}
-      {showConversation && <ConversationRail onClose={() => setShowConversation(false)} />}
+      {showConversation && <ConversationRail initialFilter={conversationFilter} onClose={() => setShowConversation(false)} />}
 
       {/* U3 — themed "ask the agent about this artifact" composer (q shortcut) */}
       {askArtifact && (

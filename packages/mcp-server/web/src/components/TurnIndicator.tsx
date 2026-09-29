@@ -3,10 +3,7 @@ import type { Comment } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
 import { computePending, summarizeTurnParts } from "../lib/pending";
-import { isUnansweredQuestion } from "../lib/unanswered";
-import { buildThreads } from "../lib/threading";
 import { AGENT_ACTIVE_WINDOW_MS } from "../lib/agentActivity";
-import { WAITING_TONE } from "../lib/waitingTone";
 
 /**
  * Top-header turn indicator + agent narration pill.
@@ -35,11 +32,9 @@ import { WAITING_TONE } from "../lib/waitingTone";
  */
 export function TurnIndicator({
   pendingBannerVisible = false,
-  questionsBannerVisible = false,
   pendingCardInView = false,
 }: {
   pendingBannerVisible?: boolean;
-  questionsBannerVisible?: boolean;
   pendingCardInView?: boolean;
 } = {}) {
   const artifacts = useArtifactStore((s) => s.artifacts);
@@ -90,27 +85,6 @@ export function TurnIndicator({
     return null;
   }, [artifacts]);
 
-  // Q4: aggregate unanswered questions across all artifacts so the badge
-  // surfaces "N waiting on agent" at a glance. Points at the first-asked
-  // unanswered question when clicked.
-  const unanswered = useMemo(() => {
-    // H1 — the SHARED predicate over threads, not a private flat filter:
-    // the old filter counted a root as waiting even after the agent
-    // answered a FOLLOW-UP (markCommentAnswered stamps the reply id, not
-    // the root) — this badge said "1 waiting" while the Conversation badge
-    // and rail said answered. buildThreads + isUnansweredQuestion is the
-    // exact pair those surfaces use, so the three can't drift.
-    const out: Array<{ artifactId: string; comment: Comment }> = [];
-    for (const [artifactId, list] of Object.entries(comments)) {
-      for (const t of buildThreads(list as Comment[])) {
-        if (isUnansweredQuestion(t.root, t.replies)) {
-          out.push({ artifactId, comment: t.root });
-        }
-      }
-    }
-    out.sort((a, b) => a.comment.createdAt.localeCompare(b.comment.createdAt));
-    return out;
-  }, [comments]);
 
   // U2 — liveness: the newest artifact/comment timestamp. After AGENT_ACTIVE_WINDOW_MS
   // with no new activity we stop claiming "Agent working" (the old behavior
@@ -191,40 +165,11 @@ export function TurnIndicator({
   const pending = computePending(artifacts).drafts;
   const totalPending = pending.length;
 
-  // Q4 — badge rendered alongside the turn pill. Violet = "waiting on agent"
-  // (inverse of the amber "your turn"). Click jumps to the oldest unanswered
-  // question so the user can see what was asked.
-  const anyAnswerable = unanswered.some(
-    (q) => activeSessions.find((x) => x.sessionId === q.comment.sessionId)?.live !== false,
-  );
-  // M4 — when ResumeQuestionsBanner is showing (agent exited + open questions),
-  // its "N questions waiting for Claude" is the actionable surface; this header
-  // badge collapses to a count-only chip so the label isn't rendered twice. The
-  // "(agent exited)" wording also moves OUT of this badge — the agent's-turn
-  // pill now states "Agent exited" once, canonically (M3).
-  const questionsBadge = unanswered.length > 0 ? (
-    <button
-      type="button"
-      onClick={() => {
-        const first = unanswered[0];
-        if (first) selectArtifact(first.artifactId);
-      }}
-      title={anyAnswerable
-        ? `${unanswered.length} question${unanswered.length > 1 ? "s" : ""} waiting on the agent — click to jump`
-        : `${unanswered.length} unanswered question${unanswered.length > 1 ? "s" : ""} — the agent exited; they'll be seen if the session resumes`}
-      // Only override the accessible name in COMPACT mode (visible text is a
-      // bare count then); in full mode the visible label is the name.
-      aria-label={questionsBannerVisible
-        ? `${unanswered.length} unanswered question${unanswered.length > 1 ? "s" : ""} — click to jump`
-        : undefined}
-      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium ${WAITING_TONE.chip} shrink-0 ${WAITING_TONE.chipHover} transition-colors`}
-    >
-      <span className="font-bold">❓</span>
-      {questionsBannerVisible
-        ? unanswered.length
-        : <>{unanswered.length} question{unanswered.length > 1 ? "s" : ""} {anyAnswerable ? "waiting" : "unanswered"}</>}
-    </button>
-  ) : null;
+  // #430 PR 1c — the ❓ "N questions waiting" badge that lived here is gone:
+  // it duplicated the Comment-threads button's count (§2.7 item 2). Per design
+  // §5 the button keeps the ONE count (it survives this pill returning null, and
+  // PR 3 shrinks this pill to agent state only); the button opens the rail on
+  // its Unanswered filter, where each question jumps to its artifact.
 
   if (totalPending > 0) {
     // #192 (usability H1) — the bucket-table summary counts EVERY reviewable
@@ -278,7 +223,6 @@ export function TurnIndicator({
                 : `Your turn — ${parts.join(", ")}`}
           </span>
         </button>
-        {questionsBadge}
       </div>
     );
   }
@@ -317,7 +261,6 @@ export function TurnIndicator({
             : "Agent working"}{elapsedMin >= 1 ? ` · ${elapsedMin}m` : ""}
         </div>
       )}
-      {questionsBadge}
       {!idle && !agentExited && latestReasoningAction && (
         <span
           className="text-2xs text-text-muted truncate italic min-w-0 max-w-md"
