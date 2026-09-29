@@ -9,6 +9,8 @@ import { enterSessionReplay } from "./lib/session-replay";
 import { useAgentRecentlyActive } from "./hooks/useAgentRecentlyActive";
 import { WaitingForClaude } from "./components/WaitingForClaude";
 import { TurnIndicator } from "./components/TurnIndicator";
+import { NextUpBar } from "./components/NextUpBar";
+import { usePreferencesStore } from "./stores/preferences";
 import { PendingBanner } from "./components/PendingBanner";
 import { ResumeQuestionsBanner } from "./components/ResumeQuestionsBanner";
 import { RequestComposerBanner } from "./components/RequestComposerBanner";
@@ -88,6 +90,7 @@ function App() {
     }
   }, [connected, sessionId, activeSessions, switchSession]);
   const hasArtifacts = useArtifactStore((s) => s.artifacts.length > 0);
+  const nextUpBar = usePreferencesStore((s) => s.nextUpBar); // #430 PR 2 — default off
   // M4 — whether each below-header banner is visible, so the header pills can
   // suppress the verbatim duplicate (computed with the banners' OWN predicates
   // so they can't drift). Both banners self-hide when their count is 0.
@@ -786,6 +789,12 @@ function App() {
           })
         )}
       </nav>
+
+      {/* #430 PR 2 — the Next-up bar, opt-in (Settings → Next-up bar, default
+          OFF). Off renders nothing, so the layout is exactly as before; on, it
+          sits under the session tabs IN ADDITION to today's banners (PR 3
+          absorbs them). */}
+      {nextUpBar && <NextUpBar />}
 
       {/* Disconnected warning — escalates (D8/H4): a blip and a dead daemon
           looked identical forever; past 60s the pair needs to know to act. */}

@@ -20,6 +20,8 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
   const toggleContentWidth = usePreferencesStore((s) => s.toggleContentWidth);
   const sidebarWidth = usePreferencesStore((s) => s.sidebarWidth);
   const setSidebarWidth = usePreferencesStore((s) => s.setSidebarWidth);
+  const nextUpBar = usePreferencesStore((s) => s.nextUpBar);
+  const setNextUpBar = usePreferencesStore((s) => s.setNextUpBar);
   const { dialogProps } = useModal({ onClose });
 
   return (
@@ -44,6 +46,25 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="p-5 space-y-6">
+          {/* #430 PR 2 — opt-in preview of the Next-up bar (default off). */}
+          <section>
+            <div className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-2">
+              Next-up bar (preview)
+            </div>
+            <label className="flex items-start gap-2 text-xs text-text-secondary cursor-pointer">
+              <input
+                type="checkbox"
+                checked={nextUpBar}
+                onChange={(e) => setNextUpBar(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                Show one line under the session tabs with what needs you next, why it matters, and what
+                happens when you respond. It is shown alongside today&apos;s banners for now.
+              </span>
+            </label>
+          </section>
+
           {/* Theme */}
           <section>
             <div className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-2">
