@@ -7,6 +7,7 @@ import { usePreflightBlockStore } from "../stores/preflightBlocks";
 import { computeAttention, type Attention, type AttentionItem, type FailureKind, type SummaryLane } from "../lib/attention";
 import { noAgentLive } from "../lib/liveness";
 import { WAITING_TONE } from "../lib/waitingTone";
+import { LANE_MARKS } from "../lib/laneMarks";
 import { resumePromptFor } from "./ResumeQuestionsBanner";
 
 /**
@@ -51,10 +52,11 @@ const SUMMARY_TEXT: Record<SummaryLane, (n: number) => string> = {
 function primaryToken(line: Attention["line"]): string {
   const p = line.primary;
   switch (p.lane) {
-    // §5 lane glyphs: ▲ a decision, ● a review.
-    case "decide": return `${p.item!.kind === "decision" ? "▲" : "●"} ${p.item!.title}`;
+    // §5 lane glyphs: ▲ a decision, ● a review — the SAME marks the sidebar
+    // rows wear (lib/laneMarks, PR 4), so the two can't drift.
+    case "decide": return `${(p.item!.kind === "decision" ? LANE_MARKS.decide : LANE_MARKS.review).glyph} ${p.item!.title}`;
     case "flag": return `⚠ Possible secret in ${p.item!.title}`;
-    case "waiting": return "◌ WAITING ON CLAUDE";
+    case "waiting": return `${LANE_MARKS.waiting.glyph} WAITING ON CLAUDE`;
     case "held": return "■ HELD";
     default: return "○ Nothing needs you";
   }

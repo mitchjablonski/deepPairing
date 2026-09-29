@@ -29,10 +29,10 @@ describe("#430 PR 1d — the waiting-on-agent colour token", () => {
     }
   });
 
-  it("a `revised` artifact's sidebar dot and header chip use the waiting token, with ↻ and a label", () => {
+  it("a `revised` artifact's sidebar dot and header chip use the waiting token, with a glyph and a label (PR 4: the Waiting lane's ◌)", () => {
     useArtifactStore.getState().addArtifact(art("rev", "revised", "Backfill plan"));
     render(<ArtifactPanel />);
-    const dot = screen.getAllByLabelText("Revision requested").find((el) => el.textContent === "↻")!;
+    const dot = screen.getAllByLabelText("Revision requested — waiting on Claude").find((el) => el.textContent === "◌")!;
     expect(dot.className).toContain(WAITING_TONE.dot);
     expect(dot.className).not.toContain("violet");
     const chip = screen.getAllByText(/Revision requested/).find((el) => el.className.includes("rounded"))!;
