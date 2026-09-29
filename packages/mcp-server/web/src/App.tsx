@@ -39,7 +39,6 @@ import { useContextBankStore } from "./stores/contextBank";
 import { displayCounts, shouldLandOnBank } from "./lib/bank";
 import { scrollToAnchor } from "./lib/comment-anchor";
 import { reviewLifecycle } from "./lib/reviewLifecycle";
-import { countUnansweredQuestions } from "./lib/unanswered";
 import { useOverlayStore } from "./stores/overlay";
 import { usePollingWhenVisible } from "./hooks/usePollingWhenVisible";
 import { useDocumentTitleBadge } from "./hooks/useDocumentTitleBadge";
@@ -102,16 +101,6 @@ function App() {
   const questionsBannerVisible =
     connected && noAgentLive(activeSessions) && countResumeQuestions(commentsMap) > 0;
 
-  // U7 — at-rest signal on the Conversation button: how many human questions
-  // are still awaiting the agent. Uses the SHARED predicate (lib/unanswered)
-  // that ConversationRail's pill/filter/marker use, so the badge can't drift
-  // from the rail. Without it the cross-artifact triage surface gave no hint.
-  // C1 — select the derived NUMBER, not the comments record: the record gets
-  // a new identity on every comment event, re-rendering the whole App shell;
-  // a primitive selector only re-renders when the count actually changes.
-  const unansweredCount = useArtifactStore((s) =>
-    countUnansweredQuestions(Object.values(s.comments).flat()),
-  );
   /**
    * THE CONTEXT BANK — "what am I doing across all my projects".
    *
@@ -618,14 +607,11 @@ function App() {
               <path d="M2 3.5h8v4H6.5L4.5 9.5V7.5H2V3.5Z" />
             </svg>
             <span className="hidden min-[1100px]:inline">Comment threads</span>
-            {unansweredCount > 0 && (
-              <span
-                className="ml-0.5 min-w-[15px] h-[15px] px-1 inline-flex items-center justify-center rounded-full bg-accent-blue-strong text-white text-[9px] font-semibold leading-none"
-                aria-label={`${unansweredCount} unanswered question${unansweredCount === 1 ? "" : "s"}`}
-              >
-                {unansweredCount}
-              </span>
-            )}
+            {/* #430 PR 1c — no second question count here. The header's ❓
+                badge (TurnIndicator) is THE unanswered-question count: same
+                thread-aware rule, plus jump-to-question and the exited-agent
+                wording this chip never had. Two counts for one fact is the
+                duplicate the attention audit flagged (§2.7 item 2). */}
           </button>
           <span className="text-2xs text-text-muted mx-1">·</span>
           {/* #138 — project-wide decisions view: every decision across all
