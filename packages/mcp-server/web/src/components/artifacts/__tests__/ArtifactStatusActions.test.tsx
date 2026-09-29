@@ -516,3 +516,17 @@ describe("#407 review — the comment→status chain follows the SESSION, not th
     );
   });
 });
+
+describe("#430 PR 5 — the footer uses THE shared approve countdown", () => {
+  it("same element, wording and Hold control as the changeset's", () => {
+    vi.useFakeTimers();
+    render(<ArtifactStatusActions artifact={artifact()} />);
+    act(() => {
+      window.dispatchEvent(new CustomEvent("dp:artifact-shortcut", { detail: { artifactId: "art_x", action: "approve" } }));
+    });
+    const cd = screen.getByTestId("approve-countdown");
+    expect(cd).toHaveTextContent(/^Will auto-approve in 3s · Esc to holdHold$/);
+    fireEvent.click(screen.getByTestId("hold-approve"));
+    expect(screen.queryByTestId("approve-countdown")).not.toBeInTheDocument();
+  });
+});

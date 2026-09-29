@@ -13,7 +13,11 @@ import { computePending } from "../lib/pending";
  *
  * Dismissible per session (sessionStorage, the drafts/rail idiom).
  */
-export function SessionWrapCard({ sessionId }: { sessionId: string }) {
+export function SessionWrapCard({ sessionId, inBar = false }: {
+  sessionId: string;
+  /** #430 PR 5 — rendered inside the Next-up bar (setting ON): no outer margin. */
+  inBar?: boolean;
+}) {
   // F8 (M2) — the merged store carries OTHER sessions' artifacts; the wrap
   // card must recap ITS session only (stats were inflated by live neighbors,
   // and a neighbor's draft suppressed the card entirely).
@@ -68,7 +72,7 @@ export function SessionWrapCard({ sessionId }: { sessionId: string }) {
     <div
       role="status"
       aria-label="Session wrapped"
-      className="mx-4 mt-3 px-4 py-3 bg-surface-secondary border border-white/[0.08] rounded-lg flex items-start gap-3"
+      className={`${inBar ? "" : "mx-4 mt-3 "}px-4 py-3 bg-surface-secondary border border-white/[0.08] rounded-lg flex items-start gap-3`}
     >
       <span className="text-base shrink-0" aria-hidden>🏁</span>
       <div className="flex-1 min-w-0 text-xs text-text-secondary leading-relaxed">

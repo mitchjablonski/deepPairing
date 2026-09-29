@@ -3,6 +3,7 @@ import { apiGet, apiBase } from "./lib/api";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { IdleHome } from "./components/IdleHome";
 import { SessionWrapCard } from "./components/SessionWrapCard";
+import { DemoNextStep } from "./components/DemoNextStep";
 import { computePending, isSinglePendingInView } from "./lib/pending";
 import { selectDefaultSession } from "./lib/selectDefaultSession";
 import { enterSessionReplay } from "./lib/session-replay";
@@ -13,7 +14,7 @@ import { NextUpBar } from "./components/NextUpBar";
 import { usePreferencesStore } from "./stores/preferences";
 import { PendingBanner } from "./components/PendingBanner";
 import { ResumeQuestionsBanner } from "./components/ResumeQuestionsBanner";
-import { RequestComposerBanner } from "./components/RequestComposerBanner";
+import { RequestComposerBanner, OPEN_REQUEST_COMPOSER_EVENT } from "./components/RequestComposerBanner";
 import { KeyboardShortcutHelp } from "./components/KeyboardShortcutHelp";
 import { MessageInput } from "./components/MessageInput";
 import { DiagnosticsMenu } from "./components/DiagnosticsMenu";
@@ -90,6 +91,14 @@ function App() {
     }
   }, [connected, sessionId, activeSessions, switchSession]);
   const hasArtifacts = useArtifactStore((s) => s.artifacts.length > 0);
+  // IV9 — the demo "next step" CTA: a scripted demo session (sessionId
+  // `demo_…`, daemon.ts) that has actually fired. D9 (H3) — the wrap card: the
+  // bound session's wrapper exited (M8 live flag), the agent is quiet, and there
+  // is work to recap. #430 PR 5 — computed once; OFF renders them as rows, ON
+  // hands them to the Next-up bar.
+  const showDemoCta = connected && !!sessionId?.startsWith("demo_") && hasArtifacts;
+  const showWrapCard = hasArtifacts && !agentRecentlyActive && sessionId != null &&
+    activeSessions.find((s) => s.sessionId === sessionId)?.live === false;
   const nextUpBar = usePreferencesStore((s) => s.nextUpBar); // #430 PR 2 — default off
   // M4 — whether each below-header banner is visible, so the header pills can
   // suppress the verbatim duplicate (computed with the banners' OWN predicates
@@ -618,6 +627,20 @@ function App() {
           />
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          {/* #430 PR 5 (design §5) — bar ON: the request composer row collapses
+              to this button; it opens the same composer (presets + input). */}
+          {nextUpBar && connected && (
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new CustomEvent(OPEN_REQUEST_COMPOSER_EVENT))}
+              data-testid="header-ask"
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs font-medium text-accent-blue hover:bg-accent-blue-dim/70 transition-colors"
+              title="Ask Claude for something (explain, plan, status)"
+            >
+              <span aria-hidden="true">✎</span>
+              <span>Ask</span>
+            </button>
+          )}
           {/* #212 (J4) — the top-level Ledger button is GONE. It was a second
               door to the drawer the Diagnostics (⋯) "Ledger" entry already
               opens, so the header carried two affordances for one surface. The
@@ -787,8 +810,15 @@ function App() {
                 {/* D8 (M8) — honest dots: green only while the wrapper is
                     REGISTERED; an exited session's history stays readable but
                     stops pretending to be live. Old daemons omit `live` —
-                    treat undefined as live (no false alarms on mixed versions). */}
-                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${s.live === false ? "bg-text-muted/50" : isActive ? "bg-accent-blue-strong animate-pulse" : "bg-accent-green"}`} />
+                    treat undefined as live (no false alarms on mixed versions).
+                    #430 PR 5 (design §2.7 item 3, §5) — the bound session's
+                    dot pulsed ALWAYS, a false "working" signal. It pulses only
+                    while the agent is working (the one PR 1b activity window). */}
+                <span
+                  data-testid="session-dot"
+                  data-working={isActive && s.live !== false && agentRecentlyActive ? "true" : "false"}
+                  className={`w-1.5 h-1.5 rounded-full shrink-0 ${s.live === false ? "bg-text-muted/50" : isActive ? `bg-accent-blue-strong${agentRecentlyActive ? " animate-pulse" : ""}` : "bg-accent-green"}`}
+                />
                 <span className="truncate max-w-40">{label}</span>
                 {s.artifactCount > 0 && (
                   /* R2 (contrast) — `opacity-70` on 9px text: 4.77:1 dark /
@@ -809,7 +839,20 @@ function App() {
           OFF). Off renders nothing, so the layout is exactly as before; on, it
           sits under the session tabs IN ADDITION to today's banners (PR 3
           absorbs them). */}
-      {nextUpBar && <NextUpBar />}
+      {nextUpBar && (
+        <NextUpBar
+          quietCards={{
+            // #430 PR 5 (design §5) — ON only: the demo CTA and the wrap card
+            // render inside the bar (inline in its quiet state, else in ⌄).
+            demo: showDemoCta ? (dismiss?: () => void) => <DemoNextStep projectRoot={projectRoot} inBar onDismiss={dismiss} /> : null,
+            wrap: showWrapCard && sessionId != null ? (
+              <ErrorBoundary fallback={null}>
+                <SessionWrapCard sessionId={sessionId} inBar />
+              </ErrorBoundary>
+            ) : null,
+          }}
+        />
+      )}
 
       {/* Disconnected warning — escalates (D8/H4): a blip and a dead daemon
           looked identical forever; past 60s the pair needs to know to act. */}
@@ -835,7 +878,7 @@ function App() {
 
       {/* G1 (#198b) — the request composer: the human can initiate a request to
           the agent (free text + intent preset). A quiet peer of the strips above. */}
-      <RequestComposerBanner />
+      <RequestComposerBanner compact={nextUpBar} />
 
       {/* Main content.
           III10 — when the WS is connected but no wrapper has registered a
@@ -854,35 +897,12 @@ function App() {
           but no obvious "what's next." This card closes the loop. Only
           renders when a demo session is active AND has at least one
           artifact — i.e., the demo has actually fired. */}
-      {connected && sessionId?.startsWith("demo_") && hasArtifacts && (
-        // L2 (#196) — the CTA now leads with the README's RECOMMENDED marketplace
-        // install (no build step, ships the hooks) and offers the local-plugin
-        // command with the daemon's REAL projectRoot (client-side) instead of a
-        // /path/to/deeppairing placeholder the user had to hand-edit.
-        <div className="px-3 py-2 bg-accent-blue-dim/30 border-b border-accent-blue/20 text-2xs flex flex-wrap items-center gap-x-2 gap-y-1 shrink-0">
-          <span className="text-accent-blue font-medium">✓ Demo fired.</span>
-          <span className="text-text-secondary">Next: install in Claude Code —</span>
-          <code className="bg-surface-elevated px-1.5 py-0.5 rounded text-text-primary font-mono">
-            /plugin marketplace add https://github.com/mitchjablonski/deepPairing
-          </code>
-          <span className="text-text-muted">then</span>
-          <code className="bg-surface-elevated px-1.5 py-0.5 rounded text-text-primary font-mono">
-            /plugin install deeppairing@deeppairing
-          </code>
-          <span className="text-text-muted">
-            or from a clone:{" "}
-            <code className="bg-surface-elevated px-1.5 py-0.5 rounded text-text-secondary font-mono">
-              claude --plugin-dir {(projectRoot ?? "/path/to/deeppairing")}/claude-plugin
-            </code>
-          </span>
-        </div>
-      )}
+      {!nextUpBar && showDemoCta && <DemoNextStep projectRoot={projectRoot} />}
 
       {/* D9 (H3) — closing beat: the bound session's wrapper exited (M8 live
           flag), the agent is quiet, and artifacts exist to recap. Renders
           above the panel so the session's work stays browsable below it. */}
-      {hasArtifacts && !agentRecentlyActive && sessionId != null &&
-        activeSessions.find((s) => s.sessionId === sessionId)?.live === false && (
+      {!nextUpBar && showWrapCard && sessionId != null && (
           // D9 review — the card reads unvalidated content casts; a malformed
           // artifact must not blank the whole shell.
           <ErrorBoundary fallback={null}>

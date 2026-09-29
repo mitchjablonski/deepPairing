@@ -87,7 +87,7 @@ describe("#430 PR 2 — states A–G render the design's exact line", () => {
   it("C — info only", () => {
     useArtifactStore.setState({ artifacts: [art("e1", "explainer", "One"), art("e2", "reasoning", "Two")] });
     render(<NextUpBar />);
-    expect(line()).toBe("○ Nothing needs you · Read 2");
+    expect(line()).toBe("◇ Nothing needs you · Read 2");
   });
 
   it("D — waiting on the agent (live)", () => {
@@ -248,7 +248,7 @@ describe("#451 review follow-ups", () => {
     render(<NextUpBar />);
     fireEvent.click(screen.getByRole("button", { name: "Why" }));
     expect(usePreflightBlockStore.getState().lastSeenAt).not.toBeNull();
-    expect(line()).toBe("○ Nothing needs you");
+    expect(line()).toBe("◇ Nothing needs you");
     expect(screen.getByText(/"global mutable state" stopped: Add a singleton/)).toBeInTheDocument();
   });
 });

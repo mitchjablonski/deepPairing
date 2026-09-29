@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef, lazy, Suspense } from "react";
+import { useMemo, useState, useEffect, useRef, lazy, Suspense, type ReactNode } from "react";
 // B5 — `m` + LazyMotion (App loads domAnimation) instead of the full
 // `motion` component: drops ~40kB gzip of animation features nothing uses
 // from the ENTRY bundle. Same animations.
@@ -740,6 +740,7 @@ function ArtifactSidebar({
   unreadIds,
   highlightedIds,
   collapsed,
+  headerExtra,
   width,
   onToggle,
 }: {
@@ -751,6 +752,8 @@ function ArtifactSidebar({
    *  Empty during initial load and replay (see useArrivalHighlights). */
   highlightedIds: string[];
   collapsed: boolean;
+  /** #430 PR 5 — the Agents filter menu (bar ON, expanded sidebar). */
+  headerExtra?: ReactNode;
   width: number;
   onToggle: () => void;
 }) {
@@ -770,6 +773,38 @@ function ArtifactSidebar({
   // of view + the newest such card to scroll to on click. null = nothing to
   // locate (all new items already in view, or none).
   const [pip, setPip] = useState<{ dir: "up" | "down"; count: number; targetId: string } | null>(null);
+
+  // #430 PR 5 (PR 4 review) — the lane label on KEYBOARD focus. The glyph's
+  // tooltip was hover-only (`title`). The row button is already the one tab
+  // stop per row and its accessible name already carries the label, so rather
+  // than make the dot a second tab stop, a keyboard focus on the row shows the
+  // same label as a visible tooltip beside the dot (collapsed: beside the rail,
+  // where there is room). Pointer focus (a click) never shows it. aria-hidden:
+  // a screen reader already hears the label in the row's name.
+  const navRef = useRef<HTMLElement>(null);
+  const keyboardModality = useRef(false);
+  const [focusTip, setFocusTip] = useState<{ label: string; top: number; left?: number; right?: number } | null>(null);
+  useEffect(() => {
+    const onKey = () => { keyboardModality.current = true; };
+    const onPointer = () => { keyboardModality.current = false; };
+    document.addEventListener("keydown", onKey, true);
+    document.addEventListener("pointerdown", onPointer, true);
+    document.addEventListener("mousedown", onPointer, true);
+    return () => {
+      document.removeEventListener("keydown", onKey, true);
+      document.removeEventListener("pointerdown", onPointer, true);
+      document.removeEventListener("mousedown", onPointer, true);
+    };
+  }, []);
+  const showFocusTip = (row: HTMLElement, label: string) => {
+    const nav = navRef.current;
+    if (!keyboardModality.current || !nav) return;
+    const n = nav.getBoundingClientRect();
+    const r = row.getBoundingClientRect();
+    setFocusTip(collapsed
+      ? { label, top: r.top - n.top + r.height / 2 - 9, left: r.right - n.left + 4 }
+      : { label, top: r.bottom - n.top + 2, right: Math.max(n.right - r.right, 0) + 4 });
+  };
 
   // Recompute the pip whenever the highlight set changes or the user scrolls /
   // resizes. Reads live geometry via getBoundingClientRect — never writes it,
@@ -871,6 +906,7 @@ function ArtifactSidebar({
     // "skip to the list of artifacts" move didn't exist. <nav> + a name;
     // the classes and the layout are untouched.
     <nav
+      ref={navRef}
       aria-label="Artifacts"
       className={`relative shrink-0 border-r border-border-default bg-surface-secondary transition-all duration-[180ms] ease-out ${
         collapsed ? "w-12" : ""
@@ -880,7 +916,7 @@ function ArtifactSidebar({
       {/* Inner scroll container — the new-item pip is positioned against the
           OUTER (relative) box so it stays pinned to the visible edge instead of
           scrolling away with the list. */}
-      <div ref={scrollRef} data-testid="sidebar-scroll" className="h-full overflow-y-auto">
+      <div ref={scrollRef} data-testid="sidebar-scroll" className="h-full overflow-y-auto" onScroll={() => setFocusTip(null)}>
       {/* Collapse toggle + grouping selector */}
       <div className="flex items-center justify-between">
         <button
@@ -917,6 +953,8 @@ function ArtifactSidebar({
           </div>
         )}
       </div>
+
+      {!collapsed && headerExtra}
 
       {/* "Show older" sits at the TOP so the recent items below it stay the
           focus — you scan down to the latest, not past a wall of old ones. */}
@@ -994,6 +1032,8 @@ function ArtifactSidebar({
                 } ${arrivalClass}`}
                 title={collapsed ? collapsedLabel : a.title}
                 aria-label={collapsed ? collapsedLabel : undefined}
+                onFocus={(e) => showFocusTip(e.currentTarget, sb.label)}
+                onBlur={() => setFocusTip(null)}
               >
                 {collapsed ? (
                   <div className="relative">
@@ -1085,6 +1125,16 @@ function ArtifactSidebar({
           <span aria-hidden="true">{pip.dir === "up" ? "↑" : "↓"}</span>
           <span>{pip.count > 1 ? `${pip.count} new` : "new"}</span>
         </button>
+      )}
+      {focusTip && (
+        <div
+          aria-hidden="true"
+          data-testid="lane-focus-tooltip"
+          className="pointer-events-none absolute z-30 px-1.5 py-0.5 rounded bg-surface-elevated border border-border-default shadow text-2xs text-text-primary whitespace-nowrap"
+          style={{ top: focusTip.top, left: focusTip.left, right: focusTip.right }}
+        >
+          {focusTip.label}
+        </div>
       )}
     </nav>
   );
@@ -1232,6 +1282,25 @@ export function ArtifactPanel() {
     [artifacts, sessionFilter, replayActive, replayCursor],
   );
 
+  const liveCount = (sid: string | "all") =>
+    artifacts.filter((a) => a.status !== "superseded" && (sid === "all" || a.sessionId === sid)).length;
+  const agentsMenu = nextUpBar && !effectiveCollapsed && sessionIds.length > 1 ? (
+    <label className="flex items-center gap-1.5 px-2 pb-1.5 text-2xs text-text-muted">
+      <span className="shrink-0">Agents</span>
+      <select
+        value={sessionFilter}
+        onChange={(e) => setSessionFilter(e.target.value)}
+        data-testid="agents-filter-menu"
+        className="flex-1 min-w-0 bg-surface-elevated border border-border-default rounded px-1 py-0.5 text-2xs text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-blue"
+      >
+        <option value="all">All ({liveCount("all")})</option>
+        {sessionIds.map((sid, i) => (
+          <option key={sid} value={sid} title={sid}>Agent {i + 1} ({liveCount(sid)})</option>
+        ))}
+      </select>
+    </label>
+  ) : null;
+
   // Group by type
   const typeGroups = useMemo(() => {
     const groups = new Map<string, Artifact[]>();
@@ -1272,8 +1341,12 @@ export function ArtifactPanel() {
         {announcement}
       </div>
 
-      {/* Session filter — shown when artifacts from multiple agents exist */}
-      {sessionIds.length > 1 && (
+      {/* Session filter — shown when artifacts from multiple agents exist.
+          #430 PR 5 (design §4.6) — with the Next-up bar ON it becomes a filter
+          menu in the sidebar header (it filters, it does not signal); the row
+          stays whenever the sidebar is collapsed (no header room) and with the
+          bar OFF. */}
+      {sessionIds.length > 1 && !agentsMenu && (
         <div className="flex items-center gap-1 px-3 py-1.5 border-b border-border-default bg-surface-secondary overflow-x-auto shrink-0">
           <span className="text-2xs text-text-muted shrink-0">Agents:</span>
           <button
@@ -1315,6 +1388,7 @@ export function ArtifactPanel() {
         unreadIds={unreadIds}
         highlightedIds={highlightedIds}
         collapsed={effectiveCollapsed}
+        headerExtra={agentsMenu}
         width={SIDEBAR_WIDTHS[sidebarWidth]}
         onToggle={toggleSidebar}
       />

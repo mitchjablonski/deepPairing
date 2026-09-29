@@ -244,7 +244,7 @@ including idle**; `⌄` expands the lane lists and the full Why/After text.
 
 Row count, honestly: when something is pending, the bar replaces the pending
 banner (no change in rows). **When idle, the bar adds one row** that today
-does not exist ("○ Nothing needs you"); the net reduction only comes in PR 5,
+does not exist ("◇ Nothing needs you"); the net reduction only comes in PR 5,
 and only with the setting on, when the request banner / demo CTA / wrap card
 rows collapse into it.
 
@@ -275,7 +275,7 @@ cover every combination:
    failure is never hidden and never replaces the primary item; act buttons
    disable with the reason.
 2. **Primary slot = the first non-empty of:** Decide (`next`) → possible-secret
-   flag → Waiting on the agent → Held (stance record) → `○ Nothing needs you`.
+   flag → Waiting on the agent → Held (stance record) → `◇ Nothing needs you`.
 3. **Summary = every other non-empty lane**, in a fixed order: `+N high
    decision` (only when Decide is primary) · `Decide N` · `⚠ flags F` ·
    `Waiting W` · `Held H` · `Read R`. No non-empty lane is ever omitted.
@@ -296,8 +296,8 @@ Worked combinations (the prefix column applies on top of any row):
 | ✓ | — | — | ✓ | any | `⚠ DISCONNECTED · ◌ WAITING ON CLAUDE …` · `[Held] · Read` |
 | — | — | — | — | ✓ | `■ HELD …` (F, read-only) · `Read` |
 | ✓ | — | — | — | ✓ | `REPLAY · ■ HELD …` · `Read` |
-| — | — | — | — | — | `○ Nothing needs you` · `Read` |
-| ✓ | — | — | — | — | `⚠ DISCONNECTED · ○ Nothing needs you (last known)` · `Read` |
+| — | — | — | — | — | `◇ Nothing needs you` · `Read` |
+| ✓ | — | — | — | — | `⚠ DISCONNECTED · ◇ Nothing needs you (last known)` · `Read` |
 
 "any" = present or absent; when present it appears in the summary. "Read" is
 shown only when non-empty.
@@ -364,7 +364,7 @@ and the `⌄` expansion.
 **C. Info only / idle**
 
 ```
-│ ○ Nothing needs you                                                         Read 2 ⌄ │
+│ ◇ Nothing needs you                                                         Read 2 ⌄ │
 ```
 
 **D. Agent working (your move is done)**

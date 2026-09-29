@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { RequestIntent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
@@ -57,46 +57,27 @@ function buildResumePrompt(n: number): string {
   );
 }
 
-export function RequestComposerBanner() {
+/**
+ * #430 PR 5 — the request STATUS half of this banner (pips + the resume bridge),
+ * shared so that with the Next-up bar ON it lives in the bar (design §5: "request
+ * pips move to the Waiting lane") with exactly the same rules and actions.
+ */
+export function useRequestResumeBridge() {
   const requests = useArtifactStore((s) => s.requests);
-  const submitRequest = useArtifactStore((s) => s.submitRequest);
-  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
-  const connected = useConnectionStore((s) => s.connected);
   const activeSessions = useConnectionStore((s) => s.activeSessions);
   // #204 (UX3) — recency, so a live-but-idle session can still surface the bridge.
   const everActive = useConnectionStore((s) => s.agentActivityAt != null);
   const recentlyActive = useAgentRecentlyActive(IDLE_WINDOW_MS);
-  const pushToast = useToastStore((s) => s.push);
-
-  const [open, setOpen] = useState(false);
-  const [intent, setIntent] = useState<RequestIntent>("explain");
-  const [text, setText] = useState("");
-  const [submitting, setSubmitting] = useState(false);
   const [copied, setCopied] = useState(false);
-
   const pending = useMemo(() => requests.filter((r) => !r.servedByArtifactId), [requests]);
   const noAgent = noAgentLive(activeSessions);
   // #204 (UX3) — a LIVE session we've SEEN poll but which has since gone quiet
   // past the window. Never fires on a never-polled session (everActive === false).
   const idleRegistered = !noAgent && everActive && !recentlyActive;
-
-  // The composer only makes sense against a live session (there has to be a
-  // session store to persist into). It's hidden entirely until connected.
-  if (!connected) return null;
-
-  const pickPreset = (p: (typeof PRESETS)[number]) => {
-    setIntent(p.intent);
-    setText(p.template);
-    setOpen(true);
-  };
-
-  const n = pending.length;
   // #204 (UX3) — the resume bridge appears when there ARE pending requests and no
   // live, actively-polling agent will pick them up soon: either no agent is live,
   // OR a live agent has gone idle. It stays hidden while an agent polls (no nag).
-  const showResumeBridge = n > 0 && (noAgent || idleRegistered);
-  const activePreset = PRESETS.find((p) => p.intent === intent);
-
+  const showResumeBridge = pending.length > 0 && (noAgent || idleRegistered);
   const copyResume = async () => {
     const writeText = navigator.clipboard?.writeText?.bind(navigator.clipboard);
     if (!writeText) return;
@@ -111,6 +92,102 @@ export function RequestComposerBanner() {
       /* clipboard denied — non-fatal */
     }
   };
+  return { requests, pending, noAgent, showResumeBridge, copyResume, copied };
+}
+
+/** The served/unserved pips: a served pip jumps to the fulfilling artifact. */
+export function RequestPips() {
+  const requests = useArtifactStore((s) => s.requests);
+  const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  if (requests.length === 0) return null;
+  return (
+    <div className="flex items-center gap-1 shrink-0 flex-wrap" data-testid="request-pips">
+      {requests.map((r) => {
+        const served = !!r.servedByArtifactId;
+        return (
+          <button
+            key={r.id}
+            type="button"
+            onClick={() => { if (r.servedByArtifactId) selectArtifact(r.servedByArtifactId); }}
+            data-served={served ? "true" : "false"}
+            className={`px-1.5 py-0.5 rounded-full text-2xs font-medium transition-colors ${
+              served
+                ? "bg-accent-green-dim text-accent-green hover:brightness-110"
+                : "bg-accent-amber-dim text-accent-amber"
+            }`}
+            title={served ? `Served — click to jump to the artifact. "${r.text}"` : `Waiting on Claude. "${r.text}"`}
+          >
+            {served ? "✓" : "○"} {r.intent}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** The resume-bridge button ("Copy resume prompt" for pending requests). */
+export function RequestResumeButton({ bridge, className = "ml-auto", label = "Copy resume prompt" }: { bridge: ReturnType<typeof useRequestResumeBridge>; className?: string; label?: string }) {
+  if (!bridge.showResumeBridge) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => void bridge.copyResume()}
+      className={`${className} shrink-0 px-2 py-0.5 rounded text-2xs font-medium bg-accent-blue-dim text-accent-blue hover:bg-accent-blue-dim/80 transition-colors`}
+      title={
+        bridge.noAgent
+          ? "No agent is live — copy a paste-able resume prompt for Claude Code"
+          : "Claude has gone idle — copy a paste-able resume prompt to hand it your request"
+      }
+      data-testid="request-resume-prompt"
+    >
+      {bridge.copied ? "Copied ✓" : label}
+    </button>
+  );
+}
+
+/** #430 PR 5 — with the Next-up bar ON, the composer row collapses to this
+ *  header button (design §5); it opens the same composer. */
+export const OPEN_REQUEST_COMPOSER_EVENT = "dp:open-request-composer";
+
+export function RequestComposerBanner({ compact = false }: {
+  /** #430 PR 5 — the Next-up bar is ON: no standing row. The header "Ask"
+   *  button opens the composer (the row shows only while composing), and the
+   *  pips + resume bridge live in the bar. OFF (default): exactly as before. */
+  compact?: boolean;
+} = {}) {
+  const submitRequest = useArtifactStore((s) => s.submitRequest);
+  const connected = useConnectionStore((s) => s.connected);
+  const pushToast = useToastStore((s) => s.push);
+  const bridge = useRequestResumeBridge();
+  const { noAgent, copyResume } = bridge;
+
+  const [open, setOpen] = useState(false);
+  const [intent, setIntent] = useState<RequestIntent>("explain");
+  const [text, setText] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  // #430 PR 5 — the header "Ask" button (bar ON) opens the composer.
+  useEffect(() => {
+    const openComposer = () => {
+      setIntent(PRESETS[0]!.intent);
+      setText(PRESETS[0]!.template);
+      setOpen(true);
+    };
+    window.addEventListener(OPEN_REQUEST_COMPOSER_EVENT, openComposer);
+    return () => window.removeEventListener(OPEN_REQUEST_COMPOSER_EVENT, openComposer);
+  }, []);
+
+  // The composer only makes sense against a live session (there has to be a
+  // session store to persist into). It's hidden entirely until connected.
+  if (!connected) return null;
+
+  const pickPreset = (p: (typeof PRESETS)[number]) => {
+    setIntent(p.intent);
+    setText(p.template);
+    setOpen(true);
+  };
+
+  const activePreset = PRESETS.find((p) => p.intent === intent);
 
   const send = async () => {
     const t = text.trim();
@@ -144,45 +221,8 @@ export function RequestComposerBanner() {
     }
   };
 
-  const resumeButton = showResumeBridge ? (
-    <button
-      type="button"
-      onClick={() => void copyResume()}
-      className="ml-auto shrink-0 px-2 py-0.5 rounded text-2xs font-medium bg-accent-blue-dim text-accent-blue hover:bg-accent-blue-dim/80 transition-colors"
-      title={
-        noAgent
-          ? "No agent is live — copy a paste-able resume prompt for Claude Code"
-          : "Claude has gone idle — copy a paste-able resume prompt to hand it your request"
-      }
-      data-testid="request-resume-prompt"
-    >
-      {copied ? "Copied ✓" : "Copy resume prompt"}
-    </button>
-  ) : null;
-
-  const pips = requests.length > 0 ? (
-    <div className="flex items-center gap-1 shrink-0" data-testid="request-pips">
-      {requests.map((r) => {
-        const served = !!r.servedByArtifactId;
-        return (
-          <button
-            key={r.id}
-            type="button"
-            onClick={() => { if (r.servedByArtifactId) selectArtifact(r.servedByArtifactId); }}
-            data-served={served ? "true" : "false"}
-            className={`px-1.5 py-0.5 rounded-full text-2xs font-medium transition-colors ${
-              served
-                ? "bg-accent-green-dim text-accent-green hover:brightness-110"
-                : "bg-accent-amber-dim text-accent-amber"
-            }`}
-            title={served ? `Served — click to jump to the artifact. "${r.text}"` : `Waiting on Claude. "${r.text}"`}
-          >
-            {served ? "✓" : "○"} {r.intent}
-          </button>
-        );
-      })}
-    </div>
-  ) : null;
+  // #430 PR 5 — bar ON and not composing: no standing row at all.
+  if (compact && !open) return null;
 
   return (
     <div
@@ -228,12 +268,13 @@ export function RequestComposerBanner() {
       )}
 
       {/* Pending request pips (served vs unserved) — always visible so the
-          collapsed row still reflects outstanding requests. */}
-      {pips}
+          collapsed row still reflects outstanding requests. #430 PR 5: with the
+          bar ON (compact) they live in the bar instead. */}
+      {!compact && <RequestPips />}
 
       {/* When no live/active agent will pick the pending requests up soon, hand
           the human a resume prompt (no-agent OR idle-registered — see #204 UX3). */}
-      {resumeButton}
+      {!compact && <RequestResumeButton bridge={bridge} />}
 
       {/* The expanded composer input + a persistent example (UX L3). */}
       {open && (

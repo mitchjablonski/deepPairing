@@ -3,7 +3,7 @@ import { createAdapter, type ConnectionAdapter } from "../lib/connection-adapter
 import { apiGet, sessionHeaders, apiBase } from "../lib/api";
 import { useHookStatusStore } from "./hookStatus";
 import { isDraftAwaitingReview } from "../lib/pending";
-import { pushDaemonRestartToast } from "../lib/daemon-restart";
+import { pushDaemonRestartToast, pushStaleDaemonToast } from "../lib/daemon-restart";
 import { reloadIfChunkFailedOffline } from "../lib/chunk-error";
 import { noAgentLive } from "../lib/liveness";
 import { AGENT_ACTIVE_WINDOW_MS } from "../lib/agentActivity";
@@ -1072,21 +1072,13 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       // the tab deliberately.
       adapter.onFatalMismatch?.(() => {
         set({ connected: false, staleDaemon: true });
-        import("./toast").then(({ useToastStore }) => {
+        // #430 PR 5 — the one shared stale-daemon toast (lib/daemon-restart):
+        // same wording and dedup as the REST path, so the two never stack.
+        // Deferred one microtask, as before, so a teardown in the same tick
+        // (disconnect / adapter swap) drops it.
+        void Promise.resolve().then(() => {
           if (get().adapter !== adapter) return;
-          useToastStore.getState().push({
-            kind: "error",
-            title: "Tab is bound to a stale daemon",
-            body: "This project's daemon was replaced by a different project's daemon on the same port. Reload the page to re-bind.",
-            ttl: 0,
-            action: {
-              label: "Reload to re-bind",
-              onClick: () => {
-                if (get().adapter !== adapter) return;
-                if (typeof window !== "undefined") window.location.reload();
-              },
-            },
-          });
+          pushStaleDaemonToast({ isCurrent: () => get().adapter === adapter });
         });
       });
 

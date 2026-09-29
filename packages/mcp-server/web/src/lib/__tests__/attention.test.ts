@@ -156,7 +156,7 @@ describe("§4.3 worked table — the doc's rows, literally", () => {
       : p.lane === "flag" ? `⚠ Possible secret in ${p.item!.title}`
       : p.lane === "waiting" ? "◌ WAITING ON CLAUDE"
       : p.lane === "held" ? "■ HELD"
-      : "○ Nothing needs you";
+      : "◇ Nothing needs you";
     return [line.prefix ? PREFIX[line.prefix] : null, primary, ...line.summary.map((x) => SUMMARY[x.lane](x.count))]
       .filter(Boolean)
       .join(" · ");
@@ -204,10 +204,10 @@ describe("§4.3 worked table — the doc's rows, literally", () => {
       "⚠ DISCONNECTED · ◌ WAITING ON CLAUDE · Held 2 · Read 2"],
     ["— — — — ✓", { held: true, read: true }, "■ HELD · Read 2"],
     ["✓ — — — ✓", { failure: "replay", held: true, read: true }, "REPLAY · ■ HELD · Read 2"],
-    ["— — — — —", { read: true }, "○ Nothing needs you · Read 2"],
-    ["✓ — — — —", { failure: "disconnected", read: true }, "⚠ DISCONNECTED · ○ Nothing needs you · Read 2"],
+    ["— — — — —", { read: true }, "◇ Nothing needs you · Read 2"],
+    ["✓ — — — —", { failure: "disconnected", read: true }, "⚠ DISCONNECTED · ◇ Nothing needs you · Read 2"],
     // "Read is shown only when non-empty".
-    ["— — — — — (no Read)", {}, "○ Nothing needs you"],
+    ["— — — — — (no Read)", {}, "◇ Nothing needs you"],
   ];
 
   it.each(ROWS)("doc row %s", (_row, st, line) => {

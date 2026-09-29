@@ -264,18 +264,10 @@ async function toastApiError(action: string, err: unknown): Promise<void> {
     // (cleared on the next successful connect). Lazy import: the connection
     // store imports this module.
     void import("./connection").then(({ useConnectionStore }) => useConnectionStore.setState({ staleDaemon: true }));
-    useToastStore.getState().push({
-      kind: "error",
-      title: "Tab is bound to a stale daemon",
-      body: "This project's daemon was replaced. Reload the page to re-bind.",
-      ttl: 0,
-      action: {
-        label: "Reload",
-        onClick: () => {
-          if (typeof window !== "undefined") window.location.reload();
-        },
-      },
-    });
+    // #430 PR 5 — the one shared stale-daemon toast (wording + dedup with the
+    // WS path live in lib/daemon-restart).
+    const { pushStaleDaemonToast } = await import("../lib/daemon-restart");
+    pushStaleDaemonToast();
     return;
   }
   // #182 — a 401/403 auth failure can mean the daemon restarted UNDER this tab:
