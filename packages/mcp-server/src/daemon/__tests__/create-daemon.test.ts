@@ -31,6 +31,8 @@ import { PENDING_DRAFT_TYPES } from "../../mcp/tools/types.js";
 // The web "waiting on you" set — imported here (a server-project test, so no web
 // tsconfig rootDir boundary) to pin it EQUAL to the server's PENDING_DRAFT_TYPES.
 import { REVIEWABLE_TYPES } from "../../../web/src/lib/pending.js";
+// #430 PR 1a — the web attention selector, pinned to the daemon badge below.
+import { computeAttention } from "../../../web/src/lib/attention.js";
 
 const OPTS: DecisionOption[] = [
   { id: "o1", title: "Redis", description: "d", pros: ["fast"], cons: ["ops"], effort: "low", risk: "low", recommendation: true },
@@ -152,6 +154,40 @@ describe("#175 — daemon pendingCount counts a draft changeset (parity with lib
 // the explainer case below asserts a badge of ZERO. Removing a type from one set
 // only would fail the equality above.
 describe("#190 — 'waiting on you' set parity (daemon badge + web banner == PENDING_DRAFT_TYPES)", () => {
+  it("#430 PR 1a — the web attention selector's Decide lane counts exactly what the daemon badge counts", async () => {
+    const { tmpDir, daemon } = makeDaemon();
+    const store = daemon.createSession("s_attention");
+    let i = 0;
+    // A draft of every type the server knows, plus the two read-only kinds…
+    for (const type of [...PENDING_DRAFT_TYPES, "explainer", "reasoning"]) {
+      store.createArtifact({ id: `att_${i++}`, type, title: `${type} draft`, content: {} });
+    }
+    // …and every reviewable type again, moved OFF draft (must count in neither).
+    for (const type of PENDING_DRAFT_TYPES) {
+      const id = `att_${i++}`;
+      store.createArtifact({ id, type, title: `${type} done`, content: {} });
+      store.updateArtifactStatus(id, i % 2 ? "approved" : "revised");
+    }
+    // Review (#445) — both counts span EVERY session: a second session holds a
+    // pending decision, a read-only explainer and a resolved plan. Its artifacts
+    // are foreign-session drafts relative to the first store — exactly what the
+    // web merges into one list (MultiAgentSync) — so the cross-session sum is pinned.
+    const other = daemon.createSession("s_attention_other");
+    other.createArtifact({ id: "other_dec", type: "decision", title: "other decision", content: {} });
+    other.createArtifact({ id: "other_exp", type: "explainer", title: "other explainer", content: {} });
+    other.createArtifact({ id: "other_plan", type: "plan", title: "other plan", content: {} });
+    other.updateArtifactStatus("other_plan", "approved");
+    const res = await daemon.app.request("/api/daemon-info", {
+      headers: { "X-Project-Hash": projectHashOf(tmpDir) },
+    });
+    expect(res.status).toBe(200);
+    const merged = [...store.getArtifacts(), ...other.getArtifacts()];
+    expect(new Set(merged.map((a) => a.sessionId))).toEqual(new Set(["s_attention", "s_attention_other"]));
+    const attention = computeAttention({ artifacts: merged });
+    expect((await res.json()).pendingCount).toBe(attention.lanes.decide.length);
+    expect(attention.lanes.decide.length).toBe(PENDING_DRAFT_TYPES.length + 1);
+  });
+
   it("the web REVIEWABLE_TYPES set equals the server PENDING_DRAFT_TYPES set exactly", () => {
     // `reasoning` is the only draft type deliberately NOT reviewable; it's absent
     // from PENDING_DRAFT_TYPES, so the two sets are a straight equality.
