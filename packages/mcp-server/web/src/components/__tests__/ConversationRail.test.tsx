@@ -503,9 +503,9 @@ describe("ConversationRail — W2 (filter, unread badges)", () => {
     }));
 
     // Thread is answered BEFORE the follow-up (agent reply is the tail).
-    const { isUnansweredQuestion } = await import("../../lib/unanswered");
+    const { threadHasOpenQuestion } = await import("../../lib/unanswered");
     const before = useArtifactStore.getState().comments["a1"]!;
-    expect(isUnansweredQuestion(before[0]!, before.slice(1))).toBe(false);
+    expect(threadHasOpenQuestion(before[0]!, before.slice(1))).toBe(false);
 
     // Server echoes the stored comment back (with intent) — the store reconciles
     // the optimistic provisional against it, so the tail must stay a question.
@@ -544,7 +544,7 @@ describe("ConversationRail — W2 (filter, unread badges)", () => {
     const after = useArtifactStore.getState().comments["a1"]!;
     const root = after.find((c) => c.id === "q1")!;
     const replies = after.filter((c) => c.id !== "q1");
-    expect(isUnansweredQuestion(root, replies)).toBe(true);
+    expect(threadHasOpenQuestion(root, replies)).toBe(true);
   });
 
   it("artifact group header shows a per-group unread count when fresh comments exist there", () => {

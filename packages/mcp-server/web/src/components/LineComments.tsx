@@ -1,8 +1,8 @@
 import { useState } from "react";
 import type { Comment, CommentSuggestion } from "@deeppairing/shared";
 import { suggestionSummary } from "@deeppairing/shared";
+import { unansweredQuestionIds } from "../lib/unanswered";
 import { useArtifactStore, commentPriorVersion } from "../stores/artifact";
-import { isSessionLive } from "../stores/connection";
 import { ReplyModeToggle, type ReplyMode } from "./ReplyModeToggle";
 import { WAITING_TONE } from "../lib/waitingTone";
 
@@ -214,6 +214,7 @@ export function LineCommentChips({
     }
   }
 
+  const openQuestionIds = unansweredQuestionIds(comments);
   const renderChip = (c: Comment, isReply: boolean) => {
     const cStart = c.target.lineStart;
     const cEnd = c.target.lineEnd;
@@ -223,7 +224,9 @@ export function LineCommentChips({
     // shows whether the agent has drained it (delivered vs seen), read-only.
     const isHuman = c.author === "human";
     const isQuestion = c.intent === "question";
-    const answered = !!c.answeredByCommentId;
+    // #430 PR 1c — thread-aware: an agent reply in this question's thread
+    // answers it (the flat `answeredByCommentId` check missed that).
+    const answered = !openQuestionIds.has(c.id);
     const humanResolved = !!c.humanResolvedAt;
     const priorVersion = commentPriorVersion(artifacts, c, artifactId);
     return (
@@ -293,7 +296,10 @@ export function LineCommentChips({
             from the agent's acknowledged drain flag — never sets it). */}
         {isHuman && !isQuestion && (
           <div className="px-3 mt-0.5 text-2xs text-text-muted">
-            {c.acknowledged ? "✓ seen by agent" : isSessionLive(c.sessionId) ? "delivered · awaiting agent" : "delivered · agent exited"}
+            {/* #430 PR 1c — the same receipt wording as CommentThread (U8): a
+                plain comment is just "delivered" — only a QUESTION leaves the
+                agent owing a reply ("awaiting"), so don't imply it here. */}
+            {c.acknowledged ? "✓ seen by agent" : "delivered"}
           </div>
         )}
         {replyingTo === c.id && (

@@ -573,7 +573,11 @@ describe("CommentableCode", () => {
       const undelivered = { id: "c1", sessionId: "s", target: { artifactId: "art_x", lineStart: 1, lineEnd: 1 }, parentCommentId: null, author: "human" as const, content: "looks good", acknowledged: false, createdAt: "2026-04-26T10:00:00.000Z" };
       const byLine = new Map<number, any[]>([[1, [undelivered]]]);
       const { rerender } = render(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" commentsByLine={byLine} />);
-      expect(screen.getByText(/delivered · awaiting agent/i)).toBeInTheDocument();
+      // #430 PR 1c — the same wording as CommentThread: a plain comment is just
+      // "delivered"; "awaiting agent" is reserved for an open question (the old
+      // "delivered · awaiting agent" here was the inconsistency, §2.8).
+      expect(screen.getByText(/^delivered$/i)).toBeInTheDocument();
+      expect(screen.queryByText(/awaiting agent/i)).not.toBeInTheDocument();
       const seen = new Map<number, any[]>([[1, [{ ...undelivered, acknowledged: true }]]]);
       rerender(<CommentableCode code={code} lineStart={1} artifactId="art_x" filePath="a.ts" commentsByLine={seen} />);
       expect(screen.getByText(/seen by agent/i)).toBeInTheDocument();

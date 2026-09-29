@@ -1,6 +1,6 @@
 import type { Artifact, Comment, Request } from "@deeppairing/shared";
-import { collectUnansweredQuestions } from "@deeppairing/shared";
 import { isDraftAwaitingReview } from "./pending";
+import { unansweredQuestionIds } from "./unanswered";
 
 /**
  * #430 PR 1a — the ONE attention model (docs/design/attention-hierarchy.md §4.1,
@@ -13,9 +13,10 @@ import { isDraftAwaitingReview } from "./pending";
  * named at the spot:
  *   - Decide == `isDraftAwaitingReview` == computePending's drafts (and the
  *     server's computeDaemonPendingCount type set) — parity-tested.
- *   - Waiting questions == the shared thread-aware `collectUnansweredQuestions`
- *     (the App header / Comment-threads count). AskTrigger's flat filter still
- *     differs — PR 1c.
+ *   - Waiting questions are PER QUESTION (PR 1c): `unansweredQuestionIds` —
+ *     answered only by `answeredByCommentId` or an agent reply after it in its
+ *     thread; cleared by `humanResolvedAt`. Two consecutive open questions in
+ *     one thread are two items (the retired thread tail-walk said one).
  *   - Agent activity is NOT computed here: the 45s/60s windows are PR 1b, and
  *     the #204 90s resume hysteresis stays its own threshold. Callers pass the
  *     agent state they already derive.
@@ -150,13 +151,16 @@ export function computeAttention(input: AttentionInput): Attention {
   flags.sort(byOldest);
 
   const allComments = Object.values(input.comments ?? {}).flat();
-  const questions: AttentionItem[] = collectUnansweredQuestions(allComments).map((q) => ({
-    id: q.question.id,
-    title: q.question.content,
-    artifactId: q.artifactId || undefined,
-    createdAt: q.question.createdAt,
-    kind: "question",
-  }));
+  const openQuestions = unansweredQuestionIds(allComments);
+  const questions: AttentionItem[] = allComments
+    .filter((c) => openQuestions.has(c.id))
+    .map((c) => ({
+      id: c.id,
+      title: c.content,
+      artifactId: c.target?.artifactId || undefined,
+      createdAt: c.createdAt,
+      kind: "question",
+    }));
   const requests: AttentionItem[] = (input.requests ?? [])
     .filter((r) => !r.servedByArtifactId)
     .map((r) => ({ id: r.id, title: r.text, createdAt: r.createdAt, kind: "request" }));

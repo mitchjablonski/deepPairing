@@ -8,7 +8,7 @@ export type ReplyMode = "comment" | "question";
  *
  * Why it matters: a plain reply is stored with intent undefined and never
  * re-opens the thread. A reply sent in "question" mode carries
- * intent:"question", so `isUnansweredQuestion`'s tail-walk sees an open human
+ * intent:"question", so the shared per-question rule sees an open human
  * follow-up and re-flags the thread as awaiting the agent (the #130 gap this
  * closes). The human can still Mark it resolved to clear it again.
  */

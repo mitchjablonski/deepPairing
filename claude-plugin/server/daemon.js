@@ -20801,26 +20801,27 @@ function buildThreads(comments) {
     replies: (descendants.get(root.id) ?? []).sort(byTime)
   }));
 }
-function findOpenQuestion(comment, replies) {
-  const isOpenHumanQuestion = (m) => {
-    const x = m;
-    return m.author === "human" && x.intent === "question" && !x.answeredByCommentId && !x.humanResolvedAt;
-  };
-  const chain = [comment, ...replies];
-  for (let i = chain.length - 1; i >= 0; i--) {
-    const m = chain[i];
-    if (m.author !== "human")
-      return null;
-    if (m.intent === "question")
-      return isOpenHumanQuestion(m) ? m : null;
+var isQuestion = (m) => m.author === "human" && m.intent === "question";
+var isClosed = (m) => {
+  const x = m;
+  return !!x.answeredByCommentId || !!x.humanResolvedAt;
+};
+function openQuestionsInThread(root, replies) {
+  let waiting = [];
+  for (const m of [root, ...replies]) {
+    if (m.author === "agent") {
+      waiting = [];
+      continue;
+    }
+    if (isQuestion(m) && !isClosed(m))
+      waiting.push(m);
   }
-  return null;
+  return waiting;
 }
 function collectUnansweredQuestions(comments) {
   const out = [];
   for (const t of buildThreads(comments)) {
-    const question = findOpenQuestion(t.root, t.replies);
-    if (question) {
+    for (const question of openQuestionsInThread(t.root, t.replies)) {
       const artifactId = question.target?.artifactId ?? t.root.target?.artifactId ?? "";
       out.push({ artifactId, question, root: t.root, replies: t.replies });
     }

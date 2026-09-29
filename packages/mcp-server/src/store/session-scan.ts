@@ -1101,7 +1101,7 @@ export function groupByFeature(
       });
     }
 
-    // Unanswered questions — run the SHARED tail-walk over the whole session's
+    // Unanswered questions — run the SHARED per-question rule over the whole session's
     // comments (thread integrity), then scope each result to the group its
     // artifact fell in.
     const unanswered = collectUnansweredQuestions(scan.comments);
