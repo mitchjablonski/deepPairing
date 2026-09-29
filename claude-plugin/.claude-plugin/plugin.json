@@ -1,7 +1,7 @@
 {
   "name": "deeppairing",
   "displayName": "deepPairing",
-  "version": "0.1.58",
+  "version": "0.1.59",
   "description": "Delegate implementation to Claude Code without losing the decisions that matter: review its findings, options, and plans in a local UI, and have rejected approaches checked (by words, not meaning) when it proposes again.",
   "author": {
     "name": "deepPairing"
