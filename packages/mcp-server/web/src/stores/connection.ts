@@ -31,15 +31,20 @@ interface RecoverySnapshot {
 }
 
 /** Request notification permission and send a notification when tab is unfocused.
- *  #430 PR 1e review — `tag` lets the OS replace instead of stack: decision
- *  alerts share "dp-decision" (they bypass the burst throttle, so a burst of
- *  decisions collapses to the newest one in the notification centre). */
-function notifyIfUnfocused(title: string, body: string, tag?: string) {
+ *
+ *  #430 PR 1e review — deliberately NO `tag`, for decisions especially. Under
+ *  the Notifications spec, a notification that REPLACES another with the same
+ *  tag is shown SILENTLY (no sound, no banner) unless `renotify: true` — and
+ *  `renotify` is Chrome-only (Firefox and Safari ignore it). A shared tag would
+ *  therefore make a second decision, minutes later, silently overwrite the
+ *  first one still in the notification centre: the exact "decision raises no
+ *  alert" bug PR 1e fixes. Each alert stays its own notification. */
+function notifyIfUnfocused(title: string, body: string) {
   if (typeof Notification === "undefined") return;
   if (document.hasFocus()) return;
 
   if (Notification.permission === "granted") {
-    new Notification(title, { body, icon: "/favicon.ico", ...(tag ? { tag } : {}) });
+    new Notification(title, { body, icon: "/favicon.ico" });
   } else if (Notification.permission === "default") {
     Notification.requestPermission();
   }
@@ -257,7 +262,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       if (now - lastDraftNotifyAt < 5_000) return;
       lastDraftNotifyAt = now;
     }
-    notifyIfUnfocused("deepPairing — your turn", body, opts?.decision ? "dp-decision" : undefined);
+    notifyIfUnfocused("deepPairing — your turn", body);
   };
 
   // #168 — hero-toast dedupe. The demo (and a sleep/blip reconnect on any

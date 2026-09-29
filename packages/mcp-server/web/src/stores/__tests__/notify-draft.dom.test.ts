@@ -104,18 +104,13 @@ describe("#430 PR 1e — a decision always gets its OS alert", () => {
     expect(shown).toHaveLength(1);
   });
 
-  it("decision alerts share the OS tag 'dp-decision' (a burst collapses); other drafts stay untagged", async () => {
-    adapter.emit(draft("research", "A finding"));
-    await flush();
+  it("decision alerts carry NO tag — a same-tag replacement is silent (see notifyIfUnfocused)", async () => {
     adapter.emit(draft("decision", "First decision"));
     await flush();
     adapter.emit(draft("decision", "Second decision"));
     await flush();
-    expect(shown.map((n) => [n.body, n.tag])).toEqual([
-      ["Findings ready for review: A finding", undefined],
-      ["Decision needed: First decision", "dp-decision"],
-      ["Decision needed: Second decision", "dp-decision"],
-    ]);
+    expect(shown.map((n) => n.body)).toEqual(["Decision needed: First decision", "Decision needed: Second decision"]);
+    expect(shown.every((n) => n.tag === undefined)).toBe(true);
   });
 });
 
