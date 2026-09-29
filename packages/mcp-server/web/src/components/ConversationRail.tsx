@@ -9,6 +9,7 @@ import { commentAnchorKey } from "../lib/comment-anchor";
 import { isUnansweredQuestion } from "../lib/unanswered";
 import { suggestionPill } from "../lib/suggestionPill";
 import { ReplyModeToggle, type ReplyMode } from "./ReplyModeToggle";
+import { WAITING_TONE } from "../lib/waitingTone";
 
 // W2 — "last opened" timestamp persisted to sessionStorage so we know
 // which comments arrived since the user last looked at the rail. Stored
@@ -249,7 +250,7 @@ export function ConversationRail({ onClose }: ConversationRailProps) {
                   ? "No comment threads yet"
                   : `${totalComments} comment${totalComments === 1 ? "" : "s"} across ${grouped.length} artifact${grouped.length === 1 ? "" : "s"}`}
                 {unansweredQuestions > 0 && (
-                  <span className="ml-2 text-accent-violet">
+                  <span className={`ml-2 ${WAITING_TONE.text}`}>
                     · {unansweredQuestions} unanswered question{unansweredQuestions === 1 ? "" : "s"}
                   </span>
                 )}
@@ -470,7 +471,7 @@ function ThreadEntry({
           </div>
         )}
         {isUnanswered && (
-          <div className="ml-4 mt-1 text-[10px] text-accent-violet/80">
+          <div className={`ml-4 mt-1 text-[10px] ${WAITING_TONE.text}`}>
             {/* F8 (M6) — don't promise a check-in on a dead session. */}
             {boundLive
               ? "⏳ awaiting the agent's answer — next check-in"
@@ -628,8 +629,9 @@ function FilterPill({
   count: number;
   accent?: boolean;
 }) {
-  const accentColor = accent ? "text-accent-violet" : "text-accent-blue";
-  const activeBg = accent ? "bg-accent-violet-dim" : "bg-accent-blue-dim/40";
+  // #430 PR 1d — the accented pill is the Unanswered (waiting-on-agent) filter.
+  const accentColor = accent ? WAITING_TONE.text : "text-accent-blue";
+  const activeBg = accent ? "bg-accent-blue-dim" : "bg-accent-blue-dim/40";
   return (
     <button
       onClick={onClick}

@@ -16,6 +16,7 @@ import { isSessionLive } from "../stores/connection";
 import { CarryoverBadge } from "./decision/CarryoverBadge";
 import type { CarryoverState } from "./decision/carryover";
 import { SpeechIcon } from "./icons/ArtifactIcons";
+import { WAITING_TONE } from "../lib/waitingTone";
 
 interface CommentThreadProps {
   artifactId: string;
@@ -490,7 +491,7 @@ export function AskTrigger({
       : "inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded transition-colors";
 
   const tint = unanswered > 0
-    ? "bg-accent-violet-dim text-accent-violet hover:bg-accent-violet-dim/80 animate-pulse"
+    ? `${WAITING_TONE.chip} ${WAITING_TONE.chipHover} animate-pulse` // #430 PR 1d — waiting on the agent
     : matching.length > 0
       ? "bg-accent-violet-dim/40 text-accent-violet hover:bg-accent-violet-dim/60"
       : "bg-surface-elevated text-text-muted hover:bg-surface-hover hover:text-accent-violet";
