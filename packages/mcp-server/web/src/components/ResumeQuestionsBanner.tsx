@@ -36,6 +36,15 @@ export function countResumeQuestions(comments: Record<string, Comment[]>): numbe
   return collectUnansweredQuestions(all).length;
 }
 
+/** The paste-able resume prompt for `n` open questions — shared with the
+ *  Next-up bar, which carries this banner's action when it absorbs it (#430 PR 3). */
+export function resumePromptFor(n: number): string {
+  return (
+    `Resume our deepPairing session: I left ${n} question${n === 1 ? "" : "s"} on your artifacts that ${n === 1 ? "is" : "are"} still unanswered. ` +
+    `Call check_feedback to see them (they arrive as an "unanswered questions carried over" block), then reply to each with answer_question so the answer links to my question in the companion UI.`
+  );
+}
+
 export function ResumeQuestionsBanner() {
   const comments = useArtifactStore((s) => s.comments);
   const selectArtifact = useArtifactStore((s) => s.selectArtifact);
@@ -55,9 +64,7 @@ export function ResumeQuestionsBanner() {
   if (!connected || !noAgentLive(activeSessions) || unanswered.length === 0) return null;
 
   const n = unanswered.length;
-  const resumePrompt =
-    `Resume our deepPairing session: I left ${n} question${n === 1 ? "" : "s"} on your artifacts that ${n === 1 ? "is" : "are"} still unanswered. ` +
-    `Call check_feedback to see them (they arrive as an "unanswered questions carried over" block), then reply to each with answer_question so the answer links to my question in the companion UI.`;
+  const resumePrompt = resumePromptFor(n);
 
   const copy = async () => {
     // Fix 3 — only claim success after an ACTUAL resolve. In the VS Code webview

@@ -48,6 +48,7 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { PreflightBreadcrumb } from "./PreflightBreadcrumb";
 import { SecretWarningBanner } from "./SecretWarningBanner";
 import { WAITING_TONE } from "../lib/waitingTone";
+import { computeAttention } from "../lib/attention";
 
 const statusDots: Record<string, string> = {
   // B1 — draft is the one status that NEEDS the human, yet it was styled as the
@@ -618,6 +619,10 @@ const HYDRATION_SETTLE_MS = 750;
 function useArrivalHighlights(
   artifacts: Artifact[],
   enabled: boolean,
+  /** #430 PR 3 — with the Next-up bar on, an arrival that BECOMES `next` is
+   *  announced by the bar (one announcer per change, §7); this region stays
+   *  quiet about it and announces only the other arrivals. */
+  barAnnouncesNext = false,
 ): { highlightedIds: string[]; announcement: string } {
   // Ordered by arrival (append) so the pip can point at the NEWEST off-screen
   // one. A plain string[] keeps to the no-Set/Map-in-state convention.
@@ -688,11 +693,15 @@ function useArrivalHighlights(
 
     // One announcement per arrival EVENT (a burst collapses to a single summary
     // line), not a per-id stream — keeps the aria-live region polite.
-    setAnnouncement(
-      arrived.length === 1
-        ? `New artifact: ${arrived[0]!.title}`
-        : `${arrived.length} new artifacts`,
-    );
+    const nextId = barAnnouncesNext ? computeAttention({ artifacts }).next?.id : undefined;
+    const toAnnounce = nextId ? arrived.filter((a) => a.id !== nextId) : arrived;
+    if (toAnnounce.length > 0) {
+      setAnnouncement(
+        toAnnounce.length === 1
+          ? `New artifact: ${toAnnounce[0]!.title}`
+          : `${toAnnounce.length} new artifacts`,
+      );
+    }
 
     // Each id fades on its own timer (a later arrival doesn't cut an earlier
     // card's highlight short).
@@ -706,7 +715,7 @@ function useArrivalHighlights(
     // idKey drives re-runs; `artifacts` is read via closure. `enabled` included
     // so a replay toggle re-evaluates.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [idKey, enabled]);
+  }, [idKey, enabled, barAnnouncesNext]);
 
   // Clear any outstanding fade + settle timers on unmount.
   useEffect(
@@ -1195,7 +1204,8 @@ export function ArtifactPanel() {
   // view) so a session-filter toggle doesn't masquerade as an arrival, and
   // never on initial load / reload. Suppressed entirely during replay, where a
   // "new item" has no meaning (the panel hides post-cursor artifacts).
-  const { highlightedIds, announcement } = useArrivalHighlights(artifacts, !replayActive);
+  const nextUpBar = usePreferencesStore((s) => s.nextUpBar);
+  const { highlightedIds, announcement } = useArrivalHighlights(artifacts, !replayActive, nextUpBar);
 
   // Unique session IDs present in the store
   const sessionIds = useMemo(

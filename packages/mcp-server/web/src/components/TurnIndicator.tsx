@@ -33,9 +33,16 @@ import { AGENT_ACTIVE_WINDOW_MS } from "../lib/agentActivity";
 export function TurnIndicator({
   pendingBannerVisible = false,
   pendingCardInView = false,
+  agentStateOnly = false,
 }: {
   pendingBannerVisible?: boolean;
   pendingCardInView?: boolean;
+  /** #430 PR 3 — with the Next-up bar on, the bar owns "your turn" (count,
+   *  jump, next) and the ONE announcer for ATTENTION changes; this pill shows
+   *  the agent's state only. It stays a live region for agent-state
+   *  transitions (working → exited…), which are not attention events and which
+   *  nothing else announces (an exit doesn't change `next`). */
+  agentStateOnly?: boolean;
 } = {}) {
   const artifacts = useArtifactStore((s) => s.artifacts);
   const comments = useArtifactStore((s) => s.comments);
@@ -171,7 +178,7 @@ export function TurnIndicator({
   // PR 3 shrinks this pill to agent state only); the button opens the rail on
   // its Unanswered filter, where each question jumps to its artifact.
 
-  if (totalPending > 0) {
+  if (totalPending > 0 && !agentStateOnly) {
     // #192 (usability H1) — the bucket-table summary counts EVERY reviewable
     // type (changeset/debrief/explainer included) and falls back to "N items"
     // if a future type isn't yet bucketed, so this can never render a dangling

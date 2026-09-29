@@ -1326,3 +1326,28 @@ describe("ChangesetArtifact — X2 large-PR split chip", () => {
     expect(screen.getByTestId("changeset-split-chip").tagName).not.toBe("BUTTON");
   });
 });
+
+describe("#452 review — a draft changeset can be dismissed from its own review area", () => {
+  // The file's convention: stub the store action (earlier tests replace it too).
+  it("two-step 'Dismiss — overcome by new information' marks the changeset obsolete (the old PendingBanner ✕ was the only path)", async () => {
+    seed(changeset());
+    const updateStatus = vi.fn().mockResolvedValue(undefined);
+    useArtifactStore.setState({ updateArtifactStatus: updateStatus });
+    render(<Harness id="art_cs" />);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss — overcome by new information" }));
+    expect(updateStatus).not.toHaveBeenCalled(); // the first click only arms
+    fireEvent.click(screen.getByRole("button", { name: /Dismiss\? \(can't be undone\)/ }));
+    await waitFor(() => expect(updateStatus).toHaveBeenCalledWith("art_cs", "obsolete", undefined));
+  });
+
+  it("'Keep it' backs out without dismissing", () => {
+    seed(changeset());
+    const updateStatus = vi.fn().mockResolvedValue(undefined);
+    useArtifactStore.setState({ updateArtifactStatus: updateStatus });
+    render(<Harness id="art_cs" />);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss — overcome by new information" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep it" }));
+    expect(screen.getByRole("button", { name: "Dismiss — overcome by new information" })).toBeInTheDocument();
+    expect(updateStatus).not.toHaveBeenCalled();
+  });
+});

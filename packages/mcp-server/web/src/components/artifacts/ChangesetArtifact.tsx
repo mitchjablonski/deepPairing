@@ -459,6 +459,7 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
 
   const setChangesetFileReview = useArtifactStore((s) => s.setChangesetFileReview);
   const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
+  const [confirmDismiss, setConfirmDismiss] = useState(false);
   const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
   const replayActive = useReplayStore((s) => s.active);
   // #187 — the single `interactive` gate split in two, so late COMMENTING can be
@@ -1598,6 +1599,46 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
               </div>
             </div>
           )}
+          {/* #430 PR 3 review — "Dismiss — overcome by new information" for a
+              changeset. Every other artifact gets it in ArtifactStatusActions'
+              footer, which the changeset (its own two-level review) never
+              renders — so the PendingBanner chip's ✕ was the ONLY way to close
+              a stale changeset. Two-step, like that chip: obsolete can't be
+              undone. */}
+          <div className="flex items-center gap-2">
+            {confirmDismiss ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmDismiss(false);
+                    setSubmitting(true);
+                    void updateArtifactStatus(artifact.id, "obsolete", feedback.trim() || undefined)
+                      .then(() => advanceToNextPending())
+                      .catch(() => {})
+                      .finally(() => setSubmitting(false));
+                  }}
+                  disabled={submitting}
+                  className="text-2xs text-text-secondary underline disabled:opacity-50"
+                >
+                  Dismiss? (can&apos;t be undone)
+                </button>
+                <button type="button" onClick={() => setConfirmDismiss(false)} className="text-2xs text-text-muted hover:text-text-secondary">
+                  Keep it
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmDismiss(true)}
+                disabled={submitting}
+                className="text-2xs text-text-muted hover:text-text-secondary disabled:opacity-50 transition-colors"
+                title="This was valid but the discussion moved past it — close it without approving or rejecting"
+              >
+                Dismiss — overcome by new information
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>

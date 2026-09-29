@@ -7,6 +7,7 @@ import { usePreflightBlockStore } from "../stores/preflightBlocks";
 import { computeAttention, type Attention, type AttentionItem, type FailureKind, type SummaryLane } from "../lib/attention";
 import { noAgentLive } from "../lib/liveness";
 import { WAITING_TONE } from "../lib/waitingTone";
+import { resumePromptFor } from "./ResumeQuestionsBanner";
 
 /**
  * #430 PR 2 — THE NEXT-UP BAR (docs/design/attention-hierarchy.md §4). One line
@@ -159,8 +160,43 @@ export function NextUpBar() {
   const [whyHolds, setWhyHolds] = useState<AttentionItem[]>([]);
   const primary = attention.line.primary;
   const item = primary.item;
+  // #430 PR 3 — absorbing ResumeQuestionsBanner: when the agent exited with
+  // your questions open, the bar carries the banner's count ("Exited with N of
+  // your questions open"), its jump (Open → the oldest question's artifact) and
+  // its Copy-resume-prompt action.
+  //
+  // #452 review — this is a SUMMARY action, shown whenever the agent is gone
+  // and questions are open, whatever holds the primary slot: the common exit
+  // leaves drafts in Decide, and the resume flow must not hide behind them.
+  const openQuestions = attention.lanes.waiting.filter((w) => w.kind === "question");
+  const openQuestionCount = openQuestions.length;
+  const resumeCase = agentGone && openQuestionCount > 0;
+  const oldestQuestion = openQuestions[0]; // waiting is oldest-first
   const why = item ? whyFor(item, artifacts) : "";
   const after = item ? afterFor(item, artifacts, agentGone) : "";
+  const [copied, setCopied] = useState(false);
+  const copyResumePrompt = async () => {
+    // Same honesty rule as the banner: only claim success on an actual resolve.
+    const writeText = navigator.clipboard?.writeText?.bind(navigator.clipboard);
+    if (!writeText) return;
+    try {
+      await writeText(resumePromptFor(openQuestionCount));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* clipboard denied — don't claim success */ }
+  };
+
+  // #430 PR 3 — the palette's "Open review queue" expands this bar and moves
+  // focus to it (an explicit request, so focus may move; `next` changes never do).
+  const sectionRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const open = () => {
+      setExpanded("all");
+      sectionRef.current?.focus();
+    };
+    window.addEventListener("dp:open-next-up", open);
+    return () => window.removeEventListener("dp:open-next-up", open);
+  }, []);
 
   // ONE polite announcer that speaks only when `next.id` changes (never on
   // mount, never when a count moves). It never touches selection or scroll.
@@ -186,6 +222,7 @@ export function NextUpBar() {
 
   return (
     <section
+      ref={sectionRef}
       id="next-up"
       tabIndex={-1}
       aria-label="Next up"
@@ -240,6 +277,26 @@ export function NextUpBar() {
           </button>
         )}
         <span className="flex-1" />
+        {resumeCase && (
+          <span className="shrink-0 flex items-center gap-1" data-testid="next-up-resume">
+            <button
+              type="button"
+              onClick={() => oldestQuestion?.artifactId && selectArtifact(oldestQuestion.artifactId)}
+              className={`px-1.5 py-0.5 rounded ${WAITING_TONE.chip} ${WAITING_TONE.chipHover}`}
+              title="Claude exited with your questions open — jump to the oldest one"
+            >
+              💤 Exited with {openQuestionCount} of your question{openQuestionCount === 1 ? "" : "s"} open
+            </button>
+            <button
+              type="button"
+              onClick={() => void copyResumePrompt()}
+              className={`px-1.5 py-0.5 rounded ${WAITING_TONE.chip} ${WAITING_TONE.chipHover}`}
+              title="Copy a paste-able resume prompt for Claude Code"
+            >
+              {copied ? "Copied ✓" : "Copy resume prompt"}
+            </button>
+          </span>
+        )}
         {attention.line.summary.map((s) =>
           s.lane === "high-decision" ? (
             <button
