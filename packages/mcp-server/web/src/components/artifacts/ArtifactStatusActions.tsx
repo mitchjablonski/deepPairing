@@ -8,6 +8,7 @@ import { useCrossProjectStore } from "../../stores/crossProject";
 import { useChainComments } from "../../hooks/useChainComments";
 import { summarizeOpenSuggestions, openSuggestionsConfirmLabel } from "../../lib/openSuggestions";
 import { WAITING_TONE } from "../../lib/waitingTone";
+import { LANE_MARKS } from "../../lib/laneMarks";
 
 interface ArtifactStatusActionsProps {
   artifact: Artifact;
@@ -433,11 +434,12 @@ export function ArtifactStatusActions({
   if (artifact.status === "revised") {
     return (
       <div className="flex items-center gap-2 pt-2 border-t border-border-default">
-        {/* UX7b — same glyph as the sidebar/header statusGlyph.revised (↻),
-            not a pencil, so "revised" reads consistently across surfaces. */}
+        {/* UX7b → #430 PR 4 — the same glyph as the sidebar row and header
+            chip (the Waiting lane's ◌, lib/laneMarks), so "revised" reads
+            consistently across surfaces. */}
         {/* F8 (L4) + #430 PR 1d — the panel dot's colour: revised = agent's
             turn = the one waiting blue. */}
-        <span className={`${WAITING_TONE.text} text-sm`}>↻</span>
+        <span aria-hidden="true" className={`${WAITING_TONE.text} text-sm`}>{LANE_MARKS.waiting.glyph}</span>
         <span className={`text-xs ${WAITING_TONE.text} font-medium`}>Revision requested</span>
         <span className="text-2xs text-text-muted ml-1">awaiting agent</span>
       </div>

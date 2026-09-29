@@ -49,6 +49,7 @@ import { PreflightBreadcrumb } from "./PreflightBreadcrumb";
 import { SecretWarningBanner } from "./SecretWarningBanner";
 import { WAITING_TONE } from "../lib/waitingTone";
 import { computeAttention } from "../lib/attention";
+import { laneMarksFrom, laneMarkFor, type LaneMark } from "../lib/laneMarks";
 
 const statusDots: Record<string, string> = {
   // B1 — draft is the one status that NEEDS the human, yet it was styled as the
@@ -111,17 +112,16 @@ const statusLabels: Record<string, string> = {
 };
 
 /**
- * #430 PR 0 (docs/design/attention-hierarchy.md §2.8, §8) — the SIDEBAR dot must
- * agree with what is actually pending. Explainer and reasoning drafts are not
- * pending (lib/pending.ts REVIEWABLE_TYPES) yet wore the amber "Draft, awaiting
- * review" dot every reviewable draft wears. A draft that is NOT awaiting review
- * gets a neutral "for you to read" dot instead; every other artifact keeps its
- * status dot, glyph and label.
+ * #430 PR 0 → PR 4 (docs/design/attention-hierarchy.md §5, §8) — the SIDEBAR dot
+ * agrees with the attention model. An artifact that is a lane item wears its
+ * lane mark (▲ decide, ● review, ○ read, ◌ waiting — lib/laneMarks, derived from
+ * computeAttention, the bar's own selector); every other artifact keeps its
+ * status dot, glyph and label. `dot` carries both the fill and the glyph colour.
  */
-const READ_DOT = { dot: "bg-text-muted", glyph: "○", label: "New — for you to read" };
-function sidebarStatus(a: Artifact): { dot: string | undefined; glyph: string; label: string } {
-  if (a.status === "draft" && !isDraftAwaitingReview(a)) return READ_DOT;
-  return { dot: statusDots[a.status], glyph: statusGlyph[a.status] ?? "•", label: statusLabels[a.status] ?? a.status };
+function sidebarStatus(a: Artifact, lanes: Record<string, LaneMark>): { dot: string; glyph: string; label: string } {
+  const lane = lanes[a.id];
+  if (lane) return lane;
+  return { dot: `${statusDots[a.status] ?? ""} text-white`, glyph: statusGlyph[a.status] ?? "•", label: statusLabels[a.status] ?? a.status };
 }
 
 /** #193 E2 — the status label, type-aware. A DRAFT explainer is not "awaiting
@@ -304,6 +304,7 @@ function ArtifactSkeleton() {
 
 // Exported for tests (#158 — the secret-warning banner renders here).
 export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
+  const headerGlyph = laneMarkFor(artifact)?.glyph ?? statusGlyph[artifact.status];
   const contentWidth = usePreferencesStore((s) => s.contentWidth);
   // #204 (UX L2) — the artifact-level comment thread's WRITE AXIS, derived through
   // the shared reviewLifecycle helper. A retracted/terminal ("closed") or replayed
@@ -355,7 +356,9 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
           <span className={`px-1.5 py-0.5 text-2xs font-medium rounded ${statusColors[artifact.status]}`}>
             {/* U6 — friendly label + glyph, matching the sidebar; not the raw
                 enum ("superseded"/"reviewing"). */}
-            {statusGlyph[artifact.status] ? `${statusGlyph[artifact.status]} ` : ""}
+            {/* #430 PR 4 — a lane item shows its lane glyph here too, so the
+                header never disagrees with the sidebar row. */}
+            {headerGlyph ? `${headerGlyph} ` : ""}
             {statusLabelFor(artifact)}
           </span>
           {artifact.version > 1 && (
@@ -752,6 +755,8 @@ function ArtifactSidebar({
   onToggle: () => void;
 }) {
   const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  // #430 PR 4 — each row's lane glyph comes from the bar's own selector.
+  const laneMarks = useMemo(() => laneMarksFrom(computeAttention({ artifacts })), [artifacts]);
   // New-item locator plumbing. The scroll container + per-item nodes let the
   // off-screen pip figure out whether a just-arrived card is above/below the
   // viewport WITHOUT ever moving scroll on arrival.
@@ -971,7 +976,7 @@ function ArtifactSidebar({
             // BUTTON itself (title + aria-label) when collapsed — the icon column
             // is unreadable without it. Expanded rows show the title inline, so
             // they keep the plain `a.title` tooltip.
-            const sb = sidebarStatus(a);
+            const sb = sidebarStatus(a, laneMarks);
             const collapsedLabel = `${typeLabels[a.type] ?? a.type}: ${a.title} — ${sb.label}`;
 
             return (
@@ -1004,7 +1009,7 @@ function ArtifactSidebar({
                     )}
                     <span
                       aria-label={sb.label}
-                      className={`absolute -bottom-1 -right-1 w-3 h-3 rounded-full flex items-center justify-center text-[8px] leading-none ${sb.dot} text-white`}
+                      className={`absolute -bottom-1 -right-1 w-3 h-3 rounded-full flex items-center justify-center text-[8px] leading-none ${sb.dot}`}
                     >
                       {sb.glyph}
                     </span>
@@ -1034,7 +1039,7 @@ function ArtifactSidebar({
                     <span
                       aria-label={sb.label}
                       title={sb.label}
-                      className={`shrink-0 w-4 h-4 rounded-full flex items-center justify-center text-[9px] leading-none ${sb.dot} text-white`}
+                      className={`shrink-0 w-4 h-4 rounded-full flex items-center justify-center text-[9px] leading-none ${sb.dot}`}
                     >
                       {sb.glyph}
                     </span>
