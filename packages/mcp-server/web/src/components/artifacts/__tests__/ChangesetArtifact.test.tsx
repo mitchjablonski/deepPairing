@@ -207,6 +207,9 @@ describe("ChangesetArtifact — approve-all fast path + confirm-countdown (#175)
     await userEvent.click(screen.getByTitle("added auth/session.test.ts"));
     await userEvent.click(screen.getByTestId("looks-right"));
     expect(await screen.findByTestId("approve-countdown")).toBeInTheDocument();
+    // #430 PR 5 — THE shared approve countdown: same wording and Hold control
+    // as the single-artifact footer (ArtifactStatusActions.test pins the other).
+    expect(screen.getByTestId("approve-countdown")).toHaveTextContent(/^Will auto-approve in \ds · press to comment · Esc to holdHold$/);
   });
 
   it("the countdown auto-commits approve at zero, then advances to the next pending artifact", async () => {
@@ -1351,3 +1354,4 @@ describe("#452 review — a draft changeset can be dismissed from its own review
     expect(updateStatus).not.toHaveBeenCalled();
   });
 });
+

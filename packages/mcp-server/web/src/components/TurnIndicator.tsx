@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Comment } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
 import { computePending, summarizeTurnParts } from "../lib/pending";
-import { AGENT_ACTIVE_WINDOW_MS } from "../lib/agentActivity";
+import { AGENT_ACTIVE_WINDOW_MS, lastAgentActivityMs } from "../lib/agentActivity";
 
 /**
  * Top-header turn indicator + agent narration pill.
@@ -97,25 +96,8 @@ export function TurnIndicator({
   // with no new activity we stop claiming "Agent working" (the old behavior
   // pulsed forever, telling the human to keep waiting on an idle/finished
   // agent). A timer flips `idle` so it updates even without a re-render.
-  const lastActivityMs = useMemo(() => {
-    let max = 0;
-    for (const a of artifacts) {
-      const t = new Date(a.createdAt).getTime();
-      if (Number.isFinite(t) && t > max) max = t;
-    }
-    for (const list of Object.values(comments)) {
-      for (const c of list as Comment[]) {
-        // M3 — only AGENT-authored comments count as agent liveness. A human
-        // posting a comment while the agent is gone used to bump this, pulsing
-        // "Agent working" for 45s over an exited agent (the composer below said
-        // otherwise). Human input is never proof the agent is alive.
-        if (c.author !== "agent") continue;
-        const t = new Date(c.createdAt).getTime();
-        if (Number.isFinite(t) && t > max) max = t;
-      }
-    }
-    return max;
-  }, [artifacts, comments]);
+  // #455 review — shared with the session-bar dot (lib/agentActivity).
+  const lastActivityMs = useMemo(() => lastAgentActivityMs(artifacts, comments), [artifacts, comments]);
 
   // B2 — liveness = max(artifact/comment timestamps, heartbeat). Either signal
   // keeps "Agent working" honest; the heartbeat covers the artifact-quiet gaps.

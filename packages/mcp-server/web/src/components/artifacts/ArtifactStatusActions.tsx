@@ -8,6 +8,7 @@ import { useCrossProjectStore } from "../../stores/crossProject";
 import { useChainComments } from "../../hooks/useChainComments";
 import { summarizeOpenSuggestions, openSuggestionsConfirmLabel } from "../../lib/openSuggestions";
 import { WAITING_TONE } from "../../lib/waitingTone";
+import { ApproveCountdown } from "./ApproveCountdown";
 import { LANE_MARKS } from "../../lib/laneMarks";
 
 interface ArtifactStatusActionsProps {
@@ -747,27 +748,9 @@ export function ArtifactStatusActions({
         </div>
       ) : (
       <>
-      {/* Auto-proceed countdown bar */}
+      {/* Auto-proceed countdown bar — #430 PR 5: the shared ApproveCountdown. */}
       {countdown !== null && countdown > 0 && !countdownPaused && (
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <span className="text-2xs text-accent-green">
-              Will auto-approve in {countdown}s...
-            </span>
-            <button
-              onClick={cancelCountdown}
-              className="text-2xs text-text-muted hover:text-text-secondary press-scale"
-            >
-              Cancel
-            </button>
-          </div>
-          <div className="h-0.5 bg-surface-elevated rounded-full overflow-hidden">
-            <div
-              className="h-full bg-accent-green transition-all duration-1000 ease-linear"
-              style={{ width: `${(countdown / countdownMax) * 100}%` }}
-            />
-          </div>
-        </div>
+        <ApproveCountdown countdown={countdown} countdownMax={countdownMax} onHold={cancelCountdown} />
       )}
 
       {/* Comment/response textarea. Submitting it as a "Respond" (the primary

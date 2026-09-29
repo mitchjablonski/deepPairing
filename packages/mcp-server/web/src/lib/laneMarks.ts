@@ -47,6 +47,10 @@ export const LANE_MARKS: Record<SidebarLane, LaneMark> = {
   waiting: { lane: "waiting", glyph: "◌", dot: `${WAITING_TONE.dot} text-white`, label: "Revision requested — waiting on Claude" },
 };
 
+/** The bar's empty state ("Nothing needs you"). Deliberately NOT a lane glyph
+ *  (PR 4 review): ○ means Read, and only Read. */
+export const NOTHING_GLYPH = "◇";
+
 /** Artifact id → its lane mark, for every artifact that is itself a lane item. */
 export function laneMarksFrom(attention: Attention): Record<string, LaneMark> {
   const out: Record<string, LaneMark> = {};

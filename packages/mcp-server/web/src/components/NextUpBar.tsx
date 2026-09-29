@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
@@ -7,8 +7,9 @@ import { usePreflightBlockStore } from "../stores/preflightBlocks";
 import { computeAttention, type Attention, type AttentionItem, type FailureKind, type SummaryLane } from "../lib/attention";
 import { noAgentLive } from "../lib/liveness";
 import { WAITING_TONE } from "../lib/waitingTone";
-import { LANE_MARKS } from "../lib/laneMarks";
+import { LANE_MARKS, NOTHING_GLYPH } from "../lib/laneMarks";
 import { resumePromptFor } from "./ResumeQuestionsBanner";
+import { RequestPips, RequestResumeButton, useRequestResumeBridge } from "./RequestComposerBanner";
 
 /**
  * #430 PR 2 — THE NEXT-UP BAR (docs/design/attention-hierarchy.md §4). One line
@@ -58,7 +59,9 @@ function primaryToken(line: Attention["line"]): string {
     case "flag": return `⚠ Possible secret in ${p.item!.title}`;
     case "waiting": return `${LANE_MARKS.waiting.glyph} WAITING ON CLAUDE`;
     case "held": return "■ HELD";
-    default: return "○ Nothing needs you";
+    // #430 PR 5 (PR 4 review) — ◇, not ○: ○ is the sidebar's Read lane, so
+    // the empty state gets its own glyph and ○ only ever means "to read".
+    default: return `${NOTHING_GLYPH} Nothing needs you`;
   }
 }
 
@@ -123,7 +126,17 @@ const LANE_WORD: Partial<Record<AttentionItem["kind"], string>> = {
   flag: "POSSIBLE SECRET",
 };
 
-export function NextUpBar() {
+/** #430 PR 5 — the bar-ON home of the demo CTA and the wrap card (design §5):
+ *  App decides WHETHER each shows (today's conditions); the bar decides WHERE —
+ *  inline in its quiet state, otherwise in the ⌄ view. `demo` receives the
+ *  bar's dismiss (the card stays in ⌄ after a dismiss); the wrap card keeps its
+ *  own per-session Dismiss, exactly as with the bar off. */
+export interface QuietCards {
+  demo?: ((dismiss?: () => void) => ReactNode) | null;
+  wrap?: ReactNode | null;
+}
+
+export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {}) {
   const artifacts = useArtifactStore((s) => s.artifacts);
   const comments = useArtifactStore((s) => s.comments);
   const requests = useArtifactStore((s) => s.requests);
@@ -176,6 +189,15 @@ export function NextUpBar() {
   const oldestQuestion = openQuestions[0]; // waiting is oldest-first
   const why = item ? whyFor(item, artifacts) : "";
   const after = item ? afterFor(item, artifacts, agentGone) : "";
+  // #430 PR 5 — the request pips + resume bridge (moved here from the
+  // composer row when the bar is ON; same hook, same rules).
+  const requestBridge = useRequestResumeBridge();
+  // #430 PR 5 — "quiet" = nothing needs your judgment right now: the demo CTA
+  // and wrap card sit inline only then (never pushing a decision off the line).
+  const quiet = primary.lane === "nothing" || primary.lane === "waiting" || primary.lane === "held";
+  const [demoDismissed, setDemoDismissed] = useState(false);
+  const demoInline = !!quietCards.demo && quiet && !demoDismissed;
+  const wrapInline = !!quietCards.wrap && quiet;
   const [copied, setCopied] = useState(false);
   const copyResumePrompt = async () => {
     // Same honesty rule as the banner: only claim success on an actual resolve.
@@ -299,6 +321,7 @@ export function NextUpBar() {
             </button>
           </span>
         )}
+        <RequestResumeButton bridge={requestBridge} className="" label="Copy request resume prompt" />
         {attention.line.summary.map((s) =>
           s.lane === "high-decision" ? (
             <button
@@ -314,6 +337,34 @@ export function NextUpBar() {
             <span key={s.lane} data-token className="shrink-0 text-text-muted">{SUMMARY_TEXT[s.lane](s.count)}</span>
           ),
         )}
+        {/* #455 review — a card that exists but isn't inline (something needs
+            you — e.g. the scripted demo always leaves a draft debrief) gets a
+            PINNED token into ⌄, never truncated (shrink-0, like "+N high
+            decision"), so it is never invisible. */}
+        {quietCards.demo && !demoInline && !demoDismissed && (
+          <button
+            type="button"
+            data-token
+            data-testid="next-up-next-step"
+            onClick={() => setExpanded("all")}
+            className={`shrink-0 px-1.5 py-0.5 rounded ${WAITING_TONE.chip} ${WAITING_TONE.chipHover}`}
+            title="The demo's next step: install deepPairing in Claude Code"
+          >
+            Next step ⌄
+          </button>
+        )}
+        {quietCards.wrap && !wrapInline && (
+          <button
+            type="button"
+            data-token
+            data-testid="next-up-recap"
+            onClick={() => setExpanded("all")}
+            className="shrink-0 px-1.5 py-0.5 rounded bg-surface-elevated text-text-secondary hover:bg-surface-hover"
+            title="Session recap"
+          >
+            Recap ⌄
+          </button>
+        )}
         <button
           type="button"
           aria-expanded={!!expanded}
@@ -325,6 +376,13 @@ export function NextUpBar() {
           {expanded ? "⌃" : "⌄"}
         </button>
       </div>
+
+      {(demoInline || wrapInline) && (
+        <div className="px-3 pb-2 space-y-1" data-testid="next-up-quiet-cards">
+          {demoInline && quietCards.demo!(() => setDemoDismissed(true))}
+          {wrapInline && quietCards.wrap}
+        </div>
+      )}
 
       {expanded && (
         <div id="next-up-details" className="px-3 pb-2 space-y-1 text-2xs text-text-secondary">
@@ -352,6 +410,17 @@ export function NextUpBar() {
                 </div>
               )}
               <Queue title="Read" items={attention.lanes.read} onOpen={selectArtifact} />
+              {/* #430 PR 5 — the request pips (served ✓ jumps to the artifact;
+                  unserved are also Waiting items above). */}
+              {requestBridge.requests.length > 0 && (
+                <div data-testid="next-up-requests">
+                  <div className="text-text-muted">Your requests ({requestBridge.requests.length})</div>
+                  <div className="ml-3 mt-0.5"><RequestPips /></div>
+                </div>
+              )}
+              {/* Cards not shown inline (something needs you, or dismissed). */}
+              {quietCards.demo && !demoInline && quietCards.demo()}
+              {quietCards.wrap && !wrapInline && quietCards.wrap}
             </>
           )}
         </div>

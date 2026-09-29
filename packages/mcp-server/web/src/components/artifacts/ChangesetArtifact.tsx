@@ -11,6 +11,7 @@ import { useArtifactStore } from "../../stores/artifact";
 import { useReplayStore } from "../../stores/replay";
 import { useOverlayStore } from "../../stores/overlay";
 import { useChainComments } from "../../hooks/useChainComments";
+import { ApproveCountdown } from "./ApproveCountdown";
 import { useConfirmCountdown } from "../../hooks/useConfirmCountdown";
 import { computePending } from "../../lib/pending";
 import { resolveChangesetKey, type ChangesetIntent } from "../../lib/changesetKeymap";
@@ -1477,19 +1478,10 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
             </div>
           )}
 
-          {/* Confirm-countdown (armed when all files look right) */}
+          {/* Confirm-countdown (armed when all files look right) — #430 PR 5:
+              the shared ApproveCountdown, same wording as the footer's. */}
           {armed && countdown !== null && countdown > 0 && (
-            <div className="space-y-1.5" data-testid="approve-countdown">
-              <div className="flex items-center justify-between">
-                <span className="text-2xs text-accent-green">Approving in {countdown}… · press to comment · Esc to hold</span>
-                <button onClick={cancel} className="text-2xs text-text-muted hover:text-text-secondary" data-testid="hold-approve">
-                  Hold
-                </button>
-              </div>
-              <div className="h-0.5 bg-surface-elevated rounded-full overflow-hidden">
-                <div className="h-full bg-accent-green transition-all duration-1000 ease-linear" style={{ width: `${(countdown / countdownMax) * 100}%` }} />
-              </div>
-            </div>
+            <ApproveCountdown countdown={countdown} countdownMax={countdownMax} onHold={cancel} hint="press to comment" />
           )}
 
           <div className="flex items-center gap-2 flex-wrap">
