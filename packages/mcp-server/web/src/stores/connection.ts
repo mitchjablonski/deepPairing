@@ -235,16 +235,24 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
   // window keeps an agent presenting several artifacts back-to-back (or a
   // supersede re-broadcast) from firing N OS notifications — the tab-title
   // badge carries the true count.
+  //
+  // #430 PR 1e (docs/design/attention-hierarchy.md §2.8) — the burst window was
+  // type-blind, so a DECISION arriving right after a finding got no alert at
+  // all: the one draft that blocks the agent was the one you didn't hear
+  // about. Decisions bypass the burst window (still deduped by id) and don't
+  // restart it, so the drafts around them are throttled exactly as before.
   const notifiedArtifactIds = new Set<string>();
   let lastDraftNotifyAt = 0;
-  const notifyDraft = (artifactId: string | undefined, body: string) => {
+  const notifyDraft = (artifactId: string | undefined, body: string, opts?: { decision?: boolean }) => {
     if (artifactId) {
       if (notifiedArtifactIds.has(artifactId)) return;
       notifiedArtifactIds.add(artifactId);
     }
-    const now = Date.now();
-    if (now - lastDraftNotifyAt < 5_000) return;
-    lastDraftNotifyAt = now;
+    if (!opts?.decision) {
+      const now = Date.now();
+      if (now - lastDraftNotifyAt < 5_000) return;
+      lastDraftNotifyAt = now;
+    }
     notifyIfUnfocused("deepPairing — your turn", body);
   };
 
@@ -480,7 +488,9 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
                 spec: "Spec ready for review",
                 research: "Findings ready for review",
               }[data.artifact.type as string] ?? "Ready for review";
-            notifyDraft(data.artifact.id, `${label}: ${data.artifact.title ?? ""}`);
+            notifyDraft(data.artifact.id, `${label}: ${data.artifact.title ?? ""}`, {
+              decision: data.artifact.type === "decision",
+            });
           }
           break;
 
@@ -564,6 +574,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           notifyDraft(
             data.artifactId,
             `Decision needed: ${data.context ?? "the agent needs you to choose an approach"}`,
+            { decision: true },
           );
           break;
 
