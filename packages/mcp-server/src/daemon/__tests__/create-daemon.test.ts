@@ -168,13 +168,24 @@ describe("#190 — 'waiting on you' set parity (daemon badge + web banner == PEN
       store.createArtifact({ id, type, title: `${type} done`, content: {} });
       store.updateArtifactStatus(id, i % 2 ? "approved" : "revised");
     }
+    // Review (#445) — both counts span EVERY session: a second session holds a
+    // pending decision, a read-only explainer and a resolved plan. Its artifacts
+    // are foreign-session drafts relative to the first store — exactly what the
+    // web merges into one list (MultiAgentSync) — so the cross-session sum is pinned.
+    const other = daemon.createSession("s_attention_other");
+    other.createArtifact({ id: "other_dec", type: "decision", title: "other decision", content: {} });
+    other.createArtifact({ id: "other_exp", type: "explainer", title: "other explainer", content: {} });
+    other.createArtifact({ id: "other_plan", type: "plan", title: "other plan", content: {} });
+    other.updateArtifactStatus("other_plan", "approved");
     const res = await daemon.app.request("/api/daemon-info", {
       headers: { "X-Project-Hash": projectHashOf(tmpDir) },
     });
     expect(res.status).toBe(200);
-    const attention = computeAttention({ artifacts: store.getArtifacts() });
+    const merged = [...store.getArtifacts(), ...other.getArtifacts()];
+    expect(new Set(merged.map((a) => a.sessionId))).toEqual(new Set(["s_attention", "s_attention_other"]));
+    const attention = computeAttention({ artifacts: merged });
     expect((await res.json()).pendingCount).toBe(attention.lanes.decide.length);
-    expect(attention.lanes.decide.length).toBe(PENDING_DRAFT_TYPES.length);
+    expect(attention.lanes.decide.length).toBe(PENDING_DRAFT_TYPES.length + 1);
   });
 
   it("the web REVIEWABLE_TYPES set equals the server PENDING_DRAFT_TYPES set exactly", () => {

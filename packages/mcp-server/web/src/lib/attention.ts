@@ -139,6 +139,10 @@ export function computeAttention(input: AttentionInput): Attention {
     }
     // A possible-secret warning is a System flag on ANY artifact (it has no
     // resolve action and can sit on non-drafts, so it is never a Decide item).
+    // PR 2: a flag on a superseded/retracted artifact is permanent (the banner
+    // has no resolve action), so with Decide empty it would hold the primary
+    // slot forever. That matches the doc today; decide in PR 2 whether a flag
+    // on a dead artifact belongs in the summary only.
     if (secret) flags.push({ id: a.id, title: a.title, artifactId: a.id, createdAt: a.createdAt, kind: "flag" });
   }
   decide.sort(byOldest);
