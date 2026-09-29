@@ -9,6 +9,7 @@ import { usePreferencesStore } from "../../stores/preferences";
 import { usePreflightBlockStore } from "../../stores/preflightBlocks";
 import { useReplayStore } from "../../stores/replay";
 import { resumePromptFor } from "../ResumeQuestionsBanner";
+import { NextUpBar as NextUpBarAbsorbProbe } from "../NextUpBar";
 
 /**
  * #430 PR 3 (docs/design/attention-hierarchy.md §5, §7, §8 PR 3) — with the
@@ -82,14 +83,15 @@ describe("#430 PR 3 — setting ON: absorbed, no duplicates", () => {
     expect(screen.queryByRole("button", { name: /Your turn/ })).not.toBeInTheDocument();
   });
 
-  it("TurnIndicator with agentStateOnly: no 'your turn' even with drafts pending, agent state shown, not a live region", () => {
+  it("TurnIndicator with agentStateOnly: no 'your turn' even with drafts pending; agent state stays a live region (#452 review)", () => {
     seedReviewQueue();
     useConnectionStore.setState({ connected: true } as any);
     render(<TurnIndicator agentStateOnly />);
     expect(screen.queryByText(/Your turn/)).not.toBeInTheDocument();
     const agentState = screen.getByText(/Up to date|Agent working|Connected — waiting/);
-    expect(agentState.closest("[aria-live]")).toBeNull();
-    expect(agentState.closest("[role='status']")).toBeNull();
+    // Agent-state transitions are not attention events and nothing else
+    // announces them (an exit doesn't change next.id), so this stays live.
+    expect(agentState.closest("[aria-live='polite']")).not.toBeNull();
   });
 
   it("no ResumeQuestionsBanner when the agent exited with questions open", () => {
@@ -113,7 +115,10 @@ describe("#430 PR 3 — setting ON: absorbed, no duplicates", () => {
     const after = liveTexts();
     // Every NEW non-empty announcement anywhere on the page.
     const changed = after.filter((text) => text && !before.includes(text));
-    expect(changed).toEqual(["Next up: review — Fresh finding"]);
+    // Exactly one ATTENTION announcement (the bar's). TurnIndicator may also
+    // report an agent-state transition — a different event, not a duplicate.
+    expect(changed.filter((t) => t.startsWith("Next up:"))).toEqual(["Next up: review — Fresh finding"]);
+    expect(changed.filter((t) => !t.startsWith("Next up:") && !/Agent working|Up to date|Connected/.test(t))).toEqual([]);
     expect(screen.getByTestId("arrival-live-region").textContent).toBe("");
   });
 
@@ -196,3 +201,51 @@ describe("#430 PR 3 — nothing lost: each absorbed piece is reachable from the 
     expect(writeText).toHaveBeenCalledWith(resumePromptFor(2));
   });
 });
+
+describe("#452 review — resume flow, agent-state announcements", () => {
+  beforeEach(() => usePreferencesStore.setState({ nextUpBar: true }));
+
+  it("exited with questions open AND drafts in Decide: the resume action still shows (count, jump, Copy)", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    useConnectionStore.setState({ activeSessions: [{ sessionId: "s1", live: false }] } as any);
+    useArtifactStore.setState({
+      artifacts: [art("cs", "changeset", "Guard changeset", { content: { files: [] } }), art("f", "research", "A finding"), art("done", "research", "Done", { status: "approved" })],
+      comments: { done: [question("q1", "done")] },
+    });
+    render(<NextUpBarAbsorbProbe />);
+    const bar = within(screen.getByTestId("next-up-bar"));
+    expect(screen.getByTestId("next-up-bar").getAttribute("data-line")).toBe("● Guard changeset · Decide 2 · Waiting 1");
+    const resume = within(screen.getByTestId("next-up-resume"));
+    expect(resume.getByText(/Exited with 1 of your question open/)).toBeInTheDocument();
+    fireEvent.click(resume.getByRole("button", { name: /Exited with 1/ }));
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("done");
+    await act(async () => { fireEvent.click(bar.getByRole("button", { name: /Copy resume prompt/ })); });
+    expect(writeText).toHaveBeenCalledWith(resumePromptFor(1));
+  });
+
+  it("the jump goes to the oldest QUESTION, not an older revision in the Waiting lane", () => {
+    useConnectionStore.setState({ activeSessions: [{ sessionId: "s1", live: false }] } as any);
+    useArtifactStore.setState({
+      artifacts: [art("rev", "plan", "Revised plan", { status: "revised" }), art("qa", "research", "Asked on", { status: "approved" })],
+      comments: { qa: [question("q1", "qa")] },
+    });
+    render(<NextUpBarAbsorbProbe />);
+    fireEvent.click(within(screen.getByTestId("next-up-resume")).getByRole("button", { name: /Exited with 1/ }));
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("qa");
+  });
+
+  it("an agent EXIT (no next change) is announced once, by TurnIndicator; the bar stays silent", async () => {
+    useArtifactStore.setState({ artifacts: [art("r1", "research", "A finding")] });
+    useConnectionStore.setState({ agentActivityAt: Date.now(), agentActiveSince: Date.now() } as any);
+    render(<><TurnIndicator agentStateOnly /><NextUpBarAbsorbProbe /></>);
+    const liveTexts = () => Array.from(document.querySelectorAll('[aria-live="polite"]')).map((el) => el.textContent?.trim() ?? "");
+    const before = liveTexts();
+    act(() => useConnectionStore.setState({ activeSessions: [{ sessionId: "s1", live: false }] } as any));
+    const changed = liveTexts().filter((t) => t && !before.includes(t));
+    expect(changed).toHaveLength(1);
+    expect(changed[0]).toMatch(/Agent exited — resume to continue/);
+    expect(screen.getByTestId("next-up-announcer").textContent).toBe("");
+  });
+});
+

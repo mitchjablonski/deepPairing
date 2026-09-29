@@ -38,8 +38,10 @@ export function TurnIndicator({
   pendingBannerVisible?: boolean;
   pendingCardInView?: boolean;
   /** #430 PR 3 — with the Next-up bar on, the bar owns "your turn" (count,
-   *  jump, next) and the ONE polite announcer; this pill shows the agent's
-   *  state only, as a plain (non-live) status. */
+   *  jump, next) and the ONE announcer for ATTENTION changes; this pill shows
+   *  the agent's state only. It stays a live region for agent-state
+   *  transitions (working → exited…), which are not attention events and which
+   *  nothing else announces (an exit doesn't change `next`). */
   agentStateOnly?: boolean;
 } = {}) {
   const artifacts = useArtifactStore((s) => s.artifacts);
@@ -237,11 +239,7 @@ export function TurnIndicator({
   // switch to a neutral "Up to date" so we don't pulse forever at an agent
   // that's finished or gone.
   return (
-    <div
-      className="flex items-center gap-2 min-w-0"
-      // #430 PR 3 — not a live region while the bar is on (one announcer, §7).
-      {...(agentStateOnly ? {} : { role: "status", "aria-live": "polite" as const })}
-    >
+    <div className="flex items-center gap-2 min-w-0" role="status" aria-live="polite">
       {agentExited ? (
         // M3 — the bound session's wrapper exited. The old branch only knew
         // "Agent working"/"Up to date" (both wrong: the agent is gone, not

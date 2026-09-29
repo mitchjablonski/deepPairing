@@ -164,11 +164,15 @@ export function NextUpBar() {
   // your questions open, the bar carries the banner's count ("Exited with N of
   // your questions open"), its jump (Open → the oldest question's artifact) and
   // its Copy-resume-prompt action.
-  const openQuestionCount = attention.lanes.waiting.filter((w) => w.kind === "question").length;
-  const resumeCase = primary.lane === "waiting" && agentGone && openQuestionCount > 0;
-  const why = !item ? "" : resumeCase
-    ? `Exited with ${openQuestionCount} of your question${openQuestionCount === 1 ? "" : "s"} open`
-    : whyFor(item, artifacts);
+  //
+  // #452 review — this is a SUMMARY action, shown whenever the agent is gone
+  // and questions are open, whatever holds the primary slot: the common exit
+  // leaves drafts in Decide, and the resume flow must not hide behind them.
+  const openQuestions = attention.lanes.waiting.filter((w) => w.kind === "question");
+  const openQuestionCount = openQuestions.length;
+  const resumeCase = agentGone && openQuestionCount > 0;
+  const oldestQuestion = openQuestions[0]; // waiting is oldest-first
+  const why = item ? whyFor(item, artifacts) : "";
   const after = item ? afterFor(item, artifacts, agentGone) : "";
   const [copied, setCopied] = useState(false);
   const copyResumePrompt = async () => {
@@ -257,16 +261,6 @@ export function NextUpBar() {
             Open
           </button>
         )}
-        {resumeCase && (
-          <button
-            type="button"
-            onClick={() => void copyResumePrompt()}
-            className={`shrink-0 px-1.5 py-0.5 rounded ${WAITING_TONE.chip} ${WAITING_TONE.chipHover}`}
-            title="Copy a paste-able resume prompt for Claude Code"
-          >
-            {copied ? "Copied ✓" : "Copy resume prompt"}
-          </button>
-        )}
         {primary.lane === "held" && (
           <button
             type="button"
@@ -283,6 +277,26 @@ export function NextUpBar() {
           </button>
         )}
         <span className="flex-1" />
+        {resumeCase && (
+          <span className="shrink-0 flex items-center gap-1" data-testid="next-up-resume">
+            <button
+              type="button"
+              onClick={() => oldestQuestion?.artifactId && selectArtifact(oldestQuestion.artifactId)}
+              className={`px-1.5 py-0.5 rounded ${WAITING_TONE.chip} ${WAITING_TONE.chipHover}`}
+              title="Claude exited with your questions open — jump to the oldest one"
+            >
+              💤 Exited with {openQuestionCount} of your question{openQuestionCount === 1 ? "" : "s"} open
+            </button>
+            <button
+              type="button"
+              onClick={() => void copyResumePrompt()}
+              className={`px-1.5 py-0.5 rounded ${WAITING_TONE.chip} ${WAITING_TONE.chipHover}`}
+              title="Copy a paste-able resume prompt for Claude Code"
+            >
+              {copied ? "Copied ✓" : "Copy resume prompt"}
+            </button>
+          </span>
+        )}
         {attention.line.summary.map((s) =>
           s.lane === "high-decision" ? (
             <button
