@@ -50,7 +50,8 @@ const SUMMARY_TEXT: Record<SummaryLane, (n: number) => string> = {
 function primaryToken(line: Attention["line"]): string {
   const p = line.primary;
   switch (p.lane) {
-    case "decide": return `▲ ${p.item!.title}`;
+    // §5 lane glyphs: ▲ a decision, ● a review.
+    case "decide": return `${p.item!.kind === "decision" ? "▲" : "●"} ${p.item!.title}`;
     case "flag": return `⚠ Possible secret in ${p.item!.title}`;
     case "waiting": return "◌ WAITING ON CLAUDE";
     case "held": return "■ HELD";
@@ -125,6 +126,10 @@ export function NextUpBar() {
   const requests = useArtifactStore((s) => s.requests);
   const selectArtifact = useArtifactStore((s) => s.selectArtifact);
   const connected = useConnectionStore((s) => s.connected);
+  const staleDaemon = useConnectionStore((s) => s.staleDaemon);
+  const snapshotUnavailable = useConnectionStore((s) => s.snapshotUnavailable);
+  const sessionConflict = useConnectionStore((s) => s.sessionConflict);
+  const markBlocksSeen = usePreflightBlockStore((s) => s.markSeen);
   const activeSessions = useConnectionStore((s) => s.activeSessions);
   const replayActive = useReplayStore((s) => s.active);
   const blocks = usePreflightBlockStore((s) => s.blocks);
@@ -136,16 +141,22 @@ export function NextUpBar() {
     requests,
     system: {
       disconnected: !connected,
+      staleDaemon,
+      snapshotUnavailable,
+      sessionConflict,
       replay: replayActive,
       // Unread stance holds (the same boundary the ⋯ gate log uses).
       holds: blocks
         .filter((b) => !lastSeenAt || b.at > lastSeenAt)
         .map((b) => ({ id: b.id, title: b.proposal ? `"${b.concept}" stopped: ${b.proposal}` : `"${b.concept}"`, at: b.at })),
     },
-  }), [artifacts, comments, requests, connected, replayActive, blocks, lastSeenAt]);
+  }), [artifacts, comments, requests, connected, staleDaemon, snapshotUnavailable, sessionConflict, replayActive, blocks, lastSeenAt]);
 
   const agentGone = noAgentLive(activeSessions);
   const [expanded, setExpanded] = useState<false | "all" | "high">(false);
+  // The holds whose "Why" was opened: shown in the expansion after they are
+  // marked seen (which, like opening the ⋯ gate log, clears them from the lane).
+  const [whyHolds, setWhyHolds] = useState<AttentionItem[]>([]);
   const primary = attention.line.primary;
   const item = primary.item;
   const why = item ? whyFor(item, artifacts) : "";
@@ -175,6 +186,8 @@ export function NextUpBar() {
 
   return (
     <section
+      id="next-up"
+      tabIndex={-1}
       aria-label="Next up"
       data-testid="next-up-bar"
       data-line={lineText}
@@ -184,8 +197,10 @@ export function NextUpBar() {
         {attention.line.prefix && (
           <span data-token className="shrink-0 font-semibold text-accent-red">{PREFIX_TEXT[attention.line.prefix]}</span>
         )}
+        {/* The lane WORD is part of the accessible text (a screen reader hears
+            "DECIDE ▲ …", not a bare glyph). */}
         {item && LANE_WORD[item.kind] && (
-          <span className={`shrink-0 font-semibold tracking-wide ${tone}`} aria-hidden="true">{LANE_WORD[item.kind]}</span>
+          <span className={`shrink-0 font-semibold tracking-wide ${tone}`}>{LANE_WORD[item.kind]}</span>
         )}
         {/* Truncation order: why (shrink 1000) → after (shrink 100) → title (shrink 1). */}
         <span data-token className={`min-w-0 truncate font-medium ${tone}`} style={{ flexShrink: 1 }} title={primaryToken(attention.line)}>
@@ -212,7 +227,13 @@ export function NextUpBar() {
         {primary.lane === "held" && (
           <button
             type="button"
-            onClick={() => setExpanded((e) => (e ? false : "all"))}
+            onClick={() => {
+              // Opening the record counts as seeing it — the same lastSeenAt
+              // boundary the ⋯ gate log sets when it is opened.
+              setWhyHolds(attention.lanes.held);
+              markBlocksSeen();
+              setExpanded("all");
+            }}
             className="shrink-0 px-1.5 py-0.5 rounded border border-border-default text-text-secondary hover:bg-surface-hover"
           >
             Why
@@ -262,11 +283,11 @@ export function NextUpBar() {
               <Queue title="Decide" items={attention.lanes.decide} onOpen={selectArtifact} />
               <Queue title="Possible secrets" items={attention.lanes.flags} onOpen={selectArtifact} />
               <Queue title="Waiting on Claude" items={attention.lanes.waiting} onOpen={selectArtifact} />
-              {attention.lanes.held.length > 0 && (
+              {(attention.lanes.held.length > 0 || whyHolds.length > 0) && (
                 <div>
                   <div className="text-text-muted">Held by your stance</div>
                   <ul className="ml-3 list-disc">
-                    {attention.lanes.held.map((h) => <li key={h.id}>{h.title}</li>)}
+                    {(attention.lanes.held.length > 0 ? attention.lanes.held : whyHolds).map((h) => <li key={h.id}>{h.title}</li>)}
                   </ul>
                   <div className="text-text-muted">Nothing to do unless you want to retire the stance — that lives in the ⋯ gate log.</div>
                 </div>

@@ -542,6 +542,20 @@ function App() {
 
   return (
     <div className="h-screen bg-surface-primary text-text-primary flex flex-col">
+      {/* #430 PR 2 (design §7) — "Jump to next up": the first focusable element
+          when the bar is on; visible only while focused. Off: not rendered. */}
+      {nextUpBar && (
+        <a
+          href="#next-up"
+          onClick={(e) => {
+            e.preventDefault();
+            document.getElementById("next-up")?.focus();
+          }}
+          className="sr-only focus:not-sr-only focus:absolute focus:top-1 focus:left-1 focus:z-50 focus:px-2 focus:py-1 focus:rounded focus:bg-surface-elevated focus:text-text-primary focus:text-xs"
+        >
+          Jump to next up
+        </a>
+      )}
       {/* O6: surfaces when the pairing-protocol skill isn't active so the
           plugin-install path doesn't fail silently. Dismissible; auto-hides
           once any artifact arrives. */}

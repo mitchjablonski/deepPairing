@@ -32,7 +32,7 @@ beforeEach(() => {
   useArtifactStore.getState().reset();
   usePreflightBlockStore.setState({ blocks: [], lastSeenAt: null } as any);
   useReplayStore.setState({ active: false } as any);
-  useConnectionStore.setState({ connected: true, hydrated: true, sessionId: "s1", activeSessions: [{ sessionId: "s1", live: true }] } as any);
+  useConnectionStore.setState({ connected: true, hydrated: true, sessionId: "s1", activeSessions: [{ sessionId: "s1", live: true }], staleDaemon: false, snapshotUnavailable: false, sessionConflict: false } as any);
   usePreferencesStore.setState({ nextUpBar: false });
 });
 afterEach(() => {
@@ -79,7 +79,8 @@ describe("#430 PR 2 — states A–G render the design's exact line", () => {
   it("B — review queue, oldest-first: an older finding leads and the later high decision is pinned as '+1 high decision'", () => {
     useArtifactStore.setState({ artifacts: [art("r1", "research", "Oldest finding"), decision("d1", "Store choice", "high")] });
     render(<NextUpBar />);
-    expect(line()).toBe("▲ Oldest finding · +1 high decision · Decide 2");
+    // §5 lane glyph: a REVIEW leads with ●, a decision with ▲.
+    expect(line()).toBe("● Oldest finding · +1 high decision · Decide 2");
     expect(screen.getByText("REVIEW")).toBeInTheDocument();
   });
 
@@ -188,3 +189,67 @@ describe("#430 PR 2 — one announcer, no movement", () => {
     expect(screen.getByRole("region", { name: "Next up" })).toBeInTheDocument();
   });
 });
+
+describe("#451 review follow-ups", () => {
+  const stubFetch = () => vi.stubGlobal("fetch", vi.fn().mockImplementation(() =>
+    Promise.resolve(new Response(JSON.stringify({ sessions: [] }), { status: 200, headers: { "Content-Type": "application/json" } }))));
+
+  it("1 — the lane word is part of the accessible text (not aria-hidden)", () => {
+    useArtifactStore.setState({ artifacts: [decision("d1", "Store choice", "high")] });
+    render(<NextUpBar />);
+    const word = screen.getByText("DECIDE");
+    expect(word.closest("[aria-hidden='true']")).toBeNull();
+    expect(screen.getByRole("region", { name: "Next up" }).textContent).toMatch(/DECIDE\s*▲ Store choice/);
+  });
+
+  it("2 — 'Jump to next up' skip link: first in the App when the bar is on, focuses the bar; absent when off", () => {
+    stubFetch();
+    usePreferencesStore.setState({ nextUpBar: true });
+    useArtifactStore.setState({ artifacts: [decision("d1", "Store choice", "high")] });
+    const { unmount } = render(<App />);
+    const link = screen.getByRole("link", { name: "Jump to next up" });
+    const focusables = document.querySelectorAll("a[href], button, textarea, input, [tabindex='0']");
+    expect(focusables[0]).toBe(link);
+    fireEvent.click(link);
+    expect(document.activeElement).toBe(screen.getByTestId("next-up-bar"));
+    unmount();
+    usePreferencesStore.setState({ nextUpBar: false });
+    render(<App />);
+    expect(screen.queryByRole("link", { name: "Jump to next up" })).not.toBeInTheDocument();
+  });
+
+  it("3 — lane glyphs: ▲ for a decision, ● for a review", () => {
+    useArtifactStore.setState({ artifacts: [art("p1", "plan", "Rollout plan")] });
+    render(<NextUpBar />);
+    expect(line()).toBe("● Rollout plan · Decide 1");
+  });
+
+  it.each([
+    ["staleDaemon", "⚠ STALE DAEMON"],
+    ["snapshotUnavailable", "⚠ SNAPSHOT UNAVAILABLE"],
+    ["sessionConflict", "⚠ SESSION CONFLICT"],
+  ] as const)("4 — %s drives the failure prefix", (flag, prefix) => {
+    useConnectionStore.setState({ [flag]: true } as any);
+    useArtifactStore.setState({ artifacts: [decision("d1", "Store choice", "high")] });
+    render(<NextUpBar />);
+    expect(line()).toBe(`${prefix} · ▲ Store choice · Decide 1`);
+  });
+
+  it("4 — a REST project_hash_mismatch (the stale-daemon toast) sets staleDaemon", async () => {
+    useConnectionStore.setState({ staleDaemon: false } as any);
+    useArtifactStore.setState({ artifacts: [art("r1", "research", "A")] });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: "project_hash_mismatch", error: "stale" }), { status: 409, headers: { "Content-Type": "application/json" } })));
+    await expect(useArtifactStore.getState().renameArtifact("r1", "B")).rejects.toBeTruthy();
+    await vi.waitFor(() => expect(useConnectionStore.getState().staleDaemon).toBe(true));
+  });
+
+  it("5 — opening a hold's Why marks it seen (the gate log's lastSeenAt) and still shows the record", () => {
+    usePreflightBlockStore.setState({ blocks: [{ id: "b1", at: at(), source: "session", concept: "global mutable state", proposal: "Add a singleton", via: "concept" }], lastSeenAt: null } as any);
+    render(<NextUpBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Why" }));
+    expect(usePreflightBlockStore.getState().lastSeenAt).not.toBeNull();
+    expect(line()).toBe("○ Nothing needs you");
+    expect(screen.getByText(/"global mutable state" stopped: Add a singleton/)).toBeInTheDocument();
+  });
+});
+

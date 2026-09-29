@@ -260,6 +260,10 @@ async function toastApiError(action: string, err: unknown): Promise<void> {
   // a reload to refetch the new hash. Pre-BB10 this came through as a
   // generic "request failed" toast and the user had no idea what to do.
   if (apiErr?.code === "project_hash_mismatch") {
+    // #430 PR 2 review — the Next-up bar's STALE DAEMON prefix reads this flag
+    // (cleared on the next successful connect). Lazy import: the connection
+    // store imports this module.
+    void import("./connection").then(({ useConnectionStore }) => useConnectionStore.setState({ staleDaemon: true }));
     useToastStore.getState().push({
       kind: "error",
       title: "Tab is bound to a stale daemon",

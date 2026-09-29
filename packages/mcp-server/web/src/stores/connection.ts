@@ -66,6 +66,18 @@ interface SwitchSessionOptions {
 
 interface ConnectionState {
   connected: boolean;
+  /**
+   * #430 PR 2 review — the failure states the Next-up bar prefixes (design
+   * §4.3 rule 1). Until now they existed only as toasts. Each is set where its
+   * toast fires and cleared on the next successful connect.
+   *   - staleDaemon: this tab is bound to a replaced daemon (WS mismatch here,
+   *     REST project_hash_mismatch in stores/artifact.ts);
+   *   - snapshotUnavailable: the daemon refused the initial snapshot;
+   *   - sessionConflict: the daemon refused with session_review_conflict.
+   */
+  staleDaemon: boolean;
+  snapshotUnavailable: boolean;
+  sessionConflict: boolean;
   /** D8 (H4) — epoch ms of the FIRST disconnect of the current outage; null while connected. */
   disconnectedSince: number | null;
   sessionId: string | null;
@@ -975,6 +987,9 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
   return {
     connected: false,
     disconnectedSince: null,
+    staleDaemon: false,
+    snapshotUnavailable: false,
+    sessionConflict: false,
     sessionId: null,
     projectRoot: null,
     agentActivityAt: null,
@@ -1009,7 +1024,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         // the bounded probe may decline to reload and must not strand it.
         reloadIfChunkFailedOffline();
         thisConnection = ++connectionGeneration;
-        set({ connected: true, disconnectedSince: null });
+        set({ connected: true, disconnectedSince: null, staleDaemon: false, snapshotUnavailable: false, sessionConflict: false });
         // Request notification permission on first connect
         if (typeof Notification !== "undefined" && Notification.permission === "default") {
           Notification.requestPermission();
@@ -1056,7 +1071,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       // safe recovery: it refetches the live daemon's hash and rebinds
       // the tab deliberately.
       adapter.onFatalMismatch?.(() => {
-        set({ connected: false });
+        set({ connected: false, staleDaemon: true });
         import("./toast").then(({ useToastStore }) => {
           if (get().adapter !== adapter) return;
           useToastStore.getState().push({
@@ -1088,6 +1103,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         import("./toast").then(({ useToastStore }) => {
           if (get().adapter !== adapter || !isCurrentSessionTransition(transition)) return;
           if (info.code !== "session_review_conflict") {
+            set({ snapshotUnavailable: true });
             useToastStore.getState().push({
               kind: "error",
               title: "Session state temporarily unavailable",
@@ -1096,6 +1112,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             });
             return;
           }
+          set({ sessionConflict: true });
           useToastStore.getState().push({
             kind: "error",
             title: "Session review conflict",
