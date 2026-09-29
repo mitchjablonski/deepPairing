@@ -56,4 +56,15 @@ describe("#430 PR 1c — the one unanswered-question count", () => {
     render(<App />);
     expect(screen.getByRole("button", { name: /Open comment threads rail — 2 unanswered questions/ })).toBeInTheDocument();
   });
+
+  it("case B — Q1 + a human-resolved follow-up Q2: the button counts 1 and the exited-agent resume banner appears", () => {
+    useArtifactStore.setState({
+      comments: { a1: [question("q1"), question("q2", { parentCommentId: "q1", createdAt: "2026-07-01T00:02:00.000Z", humanResolvedAt: "2026-07-01T00:03:00.000Z" })] },
+    });
+    useConnectionStore.setState({ connected: true, hydrated: true, sessionId: "s1", activeSessions: [{ sessionId: "s1", live: false }] } as any);
+    render(<App />);
+    expect(screen.getByRole("button", { name: /Open comment threads rail — 1 unanswered question$/ })).toBeInTheDocument();
+    expect(screen.getByText(/1 question waiting for Claude/)).toBeInTheDocument();
+  });
 });
+

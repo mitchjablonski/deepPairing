@@ -66,6 +66,21 @@ describe("parity with today's counters (no counting rule changes in PR 1a)", () 
     expect(questions.map((q) => q.id).sort()).toEqual(["q1", "q4"]);
   });
 
+  it.each([
+    // #430 PR 1c (review of #448) — consecutive questions in ONE thread, so the
+    // parity claim holds beyond one-question threads.
+    ["A: Q1 then an open follow-up Q2", [["q1"], ["q2", { parentCommentId: "q1" }]], ["q1", "q2"]],
+    ["B: Q1 then a human-resolved follow-up Q2", [["q1"], ["q2", { parentCommentId: "q1", humanResolvedAt: "2026-06-01T01:00:00.000Z" }]], ["q1"]],
+    ["C: an agent reply after both", [["q1"], ["q2", { parentCommentId: "q1" }], ["r", { parentCommentId: "q2", author: "agent", intent: undefined }]], []],
+  ] as const)("Waiting questions == countUnansweredQuestions — %s", (_name, spec, open) => {
+    seq = 0;
+    const list = spec.map(([id, over]) => question(id, "a1", (over ?? {}) as Partial<Comment>));
+    const a = computeAttention({ artifacts: [], comments: { a1: list } });
+    const questions = a.lanes.waiting.filter((w) => w.kind === "question");
+    expect(questions.length).toBe(countUnansweredQuestions(list));
+    expect(questions.map((q) => q.id).sort()).toEqual([...open]);
+  });
+
   it("Waiting also holds unserved requests and `revised` artifacts; served requests drop out", () => {
     seq = 0;
     const requests = [

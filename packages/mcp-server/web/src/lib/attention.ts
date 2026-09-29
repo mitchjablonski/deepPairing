@@ -16,7 +16,7 @@ import { unansweredQuestionIds } from "./unanswered";
  *   - Waiting questions are PER QUESTION (PR 1c): `unansweredQuestionIds` —
  *     answered only by `answeredByCommentId` or an agent reply after it in its
  *     thread; cleared by `humanResolvedAt`. Two consecutive open questions in
- *     one thread are two items (the thread-level tail-walk would say one).
+ *     one thread are two items (the retired thread tail-walk said one).
  *   - Agent activity is NOT computed here: the 45s/60s windows are PR 1b, and
  *     the #204 90s resume hysteresis stays its own threshold. Callers pass the
  *     agent state they already derive.

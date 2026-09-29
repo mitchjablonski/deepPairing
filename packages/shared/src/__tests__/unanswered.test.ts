@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import type { Comment } from "../schemas/comment.js";
 import {
-  isUnansweredQuestion,
-  findOpenQuestion,
+  threadHasOpenQuestion,
+  openQuestionsInThread,
   countUnansweredQuestions,
   collectUnansweredQuestions,
   buildThreads,
@@ -19,21 +19,21 @@ const c = (over: Partial<Comment> & { id: string }): Comment =>
     ...over,
   }) as Comment;
 
-describe("#192 — shared unanswered-question queue (the ONE tail-walk definition)", () => {
-  it("isUnansweredQuestion: an open human question with no reply is waiting", () => {
+describe("#192 / #430 PR 1c — shared unanswered-question queue (the ONE per-question definition)", () => {
+  it("threadHasOpenQuestion: an open human question with no reply is waiting", () => {
     const root = c({ id: "q1", intent: "question" } as any);
-    expect(isUnansweredQuestion(root, [])).toBe(true);
+    expect(threadHasOpenQuestion(root, [])).toBe(true);
   });
 
-  it("isUnansweredQuestion: an agent reply after the question closes it (agent had the last word)", () => {
+  it("threadHasOpenQuestion: an agent reply after the question closes it (agent had the last word)", () => {
     const root = c({ id: "q1", intent: "question" } as any);
     const reply = c({ id: "a1", author: "agent", parentCommentId: "q1", createdAt: "2026-01-01T00:01:00.000Z" });
-    expect(isUnansweredQuestion(root, [reply])).toBe(false);
+    expect(threadHasOpenQuestion(root, [reply])).toBe(false);
   });
 
-  it("isUnansweredQuestion: humanResolvedAt closes it even with no agent reply", () => {
+  it("threadHasOpenQuestion: humanResolvedAt closes it even with no agent reply", () => {
     const root = c({ id: "q1", intent: "question", humanResolvedAt: "2026-01-02T00:00:00.000Z" } as any);
-    expect(isUnansweredQuestion(root, [])).toBe(false);
+    expect(threadHasOpenQuestion(root, [])).toBe(false);
   });
 
   it("countUnansweredQuestions matches the rendered thread grouping", () => {
@@ -78,13 +78,40 @@ describe("#192 — shared unanswered-question queue (the ONE tail-walk definitio
     expect(out[0]!.root.id).toBe("root");
   });
 
-  it("findOpenQuestion returns the specific open-question comment (or null)", () => {
+  it("openQuestionsInThread returns the specific open-question comments", () => {
     const root = c({ id: "root", intent: "comment" } as any);
     const agent = c({ id: "a", author: "agent", parentCommentId: "root", createdAt: "2026-01-01T00:01:00.000Z" });
     const followup = c({ id: "fu", intent: "question", parentCommentId: "a", createdAt: "2026-01-01T00:02:00.000Z" } as any);
-    expect(findOpenQuestion(root, [agent, followup])?.id).toBe("fu");
-    // An agent reply after the follow-up closes it → null.
+    expect(openQuestionsInThread(root, [agent, followup]).map((q) => q.id)).toEqual(["fu"]);
+    // An agent reply after the follow-up closes it.
     const agentAnswer = c({ id: "a2", author: "agent", parentCommentId: "fu", createdAt: "2026-01-01T00:03:00.000Z" });
-    expect(findOpenQuestion(root, [agent, followup, agentAnswer])).toBeNull();
+    expect(openQuestionsInThread(root, [agent, followup, agentAnswer])).toEqual([]);
+  });
+});
+
+describe("#430 PR 1c (review of #448) — per QUESTION, never hidden by a follow-up", () => {
+  const q1 = c({ id: "q1", intent: "question", createdAt: "2026-01-01T00:00:00.000Z" } as any);
+  const q2 = (over: Record<string, unknown> = {}) =>
+    c({ id: "q2", intent: "question", parentCommentId: "q1", createdAt: "2026-01-01T00:01:00.000Z", ...over } as any);
+  const agentAfter = c({ id: "a", author: "agent", parentCommentId: "q2", createdAt: "2026-01-01T00:02:00.000Z" });
+
+  it("A — Q1 then a follow-up Q2: BOTH open (the tail-walk said 1)", () => {
+    const all = [q1, q2()];
+    expect(collectUnansweredQuestions(all).map((u) => u.question.id)).toEqual(["q1", "q2"]);
+    expect(countUnansweredQuestions(all)).toBe(2);
+    expect(threadHasOpenQuestion(q1, [q2()])).toBe(true);
+  });
+
+  it("B — Q1 then Q2 resolved by the human: Q1 is still open (the tail-walk said 0)", () => {
+    const all = [q1, q2({ humanResolvedAt: "2026-01-01T00:05:00.000Z" })];
+    expect(collectUnansweredQuestions(all).map((u) => u.question.id)).toEqual(["q1"]);
+    expect(countUnansweredQuestions(all)).toBe(1);
+    expect(threadHasOpenQuestion(q1, [all[1]!])).toBe(true);
+  });
+
+  it("C — an agent reply after both answers both", () => {
+    const all = [q1, q2(), agentAfter];
+    expect(countUnansweredQuestions(all)).toBe(0);
+    expect(threadHasOpenQuestion(q1, [q2(), agentAfter])).toBe(false);
   });
 });

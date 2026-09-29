@@ -643,7 +643,7 @@ export async function buildFirstCallHint(
       );
     }
     // #192 — also exclude humanResolvedAt (a question the human marked done):
-    // the tail-walk predicate this queue's other surfaces use treats a
+    // the per-question predicate this queue's other surfaces use treats a
     // human-resolved question as closed, so the preamble must not nag about it.
     //
     // Q3 — and exclude `answeringCommentIds`: the STALE NAG. This hint is built

@@ -588,7 +588,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   // store is per-project and reloads across runs, so a question asked after a
   // run ended — e.g. on a debrief/explainer ask-anything thread just as the
   // agent stopped polling — lives on and must be answerable on the NEXT run
-  // without the human re-raising it. Read-only: uses the SAME tail-walk
+  // without the human re-raising it. Read-only: uses the SAME per-question rule
   // predicate (collectUnansweredQuestions) every UI surface uses, does NOT
   // re-acknowledge anything, and is spread into structuredContent ONLY when
   // non-empty so the healthy hot-path payload stays byte-for-byte unchanged.
@@ -614,7 +614,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     }
     const older = carryover.filter(
       (q) =>
-        // FIX 1 — target/dedupe the ACTUAL open-question comment (the tail-walk
+        // FIX 1 — target/dedupe the ACTUAL open-question comment (the per-question rule
         // landing, which for a reply-question is NOT the thread root).
         !deliveredIds.has(q.question.id) &&
         // HUNCH — a __session__ question is drained as a DIRECTIVE above (and
@@ -1281,7 +1281,7 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   // `openQuestionCount` (which counts UNACKNOWLEDGED questions — those drain
   // after one poll even if never answered, so a stale-but-open question would
   // wrongly let the nag fire on the next poll). We use the same
-  // collectUnansweredQuestions tail-walk (answeredByCommentId) every other
+  // collectUnansweredQuestions per-question rule (answeredByCommentId) every other
   // surface uses, so the nag genuinely waits until questions are ANSWERED.
   // J2a (#210) — ceremony scales with task size. The nag fires only when the
   // session SHAPE owes a debrief: a changeset, 2+ code_changes, or a decision

@@ -273,8 +273,8 @@ export { normalizeConceptKey } from "./normalize.js";
 export {
   threadRootId,
   buildThreads,
-  findOpenQuestion,
-  isUnansweredQuestion,
+  openQuestionsInThread,
+  threadHasOpenQuestion,
   countUnansweredQuestions,
   collectUnansweredQuestions,
   type Thread,

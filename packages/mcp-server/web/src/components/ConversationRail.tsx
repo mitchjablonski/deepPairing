@@ -6,7 +6,7 @@ import type { Comment, Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useModal } from "../hooks/useModal";
 import { commentAnchorKey } from "../lib/comment-anchor";
-import { isUnansweredQuestion } from "../lib/unanswered";
+import { openQuestionsInThread, threadHasOpenQuestion } from "../lib/unanswered";
 import { suggestionPill } from "../lib/suggestionPill";
 import { ReplyModeToggle, type ReplyMode } from "./ReplyModeToggle";
 import { WAITING_TONE } from "../lib/waitingTone";
@@ -166,19 +166,19 @@ export function ConversationRail({ onClose, initialFilter = "all" }: Conversatio
     return grouped
       .map((g) => ({
         ...g,
-        threads: g.threads.filter((t) => isUnansweredQuestion(t.comment, t.replies)),
+        // #430 PR 1c — a THREAD is shown when it holds any open question.
+        threads: g.threads.filter((t) => threadHasOpenQuestion(t.comment, t.replies)),
       }))
       .filter((g) => g.threads.length > 0);
   }, [grouped, filter]);
 
+  // #430 PR 1c — a count of QUESTIONS (not threads), so it matches the
+  // Comment-threads button and the server's queue: two open questions in one
+  // thread are two.
   const unansweredQuestions = useMemo(() => {
     let n = 0;
     for (const g of grouped) {
-      for (const t of g.threads) {
-        if (isUnansweredQuestion(t.comment, t.replies)) {
-          n++;
-        }
-      }
+      for (const t of g.threads) n += openQuestionsInThread(t.comment, t.replies).length;
     }
     return n;
   }, [grouped]);
@@ -386,7 +386,7 @@ function ThreadEntry({
   // U5 — use the SAME predicate as the pill/filter (it also drops questions the
   // human resolved or the agent answered out-of-band), so the inline "awaiting
   // agent answer" marker can't disagree with a "0 unanswered" header.
-  const isUnanswered = isUnansweredQuestion(comment, replies);
+  const isUnanswered = threadHasOpenQuestion(comment, replies);
   // W2 — a thread is "fresh" if the parent OR any reply is unread. The
   // parent gets the dot regardless of which row is fresh; per-reply dots
   // make the diff readable when only the agent's answer is new.
@@ -400,7 +400,7 @@ function ThreadEntry({
   const [replySubmitting, setReplySubmitting] = useState(false);
   // I4 — a reply defaults to a plain comment; the human can flip it to "Ask"
   // so the follow-up carries intent:"question" and re-flags the thread as
-  // unanswered (the #130 tail-walk only fires on a question follow-up).
+  // unanswered (the #130 rule only fires on a question follow-up).
   const [replyMode, setReplyMode] = useState<ReplyMode>("comment");
 
   // Pick the comment to reply to: the latest reply if any, else the parent.
