@@ -6,6 +6,7 @@ import { computePending, summarizeTurnParts } from "../lib/pending";
 import { isUnansweredQuestion } from "../lib/unanswered";
 import { buildThreads } from "../lib/threading";
 import { AGENT_ACTIVE_WINDOW_MS } from "../lib/agentActivity";
+import { WAITING_TONE } from "../lib/waitingTone";
 
 /**
  * Top-header turn indicator + agent narration pill.
@@ -216,7 +217,7 @@ export function TurnIndicator({
       aria-label={questionsBannerVisible
         ? `${unanswered.length} unanswered question${unanswered.length > 1 ? "s" : ""} — click to jump`
         : undefined}
-      className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium bg-accent-violet-dim text-accent-violet shrink-0 hover:bg-accent-violet-dim/80 transition-colors"
+      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium ${WAITING_TONE.chip} shrink-0 ${WAITING_TONE.chipHover} transition-colors`}
     >
       <span className="font-bold">❓</span>
       {questionsBannerVisible
