@@ -778,12 +778,12 @@ function ArtifactSidebar({
   // tooltip was hover-only (`title`). The row button is already the one tab
   // stop per row and its accessible name already carries the label, so rather
   // than make the dot a second tab stop, a keyboard focus on the row shows the
-  // same label as a visible tooltip beside the dot (collapsed: beside the rail,
-  // where there is room). Pointer focus (a click) never shows it. aria-hidden:
+  // same label as a visible tooltip beside the rail, centred on the row.
+  // Pointer focus (a click) never shows it. aria-hidden:
   // a screen reader already hears the label in the row's name.
   const navRef = useRef<HTMLElement>(null);
   const keyboardModality = useRef(false);
-  const [focusTip, setFocusTip] = useState<{ label: string; top: number; left?: number; right?: number } | null>(null);
+  const [focusTip, setFocusTip] = useState<{ label: string; top: number; left: number } | null>(null);
   useEffect(() => {
     const onKey = () => { keyboardModality.current = true; };
     const onPointer = () => { keyboardModality.current = false; };
@@ -801,9 +801,9 @@ function ArtifactSidebar({
     if (!keyboardModality.current || !nav) return;
     const n = nav.getBoundingClientRect();
     const r = row.getBoundingClientRect();
-    setFocusTip(collapsed
-      ? { label, top: r.top - n.top + r.height / 2 - 9, left: r.right - n.left + 4 }
-      : { label, top: r.bottom - n.top + 2, right: Math.max(n.right - r.right, 0) + 4 });
+    // #455 review — beside the rail, centred on the row (translateY(-50%)),
+    // in both modes: below the row it covered the NEXT row's title.
+    setFocusTip({ label, top: r.top - n.top + r.height / 2, left: n.width + 4 });
   };
 
   // Recompute the pip whenever the highlight set changes or the user scrolls /
@@ -1131,7 +1131,7 @@ function ArtifactSidebar({
           aria-hidden="true"
           data-testid="lane-focus-tooltip"
           className="pointer-events-none absolute z-30 px-1.5 py-0.5 rounded bg-surface-elevated border border-border-default shadow text-2xs text-text-primary whitespace-nowrap"
-          style={{ top: focusTip.top, left: focusTip.left, right: focusTip.right }}
+          style={{ top: focusTip.top, left: focusTip.left, transform: "translateY(-50%)" }}
         >
           {focusTip.label}
         </div>

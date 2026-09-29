@@ -13,10 +13,20 @@ import { computePending } from "../lib/pending";
  *
  * Dismissible per session (sessionStorage, the drafts/rail idiom).
  */
-export function SessionWrapCard({ sessionId, inBar = false }: {
+/** #455 review — whether the card would render: not dismissed for this
+ *  session, and nothing of the session's still waiting on the human. The bar
+ *  points at the card ("Recap ⌄") only when this holds, so the token never
+ *  opens onto nothing. */
+export function wrapCardDismissed(sessionId: string): boolean {
+  try { return sessionStorage.getItem(`dp:wrap-dismissed:${sessionId}`) === "1"; } catch { return false; }
+}
+
+export function SessionWrapCard({ sessionId, inBar = false, onDismiss }: {
   sessionId: string;
   /** #430 PR 5 — rendered inside the Next-up bar (setting ON): no outer margin. */
   inBar?: boolean;
+  /** #455 review — lets the host re-derive whether the card still shows. */
+  onDismiss?: () => void;
 }) {
   // F8 (M2) — the merged store carries OTHER sessions' artifacts; the wrap
   // card must recap ITS session only (stats were inflated by live neighbors,
@@ -99,6 +109,7 @@ export function SessionWrapCard({ sessionId, inBar = false }: {
         onClick={() => {
           setDismissed(true);
           try { sessionStorage.setItem(dismissKey, "1"); } catch {}
+          onDismiss?.();
         }}
         className="text-text-muted hover:text-text-primary text-2xs px-2 py-0.5 rounded hover:bg-surface-hover transition-colors shrink-0"
         aria-label="Dismiss session recap"

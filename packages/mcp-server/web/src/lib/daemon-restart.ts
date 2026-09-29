@@ -85,14 +85,17 @@ export function pushDaemonRestartToast(newStartedAt: string | null): void {
  * sticky toast with different body and action wording, and both could fire for
  * the same replacement — two stacked "Tab is bound to a stale daemon" toasts.
  * One helper now owns the wording and the dedup: while one is on screen, a
- * second push is a no-op. `isCurrent` lets the WS caller keep its
- * superseded-adapter guard on the Reload action.
+ * second stale event REPLACES the one on screen (#455 review: skipping it
+ * left the old toast bound to a superseded adapter, a dead Reload). The action
+ * is an unconditional reload — always safe, it is exactly the recovery.
  */
 export const STALE_DAEMON_TOAST_TITLE = "Tab is bound to a stale daemon";
 
-export function pushStaleDaemonToast(opts: { isCurrent?: () => boolean } = {}): void {
+export function pushStaleDaemonToast(): void {
   const store = useToastStore.getState();
-  if (store.toasts.some((t) => t.title === STALE_DAEMON_TOAST_TITLE)) return;
+  for (const t of store.toasts) {
+    if (t.title === STALE_DAEMON_TOAST_TITLE) store.dismiss(t.id);
+  }
   store.push({
     kind: "error",
     title: STALE_DAEMON_TOAST_TITLE,
@@ -101,7 +104,6 @@ export function pushStaleDaemonToast(opts: { isCurrent?: () => boolean } = {}): 
     action: {
       label: "Reload to re-bind",
       onClick: () => {
-        if (opts.isCurrent && !opts.isCurrent()) return;
         if (typeof window !== "undefined") window.location.reload();
       },
     },

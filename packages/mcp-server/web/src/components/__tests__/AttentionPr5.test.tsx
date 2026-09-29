@@ -18,7 +18,7 @@ import { pushStaleDaemonToast, STALE_DAEMON_TOAST_TITLE } from "../../lib/daemon
  * #430 PR 5 (docs/design/attention-hierarchy.md §5, §8 PR 5).
  *
  * Setting-gated — ONLY with the Next-up bar ON: the request row collapses to a
- * header "Ask" button (pips + resume bridge move into the bar), the demo CTA
+ * header "Request" button (pips + resume bridge move into the bar), the demo CTA
  * and wrap card render inside the bar, and the `Agents:` row becomes a filter
  * menu in the sidebar header. OFF: each stays exactly where it is today.
  *
@@ -67,7 +67,7 @@ afterEach(() => {
 const bar = () => screen.getByTestId("next-up-bar");
 const expandBar = () => fireEvent.click(within(bar()).getByRole("button", { name: "Expand next-up details" }));
 
-describe("#430 PR 5 — requests: row (OFF) vs header Ask + bar (ON)", () => {
+describe("#430 PR 5 — requests: row (OFF) vs header Request + bar (ON)", () => {
   const seed = () => {
     useArtifactStore.setState({
       artifacts: [art("a_served", "Auth explainer")],
@@ -75,20 +75,23 @@ describe("#430 PR 5 — requests: row (OFF) vs header Ask + bar (ON)", () => {
     } as any);
   };
 
-  it("OFF: the composer row renders with its pips; no header Ask button", () => {
+  it("OFF: the composer row renders with its pips; no header Request button", () => {
     seed();
     render(<App />);
     const row = screen.getByTestId("request-composer");
     expect(within(row).getByTestId("request-pips")).toBeInTheDocument();
-    expect(screen.queryByTestId("header-ask")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("header-request")).not.toBeInTheDocument();
   });
 
-  it("ON: no standing row; the header Ask opens the same composer; pips live in the bar's ⌄ with the served jump", () => {
+  it("ON: no standing row; the header Request opens the same composer; pips live in the bar's ⌄ with the served jump", () => {
     usePreferencesStore.setState({ nextUpBar: true } as any);
     seed();
     render(<App />);
     expect(screen.queryByTestId("request-composer")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("header-ask"));
+    // #455 review — named "Request", never "Ask" (AskTrigger's question verb).
+    expect(screen.getByTestId("header-request")).toHaveAccessibleName("Request");
+    expect(screen.queryByRole("button", { name: /^✎ Ask$/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("header-request"));
     const composer = screen.getByTestId("request-composer");
     expect(within(composer).getByRole("textbox", { name: "Your request to Claude" })).toBeInTheDocument();
     expect(within(composer).queryByTestId("request-pips")).not.toBeInTheDocument();
@@ -279,5 +282,97 @@ describe("#430 PR 5 — PR 4 review nits", () => {
     expect(bar().getAttribute("data-line")!.startsWith(`${NOTHING_GLYPH} Nothing needs you`)).toBe(true);
     expect(NOTHING_GLYPH).not.toBe(LANE_MARKS.read.glyph);
     expect(Object.values(LANE_MARKS).map((m) => m.glyph)).not.toContain(NOTHING_GLYPH);
+  });
+});
+
+describe("#455 review — the bar never hides the demo CTA or the recap", () => {
+  it("REAL demo-script fixture (bar ON): its draft debrief holds Decide, so a pinned 'Next step ⌄' token opens the CTA", async () => {
+    // Run the daemon's own scripted demo (src/demo-script.ts) against a fake
+    // store + broadcast sink, and seed the web store with what it broadcasts.
+    const scriptPath = "../../../../src/demo-script.ts";
+    const { runDemoScript } = await import(/* @vite-ignore */ scriptPath);
+    const artifacts: any[] = [];
+    const steps: { ms: number; fn: () => unknown }[] = [];
+    let n = 0;
+    runDemoScript({
+      sessionId: "demo_1",
+      store: {
+        createArtifact: async (a: any) => ({
+          ...a, sessionId: "demo_1", version: 1, parentId: null, status: "draft", agentReasoning: null, createdAt: at(), updatedAt: at(),
+        }),
+        updateArtifactStatus: async () => undefined,
+        recordRejectedApproach: async () => undefined,
+      },
+      broadcast: (_sid: string, e: any) => {
+        if (e.type === "artifact_created") artifacts.push(e.artifact);
+        if (e.type === "artifact_updated") {
+          const a = artifacts.find((x) => x.id === e.artifactId);
+          if (a) a.status = e.status;
+        }
+      },
+      schedule: (ms: number, fn: () => unknown) => { steps.push({ ms, fn }); },
+      makeArtifactId: () => `art_demo_${n++}`,
+    });
+    for (const s of steps.sort((x, y) => x.ms - y.ms)) await s.fn();
+    expect(artifacts.some((a) => a.type === "debrief" && a.status === "draft")).toBe(true);
+
+    usePreferencesStore.setState({ nextUpBar: true } as any);
+    setConn({ sessionId: "demo_1", activeSessions: [{ sessionId: "demo_1", live: true, artifactCount: artifacts.length }] });
+    useArtifactStore.setState({ artifacts } as any);
+    render(<App />);
+    expect(bar().getAttribute("data-line")).toMatch(/^● Debrief/); // Decide holds the line
+    expect(screen.queryByTestId("demo-next-step")).not.toBeInTheDocument();
+    const token = within(bar()).getByTestId("next-up-next-step");
+    expect(token).toHaveTextContent("Next step ⌄");
+    expect(token.className).toContain("shrink-0"); // never truncated
+    fireEvent.click(token);
+    expect(within(bar()).getByTestId("demo-next-step")).toHaveTextContent("✓ Demo fired.");
+  });
+
+  it("wrap card not inline (a System flag holds the line): a pinned 'Recap ⌄' opens it", () => {
+    usePreferencesStore.setState({ nextUpBar: true } as any);
+    setConn({ activeSessions: [{ sessionId: "s1", live: false, artifactCount: 1 }] });
+    useArtifactStore.setState({ artifacts: [art("a1", "Done", { secretWarnings: [{ kind: "aws", line: 1 }] })] } as any);
+    render(<App />);
+    expect(screen.queryByRole("status", { name: "Session wrapped" })).not.toBeInTheDocument();
+    fireEvent.click(within(bar()).getByTestId("next-up-recap"));
+    expect(within(bar()).getByRole("status", { name: "Session wrapped" })).toBeInTheDocument();
+  });
+
+  it("no 'Recap ⌄' when the card wouldn't render anyway (drafts left on exit — the card's own rule, OFF too)", () => {
+    usePreferencesStore.setState({ nextUpBar: true } as any);
+    setConn({ activeSessions: [{ sessionId: "s1", live: false, artifactCount: 1 }] });
+    useArtifactStore.setState({ artifacts: [art("a1", "Draft left", { status: "draft" })] } as any);
+    render(<App />);
+    expect(screen.queryByTestId("next-up-recap")).not.toBeInTheDocument();
+  });
+});
+
+describe("#455 review — small fixes", () => {
+  it("the focus tooltip sits beside the rail, centred on its row — never over the next row", () => {
+    useArtifactStore.setState({ artifacts: [
+      art("d1", "Pick a store", { type: "decision", status: "draft", content: { context: "c", decisionId: "d", options: [] } }),
+      art("r2", "Next row"),
+    ] } as any);
+    render(<ArtifactPanel />);
+    const nav = document.querySelector("nav[aria-label='Artifacts']") as HTMLElement;
+    const row = document.querySelector("[data-artifact-item='d1']") as HTMLElement;
+    const rect = (top: number, bottom: number, right: number) =>
+      ({ top, bottom, left: 0, right, width: right, height: bottom - top, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
+    nav.getBoundingClientRect = () => rect(0, 800, 240);
+    row.getBoundingClientRect = () => rect(100, 124, 240);
+    fireEvent.keyDown(document.body, { key: "Tab" });
+    act(() => row.focus());
+    const tip = screen.getByTestId("lane-focus-tooltip");
+    expect(tip.style.left).toBe("244px"); // outside the rail: covers no row title
+    expect(tip.style.top).toBe("112px"); // the row's own centre…
+    expect(tip.style.transform).toBe("translateY(-50%)"); // …centred on it, not below it
+  });
+
+  it("the session dot and TurnIndicator's 'Agent working' share one source: a fresh artifact (no heartbeat) pulses the dot", () => {
+    useArtifactStore.setState({ artifacts: [art("a1", "Just now", { createdAt: new Date().toISOString() })] } as any);
+    render(<App />);
+    expect(screen.getByText(/Agent working/)).toBeInTheDocument();
+    expect(screen.getByTestId("session-dot").getAttribute("data-working")).toBe("true");
   });
 });

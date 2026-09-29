@@ -337,6 +337,34 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
             <span key={s.lane} data-token className="shrink-0 text-text-muted">{SUMMARY_TEXT[s.lane](s.count)}</span>
           ),
         )}
+        {/* #455 review — a card that exists but isn't inline (something needs
+            you — e.g. the scripted demo always leaves a draft debrief) gets a
+            PINNED token into ⌄, never truncated (shrink-0, like "+N high
+            decision"), so it is never invisible. */}
+        {quietCards.demo && !demoInline && !demoDismissed && (
+          <button
+            type="button"
+            data-token
+            data-testid="next-up-next-step"
+            onClick={() => setExpanded("all")}
+            className={`shrink-0 px-1.5 py-0.5 rounded ${WAITING_TONE.chip} ${WAITING_TONE.chipHover}`}
+            title="The demo's next step: install deepPairing in Claude Code"
+          >
+            Next step ⌄
+          </button>
+        )}
+        {quietCards.wrap && !wrapInline && (
+          <button
+            type="button"
+            data-token
+            data-testid="next-up-recap"
+            onClick={() => setExpanded("all")}
+            className="shrink-0 px-1.5 py-0.5 rounded bg-surface-elevated text-text-secondary hover:bg-surface-hover"
+            title="Session recap"
+          >
+            Recap ⌄
+          </button>
+        )}
         <button
           type="button"
           aria-expanded={!!expanded}

@@ -209,7 +209,7 @@ describe("ChangesetArtifact — approve-all fast path + confirm-countdown (#175)
     expect(await screen.findByTestId("approve-countdown")).toBeInTheDocument();
     // #430 PR 5 — THE shared approve countdown: same wording and Hold control
     // as the single-artifact footer (ArtifactStatusActions.test pins the other).
-    expect(screen.getByTestId("approve-countdown")).toHaveTextContent(/^Will auto-approve in \ds · Esc to holdHold$/);
+    expect(screen.getByTestId("approve-countdown")).toHaveTextContent(/^Will auto-approve in \ds · press to comment · Esc to holdHold$/);
   });
 
   it("the countdown auto-commits approve at zero, then advances to the next pending artifact", async () => {

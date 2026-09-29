@@ -1481,7 +1481,7 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
           {/* Confirm-countdown (armed when all files look right) — #430 PR 5:
               the shared ApproveCountdown, same wording as the footer's. */}
           {armed && countdown !== null && countdown > 0 && (
-            <ApproveCountdown countdown={countdown} countdownMax={countdownMax} onHold={cancel} />
+            <ApproveCountdown countdown={countdown} countdownMax={countdownMax} onHold={cancel} hint="press to comment" />
           )}
 
           <div className="flex items-center gap-2 flex-wrap">

@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { apiGet, apiBase } from "./lib/api";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { IdleHome } from "./components/IdleHome";
-import { SessionWrapCard } from "./components/SessionWrapCard";
+import { SessionWrapCard, wrapCardDismissed } from "./components/SessionWrapCard";
 import { DemoNextStep } from "./components/DemoNextStep";
 import { computePending, isSinglePendingInView } from "./lib/pending";
 import { selectDefaultSession } from "./lib/selectDefaultSession";
 import { enterSessionReplay } from "./lib/session-replay";
 import { useAgentRecentlyActive } from "./hooks/useAgentRecentlyActive";
+import { useAgentWorking } from "./hooks/useAgentWorking";
 import { WaitingForClaude } from "./components/WaitingForClaude";
 import { TurnIndicator } from "./components/TurnIndicator";
 import { NextUpBar } from "./components/NextUpBar";
@@ -64,6 +65,8 @@ function App() {
   // (D6 bail suppresses idle re-renders); the shared hook re-fires at the
   // staleness boundary so the closing beat appears when the session wraps.
   const agentRecentlyActive = useAgentRecentlyActive();
+  // #455 review — the session dot pulses on the SAME source as the pill.
+  const agentWorking = useAgentWorking();
   // C5 — no IdleHome/WaitingForClaude flash on refresh: skeleton until the
   // first `connected` payload lands, bounded by a grace timer so a dead
   // daemon still falls through to the real routing (IdleHome is then correct).
@@ -97,8 +100,15 @@ function App() {
   // is work to recap. #430 PR 5 — computed once; OFF renders them as rows, ON
   // hands them to the Next-up bar.
   const showDemoCta = connected && !!sessionId?.startsWith("demo_") && hasArtifacts;
+  // #455 review — plus the card's OWN conditions (no draft of this session
+  // pending, not dismissed), so the bar's "Recap ⌄" token never opens onto an
+  // empty card. The card still checks them itself (OFF is unchanged).
+  const sessionDraftsClear = useArtifactStore((s) =>
+    computePending(s.artifacts.filter((a) => a.sessionId === sessionId)).drafts.length === 0);
+  const [, setWrapDismissTick] = useState(0);
   const showWrapCard = hasArtifacts && !agentRecentlyActive && sessionId != null &&
-    activeSessions.find((s) => s.sessionId === sessionId)?.live === false;
+    activeSessions.find((s) => s.sessionId === sessionId)?.live === false &&
+    sessionDraftsClear && !wrapCardDismissed(sessionId);
   const nextUpBar = usePreferencesStore((s) => s.nextUpBar); // #430 PR 2 — default off
   // M4 — whether each below-header banner is visible, so the header pills can
   // suppress the verbatim duplicate (computed with the banners' OWN predicates
@@ -633,12 +643,14 @@ function App() {
             <button
               type="button"
               onClick={() => window.dispatchEvent(new CustomEvent(OPEN_REQUEST_COMPOSER_EVENT))}
-              data-testid="header-ask"
+              data-testid="header-request"
               className="flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs font-medium text-accent-blue hover:bg-accent-blue-dim/70 transition-colors"
-              title="Ask Claude for something (explain, plan, status)"
+              title="Request something from Claude (explain, plan, status)"
             >
+              {/* #455 review — "Request", not "Ask": "Ask" is AskTrigger's
+                  question-on-this-artifact verb across the app. */}
               <span aria-hidden="true">✎</span>
-              <span>Ask</span>
+              <span>Request</span>
             </button>
           )}
           {/* #212 (J4) — the top-level Ledger button is GONE. It was a second
@@ -813,11 +825,12 @@ function App() {
                     treat undefined as live (no false alarms on mixed versions).
                     #430 PR 5 (design §2.7 item 3, §5) — the bound session's
                     dot pulsed ALWAYS, a false "working" signal. It pulses only
-                    while the agent is working (the one PR 1b activity window). */}
+                    while the agent is working — the same source and window
+                    as TurnIndicator's "Agent working" (hooks/useAgentWorking). */}
                 <span
                   data-testid="session-dot"
-                  data-working={isActive && s.live !== false && agentRecentlyActive ? "true" : "false"}
-                  className={`w-1.5 h-1.5 rounded-full shrink-0 ${s.live === false ? "bg-text-muted/50" : isActive ? `bg-accent-blue-strong${agentRecentlyActive ? " animate-pulse" : ""}` : "bg-accent-green"}`}
+                  data-working={isActive && s.live !== false && agentWorking ? "true" : "false"}
+                  className={`w-1.5 h-1.5 rounded-full shrink-0 ${s.live === false ? "bg-text-muted/50" : isActive ? `bg-accent-blue-strong${agentWorking ? " animate-pulse" : ""}` : "bg-accent-green"}`}
                 />
                 <span className="truncate max-w-40">{label}</span>
                 {s.artifactCount > 0 && (
@@ -847,7 +860,7 @@ function App() {
             demo: showDemoCta ? (dismiss?: () => void) => <DemoNextStep projectRoot={projectRoot} inBar onDismiss={dismiss} /> : null,
             wrap: showWrapCard && sessionId != null ? (
               <ErrorBoundary fallback={null}>
-                <SessionWrapCard sessionId={sessionId} inBar />
+                <SessionWrapCard sessionId={sessionId} inBar onDismiss={() => setWrapDismissTick((n) => n + 1)} />
               </ErrorBoundary>
             ) : null,
           }}
@@ -906,7 +919,7 @@ function App() {
           // D9 review — the card reads unvalidated content casts; a malformed
           // artifact must not blank the whole shell.
           <ErrorBoundary fallback={null}>
-            <SessionWrapCard sessionId={sessionId} />
+            <SessionWrapCard sessionId={sessionId} onDismiss={() => setWrapDismissTick((n) => n + 1)} />
           </ErrorBoundary>
         )}
 

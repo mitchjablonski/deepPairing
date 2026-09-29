@@ -1078,7 +1078,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         // (disconnect / adapter swap) drops it.
         void Promise.resolve().then(() => {
           if (get().adapter !== adapter) return;
-          pushStaleDaemonToast({ isCurrent: () => get().adapter === adapter });
+          pushStaleDaemonToast();
         });
       });
 

@@ -150,7 +150,7 @@ export function RequestResumeButton({ bridge, className = "ml-auto", label = "Co
 export const OPEN_REQUEST_COMPOSER_EVENT = "dp:open-request-composer";
 
 export function RequestComposerBanner({ compact = false }: {
-  /** #430 PR 5 — the Next-up bar is ON: no standing row. The header "Ask"
+  /** #430 PR 5 — the Next-up bar is ON: no standing row. The header "Request"
    *  button opens the composer (the row shows only while composing), and the
    *  pips + resume bridge live in the bar. OFF (default): exactly as before. */
   compact?: boolean;
@@ -166,7 +166,7 @@ export function RequestComposerBanner({ compact = false }: {
   const [text, setText] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  // #430 PR 5 — the header "Ask" button (bar ON) opens the composer.
+  // #430 PR 5 — the header "Request" button (bar ON) opens the composer.
   useEffect(() => {
     const openComposer = () => {
       setIntent(PRESETS[0]!.intent);

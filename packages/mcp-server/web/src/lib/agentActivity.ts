@@ -1,3 +1,5 @@
+import type { Artifact, Comment } from "@deeppairing/shared";
+
 /**
  * #430 PR 1b (docs/design/attention-hierarchy.md §2.7 item 3, §8 PR 1b) — the ONE
  * "is the agent working right now?" window, shared by the header pill
@@ -18,3 +20,26 @@
  * resume nag back.
  */
 export const AGENT_ACTIVE_WINDOW_MS = 60_000;
+
+/**
+ * #455 review — the newest agent-side activity timestamp: any artifact's
+ * createdAt, or an AGENT-authored comment (M3: human input never proves the
+ * agent is alive). TurnIndicator's pill and the session-bar dot
+ * (hooks/useAgentWorking) both read it, together with the heartbeat, so the
+ * pulse and "Agent working" can't disagree.
+ */
+export function lastAgentActivityMs(artifacts: Artifact[], comments: Record<string, Comment[]>): number {
+  let max = 0;
+  for (const a of artifacts) {
+    const t = new Date(a.createdAt).getTime();
+    if (Number.isFinite(t) && t > max) max = t;
+  }
+  for (const list of Object.values(comments)) {
+    for (const c of list) {
+      if (c.author !== "agent") continue;
+      const t = new Date(c.createdAt).getTime();
+      if (Number.isFinite(t) && t > max) max = t;
+    }
+  }
+  return max;
+}
