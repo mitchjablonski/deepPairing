@@ -9,6 +9,8 @@ import { enterSessionReplay } from "./lib/session-replay";
 import { useAgentRecentlyActive } from "./hooks/useAgentRecentlyActive";
 import { WaitingForClaude } from "./components/WaitingForClaude";
 import { TurnIndicator } from "./components/TurnIndicator";
+import { NextUpBar } from "./components/NextUpBar";
+import { usePreferencesStore } from "./stores/preferences";
 import { PendingBanner } from "./components/PendingBanner";
 import { ResumeQuestionsBanner } from "./components/ResumeQuestionsBanner";
 import { RequestComposerBanner } from "./components/RequestComposerBanner";
@@ -88,6 +90,7 @@ function App() {
     }
   }, [connected, sessionId, activeSessions, switchSession]);
   const hasArtifacts = useArtifactStore((s) => s.artifacts.length > 0);
+  const nextUpBar = usePreferencesStore((s) => s.nextUpBar); // #430 PR 2 — default off
   // M4 — whether each below-header banner is visible, so the header pills can
   // suppress the verbatim duplicate (computed with the banners' OWN predicates
   // so they can't drift). Both banners self-hide when their count is 0.
@@ -539,6 +542,20 @@ function App() {
 
   return (
     <div className="h-screen bg-surface-primary text-text-primary flex flex-col">
+      {/* #430 PR 2 (design §7) — "Jump to next up": the first focusable element
+          when the bar is on; visible only while focused. Off: not rendered. */}
+      {nextUpBar && (
+        <a
+          href="#next-up"
+          onClick={(e) => {
+            e.preventDefault();
+            document.getElementById("next-up")?.focus();
+          }}
+          className="sr-only focus:not-sr-only focus:absolute focus:top-1 focus:left-1 focus:z-50 focus:px-2 focus:py-1 focus:rounded focus:bg-surface-elevated focus:text-text-primary focus:text-xs"
+        >
+          Jump to next up
+        </a>
+      )}
       {/* O6: surfaces when the pairing-protocol skill isn't active so the
           plugin-install path doesn't fail silently. Dismissible; auto-hides
           once any artifact arrives. */}
@@ -786,6 +803,12 @@ function App() {
           })
         )}
       </nav>
+
+      {/* #430 PR 2 — the Next-up bar, opt-in (Settings → Next-up bar, default
+          OFF). Off renders nothing, so the layout is exactly as before; on, it
+          sits under the session tabs IN ADDITION to today's banners (PR 3
+          absorbs them). */}
+      {nextUpBar && <NextUpBar />}
 
       {/* Disconnected warning — escalates (D8/H4): a blip and a dead daemon
           looked identical forever; past 60s the pair needs to know to act. */}
