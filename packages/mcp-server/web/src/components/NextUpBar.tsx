@@ -7,6 +7,7 @@ import { usePreflightBlockStore } from "../stores/preflightBlocks";
 import { computeAttention, type Attention, type AttentionItem, type FailureKind, type SummaryLane } from "../lib/attention";
 import { noAgentLive } from "../lib/liveness";
 import { WAITING_TONE } from "../lib/waitingTone";
+import { resumePromptFor } from "./ResumeQuestionsBanner";
 
 /**
  * #430 PR 2 — THE NEXT-UP BAR (docs/design/attention-hierarchy.md §4). One line
@@ -159,8 +160,39 @@ export function NextUpBar() {
   const [whyHolds, setWhyHolds] = useState<AttentionItem[]>([]);
   const primary = attention.line.primary;
   const item = primary.item;
-  const why = item ? whyFor(item, artifacts) : "";
+  // #430 PR 3 — absorbing ResumeQuestionsBanner: when the agent exited with
+  // your questions open, the bar carries the banner's count ("Exited with N of
+  // your questions open"), its jump (Open → the oldest question's artifact) and
+  // its Copy-resume-prompt action.
+  const openQuestionCount = attention.lanes.waiting.filter((w) => w.kind === "question").length;
+  const resumeCase = primary.lane === "waiting" && agentGone && openQuestionCount > 0;
+  const why = !item ? "" : resumeCase
+    ? `Exited with ${openQuestionCount} of your question${openQuestionCount === 1 ? "" : "s"} open`
+    : whyFor(item, artifacts);
   const after = item ? afterFor(item, artifacts, agentGone) : "";
+  const [copied, setCopied] = useState(false);
+  const copyResumePrompt = async () => {
+    // Same honesty rule as the banner: only claim success on an actual resolve.
+    const writeText = navigator.clipboard?.writeText?.bind(navigator.clipboard);
+    if (!writeText) return;
+    try {
+      await writeText(resumePromptFor(openQuestionCount));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* clipboard denied — don't claim success */ }
+  };
+
+  // #430 PR 3 — the palette's "Open review queue" expands this bar and moves
+  // focus to it (an explicit request, so focus may move; `next` changes never do).
+  const sectionRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const open = () => {
+      setExpanded("all");
+      sectionRef.current?.focus();
+    };
+    window.addEventListener("dp:open-next-up", open);
+    return () => window.removeEventListener("dp:open-next-up", open);
+  }, []);
 
   // ONE polite announcer that speaks only when `next.id` changes (never on
   // mount, never when a count moves). It never touches selection or scroll.
@@ -186,6 +218,7 @@ export function NextUpBar() {
 
   return (
     <section
+      ref={sectionRef}
       id="next-up"
       tabIndex={-1}
       aria-label="Next up"
@@ -222,6 +255,16 @@ export function NextUpBar() {
             className="shrink-0 px-1.5 py-0.5 rounded border border-border-default text-text-secondary hover:bg-surface-hover"
           >
             Open
+          </button>
+        )}
+        {resumeCase && (
+          <button
+            type="button"
+            onClick={() => void copyResumePrompt()}
+            className={`shrink-0 px-1.5 py-0.5 rounded ${WAITING_TONE.chip} ${WAITING_TONE.chipHover}`}
+            title="Copy a paste-able resume prompt for Claude Code"
+          >
+            {copied ? "Copied ✓" : "Copy resume prompt"}
           </button>
         )}
         {primary.lane === "held" && (

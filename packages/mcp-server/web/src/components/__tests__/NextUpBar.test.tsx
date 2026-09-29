@@ -54,7 +54,7 @@ describe("#430 PR 2 — the setting", () => {
     expect(screen.queryByTestId("next-up-bar")).not.toBeInTheDocument();
   });
 
-  it("ON: the App renders the bar under the session tabs, alongside today's pending banner", () => {
+  it("ON: the App renders the bar under the session tabs (PR 3: the pending banner is absorbed)", () => {
     stubFetch();
     usePreferencesStore.setState({ nextUpBar: true });
     useArtifactStore.setState({ artifacts: [decision("d1", "Store choice", "high"), art("r1", "research", "A finding")] });
@@ -62,7 +62,7 @@ describe("#430 PR 2 — the setting", () => {
     const bar = screen.getByTestId("next-up-bar");
     const nav = screen.getByRole("navigation", { name: "Sessions" });
     expect(nav.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.getByText(/items? waiting for you/)).toBeInTheDocument(); // PR 3 absorbs it, not PR 2
+    expect(screen.queryByText(/items? waiting for you/)).not.toBeInTheDocument(); // #430 PR 3 absorbed it
   });
 });
 

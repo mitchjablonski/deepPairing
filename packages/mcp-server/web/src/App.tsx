@@ -614,6 +614,7 @@ function App() {
           <TurnIndicator
             pendingBannerVisible={pendingBannerVisible}
             pendingCardInView={singlePendingInView}
+            agentStateOnly={nextUpBar}
           />
         </div>
         <div className="flex items-center gap-1 shrink-0">
@@ -821,12 +822,16 @@ function App() {
           autonomous-agent chrome, not pairing. Bulk approve still lives in
           the Command palette for keyboard users who want it. The per-artifact
           review happens inside ArtifactStatusActions. */}
+      {/* #430 PR 3 — with the Next-up bar ON, it absorbs these two banners
+          (and TurnIndicator's "your turn"); OFF, they render exactly as before.
+          Where each piece went: docs/design/attention-hierarchy.md §5 and the
+          PR 3 checklist test (NextUpBarAbsorb.test.tsx). */}
       {/* Pending decision/plan banner */}
-      <PendingBanner />
+      {!nextUpBar && <PendingBanner />}
 
       {/* #192 — questions the human asked that the agent never answered, shown
           only when no agent is live (it exited) with a one-click resume prompt. */}
-      <ResumeQuestionsBanner />
+      {!nextUpBar && <ResumeQuestionsBanner />}
 
       {/* G1 (#198b) — the request composer: the human can initiate a request to
           the agent (free text + intent preset). A quiet peer of the strips above. */}

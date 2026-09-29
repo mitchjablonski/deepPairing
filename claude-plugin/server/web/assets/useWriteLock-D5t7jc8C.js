@@ -1,0 +1,1 @@
+import{o as e}from"./pending-CrOSaluo.js";import{E as t}from"./index-kQWm5KAa.js";function n(n){let r=t(n,e(e=>e.active));return r===`closed`||r===`frozen`}export{n as t};

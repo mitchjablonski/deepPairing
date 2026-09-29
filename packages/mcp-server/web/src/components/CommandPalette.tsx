@@ -5,6 +5,7 @@ import { usePreferencesStore, resolveTheme } from "../stores/preferences";
 import { useModal } from "../hooks/useModal";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
 import { fuzzyScore } from "../lib/fuzzy";
+import { computeAttention } from "../lib/attention";
 
 /** Recursively collect string VALUES from artifact content (keys excluded). */
 function collectStrings(v: unknown, out: string[] = []): string {
@@ -33,6 +34,8 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const artifacts = useArtifactStore((s) => s.artifacts);
   const selectArtifact = useArtifactStore((s) => s.selectArtifact);
   const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
+  const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
+  const nextUpBar = usePreferencesStore((s) => s.nextUpBar);
   const theme = usePreferencesStore((s) => s.theme);
   const setTheme = usePreferencesStore((s) => s.setTheme);
   const toggleSidebar = usePreferencesStore((s) => s.toggleSidebar);
@@ -54,6 +57,37 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         (!boundSessionId || a.sessionId === boundSessionId),
     );
     const draftSessionCount = new Set(approvableDrafts.map((a) => a.sessionId)).size;
+    // #430 PR 3 — attention commands, both routed through computeAttention.
+    // "Next pending" is available with the Next-up bar on OR off: it only moves
+    // the selection (like `n`), in the bar's oldest-first Decide order, and needs
+    // no bar to be useful. "Open review queue" opens the BAR's expanded queue,
+    // so it is offered only when the bar is on — with it off there is no queue
+    // surface to open, and a command that does nothing would lie.
+    const decideQueue = computeAttention({ artifacts }).lanes.decide;
+    if (decideQueue.length > 0) {
+      items.push({
+        id: "action_next_pending",
+        label: `Next pending (${decideQueue.length} waiting on you, oldest first)`,
+        type: "action",
+        action: () => {
+          const idx = decideQueue.findIndex((d) => d.id === selectedArtifactId);
+          const target = decideQueue[(idx + 1) % decideQueue.length]; // idx=-1 → the oldest
+          if (target?.artifactId) selectArtifact(target.artifactId);
+          onClose();
+        },
+      });
+    }
+    if (nextUpBar) {
+      items.push({
+        id: "action_open_review_queue",
+        label: "Open review queue (Next-up bar)",
+        type: "action",
+        action: () => {
+          onClose();
+          window.dispatchEvent(new CustomEvent("dp:open-next-up"));
+        },
+      });
+    }
     items.push({
       id: "action_past_sessions",
       label: "Browse past sessions (replay)",
@@ -156,7 +190,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
 
     return items;
   // eslint-disable-next-line react-hooks/exhaustive-deps -- store actions are stable identities; onClose (prop) is identity-unstable but behaviorally constant (a stale one still closes via stable setState)
-  }, [artifacts, theme, boundSessionId]);
+  }, [artifacts, theme, boundSessionId, selectedArtifactId, nextUpBar]);
 
   // Filter and sort by fuzzy score
   const results = useMemo(() => {

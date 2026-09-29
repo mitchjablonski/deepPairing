@@ -33,9 +33,14 @@ import { AGENT_ACTIVE_WINDOW_MS } from "../lib/agentActivity";
 export function TurnIndicator({
   pendingBannerVisible = false,
   pendingCardInView = false,
+  agentStateOnly = false,
 }: {
   pendingBannerVisible?: boolean;
   pendingCardInView?: boolean;
+  /** #430 PR 3 — with the Next-up bar on, the bar owns "your turn" (count,
+   *  jump, next) and the ONE polite announcer; this pill shows the agent's
+   *  state only, as a plain (non-live) status. */
+  agentStateOnly?: boolean;
 } = {}) {
   const artifacts = useArtifactStore((s) => s.artifacts);
   const comments = useArtifactStore((s) => s.comments);
@@ -171,7 +176,7 @@ export function TurnIndicator({
   // PR 3 shrinks this pill to agent state only); the button opens the rail on
   // its Unanswered filter, where each question jumps to its artifact.
 
-  if (totalPending > 0) {
+  if (totalPending > 0 && !agentStateOnly) {
     // #192 (usability H1) — the bucket-table summary counts EVERY reviewable
     // type (changeset/debrief/explainer included) and falls back to "N items"
     // if a future type isn't yet bucketed, so this can never render a dangling
@@ -232,7 +237,11 @@ export function TurnIndicator({
   // switch to a neutral "Up to date" so we don't pulse forever at an agent
   // that's finished or gone.
   return (
-    <div className="flex items-center gap-2 min-w-0" role="status" aria-live="polite">
+    <div
+      className="flex items-center gap-2 min-w-0"
+      // #430 PR 3 — not a live region while the bar is on (one announcer, §7).
+      {...(agentStateOnly ? {} : { role: "status", "aria-live": "polite" as const })}
+    >
       {agentExited ? (
         // M3 — the bound session's wrapper exited. The old branch only knew
         // "Agent working"/"Up to date" (both wrong: the agent is gone, not
