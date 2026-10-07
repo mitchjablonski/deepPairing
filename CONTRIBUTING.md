@@ -33,7 +33,7 @@ cd packages/mcp-server && npx vitest
 node packages/mcp-server/dist/cli/init.js demo
 ```
 
-Requires Node 20.19+, 22.13+, or 24+ (the locked toolchain's floor — see [INSTALL.md](INSTALL.md); CI runs Node 22) and pnpm 10+. Measured on 2026-09-27 (Linux, fast network): `pnpm install` took about 6 s with a cold pnpm store and 2 s with a warm one, the build took about 8 s, and the demo took about 2 s. Times vary by machine and network; see [the README](README.md#how-long-it-takes).
+Requires Node 20.19+, 22.13+, or 24+ (the locked toolchain's floor — see [INSTALL.md](INSTALL.md#nodejs-support-policy) for the full recommended/tested/legacy policy; CI runs Node 22, plus a Node 20.19 floor check) and pnpm 10+. Measured on 2026-09-27 (Linux, fast network): `pnpm install` took about 6 s with a cold pnpm store and 2 s with a warm one, the build took about 8 s, and the demo took about 2 s. Times vary by machine and network; see [the README](README.md#how-long-it-takes).
 
 ### Regenerating the committed plugin bundle
 

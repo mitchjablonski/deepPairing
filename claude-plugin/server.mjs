@@ -19,6 +19,24 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 
+// #461 — a Node below the runtime floor would otherwise fail later with an
+// opaque syntax or "is not a constructor" error (the #437 class) deep inside
+// the bundle. Check first and say exactly what's wrong. Keep MIN_NODE in sync
+// with packages/mcp-server/package.json's "engines" and INSTALL.md's
+// Node.js support policy — this is the Node 20.11+ "legacy-compatible"
+// floor, not the recommended 22/24.
+const MIN_NODE = [20, 11];
+const [nodeMajor, nodeMinor] = process.versions.node.split(".").map(Number);
+if (nodeMajor < MIN_NODE[0] || (nodeMajor === MIN_NODE[0] && nodeMinor < MIN_NODE[1])) {
+  process.stderr.write(
+    `deepPairing requires Node ${MIN_NODE[0]}.${MIN_NODE[1]}+; you're running Node ${process.versions.node}.\n` +
+    "Node 22 or 24 (current LTS) is recommended; Node 20.11+ also works but is " +
+    "no longer security-patched upstream.\n" +
+    "Upgrade Node (e.g. via nvm: `nvm install 22`), then reload the plugin.\n",
+  );
+  process.exit(1);
+}
+
 const here = dirname(fileURLToPath(import.meta.url));
 // Order matters. In a monorepo dev checkout, prefer the sibling dist —
 // it's the freshest build if someone ran tsc without the bundle step.

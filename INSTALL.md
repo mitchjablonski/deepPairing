@@ -12,12 +12,33 @@ has the short version; this page is the detail, the caveats, and the
 > [How long it takes](README.md#how-long-it-takes)). The plugin path below
 > needs no build.
 
-All the "from a clone" paths need the build first — that requires **Node 20.19+, 22.13+, or 24+** (pnpm 10+), the floor set by the locked toolchain: `pnpm build` alone only needs Vite 8/rolldown's `^20.19.0 || >=22.12.0`, but `pnpm install` also pulls in eslint (run by `pnpm lint`, which CI runs on every PR), whose locked `^20.19.0 || ^22.13.0 || >=24` is tighter on the 22.x line — so Node 22.12.x and all of Node 23.x are *not* supported by the contributor toolchain even though they'd satisfy Vite alone. This is stricter than the runtime the *prebuilt* plugin below needs (Node 20.11+, see [option 1](#1-marketplace-plugin-recommended)) — building from source and running the shipped bundle have different Node requirements:
+All the "from a clone" paths need the build first — that requires **Node 20.19+, 22.13+, or 24+** (pnpm 10+), the floor set by the locked toolchain: `pnpm build` alone only needs Vite 8/rolldown's `^20.19.0 || >=22.12.0`, but `pnpm install` also pulls in eslint (run by `pnpm lint`, which CI runs on every PR), whose locked `^20.19.0 || ^22.13.0 || >=24` is tighter on the 22.x line — so Node 22.12.x and all of Node 23.x are *not* supported by the contributor toolchain even though they'd satisfy Vite alone. This is stricter than the runtime the *prebuilt* plugin below needs (Node 20.11+, see [option 1](#1-marketplace-plugin-recommended)) — building from source and running the shipped bundle have different Node requirements. See [Node.js support policy](#nodejs-support-policy) below for the full recommended/tested/legacy breakdown:
 
 ```bash
 git clone https://github.com/mitchjablonski/deepPairing.git
 cd deepPairing && pnpm install && pnpm build
 ```
+
+## Node.js support policy
+
+Node 20 reached end-of-life on 2026-04-30; Node 22 ("Jod") and Node 24
+("Krypton") are the current LTS lines. This is a lifecycle refresh, not a
+reaction to a known deepPairing incompatibility — nothing here has been
+observed to fail on Node 20.
+
+| | Prebuilt plugin (marketplace / `claude-plugin/`) | Source build (contributors) |
+|---|---|---|
+| **Recommended** | Node 22 or 24 | Node 22 or 24 |
+| **Maintained / tested in CI** | Node 22, Node 24 (`plugin-boot` matrix in CI runs the actual shipped `claude-plugin/server/` bundle, no `dist` fallback, on both) | Node 22 (main CI jobs) and the exact floor, Node 20.19.0 (`node-floor` CI job: install + build + lint) |
+| **Legacy-compatible, untested in CI** | Node 20.11+ — unchanged `engines.node` floor. `esbuild` targets `node20` for this bundle and it uses no Node API newer than 20.11 (checked against `node:fs/path/http/net/crypto/events/child_process/os/url/perf_hooks/readline/stream`, `fetch`, `structuredClone`), so there's no technical reason it wouldn't keep working — CI simply no longer exercises it, because Node 20 has no more upstream security fixes. | Node 20.19+ still satisfies the locked toolchain's `engines` field and builds cleanly (verified for #409/#414); it's listed here rather than above because CI only pins the exact floor, not a general Node-20 job. |
+| **Exact `engines.node`** | `>=20.11.0` (`packages/mcp-server/package.json`, unchanged) | `^20.19.0 \|\| ^22.13.0 \|\| >=24` (root `package.json`, unchanged) |
+
+**Decision needed from Mitch** (flagged in the PR, not resolved here): whether
+Node 20 should stay **legacy-compatible, untested in CI** (the status quo this
+PR keeps) or move to **deprecated, with a removal plan** (an announced
+version + date after which the `>=20.11.0` floor is dropped). This PR does not
+make that call — it only stops silently implying Node 20 is as well-supported
+as 22/24, and makes sure nothing breaks for Node 20 users today.
 
 ## 1. Marketplace plugin (recommended)
 

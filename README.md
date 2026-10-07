@@ -52,7 +52,9 @@ boundary. Editors other than Claude Code.
 ### Get started
 
 Install the plugin inside Claude Code. It needs no clone and no build: the
-plugin ships a prebuilt server that runs on Node 20.11+.
+plugin ships a prebuilt server. Node 22 or 24 (current LTS) is recommended and
+what CI tests; Node 20.11+ still works (legacy-compatible, no longer CI-tested
+since Node 20 is EOL — see [INSTALL.md](INSTALL.md#nodejs-support-policy)).
 
 ```bash
 /plugin marketplace add https://github.com/mitchjablonski/deepPairing
@@ -319,7 +321,10 @@ remembers where you stood.
 /plugin install deeppairing@deeppairing
 ```
 
-- **What you need:** Claude Code and Node 20.11+ on your `PATH`. You don't need
+- **What you need:** Claude Code and Node on your `PATH` — 22 or 24
+  recommended (what CI tests), 20.11+ legacy-compatible but no longer
+  CI-tested (Node 20 is EOL; see
+  [INSTALL.md](INSTALL.md#nodejs-support-policy)). You don't need
   pnpm, a clone or a build.
 - **What you get:** the plugin runs the server bundle committed in
   `claude-plugin/server/`. It also installs the MCP tools, the slash commands
