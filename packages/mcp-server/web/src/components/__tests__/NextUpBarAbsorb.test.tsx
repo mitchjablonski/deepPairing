@@ -84,14 +84,18 @@ describe("#430 PR 3 — setting ON: absorbed, no duplicates", () => {
   });
 
   it("TurnIndicator with agentStateOnly: no 'your turn' even with drafts pending; agent state stays a live region (#452 review)", () => {
+    vi.useFakeTimers();
     seedReviewQueue();
-    useConnectionStore.setState({ connected: true } as any);
+    useConnectionStore.setState({ connected: true, hydrated: true } as any);
     render(<TurnIndicator agentStateOnly />);
     expect(screen.queryByText(/Your turn/)).not.toBeInTheDocument();
     const agentState = screen.getByText(/Up to date|Agent working|Connected — waiting/);
-    // Agent-state transitions are not attention events and nothing else
-    // announces them (an exit doesn't change next.id), so this stays live.
-    expect(agentState.closest("[aria-live='polite']")).not.toBeNull();
+    // #457 D1 — silent on the initial mount (the bar speaks the load)…
+    expect(agentState.closest("[role='status']")!.getAttribute("aria-live")).toBe("off");
+    act(() => { vi.advanceTimersByTime(800); });
+    // …then live: agent-state transitions are not attention events and nothing
+    // else announces them (an exit doesn't change next.id), so this stays live.
+    expect(document.querySelector("[role='status'][aria-live]")!.getAttribute("aria-live")).toBe("polite");
   });
 
   it("no ResumeQuestionsBanner when the agent exited with questions open", () => {
@@ -238,7 +242,10 @@ describe("#452 review — resume flow, agent-state announcements", () => {
   it("an agent EXIT (no next change) is announced once, by TurnIndicator; the bar stays silent", async () => {
     useArtifactStore.setState({ artifacts: [art("r1", "research", "A finding")] });
     useConnectionStore.setState({ agentActivityAt: Date.now(), agentActiveSince: Date.now() } as any);
+    vi.useFakeTimers({ now: Date.now() });
+    useConnectionStore.setState({ hydrated: true } as any);
     render(<><TurnIndicator agentStateOnly /><NextUpBarAbsorbProbe /></>);
+    act(() => { vi.advanceTimersByTime(800); }); // #457 D1 — armed after settle
     const liveTexts = () => Array.from(document.querySelectorAll('[aria-live="polite"]')).map((el) => el.textContent?.trim() ?? "");
     const before = liveTexts();
     act(() => useConnectionStore.setState({ activeSessions: [{ sessionId: "s1", live: false }] } as any));

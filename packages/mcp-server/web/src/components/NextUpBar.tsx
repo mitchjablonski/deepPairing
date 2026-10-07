@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Artifact } from "@deeppairing/shared";
-import { useArtifactStore } from "../stores/artifact";
+import { useArtifactStore, artifactStoreGeneration } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
 import { useReplayStore } from "../stores/replay";
 import { usePreflightBlockStore } from "../stores/preflightBlocks";
 import { computeAttention, type Attention, type AttentionItem, type FailureKind, type SummaryLane } from "../lib/attention";
 import { noAgentLive } from "../lib/liveness";
+import { sessionLabelsFrom } from "../lib/sessionLabel";
 import { WAITING_TONE } from "../lib/waitingTone";
 import { LANE_MARKS, NOTHING_GLYPH } from "../lib/laneMarks";
 import { resumePromptFor } from "./ResumeQuestionsBanner";
@@ -51,6 +52,13 @@ const SUMMARY_TEXT: Record<SummaryLane, (n: number) => string> = {
 
 /** The primary token, in the doc's §4.3 wording (the line tests pin these). */
 function primaryToken(line: Attention["line"]): string {
+  const t = primaryCore(line);
+  // #457 state G — while disconnected the line is what the tab LAST KNEW, and
+  // says so (design §4.3 worked table: "▲ next (last known)").
+  return line.prefix === "disconnected" && line.primary.lane !== "waiting" ? `${t} (last known)` : t;
+}
+
+function primaryCore(line: Attention["line"]): string {
   const p = line.primary;
   switch (p.lane) {
     // §5 lane glyphs: ▲ a decision, ● a review — the SAME marks the sidebar
@@ -58,7 +66,9 @@ function primaryToken(line: Attention["line"]): string {
     case "decide": return `${(p.item!.kind === "decision" ? LANE_MARKS.decide : LANE_MARKS.review).glyph} ${p.item!.title}`;
     case "flag": return `⚠ Possible secret in ${p.item!.title}`;
     case "waiting": return `${LANE_MARKS.waiting.glyph} WAITING ON CLAUDE`;
-    case "held": return "■ HELD";
+    // #457 D4 — design state F names what was held (`"concept" stopped:
+    // proposal`), so the line still says it after the hero toast fades.
+    case "held": return `■ HELD ${p.item!.title}`;
     // #430 PR 5 (PR 4 review) — ◇, not ○: ○ is the sidebar's Read lane, so
     // the empty state gets its own glyph and ○ only ever means "to read".
     default: return `${NOTHING_GLYPH} Nothing needs you`;
@@ -87,15 +97,24 @@ function whyFor(item: AttentionItem, artifacts: Artifact[]): string {
   return "";
 }
 
-/** §4.4 — "what happens after you respond", reusing the app's honest copy. */
-function afterFor(item: AttentionItem, artifacts: Artifact[], agentGone: boolean): string {
+/** Whether Claude can act on a response right now (#457 D3). */
+export type AgentReach = "live" | "gone" | "disconnected" | "replay";
+
+/** §4.4 — "what happens after you respond", reusing the app's honest copy.
+ *  #457 D3 — never promise what an absent agent will do: replay is read-only,
+ *  a disconnected tab can't deliver, and an exited agent acts on resume. */
+function afterFor(item: AttentionItem, artifacts: Artifact[], reach: AgentReach): string {
   const a = item.artifactId ? artifacts.find((x) => x.id === item.artifactId) : undefined;
+  const agentGone = reach === "gone";
+  if (reach === "replay" && item.kind !== "flag") return "Replay is read-only — nothing you do here reaches Claude";
+  if (reach === "disconnected" && item.kind !== "flag") return "Disconnected — Claude resumes when it reconnects";
   switch (item.kind) {
     case "decision":
       return agentGone
         ? "Saved — Claude sees your choice when the session resumes"
         : "Claude continues with the option you pick";
     case "review-blocking": {
+      if (agentGone) return "Saved — Claude acts on your verdict when the session resumes";
       if (a?.type === "plan") {
         const n = ((a.content as { steps?: unknown[] } | null)?.steps ?? []).length;
         return `Approve → Claude executes ${n} step${n === 1 ? "" : "s"} · Request changes → Claude revises the plan`;
@@ -151,10 +170,12 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   const blocks = usePreflightBlockStore((s) => s.blocks);
   const lastSeenAt = usePreflightBlockStore((s) => s.lastSeenAt);
 
+  const sessionLabels = useMemo(() => sessionLabelsFrom(activeSessions), [activeSessions]);
   const attention = useMemo(() => computeAttention({
     artifacts,
     comments,
     requests,
+    sessionLabels,
     system: {
       disconnected: !connected,
       staleDaemon,
@@ -166,9 +187,18 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
         .filter((b) => !lastSeenAt || b.at > lastSeenAt)
         .map((b) => ({ id: b.id, title: b.proposal ? `"${b.concept}" stopped: ${b.proposal}` : `"${b.concept}"`, at: b.at })),
     },
-  }), [artifacts, comments, requests, connected, staleDaemon, snapshotUnavailable, sessionConflict, replayActive, blocks, lastSeenAt]);
+  }), [artifacts, comments, requests, sessionLabels, connected, staleDaemon, snapshotUnavailable, sessionConflict, replayActive, blocks, lastSeenAt]);
 
   const agentGone = noAgentLive(activeSessions);
+  // #457 state G — the outage clock (ticks only while disconnected).
+  const disconnectedSince = useConnectionStore((s) => s.disconnectedSince);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (connected) return;
+    const t = setInterval(() => setNowMs(Date.now()), 5000);
+    return () => clearInterval(t);
+  }, [connected]);
+  const prolongedOutage = !connected && disconnectedSince != null && nowMs - disconnectedSince >= 60_000;
   const [expanded, setExpanded] = useState<false | "all" | "high">(false);
   // The holds whose "Why" was opened: shown in the expansion after they are
   // marked seen (which, like opening the ⋯ gate log, clears them from the lane).
@@ -188,7 +218,8 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   const resumeCase = agentGone && openQuestionCount > 0;
   const oldestQuestion = openQuestions[0]; // waiting is oldest-first
   const why = item ? whyFor(item, artifacts) : "";
-  const after = item ? afterFor(item, artifacts, agentGone) : "";
+  const reach: AgentReach = replayActive ? "replay" : !connected ? "disconnected" : agentGone ? "gone" : "live";
+  const after = item ? afterFor(item, artifacts, reach) : "";
   // #430 PR 5 — the request pips + resume bridge (moved here from the
   // composer row when the bar is ON; same hook, same rules).
   const requestBridge = useRequestResumeBridge();
@@ -205,6 +236,8 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
     if (!writeText) return;
     try {
       await writeText(resumePromptFor(openQuestionCount));
+      // #457 D5 — the banner's live region spoke "Copied ✓"; so does the bar.
+      setAnnouncement("Copied ✓ — resume prompt");
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch { /* clipboard denied — don't claim success */ }
@@ -227,8 +260,22 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   const nextId = attention.next?.id ?? null;
   const prevNext = useRef<string | null | undefined>(undefined);
   const [announcement, setAnnouncement] = useState("");
+  // #457 D8 — a connect/hydration resets and refills the store, so `next`
+  // flickered review → nothing → review within ~33ms and was SPOKEN. Changes
+  // that land while the store is settling (not hydrated yet, or within 750ms of
+  // a store reset — the arrival region's own hydration window) move the
+  // baseline silently; only settled changes are announced.
+  const hydrated = useConnectionStore((s) => s.hydrated);
+  const generation = artifactStoreGeneration();
+  const lastGeneration = useRef(generation);
+  const settleUntil = useRef(0);
+  if (generation !== lastGeneration.current) {
+    lastGeneration.current = generation;
+    settleUntil.current = Date.now() + 750;
+  }
+  const settling = () => !hydrated || Date.now() < settleUntil.current;
   useEffect(() => {
-    if (prevNext.current !== undefined && prevNext.current !== nextId) {
+    if (prevNext.current !== undefined && prevNext.current !== nextId && !settling()) {
       const n = attention.next;
       setAnnouncement(n ? `Next up: ${(LANE_WORD[n.kind] ?? "").toLowerCase()} — ${n.title}` : "Next up: nothing needs you");
     }
@@ -236,6 +283,22 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
     // attention.next is derived from the same memo as nextId.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nextId]);
+
+  // #457 D5 — with the bar ON, ResumeQuestionsBanner (and its aria-live) is
+  // absorbed, so the exit/resume state spoke nothing. The SAME single announcer
+  // now says it, in the banner's words, when it appears or its count changes
+  // (never on mount, like `next`).
+  const resumeAnnounceCount = resumeCase ? openQuestionCount : 0;
+  const prevResume = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (prevResume.current !== undefined && resumeAnnounceCount > 0 && prevResume.current !== resumeAnnounceCount && !settling()) {
+      setAnnouncement(`${resumeAnnounceCount} question${resumeAnnounceCount === 1 ? "" : "s"} waiting for Claude`);
+    }
+    prevResume.current = resumeAnnounceCount;
+    // `settling` reads refs + the hydrated flag at effect time; the trigger is
+    // the count alone (like `next` above).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resumeAnnounceCount]);
 
   const tone =
     primary.lane === "decide" ? "text-accent-amber"
@@ -258,6 +321,17 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
         {attention.line.prefix && (
           <span data-token className="shrink-0 font-semibold text-accent-red">{PREFIX_TEXT[attention.line.prefix]}</span>
         )}
+        {/* #457 state G — the same 60s escalation the DisconnectBanner makes:
+            a blip and a dead daemon must not look identical on the line. */}
+        {prolongedOutage && (
+          <span
+            data-testid="next-up-doctor"
+            className="shrink-0 px-1 rounded bg-accent-red-dim text-accent-red font-mono"
+            title="Still disconnected after a minute — the daemon may be down. Run `node packages/mcp-server/dist/cli/init.js doctor --fix` in the project, then reload."
+          >
+            doctor --fix
+          </span>
+        )}
         {/* The lane WORD is part of the accessible text (a screen reader hears
             "DECIDE ▲ …", not a bare glyph). */}
         {item && LANE_WORD[item.kind] && (
@@ -269,6 +343,12 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
         </span>
         {item?.stakes === "high" && (
           <span className="shrink-0 px-1 rounded bg-accent-red-dim text-accent-red font-semibold">HIGH</span>
+        )}
+        {/* #457 D2 — which session this is (only when >1 is merged). */}
+        {item?.sessionLabel && (
+          <span data-testid="next-up-session" className="shrink-0 max-w-[12rem] truncate text-text-muted" title={`Session: ${item.sessionLabel}`}>
+            in {item.sessionLabel}
+          </span>
         )}
         {why && (
           <span className="min-w-0 truncate text-text-muted" style={{ flexShrink: 1000 }} title={why}>· {why}</span>
@@ -450,6 +530,7 @@ function Queue({ title, items, onOpen }: { title: string; items: AttentionItem[]
               <span>{it.title}</span>
             )}
             {it.stakes === "high" && <span className="ml-1 text-accent-red font-semibold">HIGH</span>}
+            {it.sessionLabel && <span className="ml-1 text-text-muted">— {it.sessionLabel}</span>}
           </li>
         ))}
       </ol>
