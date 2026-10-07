@@ -364,13 +364,25 @@ bar-ON path regresses or overclaims in ways the old UI did not:
 - **D4:** the HELD line is less informative than designed.
 - **D2:** the "which session" task (S2) is not improved at all.
 
-Suggested gate for PR 6:
-1. Fix D3, D4, D5 and D6. All four are small and local.
-2. Add the session label to the line or the expansion (D2).
-3. Suppress TurnIndicator's announcement on mount only (D1). Keep it live, because it announces exits (#452).
-4. Rerun S2, S4 and S5. The harness is reproducible from this doc.
-5. Run the **external pilot with real people and a real screen reader** that
+Suggested gate for PR 6 (in the reviewer's must-fix order):
+1. **D6:** stop the false "Nothing needs you" when the bound session is empty.
+2. **D3:** make the "after" copy honest when the agent has exited, the tab is
+   disconnected, or the view is a replay.
+3. **D5 (narrowed):** announce the questions count and the "Copied ✓"
+   confirmation.
+4. **D4:** make the HELD line name what was held.
+5. **D2:** add the session label to the line or the expansion.
+6. Rerun S2, S4 and S5. The harness is reproducible from this doc.
+7. Run the **external pilot with real people and a real screen reader** that
    §9 calls for. Nothing here substitutes for it.
+
+Nice-to-have, not gating:
+- **D1 (mount-only):** suppress TurnIndicator's announcement on mount. Keep it
+  live, because it announces exits (#452).
+- **D8:** the transient load announcement.
+- **D7:** keyboard gaps.
+- **State G details:** "(last known)", `doctor --fix` in the bar, and act
+  buttons disabled with a reason while disconnected.
 
 ## Independent review
 
