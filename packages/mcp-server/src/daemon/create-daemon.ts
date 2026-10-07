@@ -90,6 +90,26 @@ async function defaultOpenBrowser(url: string): Promise<void> {
 
 /** Minimal structural type for the accept socket the upgrade handler rides —
  *  matches how index.ts always called it: `(server as any).on?.("upgrade", …)`. */
+
+/** #460 — the broadcast types that change a session's visible state and so
+ *  bump its revision. Everything else (agent_activity heartbeats, toasts,
+ *  ledger/hook/preference events) leaves it alone. */
+const REVISION_EVENTS = new Set<string>([
+  "artifact_created",
+  "artifact_updated",
+  "artifact_content_updated",
+  "artifact_renamed",
+  "comment_added",
+  "comment_updated",
+  "question_answered",
+  "decision_resolved",
+  "decisions_acknowledged",
+  "plan_progress_updated",
+  "changeset_review_updated",
+  "request_added",
+  "request_served",
+  "secret_warning",
+]);
 export interface UpgradeCapableServer {
   on?: (event: "upgrade", cb: (request: unknown, socket: unknown, head: unknown) => void) => unknown;
 }
@@ -256,9 +276,20 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // client. Only demo sessions (throwaway) and only this one event type — real
   // pairing toasts are live signals we must never resurrect on reconnect.
   const demoReplayEvents = new Map<string, Record<string, unknown>>();
+  /** #460 — monotonic per-session revision (see broadcast()). */
+  const sessionRevisions = new Map<string, number>();
 
   function broadcast(sessionId: string, event: any): void {
     let outgoing = event;
+    // #460 — the per-session CHANGE signal /api/active-sessions publishes. A
+    // tab bound to session A only receives A's broadcasts, so it learns that a
+    // SIBLING changed from this counter in the 10s session poll and re-fetches
+    // that sibling. Bumped only for events that change what a session's
+    // artifacts/comments/requests say (status changes and comments included,
+    // which the artifact count misses); heartbeats and toasts never bump it.
+    if (REVISION_EVENTS.has(event?.type)) {
+      sessionRevisions.set(sessionId, (sessionRevisions.get(sessionId) ?? 0) + 1);
+    }
 
     // Q2: the gate firing must OUTLIVE the toast. Persist FIRST, before the
     // fan-out, so the durable entry's server-assigned id can ride the wire with
@@ -804,7 +835,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // a testable builder (see daemon-routes.ts). Without the gate, a stale tab on a
   // daemon serving a DIFFERENT project could read this project's session list +
   // full state. Mounted on "/" like the other route groups.
-  app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions, log));
+  app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions, log, sessionRevisions));
 
   // --- Serve static web UI ---
   // Extracted to http/static-ui.ts so the bootstrap-injection contract (the

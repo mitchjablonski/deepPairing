@@ -332,6 +332,23 @@ async function toastApiError(action: string, err: unknown): Promise<void> {
  * Re-throws after toasting so callers (e.g. ArtifactStatusActions) can re-enable
  * their UI in a finally.
  */
+/** #460 — the status a `verdict_already_final` refusal says the artifact is
+ *  really at, or null for any other error. */
+function staleVerdictStatus(err: unknown): ArtifactStatus | null {
+  if (!(err instanceof ApiError) || err.code !== "verdict_already_final") return null;
+  const s = err.details?.currentStatus;
+  return typeof s === "string" ? (s as ArtifactStatus) : null;
+}
+
+/** #460 — ask MultiAgentSync to re-fetch one session now (an event, so this
+ *  store needn't import the component). */
+export const REFRESH_SESSION_EVENT = "dp:refresh-session";
+function requestSessionRefresh(sessionId: string): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(REFRESH_SESSION_EVENT, { detail: { sessionId } }));
+  }
+}
+
 async function optimisticArtifactPatch<K extends keyof Artifact>(
   match: (a: Artifact) => boolean,
   field: K,
@@ -357,6 +374,18 @@ async function optimisticArtifactPatch<K extends keyof Artifact>(
     for (const [id, t] of claims) {
       const r = failRollback(slotOf(id), t);
       if (r) restore.set(id, r.to);
+    }
+    // #460 — a stale card (a sibling's artifact resolved elsewhere): the daemon
+    // refused with the CURRENT status. Show that truth, not the stale draft the
+    // rollback would restore, and re-fetch the owning session (its own
+    // re-broadcast is session-scoped and never reaches a sibling tab).
+    const current = staleVerdictStatus(err);
+    if (field === "status" && current) {
+      for (const id of prior.keys()) restore.set(id, current);
+      const owners = new Set(
+        useArtifactStore.getState().artifacts.filter((a) => prior.has(a.id)).map((a) => a.sessionId).filter(Boolean),
+      );
+      for (const sessionId of owners) requestSessionRefresh(sessionId);
     }
     if (restore.size > 0) {
       useArtifactStore.setState((state) => ({

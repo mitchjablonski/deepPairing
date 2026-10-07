@@ -238,6 +238,10 @@ export function createActiveSessionRoutes(
   /** #338 (F4) — daemon log sink for unexpected route errors. Optional so
    *  route-logic fixtures don't thread it (undefined ⇒ silent). */
   logFn?: LogFn,
+  /** #460 — per-session change counter (bumped by the daemon's broadcast on
+   *  every state-changing event). Optional: without it the field is omitted and
+   *  clients fall back to `artifactCount` as the change signal. */
+  sessionRevisions?: Map<string, number>,
 ): Hono {
   const app = new Hono();
   app.onError((error, c) => {
@@ -269,6 +273,8 @@ export function createActiveSessionRoutes(
         // most-recently-active LIVE session when a project has >1 bucket.
         // Falls back to registeredAt for pre-activity sessions.
         lastActivity: meta?.lastActivity ?? meta?.registeredAt,
+        // #460 — the sibling change signal (status changes + comments too).
+        ...(sessionRevisions ? { revision: sessionRevisions.get(id) ?? 0 } : {}),
       };
     });
     return c.json({ sessions: list });

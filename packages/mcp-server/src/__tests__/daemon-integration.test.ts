@@ -124,6 +124,17 @@ describe("S1 — createActiveSessionRoutes gates the root-app session reads (rea
     expect(list.find((s) => s.sessionId === "s_dead")?.live).toBe(false);
   });
 
+  it("#460 — revision is published when the daemon threads its counter, omitted otherwise (old daemons)", async () => {
+    createTestSession("s_rev");
+    const revisions = new Map([["s_rev", 7]]);
+    const withRev = createActiveSessionRoutes(sessions, sessionMeta, "hashA", undefined, undefined, revisions);
+    const list = (await (await withRev.request("/api/active-sessions", { headers: { "X-Project-Hash": "hashA" } })).json()).sessions;
+    expect(list.find((s: { sessionId: string }) => s.sessionId === "s_rev")?.revision).toBe(7);
+    const old = createActiveSessionRoutes(sessions, sessionMeta, "hashA");
+    const oldList = (await (await old.request("/api/active-sessions", { headers: { "X-Project-Hash": "hashA" } })).json()).sessions;
+    expect("revision" in oldList.find((s: { sessionId: string }) => s.sessionId === "s_rev")).toBe(false);
+  });
+
   it("D8 (M8) — fixtures without the set report live (old-daemon behavior)", async () => {
     createTestSession("s_x");
     const routes = createActiveSessionRoutes(sessions, sessionMeta, "hashA");
