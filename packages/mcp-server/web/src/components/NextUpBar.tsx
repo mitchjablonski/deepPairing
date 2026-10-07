@@ -107,7 +107,8 @@ function afterFor(item: AttentionItem, artifacts: Artifact[], reach: AgentReach)
   const a = item.artifactId ? artifacts.find((x) => x.id === item.artifactId) : undefined;
   const agentGone = reach === "gone";
   if (reach === "replay" && item.kind !== "flag") return "Replay is read-only — nothing you do here reaches Claude";
-  if (reach === "disconnected" && item.kind !== "flag") return "Disconnected — Claude resumes when it reconnects";
+  // #465 N3 — it is THIS TAB that lost the daemon, not Claude.
+  if (reach === "disconnected" && item.kind !== "flag") return "This tab is offline — your response can be sent once it reconnects to deepPairing";
   switch (item.kind) {
     case "decision":
       return agentGone
@@ -171,11 +172,13 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   const lastSeenAt = usePreflightBlockStore((s) => s.lastSeenAt);
 
   const sessionLabels = useMemo(() => sessionLabelsFrom(activeSessions), [activeSessions]);
+  const boundSessionId = useConnectionStore((s) => s.sessionId);
   const attention = useMemo(() => computeAttention({
     artifacts,
     comments,
     requests,
     sessionLabels,
+    boundSessionId,
     system: {
       disconnected: !connected,
       staleDaemon,
@@ -187,7 +190,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
         .filter((b) => !lastSeenAt || b.at > lastSeenAt)
         .map((b) => ({ id: b.id, title: b.proposal ? `"${b.concept}" stopped: ${b.proposal}` : `"${b.concept}"`, at: b.at })),
     },
-  }), [artifacts, comments, requests, sessionLabels, connected, staleDaemon, snapshotUnavailable, sessionConflict, replayActive, blocks, lastSeenAt]);
+  }), [artifacts, comments, requests, sessionLabels, boundSessionId, connected, staleDaemon, snapshotUnavailable, sessionConflict, replayActive, blocks, lastSeenAt]);
 
   const agentGone = noAgentLive(activeSessions);
   // #457 state G — the outage clock (ticks only while disconnected).

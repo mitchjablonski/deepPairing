@@ -43,6 +43,8 @@ export interface DecisionFooterProps {
    *  sent-back / rejected CONFIRMATION banners are preserved — a state the human
    *  already reached stays visible. Default false. */
   locked?: boolean;
+  /** #465 — set while this tab is disconnected: the send/reject submits disable with this reason. */
+  offlineReason?: string | null;
 }
 
 export function DecisionFooter({
@@ -70,7 +72,9 @@ export function DecisionFooter({
   onSelect,
   showCalibrationActions = false,
   locked = false,
+  offlineReason = null,
 }: DecisionFooterProps) {
+  const offline = offlineReason;
   return (
     /* X11 — escape hatches grouped under one footer instead of two
        stacked bordered blocks. Pre-X11 "Send back" and "Why this choice"
@@ -105,8 +109,9 @@ export function DecisionFooter({
           />
           <div className="flex items-center gap-2">
             <button
+ title={offline ?? undefined}
               onClick={submitSendBack}
-              disabled={!sendBackText.trim()}
+              disabled={(!sendBackText.trim()) || !!offline}
               className="px-3 py-1 text-xs font-medium bg-accent-amber text-text-inverse rounded
                          hover:bg-accent-amber/80 disabled:opacity-50 transition-colors press-scale"
             >
@@ -164,8 +169,9 @@ export function DecisionFooter({
           />
           <div className="flex items-center gap-2">
             <button
+ title={offline ?? undefined}
               onClick={submitReject}
-              disabled={!rejectText.trim()}
+              disabled={(!rejectText.trim()) || !!offline}
               className="px-3 py-1 text-xs font-medium bg-accent-red text-white rounded
                          hover:bg-accent-red/80 disabled:opacity-50 transition-colors press-scale"
             >
