@@ -42,6 +42,9 @@ export interface AttentionItem {
   stakes?: "high" | "medium" | "low";
   /** Annotations, never a separate Decide item (§4.3). */
   flags?: "possible-secret"[];
+  /** #457 D2 (§4.1, §4.6) — the owning session's name, set ONLY when the store
+   *  holds more than one session (one session needs no name). */
+  sessionLabel?: string;
 }
 
 export interface AttentionInput {
@@ -49,6 +52,9 @@ export interface AttentionInput {
   /** Per-artifact comment buckets, as the artifact store holds them. */
   comments?: Record<string, Comment[]>;
   requests?: Request[];
+  /** #457 D2 — session id → display name (lib/sessionLabel). Missing ids fall
+   *  back to the raw id. */
+  sessionLabels?: Record<string, string>;
   system?: {
     disconnected?: boolean;
     staleDaemon?: boolean;
@@ -198,6 +204,16 @@ export function computeAttention(input: AttentionInput): Attention {
   if (waiting.length && primary.lane !== "waiting") summary.push({ lane: "waiting", count: waiting.length });
   if (held.length && primary.lane !== "held") summary.push({ lane: "held", count: held.length });
   if (read.length) summary.push({ lane: "read", count: read.length });
+
+  // #457 D2 — name the session on every item when more than one is merged.
+  const sessionIds = new Set(artifacts.map((a) => a.sessionId).filter(Boolean));
+  if (sessionIds.size > 1) {
+    const sessionOf = new Map(artifacts.map((a) => [a.id, a.sessionId] as const));
+    for (const it of [...decide, ...read, ...flags, ...waiting]) {
+      const sid = it.artifactId ? sessionOf.get(it.artifactId) : undefined;
+      if (sid) it.sessionLabel = input.sessionLabels?.[sid] ?? sid;
+    }
+  }
 
   return {
     next,
