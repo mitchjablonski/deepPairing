@@ -5,7 +5,7 @@ import { useMemo, useState, useEffect, useRef, lazy, Suspense, type ReactNode } 
 import { m, AnimatePresence } from "motion/react";
 import { apiGet, apiBase } from "../lib/api";
 import type { Artifact } from "@deeppairing/shared";
-import { useArtifactStore, resolveToLiveId, artifactStoreGeneration } from "../stores/artifact";
+import { useArtifactStore, resolveToLiveId, artifactStoreGeneration, markBackfilled, isBackfilled } from "../stores/artifact";
 import { usePreferencesStore, SIDEBAR_WIDTHS } from "../stores/preferences";
 import { useReplayStore } from "../stores/replay";
 import { useConnectionStore } from "../stores/connection";
@@ -683,7 +683,8 @@ function useArrivalHighlights(
     }
 
     const prevSeen = seenRef.current;
-    const arrived = artifacts.filter((a) => !prevSeen.has(a.id));
+    // #458 review — a sibling session's backfilled HISTORY is never an arrival.
+    const arrived = artifacts.filter((a) => !prevSeen.has(a.id) && !isBackfilled(a.id));
     seenRef.current = current;
     if (arrived.length === 0) return;
 
@@ -1152,106 +1153,133 @@ export function MultiAgentSync() {
   // C1 — reuse the session list App already polls into the connection store
   // (every 10s) instead of running a SECOND 5s /api/active-sessions poll here.
   const activeSessions = useConnectionStore((s) => s.activeSessions);
+  const boundSessionId = useConnectionStore((s) => s.sessionId);
   // C1 review — refreshSessions sets a NEW array identity every 10s poll even
   // when unchanged; depending on the array tore down + recreated the 5s
   // interval each time. Key the effect on the id list's VALUE instead.
   const sessionKey = activeSessions.map((s) => s.sessionId).join(",");
+  // #458 review (D6b) — the per-session CHANGE signal: the artifact count the
+  // same 10s poll already carries (refreshSessions publishes a new list only
+  // when a rendered field — incl. artifactCount — changed).
+  const countKey = activeSessions.map((s) => `${s.sessionId}:${s.artifactCount}`).join(",");
+  const sessionsRef = useRef(activeSessions);
+  sessionsRef.current = activeSessions;
+  const boundRef = useRef(boundSessionId);
+  boundRef.current = boundSessionId;
   // Bug B — track which sessions we've actually BACKFILLED (a successful
   // /api/live-session/:id that returned artifacts), NOT "which sessions do we
-  // hold ≥1 artifact from". Pre-fix the gate was `knownSessionIds` — derived
-  // from artifact sessionIds — so a single STRAY artifact for session B (e.g. a
-  // global-client tab receiving B's `artifact_created` broadcast) marked B
-  // "known" and its full-state fetch was skipped forever: only that one newest
-  // artifact showed, B's older artifacts never loaded. Gating on this ref
-  // decouples "seen one artifact" from "loaded all artifacts", so a stray
-  // artifact no longer suppresses the backfill. A ref (not state) so adding an
-  // id doesn't re-render / churn the interval.
+  // hold ≥1 artifact from". A stray WS-delivered artifact for session B no
+  // longer marks B "known" and skips its full fetch. A ref (not state) so
+  // adding an id doesn't re-render / churn the interval.
   const fullyLoadedSessions = useRef<Set<string>>(new Set());
+  // #458 review (D6b) — the artifactCount each loaded session had when we last
+  // fetched it. Broadcasts are session-scoped, so a sibling's NEW draft never
+  // reaches this tab over the WS; before, a loaded session was never fetched
+  // again and its new decision stayed invisible ("Nothing needs you"). A loaded
+  // session is re-fetched when — and only when — its count moves, so the cost
+  // follows activity: a quiet sibling costs nothing, a busy one one GET per
+  // change, bounded by the existing 10s session poll.
+  const fetchedCount = useRef<Map<string, number>>(new Map());
   // C1 — a session with ZERO artifacts is never fully-loaded (the fetch
-  // returned nothing to mark), so it stays out of fullyLoadedSessions and the
-  // 30s backoff keeps polling it. The refetch is still needed (it's how another
-  // session's FIRST artifact gets discovered: session-scoped tabs don't receive
-  // other sessions' WS events), so back it off to 30s per empty session instead
-  // of dropping it.
+  // returned nothing to mark), so the 30s backoff keeps polling it: that's how
+  // another session's FIRST artifact gets discovered.
   const lastAttemptRef = useRef<Map<string, number>>(new Map());
+  const inFlight = useRef<Set<string>>(new Set());
   const EMPTY_SESSION_RETRY_MS = 30_000;
-  // #457 D6 — this component now lives at App level (it was inside this panel,
-  // which only mounts once the BOUND session has artifacts, so an empty bound
-  // session never merged its siblings and the bar claimed "Nothing needs you"
-  // over another session's open decision). Inside the panel, a store reset
-  // (session switch, hydration snapshot) emptied the store, unmounted the
-  // panel, and the remount started these refs fresh. At App level nothing
-  // remounts, so a reset is detected by the store generation instead: when it
-  // moves, every merged session was discarded and is backfilled again.
+  // #457 D6 — this component lives at App level (it was inside ArtifactPanel,
+  // which only mounts once the BOUND session has artifacts). A store reset
+  // (session switch, hydration snapshot) discards everything merged; it is
+  // detected by the store generation, and (#458 review) re-merged IMMEDIATELY —
+  // waiting for the next 5s tick landed the history after the arrival region's
+  // settle window, so old sibling artifacts were announced as new.
   const generationRef = useRef(artifactStoreGeneration());
+  const syncRef = useRef<() => Promise<void>>(async () => {});
+  const acRef = useRef<AbortController | null>(null);
+
+  syncRef.current = async () => {
+    // PP3 — skip the fetch + parse + cross-session merge when the tab is
+    // hidden (the timer keeps ticking but does no work / triggers no renders).
+    if (typeof document !== "undefined" && document.hidden) return;
+    const ac = acRef.current;
+    if (!ac) return;
+    const generation = artifactStoreGeneration();
+    if (generation !== generationRef.current) {
+      generationRef.current = generation;
+      fullyLoadedSessions.current.clear();
+      fetchedCount.current.clear();
+      lastAttemptRef.current.clear();
+    }
+    for (const session of sessionsRef.current) {
+      // E7 review — bail BEFORE stamping the backoff on an abort.
+      if (ac.signal.aborted) return;
+      const id = session.sessionId;
+      // Keyed by generation: a fetch from before a reset must not block the
+      // reset's own immediate re-merge.
+      const flightKey = `${generation}:${id}`;
+      if (inFlight.current.has(flightKey)) continue;
+      const loaded = fullyLoadedSessions.current.has(id);
+      if (loaded) {
+        // The bound session's own changes arrive over its WS.
+        if (id === boundRef.current) continue;
+        if (fetchedCount.current.get(id) === session.artifactCount) continue; // nothing new
+      } else {
+        const last = lastAttemptRef.current.get(id) ?? 0;
+        if (Date.now() - last < EMPTY_SESSION_RETRY_MS) continue;
+        lastAttemptRef.current.set(id, Date.now());
+      }
+      inFlight.current.add(flightKey);
+      try {
+        const sRes = await apiGet(`${apiBase()}/api/live-session/${id}`, { signal: ac.signal });
+        if (!sRes.ok) continue;
+        const state = await sRes.json();
+        if (ac.signal.aborted) return;
+        // #457 D6 — a reset landed mid-fetch: this payload belongs to the
+        // discarded store. The reset's own immediate re-sync fetches again.
+        if (artifactStoreGeneration() !== generation) return;
+        const artifacts: Artifact[] = state.artifacts ?? [];
+        // #458 review — a session's FIRST load (or its re-merge after a reset)
+        // is history: mark it before adding so nothing reads it as an arrival.
+        // A re-poll of a loaded session brings genuinely new work: unmarked.
+        if (!loaded) markBackfilled(artifacts.map((a) => a.id));
+        for (const artifact of artifacts) addArtifact(artifact);
+        for (const comment of state.comments ?? []) addComment(comment);
+        // Bug B — mark fully-loaded ONLY once we've actually pulled artifacts;
+        // empty sessions stay unmarked so the 30s backoff keeps polling them.
+        if (artifacts.length > 0) {
+          fullyLoadedSessions.current.add(id);
+          fetchedCount.current.set(id, session.artifactCount);
+        }
+      } catch {
+        /* network / abort — the next tick retries */
+      } finally {
+        inFlight.current.delete(flightKey);
+      }
+    }
+  };
 
   useEffect(() => {
-    // E7 — one controller per effect generation; every tick's fetch carries
-    // the signal, cleanup aborts whichever is mid-flight.
+    // E7 — one controller per effect generation; cleanup aborts mid-flight.
     const ac = new AbortController();
-
-    const sync = async () => {
-      // PP3 — skip the fetch + parse + cross-session merge when the tab is
-      // hidden (the timer keeps ticking but does no work / triggers no renders).
-      if (typeof document !== "undefined" && document.hidden) return;
-      const generation = artifactStoreGeneration();
-      if (generation !== generationRef.current) {
-        generationRef.current = generation;
-        fullyLoadedSessions.current.clear();
-        lastAttemptRef.current.clear();
-      }
-      for (const session of activeSessions) {
-        // E7 review — bail BEFORE stamping the backoff: an abort mid-loop
-        // otherwise phantom-stamped every remaining session (their fetches
-        // instantly rejected on the dead signal AFTER the stamp), delaying
-        // another agent's session discovery by up to 30s post-churn.
-        if (ac.signal.aborted) return;
-        // Bug B — gate on "have we backfilled this session", not "do we hold
-        // any artifact from it". A stray WS-delivered artifact no longer skips
-        // the full fetch.
-        if (fullyLoadedSessions.current.has(session.sessionId)) continue; // Already backfilled
-        const last = lastAttemptRef.current.get(session.sessionId) ?? 0;
-        if (Date.now() - last < EMPTY_SESSION_RETRY_MS) continue;
-        lastAttemptRef.current.set(session.sessionId, Date.now());
-
-        // Load this session's artifacts from disk via the API
-        try {
-          const sRes = await apiGet(`${apiBase()}/api/live-session/${session.sessionId}`, { signal: ac.signal });
-          if (!sRes.ok) continue;
-          const state = await sRes.json();
-          if (ac.signal.aborted) return;
-          // #457 D6 — a reset landed mid-fetch: this payload belongs to the
-          // discarded store. The next tick (fresh refs) fetches again.
-          if (artifactStoreGeneration() !== generation) return;
-
-          const loaded = state.artifacts ?? [];
-          for (const artifact of loaded) {
-            addArtifact(artifact);
-          }
-          for (const comment of state.comments ?? []) {
-            addComment(comment);
-          }
-          // Bug B — mark fully-loaded ONLY once we've actually pulled the
-          // session's artifacts. Empty sessions stay UNmarked so the 30s
-          // backoff keeps polling for their first artifact (a session-scoped
-          // tab never receives other sessions' WS events, so polling is the
-          // only discovery path). A session a stray broadcast seeded with one
-          // artifact reaches here and gets its complete backfill.
-          if (loaded.length > 0) fullyLoadedSessions.current.add(session.sessionId);
-        } catch {}
-      }
-    };
-
-    sync();
-    // 5s cadence stays for reacting to NEWLY appearing sessions quickly, but
-    // it's now fetch-free unless there's an unknown session past its backoff.
-    const timer = setInterval(sync, 5000);
+    acRef.current = ac;
+    void syncRef.current();
+    // 5s cadence stays for reacting to NEWLY appearing sessions quickly; it is
+    // fetch-free unless a session is new, past its empty backoff, or changed.
+    const timer = setInterval(() => void syncRef.current(), 5000);
     return () => { ac.abort(); clearInterval(timer); };
-    // sessionKey (not the array) so a same-content refresh doesn't churn the
-    // interval; activeSessions is read via a ref-stable closure re-created
-    // only when membership actually changes.
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberate: sessionKey (not the array) so a same-content refresh doesn't churn the 5s interval — see comment above
-  }, [sessionKey]); // Re-run when the session MEMBERSHIP changes (a new session to backfill)
+  }, [sessionKey]); // Re-run when the session MEMBERSHIP changes
+
+  // #458 review (D6b) — a sibling's count moved (the 10s poll saw it): fetch now.
+  useEffect(() => {
+    void syncRef.current();
+  }, [countKey]);
+
+  // #458 review — re-merge immediately after a store reset (generation bump).
+  useEffect(
+    () => useArtifactStore.subscribe(() => {
+      if (artifactStoreGeneration() !== generationRef.current) void syncRef.current();
+    }),
+    [],
+  );
 
   return null; // No visual output — just syncs data
 }

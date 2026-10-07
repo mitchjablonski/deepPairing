@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Artifact } from "@deeppairing/shared";
-import { useArtifactStore, artifactStoreGeneration } from "../stores/artifact";
+import { useArtifactStore, artifactStoreGeneration, isBackfilled } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
 import { useReplayStore } from "../stores/replay";
 import { usePreflightBlockStore } from "../stores/preflightBlocks";
@@ -275,7 +275,9 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   }
   const settling = () => !hydrated || Date.now() < settleUntil.current;
   useEffect(() => {
-    if (prevNext.current !== undefined && prevNext.current !== nextId && !settling()) {
+    // #458 review — `next` moving onto a sibling session's backfilled HISTORY
+    // is not news either (only a genuinely new artifact is).
+    if (prevNext.current !== undefined && prevNext.current !== nextId && !settling() && !(nextId && isBackfilled(nextId))) {
       const n = attention.next;
       setAnnouncement(n ? `Next up: ${(LANE_WORD[n.kind] ?? "").toLowerCase()} — ${n.title}` : "Next up: nothing needs you");
     }

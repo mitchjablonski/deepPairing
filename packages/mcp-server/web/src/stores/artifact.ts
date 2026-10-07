@@ -31,6 +31,22 @@ let storeGeneration = 0;
 export function artifactStoreGeneration(): number {
   return storeGeneration;
 }
+
+/**
+ * #458 review — artifacts merged as a sibling session's HISTORY (MultiAgentSync's
+ * first backfill of a session, or its re-merge after a reset). They are not
+ * live arrivals: the arrival region must not glow or announce them, and the
+ * Next-up bar must not announce `next` moving onto one. A sibling's genuinely
+ * NEW artifact (a later re-poll) is not marked and counts as an arrival.
+ * Module state, not store state (no Set in Zustand); cleared on reset().
+ */
+const backfilledIds = new Set<string>();
+export function markBackfilled(ids: string[]): void {
+  for (const id of ids) backfilledIds.add(id);
+}
+export function isBackfilled(id: string): boolean {
+  return backfilledIds.has(id);
+}
 /** #407 — the tab's session binding RIGHT NOW. Captured at a call's start so a
  *  request whose routing falls back to the tab (no owner) still goes to the
  *  session it was started in, even if an await inside lets a switch land. */
@@ -1340,6 +1356,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     // #393 review (Sol finding 2) — crossing this boundary invalidates any
     // in-flight optimistic reconciliation. See `storeGeneration` above.
     storeGeneration++;
+    backfilledIds.clear(); // #458 review — the merged history went with the store
     rollbackChains = {}; // #422 — nothing from before the boundary may roll back into it
     set({ artifacts: [], comments: {}, selectedArtifactId: null, unreadIds: [], acknowledgedDecisions: {}, resolvedDecisions: {}, requests: [] });
   },
