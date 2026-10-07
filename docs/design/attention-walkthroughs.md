@@ -45,7 +45,7 @@
 |---|---|---|---|
 | 1 | What does Claude need, and what happens when you answer? | **Better** | Only the bar answers the second half without opening anything. |
 | 2 | Which session is blocked on you? | **Same** | Neither surface names the blocked session. The bar names the item, not the session (§4.6 not implemented). |
-| 3 | 13-item queue, find the one high-stakes item | **Better** (to find it) · **Same** (to clear the queue) | "+1 high decision" is visible at both widths and reaches the decision in 8 keys. Off, nothing signals it. |
+| 3 | 13-item queue, find the one high-stakes item | **Better** (to find it) · **Same** (to clear the queue) | "+1 high decision" is visible at both widths and reaches the decision in 8 keys. Off, nothing signals *stakes* (the ▲ glyph marks decisions, not stakes). |
 | 4 | Claude exited — is anything still owed? | **Mixed** (better for sighted keyboard users, worse for screen readers) | Resume path 9 keys vs 20. But the plan's "after" text promises execution by an agent that has exited, and the exit/questions state is no longer announced. |
 | 5 | Edge states | **Mixed** | Disconnected, replay, long titles and the hold-with-pending case are better. Empty is the same. The idle **HELD** line is worse than designed. A false "Nothing needs you" appears when the bound session is empty. |
 
@@ -92,7 +92,7 @@ your having to open anything.
   where the bar says the agent is blocked on your plan review. OFF said "Your
   turn". The two surfaces disagree (see D6).
 - The keyboard path to "Open" is one key longer than the old pill.
-- Two polite announcements fire on load instead of one (D1).
+- Two polite announcements fire on initial load instead of one (D1, mount-only).
 
 **Verdict: better.**
 
@@ -152,8 +152,8 @@ as "+6". The queue was re-seeded for every run.
 
 | | Before | After |
 |---|---|---|
-| Any stakes signal above the fold before opening anything? | **None.** Banner: `13 items waiting for you` + 3 chips + `+10 more`. Sidebar rows show ▲ (decision) vs ● (review) but no HIGH. | **`+1 high decision`**, in red on a red-dim pill, at x=1102 (1280 wide) and x=1713 (1920 wide). It is fully in the viewport and not clipped at either width. It counts decisions only, correctly "+1" not "+6". |
-| Path | `n` ×7. Creation order, and nothing tells you to keep pressing. | Tab → skip link, Enter, Tab → Open, Tab → `+1 high decision`, Enter (opens "High-stakes decisions (1)"), Tab, Tab → item, Enter |
+| Any stakes signal above the fold before opening anything? | **Nothing signals stakes.** Banner: `13 items waiting for you` + 3 chips + `+10 more`. PR 4's sidebar glyphs still mark the item as a decision (▲ vs ● review), and the palette's "Next pending" command exists, but neither says HIGH. | **`+1 high decision`**, in red on a red-dim pill, at x=1102 (1280 wide) and x=1713 (1920 wide). It is fully in the viewport and not clipped at either width. It counts decisions only, correctly "+1" not "+6". |
+| Path | `n` ×7. Creation order; the ▲ marks a decision, but nothing tells you which item is high-stakes. | Tab → skip link, Enter, Tab → Open, Tab → `+1 high decision`, Enter (opens "High-stakes decisions (1)"), Tab, Tab → item, Enter |
 | Keys | **7**, and only if you already know the item exists | **8**, and you know it exists from the first frame |
 | Panels opened | 0 | 1 (the `⌄` high list) |
 
@@ -217,11 +217,14 @@ Then `unregister`: the agent exits and its history stays readable.
   `2 questions waiting for Claude Copy resume prompt`, then
   `… Copied ✓` after the copy.
 - ON: the only bar announcement was `Next up: review — Add per-user API rate limiting`.
-  The exit/question state is **not announced** (only the header's
-  `Agent exited — resume to continue`). The `Copied ✓` confirmation is a
-  button-label change, **not a live region**.
-- So a screen-reader user hears less about what Claude owes them, and gets no
-  spoken confirmation of the copy (D5).
+  The "N questions waiting for Claude" count is **not announced**, and the
+  `Copied ✓` confirmation is a button-label change, **not a live region**.
+- The exit itself is a different matter. The exit *transition* is announced
+  once, by TurnIndicator's live status (a deliberate #452 decision). This
+  scenario unregisters the agent *before* page load, so no transition was
+  observed in either mode.
+- So with the bar ON a screen-reader user loses the open-questions count and
+  the copy confirmation (D5).
 
 **Better.**
 - The Waiting lane is honest about direction: questions are "Waiting on
@@ -231,7 +234,7 @@ Then `unregister`: the agent exits and its history stays readable.
 
 **Worse.**
 - The plan's "after" copy promises execution by an exited agent (D3).
-- Screen-reader users lose two announcements (D5).
+- Screen-reader users lose the "N questions waiting for Claude" and "Copied ✓" announcements (D5).
 
 **Verdict: mixed.** Better for sighted and keyboard users. Worse on honest
 copy and for screen readers. Fixing D3 and D5 would make it better outright.
@@ -243,7 +246,7 @@ copy and for screen readers. Fixing D3 and D5 would make it better outright.
 | State | Before | After | Verdict |
 |---|---|---|---|
 | **Empty** (registered session, nothing yet) | Body: "Waiting for Claude". No extra row. | `◇ Nothing needs you ⌄` adds one row (expected, §4.2). When a finding and then a high decision arrived: `● Session cache hit rate is 12% · +1 high decision · Decide 2`, announced once (`Next up: review — …`). OFF announced `1 for you`, `Your turn`. | **Same** |
-| **Disconnected** (daemon killed under an open tab, 5s later) | DisconnectBanner `Disconnected from server — reconnecting...` + the stale `2 items waiting for you` banner. No signal that the list is last-known. | `⚠ DISCONNECTED · DECIDE ▲ Which store backs the session cache? HIGH · … · Claude continues with the option you pick`. The prefix is pinned, and DisconnectBanner is still shown. **But** there is no "(last known)" and no `[doctor --fix]` (design state G). The after text still promises "Claude continues", and the Select buttons stay enabled (the same in OFF; §4.3 rule 1 says act buttons disable with a reason). | **Better** (failure visible on the line), short of the design |
+| **Disconnected** (daemon killed under an open tab, 5s later) | DisconnectBanner `Disconnected from server — reconnecting...` + the stale `2 items waiting for you` banner. No signal that the list is last-known. | `⚠ DISCONNECTED · DECIDE ▲ Which store backs the session cache? HIGH · … · Claude continues with the option you pick`. The prefix is pinned, and DisconnectBanner is still shown. **But** there is no "(last known)" and no `[doctor --fix]` (design state G). The after text still promises "Claude continues" (D3). The decision's Select buttons stay **enabled** while disconnected, in both modes; §4.3 rule 1 says act buttons disable with the reason. | **Better** (failure visible on the line), short of the design |
 | **Replay** (deep link to an on-disk session this daemon did not register) | Scrubber `Replay mode 1/2 events … Exit` + the live `2 items waiting for you` banner + `Your turn`, with nothing tying them together | `REPLAY · ▲ Which store backs… · Decide 2` + scrubber. Esc exits, and the bar then truthfully reads `◇ Nothing needs you` for the live session. | **Better** |
 | **Long titles** (a 220-character decision title, 140-character finding, 2 high decisions) | Chips cut at 28 characters (`Should the session cache key…`). No HIGH anywhere. | One line (28px at 1280, 33px at 1920). The title truncates first. `Open`, `+2 high decision`, `Decide 3` and `⌄` all measured in the viewport and unclipped at both widths. The full text is in the accessible name. | **Better** |
 | **Blocked action, idle** (stance hold, nothing pending) | Hero toast (`role=alert`, 12s) with Retire/Ledger. After it fades, only the `⋯` button renamed to "Diagnostics — attention needed". **18 keys** to the gate log (⋯ → "Show recent gate blocks (1 waiting on you)"). | Same hero toast + bar `■ HELD [Why]`. **10 keys** to the record (skip link → Why). No Retire in the bar (good). **But the line shows only `■ HELD`**, not the concept or proposal of design state F (D4). Once the toast fades you can't tell *what* was held without pressing Why. | **Worse than designed**; about the same as before |
@@ -261,13 +264,20 @@ copy and for screen readers. Fixing D3 and D5 would make it better outright.
 
 ## Defects found (not fixed here)
 
-**D1 — Two polite announcers with the bar ON (contradicts §7).**
-`TurnIndicator`'s agent-state branch keeps `role="status" aria-live="polite"`
-even when `agentStateOnly` is true (`web/src/components/TurnIndicator.tsx:224`).
-§7 says it "becomes a plain (non-live) status" when the bar is on.
+**D1 — Co-announcement on initial load (mount-only).**
+With the bar ON, `TurnIndicator` stays a polite live status
+(`web/src/components/TurnIndicator.tsx:224`). That was a deliberate #452
+review decision: it is the single announcer for agent-state transitions such
+as an exit, so it must **stay live**. Making it non-live would recreate exit
+silence. The narrow defect is that on **initial load** its first state and the
+bar's first `next` both announce.
 - *Repro:* bar ON, seed any pending draft, load the page. The live log shows
-  `Agent working` (TurnIndicator) and `Next up: review — …` (bar) within
-  about 1ms of each other (S1, S2, S3 logs).
+  `Agent working` (TurnIndicator) and `Next up: review — …` (bar) within about
+  1ms of each other (S1, S2, S3 logs).
+- Our API seeding inflates this: the seed traffic counts as agent activity,
+  which is why the first state is "Agent working".
+- *Suggested fix:* suppress TurnIndicator's announcement on mount. Keep it live
+  for later transitions.
 
 **D2 — The bar never names the session (design §4.6 / §6).**
 `AttentionItem` has no `sessionLabel` (`web/src/lib/attention.ts`), and
@@ -283,7 +293,10 @@ is. The `decision` and `review` cases do check it.
 - *Repro:* register, add a draft plan, `unregister`, then open with the bar ON.
   The header says "Agent exited — resume to continue" while the bar says
   "Approve → Claude executes 4 steps" (`s4-after-*-landing.png`).
-- The same copy also stays while disconnected and during replay.
+- It also applies **while disconnected** and **during replay**. The bar keeps
+  promising "Claude continues with the option you pick" or "Claude executes…"
+  under `⚠ DISCONNECTED` and `REPLAY` (`s5-disconnected-after-*.png`,
+  `s5-replay-after-*.png`).
 
 **D4 — The HELD line omits what was held.**
 `primaryToken` returns the bare `"■ HELD"`, and `whyFor`/`afterFor` return ""
@@ -293,10 +306,15 @@ for holds. Design state F shows
   `/api/internal/sessions/<id>/preflight-block`, then wait for the 12s toast to
   fade. The bar reads `■ HELD [Why]` (`s5-hold-idle-after-*.png`).
 
-**D5 — Exit/resume state lost its live announcements with the bar ON.**
-With the bar OFF, `ResumeQuestionsBanner` announces "N questions waiting for
-Claude" and "Copied ✓". With the bar ON, the bar's resume chip and copy button
-sit outside any live region, and the announcer only tracks `next`.
+**D5 — The questions count and the copy confirmation are not announced with the bar ON.**
+With the bar OFF, `ResumeQuestionsBanner` is `aria-live`, so it announces "N
+questions waiting for Claude" and "Copied ✓". With the bar ON, the bar's resume
+chip and copy button sit outside any live region, and the bar's announcer only
+tracks `next`.
+
+The exit *transition* is not lost: TurnIndicator still announces it once
+(#452). S4 unregisters the agent before load, so it does not exercise the
+transition.
 - *Repro:* run S4 with the bar ON and compare the live log against the bar-OFF
   run.
 
@@ -342,17 +360,44 @@ But flipping the default would also **delete** the old banners, and today the
 bar-ON path regresses or overclaims in ways the old UI did not:
 - **D3:** it promises execution by an exited agent.
 - **D6:** it says "Nothing needs you" while a sibling session has an open decision.
-- **D5:** screen-reader users lose the exit and copy announcements.
+- **D5:** screen-reader users lose the "N questions waiting for Claude" and "Copied ✓" announcements.
 - **D4:** the HELD line is less informative than designed.
 - **D2:** the "which session" task (S2) is not improved at all.
 
 Suggested gate for PR 6:
 1. Fix D3, D4, D5 and D6. All four are small and local.
 2. Add the session label to the line or the expansion (D2).
-3. Make TurnIndicator non-live with the bar on (D1).
+3. Suppress TurnIndicator's announcement on mount only (D1). Keep it live, because it announces exits (#452).
 4. Rerun S2, S4 and S5. The harness is reproducible from this doc.
 5. Run the **external pilot with real people and a real screen reader** that
    §9 calls for. Nothing here substitutes for it.
+
+## Independent review
+
+An independent reviewer checked every defect against the code. It agreed with
+the "not yet" verdict and asked for the corrections above:
+- D1 narrowed to the mount-only co-announcement;
+- D5 narrowed to the questions count and the copy confirmation;
+- S3 bar-OFF wording changed to "nothing signals *stakes*".
+
+It also asked that three understated findings be made explicit:
+- state G is missing "(last known)" and the `doctor --fix` escalation;
+- act buttons are not disabled while disconnected;
+- D3 also applies while disconnected and during replay.
+
+**Must-fix before PR 6, in ranked order:**
+1. **D6:** false "Nothing needs you" when the bound session is empty.
+2. **D3:** "after" copy that ignores an exited agent, a disconnection or replay.
+3. **D5 (narrowed):** announce the questions count and the copy confirmation.
+4. **D4:** the HELD line names what was held.
+5. **D2:** session labels.
+
+**Nice-to-have:**
+- **D8:** the transient load announcement.
+- **D1 (mount-only):** suppress TurnIndicator's announcement on mount.
+- **D7:** keyboard gaps.
+- **State G details:** "(last known)", `doctor --fix` in the bar, and act
+  buttons disabled with a reason while disconnected.
 
 ## What this could not measure
 
