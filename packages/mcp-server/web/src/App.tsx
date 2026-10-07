@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { apiGet, apiBase } from "./lib/api";
-import { ArtifactPanel } from "./components/ArtifactPanel";
+import { ArtifactPanel, MultiAgentSync } from "./components/ArtifactPanel";
 import { IdleHome } from "./components/IdleHome";
 import { SessionWrapCard, wrapCardDismissed } from "./components/SessionWrapCard";
 import { DemoNextStep } from "./components/DemoNextStep";
@@ -849,6 +849,13 @@ function App() {
           })
         )}
       </nav>
+
+      {/* #457 D6 — merge the OTHER live sessions' artifacts at App level. It
+          lived inside ArtifactPanel, which mounts only once the BOUND session
+          has artifacts: an empty bound session never merged its siblings, so
+          the bar said "◇ Nothing needs you" (and the OFF banner/pill/tab title
+          stayed silent) while another session held an open decision. */}
+      <MultiAgentSync />
 
       {/* #430 PR 2 — the Next-up bar, opt-in (Settings → Next-up bar, default
           OFF). Off renders nothing, so the layout is exactly as before; on, it
