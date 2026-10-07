@@ -54,6 +54,19 @@ export function TurnIndicator({
   // quiet and the old inference flipped to "Up to date" on a busy agent).
   const agentActivityAt = useConnectionStore((s) => s.agentActivityAt);
   const agentActiveSince = useConnectionStore((s) => s.agentActiveSince);
+  // #457 D1 — with the bar ON, the load-time "Connected → Agent working" flip
+  // was spoken at the same instant as the bar's first "Next up" (two polite
+  // announcers on load). The agent-state region stays live (#452), but only
+  // ARMS once hydration has settled — so the initial mount is silent and every
+  // later transition (an exit, a resume) is still announced. Bar OFF: live
+  // from the start, as before.
+  const hydrated = useConnectionStore((s) => s.hydrated);
+  const [liveArmed, setLiveArmed] = useState(!agentStateOnly);
+  useEffect(() => {
+    if (liveArmed || !hydrated) return;
+    const t = setTimeout(() => setLiveArmed(true), 750);
+    return () => clearTimeout(t);
+  }, [liveArmed, hydrated]);
 
   const latestReasoningAction = useMemo(() => {
     // Walk backward through artifacts to find the most recent reasoning
@@ -221,7 +234,7 @@ export function TurnIndicator({
   // switch to a neutral "Up to date" so we don't pulse forever at an agent
   // that's finished or gone.
   return (
-    <div className="flex items-center gap-2 min-w-0" role="status" aria-live="polite">
+    <div className="flex items-center gap-2 min-w-0" role="status" aria-live={liveArmed ? "polite" : "off"}>
       {agentExited ? (
         // M3 — the bound session's wrapper exited. The old branch only knew
         // "Agent working"/"Up to date" (both wrong: the agent is gone, not

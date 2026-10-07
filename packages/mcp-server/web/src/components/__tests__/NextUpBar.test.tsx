@@ -108,7 +108,8 @@ describe("#430 PR 2 — states A–G render the design's exact line", () => {
   it("F — held by your stance: read-only with Why, no Retire in the bar", () => {
     usePreflightBlockStore.setState({ blocks: [{ id: "b1", at: at(), source: "session", concept: "global mutable state", proposal: "Add a ConfigStore singleton", via: "concept" }], lastSeenAt: null } as any);
     render(<NextUpBar />);
-    expect(line()).toBe("■ HELD");
+    // #457 D4 — design state F: the line names what was held.
+    expect(line()).toBe('■ HELD "global mutable state" stopped: Add a ConfigStore singleton');
     expect(screen.queryByRole("button", { name: /retire/i })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Why" }));
     expect(screen.getByText(/"global mutable state" stopped: Add a ConfigStore singleton/)).toBeInTheDocument();
@@ -119,14 +120,15 @@ describe("#430 PR 2 — states A–G render the design's exact line", () => {
     useConnectionStore.setState({ connected: false } as any);
     useArtifactStore.setState({ artifacts: [decision("d1", "Store choice", "high")] });
     render(<NextUpBar />);
-    expect(line()).toBe("⚠ DISCONNECTED · ▲ Store choice · Decide 1");
+    // #457 state G — "(last known)" per the §4.3 worked table.
+    expect(line()).toBe("⚠ DISCONNECTED · ▲ Store choice (last known) · Decide 1");
   });
 
   it("replay prefixes a hold (the doc's 'REPLAY · ■ HELD' row)", () => {
     useReplayStore.setState({ active: true } as any);
     usePreflightBlockStore.setState({ blocks: [{ id: "b1", at: at(), source: "session", concept: "x", via: "concept" }], lastSeenAt: null } as any);
     render(<NextUpBar />);
-    expect(line()).toBe("REPLAY · ■ HELD");
+    expect(line()).toBe('REPLAY · ■ HELD "x"');
   });
 });
 

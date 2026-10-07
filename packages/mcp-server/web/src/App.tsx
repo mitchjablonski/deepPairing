@@ -12,6 +12,7 @@ import { useAgentWorking } from "./hooks/useAgentWorking";
 import { WaitingForClaude } from "./components/WaitingForClaude";
 import { TurnIndicator } from "./components/TurnIndicator";
 import { NextUpBar } from "./components/NextUpBar";
+import { sessionLabelOf } from "./lib/sessionLabel";
 import { usePreferencesStore } from "./stores/preferences";
 import { PendingBanner } from "./components/PendingBanner";
 import { ResumeQuestionsBanner } from "./components/ResumeQuestionsBanner";
@@ -449,12 +450,16 @@ function App() {
 
       // E3 (L1) — `n`: next thing waiting on you. Same wrap-around cycle as
       // the TurnIndicator pill; at 15+ artifacts this is the velocity move.
-      if (e.key === "n") {
+      // #457 D7 (design §7) — Shift+`n` (`N`) goes to the PREVIOUS one, same
+      // wrap-around; it was unbound.
+      if (e.key === "n" || e.key === "N") {
         const pending = computePending(store.artifacts).drafts;
         if (pending.length === 0) return;
         e.preventDefault();
         const idx = pending.findIndex((a) => a.id === store.selectedArtifactId);
-        const nextPending = pending[(idx + 1) % pending.length];
+        const step = e.key === "N" ? -1 : 1;
+        const from = idx === -1 && step === -1 ? 0 : idx;
+        const nextPending = pending[(from + step + pending.length) % pending.length];
         if (nextPending) store.selectArtifact(nextPending.id);
       }
 
@@ -803,11 +808,8 @@ function App() {
         ) : (
           activeSessions.map((s, i) => {
             const isActive = sessionId === s.sessionId;
-            const label = s.title && s.title !== s.sessionId
-              ? s.title
-              : s.project
-                ? s.project
-                : `Session ${i + 1}`;
+            // #457 D2 — the same name the Next-up bar uses (lib/sessionLabel).
+            const label = sessionLabelOf(s, i);
             return (
               <button
                 key={s.sessionId}
