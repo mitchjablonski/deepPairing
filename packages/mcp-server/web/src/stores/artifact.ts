@@ -25,6 +25,12 @@ let localCommentSeq = 0;
  * imports THIS module — the cycle the codebase deliberately avoids).
  */
 let storeGeneration = 0;
+/** #457 D6 — read-only view of the generation for App-level syncers that
+ *  outlive a reset (MultiAgentSync): a bump means everything merged into the
+ *  store was discarded and must be fetched again. */
+export function artifactStoreGeneration(): number {
+  return storeGeneration;
+}
 /** #407 — the tab's session binding RIGHT NOW. Captured at a call's start so a
  *  request whose routing falls back to the tab (no owner) still goes to the
  *  session it was started in, even if an await inside lets a switch land. */

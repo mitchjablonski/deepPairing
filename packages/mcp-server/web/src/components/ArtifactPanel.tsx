@@ -5,7 +5,7 @@ import { useMemo, useState, useEffect, useRef, lazy, Suspense, type ReactNode } 
 import { m, AnimatePresence } from "motion/react";
 import { apiGet, apiBase } from "../lib/api";
 import type { Artifact } from "@deeppairing/shared";
-import { useArtifactStore, resolveToLiveId } from "../stores/artifact";
+import { useArtifactStore, resolveToLiveId, artifactStoreGeneration } from "../stores/artifact";
 import { usePreferencesStore, SIDEBAR_WIDTHS } from "../stores/preferences";
 import { useReplayStore } from "../stores/replay";
 import { useConnectionStore } from "../stores/connection";
@@ -1175,6 +1175,15 @@ export function MultiAgentSync() {
   // of dropping it.
   const lastAttemptRef = useRef<Map<string, number>>(new Map());
   const EMPTY_SESSION_RETRY_MS = 30_000;
+  // #457 D6 — this component now lives at App level (it was inside this panel,
+  // which only mounts once the BOUND session has artifacts, so an empty bound
+  // session never merged its siblings and the bar claimed "Nothing needs you"
+  // over another session's open decision). Inside the panel, a store reset
+  // (session switch, hydration snapshot) emptied the store, unmounted the
+  // panel, and the remount started these refs fresh. At App level nothing
+  // remounts, so a reset is detected by the store generation instead: when it
+  // moves, every merged session was discarded and is backfilled again.
+  const generationRef = useRef(artifactStoreGeneration());
 
   useEffect(() => {
     // E7 — one controller per effect generation; every tick's fetch carries
@@ -1185,6 +1194,12 @@ export function MultiAgentSync() {
       // PP3 — skip the fetch + parse + cross-session merge when the tab is
       // hidden (the timer keeps ticking but does no work / triggers no renders).
       if (typeof document !== "undefined" && document.hidden) return;
+      const generation = artifactStoreGeneration();
+      if (generation !== generationRef.current) {
+        generationRef.current = generation;
+        fullyLoadedSessions.current.clear();
+        lastAttemptRef.current.clear();
+      }
       for (const session of activeSessions) {
         // E7 review — bail BEFORE stamping the backoff: an abort mid-loop
         // otherwise phantom-stamped every remaining session (their fetches
@@ -1205,6 +1220,9 @@ export function MultiAgentSync() {
           if (!sRes.ok) continue;
           const state = await sRes.json();
           if (ac.signal.aborted) return;
+          // #457 D6 — a reset landed mid-fetch: this payload belongs to the
+          // discarded store. The next tick (fresh refs) fetches again.
+          if (artifactStoreGeneration() !== generation) return;
 
           const loaded = state.artifacts ?? [];
           for (const artifact of loaded) {
@@ -1325,8 +1343,8 @@ export function ArtifactPanel() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Sync artifacts from other active sessions */}
-      <MultiAgentSync />
+      {/* #457 D6 — MultiAgentSync (other sessions' artifacts) is mounted by
+          App now, so it runs even while the bound session is empty. */}
 
       {/* Polite, visually-hidden announcement of live arrivals so screen-reader
           users learn a new artifact came in without depending on the visual
