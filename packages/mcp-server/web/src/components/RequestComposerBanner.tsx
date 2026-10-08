@@ -1,10 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { RequestIntent } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
 import { useToastStore } from "../stores/toast";
 import { useAgentRecentlyActive } from "../hooks/useAgentRecentlyActive";
 import { noAgentLive } from "../lib/liveness";
+import { useDraft, clearDraftIfUnchanged } from "../hooks/useDraft";
+import { useConnectionGraceStore } from "../lib/connectionGrace";
+import { useOfflineReason } from "../hooks/useOfflineReason";
 
 /**
  * G1 (#198b) — the REQUEST COMPOSER. A quiet banner-row affordance that lets the
@@ -155,16 +158,26 @@ export function RequestComposerBanner({ compact = false }: {
    *  pips + resume bridge live in the bar. OFF (default): exactly as before. */
   compact?: boolean;
 } = {}) {
+  const offline = useOfflineReason(); // #477 — act paths gate on the shared offline condition (#467)
+  const everConnected = useConnectionGraceStore((s) => s.everConnected);
   const submitRequest = useArtifactStore((s) => s.submitRequest);
   const connected = useConnectionStore((s) => s.connected);
   const pushToast = useToastStore((s) => s.push);
   const bridge = useRequestResumeBridge();
   const { noAgent, copyResume } = bridge;
 
-  const [open, setOpen] = useState(false);
+  // A request still being typed before a reload reopens with it.
+  const [open, setOpen] = useState(() => {
+    try { return !!sessionStorage.getItem(`dp:draft:request:${useConnectionStore.getState().sessionId ?? "global"}`); } catch { return false; }
+  });
   const [intent, setIntent] = useState<RequestIntent>("explain");
-  const [text, setText] = useState("");
+  // #487 review — the typed request survives a reload (useDraft, per session).
+  const draftSession = useConnectionStore((s) => s.sessionId) ?? "global";
+  const [text, setText] = useDraft(`request:${draftSession}`);
   const [submitting, setSubmitting] = useState(false);
+  // #487 review — the CURRENT draft, for the completion fence in send().
+  const textRef = useRef(text);
+  textRef.current = text;
 
   // #430 PR 5 — the header "Request" button (bar ON) opens the composer.
   useEffect(() => {
@@ -175,11 +188,15 @@ export function RequestComposerBanner({ compact = false }: {
     };
     window.addEventListener(OPEN_REQUEST_COMPOSER_EVENT, openComposer);
     return () => window.removeEventListener(OPEN_REQUEST_COMPOSER_EVENT, openComposer);
-  }, []);
+  }, [setText]); // #487 — setText is now useDraft's setter
 
   // The composer only makes sense against a live session (there has to be a
   // session store to persist into). It's hidden entirely until connected.
-  if (!connected) return null;
+  // #477 — hidden only before the tab has ever connected. An OUTAGE keeps the
+  // row (and any request being typed) on screen, with Send gated + the reason.
+  // #487 review (Fable) — and a tab that has NEVER connected shows nothing
+  // (offline also covers the post-grace "never connected" case).
+  if (!connected && !(offline && everConnected)) return null;
 
   const pickPreset = (p: (typeof PRESETS)[number]) => {
     setIntent(p.intent);
@@ -190,11 +207,33 @@ export function RequestComposerBanner({ compact = false }: {
   const activePreset = PRESETS.find((p) => p.intent === intent);
 
   const send = async () => {
+    if (offline) return; // #477 — refused offline (the control is disabled too)
     const t = text.trim();
     if (!t || submitting) return;
     setSubmitting(true);
+    // #487 review (Sol + lifecycle) — the completion fence. The success retires
+    // the draft it was sent from (and only that); a composer now showing ANOTHER
+    // session, or text edited since, is left as it is with no announcement.
+    // Capture the session and the draft identity now.
+    const sessionAtSend = useConnectionStore.getState().sessionId;
+    const textAtSend = text;
     try {
       await submitRequest(t, intent);
+      // #487 review (lifecycle) — the request IS saved on the daemon, wherever
+      // the tab is now. Retire its persisted draft (the per-session key it was
+      // typed under) if that draft is still exactly what was sent — otherwise a
+      // trip A→B→A brought the saved text back with Send enabled: a duplicate.
+      // A live composer on that key holding the same text clears too.
+      clearDraftIfUnchanged(`request:${sessionAtSend ?? "global"}`, textAtSend);
+      const nowSession = useConnectionStore.getState().sessionId;
+      if (nowSession !== sessionAtSend) return; // another session's composer: leave it alone, no toast
+      if (textRef.current !== textAtSend) {
+        // Edited since the send: keep the new text and the composer, announce
+        // nothing about the old one. `finally` still releases the busy state.
+        return;
+      }
+      // (A→B→A with the text unchanged: the request was saved — clear and
+      // confirm as usual; the store fenced its own stale repaint.)
       setText("");
       setOpen(false);
       // #204 (UX M2) — confirm the submit with a liveness-branched toast (the ○
@@ -294,9 +333,10 @@ export function RequestComposerBanner({ compact = false }: {
             className="flex-1 min-w-0 px-2.5 py-1 bg-surface-secondary border border-border-default rounded text-xs text-text-primary placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-blue"
           />
           <button
+            title={offline ?? undefined}
             type="button"
             onClick={() => void send()}
-            disabled={!text.trim() || submitting}
+            disabled={(!text.trim() || submitting) || !!offline}
             className="shrink-0 px-2.5 py-1 rounded text-2xs font-semibold text-white bg-accent-blue-strong hover:bg-accent-blue/80 disabled:opacity-50 transition-colors"
           >
             Send request

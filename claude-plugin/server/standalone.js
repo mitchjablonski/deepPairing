@@ -24672,6 +24672,7 @@ var StdioServerTransport = class {
 
 // src/store/global-store.ts
 import fs3 from "node:fs";
+import { createHash } from "node:crypto";
 import os2 from "node:os";
 import path2 from "node:path";
 
@@ -28331,13 +28332,99 @@ var GlobalStore = class _GlobalStore {
       reentrant: true
     });
   }
+  /**
+   * #486 — `<ledger>.removed.json`: `{ seq, removals: { [conceptKey]: seq } }`.
+   * `seq` is a MONOTONIC removal counter (never a clock: a backward clock step
+   * must not change which mirrors count as "older than the removal"). A
+   * mirror queued while the ledger was busy carries the `seq` it saw before
+   * its first attempt; on replay it is skipped if its concept was removed
+   * after that. A sidecar, so the ledger's own format is unchanged.
+   */
+  removalsPath() {
+    return `${this.ledgerPath}.removed.json`;
+  }
+  /** Read the removal sidecar. A corrupt file is backed up and salvaged —
+   *  never silently treated as empty (that would lose tombstones). */
+  readRemovals() {
+    let raw;
+    try {
+      raw = fs3.readFileSync(this.removalsPath(), "utf-8");
+    } catch (err) {
+      if (err.code === "ENOENT") return { seq: 0, removals: {} };
+      throw err;
+    }
+    const salvage = (text) => {
+      const out = {};
+      for (const m of text.matchAll(/"((?:[^"\\]|\\.)*)"\s*:\s*(\d+)/g)) {
+        try {
+          const key = JSON.parse(`"${m[1]}"`);
+          if (key !== "seq") out[key] = Number(m[2]);
+        } catch {
+        }
+      }
+      return out;
+    };
+    try {
+      const v2 = JSON.parse(raw);
+      if (v2 && typeof v2 === "object" && Number.isInteger(v2.seq) && v2.removals && typeof v2.removals === "object" && !Array.isArray(v2.removals)) {
+        const removals2 = {};
+        let bad = false;
+        for (const [k, n] of Object.entries(v2.removals)) {
+          if (Number.isInteger(n)) removals2[k] = n;
+          else bad = true;
+        }
+        if (!bad) return { seq: v2.seq, removals: removals2 };
+      }
+    } catch {
+    }
+    const removals = salvage(raw);
+    const seqMatch = raw.match(/"seq"\s*:\s*(\d+)/);
+    const seq = Math.max(0, seqMatch ? Number(seqMatch[1]) : 0, ...Object.values(removals));
+    const backup = `${this.removalsPath()}.corrupt-${createHash("sha256").update(raw).digest("hex").slice(0, 12)}`;
+    if (!fs3.existsSync(backup)) {
+      try {
+        fs3.copyFileSync(this.removalsPath(), backup);
+      } catch {
+      }
+      console.error(
+        `[deepPairing] GlobalStore: the removal record ${this.removalsPath()} is corrupt; backed up to ${backup} and salvaged ${Object.keys(removals).length} removal(s). Check the backup if a removed stance reappears.`
+      );
+    }
+    return { seq, removals };
+  }
+  /** The current removal sequence — captured by a mirror before its first
+   *  attempt, so its replay can tell whether a removal happened since. */
+  removalSeq() {
+    try {
+      return this.readRemovals().seq;
+    } catch {
+      return 0;
+    }
+  }
+  /** Called under the ledger lock (removeConcept), BEFORE the deletion.
+   *  Throws if the tombstone can't be made durable — the removal then fails
+   *  rather than acknowledging something a queued mirror could undo. */
+  recordRemoval(key) {
+    const current = this.readRemovals();
+    const seq = current.seq + 1;
+    try {
+      fs3.mkdirSync(path2.dirname(this.removalsPath()), { recursive: true });
+      writeJsonAtomic(this.removalsPath(), { seq, removals: { ...current.removals, [key]: seq } });
+    } catch (err) {
+      throw new Error(
+        `could not record the removal of "${key}" durably (${this.removalsPath()}: ${err.message}); refusing to remove it, because a queued mirror could re-add it.`
+      );
+    }
+  }
+  /** Returns true only when the ledger was durably replaced (#488 review:
+   *  callers that must not acknowledge a refused write check this). */
   write(ledger) {
     if (this.lastReadCorrupt) {
       const snap = corruptSnapshots.get(this.ledgerPath);
       console.error(
         `[deepPairing] GlobalStore: refusing to write ${this.ledgerPath} \u2014 the current on-disk ledger is corrupt; not overwriting it with a reset shape. ` + (snap ? `A backup of the corrupt file is at ${snap}. ` : `It could NOT be backed up (no snapshot of the current corrupt state exists on disk). `) + `Fix or remove the file to resume recording.`
       );
-      return;
+      return false;
     }
     if (this.lastReadDroppedEntries) {
       this.snapshotLedger();
@@ -28346,7 +28433,10 @@ var GlobalStore = class _GlobalStore {
       fs3.mkdirSync(path2.dirname(this.ledgerPath), { recursive: true });
       writeJsonAtomic(this.ledgerPath, ledger);
       corruptSnapshots.delete(this.ledgerPath);
-    } catch {
+      return true;
+    } catch (err) {
+      console.error(`[deepPairing] GlobalStore: could not write ${this.ledgerPath}:`, err);
+      return false;
     }
   }
   /**
@@ -28373,16 +28463,32 @@ var GlobalStore = class _GlobalStore {
    * treat as genuine.
    */
   static DEDUPE_WINDOW_MS = 5e3;
-  recordInstance(concept, instance) {
-    if (!concept.trim()) return;
-    this.transact(() => this.recordInstanceLocked(concept, instance));
+  recordInstance(concept, instance, opts = {}) {
+    if (!concept.trim()) return "duplicate";
+    return this.transact(() => this.recordInstanceLocked(concept, instance, opts));
   }
-  recordInstanceLocked(concept, instance) {
+  recordInstanceLocked(concept, instance, opts = {}) {
     const key = normalizeKey(concept);
     const ledger = this.read();
+    if (this.lastReadCorrupt) {
+      this.write(ledger);
+      return "refused";
+    }
+    if (opts.precondition && !opts.precondition()) return "ineligible";
     const now = instance.at ?? (/* @__PURE__ */ new Date()).toISOString();
     const nowMs = Date.parse(now);
     const existing = ledger.concepts[key];
+    if (opts.replayedFromSeq !== void 0) {
+      const removedSeq = this.readRemovals().removals[key];
+      if (removedSeq !== void 0 && removedSeq > opts.replayedFromSeq) {
+        console.error(`[deepPairing] skipped a queued cross-project mirror for "${concept}": the concept was removed after it was queued.`);
+        return "removed";
+      }
+    }
+    if (opts.onlyIfConceptExists && !existing) return "not-published";
+    if (opts.exactOnce && existing?.instances.some((prior) => prior.project === instance.project && prior.sessionId === instance.sessionId && prior.verdict === instance.verdict && prior.at === now)) {
+      return "duplicate";
+    }
     const finalized = {
       project: instance.project,
       sessionId: instance.sessionId,
@@ -28395,7 +28501,7 @@ var GlobalStore = class _GlobalStore {
       if (finalized.project === "manual" && finalized.sessionId === "seed" && existing.instances.some(
         (prior) => prior.project === "manual" && prior.sessionId === "seed" && prior.verdict === finalized.verdict
       )) {
-        return;
+        return "duplicate";
       }
       const isRetry = Number.isFinite(nowMs) && existing.instances.some((prior) => {
         if (prior.project !== finalized.project) return false;
@@ -28405,7 +28511,7 @@ var GlobalStore = class _GlobalStore {
         if (!Number.isFinite(priorMs)) return false;
         return Math.abs(nowMs - priorMs) < _GlobalStore.DEDUPE_WINDOW_MS;
       });
-      if (isRetry) return;
+      if (isRetry) return "duplicate";
       existing.instances.push(finalized);
       existing.lastSeenAt = now;
     } else {
@@ -28417,7 +28523,7 @@ var GlobalStore = class _GlobalStore {
         lastSeenAt: now
       };
     }
-    this.write(ledger);
+    return this.write(ledger) ? "written" : "refused";
   }
   /**
    * First-class stance removal — deletes the WHOLE concept entry (all
@@ -28464,8 +28570,13 @@ var GlobalStore = class _GlobalStore {
         `could not back the ledger up before removal (${this.ledgerPath}) \u2014 refusing to delete taste history without a reversible copy.`
       );
     }
+    this.recordRemoval(key);
     delete ledger.concepts[key];
-    this.write(ledger);
+    if (!this.write(ledger)) {
+      throw new Error(
+        `could not write the ledger to remove "${entry.concept}" (${this.ledgerPath}); nothing was removed. Retry the removal.`
+      );
+    }
     return { concept: entry.concept, instanceCount: entry.instances.length, backupPath };
   }
   /** Look up a single entry by concept (case-insensitive). */
@@ -29371,7 +29482,7 @@ ${assembled.join("\n")}`;
 }
 
 // src/mcp/tool-helpers.ts
-import { createHash } from "node:crypto";
+import { createHash as createHash2 } from "node:crypto";
 
 // src/mcp/elicit.ts
 var ELICIT_APPROVE_SCHEMA = {
@@ -30091,7 +30202,7 @@ var PresentIdempotencyRegistry = class {
   }
 };
 function hashPresentArgs(args) {
-  return createHash("sha256").update(stableStringify(args)).digest("hex");
+  return createHash2("sha256").update(stableStringify(args)).digest("hex");
 }
 function stableStringify(v2) {
   if (v2 === null || typeof v2 !== "object") {
@@ -33554,7 +33665,7 @@ function resolveProjectRoot(opts = {}) {
 }
 
 // src/version.ts
-var SERVER_VERSION = "0.1.62";
+var SERVER_VERSION = "0.1.63";
 function parseSemver(v2) {
   const m = /^\s*(\d+)\.(\d+)\.(\d+)/.exec(v2);
   if (!m) return null;
@@ -35637,7 +35748,7 @@ function authorizeReviewPost(state, opts) {
 }
 
 // src/store/review-post-journal.ts
-import { createHash as createHash2, randomUUID } from "node:crypto";
+import { createHash as createHash3, randomUUID } from "node:crypto";
 var digestSchema = external_exports.string().regex(/^[0-9a-f]{64}$/);
 var eventSchema = external_exports.enum(["COMMENT", "REQUEST_CHANGES", "APPROVE"]);
 var timestampSchema = external_exports.iso.datetime();
@@ -35727,7 +35838,7 @@ function reviewPostDigest(value) {
     }
     return v2;
   };
-  return createHash2("sha256").update(JSON.stringify(stable(value))).digest("hex");
+  return createHash3("sha256").update(JSON.stringify(stable(value))).digest("hex");
 }
 function resultMatches(identity, result) {
   const states = { COMMENT: "COMMENTED", REQUEST_CHANGES: "CHANGES_REQUESTED", APPROVE: "APPROVED" };

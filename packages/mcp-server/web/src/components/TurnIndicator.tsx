@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useArtifactStore } from "../stores/artifact";
-import { useConnectionStore } from "../stores/connection";
+import { useConnectionStore, selectHydratedForBinding } from "../stores/connection";
 import { computePending, summarizeTurnParts } from "../lib/pending";
 import { AGENT_ACTIVE_WINDOW_MS, lastAgentActivityMs } from "../lib/agentActivity";
 
@@ -60,7 +60,8 @@ export function TurnIndicator({
   // ARMS once hydration has settled — so the initial mount is silent and every
   // later transition (an exit, a resume) is still announced. Bar OFF: live
   // from the start, as before.
-  const hydrated = useConnectionStore((s) => s.hydrated);
+  // #487 review — hydrated FOR THE CURRENT BINDING, like the bar and the App.
+  const hydrated = useConnectionStore(selectHydratedForBinding);
   const [liveArmed, setLiveArmed] = useState(!agentStateOnly);
   useEffect(() => {
     if (liveArmed || !hydrated) return;

@@ -19,6 +19,7 @@ import type { CarryoverState } from "./decision/carryover";
 import { SpeechIcon } from "./icons/ArtifactIcons";
 import { WAITING_TONE } from "../lib/waitingTone";
 import { useOfflineReason } from "../hooks/useOfflineReason";
+import { useUnsavedText } from "../lib/unsavedText";
 
 interface CommentThreadProps {
   artifactId: string;
@@ -450,6 +451,7 @@ export function AskTrigger({
   const offline = useOfflineReason(); // #467 review — replies/Ask gate like every act button
   const [open, setOpen] = useState(false);
   const [question, setQuestion] = useState("");
+  useUnsavedText(`ask:${artifactId}`, question); // #487 review (Fable) — Reload asks before discarding it
   const [sending, setSending] = useState(false);
   const { sent, flash } = useSentFlash();
   const submitComment = useArtifactStore((s) => s.submitComment);
