@@ -9,6 +9,7 @@ import { ERROR_CODES } from "../error-codes.js";
 import type { IStore } from "../store/store-interface.js";
 import { FileStore, LEDGER_EXEMPT_REJECT_TYPES } from "../store/file-store.js";
 import { isCrossTerminalVerdictFlip } from "../store/verdict-guard.js";
+import { checkStaleResolve } from "../store/decision-resolve-guard.js";
 import { isSessionReviewConflictError } from "../store/session-records.js";
 import type { LiveDecisionSource } from "../store/session-scan.js";
 import {
@@ -769,6 +770,21 @@ export function createHttpRoutes(
           message: "This decision belongs to a different session than the one this tab is bound to." },
         404,
       );
+    }
+
+    // #460 / #464 review — refuse a stale card BEFORE any write (shared with
+    // the internal resolve route): a different pick, or a pick on a decision
+    // closed elsewhere, is a 409 carrying the recorded resolution; the same
+    // pick again is a true no-op 200 (nothing rewritten). See
+    // store/decision-resolve-guard.ts.
+    {
+      const stale = await checkStaleResolve(store, decisionId, optionId);
+      if (stale?.kind === "same") return c.json(stale.body);
+      if (stale?.kind === "conflict") {
+        log(`[decision] REFUSED stale resolve on ${decisionId}: ${String(stale.body.message)}`);
+        if (stale.backing) broadcast({ type: "artifact_updated", artifactId: stale.backing.id, status: stale.backing.status }, sid);
+        return c.json(stale.body, 409);
+      }
     }
 
     // #197 (F3) — prediction capture was cut (E3); the UI no longer sends it and
