@@ -122,6 +122,14 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
       : { kind: "idle" },
   );
   const inFlightRef = useRef(false);  // sync race-guard
+  // #464 review — a resolution that arrives AFTER mount (a sibling resolved it,
+  // a 409 carried the recorded answer, a cross-tab decision_resolved) moves an
+  // idle card to resolved, so the winning pick shows and Select is gone.
+  const lateResolvedOption = initialResolved?.optionId;
+  useEffect(() => {
+    if (lateResolvedOption && phase.kind === "idle") setPhase({ kind: "resolved", optionId: lateResolvedOption });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the arriving resolution; phase is a guard
+  }, [lateResolvedOption]);
   const [showRepair, setShowRepair] = useState(false);
   // #174 — the focused "Expand to discuss" workbench. ONE affordance on the
   // otherwise-clean card opens the side-by-side compare + grain-commenting view.
@@ -186,8 +194,8 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     inFlightRef.current = true;
     setPhase({ kind: "submitting" });
     const sentReasoning = reasoningDraft;
+    const id = decisionId ?? event.decisionId;
     try {
-      const id = decisionId ?? event.decisionId;
       await resolveDecision(id, optionId, reasoning.trim() || undefined);
       // Stash what was ACTUALLY submitted (trimmed — matches the record),
       // then clear the draft so it can't shadow future resolved views.
@@ -200,7 +208,10 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
       onResolved?.();
     } catch {
       // Roll back to idle so the user can retry. No silent stuck state.
-      setPhase({ kind: "idle" });
+      // #464 review — unless the daemon refused because it was ALREADY answered
+      // elsewhere: the store now holds that recorded answer, so show it.
+      const recorded = useArtifactStore.getState().resolvedDecisions[id];
+      setPhase(recorded ? { kind: "resolved", optionId: recorded.optionId } : { kind: "idle" });
     } finally {
       inFlightRef.current = false;
     }

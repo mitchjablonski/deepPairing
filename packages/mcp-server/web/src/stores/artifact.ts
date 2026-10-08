@@ -1226,6 +1226,13 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
         else delete next[decisionId];
         return { resolvedDecisions: next };
       });
+      // #464 review — answered elsewhere: show the RECORDED answer (the 409
+      // carries it), so the card renders resolved with the winning pick and the
+      // daemon's "this card now shows the recorded answer" is true.
+      const recorded = err instanceof ApiError && err.code === "verdict_already_final"
+        ? (err.details?.resolution as ResolvedDecisionInfo | undefined)
+        : undefined;
+      if (recorded?.optionId) get().recordResolvedDecision(decisionId, recorded);
       throw err;
     }
   },

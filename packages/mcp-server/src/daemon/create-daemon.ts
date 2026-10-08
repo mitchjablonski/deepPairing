@@ -276,8 +276,10 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // client. Only demo sessions (throwaway) and only this one event type — real
   // pairing toasts are live signals we must never resurrect on reconnect.
   const demoReplayEvents = new Map<string, Record<string, unknown>>();
-  /** #460 — monotonic per-session revision (see broadcast()). */
+  /** #460 — monotonic per-session revision (see broadcast()), with a random
+   *  per-process epoch (#464 review: the counter restarts on a daemon restart). */
   const sessionRevisions = new Map<string, number>();
+  const revisionEpoch = randomBytes(6).toString("hex");
 
   function broadcast(sessionId: string, event: any): void {
     let outgoing = event;
@@ -835,7 +837,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // a testable builder (see daemon-routes.ts). Without the gate, a stale tab on a
   // daemon serving a DIFFERENT project could read this project's session list +
   // full state. Mounted on "/" like the other route groups.
-  app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions, log, sessionRevisions));
+  app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions, log, { epoch: revisionEpoch, counts: sessionRevisions }));
 
   // --- Serve static web UI ---
   // Extracted to http/static-ui.ts so the bootstrap-injection contract (the

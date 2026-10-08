@@ -126,10 +126,10 @@ describe("S1 — createActiveSessionRoutes gates the root-app session reads (rea
 
   it("#460 — revision is published when the daemon threads its counter, omitted otherwise (old daemons)", async () => {
     createTestSession("s_rev");
-    const revisions = new Map([["s_rev", 7]]);
+    const revisions = { epoch: "e1", counts: new Map([["s_rev", 7]]) };
     const withRev = createActiveSessionRoutes(sessions, sessionMeta, "hashA", undefined, undefined, revisions);
     const list = (await (await withRev.request("/api/active-sessions", { headers: { "X-Project-Hash": "hashA" } })).json()).sessions;
-    expect(list.find((s: { sessionId: string }) => s.sessionId === "s_rev")?.revision).toBe(7);
+    expect(list.find((s: { sessionId: string }) => s.sessionId === "s_rev")).toMatchObject({ revision: 7, revisionEpoch: "e1" });
     const old = createActiveSessionRoutes(sessions, sessionMeta, "hashA");
     const oldList = (await (await old.request("/api/active-sessions", { headers: { "X-Project-Hash": "hashA" } })).json()).sessions;
     expect("revision" in oldList.find((s: { sessionId: string }) => s.sessionId === "s_rev")).toBe(false);
@@ -1328,4 +1328,36 @@ describe("NIT — acknowledge routes return 400 (not 500) on a malformed body", 
       expect(ok.status).toBe(200);
     });
   }
+});
+
+describe("#464 review — the INTERNAL resolve route has the same stale-resolve guard", () => {
+  const j = (body: any) => ({ method: "POST" as const, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const seed = async (sid: string) => {
+    await app.request(`/api/internal/sessions/${sid}/register`, j({}));
+    await app.request(`/api/internal/sessions/${sid}/decisions`, j({
+      decisionId: "dec_g", artifactId: "art_g", context: "Which?",
+      options: [{ id: "a", title: "A" }, { id: "b", title: "B" }],
+    }));
+  };
+
+  it("a different pick on an answered decision is a 409 carrying the recorded answer; the answer is kept", async () => {
+    await seed("s_g1");
+    expect((await app.request(`/api/internal/sessions/s_g1/decisions/dec_g/resolve`, j({ optionId: "a", reasoning: "first" }))).status).toBe(200);
+    const res = await app.request(`/api/internal/sessions/s_g1/decisions/dec_g/resolve`, j({ optionId: "b" }));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: "verdict_already_final", resolution: { optionId: "a", reasoning: "first" } });
+    expect(sessions.get("s_g1")!.getDecisionResponse("dec_g")?.optionId).toBe("a");
+  });
+
+  it("the same pick again is a TRUE no-op: reasoning and resolvedAt are not rewritten", async () => {
+    await seed("s_g2");
+    await app.request(`/api/internal/sessions/s_g2/decisions/dec_g/resolve`, j({ optionId: "a", reasoning: "first" }));
+    const before = sessions.get("s_g2")!.getDecision("dec_g")!.resolvedAt;
+    await new Promise((r) => setTimeout(r, 5));
+    const res = await app.request(`/api/internal/sessions/s_g2/decisions/dec_g/resolve`, j({ optionId: "a", reasoning: "second" }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ alreadyResolved: true, resolution: { optionId: "a", reasoning: "first" } });
+    expect(sessions.get("s_g2")!.getDecisionResponse("dec_g")?.reasoning).toBe("first");
+    expect(sessions.get("s_g2")!.getDecision("dec_g")!.resolvedAt).toBe(before);
+  });
 });

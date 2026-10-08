@@ -1150,14 +1150,17 @@ function ArtifactSidebar({
 /** #460 — a session's change signal from the 10s session poll: the daemon's
  *  monotonic `revision` (covers status changes and comments), else — an older
  *  daemon without the field — the artifact count (#458). */
-function changeSignal(s: { artifactCount: number; revision?: number }): string {
-  return typeof s.revision === "number" ? `r${s.revision}` : `c${s.artifactCount}`;
+function changeSignal(s: { artifactCount: number; revision?: number; revisionEpoch?: string }): string {
+  // #464 review — the epoch is part of the signal: a restarted daemon's counter
+  // can climb back to a value this tab cached.
+  return typeof s.revision === "number" ? `r${s.revisionEpoch ?? ""}:${s.revision}` : `c${s.artifactCount}`;
 }
 
 export function MultiAgentSync() {
   const addArtifact = useArtifactStore((s) => s.addArtifact);
   const addComment = useArtifactStore((s) => s.addComment);
   const updateComment = useArtifactStore((s) => s.updateComment);
+  const recordResolvedDecision = useArtifactStore((s) => s.recordResolvedDecision);
   // C1 — reuse the session list App already polls into the connection store
   // (every 10s) instead of running a SECOND 5s /api/active-sessions poll here.
   const activeSessions = useConnectionStore((s) => s.activeSessions);
@@ -1259,6 +1262,14 @@ export function MultiAgentSync() {
           const bucket = held[comment.target?.artifactId ?? ""] ?? [];
           if (bucket.some((c) => c.id === comment.id)) updateComment(comment);
           else addComment(comment);
+        }
+        // #464 review — the sibling's recorded decision answers too, so a card
+        // resolved elsewhere renders resolved (winning pick, no Select) instead
+        // of a stale, actionable option grid.
+        for (const d of (state.decisions ?? []) as Array<{ decisionId?: string; resolvedAt?: string; response?: { optionId?: string; reasoning?: string } }>) {
+          if (d?.decisionId && d.response?.optionId) {
+            recordResolvedDecision(d.decisionId, { optionId: d.response.optionId, reasoning: d.response.reasoning, resolvedAt: d.resolvedAt });
+          }
         }
         forceRefresh.current.delete(id);
         // Bug B — mark fully-loaded ONLY once we've actually pulled artifacts;

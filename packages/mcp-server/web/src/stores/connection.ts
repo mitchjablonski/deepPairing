@@ -61,6 +61,9 @@ interface ActiveSession {
    *  too). Optional: old daemons omit it and MultiAgentSync falls back to
    *  `artifactCount` as the change signal. */
   revision?: number;
+  /** #464 review — random per daemon process; the counter restarts on a daemon
+   *  restart, so the change signal is (epoch, revision). */
+  revisionEpoch?: string;
 }
 
 interface SwitchSessionOptions {
@@ -1192,6 +1195,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
                 p.artifactCount === n.artifactCount &&
                 // #460 — the sibling change signal must propagate too.
                 p.revision === n.revision &&
+                p.revisionEpoch === n.revisionEpoch &&
                 // D8 — every RENDERED field must be here (D6 review's drift
                 // warning); live drives the session-bar dot.
                 p.live === n.live

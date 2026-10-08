@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import App from "../../App";
+import { DecisionCard } from "../DecisionCard";
 import { useArtifactStore } from "../../stores/artifact";
 import { useConnectionStore } from "../../stores/connection";
 import { usePreferencesStore } from "../../stores/preferences";
@@ -238,5 +239,55 @@ describe("#460 — the sibling change signal covers status changes and questions
     act(() => useConnectionStore.setState({ activeSessions: sessions(3).map((s) => ({ ...s })) } as any)); // same values, new identity
     await act(async () => { await new Promise((r) => setTimeout(r, 300)); });
     expect(liveSessionCalls).toBe(1);
+  });
+});
+
+describe("#464 review — a stale card after the 409, and a restarted daemon's revision", () => {
+  it("picking on a decision answered elsewhere: the card shows the RECORDED winning pick and no Select buttons", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+      if (String(url).includes("/api/decisions/")) {
+        return Promise.resolve(new Response(JSON.stringify({
+          error: "verdict_already_final", code: "verdict_already_final", currentStatus: "approved",
+          resolution: { optionId: "o2", reasoning: "chosen in the other tab" },
+          message: "This decision was already answered elsewhere — your pick wasn't applied; this card now shows the recorded answer.",
+        }), { status: 409, headers: { "Content-Type": "application/json" } }));
+      }
+      return json({});
+    }));
+    useArtifactStore.setState({ artifacts: [{ ...billDecision, id: "art_s", content: { context: "c", decisionId: "dd_s", options: [] } } as any] });
+    const event = {
+      type: "decision_request" as const, decisionId: "dd_s", context: "Which store?",
+      options: [
+        { id: "o1", title: "Redis", description: "d", pros: [], cons: [], effort: "low" as const, risk: "low" as const, recommendation: true },
+        { id: "o2", title: "Postgres", description: "d", pros: [], cons: [], effort: "low" as const, risk: "low" as const, recommendation: false },
+      ],
+    };
+    render(<DecisionCard event={event} decisionId="dd_s" artifactId="art_s" sessionId="s_bill" />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Select Redis" })); });
+    await waitFor(() => expect(screen.queryAllByRole("button", { name: /^Select / })).toHaveLength(0));
+    fireEvent.click(screen.getByRole("button", { name: /Show options/ }));
+    const chosen = screen.getByText("✓ Chosen").closest("div")!;
+    expect(chosen).toHaveTextContent("Postgres");
+    expect(useToastStore.getState().toasts.some((t) => /this card now shows the recorded answer/.test(t.body ?? ""))).toBe(true);
+  });
+
+  it("a daemon RESTART whose counter climbs back to a cached value still re-fetches (the epoch differs)", async () => {
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+      if (String(url).includes("/api/live-session/s_bill")) { calls++; return json({ artifacts: [billDecision], comments: [] }); }
+      if (String(url).includes("/api/live-session/")) return json({ artifacts: [], comments: [] });
+      if (String(url).includes("/api/active-sessions")) return json({ sessions: useConnectionStore.getState().activeSessions });
+      return json({ sessions: [] });
+    }));
+    const list = (epoch: string) => [
+      { sessionId: "s_new", live: true, artifactCount: 0, revision: 0, revisionEpoch: epoch },
+      { sessionId: "s_bill", live: true, artifactCount: 1, revision: 4, revisionEpoch: epoch },
+    ];
+    useConnectionStore.setState({ activeSessions: list("before") } as any);
+    render(<App />);
+    await waitFor(() => expect(calls).toBe(1));
+    // Restarted daemon: a new epoch, and its counter happens to be back at 4.
+    act(() => useConnectionStore.setState({ activeSessions: list("after") } as any));
+    await waitFor(() => expect(calls).toBe(2), { timeout: 2000 });
   });
 });

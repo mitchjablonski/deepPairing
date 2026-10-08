@@ -334,16 +334,29 @@ describe("#460 — decision-resolve refuses a stale card with the current truth"
     const res = await resolve("opt_b");
     expect(res.status).toBe(409);
     const body = await res.json();
-    expect(body).toMatchObject({ code: "verdict_already_final", currentStatus: "approved", artifactId: "art_dec" });
-    expect(body.message).toMatch(/already answered .*your pick wasn't applied/);
+    expect(body).toMatchObject({ code: "verdict_already_final", currentStatus: "approved", artifactId: "art_dec", resolution: { optionId: "opt_a" } });
+    expect(body.message).toMatch(/already answered.*your pick wasn't applied; this card now shows the recorded answer/);
     expect(store.getDecisionResponse("dec_s")?.optionId).toBe("opt_a");
     expect(broadcasts.find((e) => e.type === "decision_resolved")).toBeUndefined();
   });
 
-  it("the SAME pick again stays an idempotent 200", async () => {
+  it("the SAME pick again is a TRUE no-op 200: reasoning and resolvedAt unchanged, nothing broadcast", async () => {
     seedDecision();
-    expect((await resolve("opt_a")).status).toBe(200);
-    expect((await resolve("opt_a")).status).toBe(200);
+    const first = await app.request("/api/decisions/dec_s", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ optionId: "opt_a", reasoning: "first" }),
+    });
+    expect(first.status).toBe(200);
+    const before = store.getDecision("dec_s")!.resolvedAt;
+    broadcasts.length = 0;
+    await new Promise((r) => setTimeout(r, 5));
+    const again = await app.request("/api/decisions/dec_s", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ optionId: "opt_a", reasoning: "second" }),
+    });
+    expect(again.status).toBe(200);
+    expect(await again.json()).toMatchObject({ alreadyResolved: true, resolution: { optionId: "opt_a", reasoning: "first" } });
+    expect(store.getDecisionResponse("dec_s")?.reasoning).toBe("first");
+    expect(store.getDecision("dec_s")!.resolvedAt).toBe(before);
+    expect(broadcasts.find((e) => e.type === "decision_resolved")).toBeUndefined();
   });
 
   it("a pick on a decision REJECTED elsewhere: 409 with currentStatus rejected, no answer recorded", async () => {
