@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { Artifact } from "@deeppairing/shared";
-import { enterSessionReplay } from "../session-replay";
+import { enterSessionReplay, openSessionReplay } from "../session-replay";
+import { beginSessionTransition } from "../session-transition";
 import { useArtifactStore } from "../../stores/artifact";
 import { useReplayStore } from "../../stores/replay";
 
@@ -150,5 +151,74 @@ describe("enterSessionReplay", () => {
 
     expect(useReplayStore.getState().sessionId).toBe("A");
     expect(useArtifactStore.getState().artifacts.map((item) => item.id)).toEqual(["new-A"]);
+  });
+});
+
+// #469 — callers must tell a genuine failure (show + retry) from a transition
+// that lost to newer navigation or was cancelled (stay silent). Never rejects.
+describe("openSessionReplay outcomes", () => {
+  function expectUntouched() {
+    expect(useReplayStore.getState().active).toBe(false);
+    expect(useArtifactStore.getState().artifacts).toEqual([]);
+  }
+
+  it("opened on success", async () => {
+    stubFetch(true);
+    await expect(openSessionReplay("s1", "a1")).resolves.toEqual({ status: "opened" });
+    expect(useReplayStore.getState().active).toBe(true);
+  });
+
+  it("failed/http on a non-2xx response", async () => {
+    stubFetch(false);
+    await expect(openSessionReplay("s1", "a1")).resolves.toMatchObject({ status: "failed", kind: "http" });
+    expectUntouched();
+  });
+
+  it("failed/network (not a rejection) when fetch rejects", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    await expect(openSessionReplay("s1", "a1")).resolves.toMatchObject({ status: "failed", kind: "network" });
+    // The boolean wrapper no longer rejects either.
+    await expect(enterSessionReplay("s1", "a1")).resolves.toBe(false);
+    expectUntouched();
+  });
+
+  it("failed/invalid when the body is not JSON", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true, status: 200, json: async () => { throw new SyntaxError("Unexpected token <"); },
+    }));
+    await expect(openSessionReplay("s1", "a1")).resolves.toMatchObject({ status: "failed", kind: "invalid" });
+    expectUntouched();
+  });
+
+  it.each([
+    ["null", null],
+    ["an array", []],
+    ["a string", "oops"],
+    ["non-array artifacts", { artifacts: { a1: {} } }],
+  ])("failed/invalid when the JSON is %s", async (_label, body) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => body }));
+    await expect(openSessionReplay("s1", "a1")).resolves.toMatchObject({ status: "failed", kind: "invalid" });
+    expectUntouched();
+  });
+
+  it("superseded — not failed — when newer navigation starts mid-load, even if the load then fails", async () => {
+    const pending = deferred<any>();
+    vi.stubGlobal("fetch", vi.fn().mockReturnValueOnce(pending.promise));
+    const opening = openSessionReplay("s1", "a1");
+    beginSessionTransition("other");
+    pending.resolve({ ok: false, status: 500, json: async () => ({}) });
+    await expect(opening).resolves.toEqual({ status: "superseded" });
+    expectUntouched();
+  });
+
+  it("cancelled when its signal aborts before the replay commits", async () => {
+    const pending = deferred<any>();
+    vi.stubGlobal("fetch", vi.fn().mockReturnValueOnce(pending.promise));
+    const controller = new AbortController();
+    const opening = openSessionReplay("s1", "a1", { signal: controller.signal });
+    controller.abort();
+    pending.resolve({ ok: true, status: 200, json: async () => SESSION_STATE });
+    await expect(opening).resolves.toEqual({ status: "cancelled" });
+    expectUntouched();
   });
 });
