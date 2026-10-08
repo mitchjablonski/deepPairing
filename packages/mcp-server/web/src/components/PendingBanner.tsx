@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useArtifactStore } from "../stores/artifact";
 import { computePending, isSinglePendingInView } from "../lib/pending";
+import { useOfflineReason } from "../hooks/useOfflineReason";
 
 /**
  * The "waiting for your review" banner. Driven by the shared computePending
@@ -15,6 +16,7 @@ import { computePending, isSinglePendingInView } from "../lib/pending";
  * the tertiary dismiss link.
  */
 export function PendingBanner() {
+  const offline = useOfflineReason(); // #467 review — the dismiss chip is an act
   const artifacts = useArtifactStore((s) => s.artifacts);
   const selectArtifact = useArtifactStore((s) => s.selectArtifact);
   const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
@@ -74,6 +76,7 @@ export function PendingBanner() {
             {/* Quick dismiss — clears an abandoned/moot draft without opening it.
                 Two-step: first click asks to confirm (obsolete can't be undone). */}
             <button
+              disabled={!!offline}
               onClick={() => {
                 if (confirmingId === a.id) {
                   // store rolls back + toasts on failure; swallow so a failed
@@ -98,7 +101,7 @@ export function PendingBanner() {
                   ? "text-accent-amber font-semibold bg-accent-amber-dim"
                   : "text-accent-amber hover:bg-accent-amber-dim/80"
               }`}
-              title={confirmingId === a.id ? "Click again to dismiss (can't be undone)" : "Dismiss — overcome by new information"}
+              title={offline ?? (confirmingId === a.id ? "Click again to dismiss (can't be undone)" : "Dismiss — overcome by new information")}
               aria-label={confirmingId === a.id ? `Confirm dismiss ${a.title}` : `Dismiss ${a.title}`}
             >
               {confirmingId === a.id ? "Dismiss?" : "✕"}
