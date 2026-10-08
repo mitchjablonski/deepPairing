@@ -38135,6 +38135,7 @@ var DaemonClient = class {
     const err = new Error(`[deepPairing] ${msg}`);
     err.status = res.status;
     if (typeof body?.code === "string") err.code = body.code;
+    err.body = body;
     throw err;
   }
   async post(path13, body) {
@@ -38318,15 +38319,33 @@ var DaemonClient = class {
   /**
    * #464 (Astra review) — the wrapper side of the atomic resolve: the daemon's
    * internal route runs FileStore.resolveDecisionAtomic, so the atomicity lives
-   * there. A 409/400 refusal surfaces as the request error (as every other
-   * DaemonClient write does); a same-pick no-op answers 200 alreadyResolved.
+   * there. Its typed refusals map back to outcomes (409 verdict_already_final →
+   * conflict with the winner; 400 → invalid_option); a same-pick no-op is a
+   * 200 alreadyResolved.
    */
   async resolveDecisionAtomic(decisionId, optionId, reasoning, prediction) {
-    const res = await this.post(
-      `/decisions/${decisionId}/resolve`,
-      { optionId, reasoning, confidence: prediction?.confidence, predictedOutcome: prediction?.predictedOutcome }
-    );
-    return res?.alreadyResolved && res.resolution ? { kind: "same", resolution: res.resolution, ...res.artifactId ? { artifactId: res.artifactId } : {} } : { kind: "resolved" };
+    let res;
+    try {
+      res = await this.post(
+        `/decisions/${decisionId}/resolve`,
+        { optionId, reasoning, confidence: prediction?.confidence, predictedOutcome: prediction?.predictedOutcome }
+      );
+    } catch (error51) {
+      const e = error51;
+      if (e?.status === 409 && e.code === "verdict_already_final") {
+        const b = e.body ?? {};
+        return {
+          kind: "conflict",
+          currentStatus: typeof b.currentStatus === "string" ? b.currentStatus : "approved",
+          ...typeof b.artifactId === "string" ? { artifactId: b.artifactId } : {},
+          ...typeof b.at === "string" ? { at: b.at } : {},
+          ...b.resolution && typeof b.resolution.optionId === "string" ? { resolution: b.resolution } : {}
+        };
+      }
+      if (e?.status === 400 && e.code === "validation_error") return { kind: "invalid_option" };
+      throw error51;
+    }
+    return res?.alreadyResolved && res.resolution ? { kind: "same", resolution: res.resolution, ...res.artifactId ? { artifactId: res.artifactId } : {} } : { kind: "resolved", ...res?.artifactId ? { artifactId: res.artifactId } : {} };
   }
   async getDecisionResponse(decisionId) {
     const data = await this.get(`/decisions/${decisionId}/response`);
@@ -38497,6 +38516,7 @@ var DaemonClient = class {
     const err = new Error(`[deepPairing] ${msg}`);
     err.status = res.status;
     if (typeof body?.code === "string") err.code = body.code;
+    err.body = body;
     throw err;
   }
   /** List past sessions for this project. Uses the daemon's public /api/sessions. */

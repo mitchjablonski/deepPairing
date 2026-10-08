@@ -31476,6 +31476,7 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     }
     return withDecisionResolveLock(store, async () => {
       const outcome = await store.resolveDecisionAtomic(decisionId, optionId, reasoning);
+      if (outcome.kind === "same" || outcome.kind === "conflict") await store.forceFlush();
       if (outcome.kind === "same") return c.json(staleResolveBody(outcome, decisionId));
       if (outcome.kind === "conflict") {
         const body = staleResolveBody(outcome, decisionId);
@@ -33238,6 +33239,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     return withDecisionResolveLock(r.store, async () => {
       const prediction = confidence || predictedOutcome ? { confidence, predictedOutcome } : void 0;
       const outcome = r.store.resolveDecisionAtomic(decisionId, optionId, reasoning, prediction);
+      if (outcome.kind === "same" || outcome.kind === "conflict") await r.store.forceFlush();
       if (outcome.kind === "same") return c.json(staleResolveBody(outcome, decisionId));
       if (outcome.kind === "conflict") return c.json(staleResolveBody(outcome, decisionId), 409);
       if (outcome.kind === "invalid_option") {
