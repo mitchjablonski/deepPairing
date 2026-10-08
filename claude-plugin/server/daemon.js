@@ -27423,9 +27423,62 @@ var FileStore = class _FileStore {
     if (Array.isArray(opts) && opts.length > 0 && !opts.some((o) => o?.id === optionId)) {
       return { kind: "invalid_option" };
     }
+    const prevDecision = structuredClone(dec);
+    const prevBacking = backing ? structuredClone(backing) : void 0;
+    this.feedbackNotifyHolds++;
     this.resolveDecision(decisionId, optionId, reasoning, prediction);
+    const written = this.decisions.get(decisionId);
+    const backingNow = backing ? this.artifacts.find((a) => a.id === backing.id) : void 0;
+    this.pendingResolutions.set(decisionId, {
+      prevDecision,
+      prevBacking,
+      writtenResponse: written.response,
+      backingStatus: backingNow?.status,
+      backingHistoryLength: (backingNow?.statusHistory ?? []).length
+    });
     this.unannouncedResolutions.add(decisionId);
     return { kind: "resolved", ...dec.artifactId ? { artifactId: dec.artifactId } : {} };
+  }
+  /** #484 review — resolutions written by resolveDecisionAtomic whose flush
+   *  hasn't settled yet, with what they replaced. */
+  pendingResolutions = /* @__PURE__ */ new Map();
+  feedbackNotifyHolds = 0;
+  feedbackNotifyPending = false;
+  /**
+   * #484 review — settle a resolveDecisionAtomic write once its flush is known.
+   * committed → release held feedback waiters. NOT committed (the flush threw:
+   * lock busy → 503, review conflict) → roll memory back to exactly what disk
+   * still holds, so getResolvedDecisions / check_feedback never deliver an
+   * answer the human was told didn't complete, and a later different pick isn't
+   * refused as "already answered". The rollback restores only what THIS write
+   * still owns (an artifact another writer changed since is left alone), and no
+   * announcement remains for it. Runs under the per-store resolve lock.
+   */
+  settleResolution(decisionId, committed) {
+    const pending = this.pendingResolutions.get(decisionId);
+    if (!pending) return;
+    this.pendingResolutions.delete(decisionId);
+    if (!committed) {
+      const dec = this.decisions.get(decisionId);
+      if (dec && dec.response === pending.writtenResponse) {
+        for (const k of Object.keys(dec)) delete dec[k];
+        Object.assign(dec, pending.prevDecision);
+      }
+      if (pending.prevBacking) {
+        const art = this.artifacts.find((a) => a.id === pending.prevBacking.id);
+        const history = (art?.statusHistory ?? []).length;
+        if (art && art.status === pending.backingStatus && history === pending.backingHistoryLength) {
+          for (const k of Object.keys(art)) delete art[k];
+          Object.assign(art, pending.prevBacking);
+        }
+      }
+      this.unannouncedResolutions.delete(decisionId);
+    }
+    this.feedbackNotifyHolds = Math.max(0, this.feedbackNotifyHolds - 1);
+    if (this.feedbackNotifyHolds === 0 && this.feedbackNotifyPending) {
+      this.feedbackNotifyPending = false;
+      this.notifyFeedbackWaiters();
+    }
   }
   /** #484 review — decisions whose answer was written by resolveDecisionAtomic
    *  but not yet announced after a successful flush. In-memory on purpose: an
@@ -28090,6 +28143,10 @@ var FileStore = class _FileStore {
   }
   /** Notify all waiters that feedback has arrived */
   notifyFeedbackWaiters() {
+    if (this.feedbackNotifyHolds > 0) {
+      this.feedbackNotifyPending = true;
+      return;
+    }
     const waiters = this.feedbackWaiters;
     this.feedbackWaiters = [];
     for (const resolve of waiters) resolve();
@@ -31495,73 +31552,79 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     }
     return withDecisionResolveLock(store, async () => {
       const outcome = await store.resolveDecisionAtomic(decisionId, optionId, reasoning);
-      if (outcome.kind === "same" || outcome.kind === "conflict") {
-        await store.forceFlush();
-        const late = await store.takeResolutionAnnouncement(decisionId);
-        if (late) {
-          broadcast({ type: "decision_resolved", decisionId, artifactId: late.artifactId, optionId: late.optionId, reasoning: late.reasoning }, sid);
+      let committed = false;
+      try {
+        if (outcome.kind === "same" || outcome.kind === "conflict") {
+          await store.forceFlush();
+          const late = await store.takeResolutionAnnouncement(decisionId);
+          if (late) {
+            broadcast({ type: "decision_resolved", decisionId, artifactId: late.artifactId, optionId: late.optionId, reasoning: late.reasoning }, sid);
+          }
         }
-      }
-      if (outcome.kind === "same") return c.json(staleResolveBody(outcome, decisionId));
-      if (outcome.kind === "conflict") {
-        const body = staleResolveBody(outcome, decisionId);
-        log2(`[decision] REFUSED stale resolve on ${decisionId}: ${String(body.message)}`);
-        if (outcome.artifactId) broadcast({ type: "artifact_updated", artifactId: outcome.artifactId, status: outcome.currentStatus }, sid);
-        return c.json(body, 409);
-      }
-      if (outcome.kind === "invalid_option") {
-        return c.json(
-          { error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error },
-          400
-        );
-      }
-      const decision = outcome.kind === "resolved" ? await store.getDecision(decisionId) : void 0;
-      let targetArtifactId = decision?.artifactId;
-      let fallbackArtifact;
-      if (!targetArtifactId) {
-        const artifacts = await store.getArtifacts();
-        fallbackArtifact = artifacts.find(
-          (a) => a.type === "decision" && (a.content?.decisionId === decisionId || a.id === decisionId)
-        );
-        targetArtifactId = fallbackArtifact?.id;
-      }
-      if (targetArtifactId && !decision && fallbackArtifact) {
-        if (isCrossTerminalVerdictFlip(fallbackArtifact.status, "approved", "ui_decision_resolve")) {
-          const at = fallbackArtifact.updatedAt;
-          log2(
-            `[decision] REFUSED resolve on ${targetArtifactId}: ${fallbackArtifact.status} \u2192 approved (reason=ui_decision_resolve) \u2014 verdict already final at ${at}`
-          );
-          broadcast({ type: "artifact_updated", artifactId: targetArtifactId, status: fallbackArtifact.status }, sid);
+        if (outcome.kind === "same") return c.json(staleResolveBody(outcome, decisionId));
+        if (outcome.kind === "conflict") {
+          const body = staleResolveBody(outcome, decisionId);
+          log2(`[decision] REFUSED stale resolve on ${decisionId}: ${String(body.message)}`);
+          if (outcome.artifactId) broadcast({ type: "artifact_updated", artifactId: outcome.artifactId, status: outcome.currentStatus }, sid);
+          return c.json(body, 409);
+        }
+        if (outcome.kind === "invalid_option") {
           return c.json(
-            {
-              error: "verdict_already_final",
-              code: "verdict_already_final",
-              currentStatus: fallbackArtifact.status,
-              at,
-              message: `This decision was already ${fallbackArtifact.status}${at ? ` at ${at}` : ""} in another tab. A finalized verdict can't be reversed \u2014 this tab has been refreshed to the current state.`
-            },
-            409
+            { error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error },
+            400
           );
         }
-      }
-      if (targetArtifactId) {
-        if (!decision) {
-          await store.updateArtifactStatus(targetArtifactId, "approved", "ui_decision_resolve");
+        const decision = outcome.kind === "resolved" ? await store.getDecision(decisionId) : void 0;
+        let targetArtifactId = decision?.artifactId;
+        let fallbackArtifact;
+        if (!targetArtifactId) {
+          const artifacts = await store.getArtifacts();
+          fallbackArtifact = artifacts.find(
+            (a) => a.type === "decision" && (a.content?.decisionId === decisionId || a.id === decisionId)
+          );
+          targetArtifactId = fallbackArtifact?.id;
         }
+        if (targetArtifactId && !decision && fallbackArtifact) {
+          if (isCrossTerminalVerdictFlip(fallbackArtifact.status, "approved", "ui_decision_resolve")) {
+            const at = fallbackArtifact.updatedAt;
+            log2(
+              `[decision] REFUSED resolve on ${targetArtifactId}: ${fallbackArtifact.status} \u2192 approved (reason=ui_decision_resolve) \u2014 verdict already final at ${at}`
+            );
+            broadcast({ type: "artifact_updated", artifactId: targetArtifactId, status: fallbackArtifact.status }, sid);
+            return c.json(
+              {
+                error: "verdict_already_final",
+                code: "verdict_already_final",
+                currentStatus: fallbackArtifact.status,
+                at,
+                message: `This decision was already ${fallbackArtifact.status}${at ? ` at ${at}` : ""} in another tab. A finalized verdict can't be reversed \u2014 this tab has been refreshed to the current state.`
+              },
+              409
+            );
+          }
+        }
+        if (targetArtifactId) {
+          if (!decision) {
+            await store.updateArtifactStatus(targetArtifactId, "approved", "ui_decision_resolve");
+          }
+        }
+        await store.forceFlush();
+        committed = true;
+        if (targetArtifactId) {
+          await maybeUpdateTaskStatus(null, targetArtifactId, store);
+        }
+        const ann = await store.takeResolutionAnnouncement(decisionId);
+        broadcast({
+          type: "decision_resolved",
+          decisionId,
+          artifactId: ann?.artifactId ?? targetArtifactId,
+          optionId: ann?.optionId ?? optionId,
+          reasoning: ann ? ann.reasoning : reasoning
+        }, sid);
+        return c.json({ status: "resolved", decisionId });
+      } finally {
+        if (outcome.kind === "resolved") await store.settleResolution(decisionId, committed);
       }
-      await store.forceFlush();
-      if (targetArtifactId) {
-        await maybeUpdateTaskStatus(null, targetArtifactId, store);
-      }
-      const ann = await store.takeResolutionAnnouncement(decisionId);
-      broadcast({
-        type: "decision_resolved",
-        decisionId,
-        artifactId: ann?.artifactId ?? targetArtifactId,
-        optionId: ann?.optionId ?? optionId,
-        reasoning: ann ? ann.reasoning : reasoning
-      }, sid);
-      return c.json({ status: "resolved", decisionId });
     });
   });
   app.post("/api/decisions/:decisionId/close-out", async (c) => {
@@ -33267,23 +33330,29 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     return withDecisionResolveLock(r.store, async () => {
       const prediction = confidence || predictedOutcome ? { confidence, predictedOutcome } : void 0;
       const outcome = r.store.resolveDecisionAtomic(decisionId, optionId, reasoning, prediction);
-      if (outcome.kind === "same" || outcome.kind === "conflict") {
-        await r.store.forceFlush();
-        const late = r.store.takeResolutionAnnouncement(decisionId);
-        if (late) {
-          broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId: late.artifactId, optionId: late.optionId, reasoning: late.reasoning, confidence: late.confidence, predictedOutcome: late.predictedOutcome });
+      let committed = false;
+      try {
+        if (outcome.kind === "same" || outcome.kind === "conflict") {
+          await r.store.forceFlush();
+          const late = r.store.takeResolutionAnnouncement(decisionId);
+          if (late) {
+            broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId: late.artifactId, optionId: late.optionId, reasoning: late.reasoning, confidence: late.confidence, predictedOutcome: late.predictedOutcome });
+          }
         }
+        if (outcome.kind === "same") return c.json(staleResolveBody(outcome, decisionId));
+        if (outcome.kind === "conflict") return c.json(staleResolveBody(outcome, decisionId), 409);
+        if (outcome.kind === "invalid_option") {
+          return c.json({ error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error }, 400);
+        }
+        const artifactId = r.store.getDecision(decisionId)?.artifactId;
+        await r.store.forceFlush();
+        committed = true;
+        r.store.takeResolutionAnnouncement(decisionId);
+        broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId, optionId, reasoning, confidence, predictedOutcome });
+        return c.json({ status: "resolved" });
+      } finally {
+        if (outcome.kind === "resolved") await r.store.settleResolution(decisionId, committed);
       }
-      if (outcome.kind === "same") return c.json(staleResolveBody(outcome, decisionId));
-      if (outcome.kind === "conflict") return c.json(staleResolveBody(outcome, decisionId), 409);
-      if (outcome.kind === "invalid_option") {
-        return c.json({ error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error }, 400);
-      }
-      const artifactId = r.store.getDecision(decisionId)?.artifactId;
-      await r.store.forceFlush();
-      r.store.takeResolutionAnnouncement(decisionId);
-      broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId, optionId, reasoning, confidence, predictedOutcome });
-      return c.json({ status: "resolved" });
     });
   });
   app.get("/api/internal/sessions/:sessionId/decisions/pending", (c) => {

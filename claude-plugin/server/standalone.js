@@ -38363,6 +38363,10 @@ var DaemonClient = class {
   async takeResolutionAnnouncement(_decisionId) {
     return null;
   }
+  /** #484 review — the daemon settles its own writes (the internal route owns
+   *  the flush); nothing to do client-side. */
+  async settleResolution(_decisionId, _committed) {
+  }
   async getDecisionResponse(decisionId) {
     const data = await this.get(`/decisions/${decisionId}/response`);
     return data.response ?? null;
