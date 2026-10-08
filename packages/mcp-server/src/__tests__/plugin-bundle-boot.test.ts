@@ -40,7 +40,19 @@ interface UpgradeState {
   detailDensity: string;
   persona: string;
   globalLedgerPublish: boolean;
+  sessionMemory: { rejectedApproaches: Array<{ description: string; reason?: string; concept?: string; sourceArtifactId?: string; rejectedAt: string }> };
 }
+
+const rejectedFraming = "Tenant configuration storage";
+const rejectedConcept = "global mutable configuration state";
+const rejectedReason = "Tenant configuration must not leak between customers.";
+const rejectedProposal = {
+  title: rejectedFraming, context: "Choose tenant configuration storage", stakes: "medium",
+  options: [
+    { id: "global", title: "Global configuration", description: "Share mutable configuration between tenants", pros: ["Simple lookup"], cons: ["Tenant leakage"], effort: "low", risk: "high", concept: { name: rejectedConcept, oneLineExplanation: "All tenants share mutable state" } },
+    { id: "isolated", title: "Tenant-local configuration", description: "Keep configuration scoped to each tenant", pros: ["Tenant isolation"], cons: ["Additional plumbing"], effort: "medium", risk: "low" },
+  ],
+};
 
 /** Compare every retained semantic field, allowing additive candidate fields. */
 function expectRetained(actual: UpgradeState, retained: UpgradeState): void {
@@ -57,11 +69,15 @@ function expectRetained(actual: UpgradeState, retained: UpgradeState): void {
   expect(actual.detailDensity, "retained density preference").toBe(retained.detailDensity);
   expect(actual.persona, "retained session persona").toBe(retained.persona);
   expect(actual.globalLedgerPublish, "retained project publish preference").toBe(retained.globalLedgerPublish);
+  for (const rejection of retained.sessionMemory.rejectedApproaches) {
+    const found = actual.sessionMemory.rejectedApproaches.find((record) => record.description === rejection.description);
+    expect(found, "retained rejection memory record").toMatchObject(rejection);
+  }
 }
 
 describe("released runtime upgrades to the shipped plugin", () => {
   // Deliberately NOT runIf(bundle): missing packaged output must fail this gate.
-  it("preserves two sessions, human feedback, decisions and preferences across upgrade and restart", async () => {
+  it("preserves two sessions, human feedback, rejection memory, decisions and preferences across upgrade and restart", async () => {
     expect(fs.existsSync(bundle), "candidate shipped bundle is required").toBe(true);
     const sandbox = new UpgradeProject();
     try {
@@ -86,10 +102,20 @@ describe("released runtime upgrades to the shipped plugin", () => {
         const persona = suffix === "upgradealpha" ? "stakeholder" : "new-to-this-code";
         // Autonomy/density/publish belong to the project; persona is per-session.
         await sandbox.http("/api/preferences", sessionId, { autonomyLevel: "balanced", detailDensity: "rich", globalLedgerPublish: true, persona });
+        if (suffix === "upgradealpha") {
+          // Reject the whole decision framing, not one option: the released
+          // runtime must create the real project memory through its public API.
+          await sandbox.tool(client, "present_options", rejectedProposal);
+          state = await sandbox.http<UpgradeState>("/api/state", sessionId);
+          const rejected = state.artifacts.find((artifact) => artifact.title === rejectedFraming)!;
+          expect(rejected.type).toBe("decision");
+          await sandbox.http(`/api/artifacts/${rejected.id}/status`, sessionId, { status: "rejected", feedback: rejectedReason, concept: rejectedConcept });
+        }
         state = await sandbox.http<UpgradeState>("/api/state", sessionId);
         expect(state.comments[0]).toMatchObject({ content: `Retained human question ${suffix}`, target: { artifactId: research.id, findingIndex: 0, evidenceIndex: 0 } });
         expect(state).toMatchObject({ autonomyLevel: "balanced", detailDensity: "rich", globalLedgerPublish: true, persona });
         if (suffix === "upgradealpha") expect(state.decisions[0].response).toMatchObject({ optionId: "keep", reasoning: "The historical rationale must survive." });
+        expect(state.sessionMemory.rejectedApproaches).toEqual([expect.objectContaining({ description: rejectedFraming, reason: rejectedReason, concept: rejectedConcept, sourceArtifactId: expect.any(String), rejectedAt: expect.any(String) })]);
         snapshots.push(state);
       }
       await sandbox.stop();
@@ -106,6 +132,26 @@ describe("released runtime upgrades to the shipped plugin", () => {
       const listing = await sandbox.http<{ sessions: Array<{ id: string }> }>("/api/sessions");
       expect(listing.sessions.map((session) => session.id).sort()).toEqual(snapshots.map((state) => state.sessionId).sort());
       for (const old of snapshots) expectRetained(await sandbox.http<UpgradeState>("/api/state", old.sessionId), old);
+
+      const expectMatchingProposalBlocked = async (client: typeof alpha.client, sessionId: string) => {
+        const before = await sandbox.http<UpgradeState>("/api/state", sessionId);
+        // A healthy MCP response with the specific gate code/reason, not merely
+        // an exception or unavailable server, proves rejection remains useful.
+        for (const proposal of [rejectedProposal, { ...rejectedProposal, title: "Service wiring", context: "Choose isolated service wiring" }]) {
+          // The original framing and a differently framed proposal carrying
+          // only the same named concept must both hit the preserved memory.
+          const blocked = await client.callTool({ name: "present_options", arguments: proposal }, undefined, { timeout: 15_000 });
+          expect(blocked.isError).toBe(true);
+          expect(blocked._meta).toMatchObject({ code: "REJECTED_APPROACH_BLOCKED", retryable: false });
+          const message = JSON.stringify(blocked.content);
+          expect(message).toContain(proposal === rejectedProposal ? rejectedFraming : rejectedConcept);
+          expect(message).toContain(rejectedReason);
+        }
+        const after = await sandbox.http<UpgradeState>("/api/state", sessionId);
+        expect(after.artifacts.map((artifact) => artifact.id)).toEqual(before.artifacts.map((artifact) => artifact.id));
+        expectRetained(after, before);
+      };
+      await expectMatchingProposalBlocked(alpha.client, alpha.sessionId);
 
       // Human can comment on OLD evidence; agent can create NEW artifacts; a
       // retained pending decision can still be resolved through the companion.
@@ -124,19 +170,47 @@ describe("released runtime upgrades to the shipped plugin", () => {
 
       await sandbox.start(candidate);
       for (const expected of afterWrites) expectRetained(await sandbox.http<UpgradeState>(`/api/sessions/${expected.sessionId}`), expected);
+      const restarted = await sandbox.connect(candidate, "upgradealpha");
+      expect(restarted.sessionId).toBe(alpha.sessionId);
+      await expectMatchingProposalBlocked(restarted.client, restarted.sessionId);
       await sandbox.stop();
 
       // Real negative control: alter one retained on-disk record while stopped,
       // then boot a healthy candidate and read successfully BEFORE the assertion.
       // A network/startup failure cannot satisfy this expected rejection.
       const commentsPath = path.join(sandbox.project, ".deeppairing/sessions", snapshots[0].sessionId, "comments.json");
-      const comments = JSON.parse(fs.readFileSync(commentsPath, "utf8")) as UpgradeState["comments"];
+      const originalComments = fs.readFileSync(commentsPath, "utf8");
+      const comments = JSON.parse(originalComments) as UpgradeState["comments"];
       comments[0].content = "NEGATIVE CONTROL: retained human question lost";
       fs.writeFileSync(commentsPath, JSON.stringify(comments));
       await sandbox.start(candidate);
       const altered = await sandbox.http<UpgradeState>(`/api/sessions/${snapshots[0].sessionId}`);
       expect(altered.comments[0].content).toBe(comments[0].content);
       expect(() => expectRetained(altered, afterWrites[0])).toThrow(/retained comments record/);
+      await sandbox.stop();
+      fs.writeFileSync(commentsPath, originalComments);
+
+      const preferencesPath = path.join(sandbox.project, ".deeppairing/preferences.json");
+      const originalPreferences = fs.readFileSync(preferencesPath, "utf8");
+      for (const corruption of ["wipe", "lose-reason"] as const) {
+        // Reset each control from the healthy snapshot: the prior corrupted
+        // comment or memory must not be what makes this assertion fail.
+        const preferences = JSON.parse(originalPreferences);
+        expect(preferences.rejectedApproaches).toHaveLength(1);
+        if (corruption === "wipe") preferences.rejectedApproaches = [];
+        else delete preferences.rejectedApproaches[0].reason;
+        fs.writeFileSync(preferencesPath, JSON.stringify(preferences));
+        await sandbox.start(candidate);
+        const lost = await sandbox.http<UpgradeState>(`/api/sessions/${snapshots[0].sessionId}`);
+        if (corruption === "wipe") expect(lost.sessionMemory.rejectedApproaches).toEqual([]);
+        else {
+          expect(lost.sessionMemory.rejectedApproaches[0]).toMatchObject({ description: rejectedFraming, concept: rejectedConcept });
+          expect(lost.sessionMemory.rejectedApproaches[0].reason).toBeUndefined();
+        }
+        expect(() => expectRetained(lost, afterWrites[0]), corruption).toThrow(/retained rejection memory record/);
+        await sandbox.stop();
+      }
+      fs.writeFileSync(preferencesPath, originalPreferences);
     } finally { await sandbox.dispose(); }
   }, 90_000);
 });

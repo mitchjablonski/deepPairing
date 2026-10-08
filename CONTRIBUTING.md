@@ -115,11 +115,16 @@ embedded third-party notices. UI assets, hooks and commands are excluded from
 this **runtime-subset** fixture; the existing full packaged boot test, hook smoke
 and browser E2E gates retain their ownership. This gate does not certify the
 cross-project philosophy contents, review-post authorization, every artifact
-kind, schema downgrade, corruption salvage, or concurrent upgrade behavior.
+kind, schema downgrade, corruption salvage, concurrent upgrade behavior, or
+crash-orphaned v0.1.57 lock files (#416). The handoff is a clean shutdown, not
+a crash-recovery test.
 It uses two sessions in a temporary project and home, a bounded non-product port
 window, owned child processes, clean shutdown, and a 90-second case budget.
 Representative data is generated every run through MCP and public companion
-routes; only its negative control modifies retained JSON directly while stopped.
+routes, including a whole-decision rejection with description/reason/concept and
+matching preflight refusal after upgrade/restart. Only its negative controls
+modify retained JSON directly while stopped (altered comment, wiped rejection
+memory, and lost rejection reason); each first requires a successful boot/read.
 
 User backup/restore and downgrade expectations are documented in
 [Upgrades, backups, and recovery](docs/upgrades-and-recovery.md).

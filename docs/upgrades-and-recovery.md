@@ -75,17 +75,22 @@ CI checks one explicit forward-upgrade path: released **v0.1.57**, Git commit
 `d9efe325454f96473ec84a4537e38661ffdd9aac`, to the candidate's shipped runtime.
 It generates two sessions using the released MCP launcher and companion API,
 then verifies artifacts/evidence, anchored human comments, a resolved and a
-pending decision, per-session personas, and project autonomy/density/publish preferences.
+pending decision, per-session personas, project autonomy/density/publish preferences,
+and a whole-decision rejection with its description, reason, and named concept.
 The candidate reads and writes those retained sessions, restarts, and verifies
-old state plus new writes. A deliberately altered retained comment must be
-detected by the same semantic preservation check. The fixture is an exact
+old state plus new writes. A matching proposal must still be blocked by that
+rejection after upgrading and restarting. Deliberately altering a retained
+comment, wiping rejection memory, or losing its reason must each be detected by
+the same semantic preservation check after a successful candidate boot/read.
+The fixture is an exact
 released **runtime subset**, not a simulated old store or a full plugin-install
 test; [the contributor instructions](../CONTRIBUTING.md#released-runtime-upgrade-gate)
 document its provenance and exclusions.
 
 This bounded forward check is the supported validation baseline. It does not
 certify every historic release, every persisted feature, corrupt stores,
-concurrent upgrades, arbitrary newer-to-older writes, or backward schema
+concurrent upgrades, crash-orphaned v0.1.57 lock files (the #416 recovery case),
+arbitrary newer-to-older writes, or backward schema
 compatibility. Additional fields being optional helps forward readers, but
 does not guarantee an older writer will preserve a newer version's fields.
 
