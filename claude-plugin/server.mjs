@@ -32,7 +32,7 @@ if (nodeMajor < MIN_NODE[0] || (nodeMajor === MIN_NODE[0] && nodeMinor < MIN_NOD
     `deepPairing requires Node ${MIN_NODE[0]}.${MIN_NODE[1]}+; you're running Node ${process.versions.node}.\n` +
     "Node 22 or 24 (current LTS) is recommended; Node 20.11+ also works but is " +
     "deprecated (EOL upstream, support planned for removal no earlier than " +
-    "v0.2.0).\n" +
+    "v0.2.0, not before January 2027).\n" +
     "Upgrade Node (e.g. via nvm: `nvm install 22`), then reload the plugin.\n",
   );
   process.exit(1);
