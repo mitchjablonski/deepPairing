@@ -86,6 +86,49 @@ claude-plugin/    # Claude Code plugin (.mcp.json + slash commands + skill)
 - MCP tools get integration tests via the SDK's `InMemoryTransport` (see `mcp/__tests__/server.test.ts`).
 - New error codes need a docs/troubleshooting.md entry if user-facing.
 
+### Released-runtime upgrade gate
+
+`plugin-bundle-boot.test.ts` retains the packaged cold-boot regression and adds
+one offline forward-upgrade case: released v0.1.57
+(`d9efe325454f96473ec84a4537e38661ffdd9aac`) → the candidate's committed
+`claude-plugin/` runtime. v0.1.57 is the first released marketplace runtime after
+the #437 boot fix. The baseline in
+`packages/mcp-server/src/__tests__/fixtures/plugin-upgrade/v0.1.57/` is a gzip JSON
+container of exact Git blobs, not a rebuilt package or a hand-authored old store.
+Its manifest records the release URL, commit, generator, Git blob IDs, byte sizes,
+and SHA-256 hashes of each file and the archive. The test checks those hashes
+before execution. CI needs no historical dependencies, network, or mutable tag.
+
+To reproduce the pinned fixture (only when deliberately updating baseline work):
+
+```bash
+git fetch origin tag v0.1.57
+node tools/pin-upgrade-baseline.mjs
+git diff -- packages/mcp-server/src/__tests__/fixtures/plugin-upgrade
+pnpm --filter @deeppairing/mcp-server exec vitest run src/__tests__/plugin-bundle-boot.test.ts
+```
+
+The fixed commit in the generator is the authority; fetching a moved tag cannot
+change its output. It copies the launcher, standalone and daemon bundles, ESM
+marker, plugin manifest, HTML bootstrap shell, and MIT license, preserving
+embedded third-party notices. UI assets, hooks and commands are excluded from
+this **runtime-subset** fixture; the existing full packaged boot test, hook smoke
+and browser E2E gates retain their ownership. This gate does not certify the
+cross-project philosophy contents, review-post authorization, every artifact
+kind, schema downgrade, corruption salvage, concurrent upgrade behavior, or
+crash-orphaned v0.1.57 lock files (#416). The handoff is a clean shutdown, not
+a crash-recovery test.
+It uses two sessions in a temporary project and home, a bounded non-product port
+window, owned child processes, clean shutdown, and a 90-second case budget.
+Representative data is generated every run through MCP and public companion
+routes, including a whole-decision rejection with description/reason/concept and
+matching preflight refusal after upgrade/restart. Only its negative controls
+modify retained JSON directly while stopped (altered comment, wiped rejection
+memory, and lost rejection reason); each first requires a successful boot/read.
+
+User backup/restore and downgrade expectations are documented in
+[Upgrades, backups, and recovery](docs/upgrades-and-recovery.md).
+
 ## Commit messages
 
 We don't enforce Conventional Commits, but we do prefer:

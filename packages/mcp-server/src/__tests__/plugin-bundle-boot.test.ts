@@ -22,6 +22,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expandReleasedRuntime, UpgradeProject } from "./plugin-upgrade.harness.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pluginSrc = path.resolve(here, "../../../../claude-plugin");
@@ -29,6 +30,190 @@ const bundle = path.join(pluginSrc, "server", "standalone.js");
 
 const cleanups: Array<() => void> = [];
 afterEach(() => { while (cleanups.length) { try { cleanups.pop()!(); } catch { /* best effort */ } } });
+
+interface UpgradeState {
+  sessionId: string;
+  artifacts: Array<{ id: string; title: string; type: string; content: { decisionId?: string; summary?: string }; [key: string]: unknown }>;
+  comments: Array<{ id: string; content: string; target: { artifactId: string; findingIndex?: number }; [key: string]: unknown }>;
+  decisions: Array<{ decisionId: string; response?: { optionId: string; reasoning?: string }; [key: string]: unknown }>;
+  autonomyLevel: string;
+  detailDensity: string;
+  persona: string;
+  globalLedgerPublish: boolean;
+  sessionMemory: { rejectedApproaches: Array<{ description: string; reason?: string; concept?: string; sourceArtifactId?: string; rejectedAt: string }> };
+}
+
+const rejectedFraming = "Tenant configuration storage";
+const rejectedConcept = "global mutable configuration state";
+const rejectedReason = "Tenant configuration must not leak between customers.";
+const rejectedProposal = {
+  title: rejectedFraming, context: "Choose tenant configuration storage", stakes: "medium",
+  options: [
+    { id: "global", title: "Global configuration", description: "Share mutable configuration between tenants", pros: ["Simple lookup"], cons: ["Tenant leakage"], effort: "low", risk: "high", concept: { name: rejectedConcept, oneLineExplanation: "All tenants share mutable state" } },
+    { id: "isolated", title: "Tenant-local configuration", description: "Keep configuration scoped to each tenant", pros: ["Tenant isolation"], cons: ["Additional plumbing"], effort: "medium", risk: "low" },
+  ],
+};
+
+/** Compare every retained semantic field, allowing additive candidate fields. */
+function expectRetained(actual: UpgradeState, retained: UpgradeState): void {
+  expect(actual.sessionId, "retained session ID").toBe(retained.sessionId);
+  for (const kind of ["artifacts", "comments", "decisions"] as const) {
+    for (const oldRecord of retained[kind]) {
+      const found = actual[kind].find((record) => kind === "decisions"
+        ? (record as UpgradeState["decisions"][number]).decisionId === (oldRecord as UpgradeState["decisions"][number]).decisionId
+        : (record as { id: string }).id === (oldRecord as { id: string }).id);
+      expect(found, `retained ${kind} record`).toMatchObject(oldRecord);
+    }
+  }
+  expect(actual.autonomyLevel, "retained autonomy preference").toBe(retained.autonomyLevel);
+  expect(actual.detailDensity, "retained density preference").toBe(retained.detailDensity);
+  expect(actual.persona, "retained session persona").toBe(retained.persona);
+  expect(actual.globalLedgerPublish, "retained project publish preference").toBe(retained.globalLedgerPublish);
+  for (const rejection of retained.sessionMemory.rejectedApproaches) {
+    const found = actual.sessionMemory.rejectedApproaches.find((record) => record.description === rejection.description);
+    expect(found, "retained rejection memory record").toMatchObject(rejection);
+  }
+}
+
+describe("released runtime upgrades to the shipped plugin", () => {
+  // Deliberately NOT runIf(bundle): missing packaged output must fail this gate.
+  it("preserves two sessions, human feedback, rejection memory, decisions and preferences across upgrade and restart", async () => {
+    expect(fs.existsSync(bundle), "candidate shipped bundle is required").toBe(true);
+    const sandbox = new UpgradeProject();
+    try {
+      const released = path.join(sandbox.tmp, "released-plugin");
+      expandReleasedRuntime(path.join(here, "fixtures/plugin-upgrade/v0.1.57"), released);
+      const candidate = path.join(sandbox.tmp, "candidate-plugin");
+      fs.cpSync(pluginSrc, candidate, { recursive: true });
+      await sandbox.start(released);
+      const snapshots: UpgradeState[] = [];
+      for (const suffix of ["upgradealpha", "upgradebeta"]) {
+        const { client, sessionId } = await sandbox.connect(released, suffix);
+        await sandbox.tool(client, "present_findings", { title: `Upgrade findings ${suffix}`, summary: `Retain café evidence ${suffix}`, findings: [{ category: "reliability", detail: `Keep the user's retained feedback ${suffix}`, significance: "high", evidence: [{ filePath: "src/example.ts", lineStart: 2, lineEnd: 3, snippet: "const retained = true;", explanation: "A stable evidence anchor" }] }] });
+        let state = await sandbox.http<UpgradeState>("/api/state", sessionId);
+        const research = state.artifacts.find((artifact) => artifact.type === "research")!;
+        expect(research.content.summary).toBe(`Retain café evidence ${suffix}`);
+        await sandbox.http("/api/comments", sessionId, { artifactId: research.id, content: `Retained human question ${suffix}`, intent: "question", target: { artifactId: research.id, findingIndex: 0, evidenceIndex: 0 } });
+        await sandbox.tool(client, "present_options", { context: `Choose retained strategy ${suffix}`, stakes: "medium", options: [{ id: "keep", title: "Keep", description: "Retain the old records", pros: ["Preserves review history"], cons: [], effort: "low", risk: "low" }, { id: "replace", title: "Replace", description: "Replace the records", pros: [], cons: ["Loses review history"], effort: "high", risk: "high" }] });
+        state = await sandbox.http<UpgradeState>("/api/state", sessionId);
+        const decision = state.decisions[0];
+        expect(decision.decisionId).toBeTruthy();
+        if (suffix === "upgradealpha") await sandbox.http(`/api/decisions/${decision.decisionId}`, sessionId, { optionId: "keep", reasoning: "The historical rationale must survive." });
+        const persona = suffix === "upgradealpha" ? "stakeholder" : "new-to-this-code";
+        // Autonomy/density/publish belong to the project; persona is per-session.
+        await sandbox.http("/api/preferences", sessionId, { autonomyLevel: "balanced", detailDensity: "rich", globalLedgerPublish: true, persona });
+        if (suffix === "upgradealpha") {
+          // Reject the whole decision framing, not one option: the released
+          // runtime must create the real project memory through its public API.
+          await sandbox.tool(client, "present_options", rejectedProposal);
+          state = await sandbox.http<UpgradeState>("/api/state", sessionId);
+          const rejected = state.artifacts.find((artifact) => artifact.title === rejectedFraming)!;
+          expect(rejected.type).toBe("decision");
+          await sandbox.http(`/api/artifacts/${rejected.id}/status`, sessionId, { status: "rejected", feedback: rejectedReason, concept: rejectedConcept });
+        }
+        state = await sandbox.http<UpgradeState>("/api/state", sessionId);
+        expect(state.comments[0]).toMatchObject({ content: `Retained human question ${suffix}`, target: { artifactId: research.id, findingIndex: 0, evidenceIndex: 0 } });
+        expect(state).toMatchObject({ autonomyLevel: "balanced", detailDensity: "rich", globalLedgerPublish: true, persona });
+        if (suffix === "upgradealpha") expect(state.decisions[0].response).toMatchObject({ optionId: "keep", reasoning: "The historical rationale must survive." });
+        expect(state.sessionMemory.rejectedApproaches).toEqual([expect.objectContaining({ description: rejectedFraming, reason: rejectedReason, concept: rejectedConcept, sourceArtifactId: expect.any(String), rejectedAt: expect.any(String) })]);
+        snapshots.push(state);
+      }
+      await sandbox.stop();
+
+      await sandbox.start(candidate);
+      for (const old of snapshots) {
+        // Dead-session history is a user-facing route even before reattachment.
+        expectRetained(await sandbox.http<UpgradeState>(`/api/sessions/${old.sessionId}`), old);
+      }
+      const alpha = await sandbox.connect(candidate, "upgradealpha");
+      const beta = await sandbox.connect(candidate, "upgradebeta");
+      expect(alpha.sessionId).toBe(snapshots[0].sessionId);
+      expect(beta.sessionId).toBe(snapshots[1].sessionId);
+      const listing = await sandbox.http<{ sessions: Array<{ id: string }> }>("/api/sessions");
+      expect(listing.sessions.map((session) => session.id).sort()).toEqual(snapshots.map((state) => state.sessionId).sort());
+      for (const old of snapshots) expectRetained(await sandbox.http<UpgradeState>("/api/state", old.sessionId), old);
+
+      const expectMatchingProposalBlocked = async (client: typeof alpha.client, sessionId: string) => {
+        const before = await sandbox.http<UpgradeState>("/api/state", sessionId);
+        // A healthy MCP response with the specific gate code/reason, not merely
+        // an exception or unavailable server, proves rejection remains useful.
+        for (const proposal of [rejectedProposal, { ...rejectedProposal, title: "Service wiring", context: "Choose isolated service wiring" }]) {
+          // The original framing and a differently framed proposal carrying
+          // only the same named concept must both hit the preserved memory.
+          const blocked = await client.callTool({ name: "present_options", arguments: proposal }, undefined, { timeout: 15_000 });
+          expect(blocked.isError).toBe(true);
+          expect(blocked._meta).toMatchObject({ code: "REJECTED_APPROACH_BLOCKED", retryable: false });
+          const message = JSON.stringify(blocked.content);
+          expect(message).toContain(proposal === rejectedProposal ? rejectedFraming : rejectedConcept);
+          expect(message).toContain(rejectedReason);
+        }
+        const after = await sandbox.http<UpgradeState>("/api/state", sessionId);
+        expect(after.artifacts.map((artifact) => artifact.id)).toEqual(before.artifacts.map((artifact) => artifact.id));
+        expectRetained(after, before);
+      };
+      await expectMatchingProposalBlocked(alpha.client, alpha.sessionId);
+
+      // Human can comment on OLD evidence; agent can create NEW artifacts; a
+      // retained pending decision can still be resolved through the companion.
+      await sandbox.http("/api/comments", alpha.sessionId, { artifactId: snapshots[0].artifacts[0].id, content: "Candidate follow-up on retained evidence", intent: "comment", target: { artifactId: snapshots[0].artifacts[0].id, findingIndex: 0 } });
+      await sandbox.tool(alpha.client, "present_findings", { title: "Candidate follow-up", summary: "New durable candidate artifact", findings: [{ category: "reliability", detail: "New writes also survive restart", significance: "medium" }] });
+      await sandbox.http(`/api/decisions/${snapshots[1].decisions[0].decisionId}`, beta.sessionId, { optionId: "keep", reasoning: "Resolved after upgrading." });
+      await sandbox.http("/api/preferences", alpha.sessionId, { detailDensity: "terse" });
+      await sandbox.http("/api/preferences", beta.sessionId, { detailDensity: "terse" });
+      const afterWrites = await Promise.all(snapshots.map((state) => sandbox.http<UpgradeState>("/api/state", state.sessionId)));
+      expect(afterWrites[0].comments).toHaveLength(snapshots[0].comments.length + 1);
+      expect(afterWrites[0].comments.at(-1)?.content).toBe("Candidate follow-up on retained evidence");
+      expect(afterWrites[0].artifacts.at(-1)?.content.summary).toBe("New durable candidate artifact");
+      expect(afterWrites[0].detailDensity).toBe("terse");
+      expect(afterWrites[1].decisions[0].response).toMatchObject({ optionId: "keep", reasoning: "Resolved after upgrading." });
+      await sandbox.stop();
+
+      await sandbox.start(candidate);
+      for (const expected of afterWrites) expectRetained(await sandbox.http<UpgradeState>(`/api/sessions/${expected.sessionId}`), expected);
+      const restarted = await sandbox.connect(candidate, "upgradealpha");
+      expect(restarted.sessionId).toBe(alpha.sessionId);
+      await expectMatchingProposalBlocked(restarted.client, restarted.sessionId);
+      await sandbox.stop();
+
+      // Real negative control: alter one retained on-disk record while stopped,
+      // then boot a healthy candidate and read successfully BEFORE the assertion.
+      // A network/startup failure cannot satisfy this expected rejection.
+      const commentsPath = path.join(sandbox.project, ".deeppairing/sessions", snapshots[0].sessionId, "comments.json");
+      const originalComments = fs.readFileSync(commentsPath, "utf8");
+      const comments = JSON.parse(originalComments) as UpgradeState["comments"];
+      comments[0].content = "NEGATIVE CONTROL: retained human question lost";
+      fs.writeFileSync(commentsPath, JSON.stringify(comments));
+      await sandbox.start(candidate);
+      const altered = await sandbox.http<UpgradeState>(`/api/sessions/${snapshots[0].sessionId}`);
+      expect(altered.comments[0].content).toBe(comments[0].content);
+      expect(() => expectRetained(altered, afterWrites[0])).toThrow(/retained comments record/);
+      await sandbox.stop();
+      fs.writeFileSync(commentsPath, originalComments);
+
+      const preferencesPath = path.join(sandbox.project, ".deeppairing/preferences.json");
+      const originalPreferences = fs.readFileSync(preferencesPath, "utf8");
+      for (const corruption of ["wipe", "lose-reason"] as const) {
+        // Reset each control from the healthy snapshot: the prior corrupted
+        // comment or memory must not be what makes this assertion fail.
+        const preferences = JSON.parse(originalPreferences);
+        expect(preferences.rejectedApproaches).toHaveLength(1);
+        if (corruption === "wipe") preferences.rejectedApproaches = [];
+        else delete preferences.rejectedApproaches[0].reason;
+        fs.writeFileSync(preferencesPath, JSON.stringify(preferences));
+        await sandbox.start(candidate);
+        const lost = await sandbox.http<UpgradeState>(`/api/sessions/${snapshots[0].sessionId}`);
+        if (corruption === "wipe") expect(lost.sessionMemory.rejectedApproaches).toEqual([]);
+        else {
+          expect(lost.sessionMemory.rejectedApproaches[0]).toMatchObject({ description: rejectedFraming, concept: rejectedConcept });
+          expect(lost.sessionMemory.rejectedApproaches[0].reason).toBeUndefined();
+        }
+        expect(() => expectRetained(lost, afterWrites[0]), corruption).toThrow(/retained rejection memory record/);
+        await sandbox.stop();
+      }
+      fs.writeFileSync(preferencesPath, originalPreferences);
+    } finally { await sandbox.dispose(); }
+  }, 90_000);
+});
 
 describe.runIf(fs.existsSync(bundle))("shipped plugin bundle boots with plain node", () => {
   it("answers initialize and tools/list from a copy of claude-plugin/ alone", async () => {

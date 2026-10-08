@@ -290,7 +290,7 @@ export class DaemonClient implements IStore {
       // clients) so the companion UI knows to refetch state. Fire-and-
       // forget — recovery shouldn't fail just because the broadcast
       // didn't land.
-      void fetch(`${this.baseUrl}/recovered`, { method: "POST" }).catch(() => {});
+      void this.notifyRecovered();
       return this.request<T>(path, init, true);
     }
 
@@ -303,6 +303,21 @@ export class DaemonClient implements IStore {
     err.status = res.status;
     if (typeof body?.code === "string") err.code = body.code;
     throw err;
+  }
+
+  /** Notify companion clients after recovery without starting another recovery
+   * cycle. The shared request path supplies the bearer and project binding;
+   * `isRetry` keeps this advisory call bounded. */
+  private async notifyRecovered(): Promise<void> {
+    try {
+      await this.request("/recovered", { method: "POST" }, true);
+    } catch (err) {
+      console.error(
+        `[deepPairing] session recovery succeeded, but the companion refresh notification failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 
   private async post<T = any>(path: string, body?: any): Promise<T> {
