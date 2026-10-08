@@ -22,23 +22,22 @@ cd deepPairing && pnpm install && pnpm build
 ## Node.js support policy
 
 Node 20 reached end-of-life on 2026-04-30; Node 22 ("Jod") and Node 24
-("Krypton") are the current LTS lines. This is a lifecycle refresh, not a
-reaction to a known deepPairing incompatibility — nothing here has been
-observed to fail on Node 20.
+("Krypton") are the current LTS lines. **Node 20 is deprecated: it still works
+today (nothing here has been observed to fail on it), but support will be
+removed no earlier than v0.2.0 (not before January 2027).** Recommended and
+maintained going forward is Node 22 or 24 — migrate before then.
 
 | | Prebuilt plugin (marketplace / `claude-plugin/`) | Source build (contributors) |
 |---|---|---|
 | **Recommended** | Node 22 or 24 | Node 22 or 24 |
-| **Maintained / tested in CI** | Node 22, Node 24 (`plugin-boot` matrix in CI runs the actual shipped `claude-plugin/server/` bundle, no `dist` fallback, on both) | Node 22 (main CI jobs) and the exact floor, Node 20.19.0 (`node-floor` CI job: install + build + lint) |
-| **Legacy-compatible, untested in CI** | Node 20.11+ — unchanged `engines.node` floor. `esbuild` targets `node20` for this bundle and it uses no Node API newer than 20.11 (checked against `node:fs/path/http/net/crypto/events/child_process/os/url/perf_hooks/readline/stream`, `fetch`, `structuredClone`), so there's no technical reason it wouldn't keep working — CI simply no longer exercises it, because Node 20 has no more upstream security fixes. | Node 20.19+ still satisfies the locked toolchain's `engines` field and builds cleanly (verified for #409/#414); it's listed here rather than above because CI only pins the exact floor, not a general Node-20 job. |
-| **Exact `engines.node`** | `>=20.11.0` (`packages/mcp-server/package.json`, unchanged) | `^20.19.0 \|\| ^22.13.0 \|\| >=24` (root `package.json`, unchanged) |
+| **Maintained / tested in CI** | Node 22, Node 24 (`plugin-boot` matrix in CI runs the actual shipped `claude-plugin/server/` bundle, no `dist` fallback, on both) | Node 22 (main CI jobs) and exactly the documented floor patch, Node 20.19.0 (`node-floor` CI job: install + build + lint) — that one patch is CI-checked because it's the documented minimum, not because the Node 20 line generally is |
+| **Deprecated, removal planned** | Node 20.11+ — unchanged `engines.node` floor, still works (`esbuild` targets `node20` for this bundle and it uses no Node API newer than 20.11: checked against `node:fs/path/http/net/crypto/events/child_process/os/url/perf_hooks/readline/stream`, `fetch`, `structuredClone`), but no longer CI-tested beyond this release's `plugin-boot` matrix (which only covers 22/24) — Node 20 has no more upstream security patches. Loading the plugin on Node 20.x prints a one-line stderr deprecation notice (doesn't fail). | Any Node 20.x other than the exact 20.19.0 floor patch (e.g. 20.11–20.18, or 20.20+) still satisfies the locked toolchain's `engines` field and builds (verified for #409/#414), but isn't matrix-tested and is deprecated along with the rest of the Node 20 line. |
+| **Exact `engines.node`** | `>=20.11.0` (`packages/mcp-server/package.json`, unchanged for now — will be raised to drop the 20.x branch when Node 20 support is actually removed) | `^20.19.0 \|\| ^22.13.0 \|\| >=24` (root `package.json`, unchanged for now, same removal timing) |
 
-**Decision needed from Mitch** (flagged in the PR, not resolved here): whether
-Node 20 should stay **legacy-compatible, untested in CI** (the status quo this
-PR keeps) or move to **deprecated, with a removal plan** (an announced
-version + date after which the `>=20.11.0` floor is dropped). This PR does not
-make that call — it only stops silently implying Node 20 is as well-supported
-as 22/24, and makes sure nothing breaks for Node 20 users today.
+Node 20 support — the `20.x` branches of both `engines.node` ranges above —
+will be removed no earlier than v0.2.0 (not before January 2027). That's a
+target, not a promise it happens exactly then; it won't happen earlier. If
+you're on Node 20, plan a move to 22 or 24 before that release.
 
 ## 1. Marketplace plugin (recommended)
 

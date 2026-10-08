@@ -53,8 +53,9 @@ boundary. Editors other than Claude Code.
 
 Install the plugin inside Claude Code. It needs no clone and no build: the
 plugin ships a prebuilt server. Node 22 or 24 (current LTS) is recommended and
-what CI tests; Node 20.11+ still works (legacy-compatible, no longer CI-tested
-since Node 20 is EOL — see [INSTALL.md](INSTALL.md#nodejs-support-policy)).
+what CI tests; Node 20.11+ still works but is deprecated — Node 20 is EOL and
+support is planned for removal no earlier than v0.2.0 (not before January
+2027; see [INSTALL.md](INSTALL.md#nodejs-support-policy)).
 
 ```bash
 /plugin marketplace add https://github.com/mitchjablonski/deepPairing
@@ -322,8 +323,9 @@ remembers where you stood.
 ```
 
 - **What you need:** Claude Code and Node on your `PATH` — 22 or 24
-  recommended (what CI tests), 20.11+ legacy-compatible but no longer
-  CI-tested (Node 20 is EOL; see
+  recommended (what CI tests), 20.11+ still works but is deprecated
+  (Node 20 is EOL; support planned for removal no earlier than v0.2.0,
+  not before January 2027 — see
   [INSTALL.md](INSTALL.md#nodejs-support-policy)). You don't need
   pnpm, a clone or a build.
 - **What you get:** the plugin runs the server bundle committed in

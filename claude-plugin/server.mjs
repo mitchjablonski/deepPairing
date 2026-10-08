@@ -23,18 +23,32 @@ import { createRequire } from "node:module";
 // opaque syntax or "is not a constructor" error (the #437 class) deep inside
 // the bundle. Check first and say exactly what's wrong. Keep MIN_NODE in sync
 // with packages/mcp-server/package.json's "engines" and INSTALL.md's
-// Node.js support policy — this is the Node 20.11+ "legacy-compatible"
-// floor, not the recommended 22/24.
+// Node.js support policy — this is the Node 20.11+ "deprecated, removal
+// planned" floor, not the recommended 22/24.
 const MIN_NODE = [20, 11];
 const [nodeMajor, nodeMinor] = process.versions.node.split(".").map(Number);
 if (nodeMajor < MIN_NODE[0] || (nodeMajor === MIN_NODE[0] && nodeMinor < MIN_NODE[1])) {
   process.stderr.write(
     `deepPairing requires Node ${MIN_NODE[0]}.${MIN_NODE[1]}+; you're running Node ${process.versions.node}.\n` +
     "Node 22 or 24 (current LTS) is recommended; Node 20.11+ also works but is " +
-    "no longer security-patched upstream.\n" +
+    "deprecated (EOL upstream, support planned for removal no earlier than " +
+    "v0.2.0).\n" +
     "Upgrade Node (e.g. via nvm: `nvm install 22`), then reload the plugin.\n",
   );
   process.exit(1);
+}
+
+// #461 — Node 20 is EOL and its deepPairing support is deprecated: still
+// works today, planned for removal no earlier than v0.2.0 (not before
+// January 2027). One line, stderr only — this process's stdout is the MCP
+// stdio transport, so nothing may ever be written there except protocol
+// frames.
+if (nodeMajor === 20) {
+  process.stderr.write(
+    "deepPairing: Node 20 is deprecated (EOL upstream); support is planned " +
+    "for removal no earlier than v0.2.0 (not before January 2027). " +
+    "Move to Node 22 or 24 when convenient.\n",
+  );
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
