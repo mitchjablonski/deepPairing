@@ -125,6 +125,26 @@ describe("#486 — the cross-project mirror survives a busy ledger lock", () => 
     expect(fs.existsSync(pending)).toBe(false);
   });
 
+  it("`philosophy remove` is authoritative: a mirror queued before the removal never resurrects the concept", async () => {
+    const { getGlobalStore } = await import("../global-store.js");
+    // The concept is already in the ledger (from another project).
+    getGlobalStore().recordInstance("redis", { project: "elsewhere", sessionId: "x", verdict: "rejected" });
+    const store = publishingStore();
+    holdLedgerLock();
+    store.recordRejectedApproach({ description: "Use Redis", concept: "redis" }); // mirror queued
+    releaseLedgerLock();
+    expect(getGlobalStore().removeConcept("redis")).not.toBeNull();         // the user removes it
+    vi.advanceTimersByTime(120_000);                                        // the queued mirror replays
+    store.replayLedgerMirrors();
+    expect(instances("redis")).toEqual([]);
+    expect(fs.existsSync(pending)).toBe(false);
+    // A genuinely NEW rejection after the removal still records.
+    vi.useRealTimers();
+    await new Promise((r) => setTimeout(r, 5));
+    store.recordRejectedApproach({ description: "Use Redis again", concept: "redis" });
+    expect(instances("redis")).toHaveLength(1);
+  });
+
   it("withdrawn publish consent drops queued mirrors instead of publishing them", () => {
     const store = publishingStore();
     holdLedgerLock();

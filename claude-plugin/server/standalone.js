@@ -28331,6 +28331,29 @@ var GlobalStore = class _GlobalStore {
       reentrant: true
     });
   }
+  /** #486 — `<ledger>.removed.json`: concept key → ISO time of its last
+   *  `removeConcept`. A sidecar, so the ledger's own format is unchanged. */
+  removalsPath() {
+    return `${this.ledgerPath}.removed.json`;
+  }
+  readRemovals() {
+    try {
+      const raw = JSON.parse(fs3.readFileSync(this.removalsPath(), "utf-8"));
+      return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+    } catch {
+      return {};
+    }
+  }
+  /** Called under the ledger lock (removeConcept). */
+  recordRemoval(key) {
+    const removals = this.readRemovals();
+    removals[key] = (/* @__PURE__ */ new Date()).toISOString();
+    try {
+      writeJsonAtomic(this.removalsPath(), removals);
+    } catch (err) {
+      console.error(`[deepPairing] could not record the removal of "${key}" (a queued mirror could re-add it):`, err);
+    }
+  }
   write(ledger) {
     if (this.lastReadCorrupt) {
       const snap = corruptSnapshots.get(this.ledgerPath);
@@ -28383,6 +28406,10 @@ var GlobalStore = class _GlobalStore {
     const now = instance.at ?? (/* @__PURE__ */ new Date()).toISOString();
     const nowMs = Date.parse(now);
     const existing = ledger.concepts[key];
+    if (opts.exactOnce) {
+      const removedAt = this.readRemovals()[key];
+      if (removedAt && now <= removedAt) return;
+    }
     if (opts.exactOnce && existing?.instances.some((prior) => prior.project === instance.project && prior.sessionId === instance.sessionId && prior.verdict === instance.verdict && prior.at === now)) {
       return;
     }
@@ -28469,6 +28496,7 @@ var GlobalStore = class _GlobalStore {
     }
     delete ledger.concepts[key];
     this.write(ledger);
+    this.recordRemoval(key);
     return { concept: entry.concept, instanceCount: entry.instances.length, backupPath };
   }
   /** Look up a single entry by concept (case-insensitive). */

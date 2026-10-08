@@ -369,6 +369,32 @@ export class GlobalStore {
     });
   }
 
+  /** #486 — `<ledger>.removed.json`: concept key → ISO time of its last
+   *  `removeConcept`. A sidecar, so the ledger's own format is unchanged. */
+  private removalsPath(): string {
+    return `${this.ledgerPath}.removed.json`;
+  }
+
+  private readRemovals(): Record<string, string> {
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.removalsPath(), "utf-8"));
+      return raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, string> : {};
+    } catch {
+      return {};
+    }
+  }
+
+  /** Called under the ledger lock (removeConcept). */
+  private recordRemoval(key: string): void {
+    const removals = this.readRemovals();
+    removals[key] = new Date().toISOString();
+    try {
+      writeJsonAtomic(this.removalsPath(), removals);
+    } catch (err) {
+      console.error(`[deepPairing] could not record the removal of "${key}" (a queued mirror could re-add it):`, err);
+    }
+  }
+
   private write(ledger: LedgerFile): void {
     // H1-5 — REFUSE to overwrite a ledger the most recent read couldn't trust.
     // Writing the (empty) fallback shape here is exactly the permanent
@@ -458,6 +484,16 @@ export class GlobalStore {
     // the (project, sessionId, verdict, at) signature identifies it exactly
     // (the same signature importLedger dedupes on). Already present ⇒ an
     // earlier replay landed it; never append it twice, whatever the age.
+    // #486 — removal is authoritative over every project's queued mirrors:
+    // an instance stamped BEFORE the concept was removed (a mirror queued
+    // while the ledger was busy, replayed after the user's `philosophy
+    // remove`) must not resurrect it. Checked here, under the ledger lock, so
+    // a remove racing a replay cannot lose. A genuinely new instance (stamped
+    // after the removal) still records.
+    if (opts.exactOnce) {
+      const removedAt = this.readRemovals()[key];
+      if (removedAt && now <= removedAt) return;
+    }
     if (opts.exactOnce && existing?.instances.some((prior) =>
       prior.project === instance.project && prior.sessionId === instance.sessionId &&
       prior.verdict === instance.verdict && prior.at === now)) {
@@ -571,6 +607,7 @@ export class GlobalStore {
 
     delete ledger.concepts[key];
     this.write(ledger);
+    this.recordRemoval(key);
     return { concept: entry.concept, instanceCount: entry.instances.length, backupPath };
   }
 
