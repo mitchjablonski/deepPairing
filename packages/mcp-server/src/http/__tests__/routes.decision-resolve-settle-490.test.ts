@@ -94,6 +94,23 @@ describe("#490.2 — a partial write that landed the answer is a committed resol
     expect(events.filter((e) => e.type === "decision_resolved")).toHaveLength(1);
   });
 
+  it("the collections the failed flush left behind are re-flushed once the store can write", async () => {
+    const store = fx.track(new FileStore(fx.dir, "s_conv"));
+    seedDecision(store);
+    await store.forceFlush();
+    const app = withHash(createHttpRoutes(store, fx.dir, () => {}), fx.dir);
+    breakPlanReviews(fx.dir, "s_conv");
+    store.recordPlanReview("art_other");
+
+    expect((await app.request("/api/decisions/dec_d", json({ optionId: "a", reasoning: "first" }))).status).toBe(200);
+    const planReviews = path.join(sessionDir(fx.dir, "s_conv"), "plan-reviews.json");
+    fs.rmdirSync(planReviews); // the disk fault clears; no further mutation arrives
+    await vi.waitFor(() => {
+      expect(fs.statSync(planReviews, { throwIfNoEntry: false })?.isFile()).toBe(true);
+      expect(fs.readFileSync(planReviews, "utf8")).toContain("art_other");
+    }, { timeout: 2000, interval: 50 });
+  });
+
   it("internal: the same — 200 and one event when the answer landed despite the failed flush", async () => {
     const sessions = new Map<string, FileStore>();
     const meta = new Map<string, SessionMeta>();

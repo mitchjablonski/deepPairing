@@ -1509,7 +1509,12 @@ export class FileStore implements IStore {
     try {
       const raw = JSON.parse(fs.readFileSync(path.join(this.sessionDir(), "decisions.json"), "utf8")) as DecisionRecord[];
       const onDisk = Array.isArray(raw) ? raw.find((d) => d?.decisionId === decisionId)?.response : undefined;
-      return !!onDisk && onDisk.optionId === written.optionId && (onDisk.reasoning ?? null) === (written.reasoning ?? null);
+      const durable = !!onDisk && onDisk.optionId === written.optionId && (onDisk.reasoning ?? null) === (written.reasoning ?? null);
+      // The flush that just failed left the LATER collections memory-only;
+      // committing here schedules no write of its own, so re-flush to converge
+      // them once the store can write (the rollback path does the same).
+      if (durable) { try { this.scheduleFlush(); } catch { /* disposed */ } }
+      return durable;
     } catch {
       return false;
     }

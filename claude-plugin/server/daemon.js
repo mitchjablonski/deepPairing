@@ -27503,7 +27503,14 @@ var FileStore = class _FileStore {
     try {
       const raw2 = JSON.parse(fs14.readFileSync(path13.join(this.sessionDir(), "decisions.json"), "utf8"));
       const onDisk = Array.isArray(raw2) ? raw2.find((d) => d?.decisionId === decisionId)?.response : void 0;
-      return !!onDisk && onDisk.optionId === written.optionId && (onDisk.reasoning ?? null) === (written.reasoning ?? null);
+      const durable = !!onDisk && onDisk.optionId === written.optionId && (onDisk.reasoning ?? null) === (written.reasoning ?? null);
+      if (durable) {
+        try {
+          this.scheduleFlush();
+        } catch {
+        }
+      }
+      return durable;
     } catch {
       return false;
     }
