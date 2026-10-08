@@ -1,8 +1,18 @@
 # One-proposal stance exceptions (proposal, #470)
 
-> **Status: PROPOSAL, revision 4. No code is included.** It is written for
+> **Status: PROPOSAL, revision 5. No code is included.** It is written for
 > Astra's scope and authority review, which must happen before any
 > implementation starts.
+>
+> **Revision 5** answers Astra's re-review of `e4ec4c87`. Astra agreed with
+> O1 and with keeping D5, and raised two P2s:
+> - An allowance is now bound to the **effective proposal**: a resolved
+>   snapshot plus its preconditions. The raw-call fingerprint is used only to
+>   locate retries (§2).
+> - **One authoritative daemon operation route** completes a partial revision
+>   before any replay returns success (§6, §7).
+>
+> §12 maps both findings to sections.
 >
 > **Revision 4**
 > - Fable APPROVED revision 3 at `6be03359` with implementation notes, and
@@ -32,12 +42,19 @@ card and in the block log, plus a `deeppairing stance allow` CLI command.
 
 - **Authority.** Only the human can grant an allowance. The daemon writes
   every grant and holds it **in memory only**. Each grant is bound to one
-  stance, one live Claude session registration, one tool, and a digest of
-  the proposal's **raw arguments**.
+  stance, one live Claude session registration and one tool.
+  - **What it covers:** the **effective proposal** the human saw. That is
+    the resolved snapshot of exactly what would be created, plus the history
+    and target state it depends on.
+  - **How retries find it:** a raw-call fingerprint. The fingerprint only
+    locates the grant; it never authorizes anything.
 - **Lifetime.** It is single-use. An unused allowance ends with its session
   or after 72 hours, whichever comes first.
-- **Admission.** It admits exactly one mutation. A durable operation stamp on
-  the artifact turns retries into replays.
+- **Admission.** It admits exactly one mutation, which creates the approved
+  snapshot exactly. If anything the snapshot depends on has changed, the
+  mutation is refused instead. A durable operation stamp on the artifact
+  turns retries into replays. A replay finishes any follow-ups a crash
+  interrupted.
 - **Receipts.** These are written by the daemon on the block-log entry.
 - **What stays the same.** The stance stays in force for every other
   proposal. Nothing reaches the cross-project ledger. Retire stays as a
@@ -70,92 +87,135 @@ Two facts drive the design:
 
 ## 2. Scope: what gets exempted
 
-### Two digests, two jobs
+### Three identities, three jobs
 
-| | Matching projection | **Allowance digest** |
-|---|---|---|
-| Purpose | Decides *whether* a stance blocks | Decides *which exact proposal* the human allowed |
-| Input | `artifactProposal(type, title, content)` | The tool's **raw `arguments`**, exactly as N2 hashes them: before validation, and before `present_code_change` reconstructs `before` from history. Transport-metadata exclusions are listed below. |
-| Function | Unchanged | `sha256(stableStringify({v: 1, toolName, type, args}))`, built from the same stable stringify that `hashPresentArgs` uses |
-| Changes when `before`/`after`, evidence, pros/cons, `relatedFindings`, `feature` or the title changes | Only if projected | **Always** |
+Revision 5 separates *locating* a retry from *authorizing* a proposal (Astra
+P2). Identical raw arguments can resolve to different stored content when the
+session's history changes, so the raw-call identity is not enough to say what
+the human allowed.
 
-The gate keeps matching on the projection. The allowance is bound to the
-**allowance digest**, so *any* change to the proposal's arguments needs a new
-allowance. That is the immutable-content contract in #470.
+| | Matching projection | **Call fingerprint** | **Effective snapshot + digest** |
+|---|---|---|---|
+| Job | Decides *whether* a stance blocks | **Locates** an allowance or a committed operation for a retry. It never authorizes anything by itself. | **What the human allowed.** It is what consumption creates, byte for byte. |
+| Input | `artifactProposal(type, title, content)` | The tool's **raw `arguments`**, as N2 hashes them (before validation and history reconstruction), minus transport metadata (below) | The **resolved proposal**: the exact `CreateArtifactParams` the tool would persist, after every server-side derivation, minus ids the server mints (`art_`, `dec_`, `cmt_`). It is taken together with its **preconditions** (below). |
+| Function | Unchanged | `sha256(stableStringify({v: 1, toolName, type, args}))` | `effectiveDigest = sha256(stableStringify({v: 1, snapshot, preconditions}))` |
+| Stable across a retry with identical args | n/a | **Yes**, by construction | Only if nothing the proposal depends on has changed. That is the point of it. |
 
-Hashing **raw** arguments is deliberate:
+**Server-side derivations the snapshot captures.** A resolution step
+(`resolveProposal`) runs **before** preflight, as both tools already do. The
+snapshot captures what it produced:
 
-- It is what the agent actually sent.
-- It is stable across retries.
-- It is independent of server-side derivation. An omitted `before` is
-  rebuilt from history after hashing, so two identical calls hash the same
-  even if the history changed in between. Their *stored* content can still
-  differ.
-- The server mints ids (`dec_`/`art_`) after hashing, which is the property
-  N2 already depends on.
+- **`present_code_change` with `before` omitted** (`present-code-change.ts:20–41`):
+  - the reconstructed `before`, taken from the newest prior `code_change` for
+    the same `filePath`;
+  - the corrected `changeType` (`create` becomes `modify`).
+- **`revise_artifact` supersede** (`revise-artifact.ts:61–170`):
+  - the inherited `title` when it is omitted;
+  - an external changeset's inherited `reviewIntent` and `source` display
+    provenance (never `headSha`);
+  - the dropped `reviewState`/`reviewReasons`;
+  - a decision's inherited `stakes`;
+  - the carried `relatedArtifactIds` and `featureId`;
+  - `parentId`, and `version = old.version + 1`;
+  - `agentReasoning` (the revise `reason`).
+- **Every tool:** the title and content exactly as they would be persisted.
 
-**What the digest excludes:** only transport metadata.
+**Preconditions.** These are the facts the derivation read. The daemon checks
+them again when the allowance is consumed.
 
-- The MCP request's `params._meta`, which is not part of `arguments`.
-- A top-level `arguments._meta` key, if a client sends one.
+| Tool | Precondition |
+|---|---|
+| `present_code_change`, `before` omitted | `{priorCodeChangeId \| null, priorAfterHash}`: which prior artifact supplied `before`, and a hash of its `after`. If there was no prior, `null`. |
+| `present_code_change`, `before` supplied | None. |
+| `revise_artifact` | `{targetId, targetVersion, targetStatus, inheritedHash}`. `targetStatus` must be live. `inheritedHash` covers every field the revision inherited (title, provenance, stakes, refs, feature). |
+| Other `present_*` | None today. Any future server-side derivation **must** add its own precondition. A schema-driven test fails if a tool's resolution reads store state without declaring it. |
 
-Nothing else is excluded and nothing else is canonicalized. Whitespace, case,
-Unicode form and array order all count.
+**How the three identities are used:**
 
-### Binding: an allowance admits a call only if all six match
+1. **At the block.** The tool sends the call fingerprint, the snapshot, the
+   preconditions and the `effectiveDigest` with the block event. The daemon
+   **recomputes the digest itself** from the snapshot and preconditions. The
+   preview renders the **snapshot**, so the diff, title and provenance shown
+   are the ones that would be created.
+2. **At the grant.** The daemon copies all of this from its own block record
+   into the in-memory allowance.
+3. **When an allowance is claimed** (§7). Candidates are found by call
+   fingerprint. Then the daemon:
+   - **re-resolves the preconditions from its own store**, using the same
+     pure resolver functions the tools use (shared, not duplicated);
+   - **refuses** with `stance_exception_dependencies_changed` if any
+     precondition differs. Examples: a newer prior `code_change` for the
+     file, a target revised by someone else, or a changed target title or
+     provenance;
+   - otherwise **creates exactly the approved snapshot**, minting only fresh
+     ids. The content resolved by the client in that call is **not** used to
+     create anything. It must hash equal to the snapshot, or the claim is
+     refused with the same code.
+4. **When a committed operation is replayed** (§7). The daemon returns the
+   original result **without** re-checking authorization or preconditions.
+   The allowance may be ended or expired by then, and the dependencies may
+   have moved. A replay creates nothing new.
+
+**What the call fingerprint excludes:** only transport metadata, which is the
+MCP request's `params._meta` and a top-level `arguments._meta` key. Nothing
+else is canonicalized: whitespace, case, Unicode form and array order all
+count. The snapshot is the persisted form, so it has no transport metadata
+at all.
+
+### Binding: an allowance admits a call only if all of these match
 
 | Binding | Value |
 |---|---|
 | Project | Implicit. The allowance lives in this project's daemon. It is never mirrored. |
-| Stance | The blocking row's `{description, concept, rejectedAt}`, compared exactly. A stance that is retired and then re-rejected gets a new `rejectedAt`, so it does not inherit allowances. |
-| Session | The block's `sessionId`, plus the `registrationId` that the daemon resolved from the registration **it issued** (§5). It is never read from a request body. |
-| Tool and type | `toolName` and artifact type. Both are also inside the digest. |
-| Content | The `allowanceDigest`. The **daemon** computes it from the stored raw-args payload. It never accepts a client-supplied digest. |
+| Stance | The blocking row's `{description, concept, rejectedAt}`, compared exactly. |
+| Session | The block's `sessionId`, plus the `registrationId` resolved from the registration the daemon **issued** (§5). It is never read from a request body. |
+| Tool and type | `toolName` and artifact type, which are also inside both digests. |
+| Call | The call fingerprint. This only locates the allowance. |
+| Effective proposal | The `effectiveDigest`, with **re-verified preconditions**. What gets created is the stored snapshot. |
 | Lifetime | The registration is live, and the time is before `ceilingAt` (§5). |
 
 ### The preview shows what is covered
 
-The UI dialog and the CLI prompt show two parts:
-
 1. **"What matched"**: the projection, with the matched phrase highlighted.
-2. **"What you are allowing (all of this is covered)"**: the raw arguments,
-   rendered in the shape of the artifact. A `code_change` shows its diff,
-   with "`before` will be reconstructed from history" when `before` was
-   omitted. A decision shows every option with its pros and cons. Research
-   shows its evidence.
-
-The footer reads: "Any change to anything above needs a new allowance."
+2. **"What will be created (all of this is covered)"**: the **effective
+   snapshot**, rendered in the shape of the artifact. That means the
+   reconstructed diff, the inherited title and provenance, and every option
+   with its pros and cons.
+   - When a precondition exists, one line names it. For example: "`before`
+     comes from *art_x* (your last change to this file)", or "Revises *art_y*
+     v3".
+   - The footer reads: "If the agent changes anything, or if *art_x* / *art_y*
+     changes first, this allowance won't apply."
 
 ### Why not the other candidates
 
-- **A normalized-token fingerprint.** `not` is a stopword, so *"do not keep
-  X"* and *"keep X"* would collide.
-- **A projection-only digest** (revision 1). It admits different code under
-  the same reasoning (Astra P2, Fable HIGH).
-- **A digest of validated or derived content.** That bakes server
-  reconstruction into the binding, which makes it unstable across retries.
+- **A normalized-token fingerprint.** `not` is a stopword.
+- **A projection-only digest** (rev 1). It admits different code under the
+  same reasoning.
+- **A raw-args digest alone** (rev 4). It can admit a different effective
+  proposal after history changes (Astra P2, rev 4 re-review).
+- **An effective digest alone, with no fingerprint.** A retry made after a
+  dependency moved could not even *find* its allowance in order to explain
+  why it was refused. It also could not find a committed operation to
+  replay.
 - **An artifact id.** None exists yet.
 
 ### Why this does not open a paraphrase loophole
 
-- A near-copy has a different digest, so the unchanged matcher checks it.
-- An allowance lifts **only its own stance**. The gate is re-run with that one
-  row removed for this call only. Any other stance or team rule still blocks,
-  and nothing is consumed (§6).
-- An allowance is single-use. It never feeds `approvedPatterns`, the ledger
-  or the advisory dedupe. Gate-escape and near-miss telemetry skip admissions
-  made by allowance.
-- It admits the proposal to **review**, not to approval. The artifact still
-  lands as a draft.
+- A near-copy has a different call fingerprint, and the unchanged matcher
+  checks it.
+- An allowance lifts **only its own stance** (§6).
+- It is single-use, never feeds `approvedPatterns`, the ledger or the
+  advisory dedupe, and telemetry skips it.
+- It admits the proposal to **review**, not to approval.
 
 ### Size and secrets
 
-- **Size.** The block event carries the raw-args payload so the daemon can
-  store the preview and compute the digest. Above 48 KiB the block is
-  recorded but not eligible: "Too large to allow once."
-- **Secrets.** The payload goes through the same secret scanner that
-  `createArtifact` uses. A flagged payload is **not** persisted, and the block
-  is not eligible.
+- **Size.** The block event carries the snapshot. Above 48 KiB the block is
+  recorded but **not eligible**.
+- **Secrets.** The snapshot goes through the scanner `createArtifact` uses. If
+  the scan flags it, the snapshot is not persisted, and the block is not
+  eligible.
 
 ## 3. Authority: who can grant
 
@@ -194,12 +254,13 @@ How it is enforced:
      `X-DeepPairing-Grant-Origin: cli`.
    - If the daemon is unreachable, the grant is refused.
 4. **A block id, not a scope.** The body is `{reason}` only. The daemon
-   copies stance, session, registration, tool, type and payload from its own
-   block record, and computes the digest itself. Extra fields get a 400, and
+   copies stance, session, registration, tool, type, call fingerprint,
+   snapshot and preconditions from its own block record. It computes the
+   `effectiveDigest` itself. Extra fields get a 400, and
    an unknown block id gets a 404.
-5. **What you see is what you allow.** The digest is computed from the same
-   payload the preview renders, and it is snapshotted into memory when the
-   grant is made.
+5. **What you see is what you allow.** The preview renders the snapshot, and
+   the digest is computed from that same snapshot. Consumption creates **that
+   snapshot**, or refuses if its preconditions changed (§2, §7).
 6. **Shared guards.** The route refuses:
    - team blocks (D4);
    - `demo_` sessions;
@@ -218,7 +279,7 @@ non-zero and writes nothing.
 - **TTY.** It requires a TTY on both stdin and stdout.
 - **Flags.** It refuses every non-interactive flag, including `--reason`.
 - **Environment.** It refuses when `CLAUDECODE=1` or `CI` is set.
-- **Preview.** It shows the full covered payload.
+- **Preview.** It shows the full effective snapshot and its preconditions.
 - **Typed input.** It requires a typed reason of 3–280 characters, then a
   typed `allow`.
 
@@ -361,7 +422,7 @@ Why this is enough, using the reasoning recorded with O1 (§11):
 |---|---|
 | `id` | `sx_<random>`. |
 | `state` | `active`, `consumed` or `revoked`. "Ended" and "expired" are derived. |
-| `stance`, `sessionId`, `registrationId`, `toolName`, `artifactType`, `allowanceDigest` | The binding. |
+| `stance`, `sessionId`, `registrationId`, `toolName`, `artifactType`, `callFingerprint`, `effectiveDigest`, `snapshot`, `preconditions` | The binding. The `snapshot` is what consumption creates. |
 | `grantedAt`, `grantedVia` (`ui` or `cli`), `grantedBy?`, `reason` (3–280 characters), `ceilingAt` (`grantedAt` + 72 h) | `grantedBy` is a best-effort `git config user.name`. |
 | `operation?` | `{id, artifactId}`, set when the allowance is claimed. |
 
@@ -441,27 +502,40 @@ Rejected alternatives:
 
 ## 6. Interaction with preflight, revisions, and the hook
 
-### Admission: inspect first, then consume atomically
+### Admission: replay or complete first, then inspect, then consume atomically
 
-1. **Gate.** `runPreflight` blocks on session stance **S**.
-2. **Inspect, which does not consume.** This is a read-only internal `GET` to
-   the registry for the calling registration and a matching
-   `allowanceDigest`. It returns:
-   - `active` candidates that have not ended or expired;
-   - **separately**, any artifact in this session stamped with the same
-     `allowanceDigest`, for replay (§7).
-
-   If there are no candidates and nothing to replay, the tool returns the
-   block exactly as today.
+0. **Replay or complete, before anything else** (Astra P2, rev 4
+   re-review). The tool computes the call fingerprint and calls the daemon's
+   **operation route** (§7) with `{operationId, callFingerprint}`.
+   - **When it runs.** This happens before tool-level early returns, which
+     includes N2's in-memory dedup. It also happens before `revise_artifact`'s
+     closed-parent check. A half-finished revision has often already
+     superseded its parent, and that check would wrongly refuse the retry.
+   - **If a stamped operation exists** in this session for that
+     `operationId` or `callFingerprint`, the daemon **completes any missing
+     follow-ups** and returns the original result. The tool returns that
+     result unchanged.
+   - **If none exists,** the tool continues to step 1.
+1. **Resolve.** Run `resolveProposal`, which produces the snapshot and its
+   preconditions (§2). Run the gate. It blocks on session stance **S**.
+2. **Inspect, which does not consume.** A read-only `GET` returns `active`
+   allowances for the calling registration whose call fingerprint matches,
+   and which have not ended or expired. If there are none, the tool returns
+   the block.
 3. **Re-gate.** Re-run `runPreflight` with the candidates' stances removed,
-   for this call only. If anything else blocks, return **that** block, and
-   consume nothing. A proposal that matches two of your stances needs an
-   allowance for each, both against the same digest.
-4. **Consume, as part of the mutation.** Send the create or revise with
-   `admission: {operationId, exceptionIds[]}`. The daemon claims inside the
-   same synchronous section (§7). If the claim fails because of a race, a
-   revoke, an ended session or the ceiling, the create is refused and the
-   tool returns the normal block with the reason.
+   for this call only. If anything else blocks, return **that** block and
+   consume nothing. A proposal that matches two stances needs an allowance
+   for each.
+4. **Consume, together with the mutation.** Call the operation route with
+   `{operationId, callFingerprint, exceptionIds[], snapshot, preconditions}`.
+   In one daemon section, the route:
+   - claims the allowances;
+   - re-verifies the preconditions;
+   - creates **the stored snapshot**;
+   - runs the follow-ups.
+
+   If the claim or the precondition check fails, the tool returns the normal
+   block, with the reason.
 
 ### Revisions need a new allowance
 
@@ -492,6 +566,13 @@ The `operation.artifactId` link is kept for audit only.
   > Already admitted. Returning the original result for *art_x*. Nothing new
   > was created.
 
+  Any follow-ups that were missing are finished first.
+- **When the proposal changed underneath the allowance:** the usual block,
+  plus this line.
+
+  > The proposal your pair allowed depended on *art_x* / the state of
+  > *art_y*, which changed. Ask your pair to allow the new version.
+
 - **When an allowance is used, revoked, ended or expired:** the usual block,
   plus one line naming which.
 
@@ -503,81 +584,128 @@ prompts.
 
 ## 7. Concurrency, write ordering and idempotency
 
-### The admitted mutation carries a durable operation id
+### One authoritative operation route
 
-Each **tool invocation** mints one `operationId` before it sends anything. The
-same id rides every transport attempt, including the transparent retry in
-`DaemonClient`.
+Every admitted mutation, and every replay or completion of one, goes through
+a single daemon route:
+`POST /api/internal/sessions/:sid/operations/:operationId`. The same route
+serves both tool shapes, **create** (`present_*`) and **revise**
+(`revise_artifact` supersede). Its handler, `runOperation`, is also what the
+daemon runs at session load to finish operations that a crash left
+incomplete.
 
-The daemon handles `admission: {operationId, exceptionIds[]}` in **one
-synchronous section**. The daemon is single-threaded, and the registry is in
+Each **tool invocation** mints one `operationId` before it sends anything.
+The same id rides every transport attempt, including `DaemonClient`'s
+transparent retry. The daemon is single-threaded, and the registry is in
 memory.
 
-1. **Replay check.** If an artifact in this session already carries
-   `admission.operationId === operationId`, return it, with
-   `replayed: true`.
+#### The operation record (durable, non-authorizing)
+
+The child artifact carries `admission`, which is written **in the same
+flush** as the child. It holds enough to rebuild every follow-up. It **never**
+authorizes anything: a replay reads it to report and finish an operation, not
+to create new authority.
+
+| Field | Purpose |
+|---|---|
+| `operationId`, `callFingerprint`, `effectiveDigest` | Replay lookup by either retry shape. |
+| `kind` | `create` or `revise`. |
+| `exceptionIds`, `grantedVia` | Audit. |
+| `followUps` | The planned steps, with ids minted **before** the child is written. See below. |
+| `completedAt?` | Set, and flushed, only after every follow-up has been confirmed. |
+
+`followUps` holds:
+
+- `supersede: {parentId}` for a revise;
+- `comment: {id: "cmt_op_<operationId>", artifactId: parentId, content}` for
+  a revise;
+- `decision: {decisionId, …record}` for a decision, on create or revise;
+- `planReview: true` for a plan revise;
+- `trace: true`, which persists the preflight trace;
+- `taskStatus: {parentId}`, the MCP-side task notification. It is the only
+  step that is not durable, and it is re-sent idempotently after a replay.
+
+#### `runOperation(operationId, callFingerprint, request?)`
+
+1. **Look up the operation.** Search this session for a child stamped with
+   `admission.operationId === operationId`. If there is none, search for one
+   stamped with `admission.callFingerprint === callFingerprint` (an
+   agent-level retry, which has a new `operationId`).
+   - **If found,** this is a replay. Go to step 4. **Authorization and
+     preconditions are not re-checked,** and the parent's closed status is
+     not checked either.
+   - **If not found and the request carries no admission,** return "none".
+     This is the step-0 probe, and the tool continues.
 2. **Claim, in memory.** Every listed allowance must:
    - be `active`;
-   - match the **issued** registration and the session;
-   - equal the recomputed raw-args digest;
-   - not have ended or expired;
+   - belong to the **issued** registration and to this session;
+   - match the call fingerprint;
+   - have an `effectiveDigest` equal to the stored one;
+   - not be ended or expired;
    - still have its stance row in a fresh read of `preferences.json`.
 
-   If all of that holds, each allowance is marked `consumed` with
-   `operation.id`. Otherwise the request is refused and nothing changes.
-3. **Create.** Create the artifact stamped with the new optional field
-   `admission: {operationId, exceptionIds, allowanceDigest, grantedVia}`.
-   Then **flush before responding**. This is a write-through, following the
-   rule `recordPostedReview` already uses.
-4. **Finalize.** Set `operation.artifactId` and update the block-log receipt
-   to `used`.
-5. **Respond.**
+   Then the daemon **re-resolves the preconditions** from its own store (§2).
+   If any check fails, it refuses and nothing changes. Otherwise it marks the
+   allowances `consumed`.
+3. **Create the child** from the **stored snapshot**: fresh `art_` id,
+   `followUps` ids minted now, and the `admission` stamp. **Flush before going
+   on.** A throw before anything is persisted reverts the claim (release only
+   on proof), and `createArtifact` must be all-or-nothing on a throw.
+4. **Complete the follow-ups,** in a fixed order. Each step checks its own
+   effect before acting, so running it twice is harmless.
+   - **(a) Supersede the parent,** with reason `agent_supersede`, unless it
+     is already `superseded`. If the parent was closed by a human in the
+     meantime (`rejected` or `obsolete`), the daemon leaves it alone and
+     records `followUps.supersede.skipped = <status>`. It still completes
+     the rest, because the child exists and its lineage must be honest.
+   - **(b) Add the comment** `cmt_op_<operationId>`, unless a comment with
+     that id exists.
+   - **(c) Record the decision request** `decisionId`, unless it is already
+     recorded.
+   - **(d) Record the plan review,** unless it is already recorded.
+   - **(e) Persist the trace,** keyed by artifact id.
+5. **Flush, then set `completedAt` and flush again.** Update the block-log
+   receipt to `used`.
+6. **Respond** with the original result: the child id, plus the decision id
+   where there is one. The response includes `replayed: true` when step 1
+   found the operation. The tool sends `taskStatus` after it gets the
+   response; that step is idempotent.
 
-**Release only on proof.** The allowance goes back to `active` **only if** the
-create in step 3 throws inside this same section before anything is
-persisted. That requires `createArtifact` to be all-or-nothing on throw, which
-gets its own test. The MCP tool never releases.
+**Startup reconciliation.** When the daemon loads a session, it runs steps
+4–5 for every stamped child that has no `completedAt`. A crash at any point
+after the child's flush is therefore completed even if the agent never
+retries. A crash **before** the child's flush leaves no stamp and no
+allowance, because the registry is in memory and a restart ends the
+registration anyway. That outcome is fail-closed: the retry is blocked as
+"ended", and the receipt shows "ended (not used)".
 
-**A failure the client sees has two cases.**
+**When the response is lost.**
 
-- **The daemon finished the section.** The artifact is committed and stamped.
-  The transparent retry replays it (step 1). An agent-level retry, which is a
-  new invocation with a new `operationId`, gets the original result through
-  the inspect's digest replay. Nothing is re-armed.
-- **The daemon died inside the section.** The in-memory claim is lost along
-  with the registry, and the restart ends the registration in any case.
-  - If the flush landed, the stamp replays the original result.
-  - If it did not land, there is no artifact and no allowance, so the retry
-    is blocked as "ended".
+- **The transparent retry** has the same `operationId`, so step 1 completes
+  any remaining follow-ups and replays.
+- **An agent-level retry** has a new `operationId` but the same fingerprint.
+  Step 0 of §6 completes the operation and replays it.
+- **After a restart,** both cases still work: startup has already completed
+  the operation, and the stamp is in the flushed `artifacts.json`.
 
-  Both outcomes fail closed. **No persisted "unknown" state is needed.** In
-  this case alone the receipt can stay at "allowed". After a restart, the UI
-  shows a receipt whose session has ended and which has no stamped artifact
-  as "ended (not used)".
-
-**Replay after a daemon restart** works through the stamp in the flushed
-`artifacts.json`. A replay grants nothing new. It reports what already exists.
-
-**The revise path.** The admitted mutation is the creation of the new version,
-keyed by `operationId`. The follow-ups run in the same daemon sequence, and
-each one is idempotent:
-
-- superseding the parent (setting the same status again is a no-op);
-- the carryover comment, whose id is derived from `operationId`;
-- the decision and plan-review records.
-
-A replay returns the original new-version id and applies only the follow-ups
-that are missing.
+**Release only on proof.** An allowance is reverted only for a throw inside
+step 3, before anything has been persisted. The MCP tool never releases
+anything.
 
 ### Races
 
-- **Two identical calls.** The daemon's single thread serializes the claims,
-  so only one sees `active`. If both share an `operationId`, the second
-  replays.
-- **Revoke against claim, Retire against claim.** These are serialized in the
-  daemon, and either order is safe.
-- **Lock-free readers.** They see atomic snapshots of `preferences.json`.
-  Allowances are never in that file.
+- **Two identical calls.** Claims are serialized on the daemon's single
+  thread, so only one sees `active`. A second call with the same
+  `operationId`, or the same fingerprint after commit, replays the first.
+- **Revoke or Retire against a claim.** These are also serialized, and either
+  order is safe.
+- **A dependency changes between grant and claim.** For example, a newer
+  `code_change` lands for the file, or the target is revised. Step 2's
+  re-resolution refuses with `stance_exception_dependencies_changed`. The
+  human sees "The proposal you allowed changed underneath it" and can allow
+  the new block.
+- **Lock-free readers** see atomic snapshots of `preferences.json`, and
+  allowances are never written there.
 
 ## 8. Alternatives considered
 
@@ -601,10 +729,10 @@ Only new optional fields are added, per CLAUDE.md.
 
 | Where | New optional fields |
 |---|---|
-| `Artifact` (shared) | `admission?: {operationId, exceptionIds, allowanceDigest, grantedVia}` |
+| `Artifact` (shared) | `admission?: {operationId, callFingerprint, effectiveDigest, kind, exceptionIds, grantedVia, followUps, completedAt?}`. This is non-authorizing operation metadata (§7). |
 | `PreflightTraceSchema` | `exception?` |
-| `PreflightBlockEntry` | `allowanceDigest?`, `payload?`, `projectionPreview?`, `stance?`, `registrationId?`, `eligible?`, `allowance?` (the receipt) |
-| `preflight_blocked` event | `payload?`, `rejectedAt?` |
+| `PreflightBlockEntry` | `callFingerprint?`, `effectiveDigest?`, `snapshot?`, `preconditions?`, `projectionPreview?`, `stance?`, `registrationId?`, `eligible?`, `allowance?` (the receipt) |
+| `preflight_blocked` event | `callFingerprint?`, `snapshot?`, `preconditions?`, `rejectedAt?` |
 | `/register` response | `registrationId?`, `registrationToken?` |
 
 - **`preferences.json` is unchanged.** There is no migration.
@@ -617,7 +745,8 @@ Only new optional fields are added, per CLAUDE.md.
   - `stance_exception_not_eligible`;
   - `stance_exception_reason_required`;
   - `stance_exception_interactive_required`;
-  - `stance_exception_claim_refused`.
+  - `stance_exception_claim_refused`;
+  - `stance_exception_dependencies_changed`.
 
 ### Docs: the guarantee wording DOES change
 
@@ -646,14 +775,22 @@ Fakes, not mocks:
 
 ### Unit
 
-- **Allowance digest.**
-  - It is computed from **raw** args. An omitted `before` and a supplied
-    `before` hash differently. Two identical raw calls hash the same even if
-    the history changed between them.
+- **Call fingerprint.**
+  - It is computed from **raw** args, and two identical raw calls produce
+    the same fingerprint even if the history changed.
   - It is stable across key order.
   - Every argument changes it.
   - `params._meta` and `arguments._meta` do not change it.
   - Whitespace, case and NFC versus NFD change it.
+- **Effective snapshot and preconditions.**
+  - `resolveProposal` captures every derivation listed in §2: the
+    reconstructed `before`, the corrected `changeType`, and for a revise, the
+    inherited title, provenance (never `headSha`), stakes, refs, feature,
+    `parentId`/`version`, and the dropped review state.
+  - The `effectiveDigest` changes whenever any captured field or precondition
+    changes.
+  - A schema-driven test fails if any tool's resolution reads store state
+    without declaring a precondition for it.
 - **Matching is unchanged.** The projection, and therefore the matching
   behaviour, is identical to today.
 - **Registry state.**
@@ -703,6 +840,60 @@ Fakes, not mocks:
      admitted.
    - **`revise_artifact`.** All of the cases above, plus: one new version, one
      supersede, and one carryover comment.
+5a. **The effective proposal changes after the grant, with identical raw
+    args** (Astra P2, rev 4 re-review). In every case below the allowance
+    must **not** admit a different effective proposal. The claim is refused
+    with `stance_exception_dependencies_changed`, the allowance stays
+    `active`, and no artifact is created.
+    - `present_code_change` with `before` omitted: after the grant, a newer
+      `code_change` for the same file lands, so the reconstructed `before`
+      would differ. Then try again with the prior's `after` edited instead.
+    - `present_code_change` with `before` omitted and **no** prior at grant
+      time: a prior appears before the claim, so `changeType` would flip from
+      `create` to `modify`.
+    - `revise_artifact` with the title omitted: the target's title changes
+      after the grant.
+    - `revise_artifact` of an external changeset: the target's `source`
+      provenance changes after the grant.
+    - `revise_artifact`: the target is revised (its version moves), or the
+      target is closed by the human, after the grant.
+    - **Control:** with no dependency changes, the created artifact is
+      byte-equal to the snapshot shown in the preview, apart from minted ids.
+    - **Created from the snapshot, not the client's content:** a fault shim
+      alters the client-resolved content but keeps the fingerprint. The claim
+      is refused because the hashes are not equal. Nothing the client
+      resolved is persisted.
+    - **Replay skips re-authorization:** commit, then change a dependency,
+      then retry. The original result is returned with `replayed: true`, and
+      no refusal is raised.
+5b. **Crash or restart mid-revision** (Astra P2, rev 4 re-review). Kill the
+    daemon at each point:
+    - after the child's flush;
+    - after the supersede;
+    - after the comment;
+    - after the decision record;
+    - after the plan review;
+    - before `completedAt`.
+
+    At each point, check all three recovery paths:
+    - the transparent retry, with the same `operationId`;
+    - an agent-level retry, with a new `operationId`, the same fingerprint,
+      and the parent already `superseded`. This proves step 0 runs
+      **before** the closed-parent check and N2's dedup;
+    - startup reconciliation, with no retry at all.
+
+    Every successful replay must leave:
+    - exactly **one** child;
+    - exactly **one** `cmt_op_<operationId>` comment;
+    - the parent `superseded`, or `skipped` with its human-closed status
+      recorded;
+    - exactly one decision record, where the type is a decision;
+    - the plan review recorded, where the type is a plan;
+    - the trace persisted;
+    - `completedAt` set.
+
+    Repeat the same for the `present_options` create path, which has a
+    decision follow-up.
 5. **CLI grant.**
    - **Refused input.** Non-TTY input, every non-interactive flag, a
      missing or short reason, and `CLAUDECODE=1` are each refused, with
@@ -747,6 +938,10 @@ Fakes, not mocks:
      or a session file arms nothing.** The proposal stays blocked. This
      replaces revision 3's "consistent hand-written grant is admitted"
      residual test.
+   - **A hand-written `admission` stamp is non-authorizing.** A forged stamp
+     in `artifacts.json` can make a replay **return that existing
+     artifact**. It never creates an artifact, never admits a new or changed
+     proposal, and never consumes or arms an allowance.
 8. **Session end and expiry.**
    - An awaited SIGTERM unregisters, so the retry is "ended".
    - Closing stdin unregisters, so the retry is "ended".
@@ -827,6 +1022,14 @@ Fakes, not mocks:
     residual.
 
 ## 12. Review response map
+
+### Rev 5: Astra re-review of `e4ec4c87` (agrees with O1 and D5; two P2s)
+
+| Finding | Addressed in |
+|---|---|
+| **P2.** Bind the allowance to the **effective** proposal, not just the raw-call identity. Keep a stable raw fingerprint for locating retries. Snapshot the resolved proposal and its history and target preconditions at the block and grant. At claim, create exactly that snapshot or refuse if its dependencies changed. A replay returns the original result without re-checking authorization. | §2 "Three identities, three jobs", binding table and preview; §3 items 4–5; §4 allowance fields; §6 step 4; §7 `runOperation` steps 1–3 and Races; §9 schema and `stance_exception_dependencies_changed`; §10 unit "Effective snapshot" and adversarial 5a |
+| **P2.** A revision replay must complete partial follow-ups before returning success. Use one authoritative daemon path for both operation-id and fingerprint retries, running before closed-parent validation and before any tool-level early return. Persist non-authorizing operation metadata to rebuild the follow-ups. Probe a crash after the child flush and between each follow-up. | §6 step 0; §7 "One authoritative operation route" (operation record, `runOperation` steps 1, 4 and 5, startup reconciliation); §9 `admission` fields; §10 adversarial 5b, plus a test that a forged stamp is non-authorizing (adversarial 7) |
+| O1 stays in-memory, and D5 stays open | §4, §11 (unchanged) |
 
 ### Rev 4: Fable APPROVE on `6be03359`, with notes
 
