@@ -1409,10 +1409,75 @@ export class FileStore implements IStore {
     if (Array.isArray(opts) && opts.length > 0 && !opts.some((o) => o?.id === optionId)) {
       return { kind: "invalid_option" };
     }
+    // #484 review — snapshot what this write changes, so a failed flush can put
+    // memory back exactly where disk is (settleResolution(…, false)).
+    const prevDecision = structuredClone(dec);
+    const prevBacking = backing ? structuredClone(backing) : undefined;
+    // Hold feedback waiters until the write is durable: a check_feedback long
+    // poll woken now would deliver an answer the flush may still refuse.
+    this.feedbackNotifyHolds++;
     this.resolveDecision(decisionId, optionId, reasoning, prediction);
+    const written = this.decisions.get(decisionId)!;
+    const backingNow = backing ? this.artifacts.find((a) => a.id === backing.id) : undefined;
+    this.pendingResolutions.set(decisionId, {
+      prevDecision,
+      prevBacking,
+      writtenResponse: written.response,
+      backingStatus: backingNow?.status,
+      backingHistoryLength: ((backingNow as { statusHistory?: unknown[] } | undefined)?.statusHistory ?? []).length,
+    });
     // #484 review — written, not yet announced (see takeResolutionAnnouncement).
     this.unannouncedResolutions.add(decisionId);
     return { kind: "resolved", ...(dec.artifactId ? { artifactId: dec.artifactId } : {}) };
+  }
+
+  /** #484 review — resolutions written by resolveDecisionAtomic whose flush
+   *  hasn't settled yet, with what they replaced. */
+  private pendingResolutions = new Map<string, {
+    prevDecision: DecisionRecord;
+    prevBacking: Artifact | undefined;
+    writtenResponse: DecisionRecord["response"];
+    backingStatus: Artifact["status"] | undefined;
+    backingHistoryLength: number;
+  }>();
+  private feedbackNotifyHolds = 0;
+  private feedbackNotifyPending = false;
+
+  /**
+   * #484 review — settle a resolveDecisionAtomic write once its flush is known.
+   * committed → release held feedback waiters. NOT committed (the flush threw:
+   * lock busy → 503, review conflict) → roll memory back to exactly what disk
+   * still holds, so getResolvedDecisions / check_feedback never deliver an
+   * answer the human was told didn't complete, and a later different pick isn't
+   * refused as "already answered". The rollback restores only what THIS write
+   * still owns (an artifact another writer changed since is left alone), and no
+   * announcement remains for it. Runs under the per-store resolve lock.
+   */
+  settleResolution(decisionId: string, committed: boolean): void {
+    const pending = this.pendingResolutions.get(decisionId);
+    if (!pending) return;
+    this.pendingResolutions.delete(decisionId);
+    if (!committed) {
+      const dec = this.decisions.get(decisionId);
+      if (dec && dec.response === pending.writtenResponse) {
+        for (const k of Object.keys(dec)) delete (dec as unknown as Record<string, unknown>)[k];
+        Object.assign(dec, pending.prevDecision);
+      }
+      if (pending.prevBacking) {
+        const art = this.artifacts.find((a) => a.id === pending.prevBacking!.id);
+        const history = ((art as { statusHistory?: unknown[] } | undefined)?.statusHistory ?? []).length;
+        if (art && art.status === pending.backingStatus && history === pending.backingHistoryLength) {
+          for (const k of Object.keys(art)) delete (art as unknown as Record<string, unknown>)[k];
+          Object.assign(art, pending.prevBacking);
+        }
+      }
+      this.unannouncedResolutions.delete(decisionId);
+    }
+    this.feedbackNotifyHolds = Math.max(0, this.feedbackNotifyHolds - 1);
+    if (this.feedbackNotifyHolds === 0 && this.feedbackNotifyPending) {
+      this.feedbackNotifyPending = false;
+      this.notifyFeedbackWaiters();
+    }
   }
 
   /** #484 review — decisions whose answer was written by resolveDecisionAtomic
@@ -2290,6 +2355,9 @@ export class FileStore implements IStore {
 
   /** Notify all waiters that feedback has arrived */
   private notifyFeedbackWaiters(): void {
+    // #484 review — while a resolve's flush is unsettled, defer the wake-up
+    // (settleResolution releases it).
+    if (this.feedbackNotifyHolds > 0) { this.feedbackNotifyPending = true; return; }
     const waiters = this.feedbackWaiters;
     this.feedbackWaiters = [];
     for (const resolve of waiters) resolve();

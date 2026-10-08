@@ -455,6 +455,14 @@ export interface IStore {
    * get null (no duplicate). Called under the per-store resolve lock.
    */
   takeResolutionAnnouncement(decisionId: string): MaybePromise<ResolutionAnnouncement | null>;
+  /**
+   * #484 review — settle a resolveDecisionAtomic write once its flush is known:
+   * committed → release held feedback waiters; not committed (flush threw) →
+   * roll memory back to what disk holds (no delivery, no false "answered", no
+   * announcement). Every caller of resolveDecisionAtomic that got `resolved`
+   * must call this exactly once.
+   */
+  settleResolution(decisionId: string, committed: boolean): MaybePromise<void>;
   getDecisionResponse(decisionId: string): MaybePromise<{ optionId: string; reasoning?: string } | null>;
   getPendingDecisions(): MaybePromise<DecisionRecord[]>;
   getDecision(decisionId: string): MaybePromise<DecisionRecord | undefined>;

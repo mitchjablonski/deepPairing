@@ -634,6 +634,10 @@ export class DaemonClient implements IStore {
     return null;
   }
 
+  /** #484 review — the daemon settles its own writes (the internal route owns
+   *  the flush); nothing to do client-side. */
+  async settleResolution(_decisionId: string, _committed: boolean): Promise<void> {}
+
   async getDecisionResponse(decisionId: string): Promise<{ optionId: string; reasoning?: string } | null> {
     const data = await this.get<{ response: any }>(`/decisions/${decisionId}/response`);
     return data.response ?? null;
