@@ -783,6 +783,11 @@ export function createHttpRoutes(
     // withDecisionResolveLock.
     return withDecisionResolveLock(store, async () => {
       const outcome = await store.resolveDecisionAtomic(decisionId, optionId, reasoning);
+      // #484 review — an idempotent success (or a refusal naming the winner)
+      // reports ONLY what is persisted: an earlier request may have written the
+      // answer in memory and then failed its flush (lock busy → 503). Flush
+      // first; a failure surfaces as that same error, never as success.
+      if (outcome.kind === "same" || outcome.kind === "conflict") await store.forceFlush();
       if (outcome.kind === "same") return c.json(staleResolveBody(outcome, decisionId));
       if (outcome.kind === "conflict") {
         const body = staleResolveBody(outcome, decisionId);

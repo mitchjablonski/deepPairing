@@ -947,6 +947,8 @@ export function createDaemonRoutes(
     return withDecisionResolveLock(r.store, async () => {
       const prediction = confidence || predictedOutcome ? { confidence, predictedOutcome } : undefined;
       const outcome = r.store.resolveDecisionAtomic(decisionId, optionId, reasoning, prediction);
+      // #484 review — report only what is persisted (see the public route).
+      if (outcome.kind === "same" || outcome.kind === "conflict") await r.store.forceFlush();
       if (outcome.kind === "same") return c.json(staleResolveBody(outcome, decisionId));
       if (outcome.kind === "conflict") return c.json(staleResolveBody(outcome, decisionId), 409);
       if (outcome.kind === "invalid_option") {
