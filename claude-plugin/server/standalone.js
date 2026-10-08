@@ -38358,6 +38358,11 @@ var DaemonClient = class {
     }
     return res?.alreadyResolved && res.resolution ? { kind: "same", resolution: res.resolution, ...res.artifactId ? { artifactId: res.artifactId } : {} } : { kind: "resolved", ...res?.artifactId ? { artifactId: res.artifactId } : {} };
   }
+  /** #484 review — the daemon's internal route announces its own resolves (it
+   *  owns the store and the mark), so a client-side caller has nothing to take. */
+  async takeResolutionAnnouncement(_decisionId) {
+    return null;
+  }
   async getDecisionResponse(decisionId) {
     const data = await this.get(`/decisions/${decisionId}/response`);
     return data.response ?? null;

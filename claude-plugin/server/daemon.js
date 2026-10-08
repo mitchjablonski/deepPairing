@@ -27424,7 +27424,26 @@ var FileStore = class _FileStore {
       return { kind: "invalid_option" };
     }
     this.resolveDecision(decisionId, optionId, reasoning, prediction);
+    this.unannouncedResolutions.add(decisionId);
     return { kind: "resolved", ...dec.artifactId ? { artifactId: dec.artifactId } : {} };
+  }
+  /** #484 review — decisions whose answer was written by resolveDecisionAtomic
+   *  but not yet announced after a successful flush. In-memory on purpose: an
+   *  answer that never flushed doesn't survive a restart either. */
+  unannouncedResolutions = /* @__PURE__ */ new Set();
+  takeResolutionAnnouncement(decisionId) {
+    if (!this.unannouncedResolutions.has(decisionId)) return null;
+    const dec = this.decisions.get(decisionId);
+    const response = dec?.response;
+    this.unannouncedResolutions.delete(decisionId);
+    if (!dec || !response) return null;
+    return {
+      optionId: response.optionId,
+      ...response.reasoning ? { reasoning: response.reasoning } : {},
+      ...response.confidence ? { confidence: response.confidence } : {},
+      ...response.predictedOutcome ? { predictedOutcome: response.predictedOutcome } : {},
+      ...dec.artifactId ? { artifactId: dec.artifactId } : {}
+    };
   }
   getDecisionResponse(decisionId) {
     this.assertAuthorizationReadable();
@@ -31476,7 +31495,13 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     }
     return withDecisionResolveLock(store, async () => {
       const outcome = await store.resolveDecisionAtomic(decisionId, optionId, reasoning);
-      if (outcome.kind === "same" || outcome.kind === "conflict") await store.forceFlush();
+      if (outcome.kind === "same" || outcome.kind === "conflict") {
+        await store.forceFlush();
+        const late = await store.takeResolutionAnnouncement(decisionId);
+        if (late) {
+          broadcast({ type: "decision_resolved", decisionId, artifactId: late.artifactId, optionId: late.optionId, reasoning: late.reasoning }, sid);
+        }
+      }
       if (outcome.kind === "same") return c.json(staleResolveBody(outcome, decisionId));
       if (outcome.kind === "conflict") {
         const body = staleResolveBody(outcome, decisionId);
@@ -31528,12 +31553,13 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       if (targetArtifactId) {
         await maybeUpdateTaskStatus(null, targetArtifactId, store);
       }
+      const ann = await store.takeResolutionAnnouncement(decisionId);
       broadcast({
         type: "decision_resolved",
         decisionId,
-        artifactId: targetArtifactId,
-        optionId,
-        reasoning
+        artifactId: ann?.artifactId ?? targetArtifactId,
+        optionId: ann?.optionId ?? optionId,
+        reasoning: ann ? ann.reasoning : reasoning
       }, sid);
       return c.json({ status: "resolved", decisionId });
     });
@@ -33241,7 +33267,13 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     return withDecisionResolveLock(r.store, async () => {
       const prediction = confidence || predictedOutcome ? { confidence, predictedOutcome } : void 0;
       const outcome = r.store.resolveDecisionAtomic(decisionId, optionId, reasoning, prediction);
-      if (outcome.kind === "same" || outcome.kind === "conflict") await r.store.forceFlush();
+      if (outcome.kind === "same" || outcome.kind === "conflict") {
+        await r.store.forceFlush();
+        const late = r.store.takeResolutionAnnouncement(decisionId);
+        if (late) {
+          broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId: late.artifactId, optionId: late.optionId, reasoning: late.reasoning, confidence: late.confidence, predictedOutcome: late.predictedOutcome });
+        }
+      }
       if (outcome.kind === "same") return c.json(staleResolveBody(outcome, decisionId));
       if (outcome.kind === "conflict") return c.json(staleResolveBody(outcome, decisionId), 409);
       if (outcome.kind === "invalid_option") {
@@ -33249,6 +33281,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       }
       const artifactId = r.store.getDecision(decisionId)?.artifactId;
       await r.store.forceFlush();
+      r.store.takeResolutionAnnouncement(decisionId);
       broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId, optionId, reasoning, confidence, predictedOutcome });
       return c.json({ status: "resolved" });
     });
