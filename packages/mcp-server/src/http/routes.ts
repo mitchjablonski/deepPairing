@@ -890,7 +890,15 @@ export function createHttpRoutes(
         // artifact and decision record together before announcing success; a
         // concurrent proposal rewrite must return the global typed 409 and emit no
         // decision_resolved event.
-        await store.forceFlush();
+        try {
+          await store.forceFlush();
+        } catch (error) {
+          // #490 — a disk error AFTER decisions.json landed leaves the answer
+          // durable: that is a committed resolve (announced once, success),
+          // not a 503 for a decision that is resolved on disk.
+          if (!(outcome.kind === "resolved" && await store.isResolutionDurable(decisionId))) throw error;
+          log(`[decision] flush failed after ${decisionId}'s answer was persisted — treating as committed: ${String(error)}`);
+        }
         committed = true; // #484 review — durable: settle as committed
 
         if (targetArtifactId) {

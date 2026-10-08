@@ -977,7 +977,12 @@ export function createDaemonRoutes(
         // A response and its backing artifact are one authorization write. Flush
         // before the daemon claims success; app.onError maps a concurrent proposal
         // rewrite to the shared session_review_conflict 409, with no broadcast.
-        await r.store.forceFlush();
+        try {
+          await r.store.forceFlush();
+        } catch (error) {
+          // #490 — see the public route: a durably persisted answer is committed.
+          if (!r.store.isResolutionDurable(decisionId)) throw error;
+        }
         committed = true; // #484 review — durable: settle as committed
         r.store.takeResolutionAnnouncement(decisionId); // #484 review — announced now; a retry won't repeat it
         broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId, optionId, reasoning, confidence, predictedOutcome });

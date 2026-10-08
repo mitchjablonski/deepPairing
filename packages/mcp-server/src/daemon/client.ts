@@ -638,6 +638,11 @@ export class DaemonClient implements IStore {
    *  the flush); nothing to do client-side. */
   async settleResolution(_decisionId: string, _committed: boolean): Promise<void> {}
 
+  /** #490 — the daemon reconciles its own partial writes. */
+  async isResolutionDurable(_decisionId: string): Promise<boolean> {
+    return false;
+  }
+
   async getDecisionResponse(decisionId: string): Promise<{ optionId: string; reasoning?: string } | null> {
     const data = await this.get<{ response: any }>(`/decisions/${decisionId}/response`);
     return data.response ?? null;
