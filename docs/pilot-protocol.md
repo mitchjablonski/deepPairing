@@ -240,22 +240,28 @@ export, request `includeCode: false` (the `--redact-code` option for
 result before sharing. Never use employer/customer code without the required
 permission.
 
-Before the pilot, inventory which of these paths already exist, record whether
-the plugin is already installed and its relevant preferences, and privately
-back up any pre-existing global ledger or registry records that could be
-affected. On withdrawal or at pilot end, stop only pilot-owned deepPairing
-daemon/processes and confirm they have exited before editing or deleting local
-files, so they cannot recreate removed data. Uninstall the plugin only if it
-was installed for this pilot. If it was installed before the pilot, do not
+Before the pilot, inventory which of these paths already exist and record
+whether the plugin is already installed and its relevant preferences. Before
+backing up, restoring, editing, or deleting any affected local store, confirm
+that it has no active writers. This includes a
+pre-existing or shared deepPairing daemon that may still hold pilot session
+state or pending writes. Stop only pilot-owned daemons/processes; do not
+terminate pre-existing or unrelated processes. If a shared writer remains,
+ask whether the participant can safely and voluntarily stop it. If they
+cannot or decline, defer all local file operations for that store and record
+an exception and follow-up rather than changing a live store. Once quiescent,
+privately back up any pre-existing global ledger or registry records that
+could be affected. Uninstall the plugin only if
+it was installed for this pilot. If it was installed before the pilot, do not
 require uninstalling that pre-existing workflow: restore its pre-pilot
-state/preferences or leave it installed at the participant's choice. Remove
-only pilot-created records: delete pilot session files, remove only the
-pilot's daemon-log entries, and surgically remove pilot-created ledger/registry
-entries. If restoring a pre-pilot backup is safer, first confirm it will not
-discard unrelated later data. Never instruct participants to delete a whole
-pre-existing global file or directory. The custodian records completion and
-any records that could not be isolated; backups remain restricted and follow
-the approved deletion deadline.
+state/preferences or leave it installed at the participant's choice. Once
+each affected store is quiescent, remove only pilot-created records: delete
+pilot session files, remove only the pilot's daemon-log entries, and surgically
+remove pilot-created ledger/registry entries. If restoring a pre-pilot backup
+is safer, first confirm it will not discard unrelated later data. Never
+instruct participants to delete a whole pre-existing global file or
+directory. The custodian records completion and any records that could not be
+isolated; backups remain restricted and follow the approved deletion deadline.
 
 Set the deletion deadline to 30 days after the last participant window closes
 and tell participants the exact date. Honor withdrawal requests before public
