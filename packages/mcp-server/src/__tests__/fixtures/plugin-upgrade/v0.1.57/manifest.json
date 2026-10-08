@@ -1,0 +1,55 @@
+{
+  "version": "0.1.57",
+  "commit": "d9efe325454f96473ec84a4537e38661ffdd9aac",
+  "release": "https://github.com/mitchjablonski/deepPairing/releases/tag/v0.1.57",
+  "generator": "node tools/pin-upgrade-baseline.mjs",
+  "scope": "Exact released runtime subset; UI asset graph, hooks and commands excluded. Original bundle license notices retained.",
+  "archive": {
+    "bytes": 615347,
+    "sha256": "3cac7bf0d059de0a1dca7962fb399e4a82c498d95201de9dd2b841d2b5e90112"
+  },
+  "files": {
+    "server.mjs": {
+      "source": "claude-plugin/server.mjs",
+      "bytes": 2617,
+      "sha256": "c067828daf254838b847c13ed95274faf2e35c56f0316d611d2c80e95bb007d6",
+      "gitBlob": "1e0184171b0b72043ce56cbc2534f8fdfacfeec0"
+    },
+    "server/package.json": {
+      "source": "claude-plugin/server/package.json",
+      "bytes": 23,
+      "sha256": "3ca9d4afd21425087cf31893b8f9f63c81b0b8408db5e343ca76e5f8aa26ab9a",
+      "gitBlob": "3dbc1ca591c0557e35b6004aeba250e6a70b56e3"
+    },
+    "server/standalone.js": {
+      "source": "claude-plugin/server/standalone.js",
+      "bytes": 1585708,
+      "sha256": "5b6d1db4ea8c7d959d0ae9103d83a82f1d2796cef845e8a1b1324febc1a953bd",
+      "gitBlob": "40f149252fddb5d34efb0ddddd7bc437020f76cd"
+    },
+    "server/daemon.js": {
+      "source": "claude-plugin/server/daemon.js",
+      "bytes": 1361713,
+      "sha256": "9fa5339371c6ca716b382ce2aef8e6fee740b0bde9ec466007483fcae6c84938",
+      "gitBlob": "dc5b6528ee214b7fbebb1b9296697e7849fbd152"
+    },
+    "server/web/index.html": {
+      "source": "claude-plugin/server/web/index.html",
+      "bytes": 1681,
+      "sha256": "c93f9ec30479fe811f6a0a185ce557e590e3414828f07fefa3a26ee8e0662f98",
+      "gitBlob": "4bf544531a339a68e97d3869b5b86eab974bb29d"
+    },
+    ".claude-plugin/plugin.json": {
+      "source": "claude-plugin/.claude-plugin/plugin.json",
+      "bytes": 759,
+      "sha256": "022da4221390a5902621938c0a6f3b6ca1f9fd4838a5a52a4b5343b459d41046",
+      "gitBlob": "207ba9f6dae4b0661e1b1f49f87e522bdb278fe5"
+    },
+    "LICENSE": {
+      "source": "LICENSE",
+      "bytes": 1086,
+      "sha256": "27c9983c86484baae30b84a04b042c3d0f5ebf2bbc4259092a107658281b39b5",
+      "gitBlob": "876e96b48e089b3527cc45b1e9d2faa4abdeb6fe"
+    }
+  }
+}

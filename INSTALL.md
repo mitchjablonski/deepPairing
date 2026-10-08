@@ -115,6 +115,9 @@ node packages/mcp-server/dist/cli/init.js doctor --fix
 
 ## After install
 
+Before updating an existing install, see [Upgrades, backups, and recovery](docs/upgrades-and-recovery.md)
+for a consistent backup, recovery steps, and the supported downgrade boundary.
+
 Either way you get the tools, the companion UI, and an always-on first-call
 protocol preamble. Then just work normally — *"Let's analyze the auth module"* —
 and Claude routes findings, decisions, plans, and changes through the companion
