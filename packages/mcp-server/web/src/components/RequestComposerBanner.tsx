@@ -5,6 +5,7 @@ import { useConnectionStore } from "../stores/connection";
 import { useToastStore } from "../stores/toast";
 import { useAgentRecentlyActive } from "../hooks/useAgentRecentlyActive";
 import { noAgentLive } from "../lib/liveness";
+import { useOfflineReason } from "../hooks/useOfflineReason";
 
 /**
  * G1 (#198b) — the REQUEST COMPOSER. A quiet banner-row affordance that lets the
@@ -155,6 +156,7 @@ export function RequestComposerBanner({ compact = false }: {
    *  pips + resume bridge live in the bar. OFF (default): exactly as before. */
   compact?: boolean;
 } = {}) {
+  const offline = useOfflineReason(); // #477 — act paths gate on the shared offline condition (#467)
   const submitRequest = useArtifactStore((s) => s.submitRequest);
   const connected = useConnectionStore((s) => s.connected);
   const pushToast = useToastStore((s) => s.push);
@@ -179,7 +181,9 @@ export function RequestComposerBanner({ compact = false }: {
 
   // The composer only makes sense against a live session (there has to be a
   // session store to persist into). It's hidden entirely until connected.
-  if (!connected) return null;
+  // #477 — hidden only before the tab has ever connected. An OUTAGE keeps the
+  // row (and any request being typed) on screen, with Send gated + the reason.
+  if (!connected && !offline) return null;
 
   const pickPreset = (p: (typeof PRESETS)[number]) => {
     setIntent(p.intent);
@@ -190,6 +194,7 @@ export function RequestComposerBanner({ compact = false }: {
   const activePreset = PRESETS.find((p) => p.intent === intent);
 
   const send = async () => {
+    if (offline) return; // #477 — refused offline (the control is disabled too)
     const t = text.trim();
     if (!t || submitting) return;
     setSubmitting(true);
@@ -294,9 +299,10 @@ export function RequestComposerBanner({ compact = false }: {
             className="flex-1 min-w-0 px-2.5 py-1 bg-surface-secondary border border-border-default rounded text-xs text-text-primary placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-blue"
           />
           <button
+            title={offline ?? undefined}
             type="button"
             onClick={() => void send()}
-            disabled={!text.trim() || submitting}
+            disabled={(!text.trim() || submitting) || !!offline}
             className="shrink-0 px-2.5 py-1 rounded text-2xs font-semibold text-white bg-accent-blue-strong hover:bg-accent-blue/80 disabled:opacity-50 transition-colors"
           >
             Send request

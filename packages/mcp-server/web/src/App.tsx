@@ -14,7 +14,7 @@ import { TurnIndicator } from "./components/TurnIndicator";
 import { NextUpBar } from "./components/NextUpBar";
 import { sessionLabelOf } from "./lib/sessionLabel";
 import { outageMinutes } from "./lib/outage";
-import { useConnectionGraceDriver, useTabOffline } from "./lib/connectionGrace";
+import { useConnectionGraceDriver, useTabOffline, useHydrationStalled, HYDRATION_STALLED_TEXT, reloadPage } from "./lib/connectionGrace";
 import { usePreferencesStore } from "./stores/preferences";
 import { PendingBanner } from "./components/PendingBanner";
 import { ResumeQuestionsBanner } from "./components/ResumeQuestionsBanner";
@@ -72,6 +72,7 @@ function App() {
   // grace included), shared with the bar and the act buttons.
   useConnectionGraceDriver();
   const tabOffline = useTabOffline();
+  const hydrationStalled = useHydrationStalled(); // #477
   // #455 review — the session dot pulses on the SAME source as the pill.
   const agentWorking = useAgentWorking();
   // C5 — no IdleHome/WaitingForClaude flash on refresh: skeleton until the
@@ -885,6 +886,17 @@ function App() {
       {/* Disconnected warning — escalates (D8/H4): a blip and a dead daemon
           looked identical forever; past 60s the pair needs to know to act. */}
       {tabOffline && <DisconnectBanner />}
+
+      {/* #477 — connected, but the first snapshot never applied: say so, with
+          Reload (bar ON carries the same state on its line). */}
+      {hydrationStalled && !hydrated && !nextUpBar && (
+        <div className="px-3 py-1.5 bg-accent-amber-dim/40 border-b border-accent-amber/15 text-center" role="status" data-testid="hydration-stalled">
+          <span className="text-2xs text-accent-amber">
+            {HYDRATION_STALLED_TEXT} — this tab connected, but the session never loaded.{" "}
+            <button type="button" onClick={reloadPage} className="underline font-medium">Reload</button>
+          </span>
+        </div>
+      )}
 
       {/* Replay scrubber — only renders when replay mode is active */}
       <ReplayScrubber />

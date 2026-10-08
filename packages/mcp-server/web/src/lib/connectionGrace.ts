@@ -16,12 +16,26 @@ import { useConnectionStore } from "../stores/connection";
  */
 export const FIRST_CONNECT_GRACE_MS = 3000;
 
+/**
+ * #477 (D8 edge) — a CONNECTED tab whose first snapshot never applies (and no
+ * refusal arrives) would otherwise sit at hydrated:false forever: the bar says
+ * "Checking what needs you…" indefinitely and TurnIndicator stays silent.
+ * Past this bound the UI says so truthfully, with Reload. 10s: a normal
+ * hydration is one localhost snapshot frame — ~100–300ms in the walkthrough
+ * timings (the real line at t≈255ms), a second or two for a very large session
+ * on a slow disk — so 10s is well over an order of magnitude above normal, yet
+ * short enough that a person isn't left guessing. A late hydration clears it.
+ */
+export const HYDRATION_STALL_MS = 10_000;
+
 interface GraceState {
   everConnected: boolean;
   graceOver: boolean;
+  /** #477 — connected, but the first snapshot hasn't applied in HYDRATION_STALL_MS. */
+  hydrationStalled: boolean;
 }
 
-export const useConnectionGraceStore = create<GraceState>(() => ({ everConnected: false, graceOver: false }));
+export const useConnectionGraceStore = create<GraceState>(() => ({ everConnected: false, graceOver: false, hydrationStalled: false }));
 
 /** Mounted once, by App. */
 export function useConnectionGraceDriver(): void {
@@ -35,6 +49,27 @@ export function useConnectionGraceDriver(): void {
     const t = setTimeout(() => useConnectionGraceStore.setState({ graceOver: true }), FIRST_CONNECT_GRACE_MS);
     return () => clearTimeout(t);
   }, []);
+  // #477 — the hydration watchdog: armed while connected-but-not-hydrated;
+  // a hydration (however late) or a disconnect clears it.
+  const hydrated = useConnectionStore((s) => s.hydrated);
+  useEffect(() => {
+    if (!connected || hydrated) {
+      if (useConnectionGraceStore.getState().hydrationStalled) useConnectionGraceStore.setState({ hydrationStalled: false });
+      return;
+    }
+    const t = setTimeout(() => useConnectionGraceStore.setState({ hydrationStalled: true }), HYDRATION_STALL_MS);
+    return () => clearTimeout(t);
+  }, [connected, hydrated]);
+}
+
+/** #477 — true when the tab is connected but its first snapshot never applied. */
+export function useHydrationStalled(): boolean {
+  return useConnectionGraceStore((s) => s.hydrationStalled);
+}
+
+export const HYDRATION_STALLED_TEXT = "Couldn't load the current state";
+export function reloadPage(): void {
+  if (typeof window !== "undefined") window.location.reload();
 }
 
 /** True when this tab is offline (and it's not just the page loading). */

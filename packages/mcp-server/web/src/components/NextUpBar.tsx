@@ -6,7 +6,7 @@ import { useReplayStore } from "../stores/replay";
 import { usePreflightBlockStore } from "../stores/preflightBlocks";
 import { computeAttention, type Attention, type AttentionItem, type FailureKind, type SummaryLane } from "../lib/attention";
 import { noAgentLive } from "../lib/liveness";
-import { useTabOffline, useConnectionGraceStore } from "../lib/connectionGrace";
+import { useTabOffline, useConnectionGraceStore, useHydrationStalled, HYDRATION_STALLED_TEXT, reloadPage } from "../lib/connectionGrace";
 import { useSiblingSyncStore } from "../lib/siblingSync";
 import { sessionLabelsFrom } from "../lib/sessionLabel";
 import { WAITING_TONE } from "../lib/waitingTone";
@@ -324,11 +324,16 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   // lane may only mean "not loaded yet". Hold a neutral line instead.
   const siblingSettled = useSiblingSyncStore((s) => s.settled);
   const graceOver = useConnectionGraceStore((s) => s.graceOver);
+  const hydrationStalled = useHydrationStalled();
   // Nothing to wait for when the bound session is the only one known.
   const noSiblings = activeSessions.length > 0 && activeSessions.every((x) => x.sessionId === boundSessionId);
-  const holding = primary.lane === "nothing" && !attention.line.prefix && (!hydrated || !(siblingSettled || graceOver || noSiblings));
-  const primaryText = holding ? HOLD_TEXT : primaryToken(attention.line);
-  const lineText = holding ? HOLD_TEXT : attentionLineText(attention);
+  const holdingRaw = primary.lane === "nothing" && !attention.line.prefix && (!hydrated || !(siblingSettled || graceOver || noSiblings));
+  // #477 — the hold is bounded: connected but never hydrated past
+  // HYDRATION_STALL_MS says so truthfully, with Reload (lib/connectionGrace).
+  const stalled = hydrationStalled && !hydrated;
+  const holding = holdingRaw && !stalled;
+  const primaryText = stalled ? `⚠ ${HYDRATION_STALLED_TEXT}` : holding ? HOLD_TEXT : primaryToken(attention.line);
+  const lineText = stalled ? `⚠ ${HYDRATION_STALLED_TEXT}` : holding ? HOLD_TEXT : attentionLineText(attention);
 
   return (
     <section
@@ -364,6 +369,17 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
         <span data-token className={`min-w-0 truncate font-medium ${tone}`} style={{ flexShrink: 1 }} title={primaryText}>
           {primaryText}
         </span>
+        {stalled && (
+          <button
+            type="button"
+            onClick={reloadPage}
+            data-testid="next-up-reload"
+            className="shrink-0 px-1.5 py-0.5 rounded border border-border-default text-text-secondary hover:bg-surface-hover"
+            title="The tab connected but its first snapshot never arrived — reload to fetch it again"
+          >
+            Reload
+          </button>
+        )}
         {item?.stakes === "high" && (
           <span className="shrink-0 px-1 rounded bg-accent-red-dim text-accent-red font-semibold">HIGH</span>
         )}
