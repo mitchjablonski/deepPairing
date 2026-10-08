@@ -12,12 +12,32 @@ has the short version; this page is the detail, the caveats, and the
 > [How long it takes](README.md#how-long-it-takes)). The plugin path below
 > needs no build.
 
-All the "from a clone" paths need the build first — that requires **Node 20.19+, 22.13+, or 24+** (pnpm 10+), the floor set by the locked toolchain: `pnpm build` alone only needs Vite 8/rolldown's `^20.19.0 || >=22.12.0`, but `pnpm install` also pulls in eslint (run by `pnpm lint`, which CI runs on every PR), whose locked `^20.19.0 || ^22.13.0 || >=24` is tighter on the 22.x line — so Node 22.12.x and all of Node 23.x are *not* supported by the contributor toolchain even though they'd satisfy Vite alone. This is stricter than the runtime the *prebuilt* plugin below needs (Node 20.11+, see [option 1](#1-marketplace-plugin-recommended)) — building from source and running the shipped bundle have different Node requirements:
+All the "from a clone" paths need the build first — that requires **Node 20.19+, 22.13+, or 24+** (pnpm 10+), the floor set by the locked toolchain: `pnpm build` alone only needs Vite 8/rolldown's `^20.19.0 || >=22.12.0`, but `pnpm install` also pulls in eslint (run by `pnpm lint`, which CI runs on every PR), whose locked `^20.19.0 || ^22.13.0 || >=24` is tighter on the 22.x line — so Node 22.12.x and all of Node 23.x are *not* supported by the contributor toolchain even though they'd satisfy Vite alone. This is stricter than the runtime the *prebuilt* plugin below needs (Node 20.11+, see [option 1](#1-marketplace-plugin-recommended)) — building from source and running the shipped bundle have different Node requirements. See [Node.js support policy](#nodejs-support-policy) below for the full recommended/tested/deprecated breakdown:
 
 ```bash
 git clone https://github.com/mitchjablonski/deepPairing.git
 cd deepPairing && pnpm install && pnpm build
 ```
+
+## Node.js support policy
+
+Node 20 reached end-of-life on 2026-04-30; Node 22 ("Jod") and Node 24
+("Krypton") are the current LTS lines. **Node 20 is deprecated: it still works
+today (nothing here has been observed to fail on it), but support will be
+removed no earlier than v0.2.0 (not before January 2027).** Recommended and
+maintained going forward is Node 22 or 24 — migrate before then.
+
+| | Prebuilt plugin (marketplace / `claude-plugin/`) | Source build (contributors) |
+|---|---|---|
+| **Recommended** | Node 22 or 24 | Node 22 or 24 |
+| **Maintained / tested in CI** | Node 22, Node 24 (`plugin-boot` matrix in CI runs the actual shipped `claude-plugin/server/` bundle, no `dist` fallback, on both) | Node 22 (main CI jobs) and exactly the documented floor patch, Node 20.19.0 (`node-floor` CI job: install + build + lint) — that one patch is CI-checked because it's the documented minimum, not because the Node 20 line generally is |
+| **Deprecated, removal planned** | Node 20.11+ — unchanged `engines.node` floor, still works (`esbuild` targets `node20` for this bundle and it uses no Node API newer than 20.11: checked against `node:fs/path/http/net/crypto/events/child_process/os/url/perf_hooks/readline/stream`, `fetch`, `structuredClone`), but no longer CI-tested beyond this release's `plugin-boot` matrix (which only covers 22/24) — Node 20 has no more upstream security patches. Loading the plugin on Node 20.x prints a one-line stderr deprecation notice (doesn't fail). | **Node 20.19.1+ only** (any 20.x above the exact floor) — the root `engines`, Vite/rolldown, and eslint all require `^20.19.0`, so 20.11–20.18 is **not** supported here even though it's the plugin's floor; #409/#414 established that split. 20.19.1+ builds (verified) but isn't matrix-tested beyond the exact floor patch 20.19.0, and is deprecated along with the rest of the Node 20 line. |
+| **Exact `engines.node`** | `>=20.11.0` (`packages/mcp-server/package.json`, unchanged for now — will be raised to drop the 20.x branch when Node 20 support is actually removed) | `^20.19.0 \|\| ^22.13.0 \|\| >=24` (root `package.json`, unchanged for now, same removal timing) |
+
+Node 20 support — the `20.x` branches of both `engines.node` ranges above —
+will be removed no earlier than v0.2.0 (not before January 2027). That's a
+target, not a promise it happens exactly then; it won't happen earlier. If
+you're on Node 20, plan a move to 22 or 24 before that release.
 
 ## 1. Marketplace plugin (recommended)
 

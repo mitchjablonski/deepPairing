@@ -11,6 +11,7 @@ import { useArtifactStore } from "../../stores/artifact";
 import { useReplayStore } from "../../stores/replay";
 import { useOverlayStore } from "../../stores/overlay";
 import { useChainComments } from "../../hooks/useChainComments";
+import { useOfflineReason } from "../../hooks/useOfflineReason";
 import { ApproveCountdown } from "./ApproveCountdown";
 import { useConfirmCountdown } from "../../hooks/useConfirmCountdown";
 import { computePending } from "../../lib/pending";
@@ -461,6 +462,8 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
   const setChangesetFileReview = useArtifactStore((s) => s.setChangesetFileReview);
   const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
   const [confirmDismiss, setConfirmDismiss] = useState(false);
+  // #465 (state G rule 1) — approve / send back / reject / dismiss disable while disconnected.
+  const offline = useOfflineReason();
   const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
   const replayActive = useReplayStore((s) => s.active);
   // #187 — the single `interactive` gate split in two, so late COMMENTING can be
@@ -658,7 +661,7 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
       overrideFeedback?: string,
       opts?: { bypassSuggestionGate?: boolean },
     ) => {
-      if (submitting) return;
+      if (submitting || offline) return; // #465 — keyboard paths too
       // H1 (#202) — the single choke point for EVERY approve path (button,
       // approve-all, the rising-edge countdown, the keyboard ⏎). With the
       // human's own suggestions still open, surface the confirm instead of
@@ -685,11 +688,15 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
         setSubmitting(false);
       }
     },
-    [submitting, feedback, rejectConcept, updateArtifactStatus, artifact.id, advanceToNextPending],
+    [submitting, offline, feedback, rejectConcept, updateArtifactStatus, artifact.id, advanceToNextPending],
   );
 
   const approveCountdown = useConfirmCountdown(() => { void runWhole("approved"); });
   const { countdown, countdownMax, armed, arm, cancel } = approveCountdown;
+  // #465 — an armed auto-approve must not fire into a dead connection.
+  useEffect(() => {
+    if (offline && armed) cancel();
+  }, [offline, armed, cancel]);
 
   // #175 — arm the confirm-countdown on the RISING edge into all-look-right
   // (the human just marked the last file). Mount-initialised so a reload of an
@@ -1459,10 +1466,10 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                 <button
                   type="button"
                   onClick={() => void runWhole("approved", undefined, { bypassSuggestionGate: true })}
-                  disabled={submitting}
+                  disabled={submitting || !!offline}
                   data-testid="approve-anyway"
                   className="px-2.5 py-1 text-2xs font-semibold text-text-inverse bg-accent-amber rounded hover:bg-accent-amber/85 disabled:opacity-50 transition-colors"
-                  title="Approve the changeset even though your suggestions are still open"
+                  title={offline ?? "Approve the changeset even though your suggestions are still open"}
                 >
                   Approve anyway
                 </button>
@@ -1522,10 +1529,10 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
               <button
                 type="button"
                 onClick={() => void sendBack()}
-                disabled={submitting}
+                disabled={submitting || !!offline}
                 className="px-3 py-1.5 text-xs font-semibold text-text-inverse bg-accent-amber rounded hover:bg-accent-amber/85 disabled:opacity-50 transition-colors inline-flex items-center gap-1.5"
                 data-testid="send-back"
-                title={`Send back ${flaggedCount} flagged ${flaggedCount === 1 ? "file" : "files"} for revision`}
+                title={offline ?? (`Send back ${flaggedCount} flagged ${flaggedCount === 1 ? "file" : "files"} for revision`)}
               >
                 ↻ Send back {flaggedCount} {flaggedCount === 1 ? "file" : "files"}
               </button>
@@ -1533,10 +1540,10 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
               <button
                 type="button"
                 onClick={() => (armed ? cancel() : beginApprove())}
-                disabled={submitting}
+                disabled={submitting || !!offline}
                 className="px-3 py-1.5 text-xs font-semibold text-text-inverse bg-accent-green rounded hover:bg-accent-green/85 disabled:opacity-50 transition-colors"
                 data-testid="approve-changeset"
-                title="Approve the whole changeset"
+                title={offline ?? "Approve the whole changeset"}
               >
                 ✓ Approve changeset
               </button>
@@ -1544,10 +1551,10 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
               <button
                 type="button"
                 onClick={() => void approveAll()}
-                disabled={submitting}
+                disabled={submitting || !!offline}
                 className="px-3 py-1.5 text-xs font-semibold text-text-inverse bg-accent-green rounded hover:bg-accent-green/85 disabled:opacity-50 transition-colors"
                 data-testid="approve-all"
-                title={`Mark all ${files.length} files look-right and approve`}
+                title={offline ?? (`Mark all ${files.length} files look-right and approve`)}
               >
                 ✓ Approve all {files.length} files
               </button>
@@ -1579,9 +1586,9 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                 <button
                   type="button"
                   onClick={() => void runWhole("rejected")}
-                  disabled={submitting || !feedback.trim()}
+                  disabled={(submitting || !feedback.trim()) || !!offline}
                   className="px-2.5 py-1 text-2xs font-medium text-white bg-accent-red rounded hover:bg-accent-red/80 disabled:opacity-50 transition-colors"
-                  title="Reject and remember this approach in this project (shared with your other projects as an advisory nudge only if cross-project publishing is on)"
+                  title={offline ?? "Reject and remember this approach in this project (shared with your other projects as an advisory nudge only if cross-project publishing is on)"}
                 >
                   Reject &amp; remember
                 </button>
@@ -1601,6 +1608,7 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
             {confirmDismiss ? (
               <>
                 <button
+                  title={offline ?? undefined}
                   type="button"
                   onClick={() => {
                     setConfirmDismiss(false);
@@ -1610,7 +1618,7 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
                       .catch(() => {})
                       .finally(() => setSubmitting(false));
                   }}
-                  disabled={submitting}
+                  disabled={submitting || !!offline}
                   className="text-2xs text-text-secondary underline disabled:opacity-50"
                 >
                   Dismiss? (can&apos;t be undone)
