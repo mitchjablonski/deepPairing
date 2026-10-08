@@ -8,6 +8,23 @@ import { usePreferencesStore } from "../../stores/preferences";
 import { usePreflightBlockStore } from "../../stores/preflightBlocks";
 import { useReplayStore } from "../../stores/replay";
 import { useToastStore } from "../../stores/toast";
+import { useConnectionGraceStore } from "../../lib/connectionGrace";
+import { useSiblingSyncStore } from "../../lib/siblingSync";
+
+/**
+ * #464 review (CI flake, root cause) — App's bootstrap used to open a REAL
+ * WebSocket adapter here. Under CPU load its connect failure landed mid-test,
+ * flipped `connected` to false and the bar read "⚠ DISCONNECTED · … (last
+ * known)" (4/20 runs under 12 busy loops). These tests are about sibling sync,
+ * not transport: a quiet fake adapter that never connects or drops keeps the
+ * connection state exactly what each test sets.
+ */
+vi.mock("../../lib/connection-adapter", () => ({
+  createAdapter: () => ({
+    connect() {}, disconnect() {}, onMessage() {}, onConnect() {}, onDisconnect() {},
+    refreshUrl() {}, onFatalMismatch() {}, onConnectionRefused() {}, retryAfterRefusal() {}, switchSession() {},
+  }),
+}));
 
 /**
  * #457 D6 (docs/design/attention-walkthroughs.md) — "Nothing needs you" when the
@@ -44,7 +61,28 @@ beforeEach(() => {
     return json({ sessions: [] });
   }));
 });
+/**
+ * #464 review — render App and wait for its bootstrap to finish binding the
+ * tab (connect() installs the adapter). Under CPU load the bootstrap's
+ * active-sessions fetch resolved AFTER a test had started acting, and its late
+ * connect re-bound the tab mid-scenario. Binding via ?session= keeps it on the
+ * session the test chose.
+ */
+async function bootApp() {
+  const bound = useConnectionStore.getState().sessionId;
+  if (bound) window.history.replaceState({}, "", `/?session=${bound}`);
+  render(<App />);
+  await waitFor(() => expect(useConnectionStore.getState().adapter).toBeTruthy());
+}
+
 afterEach(() => {
+  window.history.replaceState({}, "", "/");
+  // Isolate every global these tests touch: the store's adapter, the shared
+  // offline/sibling-sync flags, fake timers, the fetch stub.
+  useConnectionStore.getState().disconnect();
+  useConnectionGraceStore.setState({ everConnected: false, graceOver: false });
+  useSiblingSyncStore.setState({ settled: false });
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -52,15 +90,18 @@ afterEach(() => {
 describe("#457 D6 — an empty bound session still merges its siblings", () => {
   it("bar ON: the sibling's decision is Decide 1 — not '◇ Nothing needs you'", async () => {
     usePreferencesStore.setState({ nextUpBar: true } as any);
-    render(<App />);
+    await bootApp();
     await waitFor(() => expect(screen.getByTestId("next-up-bar").getAttribute("data-line")).toMatch(/^▲ Which store backs the billing cache\?/));
     expect(screen.getByTestId("next-up-bar").getAttribute("data-line")).toContain("Decide 1");
     expect(screen.getByTestId("next-up-bar").getAttribute("data-line")).not.toContain("Nothing needs you");
+    // #467 × #464 merge — the first sibling pass still flips `settled` after the
+    // changeSignal / forceRefresh restructure of MultiAgentSync.
+    await waitFor(() => expect(useSiblingSyncStore.getState().settled).toBe(true));
   });
 
   it("bar OFF: the tab title counts it and the decision is on screen (was: an empty-session shell)", async () => {
     usePreferencesStore.setState({ nextUpBar: false } as any);
-    render(<App />);
+    await bootApp();
     await waitFor(() => expect(document.title).toMatch(/^\(1\)/));
     // The panel mounts with the sibling's decision (the single pending card in
     // view — so PendingBanner's J2b step-down rightly stays quiet).
@@ -69,7 +110,7 @@ describe("#457 D6 — an empty bound session still merges its siblings", () => {
 
   it("a store reset (session switch / hydration) re-merges the siblings it discarded", async () => {
     usePreferencesStore.setState({ nextUpBar: true } as any);
-    render(<App />);
+    await bootApp();
     await waitFor(() => expect(useArtifactStore.getState().artifacts.some((a) => a.id === "d_bill")).toBe(true));
     useArtifactStore.getState().reset();
     expect(useArtifactStore.getState().artifacts).toHaveLength(0);
@@ -108,7 +149,7 @@ describe("#458 review — sibling history is not news; a sibling's NEW work is",
     ] } as any);
     useArtifactStore.setState({ artifacts: [bound as any] });
     usePreferencesStore.setState({ nextUpBar: true } as any);
-    render(<App />);
+    await bootApp();
     await waitFor(() => expect(useArtifactStore.getState().artifacts.some((a) => a.id === "o1")).toBe(true));
     // The connect payload: reset, then the bound session's snapshot.
     act(() => {
@@ -126,7 +167,7 @@ describe("#458 review — sibling history is not news; a sibling's NEW work is",
     let sibling: unknown[] = [research("o1", "s_bill", "Done billing work", "2026-06-01T00:00:00.000Z", "approved")];
     serve(() => sibling);
     usePreferencesStore.setState({ nextUpBar: true } as any);
-    render(<App />);
+    await bootApp();
     await waitFor(() => expect(useArtifactStore.getState().artifacts.some((a) => a.id === "o1")).toBe(true));
     await act(async () => { await new Promise((r) => setTimeout(r, 1000)); }); // settled
     // #467 review — "nothing" only once the sibling sync has settled (held before).
@@ -180,7 +221,7 @@ describe("#460 — the sibling change signal covers status changes and questions
     sibling = { artifacts: [mkDecision()], comments: [] };
     useConnectionStore.setState({ activeSessions: sessions(1) } as any);
     usePreferencesStore.setState({ nextUpBar: true } as any);
-    render(<App />);
+    await bootApp();
     await waitFor(() => expect(line()).toMatch(/^▲ Which store backs the billing cache\?/));
     sibling = { artifacts: [mkDecision("approved")], comments: [] };
     act(() => useConnectionStore.setState({ activeSessions: sessions(2) } as any)); // the poll: revision moved, count didn't
@@ -191,7 +232,7 @@ describe("#460 — the sibling change signal covers status changes and questions
     sibling = { artifacts: [finding()], comments: [] };
     useConnectionStore.setState({ activeSessions: sessions(1) } as any);
     usePreferencesStore.setState({ nextUpBar: true } as any);
-    render(<App />);
+    await bootApp();
     await waitFor(() => expect(useArtifactStore.getState().artifacts.some((a) => a.id === "f_bill")).toBe(true));
     sibling = { artifacts: [finding()], comments: [{
       id: "q_bill", sessionId: "s_bill", target: { artifactId: "f_bill" }, parentCommentId: null, author: "human",
@@ -204,7 +245,7 @@ describe("#460 — the sibling change signal covers status changes and questions
   it("acting on a stale card: the daemon's verdict_already_final shows the TRUE status, a clear message, and re-fetches the sibling", async () => {
     sibling = { artifacts: [finding("draft")], comments: [] };
     useConnectionStore.setState({ activeSessions: sessions(1) } as any);
-    render(<App />);
+    await bootApp();
     await waitFor(() => expect(useArtifactStore.getState().artifacts.find((a) => a.id === "f_bill")?.status).toBe("draft"));
     statusResponse = () => Promise.resolve(new Response(JSON.stringify({
       error: "verdict_already_final", code: "verdict_already_final", currentStatus: "approved",
@@ -225,7 +266,7 @@ describe("#460 — the sibling change signal covers status changes and questions
     sibling = { artifacts: [finding()], comments: [] };
     useConnectionStore.setState({ activeSessions: sessions(undefined, 1) } as any);
     usePreferencesStore.setState({ nextUpBar: true } as any);
-    render(<App />);
+    await bootApp();
     await waitFor(() => expect(useArtifactStore.getState().artifacts.some((a) => a.id === "f_bill")).toBe(true));
     sibling = { artifacts: [finding(), { ...mkDecision(), createdAt: new Date().toISOString() }], comments: [] };
     act(() => useConnectionStore.setState({ activeSessions: sessions(undefined, 2) } as any));
@@ -235,7 +276,7 @@ describe("#460 — the sibling change signal covers status changes and questions
   it("an unchanged revision costs nothing (no re-fetch of a quiet sibling)", async () => {
     sibling = { artifacts: [finding()], comments: [] };
     useConnectionStore.setState({ activeSessions: sessions(3) } as any);
-    render(<App />);
+    await bootApp();
     await waitFor(() => expect(liveSessionCalls).toBe(1));
     act(() => useConnectionStore.setState({ activeSessions: sessions(3).map((s) => ({ ...s })) } as any)); // same values, new identity
     await act(async () => { await new Promise((r) => setTimeout(r, 300)); });
@@ -285,7 +326,7 @@ describe("#464 review — a stale card after the 409, and a restarted daemon's r
       { sessionId: "s_bill", live: true, artifactCount: 1, revision: 4, revisionEpoch: epoch },
     ];
     useConnectionStore.setState({ activeSessions: list("before") } as any);
-    render(<App />);
+    await bootApp();
     await waitFor(() => expect(calls).toBe(1));
     // Restarted daemon: a new epoch, and its counter happens to be back at 4.
     act(() => useConnectionStore.setState({ activeSessions: list("after") } as any));
