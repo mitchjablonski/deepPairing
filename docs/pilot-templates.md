@@ -15,12 +15,25 @@ placeholders, not observations or claims that the pilot has started.
 - Restricted storage and withdrawal contact (private):
 - Exact deletion deadline and custodian confirmation procedure:
 - Approved consent text; optional observation scope:
-- Approved thresholds; any pre-enrollment deviation and rationale:
+- Thresholds frozen at approval; predeclared task categories for Narrow:
+- Any protocol amendment after approval and rationale (before data use):
 
 ## Consent checklist (private, separate from observations)
 
 - Purpose, duration, requested fields, and voluntary participation explained:
 - Existing model-provider data flow explained:
+- Local files explained: project `.deeppairing/sessions/*` and
+  `.deeppairing/daemon.log`; global `~/.deeppairing/philosophy/v1.json` and
+  `~/.deeppairing/projects.json`:
+- Local files stay on participant's machine unless they choose to send/export;
+  pilot does not collect them; stricter no-local-export default vs #434 explained:
+- `/deeppairing:share` creates HTML with diffs by default; HTML export
+  `includeCode: false` / CLI `--redact-code` disclosed; `/deeppairing:post-pr`
+  uses participant's GitHub identity:
+- Employer-code restriction and not using share/post-pr on employer code unless
+  normally permitted explained:
+- Withdrawal/end cleanup removes only pilot-created local records; pre-existing
+  global files are backed up/preserved and never deleted wholesale:
 - No raw code/transcripts/recordings requested; storage/access explained:
 - Withdrawal method, aggregation cutoff and exact deletion date supplied:
 - Permission to retain/disclose anonymous cohort counts after withdrawal:
@@ -38,6 +51,8 @@ placeholders, not observations or claims that the pilot has started.
 - Assistance: none / type and count; support blocker and resolution:
 - Feedback delivery: answered / acknowledged / pending / unknown:
 - Concrete decision-value event (sanitized); observed / reported / inferred:
+- Before-state and specific after-state; scorer A / B independent rubric codes:
+- Scorer agreement / disagreement and conservative resolution:
 - Review/reading minutes and measurement method; interruption count/method:
 - Participant estimate of avoided rework, explicitly counterfactual:
 - Later natural task opportunities: count / zero / unknown:
@@ -61,11 +76,13 @@ placeholders, not observations or claims that the pilot has started.
 - Activation count/N; unassisted count; within-20-minute count; missing times:
 - Voluntary repeat count/N and count/known-opportunity participants:
 - Decision-value count/N, split observed/reported; inferred claims separate:
+- Perceived-value event rubric; independent scorer agreement and disagreements:
 - Low-burden (1-2) count/N; rating distribution and missing answers:
 - Review-time/interruptions summary, sources, missingness, comparability limits:
 - Baseline comparison limitations; no causal time-savings claim:
 - Most useful workflows; counterexamples and reversion reasons:
-- Each predeclared gate: pass / fail / not evaluated, with counts; do not
+- Each predeclared gate: pass / fail / not evaluated, with counts; apply
+  Inconclusive -> Go -> Pivot/stop -> Narrow -> Pivot/stop precedence; do not
   evaluate gates after withdrawal or insufficient opportunity coverage:
 - Outcome: go / narrow / pivot-stop / inconclusive; rationale:
 - Version changes, protocol deviations, exploratory analyses:
