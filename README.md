@@ -62,8 +62,8 @@ plugin ships a prebuilt server that runs on Node 20.11+.
 Then open Claude Code in your own project and ask for real work, for example
 *"Analyze the auth module and propose options."* The first steps are in
 **[Your first review ↓](#your-first-review)**. To look around before
-installing, the **[seeded demo ↓](#watch-the-seeded-demo-source-build)** runs
-without Claude Code but needs a source build.
+installing, the **[sample demo ↓](#try-the-sample-demo-no-build)** runs with
+plain Node. It needs no build and no Claude Code.
 
 ## What you get
 
@@ -368,24 +368,44 @@ Each step names where it happens and what to do next.
 staying on *Waiting for Claude*, a daemon that won't start, and MCP startup
 timeouts on WSL `/mnt/c`.
 
-### Watch the seeded demo (source build)
+### Try the sample demo (no build)
 
-The demo drives a scripted session against a real companion. It shows the
-review surface, the explainer walk-through, the end-of-run debrief, and the
-rejection gate blocking a re-proposed approach. It doesn't need Claude Code,
-but it is a **developer path**: it needs a clone and a build.
+The demo plays a **scripted sample**. No AI agent or model runs; a script plays
+the agent's part on synthetic content. In the companion you'll see:
+
+- an agent's proposal, which you reject with a reason;
+- the remembered consequence: the same approach, re-proposed in new words, is
+  refused by the gate;
+- an explainer and a closing debrief that summarise the run.
+
+It runs straight from the shipped plugin bundle with plain Node 20.11+. You
+don't need a clone build, pnpm or Claude Code:
 
 ```bash
-git clone https://github.com/mitchjablonski/deepPairing.git
-cd deepPairing && pnpm install && pnpm build
-node packages/mcp-server/dist/cli/init.js demo
+# From a download of this repo (git clone or a ZIP) — no install, no build:
+node claude-plugin/server/demo.mjs
+
+# Or from an installed plugin — find the bundle once, then run it:
+find ~/.claude/plugins -name demo.mjs -path '*deeppairing*'
+node "<that path>"
 ```
 
-- **What you need:** Node 20.19+, 22.13+ or 24+, and pnpm 10+. This is stricter
-  than the plugin's runtime floor because the locked toolchain requires it; see
-  [INSTALL.md](INSTALL.md).
-- **Demo data:** it runs in a throwaway `demo_…` session. It never writes to
-  your project's preferences or to the cross-project ledger.
+It opens the companion in your browser, or prints the URL when
+`DEEPPAIRING_NO_OPEN=1` is set. **Press Enter (or Ctrl+C) to end it.**
+
+The demo runs in a sandbox:
+
+- **Storage:** a temporary HOME and a synthetic sample project, created under
+  your system temp directory and **deleted when the demo ends**.
+- **Daemon:** its own daemon on its own port range (`41000-41063`). It never
+  starts or contacts the daemon for your projects, and never uses their
+  `3847-3974` range.
+- **Your data:** it never writes to your projects, their preferences or your
+  `~/.deeppairing` cross-project ledger. It sends no telemetry and calls no
+  external model.
+
+`node packages/mcp-server/dist/cli/init.js demo` from a source build runs the
+same sandboxed demo.
 
 ### From source (developer path)
 
@@ -415,6 +435,7 @@ disk and machine.
 | Companion page served | 467–489 ms | 1234–1307 ms |
 | First artifact visible in the companion | 487–514 ms | 1349–1482 ms |
 | A companion comment reaches Claude's `check_feedback` | 509–538 ms | 1644–1741 ms |
+| Sample demo from the shipped bundle (`node claude-plugin/server/demo.mjs`) until the companion is ready | 0.76–1.14 s | 2.8–4.5 s, one 48 s outlier (sandbox temp dir on the `\\wsl.localhost` share) |
 | Source build, cold pnpm store: clone, install, build, demo | 1.4 + 6.0 + 8.3 + 1.9 ≈ 18 s | not measured |
 | Source build, warm pnpm store | 1.3 + 2.1 + 8.3 + 1.9 ≈ 14 s | not measured |
 
