@@ -28373,16 +28373,19 @@ var GlobalStore = class _GlobalStore {
    * treat as genuine.
    */
   static DEDUPE_WINDOW_MS = 5e3;
-  recordInstance(concept, instance) {
+  recordInstance(concept, instance, opts = {}) {
     if (!concept.trim()) return;
-    this.transact(() => this.recordInstanceLocked(concept, instance));
+    this.transact(() => this.recordInstanceLocked(concept, instance, opts));
   }
-  recordInstanceLocked(concept, instance) {
+  recordInstanceLocked(concept, instance, opts = {}) {
     const key = normalizeKey(concept);
     const ledger = this.read();
     const now = instance.at ?? (/* @__PURE__ */ new Date()).toISOString();
     const nowMs = Date.parse(now);
     const existing = ledger.concepts[key];
+    if (opts.exactOnce && existing?.instances.some((prior) => prior.project === instance.project && prior.sessionId === instance.sessionId && prior.verdict === instance.verdict && prior.at === now)) {
+      return;
+    }
     const finalized = {
       project: instance.project,
       sessionId: instance.sessionId,

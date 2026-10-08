@@ -434,18 +434,35 @@ export class GlobalStore {
    */
   private static readonly DEDUPE_WINDOW_MS = 5000;
 
-  recordInstance(concept: string, instance: Omit<PhilosophyInstance, "at"> & { at?: string }): void {
+  recordInstance(
+    concept: string,
+    instance: Omit<PhilosophyInstance, "at"> & { at?: string },
+    opts: { exactOnce?: boolean } = {},
+  ): void {
     if (!concept.trim()) return;
-    this.transact(() => this.recordInstanceLocked(concept, instance));
+    this.transact(() => this.recordInstanceLocked(concept, instance, opts));
   }
 
-  private recordInstanceLocked(concept: string, instance: Omit<PhilosophyInstance, "at"> & { at?: string }): void {
+  private recordInstanceLocked(
+    concept: string,
+    instance: Omit<PhilosophyInstance, "at"> & { at?: string },
+    opts: { exactOnce?: boolean } = {},
+  ): void {
     const key = normalizeKey(concept);
     const ledger = this.read();
     const now = instance.at ?? new Date().toISOString();
     const nowMs = Date.parse(now);
 
     const existing = ledger.concepts[key];
+    // #486 — a REPLAYED mirror carries the timestamp of its first attempt, so
+    // the (project, sessionId, verdict, at) signature identifies it exactly
+    // (the same signature importLedger dedupes on). Already present ⇒ an
+    // earlier replay landed it; never append it twice, whatever the age.
+    if (opts.exactOnce && existing?.instances.some((prior) =>
+      prior.project === instance.project && prior.sessionId === instance.sessionId &&
+      prior.verdict === instance.verdict && prior.at === now)) {
+      return;
+    }
     const finalized: PhilosophyInstance = {
       project: instance.project,
       sessionId: instance.sessionId,

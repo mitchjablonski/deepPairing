@@ -7,7 +7,7 @@ import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { capConceptLength } from "./concept-hygiene.js";
 import { writeJsonAtomic, writeStringAtomic } from "./atomic-write.js";
-import { withFileLock } from "./file-lock.js";
+import { withFileLock, isFileLockError } from "./file-lock.js";
 import {
   mergeArtifactRecords,
   mergeSessionRecords,
@@ -35,6 +35,17 @@ export type { ProjectGuardrail };
 /** #408 — bounded wait for the project preferences.json transaction lock (one
  *  small JSON read + atomic replace). Past this, fail closed with ELOCKED. */
 const PREFERENCES_LOCK_TIMEOUT_MS = 1000;
+
+/** #486 — one cross-project mirror refused by a busy ledger lock, queued in
+ *  `.deeppairing/ledger-mirror-pending.json` for replay. */
+interface PendingLedgerMirror {
+  kind: "rejected" | "approved" | "override";
+  /** The capped ledger key. */
+  concept: string;
+  /** The local row it mirrors (rejected / approved), for the no-resurrect check. */
+  description?: string;
+  instance: { project: string; sessionId: string; verdict: "rejected" | "approved"; reason?: string; at: string };
+}
 
 /**
  * #193 E2 — artifact types whose rejection captures NO cross-project taste
@@ -160,6 +171,9 @@ export class FileStore implements IStore {
     this.captureRecordBaselines();
     this.loadPreferences();
     this.loadSessionPrefs();
+    // #486 — a mirror queued by an earlier process (a daemon that restarted
+    // before its retries succeeded) is replayed once this store is up.
+    if (!this.isDemoSession && fs.existsSync(this.ledgerMirrorPendingPath())) this.scheduleMirrorReplay(0, 0);
   }
 
   private ensureDir(): void {
@@ -525,6 +539,10 @@ export class FileStore implements IStore {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
+    }
+    if (this.mirrorReplayTimer) {
+      clearTimeout(this.mirrorReplayTimer);
+      this.mirrorReplayTimer = null;
     }
   }
 
@@ -1694,15 +1712,10 @@ export class FileStore implements IStore {
         // say out loud, and an unbounded one published into a shared file is
         // both a storage and a disclosure hazard. Applied at EVERY publish site
         // or an approval and its rejection would bucket under different keys.
-        getGlobalStore().recordInstance(capConceptLength(conceptKey), {
-          project: this.projectHint,
-          sessionId: this.sessionId,
-          verdict: "rejected",
-          reason,
-        });
+        this.mirrorToLedger("rejected", conceptKey, description, reason);
       } catch (err) {
-        // Non-fatal — losing a ledger append doesn't break the session — but
-        // never silent (#406: a busy ledger lock must be visible).
+        // Non-fatal — a failed mirror doesn't break the session — but never
+        // silent (#406). A busy lock is queued and retried (#486).
         FileStore.logLedgerMirrorFailure("rejected", err);
       }
     }
@@ -1790,13 +1803,9 @@ export class FileStore implements IStore {
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
         // Q2 review H2 — same minimum-payload + cap rule as the rejected path.
-        getGlobalStore().recordInstance(capConceptLength(conceptKey), {
-          project: this.projectHint,
-          sessionId: this.sessionId,
-          verdict: "approved",
-        });
+        this.mirrorToLedger("approved", conceptKey, description);
       } catch (err) {
-        // Non-fatal, but never silent (#406).
+        // Non-fatal, but never silent (#406). A busy lock is queued (#486).
         FileStore.logLedgerMirrorFailure("approved", err);
       }
     }
@@ -1844,18 +1853,20 @@ export class FileStore implements IStore {
     });
 
     const conceptKey = concept?.trim() || description?.trim() || "";
-    if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
+    // #486 — a rejection whose mirror is still QUEUED never reached the
+    // ledger. Retiring it cancels the queued mirror (so a later replay cannot
+    // resurrect it) and, like an unpublished rejection, leaves nothing to
+    // counter globally.
+    const cancelled = conceptKey && !this.isDemoSession
+      ? this.cancelQueuedRejections(capConceptLength(conceptKey), description)
+      : 0;
+    if (conceptKey && cancelled === 0 && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
         // Q2 review LOW — the stored reason said "not my taste", the label of a
         // button that no longer exists. It is written into the user's own data
         // and read back in the Ledger drawer, so it has to match what they
         // clicked: "Retire this stance". Same minimum-payload + cap rule.
-        getGlobalStore().recordInstance(capConceptLength(conceptKey), {
-          project: this.projectHint,
-          sessionId: this.sessionId,
-          verdict: "approved",
-          reason: "Retired by you — the gate was blocking something you wanted",
-        });
+        this.mirrorToLedger("override", conceptKey, description, "Retired by you — the gate was blocking something you wanted");
       } catch (err) {
         // Non-fatal — losing a ledger append doesn't break the override; the
         // local retire below is what clears the block in this project. Never
@@ -1927,6 +1938,171 @@ export class FileStore implements IStore {
       // helper instead of the raw writeFileSync this used to do.
       writeJsonAtomic(prefsPath, prefs);
     }, { label: "Project preferences lock", timeoutMs: PREFERENCES_LOCK_TIMEOUT_MS, reentrant: true });
+  }
+
+  // --- #486 — durable cross-project mirror ---
+  //
+  // The mirror into the cross-project ledger is advisory and must not block
+  // the local commit, but a busy ledger lock (ELOCKED past its 1 s bound) used
+  // to DROP it. Now a refused mirror is appended to a small project-local
+  // queue, `.deeppairing/ledger-mirror-pending.json`, and replayed:
+  //   - on a bounded backoff in this process (2 s, 5 s, 15 s, 60 s, unref'd);
+  //   - opportunistically after any later mirror that succeeds;
+  //   - when a FileStore for the project next starts (daemon restart), so a
+  //     queued mirror survives the process that queued it.
+  // A queue rather than only an in-memory retry: the in-memory version loses
+  // the mirror on exactly the restart the issue cares about, and the file is
+  // tiny and project-scoped, like preferences.json.
+  //
+  // Invariants:
+  //   - idempotent: an entry keeps the timestamp of its FIRST attempt, and the
+  //     ledger write is `exactOnce` on (project, sessionId, verdict, at), so a
+  //     replay that already landed — or two concurrent replayers — never adds
+  //     a duplicate instance;
+  //   - never resurrects: a queued rejection is replayed only while its local
+  //     row still exists (a retire removes the row, and cancelQueuedRejections
+  //     drops the entry); a queued approval only while the pattern is still
+  //     approved; nothing is replayed once the publish opt-in is off;
+  //   - #416 locks: the queue has its own lock, always taken BEFORE the ledger
+  //     lock (never the reverse), and a pass stops at the first busy ledger
+  //     lock, so it waits at most one bound;
+  //   - `ledger_write` broadcasts are unchanged: routes emit them for the
+  //     LOCAL record, which is committed before any of this.
+  private mirrorReplayTimer: ReturnType<typeof setTimeout> | null = null;
+  private static readonly MIRROR_REPLAY_DELAYS_MS = [2_000, 5_000, 15_000, 60_000];
+
+  private ledgerMirrorPendingPath(): string {
+    return path.join(this.basePath, "ledger-mirror-pending.json");
+  }
+
+  private mirrorToLedger(kind: "rejected" | "approved" | "override", conceptKey: string, description: string | undefined, reason?: string): void {
+    const concept = capConceptLength(conceptKey);
+    const instance = {
+      project: this.projectHint,
+      sessionId: this.sessionId,
+      verdict: (kind === "rejected" ? "rejected" : "approved") as "rejected" | "approved",
+      ...(reason ? { reason } : {}),
+      at: new Date().toISOString(),
+    };
+    try {
+      getGlobalStore().recordInstance(concept, instance, { exactOnce: true });
+    } catch (err) {
+      if (!isFileLockError(err)) throw err;
+      this.queueLedgerMirror({ kind, concept, ...(description ? { description } : {}), instance });
+      return;
+    }
+    // The ledger lock was just free — a good moment to drain anything queued.
+    if (fs.existsSync(this.ledgerMirrorPendingPath())) this.replayLedgerMirrorsSafe();
+  }
+
+  private readPendingMirrors(): PendingLedgerMirror[] {
+    const raw = this.loadJsonFile<unknown>(this.ledgerMirrorPendingPath(), []);
+    return Array.isArray(raw) ? raw.filter((e): e is PendingLedgerMirror =>
+      !!e && typeof e === "object" && typeof (e as PendingLedgerMirror).concept === "string" &&
+      !!(e as PendingLedgerMirror).instance && typeof (e as PendingLedgerMirror).instance.at === "string") : [];
+  }
+
+  private writePendingMirrors(entries: PendingLedgerMirror[]): void {
+    const file = this.ledgerMirrorPendingPath();
+    if (entries.length === 0) {
+      try { fs.unlinkSync(file); } catch { /* already gone */ }
+      return;
+    }
+    writeJsonAtomic(file, entries);
+  }
+
+  private withMirrorQueue<T>(run: () => T): T {
+    fs.mkdirSync(this.basePath, { recursive: true });
+    return withFileLock(`${this.ledgerMirrorPendingPath()}.lock`, run, {
+      label: "Ledger mirror queue lock", timeoutMs: PREFERENCES_LOCK_TIMEOUT_MS, reentrant: true,
+    });
+  }
+
+  private queueLedgerMirror(entry: PendingLedgerMirror): void {
+    try {
+      this.withMirrorQueue(() => {
+        const entries = this.readPendingMirrors();
+        entries.push(entry);
+        this.writePendingMirrors(entries);
+      });
+    } catch (err) {
+      FileStore.logLedgerMirrorFailure(entry.kind, err);
+      return;
+    }
+    console.error(`[deepPairing] cross-project ledger mirror (${entry.kind}) for "${entry.concept}" is queued: the ledger is busy; it will be retried.`);
+    if (!this.mirrorReplayTimer) this.scheduleMirrorReplay(0);
+  }
+
+  private scheduleMirrorReplay(attempt: number, delay = FileStore.MIRROR_REPLAY_DELAYS_MS[attempt]): void {
+    if (this.disposed || delay === undefined) return;
+    const timer = setTimeout(() => {
+      this.mirrorReplayTimer = null;
+      const remaining = this.replayLedgerMirrorsSafe();
+      if (remaining > 0) this.scheduleMirrorReplay(attempt + 1);
+    }, delay);
+    timer.unref?.();
+    this.mirrorReplayTimer = timer;
+  }
+
+  /** Never throws; returns how many mirrors are still queued (0 if unknown). */
+  private replayLedgerMirrorsSafe(): number {
+    try {
+      return this.replayLedgerMirrors();
+    } catch (err) {
+      if (errorCode(err) !== "ENOENT") console.error(`[deepPairing] ledger mirror replay failed:`, err);
+      return isFileLockError(err) ? 1 : 0;
+    }
+  }
+
+  /**
+   * Replay queued mirrors. Returns how many remain queued (the ledger was
+   * busy again). Public for tests and for a caller that wants to drain now.
+   */
+  replayLedgerMirrors(): number {
+    if (this.isDemoSession || !fs.existsSync(this.ledgerMirrorPendingPath())) return 0;
+    return this.withMirrorQueue(() => {
+      const entries = this.readPendingMirrors();
+      const publish = this.globalLedgerPublishEnabled();
+      const prefs = this.readPreferences();
+      const rows = this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []);
+      const approved: string[] = prefs.approvedPatterns ?? [];
+      const keep: PendingLedgerMirror[] = [];
+      let busy = false;
+      for (const entry of entries) {
+        if (busy) { keep.push(entry); continue; }
+        if (!publish) continue; // consent withdrawn since it was queued
+        if (entry.kind === "rejected" && !rows.some((r) =>
+          (entry.description !== undefined && r.description === entry.description) ||
+          (!!r.concept && capConceptLength(r.concept) === entry.concept))) continue; // retired meanwhile
+        if (entry.kind === "approved" && entry.description !== undefined && !approved.includes(entry.description)) continue;
+        try {
+          getGlobalStore().recordInstance(entry.concept, entry.instance, { exactOnce: true });
+        } catch (err) {
+          if (isFileLockError(err)) { busy = true; keep.push(entry); continue; }
+          FileStore.logLedgerMirrorFailure(entry.kind, err); // not retryable: drop, loudly
+        }
+      }
+      this.writePendingMirrors(keep);
+      return keep.length;
+    });
+  }
+
+  /** Drop queued REJECTED mirrors for a concept/description being retired.
+   *  Returns how many were dropped. */
+  private cancelQueuedRejections(concept: string, description: string | undefined): number {
+    if (!fs.existsSync(this.ledgerMirrorPendingPath())) return 0;
+    try {
+      return this.withMirrorQueue(() => {
+        const entries = this.readPendingMirrors();
+        const keep = entries.filter((e) => !(e.kind === "rejected" &&
+          (e.concept === concept || (description !== undefined && e.description === description))));
+        if (keep.length !== entries.length) this.writePendingMirrors(keep);
+        return entries.length - keep.length;
+      });
+    } catch (err) {
+      console.error(`[deepPairing] could not cancel a queued ledger mirror:`, err);
+      return 0;
+    }
   }
 
   private static logLedgerMirrorFailure(verdict: string, err: unknown): void {

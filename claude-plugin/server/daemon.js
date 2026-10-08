@@ -24486,16 +24486,19 @@ var GlobalStore = class _GlobalStore {
    * treat as genuine.
    */
   static DEDUPE_WINDOW_MS = 5e3;
-  recordInstance(concept, instance) {
+  recordInstance(concept, instance, opts = {}) {
     if (!concept.trim()) return;
-    this.transact(() => this.recordInstanceLocked(concept, instance));
+    this.transact(() => this.recordInstanceLocked(concept, instance, opts));
   }
-  recordInstanceLocked(concept, instance) {
+  recordInstanceLocked(concept, instance, opts = {}) {
     const key = normalizeKey(concept);
     const ledger = this.read();
     const now = instance.at ?? (/* @__PURE__ */ new Date()).toISOString();
     const nowMs = Date.parse(now);
     const existing = ledger.concepts[key];
+    if (opts.exactOnce && existing?.instances.some((prior) => prior.project === instance.project && prior.sessionId === instance.sessionId && prior.verdict === instance.verdict && prior.at === now)) {
+      return;
+    }
     const finalized = {
       project: instance.project,
       sessionId: instance.sessionId,
@@ -26443,6 +26446,7 @@ var FileStore = class _FileStore {
     this.captureRecordBaselines();
     this.loadPreferences();
     this.loadSessionPrefs();
+    if (!this.isDemoSession && fs14.existsSync(this.ledgerMirrorPendingPath())) this.scheduleMirrorReplay(0, 0);
   }
   ensureDir() {
     const sessionDir = path13.join(this.basePath, "sessions", this.sessionId);
@@ -26763,6 +26767,10 @@ var FileStore = class _FileStore {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
+    }
+    if (this.mirrorReplayTimer) {
+      clearTimeout(this.mirrorReplayTimer);
+      this.mirrorReplayTimer = null;
     }
   }
   getSessionId() {
@@ -27566,12 +27574,7 @@ var FileStore = class _FileStore {
     const conceptKey = concept?.trim() || description.trim();
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
-        getGlobalStore().recordInstance(capConceptLength(conceptKey), {
-          project: this.projectHint,
-          sessionId: this.sessionId,
-          verdict: "rejected",
-          reason
-        });
+        this.mirrorToLedger("rejected", conceptKey, description, reason);
       } catch (err) {
         _FileStore.logLedgerMirrorFailure("rejected", err);
       }
@@ -27642,11 +27645,7 @@ var FileStore = class _FileStore {
     const conceptKey = concept?.trim() || description.trim();
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
-        getGlobalStore().recordInstance(capConceptLength(conceptKey), {
-          project: this.projectHint,
-          sessionId: this.sessionId,
-          verdict: "approved"
-        });
+        this.mirrorToLedger("approved", conceptKey, description);
       } catch (err) {
         _FileStore.logLedgerMirrorFailure("approved", err);
       }
@@ -27690,14 +27689,10 @@ var FileStore = class _FileStore {
       return true;
     });
     const conceptKey = concept?.trim() || description?.trim() || "";
-    if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
+    const cancelled = conceptKey && !this.isDemoSession ? this.cancelQueuedRejections(capConceptLength(conceptKey), description) : 0;
+    if (conceptKey && cancelled === 0 && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
-        getGlobalStore().recordInstance(capConceptLength(conceptKey), {
-          project: this.projectHint,
-          sessionId: this.sessionId,
-          verdict: "approved",
-          reason: "Retired by you \u2014 the gate was blocking something you wanted"
-        });
+        this.mirrorToLedger("override", conceptKey, description, "Retired by you \u2014 the gate was blocking something you wanted");
       } catch (err) {
         _FileStore.logLedgerMirrorFailure("override", err);
       }
@@ -27753,6 +27748,166 @@ var FileStore = class _FileStore {
       if (!mutate(prefs)) return;
       writeJsonAtomic(prefsPath, prefs);
     }, { label: "Project preferences lock", timeoutMs: PREFERENCES_LOCK_TIMEOUT_MS, reentrant: true });
+  }
+  // --- #486 — durable cross-project mirror ---
+  //
+  // The mirror into the cross-project ledger is advisory and must not block
+  // the local commit, but a busy ledger lock (ELOCKED past its 1 s bound) used
+  // to DROP it. Now a refused mirror is appended to a small project-local
+  // queue, `.deeppairing/ledger-mirror-pending.json`, and replayed:
+  //   - on a bounded backoff in this process (2 s, 5 s, 15 s, 60 s, unref'd);
+  //   - opportunistically after any later mirror that succeeds;
+  //   - when a FileStore for the project next starts (daemon restart), so a
+  //     queued mirror survives the process that queued it.
+  // A queue rather than only an in-memory retry: the in-memory version loses
+  // the mirror on exactly the restart the issue cares about, and the file is
+  // tiny and project-scoped, like preferences.json.
+  //
+  // Invariants:
+  //   - idempotent: an entry keeps the timestamp of its FIRST attempt, and the
+  //     ledger write is `exactOnce` on (project, sessionId, verdict, at), so a
+  //     replay that already landed — or two concurrent replayers — never adds
+  //     a duplicate instance;
+  //   - never resurrects: a queued rejection is replayed only while its local
+  //     row still exists (a retire removes the row, and cancelQueuedRejections
+  //     drops the entry); a queued approval only while the pattern is still
+  //     approved; nothing is replayed once the publish opt-in is off;
+  //   - #416 locks: the queue has its own lock, always taken BEFORE the ledger
+  //     lock (never the reverse), and a pass stops at the first busy ledger
+  //     lock, so it waits at most one bound;
+  //   - `ledger_write` broadcasts are unchanged: routes emit them for the
+  //     LOCAL record, which is committed before any of this.
+  mirrorReplayTimer = null;
+  static MIRROR_REPLAY_DELAYS_MS = [2e3, 5e3, 15e3, 6e4];
+  ledgerMirrorPendingPath() {
+    return path13.join(this.basePath, "ledger-mirror-pending.json");
+  }
+  mirrorToLedger(kind, conceptKey, description, reason) {
+    const concept = capConceptLength(conceptKey);
+    const instance = {
+      project: this.projectHint,
+      sessionId: this.sessionId,
+      verdict: kind === "rejected" ? "rejected" : "approved",
+      ...reason ? { reason } : {},
+      at: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    try {
+      getGlobalStore().recordInstance(concept, instance, { exactOnce: true });
+    } catch (err) {
+      if (!isFileLockError(err)) throw err;
+      this.queueLedgerMirror({ kind, concept, ...description ? { description } : {}, instance });
+      return;
+    }
+    if (fs14.existsSync(this.ledgerMirrorPendingPath())) this.replayLedgerMirrorsSafe();
+  }
+  readPendingMirrors() {
+    const raw2 = this.loadJsonFile(this.ledgerMirrorPendingPath(), []);
+    return Array.isArray(raw2) ? raw2.filter((e) => !!e && typeof e === "object" && typeof e.concept === "string" && !!e.instance && typeof e.instance.at === "string") : [];
+  }
+  writePendingMirrors(entries) {
+    const file2 = this.ledgerMirrorPendingPath();
+    if (entries.length === 0) {
+      try {
+        fs14.unlinkSync(file2);
+      } catch {
+      }
+      return;
+    }
+    writeJsonAtomic(file2, entries);
+  }
+  withMirrorQueue(run) {
+    fs14.mkdirSync(this.basePath, { recursive: true });
+    return withFileLock(`${this.ledgerMirrorPendingPath()}.lock`, run, {
+      label: "Ledger mirror queue lock",
+      timeoutMs: PREFERENCES_LOCK_TIMEOUT_MS,
+      reentrant: true
+    });
+  }
+  queueLedgerMirror(entry) {
+    try {
+      this.withMirrorQueue(() => {
+        const entries = this.readPendingMirrors();
+        entries.push(entry);
+        this.writePendingMirrors(entries);
+      });
+    } catch (err) {
+      _FileStore.logLedgerMirrorFailure(entry.kind, err);
+      return;
+    }
+    console.error(`[deepPairing] cross-project ledger mirror (${entry.kind}) for "${entry.concept}" is queued: the ledger is busy; it will be retried.`);
+    if (!this.mirrorReplayTimer) this.scheduleMirrorReplay(0);
+  }
+  scheduleMirrorReplay(attempt, delay = _FileStore.MIRROR_REPLAY_DELAYS_MS[attempt]) {
+    if (this.disposed || delay === void 0) return;
+    const timer = setTimeout(() => {
+      this.mirrorReplayTimer = null;
+      const remaining = this.replayLedgerMirrorsSafe();
+      if (remaining > 0) this.scheduleMirrorReplay(attempt + 1);
+    }, delay);
+    timer.unref?.();
+    this.mirrorReplayTimer = timer;
+  }
+  /** Never throws; returns how many mirrors are still queued (0 if unknown). */
+  replayLedgerMirrorsSafe() {
+    try {
+      return this.replayLedgerMirrors();
+    } catch (err) {
+      if (errorCode(err) !== "ENOENT") console.error(`[deepPairing] ledger mirror replay failed:`, err);
+      return isFileLockError(err) ? 1 : 0;
+    }
+  }
+  /**
+   * Replay queued mirrors. Returns how many remain queued (the ledger was
+   * busy again). Public for tests and for a caller that wants to drain now.
+   */
+  replayLedgerMirrors() {
+    if (this.isDemoSession || !fs14.existsSync(this.ledgerMirrorPendingPath())) return 0;
+    return this.withMirrorQueue(() => {
+      const entries = this.readPendingMirrors();
+      const publish = this.globalLedgerPublishEnabled();
+      const prefs = this.readPreferences();
+      const rows = this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []);
+      const approved = prefs.approvedPatterns ?? [];
+      const keep = [];
+      let busy = false;
+      for (const entry of entries) {
+        if (busy) {
+          keep.push(entry);
+          continue;
+        }
+        if (!publish) continue;
+        if (entry.kind === "rejected" && !rows.some((r) => entry.description !== void 0 && r.description === entry.description || !!r.concept && capConceptLength(r.concept) === entry.concept)) continue;
+        if (entry.kind === "approved" && entry.description !== void 0 && !approved.includes(entry.description)) continue;
+        try {
+          getGlobalStore().recordInstance(entry.concept, entry.instance, { exactOnce: true });
+        } catch (err) {
+          if (isFileLockError(err)) {
+            busy = true;
+            keep.push(entry);
+            continue;
+          }
+          _FileStore.logLedgerMirrorFailure(entry.kind, err);
+        }
+      }
+      this.writePendingMirrors(keep);
+      return keep.length;
+    });
+  }
+  /** Drop queued REJECTED mirrors for a concept/description being retired.
+   *  Returns how many were dropped. */
+  cancelQueuedRejections(concept, description) {
+    if (!fs14.existsSync(this.ledgerMirrorPendingPath())) return 0;
+    try {
+      return this.withMirrorQueue(() => {
+        const entries = this.readPendingMirrors();
+        const keep = entries.filter((e) => !(e.kind === "rejected" && (e.concept === concept || description !== void 0 && e.description === description)));
+        if (keep.length !== entries.length) this.writePendingMirrors(keep);
+        return entries.length - keep.length;
+      });
+    } catch (err) {
+      console.error(`[deepPairing] could not cancel a queued ledger mirror:`, err);
+      return 0;
+    }
   }
   static logLedgerMirrorFailure(verdict, err) {
     console.error(`[deepPairing] cross-project ledger mirror (${verdict}) was not recorded:`, err);
