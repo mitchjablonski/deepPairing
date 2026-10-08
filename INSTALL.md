@@ -8,8 +8,8 @@ has the short version; this page is the detail, the caveats, and the
 > **Just want to watch it first?** The
 > [sample demo](README.md#try-the-sample-demo-no-build) plays a scripted review
 > against a real companion UI. Run `node claude-plugin/server/demo.mjs` from a
-> download of this repo; it needs only Node 20.11+, with no build and no Claude
-> Code. It runs in a temporary sandbox that is deleted when you press Enter.
+> download of this repo; it needs only Node (22 or 24 recommended), with no build
+> and no Claude Code. It runs in a temporary sandbox that is deleted when you press Enter.
 
 All the "from a clone" paths need the build first — that requires **Node 20.19+, 22.13+, or 24+** (pnpm 10+), the floor set by the locked toolchain: `pnpm build` alone only needs Vite 8/rolldown's `^20.19.0 || >=22.12.0`, but `pnpm install` also pulls in eslint (run by `pnpm lint`, which CI runs on every PR), whose locked `^20.19.0 || ^22.13.0 || >=24` is tighter on the 22.x line — so Node 22.12.x and all of Node 23.x are *not* supported by the contributor toolchain even though they'd satisfy Vite alone. This is stricter than the runtime the *prebuilt* plugin below needs (Node 20.11+, see [option 1](#1-marketplace-plugin-recommended)) — building from source and running the shipped bundle have different Node requirements. See [Node.js support policy](#nodejs-support-policy) below for the full recommended/tested/deprecated breakdown:
 

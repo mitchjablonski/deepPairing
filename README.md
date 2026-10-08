@@ -385,8 +385,9 @@ the agent's part on synthetic content. In the companion you'll see:
   refused by the gate;
 - an explainer and a closing debrief that summarise the run.
 
-It runs straight from the shipped plugin bundle with plain Node 20.11+. You
-don't need a clone build, pnpm or Claude Code:
+It runs straight from the shipped plugin bundle with plain Node. Node 22 or 24
+is recommended; 20.11+ works but is deprecated. You don't need a clone build,
+pnpm or Claude Code:
 
 ```bash
 # From a download of this repo (git clone or a ZIP) — no install, no build:

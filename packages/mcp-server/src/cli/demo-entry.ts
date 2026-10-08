@@ -2,7 +2,8 @@
  * #471 — `node <plugin>/server/demo.mjs`: the no-build demo, shipped in the
  * plugin bundle. Runs the bundled daemon (daemon.js, beside this file) in an
  * isolated sandbox — see isolated-demo.ts for exactly what is isolated.
- * Prerequisite: Node 20.11+. No clone build, no pnpm, no Claude Code needed.
+ * Prerequisite: Node (22/24 recommended; 20.11+ works, deprecated). No clone
+ * build, no pnpm, no Claude Code needed.
  */
 import fs from "node:fs";
 import path from "node:path";
