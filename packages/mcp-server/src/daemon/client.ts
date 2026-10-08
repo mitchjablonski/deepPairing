@@ -2,6 +2,7 @@
  * DaemonClient — HTTP client that implements IStore by proxying
  * all operations to the shared deepPairing daemon.
  */
+import type { DecisionResolveOutcome, RecordedResolution, ResolutionAnnouncement } from "../store/decision-resolve-guard.js";
 import type { Artifact, ArtifactStatus, Comment, TeamPreference, PreflightTrace } from "@deeppairing/shared";
 import type {
   IStore,
@@ -299,9 +300,12 @@ export class DaemonClient implements IStore {
     // thrown Error so the MCP handler wrapper can map a 413/body_too_large to a
     // friendly, actionable "payload too large" tool result instead of leaking a
     // raw JSON-RPC protocol error to the agent.
-    const err = new Error(`[deepPairing] ${msg}`) as Error & { status?: number; code?: string };
+    const err = new Error(`[deepPairing] ${msg}`) as Error & { status?: number; code?: string; body?: unknown };
     err.status = res.status;
     if (typeof body?.code === "string") err.code = body.code;
+    // #484 review — keep the structured body too: an outcome-returning call
+    // (resolveDecisionAtomic) needs a refusal's payload, e.g. the winner.
+    err.body = body;
     throw err;
   }
 
@@ -580,6 +584,60 @@ export class DaemonClient implements IStore {
     });
   }
 
+  /**
+   * #464 (Astra review) — the wrapper side of the atomic resolve: the daemon's
+   * internal route runs FileStore.resolveDecisionAtomic, so the atomicity lives
+   * there. Its typed refusals map back to outcomes (409 verdict_already_final →
+   * conflict with the winner; 400 → invalid_option); a same-pick no-op is a
+   * 200 alreadyResolved.
+   */
+  async resolveDecisionAtomic(
+    decisionId: string,
+    optionId: string,
+    reasoning?: string,
+    prediction?: { confidence?: "low" | "medium" | "high"; predictedOutcome?: string },
+  ): Promise<DecisionResolveOutcome> {
+    let res: { alreadyResolved?: boolean; resolution?: RecordedResolution; artifactId?: string };
+    try {
+      res = await this.post(
+        `/decisions/${decisionId}/resolve`,
+        { optionId, reasoning, confidence: prediction?.confidence, predictedOutcome: prediction?.predictedOutcome },
+      );
+    } catch (error) {
+      // #484 review — the internal route's typed refusals are OUTCOMES of this
+      // capability, not failures: map them back (with the winning resolution)
+      // so a daemon-backed IStore behaves like FileStore. Anything else (lock
+      // busy, review conflict, network) still throws.
+      const e = error as { status?: number; code?: string; body?: Record<string, unknown> };
+      if (e?.status === 409 && e.code === "verdict_already_final") {
+        const b = e.body ?? {};
+        return {
+          kind: "conflict",
+          currentStatus: typeof b.currentStatus === "string" ? b.currentStatus : "approved",
+          ...(typeof b.artifactId === "string" ? { artifactId: b.artifactId } : {}),
+          ...(typeof b.at === "string" ? { at: b.at } : {}),
+          ...(b.resolution && typeof (b.resolution as RecordedResolution).optionId === "string"
+            ? { resolution: b.resolution as RecordedResolution } : {}),
+        };
+      }
+      if (e?.status === 400 && e.code === "validation_error") return { kind: "invalid_option" };
+      throw error;
+    }
+    return res?.alreadyResolved && res.resolution
+      ? { kind: "same", resolution: res.resolution, ...(res.artifactId ? { artifactId: res.artifactId } : {}) }
+      : { kind: "resolved", ...(res?.artifactId ? { artifactId: res.artifactId } : {}) };
+  }
+
+  /** #484 review — the daemon's internal route announces its own resolves (it
+   *  owns the store and the mark), so a client-side caller has nothing to take. */
+  async takeResolutionAnnouncement(_decisionId: string): Promise<ResolutionAnnouncement | null> {
+    return null;
+  }
+
+  /** #484 review — the daemon settles its own writes (the internal route owns
+   *  the flush); nothing to do client-side. */
+  async settleResolution(_decisionId: string, _committed: boolean): Promise<void> {}
+
   async getDecisionResponse(decisionId: string): Promise<{ optionId: string; reasoning?: string } | null> {
     const data = await this.get<{ response: any }>(`/decisions/${decisionId}/response`);
     return data.response ?? null;
@@ -811,9 +869,12 @@ export class DaemonClient implements IStore {
     // thrown Error so the MCP handler wrapper can map a 413/body_too_large to a
     // friendly, actionable "payload too large" tool result instead of leaking a
     // raw JSON-RPC protocol error to the agent.
-    const err = new Error(`[deepPairing] ${msg}`) as Error & { status?: number; code?: string };
+    const err = new Error(`[deepPairing] ${msg}`) as Error & { status?: number; code?: string; body?: unknown };
     err.status = res.status;
     if (typeof body?.code === "string") err.code = body.code;
+    // #484 review — keep the structured body too: an outcome-returning call
+    // (resolveDecisionAtomic) needs a refusal's payload, e.g. the winner.
+    err.body = body;
     throw err;
   }
 

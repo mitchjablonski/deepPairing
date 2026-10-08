@@ -1492,3 +1492,25 @@ describe("#464 review — the INTERNAL resolve route has the same stale-resolve 
     expect(sessions.get("s_g2")!.getDecision("dec_g")!.resolvedAt).toBe(before);
   });
 });
+
+describe("#464 (Astra) — concurrent resolves on the INTERNAL route", () => {
+  const j = (body: any) => ({ method: "POST" as const, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+  it("Promise.all(a, b): one write, one 200, one 409 carrying the winner", async () => {
+    await app.request(`/api/internal/sessions/s_race/register`, j({}));
+    await app.request(`/api/internal/sessions/s_race/decisions`, j({
+      decisionId: "dec_r", artifactId: "art_r", context: "Which?", options: [{ id: "a", title: "A" }, { id: "b", title: "B" }],
+    }));
+    const store = sessions.get("s_race")!;
+    const writes = vi.spyOn(store, "resolveDecision");
+    const [ra, rb] = await Promise.all([
+      app.request(`/api/internal/sessions/s_race/decisions/dec_r/resolve`, j({ optionId: "a", reasoning: "ra" })),
+      app.request(`/api/internal/sessions/s_race/decisions/dec_r/resolve`, j({ optionId: "b", reasoning: "rb" })),
+    ]);
+    expect([ra.status, rb.status].sort()).toEqual([200, 409]);
+    expect(writes).toHaveBeenCalledTimes(1);
+    const winner = ra.status === 200 ? "a" : "b";
+    expect(await (ra.status === 409 ? ra : rb).json()).toMatchObject({ code: "verdict_already_final", resolution: { optionId: winner } });
+    expect(store.getDecisionResponse("dec_r")?.optionId).toBe(winner);
+  });
+});
