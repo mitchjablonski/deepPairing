@@ -75,6 +75,11 @@ export function useHydrationStalled(): boolean {
  *  area. Honest: loading may still finish; Reload is an offer. The 10s bound
  *  stays (the snapshot's size isn't known before it arrives). */
 export const HYDRATION_STALLED_TEXT =
+  "Still loading this session — it's taking longer than usual. It may still finish.";
+/** The full sentence, for a context WITHOUT a Reload button next to it (every
+ *  current surface has one, so the short form above is what renders — no
+ *  "…reload. Reload"). */
+export const HYDRATION_STALLED_SENTENCE =
   "Still loading this session — it's taking longer than usual. It may still finish, or you can reload.";
 export const RELOAD_TITLE = "Reload the page — saved drafts are kept";
 /** The bar announcer's one-time line when the stall begins. */

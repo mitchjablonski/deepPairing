@@ -128,7 +128,7 @@ describe("#477 — a connected tab whose first snapshot never applies", () => {
     act(() => { vi.advanceTimersByTime(HYDRATION_STALL_MS - 500); });
     expect(line()).toBe("Checking what needs you…"); // not before the bound
     act(() => { vi.advanceTimersByTime(1000); });
-    expect(line()).toBe("⚠ Still loading this session — it's taking longer than usual. It may still finish, or you can reload.");
+    expect(line()).toBe("⚠ Still loading this session — it's taking longer than usual. It may still finish.");
     expect(screen.getByTestId("next-up-reload")).toHaveTextContent("Reload");
     act(() => useConnectionStore.setState({ hydrated: true } as any));
     expect(line()).not.toMatch(/Still loading/);
@@ -142,8 +142,9 @@ describe("#477 — a connected tab whose first snapshot never applies", () => {
     act(() => { vi.advanceTimersByTime(HYDRATION_STALL_MS + 500); });
     const banner = screen.getByTestId("hydration-stalled");
     // #487 review — honest: it may still finish; Reload is an offer.
-    expect(banner).toHaveTextContent("Still loading this session — it's taking longer than usual. It may still finish, or you can reload. Reload");
+    expect(banner).toHaveTextContent("Still loading this session — it's taking longer than usual. It may still finish. Reload");
     expect(banner.textContent).not.toMatch(/couldn't|never loaded/i);
+    expect(banner.textContent).not.toMatch(/reload\.\s*Reload/i); // no "…reload. Reload"
     expect(banner.closest("[role='status']")).not.toBeNull();
     act(() => useConnectionStore.setState({ hydrated: true } as any));
     expect(screen.queryByTestId("hydration-stalled")).not.toBeInTheDocument();
@@ -247,7 +248,7 @@ describe("#487 review — drafts across the 'still loading' Reload", () => {
 });
 
 describe("#487 review (Fable)", () => {
-  const STALL = "Still loading this session — it's taking longer than usual. It may still finish, or you can reload.";
+  const STALL = "Still loading this session — it's taking longer than usual. It may still finish.";
 
   it("MED 1 — stalled with artifacts: the panel shows them; the bar is ONE line (no prefix, no Decide/summary)", () => {
     vi.useFakeTimers({ now: Date.now() });
