@@ -1,4 +1,4 @@
-import type { Artifact } from "@deeppairing/shared";
+import { decisionCanAcceptAnswer, nonAnswerableVerb, type Artifact, type DecisionClosedStatus, type DecisionSupersededBy, type DecisionNonAnswerableStatus } from "@deeppairing/shared";
 import type { DecisionRecord } from "./store-interface.js";
 import { isCrossTerminalVerdictFlip } from "./verdict-guard.js";
 
@@ -45,7 +45,9 @@ export type DecisionResolveOutcome =
   | { kind: "same"; artifactId?: string; resolution: RecordedResolution }
   | { kind: "conflict"; artifactId?: string; currentStatus: string; at?: string; resolution?: RecordedResolution }
   | { kind: "invalid_option" }
-  | { kind: "no_record" };
+  | { kind: "no_record" }
+  /** #492 — the decision's artifact is closed: refuse, write nothing. */
+  | { kind: "closed"; artifactId?: string; currentStatus: DecisionClosedStatus; supersededBy?: DecisionSupersededBy; successorStatus?: DecisionNonAnswerableStatus };
 
 /** The stale-resolve rule for a decision RECORD (pure; called inside the
  *  store's critical section). Null = go ahead and resolve. */
@@ -115,4 +117,80 @@ export function withDecisionResolveLock<T>(store: object, fn: () => Promise<T>):
   const next = prev.catch(() => undefined).then(fn);
   resolveChains.set(store, next.catch(() => undefined));
   return next;
+}
+
+
+/** #492 — backing-artifact statuses that close a decision to new answers. */
+export const CLOSED_DECISION_STATUSES: ReadonlySet<string> = new Set(["superseded", "retracted", "obsolete"]);
+
+/**
+ * #492 — the closed-decision rule (pure; called inside the store's critical
+ * section AFTER the stale-resolve rule, so an identical re-pick of a recorded
+ * answer stays a no-op and a different pick on an answered one stays the 409
+ * with the winner). A closed, unanswered decision refuses any new answer; for a
+ * superseded one it names the newest version so the card can link to it.
+ */
+export function classifyClosedDecision(
+  backing: Artifact | undefined,
+  artifacts: Artifact[],
+): Extract<DecisionResolveOutcome, { kind: "closed" }> | null {
+  if (!backing) return null;
+  // Follow the version chain (parentId) to the newest successor.
+  let latest = backing;
+  const seen = new Set<string>([backing.id]);
+  for (;;) {
+    const next = artifacts.find((a) => a.parentId === latest.id && !seen.has(a.id));
+    if (!next) break;
+    seen.add(next.id);
+    latest = next;
+  }
+  // #493 review — the REVISE WINDOW: a revision creates v2 before v1 is marked
+  // superseded (separate calls). An artifact that already has a successor is
+  // superseded for answering purposes, whatever its own status says yet.
+  const hasSuccessor = latest !== backing;
+  const status = hasSuccessor ? "superseded" : backing.status;
+  // The shared answerability rule. A rejected / sent-back decision carries a
+  // VERDICT and is refused earlier as verdict_already_final (with the
+  // recorded state); every other non-answerable state closes here.
+  if (decisionCanAcceptAnswer(status) || !CLOSED_DECISION_STATUSES.has(status)) return null;
+  const outcome: Extract<DecisionResolveOutcome, { kind: "closed" }> = {
+    kind: "closed",
+    artifactId: backing.id,
+    currentStatus: status as DecisionClosedStatus,
+  };
+  if (hasSuccessor) {
+    if (!decisionCanAcceptAnswer(latest.status)) {
+      // #493 review — the newest version can't take an answer either (rejected,
+      // withdrawn, closed, …): nothing to answer, so no link to a dead card.
+      outcome.successorStatus = latest.status as DecisionNonAnswerableStatus;
+    } else {
+      const decisionId = (latest.content as { decisionId?: unknown } | null)?.decisionId;
+      outcome.supersededBy = { artifactId: latest.id, ...(typeof decisionId === "string" && decisionId ? { decisionId } : {}) };
+    }
+  }
+  return outcome;
+}
+
+/** #492 — the HTTP body for a `closed` outcome (409 decision_closed). */
+export function closedResolveBody(
+  outcome: Extract<DecisionResolveOutcome, { kind: "closed" }>,
+  decisionId: string,
+): Record<string, unknown> {
+  const message = outcome.currentStatus === "superseded" && outcome.successorStatus
+    ? `This question was revised, and the newer version was ${nonAnswerableVerb(outcome.successorStatus)} too — there's nothing to answer here.`
+    : outcome.currentStatus === "superseded"
+    ? "This question was revised — answer the new version. Your answer to the old one wasn't recorded."
+    : outcome.currentStatus === "retracted"
+      ? "Claude withdrew this question, so your answer wasn't recorded."
+      : "This question was closed — it was overtaken by new information, so your answer wasn't recorded.";
+  return {
+    error: "decision_closed",
+    code: "decision_closed",
+    currentStatus: outcome.currentStatus,
+    decisionId,
+    ...(outcome.artifactId ? { artifactId: outcome.artifactId } : {}),
+    ...(outcome.supersededBy ? { supersededBy: outcome.supersededBy } : {}),
+    ...(outcome.successorStatus ? { successorStatus: outcome.successorStatus } : {}),
+    message,
+  };
 }

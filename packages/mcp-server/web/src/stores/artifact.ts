@@ -335,7 +335,10 @@ async function toastApiError(action: string, err: unknown): Promise<void> {
 /** #460 — the status a `verdict_already_final` refusal says the artifact is
  *  really at, or null for any other error. */
 function staleVerdictStatus(err: unknown): ArtifactStatus | null {
-  if (!(err instanceof ApiError) || err.code !== "verdict_already_final") return null;
+  // #492 — a decision_closed refusal carries the closed status the same way:
+  // the stale card flips to it (and renders its closed state) instead of
+  // rolling back to an actionable draft.
+  if (!(err instanceof ApiError) || (err.code !== "verdict_already_final" && err.code !== "decision_closed")) return null;
   const s = err.details?.currentStatus;
   return typeof s === "string" ? (s as ArtifactStatus) : null;
 }

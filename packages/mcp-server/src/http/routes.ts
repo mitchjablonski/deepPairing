@@ -9,7 +9,7 @@ import { ERROR_CODES } from "../error-codes.js";
 import type { IStore } from "../store/store-interface.js";
 import { FileStore, LEDGER_EXEMPT_REJECT_TYPES } from "../store/file-store.js";
 import { isCrossTerminalVerdictFlip } from "../store/verdict-guard.js";
-import { staleResolveBody, withDecisionResolveLock } from "../store/decision-resolve-guard.js";
+import { staleResolveBody, closedResolveBody, classifyClosedDecision, withDecisionResolveLock } from "../store/decision-resolve-guard.js";
 import { isSessionReviewConflictError } from "../store/session-records.js";
 import type { LiveDecisionSource } from "../store/session-scan.js";
 import {
@@ -792,6 +792,12 @@ export function createHttpRoutes(
         // reports ONLY what is persisted: an earlier request may have written the
         // answer in memory and then failed its flush (lock busy → 503). Flush
         // first; a failure surfaces as that same error, never as success.
+        // #492 — a closed decision (superseded / retracted / obsolete) took no
+        // answer: 409 decision_closed, nothing written, nothing broadcast.
+        if (outcome.kind === "closed") {
+          log(`[decision] REFUSED resolve on closed decision ${decisionId} (${outcome.currentStatus})`);
+          return c.json(closedResolveBody(outcome, decisionId), 409);
+        }
         if (outcome.kind === "same" || outcome.kind === "conflict") {
           await store.forceFlush();
           // #484 review — this flush may be the FIRST successful persistence of
@@ -856,6 +862,11 @@ export function createHttpRoutes(
         // stale tab refreshes. Only the fallback branch needs this: with a record,
         // store.resolveDecision owns the (identically guarded) advance and this
         // route writes no status at all.
+        // #492 — the no-record fallback refuses a closed artifact the same way.
+        if (!decision && fallbackArtifact) {
+          const closed = classifyClosedDecision(fallbackArtifact, await store.getArtifacts());
+          if (closed) return c.json(closedResolveBody(closed, decisionId), 409);
+        }
         if (targetArtifactId && !decision && fallbackArtifact) {
           if (isCrossTerminalVerdictFlip(fallbackArtifact.status, "approved", "ui_decision_resolve")) {
             const at = fallbackArtifact.updatedAt;

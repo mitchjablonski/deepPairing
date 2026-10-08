@@ -19769,6 +19769,42 @@ var DecisionResponseSchema = external_exports.object({
   confidence: DecisionConfidenceSchema.optional(),
   predictedOutcome: external_exports.string().optional()
 });
+var DecisionClosedStatusSchema = external_exports.enum(["superseded", "retracted", "obsolete"]);
+var DECISION_NON_ANSWERABLE_STATUSES = ["rejected", "revised", "superseded", "retracted", "obsolete"];
+var DecisionNonAnswerableStatusSchema = external_exports.enum(DECISION_NON_ANSWERABLE_STATUSES);
+function decisionCanAcceptAnswer(status) {
+  return !DECISION_NON_ANSWERABLE_STATUSES.includes(status);
+}
+function nonAnswerableVerb(status) {
+  switch (status) {
+    case "rejected":
+      return "rejected";
+    case "revised":
+      return "sent back for changes";
+    case "superseded":
+      return "replaced";
+    case "retracted":
+      return "withdrawn";
+    default:
+      return "closed";
+  }
+}
+var DecisionSupersededBySchema = external_exports.object({
+  artifactId: external_exports.string(),
+  decisionId: external_exports.string().optional()
+});
+var DecisionClosedRefusalSchema = external_exports.object({
+  error: external_exports.literal("decision_closed").optional(),
+  code: external_exports.literal("decision_closed"),
+  currentStatus: DecisionClosedStatusSchema,
+  decisionId: external_exports.string().optional(),
+  artifactId: external_exports.string().optional(),
+  supersededBy: DecisionSupersededBySchema.optional(),
+  /** #493 review — the newest version was itself closed: no `supersededBy`
+   *  link (nothing to answer), and this says why. */
+  successorStatus: DecisionNonAnswerableStatusSchema.optional(),
+  message: external_exports.string().optional()
+});
 
 // ../shared/dist/schemas/message.js
 var TextEventSchema = external_exports.object({
@@ -23873,6 +23909,9 @@ var ERROR_CODES = {
   /** Context bank — close-out on a decision the human actually ANSWERED. Closing
    *  it out would overwrite real history with "retired, nobody chose". */
   decision_already_resolved: "decision_already_resolved",
+  /** #492 — a resolve on a decision whose backing artifact is closed
+   *  (superseded / retracted / obsolete): nothing is written. */
+  decision_closed: "decision_closed",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
   comment_not_in_session: "comment_not_in_session",
   /** #172 — take-counter/insist targeted a suggestion the agent hasn't countered. */
@@ -24022,6 +24061,48 @@ function withDecisionResolveLock(store, fn) {
   const next = prev.catch(() => void 0).then(fn);
   resolveChains.set(store, next.catch(() => void 0));
   return next;
+}
+var CLOSED_DECISION_STATUSES = /* @__PURE__ */ new Set(["superseded", "retracted", "obsolete"]);
+function classifyClosedDecision(backing, artifacts) {
+  if (!backing) return null;
+  let latest = backing;
+  const seen = /* @__PURE__ */ new Set([backing.id]);
+  for (; ; ) {
+    const next = artifacts.find((a) => a.parentId === latest.id && !seen.has(a.id));
+    if (!next) break;
+    seen.add(next.id);
+    latest = next;
+  }
+  const hasSuccessor = latest !== backing;
+  const status = hasSuccessor ? "superseded" : backing.status;
+  if (decisionCanAcceptAnswer(status) || !CLOSED_DECISION_STATUSES.has(status)) return null;
+  const outcome = {
+    kind: "closed",
+    artifactId: backing.id,
+    currentStatus: status
+  };
+  if (hasSuccessor) {
+    if (!decisionCanAcceptAnswer(latest.status)) {
+      outcome.successorStatus = latest.status;
+    } else {
+      const decisionId = latest.content?.decisionId;
+      outcome.supersededBy = { artifactId: latest.id, ...typeof decisionId === "string" && decisionId ? { decisionId } : {} };
+    }
+  }
+  return outcome;
+}
+function closedResolveBody(outcome, decisionId) {
+  const message = outcome.currentStatus === "superseded" && outcome.successorStatus ? `This question was revised, and the newer version was ${nonAnswerableVerb(outcome.successorStatus)} too \u2014 there's nothing to answer here.` : outcome.currentStatus === "superseded" ? "This question was revised \u2014 answer the new version. Your answer to the old one wasn't recorded." : outcome.currentStatus === "retracted" ? "Claude withdrew this question, so your answer wasn't recorded." : "This question was closed \u2014 it was overtaken by new information, so your answer wasn't recorded.";
+  return {
+    error: "decision_closed",
+    code: "decision_closed",
+    currentStatus: outcome.currentStatus,
+    decisionId,
+    ...outcome.artifactId ? { artifactId: outcome.artifactId } : {},
+    ...outcome.supersededBy ? { supersededBy: outcome.supersededBy } : {},
+    ...outcome.successorStatus ? { successorStatus: outcome.successorStatus } : {},
+    message
+  };
 }
 
 // src/store/file-store.ts
@@ -27537,6 +27618,8 @@ var FileStore = class _FileStore {
     const backing = this.artifacts.find((a) => a.id === dec.artifactId) ?? this.artifacts.find((a) => a.type === "decision" && (a.content?.decisionId === decisionId || a.id === decisionId));
     const stale = classifyStaleResolve(dec, backing, optionId);
     if (stale) return stale;
+    const closed = classifyClosedDecision(backing, this.artifacts);
+    if (closed) return closed;
     const opts = dec.options;
     if (Array.isArray(opts) && opts.length > 0 && !opts.some((o) => o?.id === optionId)) {
       return { kind: "invalid_option" };
@@ -31928,6 +32011,10 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       const outcome = await store.resolveDecisionAtomic(decisionId, optionId, reasoning);
       let committed = false;
       try {
+        if (outcome.kind === "closed") {
+          log2(`[decision] REFUSED resolve on closed decision ${decisionId} (${outcome.currentStatus})`);
+          return c.json(closedResolveBody(outcome, decisionId), 409);
+        }
         if (outcome.kind === "same" || outcome.kind === "conflict") {
           await store.forceFlush();
           const late = await store.takeResolutionAnnouncement(decisionId);
@@ -31957,6 +32044,10 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
             (a) => a.type === "decision" && (a.content?.decisionId === decisionId || a.id === decisionId)
           );
           targetArtifactId = fallbackArtifact?.id;
+        }
+        if (!decision && fallbackArtifact) {
+          const closed = classifyClosedDecision(fallbackArtifact, await store.getArtifacts());
+          if (closed) return c.json(closedResolveBody(closed, decisionId), 409);
         }
         if (targetArtifactId && !decision && fallbackArtifact) {
           if (isCrossTerminalVerdictFlip(fallbackArtifact.status, "approved", "ui_decision_resolve")) {
@@ -33711,6 +33802,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       const outcome = r.store.resolveDecisionAtomic(decisionId, optionId, reasoning, prediction);
       let committed = false;
       try {
+        if (outcome.kind === "closed") return c.json(closedResolveBody(outcome, decisionId), 409);
         if (outcome.kind === "same" || outcome.kind === "conflict") {
           await r.store.forceFlush();
           const late = r.store.takeResolutionAnnouncement(decisionId);
