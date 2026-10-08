@@ -24672,6 +24672,7 @@ var StdioServerTransport = class {
 
 // src/store/global-store.ts
 import fs3 from "node:fs";
+import { createHash } from "node:crypto";
 import os2 from "node:os";
 import path2 from "node:path";
 
@@ -28377,15 +28378,18 @@ var GlobalStore = class _GlobalStore {
     } catch {
     }
     const removals = salvage(raw);
-    const seq = Math.max(0, ...Object.values(removals));
-    const backup = `${this.removalsPath()}.corrupt-${Date.now()}`;
-    try {
-      fs3.copyFileSync(this.removalsPath(), backup);
-    } catch {
+    const seqMatch = raw.match(/"seq"\s*:\s*(\d+)/);
+    const seq = Math.max(0, seqMatch ? Number(seqMatch[1]) : 0, ...Object.values(removals));
+    const backup = `${this.removalsPath()}.corrupt-${createHash("sha256").update(raw).digest("hex").slice(0, 12)}`;
+    if (!fs3.existsSync(backup)) {
+      try {
+        fs3.copyFileSync(this.removalsPath(), backup);
+      } catch {
+      }
+      console.error(
+        `[deepPairing] GlobalStore: the removal record ${this.removalsPath()} is corrupt; backed up to ${backup} and salvaged ${Object.keys(removals).length} removal(s). Check the backup if a removed stance reappears.`
+      );
     }
-    console.error(
-      `[deepPairing] GlobalStore: the removal record ${this.removalsPath()} is corrupt; backed up to ${backup} and salvaged ${Object.keys(removals).length} removal(s). Check the backup if a removed stance reappears.`
-    );
     return { seq, removals };
   }
   /** The current removal sequence — captured by a mirror before its first
@@ -29458,7 +29462,7 @@ ${assembled.join("\n")}`;
 }
 
 // src/mcp/tool-helpers.ts
-import { createHash } from "node:crypto";
+import { createHash as createHash2 } from "node:crypto";
 
 // src/mcp/elicit.ts
 var ELICIT_APPROVE_SCHEMA = {
@@ -30178,7 +30182,7 @@ var PresentIdempotencyRegistry = class {
   }
 };
 function hashPresentArgs(args) {
-  return createHash("sha256").update(stableStringify(args)).digest("hex");
+  return createHash2("sha256").update(stableStringify(args)).digest("hex");
 }
 function stableStringify(v2) {
   if (v2 === null || typeof v2 !== "object") {
@@ -35724,7 +35728,7 @@ function authorizeReviewPost(state, opts) {
 }
 
 // src/store/review-post-journal.ts
-import { createHash as createHash2, randomUUID } from "node:crypto";
+import { createHash as createHash3, randomUUID } from "node:crypto";
 var digestSchema = external_exports.string().regex(/^[0-9a-f]{64}$/);
 var eventSchema = external_exports.enum(["COMMENT", "REQUEST_CHANGES", "APPROVE"]);
 var timestampSchema = external_exports.iso.datetime();
@@ -35814,7 +35818,7 @@ function reviewPostDigest(value) {
     }
     return v2;
   };
-  return createHash2("sha256").update(JSON.stringify(stable(value))).digest("hex");
+  return createHash3("sha256").update(JSON.stringify(stable(value))).digest("hex");
 }
 function resultMatches(identity, result) {
   const states = { COMMENT: "COMMENTED", REQUEST_CHANGES: "CHANGES_REQUESTED", APPROVE: "APPROVED" };

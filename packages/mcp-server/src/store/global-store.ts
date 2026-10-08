@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { writeJsonAtomic } from "./atomic-write.js";
@@ -410,13 +411,22 @@ export class GlobalStore {
       }
     } catch { /* fall through to salvage */ }
     const removals = salvage(raw);
-    const seq = Math.max(0, ...Object.values(removals));
-    const backup = `${this.removalsPath()}.corrupt-${Date.now()}`;
-    try { fs.copyFileSync(this.removalsPath(), backup); } catch { /* best effort */ }
-    console.error(
-      `[deepPairing] GlobalStore: the removal record ${this.removalsPath()} is corrupt; backed up to ${backup} and salvaged ` +
-      `${Object.keys(removals).length} removal(s). Check the backup if a removed stance reappears.`,
-    );
+    // The counter must never go backwards (a reused number would let a
+    // removal look older than a mirror queued before it): take the larger of
+    // a still-readable "seq" and the highest per-concept entry.
+    const seqMatch = raw.match(/"seq"\s*:\s*(\d+)/);
+    const seq = Math.max(0, seqMatch ? Number(seqMatch[1]) : 0, ...Object.values(removals));
+    // One backup per corruption, not per read: the name is the content's
+    // hash, so every later read of the same bad bytes (each mirror reads the
+    // sequence) reuses it instead of piling up copies.
+    const backup = `${this.removalsPath()}.corrupt-${createHash("sha256").update(raw).digest("hex").slice(0, 12)}`;
+    if (!fs.existsSync(backup)) {
+      try { fs.copyFileSync(this.removalsPath(), backup); } catch { /* best effort */ }
+      console.error(
+        `[deepPairing] GlobalStore: the removal record ${this.removalsPath()} is corrupt; backed up to ${backup} and salvaged ` +
+        `${Object.keys(removals).length} removal(s). Check the backup if a removed stance reappears.`,
+      );
+    }
     return { seq, removals };
   }
 

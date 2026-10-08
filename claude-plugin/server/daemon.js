@@ -2288,7 +2288,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes4, createHash: createHash2 } = __require("crypto");
+    var { randomBytes: randomBytes4, createHash: createHash3 } = __require("crypto");
     var { Duplex, Readable: Readable2 } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -2956,7 +2956,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest = createHash2("sha1").update(key + GUID).digest("base64");
+        const digest = createHash3("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -3325,7 +3325,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash: createHash2 } = __require("crypto");
+    var { createHash: createHash3 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -3632,7 +3632,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest = createHash2("sha1").update(key + GUID).digest("base64");
+        const digest = createHash3("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -23993,6 +23993,7 @@ function nanoid3(size = 21) {
 
 // src/store/global-store.ts
 import fs7 from "node:fs";
+import { createHash } from "node:crypto";
 import os4 from "node:os";
 import path6 from "node:path";
 
@@ -24490,15 +24491,18 @@ var GlobalStore = class _GlobalStore {
     } catch {
     }
     const removals = salvage(raw2);
-    const seq = Math.max(0, ...Object.values(removals));
-    const backup = `${this.removalsPath()}.corrupt-${Date.now()}`;
-    try {
-      fs7.copyFileSync(this.removalsPath(), backup);
-    } catch {
+    const seqMatch = raw2.match(/"seq"\s*:\s*(\d+)/);
+    const seq = Math.max(0, seqMatch ? Number(seqMatch[1]) : 0, ...Object.values(removals));
+    const backup = `${this.removalsPath()}.corrupt-${createHash("sha256").update(raw2).digest("hex").slice(0, 12)}`;
+    if (!fs7.existsSync(backup)) {
+      try {
+        fs7.copyFileSync(this.removalsPath(), backup);
+      } catch {
+      }
+      console.error(
+        `[deepPairing] GlobalStore: the removal record ${this.removalsPath()} is corrupt; backed up to ${backup} and salvaged ${Object.keys(removals).length} removal(s). Check the backup if a removed stance reappears.`
+      );
     }
-    console.error(
-      `[deepPairing] GlobalStore: the removal record ${this.removalsPath()} is corrupt; backed up to ${backup} and salvaged ${Object.keys(removals).length} removal(s). Check the backup if a removed stance reappears.`
-    );
     return { seq, removals };
   }
   /** The current removal sequence — captured by a mirror before its first
@@ -25975,7 +25979,7 @@ function appendPostedReview(projectRoot2, sessionId, record2) {
 // src/store/review-post-journal.ts
 import fs13 from "node:fs";
 import path12 from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash as createHash2, randomUUID } from "node:crypto";
 var digestSchema = external_exports.string().regex(/^[0-9a-f]{64}$/);
 var eventSchema = external_exports.enum(["COMMENT", "REQUEST_CHANGES", "APPROVE"]);
 var timestampSchema = external_exports.iso.datetime();
@@ -26065,7 +26069,7 @@ function reviewPostDigest(value) {
     }
     return v;
   };
-  return createHash("sha256").update(JSON.stringify(stable(value))).digest("hex");
+  return createHash2("sha256").update(JSON.stringify(stable(value))).digest("hex");
 }
 function resultMatches(identity, result) {
   const states = { COMMENT: "COMMENTED", REQUEST_CHANGES: "CHANGES_REQUESTED", APPROVE: "APPROVED" };
@@ -26251,7 +26255,7 @@ var ReviewPostJournal = class {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4096) {
       throw new ReviewPostJournalError("invalid", "Claim must be a regular file of at most 4096 bytes; inspect it manually.");
     }
-    return createHash("sha256").update(readBoundedFile(this.claimPath, 4096)).digest("hex");
+    return createHash2("sha256").update(readBoundedFile(this.claimPath, 4096)).digest("hex");
   }
   /** Operator-only, offline coordination: this is NOT a process-liveness proof.
    * The explicit assertion excludes concurrent replacement after comparison. */

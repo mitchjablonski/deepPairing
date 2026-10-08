@@ -197,6 +197,26 @@ describe("#488 review — clock, corruption, retire races, queue bounds", () => 
     expect(JSON.parse(fs.readFileSync(sidecar, "utf8"))).toEqual({ seq: 3, removals: { redis: 1, mongo: 2, kafka: 3 } });
   });
 
+  it("a corrupt removal record is backed up once per corruption, not once per mirror", () => {
+    const sidecar = `${fx.ledgerPath}.removed.json`;
+    fs.mkdirSync(path.dirname(sidecar), { recursive: true });
+    fs.writeFileSync(sidecar, '{"seq": 2, "removals": {"redis": 1');
+    const store = publishingStore();
+    for (let i = 0; i < 6; i++) store.recordRejectedApproach({ description: `Use thing ${i}`, concept: `thing ${i}` });
+    const backups = fs.readdirSync(path.dirname(sidecar)).filter((f) => f.startsWith(path.basename(sidecar) + ".corrupt-"));
+    expect(backups).toHaveLength(1);
+  });
+
+  it("salvage never moves the removal sequence backwards", async () => {
+    const { getGlobalStore } = await import("../global-store.js");
+    const sidecar = `${fx.ledgerPath}.removed.json`;
+    getGlobalStore().recordInstance("kafka", { project: "p", sessionId: "s", verdict: "rejected" });
+    // The counter (9) is ahead of every surviving per-concept entry (2, 3).
+    fs.writeFileSync(sidecar, '{"seq": 9, "removals": {"redis": 2, "mongo": 3');
+    expect(getGlobalStore().removeConcept("kafka")).not.toBeNull();
+    expect(JSON.parse(fs.readFileSync(sidecar, "utf8"))).toEqual({ seq: 10, removals: { redis: 2, mongo: 3, kafka: 10 } });
+  });
+
   it("a retire that can't check the queue (lock busy) publishes no stray counter-approval", () => {
     const store = publishingStore();
     holdLedgerLock();
