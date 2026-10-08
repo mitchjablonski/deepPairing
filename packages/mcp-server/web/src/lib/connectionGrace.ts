@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { create } from "zustand";
-import { useConnectionStore } from "../stores/connection";
+import { useConnectionStore, selectHydratedForBinding } from "../stores/connection";
 import { hasUnsavedText } from "./unsavedText";
 
 /**
@@ -52,7 +52,10 @@ export function useConnectionGraceDriver(): void {
   }, []);
   // #477 — the hydration watchdog: armed while connected-but-not-hydrated;
   // a hydration (however late) or a disconnect clears it.
-  const hydrated = useConnectionStore((s) => s.hydrated);
+  // #487 review (Sol P2) — evidence for the CURRENT binding only: a switch to
+  // another session/project re-arms the deadline instead of inheriting the
+  // previous binding's applied snapshot.
+  const hydrated = useConnectionStore(selectHydratedForBinding);
   useEffect(() => {
     if (!connected || hydrated) {
       if (useConnectionGraceStore.getState().hydrationStalled) useConnectionGraceStore.setState({ hydrationStalled: false });

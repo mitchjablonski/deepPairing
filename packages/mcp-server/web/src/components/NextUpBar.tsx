@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Artifact } from "@deeppairing/shared";
 import { useArtifactStore, artifactStoreGeneration, isBackfilled } from "../stores/artifact";
-import { useConnectionStore } from "../stores/connection";
+import { useConnectionStore, selectHydratedForBinding } from "../stores/connection";
 import { useReplayStore } from "../stores/replay";
 import { usePreflightBlockStore } from "../stores/preflightBlocks";
 import { computeAttention, type Attention, type AttentionItem, type FailureKind, type SummaryLane } from "../lib/attention";
@@ -276,7 +276,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   // that land while the store is settling (not hydrated yet, or within 750ms of
   // a store reset — the arrival region's own hydration window) move the
   // baseline silently; only settled changes are announced.
-  const hydrated = useConnectionStore((s) => s.hydrated);
+  const hydrated = useConnectionStore(selectHydratedForBinding); // #487 — current binding only
   const generation = artifactStoreGeneration();
   const lastGeneration = useRef(generation);
   const settleUntil = useRef(0);

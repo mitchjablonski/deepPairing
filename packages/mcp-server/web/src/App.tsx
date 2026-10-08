@@ -39,7 +39,7 @@ import { ContextBankView } from "./components/ContextBankView";
 import { SkillLoadBanner } from "./components/SkillLoadBanner";
 import { useArtifactStore } from "./stores/artifact";
 import { useReplayStore } from "./stores/replay";
-import { useConnectionStore } from "./stores/connection";
+import { useConnectionStore, selectHydratedForBinding } from "./stores/connection";
 import { usePreflightBlockStore } from "./stores/preflightBlocks";
 import { useCrossProjectStore } from "./stores/crossProject";
 import { useContextBankStore } from "./stores/contextBank";
@@ -78,7 +78,9 @@ function App() {
   // C5 — no IdleHome/WaitingForClaude flash on refresh: skeleton until the
   // first `connected` payload lands, bounded by a grace timer so a dead
   // daemon still falls through to the real routing (IdleHome is then correct).
-  const hydrated = useConnectionStore((s) => s.hydrated);
+  // #487 review (Sol P2) — hydrated FOR THE CURRENT BINDING (session @
+  // project): a switch doesn't inherit the previous binding's snapshot.
+  const hydrated = useConnectionStore(selectHydratedForBinding);
   const [hydrationGrace, setHydrationGrace] = useState(true);
   useEffect(() => {
     // Review: re-arm whenever hydration is pending (mount AND project switch,
@@ -88,7 +90,12 @@ function App() {
     const t = setTimeout(() => setHydrationGrace(false), 4000);
     return () => clearTimeout(t);
   }, [hydrated]);
-  const showHydrationSkeleton = !hydrated && hydrationGrace;
+  // #487 review (Sol P2) — "unknown" is not "known-empty". While CONNECTED but
+  // the current binding has no applied snapshot, the main area keeps the
+  // skeleton (not WaitingForClaude/IdleHome, which assert an empty session)
+  // until the watchdog fires, then an honest still-loading placeholder. The 4s
+  // grace still lets a DEAD daemon fall through to the real routing.
+  const showHydrationSkeleton = !hydrated && (hydrationGrace || connected);
 
   // C2 review — auto-bind an unbound tab when there's EXACTLY ONE active
   // session: an unbound composer posts to the daemon's default store (map
@@ -959,7 +966,15 @@ function App() {
           </div>
         }>
           {showHydrationSkeleton
-            ? <HydrationSkeleton />
+            ? (hydrationStalled
+              // #487 review (Sol P2) — past the watchdog the main area says
+              // the same honest thing as the banner/bar (not live: the banner
+              // or the bar is the one announcement).
+              ? <div className="p-5 text-xs text-text-secondary" data-testid="hydration-unknown">
+                  {HYDRATION_STALLED_TEXT} for this session — it may still finish.{" "}
+                  <button type="button" onClick={reloadPage} className="underline text-accent-blue">Reload</button>
+                </div>
+              : <HydrationSkeleton />)
             : hasArtifacts
             ? <ArtifactPanel />
             : connected && activeSessions.length > 0 && agentRecentlyActive
