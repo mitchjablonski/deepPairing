@@ -19781,6 +19781,9 @@ var DecisionClosedRefusalSchema = external_exports.object({
   decisionId: external_exports.string().optional(),
   artifactId: external_exports.string().optional(),
   supersededBy: DecisionSupersededBySchema.optional(),
+  /** #493 review — the newest version was itself closed: no `supersededBy`
+   *  link (nothing to answer), and this says why. */
+  successorStatus: DecisionClosedStatusSchema.optional(),
   message: external_exports.string().optional()
 });
 
@@ -24042,30 +24045,35 @@ function withDecisionResolveLock(store, fn) {
 }
 var CLOSED_DECISION_STATUSES = /* @__PURE__ */ new Set(["superseded", "retracted", "obsolete"]);
 function classifyClosedDecision(backing, artifacts) {
-  if (!backing || !CLOSED_DECISION_STATUSES.has(backing.status)) return null;
+  if (!backing) return null;
+  let latest = backing;
+  const seen = /* @__PURE__ */ new Set([backing.id]);
+  for (; ; ) {
+    const next = artifacts.find((a) => a.parentId === latest.id && !seen.has(a.id));
+    if (!next) break;
+    seen.add(next.id);
+    latest = next;
+  }
+  const hasSuccessor = latest !== backing;
+  const status = hasSuccessor ? "superseded" : backing.status;
+  if (!CLOSED_DECISION_STATUSES.has(status)) return null;
   const outcome = {
     kind: "closed",
     artifactId: backing.id,
-    currentStatus: backing.status
+    currentStatus: status
   };
-  if (backing.status === "superseded") {
-    let current = backing;
-    const seen = /* @__PURE__ */ new Set([backing.id]);
-    for (; ; ) {
-      const next = artifacts.find((a) => a.parentId === current.id && !seen.has(a.id));
-      if (!next) break;
-      seen.add(next.id);
-      current = next;
-    }
-    if (current !== backing) {
-      const decisionId = current.content?.decisionId;
-      outcome.supersededBy = { artifactId: current.id, ...typeof decisionId === "string" && decisionId ? { decisionId } : {} };
+  if (hasSuccessor) {
+    if (CLOSED_DECISION_STATUSES.has(latest.status)) {
+      outcome.successorStatus = latest.status;
+    } else {
+      const decisionId = latest.content?.decisionId;
+      outcome.supersededBy = { artifactId: latest.id, ...typeof decisionId === "string" && decisionId ? { decisionId } : {} };
     }
   }
   return outcome;
 }
 function closedResolveBody(outcome, decisionId) {
-  const message = outcome.currentStatus === "superseded" ? "This question was revised \u2014 answer the new version. Your answer to the old one wasn't recorded." : outcome.currentStatus === "retracted" ? "Claude withdrew this question, so your answer wasn't recorded." : "This question was closed \u2014 it was overtaken by new information, so your answer wasn't recorded.";
+  const message = outcome.currentStatus === "superseded" && outcome.successorStatus ? `This question was revised, and the newer version was ${outcome.successorStatus === "retracted" ? "withdrawn" : "closed"} too \u2014 there's nothing to answer here.` : outcome.currentStatus === "superseded" ? "This question was revised \u2014 answer the new version. Your answer to the old one wasn't recorded." : outcome.currentStatus === "retracted" ? "Claude withdrew this question, so your answer wasn't recorded." : "This question was closed \u2014 it was overtaken by new information, so your answer wasn't recorded.";
   return {
     error: "decision_closed",
     code: "decision_closed",
@@ -24073,6 +24081,7 @@ function closedResolveBody(outcome, decisionId) {
     decisionId,
     ...outcome.artifactId ? { artifactId: outcome.artifactId } : {},
     ...outcome.supersededBy ? { supersededBy: outcome.supersededBy } : {},
+    ...outcome.successorStatus ? { successorStatus: outcome.successorStatus } : {},
     message
   };
 }

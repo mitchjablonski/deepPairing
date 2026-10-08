@@ -31,9 +31,10 @@ afterEach(() => {
 
 describe("#492 — a stale card learns its decision was closed", () => {
   it("superseded: after the 409 the card says 'revised — answer the new version', links it, and has no Select", async () => {
+    // The stale tab hasn't seen v2 yet (its card still offers Select).
     const v1 = decision("art_d", "dec_d");
     const v2 = decision("art_d2", "dec_d2", { parentId: "art_d", version: 2 });
-    useArtifactStore.setState({ artifacts: [v1, v2] } as any);
+    useArtifactStore.setState({ artifacts: [v1] } as any);
     vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
       if (String(url).includes("/api/decisions/dec_d")) {
         return Promise.resolve(new Response(JSON.stringify({
@@ -48,6 +49,8 @@ describe("#492 — a stale card learns its decision was closed", () => {
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Select Redis" })); });
     // The store applied the refusal's status; re-render the view with it.
     await waitFor(() => expect(useArtifactStore.getState().artifacts.find((a) => a.id === "art_d")?.status).toBe("superseded"));
+    // The refusal re-fetches the owning session (#460), which brings v2 in.
+    act(() => useArtifactStore.getState().addArtifact(v2));
     rerender(<DecisionArtifactView artifact={useArtifactStore.getState().artifacts.find((a) => a.id === "art_d")!} />);
     expect(screen.getByTestId("decision-closed")).toHaveTextContent("This question was revised — answer the new version.");
     expect(screen.queryAllByRole("button", { name: /^Select / })).toHaveLength(0);
@@ -61,6 +64,28 @@ describe("#492 — a stale card learns its decision was closed", () => {
     render(<DecisionArtifactView artifact={v1} />);
     expect(screen.getByTestId("decision-closed")).toHaveTextContent("Claude withdrew this question");
     expect(screen.getByText("Redis")).toBeInTheDocument();
+    expect(screen.queryAllByRole("button", { name: /^Select / })).toHaveLength(0);
+  });
+});
+
+describe("#493 review — the card around revisions", () => {
+  it("revise window: v1 still draft but v2 exists → the card is already 'revised' with a link, no Select", () => {
+    const v1 = decision("art_d", "dec_d");
+    const v2 = decision("art_d2", "dec_d2", { parentId: "art_d", version: 2 });
+    useArtifactStore.setState({ artifacts: [v1, v2] } as any);
+    render(<DecisionArtifactView artifact={v1} />);
+    expect(screen.getByTestId("decision-closed")).toHaveTextContent("This question was revised — answer the new version.");
+    expect(screen.getByRole("button", { name: "Open the new version →" })).toBeInTheDocument();
+    expect(screen.queryAllByRole("button", { name: /^Select / })).toHaveLength(0);
+  });
+
+  it("v1 → v2 (retracted): 'the newer version was withdrawn too', and no link to the withdrawn card", () => {
+    const v1 = decision("art_d", "dec_d", { status: "superseded" });
+    const v2 = decision("art_d2", "dec_d2", { parentId: "art_d", version: 2, status: "retracted" });
+    useArtifactStore.setState({ artifacts: [v1, v2] } as any);
+    render(<DecisionArtifactView artifact={v1} />);
+    expect(screen.getByTestId("decision-closed")).toHaveTextContent("This question was revised, and the newer version was withdrawn too — there's nothing to answer here.");
+    expect(screen.queryByRole("button", { name: "Open the new version →" })).not.toBeInTheDocument();
     expect(screen.queryAllByRole("button", { name: /^Select / })).toHaveLength(0);
   });
 });

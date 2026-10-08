@@ -80,6 +80,9 @@ export const DecisionClosedRefusalSchema = z.object({
   decisionId: z.string().optional(),
   artifactId: z.string().optional(),
   supersededBy: DecisionSupersededBySchema.optional(),
+  /** #493 review — the newest version was itself closed: no `supersededBy`
+   *  link (nothing to answer), and this says why. */
+  successorStatus: DecisionClosedStatusSchema.optional(),
   message: z.string().optional(),
 });
 export type DecisionClosedRefusal = z.infer<typeof DecisionClosedRefusalSchema>;

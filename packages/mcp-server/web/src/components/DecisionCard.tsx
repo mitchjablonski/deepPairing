@@ -5,7 +5,7 @@ import { useDraft, clearDraftIfUnchanged } from "../hooks/useDraft";
 // from the ENTRY bundle. Same animations.
 import { AnimatePresence } from "motion/react";
 import { type DecisionRequestEvent, type Artifact, type PlanVisual, type DecisionClosedStatus, coerceDecisionContent } from "@deeppairing/shared";
-import { useArtifactStore, resolveToLiveId } from "../stores/artifact";
+import { useArtifactStore } from "../stores/artifact";
 import { SimpleMarkdown } from "./SimpleMarkdown";
 import { RepairDecisionModal } from "./RepairDecisionModal";
 import { VisualBody } from "./ArtifactVisuals";
@@ -60,7 +60,7 @@ interface DecisionCardProps {
   /** #492 — the decision is CLOSED (its artifact was superseded, retracted or
    *  obsoleted): say so in second person, link a newer version, and offer no
    *  Select (the daemon refuses a late answer with 409 decision_closed). */
-  closed?: { status: DecisionClosedStatus; supersededBy?: { artifactId: string } };
+  closed?: { status: DecisionClosedStatus; supersededBy?: { artifactId: string }; successorStatus?: "retracted" | "obsolete" };
 }
 
 /**
@@ -686,7 +686,9 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
       {/* #492 — the closed state, to you, with the way forward. */}
       {closed && (
         <div className="mb-2 px-3 py-2 rounded border border-border-default bg-surface-elevated text-xs text-text-secondary" data-testid="decision-closed">
-          {closed.status === "superseded" ? (
+          {closed.status === "superseded" && closed.successorStatus ? (
+            <>This question was revised, and the newer version was {closed.successorStatus === "retracted" ? "withdrawn" : "closed"} too — there&apos;s nothing to answer here.</>
+          ) : closed.status === "superseded" ? (
             <>
               This question was revised — answer the new version.{" "}
               {closed.supersededBy && (
@@ -883,9 +885,26 @@ export function DecisionArtifactView({ artifact }: { artifact: Artifact }) {
   // #492 — a CLOSED decision (superseded / retracted / obsolete, unanswered):
   // the card says so and offers no Select; a superseded one links its newest
   // version (the same live-successor walk every stale-id caller uses).
-  const successorId = useArtifactStore((s) =>
-    artifact.status === "superseded" ? resolveToLiveId(s.artifacts, artifact.id) : null);
-  const closedStatus = (["superseded", "retracted", "obsolete"] as const).find((st) => st === artifact.status);
+  // #493 review — walk the version chain (parentId) to the newest successor,
+  // as "id|status" (a primitive, so the selector is render-stable). A decision
+  // with a successor is superseded even before its own status says so (the
+  // revise window), and a successor that is itself closed gets no link.
+  const successorKey = useArtifactStore((s) => {
+    let latest: Artifact = artifact;
+    const seen = new Set<string>([artifact.id]);
+    for (;;) {
+      const next = s.artifacts.find((a) => a.parentId === latest.id && !seen.has(a.id));
+      if (!next) break;
+      seen.add(next.id);
+      latest = next;
+    }
+    return latest.id === artifact.id ? null : `${latest.id}|${latest.status}`;
+  });
+  const [successorId, successorStatus] = successorKey ? successorKey.split("|") : [null, null];
+  const successorClosed = successorStatus === "retracted" || successorStatus === "obsolete";
+  const closedStatus = successorId
+    ? ("superseded" as const)
+    : (["retracted", "obsolete", "superseded"] as const).find((st) => st === artifact.status);
 
   // An options-less decision has nothing to render, so bail (after the hooks).
   if (dc.options.length === 0) return null;
@@ -931,7 +950,11 @@ export function DecisionArtifactView({ artifact }: { artifact: Artifact }) {
         initialResolved={initialResolved}
         writeLocked={writeLocked}
         closed={closedStatus && !initialResolved
-          ? { status: closedStatus, ...(successorId && successorId !== artifact.id ? { supersededBy: { artifactId: successorId } } : {}) }
+          ? {
+              status: closedStatus,
+              ...(successorId && !successorClosed ? { supersededBy: { artifactId: successorId } } : {}),
+              ...(successorClosed ? { successorStatus: successorStatus as "retracted" | "obsolete" } : {}),
+            }
           : undefined}
         retractReason={
           artifact.status === "retracted"

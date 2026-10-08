@@ -618,6 +618,7 @@ export class DaemonClient implements IStore {
           kind: "closed",
           currentStatus: status === "superseded" || status === "retracted" || status === "obsolete" ? status : "obsolete",
           ...(typeof b.artifactId === "string" ? { artifactId: b.artifactId } : {}),
+          ...(b.successorStatus === "retracted" || b.successorStatus === "obsolete" ? { successorStatus: b.successorStatus } : {}),
           ...(sup && typeof sup.artifactId === "string"
             ? { supersededBy: { artifactId: sup.artifactId, ...(typeof sup.decisionId === "string" ? { decisionId: sup.decisionId } : {}) } }
             : {}),

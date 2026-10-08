@@ -132,3 +132,48 @@ describe("#492 — DaemonClient keeps the typed outcome", () => {
     expect(outcome).toEqual({ kind: "closed", currentStatus: "superseded", artifactId: "art_d", supersededBy: { artifactId: "art_d2", decisionId: "dec_d2" } });
   });
 });
+
+describe("#493 review — the revise window and a closed successor", () => {
+  it("revise window: v2 exists but v1 isn't marked superseded yet → v1 is refused with supersededBy v2 (v2 stays the one to answer)", async () => {
+    const store = fx.track(new FileStore(fx.dir, "s_window"));
+    seed(store);
+    store.createArtifact({ id: "art_d2", type: "decision", title: "Which? (revised)", parentId: "art_d", version: 2, content: { decisionId: "dec_d2", question: "Which?", options: OPTS } });
+    expect(store.getArtifacts().find((a) => a.id === "art_d")?.status).toBe("draft"); // not marked yet
+    const events: Array<Record<string, unknown>> = [];
+    const app = withHash(createHttpRoutes(store, fx.dir, (m) => events.push(m as Record<string, unknown>)), fx.dir);
+    const res = await app.request("/api/decisions/dec_d", json({ optionId: "a" }));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: "decision_closed", currentStatus: "superseded", supersededBy: { artifactId: "art_d2", decisionId: "dec_d2" } });
+    expect(store.getDecisionResponse("dec_d")).toBeNull();
+    expect(events.filter((e) => e.type === "decision_resolved")).toHaveLength(0);
+  });
+
+  it("v1 → v2 (retracted): no link to the withdrawn card; the message says the newer version was withdrawn too", async () => {
+    const store = fx.track(new FileStore(fx.dir, "s_chain"));
+    seed(store);
+    store.updateArtifactStatus("art_d", "superseded", "agent_supersede");
+    store.createArtifact({ id: "art_d2", type: "decision", title: "Which? (revised)", parentId: "art_d", version: 2, content: { decisionId: "dec_d2", question: "Which?", options: OPTS } });
+    store.updateArtifactStatus("art_d2", "retracted", "agent_retract");
+    const app = withHash(createHttpRoutes(store, fx.dir, () => {}), fx.dir);
+    const res = await app.request("/api/decisions/dec_d", json({ optionId: "a" }));
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body).toMatchObject({ code: "decision_closed", currentStatus: "superseded", successorStatus: "retracted" });
+    expect(body.supersededBy).toBeUndefined();
+    expect(body.message).toMatch(/revised, and the newer version was withdrawn too — there's nothing to answer here/);
+  });
+
+  it("internal route: the revise window is refused the same way", async () => {
+    const sessions = new Map<string, FileStore>();
+    const meta = new Map<string, SessionMeta>();
+    const make = (sid: string) => { const s = fx.track(new FileStore(fx.dir, sid)); sessions.set(sid, s); return s; };
+    const app = createDaemonRoutes(sessions, meta, make, () => {}, undefined, fx.dir);
+    await app.request("/api/internal/sessions/s_wi/register", json({}));
+    const store = sessions.get("s_wi")!;
+    seed(store);
+    store.createArtifact({ id: "art_d2", type: "decision", title: "Which? (revised)", parentId: "art_d", version: 2, content: { decisionId: "dec_d2", question: "Which?", options: OPTS } });
+    const res = await app.request("/api/internal/sessions/s_wi/decisions/dec_d/resolve", json({ optionId: "a" }));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ currentStatus: "superseded", supersededBy: { artifactId: "art_d2" } });
+  });
+});

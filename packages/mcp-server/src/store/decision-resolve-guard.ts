@@ -47,7 +47,7 @@ export type DecisionResolveOutcome =
   | { kind: "invalid_option" }
   | { kind: "no_record" }
   /** #492 — the decision's artifact is closed: refuse, write nothing. */
-  | { kind: "closed"; artifactId?: string; currentStatus: DecisionClosedStatus; supersededBy?: DecisionSupersededBy };
+  | { kind: "closed"; artifactId?: string; currentStatus: DecisionClosedStatus; supersededBy?: DecisionSupersededBy; successorStatus?: DecisionClosedStatus };
 
 /** The stale-resolve rule for a decision RECORD (pure; called inside the
  *  store's critical section). Null = go ahead and resolve. */
@@ -134,25 +134,35 @@ export function classifyClosedDecision(
   backing: Artifact | undefined,
   artifacts: Artifact[],
 ): Extract<DecisionResolveOutcome, { kind: "closed" }> | null {
-  if (!backing || !CLOSED_DECISION_STATUSES.has(backing.status)) return null;
+  if (!backing) return null;
+  // Follow the version chain (parentId) to the newest successor.
+  let latest = backing;
+  const seen = new Set<string>([backing.id]);
+  for (;;) {
+    const next = artifacts.find((a) => a.parentId === latest.id && !seen.has(a.id));
+    if (!next) break;
+    seen.add(next.id);
+    latest = next;
+  }
+  // #493 review — the REVISE WINDOW: a revision creates v2 before v1 is marked
+  // superseded (separate calls). An artifact that already has a successor is
+  // superseded for answering purposes, whatever its own status says yet.
+  const hasSuccessor = latest !== backing;
+  const status = hasSuccessor ? "superseded" : backing.status;
+  if (!CLOSED_DECISION_STATUSES.has(status)) return null;
   const outcome: Extract<DecisionResolveOutcome, { kind: "closed" }> = {
     kind: "closed",
     artifactId: backing.id,
-    currentStatus: backing.status as DecisionClosedStatus,
+    currentStatus: status as DecisionClosedStatus,
   };
-  if (backing.status === "superseded") {
-    // Follow the version chain (parentId) to the newest successor.
-    let current = backing;
-    const seen = new Set<string>([backing.id]);
-    for (;;) {
-      const next = artifacts.find((a) => a.parentId === current.id && !seen.has(a.id));
-      if (!next) break;
-      seen.add(next.id);
-      current = next;
-    }
-    if (current !== backing) {
-      const decisionId = (current.content as { decisionId?: unknown } | null)?.decisionId;
-      outcome.supersededBy = { artifactId: current.id, ...(typeof decisionId === "string" && decisionId ? { decisionId } : {}) };
+  if (hasSuccessor) {
+    if (CLOSED_DECISION_STATUSES.has(latest.status)) {
+      // #493 review — the newest version was itself withdrawn / closed: there
+      // is nothing to answer, so don't send the human to a dead card.
+      outcome.successorStatus = latest.status as DecisionClosedStatus;
+    } else {
+      const decisionId = (latest.content as { decisionId?: unknown } | null)?.decisionId;
+      outcome.supersededBy = { artifactId: latest.id, ...(typeof decisionId === "string" && decisionId ? { decisionId } : {}) };
     }
   }
   return outcome;
@@ -163,7 +173,9 @@ export function closedResolveBody(
   outcome: Extract<DecisionResolveOutcome, { kind: "closed" }>,
   decisionId: string,
 ): Record<string, unknown> {
-  const message = outcome.currentStatus === "superseded"
+  const message = outcome.currentStatus === "superseded" && outcome.successorStatus
+    ? `This question was revised, and the newer version was ${outcome.successorStatus === "retracted" ? "withdrawn" : "closed"} too — there's nothing to answer here.`
+    : outcome.currentStatus === "superseded"
     ? "This question was revised — answer the new version. Your answer to the old one wasn't recorded."
     : outcome.currentStatus === "retracted"
       ? "Claude withdrew this question, so your answer wasn't recorded."
@@ -175,6 +187,7 @@ export function closedResolveBody(
     decisionId,
     ...(outcome.artifactId ? { artifactId: outcome.artifactId } : {}),
     ...(outcome.supersededBy ? { supersededBy: outcome.supersededBy } : {}),
+    ...(outcome.successorStatus ? { successorStatus: outcome.successorStatus } : {}),
     message,
   };
 }

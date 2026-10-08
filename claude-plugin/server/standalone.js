@@ -25804,6 +25804,9 @@ var DecisionClosedRefusalSchema = external_exports.object({
   decisionId: external_exports.string().optional(),
   artifactId: external_exports.string().optional(),
   supersededBy: DecisionSupersededBySchema.optional(),
+  /** #493 review — the newest version was itself closed: no `supersededBy`
+   *  link (nothing to answer), and this says why. */
+  successorStatus: DecisionClosedStatusSchema.optional(),
   message: external_exports.string().optional()
 });
 
@@ -38368,6 +38371,7 @@ var DaemonClient = class {
           kind: "closed",
           currentStatus: status === "superseded" || status === "retracted" || status === "obsolete" ? status : "obsolete",
           ...typeof b.artifactId === "string" ? { artifactId: b.artifactId } : {},
+          ...b.successorStatus === "retracted" || b.successorStatus === "obsolete" ? { successorStatus: b.successorStatus } : {},
           ...sup && typeof sup.artifactId === "string" ? { supersededBy: { artifactId: sup.artifactId, ...typeof sup.decisionId === "string" ? { decisionId: sup.decisionId } : {} } } : {}
         };
       }
