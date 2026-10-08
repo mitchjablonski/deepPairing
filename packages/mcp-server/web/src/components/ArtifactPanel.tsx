@@ -7,6 +7,7 @@ import { apiGet, apiBase } from "../lib/api";
 import type { Artifact, Comment } from "@deeppairing/shared";
 import { useArtifactStore, resolveToLiveId, artifactStoreGeneration, markBackfilled, isBackfilled, REFRESH_SESSION_EVENT } from "../stores/artifact";
 import { useSiblingSyncStore } from "../lib/siblingSync";
+import { useOfflineReason } from "../hooks/useOfflineReason";
 import { usePreferencesStore, SIDEBAR_WIDTHS } from "../stores/preferences";
 import { useReplayStore } from "../stores/replay";
 import { useConnectionStore } from "../stores/connection";
@@ -181,8 +182,12 @@ function EditableTitle({ artifact }: { artifact: Artifact }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(artifact.title);
   const renameArtifact = useArtifactStore((s) => s.renameArtifact);
+  // #487 review — a rename is a write: refused offline. Mid-edit, saving keeps
+  // the editor open with the draft instead of dropping it.
+  const offline = useOfflineReason();
 
   const handleSave = () => {
+    if (offline) return;
     const trimmed = draft.trim();
     if (trimmed && trimmed !== artifact.title) {
       renameArtifact(artifact.id, trimmed);
@@ -216,8 +221,9 @@ function EditableTitle({ artifact }: { artifact: Artifact }) {
     // whole change, and the artifact's own section headings step to h3 below it.
     <h2
       className="text-sm font-semibold text-text-primary leading-[1.2] cursor-pointer hover:text-accent-blue transition-colors"
-      onClick={() => { setDraft(artifact.title); setEditing(true); }}
-      title="Click to rename"
+      onClick={() => { if (offline) return; setDraft(artifact.title); setEditing(true); }}
+      title={offline ?? "Click to rename"}
+      aria-disabled={offline ? true : undefined}
     >
       {artifact.title}
     </h2>

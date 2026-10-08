@@ -4,6 +4,7 @@ import { sessionHeaders, apiBase } from "../../lib/api";
 import { useLedgerStore, ledgerHasStances } from "../../stores/ledger";
 import { normalizeConceptKey } from "@deeppairing/shared";
 import type { LedgerDigest, PhilosophyEntry } from "./types";
+import { useOfflineReason } from "../../hooks/useOfflineReason";
 
 export function LedgerPanel({
   data,
@@ -374,12 +375,14 @@ function SeedMoreInline() {
 // "paste a rule" the obvious cold-start action.
 
 export function SeedAffordance({ onSeeded }: { onSeeded: () => void }) {
+  const offline = useOfflineReason(); // #487 review — act paths gate on the shared offline condition (#467)
   const [text, setText] = useState("");
   const [verdict, setVerdict] = useState<"approved" | "rejected">("approved");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const submit = async () => {
+    if (offline) return; // #487 review — refused offline (the control is disabled too)
     const concept = text.trim();
     if (!concept || submitting) return;
     setSubmitting(true);
@@ -431,9 +434,10 @@ export function SeedAffordance({ onSeeded }: { onSeeded: () => void }) {
           <VerdictPill active={verdict === "rejected"} onClick={() => setVerdict("rejected")} label="Avoid" tone="red" />
         </div>
         <button
+          title={offline ?? undefined}
           type="button"
           onClick={submit}
-          disabled={!text.trim() || submitting}
+          disabled={(!text.trim() || submitting) || !!offline}
           className="ml-auto px-3 py-1 rounded text-2xs font-medium bg-accent-violet-strong text-white hover:bg-accent-violet-strong-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           {submitting ? "Seeding…" : "Add to ledger"}
@@ -505,6 +509,7 @@ export function FilterPill({
  * safe by construction: the confirm renders on its own row, away from the ✕.
  */
 export function EntryRow({ entry, onRemoved }: { entry: PhilosophyEntry; onRemoved?: () => void }) {
+  const offline = useOfflineReason(); // #487 review — act paths gate on the shared offline condition (#467)
   const [confirming, setConfirming] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
@@ -516,6 +521,7 @@ export function EntryRow({ entry, onRemoved }: { entry: PhilosophyEntry; onRemov
       : { label: "mixed", cls: "bg-surface-hover text-text-secondary" };
 
   const remove = async () => {
+    if (offline) return; // #487 review — refused offline (the control is disabled too)
     if (removing) return;
     setRemoving(true);
     setRemoveError(null);
@@ -582,9 +588,10 @@ export function EntryRow({ entry, onRemoved }: { entry: PhilosophyEntry; onRemov
           </p>
           <div className="mt-2 flex items-center gap-2">
             <button
+              title={offline ?? undefined}
               type="button"
               onClick={remove}
-              disabled={removing}
+              disabled={(removing) || !!offline}
               className="px-2 py-1 rounded text-2xs font-semibold bg-accent-red-dim text-accent-red hover:bg-accent-red/20 cursor-pointer disabled:opacity-60 disabled:cursor-default"
             >
               {removing ? "Removing…" : "Remove stance"}

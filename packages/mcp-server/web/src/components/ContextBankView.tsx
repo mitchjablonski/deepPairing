@@ -16,6 +16,7 @@ import {
   type BankRow,
   type BankSession,
 } from "../lib/bank";
+import { useOfflineReason } from "../hooks/useOfflineReason";
 
 /**
  * THE CONTEXT BANK SURFACE — "where did I leave off?", across every project.
@@ -173,6 +174,7 @@ interface DecisionRowProps {
  * cannot land. Off-project rows get the honest alternative instead — go there.
  */
 function DecisionRow({ decision, session, isCurrentProject, onSwitchToProject }: DecisionRowProps) {
+  const offline = useOfflineReason(); // #487 review — act paths gate on the shared offline condition (#467)
   const closeOut = useContextBankStore((s) => s.closeOut);
   const closing = useContextBankStore((s) => !!s.closing[decision.artifactId]);
   // A refused close-out remounts this row (the optimistic removal unmounted it),
@@ -184,6 +186,7 @@ function DecisionRow({ decision, session, isCurrentProject, onSwitchToProject }:
   const [note, setNote] = useState(savedNote);
 
   const confirm = async () => {
+    if (offline) return; // #487 review — refused offline (the control is disabled too)
     setConfirming(false);
     await closeOut({
       decisionId: decision.decisionId,
@@ -242,6 +245,8 @@ function DecisionRow({ decision, session, isCurrentProject, onSwitchToProject }:
             />
             <div className="flex items-center gap-1.5">
               <button
+                title={offline ?? undefined}
+                disabled={!!offline}
                 onClick={confirm}
                 className="px-2 py-0.5 rounded text-2xs font-semibold bg-accent-amber-dim text-accent-amber
                            hover:bg-surface-hover transition-colors"

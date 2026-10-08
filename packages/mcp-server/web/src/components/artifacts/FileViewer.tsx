@@ -3,6 +3,7 @@ import { apiGet } from "../../lib/api";
 import { useArtifactStore } from "../../stores/artifact";
 import { useFocusTrap } from "../../hooks/useFocusTrap";
 import { useOverlayPresence } from "../../stores/overlay";
+import { useOfflineReason } from "../../hooks/useOfflineReason";
 
 interface FileViewerProps {
   filePath: string;
@@ -20,6 +21,7 @@ export function FileViewer({
   artifactId,
   onClose,
 }: FileViewerProps) {
+  const offline = useOfflineReason(); // #487 review — act paths gate on the shared offline condition (#467)
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -111,6 +113,7 @@ export function FileViewer({
   };
 
   const handleSubmitComment = async () => {
+    if (offline) return; // #487 review — refused offline (the control is disabled too)
     if (!commentText.trim() || !artifactId || !selectionRange) return;
     setSubmitting(true);
     try {
@@ -320,8 +323,9 @@ export function FileViewer({
                            focus:outline-none focus:ring-1 focus:ring-accent-blue focus:border-transparent"
               />
               <button
+                title={offline ?? undefined}
                 onClick={handleSubmitComment}
-                disabled={!commentText.trim() || submitting}
+                disabled={(!commentText.trim() || submitting) || !!offline}
                 className="px-3 py-2 bg-accent-blue-strong text-white text-xs font-medium rounded
                            hover:bg-accent-blue/80 disabled:bg-surface-elevated disabled:text-text-muted transition-colors"
               >

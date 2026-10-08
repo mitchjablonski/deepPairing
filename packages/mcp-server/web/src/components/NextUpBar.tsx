@@ -375,7 +375,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
             onClick={reloadPage}
             data-testid="next-up-reload"
             className="shrink-0 px-1.5 py-0.5 rounded border border-border-default text-text-secondary hover:bg-surface-hover"
-            title="The tab connected but its first snapshot never arrived — reload to fetch it again"
+            title="This is taking longer than usual — it may still finish, or reload to fetch it again"
           >
             Reload
           </button>

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { apiBase, sessionHeaders, apiGet } from "../lib/api";
 import { useToastStore } from "../stores/toast";
 import { useCrossProjectStore } from "../stores/crossProject";
+import { useOfflineReason } from "../hooks/useOfflineReason";
 
 type AutonomyLevel = "supervised" | "balanced" | "autonomous";
 type DetailDensity = "rich" | "terse";
@@ -58,6 +59,7 @@ const personas: { id: Persona; label: string }[] = [
 ];
 
 export function AutonomySlider() {
+  const offline = useOfflineReason(); // #487 review — settings writes gate on the shared offline condition (#467)
   const [level, setLevel] = useState<AutonomyLevel>("supervised");
   // #139 / X1 — default "terse" mirrors the store default (plain-by-default) so
   // an old preferences.json (no detailDensity field) reads as Plain.
@@ -114,6 +116,7 @@ export function AutonomySlider() {
   }, [hydratePublish]);
 
   const handleChange = async (newLevel: AutonomyLevel) => {
+    if (offline) return; // #487 review — refused offline (the control is disabled too)
     const prev = level;
     setLevel(newLevel);
     // C1 — this control GOVERNS THE AUTO-APPROVE COUNTDOWN: silently keeping
@@ -144,6 +147,7 @@ export function AutonomySlider() {
   // auto-approve, so a failed save is a soft rollback (toast, no auto-approve
   // safety claim). Mirrors handleChange's optimistic-then-reconcile shape.
   const handleDensityChange = async (newDensity: DetailDensity) => {
+    if (offline) return; // #487 review — refused offline (the control is disabled too)
     if (newDensity === density) return;
     const prev = density;
     setDensity(newDensity);
@@ -169,6 +173,7 @@ export function AutonomySlider() {
   // auto-approve safety claim). Mirrors handleDensityChange's optimistic-then-
   // reconcile shape.
   const handlePersonaChange = async (newPersona: Persona) => {
+    if (offline) return; // #487 review — refused offline (the control is disabled too)
     if (newPersona === persona) return;
     const prev = persona;
     setPersona(newPersona);
@@ -233,6 +238,8 @@ export function AutonomySlider() {
             </div>
             {levels.map((l) => (
               <button
+                title={offline ?? undefined}
+                disabled={!!offline}
                 key={l.id}
                 onClick={() => { handleChange(l.id); setShowTooltip(false); }}
                 className={`w-full text-left px-3 py-2 transition-colors ${
@@ -256,6 +263,7 @@ export function AutonomySlider() {
               <div role="radiogroup" aria-label="Detail density" className="flex gap-1">
                 {densities.map((d, i) => (
                   <button
+                    disabled={!!offline}
                     key={d.id}
                     ref={(el) => { densityRefs.current[i] = el; }}
                     type="button"
@@ -264,7 +272,7 @@ export function AutonomySlider() {
                     // Roving tabindex: only the checked radio is in the tab
                     // order; arrows move within the group (WAI-ARIA pattern).
                     tabIndex={d.id === density ? 0 : -1}
-                    title={d.description}
+                    title={offline ?? (d.description)}
                     onClick={() => handleDensityChange(d.id)}
                     onKeyDown={(e) => handleDensityKeyDown(e, i)}
                     className={`flex-1 px-2 py-1 rounded text-2xs font-medium border transition-colors ${
@@ -300,9 +308,10 @@ export function AutonomySlider() {
               <select
                 id="persona-select"
                 aria-label="Explanation persona"
-                title="Auto-detected per artifact. Set to override — applies to this session only."
+                title={offline ?? "Auto-detected per artifact. Set to override — applies to this session only."}
                 value={persona}
                 onChange={(e) => void handlePersonaChange(e.target.value as Persona)}
+                disabled={!!offline}
                 className="w-full px-2 py-1 rounded text-2xs bg-surface border border-border-default text-text-secondary hover:bg-surface-hover focus:outline-none focus:border-accent-blue/40"
               >
                 {personas.map((p) => (
@@ -346,10 +355,11 @@ export function AutonomySlider() {
             {publish !== null && (
               <div className="px-3 py-2 border-t border-border-subtle">
                 <button
+                  title={offline ?? undefined}
                   type="button"
                   role="switch"
                   aria-checked={publish}
-                  disabled={publishSaving}
+                  disabled={(publishSaving) || !!offline}
                   onClick={() => void setPublish(!publish)}
                   className="w-full flex items-center justify-between gap-2 text-left disabled:opacity-60"
                 >

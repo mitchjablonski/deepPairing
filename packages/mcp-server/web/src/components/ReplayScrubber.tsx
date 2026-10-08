@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { formatClockTime } from "../lib/time";
 import { useReplayStore, useAnnotationsByEvent } from "../stores/replay";
 import type { TimelineEvent } from "../lib/timeline";
+import { useOfflineReason } from "../hooks/useOfflineReason";
 
 const svgDefaults = {
   fill: "none",
@@ -266,6 +267,7 @@ function CurrentEventRow({
   annotating: boolean;
   setAnnotating: (on: boolean) => void;
 }) {
+  const offline = useOfflineReason(); // #487 review — act paths gate on the shared offline condition (#467)
   const addAnnotation = useReplayStore((s) => s.addAnnotation);
   const removeAnnotation = useReplayStore((s) => s.removeAnnotation);
   const annotationsByEventId = useAnnotationsByEvent();
@@ -273,6 +275,7 @@ function CurrentEventRow({
   const [note, setNote] = useState("");
 
   const save = async () => {
+    if (offline) return; // #487 review — refused offline (the control is disabled too)
     const trimmed = note.trim();
     if (!trimmed) return;
     await addAnnotation(event.id, trimmed);
@@ -306,9 +309,10 @@ function CurrentEventRow({
               <span className="text-accent-violet shrink-0 mt-0.5"><NoteIcon size={10} /></span>
               <span className="flex-1 whitespace-pre-wrap">{a.note}</span>
               <button
+                disabled={!!offline}
                 onClick={() => removeAnnotation(a.id)}
                 className="shrink-0 text-text-muted hover:text-accent-red text-[10px]"
-                title="Delete note"
+                title={offline ?? "Delete note"}
               >
                 ✕
               </button>
@@ -332,8 +336,9 @@ function CurrentEventRow({
             className="flex-1 px-2 py-0.5 bg-surface-primary border border-border-default rounded text-2xs text-text-primary placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-violet"
           />
           <button
+            title={offline ?? undefined}
             onClick={save}
-            disabled={!note.trim()}
+            disabled={(!note.trim()) || !!offline}
             className="px-2 py-0.5 bg-accent-violet-strong text-white text-2xs rounded hover:bg-accent-violet-strong-hover disabled:opacity-50"
           >
             Save

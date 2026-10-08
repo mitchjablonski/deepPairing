@@ -5,6 +5,7 @@ import { useConnectionStore } from "../stores/connection";
 import { useToastStore } from "../stores/toast";
 import { useAgentRecentlyActive } from "../hooks/useAgentRecentlyActive";
 import { noAgentLive } from "../lib/liveness";
+import { useDraft } from "../hooks/useDraft";
 import { useOfflineReason } from "../hooks/useOfflineReason";
 
 /**
@@ -163,9 +164,14 @@ export function RequestComposerBanner({ compact = false }: {
   const bridge = useRequestResumeBridge();
   const { noAgent, copyResume } = bridge;
 
-  const [open, setOpen] = useState(false);
+  // A request still being typed before a reload reopens with it.
+  const [open, setOpen] = useState(() => {
+    try { return !!sessionStorage.getItem(`dp:draft:request:${useConnectionStore.getState().sessionId ?? "global"}`); } catch { return false; }
+  });
   const [intent, setIntent] = useState<RequestIntent>("explain");
-  const [text, setText] = useState("");
+  // #487 review — the typed request survives a reload (useDraft, per session).
+  const draftSession = useConnectionStore((s) => s.sessionId) ?? "global";
+  const [text, setText] = useDraft(`request:${draftSession}`);
   const [submitting, setSubmitting] = useState(false);
 
   // #430 PR 5 — the header "Request" button (bar ON) opens the composer.
@@ -177,7 +183,7 @@ export function RequestComposerBanner({ compact = false }: {
     };
     window.addEventListener(OPEN_REQUEST_COMPOSER_EVENT, openComposer);
     return () => window.removeEventListener(OPEN_REQUEST_COMPOSER_EVENT, openComposer);
-  }, []);
+  }, [setText]); // #487 — setText is now useDraft's setter
 
   // The composer only makes sense against a live session (there has to be a
   // session store to persist into). It's hidden entirely until connected.

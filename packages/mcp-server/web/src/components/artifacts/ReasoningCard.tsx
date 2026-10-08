@@ -8,6 +8,7 @@ import { useArtifactStore } from "../../stores/artifact";
 import { SimpleMarkdown } from "../SimpleMarkdown";
 import { OpenInEditorLink } from "../OpenInEditor";
 import { useSentFlash } from "../../hooks/useSentFlash";
+import { useOfflineReason } from "../../hooks/useOfflineReason";
 
 interface Props {
   artifact: Artifact;
@@ -183,11 +184,13 @@ function AlternativeRow({
   alt: { title: string; reason: string };
   onAskWhy: (question: string) => Promise<void>;
 }) {
+  const offline = useOfflineReason(); // #487 review — act paths gate on the shared offline condition (#467)
   const [asking, setAsking] = useState(false);
   const [question, setQuestion] = useState("");
   const { sent, flash } = useSentFlash();
 
   const send = async () => {
+    if (offline) return; // #487 review — refused offline (the control is disabled too)
     const trimmed = question.trim();
     if (!trimmed) return;
     await onAskWhy(trimmed);
@@ -236,8 +239,9 @@ function AlternativeRow({
               className="flex-1 px-2 py-1 bg-surface-primary border border-border-default rounded text-2xs text-text-primary placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-violet"
             />
             <button
+              title={offline ?? undefined}
               onClick={send}
-              disabled={!question.trim()}
+              disabled={(!question.trim()) || !!offline}
               className="px-2 py-1 bg-accent-violet-strong text-white text-2xs rounded hover:bg-accent-violet-strong-hover disabled:opacity-50 press-scale"
             >
               Ask

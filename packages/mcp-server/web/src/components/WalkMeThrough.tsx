@@ -6,6 +6,7 @@ import { useReplayStore } from "../stores/replay";
 import { useToastStore } from "../stores/toast";
 import { noAgentLive } from "../lib/liveness";
 import { CompassIcon } from "./icons/ArtifactIcons";
+import { useOfflineReason } from "../hooks/useOfflineReason";
 
 /**
  * O2 (#230) — the "Walk me through this" affordance. The round-10 review found
@@ -259,6 +260,7 @@ export function WalkMeThroughButton({
   /** Hunk-header variant: same affordance, tighter and quieter. */
   compact?: boolean;
 }) {
+  const offline = useOfflineReason(); // #487 review — act paths gate on the shared offline condition (#467)
   const submitRequest = useArtifactStore((s) => s.submitRequest);
   const replayActive = useReplayStore((s) => s.active);
   // #393 — the session and the toast store are read with `getState()` at
@@ -290,6 +292,7 @@ export function WalkMeThroughButton({
   const ariaLabel = walkMeThroughAria(target);
 
   const onClick = async () => {
+    if (offline) return; // #487 review — refused offline (the control is disabled too)
     if (sending) return;
     setSending(true);
     // #393(1) — capture the session this request BELONGS to, before the await.
@@ -374,7 +377,7 @@ export function WalkMeThroughButton({
     <button
       type="button"
       onClick={() => void onClick()}
-      disabled={sending}
+      disabled={(sending) || !!offline}
       // P2 — the testid names the GRAIN ("walk-me-through-file" /
       // "-hunk" / "-needs-eyes"): the round-11 finding was precisely that a
       // file-grain and a hunk-grain click were indistinguishable, and an
@@ -383,7 +386,7 @@ export function WalkMeThroughButton({
       data-testid={`walk-me-through-${target.kind}`}
       data-walk-grain={target.kind}
       aria-label={`${label} — ${ariaLabel}`}
-      title={`Ask Claude to explain ${ariaLabel} — the explainer posts in the sidebar`}
+      title={offline ?? (`Ask Claude to explain ${ariaLabel} — the explainer posts in the sidebar`)}
       // P2 fix 4 (UX MED) — `font-sans` explicitly: inside the changeset's
       // font-mono file-path / hunk headers the button inherited the mono face and
       // read as file METADATA rather than an action. `shrink-0 whitespace-nowrap`

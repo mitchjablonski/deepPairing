@@ -3,6 +3,7 @@ import type { Comment } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { suggestionPill } from "../lib/suggestionPill";
 import { useOfflineReason } from "../hooks/useOfflineReason";
+import { useDraft } from "../hooks/useDraft";
 
 /**
  * #172 — a posted suggested edit, rendered as a first-class card on the
@@ -62,8 +63,10 @@ export function SuggestionCard({
   const resolveSuggestion = useArtifactStore((s) => s.resolveSuggestion);
   const submitComment = useArtifactStore((s) => s.submitComment);
   const [busy, setBusy] = useState(false);
-  const [replyOpen, setReplyOpen] = useState(false);
-  const [replyText, setReplyText] = useState("");
+  // #487 review — the counter-reply draft survives a reload (useDraft), and a
+  // card reopens with it.
+  const [replyText, setReplyText] = useDraft(`sugg-reply:${comment.id}`);
+  const [replyOpen, setReplyOpen] = useState(() => !!replyText);
 
   const s = comment.suggestion;
   if (!s) return null;

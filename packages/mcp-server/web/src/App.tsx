@@ -892,7 +892,7 @@ function App() {
       {hydrationStalled && !hydrated && !nextUpBar && (
         <div className="px-3 py-1.5 bg-accent-amber-dim/40 border-b border-accent-amber/15 text-center" role="status" data-testid="hydration-stalled">
           <span className="text-2xs text-accent-amber">
-            {HYDRATION_STALLED_TEXT} — this tab connected, but the session never loaded.{" "}
+            {HYDRATION_STALLED_TEXT} — this is taking longer than usual. It may still finish, or{" "}
             <button type="button" onClick={reloadPage} className="underline font-medium">Reload</button>
           </span>
         </div>

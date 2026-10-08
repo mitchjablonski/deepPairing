@@ -3,6 +3,7 @@ import { errorMessage } from "@deeppairing/shared";
 import { buildRepairPrompt } from "../lib/repairPrompt";
 import { apiBase } from "../lib/api";
 import { useModal } from "../hooks/useModal";
+import { useOfflineReason } from "../hooks/useOfflineReason";
 
 interface Props {
   sessionId: string;
@@ -40,6 +41,7 @@ export function RepairDecisionModal({
   decisionId,
   onClose,
 }: Props) {
+  const offline = useOfflineReason(); // #487 review — act paths gate on the shared offline condition (#467)
   const [userNote, setUserNote] = useState("");
   const [copied, setCopied] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -72,6 +74,7 @@ export function RepairDecisionModal({
   };
 
   const save = async () => {
+    if (offline) return; // #487 review — refused offline (the control is disabled too)
     setSaving(true);
     setError(null);
     try {
@@ -177,8 +180,9 @@ export function RepairDecisionModal({
             Cancel
           </button>
           <button
+            title={offline ?? undefined}
             onClick={save}
-            disabled={saving}
+            disabled={(saving) || !!offline}
             className="px-3 py-1.5 bg-surface-elevated border border-border-default text-text-secondary text-xs rounded
                        hover:bg-surface-hover disabled:opacity-50 transition-colors"
           >

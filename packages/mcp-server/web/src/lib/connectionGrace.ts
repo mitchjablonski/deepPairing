@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { create } from "zustand";
 import { useConnectionStore } from "../stores/connection";
+import { hasUnsavedText } from "./unsavedText";
 
 /**
  * #465 N2 / #467 review — ONE answer to "is this tab offline?", shared by the
@@ -67,9 +68,17 @@ export function useHydrationStalled(): boolean {
   return useConnectionGraceStore((s) => s.hydrationStalled);
 }
 
-export const HYDRATION_STALLED_TEXT = "Couldn't load the current state";
+/** #487 review — honest: loading may still finish; Reload is an offer, not a
+ *  verdict. The 10s bound stays (see HYDRATION_STALL_MS): the snapshot's size
+ *  isn't known before it arrives, so the bound can't scale with it — instead the
+ *  copy no longer claims failure, and nothing is torn down at 10s. */
+export const HYDRATION_STALLED_TEXT = "Still loading the current state";
 export function reloadPage(): void {
-  if (typeof window !== "undefined") window.location.reload();
+  if (typeof window === "undefined") return;
+  // #487 review — don't silently discard text typed into a composer whose
+  // draft doesn't persist across a reload.
+  if (hasUnsavedText() && !window.confirm("You have unsent text in this tab — reloading will discard it. Reload anyway?")) return;
+  window.location.reload();
 }
 
 /** True when this tab is offline (and it's not just the page loading). */
