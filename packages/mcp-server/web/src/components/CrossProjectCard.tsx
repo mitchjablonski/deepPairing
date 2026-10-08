@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { useCrossProjectStore } from "../stores/crossProject";
 import { useToastStore } from "../stores/toast";
+import { useOfflineReason } from "../hooks/useOfflineReason";
 
 /**
  * Q2 — the FIRST-REJECT card.
@@ -22,6 +23,7 @@ import { useToastStore } from "../stores/toast";
  * projects), and "Not now" is a real answer — the card never returns.
  */
 export function CrossProjectCard() {
+  const offline = useOfflineReason(); // #487 review — act paths gate on the shared offline condition (#467)
   const visible = useCrossProjectStore((s) => s.cardVisible);
   const saving = useCrossProjectStore((s) => s.saving);
   const setPublish = useCrossProjectStore((s) => s.setPublish);
@@ -49,6 +51,7 @@ export function CrossProjectCard() {
   if (!visible) return null;
 
   const enable = async () => {
+    if (offline) return; // #487 review — refused offline (the control is disabled too)
     const ok = await setPublish(true);
     // Dismiss either way: the question has been answered. On failure the store
     // already toasted and rolled back, and the popover toggle remains.
@@ -116,9 +119,10 @@ export function CrossProjectCard() {
         </div>
         <div className="flex items-center gap-2 pt-1">
           <button
+            title={offline ?? undefined}
             type="button"
             onClick={enable}
-            disabled={saving}
+            disabled={(saving) || !!offline}
             className="px-2.5 py-1 text-2xs font-medium text-white bg-accent-blue-strong rounded
                        hover:bg-accent-blue-strong-hover disabled:opacity-50
                        transition-all duration-[180ms] ease-out press-scale"

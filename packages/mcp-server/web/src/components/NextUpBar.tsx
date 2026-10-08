@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Artifact } from "@deeppairing/shared";
 import { useArtifactStore, artifactStoreGeneration, isBackfilled } from "../stores/artifact";
-import { useConnectionStore } from "../stores/connection";
+import { useConnectionStore, selectHydratedForBinding } from "../stores/connection";
 import { useReplayStore } from "../stores/replay";
 import { usePreflightBlockStore } from "../stores/preflightBlocks";
 import { computeAttention, type Attention, type AttentionItem, type FailureKind, type SummaryLane } from "../lib/attention";
 import { noAgentLive } from "../lib/liveness";
-import { useTabOffline, useConnectionGraceStore } from "../lib/connectionGrace";
+import { useTabOffline, useConnectionGraceStore, useHydrationStalled, HYDRATION_STALLED_TEXT, HYDRATION_STALLED_ANNOUNCEMENT, RELOAD_TITLE, reloadPage } from "../lib/connectionGrace";
 import { useSiblingSyncStore } from "../lib/siblingSync";
 import { sessionLabelsFrom } from "../lib/sessionLabel";
 import { WAITING_TONE } from "../lib/waitingTone";
@@ -276,7 +276,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   // that land while the store is settling (not hydrated yet, or within 750ms of
   // a store reset — the arrival region's own hydration window) move the
   // baseline silently; only settled changes are announced.
-  const hydrated = useConnectionStore((s) => s.hydrated);
+  const hydrated = useConnectionStore(selectHydratedForBinding); // #487 — current binding only
   const generation = artifactStoreGeneration();
   const lastGeneration = useRef(generation);
   const settleUntil = useRef(0);
@@ -324,11 +324,49 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   // lane may only mean "not loaded yet". Hold a neutral line instead.
   const siblingSettled = useSiblingSyncStore((s) => s.settled);
   const graceOver = useConnectionGraceStore((s) => s.graceOver);
+  const hydrationStalled = useHydrationStalled();
   // Nothing to wait for when the bound session is the only one known.
   const noSiblings = activeSessions.length > 0 && activeSessions.every((x) => x.sessionId === boundSessionId);
-  const holding = primary.lane === "nothing" && !attention.line.prefix && (!hydrated || !(siblingSettled || graceOver || noSiblings));
+  const holdingRaw = primary.lane === "nothing" && !attention.line.prefix && (!hydrated || !(siblingSettled || graceOver || noSiblings));
+  // #477 — the hold is bounded: connected but never hydrated past
+  // HYDRATION_STALL_MS says so truthfully, with Reload (lib/connectionGrace).
+  const stalled = hydrationStalled && !hydrated;
+  const holding = holdingRaw && !stalled;
   const primaryText = holding ? HOLD_TEXT : primaryToken(attention.line);
-  const lineText = holding ? HOLD_TEXT : attentionLineText(attention);
+  const lineText = stalled ? `⚠ ${HYDRATION_STALLED_TEXT}` : holding ? HOLD_TEXT : attentionLineText(attention);
+  // #487 review (Fable) — announce the stall ONCE, through the one announcer,
+  // when it begins (bar ON had no spoken signal at all).
+  const prevStalled = useRef(stalled);
+  useEffect(() => {
+    if (stalled && !prevStalled.current) setAnnouncement(HYDRATION_STALLED_ANNOUNCEMENT);
+    prevStalled.current = stalled;
+  }, [stalled]);
+
+  // #487 review (Fable) — stalled: ONE honest line. No failure prefix, no
+  // "Decide N"/summary next to "still loading" (those counts may be partial —
+  // broadcasts can land without the snapshot), just the state and Reload.
+  if (stalled) {
+    return (
+      <section ref={sectionRef} id="next-up" tabIndex={-1} aria-label="Next up" data-testid="next-up-bar" data-line={lineText}
+        className="border-b border-border-default bg-surface-secondary">
+        <div className="flex items-center gap-2 px-3 py-1 min-w-0 text-2xs">
+          <span data-token className="min-w-0 truncate font-medium text-accent-amber" title={HYDRATION_STALLED_TEXT}>⚠ {HYDRATION_STALLED_TEXT}</span>
+          <button
+            type="button"
+            onClick={reloadPage}
+            data-testid="next-up-reload"
+            className="shrink-0 px-1.5 py-0.5 rounded border border-border-default text-text-secondary hover:bg-surface-hover"
+            title={RELOAD_TITLE}
+          >
+            Reload
+          </button>
+        </div>
+        <div className="sr-only" role="status" aria-live="polite" aria-atomic="true" data-testid="next-up-announcer">
+          {announcement}
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section
