@@ -38478,6 +38478,10 @@ var DaemonClient = class {
    *  the flush); nothing to do client-side. */
   async settleResolution(_decisionId, _committed) {
   }
+  /** #490 — the daemon reconciles its own partial writes. */
+  async isResolutionDurable(_decisionId) {
+    return false;
+  }
   async getDecisionResponse(decisionId) {
     const data = await this.get(`/decisions/${decisionId}/response`);
     return data.response ?? null;

@@ -27544,7 +27544,9 @@ var FileStore = class _FileStore {
     const prevDecision = structuredClone(dec);
     const prevBacking = backing ? structuredClone(backing) : void 0;
     this.feedbackNotifyHolds++;
+    const otherNotifyPending = this.feedbackNotifyPending;
     this.resolveDecision(decisionId, optionId, reasoning, prediction);
+    this.feedbackNotifyPending = otherNotifyPending;
     const written = this.decisions.get(decisionId);
     const backingNow = backing ? this.artifacts.find((a) => a.id === backing.id) : void 0;
     this.pendingResolutions.set(decisionId, {
@@ -27591,11 +27593,44 @@ var FileStore = class _FileStore {
         }
       }
       this.unannouncedResolutions.delete(decisionId);
+      try {
+        this.scheduleFlush();
+      } catch {
+      }
     }
     this.feedbackNotifyHolds = Math.max(0, this.feedbackNotifyHolds - 1);
+    if (committed) this.feedbackNotifyPending = true;
     if (this.feedbackNotifyHolds === 0 && this.feedbackNotifyPending) {
       this.feedbackNotifyPending = false;
       this.notifyFeedbackWaiters();
+    }
+  }
+  /**
+   * #490 — after a FAILED flush, did this resolution land on disk anyway? A
+   * flush writes collections in sequence (artifacts → … → decisions → plan
+   * reviews → requests …); a disk error AFTER decisions.json (ENOSPC on a later
+   * file) leaves the answer durable while the flush throws. The route must then
+   * treat the request as committed (announce once, succeed) — not 503 a
+   * decision that is resolved on disk. Reads the file directly; any read
+   * problem means "not proven durable" (→ roll back).
+   */
+  isResolutionDurable(decisionId) {
+    const pending = this.pendingResolutions.get(decisionId);
+    const written = pending?.writtenResponse;
+    if (!written) return false;
+    try {
+      const raw2 = JSON.parse(fs14.readFileSync(path13.join(this.sessionDir(), "decisions.json"), "utf8"));
+      const onDisk = Array.isArray(raw2) ? raw2.find((d) => d?.decisionId === decisionId)?.response : void 0;
+      const durable = !!onDisk && onDisk.optionId === written.optionId && (onDisk.reasoning ?? null) === (written.reasoning ?? null);
+      if (durable) {
+        try {
+          this.scheduleFlush();
+        } catch {
+        }
+      }
+      return durable;
+    } catch {
+      return false;
     }
   }
   /** #484 review — decisions whose answer was written by resolveDecisionAtomic
@@ -31947,7 +31982,12 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
             await store.updateArtifactStatus(targetArtifactId, "approved", "ui_decision_resolve");
           }
         }
-        await store.forceFlush();
+        try {
+          await store.forceFlush();
+        } catch (error51) {
+          if (!(outcome.kind === "resolved" && await store.isResolutionDurable(decisionId))) throw error51;
+          log2(`[decision] flush failed after ${decisionId}'s answer was persisted \u2014 treating as committed: ${String(error51)}`);
+        }
         committed = true;
         if (targetArtifactId) {
           await maybeUpdateTaskStatus(null, targetArtifactId, store);
@@ -33684,7 +33724,11 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
           return c.json({ error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error }, 400);
         }
         const artifactId = r.store.getDecision(decisionId)?.artifactId;
-        await r.store.forceFlush();
+        try {
+          await r.store.forceFlush();
+        } catch (error51) {
+          if (!r.store.isResolutionDurable(decisionId)) throw error51;
+        }
         committed = true;
         r.store.takeResolutionAnnouncement(decisionId);
         broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId, optionId, reasoning, confidence, predictedOutcome });

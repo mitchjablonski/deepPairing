@@ -463,6 +463,9 @@ export interface IStore {
    * must call this exactly once.
    */
   settleResolution(decisionId: string, committed: boolean): MaybePromise<void>;
+  /** #490 — after a failed flush: is this unsettled resolution durably on disk
+   *  anyway (a partial write)? true → the caller settles it as committed. */
+  isResolutionDurable(decisionId: string): MaybePromise<boolean>;
   getDecisionResponse(decisionId: string): MaybePromise<{ optionId: string; reasoning?: string } | null>;
   getPendingDecisions(): MaybePromise<DecisionRecord[]>;
   getDecision(decisionId: string): MaybePromise<DecisionRecord | undefined>;
