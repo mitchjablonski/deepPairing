@@ -26849,26 +26849,27 @@ function buildThreads(comments) {
     replies: (descendants.get(root.id) ?? []).sort(byTime)
   }));
 }
-function findOpenQuestion(comment, replies) {
-  const isOpenHumanQuestion = (m) => {
-    const x = m;
-    return m.author === "human" && x.intent === "question" && !x.answeredByCommentId && !x.humanResolvedAt;
-  };
-  const chain = [comment, ...replies];
-  for (let i = chain.length - 1; i >= 0; i--) {
-    const m = chain[i];
-    if (m.author !== "human")
-      return null;
-    if (m.intent === "question")
-      return isOpenHumanQuestion(m) ? m : null;
+var isQuestion = (m) => m.author === "human" && m.intent === "question";
+var isClosed = (m) => {
+  const x = m;
+  return !!x.answeredByCommentId || !!x.humanResolvedAt;
+};
+function openQuestionsInThread(root, replies) {
+  let waiting = [];
+  for (const m of [root, ...replies]) {
+    if (m.author === "agent") {
+      waiting = [];
+      continue;
+    }
+    if (isQuestion(m) && !isClosed(m))
+      waiting.push(m);
   }
-  return null;
+  return waiting;
 }
 function collectUnansweredQuestions(comments) {
   const out = [];
   for (const t of buildThreads(comments)) {
-    const question = findOpenQuestion(t.root, t.replies);
-    if (question) {
+    for (const question of openQuestionsInThread(t.root, t.replies)) {
       const artifactId = question.target?.artifactId ?? t.root.target?.artifactId ?? "";
       out.push({ artifactId, question, root: t.root, replies: t.replies });
     }
@@ -32071,7 +32072,7 @@ function looseCommentBeat(c, ctx, seq) {
 }
 function stanceBeat(r, seq) {
   const reason = r.reason ? `<blockquote class="human-reason">${renderInline(r.reason)}</blockquote>` : "";
-  const concept = r.concept ? `<p class="gate-note">Recorded as the concept <code>${esc2(r.concept)}</code> \u2014 a paraphrase of the same idea is caught too.</p>` : "";
+  const concept = r.concept ? `<p class="gate-note">Recorded as the concept <code>${esc2(r.concept)}</code> \u2014 later proposals that reuse its words (or a listed synonym) are refused in this project; a rewording that shares no words is not caught.</p>` : "";
   return beat(
     r.rejectedAt ?? "",
     seq,
@@ -33267,7 +33268,7 @@ function formatLearnings(state) {
   sections.push(`# Learnings \u2014 ${title}`);
   sections.push("");
   sections.push(
-    "*Teaching artifact: concepts named and approaches you won't re-propose.*"
+    "*Teaching artifact: concepts named and approaches you rejected.*"
   );
   sections.push("");
   const reasoningArtifacts = state.artifacts.filter(
@@ -33334,7 +33335,7 @@ function formatLearnings(state) {
     }
   }
   if (rows.length > 0) {
-    sections.push("## Approaches you won't re-propose");
+    sections.push("## Approaches you rejected");
     sections.push("");
     rows.forEach((r) => sections.push(r));
     sections.push("");
@@ -33553,7 +33554,7 @@ function resolveProjectRoot(opts = {}) {
 }
 
 // src/version.ts
-var SERVER_VERSION = "0.1.56";
+var SERVER_VERSION = "0.1.62";
 function parseSemver(v2) {
   const m = /^\s*(\d+)\.(\d+)\.(\d+)/.exec(v2);
   if (!m) return null;
@@ -34198,7 +34199,7 @@ ${otherLines.join("\n")}`);
     }
     const older = carryover.filter(
       (q) => (
-        // FIX 1 — target/dedupe the ACTUAL open-question comment (the tail-walk
+        // FIX 1 — target/dedupe the ACTUAL open-question comment (the per-question rule
         // landing, which for a reply-question is NOT the thread root).
         !deliveredIds.has(q.question.id) && // HUNCH — a __session__ question is drained as a DIRECTIVE above (and
         // acknowledged); collecting it here too would double-surface it in the
@@ -37266,7 +37267,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
         // an "approve this pattern" prompt would dilute the meaning.
         {
           name: "seed",
-          description: "Encode a stance you want the cross-project ledger to remember. The agent calls /api/philosophy/seed with what you provide; future preflights catch paraphrases of this stance across every deepPairing project on this machine.",
+          description: "Encode a stance you want the cross-project ledger to remember. The agent calls /api/philosophy/seed with what you provide; future proposals in any deepPairing project on this machine that reuse its words (plus a short synonym list) get an advisory nudge, never a block. To block it in a project, reject it there.",
           arguments: [
             {
               name: "concept",
@@ -37275,7 +37276,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
             },
             {
               name: "reason",
-              description: "Why you're rejecting it. One sentence is fine \u2014 the agent surfaces this in future preflight blocks so the future-you remembers the WHY.",
+              description: "Why you're rejecting it. One sentence is fine \u2014 the agent surfaces this in future advisory preflight nudges so the future-you remembers the WHY.",
               required: false
             }
           ]
@@ -37317,7 +37318,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
             role: "user",
             content: {
               type: "text",
-              text: `POST to /api/philosophy/seed with body {"verdict": "rejected", "concept": ${JSON.stringify(concept)}` + (reason ? `, "reason": ${JSON.stringify(reason)}` : ``) + `} so the cross-project ledger records the stance. ` + reasonClause + ` After the POST succeeds, confirm to the user: "Seeded \u2014 future preflights across every deepPairing project will catch paraphrases of this." If the POST fails (validation error or daemon unreachable), surface the exact error rather than retrying silently.`
+              text: `POST to /api/philosophy/seed with body {"verdict": "rejected", "concept": ${JSON.stringify(concept)}` + (reason ? `, "reason": ${JSON.stringify(reason)}` : ``) + `} so the cross-project ledger records the stance. ` + reasonClause + ` After the POST succeeds, confirm to the user: "Seeded \u2014 proposals in your deepPairing projects that reuse these words (matched on words, not meaning) will get an advisory nudge; it won't block. Reject it in a project to block it there." If the POST fails (validation error or daemon unreachable), surface the exact error rather than retrying silently.`
             }
           }
         ]

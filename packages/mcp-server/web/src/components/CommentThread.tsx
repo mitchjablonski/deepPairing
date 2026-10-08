@@ -9,6 +9,7 @@ import { useChainComments } from "../hooks/useChainComments";
 import { useSentFlash } from "../hooks/useSentFlash";
 import { SimpleMarkdown } from "./SimpleMarkdown";
 import { isSessionLive } from "../stores/connection";
+import { unansweredQuestionIds } from "../lib/unanswered";
 // #180 — the SHARED carryover marker. Value import of the PRESENTATIONAL badge
 // only (never computeCarryover), so the entry chunk stays free of the Zod
 // coercion the read-model needs — the D6 lazy-Zod split. `CarryoverState` is a
@@ -16,6 +17,8 @@ import { isSessionLive } from "../stores/connection";
 import { CarryoverBadge } from "./decision/CarryoverBadge";
 import type { CarryoverState } from "./decision/carryover";
 import { SpeechIcon } from "./icons/ArtifactIcons";
+import { WAITING_TONE } from "../lib/waitingTone";
+import { useOfflineReason } from "../hooks/useOfflineReason";
 
 interface CommentThreadProps {
   artifactId: string;
@@ -99,7 +102,7 @@ function Avatar({ author }: { author: string }) {
 }
 
 
-function CommentBubble({ comment, fromVersion, roomy }: { comment: Comment; fromVersion?: number; roomy?: boolean }) {
+function CommentBubble({ comment, fromVersion, roomy, questionOpen }: { comment: Comment; fromVersion?: number; roomy?: boolean; questionOpen?: boolean }) {
   const isHuman = comment.author === "human";
   const refs = (comment as any).codeReferences as Array<{
     filePath: string;
@@ -172,7 +175,16 @@ function CommentBubble({ comment, fromVersion, roomy }: { comment: Comment; from
                 {/* U8 — only a QUESTION leaves the agent owing a reply; a plain
                     comment/suggestion is just delivered, so don't imply the
                     agent is on the hook for it. */}
-                {comment.intent === "question" ? (isSessionLive(comment.sessionId) ? "delivered · awaiting agent" : "delivered · agent exited") : "delivered"}
+                {/* #430 PR 1c — a question is only "awaiting agent" while it is
+                    OPEN under the shared thread-aware rule; once the agent has
+                    replied in its thread (or you resolved it) say so. */}
+                {comment.intent !== "question"
+                  ? "delivered"
+                  : comment.humanResolvedAt
+                    ? "resolved by you"
+                    : questionOpen === false
+                      ? "✓ answered"
+                      : isSessionLive(comment.sessionId) ? "delivered · awaiting agent" : "delivered · agent exited"}
               </span>
             ))}
         </div>
@@ -216,6 +228,7 @@ export function CommentThread({
   readOnly = false,
   focusOnOpen = false,
 }: CommentThreadProps) {
+  const offline = useOfflineReason(); // #467 review — replies/Ask gate like every act button
   // D9 (H5) — keyed per artifact+anchor so each thread keeps its own draft.
   // Bug1 — key off the STABLE chain-root id, not the per-version artifactId: a
   // supersede advances the selection to v2's new id and remounts this thread,
@@ -271,6 +284,7 @@ export function CommentThread({
   // arrow (`() => handleSubmit()`), never pass the handler to onClick directly
   // — a MouseEvent arg would be truthy and silently flip the intent.
   const handleSubmit = async (intent?: "question") => {
+    if (offline) return; // #467 review — offline: refuse (the button is disabled too)
     if (!input.trim() || submitting) return;
     setSubmitting(true);
     const sent = input;
@@ -301,6 +315,7 @@ export function CommentThread({
   // F7 — transitive threads: one-level nesting made depth-2 replies (the
   // Reply button's own output!) invisible. Shared with the rail.
   const threads = buildThreads(comments);
+  const openQuestionIds = unansweredQuestionIds(comments);
 
   // Bug2 — a comment whose target artifact differs from the one being viewed
   // was posted on an earlier version (aggregated via the chain). Surface its
@@ -319,7 +334,7 @@ export function CommentThread({
         return (
           <div key={comment.id} className="space-y-2">
             {carried && <CarryoverBadge state={co} />}
-            <CommentBubble comment={comment} fromVersion={carried ? undefined : fromVersion(comment)} roomy={roomy} />
+            <CommentBubble comment={comment} fromVersion={carried ? undefined : fromVersion(comment)} roomy={roomy} questionOpen={openQuestionIds.has(comment.id)} />
             {replies.length > 0 && (
               <div className="ml-7 space-y-2 border-l border-border-subtle pl-3">
                 {replies.map((reply) => {
@@ -331,7 +346,7 @@ export function CommentThread({
                   return (
                     <Fragment key={reply.id}>
                       {rCarried && <CarryoverBadge state={rco} />}
-                      <CommentBubble comment={reply} fromVersion={rCarried ? undefined : fromVersion(reply)} roomy={roomy} />
+                      <CommentBubble comment={reply} fromVersion={rCarried ? undefined : fromVersion(reply)} roomy={roomy} questionOpen={openQuestionIds.has(reply.id)} />
                     </Fragment>
                   );
                 })}
@@ -371,8 +386,8 @@ export function CommentThread({
         {secondarySubmitLabel && (
           <button
             onClick={() => handleSubmit("question")}
-            disabled={!input.trim() || submitting}
-            title={secondarySubmitTitle}
+            disabled={(!input.trim() || submitting) || !!offline}
+            title={offline ?? (secondarySubmitTitle)}
             className="px-2.5 py-1.5 bg-accent-violet-dim text-accent-violet text-xs rounded
                        hover:bg-accent-violet-dim/80 disabled:bg-surface-elevated disabled:text-text-muted
                        transition-colors shrink-0"
@@ -381,8 +396,9 @@ export function CommentThread({
           </button>
         )}
         <button
+          title={offline ?? undefined}
           onClick={() => handleSubmit()}
-          disabled={!input.trim() || submitting}
+          disabled={(!input.trim() || submitting) || !!offline}
           className="px-2.5 py-1.5 bg-accent-blue-strong text-white text-xs rounded
                      hover:bg-accent-blue/80 disabled:bg-surface-elevated disabled:text-text-muted
                      transition-colors shrink-0"
@@ -431,6 +447,7 @@ export function AskTrigger({
    *  the two actions sit as equal halves of a wide bar. Pill variant only. */
   fullWidth?: boolean;
 }) {
+  const offline = useOfflineReason(); // #467 review — replies/Ask gate like every act button
   const [open, setOpen] = useState(false);
   const [question, setQuestion] = useState("");
   const [sending, setSending] = useState(false);
@@ -457,13 +474,21 @@ export function AskTrigger({
     if (target.lineNumber != null && c.target.lineNumber !== target.lineNumber) return false;
     return true;
   });
-  // A question is still "waiting" only when neither the agent answered it nor
-  // the human marked it resolved themselves. humanResolvedAt clears the violet
-  // pulse the same way an answer does.
-  const unanswered = matching.filter((q) => !q.answeredByCommentId && !q.humanResolvedAt).length;
+  // #430 PR 1c — the ONE thread-aware rule (lib/unanswered): a question waits
+  // until an agent reply exists in ITS thread or the human resolved it. The
+  // flat `!answeredByCommentId` check here kept pulsing after a threaded reply.
+  // Computed over the whole chain so replies (which may carry other targets)
+  // are seen.
+  const openIds = unansweredQuestionIds(artifactComments);
+  const unanswered = matching.filter((q) => openIds.has(q.id)).length;
   const answeredQuestions = matching.filter((q) => q.answeredByCommentId);
+  /** The answer to show: the out-of-band answer, else the agent's threaded reply. */
+  const answerFor = (q: Comment): Comment | undefined =>
+    (q.answeredByCommentId ? artifactComments.find((c) => c.id === q.answeredByCommentId) : undefined) ??
+    artifactComments.find((c) => c.author === "agent" && c.parentCommentId === q.id);
 
   const send = async () => {
+    if (offline) return; // #467 review — offline: refuse (the button is disabled too)
     const trimmed = question.trim();
     if (!trimmed || sending) return;
     setSending(true);
@@ -490,7 +515,7 @@ export function AskTrigger({
       : "inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded transition-colors";
 
   const tint = unanswered > 0
-    ? "bg-accent-violet-dim text-accent-violet hover:bg-accent-violet-dim/80 animate-pulse"
+    ? `${WAITING_TONE.chip} ${WAITING_TONE.chipHover} animate-pulse` // #430 PR 1d — waiting on the agent
     : matching.length > 0
       ? "bg-accent-violet-dim/40 text-accent-violet hover:bg-accent-violet-dim/60"
       : "bg-surface-elevated text-text-muted hover:bg-surface-hover hover:text-accent-violet";
@@ -520,9 +545,7 @@ export function AskTrigger({
           {matching.length > 0 && (
             <div className="space-y-2 pb-2 border-b border-border-subtle">
               {matching.map((q) => {
-                const answer = q.answeredByCommentId
-                  ? artifactComments.find((c) => c.id === q.answeredByCommentId)
-                  : undefined;
+                const answer = answerFor(q);
                 return (
                   <div key={q.id} className="text-2xs">
                     <div className="font-medium text-accent-violet">
@@ -534,7 +557,7 @@ export function AskTrigger({
                       </div>
                     ) : q.humanResolvedAt ? (
                       <div className="mt-0.5 pl-3 text-text-muted italic">resolved by you</div>
-                    ) : q.author === "human" ? (
+                    ) : q.author === "human" && openIds.has(q.id) ? (
                       <div className="mt-0.5 pl-3 flex items-center gap-2">
                         <span className="text-text-muted italic">awaiting answer</span>
                         <button
@@ -546,8 +569,10 @@ export function AskTrigger({
                           Mark resolved
                         </button>
                       </div>
-                    ) : (
+                    ) : openIds.has(q.id) ? (
                       <div className="mt-0.5 pl-3 text-text-muted italic">awaiting answer</div>
+                    ) : (
+                      <div className="mt-0.5 pl-3 text-text-muted italic">answered in the thread</div>
                     )}
                   </div>
                 );
@@ -576,8 +601,9 @@ export function AskTrigger({
               className="flex-1 px-2 py-1 bg-surface-primary border border-border-default rounded text-2xs text-text-primary placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-violet"
             />
             <button
+              title={offline ?? undefined}
               onClick={send}
-              disabled={!question.trim() || sending}
+              disabled={(!question.trim() || sending) || !!offline}
               className="px-2 py-1 bg-accent-violet-strong text-white text-2xs rounded hover:bg-accent-violet-strong-hover disabled:opacity-50 press-scale"
             >
               Ask

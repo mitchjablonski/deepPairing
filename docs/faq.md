@@ -13,10 +13,11 @@ ledger of stances you've rejected, using concept-token + scope-glob
 rules from [`runPreflight`](../packages/mcp-server/src/mcp/preflight-validator.ts).
 What makes it work isn't ML magic; it's that the match happens
 **before** the artifact is created and the tool returns an error the
-agent has to react to. Cursor's canvases let the agent ship the
-artifact and ask the human to reject again. Claude Code's auto-memory
-hopes the model consults the right context. deepPairing makes the
-rejection a hard gate: the `present_*` tool refuses
+agent has to react to. Claude Code's memory is context the model is asked
+to follow, and its own docs point to a `PreToolUse` hook for a hard stop
+([memory docs](https://code.claude.com/docs/en/memory), checked
+2026-09-27). deepPairing wires that up from your review decisions: the
+`present_*` tool refuses
 (`REJECTED_APPROACH_BLOCKED`), and a PreToolUse hook catches a *direct*
 edit that tries to skip the protocol and surfaces it for your decision.
 The same hook carries a second prompt class — a *guardrail backstop* that
@@ -174,7 +175,10 @@ different semantics:
   tries to re-propose it → `runPreflight` matches **this project's**
   rejections (or a committed `team.json` rule) → the tool returns
   `REJECTED_APPROACH_BLOCKED` → the artifact is never created. The
-  agent has to revise or escalate; it cannot silently proceed.
+  agent has to revise or escalate. (Outside `present_*` there are gaps:
+  a matching direct `Edit`/`Write` gets a permission prompt you can allow,
+  and edits made through `Bash`, or while the hook is erroring, are not
+  checked.)
 - deepPairing, on your *other* projects — **once you've enabled
   cross-project publishing** in the project where you made the call
   (Autonomy → Cross-project memory in the companion UI, the one-time
@@ -226,8 +230,8 @@ defensible — the cross-project ledger isn't the moat. Rich cross-session
 recall is table stakes now (Copilot/Cursor memory, CodeRabbit
 Learnings). What's hard to copy is the composed review system and the
 in-loop pre-execution gate that *acts* on a stance the moment the agent
-re-proposes it — a `PreToolUse` block that stops-and-asks before the
-edit lands, in the project where you made the call. We think honesty
+re-proposes it — a refused `present_*` call, or a `PreToolUse`
+permission prompt before a direct edit lands, in the project where you made the call. We think honesty
 about the trust model beats a frictionless poisoning surface.
 
 ## "Does it phone home? What's stored where?"
@@ -254,17 +258,20 @@ See [SECURITY.md](../SECURITY.md) for the threat model in full.
 
 ## "What's the install size? Cold-clone time?"
 
-- Repo: ~12 MB unpacked; built dist is ~12 MB (most of which is the
-  bundled Shiki language grammars for syntax highlighting in the
-  companion UI).
-- Cold `pnpm install`: 60-90s on a normal laptop (Turborepo + a few
-  hundred deps).
-- Build: ~10s for the monorepo, ~7s for the companion UI alone.
-- Demo: ~5s end-to-end once built.
+- **Plugin (the supported path):** no build. The committed server bundle
+  starts with plain `node`. Once the repo is fetched (1.1–1.4 s on a fast
+  connection), the daemon and MCP server are up in about 0.4 s on Linux and
+  about 1.1 s on Windows.
+- **Source build (the developer path):** from a cold pnpm store, install took
+  6.0 s (506 packages downloaded), the build took 8.3 s and the demo took 1.9 s.
+  With a warm store, install took 2.1 s.
 
-We've measured these numbers on a recent MacBook Pro and a Linux
-desktop. Slower hardware (or first-time `pnpm setup`) adds maybe
-30s. If your numbers are dramatically worse, that's worth an issue.
+The full table and how it was measured are in
+[the README](../README.md#how-long-it-takes). Those figures come from
+2026-09-27, on Linux (WSL2 ext4, Node 20.20, 16 cores) and Windows (Node 24.18),
+using throwaway directories. A slow network, a slow disk, or a first start on
+WSL `/mnt/c` takes noticeably longer. If your numbers are dramatically worse,
+please open an issue.
 
 ## "Is it stable enough for daily use?"
 

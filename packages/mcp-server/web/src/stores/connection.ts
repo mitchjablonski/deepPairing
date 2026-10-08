@@ -3,9 +3,10 @@ import { createAdapter, type ConnectionAdapter } from "../lib/connection-adapter
 import { apiGet, sessionHeaders, apiBase } from "../lib/api";
 import { useHookStatusStore } from "./hookStatus";
 import { isDraftAwaitingReview } from "../lib/pending";
-import { pushDaemonRestartToast } from "../lib/daemon-restart";
+import { pushDaemonRestartToast, pushStaleDaemonToast } from "../lib/daemon-restart";
 import { reloadIfChunkFailedOffline } from "../lib/chunk-error";
 import { noAgentLive } from "../lib/liveness";
+import { AGENT_ACTIVE_WINDOW_MS } from "../lib/agentActivity";
 import type { Artifact, Comment, Request } from "@deeppairing/shared";
 import { useReplayStore } from "./replay";
 import {
@@ -29,7 +30,15 @@ interface RecoverySnapshot {
   }>;
 }
 
-/** Request notification permission and send a notification when tab is unfocused */
+/** Request notification permission and send a notification when tab is unfocused.
+ *
+ *  #430 PR 1e review — deliberately NO `tag`, for decisions especially. Under
+ *  the Notifications spec, a notification that REPLACES another with the same
+ *  tag is shown SILENTLY (no sound, no banner) unless `renotify: true` — and
+ *  `renotify` is Chrome-only (Firefox and Safari ignore it). A shared tag would
+ *  therefore make a second decision, minutes later, silently overwrite the
+ *  first one still in the notification centre: the exact "decision raises no
+ *  alert" bug PR 1e fixes. Each alert stays its own notification. */
 function notifyIfUnfocused(title: string, body: string) {
   if (typeof Notification === "undefined") return;
   if (document.hasFocus()) return;
@@ -57,6 +66,18 @@ interface SwitchSessionOptions {
 
 interface ConnectionState {
   connected: boolean;
+  /**
+   * #430 PR 2 review — the failure states the Next-up bar prefixes (design
+   * §4.3 rule 1). Until now they existed only as toasts. Each is set where its
+   * toast fires and cleared on the next successful connect.
+   *   - staleDaemon: this tab is bound to a replaced daemon (WS mismatch here,
+   *     REST project_hash_mismatch in stores/artifact.ts);
+   *   - snapshotUnavailable: the daemon refused the initial snapshot;
+   *   - sessionConflict: the daemon refused with session_review_conflict.
+   */
+  staleDaemon: boolean;
+  snapshotUnavailable: boolean;
+  sessionConflict: boolean;
   /** D8 (H4) — epoch ms of the FIRST disconnect of the current outage; null while connected. */
   disconnectedSince: number | null;
   sessionId: string | null;
@@ -235,16 +256,24 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
   // window keeps an agent presenting several artifacts back-to-back (or a
   // supersede re-broadcast) from firing N OS notifications — the tab-title
   // badge carries the true count.
+  //
+  // #430 PR 1e (docs/design/attention-hierarchy.md §2.8) — the burst window was
+  // type-blind, so a DECISION arriving right after a finding got no alert at
+  // all: the one draft that blocks the agent was the one you didn't hear
+  // about. Decisions bypass the burst window (still deduped by id) and don't
+  // restart it, so the drafts around them are throttled exactly as before.
   const notifiedArtifactIds = new Set<string>();
   let lastDraftNotifyAt = 0;
-  const notifyDraft = (artifactId: string | undefined, body: string) => {
+  const notifyDraft = (artifactId: string | undefined, body: string, opts?: { decision?: boolean }) => {
     if (artifactId) {
       if (notifiedArtifactIds.has(artifactId)) return;
       notifiedArtifactIds.add(artifactId);
     }
-    const now = Date.now();
-    if (now - lastDraftNotifyAt < 5_000) return;
-    lastDraftNotifyAt = now;
+    if (!opts?.decision) {
+      const now = Date.now();
+      if (now - lastDraftNotifyAt < 5_000) return;
+      lastDraftNotifyAt = now;
+    }
     notifyIfUnfocused("deepPairing — your turn", body);
   };
 
@@ -480,7 +509,9 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
                 spec: "Spec ready for review",
                 research: "Findings ready for review",
               }[data.artifact.type as string] ?? "Ready for review";
-            notifyDraft(data.artifact.id, `${label}: ${data.artifact.title ?? ""}`);
+            notifyDraft(data.artifact.id, `${label}: ${data.artifact.title ?? ""}`, {
+              decision: data.artifact.type === "decision",
+            });
           }
           break;
 
@@ -496,12 +527,14 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           // call the agent's wrapper makes. A gap >60s starts a new activity
           // streak (check_feedback polls ~30s, so a live agent pings at least
           // that often); agentActiveSince drives "Agent working · Nm".
+          // #430 PR 1b/1e review — the streak gap IS the shared activity window,
+          // so "Agent working · Nm" and the pill agree on "still working".
           const now = Date.now();
           const prev = get().agentActivityAt;
           set({
             agentActivityAt: now,
             agentActiveSince:
-              prev !== null && now - prev < 60_000 ? (get().agentActiveSince ?? now) : now,
+              prev !== null && now - prev < AGENT_ACTIVE_WINDOW_MS ? (get().agentActiveSince ?? now) : now,
           });
           break;
         }
@@ -564,6 +597,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           notifyDraft(
             data.artifactId,
             `Decision needed: ${data.context ?? "the agent needs you to choose an approach"}`,
+            { decision: true },
           );
           break;
 
@@ -953,6 +987,9 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
   return {
     connected: false,
     disconnectedSince: null,
+    staleDaemon: false,
+    snapshotUnavailable: false,
+    sessionConflict: false,
     sessionId: null,
     projectRoot: null,
     agentActivityAt: null,
@@ -987,7 +1024,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         // the bounded probe may decline to reload and must not strand it.
         reloadIfChunkFailedOffline();
         thisConnection = ++connectionGeneration;
-        set({ connected: true, disconnectedSince: null });
+        set({ connected: true, disconnectedSince: null, staleDaemon: false, snapshotUnavailable: false, sessionConflict: false });
         // Request notification permission on first connect
         if (typeof Notification !== "undefined" && Notification.permission === "default") {
           Notification.requestPermission();
@@ -1034,22 +1071,14 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       // safe recovery: it refetches the live daemon's hash and rebinds
       // the tab deliberately.
       adapter.onFatalMismatch?.(() => {
-        set({ connected: false });
-        import("./toast").then(({ useToastStore }) => {
+        set({ connected: false, staleDaemon: true });
+        // #430 PR 5 — the one shared stale-daemon toast (lib/daemon-restart):
+        // same wording and dedup as the REST path, so the two never stack.
+        // Deferred one microtask, as before, so a teardown in the same tick
+        // (disconnect / adapter swap) drops it.
+        void Promise.resolve().then(() => {
           if (get().adapter !== adapter) return;
-          useToastStore.getState().push({
-            kind: "error",
-            title: "Tab is bound to a stale daemon",
-            body: "This project's daemon was replaced by a different project's daemon on the same port. Reload the page to re-bind.",
-            ttl: 0,
-            action: {
-              label: "Reload to re-bind",
-              onClick: () => {
-                if (get().adapter !== adapter) return;
-                if (typeof window !== "undefined") window.location.reload();
-              },
-            },
-          });
+          pushStaleDaemonToast();
         });
       });
 
@@ -1066,6 +1095,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         import("./toast").then(({ useToastStore }) => {
           if (get().adapter !== adapter || !isCurrentSessionTransition(transition)) return;
           if (info.code !== "session_review_conflict") {
+            set({ snapshotUnavailable: true });
             useToastStore.getState().push({
               kind: "error",
               title: "Session state temporarily unavailable",
@@ -1074,6 +1104,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             });
             return;
           }
+          set({ sessionConflict: true });
           useToastStore.getState().push({
             kind: "error",
             title: "Session review conflict",

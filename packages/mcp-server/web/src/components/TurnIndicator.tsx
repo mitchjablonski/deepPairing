@@ -1,10 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Comment } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
 import { computePending, summarizeTurnParts } from "../lib/pending";
-import { isUnansweredQuestion } from "../lib/unanswered";
-import { buildThreads } from "../lib/threading";
+import { AGENT_ACTIVE_WINDOW_MS, lastAgentActivityMs } from "../lib/agentActivity";
 
 /**
  * Top-header turn indicator + agent narration pill.
@@ -33,12 +31,17 @@ import { buildThreads } from "../lib/threading";
  */
 export function TurnIndicator({
   pendingBannerVisible = false,
-  questionsBannerVisible = false,
   pendingCardInView = false,
+  agentStateOnly = false,
 }: {
   pendingBannerVisible?: boolean;
-  questionsBannerVisible?: boolean;
   pendingCardInView?: boolean;
+  /** #430 PR 3 — with the Next-up bar on, the bar owns "your turn" (count,
+   *  jump, next) and the ONE announcer for ATTENTION changes; this pill shows
+   *  the agent's state only. It stays a live region for agent-state
+   *  transitions (working → exited…), which are not attention events and which
+   *  nothing else announces (an exit doesn't change `next`). */
+  agentStateOnly?: boolean;
 } = {}) {
   const artifacts = useArtifactStore((s) => s.artifacts);
   const comments = useArtifactStore((s) => s.comments);
@@ -51,6 +54,19 @@ export function TurnIndicator({
   // quiet and the old inference flipped to "Up to date" on a busy agent).
   const agentActivityAt = useConnectionStore((s) => s.agentActivityAt);
   const agentActiveSince = useConnectionStore((s) => s.agentActiveSince);
+  // #457 D1 — with the bar ON, the load-time "Connected → Agent working" flip
+  // was spoken at the same instant as the bar's first "Next up" (two polite
+  // announcers on load). The agent-state region stays live (#452), but only
+  // ARMS once hydration has settled — so the initial mount is silent and every
+  // later transition (an exit, a resume) is still announced. Bar OFF: live
+  // from the start, as before.
+  const hydrated = useConnectionStore((s) => s.hydrated);
+  const [liveArmed, setLiveArmed] = useState(!agentStateOnly);
+  useEffect(() => {
+    if (liveArmed || !hydrated) return;
+    const t = setTimeout(() => setLiveArmed(true), 750);
+    return () => clearTimeout(t);
+  }, [liveArmed, hydrated]);
 
   const latestReasoningAction = useMemo(() => {
     // Walk backward through artifacts to find the most recent reasoning
@@ -88,53 +104,14 @@ export function TurnIndicator({
     return null;
   }, [artifacts]);
 
-  // Q4: aggregate unanswered questions across all artifacts so the badge
-  // surfaces "N waiting on agent" at a glance. Points at the first-asked
-  // unanswered question when clicked.
-  const unanswered = useMemo(() => {
-    // H1 — the SHARED predicate over threads, not a private flat filter:
-    // the old filter counted a root as waiting even after the agent
-    // answered a FOLLOW-UP (markCommentAnswered stamps the reply id, not
-    // the root) — this badge said "1 waiting" while the Conversation badge
-    // and rail said answered. buildThreads + isUnansweredQuestion is the
-    // exact pair those surfaces use, so the three can't drift.
-    const out: Array<{ artifactId: string; comment: Comment }> = [];
-    for (const [artifactId, list] of Object.entries(comments)) {
-      for (const t of buildThreads(list as Comment[])) {
-        if (isUnansweredQuestion(t.root, t.replies)) {
-          out.push({ artifactId, comment: t.root });
-        }
-      }
-    }
-    out.sort((a, b) => a.comment.createdAt.localeCompare(b.comment.createdAt));
-    return out;
-  }, [comments]);
 
-  // U2 — liveness: the newest artifact/comment timestamp. After AGENT_IDLE_MS
+  // U2 — liveness: the newest artifact/comment timestamp. After AGENT_ACTIVE_WINDOW_MS
   // with no new activity we stop claiming "Agent working" (the old behavior
   // pulsed forever, telling the human to keep waiting on an idle/finished
   // agent). A timer flips `idle` so it updates even without a re-render.
-  const lastActivityMs = useMemo(() => {
-    let max = 0;
-    for (const a of artifacts) {
-      const t = new Date(a.createdAt).getTime();
-      if (Number.isFinite(t) && t > max) max = t;
-    }
-    for (const list of Object.values(comments)) {
-      for (const c of list as Comment[]) {
-        // M3 — only AGENT-authored comments count as agent liveness. A human
-        // posting a comment while the agent is gone used to bump this, pulsing
-        // "Agent working" for 45s over an exited agent (the composer below said
-        // otherwise). Human input is never proof the agent is alive.
-        if (c.author !== "agent") continue;
-        const t = new Date(c.createdAt).getTime();
-        if (Number.isFinite(t) && t > max) max = t;
-      }
-    }
-    return max;
-  }, [artifacts, comments]);
+  // #455 review — shared with the session-bar dot (lib/agentActivity).
+  const lastActivityMs = useMemo(() => lastAgentActivityMs(artifacts, comments), [artifacts, comments]);
 
-  const AGENT_IDLE_MS = 45_000;
   // B2 — liveness = max(artifact/comment timestamps, heartbeat). Either signal
   // keeps "Agent working" honest; the heartbeat covers the artifact-quiet gaps.
   const effectiveActivityMs = Math.max(lastActivityMs, agentActivityAt ?? 0);
@@ -148,7 +125,8 @@ export function TurnIndicator({
   useEffect(() => {
     setIdle(false);
     if (!effectiveActivityMs) return;
-    const remaining = AGENT_IDLE_MS - (Date.now() - effectiveActivityMs);
+    // #430 PR 1b — the shared activity window (was a local 45s; see lib/agentActivity).
+    const remaining = AGENT_ACTIVE_WINDOW_MS - (Date.now() - effectiveActivityMs);
     if (remaining <= 0) { setIdle(true); return; }
     const t = setTimeout(() => setIdle(true), remaining);
     return () => clearTimeout(t);
@@ -189,42 +167,13 @@ export function TurnIndicator({
   const pending = computePending(artifacts).drafts;
   const totalPending = pending.length;
 
-  // Q4 — badge rendered alongside the turn pill. Violet = "waiting on agent"
-  // (inverse of the amber "your turn"). Click jumps to the oldest unanswered
-  // question so the user can see what was asked.
-  const anyAnswerable = unanswered.some(
-    (q) => activeSessions.find((x) => x.sessionId === q.comment.sessionId)?.live !== false,
-  );
-  // M4 — when ResumeQuestionsBanner is showing (agent exited + open questions),
-  // its "N questions waiting for Claude" is the actionable surface; this header
-  // badge collapses to a count-only chip so the label isn't rendered twice. The
-  // "(agent exited)" wording also moves OUT of this badge — the agent's-turn
-  // pill now states "Agent exited" once, canonically (M3).
-  const questionsBadge = unanswered.length > 0 ? (
-    <button
-      type="button"
-      onClick={() => {
-        const first = unanswered[0];
-        if (first) selectArtifact(first.artifactId);
-      }}
-      title={anyAnswerable
-        ? `${unanswered.length} question${unanswered.length > 1 ? "s" : ""} waiting on the agent — click to jump`
-        : `${unanswered.length} unanswered question${unanswered.length > 1 ? "s" : ""} — the agent exited; they'll be seen if the session resumes`}
-      // Only override the accessible name in COMPACT mode (visible text is a
-      // bare count then); in full mode the visible label is the name.
-      aria-label={questionsBannerVisible
-        ? `${unanswered.length} unanswered question${unanswered.length > 1 ? "s" : ""} — click to jump`
-        : undefined}
-      className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium bg-accent-violet-dim text-accent-violet shrink-0 hover:bg-accent-violet-dim/80 transition-colors"
-    >
-      <span className="font-bold">❓</span>
-      {questionsBannerVisible
-        ? unanswered.length
-        : <>{unanswered.length} question{unanswered.length > 1 ? "s" : ""} {anyAnswerable ? "waiting" : "unanswered"}</>}
-    </button>
-  ) : null;
+  // #430 PR 1c — the ❓ "N questions waiting" badge that lived here is gone:
+  // it duplicated the Comment-threads button's count (§2.7 item 2). Per design
+  // §5 the button keeps the ONE count (it survives this pill returning null, and
+  // PR 3 shrinks this pill to agent state only); the button opens the rail on
+  // its Unanswered filter, where each question jumps to its artifact.
 
-  if (totalPending > 0) {
+  if (totalPending > 0 && !agentStateOnly) {
     // #192 (usability H1) — the bucket-table summary counts EVERY reviewable
     // type (changeset/debrief/explainer included) and falls back to "N items"
     // if a future type isn't yet bucketed, so this can never render a dangling
@@ -276,7 +225,6 @@ export function TurnIndicator({
                 : `Your turn — ${parts.join(", ")}`}
           </span>
         </button>
-        {questionsBadge}
       </div>
     );
   }
@@ -286,7 +234,7 @@ export function TurnIndicator({
   // switch to a neutral "Up to date" so we don't pulse forever at an agent
   // that's finished or gone.
   return (
-    <div className="flex items-center gap-2 min-w-0" role="status" aria-live="polite">
+    <div className="flex items-center gap-2 min-w-0" role="status" aria-live={liveArmed ? "polite" : "off"}>
       {agentExited ? (
         // M3 — the bound session's wrapper exited. The old branch only knew
         // "Agent working"/"Up to date" (both wrong: the agent is gone, not
@@ -315,7 +263,6 @@ export function TurnIndicator({
             : "Agent working"}{elapsedMin >= 1 ? ` · ${elapsedMin}m` : ""}
         </div>
       )}
-      {questionsBadge}
       {!idle && !agentExited && latestReasoningAction && (
         <span
           className="text-2xs text-text-muted truncate italic min-w-0 max-w-md"

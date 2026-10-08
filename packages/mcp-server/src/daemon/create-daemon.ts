@@ -544,7 +544,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   }
 
   // #192 (serving H1) — enumerate unanswered human questions across all of this
-  // daemon's sessions, using the SAME tail-walk predicate every UI surface and
+  // daemon's sessions, using the SAME per-question predicate every UI surface and
   // the first-call hint / check_feedback carryover use (collectUnansweredQuestions
   // — the queue's single definition). This is the INVERSE of pendingCount: those
   // are the AGENT's turn (a question the human asked, still owed an answer). The

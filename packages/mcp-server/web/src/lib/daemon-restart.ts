@@ -79,6 +79,38 @@ export function pushDaemonRestartToast(newStartedAt: string | null): void {
 }
 
 /**
+ * #430 PR 5 (design §2.7 item 8, §5 "Unify") — THE stale-daemon toast. The WS
+ * path (connection.ts onFatalMismatch, II3) and the REST path (artifact.ts
+ * toastApiError on project_hash_mismatch, BB10) each pushed a near-identical
+ * sticky toast with different body and action wording, and both could fire for
+ * the same replacement — two stacked "Tab is bound to a stale daemon" toasts.
+ * One helper now owns the wording and the dedup: while one is on screen, a
+ * second stale event REPLACES the one on screen (#455 review: skipping it
+ * left the old toast bound to a superseded adapter, a dead Reload). The action
+ * is an unconditional reload — always safe, it is exactly the recovery.
+ */
+export const STALE_DAEMON_TOAST_TITLE = "Tab is bound to a stale daemon";
+
+export function pushStaleDaemonToast(): void {
+  const store = useToastStore.getState();
+  for (const t of store.toasts) {
+    if (t.title === STALE_DAEMON_TOAST_TITLE) store.dismiss(t.id);
+  }
+  store.push({
+    kind: "error",
+    title: STALE_DAEMON_TOAST_TITLE,
+    body: "This project's daemon was replaced by a different project's daemon on the same port. Reload the page to re-bind.",
+    ttl: 0,
+    action: {
+      label: "Reload to re-bind",
+      onClick: () => {
+        if (typeof window !== "undefined") window.location.reload();
+      },
+    },
+  });
+}
+
+/**
  * Confirm — via an authoritative /api/daemon-info fetch — whether the daemon on
  * this port is a DIFFERENT process than the one the tab knows. Returns the live
  * startedAt when a restart is confirmed, else null (same daemon, an older daemon

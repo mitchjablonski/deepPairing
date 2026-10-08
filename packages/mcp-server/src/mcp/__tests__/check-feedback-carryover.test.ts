@@ -139,4 +139,32 @@ describe("check_feedback — unanswered-question carryover (#192)", () => {
     const sc = res.structuredContent as any;
     expect(sc.unansweredCarryover).toBeUndefined();
   });
+
+  // #430 PR 1c (review of #448) — the rule is PER QUESTION. Q1, then a human
+  // follow-up Q2 that the human later RESOLVED: Q1 is still owed an answer. The
+  // old thread tail-walk looked only at the tail (Q2, closed) and read the whole
+  // thread as answered, so Q1 was never carried over to the agent.
+  it("carries over Q1 when a follow-up Q2 in the same thread was human-resolved", async () => {
+    const id = await presentChangeset();
+    await store.addComment({ id: "q1_open", artifactId: id, content: "why cookies and not JWT?", author: "human", intent: "question" } as any);
+    await store.addComment({ id: "q2_resolved", artifactId: id, content: "also, rotation?", author: "human", intent: "question", parentCommentId: "q1_open" } as any);
+    store.markCommentHumanResolved("q2_resolved");
+    await store.acknowledgeComments(["q1_open", "q2_resolved"]);
+
+    const res = await callTool("check_feedback");
+    const sc = res.structuredContent as any;
+    expect(Array.isArray(sc.unansweredCarryover)).toBe(true);
+    expect(sc.unansweredCarryover.map((q: any) => q.commentId)).toEqual(["q1_open"]);
+    expect(res.text).toContain("q1_open");
+  });
+
+  it("carries over BOTH consecutive open questions in one thread (Q1, then a follow-up Q2)", async () => {
+    const id = await presentChangeset();
+    await store.addComment({ id: "qa", artifactId: id, content: "first?", author: "human", intent: "question" } as any);
+    await store.addComment({ id: "qb", artifactId: id, content: "and second?", author: "human", intent: "question", parentCommentId: "qa" } as any);
+    await store.acknowledgeComments(["qa", "qb"]);
+    const sc = (await callTool("check_feedback")).structuredContent as any;
+    expect(sc.unansweredCarryover.map((q: any) => q.commentId).sort()).toEqual(["qa", "qb"]);
+  });
 });
+

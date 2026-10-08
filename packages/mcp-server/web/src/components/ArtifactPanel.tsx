@@ -1,15 +1,17 @@
-import { useMemo, useState, useEffect, useRef, lazy, Suspense } from "react";
+import { useMemo, useState, useEffect, useRef, lazy, Suspense, type ReactNode } from "react";
 // B5 — `m` + LazyMotion (App loads domAnimation) instead of the full
 // `motion` component: drops ~40kB gzip of animation features nothing uses
 // from the ENTRY bundle. Same animations.
 import { m, AnimatePresence } from "motion/react";
 import { apiGet, apiBase } from "../lib/api";
 import type { Artifact } from "@deeppairing/shared";
-import { useArtifactStore, resolveToLiveId } from "../stores/artifact";
+import { useArtifactStore, resolveToLiveId, artifactStoreGeneration, markBackfilled, isBackfilled } from "../stores/artifact";
+import { useSiblingSyncStore } from "../lib/siblingSync";
 import { usePreferencesStore, SIDEBAR_WIDTHS } from "../stores/preferences";
 import { useReplayStore } from "../stores/replay";
 import { useConnectionStore } from "../stores/connection";
 import { reviewLifecycle } from "../lib/reviewLifecycle";
+import { isDraftAwaitingReview } from "../lib/pending";
 import { useIsNarrowViewport, useMediaQuery } from "../hooks/useMediaQuery";
 // D6 (P2) — the artifact renderers are LAZY: statically importing all seven
 // kept them (and, via their coerce*Content imports, the whole Zod runtime)
@@ -46,6 +48,9 @@ import { CausalChain } from "./CausalChain";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { PreflightBreadcrumb } from "./PreflightBreadcrumb";
 import { SecretWarningBanner } from "./SecretWarningBanner";
+import { WAITING_TONE } from "../lib/waitingTone";
+import { computeAttention } from "../lib/attention";
+import { laneMarksFrom, laneMarkFor, type LaneMark } from "../lib/laneMarks";
 
 const statusDots: Record<string, string> = {
   // B1 — draft is the one status that NEEDS the human, yet it was styled as the
@@ -57,8 +62,10 @@ const statusDots: Record<string, string> = {
   approved: "bg-accent-green",
   // F8 (L4) — revised means BACK TO THE AGENT (its own glyph comment says
   // so, and computePending excludes it); wearing the your-turn amber made
-  // the sidebar dot signal a false turn. Violet = the agent's-turn family.
-  revised: "bg-accent-violet",
+  // the sidebar dot signal a false turn. #430 PR 1d — the agent's-turn
+  // family is ONE blue (lib/waitingTone), not violet; the ↻ glyph and the
+  // "Revision requested" label keep it from being colour-only.
+  revised: WAITING_TONE.dot,
   rejected: "bg-accent-red",
   superseded: "bg-text-muted opacity-40",
   retracted: "bg-text-muted opacity-60",
@@ -71,7 +78,7 @@ const statusColors: Record<string, string> = {
   draft: "bg-accent-amber-dim text-accent-amber",
   reviewing: "bg-accent-blue-dim text-accent-blue",
   approved: "bg-accent-green-dim text-accent-green",
-  revised: "bg-accent-violet-dim text-accent-violet",
+  revised: WAITING_TONE.chip,
   rejected: "bg-accent-red-dim text-accent-red",
   superseded: "bg-surface-elevated text-text-muted",
   retracted: "bg-surface-elevated text-text-muted",
@@ -104,6 +111,19 @@ const statusLabels: Record<string, string> = {
   retracted: "Retracted by agent",
   obsolete: "Overcome by new information",
 };
+
+/**
+ * #430 PR 0 → PR 4 (docs/design/attention-hierarchy.md §5, §8) — the SIDEBAR dot
+ * agrees with the attention model. An artifact that is a lane item wears its
+ * lane mark (▲ decide, ● review, ○ read, ◌ waiting — lib/laneMarks, derived from
+ * computeAttention, the bar's own selector); every other artifact keeps its
+ * status dot, glyph and label. `dot` carries both the fill and the glyph colour.
+ */
+function sidebarStatus(a: Artifact, lanes: Record<string, LaneMark>): { dot: string; glyph: string; label: string } {
+  const lane = lanes[a.id];
+  if (lane) return lane;
+  return { dot: `${statusDots[a.status] ?? ""} text-white`, glyph: statusGlyph[a.status] ?? "•", label: statusLabels[a.status] ?? a.status };
+}
 
 /** #193 E2 — the status label, type-aware. A DRAFT explainer is not "awaiting
  *  review" — it's a read-only walk-through the human should READ; the verdict
@@ -285,6 +305,7 @@ function ArtifactSkeleton() {
 
 // Exported for tests (#158 — the secret-warning banner renders here).
 export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
+  const headerGlyph = laneMarkFor(artifact)?.glyph ?? statusGlyph[artifact.status];
   const contentWidth = usePreferencesStore((s) => s.contentWidth);
   // #204 (UX L2) — the artifact-level comment thread's WRITE AXIS, derived through
   // the shared reviewLifecycle helper. A retracted/terminal ("closed") or replayed
@@ -336,7 +357,9 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
           <span className={`px-1.5 py-0.5 text-2xs font-medium rounded ${statusColors[artifact.status]}`}>
             {/* U6 — friendly label + glyph, matching the sidebar; not the raw
                 enum ("superseded"/"reviewing"). */}
-            {statusGlyph[artifact.status] ? `${statusGlyph[artifact.status]} ` : ""}
+            {/* #430 PR 4 — a lane item shows its lane glyph here too, so the
+                header never disagrees with the sidebar row. */}
+            {headerGlyph ? `${headerGlyph} ` : ""}
             {statusLabelFor(artifact)}
           </span>
           {artifact.version > 1 && (
@@ -600,6 +623,10 @@ const HYDRATION_SETTLE_MS = 750;
 function useArrivalHighlights(
   artifacts: Artifact[],
   enabled: boolean,
+  /** #430 PR 3 — with the Next-up bar on, an arrival that BECOMES `next` is
+   *  announced by the bar (one announcer per change, §7); this region stays
+   *  quiet about it and announces only the other arrivals. */
+  barAnnouncesNext = false,
 ): { highlightedIds: string[]; announcement: string } {
   // Ordered by arrival (append) so the pip can point at the NEWEST off-screen
   // one. A plain string[] keeps to the no-Set/Map-in-state convention.
@@ -657,7 +684,8 @@ function useArrivalHighlights(
     }
 
     const prevSeen = seenRef.current;
-    const arrived = artifacts.filter((a) => !prevSeen.has(a.id));
+    // #458 review — a sibling session's backfilled HISTORY is never an arrival.
+    const arrived = artifacts.filter((a) => !prevSeen.has(a.id) && !isBackfilled(a.id));
     seenRef.current = current;
     if (arrived.length === 0) return;
 
@@ -670,11 +698,15 @@ function useArrivalHighlights(
 
     // One announcement per arrival EVENT (a burst collapses to a single summary
     // line), not a per-id stream — keeps the aria-live region polite.
-    setAnnouncement(
-      arrived.length === 1
-        ? `New artifact: ${arrived[0]!.title}`
-        : `${arrived.length} new artifacts`,
-    );
+    const nextId = barAnnouncesNext ? computeAttention({ artifacts }).next?.id : undefined;
+    const toAnnounce = nextId ? arrived.filter((a) => a.id !== nextId) : arrived;
+    if (toAnnounce.length > 0) {
+      setAnnouncement(
+        toAnnounce.length === 1
+          ? `New artifact: ${toAnnounce[0]!.title}`
+          : `${toAnnounce.length} new artifacts`,
+      );
+    }
 
     // Each id fades on its own timer (a later arrival doesn't cut an earlier
     // card's highlight short).
@@ -688,7 +720,7 @@ function useArrivalHighlights(
     // idKey drives re-runs; `artifacts` is read via closure. `enabled` included
     // so a replay toggle re-evaluates.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [idKey, enabled]);
+  }, [idKey, enabled, barAnnouncesNext]);
 
   // Clear any outstanding fade + settle timers on unmount.
   useEffect(
@@ -710,6 +742,7 @@ function ArtifactSidebar({
   unreadIds,
   highlightedIds,
   collapsed,
+  headerExtra,
   width,
   onToggle,
 }: {
@@ -721,10 +754,14 @@ function ArtifactSidebar({
    *  Empty during initial load and replay (see useArrivalHighlights). */
   highlightedIds: string[];
   collapsed: boolean;
+  /** #430 PR 5 — the Agents filter menu (bar ON, expanded sidebar). */
+  headerExtra?: ReactNode;
   width: number;
   onToggle: () => void;
 }) {
   const selectArtifact = useArtifactStore((s) => s.selectArtifact);
+  // #430 PR 4 — each row's lane glyph comes from the bar's own selector.
+  const laneMarks = useMemo(() => laneMarksFrom(computeAttention({ artifacts })), [artifacts]);
   // New-item locator plumbing. The scroll container + per-item nodes let the
   // off-screen pip figure out whether a just-arrived card is above/below the
   // viewport WITHOUT ever moving scroll on arrival.
@@ -738,6 +775,38 @@ function ArtifactSidebar({
   // of view + the newest such card to scroll to on click. null = nothing to
   // locate (all new items already in view, or none).
   const [pip, setPip] = useState<{ dir: "up" | "down"; count: number; targetId: string } | null>(null);
+
+  // #430 PR 5 (PR 4 review) — the lane label on KEYBOARD focus. The glyph's
+  // tooltip was hover-only (`title`). The row button is already the one tab
+  // stop per row and its accessible name already carries the label, so rather
+  // than make the dot a second tab stop, a keyboard focus on the row shows the
+  // same label as a visible tooltip beside the rail, centred on the row.
+  // Pointer focus (a click) never shows it. aria-hidden:
+  // a screen reader already hears the label in the row's name.
+  const navRef = useRef<HTMLElement>(null);
+  const keyboardModality = useRef(false);
+  const [focusTip, setFocusTip] = useState<{ label: string; top: number; left: number } | null>(null);
+  useEffect(() => {
+    const onKey = () => { keyboardModality.current = true; };
+    const onPointer = () => { keyboardModality.current = false; };
+    document.addEventListener("keydown", onKey, true);
+    document.addEventListener("pointerdown", onPointer, true);
+    document.addEventListener("mousedown", onPointer, true);
+    return () => {
+      document.removeEventListener("keydown", onKey, true);
+      document.removeEventListener("pointerdown", onPointer, true);
+      document.removeEventListener("mousedown", onPointer, true);
+    };
+  }, []);
+  const showFocusTip = (row: HTMLElement, label: string) => {
+    const nav = navRef.current;
+    if (!keyboardModality.current || !nav) return;
+    const n = nav.getBoundingClientRect();
+    const r = row.getBoundingClientRect();
+    // #455 review — beside the rail, centred on the row (translateY(-50%)),
+    // in both modes: below the row it covered the NEXT row's title.
+    setFocusTip({ label, top: r.top - n.top + r.height / 2, left: n.width + 4 });
+  };
 
   // Recompute the pip whenever the highlight set changes or the user scrolls /
   // resizes. Reads live geometry via getBoundingClientRect — never writes it,
@@ -805,6 +874,10 @@ function ArtifactSidebar({
   // only the most-recent N artifacts by default, collapse the rest behind a
   // "Show N older" toggle. The currently-selected artifact is always kept
   // visible even if it's old, so the list never hides where you are.
+  // #430 PR 0 (docs/design/attention-hierarchy.md §4.3) — and neither does it
+  // hide what is WAITING ON YOU: every draft awaiting review is kept too. The
+  // cutoff hid the only high-stakes decision behind "Show 6 older"; it now
+  // applies to non-pending items only.
   const [showAllOlder, setShowAllOlder] = useState(false);
   const recentIds = useMemo(() => {
     const ids = new Set(
@@ -814,6 +887,7 @@ function ArtifactSidebar({
         .map((a) => a.id),
     );
     if (selectedArtifactId) ids.add(selectedArtifactId);
+    for (const a of artifacts) if (isDraftAwaitingReview(a)) ids.add(a.id);
     return ids;
   }, [artifacts, selectedArtifactId]);
   const olderCount = artifacts.filter((a) => !recentIds.has(a.id)).length;
@@ -834,6 +908,7 @@ function ArtifactSidebar({
     // "skip to the list of artifacts" move didn't exist. <nav> + a name;
     // the classes and the layout are untouched.
     <nav
+      ref={navRef}
       aria-label="Artifacts"
       className={`relative shrink-0 border-r border-border-default bg-surface-secondary transition-all duration-[180ms] ease-out ${
         collapsed ? "w-12" : ""
@@ -843,7 +918,7 @@ function ArtifactSidebar({
       {/* Inner scroll container — the new-item pip is positioned against the
           OUTER (relative) box so it stays pinned to the visible edge instead of
           scrolling away with the list. */}
-      <div ref={scrollRef} data-testid="sidebar-scroll" className="h-full overflow-y-auto">
+      <div ref={scrollRef} data-testid="sidebar-scroll" className="h-full overflow-y-auto" onScroll={() => setFocusTip(null)}>
       {/* Collapse toggle + grouping selector */}
       <div className="flex items-center justify-between">
         <button
@@ -880,6 +955,8 @@ function ArtifactSidebar({
           </div>
         )}
       </div>
+
+      {!collapsed && headerExtra}
 
       {/* "Show older" sits at the TOP so the recent items below it stay the
           focus — you scan down to the latest, not past a wall of old ones. */}
@@ -939,7 +1016,8 @@ function ArtifactSidebar({
             // BUTTON itself (title + aria-label) when collapsed — the icon column
             // is unreadable without it. Expanded rows show the title inline, so
             // they keep the plain `a.title` tooltip.
-            const collapsedLabel = `${typeLabels[a.type] ?? a.type}: ${a.title} — ${statusLabels[a.status] ?? a.status}`;
+            const sb = sidebarStatus(a, laneMarks);
+            const collapsedLabel = `${typeLabels[a.type] ?? a.type}: ${a.title} — ${sb.label}`;
 
             return (
               <button
@@ -956,6 +1034,8 @@ function ArtifactSidebar({
                 } ${arrivalClass}`}
                 title={collapsed ? collapsedLabel : a.title}
                 aria-label={collapsed ? collapsedLabel : undefined}
+                onFocus={(e) => showFocusTip(e.currentTarget, sb.label)}
+                onBlur={() => setFocusTip(null)}
               >
                 {collapsed ? (
                   <div className="relative">
@@ -970,10 +1050,10 @@ function ArtifactSidebar({
                       </span>
                     )}
                     <span
-                      aria-label={statusLabels[a.status]}
-                      className={`absolute -bottom-1 -right-1 w-3 h-3 rounded-full flex items-center justify-center text-[8px] leading-none ${statusDots[a.status]} text-white`}
+                      aria-label={sb.label}
+                      className={`absolute -bottom-1 -right-1 w-3 h-3 rounded-full flex items-center justify-center text-[8px] leading-none ${sb.dot}`}
                     >
-                      {statusGlyph[a.status] ?? "•"}
+                      {sb.glyph}
                     </span>
                   </div>
                 ) : (
@@ -999,11 +1079,11 @@ function ArtifactSidebar({
                       </span>
                     )}
                     <span
-                      aria-label={statusLabels[a.status]}
-                      title={statusLabels[a.status]}
-                      className={`shrink-0 w-4 h-4 rounded-full flex items-center justify-center text-[9px] leading-none ${statusDots[a.status]} text-white`}
+                      aria-label={sb.label}
+                      title={sb.label}
+                      className={`shrink-0 w-4 h-4 rounded-full flex items-center justify-center text-[9px] leading-none ${sb.dot}`}
                     >
-                      {statusGlyph[a.status] ?? "•"}
+                      {sb.glyph}
                     </span>
                     {/* Q4 — same unread dot, expanded-rail variant. */}
                     {isUnread && (
@@ -1048,6 +1128,16 @@ function ArtifactSidebar({
           <span>{pip.count > 1 ? `${pip.count} new` : "new"}</span>
         </button>
       )}
+      {focusTip && (
+        <div
+          aria-hidden="true"
+          data-testid="lane-focus-tooltip"
+          className="pointer-events-none absolute z-30 px-1.5 py-0.5 rounded bg-surface-elevated border border-border-default shadow text-2xs text-text-primary whitespace-nowrap"
+          style={{ top: focusTip.top, left: focusTip.left, transform: "translateY(-50%)" }}
+        >
+          {focusTip.label}
+        </div>
+      )}
     </nav>
   );
 }
@@ -1064,88 +1154,140 @@ export function MultiAgentSync() {
   // C1 — reuse the session list App already polls into the connection store
   // (every 10s) instead of running a SECOND 5s /api/active-sessions poll here.
   const activeSessions = useConnectionStore((s) => s.activeSessions);
+  const boundSessionId = useConnectionStore((s) => s.sessionId);
   // C1 review — refreshSessions sets a NEW array identity every 10s poll even
   // when unchanged; depending on the array tore down + recreated the 5s
   // interval each time. Key the effect on the id list's VALUE instead.
   const sessionKey = activeSessions.map((s) => s.sessionId).join(",");
+  // #458 review (D6b) — the per-session CHANGE signal: the artifact count the
+  // same 10s poll already carries (refreshSessions publishes a new list only
+  // when a rendered field — incl. artifactCount — changed).
+  const countKey = activeSessions.map((s) => `${s.sessionId}:${s.artifactCount}`).join(",");
+  const sessionsRef = useRef(activeSessions);
+  sessionsRef.current = activeSessions;
+  const boundRef = useRef(boundSessionId);
+  boundRef.current = boundSessionId;
   // Bug B — track which sessions we've actually BACKFILLED (a successful
   // /api/live-session/:id that returned artifacts), NOT "which sessions do we
-  // hold ≥1 artifact from". Pre-fix the gate was `knownSessionIds` — derived
-  // from artifact sessionIds — so a single STRAY artifact for session B (e.g. a
-  // global-client tab receiving B's `artifact_created` broadcast) marked B
-  // "known" and its full-state fetch was skipped forever: only that one newest
-  // artifact showed, B's older artifacts never loaded. Gating on this ref
-  // decouples "seen one artifact" from "loaded all artifacts", so a stray
-  // artifact no longer suppresses the backfill. A ref (not state) so adding an
-  // id doesn't re-render / churn the interval.
+  // hold ≥1 artifact from". A stray WS-delivered artifact for session B no
+  // longer marks B "known" and skips its full fetch. A ref (not state) so
+  // adding an id doesn't re-render / churn the interval.
   const fullyLoadedSessions = useRef<Set<string>>(new Set());
+  // #458 review (D6b) — the artifactCount each loaded session had when we last
+  // fetched it. Broadcasts are session-scoped, so a sibling's NEW draft never
+  // reaches this tab over the WS; before, a loaded session was never fetched
+  // again and its new decision stayed invisible ("Nothing needs you"). A loaded
+  // session is re-fetched when — and only when — its count moves, so the cost
+  // follows activity: a quiet sibling costs nothing, a busy one one GET per
+  // change, bounded by the existing 10s session poll.
+  const fetchedCount = useRef<Map<string, number>>(new Map());
   // C1 — a session with ZERO artifacts is never fully-loaded (the fetch
-  // returned nothing to mark), so it stays out of fullyLoadedSessions and the
-  // 30s backoff keeps polling it. The refetch is still needed (it's how another
-  // session's FIRST artifact gets discovered: session-scoped tabs don't receive
-  // other sessions' WS events), so back it off to 30s per empty session instead
-  // of dropping it.
+  // returned nothing to mark), so the 30s backoff keeps polling it: that's how
+  // another session's FIRST artifact gets discovered.
   const lastAttemptRef = useRef<Map<string, number>>(new Map());
+  const inFlight = useRef<Set<string>>(new Set());
   const EMPTY_SESSION_RETRY_MS = 30_000;
+  // #457 D6 — this component lives at App level (it was inside ArtifactPanel,
+  // which only mounts once the BOUND session has artifacts). A store reset
+  // (session switch, hydration snapshot) discards everything merged; it is
+  // detected by the store generation, and (#458 review) re-merged IMMEDIATELY —
+  // waiting for the next 5s tick landed the history after the arrival region's
+  // settle window, so old sibling artifacts were announced as new.
+  const generationRef = useRef(artifactStoreGeneration());
+  const syncRef = useRef<() => Promise<void>>(async () => {});
+  const acRef = useRef<AbortController | null>(null);
+
+  syncRef.current = async () => {
+    // PP3 — skip the fetch + parse + cross-session merge when the tab is
+    // hidden (the timer keeps ticking but does no work / triggers no renders).
+    if (typeof document !== "undefined" && document.hidden) return;
+    const ac = acRef.current;
+    if (!ac) return;
+    const generation = artifactStoreGeneration();
+    if (generation !== generationRef.current) {
+      generationRef.current = generation;
+      fullyLoadedSessions.current.clear();
+      fetchedCount.current.clear();
+      lastAttemptRef.current.clear();
+      useSiblingSyncStore.setState({ settled: false }); // #467 review — re-merging
+    }
+    for (const session of sessionsRef.current) {
+      // E7 review — bail BEFORE stamping the backoff on an abort.
+      if (ac.signal.aborted) return;
+      const id = session.sessionId;
+      // Keyed by generation: a fetch from before a reset must not block the
+      // reset's own immediate re-merge.
+      const flightKey = `${generation}:${id}`;
+      if (inFlight.current.has(flightKey)) continue;
+      const loaded = fullyLoadedSessions.current.has(id);
+      if (loaded) {
+        // The bound session's own changes arrive over its WS.
+        if (id === boundRef.current) continue;
+        if (fetchedCount.current.get(id) === session.artifactCount) continue; // nothing new
+      } else {
+        const last = lastAttemptRef.current.get(id) ?? 0;
+        if (Date.now() - last < EMPTY_SESSION_RETRY_MS) continue;
+        lastAttemptRef.current.set(id, Date.now());
+      }
+      inFlight.current.add(flightKey);
+      try {
+        const sRes = await apiGet(`${apiBase()}/api/live-session/${id}`, { signal: ac.signal });
+        if (!sRes.ok) continue;
+        const state = await sRes.json();
+        if (ac.signal.aborted) return;
+        // #457 D6 — a reset landed mid-fetch: this payload belongs to the
+        // discarded store. The reset's own immediate re-sync fetches again.
+        if (artifactStoreGeneration() !== generation) return;
+        const artifacts: Artifact[] = state.artifacts ?? [];
+        // #458 review — a session's FIRST load (or its re-merge after a reset)
+        // is history: mark it before adding so nothing reads it as an arrival.
+        // A re-poll of a loaded session brings genuinely new work: unmarked.
+        if (!loaded) markBackfilled(artifacts.map((a) => a.id));
+        for (const artifact of artifacts) addArtifact(artifact);
+        for (const comment of state.comments ?? []) addComment(comment);
+        // Bug B — mark fully-loaded ONLY once we've actually pulled artifacts;
+        // empty sessions stay unmarked so the 30s backoff keeps polling them.
+        if (artifacts.length > 0) {
+          fullyLoadedSessions.current.add(id);
+          fetchedCount.current.set(id, session.artifactCount);
+        }
+      } catch {
+        /* network / abort — the next tick retries */
+      } finally {
+        inFlight.current.delete(flightKey);
+      }
+    }
+    // #467 review — a full pass over a KNOWN session list (the 10s poll has
+    // published at least one session) means the siblings are merged.
+    const stillFetching = [...inFlight.current].some((k) => k.startsWith(`${generation}:`));
+    if (sessionsRef.current.length > 0 && !stillFetching && artifactStoreGeneration() === generation && !useSiblingSyncStore.getState().settled) {
+      useSiblingSyncStore.setState({ settled: true });
+    }
+  };
 
   useEffect(() => {
-    // E7 — one controller per effect generation; every tick's fetch carries
-    // the signal, cleanup aborts whichever is mid-flight.
+    // E7 — one controller per effect generation; cleanup aborts mid-flight.
     const ac = new AbortController();
-
-    const sync = async () => {
-      // PP3 — skip the fetch + parse + cross-session merge when the tab is
-      // hidden (the timer keeps ticking but does no work / triggers no renders).
-      if (typeof document !== "undefined" && document.hidden) return;
-      for (const session of activeSessions) {
-        // E7 review — bail BEFORE stamping the backoff: an abort mid-loop
-        // otherwise phantom-stamped every remaining session (their fetches
-        // instantly rejected on the dead signal AFTER the stamp), delaying
-        // another agent's session discovery by up to 30s post-churn.
-        if (ac.signal.aborted) return;
-        // Bug B — gate on "have we backfilled this session", not "do we hold
-        // any artifact from it". A stray WS-delivered artifact no longer skips
-        // the full fetch.
-        if (fullyLoadedSessions.current.has(session.sessionId)) continue; // Already backfilled
-        const last = lastAttemptRef.current.get(session.sessionId) ?? 0;
-        if (Date.now() - last < EMPTY_SESSION_RETRY_MS) continue;
-        lastAttemptRef.current.set(session.sessionId, Date.now());
-
-        // Load this session's artifacts from disk via the API
-        try {
-          const sRes = await apiGet(`${apiBase()}/api/live-session/${session.sessionId}`, { signal: ac.signal });
-          if (!sRes.ok) continue;
-          const state = await sRes.json();
-          if (ac.signal.aborted) return;
-
-          const loaded = state.artifacts ?? [];
-          for (const artifact of loaded) {
-            addArtifact(artifact);
-          }
-          for (const comment of state.comments ?? []) {
-            addComment(comment);
-          }
-          // Bug B — mark fully-loaded ONLY once we've actually pulled the
-          // session's artifacts. Empty sessions stay UNmarked so the 30s
-          // backoff keeps polling for their first artifact (a session-scoped
-          // tab never receives other sessions' WS events, so polling is the
-          // only discovery path). A session a stray broadcast seeded with one
-          // artifact reaches here and gets its complete backfill.
-          if (loaded.length > 0) fullyLoadedSessions.current.add(session.sessionId);
-        } catch {}
-      }
-    };
-
-    sync();
-    // 5s cadence stays for reacting to NEWLY appearing sessions quickly, but
-    // it's now fetch-free unless there's an unknown session past its backoff.
-    const timer = setInterval(sync, 5000);
+    acRef.current = ac;
+    void syncRef.current();
+    // 5s cadence stays for reacting to NEWLY appearing sessions quickly; it is
+    // fetch-free unless a session is new, past its empty backoff, or changed.
+    const timer = setInterval(() => void syncRef.current(), 5000);
     return () => { ac.abort(); clearInterval(timer); };
-    // sessionKey (not the array) so a same-content refresh doesn't churn the
-    // interval; activeSessions is read via a ref-stable closure re-created
-    // only when membership actually changes.
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberate: sessionKey (not the array) so a same-content refresh doesn't churn the 5s interval — see comment above
-  }, [sessionKey]); // Re-run when the session MEMBERSHIP changes (a new session to backfill)
+  }, [sessionKey]); // Re-run when the session MEMBERSHIP changes
+
+  // #458 review (D6b) — a sibling's count moved (the 10s poll saw it): fetch now.
+  useEffect(() => {
+    void syncRef.current();
+  }, [countKey]);
+
+  // #458 review — re-merge immediately after a store reset (generation bump).
+  useEffect(
+    () => useArtifactStore.subscribe(() => {
+      if (artifactStoreGeneration() !== generationRef.current) void syncRef.current();
+    }),
+    [],
+  );
 
   return null; // No visual output — just syncs data
 }
@@ -1171,7 +1313,8 @@ export function ArtifactPanel() {
   // view) so a session-filter toggle doesn't masquerade as an arrival, and
   // never on initial load / reload. Suppressed entirely during replay, where a
   // "new item" has no meaning (the panel hides post-cursor artifacts).
-  const { highlightedIds, announcement } = useArrivalHighlights(artifacts, !replayActive);
+  const nextUpBar = usePreferencesStore((s) => s.nextUpBar);
+  const { highlightedIds, announcement } = useArrivalHighlights(artifacts, !replayActive, nextUpBar);
 
   // Unique session IDs present in the store
   const sessionIds = useMemo(
@@ -1192,6 +1335,25 @@ export function ArtifactPanel() {
     }),
     [artifacts, sessionFilter, replayActive, replayCursor],
   );
+
+  const liveCount = (sid: string | "all") =>
+    artifacts.filter((a) => a.status !== "superseded" && (sid === "all" || a.sessionId === sid)).length;
+  const agentsMenu = nextUpBar && !effectiveCollapsed && sessionIds.length > 1 ? (
+    <label className="flex items-center gap-1.5 px-2 pb-1.5 text-2xs text-text-muted">
+      <span className="shrink-0">Agents</span>
+      <select
+        value={sessionFilter}
+        onChange={(e) => setSessionFilter(e.target.value)}
+        data-testid="agents-filter-menu"
+        className="flex-1 min-w-0 bg-surface-elevated border border-border-default rounded px-1 py-0.5 text-2xs text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-blue"
+      >
+        <option value="all">All ({liveCount("all")})</option>
+        {sessionIds.map((sid, i) => (
+          <option key={sid} value={sid} title={sid}>Agent {i + 1} ({liveCount(sid)})</option>
+        ))}
+      </select>
+    </label>
+  ) : null;
 
   // Group by type
   const typeGroups = useMemo(() => {
@@ -1217,8 +1379,8 @@ export function ArtifactPanel() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Sync artifacts from other active sessions */}
-      <MultiAgentSync />
+      {/* #457 D6 — MultiAgentSync (other sessions' artifacts) is mounted by
+          App now, so it runs even while the bound session is empty. */}
 
       {/* Polite, visually-hidden announcement of live arrivals so screen-reader
           users learn a new artifact came in without depending on the visual
@@ -1233,8 +1395,12 @@ export function ArtifactPanel() {
         {announcement}
       </div>
 
-      {/* Session filter — shown when artifacts from multiple agents exist */}
-      {sessionIds.length > 1 && (
+      {/* Session filter — shown when artifacts from multiple agents exist.
+          #430 PR 5 (design §4.6) — with the Next-up bar ON it becomes a filter
+          menu in the sidebar header (it filters, it does not signal); the row
+          stays whenever the sidebar is collapsed (no header room) and with the
+          bar OFF. */}
+      {sessionIds.length > 1 && !agentsMenu && (
         <div className="flex items-center gap-1 px-3 py-1.5 border-b border-border-default bg-surface-secondary overflow-x-auto shrink-0">
           <span className="text-2xs text-text-muted shrink-0">Agents:</span>
           <button
@@ -1276,6 +1442,7 @@ export function ArtifactPanel() {
         unreadIds={unreadIds}
         highlightedIds={highlightedIds}
         collapsed={effectiveCollapsed}
+        headerExtra={agentsMenu}
         width={SIDEBAR_WIDTHS[sidebarWidth]}
         onToggle={toggleSidebar}
       />

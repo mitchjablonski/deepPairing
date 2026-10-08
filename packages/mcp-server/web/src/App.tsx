@@ -1,17 +1,24 @@
 import { useEffect, useRef, useState } from "react";
 import { apiGet, apiBase } from "./lib/api";
-import { ArtifactPanel } from "./components/ArtifactPanel";
+import { ArtifactPanel, MultiAgentSync } from "./components/ArtifactPanel";
 import { IdleHome } from "./components/IdleHome";
-import { SessionWrapCard } from "./components/SessionWrapCard";
+import { SessionWrapCard, wrapCardDismissed } from "./components/SessionWrapCard";
+import { DemoNextStep } from "./components/DemoNextStep";
 import { computePending, isSinglePendingInView } from "./lib/pending";
 import { selectDefaultSession } from "./lib/selectDefaultSession";
 import { enterSessionReplay } from "./lib/session-replay";
 import { useAgentRecentlyActive } from "./hooks/useAgentRecentlyActive";
+import { useAgentWorking } from "./hooks/useAgentWorking";
 import { WaitingForClaude } from "./components/WaitingForClaude";
 import { TurnIndicator } from "./components/TurnIndicator";
+import { NextUpBar } from "./components/NextUpBar";
+import { sessionLabelOf } from "./lib/sessionLabel";
+import { outageMinutes } from "./lib/outage";
+import { useConnectionGraceDriver, useTabOffline } from "./lib/connectionGrace";
+import { usePreferencesStore } from "./stores/preferences";
 import { PendingBanner } from "./components/PendingBanner";
-import { ResumeQuestionsBanner, countResumeQuestions, noAgentLive } from "./components/ResumeQuestionsBanner";
-import { RequestComposerBanner } from "./components/RequestComposerBanner";
+import { ResumeQuestionsBanner } from "./components/ResumeQuestionsBanner";
+import { RequestComposerBanner, OPEN_REQUEST_COMPOSER_EVENT } from "./components/RequestComposerBanner";
 import { KeyboardShortcutHelp } from "./components/KeyboardShortcutHelp";
 import { MessageInput } from "./components/MessageInput";
 import { DiagnosticsMenu } from "./components/DiagnosticsMenu";
@@ -43,6 +50,7 @@ import { countUnansweredQuestions } from "./lib/unanswered";
 import { useOverlayStore } from "./stores/overlay";
 import { usePollingWhenVisible } from "./hooks/usePollingWhenVisible";
 import { useDocumentTitleBadge } from "./hooks/useDocumentTitleBadge";
+import { WAITING_TONE } from "./lib/waitingTone";
 
 function App() {
   const connected = useConnectionStore((s) => s.connected);
@@ -60,6 +68,12 @@ function App() {
   // (D6 bail suppresses idle re-renders); the shared hook re-fires at the
   // staleness boundary so the closing beat appears when the session wraps.
   const agentRecentlyActive = useAgentRecentlyActive();
+  // #465 N2 / #467 review — the one "is this tab offline?" answer (first-connect
+  // grace included), shared with the bar and the act buttons.
+  useConnectionGraceDriver();
+  const tabOffline = useTabOffline();
+  // #455 review — the session dot pulses on the SAME source as the pill.
+  const agentWorking = useAgentWorking();
   // C5 — no IdleHome/WaitingForClaude flash on refresh: skeleton until the
   // first `connected` payload lands, bounded by a grace timer so a dead
   // daemon still falls through to the real routing (IdleHome is then correct).
@@ -87,11 +101,26 @@ function App() {
     }
   }, [connected, sessionId, activeSessions, switchSession]);
   const hasArtifacts = useArtifactStore((s) => s.artifacts.length > 0);
+  // IV9 — the demo "next step" CTA: a scripted demo session (sessionId
+  // `demo_…`, daemon.ts) that has actually fired. D9 (H3) — the wrap card: the
+  // bound session's wrapper exited (M8 live flag), the agent is quiet, and there
+  // is work to recap. #430 PR 5 — computed once; OFF renders them as rows, ON
+  // hands them to the Next-up bar.
+  const showDemoCta = connected && !!sessionId?.startsWith("demo_") && hasArtifacts;
+  // #455 review — plus the card's OWN conditions (no draft of this session
+  // pending, not dismissed), so the bar's "Recap ⌄" token never opens onto an
+  // empty card. The card still checks them itself (OFF is unchanged).
+  const sessionDraftsClear = useArtifactStore((s) =>
+    computePending(s.artifacts.filter((a) => a.sessionId === sessionId)).drafts.length === 0);
+  const [, setWrapDismissTick] = useState(0);
+  const showWrapCard = hasArtifacts && !agentRecentlyActive && sessionId != null &&
+    activeSessions.find((s) => s.sessionId === sessionId)?.live === false &&
+    sessionDraftsClear && !wrapCardDismissed(sessionId);
+  const nextUpBar = usePreferencesStore((s) => s.nextUpBar); // #430 PR 2 — default off
   // M4 — whether each below-header banner is visible, so the header pills can
   // suppress the verbatim duplicate (computed with the banners' OWN predicates
   // so they can't drift). Both banners self-hide when their count is 0.
   const artifactsList = useArtifactStore((s) => s.artifacts);
-  const commentsMap = useArtifactStore((s) => s.comments);
   // J2b (#212) — lite-frame step-down. When the ONE pending draft is the card
   // in view, the card is the CTA; the PendingBanner suppresses (below) and the
   // header pill collapses to a bare count. Computed with the SHARED predicate so
@@ -99,8 +128,6 @@ function App() {
   const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
   const singlePendingInView = isSinglePendingInView(artifactsList, selectedArtifactId);
   const pendingBannerVisible = computePending(artifactsList).total > 0 && !singlePendingInView;
-  const questionsBannerVisible =
-    connected && noAgentLive(activeSessions) && countResumeQuestions(commentsMap) > 0;
 
   // U7 — at-rest signal on the Conversation button: how many human questions
   // are still awaiting the agent. Uses the SHARED predicate (lib/unanswered)
@@ -216,6 +243,7 @@ function App() {
   // header button toggles, dp:open-conversation event lets toasts open it,
   // Esc closes via the drawer's own keydown.
   const [showConversation, setShowConversation] = useState(false);
+  const [conversationFilter, setConversationFilter] = useState<"all" | "unanswered">("all");
   // U3 — themed "ask about this artifact" composer for the `q` shortcut.
   const [askArtifact, setAskArtifact] = useState<{ id: string; title: string } | null>(null);
 
@@ -428,12 +456,16 @@ function App() {
 
       // E3 (L1) — `n`: next thing waiting on you. Same wrap-around cycle as
       // the TurnIndicator pill; at 15+ artifacts this is the velocity move.
-      if (e.key === "n") {
+      // #457 D7 (design §7) — Shift+`n` (`N`) goes to the PREVIOUS one, same
+      // wrap-around; it was unbound.
+      if (e.key === "n" || e.key === "N") {
         const pending = computePending(store.artifacts).drafts;
         if (pending.length === 0) return;
         e.preventDefault();
         const idx = pending.findIndex((a) => a.id === store.selectedArtifactId);
-        const nextPending = pending[(idx + 1) % pending.length];
+        const step = e.key === "N" ? -1 : 1;
+        const from = idx === -1 && step === -1 ? 0 : idx;
+        const nextPending = pending[(from + step + pending.length) % pending.length];
         if (nextPending) store.selectArtifact(nextPending.id);
       }
 
@@ -540,6 +572,20 @@ function App() {
 
   return (
     <div className="h-screen bg-surface-primary text-text-primary flex flex-col">
+      {/* #430 PR 2 (design §7) — "Jump to next up": the first focusable element
+          when the bar is on; visible only while focused. Off: not rendered. */}
+      {nextUpBar && (
+        <a
+          href="#next-up"
+          onClick={(e) => {
+            e.preventDefault();
+            document.getElementById("next-up")?.focus();
+          }}
+          className="sr-only focus:not-sr-only focus:absolute focus:top-1 focus:left-1 focus:z-50 focus:px-2 focus:py-1 focus:rounded focus:bg-surface-elevated focus:text-text-primary focus:text-xs"
+        >
+          Jump to next up
+        </a>
+      )}
       {/* O6: surfaces when the pairing-protocol skill isn't active so the
           plugin-install path doesn't fail silently. Dismissible; auto-hides
           once any artifact arrives. */}
@@ -597,22 +643,49 @@ function App() {
           </button>
           <TurnIndicator
             pendingBannerVisible={pendingBannerVisible}
-            questionsBannerVisible={questionsBannerVisible}
             pendingCardInView={singlePendingInView}
+            agentStateOnly={nextUpBar}
           />
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          {/* #430 PR 5 (design §5) — bar ON: the request composer row collapses
+              to this button; it opens the same composer (presets + input). */}
+          {nextUpBar && connected && (
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new CustomEvent(OPEN_REQUEST_COMPOSER_EVENT))}
+              data-testid="header-request"
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs font-medium text-accent-blue hover:bg-accent-blue-dim/70 transition-colors"
+              title="Request something from Claude (explain, plan, status)"
+            >
+              {/* #455 review — "Request", not "Ask": "Ask" is AskTrigger's
+                  question-on-this-artifact verb across the app. */}
+              <span aria-hidden="true">✎</span>
+              <span>Request</span>
+            </button>
+          )}
           {/* #212 (J4) — the top-level Ledger button is GONE. It was a second
               door to the drawer the Diagnostics (⋯) "Ledger" entry already
               opens, so the header carried two affordances for one surface. The
               Diagnostics entry is now THE single ledger entry; the drawer itself
               is unchanged, still reachable from the ⌘K palette + the taste
               toasts (dp:open-your-taste). */}
+          {/* #430 PR 1c — THE one unanswered-question count (design §5; the
+              header pill's duplicate ❓ badge is gone). With questions open,
+              the button opens the rail on its Unanswered filter, where each
+              question jumps to its artifact — the old badge's jump, one step. */}
           <button
-            onClick={() => setShowConversation(true)}
+            onClick={() => {
+              setConversationFilter(unansweredCount > 0 ? "unanswered" : "all");
+              setShowConversation(true);
+            }}
             className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
-            title="Comment threads — every comment + reply across artifacts (read-only)"
-            aria-label="Open comment threads rail"
+            title={unansweredCount > 0
+              ? `Comment threads — ${unansweredCount} question${unansweredCount === 1 ? "" : "s"} waiting on the agent; opens the unanswered ones`
+              : "Comment threads — every comment + reply across artifacts (read-only)"}
+            aria-label={unansweredCount > 0
+              ? `Open comment threads rail — ${unansweredCount} unanswered question${unansweredCount === 1 ? "" : "s"}`
+              : "Open comment threads rail"}
           >
             <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M2 3.5h8v4H6.5L4.5 9.5V7.5H2V3.5Z" />
@@ -620,7 +693,7 @@ function App() {
             <span className="hidden min-[1100px]:inline">Comment threads</span>
             {unansweredCount > 0 && (
               <span
-                className="ml-0.5 min-w-[15px] h-[15px] px-1 inline-flex items-center justify-center rounded-full bg-accent-blue-strong text-white text-[9px] font-semibold leading-none"
+                className={`ml-0.5 min-w-[15px] h-[15px] px-1 inline-flex items-center justify-center rounded-full ${WAITING_TONE.dot} text-white text-[9px] font-semibold leading-none`}
                 aria-label={`${unansweredCount} unanswered question${unansweredCount === 1 ? "" : "s"}`}
               >
                 {unansweredCount}
@@ -741,11 +814,8 @@ function App() {
         ) : (
           activeSessions.map((s, i) => {
             const isActive = sessionId === s.sessionId;
-            const label = s.title && s.title !== s.sessionId
-              ? s.title
-              : s.project
-                ? s.project
-                : `Session ${i + 1}`;
+            // #457 D2 — the same name the Next-up bar uses (lib/sessionLabel).
+            const label = sessionLabelOf(s, i);
             return (
               <button
                 key={s.sessionId}
@@ -760,8 +830,16 @@ function App() {
                 {/* D8 (M8) — honest dots: green only while the wrapper is
                     REGISTERED; an exited session's history stays readable but
                     stops pretending to be live. Old daemons omit `live` —
-                    treat undefined as live (no false alarms on mixed versions). */}
-                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${s.live === false ? "bg-text-muted/50" : isActive ? "bg-accent-blue-strong animate-pulse" : "bg-accent-green"}`} />
+                    treat undefined as live (no false alarms on mixed versions).
+                    #430 PR 5 (design §2.7 item 3, §5) — the bound session's
+                    dot pulsed ALWAYS, a false "working" signal. It pulses only
+                    while the agent is working — the same source and window
+                    as TurnIndicator's "Agent working" (hooks/useAgentWorking). */}
+                <span
+                  data-testid="session-dot"
+                  data-working={isActive && s.live !== false && agentWorking ? "true" : "false"}
+                  className={`w-1.5 h-1.5 rounded-full shrink-0 ${s.live === false ? "bg-text-muted/50" : isActive ? `bg-accent-blue-strong${agentWorking ? " animate-pulse" : ""}` : "bg-accent-green"}`}
+                />
                 <span className="truncate max-w-40">{label}</span>
                 {s.artifactCount > 0 && (
                   /* R2 (contrast) — `opacity-70` on 9px text: 4.77:1 dark /
@@ -778,9 +856,35 @@ function App() {
         )}
       </nav>
 
+      {/* #457 D6 — merge the OTHER live sessions' artifacts at App level. It
+          lived inside ArtifactPanel, which mounts only once the BOUND session
+          has artifacts: an empty bound session never merged its siblings, so
+          the bar said "◇ Nothing needs you" (and the OFF banner/pill/tab title
+          stayed silent) while another session held an open decision. */}
+      <MultiAgentSync />
+
+      {/* #430 PR 2 — the Next-up bar, opt-in (Settings → Next-up bar, default
+          OFF). Off renders nothing, so the layout is exactly as before; on, it
+          sits under the session tabs IN ADDITION to today's banners (PR 3
+          absorbs them). */}
+      {nextUpBar && (
+        <NextUpBar
+          quietCards={{
+            // #430 PR 5 (design §5) — ON only: the demo CTA and the wrap card
+            // render inside the bar (inline in its quiet state, else in ⌄).
+            demo: showDemoCta ? (dismiss?: () => void) => <DemoNextStep projectRoot={projectRoot} inBar onDismiss={dismiss} /> : null,
+            wrap: showWrapCard && sessionId != null ? (
+              <ErrorBoundary fallback={null}>
+                <SessionWrapCard sessionId={sessionId} inBar onDismiss={() => setWrapDismissTick((n) => n + 1)} />
+              </ErrorBoundary>
+            ) : null,
+          }}
+        />
+      )}
+
       {/* Disconnected warning — escalates (D8/H4): a blip and a dead daemon
           looked identical forever; past 60s the pair needs to know to act. */}
-      {!connected && <DisconnectBanner />}
+      {tabOffline && <DisconnectBanner />}
 
       {/* Replay scrubber — only renders when replay mode is active */}
       <ReplayScrubber />
@@ -789,16 +893,20 @@ function App() {
           autonomous-agent chrome, not pairing. Bulk approve still lives in
           the Command palette for keyboard users who want it. The per-artifact
           review happens inside ArtifactStatusActions. */}
+      {/* #430 PR 3 — with the Next-up bar ON, it absorbs these two banners
+          (and TurnIndicator's "your turn"); OFF, they render exactly as before.
+          Where each piece went: docs/design/attention-hierarchy.md §5 and the
+          PR 3 checklist test (NextUpBarAbsorb.test.tsx). */}
       {/* Pending decision/plan banner */}
-      <PendingBanner />
+      {!nextUpBar && <PendingBanner />}
 
       {/* #192 — questions the human asked that the agent never answered, shown
           only when no agent is live (it exited) with a one-click resume prompt. */}
-      <ResumeQuestionsBanner />
+      {!nextUpBar && <ResumeQuestionsBanner />}
 
       {/* G1 (#198b) — the request composer: the human can initiate a request to
           the agent (free text + intent preset). A quiet peer of the strips above. */}
-      <RequestComposerBanner />
+      <RequestComposerBanner compact={nextUpBar} />
 
       {/* Main content.
           III10 — when the WS is connected but no wrapper has registered a
@@ -817,39 +925,16 @@ function App() {
           but no obvious "what's next." This card closes the loop. Only
           renders when a demo session is active AND has at least one
           artifact — i.e., the demo has actually fired. */}
-      {connected && sessionId?.startsWith("demo_") && hasArtifacts && (
-        // L2 (#196) — the CTA now leads with the README's RECOMMENDED marketplace
-        // install (no build step, ships the hooks) and offers the local-plugin
-        // command with the daemon's REAL projectRoot (client-side) instead of a
-        // /path/to/deeppairing placeholder the user had to hand-edit.
-        <div className="px-3 py-2 bg-accent-blue-dim/30 border-b border-accent-blue/20 text-2xs flex flex-wrap items-center gap-x-2 gap-y-1 shrink-0">
-          <span className="text-accent-blue font-medium">✓ Demo fired.</span>
-          <span className="text-text-secondary">Next: install in Claude Code —</span>
-          <code className="bg-surface-elevated px-1.5 py-0.5 rounded text-text-primary font-mono">
-            /plugin marketplace add https://github.com/mitchjablonski/deepPairing
-          </code>
-          <span className="text-text-muted">then</span>
-          <code className="bg-surface-elevated px-1.5 py-0.5 rounded text-text-primary font-mono">
-            /plugin install deeppairing@deeppairing
-          </code>
-          <span className="text-text-muted">
-            or from a clone:{" "}
-            <code className="bg-surface-elevated px-1.5 py-0.5 rounded text-text-secondary font-mono">
-              claude --plugin-dir {(projectRoot ?? "/path/to/deeppairing")}/claude-plugin
-            </code>
-          </span>
-        </div>
-      )}
+      {!nextUpBar && showDemoCta && <DemoNextStep projectRoot={projectRoot} />}
 
       {/* D9 (H3) — closing beat: the bound session's wrapper exited (M8 live
           flag), the agent is quiet, and artifacts exist to recap. Renders
           above the panel so the session's work stays browsable below it. */}
-      {hasArtifacts && !agentRecentlyActive && sessionId != null &&
-        activeSessions.find((s) => s.sessionId === sessionId)?.live === false && (
+      {!nextUpBar && showWrapCard && sessionId != null && (
           // D9 review — the card reads unvalidated content casts; a malformed
           // artifact must not blank the whole shell.
           <ErrorBoundary fallback={null}>
-            <SessionWrapCard sessionId={sessionId} />
+            <SessionWrapCard sessionId={sessionId} onDismiss={() => setWrapDismissTick((n) => n + 1)} />
           </ErrorBoundary>
         )}
 
@@ -926,7 +1011,7 @@ function App() {
           onClose={closeTaste}
         />
       )}
-      {showConversation && <ConversationRail onClose={() => setShowConversation(false)} />}
+      {showConversation && <ConversationRail initialFilter={conversationFilter} onClose={() => setShowConversation(false)} />}
 
       {/* U3 — themed "ask the agent about this artifact" composer (q shortcut) */}
       {askArtifact && (
@@ -982,16 +1067,17 @@ function DisconnectBanner() {
   }, []);
   const outageMs = disconnectedSince ? now - disconnectedSince : 0;
   const prolonged = outageMs >= 60_000;
+  // #465 N3 — say it is THIS TAB that lost the daemon, never Claude.
   return (
     <div className="px-3 py-1.5 bg-accent-red-dim/30 border-b border-accent-red/15 text-center" role="status">
       {prolonged ? (
         <span className="text-2xs text-accent-red">
-          Still disconnected after {Math.round(outageMs / 60_000)} min — the daemon may be down. Run{" "}
+          This tab has been offline for {outageMinutes(outageMs)} min — the deepPairing daemon may be down. Run{" "}
           <code className="bg-surface-elevated px-1 py-0.5 rounded">node packages/mcp-server/dist/cli/init.js doctor --fix</code> in the project, then reload.
         </span>
       ) : (
         <span className="text-2xs text-accent-red">
-          Disconnected from server — reconnecting...
+          This tab lost its connection to the deepPairing daemon — reconnecting…
         </span>
       )}
     </div>

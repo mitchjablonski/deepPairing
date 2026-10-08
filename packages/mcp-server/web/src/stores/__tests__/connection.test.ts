@@ -501,6 +501,30 @@ describe("connection store — handleMessage dispatch", () => {
       expect(useConnectionStore.getState().connected).toBe(false);
     });
 
+    it("#455 review — a NEW adapter's mismatch replaces the stale toast, and its Reload actually reloads", async () => {
+      const { useToastStore } = await import("../toast");
+      useToastStore.getState().dismissAll();
+      useConnectionStore.getState().connect("A");
+      activeAdapter.triggerFatalMismatch();
+      await flush();
+      // A project switch tears adapter A down and builds adapter B.
+      useConnectionStore.getState().disconnect();
+      activeAdapter = new FakeAdapter();
+      useConnectionStore.getState().connect("B");
+      activeAdapter.triggerFatalMismatch();
+      await flush();
+      const stale = useToastStore.getState().toasts.filter((t) => /stale daemon/i.test(t.title));
+      expect(stale).toHaveLength(1);
+      const reload = vi.fn();
+      vi.stubGlobal("window", { location: { reload } });
+      try {
+        stale[0]!.action!.onClick();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+      expect(reload).toHaveBeenCalledTimes(1);
+    });
+
     it("keeps a project mismatch warning across session navigation but drops it after adapter teardown", async () => {
       const { useToastStore } = await import("../toast");
       useToastStore.getState().dismissAll();

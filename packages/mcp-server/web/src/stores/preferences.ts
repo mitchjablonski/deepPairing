@@ -39,8 +39,12 @@ interface PreferencesState {
   sidebarWidth: SidebarWidth;
   focusedPanel: "activity" | "artifact" | null;
   editorScheme: string;
+  /** #430 PR 2 — the Next-up bar (docs/design/attention-hierarchy.md §4).
+   *  Default OFF: with it off the UI is exactly what it was before PR 2. */
+  nextUpBar: boolean;
 
   setTheme: (theme: Theme) => void;
+  setNextUpBar: (on: boolean) => void;
   setFontSize: (size: FontSize) => void;
   toggleContentWidth: () => void;
   toggleSidebar: () => void;
@@ -126,6 +130,12 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => {
     sidebarWidth: getStoredSidebarWidth(),
     focusedPanel: null,
     editorScheme,
+    nextUpBar: lsGet("dp-next-up-bar") === "1",
+
+    setNextUpBar: (on) => {
+      lsSet("dp-next-up-bar", on ? "1" : "0");
+      set({ nextUpBar: on });
+    },
 
     setTheme: (theme) => {
       lsSet("dp-theme", theme);

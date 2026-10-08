@@ -13,7 +13,21 @@ import { computePending } from "../lib/pending";
  *
  * Dismissible per session (sessionStorage, the drafts/rail idiom).
  */
-export function SessionWrapCard({ sessionId }: { sessionId: string }) {
+/** #455 review — whether the card would render: not dismissed for this
+ *  session, and nothing of the session's still waiting on the human. The bar
+ *  points at the card ("Recap ⌄") only when this holds, so the token never
+ *  opens onto nothing. */
+export function wrapCardDismissed(sessionId: string): boolean {
+  try { return sessionStorage.getItem(`dp:wrap-dismissed:${sessionId}`) === "1"; } catch { return false; }
+}
+
+export function SessionWrapCard({ sessionId, inBar = false, onDismiss }: {
+  sessionId: string;
+  /** #430 PR 5 — rendered inside the Next-up bar (setting ON): no outer margin. */
+  inBar?: boolean;
+  /** #455 review — lets the host re-derive whether the card still shows. */
+  onDismiss?: () => void;
+}) {
   // F8 (M2) — the merged store carries OTHER sessions' artifacts; the wrap
   // card must recap ITS session only (stats were inflated by live neighbors,
   // and a neighbor's draft suppressed the card entirely).
@@ -68,7 +82,7 @@ export function SessionWrapCard({ sessionId }: { sessionId: string }) {
     <div
       role="status"
       aria-label="Session wrapped"
-      className="mx-4 mt-3 px-4 py-3 bg-surface-secondary border border-white/[0.08] rounded-lg flex items-start gap-3"
+      className={`${inBar ? "" : "mx-4 mt-3 "}px-4 py-3 bg-surface-secondary border border-white/[0.08] rounded-lg flex items-start gap-3`}
     >
       <span className="text-base shrink-0" aria-hidden>🏁</span>
       <div className="flex-1 min-w-0 text-xs text-text-secondary leading-relaxed">
@@ -95,6 +109,7 @@ export function SessionWrapCard({ sessionId }: { sessionId: string }) {
         onClick={() => {
           setDismissed(true);
           try { sessionStorage.setItem(dismissKey, "1"); } catch {}
+          onDismiss?.();
         }}
         className="text-text-muted hover:text-text-primary text-2xs px-2 py-0.5 rounded hover:bg-surface-hover transition-colors shrink-0"
         aria-label="Dismiss session recap"

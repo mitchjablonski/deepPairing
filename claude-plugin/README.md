@@ -1,14 +1,17 @@
 # deepPairing — Claude Code plugin
 
-Block Claude Code from re-proposing an approach you rejected — it refuses and
-quotes your reason back — then pair on findings, options, and plans in a rich
-local review UI. Around that gate, structured artifacts (findings, specs,
+Delegate implementation to Claude Code without losing the decisions that
+matter. Its work reaches you as structured artifacts (findings, specs,
 decisions, plans) and a companion web UI
 (on a deterministic per-project port in `3847-3974`, derived from the project
 path — check `.deeppairing/daemon.json` for the actual one) for inline review and
-commenting. The block is hard in the project where you rejected it; once you
-enable cross-project publishing it is also flagged, advisory, on your other
-projects.
+commenting. Reject an approach and it's checked against later proposals by
+words and a short synonym list, not meaning: in this project a matching
+`present_*` call is refused with your reason quoted back, and a matching direct
+`Edit`/`Write` gets a permission prompt (it asks; it doesn't refuse, and it
+fails open). Once you enable cross-project publishing, your other projects get
+an advisory nudge, never a block. Details and limits:
+[the main README](../README.md#your-taste-compounds).
 
 ## Install
 
@@ -50,14 +53,16 @@ The plugin's `.mcp.json` invokes a small launcher (`server.mjs`) that
 resolves the MCP server entry point across three install layouts:
 
 1. **Bundled** — `${CLAUDE_PLUGIN_ROOT}/server/standalone.js`. This is
-   what the marketplace pack will ship: the compiled server lives inside
-   the plugin so it has zero external dependencies.
+   what a marketplace install runs. The compiled server lives inside the
+   plugin, so it has no external dependencies.
 2. **Monorepo dev checkout** —
    `${CLAUDE_PLUGIN_ROOT}/../packages/mcp-server/dist/standalone.js`.
    What you're using when you `claude --plugin-dir ./claude-plugin` from
    this repo after `pnpm build`.
-3. **npm-installed package** — `require.resolve("@deeppairing/mcp-server")`.
-   Use `npm i -g @deeppairing/mcp-server` once the package is published.
+3. **A locally linked package** — `require.resolve("@deeppairing/mcp-server")`.
+   deepPairing is **not published to npm**. This candidate resolves only if
+   you have linked a local build yourself, for example with
+   `pnpm link --global`.
 
 If none resolve, the launcher prints a clear message naming each path it
 tried and the recovery command, so install failures don't show up as
@@ -189,10 +194,11 @@ same ground, so this is optional.
 deepPairing is pointed at *teaching you*, not replacing you. The agent
 names the pattern at play on every action (`log_reasoning.concept`), asks
 you to predict outcomes on high-stakes decisions, records every rejection
-with its reason, and refuses to re-propose things you've rejected — by
-name OR by underlying concept — in the project where you rejected them,
-flagging them (advisory) everywhere else. Every session compounds, so the
-NEXT session — on any project — is smarter.
+with its reason, and checks later proposals against them by words and a
+short synonym list, not meaning: a matching `present_*` call is refused in
+the project where you rejected it, and (with cross-project publishing on)
+other projects get an advisory nudge. Every session compounds, so the NEXT
+session in that project starts from what you've already decided.
 
 ## See also
 

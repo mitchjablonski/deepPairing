@@ -30,6 +30,21 @@ export const DEFAULT_REJECTION_DESCRIPTION =
 export const DEFAULT_REPROPOSAL =
   "Add a global mutable state singleton to hold config";
 
+/**
+ * #432 — the `deeppairing demo` terminal narration, built from the SAME
+ * constants the script broadcasts so the two cannot drift (pinned in
+ * demo-script.test.ts). Plain strings; the CLI adds its own styling.
+ */
+export function demoNarrationLines(): { at: string; text: string }[] {
+  return [
+    { at: "t+0.5s", text: "Agent proposes a global mutable ConfigStore singleton." },
+    { at: "t+2.5s", text: `You reject it as "${DEFAULT_REJECTION_CONCEPT}", with your reason.` },
+    { at: "", text: "→ Added to Your taste (this project's ledger)." },
+    { at: "t+5.0s", text: `Agent re-proposes it in new words: "${DEFAULT_REPROPOSAL}".` },
+    { at: "", text: "→ 🛡 Pre-flight refuses it: every word of the concept is there. Hero toast fires." },
+  ];
+}
+
 /** Run the demo script against the given store + broadcast. Fires broadcasts
  *  on a timeline; callers can observe them as they land. */
 export function runDemoScript({

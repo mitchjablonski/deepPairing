@@ -43,6 +43,8 @@ export interface DecisionFooterProps {
    *  sent-back / rejected CONFIRMATION banners are preserved — a state the human
    *  already reached stays visible. Default false. */
   locked?: boolean;
+  /** #465 — set while this tab is disconnected: the send/reject submits disable with this reason. */
+  offlineReason?: string | null;
 }
 
 export function DecisionFooter({
@@ -70,7 +72,9 @@ export function DecisionFooter({
   onSelect,
   showCalibrationActions = false,
   locked = false,
+  offlineReason = null,
 }: DecisionFooterProps) {
+  const offline = offlineReason;
   return (
     /* X11 — escape hatches grouped under one footer instead of two
        stacked bordered blocks. Pre-X11 "Send back" and "Why this choice"
@@ -105,8 +109,9 @@ export function DecisionFooter({
           />
           <div className="flex items-center gap-2">
             <button
+              title={offline ?? undefined}
               onClick={submitSendBack}
-              disabled={!sendBackText.trim()}
+              disabled={(!sendBackText.trim()) || !!offline}
               className="px-3 py-1 text-xs font-medium bg-accent-amber text-text-inverse rounded
                          hover:bg-accent-amber/80 disabled:opacity-50 transition-colors press-scale"
             >
@@ -126,8 +131,8 @@ export function DecisionFooter({
       {!locked && showReject && !rejectSent && (
         <div className="space-y-2 mb-2 p-2.5 rounded border border-accent-red/30 bg-accent-red-dim/15">
           <label className="block text-2xs text-text-muted">
-            Why is this the wrong question? The agent will remember not to
-            re-propose this framing.
+            Why is this the wrong question? A re-proposal of this framing
+            will be refused in this project.
           </label>
           <textarea
             rows={2}
@@ -164,8 +169,9 @@ export function DecisionFooter({
           />
           <div className="flex items-center gap-2">
             <button
+              title={offline ?? undefined}
               onClick={submitReject}
-              disabled={!rejectText.trim()}
+              disabled={(!rejectText.trim()) || !!offline}
               className="px-3 py-1 text-xs font-medium bg-accent-red text-white rounded
                          hover:bg-accent-red/80 disabled:opacity-50 transition-colors press-scale"
             >
@@ -220,8 +226,8 @@ export function DecisionFooter({
         <div className="flex items-center gap-2 text-2xs text-accent-red">
           <span aria-hidden>✕</span>
           <span>
-            You rejected this framing — the agent won't re-propose it. Your
-            reason is remembered across sessions.
+            You rejected this framing — a re-proposal of it is refused in this
+            project. Your reason is remembered across sessions.
           </span>
         </div>
       ) : sendBackSent ? (
@@ -265,7 +271,7 @@ export function DecisionFooter({
             <button
               onClick={() => { setShowReject(true); setShowSendBack(false); setShowReasoning(false); }}
               className="hover:text-accent-red transition-colors"
-              title="Reject this whole framing — you don't want any version of this. Remembered so the agent can't re-propose the same question."
+              title="Reject this whole framing — you don't want any version of this. Remembered, so a re-proposal of the same framing is refused in this project."
               aria-label="Reject this framing — wrong question"
             >
               ✕ Reject
