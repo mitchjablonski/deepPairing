@@ -109,7 +109,7 @@ export function DecisionFooter({
           />
           <div className="flex items-center gap-2">
             <button
- title={offline ?? undefined}
+              title={offline ?? undefined}
               onClick={submitSendBack}
               disabled={(!sendBackText.trim()) || !!offline}
               className="px-3 py-1 text-xs font-medium bg-accent-amber text-text-inverse rounded
@@ -169,7 +169,7 @@ export function DecisionFooter({
           />
           <div className="flex items-center gap-2">
             <button
- title={offline ?? undefined}
+              title={offline ?? undefined}
               onClick={submitReject}
               disabled={(!rejectText.trim()) || !!offline}
               className="px-3 py-1 text-xs font-medium bg-accent-red text-white rounded

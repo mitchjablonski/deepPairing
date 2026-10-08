@@ -127,7 +127,8 @@ describe("#458 review — sibling history is not news; a sibling's NEW work is",
     render(<App />);
     await waitFor(() => expect(useArtifactStore.getState().artifacts.some((a) => a.id === "o1")).toBe(true));
     await act(async () => { await new Promise((r) => setTimeout(r, 1000)); }); // settled
-    expect(screen.getByTestId("next-up-bar").getAttribute("data-line")).toMatch(/Nothing needs you/);
+    // #467 review — "nothing" only once the sibling sync has settled (held before).
+    await waitFor(() => expect(screen.getByTestId("next-up-bar").getAttribute("data-line")).toMatch(/Nothing needs you/));
 
     // The sibling's agent presents a decision. Its broadcast is session-scoped
     // (never reaches this tab); the 10s /api/active-sessions poll sees count 2.

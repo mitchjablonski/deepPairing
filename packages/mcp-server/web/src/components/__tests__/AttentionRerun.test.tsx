@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { CommentThread } from "../CommentThread";
+import { QuickAskModal } from "../QuickAskModal";
 import App from "../../App";
 import { NextUpBar } from "../NextUpBar";
 import { DecisionCard } from "../DecisionCard";
@@ -12,6 +14,10 @@ import { usePreflightBlockStore } from "../../stores/preflightBlocks";
 import { useReplayStore } from "../../stores/replay";
 import { outageMinutes } from "../../lib/outage";
 import { OFFLINE_ACT_REASON } from "../../hooks/useOfflineReason";
+import { useConnectionGraceStore } from "../../lib/connectionGrace";
+import { useSiblingSyncStore } from "../../lib/siblingSync";
+import { CommandPalette } from "../CommandPalette";
+import { PendingBanner } from "../PendingBanner";
 
 /**
  * #465 — the walkthrough RERUN's findings (docs/design/attention-walkthroughs.md,
@@ -33,6 +39,8 @@ beforeEach(() => {
     staleDaemon: false, snapshotUnavailable: false, sessionConflict: false, agentActivityAt: null, disconnectedSince: null,
   } as any);
   usePreferencesStore.setState({ nextUpBar: false } as any);
+  useConnectionGraceStore.setState({ everConnected: false, graceOver: false });
+  useSiblingSyncStore.setState({ settled: false });
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -40,7 +48,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const goOffline = (since = Date.now()) => useConnectionStore.setState({ connected: false, disconnectedSince: since } as any);
+const goOffline = (since = Date.now()) => {
+  useConnectionGraceStore.setState({ everConnected: true }); // an outage AFTER connecting
+  useConnectionStore.setState({ connected: false, disconnectedSince: since } as any);
+};
 
 describe("N1 — label an item from any session other than the bound one", () => {
   it("bound s_new is empty and ONE sibling holds the decision: the line names the sibling", () => {
@@ -138,5 +149,99 @@ describe("state G rule 1 — act buttons disable while disconnected, with the re
     expect(send).toBeDisabled();
     expect(send.getAttribute("title")).toBe(OFFLINE_ACT_REASON);
     expect((screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement).value).toBe("please also check the 401 path");
+  });
+});
+
+describe("#467 review — no false line on load (bar ON, a sibling holds pending work)", () => {
+  it("no rendered frame shows DISCONNECTED or 'Nothing needs you' between first paint and the real line", async () => {
+    const SESSIONS = [
+      { sessionId: "s_new", live: true, artifactCount: 0, title: "s_new" },
+      { sessionId: "s_bill", live: true, artifactCount: 1, title: "Billing migration" },
+    ];
+    const billDecision = art("d_bill", "s_bill", "decision", "Backfill invoices now?", { content: { context: "c", decisionId: "dd", stakes: "high", options: [] } });
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+      const u = String(url);
+      const json = (b: unknown) => Promise.resolve(new Response(JSON.stringify(b), { status: 200, headers: { "Content-Type": "application/json" } }));
+      if (u.includes("/api/live-session/s_bill")) return json({ artifacts: [billDecision], comments: [] });
+      if (u.includes("/api/live-session/")) return json({ artifacts: [], comments: [] });
+      if (u.includes("/api/active-sessions")) return json({ sessions: SESSIONS });
+      return json({ sessions: [] });
+    }));
+    // A page load: not connected yet, not hydrated.
+    useConnectionStore.setState({ connected: false, hydrated: false, sessionId: "s_new", activeSessions: SESSIONS, disconnectedSince: null } as any);
+    usePreferencesStore.setState({ nextUpBar: true } as any);
+
+    // The render log: every data-line the bar ever shows.
+    const log: string[] = [];
+    const observer = new MutationObserver(() => {
+      const bar = document.querySelector("[data-testid='next-up-bar']");
+      const line = bar?.getAttribute("data-line");
+      if (line != null && log[log.length - 1] !== line) log.push(line);
+    });
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-line"] });
+    render(<App />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 150)); });
+    // The connect: the store is reset and refilled with the (empty) bound session.
+    act(() => {
+      useArtifactStore.getState().reset();
+      useConnectionStore.setState({ connected: true, hydrated: true } as any);
+    });
+    await waitFor(() => expect(log[log.length - 1]).toMatch(/^▲ Backfill invoices now\?/), { timeout: 3000 });
+    observer.disconnect();
+    expect(log.filter((l) => /DISCONNECTED|Nothing needs you/.test(l))).toEqual([]);
+  });
+});
+
+describe("#467 review — the remaining act buttons gate too", () => {
+  const offlineStale = () => {
+    useConnectionGraceStore.setState({ everConnected: true });
+    // A fatal stale-daemon mismatch: connected:false WITHOUT a disconnectedSince stamp.
+    useConnectionStore.setState({ connected: false, staleDaemon: true, disconnectedSince: null } as any);
+  };
+
+  it("a fatal stale-daemon mismatch (no disconnectedSince) still disables Approve", () => {
+    render(<ArtifactStatusActions artifact={art("art_x", "s1", "research", "Test artifact")} />);
+    act(() => offlineStale());
+    expect(screen.getAllByRole("button", { name: /^Approve/ })[0]).toBeDisabled();
+  });
+
+  it("palette 'Approve all' is shown disabled with the reason and Enter doesn't run it", () => {
+    const updateArtifactStatus = vi.fn().mockResolvedValue(undefined);
+    useArtifactStore.setState({ artifacts: [art("r1", "s1", "research", "One")], updateArtifactStatus } as any);
+    act(() => goOffline());
+    render(<CommandPalette onClose={() => {}} />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Approve all" } });
+    const item = screen.getByRole("button", { name: /Approve all 1 draft artifact/ });
+    expect(item).toBeDisabled();
+    expect(item.getAttribute("title")).toBe(OFFLINE_ACT_REASON);
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    expect(updateArtifactStatus).not.toHaveBeenCalled();
+  });
+
+  it("bar-OFF PendingBanner's dismiss chip disables with the reason", () => {
+    useArtifactStore.setState({ artifacts: [art("r1", "s1", "research", "One"), art("r2", "s1", "research", "Two")], selectedArtifactId: null } as any);
+    act(() => goOffline());
+    render(<PendingBanner />);
+    const chip = screen.getByRole("button", { name: "Dismiss One" });
+    expect(chip).toBeDisabled();
+    expect(chip.getAttribute("title")).toBe(OFFLINE_ACT_REASON);
+  });
+
+  it("comment Send and Quick-ask Ask disable with the same reason; the text stays", async () => {
+    act(() => goOffline());
+    const { unmount } = render(<CommentThread artifactId="a1" comments={[]} />);
+    const box = screen.getByPlaceholderText(/Add a comment/);
+    fireEvent.change(box, { target: { value: "draft reply" } });
+    const send = screen.getByRole("button", { name: /^Send/ });
+    expect(send).toBeDisabled();
+    expect(send.getAttribute("title")).toBe(OFFLINE_ACT_REASON);
+    expect((screen.getByPlaceholderText(/Add a comment/) as HTMLTextAreaElement).value).toBe("draft reply");
+    unmount();
+    const onSubmit = vi.fn();
+    render(<QuickAskModal artifactTitle="X" onSubmit={onSubmit} onClose={() => {}} />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "why?" } });
+    const ask = screen.getByRole("button", { name: "Ask" });
+    expect(ask).toBeDisabled();
+    expect(ask.getAttribute("title")).toBe(OFFLINE_ACT_REASON);
   });
 });

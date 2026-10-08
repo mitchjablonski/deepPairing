@@ -1608,7 +1608,7 @@ export function ChangesetArtifact({ artifact }: { artifact: Artifact }) {
             {confirmDismiss ? (
               <>
                 <button
- title={offline ?? undefined}
+                  title={offline ?? undefined}
                   type="button"
                   onClick={() => {
                     setConfirmDismiss(false);

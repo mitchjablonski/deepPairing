@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useModal } from "../hooks/useModal";
+import { useOfflineReason } from "../hooks/useOfflineReason";
 
 interface QuickAskModalProps {
   artifactTitle: string;
@@ -14,10 +15,12 @@ interface QuickAskModalProps {
  * first: autofocused textarea, ⌘/Ctrl+Enter or the button submits, Esc cancels.
  */
 export function QuickAskModal({ artifactTitle, onSubmit, onClose }: QuickAskModalProps) {
+  const offline = useOfflineReason(); // #467 review — replies/Ask gate like every act button
   const [text, setText] = useState("");
   const { dialogProps } = useModal({ onClose });
 
   const submit = async () => {
+    if (offline) return; // #467 review — offline: refuse (the button is disabled too)
     const q = text.trim();
     if (!q) return;
     try {
@@ -70,8 +73,9 @@ export function QuickAskModal({ artifactTitle, onSubmit, onClose }: QuickAskModa
             Cancel
           </button>
           <button
+            title={offline ?? undefined}
             onClick={submit}
-            disabled={!text.trim()}
+            disabled={(!text.trim()) || !!offline}
             className="px-3 py-1.5 bg-accent-violet-strong text-white text-xs font-medium rounded
                        hover:bg-accent-violet-strong-hover disabled:bg-surface-elevated disabled:text-text-muted transition-colors"
           >

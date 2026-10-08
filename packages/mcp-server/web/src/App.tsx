@@ -14,6 +14,7 @@ import { TurnIndicator } from "./components/TurnIndicator";
 import { NextUpBar } from "./components/NextUpBar";
 import { sessionLabelOf } from "./lib/sessionLabel";
 import { outageMinutes } from "./lib/outage";
+import { useConnectionGraceDriver, useTabOffline } from "./lib/connectionGrace";
 import { usePreferencesStore } from "./stores/preferences";
 import { PendingBanner } from "./components/PendingBanner";
 import { ResumeQuestionsBanner } from "./components/ResumeQuestionsBanner";
@@ -67,7 +68,10 @@ function App() {
   // (D6 bail suppresses idle re-renders); the shared hook re-fires at the
   // staleness boundary so the closing beat appears when the session wraps.
   const agentRecentlyActive = useAgentRecentlyActive();
-  const showDisconnect = useShowDisconnect(connected); // #465 N2
+  // #465 N2 / #467 review — the one "is this tab offline?" answer (first-connect
+  // grace included), shared with the bar and the act buttons.
+  useConnectionGraceDriver();
+  const tabOffline = useTabOffline();
   // #455 review — the session dot pulses on the SAME source as the pill.
   const agentWorking = useAgentWorking();
   // C5 — no IdleHome/WaitingForClaude flash on refresh: skeleton until the
@@ -880,7 +884,7 @@ function App() {
 
       {/* Disconnected warning — escalates (D8/H4): a blip and a dead daemon
           looked identical forever; past 60s the pair needs to know to act. */}
-      {!connected && showDisconnect && <DisconnectBanner />}
+      {tabOffline && <DisconnectBanner />}
 
       {/* Replay scrubber — only renders when replay mode is active */}
       <ReplayScrubber />
@@ -1054,23 +1058,6 @@ function HydrationSkeleton() {
  * command (the daemon-reliability rule: surface failures loudly, give a
  * recovery command).
  */
-/**
- * #465 N2 — every page load spoke "Disconnected…" before the FIRST connect (the
- * banner is a role=status). Until this tab has connected once, the banner waits
- * out a short grace; a real disconnect after a connect shows at once.
- */
-const FIRST_CONNECT_GRACE_MS = 3000;
-function useShowDisconnect(connected: boolean): boolean {
-  const [everConnected, setEverConnected] = useState(connected);
-  const [graceOver, setGraceOver] = useState(false);
-  useEffect(() => { if (connected) setEverConnected(true); }, [connected]);
-  useEffect(() => {
-    const t = setTimeout(() => setGraceOver(true), FIRST_CONNECT_GRACE_MS);
-    return () => clearTimeout(t);
-  }, []);
-  return everConnected || graceOver;
-}
-
 function DisconnectBanner() {
   const disconnectedSince = useConnectionStore((s) => s.disconnectedSince);
   const [now, setNow] = useState(() => Date.now());

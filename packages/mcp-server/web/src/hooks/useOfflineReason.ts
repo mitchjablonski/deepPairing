@@ -1,4 +1,4 @@
-import { useConnectionStore } from "../stores/connection";
+import { useTabOffline } from "../lib/connectionGrace";
 
 /**
  * #465 (design §4.3 rule 1 / state G) — act buttons (approve, reject,
@@ -11,9 +11,8 @@ export const OFFLINE_ACT_REASON =
   "This tab is disconnected from the deepPairing daemon — this re-enables when it reconnects (anything you've typed is kept)";
 
 export function useOfflineReason(): string | null {
-  // A real outage: not connected AND a disconnect was observed (the store
-  // stamps disconnectedSince on the transport dropping, and clears it on a
-  // connect). Before the first connect there is nothing loaded to act on.
-  const offline = useConnectionStore((s) => !s.connected && s.disconnectedSince != null);
-  return offline ? OFFLINE_ACT_REASON : null;
+  // #467 review — the SAME offline condition as the bar and the banner
+  // (lib/connectionGrace): it also covers a fatal stale-daemon mismatch, which
+  // sets connected:false without a disconnectedSince stamp.
+  return useTabOffline() ? OFFLINE_ACT_REASON : null;
 }
