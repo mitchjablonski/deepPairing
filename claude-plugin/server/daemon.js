@@ -28124,6 +28124,42 @@ var FileStore = class _FileStore {
 import fs19 from "node:fs";
 import path18 from "node:path";
 
+// src/store/decision-resolve-guard.ts
+async function checkStaleResolve(store, decisionId, optionId) {
+  const record2 = await store.getDecision(decisionId);
+  const prior = record2 ? await store.getDecisionResponse(decisionId) : null;
+  const backing = (await store.getArtifacts()).find(
+    (a) => a.id === record2?.artifactId || a.type === "decision" && (a.content?.decisionId === decisionId || a.id === decisionId)
+  );
+  const resolution = prior ? { optionId: prior.optionId, ...prior.reasoning ? { reasoning: prior.reasoning } : {}, ...record2?.resolvedAt ? { resolvedAt: record2.resolvedAt } : {} } : void 0;
+  if (prior && prior.optionId === optionId) {
+    return {
+      kind: "same",
+      backing,
+      body: { status: "resolved", alreadyResolved: true, decisionId, ...backing ? { artifactId: backing.id } : {}, resolution }
+    };
+  }
+  const answeredElsewhere = !!prior;
+  const closedElsewhere = !!backing && isCrossTerminalVerdictFlip(backing.status, "approved", "ui_decision_resolve");
+  if (!answeredElsewhere && !closedElsewhere) return null;
+  const currentStatus = backing?.status ?? "approved";
+  const at = resolution?.resolvedAt ?? backing?.updatedAt;
+  return {
+    kind: "conflict",
+    backing,
+    body: {
+      error: "verdict_already_final",
+      code: "verdict_already_final",
+      currentStatus,
+      decisionId,
+      ...backing ? { artifactId: backing.id } : {},
+      ...resolution ? { resolution } : {},
+      at,
+      message: answeredElsewhere ? `This decision was already answered${at ? ` at ${at}` : ""} elsewhere \u2014 your pick wasn't applied; this card now shows the recorded answer.` : `This decision was already ${currentStatus}${at ? ` at ${at}` : ""} elsewhere \u2014 your pick wasn't applied; this card now shows its current state.`
+    }
+  };
+}
+
 // src/store/context-bank.ts
 import fs15 from "node:fs";
 import path14 from "node:path";
@@ -31403,6 +31439,15 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
         404
       );
     }
+    {
+      const stale = await checkStaleResolve(store, decisionId, optionId);
+      if (stale?.kind === "same") return c.json(stale.body);
+      if (stale?.kind === "conflict") {
+        log2(`[decision] REFUSED stale resolve on ${decisionId}: ${String(stale.body.message)}`);
+        if (stale.backing) broadcast({ type: "artifact_updated", artifactId: stale.backing.id, status: stale.backing.status }, sid);
+        return c.json(stale.body, 409);
+      }
+    }
     await store.resolveDecision(decisionId, optionId, reasoning);
     const decision = await store.getDecision(decisionId);
     if (decision && (await store.getDecisionResponse(decisionId))?.optionId !== optionId) {
@@ -32690,7 +32735,7 @@ function lockBusyRouteError(log2, c, error51) {
   log2(`[route-error] ${c.req.method} ${c.req.path} \u2192 503 lock_busy: ${error51.message}`);
   return c.json(lockBusyBody(error51), 503);
 }
-function createActiveSessionRoutes(sessions, sessionMeta, daemonHash, activeSessions, logFn) {
+function createActiveSessionRoutes(sessions, sessionMeta, daemonHash, activeSessions, logFn, sessionRevisions) {
   const app = new Hono2();
   app.onError((error51, c) => {
     if (isFileLockError(error51)) return lockBusyRouteError(logFn ?? (() => {
@@ -32721,7 +32766,9 @@ function createActiveSessionRoutes(sessions, sessionMeta, daemonHash, activeSess
         // Per-session-split — the default-view selector picks the
         // most-recently-active LIVE session when a project has >1 bucket.
         // Falls back to registeredAt for pre-activity sessions.
-        lastActivity: meta3?.lastActivity ?? meta3?.registeredAt
+        lastActivity: meta3?.lastActivity ?? meta3?.registeredAt,
+        // #460 — the sibling change signal (status changes + comments too).
+        ...sessionRevisions ? { revision: sessionRevisions.counts.get(id) ?? 0, revisionEpoch: sessionRevisions.epoch } : {}
       };
     });
     return c.json({ sessions: list });
@@ -33152,6 +33199,11 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const decisionId = c.req.param("decisionId");
     if (typeof optionId !== "string" || optionId.length === 0) {
       return c.json({ error: "optionId is required", code: ERROR_CODES.validation_error }, 400);
+    }
+    {
+      const stale = await checkStaleResolve(r.store, decisionId, optionId);
+      if (stale?.kind === "same") return c.json(stale.body);
+      if (stale?.kind === "conflict") return c.json(stale.body, 409);
     }
     const prediction = confidence || predictedOutcome ? { confidence, predictedOutcome } : void 0;
     r.store.resolveDecision(decisionId, optionId, reasoning, prediction);
@@ -33833,6 +33885,22 @@ async function defaultOpenBrowser(url2) {
   });
   child.unref();
 }
+var REVISION_EVENTS = /* @__PURE__ */ new Set([
+  "artifact_created",
+  "artifact_updated",
+  "artifact_content_updated",
+  "artifact_renamed",
+  "comment_added",
+  "comment_updated",
+  "question_answered",
+  "decision_resolved",
+  "decisions_acknowledged",
+  "plan_progress_updated",
+  "changeset_review_updated",
+  "request_added",
+  "request_served",
+  "secret_warning"
+]);
 function createDaemon(deps) {
   const {
     projectRoot: projectRoot2,
@@ -33875,8 +33943,13 @@ function createDaemon(deps) {
   const wsClients = /* @__PURE__ */ new Map();
   const globalClients = /* @__PURE__ */ new Set();
   const demoReplayEvents = /* @__PURE__ */ new Map();
+  const sessionRevisions = /* @__PURE__ */ new Map();
+  const revisionEpoch = randomBytes3(6).toString("hex");
   function broadcast(sessionId, event) {
     let outgoing = event;
+    if (REVISION_EVENTS.has(event?.type)) {
+      sessionRevisions.set(sessionId, (sessionRevisions.get(sessionId) ?? 0) + 1);
+    }
     try {
       const entry = recordPreflightBlock(projectRoot2, sessionId, event);
       if (entry) outgoing = { ...event, blockId: entry.id, at: entry.at };
@@ -34185,7 +34258,7 @@ function createDaemon(deps) {
     checkAutoShutdown();
     return c.json({ sessionId, startedAt: (/* @__PURE__ */ new Date()).toISOString() });
   });
-  app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions, log2));
+  app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions, log2, { epoch: revisionEpoch, counts: sessionRevisions }));
   const __thisDir3 = path22.dirname(fileURLToPath4(import.meta.url));
   const monorepoWebDist = path22.join(__thisDir3, "../../dist/web");
   const webDistCandidates = [monorepoWebDist, path22.join(__thisDir3, "web")];

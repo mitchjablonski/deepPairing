@@ -5,6 +5,7 @@ import { unansweredQuestionIds } from "../lib/unanswered";
 import { useArtifactStore, commentPriorVersion } from "../stores/artifact";
 import { ReplyModeToggle, type ReplyMode } from "./ReplyModeToggle";
 import { WAITING_TONE } from "../lib/waitingTone";
+import { useOfflineReason } from "../hooks/useOfflineReason";
 
 /**
  * Shared per-line comment surface: the hover gutter (+ comment / ? ask /
@@ -122,6 +123,7 @@ export function LineCommentChips({
   side,
   onOpenLine,
 }: LineCommentChipsProps) {
+  const offline = useOfflineReason(); // #467 review — replies/Ask gate like every act button
   const submitComment = useArtifactStore((s) => s.submitComment);
   const markQuestionResolved = useArtifactStore((s) => s.markQuestionResolved);
   // Bug2 — inline chips aggregate across the version chain (via the caller's
@@ -149,6 +151,7 @@ export function LineCommentChips({
     setReplyMode("comment");
   };
   const submitReply = async (parent: Comment) => {
+    if (offline) return; // #467 review — offline: refuse (the button is disabled too)
     const text = replyText.trim();
     if (!text || replySubmitting) return;
     setReplySubmitting(true);
@@ -337,9 +340,10 @@ export function LineCommentChips({
             />
             <div className="flex gap-1.5 mt-1">
               <button
+                title={offline ?? undefined}
                 type="button"
                 onClick={() => submitReply(c)}
-                disabled={!replyText.trim() || replySubmitting}
+                disabled={(!replyText.trim() || replySubmitting) || !!offline}
                 className={`px-2.5 py-1 text-white text-2xs rounded disabled:bg-surface-elevated disabled:text-text-muted transition-colors ${
                   replyMode === "question"
                     ? "bg-accent-violet-strong hover:bg-accent-violet-strong-hover"
@@ -470,6 +474,7 @@ export function LineComposer({
   targetContext,
   onClose,
 }: LineComposerProps) {
+  const offline = useOfflineReason(); // #467 review — replies/Ask gate like every act button
   const submitComment = useArtifactStore((s) => s.submitComment);
   const [commentText, setCommentText] = useState("");
   const [lineEnd, setLineEnd] = useState<number>(lineNum);
@@ -504,6 +509,7 @@ export function LineComposer({
   const changedLine = (i: number): boolean => editorLines[i] !== (originalLines[i] ?? undefined);
 
   const handleSubmit = async () => {
+    if (offline) return; // #467 review — offline: refuse (the button is disabled too)
     if (submitting) return;
     const rawEnd = canSpan ? lineEnd : lineNum;
     const safeEnd = Math.max(lineNum, Math.min(rawEnd, spanMax));
@@ -731,8 +737,9 @@ export function LineComposer({
               Cancel
             </button>
             <button
+              title={offline ?? undefined}
               onClick={handleSubmit}
-              disabled={!effectiveSuggestion.trim() || submitting}
+              disabled={(!effectiveSuggestion.trim() || submitting) || !!offline}
               className="px-2.5 py-1.5 bg-accent-green text-white text-xs rounded
                          hover:bg-accent-green/80 disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
             >
@@ -772,8 +779,9 @@ export function LineComposer({
                        }`}
           />
           <button
+            title={offline ?? undefined}
             onClick={handleSubmit}
-            disabled={!commentText.trim() || submitting}
+            disabled={(!commentText.trim() || submitting) || !!offline}
             className={`px-2.5 py-1.5 text-white text-xs rounded disabled:bg-surface-elevated disabled:text-text-muted transition-all duration-[180ms] ease-out press-scale ${
               mode === "ask" ? "bg-accent-violet-strong hover:bg-accent-violet-strong-hover" : "bg-accent-blue-strong hover:bg-accent-blue/80"
             }`}

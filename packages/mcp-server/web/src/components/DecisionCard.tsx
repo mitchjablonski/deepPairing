@@ -21,6 +21,7 @@ import { DecisionWorkbench, isGrainComment } from "./decision/DecisionWorkbench"
 import { useChainComments } from "../hooks/useChainComments";
 import type { InitialResolved } from "./decision/types";
 import { SpeechIcon } from "./icons/ArtifactIcons";
+import { useOfflineReason } from "../hooks/useOfflineReason";
 
 interface DecisionCardProps {
   event: DecisionRequestEvent;
@@ -86,6 +87,8 @@ type DecisionPhase =
   | { kind: "sentBack" };
 
 export function DecisionCard({ event, decisionId, artifactId, stakes, initialResolved, sessionId, writeLocked = false, retractReason, onResolved }: DecisionCardProps) {
+  // #465 (state G rule 1) — Select / send-back / reject disable while disconnected.
+  const offline = useOfflineReason();
   const resolveDecision = useArtifactStore((s) => s.resolveDecision);
   const submitComment = useArtifactStore((s) => s.submitComment);
   const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
@@ -122,6 +125,14 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
       : { kind: "idle" },
   );
   const inFlightRef = useRef(false);  // sync race-guard
+  // #464 review — a resolution that arrives AFTER mount (a sibling resolved it,
+  // a 409 carried the recorded answer, a cross-tab decision_resolved) moves an
+  // idle card to resolved, so the winning pick shows and Select is gone.
+  const lateResolvedOption = initialResolved?.optionId;
+  useEffect(() => {
+    if (lateResolvedOption && phase.kind === "idle") setPhase({ kind: "resolved", optionId: lateResolvedOption });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the arriving resolution; phase is a guard
+  }, [lateResolvedOption]);
   const [showRepair, setShowRepair] = useState(false);
   // #174 — the focused "Expand to discuss" workbench. ONE affordance on the
   // otherwise-clean card opens the side-by-side compare + grain-commenting view.
@@ -186,8 +197,8 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     inFlightRef.current = true;
     setPhase({ kind: "submitting" });
     const sentReasoning = reasoningDraft;
+    const id = decisionId ?? event.decisionId;
     try {
-      const id = decisionId ?? event.decisionId;
       await resolveDecision(id, optionId, reasoning.trim() || undefined);
       // Stash what was ACTUALLY submitted (trimmed — matches the record),
       // then clear the draft so it can't shadow future resolved views.
@@ -200,7 +211,10 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
       onResolved?.();
     } catch {
       // Roll back to idle so the user can retry. No silent stuck state.
-      setPhase({ kind: "idle" });
+      // #464 review — unless the daemon refused because it was ALREADY answered
+      // elsewhere: the store now holds that recorded answer, so show it.
+      const recorded = useArtifactStore.getState().resolvedDecisions[id];
+      setPhase(recorded ? { kind: "resolved", optionId: recorded.optionId } : { kind: "idle" });
     } finally {
       inFlightRef.current = false;
     }
@@ -213,6 +227,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     // the armed timer alive to commit the ABANDONED option. Idempotent on
     // the expiry path (which already cleared it).
     setArmedSelect(null);
+    if (offline) return; // #465 — the keyboard path too, not only the button
     // F12 — no resolving decisions against a replayed frame (the write
     // would land in the historical session's store via owner routing).
     if (useReplayStore.getState().active) return;
@@ -675,6 +690,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
               focused={idx === focusedIndex}
               submitting={submitting}
               locked={writeLocked}
+              offlineReason={offline}
               artifactId={artifactId}
               onSelect={handleSelect}
               onFocus={setFocusedIndex}
@@ -769,7 +785,8 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
 
       {/* X11 — escape-hatch footer (send-back + reasoning composers, tertiary
           affordance row). */}
-      <DecisionFooter {...footerProps} />
+      <DecisionFooter
+            offlineReason={offline} {...footerProps} />
 
       {/* #174 — the focused discuss workbench. Reuses the same footerProps
           bundle for its decision-level actions, and nests #173's diagram view
