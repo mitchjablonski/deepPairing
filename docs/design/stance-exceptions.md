@@ -1,8 +1,19 @@
 # One-proposal stance exceptions (proposal, #470)
 
-> **Status: PROPOSAL, revision 5. No code is included.** It is written for
+> **Status: PROPOSAL, revision 6 (design APPROVED by Astra at rev 5). No code is included.** It is written for
 > Astra's scope and authority review, which must happen before any
 > implementation starts.
+>
+> **Revision 6.** Astra APPROVED revision 5 at `043a0579`, with three
+> implementation acceptance conditions; §13 turns them into a checklist.
+> Fable's final design/style review asked for UX and placement changes, with
+> no change to scope or authority:
+> - the CLI diff preview (§3);
+> - a human-facing "changed" state (§4, §7);
+> - the interaction and accessibility of Allow-once and Retire (§3a);
+> - fit with the #430 attention hierarchy (§4a).
+>
+> §12 maps every point.
 >
 > **Revision 5** answers Astra's re-review of `e4ec4c87`. Astra agreed with
 > O1 and with keeping D5, and raised two P2s:
@@ -279,7 +290,19 @@ non-zero and writes nothing.
 - **TTY.** It requires a TTY on both stdin and stdout.
 - **Flags.** It refuses every non-interactive flag, including `--reason`.
 - **Environment.** It refuses when `CLAUDECODE=1` or `CI` is set.
-- **Preview.** It shows the full effective snapshot and its preconditions.
+- **Preview.** This is never raw JSON. The CLI shows:
+  1. the stance;
+  2. the precondition line, such as "`before` comes from *art_x* (your last
+     change to `src/config.ts`)" or "Revises *art_y* v3";
+  3. the snapshot rendered for the terminal:
+     - a `code_change` is shown as a **unified diff** of the effective
+       `before`/`after`, with the file path as the header;
+     - other types are shown as readable text: title, then each section,
+       option (with pros and cons) or finding (with evidence).
+
+  All of it goes through `$PAGER`, falling back to `less -R`. You have to
+  page to the end before the reason prompt appears. With `NO_COLOR` set,
+  the diff has no colour.
 - **Typed input.** It requires a typed reason of 3–280 characters, then a
   typed `allow`.
 
@@ -379,12 +402,72 @@ Allowances no longer live on disk, so editing a file cannot grant one. The
 | CLI `stance exceptions [revoke <id>]` (through the daemon) | No | Yes | Yes |
 | MCP tools, `/api/internal/*` | **No** | No | No |
 
-The UI dialog shows the two-part preview. Its scope text reads "Allows this
-exact proposal, once, until this Claude session ends (at most 72 hours). The
-stance stays on for everything else." It requires a reason and is reachable
-by keyboard: focus starts in the reason field, Enter submits, Esc cancels.
-When a request fails, the dialog stays open and shows the error. **Retire this
-stance** is unchanged.
+### 3a. Interaction and accessibility (rev 6)
+
+**Today's hazard.** At 842f4495, **Retire this stance** in the hero toast
+(`ToastLayer.tsx:157-163`) is a `text-2xs` muted text link. It retires the
+stance permanently, on one click, with no confirmation. Revision 5 put
+Allow-once beside it in the same `gap-3` row. That would make a destructive
+misclick *more* likely, because the two actions would sit side by side and
+look alike.
+
+**Revision 6 placement.**
+
+- **The hero toast** carries **Allow this proposal once** as its **primary
+  button**. That means a filled, accent-coloured button with a hit target of
+  at least **32×32 px**.
+  - The toast has no Retire control. A secondary "More options" link opens
+    the gate-log entry.
+  - The toast's auto-dismiss pauses while the toast has hover or focus, and
+    while the dialog is open.
+- **The gate-log entry** (`PreflightBlockLog`) carries the same primary
+  **Allow once** button, plus **Retire…** as a secondary 32 px button.
+- **Retire is behind a one-step confirm.** **Retire…** opens an inline
+  confirm: "Retire '*stance*'? This deletes the stance from this project. It
+  stops blocking everywhere, not just here." The confirm has two buttons,
+  **Cancel** and **Retire**. Initial focus is on **Cancel**, so pressing
+  Enter does **not** retire.
+- **The Ledger drawer** keeps its own Revoke and Retire controls, with the
+  same confirm.
+
+**The Allow-once dialog.**
+
+- **Semantics.**
+  - It has `role="dialog"` and `aria-modal="true"`.
+  - It sets `aria-labelledby`, which points at a heading that names the
+    stance: "Allow one proposal past '*stance*'".
+  - It sets `aria-describedby`, which points at the scope sentence: "Allows
+    this exact proposal, once, until this Claude session ends (at most 72
+    hours). The stance stays on for everything else."
+- **Focus.**
+  - Focus is trapped inside the dialog while it is open.
+  - **Initial focus goes to the heading** (`tabIndex=-1`). A screen reader
+    therefore announces what is being allowed before the first Tab reaches
+    the reason field.
+  - Tab order: the preview region (which scrolls and can be focused), the
+    reason field, **Allow once**, **Cancel**.
+  - On close, focus returns to the button that opened the dialog.
+- **Keys.**
+  - Enter in the reason field **confirms only when the reason is valid** (3
+    or more characters after trimming). Otherwise Enter does nothing and the
+    inline hint is announced.
+  - Esc cancels and writes nothing.
+- **Errors.** On a 503 or 409 the dialog stays open, and the message appears
+  in a `role="alert"` region.
+- **Announcements.** These go through the existing `next-up-announcer` live
+  region (`NextUpBar.tsx`, `role="status"`, polite). There is no second live
+  region.
+  - When a grant is made: "Allowed once: '*stance*'. Waiting for Claude to
+    retry."
+  - When the allowance changes from **allowed to used**: "Claude used your
+    allowance: *artifact title*."
+  - When the allowance changes to **changed**: "The proposal you allowed
+    changed. A new block is waiting."
+
+**Behaviour change to list in the docs.** Retire has always been a one-click
+link on the toast. It now lives on the gate-log entry and in the Ledger
+drawer, and it needs a confirmation. This change applies to every stance,
+not only ones with allowances, and §9 lists it.
 
 ## 4. Recording and audit (O1 resolved: in-memory authority)
 
@@ -411,7 +494,7 @@ Why this is enough, using the reasoning recorded with O1 (§11):
 
 - The `preferences.json` schema, retention and migration.
 - The cross-process lock path for allowances. Claims and grants are
-  serialized by the daemon's single thread. Stance rows are still read from
+  serialized by the daemon's per-session operation queue (§7). Stance rows are still read from
   the atomically replaced `preferences.json`.
 - Most of revision 3's persisted `unknown` state and its reconciliation.
 - Revision 3's §10.6 hand-written-grant residual.
@@ -421,7 +504,7 @@ Why this is enough, using the reasoning recorded with O1 (§11):
 | Field | Notes |
 |---|---|
 | `id` | `sx_<random>`. |
-| `state` | `active`, `consumed` or `revoked`. "Ended" and "expired" are derived. |
+| `state` | `active`, `consumed`, `changed` or `revoked`. "Ended" and "expired" are derived. |
 | `stance`, `sessionId`, `registrationId`, `toolName`, `artifactType`, `callFingerprint`, `effectiveDigest`, `snapshot`, `preconditions` | The binding. The `snapshot` is what consumption creates. |
 | `grantedAt`, `grantedVia` (`ui` or `cli`), `grantedBy?`, `reason` (3–280 characters), `ceilingAt` (`grantedAt` + 72 h) | `grantedBy` is a best-effort `git config user.name`. |
 | `operation?` | `{id, artifactId}`, set when the allowance is claimed. |
@@ -430,15 +513,32 @@ Why this is enough, using the reasoning recorded with O1 (§11):
 
 The daemon writes it on grant, consume and revoke:
 
-- `{id, grantedVia, grantedAt, grantedBy?, reason, ceilingAt, state, artifactId?, revokedAt?}`.
+- `{id, grantedVia, grantedAt, grantedBy?, reason, ceilingAt, state, artifactId?, revokedAt?, supersededByBlockId?}`.
+- `state` is one of `allowed`, `used`, `changed`, `revoked`, `ended` or
+  `expired`.
+- The block entry also gains `supersedesAllowanceId?` and `seenAt?`. §4a
+  explains `seenAt`.
 - Because the receipt is the block entry, the block log's cap of 50 entries
   applies to receipts as well. A used allowance outlives that cap through
   its artifact stamp.
 
 ### Where you see it
 
-- **The block card and gate log.** These show the origin badge and the state:
-  allowed, used, revoked, ended or expired.
+- **The block card and gate log.** These show the origin badge and the
+  state: allowed, used, **changed**, revoked, ended or expired.
+  - **Changed** means a claim was refused with
+    `stance_exception_dependencies_changed` (§7).
+  - The old receipt becomes `changed`, with `supersededByBlockId`. The card
+    reads, in words written to you: "The agent's proposal now depends on a
+    newer *art_x*. Allow the new block if you still want it." The text "the
+    new block" is a link to the entry for that block.
+  - The new block entry carries `supersedesAllowanceId`, and shows "Replaces
+    the proposal you allowed at *time*", with a link back.
+  - A precondition about the revise target has its own wording: "*art_y*
+    changed after you allowed this revision (*it was revised* / *you closed
+    it*)."
+  - The old allowance is no longer usable. It is marked `changed` in memory,
+    so it cannot be claimed later even if the dependency moves back.
 - **A toast** appears on every grant.
 - **The artifact card** keeps a persistent "Allowed once (UI/CLI)" badge, and
   the trace carries an `exception` summary.
@@ -450,6 +550,41 @@ The daemon writes it on grant, consume and revoke:
 
 A revoke changes `active` to `revoked` in memory and updates the receipt. A
 `consumed` allowance reports "already used by *artifact*".
+
+## 4a. Fit with the attention hierarchy (#430)
+
+The #430 design (`docs/design/attention-hierarchy.md`) sorts what needs you
+into lanes. Its lane **F, "Held by your stance"**, is a **read-only record**.
+Per that doc's §4.3, F never covers a pending decision, and the bar routes
+you somewhere; it never acts. The design states this explicitly: "No Retire
+control in the bar … Retire stays in the ⋯ gate log." Allowances fit that
+model without any precedence change:
+
+- **Where the action lives.** Allow-once is offered **only** on the hero
+  toast and the gate-log entry (§3a). It never appears in the Held line or
+  its [Why] disclosure, so Held stays read-only. The [Why] of a Held item
+  links to its gate-log entry, where the action is.
+- **A grant takes the hold out of the Held count.** Today the Held items come
+  from `NextUpBar.tsx:186-188` (at 842f4495), which counts unread blocks
+  newer than the single `lastSeenAt` timestamp.
+  - A grant sets the block entry's new `seenAt`, written by the daemon, and
+    updates its title state to "'*stance*' stopped: … · allowed once".
+  - The holds filter also excludes entries that have `seenAt`, so the
+    **Held count drops** as soon as you allow.
+  - Revoke, end or expiry does **not** put the entry back into Held. Nothing
+    new has been blocked. The gate log shows the new state.
+- **A changed dependency raises Held honestly.** A refusal for a changed
+  dependency records a **new** block entry (§7). The entry is unread, so
+  **Held rises by one**. That is accurate: there is a new block you have not
+  seen. The old entry stays seen and shows `changed`, with a link to the new
+  one.
+- **Decide.** The artifact that was admitted lands as an ordinary draft in
+  the **Decide** lane. Its "Why" line reads "Admitted under your allowance
+  (*UI/CLI*) for '*stance*': *reason*". It also keeps its card badge (§4).
+  The admission changes **no** lane order or precedence.
+- **Announcements.** Every allowance announcement goes through the bar's
+  existing `next-up-announcer` (§3a), so #430's rule of a single live region
+  holds.
 
 ## 5. Expiry: single-use, until the session ends, capped at 72 hours
 
@@ -596,8 +731,13 @@ incomplete.
 
 Each **tool invocation** mints one `operationId` before it sends anything.
 The same id rides every transport attempt, including `DaemonClient`'s
-transparent retry. The daemon is single-threaded, and the registry is in
-memory.
+transparent retry. The registry is in memory.
+
+Single-threaded JavaScript does **not** serialize across awaited flushes
+(Astra's acceptance condition 1). Every call to `runOperation`, and every
+grant, revoke and startup reconciliation, therefore runs inside an explicit
+**per-session operation queue**. The queue is held from the claim, through
+the child's persistence and every follow-up, until the final response.
 
 #### The operation record (durable, non-authorizing)
 
@@ -689,20 +829,30 @@ registration anyway. That outcome is fail-closed: the retry is blocked as
   the operation, and the stamp is in the flushed `artifacts.json`.
 
 **Release only on proof.** An allowance is reverted only for a throw inside
-step 3, before anything has been persisted. The MCP tool never releases
-anything.
+step 3, and only when **neither** of these has happened:
+
+- bytes have been persisted;
+- the child or its stamp is held in an in-memory or deferred write buffer
+  that could still commit.
+
+That is Astra's acceptance condition 2. A failed flush is **not** proof that
+nothing happened. The MCP tool never releases anything.
 
 ### Races
 
-- **Two identical calls.** Claims are serialized on the daemon's single
-  thread, so only one sees `active`. A second call with the same
+- **Two identical calls.** Claims are serialized by the per-session operation
+  queue, so only one sees `active`. A second call with the same
   `operationId`, or the same fingerprint after commit, replays the first.
 - **Revoke or Retire against a claim.** These are also serialized, and either
   order is safe.
 - **A dependency changes between grant and claim.** For example, a newer
   `code_change` lands for the file, or the target is revised. Step 2's
-  re-resolution refuses with `stance_exception_dependencies_changed`. The
-  human sees "The proposal you allowed changed underneath it" and can allow
+  re-resolution refuses with `stance_exception_dependencies_changed`. In the
+  same queued operation, the daemon marks the allowance `changed`. The tool
+  then returns a block for the **new** effective snapshot. That block is
+  recorded with `supersedesAllowanceId`, and the old receipt gets
+  `supersededByBlockId` (§4). You see "The agent's proposal now depends on a
+  newer *art_x*. Allow the new block if you still want it." You can then allow
   the new block.
 - **Lock-free readers** see atomic snapshots of `preferences.json`, and
   allowances are never written there.
@@ -763,6 +913,8 @@ Implementation PRs must update the following (line numbers at 842f4495):
 | `claude-plugin/skills/pairing-protocol/SKILL.md` L620–623 | Add the identical-retry exception: retry only after your pair says they allowed it once. Never try to grant it yourself, and expect a prompt if you try. |
 | `SECURITY.md`, threat model | Add the residuals: human-only by design, not by enforcement. A same-user process can script a pty, evade the Bash substring check, or call the bearer route. Receipts are not tamper-evident. |
 | `preflight-validator.ts` block message and hook reason text | Use the §6 wording. |
+| **Retire behaviour change** (`ToastLayer.tsx:157-163`; README L33–35 and L223–227; FAQ L39–49 "one-click overridable" and L59–63 "one click from an override"; the L45 screenshot) | Retire is no longer a one-click link on the toast. It sits on the gate-log entry and in the Ledger drawer, behind a one-step confirm. Every "one click" wording about Retire changes, and the screenshot is recaptured showing **Allow once** as the primary button. |
+| `docs/design/attention-hierarchy.md` F / §4.3 | Add a note: an allowance marks its hold seen, a dependency-changed refusal adds a new hold, and Decide's "Why" carries the allowance line. Held stays read-only. |
 
 ## 10. Test plan
 
@@ -970,13 +1122,52 @@ Fakes, not mocks:
 
 ### Web
 
-- **Keyboard.** Focus moves to the reason field. Enter is disabled while the
-  reason is empty. Esc cancels. Focus returns to where it was.
+- **Dialog semantics.** The dialog has `role="dialog"` and
+  `aria-modal="true"`. `aria-labelledby` resolves to the heading that names
+  the stance, and `aria-describedby` resolves to the scope sentence.
+- **Focus.**
+  - Initial focus is on the **heading**, not the reason field.
+  - Tab and Shift-Tab cycle inside the dialog (the trap).
+  - On close, focus returns to the button that opened the dialog.
+- **Keys.**
+  - Enter with a valid reason confirms. Enter with an empty reason, a
+    two-character reason or a whitespace-only reason does nothing, and the
+    hint is announced.
+  - Esc cancels and sends no request.
+- **Placement and targets.**
+  - Allow-once is the primary button on the toast and on the gate-log
+    entry.
+  - The toast renders **no** Retire control.
+  - Every action control has a computed hit target of at least 32×32 px.
+  - The toast's auto-dismiss pauses on hover or focus and while the dialog
+    is open.
+- **The Retire confirm.**
+  - **Retire…** opens the confirm, with initial focus on **Cancel**.
+  - Pressing Enter immediately after opening it, and pressing Esc, both
+    leave the stance intact and send no request.
+  - Only activating **Retire** sends the request.
+- **Announcements** go through `next-up-announcer`. A grant, the change from
+  allowed to used, and the change to changed each produce the specified
+  text. No second live region exists.
 - **Errors.** On a 503 or a 409 the dialog stays open.
 - **Preview.** The two-part preview renders a `code_change` diff, the
   "`before` reconstructed" note, and decision pros and cons.
-- **States.** Every state renders: allowed, used, revoked, ended,
-  "ended (not used)", expired.
+- **States.** Every state renders: allowed, used, **changed**, revoked,
+  ended, "ended (not used)", expired.
+- **Changed.** Trigger a dependency-changed refusal. Then check that:
+  - the old entry reads "The agent's proposal now depends on a newer
+    *art_x*. Allow the new block if you still want it.";
+  - the "new block" link focuses the new entry, and the new entry links
+    back with "Replaces the proposal you allowed at …";
+  - the old allowance cannot be claimed even after the dependency is
+    restored.
+- **Fit with #430.**
+  - A grant drops the Held count by one.
+  - A dependency-changed refusal raises it by one.
+  - Revoke, end and expiry do not put the hold back.
+  - Held and its [Why] render **no** Allow or Retire control.
+  - The admitted artifact's Decide "Why" line reads "Admitted under your
+    allowance …".
 
 ## 11. Decisions (recorded)
 
@@ -1023,6 +1214,16 @@ Fakes, not mocks:
 
 ## 12. Review response map
 
+### Rev 6: Astra APPROVE at `043a0579` (conditions); Fable final design/style review (CHANGES)
+
+| Finding | Source | Addressed in |
+|---|---|---|
+| **LOW.** The CLI preview should be a paged unified diff plus the precondition line, never raw JSON | Fable | §3, the CLI grant "Preview" item |
+| **MED.** The dependency-change refusal needs a human-facing "changed" state, written to the human, linked to the allowance it supersedes, and tested | Fable | §4 "Where you see it" and the receipt fields; §4 allowance `state`; §7 Races; §3a announcement; §10 web "States" and "Changed" |
+| **MED.** Interaction and accessibility: Allow-once becomes the primary button and Retire moves behind a confirm, with 32 px targets. The dialog gets `role=dialog`, `aria-modal`, labelling by the stance, a focus trap, initial focus on the heading, and Enter with a reason confirms. "Used" is announced via `next-up-announcer`. The Retire behaviour change goes in the docs list | Fable | §3a; §9 docs table (Retire row); §10 web |
+| **MED.** Fit with #430: the action lives on the toast and gate log, not in Held or Why. A grant marks the hold seen so Held drops, a changed dependency adds a new block, and the Decide "Why" line names the allowance. Cite `NextUpBar.tsx:186-188` and §4.3 | Fable | §4a; §9 docs table (attention-hierarchy row); §10 web "Fit with #430" |
+| Astra's three implementation acceptance conditions | Astra | §13 checklist; §7 wording aligned (operation queue, release only on proof including buffers) |
+
 ### Rev 5: Astra re-review of `e4ec4c87` (agrees with O1 and D5; two P2s)
 
 | Finding | Addressed in |
@@ -1058,3 +1259,45 @@ Fakes, not mocks:
 | Docs wording changes | Fable MED | §9 |
 | In-memory alternative | Fable LOW | §8; §11 O1 (resolved in rev 4) |
 | D5 stays open | Astra, coordinator | §6; §11 |
+
+## 13. Implementation acceptance checklist (Astra, APPROVE at `043a0579`)
+
+Astra approved the **design** at revision 5. That is not sign-off on an
+implementation. Each implementation PR must meet these conditions and
+include their tests. It must be reviewed independently, and it must keep the
+adversarial controls in §10.
+
+- [ ] **1. Explicit per-session operation queue.** Single-threaded JavaScript
+  does not serialize across awaited flushes. Hold one queue per
+  session/store through the claim, child persistence, every follow-up and
+  the final response. Grants, revokes and startup reconciliation go through
+  it too.
+  - *Tests:* overlapping identical and different requests on one session;
+    startup reconciliation racing a live retry. Exactly one child, and
+    exactly one of each follow-up.
+- [ ] **2. A failed flush is not proof that nothing happened.** Never re-arm
+  an allowance while an in-memory child or stamp, or a deferred write, could
+  still commit. Release on proof covers pending buffers, not only the bytes
+  on disk.
+  - *Tests:*
+    - real lock failures, then unlock and retry;
+    - disk errors such as ENOSPC and EIO;
+    - follow-ups happen exactly once;
+    - notifications fire for the first successful commit only;
+    - all of this **in addition to** the process-crash matrix in §10 (5b).
+- [ ] **3. A completed-operation replay is read-only, except for missing
+  idempotent effects.**
+  - Never replay an old supersede over a terminal state a human set later
+    (§7 step 4a skips it and records why).
+  - Validate every durable follow-up target against the lineage recorded on
+    the child: `parentId`, `version`, `decisionId`, and the comment id
+    derived from `operationId`.
+  - Receipts stay non-tamper-evident, and are never presented as an
+    authenticated human identity.
+  - *Tests:*
+    - the human rejects the parent between the crash and the replay, and the
+      replay leaves the parent rejected;
+    - a follow-up target in the stamp is edited to point elsewhere, and the
+      replay refuses;
+    - the copy in the UI and the export never says "verified" or names an
+      authenticated person.
