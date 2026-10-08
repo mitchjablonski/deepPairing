@@ -1,15 +1,14 @@
 # One-proposal stance exceptions (proposal, #470)
 
-> **Status: PROPOSAL, revision 2. No code is included.** It is written for
+> **Status: PROPOSAL, revision 3. No code is included.** It is written for
 > Astra's scope and authority review, which must happen before any
 > implementation starts.
-> Revision 2 applies Mitch's decisions of 2026-10-08 (§11). An unused
-> allowance now lasts until its Claude session ends, defined in §5, instead
-> of 24 hours. Grants can come from the UI **and** an interactive CLI (§3).
-> Revision 2 adds the session-end definition, the TTY-gated CLI grant, the
-> `ui`/`cli` origin on every grant, and the matching adversarial tests.
-> Team rules stay out, and the forgery gap stays documented. The hook
-> question is still open.
+>
+> - Revision 3 answers the two CHANGES verdicts on `f0bd817f`: Astra's review
+>   comment and Fable's review. §12 maps each finding to the section that
+>   addresses it.
+> - Revision 2 applied Mitch's decisions of 2026-10-08 (§11).
+>
 > Refs #470. Source audited at `main` 842f4495 (v0.1.62).
 
 ## 0. The ask, in one paragraph
@@ -24,792 +23,862 @@ an `approved` counter-instance to the cross-project ledger. You lose a stance
 you still hold just to let one valid proposal through.
 
 **Proposal:** add **Allow this proposal once**, next to Retire on the block
-card and in the block log. A matching `deeppairing stance allow` command
-works only at an interactive terminal. The allowance is a single-use
-exception for the human to grant. It is recorded in this project's
-`preferences.json`. It is bound to one stance, one live Claude session, one
-tool, and the **exact content** of the proposal the gate refused. The
-stance stays in force for every other proposal. Nothing reaches the
-cross-project ledger. Retire stays as a separate, clearly worded action.
+card and in the block log, with a `deeppairing stance allow` CLI counterpart.
+
+- **Who grants it:** only the human. Every grant is written by the daemon.
+- **Where it is recorded:** this project's `preferences.json`.
+- **What it is bound to:** one stance, one live Claude session registration,
+  one tool, and a digest of the **full proposal payload** the gate refused.
+- **How long it lasts:** it is single-use, and it ends with the session or
+  after 72 hours, whichever comes first.
+- **What it does:** it admits exactly one mutation, with a durable operation
+  id that makes retries replay instead of re-running.
+- **What stays the same:** the stance stays in force for every other proposal.
+  Nothing reaches the cross-project ledger. Retire stays as a separate,
+  clearly worded action.
 
 ## 1. What the gate does today (audited)
 
 | Piece | Where | Behaviour that matters here |
 |---|---|---|
-| Proposal projection | `mcp/artifact-preflight.ts` `artifactProposal` | Per artifact type, picks the strings, paths and named concepts the gate reads (for example, a decision's context, option titles and descriptions, and option concept names). Debriefs and external changesets are `advisory`, so they are never refused. |
-| Matcher | `mcp/preflight-validator.ts` `runPreflight` | The session lane runs first, then the team lane. It returns the **first** match only. The matching is lexical: a word-bounded phrase match, stemmed token containment (concepts need at least 2 distinct tokens) and a small alias table. The block message tells the agent to "ask the human to override this block". |
-| Refusal | `mcp/tool-helpers.ts` `preflightRejectedApproaches` | When the gate blocks, it broadcasts, persists the block (`store.recordPreflightBlock`), records a metric, and returns `REJECTED_APPROACH_BLOCKED` with `retryable: false`. **The artifact is never created, so a blocked proposal has no artifact id.** `revise_artifact` runs the same path. |
-| Block log | `store/preflight-block-log.ts` | `.deeppairing/preflight-blocks.json` is project-scoped and holds the newest 50 blocks. The daemon writes it from the broadcast fan-out (`create-daemon.ts`), and fails soft. Each entry has a server-minted `id`, `sessionId`, `toolName`, `concept`, the matched surface `proposal`, `reason` and `via`. It does **not** store the full proposal. |
-| Stance storage | `FileStore.recordRejectedApproach` / `normalizeRejectedApproaches` | `preferences.json` `rejectedApproaches[]` rows hold `{description, reason?, rejectedAt?, sourceArtifactId?, concept?}`. Rows are deduped on the exact `description`. **A rewrite drops any unknown row field**, because `normalizeRejectedApproaches` rebuilds each row from the known fields. |
-| Retire | `FileStore.overrideRejectedApproach`, `POST /api/philosophy/override`, `ToastLayer.tsx` "Retire this stance" | Deletes every local row that matches the description or concept. With publishing on, it also records a global `approved` instance. Team blocks are refused (400, "edit team.json"). An agent-reachable twin exists at `POST /api/internal/sessions/:sid/memory/override`, kept "for IStore symmetry". |
-| Write path | `FileStore.mutatePreferences` (#408, on #416's `file-lock.ts`) | This is the only way to change `preferences.json`. It runs read → mutate → atomic replace under `preferences.json.lock`, which works across processes and is reentrant within one process. A busy lock throws `ELOCKED` and the routes map it to 503 `lock_busy`. Readers, including the hook, never take the lock. |
-| Direct-edit hook | `cli/preflight-hook-core.ts` `evaluatePreflightHook` | Runs the same `runPreflight` on Edit, Write and MultiEdit (file path plus new text), using a lock-free read of `preferences.json` and `team.json`. A match returns `permissionDecision: "ask"` and never `deny`. The hook fails open. |
-| Mutation auth | `http/routes.ts` SP1 middleware, `SECURITY.md` | Every public non-GET route needs `Authorization: Bearer <token>`. The browser gets the token from the served HTML. SECURITY.md is honest that any same-uid process can also get it. |
-| Guarantee table | README "Your taste compounds", `docs/faq.md` (#432/#436) | `present_*` is **refused**, a direct edit is **asked**, other projects get a **nudge**. Matching is "a strong default, not a guarantee." Retire is documented as a delete. |
+| Proposal projection | `mcp/artifact-preflight.ts` `artifactProposal` | For each artifact type, it picks the strings, paths and named concepts the gate reads. It is **not** the whole proposal. For `code_change` it reads only `filePath`, `reasoning` and `concept.name` (lines 34–37), and never `before` or `after`. Evidence snippets and option pros and cons are not read either. Debriefs and external changesets are `advisory`. |
+| Matcher | `mcp/preflight-validator.ts` `runPreflight` | The session lane runs first, then the team lane. It returns the **first** match only, and the match is lexical. The block message tells the agent to "ask the human to override this block". |
+| Refusal | `mcp/tool-helpers.ts` `preflightRejectedApproaches` | Broadcasts the block, persists it (`store.recordPreflightBlock`), records a metric, and returns `REJECTED_APPROACH_BLOCKED` with `retryable: false`. **The artifact is never created, so it has no id.** `revise_artifact` re-gates under its own tool name (`revise-artifact.ts:118`). |
+| Arg hashing | `tool-helpers.ts:724` `hashPresentArgs` | SHA-256 of a key-sorted stable stringify of the raw tool args. It is used by N2's in-memory 30-second duplicate window (`beginPresentIdempotency`), which is not durable. |
+| Transport | `daemon/client.ts:221–243`, `:411–413`; `daemon/routes.ts:517–519` | `DaemonClient` retries a request once, transparently, after a network-level failure. The daemon persists the artifact before it responds. **A lost response means the artifact was committed but the tool saw an error, and the retry runs the create again.** |
+| Block log | `store/preflight-block-log.ts` | `.deeppairing/preflight-blocks.json`, project-scoped, newest 50 entries, written by the daemon on a fail-soft basis. It stores the matched phrase only, not the proposal. |
+| Stance storage | `FileStore.recordRejectedApproach` / `normalizeRejectedApproaches` | Each row in `preferences.json` `rejectedApproaches[]` is `{description, reason?, rejectedAt?, sourceArtifactId?, concept?}`. **A rewrite drops unknown row fields.** |
+| Retire | `FileStore.overrideRejectedApproach`, `POST /api/philosophy/override`, `ToastLayer.tsx` | Deletes the stance from the project. Team blocks are refused. There is an internal twin route that the agent can reach. |
+| Write path | `FileStore.mutatePreferences` (#408 on #416's `file-lock.ts`) | Read, mutate and atomic replace, all under `preferences.json.lock`, which works across processes. `ELOCKED` maps to 503 `lock_busy`. Readers never lock. |
+| Session lifecycle | `standalone.ts:125–152`, `daemon/routes.ts:418–495`, `create-daemon.ts:214` | The wrapper calls `/register` when it starts. `/unregister` drops the session from the in-memory `activeSessions` **set of session ids**. All three exit paths (`exit`, `SIGINT`, `SIGTERM`) fire `unregister()` without awaiting it, and `SIGINT`/`SIGTERM` then call `process.exit(0)` straight away. **Whether the unregister lands is a race.** Nothing listens for stdin closing. |
+| Direct-edit hook | `cli/preflight-hook-core.ts`, `cli/setup-tasks.ts:465` | The PreToolUse matcher covers `Write\|Edit\|MultiEdit` **only**. A match returns `ask`, never `deny`, and the hook fails open. The guardrail backstop (`guardrail-rules.ts:93–118`) asks only when no live pre-work ceremony exists, and only once per class per time window. |
+| Mutation auth | `http/routes.ts` SP1, `SECURITY.md` | Every public non-GET route needs the bearer token. Any same-uid process can read that token. |
 
-Two facts drive the whole design:
+Two facts drive the design:
 
-- **No artifact exists at block time.** An exception cannot be keyed on an
-  artifact id or version. It has to be keyed on the content the gate refused.
-- **Retire already sits on the same authority boundary** (a bearer-gated
-  public route, plus an internal twin). An exception is strictly narrower than
-  Retire, so it must never sit on a *weaker* boundary than Retire does, and
-  this design puts it on a stronger one.
+- **No artifact exists at block time**, so an exception has to be keyed on
+  content.
+- **The agent runs as the same user as everything else.** It cannot be stopped
+  from forging state, only kept off the sanctioned paths. The design therefore
+  states which paths are sanctioned, closes the easy unsanctioned ones, and is
+  precise about what detection can and cannot promise (§3).
 
 ## 2. Scope: what gets exempted
 
-### Recommendation: an exact-content fingerprint bound to five things
+### Two digests, two jobs
 
-An exception admits **one proposal** if, and only if, all of the following
-match the block the human allowed:
-
-| Binding | Value | Why |
+| | Matching projection | **Allowance digest** (new) |
 |---|---|---|
-| Project | Implicit: the record lives in this project's `.deeppairing/preferences.json` | The issue requires that an exception is never mirrored as a global approval. |
-| Stance | The blocking row's `{description, concept, rejectedAt}` (each compared exactly, absent equals absent) | No new stance id is needed. An id would be stripped by an older build's `normalizeRejectedApproaches` rewrite (see §9). Including `rejectedAt` means a stance that is retired and later re-rejected is a *new* stance and does not inherit old exceptions. |
-| Session | The block's `sessionId` **and** its `registrationId`, which identifies the live wrapper registration that was refused (§5) | A different session must not reuse the authority, which is what the issue asks for. The registration id also gives "until the session ends" a precise meaning. It keeps fallback mode honest too: when several Claude sessions share one `sessionId`, each still has its own registration. |
-| Tool and type | `toolName` and artifact type | The same text sent through a different tool projects differently and is a different proposal. |
-| Content | `proposalDigest`: SHA-256 over a canonical serialization of the **full gate projection**, which is `{type, text[], paths[], concepts[]}` from `artifactProposal` | This covers exactly what the gate reads. The digest is computed by the **daemon** from the projection it stores, never taken from the client (see §3). |
+| Purpose | Decides *whether* a stance blocks | Decides *which exact proposal* the human allowed |
+| Input | `artifactProposal(type, title, content)` | The tool's complete validated `arguments` object, with the exclusions listed below |
+| Function | Unchanged | `hashPresentArgs` (stable, key-sorted stringify, then SHA-256), wrapped as `sha256(stableStringify({v: 1, toolName, type, args}))` |
+| Changed by `before`/`after`, evidence, pros/cons, `relatedFindings`, `feature`, title | Only if projected | **Always** |
 
-Canonicalization is deliberately minimal: Unicode NFC, CRLF to LF, and
-trimming each string. That is the same trim and drop-empty step
-`artifactProposal` already applies. The order of arrays is kept. There is
-**no** case folding, stemming, stopword removal or alias mapping.
+The gate keeps using the projection to **match**. The allowance is bound to the
+**allowance digest**, so *any* change to the proposal, gated or not, needs a
+new allowance. That is the immutable-content contract #470 asks for. A
+`present_code_change` whose diff changes while its `reasoning` stays the same
+no longer reuses the allowance.
 
-### Why not the other two candidates
+**What the payload includes:** every key of the tool's `arguments` as the MCP
+server received and validated them. That covers content, title, `feature`,
+related ids, and for `revise_artifact` the target `artifactId`.
 
-- **A normalized-token fingerprint (rejected).** The matcher's own
-  normalization throws away word order and stopwords, and `not` is a stopword.
-  *"Do not keep global mutable state"* and *"keep global mutable state"* reduce
-  to the same token set. A fingerprint built in that space would admit the
-  opposite proposal. Every step that makes matching broader makes an exception
-  more reusable. The exception should be as narrow as the matcher is broad.
-- **Artifact id or version (rejected).** No artifact exists when the gate
-  refuses. Minting a "pending" artifact for blocked proposals would put a
-  refused proposal on the review surface, which is the thing the gate exists
-  to prevent.
+**What the payload excludes:** only transport metadata, never content.
 
-### Why this closes the paraphrase loophole
+- The MCP request's `params._meta`, such as the progress token. This is not
+  part of `arguments` at all.
+- A top-level `_meta` key inside `arguments`, if a client sends one.
+- Nothing else is excluded.
 
-- Any change to any gated string produces a different digest, so the next
-  call is checked against every stance as usual. That includes one character,
-  whitespace inside a string, letter case, order, an added option, or a
-  different path. A near-copy does not "sneak through". It is *blocked* by the
-  same lexical matcher as before. The exception never widens what the matcher
-  admits. It only lifts one stance for one already-seen byte sequence.
-- **The exception lifts only its own stance.** `runPreflight` returns the
-  first match only, so the design re-runs the gate with the excepted row
-  removed from `rejectedApproaches` for that call only. If another session
-  stance or a team rule still matches, the proposal is blocked on that one and
-  the exception is **not** consumed.
-- **It is single-use** (§5). Even the identical content passes once.
-- **It never feeds the matcher or the ledger.** It is not added to
-  `approvedPatterns` and writes no global `recordInstance`. The cross-project
-  advisory dedupe (`localKeys`) still sees the stance. Gate-escape telemetry
-  and the near-miss residual counter skip traces admitted by an exception.
-- **It admits a proposal to review, not to approval.** The artifact still
-  lands as a draft in the companion UI for your verdict. The exception
-  removes a false refusal. It does not approve anything.
+There is no extra canonicalization beyond what stable stringify does (key
+order). Whitespace, case, Unicode form and array order all count, so an
+identical retry means byte-identical argument values. The server mints ids
+(such as `dec_`/`art_`) **after** hashing, which is the property N2 already
+relies on.
 
-Fields that are not projected, such as evidence snippets and option pros and
-cons, are not covered by the digest. That is correct, because the gate never
-reads them. Exempting the gated projection exactly is the same coverage the
-gate has today, with nothing added.
+### Binding: an allowance admits a call only if all six match
 
-### Size limit
+| Binding | Value |
+|---|---|
+| Project | Implicit: the record is in this project's `.deeppairing/preferences.json`, and it is never mirrored. |
+| Stance | The blocking row's `{description, concept, rejectedAt}`, compared exactly. No new stance id is added, because an older build would strip it on rewrite (§9). Including `rejectedAt` means a stance that was retired and then re-rejected does not inherit old allowances. |
+| Session | The block's `sessionId` **and** `registrationId` (§5). |
+| Tool and type | `toolName` and artifact type. These are inside the digest too. |
+| Content | The `allowanceDigest`. The **daemon** computes it from the payload it stores. It never takes a digest from the client. |
+| Lifetime | The registration is live, and the time is before `ceilingAt` (§5). |
 
-The block event must carry the canonical projection so the daemon can store a
-preview and compute the digest. Above 32 KiB of projection the block is still
-recorded, but the card offers **no** allow-once button. Instead it says "This
-proposal is too large to allow once. Retire the stance or ask for a smaller
-proposal." This keeps `preferences.json` and the block log small.
+### The preview shows what is covered
+
+The UI dialog and the CLI prompt show two things:
+
+1. **"What matched":** the projection, with the matched phrase highlighted.
+2. **"What you are allowing (all of this is covered)":** the full payload,
+   rendered in the shape of the artifact. A `code_change` shows its
+   before/after diff. A decision shows every option with its pros and cons.
+   Research shows its evidence.
+
+The footer says: "Any change to anything above needs a new allowance."
+
+### Why not the other candidates
+
+- **A normalized-token fingerprint.** `not` is a stopword, so *"do not keep
+  global mutable state"* and *"keep global mutable state"* would collide.
+- **The projection alone** (revision 1 used this). It admits different code
+  under the same reasoning. Astra P2 and Fable HIGH both raised this.
+- **An artifact id.** None exists when the gate blocks.
+
+### Why this does not open a paraphrase loophole
+
+- A near-copy has a different digest, so the unchanged matcher checks it as
+  usual.
+- The allowance lifts **only its own stance**. The gate is re-run with that one
+  row removed for this call only. Any other session stance or team rule still
+  blocks, and the allowance is not consumed (§6).
+- It is single-use (§5). It never feeds `approvedPatterns`, the ledger or the
+  advisory dedupe. Gate-escape and near-miss telemetry skip admissions made by
+  allowance.
+- It admits the proposal to **review**, not to approval. The artifact still
+  lands as a draft.
+
+### Size and secrets
+
+- **Size.** The block event now carries the canonical payload, so the daemon
+  can store the preview and compute the digest. Above 48 KiB of canonical
+  payload the block is recorded, but it is not eligible: "Too large to allow
+  once. Retire the stance or ask for a smaller proposal."
+- **Secrets.** A blocked proposal used to leave only its matched phrase on
+  disk. Now it would leave the whole payload. So the payload goes through the
+  same secret scanner `createArtifact` uses. If the scanner flags it, the
+  payload is **not** persisted and the block is not eligible ("This proposal
+  may contain a secret, so it can't be stored for allow-once.").
 
 ## 3. Authority: who can grant
 
-### Invariant A1: the agent has no sanctioned way to create an exception
+### Invariant A1: only the daemon writes a grant, and only on a human-facing request
 
-> No MCP tool, MCP tool argument, `IStore` method, `DaemonClient` method,
-> `/api/internal/*` route, hook output, or **non-interactive** CLI invocation
-> can create a stance exception. Exactly two things can create one, and both
-> call the same `FileStore` grant function:
-> - the public route `POST /api/preflight-blocks/:blockId/exception`, which
->   the companion UI calls after an explicit human gesture;
-> - `deeppairing stance allow <blockId>`, which refuses unless a person
->   confirms it at an interactive terminal (see "The CLI grant" below).
+> No MCP tool, MCP tool argument, `IStore` or `DaemonClient` method,
+> `/api/internal/*` route, or hook output can create an allowance. The only
+> writer is the daemon's grant handler, behind the bearer-gated public route
+> `POST /api/preflight-blocks/:blockId/exception`. Two clients call that
+> route:
+> - the companion UI, after an explicit gesture;
+> - `deeppairing stance allow <blockId>`, which reaches the route only after
+>   its interactive checks **and** a Claude Code permission prompt when the
+>   agent's Bash runs it.
 
 How it is enforced:
 
-1. **Structural absence plus a test that pins it.** The grant function exists
-   on `FileStore` only. It is *not* added to `IStore`, so `DaemonClient`
-   (the agent-side store in the production plugin path) cannot call it, and
-   no internal route exposes it. An **authority-surface test** enumerates:
-   - every registered MCP tool's input schema, which must not grant;
-   - `IStore` and `DaemonClient` method names, which must have no
-     `grant*Exception`;
-   - every `/api/internal/*` route, which must have no exception-creating route;
-   - every CLI subcommand, where `stance allow` must be the only one that
-     reaches the grant function, and it must sit behind the interactive
-     guard.
+1. **Structural absence, pinned by a test.** The grant function exists only in
+   the daemon's route handler and in `FileStore`. It is not added to `IStore`,
+   so `DaemonClient` cannot call it, and no internal route exposes it. An
+   **authority-surface test** enumerates:
+   - MCP tool schemas;
+   - `IStore` and `DaemonClient` method names;
+   - `/api/internal/*` routes;
+   - CLI subcommands, where `stance allow` must be the only command that
+     reaches the grant route, behind the interactive guard.
 
-   The test fails if any of these changes. This follows the
-   `review-authorization.ts` lesson, "prose is not a gate": the check is in
-   code, with one grant function, two callers, and no force flag.
-2. **Both doors take a block id, not a scope.** The UI body is `{reason}`
-   and nothing else. The CLI takes the block id as its only argument, and you
-   type the reason at the prompt. The grant function looks up the
-   server-minted block entry and copies the stance, session, registration,
-   tool, type and projection from that **durable record**. It computes the
-   digest itself. Neither caller can widen the scope, choose a stance, or name
-   content. Any extra body fields or flags are rejected (400, or a CLI usage
-   error). If the block id is unknown or has been pushed out of the log, the
-   grant returns "not found: retry the proposal to get a fresh block".
-3. **What you see is what you allow.** The block event is agent-side data: the
-   MCP process posts it through `DaemonClient.recordPreflightBlock`. Suppose
-   the event were forged. The grant still derives the digest from the *same*
-   stored projection that the dialog or terminal prompt shows you. A forged
-   event can therefore only get you to allow the exact text in front of you.
-   It cannot get you to allow different content hidden behind a matching
-   preview.
-4. **Shared guards on both doors.**
-   - The UI route also needs the SP1 bearer token and the project hash, like
-     every mutation.
-   - Both refuse `source: "team"` blocks (D4) and `demo_` sessions.
-   - Both refuse a block whose stance row no longer exists ("stance already
-     retired").
-   - Both refuse a block whose session has already ended (§5). Granting
-     something that could never be used would only be noise.
-5. **Every grant records its origin.** `grantedVia` is `"ui"` or `"cli"` and
-   is shown on every surface that shows a grant (§4).
+   The test fails if any of these changes.
+2. **The CLI writes through the daemon, not its own `FileStore`** (Fable
+   HIGH a). `stance allow` reads the token from `daemon.json` and POSTs to
+   the same route the UI uses, with `X-DeepPairing-Grant-Origin: cli`.
+   - If the daemon is unreachable, the grant is refused. This also makes the
+     liveness check (§5) authoritative.
+   - All grant, claim and revoke writes happen in **one process**. The
+     cross-process CLI-against-daemon races of revision 2 go away. The
+     preferences lock stays, because other CLI commands such as
+     `philosophy publish` still write the file.
+3. **A block id, not a scope.** The body is `{reason}` and nothing else. The
+   daemon copies stance, session, registration, tool, type and payload from
+   the server-minted block record, and computes the digest itself. Extra body
+   fields get a 400. An unknown or pruned block id gets a 404.
+4. **What you see is what you allow.** The digest is computed from the same
+   stored payload the preview renders. A forged block event can only get you to
+   allow exactly what is on your screen.
+5. **Shared guards.** The route refuses:
+   - team blocks (D4);
+   - `demo_` sessions;
+   - a retired stance;
+   - an ended session (§5);
+   - a payload that is not eligible (§2).
+6. **Origin is recorded.** `grantedVia` is `"ui"` or `"cli"`, taken from the
+   origin header. That header is **self-reported**: it labels the door, it
+   does not authenticate it.
 
-### The CLI grant (decided 2026-10-08, D2)
+### The CLI grant (D2) and the Bash prompt
 
-`deeppairing stance allow <blockId>` follows these rules, checked in order.
-Any refusal exits non-zero and writes nothing.
+`deeppairing stance allow <blockId>` keeps revision 2's interactive checks.
+Each failure exits non-zero and writes nothing.
 
-1. **It refuses unless both stdin and stdout are TTYs.** That means
-   `!process.stdin.isTTY || !process.stdout.isTTY` refuses, with "Run this in
-   your own terminal; it needs you to confirm by typing."
-2. **It has no non-interactive flags.** `--yes`, `-y`, `--force`,
-   `--non-interactive`, `--reason` and any other unknown flag are refused,
-   not ignored. The reason cannot be passed as an argument; you type it at
-   the prompt.
-3. **It refuses an invocation that looks like the agent's.** That means
-   `CLAUDECODE=1` (Claude Code sets this in the shells it spawns) or `CI` set
-   in the environment. This is a heuristic, and it is documented as one: it
-   catches the agent's own shell even in a future where that shell has a TTY.
-   You can still run the command from any terminal you opened yourself.
-4. **It shows exactly what you are allowing.** It prints the stance (its
-   description, concept and your original reason), the session it is bound
-   to, the tool and type, and the **full proposal preview**, the same
-   projection the UI dialog shows. A preview longer than one screen goes
-   through the pager and has to be viewed to the end.
-5. **It asks you to type a reason** (3–280 characters after trimming, the
-   same rule as the UI). An empty or too-short reason is asked for again, and
-   the command gives up after three tries. Ctrl-C or EOF cancels and writes
-   nothing.
-6. **It asks you to type `allow` to confirm.** A bare Enter or `y` is not
-   enough, so a reflexive keypress or a stray `yes`-style input stream does
-   not confirm.
-7. It then calls the grant function through its own `FileStore`, under
-   `mutatePreferences`, with `grantedVia: "cli"`. This is the cross-process
-   lock path tested in §10. It prints the exception id and the scope in plain
-   words.
+- It refuses unless both stdin and stdout are TTYs.
+- It refuses all flags that would make it non-interactive, including
+  `--reason`.
+- It refuses when `CLAUDECODE=1` or `CI` is set.
+- It shows the stance and the full covered payload.
+- It requires a typed reason of 3–280 characters, and then requires you to
+  type `allow`.
 
-The CLI also offers `deeppairing stance exceptions` (list) and
-`deeppairing stance exceptions revoke <id>`. Those stay non-interactive,
-because listing exposes nothing new and revoking only narrows authority.
+**Fable showed that these checks are one shell line from the agent.** Bash has
+`script` and Python, so
+`printf 'reason\nallow\n' | script -qc 'env -u CLAUDECODE deeppairing stance allow <id>' /dev/null`
+gets past all of them. The checks stay, because they stop casual and accidental
+use, but the protection now comes from a channel the agent cannot answer:
 
-**What the TTY rule does and does not prevent, stated plainly:**
+**(b) A narrow `Bash` PreToolUse matcher.** `init` adds a second PreToolUse
+entry to the generated hooks, `matcher: "Bash"`. It runs a dependency-free
+`.mjs` that reads `tool_input.command` and does exactly one thing:
 
-- It **does** stop the agent's normal path. Claude Code's Bash tool runs
-  commands without a TTY today, and also sets `CLAUDECODE=1`, so an agent that
-  runs `deeppairing stance allow …` gets a refusal telling it to ask you.
-- It **does** stop piping, `yes |`, a heredoc, a `--yes` flag and CI.
-- It does **not** stop a determined local process. Anything running as your
-  user can make a pseudo-terminal (`script`, `expect`, Python `pty`,
-  `node-pty`), read the prompt and type into it. It can also unset
-  `CLAUDECODE`. A process that can do that can just as easily edit
-  `preferences.json` or `curl` the bearer-gated UI route. The CLI adds no
-  power that was not already there. It removes the one easy path.
-- It does **not** prove a human typed the answers. deepPairing has no
-  identity system. `grantedVia: "cli"` records which door was used, not who
-  used it.
+- If the command matches `/\bstance\s+allow\b/`, it returns
+  `permissionDecision: "ask"` with the text "The agent is trying to grant a
+  stance allowance from the shell. Only allow this if you asked for it." This
+  catches the one-liner above, because the words appear inside the `script
+  -qc` string.
+- For **every other Bash command**, it exits 0 with **no output**. Claude
+  Code then behaves exactly as it does today. There is no other matching, no
+  guardrail logic, no stance matching on Bash, and no logging.
 
-This sits alongside the forgery gap below. The response to both is the same:
-the agent gets no sanctioned path, and any forged grant is visible.
+The added cost is one `node` start per Bash call. It is budgeted at 50 ms or
+less at the 95th percentile and measured in a test. If that budget fails, the
+fallback is a matcher written in POSIX `sh`.
 
-### The honest residual: the forgery gap (decided 2026-10-08, D3)
+**Honest limits of (b).** It is a substring check, not a shell parser. These
+all get past it:
 
-The agent runs as your user and has `Bash`. A same-uid process can:
+- splitting the words (`s=stance; deeppairing $s allow`);
+- encoding the command (base64);
+- writing a script to a file and running that file;
+- calling the HTTP route with `curl`.
 
-- read the bearer token and `curl` the grant route;
-- drive the CLI through a scripted pseudo-terminal;
-- edit `preferences.json` directly.
+At that point the agent is deliberately evading the check, which is the same
+class as editing the file directly (below). The prompt closes the
+**obvious** path and the one Fable published. It does not close every path.
 
-The same is true today for Retire, for verdict routes, and for decision picks
-(`SECURITY.md`, the SP1 comment in `http/routes.ts`). This design does
-**not** claim to close that hole, and the docs must not say
-"cryptographically human-only". Their wording will be "human-only by design;
-visible if forged". What the design does guarantee:
+**(c) Detection reaches the human, not just the log.**
 
-- **The agent has no sanctioned path.** Forging a grant means misusing the
-  API, the CLI or the file out of band. Those are the same routes a forged
-  Retire would use, and Retire does more damage.
-- **A forged grant is visible.** Every grant is broadcast and persisted with
-  `grantedVia`. It shows in the block log, the gate log and the Ledger
-  drawer, with an origin badge (`UI` or `CLI`). Every admission by exception
-  is stamped on the artifact's preflight trace and shown in its breadcrumb
-  ("Admitted once by your exception (CLI): reason …"). A grant you did not
-  make shows up next to an artifact you did not expect.
+- **A grant raises a toast.** The `stance_exception_granted` broadcast shows
+  "Allowance granted from the CLI for '*stance*': *reason*". The CLI origin
+  is styled to stand out, because it is the less expected door.
+- **An admitted artifact carries a persistent badge on its card.** It reads
+  "Allowed once (CLI)", in addition to the trace breadcrumb, and stays as long
+  as the artifact exists.
+- **Allowances are listed in the debrief view and in the export.** The
+  debrief view renders a system section, "Allowances used this session", built
+  from the store and **not** written by the agent. `export_session` (both
+  Markdown and HTML) includes the same list.
 
-Optional speed bump, not a security claim: the UI route could also require
-an `Origin` header of the daemon's own origin or `vscode-webview://`. A
-browser sets this automatically, and curl has to spoof it on purpose. It is
-cheap and keeps casual tooling off the route. Recommended, but it must be
-documented as hygiene only.
+### Direct file edits (Fable MED, Astra P2)
+
+The agent's Edit and Write tools can write `preferences.json` and create a
+grant without any prompt. So:
+
+- **A new guardrail class, `deeppairing-state`**, is added to
+  `GUARDRAIL_RULES`. Its file patterns match
+  `(^|/)\.deeppairing/preferences\.json$` and
+  `(^|/)\.deeppairing/team\.json$`, and it **always** returns `ask`.
+  - It ignores the "live pre-work ceremony" skip that suppresses the other
+    guardrail classes.
+  - It ignores the per-class dedup window.
+  - It is the only class that behaves like this, and the parity test pins it.
+  - deepPairing's own writes are not tool calls, so they never trigger it.
+  - The cost is that agent edits to `team.json`, which is shared committed
+    config, now also prompt. We consider that correct.
+- **The claim checks that the stored record is consistent.** It requires
+  `sha256(stableStringify(storedPayload)) === allowanceDigest`. It **also**
+  requires the incoming call's recomputed digest to be equal to it. A
+  hand-edited record whose preview and digest disagree is refused, and it
+  shows as "record inconsistent".
+- **Bash writes to the file are not covered.** `jq … > preferences.json` is
+  outside the narrow Bash matcher on purpose.
+
+### What the audit trail does and does not promise (narrowed, Astra P2)
+
+- **Promised:** for operations done through the **supported paths** (the UI
+  route, the CLI through the daemon, and the daemon's claim during
+  admission), every grant, consumption and revocation produces:
+  - a stored receipt;
+  - a broadcast;
+  - an origin badge;
+  - on admission, an artifact badge and a trace stamp.
+- **Not promised:** the receipts are **not tamper-evident** and do **not**
+  authenticate anyone. A process running as your user can edit or delete
+  `preferences.json`, the block log, the session files or the export. It can
+  write a grant that is internally consistent, and it can erase receipts.
+  Nothing here can **guarantee** that a same-user file modification will be
+  detected. The guardrail `ask` and the Bash `ask` make the agent's *direct*
+  attempts visible as prompts. They are not a detection guarantee.
+- The docs (§9) must say exactly this: "Human-only by design. Receipts cover
+  supported operations. Not tamper-evident against same-user processes." The
+  phrase "visible if forged" from revision 2 is withdrawn.
 
 ### Surfaces
 
-| Surface | Grant | List | Revoke | Why |
-|---|---|---|---|---|
-| Companion UI: the block card (hero toast) and the `PreflightBlockLog` entries | **Yes** | Yes | Yes | This is the place where you see the refused proposal in full. |
-| Ledger drawer, on each stance | No (it shows the count and the receipts) | Yes | Yes | You review exceptions in the context of the stance. |
-| CLI `deeppairing stance allow <blockId>` | **Yes, interactive TTY only** | — | — | Decided 2026-10-08 so you can grant from the terminal. It has the guards above. |
-| CLI `deeppairing stance exceptions [revoke <id>]` | No | Yes | Yes | Revoking only narrows authority, so it is safe without a TTY. |
-| MCP tools and `/api/internal/*` | **No** | No | No | Covered by Invariant A1. The agent may *claim* an exception (§6), but cannot create, list or revoke one. |
+| Surface | Grant | List | Revoke |
+|---|---|---|---|
+| UI: block card and block log | **Yes** | Yes | Yes |
+| UI: Ledger drawer, debrief view, artifact card badge | No | Yes | Yes (Ledger) |
+| CLI `stance allow <blockId>` (interactive, via the daemon, Bash prompt) | **Yes** | — | — |
+| CLI `stance exceptions [revoke <id>]` (via the daemon) | No | Yes | Yes |
+| MCP tools, `/api/internal/*` | **No** | No | No |
 
-The UI dialog behind **Allow this proposal once**:
-
-- It shows the stance, the reason you gave for it, and the **full proposal
-  preview** (the projection, not just the matched phrase).
-- It states the scope in plain words: "Allows this exact proposal, once,
-  until this Claude session ends. The stance stays on for everything else."
-- It requires a reason (§4).
-- It is reachable by keyboard: focus starts on the reason field, Enter
-  submits once a reason is present, and Esc cancels and writes nothing.
-- On failure, the dialog stays open and shows why, for example "Your
-  preferences are busy (another deepPairing process is writing). Try again."
-  for 503 `lock_busy`.
-
-**Retire this stance** stays as it is, with its current wording. The two
-buttons are visually distinct. Allow-once is the primary action, because it
-is the narrower one.
+The UI dialog shows the two-part preview (§2). Its scope text reads "Allows
+this exact proposal, once, until this Claude session ends (at most 72 hours).
+The stance stays on for everything else." It requires a reason and is
+reachable by keyboard: focus starts on the reason field, Enter submits once a
+reason is present, and Esc cancels. When a request fails, the dialog stays
+open and shows the error. **Retire this stance** is unchanged.
 
 ## 4. Recording and audit
 
 ### Where
 
-The record goes in project-scoped `.deeppairing/preferences.json`, in a new
-optional array `stanceExceptions[]`. It is written only through
-`mutatePreferences`. It is **never** mirrored to `~/.deeppairing/philosophy`,
-and grant, consume and revoke perform no `recordInstance`.
+The record is a new optional array, `stanceExceptions[]`, in project-scoped
+`.deeppairing/preferences.json`.
 
-Why `preferences.json` and not a separate file: the stance rows live there.
-Putting the exception there means one lock can check "the stance still
-exists" and "the exception is active" together with the claim, in a single
-transaction. It also keeps the exception under the #416 lock path the issue
-requires.
+- It is written only by the daemon, through `mutatePreferences`.
+- It is never mirrored to the ledger.
+- It sits next to the stance rows, so "the stance still exists" and "the
+  allowance is active" can be checked in one locked transaction.
+
+§8 discusses an in-memory alternative and leaves it as an open question.
 
 ### Shape (all fields are new; the container is optional)
 
 | Field | Notes |
 |---|---|
-| `id` | Server-minted, `sx_<random>`. |
-| `status` | `active`, `consumed` or `revoked`. "Ended" (the session ended, §5) and "expired" (the ceiling passed) are **derived** at read time, so expiry needs no write. Pruning records them as `expired` with an `endedBecause` note. |
-| `stance` | `{description, concept?, rejectedAt?}`, copied from the blocking row. |
-| `sessionId`, `registrationId`, `toolName`, `artifactType` | The binding (§2). `registrationId` is the wrapper registration whose lifetime bounds the grant (§5). |
-| `proposalDigest` | `sha256:<hex>`, computed by the daemon. |
-| `proposalPreview` | The canonical projection (at most 32 KiB). This is the receipt of what you allowed. |
-| `blockId` | Links back to the block log entry. The block log keeps only 50 entries, so the preview here is the durable copy. |
-| `grantedAt`, `grantedVia` (`"ui"` or `"cli"`), `grantedBy?` | `grantedVia` records which door was used and is **required** on every grant. `grantedBy` is a best-effort display name taken from `git config user.name` by whichever process grants, if available. deepPairing has no identity system, so neither field authenticates anyone. They label the grant. |
-| `reason` | **Required** at both doors, 3–280 characters after trimming. The CLI requires it typed at the prompt. The dialog offers quick picks ("Wording overlap, not the approach I rejected", "Conditions changed for this case") that you can edit. A reason you have to type turns a click into a receipt, and it is what the agent reads back. |
-| `ceilingAt` | `grantedAt` plus 72 hours. This is the bounded fallback from §5, and it is only reached when a session's end could not be observed. |
-| `consumedAt?`, `consumedArtifactId?`, `claimToken?` | Set by the claim (§6). `claimToken` is internal and never shown. |
-| `revokedAt?`, `revokedVia?` (`"ui"` or `"cli"`) | Set by revoke. |
+| `id` | `sx_<random>`. |
+| `status` | `active`, `consumed` or `revoked`. "Ended" and "expired" are **derived** when the record is read (§5). |
+| `stance` | `{description, concept?, rejectedAt?}`. |
+| `sessionId`, `registrationId`, `toolName`, `artifactType` | The binding. |
+| `allowanceDigest` | `sha256:<hex>` of the canonical payload (§2). |
+| `payload` | The canonical payload, at most 48 KiB. It is both the receipt and what the claim's consistency check (§3) hashes. |
+| `projectionPreview` | What matched. |
+| `blockId` | Links back to the block log, which keeps only 50 entries. |
+| `grantedAt`, `grantedVia` (`"ui"` or `"cli"`, required), `grantedBy?` | `grantedBy` is a best-effort `git config user.name`. These are labels, not authentication. |
+| `reason` | Required at both doors, 3–280 characters. |
+| `ceilingAt` | `grantedAt` plus 72 hours. **Applies unconditionally** (§5). |
+| `operation?` | `{id, state: "committed" \| "unknown", artifactId?, at}`. Set by the claim (§7). |
+| `revokedAt?`, `revokedVia?` | Set by revoke. |
 
-Retention: all `active` records, plus the newest 100 terminal records
-(consumed, revoked or expired). Older terminal records are pruned in the same
-`mutatePreferences` transaction as any grant. The hook reads the whole file
-without a lock on every edit, so the file stays small.
+**Retention:** keep every `active` record, plus the newest 100 terminal
+records. Pruning happens in the same transaction as a grant.
 
 ### Where you see it
 
-- **Block log, gate log and block card.** Every grant carries an origin
-  badge, **UI** or **CLI**. After a grant, the card reads "Allowed once
-  (CLI), *reason*, waiting for the agent to retry". After consumption it reads "Used
-  by *artifact title*". After revocation, session end or expiry,
-  the card says which one happened. The UI
-  joins block entries to exceptions by `blockId` from a new
-  `GET /api/stance-exceptions`, so the daemon stays the only writer of the
-  block log.
-- **The artifact.** Its preflight trace gains an optional `exception` summary
-  (`{id, stance, reason, grantedAt, grantedVia}`), and the breadcrumb reads
-  "Admitted once by your exception (UI) for '*stance*' (*reason*)".
-- **Ledger drawer.** Each stance shows "N one-time exceptions" with the
-  receipts and a Revoke button on active ones.
-- **Live updates.** The daemon broadcasts `stance_exception_granted`,
-  `stance_exception_consumed`, `stance_exception_revoked`, so open tabs update
-  in place.
+- **The block card and the gate log.** Each grant shows an origin badge, and
+  the card shows the current state: allowed, used, outcome unknown, revoked,
+  ended or expired.
+- **A toast** when a grant is made, with CLI grants made more prominent.
+- **The artifact card.** A persistent "Allowed once (UI/CLI)" badge, plus the
+  trace's `exception` summary: `{id, stance, reason, grantedVia, grantedAt}`.
+- **The Ledger drawer.** Each stance shows "N one-time allowances", with
+  their receipts and a Revoke button.
+- **The debrief view and `export_session`.** Both list the allowances used in
+  the session.
+- **Live updates.** Broadcasts for `granted`, `consumed`, `revoked` and
+  `unknown` keep open tabs current.
 
 ### Revocation
 
-An `active` exception can be revoked from the UI or the CLI. Under the lock,
-the status goes from `active` to `revoked`. Revoking a `consumed` exception
-returns "Already used by *artifact*". It does not retract the artifact; you
-reject that the usual way. Revoke and claim take the same lock, so their order
-is well defined, and whichever runs first wins.
+Revoking changes `active` to `revoked` in the daemon, under the lock. A
+`consumed` record cannot be revoked; the response is "already used by
+*artifact*". If you no longer want that artifact, reject it as you would any
+other.
 
-## 5. Expiry: single-use, and only until the session ends
+## 5. Expiry: single-use, until the session ends, capped at 72 hours
 
-**Decided 2026-10-08 (D1):** an exception is **single-use**, and an unused one
-**ends when its Claude session ends**, not after a fixed time. A 72-hour
-ceiling applies only when the end of a session could not be observed.
+**D1 (2026-10-08), with an amendment in this revision.** An allowance is
+single-use. An unused one ends when its session ends, or 72 hours after it was
+granted, **whichever comes first**. The amendment makes the 72-hour ceiling
+unconditional. It can only **narrow** what Mitch decided: it never extends an
+allowance's life, and it makes this revision's definition of "ended" (below)
+safe even though that definition is coarse. §11 records it as a one-line
+amendment.
 
-- **Single-use** matches the issue's "one proposal". After one admission the
-  authority is gone, so an exact retry later is blocked again. The block
-  message then names the artifact that used it, so the agent knows its first
-  call succeeded.
-- **It ends with the session**, because a grant is a judgement about this
-  piece of work in this conversation. It should not still be armed in some
-  later run.
+### Definition: "ended" means the registration id is not in the live map
 
-### What "the session" and "ends" mean in the code today
+The daemon keeps an in-memory map from `registrationId` to
+`{sessionId, registeredAt}`. An allowance's session has **ended** when its
+`registrationId` is not in that map. Process ids are **not** probed: Fable
+pointed out that pid probing is fragile, and Astra wanted a single policy.
 
-There are three different "session" ideas in the codebase, so this needs
-care:
+Today's `activeSessions` is a set of session ids. In fallback mode several
+wrappers share one id, so one wrapper's unregister removes the id for all of
+them. The map sits **next to** that set. It does not change idle-shutdown
+semantics.
 
-- **The artifact session id.** `deriveSessionId` (`session-id.ts`) builds
-  `session_<project>_<hash>`. When Claude Code sets
-  `CLAUDE_CODE_SESSION_ID`, it appends that id ("split" mode). In fallback
-  mode, without that variable, **every** Claude session in the project shares
-  one id, and the bucket on disk never ends. A `--resume` reuses the same
-  Claude id. So the session id alone cannot express "ended".
-- **The wrapper registration.** Each MCP wrapper process (`standalone.ts`)
-  calls `POST /api/internal/sessions/:sid/register` when it starts. It calls
-  `/unregister` from its `exit`, `SIGINT` and `SIGTERM` handlers, which
-  removes the session from the daemon's in-memory `activeSessions`. The
-  daemon keeps the session's store afterwards, so the UI can still read it.
-  The unregister is best-effort: it is an async request in an exit handler,
-  and it never runs on `SIGKILL`, a crash, or a host power loss.
-- **The daemon instance.** `activeSessions` exists only in daemon memory.
-  A daemon restart, whether a crash, an idle shutdown or an upgrade, forgets
-  every registration. `DaemonClient` then re-registers on its next call
-  after a 404 (AA2).
+What removes an entry from the map:
 
-There is no "close session" action. The context bank's
-`/api/decisions/:id/close-out` closes a *decision*, not a session, so it plays
-no part here.
-
-**Definition.** The session a grant belongs to is **the live wrapper
-registration that was blocked**, identified by `registrationId`. That session
-has **ended** at the first of these:
-
-| Event | How the daemon knows | Effect on the grant |
+| Event | Removes the entry? | Notes |
 |---|---|---|
-| The wrapper exits cleanly (Claude Code quits, `/exit`, the terminal closes and sends SIGTERM or SIGINT) | `/unregister` for that registration | Ended |
-| The wrapper dies without unregistering (SIGKILL, crash, OOM) | A liveness check at claim time and when the UI renders: the daemon records the wrapper's process identity at `/register` and reuses `file-lock.ts`'s proof-of-death rule (an exact identity match plus ESRCH, or a different start time for the same pid) | Ended once death is **proven**. An unprovable identity, such as a mismatched pid namespace, is not treated as proof, so the 72-hour ceiling applies instead. |
-| The MCP server reconnects (`/mcp` restart) within the same Claude conversation | A new wrapper process registers with a new `registrationId` | Ended. This is a deliberate cost: you have to grant again. The agent is told "the allowance ended with the earlier connection; ask your pair again". |
-| `claude --resume` of the same conversation | New wrapper, new registration, even though the Claude session id is the same | Ended. The run you granted in is over. |
-| The daemon restarts | `registrationId` includes the daemon's `instanceId`, so no registration survives a restart | Ended, and the wrapper's AA2 re-registration does not bring it back. Restarts are rare, and failing closed costs one re-grant. |
+| `/unregister` from that wrapper | Yes | This revision does not overstate how reliable it is (Fable MED). Today all three exit handlers fire an un-awaited request, and two of them exit immediately afterwards, so the request often never lands. The implementation must (1) **await** unregister in the `SIGINT` and `SIGTERM` handlers, with a 500 ms timeout before exiting, and (2) add a **stdin `end`/`close` listener** that unregisters. Stdin closing is how Claude Code tears down a stdio MCP server. The `exit` handler cannot await, so it stays best-effort. |
+| A newer `/register` for the same `sessionId` in split mode | Yes, for the older entries | In split mode the session id contains the Claude conversation id, so a new registration means the old wrapper is gone, as after `/mcp` reconnect or `--resume`. In fallback mode older entries are not evicted, because concurrent conversations legitimately share the id. |
+| The daemon restarts | Yes, all entries | The map is in memory, and `registrationId` includes the daemon's `instanceId`. The AA2 re-registration gets a new id. |
+| The wrapper crashes or is SIGKILLed | **No** | The entry lingers. The **72-hour ceiling** ends the allowance. Also, a lingering entry cannot be claimed through the supported path, because only the dead wrapper's `DaemonClient` held that id. |
+| Fallback mode, wrapper never unregisters | No | Same as above: the ceiling ends it. |
+| Decision close-out (`/api/decisions/:id/close-out`) | No | It closes a decision, not a session. It is unrelated. |
 
-Because this definition keys on the **registration**, it also works in
-fallback mode: two concurrent Claude sessions sharing one artifact session id
-still have different registrations, so neither can use the other's grant.
-
-What this needs in the code, all of it additive (§9):
-
-- `/register` returns a `registrationId`, made of the daemon `instanceId`
-  plus a random part. It also records the wrapper's process identity.
-- The daemon keeps a map from `registrationId` to live registrations,
-  alongside `activeSessions`. Today `activeSessions` is a `Set` of session
-  ids, so in fallback mode one wrapper's unregister removes the shared id for
-  everyone. The new map does not have that problem. The design does not
-  change idle-shutdown semantics.
-- `DaemonClient` keeps its `registrationId`, replacing it when it
-  re-registers. It sends the id with `recordPreflightBlock` and with every
-  claim.
-
-There are no ended-session timers and no extra writes. "Ended" is computed
-whenever an exception is read or claimed, because the daemon is the only
-party that knows which registrations are live. A CLI grant asks the daemon
-(through a hash-gated `GET`) whether the block's registration is live. It
-refuses if the registration is not live, **or if the daemon cannot be
-reached**, because then it cannot show that anyone could use the grant.
-
-### The bounded fallback: a 72-hour ceiling
-
-A ceiling is still needed for the one case the definition cannot see: a
-registration that stays "live" because it was never unregistered and its
-death could not be proven. In that case the daemon keeps it in memory for as
-long as the daemon runs. A stale registration also keeps the daemon from
-idling out, so that could be indefinitely. Nobody legitimate can claim such a
-grant, because the wrapper that held the `registrationId` is gone. But a
-forger could, and the receipt would read "active" for ever.
-
-- **Why 72 hours:** it is far longer than a live working session is likely to
-  run without a reconnect, so in practice it never cuts off a real grant. It
-  covers a grant made on Friday evening and used on Monday morning. It also
-  bounds a stale grant to days, not weeks. It is a constant that can be
-  changed.
-- **Why not 24 hours:** Mitch chose session lifetime as the rule. A short
-  timer would quietly bring back the rule that was rejected for long
-  sessions.
-- Like every other expiry, it is derived from `ceilingAt` at read time and
-  needs no timer.
+**One policy for a registration that is live and older than 72 hours** (Astra):
+the allowance is **expired**, and the claim refuses it with "expired at *t*".
+§5 and §7 now both check `ceilingAt` unconditionally, and §10 tests it.
 
 Rejected options:
 
-- *A fixed 24 hours.* Superseded by D1. It would cut off long live sessions
-  and keep a grant armed after a quick exit.
-- *The artifact session id only.* In fallback mode that id never ends, and in
-  split mode it survives `--resume`.
-- *N days, reusable.* That is a time-boxed Retire for one text. Reuse is
-  exactly the loophole the issue warns about.
-- *Permanent.* That is Retire.
+- **A fixed 24 hours** was superseded by D1.
+- **The session id alone** never ends in fallback mode, and in split mode it
+  survives `--resume`.
+- **Pid probing** was dropped in this revision.
+- **Reusable for N days** is a time-boxed Retire.
+- **Permanent** is Retire.
 
-## 6. Interaction with the hook and with preflight
+## 6. Interaction with preflight, revisions, and the hook
 
-### Preflight (`present_*` and `revise_artifact`): the exception applies
+### Admission: inspect first, then consume atomically
 
-The admission flow:
+Astra pointed out that revision 2's steps 2 and 3 conflicted. They are now
+separate steps.
 
-1. `runPreflight` blocks on session stance **S**.
-2. Look up an `active` exception that matches S and this session, this live
-   registration, tool, type and digest, and whose session has not ended
-   (§5). The agent-side process asks the daemon through a
-   new **claim-only** call; see Concurrency below. If none matches, return the
-   block exactly as today.
-3. If one matches, re-run `runPreflight` with S removed for this call only.
-   If any other session stance or team rule still blocks, return **that**
-   block, and do not consume the exception.
-4. If the proposal is otherwise admitted, **claim** the exception, then
-   create the artifact, then finalize the claim (see Concurrency).
+1. **Gate.** `runPreflight` blocks on session stance **S**.
+2. **Inspect (does not consume).** The tool calls a read-only internal
+   `GET` that returns candidate allowances for this session and registration
+   with a matching `allowanceDigest`. Each candidate must be `active`, not
+   ended and not expired. This takes no lock and writes nothing. If there are
+   no candidates, the tool returns the block exactly as today, unless the
+   replay check in §7 applies.
+3. **Re-gate.** Re-run `runPreflight` with the stances covered by those
+   candidates removed, for this call only.
+   - If anything else blocks, return **that** block. Nothing is consumed.
+   - If the proposal matches two session stances, it needs an allowance for
+     each. The human grants them one block at a time, both against the same
+     digest.
+4. **Consume, which is also the mutation.** The tool sends the create (or the
+   revise) **with** `admission: {operationId, exceptionIds[]}`, and the daemon
+   claims atomically inside the same request (§7). If the claim fails because
+   of a race, a revoke, the session ending or the ceiling, the daemon refuses
+   the create, and the tool returns the normal block with the reason.
 
-What the agent sees:
+### Revisions need a new allowance (Fable MED)
 
-- **On the block (changed wording).** The current text says "ask the human to
-  override this block in the companion UI's Ledger". The new text says:
+`revise_artifact` re-gates under `revise_artifact`, with the revised content.
+**An allowance never carries across the artifact's lineage.**
+
+- A revision is different content, and different content is exactly what
+  the digest is there to catch.
+- A revision that no longer matches the stance passes anyway.
+- A revision that still matches needs its own allowance, granted against the
+  block for the revision.
+
+The `consumedArtifactId` / `operation.artifactId` link is kept for audit only.
+It never authorizes anything.
+
+### What the agent sees
+
+- **On a block:**
 
   > If this is a false positive, ask your pair to choose **Allow this
-  > proposal once** on the block card, then retry this **identical** call. Any
-  > change to the content needs a new allowance. You cannot grant this
-  > yourself.
+  > proposal once** on the block card. Then retry this **identical** call:
+  > every argument must be the same, not only the matched text. You cannot
+  > grant this yourself.
 
-  `_meta.retryable` stays `false`. An identical retry without a grant still
-  fails.
-- **On admission by exception.** The tool result appends:
+- **On admission:**
 
-  > Admitted once under an exception your pair granted for stance "*S*"
-  > (reason: "*…*"). The stance still applies to everything else. A direct
-  > edit carrying this content will still prompt your pair.
+  > Admitted once under an allowance your pair granted (*UI/CLI*) for stance
+  > "*S*" (reason: "*…*"). It covered this exact version only. If you revise
+  > this artifact and the revision still matches the stance, your pair must
+  > allow it again. The stance still applies to everything else. A direct edit
+  > carrying this content will still prompt your pair.
 
-  The `_meta` gains `admittedByException: <id>`.
-- **On a used, revoked, ended or expired exception.** The usual block, plus
-  one line: "An exception for this proposal was already used by *art_x*". The
-  other cases read "was revoked", "ended with an earlier session or
-  connection; ask your pair again", or "expired at *t*".
+- **On a replay** (§7): "Already admitted. Returning the original result for
+  *art_x* (allowance *sx_…*). Nothing new was created."
+- **When an allowance is used, revoked, ended, expired, unknown or
+  inconsistent:** the usual block, plus one line that names which.
 
-### The direct-edit hook: unchanged in v1
+### The direct-edit hook: unchanged in v1 (D5 still open)
 
-The hook already **asks** and never denies. Its Claude Code permission
-prompt *is* a one-edit, human-only allowance for exactly the content shown.
-The platform renders it and the agent cannot answer it. Adding exceptions to
-the hook would mean:
+The Edit/Write/MultiEdit hook keeps asking. The allowance lifts a refusal and
+never removes a prompt. An Edit's bytes are not the same as an admitted
+`code_change` payload, so binding the two would need fuzzy matching. The new
+Bash matcher (§3) and the guardrail class (§3) add prompts. They do not take
+any away.
 
-- the hook reading and matching exceptions in its lock-free, dependency-free
-  hot path;
-- worse, binding an exception to edit content. An Edit's `new_string` is not
-  the same bytes as the `present_code_change` projection that was allowed, so
-  you would need fuzzy matching between the two. That brings back the
-  paraphrase problem the exact digest just closed.
+## 7. Concurrency, write ordering and idempotency
 
-So after an admitted `present_code_change`, the agent's actual Edit still
-gets one permission prompt. That costs one more click and keeps one clear
-rule: **the exception lifts a refusal; it never removes a prompt.** The
-guarantee table changes on the `present_*` row only.
+All allowance writes run in the **daemon**, under `mutatePreferences`. The CLI
+now goes through the daemon. `ELOCKED` maps to 503 `lock_busy`, and nothing is
+written without the lock.
 
-A possible v2 is an annotation only: the hook adds "you allowed a matching
-proposal for this stance at *t* (*reason*)" to its ask text, and the prompt
-stays. That is deferred until someone shows the extra prompt is real friction.
+### The admitted mutation carries a durable operation id (Astra P1)
 
-## 7. Concurrency and write ordering
+Each **tool invocation** mints one `operationId` (a random UUID) before it
+sends anything. The same id rides every transport attempt, including
+`DaemonClient`'s transparent retry.
 
-All four operations run in `FileStore`, inside `mutatePreferences`, under
-`preferences.json.lock`. That is the #408 transaction on #416's cross-process
-lock, and it is reentrant in-process. A busy lock past the timeout throws
-`ELOCKED`, which maps to 503 `lock_busy`. Nothing is ever written without the
-lock.
+The daemon's create route (and the revise sequence) handles
+`admission: {operationId, exceptionIds[]}` in **one synchronous section**. The
+daemon is single-threaded, and every step below except the preferences write
+is a synchronous `FileStore` call.
 
-| Operation | Who runs it | Inside the lock |
-|---|---|---|
-| **Grant** | The daemon (UI route), or the CLI's own `FileStore` (`stance allow`, after the interactive checks and the daemon liveness check) | Check that the block's stance row still exists with the same identity. If an `active` exception already has the same binding, return it (idempotent, same `id`, 200). Otherwise append a new one and prune. |
-| **Claim** | The daemon only, from a new internal route `POST /api/internal/sessions/:sid/stance-exceptions/claim` | The body carries the projection, stance identity and `registrationId`, and the daemon recomputes the digest. It requires the stance row present, a matching `active` record, a matching session **and** registration, a registration that is still live (§5), and a time before `ceilingAt`. A store with no daemon has no registrations, so it never admits by exception. That is fail-closed. Production always runs through the daemon. It then sets `consumed`, `consumedAt` and a fresh `claimToken`, and returns `{id, claimToken, reason}`. If anything fails, it returns "no exception", and the caller returns the normal block. |
-| **Finalize** | The tool, after `createArtifact` succeeds | Stamp `consumedArtifactId` where the `claimToken` matches. This is best effort: if it fails, the receipt shows "used (artifact not linked)", and the artifact's trace still carries the exception id. |
-| **Release** | The tool, if `createArtifact` throws (for example a secret-scan refusal, or a store error) | If the `claimToken` matches and the status is still `consumed` with no artifact linked, go back to `active`. |
-| **Revoke** | The daemon, from the UI route, or the CLI's own `FileStore` | Change `active` to `revoked`. |
+1. **Replay check.** If an artifact in this session already carries
+   `admission.operationId === operationId`, return it unchanged, flagged
+   `replayed: true`. This is the transparent-retry case.
+2. **Claim**, under the preferences lock. Every listed exception must be
+   `active`, bound to this session and registration, digest-equal to the
+   recomputed payload digest, consistent (stored payload hashes to the
+   digest), not ended and not expired. If so, each becomes `consumed`, with
+   `operation: {id, state: "unknown"}`. If not, nothing changes and the
+   response is a refusal.
+3. **Create.** Create the artifact, stamped with the new optional field
+   `admission: {operationId, exceptionIds}`. Then **flush before
+   responding**: this is a write-through, the same rule `recordPostedReview`
+   follows. The stamp is what makes replay work after a restart.
+4. **Finalize**, under the lock. Set `operation.state` to `committed` with the
+   artifact id.
+5. **Respond.**
 
-**Write ordering.** The authority change is written before the effect it
-authorizes, the same discipline as #408, where the local record lands first.
-The exception is consumed on disk **before** the artifact exists. So a crash,
-or a lock timeout, between the two can only leave a consumed exception with
-no artifact. That is fail-closed: you see "used (artifact not linked)" and can
-grant again. The opposite order would be create, then consume. If the consume
-step failed, there would be an artifact *and* an armed exception, and an
-identical retry could pass a second time. That is fail-open on authority, so
-it is rejected. Release is the compensation step, just as
-`retractRejectedApproach` is for verdicts. If the release step itself hits a
-busy lock, the exception stays consumed, which is still fail-closed. This
-mirrors the `dedup.abort()` / `dedup.commit()` pair that `present_options`
-already uses around `createArtifact`.
+**When a release is allowed.** A consumed allowance goes back to `active`
+**only** when the authoritative writer can prove that no effect happened. The
+only such case is when the create in step 3 throws inside this same
+synchronous section, before anything is persisted. `FileStore.createArtifact`
+must be all-or-nothing on throw, which the implementation must test. In that
+case the daemon reverts the claim, again under the lock, before it responds.
+**The MCP tool never releases.** A failure the client sees (a network throw,
+a timeout, a 5xx after a retry) is an **unknown outcome**. The allowance stays
+consumed, with `operation.state: "unknown"`.
 
-**Races.**
+**Reconciliation.** Whenever the daemon reads allowances (the UI list, an
+inspect, or startup), it handles each `unknown` operation:
 
-- **Two identical proposals at once,** from parallel tool calls or two
-  processes. Only one claim can see `active` under the lock. The other gets
-  the normal block, with "already used by …".
-- **Claim against revoke, from the CLI and the daemon.** Both take the same
-  lock file, so one runs first. Either the revoke wins (the claim finds
-  `revoked`, so the proposal is blocked) or the claim wins (the revoke returns
-  "already used").
-- **Claim against Retire.** Retire deletes the stance row, so a claim that
-  runs afterwards fails its "stance present" check. That does not matter,
-  because with the stance gone the gate no longer blocks. A claim that runs
-  first consumes the exception, and then Retire proceeds. Neither order is
-  unsafe.
-- **Lock-free readers.** The hook and `getSessionMemory` read through an
-  atomic rename, so they always see a full snapshot from before or after the
-  write.
+- If an artifact stamped with that `operationId` exists, the state becomes
+  `committed` and the artifact is linked.
+- If no such artifact exists, the state stays **`unknown`**. The card shows
+  "Outcome unknown. If nothing appeared, allow it again." The allowance is
+  **never** re-armed automatically.
+
+**Agent-level retry and restart replay.** Suppose the agent retries the
+identical call, with a **new** tool invocation and therefore a new
+`operationId`. Inspect (§6 step 2) also returns `consumed` allowances with a
+matching digest and session. If one of those has an operation with a stamped
+artifact, the tool returns the **original result** (the artifact id and URL,
+in `buildDedupResponse` style) and creates nothing.
+
+- This works after a daemon restart, because the stamp is in the flushed
+  `artifacts.json`. It works even though the restart ended the registration:
+  a replay grants nothing new, it only reports what already exists.
+- If there is no stamped artifact, the call is blocked as usual, with the
+  allowance's state named.
+
+**The revise path.** The admitted mutation is the new version's create
+(steps 1–4, keyed by `operationId`). The follow-ups run in the same daemon
+sequence, and each is idempotent:
+
+- superseding the parent (setting a status that is already set is a no-op);
+- the carryover comment, with its id derived from `operationId`;
+- the decision and plan-review records.
+
+On a replay the daemon returns the original new-version id and re-applies
+only the follow-ups that are missing.
+
+### Races
+
+- **Two identical calls at once, across sessions or within one.** Only one
+  claim sees `active` under the lock. The other is refused. If both share an
+  `operationId` (a transport retry), the second one replays.
+- **Revoke against claim.** Both run in the daemon under the same lock, so
+  one goes first.
+- **Retire against claim.** A Retire that runs first removes the stance, so
+  the claim's "stance present" check fails. That is harmless, because the
+  gate no longer blocks. A claim that runs first wins, and Retire then
+  proceeds.
+- **Lock-free readers** (the hook, `getSessionMemory`) see either the old or
+  the new snapshot, because writes are an atomic rename.
 
 ## 8. Alternatives considered
 
 | Alternative | Why it was rejected |
 |---|---|
-| **Retire, then re-reject the stance** | (a) While the stance is retired, *every* proposal in *every* session is unguarded on that stance, and a parallel session can slip through. (b) With publishing on, Retire writes a global `approved` counter-instance, so one false positive changes your derived cross-project stance. (c) Re-rejecting depends on you remembering, and the reinstated row gets a new `rejectedAt` and loses its `sourceArtifactId` link. (d) Nothing records *why*. This is the very problem the issue describes. |
-| **Edit the stance concept to narrow it** | A worthwhile feature, but a different one. It is a permanent policy change for all future proposals. Narrowing a lexical concept to dodge one false positive can open real paraphrase holes, for example removing "state" from "global mutable state for config". It is right when the stance is badly *worded*. It is wrong when the stance is right and one proposal is a false hit. Candidate follow-up: "Edit wording" in the Ledger drawer. |
-| **Snooze the stance for a session** | This is the "broad session bypass" the issue rules out. Every proposal in that session, including true re-proposals, would pass, so the gate would be off exactly while the agent works. |
-| **A path- or glob-scoped exception** ("allow this stance under `packages/x/**`") | The issue says to prefer one tightly scoped allowance before reusable path exceptions. Paths are also gated text and do not identify a proposal. Deferred. |
-| **An MCP tool for the agent to request an exception** | The block card already is the request. Adding a tool gives the agent an exception-shaped verb in its schema, and the authority test would have to separate "request" from "grant". Deferred until there is a need. Even then it would only open the same dialog. |
-| **Telling the agent "approved" in chat** | Chat is not an authority. The agent could quote it, or make it up. This is the `review-authorization.ts` rule: no "the human said so" bypass. |
-| **Key the exception on a normalized token set, or on the matched phrase** | Both are reusable across different proposals. See §2. |
+| **Retire, then re-reject** | While the stance is retired, every session is unguarded on it. With publishing on, the global ledger also records an approval. Re-rejecting depends on you remembering. Nothing records why. |
+| **Edit the stance's wording to narrow it** | That is a permanent policy change, and it can open real paraphrase holes. It is a worthwhile separate follow-up. |
+| **Snooze the stance for a session** | This is the broad session bypass the issue rules out. |
+| **A path-scoped exception** | The issue says to prefer one tightly scoped allowance first. Deferred. |
+| **An MCP "request exception" tool** | The block card already is the request. It would put an exception-shaped verb in the agent's schema. Deferred. |
+| **"Approved" said in chat** | Chat is not authority. |
+| **A projection-only or token-set digest** | §2. |
+| **Carrying the allowance along the revise lineage** | §6. That would reuse authority across changed content. |
 
-## 9. Migration and backward compatibility
+### The in-memory, registration-bound alternative (Fable LOW)
 
-- **Only new optional fields.** This follows CLAUDE.md: "All new fields in
-  schemas must be optional."
-  - `preferences.json` gains `stanceExceptions?`.
-  - `PreflightTraceSchema` (shared) gains `exception?`.
-  - `PreflightBlockEntry` gains `proposalDigest?`, `proposalPreview?` and
-    `stance?`.
-  - The `preflight_blocked` event `match` gains `projection?` and
-    `rejectedAt?`, and the event gains `registrationId?`.
-  - The `/register` response gains `registrationId?`, and the request
-    gains an optional wrapper process identity. An older wrapper that sends
-    neither can never claim, which is the safe direction.
-  - A new `StanceExceptionSchema` goes in `packages/shared`. The hook
-    does not import it, because the hook does not read exceptions in v1, so
-    the hook stays free of `@deeppairing/shared`.
-- **Existing stance rows are not changed.** The binding uses fields rows
-  already have. It adds **no** stance id, because an older build's
-  `normalizeRejectedApproaches` would remove one on its next rewrite. Legacy
-  rows without `rejectedAt` bind on `{description, concept}` alone.
-- **Old blocks.** Block log entries from before this change have no
-  projection. Their cards show Retire only, with the tooltip "Retry the
-  proposal to allow it once".
-- **Downgrade.** `mutatePreferences` changes the raw record in place, so an
-  older daemon that rewrites `preferences.json` keeps `stanceExceptions`. It
-  just never reads it, so the proposal is blocked, which is the safe
-  direction.
-- **Docs to update with the implementation.**
-  - README "False positives and overrides": add "**Allow this proposal once**
-    lets one exact proposal through until this Claude session ends; the
-    stance stays."
-  - The faq guarantee paragraphs, with the CLI grant and the honest TTY and
-    forgery limits from §3 added next to the existing same-uid note.
-  - The block message text in `preflight-validator.ts`.
-  - The SKILL guidance on what to do after a block.
-  - The guarantee wording itself does not change: the gate still refuses,
-    and only you can lift a refusal, once.
-- **New error codes**, in `error-codes.ts`: `stance_exception_block_not_found`,
-  `stance_exception_not_eligible` (team, demo, too large, stance retired,
-  session ended), `stance_exception_reason_required` and
-  `stance_exception_interactive_required` (the CLI refusals).
+**The idea:** hold *active* allowances only in daemon memory, keyed by
+`registrationId`. There would be no schema change and no `preferences.json`
+writes for authority. Receipts would go to an append-only, display-only log.
+
+**Advantages over this design:**
+
+- **A file edit cannot create live authority.** That closes the
+  `preferences.json` forgery path for grants without relying on the
+  guardrail prompt.
+- **Session end becomes automatic.** Memory dies with the daemon, and
+  removing a registration drops its grants.
+- **No migration** is needed.
+- **No preferences lock** is needed for the grant path, now that the CLI goes
+  through the daemon anyway.
+
+**Costs:**
+
+- The receipt and the authority live in different places, so the claim
+  cannot check "the stance still exists" and "the grant is active" in one
+  transaction. A Retire racing a claim is still harmless, though.
+- The replay and reconciliation in §7 do not need grant durability, since
+  they key off the stamped artifact. So durability buys **less** than it
+  first appears.
+- It departs from the original brief, which said to "record via
+  `mutatePreferences`".
+
+**Status:** this revision keeps the persisted design so that the review covers
+one coherent model. Because the CLI now writes through the daemon, switching
+to in-memory authority is a contained change, and it would remove the
+direct-edit forgery class outright. **It is flagged as open question O1 for
+Astra and Mitch**, and the author leans toward it.
+
+## 9. Migration, backward compatibility and docs impact
+
+### Schema
+
+Only new optional fields are added, per CLAUDE.md.
+
+| Where | New optional fields |
+|---|---|
+| `preferences.json` | `stanceExceptions?` |
+| `Artifact` (shared) | `admission?: {operationId, exceptionIds}` |
+| `PreflightTraceSchema` | `exception?` |
+| `PreflightBlockEntry` | `allowanceDigest?`, `payload?`, `projectionPreview?`, `stance?`, `registrationId?`, `eligible?` |
+| `preflight_blocked` event | `payload?`, `rejectedAt?`, `registrationId?` |
+| `/register` response | `registrationId?` |
+| `StanceExceptionSchema` | New, in `packages/shared` |
+
+- **No stance row changes.** No stance id is added. A legacy row without
+  `rejectedAt` binds on `{description, concept}`.
+- **Old blocks**, which have no payload, offer Retire only.
+- **Old wrappers** have no `registrationId`, so they can never claim. That
+  fails safe.
+- **Downgrade.** An older daemon keeps `stanceExceptions` through its raw
+  read-modify-write and ignores the field, so the proposal is blocked again.
+  That also fails safe.
+- **New error codes:**
+  - `stance_exception_block_not_found`;
+  - `stance_exception_not_eligible` (team, demo, too large, secret, stance
+    retired, session ended);
+  - `stance_exception_reason_required`;
+  - `stance_exception_interactive_required`;
+  - `stance_exception_claim_refused` (used, revoked, ended, expired,
+    inconsistent);
+  - `stance_exception_operation_unknown`.
+
+### Docs: the guarantee wording DOES change (Fable MED)
+
+Revision 2 said the guarantee wording would not change. That was wrong.
+Implementation PRs must update:
+
+| File and lines (at 842f4495) | Change |
+|---|---|
+| README L190–191 (the `present_*` row) | "Refused" stays, with an added clause: "unless you allowed that exact proposal once, from the UI or an interactive CLI. The artifact then carries an 'Allowed once' badge." |
+| README L223–227 ("False positives and overrides") | Split this into **Allow once** (one exact proposal, until the session ends or 72 hours, the stance stays, nothing is mirrored) and **Retire** (deletes the stance). |
+| README L197–199 (the direct-edit row, which says "doesn't see `Bash`") | Becomes: "It doesn't check `Bash` against your stances. One narrow `Bash` check asks before the shell grants a stance allowance, and that is the only Bash command it looks at." |
+| FAQ L39–49 (the "every block is one-click overridable" list) | Split Retire from Allow once. Say that allow-once is **not** mirrored to the ledger and writes no approval. |
+| FAQ L59–63 ("every fire is one click from an override") | Add Allow once as the non-destructive option. Retire stays the wholesale one. |
+| `claude-plugin/skills/pairing-protocol/SKILL.md` L620–623 ("Don't retry a blocked call") | Add the one exception: retry the **identical** call only after your pair says they allowed it once. Never try to grant it yourself, and expect a permission prompt if you try. |
+| `SECURITY.md`, threat model | Add the residuals: an allowance is human-only by design, not by enforcement. A same-user process can script a pty, bypass the Bash substring check, call the bearer route, or edit `preferences.json` (which is now guarded by an `ask` for the agent's Edit and Write tools). Receipts are not tamper-evident. |
+| The block message in `preflight-validator.ts` and the hook reason text | §6 wording. |
 
 ## 10. Test plan
 
-Fakes, not mocks. That means a real `FileStore` on a temp directory, real
-child processes for anything across processes, and an injected clock for
-expiry.
+The tests use fakes, not mocks:
+
+- a real `FileStore` on a temp directory;
+- a real daemon, with real child processes for wrappers and the CLI;
+- an injected clock;
+- a fault-injecting fetch shim in front of `DaemonClient`.
 
 ### Unit
 
-- Digest canonicalization. It is stable across runs and key order. NFC and
-  CRLF variants give the same digest. **Any** change to case, word order,
-  inner whitespace, an added or removed string, the type or the path gives a
-  different digest.
-- The claim state machine: active to consumed to finalized, active to
-  consumed to released to active, active to revoked, and derived end and expiry:
-  - an unregistered registration counts as ended;
-  - a registration from another daemon `instanceId` counts as ended;
-  - a wrapper proven dead counts as ended;
-  - an unprovable identity counts as live, until the ceiling;
-  - exactly `ceilingAt` counts as expired.
-- Multiple stances: excepting A, while B (session) or a team avoid still
-  matches, blocks on B, and A is **still active** afterwards.
+- **Allowance digest.** It is stable across key order. Changing *any*
+  argument changes it, including non-projected ones. `params._meta` and a
+  top-level `arguments._meta` do not change it. Whitespace, case and NFC
+  versus NFD do change it.
+- **Projection independence.** The matching projection is unchanged by
+  `before`/`after`, so matching behaviour is identical to today.
+- **State machine.** These transitions:
+  - active, then consumed (unknown), then committed;
+  - active, then consumed, then reverted on an in-section throw;
+  - active, then revoked.
+
+  Derived ended and expired:
+  - a registration missing from the map is ended;
+  - a registration with an old `instanceId` is ended;
+  - in split mode, a newer registration evicts the older one;
+  - in fallback mode, there is no eviction;
+  - at `ceilingAt` the allowance is expired **even while the registration is
+    live**, and 1 ms before it is admitted.
+- **Multiple stances.** With an allowance for A, a proposal that still
+  matches B is blocked on B, and A stays `active`. With allowances for both A
+  and B against the same digest, one claim consumes both atomically.
 
 ### Adversarial
 
-1. **The agent tries to self-grant.**
-   - The authority-surface test from §3 runs over MCP tool schemas,
-     `IStore`, `DaemonClient`, `/api/internal/*` and the CLI.
-   - The grant route without a bearer token returns 401.
-   - The grant route with extra body fields (`digest`, `stance`,
-     `sessionId`, `scope`) returns 400.
-   - The grant route with an unknown or pruned block id returns 404.
-   - A team-source block, a `demo_` session or a retired stance is refused.
-   - Calling claim with no grant returns "none" and the proposal is blocked.
-   - **The CLI grant without a TTY is refused.** Spawn
-     `deeppairing stance allow <id>` as a child process with piped stdin, and
-     again with only stdout piped. Each exits non-zero with
-     `stance_exception_interactive_required`, and `preferences.json` is
-     byte-identical afterwards.
-   - **Non-interactive flags are refused.** `--yes`, `-y`, `--force`,
-     `--non-interactive` and `--reason "..."` are each refused, even under a
-     real pty.
-   - **A grant with no reason is refused.** Under a test pty:
-     - an empty reason, then a whitespace-only one, then a two-character
-       one, then EOF writes nothing;
-     - three failed prompts exit non-zero;
-     - an empty UI `{reason}` returns 400 `stance_exception_reason_required`.
-   - **An invocation shaped like the agent's is refused.** Run it the way
-     Claude Code's Bash tool does: no TTY, `CLAUDECODE=1` set, and stdin from
-     `/dev/null` or a heredoc piping `allow`. It is refused. Then run it under
-     a pty with `CLAUDECODE=1` still set. That is refused too, by the
-     env heuristic.
-   - **Confirmation needs the typed word.** Under a pty, a valid reason
-     followed by Enter or `y` at the confirm prompt writes nothing. Only
-     typing `allow` grants, and it records `grantedVia: "cli"`.
-   - **The CLI checks the session first.** A block whose registration has
-     ended is refused. So is any grant while the daemon is unreachable.
-   - **The origin is recorded and shown.** A UI grant records
-     `grantedVia: "ui"`. A CLI grant records `"cli"`. Both badges render in
-     the block log, the gate log, the Ledger drawer and the artifact
-     breadcrumb.
-   - **The residual is documented, not a test failure.** One test drives
-     the CLI through a scripted pty with `CLAUDECODE` unset, and asserts that
-     the grant **succeeds** and is shown as `cli`. This pins the documented
-     limit, so nobody later claims the TTY check is a security boundary.
-2. **A paraphrase of an excepted proposal.**
-   - Grant for P, then submit P with one character changed, P with an
-     option reordered, P with a synonym from the alias table, P with a
-     trailing clause, and P through a different tool. Every one is blocked by
-     the same stance, and the exception for P is still active.
-   - A forged block event whose `proposal` (matched phrase) differs from its
-     projection still produces a digest of the projection shown in the
-     dialog.
-3. **Session end and expiry.** These use a real daemon and real wrapper
-   child processes.
-   - After a grant, the wrapper exits by SIGTERM, which sends `/unregister`.
-     Its replacement, with the same Claude session id, retries the
-     identical proposal and is **blocked** with "ended".
-   - The wrapper is SIGKILLed with no unregister. Proof of death ends the
-     grant at the next claim or UI read.
-   - An `/mcp`-style reconnect (new wrapper, same session id) is blocked.
-   - A `--resume`-style respawn with the same `CLAUDE_CODE_SESSION_ID` is
-     blocked.
-   - A daemon restart between grant and retry blocks the proposal. The AA2
-     re-registration gets a new `registrationId`, which does not match.
-   - **Fallback mode.** Two wrappers with no `CLAUDE_CODE_SESSION_ID`
-     share one session id. A grant bound to wrapper 1's block cannot be
-     claimed by wrapper 2.
-   - **Ceiling.** Use an unprovable wrapper identity with an injected clock.
-     At `ceilingAt` minus 1 ms the proposal is admitted. At `ceilingAt` it
-     is blocked with "expired".
-   - **Survival while the session is live.** A grant made and used by the
-     same live registration, with a daemon `FileStore` re-read in between,
-     admits once.
-4. **Revocation.** Revoke before the retry blocks the proposal. Revoke after
-   consumption returns "already used" and leaves the artifact as it is.
-   Revoke from the CLI is seen by the daemon's next claim.
-5. **A concurrent CLI and daemon.**
-   - Two real processes, each with its own `FileStore`, race claim against
-     claim for the same exception: exactly one admission.
-   - Revoke (CLI) races claim (daemon): exactly one of "revoked, blocked" or
-     "admitted, revoke reports used", with no torn file, checked over many
-     iterations.
-   - Grant races an unrelated `recordRejectedApproach`: both changes are
-     present.
-   - `ELOCKED` on claim returns the normal block (fail-closed).
-   - `ELOCKED` on grant returns 503 and the dialog stays open.
-6. **Session binding.** The same content from another session id, or from
-   another registration of the same session id, is blocked,
-   and so is the same content after the stance is retired and re-rejected (new
-   `rejectedAt`).
-7. **Idempotency.**
-   - A double-click on grant returns one exception with the same id.
-   - An identical retry after a successful admission is blocked, and the
-     message names the artifact.
-   - `createArtifact` throwing (a secret-scan fixture) after the claim
-     releases the exception back to active.
-   - A release that hits a busy lock leaves it consumed.
-8. **No leakage.**
-   - With publishing on, grant, consume and revoke write **nothing** to the
-     global ledger (fake HOME, compare bytes).
-   - `approvedPatterns` is unchanged.
-   - The cross-project advisory dedupe still sees the stance.
-   - Gate-escape and near-miss telemetry skip admissions made by exception.
-9. **The hook is unchanged.** After an admitted `present_code_change`, an
-   Edit with the same text still returns `ask`. This pins the v1 rule while
-   D5 is open.
+1. **Self-grant.**
+   - The authority-surface test.
+   - A grant without the bearer token gets 401.
+   - Extra body fields get 400.
+   - An unknown block id gets 404.
+   - A team block, a demo session or a retired stance is refused.
+   - Inspect never consumes: 100 inspects leave the allowance `active`.
+2. **Non-projected content** (Astra P2, Fable HIGH). Grant P, a
+   `present_code_change`. Then each of these is **blocked** and the allowance
+   stays `active`:
+   - the same `filePath`, `reasoning` and `concept` with a changed `after`;
+   - a changed `before`;
+   - a changed `concept.description`.
 
-### Web (jsdom, plus one real-browser check flagged for the reviewer)
+   Also blocked: a decision with one option's pros changed, and research with
+   one evidence snippet changed. The digest equality test covers every key of
+   each tool's input schema, generated from the zod schema so that new fields
+   are covered automatically.
+3. **Paraphrase.** A one-character change, a reorder, an alias synonym, a
+   trailing clause, or a different tool: each is blocked, and the allowance
+   stays `active`.
+4. **Dropped response after commit** (Astra P1). The fetch shim lets the
+   create reach the daemon, then destroys the socket before the response.
+   - **Transparent retry:** `DaemonClient` retries with the same
+     `operationId`, and the daemon replays. Result: exactly **one** artifact,
+     the allowance is `consumed`/`committed`, and nothing is re-armed.
+   - **Retry fails too:** the shim kills both attempts. The tool reports an
+     error, and the allowance is `consumed`/`unknown`, **not** `active`. The
+     agent's identical retry, as a new invocation, gets the **original**
+     artifact back through replay, and still exactly one artifact exists.
+   - **Restart:** commit, drop the response, kill and restart the daemon,
+     then the agent retries. The replay returns the original artifact from
+     the stamp in `artifacts.json`, the artifact count is 1, and the
+     allowance is not re-armed.
+   - **Revise path:** the same three cases for `revise_artifact`. There is
+     exactly one new version, the parent is superseded once, and there is
+     exactly one carryover comment.
+   - **In-section throw:** a fixture that makes `createArtifact` throw before
+     persisting. The claim reverts to `active`, and the identical retry is
+     admitted.
+   - **Crash between claim and create:** kill the daemon between steps 2
+     and 3. After restart the allowance shows `consumed`/`unknown` and is
+     never re-armed, and the retry is blocked as "ended".
+5. **The CLI grant.**
+   - Without a TTY it is refused. Each flag (`--yes`, `-y`, `--force`,
+     `--non-interactive`, `--reason`) is refused. A missing or short reason
+     is refused. `CLAUDECODE=1` is refused. In every case
+     `preferences.json` is byte-identical afterwards.
+   - **The CLI writes through the daemon.** With the daemon stopped, the
+     grant is refused and no file is written. With the daemon up, the grant
+     record is written by the daemon process, which the test checks through
+     the lock-owner pid in a lock-trace hook. The record carries
+     `grantedVia: "cli"`.
+   - **Fable's one-liner, through the Bash hook.** Feed the generated Bash
+     PreToolUse hook a `tool_input.command` of
+     `printf 'reason\nallow\n' | script -qc 'env -u CLAUDECODE deeppairing stance allow <id>' /dev/null`.
+     The hook returns `ask`. So do the plain command, a `bash -c '…'`
+     wrapper, and a `python -c` wrapper that contains the words.
+   - **Narrowness.** Over a corpus of 200 ordinary Bash commands (`ls`,
+     `git status`, `pnpm test`, `grep -r stance`, `echo allow`,
+     `deeppairing stance exceptions`), the hook writes **no output** and
+     exits 0. The latency budget is checked.
+   - **Documented residuals, pinned as passing.** `s=stance; deeppairing $s
+     allow` is **not** caught by the hook. A scripted pty with `CLAUDECODE`
+     unset **does** grant, and that grant is labelled `cli`. These tests
+     exist so that nobody later claims these paths are closed.
+6. **Direct file edits.**
+   - Edit or Write to `.deeppairing/preferences.json` or `team.json` returns
+     `ask`, even with a live pre-work ceremony and inside the dedup window.
+   - Edits to other files are unaffected (parity test).
+   - A hand-written grant whose `payload` does not hash to
+     `allowanceDigest` is refused as inconsistent.
+   - A consistent hand-written grant **is** admitted. This pins the
+     documented limit, and the artifact still gets its badge.
+7. **Session end and expiry.** These use a real daemon and wrappers.
+   - SIGTERM is now awaited, so the unregister lands and the retry is
+     blocked as "ended".
+   - Closing stdin unregisters, and the retry is blocked as "ended".
+   - After SIGKILL the registration lingers, and the allowance is admitted
+     until `ceilingAt` and expired at it.
+   - A `/mcp` reconnect and a `--resume` respawn in split mode evict the old
+     registration, so the retry is blocked.
+   - A daemon restart blocks the retry.
+   - In fallback mode, wrapper 2 cannot claim wrapper 1's allowance.
+   - A live registration past 72 hours is expired.
+8. **Revisions.** A proposal admitted by allowance, then revised so it still
+   matches, is **blocked** under `revise_artifact`. A revision that no longer
+   matches is admitted with no allowance. The admission message names the
+   one-version scope.
+9. **Detection reaches the human.**
+   - A grant raises a toast, and a CLI grant gets the stronger style.
+   - The artifact card shows a persistent badge.
+   - The debrief view's system section lists the allowances used.
+   - The Markdown and HTML exports include them.
+   - An agent-authored debrief cannot suppress the system section.
+10. **Idempotency.** A double grant returns the same id. Revoking a consumed
+    allowance reports "already used".
+11. **No leakage.** With publishing on, nothing is written to the global
+    ledger. `approvedPatterns` is unchanged. A payload the secret scanner
+    flags is not persisted, and the block is marked not eligible.
+12. **The edit hook is unchanged (D5 open).** An Edit with admitted content
+    still gets `ask`.
 
-- **Keyboard path.** Tab to Allow-once, focus moves to the reason field,
-  Enter is disabled while the reason is empty, Enter submits, Esc cancels and
-  makes no request, and focus returns to the card.
-- **Failure display.** A 503 or 409 keeps the dialog open and shows the
-  message.
-- **The two actions stay separate.** Allow-once and Retire have distinct
-  labels and tooltips. Retire's wording is unchanged.
-- **The card updates live** from the broadcasts: allowed → used → revoked or
-  expired.
+### Web
+
+- **Keyboard path.** Focus moves to the reason field, Enter is disabled while
+  the reason is empty, Enter submits, Esc cancels, and focus returns to the
+  card.
+- **Failures.** 503 and 409 responses keep the dialog open.
+- **The two-part preview** renders a `code_change` diff and decision pros and
+  cons.
+- **Live states.** The card shows allowed, used, unknown, revoked, ended and
+  expired correctly.
 
 ## 11. Decisions (recorded)
 
-Mitch decided D1 to D4 on **2026-10-08**. D5 is still open.
+Mitch decided D1–D4 on **2026-10-08**. D5 is still open, and O1 is new.
 
-- **D1. Unused-allowance lifetime: until the session ends.** An unused
-  allowance ends when its Claude session ends, not after 24 hours. §5 defines
-  "ends" from the code's lifecycle:
-  - the wrapper unregisters;
-  - the wrapper is proven dead;
-  - the MCP server reconnects, or the conversation is resumed (a new
-    registration);
-  - the daemon restarts.
+- **D1. Unused-allowance lifetime: until the session ends.** §5 defines
+  "ended" as the registration being absent from the daemon's live map.
+  - *Amendment (rev 3, narrows only):* the 72-hour ceiling applies
+    unconditionally, even to a live session, so a live registration older
+    than 72 hours is expired.
+- **D2. CLI grant: yes, from both the UI and the CLI.** The CLI requires an
+  interactive TTY, refuses non-interactive flags and agent-shaped
+  environments, and needs a typed reason and a typed `allow`. Each grant
+  records `grantedVia: ui | cli`.
+  - *Rev 3, after review:* the CLI writes **through the daemon's bearer
+    route**, the agent's Bash invocations of `stance allow` get a Claude Code
+    `ask`, and grants surface as a toast, an artifact badge and debrief/export
+    entries.
+- **D3. The forgery gap is documented, not closed.** *Narrowed in rev 3:*
+  receipts and badges cover supported operations only. They are not
+  tamper-evident. Detection of same-user file modification is not
+  guaranteed. Agent edits to `preferences.json` and `team.json` now always
+  prompt.
+- **D4. Own stances only.** Team-rule blocks stay out of v1.
+- **D5 (open). The hook still prompts once after an allowed proposal.** The
+  proposal in §6 stands. This review does not authorize removing the prompt.
+- **O1 (open, new). In-memory active allowances** versus the persisted design
+  (§8). The author leans toward in-memory.
 
-  A 72-hour ceiling covers registrations whose end cannot be observed.
-- **D2. CLI grant: yes, from both the UI and the CLI.** The CLI grant is
-  `deeppairing stance allow <blockId>`. It refuses without an interactive TTY
-  on stdin and stdout, refuses every non-interactive flag (`--yes`, `-y`,
-  `--force`, `--non-interactive`, `--reason`), and refuses an invocation that
-  looks like the agent's (`CLAUDECODE=1` or `CI`). It shows the exact
-  proposal and the stance, requires a typed reason, and requires `allow`
-  typed to confirm. Every grant records `grantedVia: "ui" | "cli"`, and that
-  origin is shown wherever the grant is.
+## 12. Review response map (rev 3)
 
-  This deliberately weakens "only the human, only in the UI". §3 states the
-  limits honestly: it blocks the agent's normal non-interactive Bash path, but
-  not a determined local process scripting a pty, and it sits next to the
-  forgery gap.
-- **D3. The forgery gap is documented, not closed, and grants are made
-  visible.** A same-uid process can forge a grant through the bearer-gated
-  route, a scripted pty, or the file. The docs will say "human-only by
-  design; visible if forged", never "enforced". Visibility comes from the
-  origin badge on every grant and from the "admitted by exception" stamp on
-  every artifact that used one.
-- **D4. Own stances only.** Team-rule blocks stay out of v1 and keep
-  pointing to `.deeppairing/team.json`, at both doors.
-- **D5 (open). The hook still prompts once after an allowed proposal.** This
-  is not decided yet. The proposal in §6 stands: the exception lifts a
-  refusal and never removes a prompt, so the direct Edit still gets a
-  permission prompt. A v2 annotation that adds context to the prompt text
-  without removing the prompt is deferred until this is decided.
+| Finding | Source | Addressed in |
+|---|---|---|
+| Admitted mutations must be idempotent; do not release on a client throw; replay across restart; cover create and revise | Astra P1 (Fable concurs) | §7 (operation id, replay, release only on proof, reconciliation, revise path); §10 adversarial 4 |
+| The projection digest does not bind content (`code_change` `before`/`after`, evidence, pros/cons) | Astra P2, Fable HIGH | §2 (separate allowance digest via `hashPresentArgs`, the excluded transport metadata, the preview that shows what is covered); §10 adversarial 2 |
+| The audit visibility claim is too strong | Astra P2 | §3 "What the audit trail does and does not promise"; §11 D3 |
+| Inspect versus consume conflict | Astra | §6 steps 2–4 |
+| 72 hours: unobservable-end fallback or unconditional? | Astra | §5 (unconditional, a single policy); §11 D1 amendment; §10 unit and adversarial 7 |
+| The TTY gate is one shell line from the agent | Fable HIGH | §3 (a: CLI via the daemon route; b: narrow Bash `ask` matcher, with its limits; c: toast, badge, debrief/export); §10 adversarial 5 and 9 |
+| Direct Edit to `preferences.json` | Fable MED, Astra P2 | §3 "Direct file edits" (guardrail class that always asks, the digest consistency check); §10 adversarial 6 |
+| "Clean exit, then unregister" overstated; pid probing | Fable MED, Astra | §1 lifecycle row; §5 (live-map definition, awaited signals and stdin close, split-mode eviction, no pid probing) |
+| Revisions | Fable MED | §6 "Revisions need a new allowance"; the admission message; §10 adversarial 8 |
+| The docs guarantee wording does change | Fable MED | §9 docs table |
+| The in-memory alternative | Fable LOW | §8; §11 O1 |
+| D5 stays open, and the direct-edit prompt stays | Astra, coordinator | §6; §11 D5 |
