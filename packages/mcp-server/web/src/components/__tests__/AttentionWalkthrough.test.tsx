@@ -7,6 +7,7 @@ import { useConnectionStore } from "../../stores/connection";
 import { usePreferencesStore } from "../../stores/preferences";
 import { usePreflightBlockStore } from "../../stores/preflightBlocks";
 import { useReplayStore } from "../../stores/replay";
+import { useConnectionGraceStore } from "../../lib/connectionGrace";
 
 /**
  * #457 — the §9 walkthrough defects (docs/design/attention-walkthroughs.md).
@@ -29,6 +30,7 @@ const question = (id: string, artifactId: string) => ({
 
 beforeEach(() => {
   t = 0;
+  useConnectionGraceStore.setState({ everConnected: false, graceOver: false });
   vi.stubGlobal("fetch", vi.fn().mockImplementation(() =>
     Promise.resolve(new Response(JSON.stringify({ sessions: [] }), { status: 200, headers: { "Content-Type": "application/json" } }))));
   useArtifactStore.getState().reset();
@@ -58,7 +60,7 @@ describe("#457 D3 — a blocking review's 'after' never promises an absent agent
 
   it.each([
     ["exited", () => useConnectionStore.setState({ activeSessions: [{ sessionId: "s1", live: false }] } as any), /Claude acts on your verdict when the session resumes/],
-    ["disconnected", () => useConnectionStore.setState({ connected: false, disconnectedSince: Date.now() } as any), /Claude resumes when it reconnects/],
+    ["disconnected", () => { useConnectionGraceStore.setState({ everConnected: true }); useConnectionStore.setState({ connected: false, disconnectedSince: Date.now() } as any); }, /This tab is offline — your response can be sent once it reconnects/],
     ["replaying", () => useReplayStore.setState({ active: true } as any), /Replay is read-only/],
   ])("%s: no 'Claude executes N steps'", (_name, arrange, expected) => {
     useArtifactStore.setState({ artifacts: [plan("p1", "Backfill plan")] });
@@ -147,6 +149,7 @@ describe("#457 D7 — Shift+n goes to the previous pending item", () => {
 
 describe("#457 state G — the bar escalates a prolonged outage", () => {
   it("under a minute: no doctor chip; past a minute: 'doctor --fix'", () => {
+    useConnectionGraceStore.setState({ everConnected: true }); // an outage after connecting
     useConnectionStore.setState({ connected: false, disconnectedSince: Date.now() - 5_000 } as any);
     const { unmount } = render(<NextUpBar />);
     expect(screen.queryByTestId("next-up-doctor")).not.toBeInTheDocument();

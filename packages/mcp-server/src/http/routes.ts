@@ -9,6 +9,7 @@ import { ERROR_CODES } from "../error-codes.js";
 import type { IStore } from "../store/store-interface.js";
 import { FileStore, LEDGER_EXEMPT_REJECT_TYPES } from "../store/file-store.js";
 import { isCrossTerminalVerdictFlip } from "../store/verdict-guard.js";
+import { checkStaleResolve } from "../store/decision-resolve-guard.js";
 import { isSessionReviewConflictError } from "../store/session-records.js";
 import type { LiveDecisionSource } from "../store/session-scan.js";
 import {
@@ -769,6 +770,21 @@ export function createHttpRoutes(
           message: "This decision belongs to a different session than the one this tab is bound to." },
         404,
       );
+    }
+
+    // #460 / #464 review — refuse a stale card BEFORE any write (shared with
+    // the internal resolve route): a different pick, or a pick on a decision
+    // closed elsewhere, is a 409 carrying the recorded resolution; the same
+    // pick again is a true no-op 200 (nothing rewritten). See
+    // store/decision-resolve-guard.ts.
+    {
+      const stale = await checkStaleResolve(store, decisionId, optionId);
+      if (stale?.kind === "same") return c.json(stale.body);
+      if (stale?.kind === "conflict") {
+        log(`[decision] REFUSED stale resolve on ${decisionId}: ${String(stale.body.message)}`);
+        if (stale.backing) broadcast({ type: "artifact_updated", artifactId: stale.backing.id, status: stale.backing.status }, sid);
+        return c.json(stale.body, 409);
+      }
     }
 
     // #197 (F3) — prediction capture was cut (E3); the UI no longer sends it and
@@ -2273,12 +2289,23 @@ export function createHttpRoutes(
     if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
       return c.json({ error: "Invalid session ID" }, 400);
     }
-    try {
-      const s = new FileStore(projectRoot, sessionId);
-      return c.json({ annotations: s.getAnnotations() });
-    } catch {
-      return c.json({ annotations: [] });
+    // #472 — load-only: `new FileStore(...)` mkdir -p's the session dir as a
+    // write-path side effect, so a GET for a nonexistent sessionId used to
+    // create `.deeppairing/sessions/<id>/` and then report an empty result
+    // as if the session existed. readAnnotationsIfSessionExists reads the
+    // sidecar file directly (no instance, no mkdir) and distinguishes an
+    // absent session (404, same shape as the sibling GET
+    // /api/sessions/:sessionId read route) from a valid session with no
+    // annotations yet (200, legacy-empty) from a real read failure (500,
+    // reported honestly rather than silently flattened to empty).
+    const result = FileStore.readAnnotationsIfSessionExists(projectRoot, sessionId);
+    if (!result.ok) {
+      return c.json({ error: result.message }, 500);
     }
+    if (!result.exists) {
+      return c.json({ error: "Session not found" }, 404);
+    }
+    return c.json({ annotations: result.annotations });
   });
 
   app.post("/api/sessions/:sessionId/annotations", async (c) => {

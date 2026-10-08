@@ -4,8 +4,9 @@ import { useMemo, useState, useEffect, useRef, lazy, Suspense, type ReactNode } 
 // from the ENTRY bundle. Same animations.
 import { m, AnimatePresence } from "motion/react";
 import { apiGet, apiBase } from "../lib/api";
-import type { Artifact } from "@deeppairing/shared";
-import { useArtifactStore, resolveToLiveId, artifactStoreGeneration, markBackfilled, isBackfilled } from "../stores/artifact";
+import type { Artifact, Comment } from "@deeppairing/shared";
+import { useArtifactStore, resolveToLiveId, artifactStoreGeneration, markBackfilled, isBackfilled, REFRESH_SESSION_EVENT } from "../stores/artifact";
+import { useSiblingSyncStore } from "../lib/siblingSync";
 import { usePreferencesStore, SIDEBAR_WIDTHS } from "../stores/preferences";
 import { useReplayStore } from "../stores/replay";
 import { useConnectionStore } from "../stores/connection";
@@ -1147,9 +1148,20 @@ function ArtifactSidebar({
  * Multi-agent bar: loads artifacts from other active sessions and merges
  * them into the local store so everything appears in one UI.
  */
+/** #460 — a session's change signal from the 10s session poll: the daemon's
+ *  monotonic `revision` (covers status changes and comments), else — an older
+ *  daemon without the field — the artifact count (#458). */
+function changeSignal(s: { artifactCount: number; revision?: number; revisionEpoch?: string }): string {
+  // #464 review — the epoch is part of the signal: a restarted daemon's counter
+  // can climb back to a value this tab cached.
+  return typeof s.revision === "number" ? `r${s.revisionEpoch ?? ""}:${s.revision}` : `c${s.artifactCount}`;
+}
+
 export function MultiAgentSync() {
   const addArtifact = useArtifactStore((s) => s.addArtifact);
   const addComment = useArtifactStore((s) => s.addComment);
+  const updateComment = useArtifactStore((s) => s.updateComment);
+  const recordResolvedDecision = useArtifactStore((s) => s.recordResolvedDecision);
   // C1 — reuse the session list App already polls into the connection store
   // (every 10s) instead of running a SECOND 5s /api/active-sessions poll here.
   const activeSessions = useConnectionStore((s) => s.activeSessions);
@@ -1161,7 +1173,7 @@ export function MultiAgentSync() {
   // #458 review (D6b) — the per-session CHANGE signal: the artifact count the
   // same 10s poll already carries (refreshSessions publishes a new list only
   // when a rendered field — incl. artifactCount — changed).
-  const countKey = activeSessions.map((s) => `${s.sessionId}:${s.artifactCount}`).join(",");
+  const countKey = activeSessions.map((s) => `${s.sessionId}:${changeSignal(s)}`).join(",");
   const sessionsRef = useRef(activeSessions);
   sessionsRef.current = activeSessions;
   const boundRef = useRef(boundSessionId);
@@ -1179,7 +1191,9 @@ export function MultiAgentSync() {
   // session is re-fetched when — and only when — its count moves, so the cost
   // follows activity: a quiet sibling costs nothing, a busy one one GET per
   // change, bounded by the existing 10s session poll.
-  const fetchedCount = useRef<Map<string, number>>(new Map());
+  const fetchedCount = useRef<Map<string, string>>(new Map());
+  // #460 — sessions a stale-card refusal asked to re-fetch right now.
+  const forceRefresh = useRef<Set<string>>(new Set());
   // C1 — a session with ZERO artifacts is never fully-loaded (the fetch
   // returned nothing to mark), so the 30s backoff keeps polling it: that's how
   // another session's FIRST artifact gets discovered.
@@ -1208,6 +1222,7 @@ export function MultiAgentSync() {
       fullyLoadedSessions.current.clear();
       fetchedCount.current.clear();
       lastAttemptRef.current.clear();
+      useSiblingSyncStore.setState({ settled: false }); // #467 review — re-merging
     }
     for (const session of sessionsRef.current) {
       // E7 review — bail BEFORE stamping the backoff on an abort.
@@ -1221,7 +1236,7 @@ export function MultiAgentSync() {
       if (loaded) {
         // The bound session's own changes arrive over its WS.
         if (id === boundRef.current) continue;
-        if (fetchedCount.current.get(id) === session.artifactCount) continue; // nothing new
+        if (fetchedCount.current.get(id) === changeSignal(session) && !forceRefresh.current.has(id)) continue; // nothing new
       } else {
         const last = lastAttemptRef.current.get(id) ?? 0;
         if (Date.now() - last < EMPTY_SESSION_RETRY_MS) continue;
@@ -1242,18 +1257,40 @@ export function MultiAgentSync() {
         // A re-poll of a loaded session brings genuinely new work: unmarked.
         if (!loaded) markBackfilled(artifacts.map((a) => a.id));
         for (const artifact of artifacts) addArtifact(artifact);
-        for (const comment of state.comments ?? []) addComment(comment);
+        // #460 — upsert: a re-poll must carry an answered/resolved question's
+        // UPDATE too (addComment skips an id it already holds).
+        const held = useArtifactStore.getState().comments;
+        for (const comment of (state.comments ?? []) as Comment[]) {
+          const bucket = held[comment.target?.artifactId ?? ""] ?? [];
+          if (bucket.some((c) => c.id === comment.id)) updateComment(comment);
+          else addComment(comment);
+        }
+        // #464 review — the sibling's recorded decision answers too, so a card
+        // resolved elsewhere renders resolved (winning pick, no Select) instead
+        // of a stale, actionable option grid.
+        for (const d of (state.decisions ?? []) as Array<{ decisionId?: string; resolvedAt?: string; response?: { optionId?: string; reasoning?: string } }>) {
+          if (d?.decisionId && d.response?.optionId) {
+            recordResolvedDecision(d.decisionId, { optionId: d.response.optionId, reasoning: d.response.reasoning, resolvedAt: d.resolvedAt });
+          }
+        }
+        forceRefresh.current.delete(id);
         // Bug B — mark fully-loaded ONLY once we've actually pulled artifacts;
         // empty sessions stay unmarked so the 30s backoff keeps polling them.
         if (artifacts.length > 0) {
           fullyLoadedSessions.current.add(id);
-          fetchedCount.current.set(id, session.artifactCount);
+          fetchedCount.current.set(id, changeSignal(session));
         }
       } catch {
         /* network / abort — the next tick retries */
       } finally {
         inFlight.current.delete(flightKey);
       }
+    }
+    // #467 review — a full pass over a KNOWN session list (the 10s poll has
+    // published at least one session) means the siblings are merged.
+    const stillFetching = [...inFlight.current].some((k) => k.startsWith(`${generation}:`));
+    if (sessionsRef.current.length > 0 && !stillFetching && artifactStoreGeneration() === generation && !useSiblingSyncStore.getState().settled) {
+      useSiblingSyncStore.setState({ settled: true });
     }
   };
 
@@ -1272,6 +1309,19 @@ export function MultiAgentSync() {
   useEffect(() => {
     void syncRef.current();
   }, [countKey]);
+
+  // #460 — a stale-card refusal (verdict_already_final) on a sibling's
+  // artifact: re-fetch that session now, whatever its signal says.
+  useEffect(() => {
+    const onRefresh = (e: Event) => {
+      const sid = (e as CustomEvent<{ sessionId?: string }>).detail?.sessionId;
+      if (!sid) return;
+      forceRefresh.current.add(sid);
+      void syncRef.current();
+    };
+    window.addEventListener(REFRESH_SESSION_EVENT, onRefresh);
+    return () => window.removeEventListener(REFRESH_SESSION_EVENT, onRefresh);
+  }, []);
 
   // #458 review — re-merge immediately after a store reset (generation bump).
   useEffect(

@@ -25,13 +25,16 @@ interface OptionCardProps {
   /** Artifact id — needed for AskTrigger targeting per-option questions */
   artifactId?: string;
   onSelect: (optionId: string) => void;
+  /** #465 — set while this tab is disconnected: Select disables with this reason. */
+  offlineReason?: string | null;
   onFocus: (index: number) => void;
   /** D3 review — parent-owned Select button ref so keyboard nav can move DOM
       focus in lockstep with the roving highlight. */
   selectButtonRef: (el: HTMLButtonElement | null) => void;
 }
 
-export function OptionCard({ option, index, focused, submitting, locked = false, artifactId, onSelect, onFocus, selectButtonRef }: OptionCardProps) {
+export function OptionCard({ option, index, focused, submitting, locked = false, artifactId, onSelect, onFocus, selectButtonRef, offlineReason = null }: OptionCardProps) {
+  const offline = offlineReason;
   // #180 — the inline card is a DEFAULT decision surface: a comment you left on
   // this option carries onto the tuned version here too (useChainComments), so
   // show the SAME carryover signal the workbench does instead of leaving it
@@ -187,14 +190,14 @@ export function OptionCard({ option, index, focused, submitting, locked = false,
         <button
           ref={selectButtonRef}
           data-select-option
-          onClick={() => !submitting && !locked && onSelect(option.id)}
-          disabled={submitting || locked}
+          onClick={() => !submitting && !locked && !offline && onSelect(option.id)}
+          disabled={submitting || locked || !!offline}
           // Accessible name carries the option title so a SR user
           // choosing from the buttons list can tell them apart.
           aria-label={`Select ${option.title}`}
           // #207 (I2) — the H3 read-only affordance wording on a locked decision.
           aria-disabled={locked || undefined}
-          title={locked ? "Read-only — this artifact was retracted or is being replayed" : undefined}
+          title={locked ? "Read-only — this artifact was retracted or is being replayed" : offline ?? undefined}
           // U4 — keep the roving highlight in lockstep with Tab focus
           // (this button is now the card's only focusable selector).
           onFocus={() => !submitting && onFocus(index)}
