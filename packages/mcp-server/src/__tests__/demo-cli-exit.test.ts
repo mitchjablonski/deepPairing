@@ -52,11 +52,16 @@ function runDemo(projectRoot: string, timeoutMs: number): Promise<RunResult> {
     const child = spawn(tsxBin, [cliEntry, "demo"], {
       cwd: projectRoot,
       env: { ...process.env, DEEPPAIRING_NO_OPEN: "1", DEEPPAIRING_PROJECT_ROOT: projectRoot },
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (c) => { stdout += c.toString(); });
+    child.stdout.on("data", (c) => {
+      stdout += c.toString();
+      // #471 — the demo now stays up until the user ends it (Enter), then
+      // stops its sandboxed daemon and deletes its temporary data.
+      if (stdout.includes("Press Enter to end the demo")) child.stdin.write("\n");
+    });
     child.stderr.on("data", (c) => { stderr += c.toString(); });
     const killer = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* gone */ } }, timeoutMs);
     child.on("exit", (code, signal) => {
@@ -82,9 +87,11 @@ describe("#168 deeppairing demo — cold run exits cleanly + respects NO_OPEN", 
       expect(res.signal).toBeNull();       // NOT killed by our timeout
       expect(res.code).toBe(0);            // clean exit
       // NO_OPEN suppression path prints the URL for the human to open manually.
-      expect(out).toMatch(/open http:\/\/localhost:\d+\/\?session=demo_\d+_[a-f0-9]+ in your browser/);
-      // Sanity: the daemon actually came up.
-      expect(out).toMatch(/Daemon ready on port \d+/);
+      expect(out).toMatch(/Open this in your browser:\s+http:\/\/localhost:\d+\/\?session=demo_\d+_[a-f0-9]+/);
+      // #471 — the demo ran in its sandbox and cleaned up after itself: the
+      // cwd project was never given a .deeppairing/ directory.
+      expect(out).toContain("Demo ended. Its temporary data was deleted.");
+      expect(fs.existsSync(path.join(root, ".deeppairing"))).toBe(false);
     },
     90_000,
   );
