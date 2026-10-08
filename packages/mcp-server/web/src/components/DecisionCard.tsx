@@ -4,8 +4,8 @@ import { useDraft, clearDraftIfUnchanged } from "../hooks/useDraft";
 // `motion` component: drops ~40kB gzip of animation features nothing uses
 // from the ENTRY bundle. Same animations.
 import { AnimatePresence } from "motion/react";
-import { type DecisionRequestEvent, type Artifact, type PlanVisual, coerceDecisionContent } from "@deeppairing/shared";
-import { useArtifactStore } from "../stores/artifact";
+import { type DecisionRequestEvent, type Artifact, type PlanVisual, type DecisionClosedStatus, coerceDecisionContent } from "@deeppairing/shared";
+import { useArtifactStore, resolveToLiveId } from "../stores/artifact";
 import { SimpleMarkdown } from "./SimpleMarkdown";
 import { RepairDecisionModal } from "./RepairDecisionModal";
 import { VisualBody } from "./ArtifactVisuals";
@@ -57,6 +57,10 @@ interface DecisionCardProps {
    */
   retractReason?: string;
   onResolved?: () => void;
+  /** #492 — the decision is CLOSED (its artifact was superseded, retracted or
+   *  obsoleted): say so in second person, link a newer version, and offer no
+   *  Select (the daemon refuses a late answer with 409 decision_closed). */
+  closed?: { status: DecisionClosedStatus; supersededBy?: { artifactId: string } };
 }
 
 /**
@@ -86,7 +90,7 @@ type DecisionPhase =
   | { kind: "resolved"; optionId: string }
   | { kind: "sentBack" };
 
-export function DecisionCard({ event, decisionId, artifactId, stakes, initialResolved, sessionId, writeLocked = false, retractReason, onResolved }: DecisionCardProps) {
+export function DecisionCard({ event, decisionId, artifactId, stakes, initialResolved, sessionId, writeLocked = false, retractReason, onResolved, closed }: DecisionCardProps) {
   // #465 (state G rule 1) — Select / send-back / reject disable while disconnected.
   const offline = useOfflineReason();
   const resolveDecision = useArtifactStore((s) => s.resolveDecision);
@@ -679,6 +683,30 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
         </div>
       )}
 
+      {/* #492 — the closed state, to you, with the way forward. */}
+      {closed && (
+        <div className="mb-2 px-3 py-2 rounded border border-border-default bg-surface-elevated text-xs text-text-secondary" data-testid="decision-closed">
+          {closed.status === "superseded" ? (
+            <>
+              This question was revised — answer the new version.{" "}
+              {closed.supersededBy && (
+                <button
+                  type="button"
+                  onClick={() => useArtifactStore.getState().selectArtifact(closed.supersededBy!.artifactId)}
+                  className="text-accent-blue underline font-medium"
+                >
+                  Open the new version →
+                </button>
+              )}
+            </>
+          ) : closed.status === "retracted" ? (
+            <>Claude withdrew this question — there&apos;s nothing to answer here.</>
+          ) : (
+            <>This question was closed — it was overtaken by new information.</>
+          )}
+        </div>
+      )}
+
       {/* Options grid */}
       <div className={`grid gap-2 ${gridCols}`}>
         <AnimatePresence>
@@ -691,6 +719,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
               submitting={submitting}
               locked={writeLocked}
               offlineReason={offline}
+              hideSelect={!!closed}
               artifactId={artifactId}
               onSelect={handleSelect}
               onFocus={setFocusedIndex}
@@ -851,6 +880,12 @@ export function DecisionArtifactView({ artifact }: { artifact: Artifact }) {
   // Discuss entry go read-only. (A resolved decision renders ResolvedDecisionView
   // regardless — out of this residue's scope.)
   const writeLocked = useWriteLock(artifact.status);
+  // #492 — a CLOSED decision (superseded / retracted / obsolete, unanswered):
+  // the card says so and offers no Select; a superseded one links its newest
+  // version (the same live-successor walk every stale-id caller uses).
+  const successorId = useArtifactStore((s) =>
+    artifact.status === "superseded" ? resolveToLiveId(s.artifacts, artifact.id) : null);
+  const closedStatus = (["superseded", "retracted", "obsolete"] as const).find((st) => st === artifact.status);
 
   // An options-less decision has nothing to render, so bail (after the hooks).
   if (dc.options.length === 0) return null;
@@ -895,6 +930,9 @@ export function DecisionArtifactView({ artifact }: { artifact: Artifact }) {
         stakes={dc.stakes}
         initialResolved={initialResolved}
         writeLocked={writeLocked}
+        closed={closedStatus && !initialResolved
+          ? { status: closedStatus, ...(successorId && successorId !== artifact.id ? { supersededBy: { artifactId: successorId } } : {}) }
+          : undefined}
         retractReason={
           artifact.status === "retracted"
             ? (typeof (artifact.content as { retractReason?: unknown })?.retractReason === "string"

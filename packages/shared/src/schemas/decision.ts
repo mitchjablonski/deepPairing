@@ -55,3 +55,31 @@ export const DecisionResponseSchema = z.object({
 });
 
 export type DecisionResponse = z.infer<typeof DecisionResponseSchema>;
+
+
+/**
+ * #492 — the refusal a decision-resolve answers when the decision's backing
+ * artifact was CLOSED (superseded by a newer version, retracted by the agent,
+ * or marked obsolete): 409 `decision_closed`. Every field beyond `code` and
+ * `currentStatus` is optional (backward-compatible). `supersededBy` names the
+ * newer version so a stale card can link to it.
+ */
+export const DecisionClosedStatusSchema = z.enum(["superseded", "retracted", "obsolete"]);
+export type DecisionClosedStatus = z.infer<typeof DecisionClosedStatusSchema>;
+
+export const DecisionSupersededBySchema = z.object({
+  artifactId: z.string(),
+  decisionId: z.string().optional(),
+});
+export type DecisionSupersededBy = z.infer<typeof DecisionSupersededBySchema>;
+
+export const DecisionClosedRefusalSchema = z.object({
+  error: z.literal("decision_closed").optional(),
+  code: z.literal("decision_closed"),
+  currentStatus: DecisionClosedStatusSchema,
+  decisionId: z.string().optional(),
+  artifactId: z.string().optional(),
+  supersededBy: DecisionSupersededBySchema.optional(),
+  message: z.string().optional(),
+});
+export type DecisionClosedRefusal = z.infer<typeof DecisionClosedRefusalSchema>;

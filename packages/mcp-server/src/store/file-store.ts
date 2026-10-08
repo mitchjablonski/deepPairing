@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { classifyStaleResolve, type DecisionResolveOutcome, type ResolutionAnnouncement } from "./decision-resolve-guard.js";
+import { classifyStaleResolve, classifyClosedDecision, type DecisionResolveOutcome, type ResolutionAnnouncement } from "./decision-resolve-guard.js";
 import path from "node:path";
 import crypto from "node:crypto";
 import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
@@ -1403,6 +1403,10 @@ export class FileStore implements IStore {
         ((a.content as { decisionId?: string } | null)?.decisionId === decisionId || a.id === decisionId));
     const stale = classifyStaleResolve(dec, backing, optionId);
     if (stale) return stale;
+    // #492 — a closed (superseded / retracted / obsolete) decision takes no
+    // new answer; in the same critical section, so it's race-free.
+    const closed = classifyClosedDecision(backing, this.artifacts);
+    if (closed) return closed;
     // F2 — fail-closed on an option the decision doesn't have (resolveDecision
     // would silently ignore it).
     const opts = (dec as { options?: Array<{ id?: string }> }).options;

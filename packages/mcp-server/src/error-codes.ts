@@ -63,6 +63,9 @@ export const ERROR_CODES = {
   /** Context bank — close-out on a decision the human actually ANSWERED. Closing
    *  it out would overwrite real history with "retired, nobody chose". */
   decision_already_resolved: "decision_already_resolved",
+  /** #492 — a resolve on a decision whose backing artifact is closed
+   *  (superseded / retracted / obsolete): nothing is written. */
+  decision_closed: "decision_closed",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
   comment_not_in_session: "comment_not_in_session",
   /** #172 — take-counter/insist targeted a suggestion the agent hasn't countered. */

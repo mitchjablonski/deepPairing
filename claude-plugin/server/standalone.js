@@ -25792,6 +25792,20 @@ var DecisionResponseSchema = external_exports.object({
   confidence: DecisionConfidenceSchema.optional(),
   predictedOutcome: external_exports.string().optional()
 });
+var DecisionClosedStatusSchema = external_exports.enum(["superseded", "retracted", "obsolete"]);
+var DecisionSupersededBySchema = external_exports.object({
+  artifactId: external_exports.string(),
+  decisionId: external_exports.string().optional()
+});
+var DecisionClosedRefusalSchema = external_exports.object({
+  error: external_exports.literal("decision_closed").optional(),
+  code: external_exports.literal("decision_closed"),
+  currentStatus: DecisionClosedStatusSchema,
+  decisionId: external_exports.string().optional(),
+  artifactId: external_exports.string().optional(),
+  supersededBy: DecisionSupersededBySchema.optional(),
+  message: external_exports.string().optional()
+});
 
 // ../shared/dist/schemas/message.js
 var TextEventSchema = external_exports.object({
@@ -30227,6 +30241,9 @@ var ERROR_CODES = {
   /** Context bank — close-out on a decision the human actually ANSWERED. Closing
    *  it out would overwrite real history with "retired, nobody chose". */
   decision_already_resolved: "decision_already_resolved",
+  /** #492 — a resolve on a decision whose backing artifact is closed
+   *  (superseded / retracted / obsolete): nothing is written. */
+  decision_closed: "decision_closed",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
   comment_not_in_session: "comment_not_in_session",
   /** #172 — take-counter/insist targeted a suggestion the agent hasn't countered. */
@@ -38343,6 +38360,17 @@ var DaemonClient = class {
       );
     } catch (error51) {
       const e = error51;
+      if (e?.status === 409 && e.code === "decision_closed") {
+        const b = e.body ?? {};
+        const status = b.currentStatus;
+        const sup = b.supersededBy;
+        return {
+          kind: "closed",
+          currentStatus: status === "superseded" || status === "retracted" || status === "obsolete" ? status : "obsolete",
+          ...typeof b.artifactId === "string" ? { artifactId: b.artifactId } : {},
+          ...sup && typeof sup.artifactId === "string" ? { supersededBy: { artifactId: sup.artifactId, ...typeof sup.decisionId === "string" ? { decisionId: sup.decisionId } : {} } } : {}
+        };
+      }
       if (e?.status === 409 && e.code === "verdict_already_final") {
         const b = e.body ?? {};
         return {

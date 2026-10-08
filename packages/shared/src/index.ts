@@ -51,6 +51,12 @@ export {
   type DecisionResponse,
   type DecisionStakes,
   type DecisionConfidence,
+  DecisionClosedStatusSchema,
+  DecisionSupersededBySchema,
+  DecisionClosedRefusalSchema,
+  type DecisionClosedStatus,
+  type DecisionSupersededBy,
+  type DecisionClosedRefusal,
 } from "./schemas/decision.js";
 
 export {

@@ -2,7 +2,7 @@
  * Internal API routes for daemon ↔ MCP wrapper communication.
  * These are called by DaemonClient, not by the web UI.
  */
-import { staleResolveBody, withDecisionResolveLock } from "../store/decision-resolve-guard.js";
+import { staleResolveBody, closedResolveBody, withDecisionResolveLock } from "../store/decision-resolve-guard.js";
 import { isFileLockError, lockBusyBody } from "../store/file-lock.js";
 import { Hono } from "hono";
 import type { Context } from "hono";
@@ -955,6 +955,8 @@ export function createDaemonRoutes(
       let committed = false;
       try {
         // #484 review — report only what is persisted (see the public route).
+        // #492 — closed decision: 409 decision_closed, nothing written.
+        if (outcome.kind === "closed") return c.json(closedResolveBody(outcome, decisionId), 409);
         if (outcome.kind === "same" || outcome.kind === "conflict") {
           await r.store.forceFlush();
           // #484 review — first successful persistence of an answer whose own

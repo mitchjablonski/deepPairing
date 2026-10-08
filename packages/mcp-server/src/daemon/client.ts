@@ -609,6 +609,20 @@ export class DaemonClient implements IStore {
       // so a daemon-backed IStore behaves like FileStore. Anything else (lock
       // busy, review conflict, network) still throws.
       const e = error as { status?: number; code?: string; body?: Record<string, unknown> };
+      // #492 — the closed-decision refusal is a typed outcome too.
+      if (e?.status === 409 && e.code === "decision_closed") {
+        const b = e.body ?? {};
+        const status = b.currentStatus;
+        const sup = b.supersededBy as { artifactId?: unknown; decisionId?: unknown } | undefined;
+        return {
+          kind: "closed",
+          currentStatus: status === "superseded" || status === "retracted" || status === "obsolete" ? status : "obsolete",
+          ...(typeof b.artifactId === "string" ? { artifactId: b.artifactId } : {}),
+          ...(sup && typeof sup.artifactId === "string"
+            ? { supersededBy: { artifactId: sup.artifactId, ...(typeof sup.decisionId === "string" ? { decisionId: sup.decisionId } : {}) } }
+            : {}),
+        };
+      }
       if (e?.status === 409 && e.code === "verdict_already_final") {
         const b = e.body ?? {};
         return {
