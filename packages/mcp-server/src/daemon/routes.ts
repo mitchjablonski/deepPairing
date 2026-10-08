@@ -501,6 +501,8 @@ export function createDaemonRoutes(
   // `daemon_resumed` lets the connected clients refetch full state.
   app.post("/api/internal/sessions/:sessionId/recovered", async (c) => {
     const sessionId = c.req.param("sessionId");
+    const r = requireStore(c, sessionId);
+    if (!r.ok) return r.response;
     log(`[recovered] sid=${sessionId} — wrapper auto-re-registered after a 404`);
     broadcast(sessionId, { type: "daemon_resumed", sessionId });
     return c.json({ status: "broadcast" });

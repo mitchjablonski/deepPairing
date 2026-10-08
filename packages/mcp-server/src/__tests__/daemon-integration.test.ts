@@ -3,13 +3,16 @@
  * Tests: daemon-routes (via Hono request), DaemonClient (via real HTTP server),
  * and the full session lifecycle.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import { serve } from "@hono/node-server";
+import { Hono } from "hono";
 import { createDaemonRoutes, createActiveSessionRoutes } from "../daemon/routes.js";
 import { DaemonClient } from "../daemon/client.js";
 import { FileStore } from "../store/file-store.js";
 import { setGlobalStoreForTests } from "../store/global-store.js";
 import { readMetrics, __resetMetricsCacheForTests } from "../store/metrics-store.js";
+import { projectHashGate } from "../http/guards.js";
+import { projectHashOf } from "../project-root.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -619,6 +622,17 @@ describe("Daemon Routes", () => {
       expect(sessions.has("never_registered")).toBe(false);
     });
 
+    it("rejects recovered for an unknown session without broadcasting recovery or activity", async () => {
+      const before = broadcasts.length;
+      const res = await app.request(`/api/internal/sessions/never_registered/recovered`, {
+        method: "POST",
+      });
+
+      expect(res.status).toBe(404);
+      expect((await res.json()).code).toBe("session_not_registered");
+      expect(broadcasts.slice(before)).toEqual([]);
+    });
+
     it("returns 404 for write on unknown session (artifacts POST)", async () => {
       const res = await app.request(`/api/internal/sessions/never_registered/artifacts`, {
         method: "POST",
@@ -1019,20 +1033,137 @@ describe("DaemonClient", () => {
       expect((c as any).lastRegisterMeta).toEqual({ title: "x", project: "y", expectedProjectRoot: undefined });
     });
 
-    it("AA2: auto-recover broadcasts daemon_resumed via /recovered", async () => {
-      // Use a fresh client whose sessionId is unknown to the running
-      // daemon — first call goes through the recover path, which
-      // fire-and-forgets a POST /recovered. Verify the broadcast lands.
-      const freshClient = new DaemonClient(TEST_PORT, "aa2_recover_session");
-      const before = broadcasts.length;
-      await freshClient.getArtifacts();
-      // Give the fire-and-forget POST a tick to land.
-      await new Promise((r) => setTimeout(r, 50));
-      const resumed = broadcasts.find(
-        (b) => b.event.type === "daemon_resumed" && b.sessionId === "aa2_recover_session",
+    async function withAuthenticatedRecovery(
+      run: (fixture: {
+        root: string;
+        token: string;
+        port: number;
+        stores: Map<string, FileStore>;
+        events: Array<{ sessionId: string; event: any }>;
+        calls: Array<{ path: string; auth: string | undefined; hash: string | undefined }>;
+      }) => Promise<void>,
+      recoveredStatus?: 401 | 404 | 503,
+    ) {
+      const authRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dp-auth-recovery-"));
+      const authToken = "recovery-test-token";
+      const authSessions = new Map<string, FileStore>();
+      const allStores = new Set<FileStore>();
+      const authBroadcasts: Array<{ sessionId: string; event: any }> = [];
+      const calls: Array<{ path: string; auth: string | undefined; hash: string | undefined }> = [];
+      const authRoutes = createDaemonRoutes(
+        authSessions,
+        new Map(),
+        (id) => {
+          const store = new FileStore(authRoot, id);
+          authSessions.set(id, store);
+          allStores.add(store);
+          return store;
+        },
+        (sessionId, event) => authBroadcasts.push({ sessionId, event }),
+        undefined,
+        authRoot,
+        authToken,
       );
-      expect(resumed).toBeDefined();
-      expect(broadcasts.length).toBeGreaterThan(before);
+      const guardedApp = new Hono();
+      guardedApp.use("/api/internal/*", projectHashGate(projectHashOf(authRoot)));
+      guardedApp.use("/api/internal/*", async (c, next) => {
+        calls.push({ path: c.req.path, auth: c.req.header("Authorization"), hash: c.req.header("X-Project-Hash") });
+        if (recoveredStatus && c.req.path.endsWith("/recovered")) {
+          return c.json({
+            error: `recovery notification rejected (${recoveredStatus})`,
+            code: recoveredStatus === 401 ? "daemon_auth_required" : "session_not_registered",
+          }, recoveredStatus);
+        }
+        await next();
+      });
+      guardedApp.route("/", authRoutes);
+      let authServer: any;
+      const authPort = await new Promise<number>((resolve) => {
+        authServer = serve({ fetch: guardedApp.fetch, port: 0 }, (info) => resolve(info.port));
+      });
+
+      try {
+        await run({ root: authRoot, token: authToken, port: authPort, stores: authSessions, events: authBroadcasts, calls });
+      } finally {
+        await new Promise<void>((resolve, reject) => authServer.close((err?: Error) => err ? reject(err) : resolve()));
+        for (const store of allStores) store.dispose();
+        fs.rmSync(authRoot, { recursive: true, force: true });
+      }
+    }
+
+    it("AA2: authenticated, project-bound auto-recovery retries and broadcasts daemon_resumed", async () => {
+      await withAuthenticatedRecovery(async ({ root, token, port, stores, events, calls }) => {
+        const sessionId = "aa2_auth_recover_session";
+        const authClient = new DaemonClient(port, sessionId, root, token);
+        await authClient.register({ expectedProjectRoot: root });
+        stores.get(sessionId)?.dispose();
+        stores.delete(sessionId); // daemon restart: live process, empty session map
+
+        const artifacts = await authClient.getArtifacts();
+        expect(artifacts).toEqual([]); // original request retried successfully
+
+        await expect.poll(() => events).toContainEqual({
+          sessionId,
+          event: { type: "daemon_resumed", sessionId },
+        });
+        expect(calls.filter((call) => call.path.endsWith("/recovered"))).toEqual([{
+          path: `/api/internal/sessions/${sessionId}/recovered`,
+          auth: `Bearer ${token}`,
+          hash: projectHashOf(root),
+        }]);
+        expect(calls.filter((call) => call.path.endsWith("/register"))).toHaveLength(2);
+        expect(calls.filter((call) => call.path.endsWith("/artifacts"))).toHaveLength(2);
+      });
+    });
+
+    it.each([401, 404, 503] as const)("AA2: recovered %i is nonfatal and never starts another recovery", async (status) => {
+      const warning = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await withAuthenticatedRecovery(async ({ root, token, port, stores, events, calls }) => {
+          const sessionId = "aa2_failed_notification";
+          const authClient = new DaemonClient(port, sessionId, root, token);
+          await authClient.register({ expectedProjectRoot: root });
+          stores.get(sessionId)?.dispose();
+          stores.delete(sessionId);
+
+          await expect(authClient.getArtifacts()).resolves.toEqual([]);
+          await expect.poll(() => warning.mock.calls.length).toBe(1);
+          expect(warning.mock.calls[0][0]).toContain(`recovery notification rejected (${status})`);
+          expect(events.some(({ event }) => event.type === "daemon_resumed")).toBe(false);
+          expect(calls.filter((call) => call.path.endsWith("/recovered"))).toHaveLength(1);
+          expect(calls.filter((call) => call.path.endsWith("/register"))).toHaveLength(2);
+          expect(calls.filter((call) => call.path.endsWith("/artifacts"))).toHaveLength(2);
+        }, status);
+      } finally {
+        warning.mockRestore();
+      }
+    });
+
+    it("AA2: recovery notification uses the rotated token after registration", async () => {
+      await withAuthenticatedRecovery(async ({ root, token, port, stores, events, calls }) => {
+        fs.mkdirSync(path.join(root, ".deeppairing"), { recursive: true });
+        fs.writeFileSync(path.join(root, ".deeppairing", "daemon.json"), JSON.stringify({ authToken: token }));
+        const sessionId = "aa2_rotated_recovery";
+        const authClient = new DaemonClient(port, sessionId, root, "expired-token");
+        await authClient.register({ expectedProjectRoot: root });
+        stores.get(sessionId)?.dispose();
+        stores.delete(sessionId);
+
+        await expect(authClient.getArtifacts()).resolves.toEqual([]);
+        await expect.poll(() => events.some(({ event }) => event.type === "daemon_resumed")).toBe(true);
+        expect(calls.filter((call) => call.path.endsWith("/recovered"))[0]?.auth).toBe(`Bearer ${token}`);
+        expect(calls.filter((call) => call.path.endsWith("/register"))).toHaveLength(3);
+      });
+    });
+
+    it("AA2: a wrong-project recovery request cannot register or broadcast", async () => {
+      await withAuthenticatedRecovery(async ({ root, token, port, stores, events, calls }) => {
+        const authClient = new DaemonClient(port, "aa2_wrong_project", `${root}-other`, token);
+        await expect(authClient.getArtifacts()).rejects.toMatchObject({ status: 403, code: "project_hash_mismatch" });
+        expect(stores.size).toBe(0);
+        expect(events).toEqual([]);
+        expect(calls).toEqual([]); // hash gate rejects before the route transport
+      });
     });
 
     it("AA2: searchSessions throws on non-2xx instead of returning [] silently", async () => {
