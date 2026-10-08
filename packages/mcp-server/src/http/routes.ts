@@ -700,7 +700,7 @@ export function createHttpRoutes(
     broadcast,
     log,
     updateTaskStatus: async (artifactId, store) =>
-      maybeUpdateTaskStatus(null, artifactId, store as IStore),
+      maybeUpdateTaskStatus(null, artifactId, store),
   }));
 
   /**
