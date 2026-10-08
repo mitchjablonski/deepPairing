@@ -1441,7 +1441,12 @@ export class FileStore implements IStore {
     // Hold feedback waiters until the write is durable: a check_feedback long
     // poll woken now would deliver an answer the flush may still refuse.
     this.feedbackNotifyHolds++;
+    // #490 — this write's OWN wake-up (resolveDecision / updateArtifactStatus
+    // notify internally) must not count as "another event queued one": restore
+    // the flag after the write, so an uncommitted settle wakes nobody.
+    const otherNotifyPending = this.feedbackNotifyPending;
     this.resolveDecision(decisionId, optionId, reasoning, prediction);
+    this.feedbackNotifyPending = otherNotifyPending;
     const written = this.decisions.get(decisionId)!;
     const backingNow = backing ? this.artifacts.find((a) => a.id === backing.id) : undefined;
     this.pendingResolutions.set(decisionId, {
@@ -1497,11 +1502,46 @@ export class FileStore implements IStore {
         }
       }
       this.unannouncedResolutions.delete(decisionId);
+      // #490 — a partial flush may have landed the backing artifact (written
+      // before decisions.json) while the decision didn't: re-flush so disk
+      // converges back to this rolled-back state once the store can write.
+      try { this.scheduleFlush(); } catch { /* disposed: nothing to converge */ }
     }
+    // #490 — wake waiters only for something real: this write COMMITTED, or
+    // another event queued a wake-up during the hold. A rolled-back write is
+    // not news (it was a spurious wake for every long-polling agent).
     this.feedbackNotifyHolds = Math.max(0, this.feedbackNotifyHolds - 1);
+    if (committed) this.feedbackNotifyPending = true;
     if (this.feedbackNotifyHolds === 0 && this.feedbackNotifyPending) {
       this.feedbackNotifyPending = false;
       this.notifyFeedbackWaiters();
+    }
+  }
+
+  /**
+   * #490 — after a FAILED flush, did this resolution land on disk anyway? A
+   * flush writes collections in sequence (artifacts → … → decisions → plan
+   * reviews → requests …); a disk error AFTER decisions.json (ENOSPC on a later
+   * file) leaves the answer durable while the flush throws. The route must then
+   * treat the request as committed (announce once, succeed) — not 503 a
+   * decision that is resolved on disk. Reads the file directly; any read
+   * problem means "not proven durable" (→ roll back).
+   */
+  isResolutionDurable(decisionId: string): boolean {
+    const pending = this.pendingResolutions.get(decisionId);
+    const written = pending?.writtenResponse;
+    if (!written) return false;
+    try {
+      const raw = JSON.parse(fs.readFileSync(path.join(this.sessionDir(), "decisions.json"), "utf8")) as DecisionRecord[];
+      const onDisk = Array.isArray(raw) ? raw.find((d) => d?.decisionId === decisionId)?.response : undefined;
+      const durable = !!onDisk && onDisk.optionId === written.optionId && (onDisk.reasoning ?? null) === (written.reasoning ?? null);
+      // The flush that just failed left the LATER collections memory-only;
+      // committing here schedules no write of its own, so re-flush to converge
+      // them once the store can write (the rollback path does the same).
+      if (durable) { try { this.scheduleFlush(); } catch { /* disposed */ } }
+      return durable;
+    } catch {
+      return false;
     }
   }
 

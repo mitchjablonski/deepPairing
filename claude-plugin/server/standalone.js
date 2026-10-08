@@ -33665,7 +33665,7 @@ function resolveProjectRoot(opts = {}) {
 }
 
 // src/version.ts
-var SERVER_VERSION = "0.1.62";
+var SERVER_VERSION = "0.1.63";
 function parseSemver(v2) {
   const m = /^\s*(\d+)\.(\d+)\.(\d+)/.exec(v2);
   if (!m) return null;
@@ -38477,6 +38477,10 @@ var DaemonClient = class {
   /** #484 review — the daemon settles its own writes (the internal route owns
    *  the flush); nothing to do client-side. */
   async settleResolution(_decisionId, _committed) {
+  }
+  /** #490 — the daemon reconciles its own partial writes. */
+  async isResolutionDurable(_decisionId) {
+    return false;
   }
   async getDecisionResponse(decisionId) {
     const data = await this.get(`/decisions/${decisionId}/response`);
