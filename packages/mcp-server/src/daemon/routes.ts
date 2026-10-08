@@ -2,6 +2,7 @@
  * Internal API routes for daemon ↔ MCP wrapper communication.
  * These are called by DaemonClient, not by the web UI.
  */
+import { checkStaleResolve } from "../store/decision-resolve-guard.js";
 import { isFileLockError, lockBusyBody } from "../store/file-lock.js";
 import { Hono } from "hono";
 import type { Context } from "hono";
@@ -238,6 +239,13 @@ export function createActiveSessionRoutes(
   /** #338 (F4) — daemon log sink for unexpected route errors. Optional so
    *  route-logic fixtures don't thread it (undefined ⇒ silent). */
   logFn?: LogFn,
+  /** #460 — per-session change counter (bumped by the daemon's broadcast on
+   *  every state-changing event). Optional: without it the field is omitted and
+   *  clients fall back to `artifactCount` as the change signal. `epoch` (#464
+   *  review) is random per daemon process: the counter restarts at 0 on a
+   *  daemon restart and could climb back to a value a tab cached, so clients
+   *  compare (epoch, revision), never the bare number. */
+  sessionRevisions?: { epoch: string; counts: Map<string, number> },
 ): Hono {
   const app = new Hono();
   app.onError((error, c) => {
@@ -269,6 +277,8 @@ export function createActiveSessionRoutes(
         // most-recently-active LIVE session when a project has >1 bucket.
         // Falls back to registeredAt for pre-activity sessions.
         lastActivity: meta?.lastActivity ?? meta?.registeredAt,
+        // #460 — the sibling change signal (status changes + comments too).
+        ...(sessionRevisions ? { revision: sessionRevisions.counts.get(id) ?? 0, revisionEpoch: sessionRevisions.epoch } : {}),
       };
     });
     return c.json({ sessions: list });
@@ -926,6 +936,16 @@ export function createDaemonRoutes(
     // optionId:undefined while nothing was resolved.
     if (typeof optionId !== "string" || optionId.length === 0) {
       return c.json({ error: "optionId is required", code: ERROR_CODES.validation_error }, 400);
+    }
+    // #464 review — the same stale-resolve guard as the public route, BEFORE any
+    // write: this route is how the agent side (and the triage/CLI paths)
+    // resolve, and resolveDecision would overwrite an answer the human gave in
+    // the companion. Different pick / closed elsewhere → 409 with the recorded
+    // resolution; the same pick → a true no-op 200.
+    {
+      const stale = await checkStaleResolve(r.store, decisionId, optionId);
+      if (stale?.kind === "same") return c.json(stale.body);
+      if (stale?.kind === "conflict") return c.json(stale.body, 409);
     }
     const prediction = confidence || predictedOutcome ? { confidence, predictedOutcome } : undefined;
     r.store.resolveDecision(decisionId, optionId, reasoning, prediction);
