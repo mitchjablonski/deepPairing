@@ -28331,25 +28331,78 @@ var GlobalStore = class _GlobalStore {
       reentrant: true
     });
   }
-  /** #486 — `<ledger>.removed.json`: concept key → ISO time of its last
-   *  `removeConcept`. A sidecar, so the ledger's own format is unchanged. */
+  /**
+   * #486 — `<ledger>.removed.json`: `{ seq, removals: { [conceptKey]: seq } }`.
+   * `seq` is a MONOTONIC removal counter (never a clock: a backward clock step
+   * must not change which mirrors count as "older than the removal"). A
+   * mirror queued while the ledger was busy carries the `seq` it saw before
+   * its first attempt; on replay it is skipped if its concept was removed
+   * after that. A sidecar, so the ledger's own format is unchanged.
+   */
   removalsPath() {
     return `${this.ledgerPath}.removed.json`;
   }
+  /** Read the removal sidecar. A corrupt file is backed up and salvaged —
+   *  never silently treated as empty (that would lose tombstones). */
   readRemovals() {
+    let raw;
     try {
-      const raw = JSON.parse(fs3.readFileSync(this.removalsPath(), "utf-8"));
-      return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+      raw = fs3.readFileSync(this.removalsPath(), "utf-8");
+    } catch (err) {
+      if (err.code === "ENOENT") return { seq: 0, removals: {} };
+      throw err;
+    }
+    const salvage = (text) => {
+      const out = {};
+      for (const m of text.matchAll(/"((?:[^"\\]|\\.)*)"\s*:\s*(\d+)/g)) {
+        try {
+          const key = JSON.parse(`"${m[1]}"`);
+          if (key !== "seq") out[key] = Number(m[2]);
+        } catch {
+        }
+      }
+      return out;
+    };
+    try {
+      const v2 = JSON.parse(raw);
+      if (v2 && typeof v2 === "object" && Number.isInteger(v2.seq) && v2.removals && typeof v2.removals === "object" && !Array.isArray(v2.removals)) {
+        const removals2 = {};
+        let bad = false;
+        for (const [k, n] of Object.entries(v2.removals)) {
+          if (Number.isInteger(n)) removals2[k] = n;
+          else bad = true;
+        }
+        if (!bad) return { seq: v2.seq, removals: removals2 };
+      }
     } catch {
-      return {};
+    }
+    const removals = salvage(raw);
+    const seq = Math.max(0, ...Object.values(removals));
+    const backup = `${this.removalsPath()}.corrupt-${Date.now()}`;
+    try {
+      fs3.copyFileSync(this.removalsPath(), backup);
+    } catch {
+    }
+    console.error(
+      `[deepPairing] GlobalStore: the removal record ${this.removalsPath()} is corrupt; backed up to ${backup} and salvaged ${Object.keys(removals).length} removal(s). Check the backup if a removed stance reappears.`
+    );
+    return { seq, removals };
+  }
+  /** The current removal sequence — captured by a mirror before its first
+   *  attempt, so its replay can tell whether a removal happened since. */
+  removalSeq() {
+    try {
+      return this.readRemovals().seq;
+    } catch {
+      return 0;
     }
   }
   /** Called under the ledger lock (removeConcept). */
   recordRemoval(key) {
-    const removals = this.readRemovals();
-    removals[key] = (/* @__PURE__ */ new Date()).toISOString();
+    const current = this.readRemovals();
+    const seq = current.seq + 1;
     try {
-      writeJsonAtomic(this.removalsPath(), removals);
+      writeJsonAtomic(this.removalsPath(), { seq, removals: { ...current.removals, [key]: seq } });
     } catch (err) {
       console.error(`[deepPairing] could not record the removal of "${key}" (a queued mirror could re-add it):`, err);
     }
@@ -28406,9 +28459,12 @@ var GlobalStore = class _GlobalStore {
     const now = instance.at ?? (/* @__PURE__ */ new Date()).toISOString();
     const nowMs = Date.parse(now);
     const existing = ledger.concepts[key];
-    if (opts.exactOnce) {
-      const removedAt = this.readRemovals()[key];
-      if (removedAt && now <= removedAt) return;
+    if (opts.replayedFromSeq !== void 0) {
+      const removedSeq = this.readRemovals().removals[key];
+      if (removedSeq !== void 0 && removedSeq > opts.replayedFromSeq) {
+        console.error(`[deepPairing] skipped a queued cross-project mirror for "${concept}": the concept was removed after it was queued.`);
+        return;
+      }
     }
     if (opts.exactOnce && existing?.instances.some((prior) => prior.project === instance.project && prior.sessionId === instance.sessionId && prior.verdict === instance.verdict && prior.at === now)) {
       return;
