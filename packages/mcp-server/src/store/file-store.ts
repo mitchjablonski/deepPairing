@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { classifyStaleResolve, type DecisionResolveOutcome, type ResolutionAnnouncement } from "./decision-resolve-guard.js";
 import path from "node:path";
 import crypto from "node:crypto";
 import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
@@ -1405,6 +1406,125 @@ export class FileStore implements IStore {
     this.notifyFeedbackWaiters();
   }
 
+  /**
+   * #464 (Astra review) — check-and-resolve in ONE synchronous critical
+   * section: no await separates the stale-resolve classification from the
+   * write, so of two overlapping resolves exactly one writes and the other sees
+   * its answer (a same-pick no-op, or a conflict carrying the winner). See
+   * store/decision-resolve-guard.ts for the outcomes.
+   */
+  resolveDecisionAtomic(
+    decisionId: string,
+    optionId: string,
+    reasoning?: string,
+    prediction?: { confidence?: "low" | "medium" | "high"; predictedOutcome?: string },
+  ): DecisionResolveOutcome {
+    this.assertAuthorizationReadable();
+    const dec = this.decisions.get(decisionId);
+    if (!dec) return { kind: "no_record" };
+    const backing = this.artifacts.find((a) => a.id === dec.artifactId) ??
+      this.artifacts.find((a) =>
+        a.type === "decision" &&
+        ((a.content as { decisionId?: string } | null)?.decisionId === decisionId || a.id === decisionId));
+    const stale = classifyStaleResolve(dec, backing, optionId);
+    if (stale) return stale;
+    // F2 — fail-closed on an option the decision doesn't have (resolveDecision
+    // would silently ignore it).
+    const opts = (dec as { options?: Array<{ id?: string }> }).options;
+    if (Array.isArray(opts) && opts.length > 0 && !opts.some((o) => o?.id === optionId)) {
+      return { kind: "invalid_option" };
+    }
+    // #484 review — snapshot what this write changes, so a failed flush can put
+    // memory back exactly where disk is (settleResolution(…, false)).
+    const prevDecision = structuredClone(dec);
+    const prevBacking = backing ? structuredClone(backing) : undefined;
+    // Hold feedback waiters until the write is durable: a check_feedback long
+    // poll woken now would deliver an answer the flush may still refuse.
+    this.feedbackNotifyHolds++;
+    this.resolveDecision(decisionId, optionId, reasoning, prediction);
+    const written = this.decisions.get(decisionId)!;
+    const backingNow = backing ? this.artifacts.find((a) => a.id === backing.id) : undefined;
+    this.pendingResolutions.set(decisionId, {
+      prevDecision,
+      prevBacking,
+      writtenResponse: written.response,
+      backingStatus: backingNow?.status,
+      backingHistoryLength: ((backingNow as { statusHistory?: unknown[] } | undefined)?.statusHistory ?? []).length,
+    });
+    // #484 review — written, not yet announced (see takeResolutionAnnouncement).
+    this.unannouncedResolutions.add(decisionId);
+    return { kind: "resolved", ...(dec.artifactId ? { artifactId: dec.artifactId } : {}) };
+  }
+
+  /** #484 review — resolutions written by resolveDecisionAtomic whose flush
+   *  hasn't settled yet, with what they replaced. */
+  private pendingResolutions = new Map<string, {
+    prevDecision: DecisionRecord;
+    prevBacking: Artifact | undefined;
+    writtenResponse: DecisionRecord["response"];
+    backingStatus: Artifact["status"] | undefined;
+    backingHistoryLength: number;
+  }>();
+  private feedbackNotifyHolds = 0;
+  private feedbackNotifyPending = false;
+
+  /**
+   * #484 review — settle a resolveDecisionAtomic write once its flush is known.
+   * committed → release held feedback waiters. NOT committed (the flush threw:
+   * lock busy → 503, review conflict) → roll memory back to exactly what disk
+   * still holds, so getResolvedDecisions / check_feedback never deliver an
+   * answer the human was told didn't complete, and a later different pick isn't
+   * refused as "already answered". The rollback restores only what THIS write
+   * still owns (an artifact another writer changed since is left alone), and no
+   * announcement remains for it. Runs under the per-store resolve lock.
+   */
+  settleResolution(decisionId: string, committed: boolean): void {
+    const pending = this.pendingResolutions.get(decisionId);
+    if (!pending) return;
+    this.pendingResolutions.delete(decisionId);
+    if (!committed) {
+      const dec = this.decisions.get(decisionId);
+      if (dec && dec.response === pending.writtenResponse) {
+        for (const k of Object.keys(dec)) delete (dec as unknown as Record<string, unknown>)[k];
+        Object.assign(dec, pending.prevDecision);
+      }
+      if (pending.prevBacking) {
+        const art = this.artifacts.find((a) => a.id === pending.prevBacking!.id);
+        const history = ((art as { statusHistory?: unknown[] } | undefined)?.statusHistory ?? []).length;
+        if (art && art.status === pending.backingStatus && history === pending.backingHistoryLength) {
+          for (const k of Object.keys(art)) delete (art as unknown as Record<string, unknown>)[k];
+          Object.assign(art, pending.prevBacking);
+        }
+      }
+      this.unannouncedResolutions.delete(decisionId);
+    }
+    this.feedbackNotifyHolds = Math.max(0, this.feedbackNotifyHolds - 1);
+    if (this.feedbackNotifyHolds === 0 && this.feedbackNotifyPending) {
+      this.feedbackNotifyPending = false;
+      this.notifyFeedbackWaiters();
+    }
+  }
+
+  /** #484 review — decisions whose answer was written by resolveDecisionAtomic
+   *  but not yet announced after a successful flush. In-memory on purpose: an
+   *  answer that never flushed doesn't survive a restart either. */
+  private unannouncedResolutions = new Set<string>();
+
+  takeResolutionAnnouncement(decisionId: string): ResolutionAnnouncement | null {
+    if (!this.unannouncedResolutions.has(decisionId)) return null;
+    const dec = this.decisions.get(decisionId);
+    const response = dec?.response;
+    this.unannouncedResolutions.delete(decisionId);
+    if (!dec || !response) return null;
+    return {
+      optionId: response.optionId,
+      ...(response.reasoning ? { reasoning: response.reasoning } : {}),
+      ...(response.confidence ? { confidence: response.confidence } : {}),
+      ...(response.predictedOutcome ? { predictedOutcome: response.predictedOutcome } : {}),
+      ...(dec.artifactId ? { artifactId: dec.artifactId } : {}),
+    };
+  }
+
   getDecisionResponse(decisionId: string): { optionId: string; reasoning?: string } | null {
     this.assertAuthorizationReadable();
     return this.decisions.get(decisionId)?.response ?? null;
@@ -2498,6 +2618,9 @@ export class FileStore implements IStore {
 
   /** Notify all waiters that feedback has arrived */
   private notifyFeedbackWaiters(): void {
+    // #484 review — while a resolve's flush is unsettled, defer the wake-up
+    // (settleResolution releases it).
+    if (this.feedbackNotifyHolds > 0) { this.feedbackNotifyPending = true; return; }
     const waiters = this.feedbackWaiters;
     this.feedbackWaiters = [];
     for (const resolve of waiters) resolve();
