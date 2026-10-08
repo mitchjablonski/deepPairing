@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, apiBase } from "../lib/api";
-import { enterSessionReplay } from "../lib/session-replay";
+import { openSessionReplay } from "../lib/session-replay";
 import { useModal } from "../hooks/useModal";
 import { timeAgo } from "../lib/time";
 
@@ -11,9 +11,11 @@ import { timeAgo } from "../lib/time";
  * once the session scrolls away.
  *
  * Read-only. Clicking a row opens that decision in its session via the shared
- * replay-navigation scheme (enterSessionReplay) — the same routing the
+ * replay-navigation scheme (openSessionReplay) — the same routing the
  * cross-session SessionBrowser uses. Search is client-side over the decision
- * text + chosen option + session. A corrupt session's decisions surface as an
+ * text + chosen option + recorded reasoning + session + artifact (#469). A
+ * session that can't be opened surfaces an alert with Retry (#469) — the modal,
+ * query and results stay put; a superseded/cancelled open stays silent. A corrupt session's decisions surface as an
  * HONEST partial banner, never a silently-shorter list.
  */
 interface ProjectDecision {
@@ -89,6 +91,27 @@ export function ProjectDecisionsModal({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [opening, setOpening] = useState<string | null>(null);
+  // #469 — a genuine open failure (HTTP / network / unreadable payload). A
+  // superseded or cancelled transition never lands here.
+  const [openFailure, setOpenFailure] = useState<{ decision: ProjectDecision; message: string; hint: string } | null>(null);
+  const openAttempt = useRef(0);
+  const openAbort = useRef<AbortController | null>(null);
+  const mounted = useRef(true);
+  const retryRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      // Closing the modal cancels an in-flight open: a late result must not
+      // close/reopen anything or take over navigation.
+      mounted.current = false;
+      openAbort.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (openFailure) retryRef.current?.focus();
+  }, [openFailure]);
 
   useEffect(() => {
     let cancelled = false;
@@ -119,19 +142,42 @@ export function ProjectDecisionsModal({ onClose }: { onClose: () => void }) {
     const q = query.trim().toLowerCase();
     if (!q) return list;
     return list.filter((d) =>
-      [d.context, d.chosenOptionTitle ?? "", d.sessionTitle, d.artifactTitle]
-        .some((s) => s.toLowerCase().includes(q)),
+      [d.context, d.chosenOptionTitle, d.reasoning, d.sessionTitle, d.artifactTitle]
+        .some((s) => typeof s === "string" && s.toLowerCase().includes(q)),
     );
   }, [data, query]);
 
   const openDecision = async (d: ProjectDecision) => {
+    const attempt = ++openAttempt.current;
+    openAbort.current?.abort();
+    const controller = new AbortController();
+    openAbort.current = controller;
+    setOpenFailure(null);
     setOpening(d.decisionId);
+    let result: Awaited<ReturnType<typeof openSessionReplay>>;
     try {
-      const ok = await enterSessionReplay(d.sessionId, d.artifactId);
-      if (ok) onClose();
-    } finally {
-      setOpening(null);
+      result = await openSessionReplay(d.sessionId, d.artifactId, { signal: controller.signal });
+    } catch {
+      // openSessionReplay never rejects; belt-and-braces so a click can't
+      // leak an unhandled rejection.
+      result = { status: "failed", kind: "invalid", message: "The session couldn't be opened." };
     }
+    // A late result from a closed modal or an older click changes nothing.
+    if (!mounted.current || attempt !== openAttempt.current) return;
+    openAbort.current = null;
+    setOpening(null);
+    if (result.status === "opened") {
+      onClose();
+    } else if (result.status === "failed") {
+      setOpenFailure({
+        decision: d,
+        message: result.message,
+        hint: result.kind === "network"
+          ? "Check that the deepPairing server is running, then retry."
+          : "Its files may be missing or unreadable — retry, or open another decision.",
+      });
+    }
+    // superseded / cancelled: newer navigation owns the screen — stay silent.
   };
 
   const formatDate = (iso: string) => {
@@ -177,7 +223,7 @@ export function ProjectDecisionsModal({ onClose }: { onClose: () => void }) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             aria-label="Search decisions"
-            placeholder="Search decisions (question, chosen option, session)…"
+            placeholder="Search decisions (question, chosen option, reason, session)…"
             className="w-full px-3 py-2 pr-8 bg-surface-secondary border border-border-default rounded-lg text-sm text-text-primary
                        placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-blue"
           />
@@ -225,6 +271,40 @@ export function ProjectDecisionsModal({ onClose }: { onClose: () => void }) {
           );
         })()}
 
+        {/* #469 — announces an in-flight open; the alert below announces failure. */}
+        <div role="status" aria-live="polite" className="sr-only" data-testid="decision-open-status">
+          {opening ? "Opening session…" : ""}
+        </div>
+
+        {openFailure && (
+          <div
+            role="alert"
+            data-testid="decision-open-error"
+            className="mb-3 px-3 py-2 rounded-lg bg-accent-red/10 border border-accent-red/30 text-2xs text-accent-red flex items-start gap-2"
+          >
+            <span className="flex-1">
+              <span className="font-semibold">Couldn't open “{openFailure.decision.sessionTitle}”.</span>{" "}
+              {openFailure.message} {openFailure.hint}
+            </span>
+            <button
+              ref={retryRef}
+              type="button"
+              onClick={() => { void openDecision(openFailure.decision); }}
+              className="shrink-0 px-2 py-0.5 rounded border border-accent-red/40 font-semibold hover:bg-accent-red/20 focus:outline-none focus:ring-1 focus:ring-accent-blue"
+            >
+              Retry
+            </button>
+            <button
+              type="button"
+              onClick={() => setOpenFailure(null)}
+              aria-label="Dismiss error"
+              className="shrink-0 text-text-muted hover:text-text-primary"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {loading && (
           <div className="py-8 text-center text-text-muted text-sm" role="status">
             Loading decisions…
@@ -255,8 +335,9 @@ export function ProjectDecisionsModal({ onClose }: { onClose: () => void }) {
                   <li key={d.decisionId}>
                     <button
                       data-decision-row
-                      onClick={() => openDecision(d)}
+                      onClick={() => { void openDecision(d); }}
                       disabled={opening === d.decisionId}
+                      aria-busy={opening === d.decisionId || undefined}
                       className="w-full text-left p-3 bg-surface-elevated border border-white/[0.06] rounded-lg
                                  hover:border-accent-blue/40 hover:bg-surface-hover transition-all duration-[180ms] ease-out
                                  disabled:opacity-50 press-scale focus:outline-none focus:ring-1 focus:ring-accent-blue"

@@ -25,6 +25,7 @@ import { GlobalStore } from "../global-store.js";
 import { breakDeadLock, inspectLocks, ownerState, ownLockIdentity, withFileLock } from "../file-lock.js";
 import { withSessionFlushLock } from "../session-records.js";
 import { readRejectedApproaches } from "../../cli/preflight-hook-core.js";
+import { normalizeConceptKey } from "@deeppairing/shared";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 
 const CHILD_TIMEOUT_MS = 30_000;
@@ -80,16 +81,57 @@ const childProgram = String.raw`
     if (Date.now() >= deadline) process.exit(4);
     Atomics.wait(waiter, 0, 0, 2);
   }
-  if (mode === "ledger") {
+  // The lock's contract is a BOUNDED wait that fails LOUDLY (ELOCKED, 1 s for
+  // the ledger and preferences) — never a silent drop. These writers hammer
+  // the lock with zero think-time, and the spin-wait lock is not fair: a
+  // writer that releases and immediately re-acquires can starve the other
+  // past the bound when the host is loaded (measured: 3/30 runs under 12
+  // busy loops, every failure an ELOCKED, never a missing entry). A refused
+  // write changed nothing, so a writer re-submits it — exactly what a caller
+  // of a 503 lock_busy does. What these tests assert is the property the lock
+  // exists for: no ACCEPTED write is ever lost.
+  let refusals = 0;
+  const resubmit = (write) => {
+    for (let attempt = 0; ; attempt++) {
+      try { return write(); } catch (e) {
+        if (!e || e.code !== "ELOCKED" || attempt >= 50) throw e;
+        refusals++;
+        Atomics.wait(waiter, 0, 0, 5 + Math.floor(Math.random() * 20));
+      }
+    }
+  };
+  process.on("exit", () => { try { fs.writeFileSync(path.join(root, ".refusals-" + role), String(refusals)); } catch {} });
+  if (role === "hog") {
+    // A LIVE writer that holds the ledger lock past the 1 s bound — what a
+    // descheduled holder on a loaded host looks like to the others.
+    // It takes the lock first (the writers wait for its marker) and holds it
+    // for 1.5 s, so every writer's first write MUST hit the bound.
+    withFileLock(ledgerPath + ".lock", () => {
+      fs.writeFileSync(path.join(root, ".hog-holding"), "");
+      Atomics.wait(waiter, 0, 0, 1500);
+    }, { timeoutMs: 20000 });
+  } else if (mode === "ledger") {
     // A project daemon mirroring stances into the cross-project ledger.
     const ledger = new GlobalStore(ledgerPath);
+    // Every write the lock ACCEPTED (recordInstance returned) is acknowledged
+    // here; the parent proves each one is in the ledger, so a write that was
+    // refused and then silently skipped can't hide behind the counts.
+    const acked = [];
+    const ack = (concept, instance) => { resubmit(() => ledger.recordInstance(concept, instance)); acked.push({ concept, sessionId: instance.sessionId }); };
+    process.on("exit", () => { try { fs.writeFileSync(path.join(root, ".acked-" + role), JSON.stringify(acked)); } catch {} });
+    if (fs.existsSync(path.join(root, ".ready-hog"))) {
+      while (!fs.existsSync(path.join(root, ".hog-holding"))) Atomics.wait(waiter, 0, 0, 2);
+      // The hog refuses this write. Nothing else ever writes this concept, so
+      // it is in the ledger only if the refusal was genuinely re-submitted.
+      ack("first write " + role, { project: "project-" + role, sessionId: role + "-first", verdict: "rejected" });
+    }
     for (let i = 0; i < n; i++) {
-      ledger.recordInstance("shared concept", { project: "project-" + role, sessionId: role + "-" + i, verdict: "rejected" });
-      ledger.recordInstance("concept " + role + " " + i, { project: "project-" + role, sessionId: role + "-" + i, verdict: "approved" });
+      ack("shared concept", { project: "project-" + role, sessionId: role + "-" + i, verdict: "rejected" });
+      ack("concept " + role + " " + i, { project: "project-" + role, sessionId: role + "-" + i, verdict: "approved" });
     }
     // II6 retry dedupe must survive the transaction: an identical
     // (project, session, verdict) inside 5 s is still one instance.
-    ledger.recordInstance("shared concept", { project: "project-" + role, sessionId: role + "-0", verdict: "rejected" });
+    ack("shared concept", { project: "project-" + role, sessionId: role + "-0", verdict: "rejected" });
   } else if (mode === "counter") {
     // Dead-owner recovery race: every child starts against the SAME orphaned
     // lock; exactly one breaker may win each time, so no increment is lost.
@@ -130,7 +172,7 @@ const childProgram = String.raw`
   } else if (role === "daemon") {
     // Daemon-equivalent: the rejection route's FileStore.
     const store = new FileStore(root, "daemon-session");
-    for (let i = 0; i < n; i++) store.recordRejectedApproach({ description: "rejected " + i, concept: "rejected concept " + i });
+    for (let i = 0; i < n; i++) resubmit(() => store.recordRejectedApproach({ description: "rejected " + i, concept: "rejected concept " + i }));
     store.forceFlush();
     store.dispose();
   } else {
@@ -138,8 +180,8 @@ const childProgram = String.raw`
     // approvals so both sides append. Ends with publish ON.
     const store = new FileStore(root, "session_cli_seed");
     for (let i = 0; i < n; i++) {
-      store.recordApprovedPattern({ description: "approved " + i });
-      store.setGlobalLedgerPublish(i % 2 === 1);
+      resubmit(() => store.recordApprovedPattern({ description: "approved " + i }));
+      resubmit(() => store.setGlobalLedgerPublish(i % 2 === 1));
     }
     store.forceFlush();
     store.dispose();
@@ -187,6 +229,12 @@ async function race(mode: string, roles: string[], n = N): Promise<void> {
   fs.writeFileSync(path.join(fx.dir, ".go"), "go");
   await finished;
   if (failure) throw failure;
+  // Diagnostic: how often the bounded wait refused a write under this run's
+  // load (each refusal was re-submitted; the assertions prove none was lost).
+  const refused = roles.map((role) => {
+    try { return Number(fs.readFileSync(path.join(fx.dir, `.refusals-${role}`), "utf8")); } catch { return 0; }
+  });
+  if (refused.some((n) => n > 0)) console.log(`[cross-process-rmw] ${mode}: ELOCKED refusals re-submitted per writer: ${refused.join(", ")}`);
 }
 
 describe("cross-process read-modify-write (#406 ledger, #408 preferences)", () => {
@@ -201,6 +249,29 @@ describe("cross-process read-modify-write (#406 ledger, #408 preferences)", () =
     // Every distinct concept survives.
     const distinct = Object.keys(ledger.concepts).filter((k) => k !== "shared concept");
     expect(distinct).toHaveLength(2 * N);
+    expect(fs.existsSync(`${fx.ledgerPath}.lock`)).toBe(false);
+  }, 90_000);
+
+  it("#406 under a lock held past the bound: refused writes are re-submitted and none is lost", async () => {
+    // Deterministic version of the loaded-host flake: a live third writer holds
+    // the lock for 1.5 s, so the bounded wait MUST refuse (ELOCKED) at least one
+    // write. Before this test re-submitted refusals, that crashed the writer.
+    await race("ledger", ["A", "B", "hog"]);
+    const refused = ["A", "B"].map((role) => Number(fs.readFileSync(path.join(fx.dir, `.refusals-${role}`), "utf8")));
+    expect(refused.reduce((a, b) => a + b, 0)).toBeGreaterThan(0);
+
+    const ledger = JSON.parse(fs.readFileSync(fx.ledgerPath, "utf8"));
+    expect(ledger.concepts["shared concept"].instances).toHaveLength(2 * N);
+    expect(Object.keys(ledger.concepts).filter((k) => k !== "shared concept" && !k.startsWith("first write"))).toHaveLength(2 * N);
+    // Every acknowledged write — including each writer's refused first write,
+    // which nothing rewrites — is in the ledger.
+    for (const role of ["A", "B"]) {
+      const acked = JSON.parse(fs.readFileSync(path.join(fx.dir, `.acked-${role}`), "utf8")) as Array<{ concept: string; sessionId: string }>;
+      expect(acked[0]).toEqual({ concept: `first write ${role}`, sessionId: `${role}-first` });
+      const missing = acked.filter(({ concept, sessionId }) =>
+        !(ledger.concepts[normalizeConceptKey(concept)]?.instances ?? []).some((i: { sessionId: string }) => i.sessionId === sessionId));
+      expect(missing).toEqual([]);
+    }
     expect(fs.existsSync(`${fx.ledgerPath}.lock`)).toBe(false);
   }, 90_000);
 

@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ProjectDecisionsModal } from "../ProjectDecisionsModal";
-import { enterSessionReplay } from "../../lib/session-replay";
+import { openSessionReplay, type SessionReplayResult } from "../../lib/session-replay";
 
 // The navigation scheme is exercised by its own module; here we assert the
 // modal CALLS it with the right target (and closes) — a fake, not a mock of fetch.
 vi.mock("../../lib/session-replay", () => ({
-  enterSessionReplay: vi.fn().mockResolvedValue(true),
+  openSessionReplay: vi.fn().mockResolvedValue({ status: "opened" }),
 }));
 
 const RESOLVED = {
@@ -45,7 +45,8 @@ function stubDecisions(payload: { decisions: unknown[]; failedSessions: unknown[
 }
 
 beforeEach(() => {
-  vi.mocked(enterSessionReplay).mockClear();
+  vi.mocked(openSessionReplay).mockReset();
+  vi.mocked(openSessionReplay).mockResolvedValue({ status: "opened" });
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -105,7 +106,7 @@ describe("ProjectDecisionsModal", () => {
     render(<ProjectDecisionsModal onClose={onClose} />);
     const row = await screen.findByText("Which cache should we use?");
     await userEvent.click(row);
-    await waitFor(() => expect(enterSessionReplay).toHaveBeenCalledWith("s1", "a1"));
+    await waitFor(() => expect(openSessionReplay).toHaveBeenCalledWith("s1", "a1", expect.anything()));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
@@ -221,5 +222,148 @@ describe("ProjectDecisionsModal", () => {
     expect(screen.getByText(/s_bad/)).toBeInTheDocument();
     expect(screen.getByText(/s_recovered/)).toBeInTheDocument();
     expect(screen.getByText(/previously recovered/i)).toBeInTheDocument();
+  });
+
+  // #469 — the recorded rationale is searchable, not just displayed.
+  describe("search covers the recorded reasoning (#469)", () => {
+    const WITH_REASON = { ...RESOLVED, reasoning: "Avoids the Zanzibar quota entirely" };
+    const NO_REASON = { ...RESOLVED, decisionId: "d8", sessionId: "s8", context: "Which logger?", chosenOptionTitle: "pino", reasoning: undefined };
+
+    it("finds a decision by a term that appears ONLY in its reasoning (case-insensitive)", async () => {
+      stubDecisions({ decisions: [WITH_REASON, NO_REASON, UNRESOLVED], failedSessions: [] });
+      render(<ProjectDecisionsModal onClose={() => {}} />);
+      await screen.findByText("Which cache should we use?");
+      await userEvent.type(screen.getByLabelText(/search decisions/i), "zANZIBAR");
+      expect(screen.getByText("Which cache should we use?")).toBeInTheDocument();
+      expect(screen.queryByText("Which logger?")).not.toBeInTheDocument();
+      expect(screen.queryByText("Which queue should we use?")).not.toBeInTheDocument();
+    });
+
+    it("keeps the existing fields searchable and reports an accurate empty result with reason-less records", async () => {
+      stubDecisions({ decisions: [WITH_REASON, NO_REASON, UNRESOLVED], failedSessions: [] });
+      render(<ProjectDecisionsModal onClose={() => {}} />);
+      await screen.findByText("Which cache should we use?");
+      const input = screen.getByLabelText(/search decisions/i);
+      await userEvent.type(input, "pino"); // chosen option of the reason-less record
+      expect(screen.getByText("Which logger?")).toBeInTheDocument();
+      await userEvent.clear(input);
+      await userEvent.type(input, "queue work"); // session title
+      expect(screen.getByText("Which queue should we use?")).toBeInTheDocument();
+      await userEvent.clear(input);
+      await userEvent.type(input, "no-such-reason");
+      expect(screen.getByText(/no decisions match “no-such-reason”/i)).toBeInTheDocument();
+    });
+  });
+
+  // #469 — a session that can't be opened must say so, keep the modal, the
+  // query and the results, and offer a keyboard-reachable Retry. Superseded /
+  // cancelled transitions stay silent, and a late result changes nothing.
+  describe("session open failures (#469)", () => {
+    function deferred<T>() {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((res) => { resolve = res; });
+      return { promise, resolve };
+    }
+    const FAILED: SessionReplayResult = { status: "failed", kind: "http", message: "The session couldn't be loaded (HTTP 404)." };
+
+    it("shows an alert with Retry, keeps modal + query + results, and Retry succeeds", async () => {
+      const onClose = vi.fn();
+      vi.mocked(openSessionReplay).mockResolvedValueOnce(FAILED).mockResolvedValueOnce({ status: "opened" });
+      stubDecisions({ decisions: [RESOLVED, UNRESOLVED], failedSessions: [] });
+      render(<ProjectDecisionsModal onClose={onClose} />);
+      await screen.findByText("Which cache should we use?");
+      await userEvent.type(screen.getByLabelText(/search decisions/i), "cache");
+      await userEvent.click(screen.getByText("Which cache should we use?"));
+
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent(/couldn't open “Cache work”/i);
+      expect(alert).toHaveTextContent(/HTTP 404/);
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByTestId("decisions-view")).toBeInTheDocument();
+      expect(screen.getByLabelText(/search decisions/i)).toHaveValue("cache");
+      expect(screen.getByText("Which cache should we use?")).toBeInTheDocument();
+      // The row is re-enabled (not stuck in "opening").
+      expect(screen.getByText("Which cache should we use?").closest("button")).not.toBeDisabled();
+
+      const retry = screen.getByRole("button", { name: /retry/i });
+      expect(retry).toHaveFocus();
+      await userEvent.keyboard("{Enter}");
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(openSessionReplay).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(openSessionReplay).mock.calls[1]!.slice(0, 2)).toEqual(["s1", "a1"]);
+    });
+
+    it("keyboard: Enter on a row announces 'Opening session…', then the failure alert", async () => {
+      const pending = deferred<SessionReplayResult>();
+      vi.mocked(openSessionReplay).mockReturnValueOnce(pending.promise);
+      stubDecisions({ decisions: [RESOLVED], failedSessions: [] });
+      render(<ProjectDecisionsModal onClose={() => {}} />);
+      await screen.findByText("Which cache should we use?");
+      const row = screen.getByText("Which cache should we use?").closest("button")!;
+      row.focus();
+      await userEvent.keyboard("{Enter}");
+      const status = screen.getByTestId("decision-open-status");
+      expect(status).toHaveAttribute("role", "status");
+      expect(status).toHaveAttribute("aria-live", "polite");
+      expect(status).toHaveTextContent("Opening session…");
+      expect(row).toHaveAttribute("aria-busy", "true");
+      await act(async () => { pending.resolve(FAILED); });
+      expect(await screen.findByRole("alert")).toHaveTextContent(/couldn't open/i);
+      expect(status).toHaveTextContent("");
+    });
+
+    it("dismissing the alert keeps the results", async () => {
+      vi.mocked(openSessionReplay).mockResolvedValueOnce(FAILED);
+      stubDecisions({ decisions: [RESOLVED], failedSessions: [] });
+      render(<ProjectDecisionsModal onClose={() => {}} />);
+      await userEvent.click(await screen.findByText("Which cache should we use?"));
+      await screen.findByRole("alert");
+      await userEvent.click(screen.getByRole("button", { name: /dismiss error/i }));
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.getByText("Which cache should we use?")).toBeInTheDocument();
+    });
+
+    it.each(["superseded", "cancelled"] as const)("a %s transition is silent: no alert, no close", async (status) => {
+      const onClose = vi.fn();
+      vi.mocked(openSessionReplay).mockResolvedValueOnce({ status });
+      stubDecisions({ decisions: [RESOLVED], failedSessions: [] });
+      render(<ProjectDecisionsModal onClose={onClose} />);
+      await userEvent.click(await screen.findByText("Which cache should we use?"));
+      await waitFor(() => expect(screen.getByText("Which cache should we use?").closest("button")).not.toBeDisabled());
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("closing the modal cancels the open; a late result neither closes nor reports", async () => {
+      const onClose = vi.fn();
+      const pending = deferred<SessionReplayResult>();
+      vi.mocked(openSessionReplay).mockReturnValueOnce(pending.promise);
+      stubDecisions({ decisions: [RESOLVED], failedSessions: [] });
+      const { unmount } = render(<ProjectDecisionsModal onClose={onClose} />);
+      await userEvent.click(await screen.findByText("Which cache should we use?"));
+      const signal = (vi.mocked(openSessionReplay).mock.calls[0]![2] as { signal: AbortSignal }).signal;
+      expect(signal.aborted).toBe(false);
+      unmount();
+      expect(signal.aborted).toBe(true);
+      await act(async () => { pending.resolve({ status: "opened" }); });
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("an older click's late result never overwrites the newer one", async () => {
+      const onClose = vi.fn();
+      const first = deferred<SessionReplayResult>();
+      vi.mocked(openSessionReplay).mockReturnValueOnce(first.promise).mockResolvedValueOnce(FAILED);
+      stubDecisions({ decisions: [RESOLVED, UNRESOLVED], failedSessions: [] });
+      render(<ProjectDecisionsModal onClose={onClose} />);
+      await userEvent.click(await screen.findByText("Which cache should we use?"));
+      await userEvent.click(screen.getByText("Which queue should we use?"));
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent(/Queue work/);
+      // The first click's controller was aborted by the second click.
+      expect((vi.mocked(openSessionReplay).mock.calls[0]![2] as { signal: AbortSignal }).signal.aborted).toBe(true);
+      await act(async () => { first.resolve({ status: "opened" }); });
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByRole("alert")).toHaveTextContent(/Queue work/);
+    });
   });
 });

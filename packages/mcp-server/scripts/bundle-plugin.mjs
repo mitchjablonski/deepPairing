@@ -15,6 +15,7 @@
  *   claude-plugin/server/daemon.js       (bundled, self-contained —
  *                                         daemon-lifecycle's spawn fallback
  *                                         resolves it beside standalone.js)
+ *   claude-plugin/server/demo.mjs        (#471 — the isolated no-build demo)
  *   claude-plugin/server/web/            (the daemon's webDistPath fallback
  *                                         resolves web/ beside daemon.js)
  *   claude-plugin/server/review-posts.mjs (operator recovery — the only runnable
@@ -128,6 +129,15 @@ await build({
   ...shared,
   entryPoints: [resolve(pkgRoot, "src/cli/review-posts-entry.ts")],
   outfile: resolve(pluginDir, "review-posts.mjs"),
+});
+
+// #471 — the isolated, no-build demo: `node claude-plugin/server/demo.mjs`.
+// Runs the bundled daemon.js beside it in a throwaway HOME + sample project on
+// its own port window, and deletes everything when the demo ends.
+await build({
+  ...shared,
+  entryPoints: [resolve(pkgRoot, "src/cli/demo-entry.ts")],
+  outfile: resolve(pluginDir, "demo.mjs"),
 });
 
 // The companion web UI, served by the bundled daemon via its web/ fallback.
