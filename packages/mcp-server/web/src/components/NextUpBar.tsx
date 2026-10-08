@@ -6,6 +6,8 @@ import { useReplayStore } from "../stores/replay";
 import { usePreflightBlockStore } from "../stores/preflightBlocks";
 import { computeAttention, type Attention, type AttentionItem, type FailureKind, type SummaryLane } from "../lib/attention";
 import { noAgentLive } from "../lib/liveness";
+import { useTabOffline, useConnectionGraceStore } from "../lib/connectionGrace";
+import { useSiblingSyncStore } from "../lib/siblingSync";
 import { sessionLabelsFrom } from "../lib/sessionLabel";
 import { WAITING_TONE } from "../lib/waitingTone";
 import { LANE_MARKS, NOTHING_GLYPH } from "../lib/laneMarks";
@@ -75,6 +77,9 @@ function primaryCore(line: Attention["line"]): string {
   }
 }
 
+/** #467 review — the neutral line while the tab is still loading what needs you. */
+const HOLD_TEXT = "Checking what needs you…";
+
 /** The line exactly as the design's worked table writes it: prefix · primary · summary. */
 export function attentionLineText(a: Attention): string {
   return [
@@ -107,7 +112,8 @@ function afterFor(item: AttentionItem, artifacts: Artifact[], reach: AgentReach)
   const a = item.artifactId ? artifacts.find((x) => x.id === item.artifactId) : undefined;
   const agentGone = reach === "gone";
   if (reach === "replay" && item.kind !== "flag") return "Replay is read-only — nothing you do here reaches Claude";
-  if (reach === "disconnected" && item.kind !== "flag") return "Disconnected — Claude resumes when it reconnects";
+  // #465 N3 — it is THIS TAB that lost the daemon, not Claude.
+  if (reach === "disconnected" && item.kind !== "flag") return "This tab is offline — your response can be sent once it reconnects to deepPairing";
   switch (item.kind) {
     case "decision":
       return agentGone
@@ -161,6 +167,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   const requests = useArtifactStore((s) => s.requests);
   const selectArtifact = useArtifactStore((s) => s.selectArtifact);
   const connected = useConnectionStore((s) => s.connected);
+  const tabOffline = useTabOffline();
   const staleDaemon = useConnectionStore((s) => s.staleDaemon);
   const snapshotUnavailable = useConnectionStore((s) => s.snapshotUnavailable);
   const sessionConflict = useConnectionStore((s) => s.sessionConflict);
@@ -171,13 +178,17 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   const lastSeenAt = usePreflightBlockStore((s) => s.lastSeenAt);
 
   const sessionLabels = useMemo(() => sessionLabelsFrom(activeSessions), [activeSessions]);
+  const boundSessionId = useConnectionStore((s) => s.sessionId);
   const attention = useMemo(() => computeAttention({
     artifacts,
     comments,
     requests,
     sessionLabels,
+    boundSessionId,
     system: {
-      disconnected: !connected,
+      // #467 review — the shared offline answer (first-connect grace): a page
+      // load is not an outage.
+      disconnected: tabOffline,
       staleDaemon,
       snapshotUnavailable,
       sessionConflict,
@@ -187,7 +198,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
         .filter((b) => !lastSeenAt || b.at > lastSeenAt)
         .map((b) => ({ id: b.id, title: b.proposal ? `"${b.concept}" stopped: ${b.proposal}` : `"${b.concept}"`, at: b.at })),
     },
-  }), [artifacts, comments, requests, sessionLabels, connected, staleDaemon, snapshotUnavailable, sessionConflict, replayActive, blocks, lastSeenAt]);
+  }), [artifacts, comments, requests, sessionLabels, boundSessionId, tabOffline, staleDaemon, snapshotUnavailable, sessionConflict, replayActive, blocks, lastSeenAt]);
 
   const agentGone = noAgentLive(activeSessions);
   // #457 state G — the outage clock (ticks only while disconnected).
@@ -198,7 +209,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
     const t = setInterval(() => setNowMs(Date.now()), 5000);
     return () => clearInterval(t);
   }, [connected]);
-  const prolongedOutage = !connected && disconnectedSince != null && nowMs - disconnectedSince >= 60_000;
+  const prolongedOutage = tabOffline && disconnectedSince != null && nowMs - disconnectedSince >= 60_000;
   const [expanded, setExpanded] = useState<false | "all" | "high">(false);
   // The holds whose "Why" was opened: shown in the expansion after they are
   // marked seen (which, like opening the ⋯ gate log, clears them from the lane).
@@ -218,7 +229,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   const resumeCase = agentGone && openQuestionCount > 0;
   const oldestQuestion = openQuestions[0]; // waiting is oldest-first
   const why = item ? whyFor(item, artifacts) : "";
-  const reach: AgentReach = replayActive ? "replay" : !connected ? "disconnected" : agentGone ? "gone" : "live";
+  const reach: AgentReach = replayActive ? "replay" : tabOffline ? "disconnected" : agentGone ? "gone" : "live";
   const after = item ? afterFor(item, artifacts, reach) : "";
   // #430 PR 5 — the request pips + resume bridge (moved here from the
   // composer row when the bar is ON; same hook, same rules).
@@ -307,7 +318,17 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
     : primary.lane === "flag" ? "text-accent-red"
     : primary.lane === "waiting" ? WAITING_TONE.text
     : "text-text-secondary";
-  const lineText = attentionLineText(attention);
+  // #467 review — never claim "Nothing needs you" before the tab knows: until
+  // the session has hydrated and the first sibling sync has merged (or the
+  // first-connect grace ran out — no siblings to wait for), an empty Decide
+  // lane may only mean "not loaded yet". Hold a neutral line instead.
+  const siblingSettled = useSiblingSyncStore((s) => s.settled);
+  const graceOver = useConnectionGraceStore((s) => s.graceOver);
+  // Nothing to wait for when the bound session is the only one known.
+  const noSiblings = activeSessions.length > 0 && activeSessions.every((x) => x.sessionId === boundSessionId);
+  const holding = primary.lane === "nothing" && !attention.line.prefix && (!hydrated || !(siblingSettled || graceOver || noSiblings));
+  const primaryText = holding ? HOLD_TEXT : primaryToken(attention.line);
+  const lineText = holding ? HOLD_TEXT : attentionLineText(attention);
 
   return (
     <section
@@ -340,8 +361,8 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
           <span className={`shrink-0 font-semibold tracking-wide ${tone}`}>{LANE_WORD[item.kind]}</span>
         )}
         {/* Truncation order: why (shrink 1000) → after (shrink 100) → title (shrink 1). */}
-        <span data-token className={`min-w-0 truncate font-medium ${tone}`} style={{ flexShrink: 1 }} title={primaryToken(attention.line)}>
-          {primaryToken(attention.line)}
+        <span data-token className={`min-w-0 truncate font-medium ${tone}`} style={{ flexShrink: 1 }} title={primaryText}>
+          {primaryText}
         </span>
         {item?.stakes === "high" && (
           <span className="shrink-0 px-1 rounded bg-accent-red-dim text-accent-red font-semibold">HIGH</span>

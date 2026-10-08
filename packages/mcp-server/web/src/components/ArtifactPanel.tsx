@@ -6,6 +6,7 @@ import { m, AnimatePresence } from "motion/react";
 import { apiGet, apiBase } from "../lib/api";
 import type { Artifact } from "@deeppairing/shared";
 import { useArtifactStore, resolveToLiveId, artifactStoreGeneration, markBackfilled, isBackfilled } from "../stores/artifact";
+import { useSiblingSyncStore } from "../lib/siblingSync";
 import { usePreferencesStore, SIDEBAR_WIDTHS } from "../stores/preferences";
 import { useReplayStore } from "../stores/replay";
 import { useConnectionStore } from "../stores/connection";
@@ -1208,6 +1209,7 @@ export function MultiAgentSync() {
       fullyLoadedSessions.current.clear();
       fetchedCount.current.clear();
       lastAttemptRef.current.clear();
+      useSiblingSyncStore.setState({ settled: false }); // #467 review — re-merging
     }
     for (const session of sessionsRef.current) {
       // E7 review — bail BEFORE stamping the backoff on an abort.
@@ -1254,6 +1256,12 @@ export function MultiAgentSync() {
       } finally {
         inFlight.current.delete(flightKey);
       }
+    }
+    // #467 review — a full pass over a KNOWN session list (the 10s poll has
+    // published at least one session) means the siblings are merged.
+    const stillFetching = [...inFlight.current].some((k) => k.startsWith(`${generation}:`));
+    if (sessionsRef.current.length > 0 && !stillFetching && artifactStoreGeneration() === generation && !useSiblingSyncStore.getState().settled) {
+      useSiblingSyncStore.setState({ settled: true });
     }
   };
 
