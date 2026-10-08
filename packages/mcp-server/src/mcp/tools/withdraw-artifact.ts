@@ -13,7 +13,7 @@ import type { ToolContext, ToolResult } from "./types.js";
  * the successor thread).
  *
  * THE LOAD-BEARING GUARD: a withdrawal must NEVER be a way to DODGE feedback. If
- * the draft carries unanswered human questions (the persisted tail-walk,
+ * the draft carries unanswered human questions (the persisted per-question rule,
  * collectUnansweredQuestions) OR undrained human comments (acknowledged=false —
  * the agent hasn't even seen them via check_feedback yet), the withdrawal is
  * REJECTED with an error telling the agent to answer first. Only once the draft

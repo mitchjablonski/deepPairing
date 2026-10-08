@@ -100,6 +100,34 @@ jobs:
       - name: Lint (locked eslint is the tightest constraint at this floor)
         run: pnpm lint
 
+  # #461 — exercise the actual SHIPPED plugin bundle (committed in
+  # claude-plugin/server/, no `pnpm build`, no dist/ fallback — exactly what
+  # a marketplace install runs) on both maintained Node LTS lines. Bounded
+  # matrix on purpose: one OS (ubuntu; hook-smoke above already covers
+  # Windows, and the #437 crash this test guards against reproduced on
+  # Linux and Windows alike) x the two maintained majors, not every patch.
+  plugin-boot:
+    name: Plugin bundle boot (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Plugin bundle boot (shipped claude-plugin/, no dist fallback)
+        run: pnpm --filter @deeppairing/mcp-server exec vitest run src/__tests__/plugin-bundle-boot.test.ts
+
   e2e:
     runs-on: ubuntu-latest
     steps:

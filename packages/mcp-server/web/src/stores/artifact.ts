@@ -25,6 +25,28 @@ let localCommentSeq = 0;
  * imports THIS module — the cycle the codebase deliberately avoids).
  */
 let storeGeneration = 0;
+/** #457 D6 — read-only view of the generation for App-level syncers that
+ *  outlive a reset (MultiAgentSync): a bump means everything merged into the
+ *  store was discarded and must be fetched again. */
+export function artifactStoreGeneration(): number {
+  return storeGeneration;
+}
+
+/**
+ * #458 review — artifacts merged as a sibling session's HISTORY (MultiAgentSync's
+ * first backfill of a session, or its re-merge after a reset). They are not
+ * live arrivals: the arrival region must not glow or announce them, and the
+ * Next-up bar must not announce `next` moving onto one. A sibling's genuinely
+ * NEW artifact (a later re-poll) is not marked and counts as an arrival.
+ * Module state, not store state (no Set in Zustand); cleared on reset().
+ */
+const backfilledIds = new Set<string>();
+export function markBackfilled(ids: string[]): void {
+  for (const id of ids) backfilledIds.add(id);
+}
+export function isBackfilled(id: string): boolean {
+  return backfilledIds.has(id);
+}
 /** #407 — the tab's session binding RIGHT NOW. Captured at a call's start so a
  *  request whose routing falls back to the tab (no owner) still goes to the
  *  session it was started in, even if an await inside lets a switch land. */
@@ -260,18 +282,14 @@ async function toastApiError(action: string, err: unknown): Promise<void> {
   // a reload to refetch the new hash. Pre-BB10 this came through as a
   // generic "request failed" toast and the user had no idea what to do.
   if (apiErr?.code === "project_hash_mismatch") {
-    useToastStore.getState().push({
-      kind: "error",
-      title: "Tab is bound to a stale daemon",
-      body: "This project's daemon was replaced. Reload the page to re-bind.",
-      ttl: 0,
-      action: {
-        label: "Reload",
-        onClick: () => {
-          if (typeof window !== "undefined") window.location.reload();
-        },
-      },
-    });
+    // #430 PR 2 review — the Next-up bar's STALE DAEMON prefix reads this flag
+    // (cleared on the next successful connect). Lazy import: the connection
+    // store imports this module.
+    void import("./connection").then(({ useConnectionStore }) => useConnectionStore.setState({ staleDaemon: true }));
+    // #430 PR 5 — the one shared stale-daemon toast (wording + dedup with the
+    // WS path live in lib/daemon-restart).
+    const { pushStaleDaemonToast } = await import("../lib/daemon-restart");
+    pushStaleDaemonToast();
     return;
   }
   // #182 — a 401/403 auth failure can mean the daemon restarted UNDER this tab:
@@ -1338,6 +1356,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     // #393 review (Sol finding 2) — crossing this boundary invalidates any
     // in-flight optimistic reconciliation. See `storeGeneration` above.
     storeGeneration++;
+    backfilledIds.clear(); // #458 review — the merged history went with the store
     rollbackChains = {}; // #422 — nothing from before the boundary may roll back into it
     set({ artifacts: [], comments: {}, selectedArtifactId: null, unreadIds: [], acknowledgedDecisions: {}, resolvedDecisions: {}, requests: [] });
   },

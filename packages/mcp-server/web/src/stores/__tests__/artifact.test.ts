@@ -342,7 +342,8 @@ describe("artifact store — mutation error surfacing (U3)", () => {
     expect(toasts[0]!.kind).toBe("error");
     expect(toasts[0]!.title).toMatch(/stale daemon/i);
     expect(toasts[0]!.ttl).toBe(0); // sticky
-    expect(toasts[0]!.action?.label).toBe("Reload");
+    // #430 PR 5 — the one shared stale-daemon toast's wording (lib/daemon-restart).
+    expect(toasts[0]!.action?.label).toBe("Reload to re-bind");
   });
 
   it("network-error rejection toasts the doctor hint", async () => {

@@ -869,7 +869,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
         // an "approve this pattern" prompt would dilute the meaning.
         {
           name: "seed",
-          description: "Encode a stance you want the cross-project ledger to remember. The agent calls /api/philosophy/seed with what you provide; future preflights catch paraphrases of this stance across every deepPairing project on this machine.",
+          description: "Encode a stance you want the cross-project ledger to remember. The agent calls /api/philosophy/seed with what you provide; future proposals in any deepPairing project on this machine that reuse its words (plus a short synonym list) get an advisory nudge, never a block. To block it in a project, reject it there.",
           arguments: [
             {
               name: "concept",
@@ -878,7 +878,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
             },
             {
               name: "reason",
-              description: "Why you're rejecting it. One sentence is fine — the agent surfaces this in future preflight blocks so the future-you remembers the WHY.",
+              description: "Why you're rejecting it. One sentence is fine — the agent surfaces this in future advisory preflight nudges so the future-you remembers the WHY.",
               required: false,
             },
           ],
@@ -934,7 +934,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
                 (reason ? `, "reason": ${JSON.stringify(reason)}` : ``) +
                 `} so the cross-project ledger records the stance. ` +
                 reasonClause +
-                ` After the POST succeeds, confirm to the user: "Seeded — future preflights across every deepPairing project will catch paraphrases of this." ` +
+                ` After the POST succeeds, confirm to the user: "Seeded — proposals in your deepPairing projects that reuse these words (matched on words, not meaning) will get an advisory nudge; it won't block. Reject it in a project to block it there." ` +
                 `If the POST fails (validation error or daemon unreachable), surface the exact error rather than retrying silently.`,
             },
           },

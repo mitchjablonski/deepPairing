@@ -6,7 +6,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { FileStore } from "../store/file-store.js";
 import { withGlobalStore, type GlobalStoreFixture } from "./global-store-fixture.js";
-import { runDemoScript, DEFAULT_REJECTION_CONCEPT, DEFAULT_REPROPOSAL } from "../demo-script.js";
+import { runDemoScript, demoNarrationLines, DEFAULT_REJECTION_CONCEPT, DEFAULT_REPROPOSAL } from "../demo-script.js";
+import { runPreflight } from "../mcp/preflight-validator.js";
 import { conceptMatchesProposal } from "../mcp/preflight-validator.js";
 
 type BroadcastEvent = { sessionId: string; event: any };
@@ -174,5 +175,26 @@ describe("runDemoScript", () => {
       makeArtifactId: () => "art_demo_fixed",
     });
     expect(result.artifactId).toBe("art_demo_fixed");
+  });
+});
+
+// #432 — the CLI narration must quote the exact string the demo broadcasts,
+// and that string must be one the REAL gate refuses (no dramatized paraphrase).
+describe("demo narration (#432)", () => {
+  it("quotes DEFAULT_REPROPOSAL and DEFAULT_REJECTION_CONCEPT verbatim", () => {
+    const text = demoNarrationLines().map((l) => l.text).join("\n");
+    expect(text).toContain(`"${DEFAULT_REPROPOSAL}"`);
+    expect(text).toContain(`"${DEFAULT_REJECTION_CONCEPT}"`);
+    expect(text).not.toMatch(/paraphrase|every deepPairing project/i);
+  });
+
+  it("the narrated re-proposal is refused by the real preflight", () => {
+    const r = runPreflight({
+      toolName: "present_options",
+      proposalStrings: [DEFAULT_REPROPOSAL],
+      rejectedApproaches: [{ description: DEFAULT_REJECTION_CONCEPT, concept: DEFAULT_REJECTION_CONCEPT }],
+      teamPreferences: [],
+    });
+    expect(r.blocked).toBe(true);
   });
 });

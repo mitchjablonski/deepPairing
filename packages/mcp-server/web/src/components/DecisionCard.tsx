@@ -21,6 +21,7 @@ import { DecisionWorkbench, isGrainComment } from "./decision/DecisionWorkbench"
 import { useChainComments } from "../hooks/useChainComments";
 import type { InitialResolved } from "./decision/types";
 import { SpeechIcon } from "./icons/ArtifactIcons";
+import { useOfflineReason } from "../hooks/useOfflineReason";
 
 interface DecisionCardProps {
   event: DecisionRequestEvent;
@@ -86,6 +87,8 @@ type DecisionPhase =
   | { kind: "sentBack" };
 
 export function DecisionCard({ event, decisionId, artifactId, stakes, initialResolved, sessionId, writeLocked = false, retractReason, onResolved }: DecisionCardProps) {
+  // #465 (state G rule 1) — Select / send-back / reject disable while disconnected.
+  const offline = useOfflineReason();
   const resolveDecision = useArtifactStore((s) => s.resolveDecision);
   const submitComment = useArtifactStore((s) => s.submitComment);
   const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
@@ -213,6 +216,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
     // the armed timer alive to commit the ABANDONED option. Idempotent on
     // the expiry path (which already cleared it).
     setArmedSelect(null);
+    if (offline) return; // #465 — the keyboard path too, not only the button
     // F12 — no resolving decisions against a replayed frame (the write
     // would land in the historical session's store via owner routing).
     if (useReplayStore.getState().active) return;
@@ -675,6 +679,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
               focused={idx === focusedIndex}
               submitting={submitting}
               locked={writeLocked}
+              offlineReason={offline}
               artifactId={artifactId}
               onSelect={handleSelect}
               onFocus={setFocusedIndex}
@@ -769,7 +774,8 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
 
       {/* X11 — escape-hatch footer (send-back + reasoning composers, tertiary
           affordance row). */}
-      <DecisionFooter {...footerProps} />
+      <DecisionFooter
+            offlineReason={offline} {...footerProps} />
 
       {/* #174 — the focused discuss workbench. Reuses the same footerProps
           bundle for its decision-level actions, and nests #173's diagram view

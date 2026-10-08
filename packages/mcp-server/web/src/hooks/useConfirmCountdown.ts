@@ -2,9 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
  * #175 — the confirm-countdown affordance, factored out so the changeset's
- * derived approve uses the SAME "Approving in 3…2…1 · press to comment · Esc to
- * hold" pattern the single-artifact footer arms (ArtifactStatusActions'
- * countdown). It never HARD-commits: arming leaves a visible window to add an
+ * derived approve uses the SAME pattern the single-artifact footer arms
+ * (ArtifactStatusActions' countdown). #430 PR 5 — both render the one shared
+ * ApproveCountdown ("Will auto-approve in Ns · Esc to hold" + Hold). It never HARD-commits: arming leaves a visible window to add an
  * approval comment or cancel, then proceeds on its own.
  *
  * Semantics (mirrors ArtifactStatusActions):

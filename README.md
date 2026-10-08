@@ -1,53 +1,82 @@
 # deepPairing
 
-**Block Claude Code from re-proposing an approach you rejected — it refuses and
-quotes your reason back — then pair on findings, options, and plans in a rich
-local review UI.**
+**Hand Claude Code the implementation without handing it the decisions that
+matter. It shows you the evidence, you make the call in a local review UI, and
+what you turn down is checked against what the agent proposes next in that
+repo.**
 
-Reject an approach with your reason and deepPairing turns it into a gate: the
-next time the agent reaches for that concept — even reworded — the tool call is
-*refused* before the edit lands, and it tells you why, in your words. Around
-that gate is the pairing surface it exists to protect: before it writes code,
-Claude Code shows you what it found, the options it weighed, and the plan it'll
-follow, as structured artifacts you approve or redirect in a local UI instead of
-a wall of terminal text.
+**Who it's for:** engineers who let Claude Code write most of the code but want
+to own the architecture — the calls that are expensive to reverse.
+
+**The expensive problem:** an agent working alone quietly makes the
+load-bearing choices (a global singleton for config, a new queue, a schema
+change). You meet them in a 500-line diff, after the code is built on top of
+them. Or you reject an idea on Tuesday, and on Thursday a fresh session
+proposes it again.
+
+**What you get instead:** before it builds, Claude Code shows you what it found
+(with file:line evidence), the options it weighed, and the plan. You comment,
+pick, or reject in the companion UI. When you reject an approach with a reason,
+this project's gate checks later proposals against it and refuses a match,
+quoting your reason back. The run ends with a debrief of what changed and what
+still needs your eyes.
+
+**What the gate does, and what it doesn't** (the details are in
+[Your taste compounds](#your-taste-compounds)):
+
+- **In-protocol (`present_*` tools) — refused.** Reject *"global mutable state
+  for config"*, and *"keep config in global mutable states"* is refused before
+  the artifact is recorded.
+- **Matching is on words, not meaning.** It uses stemmed words plus a small,
+  hand-audited synonym list (*delete*↔*remove*, *directory*↔*folder*). *"A
+  module-level mutable settings object"* shares too few words with that
+  concept, so it gets through. False positives happen too: *"remove global
+  mutable state from config"* is refused, because it contains every word of
+  the concept. One click on "Retire this stance" clears it.
+- **Direct `Edit`/`Write`/`MultiEdit` — you're asked, not refused.** A `PreToolUse`
+  hook pauses a matching edit with a permission prompt, and you decide. It does
+  not see `Bash` or notebook edits, and if it breaks, it lets the edit
+  through.
+- **Other projects — a nudge only.** It's off until you turn on cross-project
+  publishing, and it never blocks.
 
 *MIT · no account · no telemetry · 3,000+ tests · everything stays on your disk.*
 
 ![The enforcement moment — the agent re-proposes a concept you rejected ("global mutable state for config"), and a "Blocked by your taste" card stops it before the edit lands, showing the reason you gave and a one-click override.](docs/assets/enforcement.png)
 
-**Who it's for:** engineers who don't trust an autonomous agent with the
-architecture, and want to stay in the loop at the *decision* level — not the
-keystroke level, and not a 500-line diff after the fact.
+**Poor fit:** one-line fixes and throwaway scripts (the review is heavier than
+the change). Fully unattended runs where nobody will look at the UI. Teams that
+need a hard policy engine: the gate is a local word matcher, not a security
+boundary. Editors other than Claude Code.
 
-### See it in ~90 seconds
+### Get started
+
+Install the plugin inside Claude Code. It needs no clone and no build: the
+plugin ships a prebuilt server. Node 22 or 24 (current LTS) is recommended and
+what CI tests; Node 20.11+ still works but is deprecated — Node 20 is EOL and
+support is planned for removal no earlier than v0.2.0 (not before January
+2027; see [INSTALL.md](INSTALL.md#nodejs-support-policy)).
 
 ```bash
-git clone https://github.com/mitchjablonski/deepPairing.git
-cd deepPairing && pnpm install && pnpm build
-node packages/mcp-server/dist/cli/init.js demo
+/plugin marketplace add https://github.com/mitchjablonski/deepPairing
+/plugin install deeppairing@deeppairing
 ```
 
-Fires the hero flow against a real companion UI (auto-opens your browser), so
-you feel the whole loop before installing anything — the review surface, the
-read-only explainer walk-through and end-of-run debrief that make the change
-comprehensible, and the rejection gate that blocks a re-proposed approach.
-Building from source (as above) needs Node 20.19+, 22.13+, or 24+ — the
-locked toolchain's floor (Vite/rolldown *and* eslint, see
-[INSTALL.md](INSTALL.md) for the exact range), not the 20.11+ the prebuilt
-plugin runs on — plus pnpm 10+. CI runs Node 22. (The ~90s assumes a
-warm pnpm store; a first-ever install adds ~60-90s of dependency downloads —
-see [the FAQ](docs/faq.md#whats-the-install-size-cold-clone-time).) Then, to use
-it in your own project: **[install in Claude Code ↓](#install-in-claude-code)**.
+Then open Claude Code in your own project and ask for real work, for example
+*"Analyze the auth module and propose options."* The first steps are in
+**[Your first review ↓](#your-first-review)**. To look around before
+installing, the **[seeded demo ↓](#watch-the-seeded-demo-source-build)** runs
+without Claude Code but needs a source build.
 
 ## What you get
 
-- **The rejection gate — the thing nothing else does.** Reject an approach with
-  a reason and a pre-flight gate stops the agent from re-proposing that concept
-  here, before the edit lands: the tool call is refused and your reason is
-  quoted back. A `PreToolUse` hook catches a direct edit that tries to skip the
-  protocol. And once you enable cross-project publishing, the same stance is
-  flagged — advisory, never a block — on your other projects too.
+- **The rejection gate.** Reject an approach with a reason, and in this
+  project a `present_*` call that matches it is refused, with your reason
+  quoted back. A direct `Edit`/`Write` that matches is paused for your approval
+  by a `PreToolUse` hook rather than refused. Once you enable cross-project
+  publishing, your other projects get an advisory nudge about the same stance,
+  never a block. Matching is on words and a short synonym list, not meaning
+  ([limits](#your-taste-compounds)).
 - **Decision cards.** Options arrive as cards you pick in the UI — pros, cons,
   effort, and risk laid out side by side. Hard-to-reverse calls are flagged
   "high stakes" so you see at a glance which choices are load-bearing.
@@ -160,25 +189,49 @@ separate orchestrator) and serves the UI on a deterministic per-project port in
 
 So you never have to make the same call twice:
 
-- **You're not silently re-proposed past.** In the project where you rejected a
-  concept, re-proposing it is **stopped**: the `present_*` tool refuses
-  (`REJECTED_APPROACH_BLOCKED`) and a **PreToolUse hook** catches a *direct*
-  edit that tries to skip the protocol. The match is on the concept's *words*:
-  reject *"global mutable state for config"* and *"add a global mutable state
-  singleton to hold config"* gets caught. Turn on **cross-project publishing**
-  (off by default — see below) and reaching for that same concept **in another
-  project** is **flagged, not stopped** — an advisory nudge ("you avoided this
-  in `<project>` — still want it here?") that you can promote to a hard block by
-  rejecting it locally. The match is token-based, widened by a small **curated
-  synonym layer** (e.g. *delete*↔*remove*, *directory*↔*folder* — with
-  authentication kept deliberately distinct from authorization) so common
-  rewordings are caught too. It's a hand-audited starter set, not full semantic
-  understanding: an un-listed synonym that shares no words won't trip it *yet* —
-  so name the concept for what it is and it generalizes across the instances
-  that reuse it. **False positives are one click away:**
-  "Retire this stance" in the block card deletes it from this project's stances
-  and lets the proposal through. (Blocks from a committed **team rule** point you to
-  `.deeppairing/team.json` instead.)
+- **You're not silently re-proposed past.** Four surfaces, four different
+  guarantees:
+  - **`present_*` tools, this project: refused.** A matching proposal gets a
+    `REJECTED_APPROACH_BLOCKED` error, the artifact is not recorded, and your
+    reason is quoted back. `revise_artifact` runs the same check. For
+    `present_debrief` and an external-PR `present_changeset`, a match is
+    reported as advice instead, because those describe work that already
+    exists.
+  - **Direct `Edit`/`Write`/`MultiEdit`, this project: asked.** The
+    `PreToolUse` hook runs the same matcher on the new text and file path,
+    and a match becomes a Claude Code permission prompt (`ask`). It never
+    returns `deny`, so you can allow the edit. It doesn't see `Bash` or
+    `NotebookEdit`. It only reads this project's stances, and it fails open:
+    if it errors, or the stance file can't be parsed, the edit proceeds.
+  - **Other projects: a nudge, never a block.** Turn on **cross-project
+    publishing** (off by default; see below) and a matching proposal elsewhere
+    gets an advisory note ("you avoided this in `<project>` — still want it
+    here?"). Reject it there as well to make it block there. If the
+    cross-project ledger can't be read, the note is skipped.
+  - **What counts as a match.** Every word of the concept (after light
+    stemming, so *state*/*states* match) must appear in the proposal, or the
+    rejected phrase itself must. A small, hand-audited **synonym list** widens
+    that: *delete*↔*remove*, *directory*↔*folder*, *cache*↔*memoize*,
+    *env*↔*environment*, *authentication*↔*login*↔*signin*, and
+    *authorization*↔*authz*. Authentication and authorization are kept
+    apart on purpose. That's the whole list. It is not semantic understanding.
+    Reject *"global mutable state for config"*, and *"keep config in global
+    mutable states"* is caught, while *"a module-level mutable settings
+    object"* is not. A partial overlap, such as *"global state for config"*,
+    goes through, with a near-miss note in the trace. So name the concept in
+    the words the agent will reuse. Word matching needs a named concept: if
+    you reject a finding, plan, or spec without typing one, the stance is
+    just its title, and only that phrase (word-bounded) is matched. None of
+    the rewordings above would be caught.
+  - **False positives and overrides.** A proposal to *remove* global mutable
+    state from config is refused too, because it contains every word of the
+    concept. **"Retire this stance"** on the block card deletes the stance
+    from this project and lets the proposal through. (Blocks from a committed
+    **team rule** point you to `.deeppairing/team.json` instead.) Tests:
+    [preflight-validator](packages/mcp-server/src/mcp/__tests__/preflight-validator.test.ts),
+    [paraphrase-alias](packages/mcp-server/src/mcp/__tests__/paraphrase-alias.test.ts),
+    [preflight-hook-core](packages/mcp-server/src/cli/__tests__/preflight-hook-core.test.ts),
+    [tool-helpers-global-advisory](packages/mcp-server/src/mcp/__tests__/tool-helpers-global-advisory.test.ts).
 - **A backstop on the paths you can't undo.** The same PreToolUse hook also
   watches your guardrail paths — migrations, CI config, infrastructure, `.env`
   and other secret files. If the agent starts writing to one of them without
@@ -210,13 +263,13 @@ So you never have to make the same call twice:
   the code is being written; a PR is just a surface to share what you paired on.
 - **Not an autonomous agent.** The Autonomy dial goes Full / Light / Minimal —
   and even Minimal stops at the architectural decisions.
-- **Not another cross-session memory feature.** Copilot/Cursor memory *recalls*
-  your preferences as passive context the model may or may not consult;
-  deepPairing turns a past decision into **a gate** — a hard block in the repo
-  where you rejected it, and (once you enable cross-project publishing) an
-  active nudge on your other projects, which you can promote to a hard block by
-  rejecting it locally. Still stronger than passive recall: we *surface* it
-  every time, you don't hope the model remembers.
+- **Not just a memory file.** Claude Code's CLAUDE.md and auto memory are
+  context the model is asked to follow, and its docs point you to a
+  `PreToolUse` hook when you need a hard stop
+  ([memory docs](https://code.claude.com/docs/en/memory), checked 2026-09-27).
+  deepPairing ties the rejection to the decision you made in the review UI and
+  checks every later proposal in that repo against it. The check is a word
+  matcher, so it's a strong default, not a guarantee.
 - **Not a skin over MCP elicitation.** The async review loop is standard
   protocol now — server-initiated requests went non-blocking in the
   [2026-07-28 spec](https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/)
@@ -233,9 +286,8 @@ So you never have to make the same call twice:
   cross-file comments and suggested edits the agent has to answer, the decision
   workbench with per-part comments and version carryover, region-anchored
   diagram comments, and the debrief/explainer comprehension pair with an
-  answer-back question loop. It's the only tool with a structured, commentable
-  understanding artifact anchored to a live agent session with an answer-back
-  loop. The review surface is the product; the loop is plumbing.
+  answer-back question loop. The review surface is the product; the loop is
+  plumbing.
 
 ## Beyond Plan Mode
 
@@ -246,9 +298,11 @@ makes the plan a *thing you work*: it lands in the companion UI as a checklist
 you comment on line by line, pick between options on, and reject approaches in —
 and the same review surface extends past the plan to the findings, the
 decisions, and the diffs. Your calls don't evaporate when the session ends:
-reject an approach with a reason and it's remembered per-repo, and an enforced
-in-loop gate stops the agent from re-attempting what you already turned down —
-before the edit lands, not in the diff after. Plan Mode gets you one gate at the
+reject an approach with a reason and it's remembered per-repo. A matching
+`present_*` proposal is refused, and a matching direct edit is paused for your
+approval, before the change lands rather than in the diff after. (Plan Mode in
+other tools has grown too: Cursor saves plans as editable Markdown files —
+[docs](https://cursor.com/docs/agent/plan-mode), checked 2026-09-27.) Plan Mode gets you one gate at the
 start; deepPairing keeps you in the loop at every decision that matters and
 remembers where you stood.
 
@@ -257,37 +311,136 @@ remembers where you stood.
 | Where the plan lives           | Terminal text      | Commentable artifact in a local UI   |
 | You respond by                 | Approving/retyping | Inline comments, option picks, "why" |
 | Covers                         | The initial plan   | Findings, options, plans, diffs      |
-| Remembers your calls next time | No                 | Yes — per-repo, with a rejection gate |
+| Remembers your calls next time | No                 | Per-repo, with a word-matched gate   |
 
 ## Install in Claude Code
 
-Three ways in, fastest first — all give you the same MCP tools + companion UI.
-Full setup details, the SSH note, and the `init`-vs-plugin comparison live in
-**[INSTALL.md](INSTALL.md)**.
+**Supported path: the prebuilt plugin.** Inside Claude Code:
 
 ```bash
-# 1. Marketplace (recommended) — inside Claude Code, no build step. Ships the
-#    rejection-gate + checkpoint hooks, so the enforcement layer is on:
 /plugin marketplace add https://github.com/mitchjablonski/deepPairing
 /plugin install deeppairing@deeppairing
+```
 
-# 2. Local plugin — same, from a clone (slash commands + skill + hooks):
-claude --plugin-dir ./claude-plugin
+- **What you need:** Claude Code and Node on your `PATH` — 22 or 24
+  recommended (what CI tests), 20.11+ still works but is deprecated
+  (Node 20 is EOL; support planned for removal no earlier than v0.2.0,
+  not before January 2027 — see
+  [INSTALL.md](INSTALL.md#nodejs-support-policy)). You don't need
+  pnpm, a clone or a build.
+- **What you get:** the plugin runs the server bundle committed in
+  `claude-plugin/server/`. It also installs the MCP tools, the slash commands
+  (`/deeppairing:start`, `:review`, `:stance`, `:share`, `:review-pr`,
+  `:post-pr`) and
+  the rejection-gate and checkpoint hooks.
+- **What it is not:** there is no npm package. deepPairing is distributed only
+  as this plugin and this repository.
 
-# 3. From source — writes .mcp.json + hooks into this project (no plugin):
+To load the same plugin from a clone for one session, use
+`claude --plugin-dir ./claude-plugin`. That also needs no build: the committed
+bundle is used when `packages/mcp-server/dist` is absent. Setup details, the SSH
+note and the `init`-vs-plugin comparison are in **[INSTALL.md](INSTALL.md)**.
+
+### Your first review
+
+Each step names where it happens and what to do next.
+
+1. **Terminal: start Claude Code in your project.** When the plugin's MCP
+   server starts, it starts a local daemon for the project. On the daemon's
+   first start it opens the companion in your browser. The companion runs on a per-project port in `3847-3974`. If no
+   tab opens, run `/deeppairing:start` and Claude gives you the URL. The daemon
+   records its port in `.deeppairing/daemon.json`.
+2. **Companion: wait for the first artifact.** Until Claude presents something,
+   the companion shows *Waiting for Claude*. **Next:** go back to the terminal
+   and ask for real work, such as an analysis, a set of options or a plan.
+3. **Companion: review.** Findings, options, plans and changes arrive as
+   artifacts. **Next:** comment on a line, pick an option, ask "why", approve,
+   or reject with a reason. A rejection becomes a gate in this project.
+4. **Terminal: Claude picks up your feedback.** Claude doesn't block while you
+   review. It reads your comments and decisions with `check_feedback`, which it
+   calls after presenting and whenever it next pauses. If you answered while
+   it was busy, your feedback waits in the session. **Next:** if Claude
+   hasn't responded, tell it in the terminal to *"check feedback"*.
+
+**Where each part goes.**
+
+- **Terminal chat:** direction and quick questions.
+- **Companion:** anything tied to an artifact, such as line comments, option
+  picks and verdicts.
+- **Late feedback:** you don't need to re-type it in the terminal. It stays
+  queued in the session until Claude next checks.
+
+**If something is stuck,** run the checks in
+[docs/troubleshooting.md](docs/troubleshooting.md). It covers the companion
+staying on *Waiting for Claude*, a daemon that won't start, and MCP startup
+timeouts on WSL `/mnt/c`.
+
+### Watch the seeded demo (source build)
+
+The demo drives a scripted session against a real companion. It shows the
+review surface, the explainer walk-through, the end-of-run debrief, and the
+rejection gate blocking a re-proposed approach. It doesn't need Claude Code,
+but it is a **developer path**: it needs a clone and a build.
+
+```bash
+git clone https://github.com/mitchjablonski/deepPairing.git
+cd deepPairing && pnpm install && pnpm build
+node packages/mcp-server/dist/cli/init.js demo
+```
+
+- **What you need:** Node 20.19+, 22.13+ or 24+, and pnpm 10+. This is stricter
+  than the plugin's runtime floor because the locked toolchain requires it; see
+  [INSTALL.md](INSTALL.md).
+- **Demo data:** it runs in a throwaway `demo_…` session. It never writes to
+  your project's preferences or to the cross-project ledger.
+
+### From source (developer path)
+
+Use this path to work on deepPairing itself or to run it without the plugin.
+`init` writes `.mcp.json` and the hooks into the current project:
+
+```bash
 pnpm install && pnpm build
 node packages/mcp-server/dist/cli/init.js init
 ```
 
-Then just work normally — *"Let's analyze the auth module"* — and Claude routes
-findings, decisions, plans, and changes through the companion UI with structured
-evidence. You comment, pick, ask "why", request revisions; every rejection
-becomes a gate in this project, and — once you enable cross-project publishing —
-joins the ledger your other projects read.
+### How long it takes
 
-**VS Code extension — experimental preview.** Claude Code plus the browser
-companion is the supported workflow. The extension in
-`packages/vscode-extension/` is an experimental preview. There is no parity
+**Indicative only.** Once the plugin is installed, its server, the daemon and
+the companion are ready in about half a second on Linux and in under 2 s on
+Windows. Times vary by machine: an independent re-run on the same kind of setup
+was 20–40% slower.
+
+The ranges below are exactly what three runs measured on 2026-09-27, using
+throwaway `HOME` and project directories. Your times depend on your network,
+disk and machine.
+
+| Step | Linux (WSL2 ext4, Node 20.20) | Windows (Node 24.18, project on a `\\wsl.localhost` share) |
+|---|---|---|
+| Fetch the repo (what `/plugin marketplace add` downloads) | 1.1–1.4 s | not measured |
+| Plugin server and daemon up, MCP `initialize` answered | 406–428 ms | 1047–1113 ms |
+| Companion page served | 467–489 ms | 1234–1307 ms |
+| First artifact visible in the companion | 487–514 ms | 1349–1482 ms |
+| A companion comment reaches Claude's `check_feedback` | 509–538 ms | 1644–1741 ms |
+| Source build, cold pnpm store: clone, install, build, demo | 1.4 + 6.0 + 8.3 + 1.9 ≈ 18 s | not measured |
+| Source build, warm pnpm store | 1.3 + 2.1 + 8.3 + 1.9 ≈ 14 s | not measured |
+
+How these were measured:
+
+- **Plugin rows:** the times are from launching the plugin's `server.mjs` with
+  plain `node`. A scripted MCP client stood in for Claude Code and an HTTP
+  client stood in for the browser. A separate headless-browser check confirmed
+  that the companion renders the artifact.
+- **What they leave out:** installing the plugin inside Claude Code, Claude
+  Code's own start-up, and the model's thinking time.
+- **Cold install:** it downloaded 506 packages on a fast connection. A slow
+  network adds to it.
+- **WSL `/mnt/c`:** a first start there is much slower; see
+  [troubleshooting](docs/troubleshooting.md#claude-codes-mcp-startup-times-out-on-mntc).
+
+**VS Code extension (experimental preview).** The supported workflow is Claude
+Code plus the browser companion. The extension in
+`packages/vscode-extension/` is an experimental preview, with no parity
 commitment and no date for one. Its known limitations are listed in
 [packages/vscode-extension/README.md](packages/vscode-extension/README.md).
 
@@ -313,7 +466,7 @@ research brief is [docs/research-brief.md](docs/research-brief.md) (historical).
   (React + Vite + Zustand).
 - **`packages/shared/`** — Zod schemas + fixtures both server and UI import.
 - **`claude-plugin/`** — the Claude Code plugin: `.mcp.json`, slash commands
-  (`/deeppairing:start`, `:review`, `:stance`, `:review-pr`, `:post-pr`), the
+  (`/deeppairing:start`, `:review`, `:stance`, `:share`, `:review-pr`, `:post-pr`), the
   `pairing-protocol` skill, and the rejection-gate + checkpoint hooks.
 
 18 MCP tools: `present_findings`, `present_options`, `present_spec`,
@@ -350,14 +503,17 @@ review. See
 
 ## How it compares
 
-Cursor's canvases and Claude Code's auto-memory look similar on the surface, but
-neither turns a past decision into a *gate*: canvases are a presentation surface
-with no constraint on the tool call, and auto-memory is context the model is
-*encouraged* to consult, not a rule it's stopped by. deepPairing is the one
-where a decision you already made becomes a hard constraint the agent is refused
-by — and, once you enable cross-project publishing, an active flag on your other
-projects — and where the collaboration is the point, not a bolt-on. (More detail, including the
-honest limits of the concept match, in [docs/faq.md](docs/faq.md).)
+Planning, memory, and blocking each exist elsewhere already, as of 2026-09-27.
+Cursor's [Plan Mode](https://cursor.com/docs/agent/plan-mode) saves editable
+plans. Claude Code's [memory](https://code.claude.com/docs/en/memory) carries
+your instructions across sessions, and its
+[hooks](https://code.claude.com/docs/en/hooks-guide) can deterministically
+block a tool call. deepPairing doesn't claim any one of those alone. What it
+adds is the workflow that joins them: evidence you can comment on, then a
+decision you make on a card, then a review of the change, and a rejection that
+comes back as a checked stance the next time the agent reaches for the same
+thing. (The honest limits of the concept match are above and in
+[docs/faq.md](docs/faq.md).)
 
 ## Status
 

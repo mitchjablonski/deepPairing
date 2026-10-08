@@ -2,6 +2,7 @@ import { useId } from "react";
 import { useArtifactStore } from "../../stores/artifact";
 import { useChainComments } from "../../hooks/useChainComments";
 import { CommentThread } from "../CommentThread";
+import { unansweredQuestionIds } from "../../lib/unanswered";
 
 /**
  * #164 — one open question, rendered as its own bounded section.
@@ -46,8 +47,11 @@ export function OpenQuestionSection({
   // D8 review (carried verbatim from the old row) — the human's OWN unanswered
   // AskTrigger question must NOT stamp the section "answered"; only plain
   // comments / answered questions count as an answer.
+  // #430 PR 1c — "unanswered" is the shared thread-aware rule, over the whole
+  // chain so an agent's threaded reply counts.
+  const openIds = unansweredQuestionIds(comments);
   const answers = questionComments.filter(
-    (c) => !(c.intent === "question" && !c.answeredByCommentId),
+    (c) => !(c.intent === "question" && openIds.has(c.id)),
   );
   const answered = answers.length > 0;
 
@@ -56,11 +60,7 @@ export function OpenQuestionSection({
   // stops counting as waiting-on-the-agent. The thread bubble already shows
   // the "delivered · awaiting agent" state; this is the way out of it.
   const ownUnresolvedAsks = questionComments.filter(
-    (c) =>
-      c.author === "human" &&
-      c.intent === "question" &&
-      !c.answeredByCommentId &&
-      !c.humanResolvedAt,
+    (c) => c.author === "human" && c.intent === "question" && openIds.has(c.id),
   );
 
   const labelId = useId();

@@ -69,6 +69,9 @@ import { shouldAutoOpenBrowser } from "./auto-open.js";
 import { writeJsonAtomic } from "../store/atomic-write.js";
 import { summarizeProject } from "../store/context-bank.js";
 import { isSessionReviewConflictError } from "../store/session-records.js";
+// Static on purpose — see the note in client.ts (a dynamic import of
+// lifecycle.ts broke the plugin bundle's module initialisation order).
+import { probeDaemonIdentity } from "./lifecycle.js";
 
 /**
  * Cross-platform "open URL in default browser" without pulling in an npm
@@ -541,7 +544,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   }
 
   // #192 (serving H1) — enumerate unanswered human questions across all of this
-  // daemon's sessions, using the SAME tail-walk predicate every UI surface and
+  // daemon's sessions, using the SAME per-question predicate every UI surface and
   // the first-call hint / check_feedback carryover use (collectUnansweredQuestions
   // — the queue's single definition). This is the INVERSE of pendingCount: those
   // are the AGENT's turn (a question the human asked, still owed an answer). The
@@ -613,7 +616,6 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   });
 
   async function sweepProjects(): Promise<unknown> {
-    const { probeDaemonIdentity } = await import("./lifecycle.js");
     const probes: Array<Promise<{ port: number; identity: any | null }>> = [];
     for (let port = BASE_PORT; port < BASE_PORT + PORT_SPAN; port++) {
       probes.push(probeDaemonIdentity(port, 300).then((identity) => ({ port, identity })));

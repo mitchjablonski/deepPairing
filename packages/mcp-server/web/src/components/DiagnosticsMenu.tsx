@@ -1,10 +1,10 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useOverlayPresence } from "../stores/overlay";
-import { usePreflightBlockStore } from "../stores/preflightBlocks";
+import { usePreflightBlockStore, unreadBlockCount } from "../stores/preflightBlocks";
 import { useHookStatusStore } from "../stores/hookStatus";
 import { AutonomySlider } from "./AutonomySlider";
 import { PreflightBlockLog } from "./PreflightBlockLog";
-import { HookStatus } from "./HookStatus";
+import { HookStatus, fireKindLabel } from "./HookStatus";
 import { CompoundingBadge } from "./CompoundingBadge";
 
 /**
@@ -38,12 +38,15 @@ export function DiagnosticsMenu({ onOpenLedger }: { onOpenLedger: () => void }) 
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const panelId = useId();
 
-  // The persistent attention signal (Fix 1): a gate block recorded this session,
-  // or the most-recent hook fire was a nag (exitCode 2) — the same "latest fire
-  // is a nag" rule HookStatus's own dot uses. Primitive selectors so the trigger
+  // The persistent attention signal (Fix 1). #430 PR 5 (design §2.7 items 5-6,
+  // §5): it keyed on TOTAL blocks (so it never cleared once one fired) and on
+  // `exitCode === 2` only (so an "ask" hook fire lit HookStatus's dot but not
+  // this one). It now keys on UNREAD blocks — the same `unreadBlockCount` the
+  // gate-log chip shows, cleared by opening that log — and on BOTH nag kinds via
+  // HookStatus's own `fireKindLabel`. Primitive selectors so the trigger
   // re-renders only when the signal actually flips.
-  const hasGateBlocks = usePreflightBlockStore((s) => s.blocks.length > 0);
-  const hasHookNag = useHookStatusStore((s) => s.fires[0]?.exitCode === 2);
+  const hasGateBlocks = usePreflightBlockStore((s) => unreadBlockCount(s) > 0);
+  const hasHookNag = useHookStatusStore((s) => (s.fires[0] ? fireKindLabel(s.fires[0]).tone === "nag" : false));
   const attention = hasGateBlocks || hasHookNag;
 
   // Outside-click + Esc dismissal (mirrors HookStatus / PreflightBlockLog). A
@@ -76,7 +79,7 @@ export function DiagnosticsMenu({ onOpenLedger }: { onOpenLedger: () => void }) 
         onClick={() => setOpen((v) => !v)}
         className="relative inline-flex items-center justify-center px-1.5 py-0.5 rounded text-text-muted hover:text-text-secondary hover:bg-surface-hover transition-colors"
         title={attention
-          ? "Diagnostics — attention needed (a gate block or hook nag fired). Autonomy, gate blocks, hooks, taste stats."
+          ? "Diagnostics — attention needed (an unread gate block, or the latest hook fire nagged or asked). Autonomy, gate blocks, hooks, taste stats."
           : "Diagnostics — autonomy, gate blocks, hooks, taste stats"}
         aria-label={attention ? "Diagnostics — attention needed" : "Open diagnostics menu"}
         aria-expanded={open}

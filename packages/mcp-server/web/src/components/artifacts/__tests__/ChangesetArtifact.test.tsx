@@ -207,6 +207,9 @@ describe("ChangesetArtifact — approve-all fast path + confirm-countdown (#175)
     await userEvent.click(screen.getByTitle("added auth/session.test.ts"));
     await userEvent.click(screen.getByTestId("looks-right"));
     expect(await screen.findByTestId("approve-countdown")).toBeInTheDocument();
+    // #430 PR 5 — THE shared approve countdown: same wording and Hold control
+    // as the single-artifact footer (ArtifactStatusActions.test pins the other).
+    expect(screen.getByTestId("approve-countdown")).toHaveTextContent(/^Will auto-approve in \ds · press to comment · Esc to holdHold$/);
   });
 
   it("the countdown auto-commits approve at zero, then advances to the next pending artifact", async () => {
@@ -1326,3 +1329,29 @@ describe("ChangesetArtifact — X2 large-PR split chip", () => {
     expect(screen.getByTestId("changeset-split-chip").tagName).not.toBe("BUTTON");
   });
 });
+
+describe("#452 review — a draft changeset can be dismissed from its own review area", () => {
+  // The file's convention: stub the store action (earlier tests replace it too).
+  it("two-step 'Dismiss — overcome by new information' marks the changeset obsolete (the old PendingBanner ✕ was the only path)", async () => {
+    seed(changeset());
+    const updateStatus = vi.fn().mockResolvedValue(undefined);
+    useArtifactStore.setState({ updateArtifactStatus: updateStatus });
+    render(<Harness id="art_cs" />);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss — overcome by new information" }));
+    expect(updateStatus).not.toHaveBeenCalled(); // the first click only arms
+    fireEvent.click(screen.getByRole("button", { name: /Dismiss\? \(can't be undone\)/ }));
+    await waitFor(() => expect(updateStatus).toHaveBeenCalledWith("art_cs", "obsolete", undefined));
+  });
+
+  it("'Keep it' backs out without dismissing", () => {
+    seed(changeset());
+    const updateStatus = vi.fn().mockResolvedValue(undefined);
+    useArtifactStore.setState({ updateArtifactStatus: updateStatus });
+    render(<Harness id="art_cs" />);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss — overcome by new information" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep it" }));
+    expect(screen.getByRole("button", { name: "Dismiss — overcome by new information" })).toBeInTheDocument();
+    expect(updateStatus).not.toHaveBeenCalled();
+  });
+});
+

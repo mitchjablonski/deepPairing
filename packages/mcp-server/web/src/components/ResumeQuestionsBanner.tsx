@@ -4,6 +4,7 @@ import { collectUnansweredQuestions } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
 import { noAgentLive } from "../lib/liveness";
+import { WAITING_TONE } from "../lib/waitingTone";
 
 // Re-exported so existing importers (App.tsx) keep their import site; the
 // definition now lives in lib/liveness so the store can share it without a
@@ -35,6 +36,15 @@ export function countResumeQuestions(comments: Record<string, Comment[]>): numbe
   return collectUnansweredQuestions(all).length;
 }
 
+/** The paste-able resume prompt for `n` open questions — shared with the
+ *  Next-up bar, which carries this banner's action when it absorbs it (#430 PR 3). */
+export function resumePromptFor(n: number): string {
+  return (
+    `Resume our deepPairing session: I left ${n} question${n === 1 ? "" : "s"} on your artifacts that ${n === 1 ? "is" : "are"} still unanswered. ` +
+    `Call check_feedback to see them (they arrive as an "unanswered questions carried over" block), then reply to each with answer_question so the answer links to my question in the companion UI.`
+  );
+}
+
 export function ResumeQuestionsBanner() {
   const comments = useArtifactStore((s) => s.comments);
   const selectArtifact = useArtifactStore((s) => s.selectArtifact);
@@ -54,9 +64,7 @@ export function ResumeQuestionsBanner() {
   if (!connected || !noAgentLive(activeSessions) || unanswered.length === 0) return null;
 
   const n = unanswered.length;
-  const resumePrompt =
-    `Resume our deepPairing session: I left ${n} question${n === 1 ? "" : "s"} on your artifacts that ${n === 1 ? "is" : "are"} still unanswered. ` +
-    `Call check_feedback to see them (they arrive as an "unanswered questions carried over" block), then reply to each with answer_question so the answer links to my question in the companion UI.`;
+  const resumePrompt = resumePromptFor(n);
 
   const copy = async () => {
     // Fix 3 — only claim success after an ACTUAL resolve. In the VS Code webview
@@ -80,13 +88,13 @@ export function ResumeQuestionsBanner() {
       aria-live="polite"
       // Mirrors PendingBanner's proven-AA-contrast treatment (tinted strip +
       // full-strength colored label) so the small text keeps 4.5:1.
-      className="px-3 py-1.5 bg-accent-violet-dim/50 border-b border-accent-violet/15 flex items-center gap-2"
+      className={`px-3 py-1.5 ${WAITING_TONE.strip} flex items-center gap-2`}
     >
       <span className="text-2xs shrink-0" aria-hidden="true">💤</span>
       <button
         type="button"
         onClick={() => { const first = unanswered[0]; if (first) selectArtifact(first.artifactId); }}
-        className="text-2xs text-accent-violet font-medium shrink-0 hover:underline"
+        className={`text-2xs ${WAITING_TONE.text} font-medium shrink-0 hover:underline`}
         title={`${n} question${n === 1 ? "" : "s"} the agent never answered — it exited; resume it to answer ${n === 1 ? "it" : "them"}. Click to jump to the oldest.`}
       >
         {n} question{n === 1 ? "" : "s"} waiting for Claude
@@ -94,7 +102,7 @@ export function ResumeQuestionsBanner() {
       <button
         type="button"
         onClick={copy}
-        className="ml-auto shrink-0 px-2 py-0.5 rounded text-2xs font-medium bg-accent-violet-dim text-accent-violet hover:bg-accent-violet-dim/80 transition-colors"
+        className={`ml-auto shrink-0 px-2 py-0.5 rounded text-2xs font-medium ${WAITING_TONE.chip} ${WAITING_TONE.chipHover} transition-colors`}
         title="Copy a paste-able resume prompt for Claude Code"
       >
         {copied ? "Copied ✓" : "Copy resume prompt"}

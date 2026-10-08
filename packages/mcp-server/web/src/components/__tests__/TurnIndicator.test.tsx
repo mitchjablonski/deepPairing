@@ -58,75 +58,17 @@ beforeEach(() => {
   useConnectionStore.setState({ connected: false, agentActivityAt: null, agentActiveSince: null } as any);
 });
 
-describe("TurnIndicator — Q4 unanswered-questions badge", () => {
-  it("does NOT render the badge when there are no unanswered questions", () => {
+describe("TurnIndicator — #430 PR 1c: no question badge (the Comment-threads count owns it)", () => {
+  // The Q4 ❓ "N questions waiting" badge duplicated the Comment-threads
+  // button's count (design §2.7 item 2); per §5 the button keeps the ONE count
+  // (AppQuestionsCount.dom.test.tsx). This pill is agent state + your turn only.
+  it("renders no question badge even with unanswered questions", () => {
     seedConnected();
     seedArtifact();
-    render(<TurnIndicator />);
-    expect(screen.queryByText(/question.* waiting/i)).not.toBeInTheDocument();
-  });
-
-  it("renders '1 question waiting' when a human question-intent comment has no answer", () => {
-    seedConnected();
-    seedArtifact({ id: "art_1" });
     seedComment("art_1");
     render(<TurnIndicator />);
-    expect(screen.getByText(/1 question waiting/i)).toBeInTheDocument();
-  });
-
-  it("pluralizes correctly and counts across multiple artifacts", () => {
-    seedConnected();
-    seedArtifact({ id: "art_1" });
-    seedArtifact({ id: "art_2" });
-    seedComment("art_1");
-    seedComment("art_1");
-    seedComment("art_2");
-    render(<TurnIndicator />);
-    expect(screen.getByText(/3 questions waiting/i)).toBeInTheDocument();
-  });
-
-  it("hides the badge when all questions have been answered", () => {
-    seedConnected();
-    seedArtifact({ id: "art_1" });
-    seedComment("art_1", { answeredByCommentId: "cmt_answer" });
-    render(<TurnIndicator />);
-    expect(screen.queryByText(/question.* waiting/i)).not.toBeInTheDocument();
-  });
-
-  it("click selects the artifact containing the oldest unanswered question", async () => {
-    seedConnected();
-    seedArtifact({ id: "art_1" });
-    seedArtifact({ id: "art_2" });
-    seedComment("art_2", { createdAt: "2026-04-21T00:00:00Z" });
-    seedComment("art_1", { createdAt: "2026-04-20T00:00:00Z" });
-    render(<TurnIndicator />);
-    await userEvent.click(screen.getByRole("button", { name: /2 questions waiting/i }));
-    expect(useArtifactStore.getState().selectedArtifactId).toBe("art_1");
-  });
-
-  it("ignores agent-authored comments (those are answers, not questions)", () => {
-    seedConnected();
-    seedArtifact({ id: "art_1" });
-    seedComment("art_1", { author: "agent" });
-    render(<TurnIndicator />);
-    expect(screen.queryByText(/question.* waiting/i)).not.toBeInTheDocument();
-  });
-
-  it("does NOT count a question the human resolved themselves (humanResolvedAt set)", () => {
-    seedConnected();
-    seedArtifact({ id: "art_1" });
-    seedComment("art_1", { humanResolvedAt: "2026-04-22T00:00:00Z" });
-    render(<TurnIndicator />);
-    expect(screen.queryByText(/question.* waiting/i)).not.toBeInTheDocument();
-  });
-
-  it("still counts a sibling unresolved question when another was human-resolved", () => {
-    seedConnected();
-    seedArtifact({ id: "art_1" });
-    seedComment("art_1", { humanResolvedAt: "2026-04-22T00:00:00Z" });
-    seedComment("art_1"); // still open
-    render(<TurnIndicator />);
-    expect(screen.getByText(/1 question waiting/i)).toBeInTheDocument();
+    expect(screen.queryByText(/question/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("❓")).not.toBeInTheDocument();
   });
 });
 
@@ -270,8 +212,8 @@ describe("B1 — the 'Your turn' pill is a jump button, not a dead label", () =>
   });
 });
 
-describe("F8 (M6) — the questions badge stops promising check-ins from dead sessions", () => {
-  it("badge drops 'waiting' and the pill states 'Agent exited' when the owning session is dead", () => {
+describe("F8 (M6) — no check-in promise from a dead session", () => {
+  it("the pill states 'Agent exited' when the owning session is dead", () => {
     useConnectionStore.setState({
       connected: true,
       sessionId: "s1",
@@ -290,9 +232,8 @@ describe("F8 (M6) — the questions badge stops promising check-ins from dead se
     // M3 (#196) — the exited state is stated ONCE, canonically, by the agent's
     // -turn pill (not repeated in the questions badge).
     expect(screen.getByText(/agent exited/i)).toBeInTheDocument();
-    // F8/M6 intent survives: the badge never promises a check-in from a dead
-    // session. It reads "1 question unanswered", not "waiting".
-    expect(screen.getByText(/1 question unanswered/i)).toBeInTheDocument();
+    // #430 PR 1c — the question badge is gone from this pill; the exited-agent
+    // wording for open questions lives in ResumeQuestionsBanner.
     expect(screen.queryByText(/question.*waiting/i)).not.toBeInTheDocument();
   });
 });
@@ -335,14 +276,4 @@ describe("#196 F2 — banner-soup dedup (M4)", () => {
     expect(screen.getByRole("button", { name: /your turn/i })).toBeInTheDocument();
   });
 
-  it("collapses the questions badge to a count when ResumeQuestionsBanner is visible", () => {
-    seedConnected();
-    seedArtifact({ id: "art_1" });
-    seedComment("art_1");
-    render(<TurnIndicator questionsBannerVisible />);
-    // No "N questions waiting/unanswered" label — the banner carries it. The
-    // jump affordance stays via the accessible name.
-    expect(screen.queryByText(/question.*(waiting|unanswered)/i)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /unanswered question/i })).toBeInTheDocument();
-  });
 });

@@ -17,6 +17,13 @@ import { projectHashOf, BASE_PORT } from "../project-root.js";
 import { cliInvocation } from "../cli-invocation.js";
 import { errorName } from "@deeppairing/shared";
 import type { DurableReviewPostStore } from "../github/durable-review-post.js";
+// Static on purpose (was a dynamic import): a dynamic import made esbuild wrap
+// lifecycle.ts and its whole dependency graph (including zod) in lazy __esm
+// initialisers, and the MCP SDK's top-level zod calls then ran before zod was
+// initialised — the shipped plugin bundle crashed at load with "Class2 is not
+// a constructor". lifecycle.ts imports nothing from this file, so there is no
+// cycle to avoid.
+import { ensureDaemon } from "./lifecycle.js";
 
 export class DaemonClient implements IStore {
   readonly reviewPosts: DurableReviewPostStore = {
@@ -150,8 +157,6 @@ export class DaemonClient implements IStore {
     if (!this.projectRoot) return false;
     if (this.lastRegisterMeta && !this.lastRegisterMeta.expectedProjectRoot) return false;
     try {
-      // Dynamic import — avoids any static cycle with daemon-lifecycle.
-      const { ensureDaemon } = await import("./lifecycle.js");
       const info = await ensureDaemon(this.projectRoot);
       if (!info) return false;
       if (info.authToken) this.authToken = info.authToken;

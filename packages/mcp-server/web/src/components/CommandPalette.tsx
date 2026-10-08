@@ -5,6 +5,8 @@ import { usePreferencesStore, resolveTheme } from "../stores/preferences";
 import { useModal } from "../hooks/useModal";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
 import { fuzzyScore } from "../lib/fuzzy";
+import { computeAttention } from "../lib/attention";
+import { useOfflineReason } from "../hooks/useOfflineReason";
 
 /** Recursively collect string VALUES from artifact content (keys excluded). */
 function collectStrings(v: unknown, out: string[] = []): string {
@@ -23,9 +25,13 @@ interface PaletteItem {
   icon?: string; // artifact type or action icon
   type: "artifact" | "action";
   action: () => void;
+  /** #467 review — set when the command can't run now (e.g. offline): shown,
+   *  disabled, with this reason, and Enter won't run it. */
+  disabledReason?: string;
 }
 
 export function CommandPalette({ onClose }: { onClose: () => void }) {
+  const offline = useOfflineReason(); // #467 review — Approve all is an act
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -33,6 +39,8 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const artifacts = useArtifactStore((s) => s.artifacts);
   const selectArtifact = useArtifactStore((s) => s.selectArtifact);
   const updateArtifactStatus = useArtifactStore((s) => s.updateArtifactStatus);
+  const selectedArtifactId = useArtifactStore((s) => s.selectedArtifactId);
+  const nextUpBar = usePreferencesStore((s) => s.nextUpBar);
   const theme = usePreferencesStore((s) => s.theme);
   const setTheme = usePreferencesStore((s) => s.setTheme);
   const toggleSidebar = usePreferencesStore((s) => s.toggleSidebar);
@@ -54,6 +62,37 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         (!boundSessionId || a.sessionId === boundSessionId),
     );
     const draftSessionCount = new Set(approvableDrafts.map((a) => a.sessionId)).size;
+    // #430 PR 3 — attention commands, both routed through computeAttention.
+    // "Next pending" is available with the Next-up bar on OR off: it only moves
+    // the selection (like `n`), in the bar's oldest-first Decide order, and needs
+    // no bar to be useful. "Open review queue" opens the BAR's expanded queue,
+    // so it is offered only when the bar is on — with it off there is no queue
+    // surface to open, and a command that does nothing would lie.
+    const decideQueue = computeAttention({ artifacts }).lanes.decide;
+    if (decideQueue.length > 0) {
+      items.push({
+        id: "action_next_pending",
+        label: `Next pending (${decideQueue.length} waiting on you, oldest first)`,
+        type: "action",
+        action: () => {
+          const idx = decideQueue.findIndex((d) => d.id === selectedArtifactId);
+          const target = decideQueue[(idx + 1) % decideQueue.length]; // idx=-1 → the oldest
+          if (target?.artifactId) selectArtifact(target.artifactId);
+          onClose();
+        },
+      });
+    }
+    if (nextUpBar) {
+      items.push({
+        id: "action_open_review_queue",
+        label: "Open review queue (Next-up bar)",
+        type: "action",
+        action: () => {
+          onClose();
+          window.dispatchEvent(new CustomEvent("dp:open-next-up"));
+        },
+      });
+    }
     items.push({
       id: "action_past_sessions",
       label: "Browse past sessions (replay)",
@@ -98,12 +137,15 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       id: "action_approve_all",
       label: `Approve all ${approvableDrafts.length} draft artifact${approvableDrafts.length === 1 ? "" : "s"}${boundSessionId ? " in this session" : !boundSessionId && draftSessionCount > 1 ? ` across ${draftSessionCount} sessions` : ""} (except decisions)`,
       type: "action",
+      // #467 review — an act like any other: refused while this tab is offline.
+      ...(offline ? { disabledReason: offline, description: offline } : {}),
       // F2 — decisions are intentionally EXCLUDED: a blanket "approved" flip
       // records no optionId, so the agent never learns which option was picked
       // (and resolveDecision never runs). They must be resolved individually via
       // the decision card. Await sequentially so a flaky daemon surfaces one
       // error toast, not N parallel ones, and a mid-batch failure stops cleanly.
       action: async () => {
+        if (offline) return;
         for (const a of approvableDrafts) {
           try {
             await updateArtifactStatus(a.id, "approved");
@@ -156,7 +198,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
 
     return items;
   // eslint-disable-next-line react-hooks/exhaustive-deps -- store actions are stable identities; onClose (prop) is identity-unstable but behaviorally constant (a stale one still closes via stable setState)
-  }, [artifacts, theme, boundSessionId]);
+  }, [artifacts, theme, boundSessionId, selectedArtifactId, nextUpBar, offline]);
 
   // Filter and sort by fuzzy score
   const results = useMemo(() => {
@@ -198,7 +240,8 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       setSelectedIndex((i) => Math.max(i - 1, 0));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      results[selectedIndex]?.action();
+      const picked = results[selectedIndex];
+      if (picked && !picked.disabledReason) picked.action();
     }
     // Escape is handled by useModal's dialogProps.onKeyDown on the panel (the
     // input's keydown bubbles to it) — no branch here, or it'd double-close.
@@ -239,6 +282,8 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
               <button
                 key={item.id}
                 onClick={item.action}
+                disabled={!!item.disabledReason}
+                title={item.disabledReason}
                 onMouseEnter={() => setSelectedIndex(i)}
                 className={`w-full flex items-center gap-3 px-4 py-2 text-left transition-colors ${
                   i === selectedIndex

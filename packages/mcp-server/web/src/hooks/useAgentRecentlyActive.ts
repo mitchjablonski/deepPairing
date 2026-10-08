@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useConnectionStore } from "../stores/connection";
+import { AGENT_ACTIVE_WINDOW_MS } from "../lib/agentActivity";
 
 /**
  * D8/D9 — heartbeat recency with a one-shot timer to the staleness boundary.
@@ -7,8 +8,12 @@ import { useConnectionStore } from "../stores/connection";
  * equality bail suppresses idle re-renders, so nothing recomputes it — the
  * exact trap both the composer copy (M3) and the closing-beat gate (H3) fell
  * into independently.
+ *
+ * #430 PR 1b — the default is the shared AGENT_ACTIVE_WINDOW_MS, the same window
+ * TurnIndicator's pill uses. RequestComposerBanner passes its own 90s #204
+ * hysteresis explicitly and is unaffected.
  */
-export function useAgentRecentlyActive(windowMs = 60_000): boolean {
+export function useAgentRecentlyActive(windowMs = AGENT_ACTIVE_WINDOW_MS): boolean {
   const recentlyActive = useConnectionStore(
     (st) => st.agentActivityAt != null && Date.now() - st.agentActivityAt < windowMs,
   );
