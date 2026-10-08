@@ -113,23 +113,39 @@ function defaultOpenUrl(url: string): void {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Thrown inside startup when the user cancels (Ctrl+C / SIGTERM). */
+class DemoCancelled extends Error {
+  constructor() { super("cancelled"); }
+}
+
+/** Sleep that ends early (rejecting) when `signal` aborts. */
+function cancellableSleep(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(new DemoCancelled());
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => { signal.removeEventListener("abort", onAbort); resolve(); }, ms);
+    const onAbort = () => { clearTimeout(t); reject(new DemoCancelled()); };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 async function waitForDemoDaemon(
-  child: ChildProcess, sandbox: DemoSandbox, timeoutMs: number, stderrTail: () => string,
+  child: ChildProcess, sandbox: DemoSandbox, timeoutMs: number, stderrTail: () => string, cancel: AbortSignal,
 ): Promise<number> {
   const infoPath = path.join(sandbox.project, ".deeppairing", "daemon.json");
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    if (cancel.aborted) throw new DemoCancelled();
     if (child.exitCode !== null || child.signalCode !== null) {
       throw new Error(`the demo daemon exited during startup (${child.signalCode ?? `exit code ${child.exitCode}`}).\n${stderrTail()}`);
     }
     try {
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8")) as { port?: number; pid?: number };
       if (info.port && info.pid === child.pid) {
-        const res = await fetch(`http://127.0.0.1:${info.port}/`, { signal: AbortSignal.timeout(1000) });
+        const res = await fetch(`http://127.0.0.1:${info.port}/`, { signal: AbortSignal.any([AbortSignal.timeout(1000), cancel]) });
         if (res.ok) return info.port;
       }
-    } catch { /* not ready yet */ }
-    await sleep(100);
+    } catch { /* not ready yet (or cancelled — checked at the loop top) */ }
+    await cancellableSleep(100, cancel);
   }
   throw new Error(`the demo daemon did not become ready within ${Math.round(timeoutMs / 1000)}s.\n${stderrTail()}`);
 }
@@ -151,6 +167,15 @@ function removeSandbox(sandbox: DemoSandbox): void {
 
 /**
  * Run the demo until the user ends it. Resolves with a process exit code.
+ *
+ * Lifecycle (#481 review): the cancellation handlers (SIGINT, SIGTERM) are
+ * installed BEFORE the first asynchronous step, so a Ctrl+C during a slow
+ * startup is handled by us — not by Node's default handler, which would kill
+ * this process without stopping the daemon or deleting the sandbox (an
+ * 'exit' listener does not run on a default-signal death). Cancellation aborts
+ * readiness polling and a pending /api/demo/run, and every path ends in ONE
+ * shared shutdown (stop the daemon, then delete the sandbox) that is awaited
+ * before the runner returns.
  */
 export async function runIsolatedDemo(opts: IsolatedDemoOptions): Promise<number> {
   const print = opts.print ?? ((line: string) => process.stdout.write(`${line}\n`));
@@ -162,24 +187,61 @@ export async function runIsolatedDemo(opts: IsolatedDemoOptions): Promise<number
     cwd: sandbox.project,
     env: demoDaemonEnv(baseEnv, sandbox),
     stdio: ["ignore", "ignore", "pipe"],
+    // POSIX: its own process group, so a terminal Ctrl+C reaches only this
+    // runner — which then stops the daemon itself, in order. (Windows has no
+    // process-group signal fan-out; `detached` there would open a console.)
+    detached: process.platform !== "win32",
+    windowsHide: true,
   });
   child.stderr?.on("data", (d) => { stderrBuf = (stderrBuf + d.toString()).slice(-4000); });
   const tail = () => (stderrBuf.trim() ? `Daemon stderr:\n${stderrBuf.trim()}` : "");
 
-  // Last-resort cleanup if this process dies without reaching `finish`.
+  // --- Cancellation + end-of-demo signals, armed before anything async. ---
+  const cancel = new AbortController();
+  let endReason: string | null = null;
+  let resolveEnd!: (why: string) => void;
+  const ended = new Promise<string>((r) => { resolveEnd = r; });
+  const end = (why: string) => {
+    if (endReason) return;
+    endReason = why;
+    cancel.abort();
+    resolveEnd(why);
+  };
+  const onInt = () => end("SIGINT");
+  const onTerm = () => end("SIGTERM");
+  const onDaemonExit = () => end("daemon-exit");
+  let acceptingEnter = false;
+  const onData = (chunk: Buffer | string) => { if (acceptingEnter && String(chunk).includes("\n")) end("enter"); };
+  process.on("SIGINT", onInt);
+  process.on("SIGTERM", onTerm);
+  child.once("exit", onDaemonExit);
+  input.on("data", onData);
+  (input as NodeJS.ReadStream).resume?.(); // let 'data' flow from a paused stdin
+
+  // Last-resort cleanup if this process dies some other way (uncaught error).
   const onProcessExit = () => {
     try { child.kill("SIGKILL"); } catch { /* gone */ }
     try { removeSandbox(sandbox); } catch { /* best effort */ }
   };
   process.once("exit", onProcessExit);
 
-  let finished = false;
+  // --- The one shared shutdown. ---
+  let shutdown: Promise<void> | null = null;
+  const shutdownOnce = () => {
+    shutdown ??= (async () => {
+      input.removeListener("data", onData);
+      (input as NodeJS.ReadStream).pause?.();
+      child.removeListener("exit", onDaemonExit);
+      await stopDaemon(child);
+      removeSandbox(sandbox);
+      process.removeListener("exit", onProcessExit);
+      process.removeListener("SIGINT", onInt);
+      process.removeListener("SIGTERM", onTerm);
+    })();
+    return shutdown;
+  };
   const finish = async (code: number, message?: string): Promise<number> => {
-    if (finished) return code;
-    finished = true;
-    await stopDaemon(child);
-    removeSandbox(sandbox);
-    process.removeListener("exit", onProcessExit);
+    await shutdownOnce();
     if (message) print(message);
     return code;
   };
@@ -195,16 +257,23 @@ export async function runIsolatedDemo(opts: IsolatedDemoOptions): Promise<number
   let port: number;
   let sessionId: string;
   try {
-    port = await waitForDemoDaemon(child, sandbox, opts.readyTimeoutMs ?? 40_000, tail);
+    port = await waitForDemoDaemon(child, sandbox, opts.readyTimeoutMs ?? 40_000, tail, cancel.signal);
     const res = await fetch(`http://127.0.0.1:${port}/api/demo/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.any([AbortSignal.timeout(5000), cancel.signal]),
     });
     if (!res.ok) throw new Error(`the demo daemon refused to start the script (HTTP ${res.status})`);
     sessionId = ((await res.json()) as { sessionId: string }).sessionId;
+    if (cancel.signal.aborted) throw new DemoCancelled();
   } catch (err) {
-    return finish(1, `  ✗ Could not start the demo: ${(err as Error).message}\n  Its temporary data was deleted.`);
+    if (endReason === "SIGINT" || endReason === "SIGTERM") {
+      return finish(0, "  Demo cancelled. Its temporary data was deleted.");
+    }
+    const why = endReason === "daemon-exit"
+      ? `the demo daemon exited during startup (${child.signalCode ?? `exit code ${child.exitCode}`}).\n${tail()}`
+      : (err as Error).message;
+    return finish(1, `  ✗ Could not start the demo: ${why}\n  Its temporary data was deleted.`);
   }
 
   const url = `http://localhost:${port}/?session=${sessionId}`;
@@ -227,30 +296,9 @@ export async function runIsolatedDemo(opts: IsolatedDemoOptions): Promise<number
   print("  https://github.com/mitchjablonski/deepPairing#your-first-review");
   print("");
   print("  Press Enter to end the demo and delete its data (Ctrl+C also works).");
+  acceptingEnter = true;
 
-  const reason = await new Promise<string>((resolve) => {
-    let decided = false;
-    const decide = (why: string) => {
-      if (decided) return;
-      decided = true;
-      input.removeListener("data", onData);
-      (input as NodeJS.ReadStream).pause?.();
-      process.removeListener("SIGINT", onInt);
-      process.removeListener("SIGTERM", onTerm);
-      child.removeListener("exit", onDaemonExit);
-      resolve(why);
-    };
-    const onData = (chunk: Buffer | string) => { if (String(chunk).includes("\n")) decide("enter"); };
-    const onInt = () => decide("SIGINT");
-    const onTerm = () => decide("SIGTERM");
-    const onDaemonExit = () => decide("daemon-exit");
-    input.on("data", onData);
-    (input as NodeJS.ReadStream).resume?.(); // let 'data' flow from a paused stdin
-    process.once("SIGINT", onInt);
-    process.once("SIGTERM", onTerm);
-    child.once("exit", onDaemonExit);
-  });
-
+  const reason = await ended;
   if (reason === "daemon-exit") {
     return finish(1, `  ✗ The demo daemon stopped unexpectedly. ${tail()}\n  Its temporary data was deleted.`);
   }

@@ -89,10 +89,30 @@ function defaultOpenUrl(url) {
   }
 }
 var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-async function waitForDemoDaemon(child, sandbox, timeoutMs, stderrTail) {
+var DemoCancelled = class extends Error {
+  constructor() {
+    super("cancelled");
+  }
+};
+function cancellableSleep(ms, signal) {
+  if (signal.aborted) return Promise.reject(new DemoCancelled());
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(t);
+      reject(new DemoCancelled());
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+async function waitForDemoDaemon(child, sandbox, timeoutMs, stderrTail, cancel) {
   const infoPath = path.join(sandbox.project, ".deeppairing", "daemon.json");
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    if (cancel.aborted) throw new DemoCancelled();
     if (child.exitCode !== null || child.signalCode !== null) {
       throw new Error(`the demo daemon exited during startup (${child.signalCode ?? `exit code ${child.exitCode}`}).
 ${stderrTail()}`);
@@ -100,12 +120,12 @@ ${stderrTail()}`);
     try {
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
       if (info.port && info.pid === child.pid) {
-        const res = await fetch(`http://127.0.0.1:${info.port}/`, { signal: AbortSignal.timeout(1e3) });
+        const res = await fetch(`http://127.0.0.1:${info.port}/`, { signal: AbortSignal.any([AbortSignal.timeout(1e3), cancel]) });
         if (res.ok) return info.port;
       }
     } catch {
     }
-    await sleep(100);
+    await cancellableSleep(100, cancel);
   }
   throw new Error(`the demo daemon did not become ready within ${Math.round(timeoutMs / 1e3)}s.
 ${stderrTail()}`);
@@ -139,13 +159,42 @@ async function runIsolatedDemo(opts) {
   const child = spawn(process.execPath, [opts.daemonScript], {
     cwd: sandbox.project,
     env: demoDaemonEnv(baseEnv, sandbox),
-    stdio: ["ignore", "ignore", "pipe"]
+    stdio: ["ignore", "ignore", "pipe"],
+    // POSIX: its own process group, so a terminal Ctrl+C reaches only this
+    // runner — which then stops the daemon itself, in order. (Windows has no
+    // process-group signal fan-out; `detached` there would open a console.)
+    detached: process.platform !== "win32",
+    windowsHide: true
   });
   child.stderr?.on("data", (d) => {
     stderrBuf = (stderrBuf + d.toString()).slice(-4e3);
   });
   const tail = () => stderrBuf.trim() ? `Daemon stderr:
 ${stderrBuf.trim()}` : "";
+  const cancel = new AbortController();
+  let endReason = null;
+  let resolveEnd;
+  const ended = new Promise((r) => {
+    resolveEnd = r;
+  });
+  const end = (why) => {
+    if (endReason) return;
+    endReason = why;
+    cancel.abort();
+    resolveEnd(why);
+  };
+  const onInt = () => end("SIGINT");
+  const onTerm = () => end("SIGTERM");
+  const onDaemonExit = () => end("daemon-exit");
+  let acceptingEnter = false;
+  const onData = (chunk) => {
+    if (acceptingEnter && String(chunk).includes("\n")) end("enter");
+  };
+  process.on("SIGINT", onInt);
+  process.on("SIGTERM", onTerm);
+  child.once("exit", onDaemonExit);
+  input.on("data", onData);
+  input.resume?.();
   const onProcessExit = () => {
     try {
       child.kill("SIGKILL");
@@ -157,13 +206,22 @@ ${stderrBuf.trim()}` : "";
     }
   };
   process.once("exit", onProcessExit);
-  let finished = false;
+  let shutdown = null;
+  const shutdownOnce = () => {
+    shutdown ??= (async () => {
+      input.removeListener("data", onData);
+      input.pause?.();
+      child.removeListener("exit", onDaemonExit);
+      await stopDaemon(child);
+      removeSandbox(sandbox);
+      process.removeListener("exit", onProcessExit);
+      process.removeListener("SIGINT", onInt);
+      process.removeListener("SIGTERM", onTerm);
+    })();
+    return shutdown;
+  };
   const finish = async (code, message) => {
-    if (finished) return code;
-    finished = true;
-    await stopDaemon(child);
-    removeSandbox(sandbox);
-    process.removeListener("exit", onProcessExit);
+    await shutdownOnce();
     if (message) print(message);
     return code;
   };
@@ -177,16 +235,22 @@ ${stderrBuf.trim()}` : "";
   let port;
   let sessionId;
   try {
-    port = await waitForDemoDaemon(child, sandbox, opts.readyTimeoutMs ?? 4e4, tail);
+    port = await waitForDemoDaemon(child, sandbox, opts.readyTimeoutMs ?? 4e4, tail, cancel.signal);
     const res = await fetch(`http://127.0.0.1:${port}/api/demo/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(5e3)
+      signal: AbortSignal.any([AbortSignal.timeout(5e3), cancel.signal])
     });
     if (!res.ok) throw new Error(`the demo daemon refused to start the script (HTTP ${res.status})`);
     sessionId = (await res.json()).sessionId;
+    if (cancel.signal.aborted) throw new DemoCancelled();
   } catch (err) {
-    return finish(1, `  \u2717 Could not start the demo: ${err.message}
+    if (endReason === "SIGINT" || endReason === "SIGTERM") {
+      return finish(0, "  Demo cancelled. Its temporary data was deleted.");
+    }
+    const why = endReason === "daemon-exit" ? `the demo daemon exited during startup (${child.signalCode ?? `exit code ${child.exitCode}`}).
+${tail()}` : err.message;
+    return finish(1, `  \u2717 Could not start the demo: ${why}
   Its temporary data was deleted.`);
   }
   const url = `http://localhost:${port}/?session=${sessionId}`;
@@ -209,30 +273,8 @@ ${stderrBuf.trim()}` : "";
   print("  https://github.com/mitchjablonski/deepPairing#your-first-review");
   print("");
   print("  Press Enter to end the demo and delete its data (Ctrl+C also works).");
-  const reason = await new Promise((resolve) => {
-    let decided = false;
-    const decide = (why) => {
-      if (decided) return;
-      decided = true;
-      input.removeListener("data", onData);
-      input.pause?.();
-      process.removeListener("SIGINT", onInt);
-      process.removeListener("SIGTERM", onTerm);
-      child.removeListener("exit", onDaemonExit);
-      resolve(why);
-    };
-    const onData = (chunk) => {
-      if (String(chunk).includes("\n")) decide("enter");
-    };
-    const onInt = () => decide("SIGINT");
-    const onTerm = () => decide("SIGTERM");
-    const onDaemonExit = () => decide("daemon-exit");
-    input.on("data", onData);
-    input.resume?.();
-    process.once("SIGINT", onInt);
-    process.once("SIGTERM", onTerm);
-    child.once("exit", onDaemonExit);
-  });
+  acceptingEnter = true;
+  const reason = await ended;
   if (reason === "daemon-exit") {
     return finish(1, `  \u2717 The demo daemon stopped unexpectedly. ${tail()}
   Its temporary data was deleted.`);

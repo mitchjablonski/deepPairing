@@ -170,4 +170,72 @@ describe.runIf(fs.existsSync(shippedDemo))("#471 — isolated no-build demo from
     expect(fs.existsSync(sandbox)).toBe(false);
     expect(pidAlive(pid)).toBe(false);
   }, 90_000);
+
+  /**
+   * #481 review — cancelling DURING STARTUP must still stop the daemon and
+   * delete the sandbox. The copied bundle's daemon.js is swapped for a thin
+   * wrapper around the real one that makes startup deliberately slow, so the
+   * signal provably lands mid-startup rather than winning a timing race:
+   *   - "listening": the real daemon binds and writes daemon.json, but every
+   *     HTTP request is held for 30 s, so the runner is still polling for
+   *     readiness (Astra's repro: an orphan daemon left LISTENING);
+   *   - "pre-bind": the daemon process sleeps 30 s before loading at all.
+   */
+  const SLOW_WRAPPERS = {
+    listening: [
+      'import http from "node:http";',
+      "const emit = http.Server.prototype.emit;",
+      'http.Server.prototype.emit = function (ev, ...args) { if (ev === "request") { setTimeout(() => emit.call(this, ev, ...args), 30000); return true; } return emit.call(this, ev, ...args); };',
+      'await import("./daemon-real.js");',
+    ].join("\n"),
+    "pre-bind": [
+      'import fs from "node:fs"; import path from "node:path";',
+      'fs.writeFileSync(path.join(process.env.DEEPPAIRING_PROJECT_ROOT, "..", "daemon-started"), String(process.pid));',
+      "await new Promise((r) => setTimeout(r, 30000));",
+      'await import("./daemon-real.js");',
+    ].join("\n"),
+  } as const;
+
+  const cases: Array<["SIGINT" | "SIGTERM", keyof typeof SLOW_WRAPPERS]> = [
+    ["SIGINT", "listening"], ["SIGTERM", "listening"], ["SIGINT", "pre-bind"], ["SIGTERM", "pre-bind"],
+  ];
+  for (const [signal, mode] of cases) {
+    it.runIf(process.platform !== "win32")(`${signal} during a slow startup (${mode}) stops the owned daemon and deletes the sandbox`, async () => {
+      const world = makeWorld();
+      const server = path.join(world.plugin, "server");
+      fs.renameSync(path.join(server, "daemon.js"), path.join(server, "daemon-real.js"));
+      fs.writeFileSync(path.join(server, "daemon.js"), SLOW_WRAPPERS[mode]);
+      const before = { home: snapshot(world.home), project: snapshot(world.project) };
+
+      const demo = startDemo(world);
+      const sandbox = await waitFor(() => demo.out().match(/Sandbox: (.+)/)?.[1]?.trim(), 30_000, "the sandbox line");
+      // Wait until the daemon process is provably running mid-startup.
+      const { pid, port } = await waitFor(() => {
+        try {
+          if (mode === "pre-bind") {
+            return { pid: Number(fs.readFileSync(path.join(sandbox, "daemon-started"), "utf8")), port: null as number | null };
+          }
+          const info = JSON.parse(fs.readFileSync(path.join(sandbox, "sample-project", ".deeppairing", "daemon.json"), "utf8"));
+          return info.pid ? { pid: info.pid as number, port: info.port as number } : null;
+        } catch { return null; }
+      }, 30_000, "the daemon to be mid-startup");
+      // Owned by this test: never leave it running even if an assertion fails.
+      cleanups.push(() => { if (pidAlive(pid)) process.kill(pid, "SIGKILL"); });
+      expect(pidAlive(pid)).toBe(true);
+      if (port !== null) expect(await portAccepts(port)).toBe(true); // listening, not yet ready
+      expect(demo.out()).not.toContain("Companion ready");
+
+      demo.child.kill(signal);
+      expect(await demo.exited).toBe(0);
+      const out = demo.out();
+      expect(out).toContain("Demo cancelled. Its temporary data was deleted.");
+      expect(out).not.toContain("Companion ready"); // no success printed after cancel
+      expect(pidAlive(pid)).toBe(false);
+      if (port !== null) expect(await portAccepts(port)).toBe(false);
+      expect(fs.existsSync(sandbox)).toBe(false);
+      expect(fs.readdirSync(world.tmpdir)).toEqual([]);
+      expect(snapshot(world.home)).toEqual(before.home);
+      expect(snapshot(world.project)).toEqual(before.project);
+    }, 90_000);
+  }
 });
