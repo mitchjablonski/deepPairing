@@ -31062,11 +31062,15 @@ function createReviewRoutes({
         );
       }
     }
-    if (targetArtifactId && !decision) {
-      await store.updateArtifactStatus(targetArtifactId, "approved", "ui_decision_resolve");
+    if (targetArtifactId) {
+      if (!decision) {
+        await store.updateArtifactStatus(targetArtifactId, "approved", "ui_decision_resolve");
+      }
     }
     await store.forceFlush();
-    if (targetArtifactId) await updateTaskStatus(targetArtifactId, store);
+    if (targetArtifactId) {
+      await updateTaskStatus(targetArtifactId, store);
+    }
     broadcast({
       type: "decision_resolved",
       decisionId,
