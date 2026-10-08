@@ -38127,8 +38127,7 @@ var DaemonClient = class {
         );
       }
       await this.register(this.lastRegisterMeta);
-      void fetch(`${this.baseUrl}/recovered`, { method: "POST" }).catch(() => {
-      });
+      await this.notifyRecovered();
       return this.request(path13, init, true);
     }
     const msg = body?.error ?? `request failed (${res.status})`;
@@ -38136,6 +38135,34 @@ var DaemonClient = class {
     err.status = res.status;
     if (typeof body?.code === "string") err.code = body.code;
     throw err;
+  }
+  /**
+   * #468 — tell the daemon this session just re-registered, so it broadcasts
+   * `daemon_resumed` and the companion refetches full state.
+   *
+   * Goes through the shared request() transport, so it carries the bearer
+   * token and X-Project-Hash like every other internal call. (It used to be a
+   * bare fetch: every authenticated daemon answered 401, fetch resolved
+   * anyway, and the catch-all hid it — the broadcast never happened.)
+   *
+   * Sent with isRetry=true: a failure here must never start another
+   * recovery (no re-register, no token rotation, no reconnect), so it cannot
+   * recurse. It is also NON-FATAL — the caller's own call is retried
+   * regardless — but a non-2xx or network failure is reported, never treated
+   * as success.
+   */
+  async notifyRecovered() {
+    try {
+      await this.request("/recovered", { method: "POST" }, true);
+      return true;
+    } catch (err) {
+      const e = err;
+      process.stderr.write(
+        `[deepPairing] re-registered after a daemon restart, but the companion was not told to refresh (POST /recovered failed${e.status ? `: ${e.status}${e.code ? ` ${e.code}` : ""}` : `: ${e.message ?? String(err)}`}). Reload the companion tab if it looks stale.
+`
+      );
+      return false;
+    }
   }
   async post(path13, body) {
     return this.request(path13, {

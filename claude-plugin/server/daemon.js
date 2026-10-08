@@ -32819,6 +32819,8 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
   });
   app.post("/api/internal/sessions/:sessionId/recovered", async (c) => {
     const sessionId = c.req.param("sessionId");
+    const r = requireStore(c, sessionId);
+    if (!r.ok) return r.response;
     log2(`[recovered] sid=${sessionId} \u2014 wrapper auto-re-registered after a 404`);
     broadcast(sessionId, { type: "daemon_resumed", sessionId });
     return c.json({ status: "broadcast" });

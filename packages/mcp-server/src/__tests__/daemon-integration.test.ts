@@ -1021,8 +1021,9 @@ describe("DaemonClient", () => {
 
     it("AA2: auto-recover broadcasts daemon_resumed via /recovered", async () => {
       // Use a fresh client whose sessionId is unknown to the running
-      // daemon — first call goes through the recover path, which
-      // fire-and-forgets a POST /recovered. Verify the broadcast lands.
+      // daemon — first call goes through the recover path, which sends
+      // POST /recovered (awaited since #468; auth-enabled coverage lives in
+      // recovered-auth.test.ts). Verify the broadcast lands.
       const freshClient = new DaemonClient(TEST_PORT, "aa2_recover_session");
       const before = broadcasts.length;
       await freshClient.getArtifacts();
