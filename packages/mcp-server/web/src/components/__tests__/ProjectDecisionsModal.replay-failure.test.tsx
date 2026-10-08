@@ -48,6 +48,8 @@ describe("ProjectDecisionsModal × real openSessionReplay failures (#469)", () =
     ["a network rejection", () => Promise.reject(new TypeError("Failed to fetch")), /couldn't reach the deepPairing server/i],
     ["a non-JSON body", () => Promise.resolve({ ok: true, status: 200, json: async () => { throw new SyntaxError("bad"); } }), /unreadable response/i],
     ["a JSON null body", () => Promise.resolve({ ok: true, status: 200, json: async () => null }), /unreadable response/i],
+    ["an HTTP-200 error object", () => Promise.resolve({ ok: true, status: 200, json: async () => ({ error: "history unavailable" }) }), /unreadable response/i],
+    ["a null nested artifact", () => Promise.resolve({ ok: true, status: 200, json: async () => ({ sessionId: "s_gone", artifacts: [null], comments: [] }) }), /unreadable response/i],
   ])("surfaces %s as an alert and keeps the modal", async (_label, sessionResponse, message) => {
     const onClose = vi.fn();
     stubFetch(sessionResponse);

@@ -222,3 +222,79 @@ describe("openSessionReplay outcomes", () => {
     expectUntouched();
   });
 });
+
+// #469 (Sol review) — a malformed HTTP-200 snapshot must be rejected BEFORE any
+// store changes: the live frame survives, replay never activates, and nothing
+// leaks as an unhandled rejection.
+describe("openSessionReplay validates the snapshot before touching any store", () => {
+  const LIVE: Artifact = {
+    id: "live_1", sessionId: "live", type: "spec", version: 1, parentId: null,
+    title: "Live work", status: "draft", content: {}, agentReasoning: null,
+    createdAt: "2026-07-09T00:00:00Z", updatedAt: "2026-07-09T00:00:00Z",
+  };
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+  let realEnterReplay: ReturnType<typeof useReplayStore.getState>["enterReplay"];
+
+  beforeEach(() => {
+    unhandled.length = 0;
+    process.on("unhandledRejection", onUnhandled);
+    realEnterReplay = useReplayStore.getState().enterReplay;
+    useArtifactStore.getState().addArtifact(LIVE);
+  });
+  afterEach(() => {
+    process.off("unhandledRejection", onUnhandled);
+    useReplayStore.setState({ enterReplay: realEnterReplay });
+  });
+
+  function serve(body: unknown) {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+      if (url.includes("/annotations")) return Promise.resolve({ ok: true, json: async () => ({ annotations: [] }) });
+      return Promise.resolve({ ok: true, status: 200, json: async () => body });
+    }));
+  }
+  async function expectLiveFrameKept() {
+    await new Promise((r) => setTimeout(r, 0));
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id)).toEqual(["live_1"]);
+    expect(useReplayStore.getState().active).toBe(false);
+    expect(unhandled).toEqual([]);
+  }
+
+  const { comments: _c, ...NO_COMMENTS } = SESSION_STATE;
+  it.each([
+    ["a null artifact", { ...SESSION_STATE, artifacts: [null] }],
+    ["an artifact missing createdAt", { ...SESSION_STATE, artifacts: [{ ...SESSION_STATE.artifacts[0], createdAt: undefined }] }],
+    ["a comment with no target", { ...NO_COMMENTS, comments: [{ ...SESSION_STATE.comments[0], target: undefined }] }],
+    ["a decision with non-array options", { ...SESSION_STATE, decisions: [{ ...SESSION_STATE.decisions[0], options: "o1" }] }],
+    ["a null request", { ...SESSION_STATE, requests: [null] }],
+    ["an error object", { error: "history unavailable" }],
+    ["a different session's snapshot", { ...SESSION_STATE, sessionId: "someone-else" }],
+  ])("rejects %s as failed/invalid and keeps the live frame", async (_label, body) => {
+    serve(body);
+    await expect(openSessionReplay("s1", "a1")).resolves.toMatchObject({ status: "failed", kind: "invalid" });
+    await expectLiveFrameKept();
+  });
+
+  it("still opens a valid snapshot carrying extra (back-compat) fields", async () => {
+    serve({ ...SESSION_STATE, futureField: { x: 1 }, artifacts: SESSION_STATE.artifacts.map((a) => ({ ...a, featureId: "f", extra: true })) });
+    await expect(openSessionReplay("s1", "a1")).resolves.toEqual({ status: "opened" });
+    expect(useArtifactStore.getState().artifacts.map((a) => a.id).sort()).toEqual(["a1", "a2"]);
+  });
+
+  it("observes a rejecting replay init: failed, no unhandled rejection, replay not left active", async () => {
+    serve(SESSION_STATE);
+    useReplayStore.setState({
+      enterReplay: async () => {
+        useReplayStore.setState({ active: true });
+        throw new TypeError("timeline exploded");
+      },
+    });
+    await expect(openSessionReplay("s1", "a1")).resolves.toMatchObject({ status: "failed" });
+    // Recovery handed to exitReplay (the normal live-frame restore path):
+    // either already complete, or exiting with the write lock held.
+    const replay = useReplayStore.getState();
+    expect(!replay.active || replay.exiting).toBe(true);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(unhandled).toEqual([]);
+  });
+});

@@ -1,3 +1,11 @@
+import { z } from "zod";
+import {
+  ArtifactSchema,
+  CommentSchema,
+  DecisionOptionBaseSchema,
+  DecisionResponseSchema,
+  RequestSchema,
+} from "@deeppairing/shared";
 import { apiGet, apiBase } from "./api";
 import { useReplayStore } from "../stores/replay";
 import { hydrateArtifactSession } from "./session-hydration";
@@ -19,12 +27,53 @@ export interface OpenSessionReplayOptions {
   signal?: AbortSignal;
 }
 
-const STATE_ARRAY_FIELDS = ["artifacts", "comments", "decisions", "requests"] as const;
+/**
+ * #469 — the session envelope replay consumes, validated BEFORE any store is
+ * touched. Built from the shared Zod schemas (the single source of truth),
+ * narrowed with `pick` to the fields buildTimeline / hydrateArtifactSession /
+ * the replay store actually read, and `loose` so every other supported field
+ * (optional, back-compat) passes through untouched. A record missing a
+ * required field — a null artifact, a comment with no target, an error body
+ * like `{ error }` — fails the whole snapshot: installing half a history and
+ * then reporting failure would leave the live frame already replaced.
+ */
+const ReplayArtifactSchema = ArtifactSchema.pick({
+  id: true, type: true, version: true, parentId: true, title: true, status: true,
+  statusHistory: true, content: true, createdAt: true, updatedAt: true,
+}).loose();
+const ReplayCommentSchema = CommentSchema.pick({
+  id: true, target: true, parentCommentId: true, author: true, content: true, createdAt: true,
+}).loose();
+const ReplayRequestSchema = RequestSchema.pick({ id: true, text: true, intent: true, createdAt: true }).loose();
+const ReplayDecisionSchema = z.object({
+  decisionId: z.string(),
+  artifactId: z.string(),
+  context: z.string(),
+  options: z.array(DecisionOptionBaseSchema.pick({ id: true, title: true }).loose()),
+  response: DecisionResponseSchema.pick({ optionId: true, reasoning: true }).loose().optional(),
+  acknowledged: z.boolean().optional(),
+  createdAt: z.string().optional(),
+  resolvedAt: z.string().optional(),
+}).loose();
+const ReplayPlanReviewSchema = z.object({
+  artifactId: z.string(),
+  verdict: z.string().optional(),
+  feedback: z.string().optional(),
+  createdAt: z.string().optional(),
+  resolvedAt: z.string().optional(),
+}).loose();
+const ReplaySessionStateSchema = z.object({
+  sessionId: z.string(),
+  artifacts: z.array(ReplayArtifactSchema),
+  comments: z.array(ReplayCommentSchema).optional(),
+  decisions: z.array(ReplayDecisionSchema).optional(),
+  planReviews: z.array(ReplayPlanReviewSchema).optional(),
+  requests: z.array(ReplayRequestSchema).optional(),
+}).loose();
 
-function isSessionState(value: unknown): boolean {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  return STATE_ARRAY_FIELDS.every((f) => record[f] === undefined || Array.isArray(record[f]));
+function isReplaySessionState(value: unknown, sessionId: string): boolean {
+  const parsed = ReplaySessionStateSchema.safeParse(value);
+  return parsed.success && parsed.data.sessionId === sessionId;
 }
 
 /**
@@ -82,18 +131,28 @@ export async function openSessionReplay(
   }
   const before = settle({ status: "opened" });
   if (before.status !== "opened") return before;
-  if (!isSessionState(state)) {
+  if (!isReplaySessionState(state, sessionId)) {
     return { status: "failed", kind: "invalid", message: "The session returned an unreadable response." };
   }
 
+  const sessionState = state;
+  // The replay-init promise is observed the moment it exists, so a rejection
+  // can never go unhandled — even when hydration below throws first.
+  let initOutcome: Promise<{ error: unknown } | null> = Promise.resolve(null);
   try {
     // enterReplay flips the read-only gate synchronously, before its annotation
     // request yields. Historical artifacts can only become visible after that.
-    const sessionState = state;
-    const enteringReplay = useReplayStore.getState().enterReplay(sessionId, sessionState, transition);
-    if (!isCurrentSessionTransition(transition)) return { status: "superseded" };
+    initOutcome = useReplayStore
+      .getState()
+      .enterReplay(sessionId, sessionState, transition)
+      .then(() => null, (error: unknown) => ({ error }));
+    if (!isCurrentSessionTransition(transition)) {
+      await initOutcome;
+      return { status: "superseded" };
+    }
     hydrateArtifactSession(sessionState, { focusArtifactId });
-    await enteringReplay;
+    const init = await initOutcome;
+    if (init) throw init.error;
     if (!isCurrentSessionTransition(transition)) return { status: "superseded" };
 
     if (focusArtifactId) {
@@ -105,7 +164,12 @@ export async function openSessionReplay(
       }
     }
   } catch {
+    await initOutcome;
     if (!isCurrentSessionTransition(transition)) return { status: "superseded" };
+    // Unreachable for a validated snapshot, but if replay committed and then
+    // broke, don't leave a half-installed history behind a Retry button:
+    // exitReplay restores the live frame through the normal recovery path.
+    if (useReplayStore.getState().active) useReplayStore.getState().exitReplay();
     return { status: "failed", kind: "invalid", message: "The session's history couldn't be opened." };
   }
   return { status: "opened" };
