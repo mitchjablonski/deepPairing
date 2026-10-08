@@ -2288,7 +2288,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes4, createHash: createHash2 } = __require("crypto");
+    var { randomBytes: randomBytes4, createHash: createHash3 } = __require("crypto");
     var { Duplex, Readable: Readable2 } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -2956,7 +2956,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest = createHash2("sha1").update(key + GUID).digest("base64");
+        const digest = createHash3("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -3325,7 +3325,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash: createHash2 } = __require("crypto");
+    var { createHash: createHash3 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -3632,7 +3632,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest = createHash2("sha1").update(key + GUID).digest("base64");
+        const digest = createHash3("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -24141,6 +24141,7 @@ function nanoid3(size = 21) {
 
 // src/store/global-store.ts
 import fs7 from "node:fs";
+import { createHash } from "node:crypto";
 import os4 from "node:os";
 import path6 from "node:path";
 
@@ -24592,13 +24593,99 @@ var GlobalStore = class _GlobalStore {
       reentrant: true
     });
   }
+  /**
+   * #486 — `<ledger>.removed.json`: `{ seq, removals: { [conceptKey]: seq } }`.
+   * `seq` is a MONOTONIC removal counter (never a clock: a backward clock step
+   * must not change which mirrors count as "older than the removal"). A
+   * mirror queued while the ledger was busy carries the `seq` it saw before
+   * its first attempt; on replay it is skipped if its concept was removed
+   * after that. A sidecar, so the ledger's own format is unchanged.
+   */
+  removalsPath() {
+    return `${this.ledgerPath}.removed.json`;
+  }
+  /** Read the removal sidecar. A corrupt file is backed up and salvaged —
+   *  never silently treated as empty (that would lose tombstones). */
+  readRemovals() {
+    let raw2;
+    try {
+      raw2 = fs7.readFileSync(this.removalsPath(), "utf-8");
+    } catch (err) {
+      if (err.code === "ENOENT") return { seq: 0, removals: {} };
+      throw err;
+    }
+    const salvage = (text) => {
+      const out = {};
+      for (const m of text.matchAll(/"((?:[^"\\]|\\.)*)"\s*:\s*(\d+)/g)) {
+        try {
+          const key = JSON.parse(`"${m[1]}"`);
+          if (key !== "seq") out[key] = Number(m[2]);
+        } catch {
+        }
+      }
+      return out;
+    };
+    try {
+      const v = JSON.parse(raw2);
+      if (v && typeof v === "object" && Number.isInteger(v.seq) && v.removals && typeof v.removals === "object" && !Array.isArray(v.removals)) {
+        const removals2 = {};
+        let bad = false;
+        for (const [k, n] of Object.entries(v.removals)) {
+          if (Number.isInteger(n)) removals2[k] = n;
+          else bad = true;
+        }
+        if (!bad) return { seq: v.seq, removals: removals2 };
+      }
+    } catch {
+    }
+    const removals = salvage(raw2);
+    const seqMatch = raw2.match(/"seq"\s*:\s*(\d+)/);
+    const seq = Math.max(0, seqMatch ? Number(seqMatch[1]) : 0, ...Object.values(removals));
+    const backup = `${this.removalsPath()}.corrupt-${createHash("sha256").update(raw2).digest("hex").slice(0, 12)}`;
+    if (!fs7.existsSync(backup)) {
+      try {
+        fs7.copyFileSync(this.removalsPath(), backup);
+      } catch {
+      }
+      console.error(
+        `[deepPairing] GlobalStore: the removal record ${this.removalsPath()} is corrupt; backed up to ${backup} and salvaged ${Object.keys(removals).length} removal(s). Check the backup if a removed stance reappears.`
+      );
+    }
+    return { seq, removals };
+  }
+  /** The current removal sequence — captured by a mirror before its first
+   *  attempt, so its replay can tell whether a removal happened since. */
+  removalSeq() {
+    try {
+      return this.readRemovals().seq;
+    } catch {
+      return 0;
+    }
+  }
+  /** Called under the ledger lock (removeConcept), BEFORE the deletion.
+   *  Throws if the tombstone can't be made durable — the removal then fails
+   *  rather than acknowledging something a queued mirror could undo. */
+  recordRemoval(key) {
+    const current = this.readRemovals();
+    const seq = current.seq + 1;
+    try {
+      fs7.mkdirSync(path6.dirname(this.removalsPath()), { recursive: true });
+      writeJsonAtomic(this.removalsPath(), { seq, removals: { ...current.removals, [key]: seq } });
+    } catch (err) {
+      throw new Error(
+        `could not record the removal of "${key}" durably (${this.removalsPath()}: ${err.message}); refusing to remove it, because a queued mirror could re-add it.`
+      );
+    }
+  }
+  /** Returns true only when the ledger was durably replaced (#488 review:
+   *  callers that must not acknowledge a refused write check this). */
   write(ledger) {
     if (this.lastReadCorrupt) {
       const snap = corruptSnapshots.get(this.ledgerPath);
       console.error(
         `[deepPairing] GlobalStore: refusing to write ${this.ledgerPath} \u2014 the current on-disk ledger is corrupt; not overwriting it with a reset shape. ` + (snap ? `A backup of the corrupt file is at ${snap}. ` : `It could NOT be backed up (no snapshot of the current corrupt state exists on disk). `) + `Fix or remove the file to resume recording.`
       );
-      return;
+      return false;
     }
     if (this.lastReadDroppedEntries) {
       this.snapshotLedger();
@@ -24607,7 +24694,10 @@ var GlobalStore = class _GlobalStore {
       fs7.mkdirSync(path6.dirname(this.ledgerPath), { recursive: true });
       writeJsonAtomic(this.ledgerPath, ledger);
       corruptSnapshots.delete(this.ledgerPath);
-    } catch {
+      return true;
+    } catch (err) {
+      console.error(`[deepPairing] GlobalStore: could not write ${this.ledgerPath}:`, err);
+      return false;
     }
   }
   /**
@@ -24634,16 +24724,32 @@ var GlobalStore = class _GlobalStore {
    * treat as genuine.
    */
   static DEDUPE_WINDOW_MS = 5e3;
-  recordInstance(concept, instance) {
-    if (!concept.trim()) return;
-    this.transact(() => this.recordInstanceLocked(concept, instance));
+  recordInstance(concept, instance, opts = {}) {
+    if (!concept.trim()) return "duplicate";
+    return this.transact(() => this.recordInstanceLocked(concept, instance, opts));
   }
-  recordInstanceLocked(concept, instance) {
+  recordInstanceLocked(concept, instance, opts = {}) {
     const key = normalizeKey(concept);
     const ledger = this.read();
+    if (this.lastReadCorrupt) {
+      this.write(ledger);
+      return "refused";
+    }
+    if (opts.precondition && !opts.precondition()) return "ineligible";
     const now = instance.at ?? (/* @__PURE__ */ new Date()).toISOString();
     const nowMs = Date.parse(now);
     const existing = ledger.concepts[key];
+    if (opts.replayedFromSeq !== void 0) {
+      const removedSeq = this.readRemovals().removals[key];
+      if (removedSeq !== void 0 && removedSeq > opts.replayedFromSeq) {
+        console.error(`[deepPairing] skipped a queued cross-project mirror for "${concept}": the concept was removed after it was queued.`);
+        return "removed";
+      }
+    }
+    if (opts.onlyIfConceptExists && !existing) return "not-published";
+    if (opts.exactOnce && existing?.instances.some((prior) => prior.project === instance.project && prior.sessionId === instance.sessionId && prior.verdict === instance.verdict && prior.at === now)) {
+      return "duplicate";
+    }
     const finalized = {
       project: instance.project,
       sessionId: instance.sessionId,
@@ -24656,7 +24762,7 @@ var GlobalStore = class _GlobalStore {
       if (finalized.project === "manual" && finalized.sessionId === "seed" && existing.instances.some(
         (prior) => prior.project === "manual" && prior.sessionId === "seed" && prior.verdict === finalized.verdict
       )) {
-        return;
+        return "duplicate";
       }
       const isRetry = Number.isFinite(nowMs) && existing.instances.some((prior) => {
         if (prior.project !== finalized.project) return false;
@@ -24666,7 +24772,7 @@ var GlobalStore = class _GlobalStore {
         if (!Number.isFinite(priorMs)) return false;
         return Math.abs(nowMs - priorMs) < _GlobalStore.DEDUPE_WINDOW_MS;
       });
-      if (isRetry) return;
+      if (isRetry) return "duplicate";
       existing.instances.push(finalized);
       existing.lastSeenAt = now;
     } else {
@@ -24678,7 +24784,7 @@ var GlobalStore = class _GlobalStore {
         lastSeenAt: now
       };
     }
-    this.write(ledger);
+    return this.write(ledger) ? "written" : "refused";
   }
   /**
    * First-class stance removal — deletes the WHOLE concept entry (all
@@ -24725,8 +24831,13 @@ var GlobalStore = class _GlobalStore {
         `could not back the ledger up before removal (${this.ledgerPath}) \u2014 refusing to delete taste history without a reversible copy.`
       );
     }
+    this.recordRemoval(key);
     delete ledger.concepts[key];
-    this.write(ledger);
+    if (!this.write(ledger)) {
+      throw new Error(
+        `could not write the ledger to remove "${entry.concept}" (${this.ledgerPath}); nothing was removed. Retry the removal.`
+      );
+    }
     return { concept: entry.concept, instanceCount: entry.instances.length, backupPath };
   }
   /** Look up a single entry by concept (case-insensitive). */
@@ -26019,7 +26130,7 @@ function appendPostedReview(projectRoot2, sessionId, record2) {
 // src/store/review-post-journal.ts
 import fs13 from "node:fs";
 import path12 from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash as createHash2, randomUUID } from "node:crypto";
 var digestSchema = external_exports.string().regex(/^[0-9a-f]{64}$/);
 var eventSchema = external_exports.enum(["COMMENT", "REQUEST_CHANGES", "APPROVE"]);
 var timestampSchema = external_exports.iso.datetime();
@@ -26109,7 +26220,7 @@ function reviewPostDigest(value) {
     }
     return v;
   };
-  return createHash("sha256").update(JSON.stringify(stable(value))).digest("hex");
+  return createHash2("sha256").update(JSON.stringify(stable(value))).digest("hex");
 }
 function resultMatches(identity, result) {
   const states = { COMMENT: "COMMENTED", REQUEST_CHANGES: "CHANGES_REQUESTED", APPROVE: "APPROVED" };
@@ -26295,7 +26406,7 @@ var ReviewPostJournal = class {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4096) {
       throw new ReviewPostJournalError("invalid", "Claim must be a regular file of at most 4096 bytes; inspect it manually.");
     }
-    return createHash("sha256").update(readBoundedFile(this.claimPath, 4096)).digest("hex");
+    return createHash2("sha256").update(readBoundedFile(this.claimPath, 4096)).digest("hex");
   }
   /** Operator-only, offline coordination: this is NOT a process-liveness proof.
    * The explicit assertion excludes concurrent replacement after comparison. */
@@ -26479,6 +26590,8 @@ var ReviewPostJournal = class {
 
 // src/store/file-store.ts
 var PREFERENCES_LOCK_TIMEOUT_MS = 1e3;
+var MIRROR_QUEUE_MAX = 200;
+var MIRROR_QUEUE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 var LEDGER_EXEMPT_REJECT_TYPES = /* @__PURE__ */ new Set([
   "explainer",
   "debrief"
@@ -26574,6 +26687,7 @@ var FileStore = class _FileStore {
     this.captureRecordBaselines();
     this.loadPreferences();
     this.loadSessionPrefs();
+    if (!this.isDemoSession && fs14.existsSync(this.ledgerMirrorPendingPath())) this.scheduleMirrorReplay(0, 0);
   }
   ensureDir() {
     const sessionDir = path13.join(this.basePath, "sessions", this.sessionId);
@@ -26894,6 +27008,10 @@ var FileStore = class _FileStore {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
+    }
+    if (this.mirrorReplayTimer) {
+      clearTimeout(this.mirrorReplayTimer);
+      this.mirrorReplayTimer = null;
     }
   }
   getSessionId() {
@@ -27827,12 +27945,7 @@ var FileStore = class _FileStore {
     const conceptKey = concept?.trim() || description.trim();
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
-        getGlobalStore().recordInstance(capConceptLength(conceptKey), {
-          project: this.projectHint,
-          sessionId: this.sessionId,
-          verdict: "rejected",
-          reason
-        });
+        this.mirrorToLedger("rejected", conceptKey, description, reason);
       } catch (err) {
         _FileStore.logLedgerMirrorFailure("rejected", err);
       }
@@ -27903,11 +28016,7 @@ var FileStore = class _FileStore {
     const conceptKey = concept?.trim() || description.trim();
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
-        getGlobalStore().recordInstance(capConceptLength(conceptKey), {
-          project: this.projectHint,
-          sessionId: this.sessionId,
-          verdict: "approved"
-        });
+        this.mirrorToLedger("approved", conceptKey, description);
       } catch (err) {
         _FileStore.logLedgerMirrorFailure("approved", err);
       }
@@ -27940,7 +28049,7 @@ var FileStore = class _FileStore {
   overrideRejectedApproach(params) {
     const { description, concept } = params;
     let retired = 0;
-    this.mutatePreferences((prefs) => {
+    const retireLocal = () => this.mutatePreferences((prefs) => {
       const rejected = this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []);
       const keep = rejected.filter(
         (r) => !(description && r.description === description || concept && r.concept === concept)
@@ -27951,14 +28060,14 @@ var FileStore = class _FileStore {
       return true;
     });
     const conceptKey = concept?.trim() || description?.trim() || "";
+    if (conceptKey && !this.isDemoSession) {
+      this.cancelQueuedRejections(capConceptLength(conceptKey), description, retireLocal);
+    } else {
+      retireLocal();
+    }
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
-        getGlobalStore().recordInstance(capConceptLength(conceptKey), {
-          project: this.projectHint,
-          sessionId: this.sessionId,
-          verdict: "approved",
-          reason: "Retired by you \u2014 the gate was blocking something you wanted"
-        });
+        this.mirrorToLedger("override", conceptKey, description, "Retired by you \u2014 the gate was blocking something you wanted");
       } catch (err) {
         _FileStore.logLedgerMirrorFailure("override", err);
       }
@@ -28014,6 +28123,236 @@ var FileStore = class _FileStore {
       if (!mutate(prefs)) return;
       writeJsonAtomic(prefsPath, prefs);
     }, { label: "Project preferences lock", timeoutMs: PREFERENCES_LOCK_TIMEOUT_MS, reentrant: true });
+  }
+  // --- #486 — durable cross-project mirror ---
+  //
+  // The mirror into the cross-project ledger is advisory and must not block
+  // the local commit, but a busy ledger lock (ELOCKED past its 1 s bound) used
+  // to DROP it. Now a refused mirror is appended to a small project-local
+  // queue, `.deeppairing/ledger-mirror-pending.json`, and replayed:
+  //   - on a bounded backoff in this process (2 s, 5 s, 15 s, 60 s, unref'd);
+  //   - opportunistically after any later mirror that succeeds;
+  //   - when a FileStore for the project next starts (daemon restart), so a
+  //     queued mirror survives the process that queued it.
+  // A queue rather than only an in-memory retry: the in-memory version loses
+  // the mirror on exactly the restart the issue cares about, and the file is
+  // tiny and project-scoped, like preferences.json.
+  //
+  // Invariants:
+  //   - idempotent: an entry keeps the timestamp of its FIRST attempt, and the
+  //     ledger write is `exactOnce` on (project, sessionId, verdict, at), so a
+  //     replay that already landed — or two concurrent replayers — never adds
+  //     a duplicate instance;
+  //   - never resurrects: a queued rejection is replayed only while its local
+  //     row still exists (a retire removes the row, and cancelQueuedRejections
+  //     drops the entry); a queued approval only while the pattern is still
+  //     approved; nothing is replayed once the publish opt-in is off;
+  //   - #416 locks: the queue has its own lock, always taken BEFORE the ledger
+  //     lock (never the reverse), and a pass stops at the first busy ledger
+  //     lock, so it waits at most one bound;
+  //   - `ledger_write` broadcasts are unchanged: routes emit them for the
+  //     LOCAL record, which is committed before any of this.
+  mirrorReplayTimer = null;
+  static MIRROR_REPLAY_DELAYS_MS = [2e3, 5e3, 15e3, 6e4];
+  ledgerMirrorPendingPath() {
+    return path13.join(this.basePath, "ledger-mirror-pending.json");
+  }
+  /**
+   * #488 review — is this mirror still eligible, judged from DISK (another
+   * process — the CLI, a sibling session — may have changed it)? Runs inside
+   * the ledger lock as a precondition, immediately before the append, so a
+   * withdrawal or retire that completed while a writer waited for the lock
+   * always wins.
+   */
+  mirrorStillEligible(entry) {
+    const prefs = _FileStore.salvageRecord(
+      "preferences.json",
+      this.loadJsonFile(path13.join(this.basePath, "preferences.json"), {}),
+      {}
+    );
+    if (prefs.globalLedgerPublish !== true) return false;
+    if (entry.kind === "rejected") {
+      return this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []).some((r) => entry.description !== void 0 && r.description === entry.description || !!r.concept && capConceptLength(r.concept) === entry.concept);
+    }
+    if (entry.kind === "approved" && entry.description !== void 0) {
+      return Array.isArray(prefs.approvedPatterns) && prefs.approvedPatterns.includes(entry.description);
+    }
+    return true;
+  }
+  mirrorOptions(entry, replay) {
+    return {
+      exactOnce: true,
+      precondition: () => this.mirrorStillEligible(entry),
+      ...entry.kind === "override" ? { onlyIfConceptExists: true } : {},
+      ...replay ? { replayedFromSeq: entry.removalSeq ?? 0 } : {}
+    };
+  }
+  mirrorToLedger(kind, conceptKey, description, reason) {
+    const concept = capConceptLength(conceptKey);
+    const removalSeq = getGlobalStore().removalSeq();
+    const instance = {
+      project: this.projectHint,
+      sessionId: this.sessionId,
+      verdict: kind === "rejected" ? "rejected" : "approved",
+      ...reason ? { reason } : {},
+      at: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    const entry = { kind, concept, ...description ? { description } : {}, instance, removalSeq };
+    let outcome;
+    try {
+      outcome = getGlobalStore().recordInstance(concept, instance, this.mirrorOptions(entry, false));
+    } catch (err) {
+      if (!isFileLockError(err)) _FileStore.logLedgerMirrorFailure(kind, err);
+      this.queueLedgerMirror(entry);
+      return;
+    }
+    if (outcome === "refused") {
+      this.queueLedgerMirror(entry);
+      return;
+    }
+    if (fs14.existsSync(this.ledgerMirrorPendingPath())) this.replayLedgerMirrorsSafe();
+  }
+  /** Read the queue, applying its bounds. Malformed entries and entries cut
+   *  by the size/age caps are never dropped silently: the file is backed up
+   *  (`.corrupt-<ts>`) or the cut is logged. */
+  readPendingMirrors() {
+    const file2 = this.ledgerMirrorPendingPath();
+    const raw2 = this.loadJsonFile(file2, []);
+    if (!Array.isArray(raw2)) return [];
+    const valid = raw2.filter((e) => !!e && typeof e === "object" && typeof e.concept === "string" && ["rejected", "approved", "override"].includes(e.kind) && !!e.instance && typeof e.instance.at === "string");
+    if (valid.length !== raw2.length) {
+      const backup = `${file2}.corrupt-${Date.now()}`;
+      try {
+        fs14.copyFileSync(file2, backup);
+      } catch {
+      }
+      console.error(`[deepPairing] ${raw2.length - valid.length} malformed queued ledger mirror(s) skipped; the queue was backed up to ${backup}.`);
+    }
+    const cutoff = Date.now() - MIRROR_QUEUE_MAX_AGE_MS;
+    const fresh = valid.filter((e) => !(Date.parse(e.instance.at) < cutoff));
+    if (fresh.length !== valid.length) {
+      console.error(`[deepPairing] dropped ${valid.length - fresh.length} queued ledger mirror(s) older than 30 days.`);
+    }
+    if (fresh.length > MIRROR_QUEUE_MAX) {
+      console.error(`[deepPairing] the ledger mirror queue is capped at ${MIRROR_QUEUE_MAX}; dropped the ${fresh.length - MIRROR_QUEUE_MAX} oldest.`);
+      return fresh.slice(-MIRROR_QUEUE_MAX);
+    }
+    return fresh;
+  }
+  writePendingMirrors(entries) {
+    const file2 = this.ledgerMirrorPendingPath();
+    if (entries.length === 0) {
+      try {
+        fs14.unlinkSync(file2);
+      } catch {
+      }
+      return;
+    }
+    writeJsonAtomic(file2, entries);
+  }
+  withMirrorQueue(run) {
+    fs14.mkdirSync(this.basePath, { recursive: true });
+    return withFileLock(`${this.ledgerMirrorPendingPath()}.lock`, run, {
+      label: "Ledger mirror queue lock",
+      timeoutMs: PREFERENCES_LOCK_TIMEOUT_MS,
+      reentrant: true
+    });
+  }
+  queueLedgerMirror(entry) {
+    try {
+      this.withMirrorQueue(() => {
+        const entries = this.readPendingMirrors();
+        entries.push(entry);
+        this.writePendingMirrors(entries);
+      });
+    } catch (err) {
+      _FileStore.logLedgerMirrorFailure(entry.kind, err);
+      return;
+    }
+    console.error(`[deepPairing] cross-project ledger mirror (${entry.kind}) for "${entry.concept}" is queued: the ledger is busy; it will be retried.`);
+    if (!this.mirrorReplayTimer) this.scheduleMirrorReplay(0);
+  }
+  scheduleMirrorReplay(attempt, delay = _FileStore.MIRROR_REPLAY_DELAYS_MS[attempt]) {
+    if (this.disposed || delay === void 0) return;
+    const timer = setTimeout(() => {
+      this.mirrorReplayTimer = null;
+      const remaining = this.replayLedgerMirrorsSafe();
+      if (remaining > 0) this.scheduleMirrorReplay(attempt + 1);
+    }, delay);
+    timer.unref?.();
+    this.mirrorReplayTimer = timer;
+  }
+  /** Never throws; returns how many mirrors are still queued (0 if unknown). */
+  replayLedgerMirrorsSafe() {
+    try {
+      return this.replayLedgerMirrors();
+    } catch (err) {
+      if (errorCode(err) !== "ENOENT") console.error(`[deepPairing] ledger mirror replay failed:`, err);
+      return isFileLockError(err) ? 1 : 0;
+    }
+  }
+  /**
+   * Replay queued mirrors. Returns how many remain queued (the ledger was
+   * busy again). Public for tests and for a caller that wants to drain now.
+   */
+  replayLedgerMirrors() {
+    if (this.isDemoSession || !fs14.existsSync(this.ledgerMirrorPendingPath())) return 0;
+    return this.withMirrorQueue(() => {
+      const entries = this.readPendingMirrors();
+      const keep = [];
+      let stopped = false;
+      for (const entry of entries) {
+        if (stopped) {
+          keep.push(entry);
+          continue;
+        }
+        let outcome;
+        try {
+          outcome = getGlobalStore().recordInstance(entry.concept, entry.instance, this.mirrorOptions(entry, true));
+        } catch (err) {
+          if (!isFileLockError(err)) _FileStore.logLedgerMirrorFailure(entry.kind, err);
+          stopped = true;
+          keep.push(entry);
+          continue;
+        }
+        if (outcome === "refused") {
+          console.error(`[deepPairing] the cross-project ledger refused a queued mirror for "${entry.concept}"; it stays queued.`);
+          stopped = true;
+          keep.push(entry);
+          continue;
+        }
+      }
+      this.writePendingMirrors(keep);
+      return keep.length;
+    });
+  }
+  /** Drop queued REJECTED mirrors for a concept/description being retired.
+   *  Returns how many were dropped. */
+  /** Drop queued REJECTED mirrors for a concept/description being retired —
+   *  under the queue lock, together with `retireLocal`, so a replay cannot
+   *  slip in between and drop the entry itself (which would make the retire
+   *  think nothing was queued and publish a stray counter-approval).
+   *  Returns how many were dropped, or "unknown" if the queue lock was busy. */
+  cancelQueuedRejections(concept, description, retireLocal) {
+    if (!fs14.existsSync(this.ledgerMirrorPendingPath())) {
+      retireLocal();
+      return 0;
+    }
+    let cancelled = "unknown";
+    try {
+      this.withMirrorQueue(() => {
+        retireLocal();
+        const entries = this.readPendingMirrors();
+        const keep = entries.filter((e) => !(e.kind === "rejected" && (e.concept === concept || description !== void 0 && e.description === description)));
+        if (keep.length !== entries.length) this.writePendingMirrors(keep);
+        cancelled = entries.length - keep.length;
+      });
+    } catch (err) {
+      if (!isFileLockError(err) || err.path !== `${this.ledgerMirrorPendingPath()}.lock`) throw err;
+      console.error(`[deepPairing] could not check the ledger mirror queue (busy) \u2014 the retire's cross-project counter is skipped:`, err);
+      retireLocal();
+    }
+    return cancelled;
   }
   static logLedgerMirrorFailure(verdict, err) {
     console.error(`[deepPairing] cross-project ledger mirror (${verdict}) was not recorded:`, err);
@@ -31072,7 +31411,7 @@ function htmlExportFileName(sessionId, generatedAt = (/* @__PURE__ */ new Date()
 }
 
 // src/version.ts
-var SERVER_VERSION = "0.1.62";
+var SERVER_VERSION = "0.1.63";
 
 // src/store/rejected-option-recorder.ts
 function optionConceptKey(option) {

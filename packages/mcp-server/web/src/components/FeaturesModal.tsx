@@ -5,6 +5,7 @@ import { useModal } from "../hooks/useModal";
 import { timeAgo } from "../lib/time";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
 import { useToastStore } from "../stores/toast";
+import { useOfflineReason } from "../hooks/useOfflineReason";
 
 /**
  * #203 (H2) — the Features view, slice 1. A DERIVED read-model: a FEATURE is a
@@ -67,6 +68,7 @@ const OPEN_ITEM_LABEL: Record<FeatureOpenItem["kind"], string> = {
 };
 
 export function FeaturesModal({ onClose }: { onClose: () => void }) {
+  const offline = useOfflineReason(); // #487 review — act paths gate on the shared offline condition (#467)
   const { dialogProps } = useModal({ onClose });
   const [data, setData] = useState<FeatureGroupsResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -134,6 +136,7 @@ export function FeaturesModal({ onClose }: { onClose: () => void }) {
   // state so a correction doesn't collapse groups the human opened; a brand-new
   // group (a move to a not-yet-rendered key) defaults to expanded.
   const postOverride = async (body: Record<string, unknown>): Promise<boolean> => {
+    if (offline) return false; // #487 review — refused offline (the control is disabled too)
     setSavingOverride(true);
     setOverrideError(null);
     try {
@@ -291,8 +294,9 @@ export function FeaturesModal({ onClose }: { onClose: () => void }) {
                           className="flex-1 min-w-0 bg-surface-secondary border border-border-default rounded px-2 py-1 text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-blue"
                         />
                         <button
+                          title={offline ?? undefined}
                           onClick={() => void commitRename(g)}
-                          disabled={savingOverride}
+                          disabled={(savingOverride) || !!offline}
                           className="text-2xs text-accent-blue hover:underline disabled:opacity-50 shrink-0"
                         >
                           Save
@@ -391,8 +395,8 @@ export function FeaturesModal({ onClose }: { onClose: () => void }) {
                                     <select
                                       data-feature-move
                                       aria-label={`Move ${r.title} to another feature`}
-                                      title="Move to feature…"
-                                      disabled={savingOverride}
+                                      title={offline ?? "Move to feature…"}
+                                      disabled={savingOverride || !!offline}
                                       value=""
                                       onChange={(e) => {
                                         const target = e.target.value;

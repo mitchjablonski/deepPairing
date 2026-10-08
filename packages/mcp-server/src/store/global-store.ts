@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { writeJsonAtomic } from "./atomic-write.js";
@@ -28,6 +29,23 @@ import { normalizeConceptKey } from "@deeppairing/shared";
  */
 
 export type PhilosophyVerdict = "rejected" | "approved";
+
+/** #488 review — what recordInstance actually did. Only "written" changed the
+ *  ledger; "duplicate" / "removed" / "ineligible" / "not-published" are
+ *  validated, intentional no-ops; "refused" means the ledger would not accept
+ *  the write (corrupt or unwritable) and nothing was recorded. */
+export type RecordOutcome = "written" | "duplicate" | "removed" | "ineligible" | "not-published" | "refused";
+
+export interface RecordInstanceOptions {
+  /** Skip if this exact (project, sessionId, verdict, at) instance exists. */
+  exactOnce?: boolean;
+  /** A replayed mirror: skip if the concept was removed after this removal sequence. */
+  replayedFromSeq?: number;
+  /** Evaluated under the ledger lock just before appending; false ⇒ "ineligible". */
+  precondition?: () => boolean;
+  /** Only append if the concept already exists (a retire's counter-approval). */
+  onlyIfConceptExists?: boolean;
+}
 export type PhilosophyStance = "avoid" | "prefer" | "mixed";
 
 export interface PhilosophyInstance {
@@ -369,7 +387,92 @@ export class GlobalStore {
     });
   }
 
-  private write(ledger: LedgerFile): void {
+  /**
+   * #486 — `<ledger>.removed.json`: `{ seq, removals: { [conceptKey]: seq } }`.
+   * `seq` is a MONOTONIC removal counter (never a clock: a backward clock step
+   * must not change which mirrors count as "older than the removal"). A
+   * mirror queued while the ledger was busy carries the `seq` it saw before
+   * its first attempt; on replay it is skipped if its concept was removed
+   * after that. A sidecar, so the ledger's own format is unchanged.
+   */
+  private removalsPath(): string {
+    return `${this.ledgerPath}.removed.json`;
+  }
+
+  /** Read the removal sidecar. A corrupt file is backed up and salvaged —
+   *  never silently treated as empty (that would lose tombstones). */
+  private readRemovals(): { seq: number; removals: Record<string, number> } {
+    let raw: string;
+    try {
+      raw = fs.readFileSync(this.removalsPath(), "utf-8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return { seq: 0, removals: {} };
+      throw err;
+    }
+    const salvage = (text: string): Record<string, number> => {
+      const out: Record<string, number> = {};
+      for (const m of text.matchAll(/"((?:[^"\\]|\\.)*)"\s*:\s*(\d+)/g)) {
+        try { const key = JSON.parse(`"${m[1]}"`) as string; if (key !== "seq") out[key] = Number(m[2]); } catch { /* skip */ }
+      }
+      return out;
+    };
+    try {
+      const v = JSON.parse(raw) as { seq?: unknown; removals?: unknown };
+      if (v && typeof v === "object" && Number.isInteger(v.seq) && v.removals && typeof v.removals === "object" && !Array.isArray(v.removals)) {
+        const removals: Record<string, number> = {};
+        let bad = false;
+        for (const [k, n] of Object.entries(v.removals as Record<string, unknown>)) {
+          if (Number.isInteger(n)) removals[k] = n as number; else bad = true;
+        }
+        if (!bad) return { seq: v.seq as number, removals };
+      }
+    } catch { /* fall through to salvage */ }
+    const removals = salvage(raw);
+    // The counter must never go backwards (a reused number would let a
+    // removal look older than a mirror queued before it): take the larger of
+    // a still-readable "seq" and the highest per-concept entry.
+    const seqMatch = raw.match(/"seq"\s*:\s*(\d+)/);
+    const seq = Math.max(0, seqMatch ? Number(seqMatch[1]) : 0, ...Object.values(removals));
+    // One backup per corruption, not per read: the name is the content's
+    // hash, so every later read of the same bad bytes (each mirror reads the
+    // sequence) reuses it instead of piling up copies.
+    const backup = `${this.removalsPath()}.corrupt-${createHash("sha256").update(raw).digest("hex").slice(0, 12)}`;
+    if (!fs.existsSync(backup)) {
+      try { fs.copyFileSync(this.removalsPath(), backup); } catch { /* best effort */ }
+      console.error(
+        `[deepPairing] GlobalStore: the removal record ${this.removalsPath()} is corrupt; backed up to ${backup} and salvaged ` +
+        `${Object.keys(removals).length} removal(s). Check the backup if a removed stance reappears.`,
+      );
+    }
+    return { seq, removals };
+  }
+
+  /** The current removal sequence — captured by a mirror before its first
+   *  attempt, so its replay can tell whether a removal happened since. */
+  removalSeq(): number {
+    try { return this.readRemovals().seq; } catch { return 0; }
+  }
+
+  /** Called under the ledger lock (removeConcept), BEFORE the deletion.
+   *  Throws if the tombstone can't be made durable — the removal then fails
+   *  rather than acknowledging something a queued mirror could undo. */
+  private recordRemoval(key: string): void {
+    const current = this.readRemovals();
+    const seq = current.seq + 1;
+    try {
+      fs.mkdirSync(path.dirname(this.removalsPath()), { recursive: true });
+      writeJsonAtomic(this.removalsPath(), { seq, removals: { ...current.removals, [key]: seq } });
+    } catch (err) {
+      throw new Error(
+        `could not record the removal of "${key}" durably (${this.removalsPath()}: ${(err as Error).message}); ` +
+        "refusing to remove it, because a queued mirror could re-add it.",
+      );
+    }
+  }
+
+  /** Returns true only when the ledger was durably replaced (#488 review:
+   *  callers that must not acknowledge a refused write check this). */
+  private write(ledger: LedgerFile): boolean {
     // H1-5 — REFUSE to overwrite a ledger the most recent read couldn't trust.
     // Writing the (empty) fallback shape here is exactly the permanent
     // data-loss bug: recordInstance reads empty-on-corruption, appends one
@@ -386,7 +489,7 @@ export class GlobalStore {
             : `It could NOT be backed up (no snapshot of the current corrupt state exists on disk). `) +
           `Fix or remove the file to resume recording.`,
       );
-      return;
+      return false;
     }
     // H1-5 R1 — never shrink the on-disk ledger (a per-entry DROP happened this
     // read) without first snapshotting the pre-drop bytes. writeJsonAtomic below
@@ -404,8 +507,12 @@ export class GlobalStore {
       // The file on disk is valid again; forget any stale corruption snapshot so
       // a future corruption of this path is treated as new (H1-5 R4).
       corruptSnapshots.delete(this.ledgerPath);
-    } catch {
-      // Silent — losing the ledger is non-fatal for the current session.
+      return true;
+    } catch (err) {
+      // Non-fatal for the current session, but no longer silent: the caller
+      // learns the write did not land (false), and it is logged.
+      console.error(`[deepPairing] GlobalStore: could not write ${this.ledgerPath}:`, err);
+      return false;
     }
   }
 
@@ -434,18 +541,61 @@ export class GlobalStore {
    */
   private static readonly DEDUPE_WINDOW_MS = 5000;
 
-  recordInstance(concept: string, instance: Omit<PhilosophyInstance, "at"> & { at?: string }): void {
-    if (!concept.trim()) return;
-    this.transact(() => this.recordInstanceLocked(concept, instance));
+  recordInstance(
+    concept: string,
+    instance: Omit<PhilosophyInstance, "at"> & { at?: string },
+    opts: RecordInstanceOptions = {},
+  ): RecordOutcome {
+    if (!concept.trim()) return "duplicate";
+    return this.transact(() => this.recordInstanceLocked(concept, instance, opts));
   }
 
-  private recordInstanceLocked(concept: string, instance: Omit<PhilosophyInstance, "at"> & { at?: string }): void {
+  private recordInstanceLocked(
+    concept: string,
+    instance: Omit<PhilosophyInstance, "at"> & { at?: string },
+    opts: RecordInstanceOptions = {},
+  ): RecordOutcome {
     const key = normalizeKey(concept);
     const ledger = this.read();
+    // #488 review — a corrupt ledger refuses every write (H1-5). Say so, so a
+    // queued mirror is kept rather than acknowledged.
+    if (this.lastReadCorrupt) {
+      this.write(ledger); // refuses (never overwrites a corrupt ledger) and logs the refusal
+      return "refused";
+    }
+    // #488 review — eligibility (publish consent, the local row still there)
+    // is decided HERE, under the ledger lock and from disk, immediately
+    // before appending — not from a snapshot taken before a blocking wait.
+    if (opts.precondition && !opts.precondition()) return "ineligible";
     const now = instance.at ?? new Date().toISOString();
     const nowMs = Date.parse(now);
 
     const existing = ledger.concepts[key];
+    // #486 — a REPLAYED mirror carries the timestamp of its first attempt, so
+    // the (project, sessionId, verdict, at) signature identifies it exactly
+    // (the same signature importLedger dedupes on). Already present ⇒ an
+    // earlier replay landed it; never append it twice, whatever the age.
+    // #486 — removal is authoritative over every project's queued mirrors:
+    // an instance stamped BEFORE the concept was removed (a mirror queued
+    // while the ledger was busy, replayed after the user's `philosophy
+    // remove`) must not resurrect it. Checked here, under the ledger lock, so
+    // a remove racing a replay cannot lose. A genuinely new instance (stamped
+    // after the removal) still records.
+    if (opts.replayedFromSeq !== undefined) {
+      const removedSeq = this.readRemovals().removals[key];
+      if (removedSeq !== undefined && removedSeq > opts.replayedFromSeq) {
+        console.error(`[deepPairing] skipped a queued cross-project mirror for "${concept}": the concept was removed after it was queued.`);
+        return "removed";
+      }
+    }
+    // A retire's counter-approval only makes sense if something for this
+    // concept was actually published (#488 review).
+    if (opts.onlyIfConceptExists && !existing) return "not-published";
+    if (opts.exactOnce && existing?.instances.some((prior) =>
+      prior.project === instance.project && prior.sessionId === instance.sessionId &&
+      prior.verdict === instance.verdict && prior.at === now)) {
+      return "duplicate";
+    }
     const finalized: PhilosophyInstance = {
       project: instance.project,
       sessionId: instance.sessionId,
@@ -476,7 +626,7 @@ export class GlobalStore {
             prior.verdict === finalized.verdict,
         )
       ) {
-        return;
+        return "duplicate";
       }
       // II6 — scan recent instances for a duplicate within the window.
       const isRetry = Number.isFinite(nowMs) && existing.instances.some((prior) => {
@@ -487,7 +637,7 @@ export class GlobalStore {
         if (!Number.isFinite(priorMs)) return false;
         return Math.abs(nowMs - priorMs) < GlobalStore.DEDUPE_WINDOW_MS;
       });
-      if (isRetry) return;
+      if (isRetry) return "duplicate";
       existing.instances.push(finalized);
       existing.lastSeenAt = now;
     } else {
@@ -499,7 +649,7 @@ export class GlobalStore {
         lastSeenAt: now,
       };
     }
-    this.write(ledger);
+    return this.write(ledger) ? "written" : "refused";
   }
 
   /**
@@ -552,8 +702,19 @@ export class GlobalStore {
       );
     }
 
+    // #488 review — the anti-resurrection tombstone is made durable FIRST;
+    // if it can't be, the removal fails before anything is deleted. Only then
+    // is the concept deleted. An interruption between the two leaves a
+    // tombstone for a concept that is still present: harmless (no queued
+    // mirror can re-add it, new instances still record) and a retry of the
+    // removal completes it.
+    this.recordRemoval(key);
     delete ledger.concepts[key];
-    this.write(ledger);
+    if (!this.write(ledger)) {
+      throw new Error(
+        `could not write the ledger to remove "${entry.concept}" (${this.ledgerPath}); nothing was removed. Retry the removal.`,
+      );
+    }
     return { concept: entry.concept, instanceCount: entry.instances.length, backupPath };
   }
 

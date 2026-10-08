@@ -2,6 +2,8 @@ import { useState } from "react";
 import type { Comment } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { suggestionPill } from "../lib/suggestionPill";
+import { useOfflineReason } from "../hooks/useOfflineReason";
+import { useDraft } from "../hooks/useDraft";
 
 /**
  * #172 — a posted suggested edit, rendered as a first-class card on the
@@ -57,11 +59,14 @@ export function SuggestionCard({
   replies: Comment[];
   filePath?: string;
 }) {
+  const offline = useOfflineReason(); // #477 — act paths gate on the shared offline condition (#467)
   const resolveSuggestion = useArtifactStore((s) => s.resolveSuggestion);
   const submitComment = useArtifactStore((s) => s.submitComment);
   const [busy, setBusy] = useState(false);
-  const [replyOpen, setReplyOpen] = useState(false);
-  const [replyText, setReplyText] = useState("");
+  // #487 review — the counter-reply draft survives a reload (useDraft), and a
+  // card reopens with it.
+  const [replyText, setReplyText] = useDraft(`sugg-reply:${comment.id}`);
+  const [replyOpen, setReplyOpen] = useState(() => !!replyText);
 
   const s = comment.suggestion;
   if (!s) return null;
@@ -78,6 +83,7 @@ export function SuggestionCard({
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
   const act = async (action: "take_counter" | "insist") => {
+    if (offline) return; // #477 — refused offline (the control is disabled too)
     if (busy) return;
     setBusy(true);
     try {
@@ -90,6 +96,7 @@ export function SuggestionCard({
   };
 
   const sendReply = async () => {
+    if (offline) return; // #477 — refused offline (the control is disabled too)
     const text = replyText.trim();
     if (!text || busy) return;
     setBusy(true);
@@ -156,8 +163,9 @@ export function SuggestionCard({
       {s.state === "countered" && (
         <div className="flex flex-wrap gap-1.5 px-3 py-2.5 border-t border-border-subtle">
           <button
+            title={offline ?? undefined}
             type="button"
-            disabled={busy}
+            disabled={(busy) || !!offline}
             onClick={() => act("take_counter")}
             className="px-2.5 py-1 text-2xs rounded border border-accent-green-dim bg-accent-green-dim text-accent-green
                        hover:brightness-110 disabled:opacity-50 transition-all"
@@ -165,8 +173,9 @@ export function SuggestionCard({
             Take the counter
           </button>
           <button
+            title={offline ?? undefined}
             type="button"
-            disabled={busy}
+            disabled={(busy) || !!offline}
             onClick={() => act("insist")}
             className="px-2.5 py-1 text-2xs rounded border border-border-default bg-surface-elevated text-text-secondary
                        hover:bg-surface-hover disabled:opacity-50 transition-colors"
@@ -207,8 +216,9 @@ export function SuggestionCard({
           />
           <div className="flex gap-1.5 mt-1">
             <button
+              title={offline ?? undefined}
               type="button"
-              disabled={!replyText.trim() || busy}
+              disabled={(!replyText.trim() || busy) || !!offline}
               onClick={() => void sendReply()}
               className="px-2.5 py-1 text-2xs rounded bg-accent-violet-strong text-white hover:bg-accent-violet-strong-hover disabled:opacity-50 transition-colors"
             >
