@@ -2273,12 +2273,23 @@ export function createHttpRoutes(
     if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
       return c.json({ error: "Invalid session ID" }, 400);
     }
-    try {
-      const s = new FileStore(projectRoot, sessionId);
-      return c.json({ annotations: s.getAnnotations() });
-    } catch {
-      return c.json({ annotations: [] });
+    // #472 — load-only: `new FileStore(...)` mkdir -p's the session dir as a
+    // write-path side effect, so a GET for a nonexistent sessionId used to
+    // create `.deeppairing/sessions/<id>/` and then report an empty result
+    // as if the session existed. readAnnotationsIfSessionExists reads the
+    // sidecar file directly (no instance, no mkdir) and distinguishes an
+    // absent session (404, same shape as the sibling GET
+    // /api/sessions/:sessionId read route) from a valid session with no
+    // annotations yet (200, legacy-empty) from a real read failure (500,
+    // reported honestly rather than silently flattened to empty).
+    const result = FileStore.readAnnotationsIfSessionExists(projectRoot, sessionId);
+    if (!result.ok) {
+      return c.json({ error: result.message }, 500);
     }
+    if (!result.exists) {
+      return c.json({ error: "Session not found" }, 404);
+    }
+    return c.json({ annotations: result.annotations });
   });
 
   app.post("/api/sessions/:sessionId/annotations", async (c) => {
