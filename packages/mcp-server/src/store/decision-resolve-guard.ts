@@ -1,4 +1,4 @@
-import type { Artifact, DecisionClosedStatus, DecisionSupersededBy } from "@deeppairing/shared";
+import { decisionCanAcceptAnswer, nonAnswerableVerb, type Artifact, type DecisionClosedStatus, type DecisionSupersededBy, type DecisionNonAnswerableStatus } from "@deeppairing/shared";
 import type { DecisionRecord } from "./store-interface.js";
 import { isCrossTerminalVerdictFlip } from "./verdict-guard.js";
 
@@ -47,7 +47,7 @@ export type DecisionResolveOutcome =
   | { kind: "invalid_option" }
   | { kind: "no_record" }
   /** #492 — the decision's artifact is closed: refuse, write nothing. */
-  | { kind: "closed"; artifactId?: string; currentStatus: DecisionClosedStatus; supersededBy?: DecisionSupersededBy; successorStatus?: DecisionClosedStatus };
+  | { kind: "closed"; artifactId?: string; currentStatus: DecisionClosedStatus; supersededBy?: DecisionSupersededBy; successorStatus?: DecisionNonAnswerableStatus };
 
 /** The stale-resolve rule for a decision RECORD (pure; called inside the
  *  store's critical section). Null = go ahead and resolve. */
@@ -149,17 +149,20 @@ export function classifyClosedDecision(
   // superseded for answering purposes, whatever its own status says yet.
   const hasSuccessor = latest !== backing;
   const status = hasSuccessor ? "superseded" : backing.status;
-  if (!CLOSED_DECISION_STATUSES.has(status)) return null;
+  // The shared answerability rule. A rejected / sent-back decision carries a
+  // VERDICT and is refused earlier as verdict_already_final (with the
+  // recorded state); every other non-answerable state closes here.
+  if (decisionCanAcceptAnswer(status) || !CLOSED_DECISION_STATUSES.has(status)) return null;
   const outcome: Extract<DecisionResolveOutcome, { kind: "closed" }> = {
     kind: "closed",
     artifactId: backing.id,
     currentStatus: status as DecisionClosedStatus,
   };
   if (hasSuccessor) {
-    if (CLOSED_DECISION_STATUSES.has(latest.status)) {
-      // #493 review — the newest version was itself withdrawn / closed: there
-      // is nothing to answer, so don't send the human to a dead card.
-      outcome.successorStatus = latest.status as DecisionClosedStatus;
+    if (!decisionCanAcceptAnswer(latest.status)) {
+      // #493 review — the newest version can't take an answer either (rejected,
+      // withdrawn, closed, …): nothing to answer, so no link to a dead card.
+      outcome.successorStatus = latest.status as DecisionNonAnswerableStatus;
     } else {
       const decisionId = (latest.content as { decisionId?: unknown } | null)?.decisionId;
       outcome.supersededBy = { artifactId: latest.id, ...(typeof decisionId === "string" && decisionId ? { decisionId } : {}) };
@@ -174,7 +177,7 @@ export function closedResolveBody(
   decisionId: string,
 ): Record<string, unknown> {
   const message = outcome.currentStatus === "superseded" && outcome.successorStatus
-    ? `This question was revised, and the newer version was ${outcome.successorStatus === "retracted" ? "withdrawn" : "closed"} too — there's nothing to answer here.`
+    ? `This question was revised, and the newer version was ${nonAnswerableVerb(outcome.successorStatus)} too — there's nothing to answer here.`
     : outcome.currentStatus === "superseded"
     ? "This question was revised — answer the new version. Your answer to the old one wasn't recorded."
     : outcome.currentStatus === "retracted"

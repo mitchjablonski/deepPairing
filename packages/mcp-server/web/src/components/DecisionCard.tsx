@@ -4,7 +4,7 @@ import { useDraft, clearDraftIfUnchanged } from "../hooks/useDraft";
 // `motion` component: drops ~40kB gzip of animation features nothing uses
 // from the ENTRY bundle. Same animations.
 import { AnimatePresence } from "motion/react";
-import { type DecisionRequestEvent, type Artifact, type PlanVisual, type DecisionClosedStatus, coerceDecisionContent } from "@deeppairing/shared";
+import { type DecisionRequestEvent, type Artifact, type PlanVisual, type DecisionClosedStatus, type DecisionNonAnswerableStatus, coerceDecisionContent, decisionCanAcceptAnswer, nonAnswerableVerb } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
 import { SimpleMarkdown } from "./SimpleMarkdown";
 import { RepairDecisionModal } from "./RepairDecisionModal";
@@ -60,7 +60,7 @@ interface DecisionCardProps {
   /** #492 — the decision is CLOSED (its artifact was superseded, retracted or
    *  obsoleted): say so in second person, link a newer version, and offer no
    *  Select (the daemon refuses a late answer with 409 decision_closed). */
-  closed?: { status: DecisionClosedStatus; supersededBy?: { artifactId: string }; successorStatus?: "retracted" | "obsolete" };
+  closed?: { status: DecisionClosedStatus; supersededBy?: { artifactId: string }; successorStatus?: DecisionNonAnswerableStatus };
 }
 
 /**
@@ -687,7 +687,7 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
       {closed && (
         <div className="mb-2 px-3 py-2 rounded border border-border-default bg-surface-elevated text-xs text-text-secondary" data-testid="decision-closed">
           {closed.status === "superseded" && closed.successorStatus ? (
-            <>This question was revised, and the newer version was {closed.successorStatus === "retracted" ? "withdrawn" : "closed"} too — there&apos;s nothing to answer here.</>
+            <>This question was revised, and the newer version was {nonAnswerableVerb(closed.successorStatus)} too — there&apos;s nothing to answer here.</>
           ) : closed.status === "superseded" ? (
             <>
               This question was revised — answer the new version.{" "}
@@ -901,7 +901,9 @@ export function DecisionArtifactView({ artifact }: { artifact: Artifact }) {
     return latest.id === artifact.id ? null : `${latest.id}|${latest.status}`;
   });
   const [successorId, successorStatus] = successorKey ? successorKey.split("|") : [null, null];
-  const successorClosed = successorStatus === "retracted" || successorStatus === "obsolete";
+  // #493 review — the shared answerability rule decides whether the newest
+  // version is worth linking (rejected / withdrawn / closed / … → no link).
+  const successorClosed = !!successorStatus && !decisionCanAcceptAnswer(successorStatus);
   const closedStatus = successorId
     ? ("superseded" as const)
     : (["retracted", "obsolete", "superseded"] as const).find((st) => st === artifact.status);
@@ -953,7 +955,7 @@ export function DecisionArtifactView({ artifact }: { artifact: Artifact }) {
           ? {
               status: closedStatus,
               ...(successorId && !successorClosed ? { supersededBy: { artifactId: successorId } } : {}),
-              ...(successorClosed ? { successorStatus: successorStatus as "retracted" | "obsolete" } : {}),
+              ...(successorClosed ? { successorStatus: successorStatus as DecisionNonAnswerableStatus } : {}),
             }
           : undefined}
         retractReason={

@@ -89,3 +89,15 @@ describe("#493 review — the card around revisions", () => {
     expect(screen.queryAllByRole("button", { name: /^Select / })).toHaveLength(0);
   });
 });
+
+describe("#493 — the card uses the same answerability rule for the successor", () => {
+  const VERB = { rejected: "rejected", revised: "sent back for changes", superseded: "replaced", retracted: "withdrawn", obsolete: "closed" } as const;
+  it.each(Object.keys(VERB) as Array<keyof typeof VERB>)("v1 → v2 (%s): no link; honest copy", (st) => {
+    const v1 = decision("art_d", "dec_d", { status: "superseded" });
+    const v2 = decision("art_d2", "dec_d2", { parentId: "art_d", version: 2, status: st });
+    useArtifactStore.setState({ artifacts: [v1, v2] } as any);
+    render(<DecisionArtifactView artifact={v1} />);
+    expect(screen.getByTestId("decision-closed")).toHaveTextContent(`This question was revised, and the newer version was ${VERB[st]} too — there's nothing to answer here.`);
+    expect(screen.queryByRole("button", { name: "Open the new version →" })).not.toBeInTheDocument();
+  });
+});

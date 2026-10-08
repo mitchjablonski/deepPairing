@@ -57,6 +57,11 @@ export {
   type DecisionClosedStatus,
   type DecisionSupersededBy,
   type DecisionClosedRefusal,
+  DECISION_NON_ANSWERABLE_STATUSES,
+  DecisionNonAnswerableStatusSchema,
+  type DecisionNonAnswerableStatus,
+  decisionCanAcceptAnswer,
+  nonAnswerableVerb,
 } from "./schemas/decision.js";
 
 export {

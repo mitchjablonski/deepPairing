@@ -25793,6 +25793,11 @@ var DecisionResponseSchema = external_exports.object({
   predictedOutcome: external_exports.string().optional()
 });
 var DecisionClosedStatusSchema = external_exports.enum(["superseded", "retracted", "obsolete"]);
+var DECISION_NON_ANSWERABLE_STATUSES = ["rejected", "revised", "superseded", "retracted", "obsolete"];
+var DecisionNonAnswerableStatusSchema = external_exports.enum(DECISION_NON_ANSWERABLE_STATUSES);
+function decisionCanAcceptAnswer(status) {
+  return !DECISION_NON_ANSWERABLE_STATUSES.includes(status);
+}
 var DecisionSupersededBySchema = external_exports.object({
   artifactId: external_exports.string(),
   decisionId: external_exports.string().optional()
@@ -25806,7 +25811,7 @@ var DecisionClosedRefusalSchema = external_exports.object({
   supersededBy: DecisionSupersededBySchema.optional(),
   /** #493 review — the newest version was itself closed: no `supersededBy`
    *  link (nothing to answer), and this says why. */
-  successorStatus: DecisionClosedStatusSchema.optional(),
+  successorStatus: DecisionNonAnswerableStatusSchema.optional(),
   message: external_exports.string().optional()
 });
 
@@ -38371,7 +38376,7 @@ var DaemonClient = class {
           kind: "closed",
           currentStatus: status === "superseded" || status === "retracted" || status === "obsolete" ? status : "obsolete",
           ...typeof b.artifactId === "string" ? { artifactId: b.artifactId } : {},
-          ...b.successorStatus === "retracted" || b.successorStatus === "obsolete" ? { successorStatus: b.successorStatus } : {},
+          ...typeof b.successorStatus === "string" && !decisionCanAcceptAnswer(b.successorStatus) ? { successorStatus: b.successorStatus } : {},
           ...sup && typeof sup.artifactId === "string" ? { supersededBy: { artifactId: sup.artifactId, ...typeof sup.decisionId === "string" ? { decisionId: sup.decisionId } : {} } } : {}
         };
       }

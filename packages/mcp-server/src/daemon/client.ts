@@ -2,6 +2,7 @@
  * DaemonClient — HTTP client that implements IStore by proxying
  * all operations to the shared deepPairing daemon.
  */
+import { decisionCanAcceptAnswer, type DecisionNonAnswerableStatus } from "@deeppairing/shared";
 import type { DecisionResolveOutcome, RecordedResolution, ResolutionAnnouncement } from "../store/decision-resolve-guard.js";
 import type { Artifact, ArtifactStatus, Comment, TeamPreference, PreflightTrace } from "@deeppairing/shared";
 import type {
@@ -618,7 +619,8 @@ export class DaemonClient implements IStore {
           kind: "closed",
           currentStatus: status === "superseded" || status === "retracted" || status === "obsolete" ? status : "obsolete",
           ...(typeof b.artifactId === "string" ? { artifactId: b.artifactId } : {}),
-          ...(b.successorStatus === "retracted" || b.successorStatus === "obsolete" ? { successorStatus: b.successorStatus } : {}),
+          ...(typeof b.successorStatus === "string" && !decisionCanAcceptAnswer(b.successorStatus)
+            ? { successorStatus: b.successorStatus as DecisionNonAnswerableStatus } : {}),
           ...(sup && typeof sup.artifactId === "string"
             ? { supersededBy: { artifactId: sup.artifactId, ...(typeof sup.decisionId === "string" ? { decisionId: sup.decisionId } : {}) } }
             : {}),

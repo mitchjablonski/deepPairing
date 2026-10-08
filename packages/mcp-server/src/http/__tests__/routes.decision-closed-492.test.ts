@@ -177,3 +177,39 @@ describe("#493 review — the revise window and a closed successor", () => {
     expect(await res.json()).toMatchObject({ currentStatus: "superseded", supersededBy: { artifactId: "art_d2" } });
   });
 });
+
+/**
+ * #493 delta review — ONE answerability rule (shared decisionCanAcceptAnswer):
+ * any newest version that can't take an answer gets no link and honest copy.
+ */
+describe("#493 — a non-answerable successor, by the shared rule", () => {
+  const REASON = { rejected: "ui_reject_button", revised: "ui_revise_button", superseded: "agent_supersede", retracted: "agent_retract", obsolete: "ui_dismiss_obsolete" } as const;
+  const VERB = { rejected: "rejected", revised: "sent back for changes", superseded: "replaced", retracted: "withdrawn", obsolete: "closed" } as const;
+
+  it.each(Object.keys(REASON) as Array<keyof typeof REASON>)("v1 → v2 (%s): no link, honest copy", async (v2Status) => {
+    const store = fx.track(new FileStore(fx.dir, `s_succ_${v2Status}`));
+    seed(store);
+    store.updateArtifactStatus("art_d", "superseded", "agent_supersede");
+    store.createArtifact({ id: "art_d2", type: "decision", title: "Which? (revised)", parentId: "art_d", version: 2, content: { decisionId: "dec_d2", question: "Which?", options: OPTS } });
+    store.updateArtifactStatus("art_d2", v2Status, REASON[v2Status]);
+    expect(store.getArtifacts().find((a) => a.id === "art_d2")?.status).toBe(v2Status);
+    const app = withHash(createHttpRoutes(store, fx.dir, () => {}), fx.dir);
+    const res = await app.request("/api/decisions/dec_d", json({ optionId: "a" }));
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body).toMatchObject({ code: "decision_closed", currentStatus: "superseded", successorStatus: v2Status });
+    expect(body.supersededBy).toBeUndefined();
+    expect(body.message).toBe(`This question was revised, and the newer version was ${VERB[v2Status]} too — there's nothing to answer here.`);
+  });
+
+  it("control: an OPEN v2 (draft) is still linked", async () => {
+    const store = fx.track(new FileStore(fx.dir, "s_succ_open"));
+    seed(store);
+    store.updateArtifactStatus("art_d", "superseded", "agent_supersede");
+    store.createArtifact({ id: "art_d2", type: "decision", title: "Which? (revised)", parentId: "art_d", version: 2, content: { decisionId: "dec_d2", question: "Which?", options: OPTS } });
+    const app = withHash(createHttpRoutes(store, fx.dir, () => {}), fx.dir);
+    const body = await (await app.request("/api/decisions/dec_d", json({ optionId: "a" }))).json();
+    expect(body.supersededBy).toEqual({ artifactId: "art_d2", decisionId: "dec_d2" });
+    expect(body.successorStatus).toBeUndefined();
+  });
+});
