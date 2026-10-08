@@ -1,6 +1,7 @@
 import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SuggestionState, SuggestionCounter, DecisionOption, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
 
 import type { PostedReviewRecord } from "./posted-reviews.js";
+import type { DecisionResolveOutcome, ResolutionAnnouncement } from "./decision-resolve-guard.js";
 import type { DurableReviewPostStore } from "../github/durable-review-post.js";
 
 /** Allows both sync (FileStore) and async (DaemonClient) implementations */
@@ -431,6 +432,37 @@ export interface IStore {
     reasoning?: string,
     prediction?: { confidence?: "low" | "medium" | "high"; predictedOutcome?: string },
   ): MaybePromise<void>;
+  /**
+   * #464 (Astra review) — THE authoritative check-and-resolve: the stale-resolve
+   * classification (same pick → no-op, different pick / closed elsewhere →
+   * conflict with the recorded winner, unknown option → invalid) and the write
+   * happen in ONE critical section, so overlapping requests cannot both observe
+   * "unanswered" and both write. Every decision-resolve route goes through this;
+   * see store/decision-resolve-guard.ts.
+   */
+  resolveDecisionAtomic(
+    decisionId: string,
+    optionId: string,
+    reasoning?: string,
+    prediction?: { confidence?: "low" | "medium" | "high"; predictedOutcome?: string },
+  ): MaybePromise<DecisionResolveOutcome>;
+  /**
+   * #484 review — exactly-once announcement of a resolve. A resolve that WROTE
+   * the answer marks it unannounced; the route takes the mark only after a
+   * SUCCESSFUL flush and publishes `decision_resolved` with the RECORDED winner.
+   * A flush that failed (503) leaves the mark, so the next successful retry —
+   * same pick or a refused different one — announces it once; later retries
+   * get null (no duplicate). Called under the per-store resolve lock.
+   */
+  takeResolutionAnnouncement(decisionId: string): MaybePromise<ResolutionAnnouncement | null>;
+  /**
+   * #484 review — settle a resolveDecisionAtomic write once its flush is known:
+   * committed → release held feedback waiters; not committed (flush threw) →
+   * roll memory back to what disk holds (no delivery, no false "answered", no
+   * announcement). Every caller of resolveDecisionAtomic that got `resolved`
+   * must call this exactly once.
+   */
+  settleResolution(decisionId: string, committed: boolean): MaybePromise<void>;
   getDecisionResponse(decisionId: string): MaybePromise<{ optionId: string; reasoning?: string } | null>;
   getPendingDecisions(): MaybePromise<DecisionRecord[]>;
   getDecision(decisionId: string): MaybePromise<DecisionRecord | undefined>;

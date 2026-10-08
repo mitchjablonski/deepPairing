@@ -3,7 +3,7 @@
 // Covers: the store backstop, the route 409 + refresh broadcast, and the pinned
 // invariants that MUST stay normal (draft→terminal, same-verdict re-assert,
 // agent supersede/revise, J1 decision-resolve).
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { FileStore } from "../../store/file-store.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { withHash } from "./routes.harness.js";
@@ -366,5 +366,63 @@ describe("#460 — decision-resolve refuses a stale card with the current truth"
     expect(res.status).toBe(409);
     expect(await res.json()).toMatchObject({ code: "verdict_already_final", currentStatus: "rejected" });
     expect(store.getDecisionResponse("dec_s")).toBeNull();
+  });
+});
+
+/**
+ * #464 (Astra concurrency review) — OVERLAPPING resolves. The stale-resolve
+ * check used to be a multi-await snapshot taken before a separate write: two
+ * overlapping requests both saw "unanswered", both wrote, and the loser got a
+ * false 400 ("not an option"). Check-and-resolve is now one atomic store
+ * operation; exactly one request writes and every other one gets the winner.
+ */
+describe("#464 — concurrent decision resolves (public route)", () => {
+  const letters = "abcdefgh".split("");
+  const opts = letters.map((l) => ({ id: l, title: l.toUpperCase(), description: "d", pros: [], cons: [], effort: "low" as const, risk: "low" as const, recommendation: false }));
+  const seed = () => {
+    store.createArtifact({ id: "art_race", type: "decision", title: "Which?", content: { decisionId: "dec_race2", question: "Which?", options: opts } });
+    store.recordDecisionRequest({ decisionId: "dec_race2", artifactId: "art_race", context: "Which?", options: opts });
+  };
+  const post = (optionId: string) => app.request("/api/decisions/dec_race2", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ optionId, reasoning: `reason-${optionId}` }),
+  });
+
+  it("Astra's repro — Promise.all(a, b): exactly one write, one 200, one 409 carrying the winner", async () => {
+    seed();
+    const writes = vi.spyOn(store, "resolveDecision");
+    const [ra, rb] = await Promise.all([post("a"), post("b")]);
+    expect([ra.status, rb.status].sort()).toEqual([200, 409]);
+    expect(writes).toHaveBeenCalledTimes(1);
+    const winner = ra.status === 200 ? "a" : "b";
+    const loser = ra.status === 200 ? rb : ra;
+    expect(await loser.json()).toMatchObject({ code: "verdict_already_final", resolution: { optionId: winner, reasoning: `reason-${winner}` } });
+    expect(store.getDecisionResponse("dec_race2")).toMatchObject({ optionId: winner, reasoning: `reason-${winner}` });
+    expect(broadcasts.filter((e) => e.type === "decision_resolved")).toHaveLength(1);
+  });
+
+  it("an identical-choice concurrent retry: both 200, one write, the second a no-op carrying the first's reasoning", async () => {
+    seed();
+    const writes = vi.spyOn(store, "resolveDecision");
+    const [r1, r2] = await Promise.all([post("a"), post("a")]);
+    expect([r1.status, r2.status]).toEqual([200, 200]);
+    expect(writes).toHaveBeenCalledTimes(1);
+    const bodies = [await r1.json(), await r2.json()];
+    expect(bodies.filter((b) => b.alreadyResolved)).toHaveLength(1);
+    expect(store.getDecisionResponse("dec_race2")?.reasoning).toBe("reason-a");
+  });
+
+  it("8 concurrent DIFFERENT choices: exactly one 200 and one write; seven 409s all naming the same winner", async () => {
+    seed();
+    const writes = vi.spyOn(store, "resolveDecision");
+    const res = await Promise.all(letters.map((l) => post(l)));
+    const statuses = res.map((r) => r.status);
+    expect(statuses.filter((s) => s === 200)).toHaveLength(1);
+    expect(statuses.filter((s) => s === 409)).toHaveLength(7);
+    expect(writes).toHaveBeenCalledTimes(1);
+    const winner = letters[statuses.indexOf(200)]!;
+    for (const r of res.filter((x) => x.status === 409)) {
+      expect((await r.json()).resolution?.optionId).toBe(winner);
+    }
+    expect(store.getDecisionResponse("dec_race2")?.optionId).toBe(winner);
   });
 });
