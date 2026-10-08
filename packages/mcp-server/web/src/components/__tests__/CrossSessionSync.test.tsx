@@ -1,11 +1,30 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import App from "../../App";
+import { DecisionCard } from "../DecisionCard";
 import { useArtifactStore } from "../../stores/artifact";
 import { useConnectionStore } from "../../stores/connection";
 import { usePreferencesStore } from "../../stores/preferences";
 import { usePreflightBlockStore } from "../../stores/preflightBlocks";
 import { useReplayStore } from "../../stores/replay";
+import { useToastStore } from "../../stores/toast";
+import { useConnectionGraceStore } from "../../lib/connectionGrace";
+import { useSiblingSyncStore } from "../../lib/siblingSync";
+
+/**
+ * #464 review (CI flake, root cause) — App's bootstrap used to open a REAL
+ * WebSocket adapter here. Under CPU load its connect failure landed mid-test,
+ * flipped `connected` to false and the bar read "⚠ DISCONNECTED · … (last
+ * known)" (4/20 runs under 12 busy loops). These tests are about sibling sync,
+ * not transport: a quiet fake adapter that never connects or drops keeps the
+ * connection state exactly what each test sets.
+ */
+vi.mock("../../lib/connection-adapter", () => ({
+  createAdapter: () => ({
+    connect() {}, disconnect() {}, onMessage() {}, onConnect() {}, onDisconnect() {},
+    refreshUrl() {}, onFatalMismatch() {}, onConnectionRefused() {}, retryAfterRefusal() {}, switchSession() {},
+  }),
+}));
 
 /**
  * #457 D6 (docs/design/attention-walkthroughs.md) — "Nothing needs you" when the
@@ -42,7 +61,28 @@ beforeEach(() => {
     return json({ sessions: [] });
   }));
 });
+/**
+ * #464 review — render App and wait for its bootstrap to finish binding the
+ * tab (connect() installs the adapter). Under CPU load the bootstrap's
+ * active-sessions fetch resolved AFTER a test had started acting, and its late
+ * connect re-bound the tab mid-scenario. Binding via ?session= keeps it on the
+ * session the test chose.
+ */
+async function bootApp() {
+  const bound = useConnectionStore.getState().sessionId;
+  if (bound) window.history.replaceState({}, "", `/?session=${bound}`);
+  render(<App />);
+  await waitFor(() => expect(useConnectionStore.getState().adapter).toBeTruthy());
+}
+
 afterEach(() => {
+  window.history.replaceState({}, "", "/");
+  // Isolate every global these tests touch: the store's adapter, the shared
+  // offline/sibling-sync flags, fake timers, the fetch stub.
+  useConnectionStore.getState().disconnect();
+  useConnectionGraceStore.setState({ everConnected: false, graceOver: false });
+  useSiblingSyncStore.setState({ settled: false });
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -50,15 +90,18 @@ afterEach(() => {
 describe("#457 D6 — an empty bound session still merges its siblings", () => {
   it("bar ON: the sibling's decision is Decide 1 — not '◇ Nothing needs you'", async () => {
     usePreferencesStore.setState({ nextUpBar: true } as any);
-    render(<App />);
+    await bootApp();
     await waitFor(() => expect(screen.getByTestId("next-up-bar").getAttribute("data-line")).toMatch(/^▲ Which store backs the billing cache\?/));
     expect(screen.getByTestId("next-up-bar").getAttribute("data-line")).toContain("Decide 1");
     expect(screen.getByTestId("next-up-bar").getAttribute("data-line")).not.toContain("Nothing needs you");
+    // #467 × #464 merge — the first sibling pass still flips `settled` after the
+    // changeSignal / forceRefresh restructure of MultiAgentSync.
+    await waitFor(() => expect(useSiblingSyncStore.getState().settled).toBe(true));
   });
 
   it("bar OFF: the tab title counts it and the decision is on screen (was: an empty-session shell)", async () => {
     usePreferencesStore.setState({ nextUpBar: false } as any);
-    render(<App />);
+    await bootApp();
     await waitFor(() => expect(document.title).toMatch(/^\(1\)/));
     // The panel mounts with the sibling's decision (the single pending card in
     // view — so PendingBanner's J2b step-down rightly stays quiet).
@@ -67,7 +110,7 @@ describe("#457 D6 — an empty bound session still merges its siblings", () => {
 
   it("a store reset (session switch / hydration) re-merges the siblings it discarded", async () => {
     usePreferencesStore.setState({ nextUpBar: true } as any);
-    render(<App />);
+    await bootApp();
     await waitFor(() => expect(useArtifactStore.getState().artifacts.some((a) => a.id === "d_bill")).toBe(true));
     useArtifactStore.getState().reset();
     expect(useArtifactStore.getState().artifacts).toHaveLength(0);
@@ -106,7 +149,7 @@ describe("#458 review — sibling history is not news; a sibling's NEW work is",
     ] } as any);
     useArtifactStore.setState({ artifacts: [bound as any] });
     usePreferencesStore.setState({ nextUpBar: true } as any);
-    render(<App />);
+    await bootApp();
     await waitFor(() => expect(useArtifactStore.getState().artifacts.some((a) => a.id === "o1")).toBe(true));
     // The connect payload: reset, then the bound session's snapshot.
     act(() => {
@@ -124,7 +167,7 @@ describe("#458 review — sibling history is not news; a sibling's NEW work is",
     let sibling: unknown[] = [research("o1", "s_bill", "Done billing work", "2026-06-01T00:00:00.000Z", "approved")];
     serve(() => sibling);
     usePreferencesStore.setState({ nextUpBar: true } as any);
-    render(<App />);
+    await bootApp();
     await waitFor(() => expect(useArtifactStore.getState().artifacts.some((a) => a.id === "o1")).toBe(true));
     await act(async () => { await new Promise((r) => setTimeout(r, 1000)); }); // settled
     // #467 review — "nothing" only once the sibling sync has settled (held before).
@@ -141,4 +184,152 @@ describe("#458 review — sibling history is not news; a sibling's NEW work is",
     // …once: the arrival region leaves `next` to the bar.
     expect(arrivalText()).not.toContain("Ship the invoice batch");
   }, 15_000);
+});
+
+describe("#460 — the sibling change signal covers status changes and questions", () => {
+  const mkDecision = (status = "draft") => ({
+    id: "d_bill", sessionId: "s_bill", type: "decision", version: 1, parentId: null,
+    title: "Which store backs the billing cache?", status,
+    content: { context: "c", decisionId: "dd_bill", stakes: "high", options: [] },
+    agentReasoning: null, createdAt: "2026-06-01T00:00:00.000Z", updatedAt: "2026-06-01T00:00:00.000Z",
+  });
+  const finding = (status = "approved") => ({
+    id: "f_bill", sessionId: "s_bill", type: "research", version: 1, parentId: null, title: "Billing finding", status,
+    content: { summary: "s", findings: [] }, agentReasoning: null, createdAt: "2026-06-01T00:00:00.000Z", updatedAt: "2026-06-01T00:00:00.000Z",
+  });
+  const sessions = (rev: number | undefined, count = 1) => [
+    { sessionId: "s_new", live: true, artifactCount: 0, ...(rev === undefined ? {} : { revision: 0 }) },
+    { sessionId: "s_bill", live: true, artifactCount: count, ...(rev === undefined ? {} : { revision: rev }) },
+  ];
+  let sibling: { artifacts: unknown[]; comments: unknown[] };
+  let liveSessionCalls = 0;
+  let statusResponse: () => Promise<Response> = () => json({ ok: true });
+  beforeEach(() => {
+    liveSessionCalls = 0;
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.includes("/api/live-session/s_bill")) { liveSessionCalls++; return json(sibling); }
+      if (u.includes("/api/live-session/")) return json({ artifacts: [], comments: [] });
+      if (u.includes("/api/artifacts/") && u.endsWith("/status")) return statusResponse();
+      if (u.includes("/api/active-sessions")) return json({ sessions: useConnectionStore.getState().activeSessions });
+      return json({ sessions: [] });
+    }));
+  });
+  const line = () => screen.getByTestId("next-up-bar").getAttribute("data-line") ?? "";
+
+  it("a sibling decision approved elsewhere (count unchanged) leaves the bar on the next poll", async () => {
+    sibling = { artifacts: [mkDecision()], comments: [] };
+    useConnectionStore.setState({ activeSessions: sessions(1) } as any);
+    usePreferencesStore.setState({ nextUpBar: true } as any);
+    await bootApp();
+    await waitFor(() => expect(line()).toMatch(/^▲ Which store backs the billing cache\?/));
+    sibling = { artifacts: [mkDecision("approved")], comments: [] };
+    act(() => useConnectionStore.setState({ activeSessions: sessions(2) } as any)); // the poll: revision moved, count didn't
+    await waitFor(() => expect(line()).toMatch(/Nothing needs you/), { timeout: 2000 });
+  });
+
+  it("a sibling's new QUESTION (a comment — count unchanged) appears in Waiting", async () => {
+    sibling = { artifacts: [finding()], comments: [] };
+    useConnectionStore.setState({ activeSessions: sessions(1) } as any);
+    usePreferencesStore.setState({ nextUpBar: true } as any);
+    await bootApp();
+    await waitFor(() => expect(useArtifactStore.getState().artifacts.some((a) => a.id === "f_bill")).toBe(true));
+    sibling = { artifacts: [finding()], comments: [{
+      id: "q_bill", sessionId: "s_bill", target: { artifactId: "f_bill" }, parentCommentId: null, author: "human",
+      content: "Why is the hit rate 12%?", acknowledged: false, createdAt: "2026-06-01T01:00:00.000Z", intent: "question",
+    }] };
+    act(() => useConnectionStore.setState({ activeSessions: sessions(2) } as any));
+    await waitFor(() => expect(line()).toMatch(/^◌ WAITING ON CLAUDE/), { timeout: 2000 });
+  });
+
+  it("acting on a stale card: the daemon's verdict_already_final shows the TRUE status, a clear message, and re-fetches the sibling", async () => {
+    sibling = { artifacts: [finding("draft")], comments: [] };
+    useConnectionStore.setState({ activeSessions: sessions(1) } as any);
+    await bootApp();
+    await waitFor(() => expect(useArtifactStore.getState().artifacts.find((a) => a.id === "f_bill")?.status).toBe("draft"));
+    statusResponse = () => Promise.resolve(new Response(JSON.stringify({
+      error: "verdict_already_final", code: "verdict_already_final", currentStatus: "approved",
+      message: "This artifact was already approved in another tab. A finalized verdict can't be reversed — this tab has been refreshed to the current state.",
+    }), { status: 409, headers: { "Content-Type": "application/json" } }));
+    sibling = { artifacts: [finding("approved")], comments: [] };
+    const callsBefore = liveSessionCalls;
+    await act(async () => {
+      await useArtifactStore.getState().updateArtifactStatus("f_bill", "rejected").catch(() => {});
+    });
+    // The truth, not the rolled-back stale draft.
+    expect(useArtifactStore.getState().artifacts.find((a) => a.id === "f_bill")?.status).toBe("approved");
+    expect(useToastStore.getState().toasts.some((t) => /already approved in another tab/.test(t.body ?? ""))).toBe(true);
+    await waitFor(() => expect(liveSessionCalls).toBeGreaterThan(callsBefore));
+  });
+
+  it("an OLD daemon (no revision field) still refreshes a sibling on its artifact count", async () => {
+    sibling = { artifacts: [finding()], comments: [] };
+    useConnectionStore.setState({ activeSessions: sessions(undefined, 1) } as any);
+    usePreferencesStore.setState({ nextUpBar: true } as any);
+    await bootApp();
+    await waitFor(() => expect(useArtifactStore.getState().artifacts.some((a) => a.id === "f_bill")).toBe(true));
+    sibling = { artifacts: [finding(), { ...mkDecision(), createdAt: new Date().toISOString() }], comments: [] };
+    act(() => useConnectionStore.setState({ activeSessions: sessions(undefined, 2) } as any));
+    await waitFor(() => expect(line()).toMatch(/^▲ Which store backs the billing cache\?/), { timeout: 2000 });
+  });
+
+  it("an unchanged revision costs nothing (no re-fetch of a quiet sibling)", async () => {
+    sibling = { artifacts: [finding()], comments: [] };
+    useConnectionStore.setState({ activeSessions: sessions(3) } as any);
+    await bootApp();
+    await waitFor(() => expect(liveSessionCalls).toBe(1));
+    act(() => useConnectionStore.setState({ activeSessions: sessions(3).map((s) => ({ ...s })) } as any)); // same values, new identity
+    await act(async () => { await new Promise((r) => setTimeout(r, 300)); });
+    expect(liveSessionCalls).toBe(1);
+  });
+});
+
+describe("#464 review — a stale card after the 409, and a restarted daemon's revision", () => {
+  it("picking on a decision answered elsewhere: the card shows the RECORDED winning pick and no Select buttons", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+      if (String(url).includes("/api/decisions/")) {
+        return Promise.resolve(new Response(JSON.stringify({
+          error: "verdict_already_final", code: "verdict_already_final", currentStatus: "approved",
+          resolution: { optionId: "o2", reasoning: "chosen in the other tab" },
+          message: "This decision was already answered elsewhere — your pick wasn't applied; this card now shows the recorded answer.",
+        }), { status: 409, headers: { "Content-Type": "application/json" } }));
+      }
+      return json({});
+    }));
+    useArtifactStore.setState({ artifacts: [{ ...billDecision, id: "art_s", content: { context: "c", decisionId: "dd_s", options: [] } } as any] });
+    const event = {
+      type: "decision_request" as const, decisionId: "dd_s", context: "Which store?",
+      options: [
+        { id: "o1", title: "Redis", description: "d", pros: [], cons: [], effort: "low" as const, risk: "low" as const, recommendation: true },
+        { id: "o2", title: "Postgres", description: "d", pros: [], cons: [], effort: "low" as const, risk: "low" as const, recommendation: false },
+      ],
+    };
+    render(<DecisionCard event={event} decisionId="dd_s" artifactId="art_s" sessionId="s_bill" />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Select Redis" })); });
+    await waitFor(() => expect(screen.queryAllByRole("button", { name: /^Select / })).toHaveLength(0));
+    fireEvent.click(screen.getByRole("button", { name: /Show options/ }));
+    const chosen = screen.getByText("✓ Chosen").closest("div")!;
+    expect(chosen).toHaveTextContent("Postgres");
+    expect(useToastStore.getState().toasts.some((t) => /this card now shows the recorded answer/.test(t.body ?? ""))).toBe(true);
+  });
+
+  it("a daemon RESTART whose counter climbs back to a cached value still re-fetches (the epoch differs)", async () => {
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+      if (String(url).includes("/api/live-session/s_bill")) { calls++; return json({ artifacts: [billDecision], comments: [] }); }
+      if (String(url).includes("/api/live-session/")) return json({ artifacts: [], comments: [] });
+      if (String(url).includes("/api/active-sessions")) return json({ sessions: useConnectionStore.getState().activeSessions });
+      return json({ sessions: [] });
+    }));
+    const list = (epoch: string) => [
+      { sessionId: "s_new", live: true, artifactCount: 0, revision: 0, revisionEpoch: epoch },
+      { sessionId: "s_bill", live: true, artifactCount: 1, revision: 4, revisionEpoch: epoch },
+    ];
+    useConnectionStore.setState({ activeSessions: list("before") } as any);
+    await bootApp();
+    await waitFor(() => expect(calls).toBe(1));
+    // Restarted daemon: a new epoch, and its counter happens to be back at 4.
+    act(() => useConnectionStore.setState({ activeSessions: list("after") } as any));
+    await waitFor(() => expect(calls).toBe(2), { timeout: 2000 });
+  });
 });
