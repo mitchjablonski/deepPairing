@@ -32,8 +32,10 @@ placeholders, not observations or claims that the pilot has started.
   uses participant's GitHub identity:
 - Employer-code restriction and not using share/post-pr on employer code unless
   normally permitted explained:
-- Withdrawal/end cleanup removes only pilot-created local records; pre-existing
-  global files are backed up/preserved and never deleted wholesale:
+- Withdrawal/end cleanup stops pilot-owned daemons before editing files and
+  removes only pilot-created records; pre-existing global files are
+  backed up/preserved, never deleted wholesale; a pre-existing plugin install
+  is restored or left installed at participant's choice:
 - No raw code/transcripts/recordings requested; storage/access explained:
 - Withdrawal method, aggregation cutoff and exact deletion date supplied:
 - Permission to retain/disclose anonymous cohort counts after withdrawal:

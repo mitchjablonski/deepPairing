@@ -26,8 +26,8 @@ The tested install path is the two commands in the README's
 https://github.com/mitchjablonski/deepPairing`, then
 `/plugin install deeppairing@deeppairing`. Record the exact installed plugin
 version and source commit in the approval record and report. The gate matches
-lexically; a direct edit prompts the user to ask rather than refusing it, and
-cross-project matches are advisory. These are workflow expectations, not a
+lexically; a matching direct edit asks the user for approval, and cross-project
+matches are advisory. These are workflow expectations, not a
 claim that the tool enforces project policy.
 
 ## Approval gate (must be completed before outreach)
@@ -191,7 +191,8 @@ Pivot/stop and 2 do not; three 4-5 burden ratings trigger Pivot/stop. With
 exactly two participants with qualifying events, no burden trigger, and fewer
 than three in one predeclared category, the fallback is Pivot/stop. Three
 participants with qualifying events in one predeclared category and no burden
-trigger yield Narrow. A withdrawal yields Inconclusive before any of these
+trigger yield Narrow if at least one other Go gate fails; if all Go gates pass,
+Go takes precedence. A withdrawal yields Inconclusive before any of these
 checks.
 Go still requires every original gate. Do not retrospectively change a gate
 or remove a dropout to obtain a Go. Exploratory subgroups must be labeled
@@ -239,11 +240,17 @@ export, request `includeCode: false` (the `--redact-code` option for
 result before sharing. Never use employer/customer code without the required
 permission.
 
-Before the pilot, inventory which of these paths already exist and privately
+Before the pilot, inventory which of these paths already exist, record whether
+the plugin is already installed and its relevant preferences, and privately
 back up any pre-existing global ledger or registry records that could be
-affected. On withdrawal or at pilot end, uninstall the plugin and remove only
-pilot-created records: delete pilot session files, remove only the pilot's
-daemon-log entries, and surgically remove pilot-created ledger/registry
+affected. On withdrawal or at pilot end, stop only pilot-owned deepPairing
+daemon/processes and confirm they have exited before editing or deleting local
+files, so they cannot recreate removed data. Uninstall the plugin only if it
+was installed for this pilot. If it was installed before the pilot, do not
+require uninstalling that pre-existing workflow: restore its pre-pilot
+state/preferences or leave it installed at the participant's choice. Remove
+only pilot-created records: delete pilot session files, remove only the
+pilot's daemon-log entries, and surgically remove pilot-created ledger/registry
 entries. If restoring a pre-pilot backup is safer, first confirm it will not
 discard unrelated later data. Never instruct participants to delete a whole
 pre-existing global file or directory. The custodian records completion and
