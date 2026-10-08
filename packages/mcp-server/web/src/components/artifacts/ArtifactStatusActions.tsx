@@ -10,6 +10,7 @@ import { summarizeOpenSuggestions, openSuggestionsConfirmLabel } from "../../lib
 import { WAITING_TONE } from "../../lib/waitingTone";
 import { ApproveCountdown } from "./ApproveCountdown";
 import { LANE_MARKS } from "../../lib/laneMarks";
+import { useOfflineReason } from "../../hooks/useOfflineReason";
 
 interface ArtifactStatusActionsProps {
   artifact: Artifact;
@@ -191,6 +192,8 @@ export function ArtifactStatusActions({
   // Remaining effects are IO only: interval tick + approve-at-zero, the
   // IntersectionObserver, focus-after-expand, and the shortcut listener.
   const [state, dispatch] = useReducer(footerReducer, INITIAL_FOOTER_STATE);
+  // #465 (state G rule 1) — act buttons disable while this tab is disconnected.
+  const offline = useOfflineReason();
   const {
     comment, submitting, rejecting, rejectConcept,
     countdown, countdownMax, countdownPaused,
@@ -288,6 +291,12 @@ export function ArtifactStatusActions({
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- E6 reducer: typing-cancels-countdown is a transition, not a dep — see the reducer header
   }, [shouldAutoApprove]);
+
+  // #465 — an armed auto-approve must not fire into a dead connection.
+  useEffect(() => {
+    if (offline && countdown !== null) dispatch({ type: "cancelCountdown" });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the offline transition; countdown is a guard
+  }, [offline]);
 
   // U3 — if approval gets suppressed mid-countdown (e.g. the user unchecks a
   // plan step after pressing `a`), cancel the armed countdown. Otherwise it
@@ -484,6 +493,7 @@ export function ArtifactStatusActions({
     action: "approved" | "revised" | "rejected",
     opts?: { bypassSuggestionGate?: boolean },
   ) => {
+    if (offline) return; // #465 — keyboard/⌘⏎ paths too, not only the buttons
     // H1 (#202) — gate a FINALIZING approve behind the inline confirm when the
     // human's own suggestions are still open. Reject/Request-changes are never
     // gated (they don't abandon a proposal). "Approve anyway" passes the bypass.
@@ -628,10 +638,10 @@ export function ArtifactStatusActions({
           <div className="flex items-center gap-2 pb-1">
             <button
               onClick={handleAcknowledge}
-              disabled={submitting}
+              disabled={submitting || !!offline}
               className="px-3 py-1.5 text-xs font-medium text-accent-green rounded border border-accent-green/40
                          hover:bg-accent-green-dim disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
-              title="Mark this walk-through read — hands the turn back to the agent"
+              title={offline ?? "Mark this walk-through read — hands the turn back to the agent"}
             >
               &#10003; Got it
             </button>
@@ -690,7 +700,7 @@ export function ArtifactStatusActions({
           <div className="flex items-center gap-2">
             <button
               onClick={() => handleAction("approved", { bypassSuggestionGate: true })}
-              disabled={submitting}
+              disabled={submitting || !!offline}
               data-testid="approve-anyway"
               // Q4 (round-12 UX #3) — the amber lane's worst measured pair, and
               // the only one that failed in the DARK theme: literal white on
@@ -701,7 +711,7 @@ export function ArtifactStatusActions({
               // whole defence here.
               className="px-2.5 py-1 text-2xs font-medium text-text-inverse bg-accent-amber rounded
                          hover:bg-accent-amber/85 disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
-              title="Approve even though your suggestions are still open"
+              title={offline ?? "Approve even though your suggestions are still open"}
             >
               Approve anyway
             </button>
@@ -722,10 +732,10 @@ export function ArtifactStatusActions({
           {!hideApprove && (
             <button
               onClick={() => handleAction("approved")}
-              disabled={submitting}
+              disabled={submitting || !!offline}
               className="px-2.5 py-1 text-2xs font-medium text-accent-green rounded border border-accent-green/30
                          hover:bg-accent-green-dim disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
-              title="Approve as-is"
+              title={offline ?? "Approve as-is"}
             >
               Approve
             </button>
@@ -799,11 +809,11 @@ export function ArtifactStatusActions({
       <div className="flex items-center gap-2">
         <button
           onClick={handleRespond}
-          disabled={submitting || !comment.trim()}
+          disabled={(submitting || !comment.trim()) || !!offline}
           className="px-3 py-1.5 bg-accent-violet-strong text-white text-xs font-medium rounded
                      hover:bg-accent-violet-strong-hover disabled:bg-surface-elevated disabled:text-text-muted
                      transition-all duration-[180ms] ease-out press-scale"
-          title="Send the comment; the agent will iterate (keeps artifact in draft)"
+          title={offline ?? "Send the comment; the agent will iterate (keeps artifact in draft)"}
         >
           Respond
         </button>
@@ -815,29 +825,29 @@ export function ArtifactStatusActions({
           {!hideApprove && (
             <button
               onClick={() => handleAction("approved")}
-              disabled={submitting}
+              disabled={submitting || !!offline}
               className="px-2.5 py-1 text-2xs font-medium text-accent-green rounded border border-accent-green/30
                          hover:bg-accent-green-dim disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
-              title={comment.trim() ? "Approve and send this comment" : "Approve as-is"}
+              title={offline ?? (comment.trim() ? "Approve and send this comment" : "Approve as-is")}
             >
               {comment.trim() ? "Approve with note" : "Approve"}
             </button>
           )}
           <button
             onClick={() => handleAction("revised")}
-            disabled={submitting || !comment.trim()}
+            disabled={(submitting || !comment.trim()) || !!offline}
             className="px-2.5 py-1 text-2xs font-medium text-accent-amber rounded border border-accent-amber/30
                        hover:bg-accent-amber-dim disabled:opacity-30 transition-all duration-[180ms] ease-out press-scale"
-            title={comment.trim() ? "Request changes — agent will redraft" : "Add a reason first"}
+            title={offline ?? (comment.trim() ? "Request changes — agent will redraft" : "Add a reason first")}
           >
             Request changes
           </button>
           <button
             onClick={beginReject}
-            disabled={submitting || !comment.trim() || rejecting}
+            disabled={(submitting || !comment.trim() || rejecting) || !!offline}
             className="px-2.5 py-1 text-2xs font-medium text-accent-red rounded border border-accent-red/30
                        hover:bg-accent-red-dim disabled:opacity-30 transition-all duration-[180ms] ease-out press-scale"
-            title={
+            title={offline ?? (
               !comment.trim()
                 ? "Add a reason first"
                 : suppressRejectConcept
@@ -845,7 +855,7 @@ export function ArtifactStatusActions({
                   // remembered rule: no cross-project stance is recorded.
                   ? "Reject — asks for a redo of this digest (records no cross-project rule)"
                   : "Reject and remember this pattern across sessions"
-            }
+            )}
           >
             Reject
           </button>
@@ -901,10 +911,10 @@ export function ArtifactStatusActions({
           <div className="flex items-center gap-2">
             <button
               onClick={() => handleAction("rejected")}
-              disabled={submitting}
+              disabled={submitting || !!offline}
               className="px-2.5 py-1 text-2xs font-medium text-white bg-accent-red rounded
                          hover:bg-accent-red/80 disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
-              title="Reject and remember this pattern in this project (shared with your other projects as an advisory nudge only if cross-project publishing is on)"
+              title={offline ?? "Reject and remember this pattern in this project (shared with your other projects as an advisory nudge only if cross-project publishing is on)"}
             >
               Reject &amp; remember
             </button>
@@ -923,9 +933,9 @@ export function ArtifactStatusActions({
           reject). Mirrors the agent's revise_artifact mode="obsolete". */}
       <button
         onClick={handleDismissObsolete}
-        disabled={submitting}
+        disabled={submitting || !!offline}
         className="text-2xs text-text-muted hover:text-text-secondary disabled:opacity-50 transition-colors"
-        title="This was valid but the discussion moved past it — close it without approving or rejecting"
+        title={offline ?? "This was valid but the discussion moved past it — close it without approving or rejecting"}
       >
         Dismiss — overcome by new information
       </button>

@@ -184,6 +184,11 @@ describe("R2 repro 2b — DecisionCard fires the first-reject card", () => {
 
   beforeEach(() => {
     vi.stubGlobal("fetch", coldDaemon({ publish: false }));
+    // #465 — the decision's act buttons now disable while the tab is offline.
+    // The App renders above leave a real WS adapter retrying a dead port; tear
+    // it down so its late failure can't flip this card offline mid-test.
+    useConnectionStore.getState().disconnect();
+    useConnectionStore.setState({ connected: true, disconnectedSince: null } as any);
   });
 
   it("a decision reject WITH a concept on a cold page opens the card", async () => {
