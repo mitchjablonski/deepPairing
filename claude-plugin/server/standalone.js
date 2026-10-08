@@ -38315,6 +38315,19 @@ var DaemonClient = class {
       predictedOutcome: prediction?.predictedOutcome
     });
   }
+  /**
+   * #464 (Astra review) — the wrapper side of the atomic resolve: the daemon's
+   * internal route runs FileStore.resolveDecisionAtomic, so the atomicity lives
+   * there. A 409/400 refusal surfaces as the request error (as every other
+   * DaemonClient write does); a same-pick no-op answers 200 alreadyResolved.
+   */
+  async resolveDecisionAtomic(decisionId, optionId, reasoning, prediction) {
+    const res = await this.post(
+      `/decisions/${decisionId}/resolve`,
+      { optionId, reasoning, confidence: prediction?.confidence, predictedOutcome: prediction?.predictedOutcome }
+    );
+    return res?.alreadyResolved && res.resolution ? { kind: "same", resolution: res.resolution, ...res.artifactId ? { artifactId: res.artifactId } : {} } : { kind: "resolved" };
+  }
   async getDecisionResponse(decisionId) {
     const data = await this.get(`/decisions/${decisionId}/response`);
     return data.response ?? null;

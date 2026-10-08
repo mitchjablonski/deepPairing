@@ -9,7 +9,7 @@ import { ERROR_CODES } from "../error-codes.js";
 import type { IStore } from "../store/store-interface.js";
 import { FileStore, LEDGER_EXEMPT_REJECT_TYPES } from "../store/file-store.js";
 import { isCrossTerminalVerdictFlip } from "../store/verdict-guard.js";
-import { checkStaleResolve } from "../store/decision-resolve-guard.js";
+import { staleResolveBody, withDecisionResolveLock } from "../store/decision-resolve-guard.js";
 import { isSessionReviewConflictError } from "../store/session-records.js";
 import type { LiveDecisionSource } from "../store/session-scan.js";
 import {
@@ -772,130 +772,124 @@ export function createHttpRoutes(
       );
     }
 
-    // #460 / #464 review — refuse a stale card BEFORE any write (shared with
-    // the internal resolve route): a different pick, or a pick on a decision
-    // closed elsewhere, is a 409 carrying the recorded resolution; the same
-    // pick again is a true no-op 200 (nothing rewritten). See
-    // store/decision-resolve-guard.ts.
-    {
-      const stale = await checkStaleResolve(store, decisionId, optionId);
-      if (stale?.kind === "same") return c.json(stale.body);
-      if (stale?.kind === "conflict") {
-        log(`[decision] REFUSED stale resolve on ${decisionId}: ${String(stale.body.message)}`);
-        if (stale.backing) broadcast({ type: "artifact_updated", artifactId: stale.backing.id, status: stale.backing.status }, sid);
-        return c.json(stale.body, 409);
+    // #460 / #464 (Astra review) — check-and-resolve is ONE atomic store
+    // operation (FileStore.resolveDecisionAtomic, shared with the internal
+    // route): the stale-resolve classification and the write share a
+    // synchronous critical section, so overlapping requests can't both see
+    // "unanswered" and both write. Same pick → true no-op 200; different pick
+    // or a decision closed elsewhere → 409 carrying the recorded winner;
+    // unknown option → 400 (F2). #197 (F3) — no prediction from the UI.
+    // Serialized per store from the atomic write through its flush — see
+    // withDecisionResolveLock.
+    return withDecisionResolveLock(store, async () => {
+      const outcome = await store.resolveDecisionAtomic(decisionId, optionId, reasoning);
+      if (outcome.kind === "same") return c.json(staleResolveBody(outcome, decisionId));
+      if (outcome.kind === "conflict") {
+        const body = staleResolveBody(outcome, decisionId);
+        log(`[decision] REFUSED stale resolve on ${decisionId}: ${String(body.message)}`);
+        if (outcome.artifactId) broadcast({ type: "artifact_updated", artifactId: outcome.artifactId, status: outcome.currentStatus }, sid);
+        return c.json(body, 409);
       }
-    }
-
-    // #197 (F3) — prediction capture was cut (E3); the UI no longer sends it and
-    // this write path no longer accepts it. The store method keeps its optional
-    // `prediction` param for backward-compatible reads of old records.
-    await store.resolveDecision(decisionId, optionId, reasoning);
-
-    // Prefer the decision RECORD's artifactId, but fall back to the decision
-    // artifact carrying this decisionId when no record is found. The daemon
-    // and the MCP server are separate processes sharing the file store (see
-    // X6), so the daemon's decisions map can legitimately lag/miss a record
-    // the artifact already references — without this fallback the route
-    // returns 200 "resolved" yet leaves the artifact stuck in draft, so it
-    // keeps showing as "waiting for you" even though the choice was made.
-    const decision = await store.getDecision(decisionId);
-
-    // F2 — when a record EXISTS, resolveDecision ignores an optionId that isn't
-    // one of its options (fail-closed). Honor that: don't flip the artifact to
-    // approved (a split state — artifact approved, record eternally pending);
-    // surface a 400 instead of a misleading 200. When there's NO record (the
-    // artifact-only fallback above), skip the guard and let the flip proceed.
-    if (decision && (await store.getDecisionResponse(decisionId))?.optionId !== optionId) {
-      return c.json(
-        { error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error },
-        400,
-      );
-    }
-
-    // Flip the decision ARTIFACT to approved so it leaves the "waiting" set.
-    // #209 (J1) — when a decision RECORD exists, store.resolveDecision ALREADY
-    // advanced its backing artifact to `approved` atomically (single flush, no
-    // resolved-but-draft window). Re-flipping here would append a SPURIOUS
-    // duplicate statusHistory entry, so the explicit flip is now scoped to the
-    // no-record FALLBACK only: the daemon's decisions map can lag/miss a record
-    // the artifact already carries (X6), and in that case the store had nothing
-    // to advance — so the route is the belt that still leaves the artifact honest.
-    let targetArtifactId = decision?.artifactId;
-    let fallbackArtifact: Artifact | undefined;
-    if (!targetArtifactId) {
-      const artifacts = await store.getArtifacts();
-      fallbackArtifact = artifacts.find(
-        (a) =>
-          a.type === "decision" &&
-          ((a.content as { decisionId?: string } | null)?.decisionId === decisionId || a.id === decisionId),
-      );
-      targetArtifactId = fallbackArtifact?.id;
-    }
-    // P3 — the no-record fallback's SILENT SUCCESS. updateArtifactStatus carries
-    // the O3 verdict guard as a store-authoritative backstop: on an artifact
-    // already at a DIFFERENT terminal verdict (rejected/revised — e.g. a stale
-    // tab still showing the option list after the human rejected the whole
-    // framing in another tab) it logs and `return`s without writing, while this
-    // route went on to broadcast `decision_resolved` and answer 200
-    // {status:"resolved"} — reporting a resolution that never landed. Pre-check
-    // the same predicate the verdict route uses and answer 409
-    // verdict_already_final instead, re-broadcasting the REAL status so the
-    // stale tab refreshes. Only the fallback branch needs this: with a record,
-    // store.resolveDecision owns the (identically guarded) advance and this
-    // route writes no status at all.
-    if (targetArtifactId && !decision && fallbackArtifact) {
-      if (isCrossTerminalVerdictFlip(fallbackArtifact.status, "approved", "ui_decision_resolve")) {
-        const at = fallbackArtifact.updatedAt;
-        log(
-          `[decision] REFUSED resolve on ${targetArtifactId}: ` +
-          `${fallbackArtifact.status} → approved (reason=ui_decision_resolve) — verdict already final at ${at}`,
-        );
-        broadcast({ type: "artifact_updated", artifactId: targetArtifactId, status: fallbackArtifact.status }, sid);
+      if (outcome.kind === "invalid_option") {
         return c.json(
-          {
-            error: "verdict_already_final",
-            code: "verdict_already_final",
-            currentStatus: fallbackArtifact.status,
-            at,
-            message:
-              `This decision was already ${fallbackArtifact.status}${at ? ` at ${at}` : ""} in another tab. ` +
-              `A finalized verdict can't be reversed — this tab has been refreshed to the current state.`,
-          },
-          409,
+          { error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error },
+          400,
         );
       }
-    }
-    if (targetArtifactId) {
-      if (!decision) {
-        // No-record fallback only — store.resolveDecision couldn't advance the
-        // artifact (it had no record to key off), so the route does it.
-        await store.updateArtifactStatus(targetArtifactId, "approved", "ui_decision_resolve");
+
+      // Prefer the decision RECORD's artifactId, but fall back to the decision
+      // artifact carrying this decisionId when no record is found. The daemon
+      // and the MCP server are separate processes sharing the file store (see
+      // X6), so the daemon's decisions map can legitimately lag/miss a record
+      // the artifact already references — without this fallback the route
+      // returns 200 "resolved" yet leaves the artifact stuck in draft, so it
+      // keeps showing as "waiting for you" even though the choice was made.
+      const decision = outcome.kind === "resolved" ? await store.getDecision(decisionId) : undefined;
+
+      // Flip the decision ARTIFACT to approved so it leaves the "waiting" set.
+      // #209 (J1) — when a decision RECORD exists, store.resolveDecision ALREADY
+      // advanced its backing artifact to `approved` atomically (single flush, no
+      // resolved-but-draft window). Re-flipping here would append a SPURIOUS
+      // duplicate statusHistory entry, so the explicit flip is now scoped to the
+      // no-record FALLBACK only: the daemon's decisions map can lag/miss a record
+      // the artifact already carries (X6), and in that case the store had nothing
+      // to advance — so the route is the belt that still leaves the artifact honest.
+      let targetArtifactId = decision?.artifactId;
+      let fallbackArtifact: Artifact | undefined;
+      if (!targetArtifactId) {
+        const artifacts = await store.getArtifacts();
+        fallbackArtifact = artifacts.find(
+          (a) =>
+            a.type === "decision" &&
+            ((a.content as { decisionId?: string } | null)?.decisionId === decisionId || a.id === decisionId),
+        );
+        targetArtifactId = fallbackArtifact?.id;
       }
-    }
+      // P3 — the no-record fallback's SILENT SUCCESS. updateArtifactStatus carries
+      // the O3 verdict guard as a store-authoritative backstop: on an artifact
+      // already at a DIFFERENT terminal verdict (rejected/revised — e.g. a stale
+      // tab still showing the option list after the human rejected the whole
+      // framing in another tab) it logs and `return`s without writing, while this
+      // route went on to broadcast `decision_resolved` and answer 200
+      // {status:"resolved"} — reporting a resolution that never landed. Pre-check
+      // the same predicate the verdict route uses and answer 409
+      // verdict_already_final instead, re-broadcasting the REAL status so the
+      // stale tab refreshes. Only the fallback branch needs this: with a record,
+      // store.resolveDecision owns the (identically guarded) advance and this
+      // route writes no status at all.
+      if (targetArtifactId && !decision && fallbackArtifact) {
+        if (isCrossTerminalVerdictFlip(fallbackArtifact.status, "approved", "ui_decision_resolve")) {
+          const at = fallbackArtifact.updatedAt;
+          log(
+            `[decision] REFUSED resolve on ${targetArtifactId}: ` +
+            `${fallbackArtifact.status} → approved (reason=ui_decision_resolve) — verdict already final at ${at}`,
+          );
+          broadcast({ type: "artifact_updated", artifactId: targetArtifactId, status: fallbackArtifact.status }, sid);
+          return c.json(
+            {
+              error: "verdict_already_final",
+              code: "verdict_already_final",
+              currentStatus: fallbackArtifact.status,
+              at,
+              message:
+                `This decision was already ${fallbackArtifact.status}${at ? ` at ${at}` : ""} in another tab. ` +
+                `A finalized verdict can't be reversed — this tab has been refreshed to the current state.`,
+            },
+            409,
+          );
+        }
+      }
+      if (targetArtifactId) {
+        if (!decision) {
+          // No-record fallback only — store.resolveDecision couldn't advance the
+          // artifact (it had no record to key off), so the route does it.
+          await store.updateArtifactStatus(targetArtifactId, "approved", "ui_decision_resolve");
+        }
+      }
 
-    // A decision response authorizes its backing artifact. Persist the
-    // artifact and decision record together before announcing success; a
-    // concurrent proposal rewrite must return the global typed 409 and emit no
-    // decision_resolved event.
-    await store.forceFlush();
+      // A decision response authorizes its backing artifact. Persist the
+      // artifact and decision record together before announcing success; a
+      // concurrent proposal rewrite must return the global typed 409 and emit no
+      // decision_resolved event.
+      await store.forceFlush();
 
-    if (targetArtifactId) {
-      // X6 — emission seam: HTTP-side mutations pass null for `server`
-      // (the MCP server lives in the daemon's separate process). Today
-      // a no-op; future Tasks impl can route via the daemon broadcast.
-      await maybeUpdateTaskStatus(null, targetArtifactId, store);
-    }
+      if (targetArtifactId) {
+        // X6 — emission seam: HTTP-side mutations pass null for `server`
+        // (the MCP server lives in the daemon's separate process). Today
+        // a no-op; future Tasks impl can route via the daemon broadcast.
+        await maybeUpdateTaskStatus(null, targetArtifactId, store);
+      }
 
-    broadcast({
-      type: "decision_resolved",
-      decisionId,
-      artifactId: targetArtifactId,
-      optionId,
-      reasoning,
-    }, sid);
+      broadcast({
+        type: "decision_resolved",
+        decisionId,
+        artifactId: targetArtifactId,
+        optionId,
+        reasoning,
+      }, sid);
 
-    return c.json({ status: "resolved", decisionId });
+      return c.json({ status: "resolved", decisionId });
+    });
   });
 
   /**

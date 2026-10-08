@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { classifyStaleResolve, type DecisionResolveOutcome } from "./decision-resolve-guard.js";
 import path from "node:path";
 import crypto from "node:crypto";
 import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
@@ -1378,6 +1379,38 @@ export class FileStore implements IStore {
     }
     this.scheduleFlush();
     this.notifyFeedbackWaiters();
+  }
+
+  /**
+   * #464 (Astra review) — check-and-resolve in ONE synchronous critical
+   * section: no await separates the stale-resolve classification from the
+   * write, so of two overlapping resolves exactly one writes and the other sees
+   * its answer (a same-pick no-op, or a conflict carrying the winner). See
+   * store/decision-resolve-guard.ts for the outcomes.
+   */
+  resolveDecisionAtomic(
+    decisionId: string,
+    optionId: string,
+    reasoning?: string,
+    prediction?: { confidence?: "low" | "medium" | "high"; predictedOutcome?: string },
+  ): DecisionResolveOutcome {
+    this.assertAuthorizationReadable();
+    const dec = this.decisions.get(decisionId);
+    if (!dec) return { kind: "no_record" };
+    const backing = this.artifacts.find((a) => a.id === dec.artifactId) ??
+      this.artifacts.find((a) =>
+        a.type === "decision" &&
+        ((a.content as { decisionId?: string } | null)?.decisionId === decisionId || a.id === decisionId));
+    const stale = classifyStaleResolve(dec, backing, optionId);
+    if (stale) return stale;
+    // F2 — fail-closed on an option the decision doesn't have (resolveDecision
+    // would silently ignore it).
+    const opts = (dec as { options?: Array<{ id?: string }> }).options;
+    if (Array.isArray(opts) && opts.length > 0 && !opts.some((o) => o?.id === optionId)) {
+      return { kind: "invalid_option" };
+    }
+    this.resolveDecision(decisionId, optionId, reasoning, prediction);
+    return { kind: "resolved", ...(dec.artifactId ? { artifactId: dec.artifactId } : {}) };
   }
 
   getDecisionResponse(decisionId: string): { optionId: string; reasoning?: string } | null {

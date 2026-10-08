@@ -2,6 +2,7 @@
  * DaemonClient — HTTP client that implements IStore by proxying
  * all operations to the shared deepPairing daemon.
  */
+import type { DecisionResolveOutcome, RecordedResolution } from "../store/decision-resolve-guard.js";
 import type { Artifact, ArtifactStatus, Comment, TeamPreference, PreflightTrace } from "@deeppairing/shared";
 import type {
   IStore,
@@ -563,6 +564,27 @@ export class DaemonClient implements IStore {
       confidence: prediction?.confidence,
       predictedOutcome: prediction?.predictedOutcome,
     });
+  }
+
+  /**
+   * #464 (Astra review) — the wrapper side of the atomic resolve: the daemon's
+   * internal route runs FileStore.resolveDecisionAtomic, so the atomicity lives
+   * there. A 409/400 refusal surfaces as the request error (as every other
+   * DaemonClient write does); a same-pick no-op answers 200 alreadyResolved.
+   */
+  async resolveDecisionAtomic(
+    decisionId: string,
+    optionId: string,
+    reasoning?: string,
+    prediction?: { confidence?: "low" | "medium" | "high"; predictedOutcome?: string },
+  ): Promise<DecisionResolveOutcome> {
+    const res = await this.post<{ alreadyResolved?: boolean; resolution?: RecordedResolution; artifactId?: string }>(
+      `/decisions/${decisionId}/resolve`,
+      { optionId, reasoning, confidence: prediction?.confidence, predictedOutcome: prediction?.predictedOutcome },
+    );
+    return res?.alreadyResolved && res.resolution
+      ? { kind: "same", resolution: res.resolution, ...(res.artifactId ? { artifactId: res.artifactId } : {}) }
+      : { kind: "resolved" };
   }
 
   async getDecisionResponse(decisionId: string): Promise<{ optionId: string; reasoning?: string } | null> {

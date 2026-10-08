@@ -1,6 +1,7 @@
 import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SuggestionState, SuggestionCounter, DecisionOption, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
 
 import type { PostedReviewRecord } from "./posted-reviews.js";
+import type { DecisionResolveOutcome } from "./decision-resolve-guard.js";
 import type { DurableReviewPostStore } from "../github/durable-review-post.js";
 
 /** Allows both sync (FileStore) and async (DaemonClient) implementations */
@@ -431,6 +432,20 @@ export interface IStore {
     reasoning?: string,
     prediction?: { confidence?: "low" | "medium" | "high"; predictedOutcome?: string },
   ): MaybePromise<void>;
+  /**
+   * #464 (Astra review) — THE authoritative check-and-resolve: the stale-resolve
+   * classification (same pick → no-op, different pick / closed elsewhere →
+   * conflict with the recorded winner, unknown option → invalid) and the write
+   * happen in ONE critical section, so overlapping requests cannot both observe
+   * "unanswered" and both write. Every decision-resolve route goes through this;
+   * see store/decision-resolve-guard.ts.
+   */
+  resolveDecisionAtomic(
+    decisionId: string,
+    optionId: string,
+    reasoning?: string,
+    prediction?: { confidence?: "low" | "medium" | "high"; predictedOutcome?: string },
+  ): MaybePromise<DecisionResolveOutcome>;
   getDecisionResponse(decisionId: string): MaybePromise<{ optionId: string; reasoning?: string } | null>;
   getPendingDecisions(): MaybePromise<DecisionRecord[]>;
   getDecision(decisionId: string): MaybePromise<DecisionRecord | undefined>;
