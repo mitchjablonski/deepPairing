@@ -948,7 +948,15 @@ export function createDaemonRoutes(
       const prediction = confidence || predictedOutcome ? { confidence, predictedOutcome } : undefined;
       const outcome = r.store.resolveDecisionAtomic(decisionId, optionId, reasoning, prediction);
       // #484 review — report only what is persisted (see the public route).
-      if (outcome.kind === "same" || outcome.kind === "conflict") await r.store.forceFlush();
+      if (outcome.kind === "same" || outcome.kind === "conflict") {
+        await r.store.forceFlush();
+        // #484 review — first successful persistence of an answer whose own
+        // request failed: announce the recorded winner once (see public route).
+        const late = r.store.takeResolutionAnnouncement(decisionId);
+        if (late) {
+          broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId: late.artifactId, optionId: late.optionId, reasoning: late.reasoning, confidence: late.confidence, predictedOutcome: late.predictedOutcome });
+        }
+      }
       if (outcome.kind === "same") return c.json(staleResolveBody(outcome, decisionId));
       if (outcome.kind === "conflict") return c.json(staleResolveBody(outcome, decisionId), 409);
       if (outcome.kind === "invalid_option") {
@@ -963,6 +971,7 @@ export function createDaemonRoutes(
       // before the daemon claims success; app.onError maps a concurrent proposal
       // rewrite to the shared session_review_conflict 409, with no broadcast.
       await r.store.forceFlush();
+      r.store.takeResolutionAnnouncement(decisionId); // #484 review — announced now; a retry won't repeat it
       broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId, optionId, reasoning, confidence, predictedOutcome });
       return c.json({ status: "resolved" });
     });

@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { classifyStaleResolve, type DecisionResolveOutcome } from "./decision-resolve-guard.js";
+import { classifyStaleResolve, type DecisionResolveOutcome, type ResolutionAnnouncement } from "./decision-resolve-guard.js";
 import path from "node:path";
 import crypto from "node:crypto";
 import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
@@ -1410,7 +1410,29 @@ export class FileStore implements IStore {
       return { kind: "invalid_option" };
     }
     this.resolveDecision(decisionId, optionId, reasoning, prediction);
+    // #484 review — written, not yet announced (see takeResolutionAnnouncement).
+    this.unannouncedResolutions.add(decisionId);
     return { kind: "resolved", ...(dec.artifactId ? { artifactId: dec.artifactId } : {}) };
+  }
+
+  /** #484 review — decisions whose answer was written by resolveDecisionAtomic
+   *  but not yet announced after a successful flush. In-memory on purpose: an
+   *  answer that never flushed doesn't survive a restart either. */
+  private unannouncedResolutions = new Set<string>();
+
+  takeResolutionAnnouncement(decisionId: string): ResolutionAnnouncement | null {
+    if (!this.unannouncedResolutions.has(decisionId)) return null;
+    const dec = this.decisions.get(decisionId);
+    const response = dec?.response;
+    this.unannouncedResolutions.delete(decisionId);
+    if (!dec || !response) return null;
+    return {
+      optionId: response.optionId,
+      ...(response.reasoning ? { reasoning: response.reasoning } : {}),
+      ...(response.confidence ? { confidence: response.confidence } : {}),
+      ...(response.predictedOutcome ? { predictedOutcome: response.predictedOutcome } : {}),
+      ...(dec.artifactId ? { artifactId: dec.artifactId } : {}),
+    };
   }
 
   getDecisionResponse(decisionId: string): { optionId: string; reasoning?: string } | null {

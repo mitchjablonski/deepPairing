@@ -1,7 +1,7 @@
 import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SuggestionState, SuggestionCounter, DecisionOption, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
 
 import type { PostedReviewRecord } from "./posted-reviews.js";
-import type { DecisionResolveOutcome } from "./decision-resolve-guard.js";
+import type { DecisionResolveOutcome, ResolutionAnnouncement } from "./decision-resolve-guard.js";
 import type { DurableReviewPostStore } from "../github/durable-review-post.js";
 
 /** Allows both sync (FileStore) and async (DaemonClient) implementations */
@@ -446,6 +446,15 @@ export interface IStore {
     reasoning?: string,
     prediction?: { confidence?: "low" | "medium" | "high"; predictedOutcome?: string },
   ): MaybePromise<DecisionResolveOutcome>;
+  /**
+   * #484 review — exactly-once announcement of a resolve. A resolve that WROTE
+   * the answer marks it unannounced; the route takes the mark only after a
+   * SUCCESSFUL flush and publishes `decision_resolved` with the RECORDED winner.
+   * A flush that failed (503) leaves the mark, so the next successful retry —
+   * same pick or a refused different one — announces it once; later retries
+   * get null (no duplicate). Called under the per-store resolve lock.
+   */
+  takeResolutionAnnouncement(decisionId: string): MaybePromise<ResolutionAnnouncement | null>;
   getDecisionResponse(decisionId: string): MaybePromise<{ optionId: string; reasoning?: string } | null>;
   getPendingDecisions(): MaybePromise<DecisionRecord[]>;
   getDecision(decisionId: string): MaybePromise<DecisionRecord | undefined>;

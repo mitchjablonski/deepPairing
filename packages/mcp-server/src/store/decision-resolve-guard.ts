@@ -31,6 +31,15 @@ export interface RecordedResolution {
   resolvedAt?: string;
 }
 
+/** #484 review — the winner to announce once its write is durable. */
+export interface ResolutionAnnouncement {
+  optionId: string;
+  reasoning?: string;
+  confidence?: "low" | "medium" | "high";
+  predictedOutcome?: string;
+  artifactId?: string;
+}
+
 export type DecisionResolveOutcome =
   | { kind: "resolved"; artifactId?: string }
   | { kind: "same"; artifactId?: string; resolution: RecordedResolution }

@@ -2,7 +2,7 @@
  * DaemonClient — HTTP client that implements IStore by proxying
  * all operations to the shared deepPairing daemon.
  */
-import type { DecisionResolveOutcome, RecordedResolution } from "../store/decision-resolve-guard.js";
+import type { DecisionResolveOutcome, RecordedResolution, ResolutionAnnouncement } from "../store/decision-resolve-guard.js";
 import type { Artifact, ArtifactStatus, Comment, TeamPreference, PreflightTrace } from "@deeppairing/shared";
 import type {
   IStore,
@@ -611,6 +611,12 @@ export class DaemonClient implements IStore {
     return res?.alreadyResolved && res.resolution
       ? { kind: "same", resolution: res.resolution, ...(res.artifactId ? { artifactId: res.artifactId } : {}) }
       : { kind: "resolved", ...(res?.artifactId ? { artifactId: res.artifactId } : {}) };
+  }
+
+  /** #484 review — the daemon's internal route announces its own resolves (it
+   *  owns the store and the mark), so a client-side caller has nothing to take. */
+  async takeResolutionAnnouncement(_decisionId: string): Promise<ResolutionAnnouncement | null> {
+    return null;
   }
 
   async getDecisionResponse(decisionId: string): Promise<{ optionId: string; reasoning?: string } | null> {

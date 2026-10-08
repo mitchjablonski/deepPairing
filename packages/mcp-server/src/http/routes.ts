@@ -787,7 +787,16 @@ export function createHttpRoutes(
       // reports ONLY what is persisted: an earlier request may have written the
       // answer in memory and then failed its flush (lock busy → 503). Flush
       // first; a failure surfaces as that same error, never as success.
-      if (outcome.kind === "same" || outcome.kind === "conflict") await store.forceFlush();
+      if (outcome.kind === "same" || outcome.kind === "conflict") {
+        await store.forceFlush();
+        // #484 review — this flush may be the FIRST successful persistence of
+        // an answer whose original request failed (503): announce the recorded
+        // winner once, now. Later retries take nothing (no duplicate event).
+        const late = await store.takeResolutionAnnouncement(decisionId);
+        if (late) {
+          broadcast({ type: "decision_resolved", decisionId, artifactId: late.artifactId, optionId: late.optionId, reasoning: late.reasoning }, sid);
+        }
+      }
       if (outcome.kind === "same") return c.json(staleResolveBody(outcome, decisionId));
       if (outcome.kind === "conflict") {
         const body = staleResolveBody(outcome, decisionId);
@@ -885,12 +894,16 @@ export function createHttpRoutes(
         await maybeUpdateTaskStatus(null, targetArtifactId, store);
       }
 
+      // #484 review — take the announcement mark (so a later retry can't
+      // announce again); a store without marks (DaemonClient) announces as
+      // before with this request's values, which ARE the winner here.
+      const ann = await store.takeResolutionAnnouncement(decisionId);
       broadcast({
         type: "decision_resolved",
         decisionId,
-        artifactId: targetArtifactId,
-        optionId,
-        reasoning,
+        artifactId: ann?.artifactId ?? targetArtifactId,
+        optionId: ann?.optionId ?? optionId,
+        reasoning: ann ? ann.reasoning : reasoning,
       }, sid);
 
       return c.json({ status: "resolved", decisionId });

@@ -140,3 +140,87 @@ describe("P3 — createHttpRoutes(DaemonClient): a losing choice is the typed 40
     expect(outcome).toMatchObject({ kind: "conflict", resolution: { optionId: winner } });
   });
 });
+
+/**
+ * #484 review (Codex 6050934384) — the FIRST successful persistence after a
+ * failed (503) write must publish `decision_resolved` exactly once, with the
+ * RECORDED winner's reasoning; later retries stay silent. The web relies on
+ * that event to approve the card and record the winner across tabs.
+ */
+describe("P2 — a recovered resolve is announced exactly once, with the winner", () => {
+  const resolvedEvents = (events: Array<Record<string, unknown>>) => events.filter((e) => e.type === "decision_resolved");
+
+  it("public route: 503 (no event) → lock released → same-choice retry: ONE event carrying 'first'; a later retry adds none", async () => {
+    const store = fx.track(new FileStore(fx.dir, "s_pubA"));
+    seedDecision(store);
+    await store.forceFlush();
+    const events: Array<Record<string, unknown>> = [];
+    const app = withHash(createHttpRoutes(store, fx.dir, (m) => events.push(m as Record<string, unknown>)), fx.dir);
+    const lock = path.join(fx.dir, ".deeppairing", "sessions", "s_pubA", ".flush.lock");
+    fs.writeFileSync(lock, liveOwner());
+    expect((await app.request("/api/decisions/dec_d", json({ optionId: "a", reasoning: "first" }))).status).toBe(503);
+    expect(resolvedEvents(events)).toHaveLength(0);
+    fs.unlinkSync(lock);
+
+    const retry = await app.request("/api/decisions/dec_d", json({ optionId: "a", reasoning: "retry" }));
+    expect(retry.status).toBe(200);
+    expect(resolvedEvents(events)).toHaveLength(1);
+    expect(resolvedEvents(events)[0]).toMatchObject({ decisionId: "dec_d", optionId: "a", reasoning: "first", artifactId: "art_d" });
+
+    expect((await app.request("/api/decisions/dec_d", json({ optionId: "a", reasoning: "again" }))).status).toBe(200);
+    expect(resolvedEvents(events)).toHaveLength(1);
+  });
+
+  it("public route: a DIFFERENT-choice retry that first persists the unflushed winner announces the winner once (and is refused)", async () => {
+    const store = fx.track(new FileStore(fx.dir, "s_pubB"));
+    seedDecision(store);
+    await store.forceFlush();
+    const events: Array<Record<string, unknown>> = [];
+    const app = withHash(createHttpRoutes(store, fx.dir, (m) => events.push(m as Record<string, unknown>)), fx.dir);
+    const lock = path.join(fx.dir, ".deeppairing", "sessions", "s_pubB", ".flush.lock");
+    fs.writeFileSync(lock, liveOwner());
+    expect((await app.request("/api/decisions/dec_d", json({ optionId: "a", reasoning: "first" }))).status).toBe(503);
+    fs.unlinkSync(lock);
+
+    const other = await app.request("/api/decisions/dec_d", json({ optionId: "b", reasoning: "other" }));
+    expect(other.status).toBe(409);
+    expect(resolvedEvents(events)).toHaveLength(1);
+    expect(resolvedEvents(events)[0]).toMatchObject({ optionId: "a", reasoning: "first" });
+    expect((await app.request("/api/decisions/dec_d", json({ optionId: "b" }))).status).toBe(409);
+    expect(resolvedEvents(events)).toHaveLength(1);
+  });
+
+  it("internal route: the same — ONE event with the winner's reasoning, none on later retries", async () => {
+    const sessions = new Map<string, FileStore>();
+    const meta = new Map<string, SessionMeta>();
+    const events: Array<Record<string, unknown>> = [];
+    const make = (sid: string) => { const s = fx.track(new FileStore(fx.dir, sid)); sessions.set(sid, s); return s; };
+    const app = createDaemonRoutes(sessions, meta, make, (_sid, e) => events.push(e as Record<string, unknown>), undefined, fx.dir);
+    await app.request("/api/internal/sessions/s_intA/register", json({}));
+    const store = sessions.get("s_intA")!;
+    seedDecision(store);
+    await store.forceFlush();
+    const lock = path.join(fx.dir, ".deeppairing", "sessions", "s_intA", ".flush.lock");
+    fs.writeFileSync(lock, liveOwner());
+    const url = "/api/internal/sessions/s_intA/decisions/dec_d/resolve";
+    expect((await app.request(url, json({ optionId: "a", reasoning: "first" }))).status).toBe(503);
+    expect(resolvedEvents(events)).toHaveLength(0);
+    fs.unlinkSync(lock);
+
+    expect((await app.request(url, json({ optionId: "a", reasoning: "retry" }))).status).toBe(200);
+    expect(resolvedEvents(events)).toHaveLength(1);
+    expect(resolvedEvents(events)[0]).toMatchObject({ decisionId: "dec_d", optionId: "a", reasoning: "first" });
+    expect((await app.request(url, json({ optionId: "a" }))).status).toBe(200);
+    expect(resolvedEvents(events)).toHaveLength(1);
+  });
+
+  it("an ordinary first-try success announces once, and a same-choice retry afterwards adds none (no duplicate)", async () => {
+    const store = fx.track(new FileStore(fx.dir, "s_pubC"));
+    seedDecision(store);
+    const events: Array<Record<string, unknown>> = [];
+    const app = withHash(createHttpRoutes(store, fx.dir, (m) => events.push(m as Record<string, unknown>)), fx.dir);
+    expect((await app.request("/api/decisions/dec_d", json({ optionId: "a", reasoning: "first" }))).status).toBe(200);
+    expect((await app.request("/api/decisions/dec_d", json({ optionId: "a", reasoning: "again" }))).status).toBe(200);
+    expect(resolvedEvents(events)).toHaveLength(1);
+  });
+});
