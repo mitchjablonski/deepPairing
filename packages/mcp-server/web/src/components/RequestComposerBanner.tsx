@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { RequestIntent } from "@deeppairing/shared";
-import { useArtifactStore, artifactStoreGeneration } from "../stores/artifact";
+import { useArtifactStore } from "../stores/artifact";
 import { useConnectionStore } from "../stores/connection";
 import { useToastStore } from "../stores/toast";
 import { useAgentRecentlyActive } from "../hooks/useAgentRecentlyActive";
 import { noAgentLive } from "../lib/liveness";
-import { useDraft } from "../hooks/useDraft";
+import { useDraft, clearDraftIfUnchanged } from "../hooks/useDraft";
 import { useConnectionGraceStore } from "../lib/connectionGrace";
 import { useOfflineReason } from "../hooks/useOfflineReason";
 
@@ -211,25 +211,29 @@ export function RequestComposerBanner({ compact = false }: {
     const t = text.trim();
     if (!t || submitting) return;
     setSubmitting(true);
-    // #487 review (Sol) — the completion fence. A success that lands after the
-    // tab moved on (A→B→A: same session id, but the store was reset in between)
-    // or after the draft was replaced belongs to a composer state that no
-    // longer exists: it must not clear, close or announce. Capture the semantic
-    // transition (session + store generation) and the draft identity now.
+    // #487 review (Sol + lifecycle) — the completion fence. The success retires
+    // the draft it was sent from (and only that); a composer now showing ANOTHER
+    // session, or text edited since, is left as it is with no announcement.
+    // Capture the session and the draft identity now.
     const sessionAtSend = useConnectionStore.getState().sessionId;
-    const generationAtSend = artifactStoreGeneration();
     const textAtSend = text;
     try {
       await submitRequest(t, intent);
-      const moved =
-        useConnectionStore.getState().sessionId !== sessionAtSend ||
-        artifactStoreGeneration() !== generationAtSend;
-      if (moved || textRef.current !== textAtSend) {
-        // The store fenced the stale repaint itself; here: keep whatever is
-        // typed now, keep the composer as it is, no success toast. `finally`
-        // still releases the busy state.
+      // #487 review (lifecycle) — the request IS saved on the daemon, wherever
+      // the tab is now. Retire its persisted draft (the per-session key it was
+      // typed under) if that draft is still exactly what was sent — otherwise a
+      // trip A→B→A brought the saved text back with Send enabled: a duplicate.
+      // A live composer on that key holding the same text clears too.
+      clearDraftIfUnchanged(`request:${sessionAtSend ?? "global"}`, textAtSend);
+      const nowSession = useConnectionStore.getState().sessionId;
+      if (nowSession !== sessionAtSend) return; // another session's composer: leave it alone, no toast
+      if (textRef.current !== textAtSend) {
+        // Edited since the send: keep the new text and the composer, announce
+        // nothing about the old one. `finally` still releases the busy state.
         return;
       }
+      // (A→B→A with the text unchanged: the request was saved — clear and
+      // confirm as usual; the store fenced its own stale repaint.)
       setText("");
       setOpen(false);
       // #204 (UX M2) — confirm the submit with a liveness-branched toast (the ○

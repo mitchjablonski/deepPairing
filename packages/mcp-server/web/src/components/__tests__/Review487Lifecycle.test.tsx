@@ -45,6 +45,7 @@ import { useArtifactStore, artifactStoreGeneration } from "../../stores/artifact
 import { useToastStore } from "../../stores/toast";
 import { usePreferencesStore } from "../../stores/preferences";
 import { useConnectionGraceDriver, useConnectionGraceStore, HYDRATION_STALL_MS } from "../../lib/connectionGrace";
+import { TurnIndicator } from "../TurnIndicator";
 
 const snapshot = (sessionId: string) => ({ type: "connected", state: { sessionId, artifacts: [], comments: [], requests: [], decisions: [] } });
 const tick = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); await new Promise((r) => setTimeout(r, 0)); });
@@ -171,5 +172,101 @@ describe("3 — a stale request completion doesn't clear, close or announce", ()
     expect(box().value).toBe("Actually: plan the limiter");
     expect(useToastStore.getState().toasts.some((t) => /Saved|Sent to Claude/.test(t.title))).toBe(false);
     expect(screen.getByRole("button", { name: "Send request" })).toBeEnabled();
+  });
+});
+
+/**
+ * #487 lifecycle review (Claude, 865e7347) — the reviewer's probes as
+ * regressions: each binding gets its OWN deadline, and a saved request's draft
+ * is retired wherever the tab is when the POST succeeds.
+ */
+describe("4 — each binding gets its own hydration deadline", () => {
+  it("A pending 9s → switchSession(B): B is NOT stalled 1.5s later; it stalls only after its own full deadline", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    render(<Driver />);
+    act(() => useConnectionStore.getState().connect("A"));
+    act(() => adapter().connect());
+    act(() => { vi.advanceTimersByTime(9000); });
+    act(() => useConnectionStore.getState().switchSession("B"));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    act(() => { adapter().disconnect(); adapter().connect(); });
+    act(() => { vi.advanceTimersByTime(1500); });
+    expect(useConnectionGraceStore.getState().hydrationStalled).toBe(false);
+    act(() => { vi.advanceTimersByTime(HYDRATION_STALL_MS); });
+    expect(useConnectionGraceStore.getState().hydrationStalled).toBe(true);
+  });
+
+  it("A already stalled → switchSession(B): B starts pending, not stalled", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    render(<Driver />);
+    act(() => useConnectionStore.getState().connect("A"));
+    act(() => adapter().connect());
+    act(() => { vi.advanceTimersByTime(HYDRATION_STALL_MS + 1); });
+    expect(useConnectionGraceStore.getState().hydrationStalled).toBe(true);
+    act(() => useConnectionStore.getState().switchSession("B"));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(useConnectionGraceStore.getState().hydrationStalled).toBe(false);
+  });
+});
+
+describe("5 — a saved request's draft is retired (no duplicate Send)", () => {
+  const deferredPost = () => {
+    let resolvePost!: (r: Response) => void;
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (String(url).includes("/api/requests") && init?.method === "POST") return new Promise<Response>((r) => { resolvePost = r; });
+      return Promise.resolve(new Response(JSON.stringify({ sessions: [] }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    }));
+    return (text: string) => resolvePost(new Response(JSON.stringify({ request: { id: "req_old", text, intent: "explain", createdAt: new Date().toISOString() } }), { status: 200, headers: { "Content-Type": "application/json" } }));
+  };
+  const box = () => screen.queryByRole("textbox", { name: "Your request to Claude" }) as HTMLInputElement | null;
+
+  it("A→B→A with the draft UNCHANGED, old POST succeeds: the text and its stored draft are gone (Send can't resend it)", async () => {
+    const succeed = deferredPost();
+    act(() => useConnectionStore.getState().connect("A"));
+    act(() => adapter().connect());
+    act(() => adapter().emit(snapshot("A")));
+    await tick();
+    render(<RequestComposerBanner />);
+    act(() => { window.dispatchEvent(new CustomEvent(OPEN_REQUEST_COMPOSER_EVENT)); });
+    fireEvent.change(box()!, { target: { value: "Explain the cache" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send request" }));
+    const g = artifactStoreGeneration();
+    act(() => useConnectionStore.getState().switchSession("B"));
+    await waitFor(() => expect(artifactStoreGeneration()).toBeGreaterThan(g));
+    act(() => useConnectionStore.getState().switchSession("A"));
+    await tick();
+    await act(async () => { succeed("Explain the cache"); await new Promise((r) => setTimeout(r, 0)); });
+    expect(box()?.value ?? "").toBe("");
+    expect(sessionStorage.getItem("dp:draft:request:A")).toBeNull();
+  });
+
+  it("send in A, stay on B until it succeeds, then back to A: A's saved draft doesn't come back", async () => {
+    const succeed = deferredPost();
+    act(() => useConnectionStore.getState().connect("A"));
+    act(() => adapter().connect());
+    act(() => adapter().emit(snapshot("A")));
+    await tick();
+    render(<RequestComposerBanner />);
+    act(() => { window.dispatchEvent(new CustomEvent(OPEN_REQUEST_COMPOSER_EVENT)); });
+    fireEvent.change(box()!, { target: { value: "Explain the cache" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send request" }));
+    act(() => useConnectionStore.getState().switchSession("B"));
+    await tick();
+    await act(async () => { succeed("Explain the cache"); await new Promise((r) => setTimeout(r, 0)); });
+    expect(useToastStore.getState().toasts.some((t) => /Saved|Sent to Claude/.test(t.title))).toBe(false); // not on B
+    act(() => useConnectionStore.getState().switchSession("A"));
+    await tick();
+    expect(box()?.value ?? "").toBe("");
+    expect(sessionStorage.getItem("dp:draft:request:A")).toBeNull();
+  });
+});
+
+describe("6 — TurnIndicator reads hydration for the CURRENT binding", () => {
+  it("hydrated evidence from another binding doesn't arm its live region", () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    useConnectionStore.setState({ connected: true, sessionId: "B", hydrated: true, hydratedBinding: "A@" } as any);
+    render(<TurnIndicator agentStateOnly />);
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(document.querySelector("[role='status'][aria-live]")?.getAttribute("aria-live")).toBe("off");
   });
 });

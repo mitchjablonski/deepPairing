@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { create } from "zustand";
-import { useConnectionStore, selectHydratedForBinding } from "../stores/connection";
+import { useConnectionStore, selectHydratedForBinding, bindingKey } from "../stores/connection";
 import { hasUnsavedText } from "./unsavedText";
 
 /**
@@ -56,14 +56,16 @@ export function useConnectionGraceDriver(): void {
   // another session/project re-arms the deadline instead of inheriting the
   // previous binding's applied snapshot.
   const hydrated = useConnectionStore(selectHydratedForBinding);
+  // #487 review (lifecycle) — and the DEADLINE belongs to the binding too: a
+  // switch to B (session or project) clears any stall A earned and starts B's
+  // own full deadline, instead of B inheriting A's elapsed time (or A's stall).
+  const binding = useConnectionStore(bindingKey);
   useEffect(() => {
-    if (!connected || hydrated) {
-      if (useConnectionGraceStore.getState().hydrationStalled) useConnectionGraceStore.setState({ hydrationStalled: false });
-      return;
-    }
+    if (useConnectionGraceStore.getState().hydrationStalled) useConnectionGraceStore.setState({ hydrationStalled: false });
+    if (!connected || hydrated) return;
     const t = setTimeout(() => useConnectionGraceStore.setState({ hydrationStalled: true }), HYDRATION_STALL_MS);
     return () => clearTimeout(t);
-  }, [connected, hydrated]);
+  }, [connected, hydrated, binding]);
 }
 
 /** #477 — true when the tab is connected but its first snapshot never applied. */
