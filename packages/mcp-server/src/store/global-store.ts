@@ -369,27 +369,69 @@ export class GlobalStore {
     });
   }
 
-  /** #486 — `<ledger>.removed.json`: concept key → ISO time of its last
-   *  `removeConcept`. A sidecar, so the ledger's own format is unchanged. */
+  /**
+   * #486 — `<ledger>.removed.json`: `{ seq, removals: { [conceptKey]: seq } }`.
+   * `seq` is a MONOTONIC removal counter (never a clock: a backward clock step
+   * must not change which mirrors count as "older than the removal"). A
+   * mirror queued while the ledger was busy carries the `seq` it saw before
+   * its first attempt; on replay it is skipped if its concept was removed
+   * after that. A sidecar, so the ledger's own format is unchanged.
+   */
   private removalsPath(): string {
     return `${this.ledgerPath}.removed.json`;
   }
 
-  private readRemovals(): Record<string, string> {
+  /** Read the removal sidecar. A corrupt file is backed up and salvaged —
+   *  never silently treated as empty (that would lose tombstones). */
+  private readRemovals(): { seq: number; removals: Record<string, number> } {
+    let raw: string;
     try {
-      const raw = JSON.parse(fs.readFileSync(this.removalsPath(), "utf-8"));
-      return raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, string> : {};
-    } catch {
-      return {};
+      raw = fs.readFileSync(this.removalsPath(), "utf-8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return { seq: 0, removals: {} };
+      throw err;
     }
+    const salvage = (text: string): Record<string, number> => {
+      const out: Record<string, number> = {};
+      for (const m of text.matchAll(/"((?:[^"\\]|\\.)*)"\s*:\s*(\d+)/g)) {
+        try { const key = JSON.parse(`"${m[1]}"`) as string; if (key !== "seq") out[key] = Number(m[2]); } catch { /* skip */ }
+      }
+      return out;
+    };
+    try {
+      const v = JSON.parse(raw) as { seq?: unknown; removals?: unknown };
+      if (v && typeof v === "object" && Number.isInteger(v.seq) && v.removals && typeof v.removals === "object" && !Array.isArray(v.removals)) {
+        const removals: Record<string, number> = {};
+        let bad = false;
+        for (const [k, n] of Object.entries(v.removals as Record<string, unknown>)) {
+          if (Number.isInteger(n)) removals[k] = n as number; else bad = true;
+        }
+        if (!bad) return { seq: v.seq as number, removals };
+      }
+    } catch { /* fall through to salvage */ }
+    const removals = salvage(raw);
+    const seq = Math.max(0, ...Object.values(removals));
+    const backup = `${this.removalsPath()}.corrupt-${Date.now()}`;
+    try { fs.copyFileSync(this.removalsPath(), backup); } catch { /* best effort */ }
+    console.error(
+      `[deepPairing] GlobalStore: the removal record ${this.removalsPath()} is corrupt; backed up to ${backup} and salvaged ` +
+      `${Object.keys(removals).length} removal(s). Check the backup if a removed stance reappears.`,
+    );
+    return { seq, removals };
+  }
+
+  /** The current removal sequence — captured by a mirror before its first
+   *  attempt, so its replay can tell whether a removal happened since. */
+  removalSeq(): number {
+    try { return this.readRemovals().seq; } catch { return 0; }
   }
 
   /** Called under the ledger lock (removeConcept). */
   private recordRemoval(key: string): void {
-    const removals = this.readRemovals();
-    removals[key] = new Date().toISOString();
+    const current = this.readRemovals();
+    const seq = current.seq + 1;
     try {
-      writeJsonAtomic(this.removalsPath(), removals);
+      writeJsonAtomic(this.removalsPath(), { seq, removals: { ...current.removals, [key]: seq } });
     } catch (err) {
       console.error(`[deepPairing] could not record the removal of "${key}" (a queued mirror could re-add it):`, err);
     }
@@ -463,7 +505,7 @@ export class GlobalStore {
   recordInstance(
     concept: string,
     instance: Omit<PhilosophyInstance, "at"> & { at?: string },
-    opts: { exactOnce?: boolean } = {},
+    opts: { exactOnce?: boolean; replayedFromSeq?: number } = {},
   ): void {
     if (!concept.trim()) return;
     this.transact(() => this.recordInstanceLocked(concept, instance, opts));
@@ -472,7 +514,7 @@ export class GlobalStore {
   private recordInstanceLocked(
     concept: string,
     instance: Omit<PhilosophyInstance, "at"> & { at?: string },
-    opts: { exactOnce?: boolean } = {},
+    opts: { exactOnce?: boolean; replayedFromSeq?: number } = {},
   ): void {
     const key = normalizeKey(concept);
     const ledger = this.read();
@@ -490,9 +532,12 @@ export class GlobalStore {
     // remove`) must not resurrect it. Checked here, under the ledger lock, so
     // a remove racing a replay cannot lose. A genuinely new instance (stamped
     // after the removal) still records.
-    if (opts.exactOnce) {
-      const removedAt = this.readRemovals()[key];
-      if (removedAt && now <= removedAt) return;
+    if (opts.replayedFromSeq !== undefined) {
+      const removedSeq = this.readRemovals().removals[key];
+      if (removedSeq !== undefined && removedSeq > opts.replayedFromSeq) {
+        console.error(`[deepPairing] skipped a queued cross-project mirror for "${concept}": the concept was removed after it was queued.`);
+        return;
+      }
     }
     if (opts.exactOnce && existing?.instances.some((prior) =>
       prior.project === instance.project && prior.sessionId === instance.sessionId &&

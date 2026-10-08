@@ -45,7 +45,14 @@ interface PendingLedgerMirror {
   /** The local row it mirrors (rejected / approved), for the no-resurrect check. */
   description?: string;
   instance: { project: string; sessionId: string; verdict: "rejected" | "approved"; reason?: string; at: string };
+  /** The ledger's monotonic removal sequence seen BEFORE the first attempt;
+   *  a removal of this concept after it wins over the replay. */
+  removalSeq?: number;
 }
+
+/** #486 review — bounds on the pending mirror queue. */
+const MIRROR_QUEUE_MAX = 200;
+const MIRROR_QUEUE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
  * #193 E2 — artifact types whose rejection captures NO cross-project taste
@@ -1840,7 +1847,7 @@ export class FileStore implements IStore {
     // Demo isolation — same never-mirror gate as the record paths.
     // #408 review — local retire first (a busy lock throws before the mirror).
     let retired = 0;
-    this.mutatePreferences((prefs) => {
+    const retireLocal = () => this.mutatePreferences((prefs) => {
       const rejected = this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []);
       const keep = rejected.filter(
         (r) =>
@@ -1856,10 +1863,12 @@ export class FileStore implements IStore {
     // #486 — a rejection whose mirror is still QUEUED never reached the
     // ledger. Retiring it cancels the queued mirror (so a later replay cannot
     // resurrect it) and, like an unpublished rejection, leaves nothing to
-    // counter globally.
+    // counter globally. If the queue can't be checked (lock busy), the
+    // counter is skipped too: publishing one for a rejection that may never
+    // have been published would be wrong; skipping one is only advisory.
     const cancelled = conceptKey && !this.isDemoSession
-      ? this.cancelQueuedRejections(capConceptLength(conceptKey), description)
-      : 0;
+      ? this.cancelQueuedRejections(capConceptLength(conceptKey), description, retireLocal)
+      : (retireLocal(), 0);
     if (conceptKey && cancelled === 0 && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
         // Q2 review LOW — the stored reason said "not my taste", the label of a
@@ -1977,6 +1986,9 @@ export class FileStore implements IStore {
 
   private mirrorToLedger(kind: "rejected" | "approved" | "override", conceptKey: string, description: string | undefined, reason?: string): void {
     const concept = capConceptLength(conceptKey);
+    // Captured BEFORE the attempt: a removal that lands after this point must
+    // win over a later replay of this mirror (monotonic, not a clock).
+    const removalSeq = getGlobalStore().removalSeq();
     const instance = {
       project: this.projectHint,
       sessionId: this.sessionId,
@@ -1988,18 +2000,39 @@ export class FileStore implements IStore {
       getGlobalStore().recordInstance(concept, instance, { exactOnce: true });
     } catch (err) {
       if (!isFileLockError(err)) throw err;
-      this.queueLedgerMirror({ kind, concept, ...(description ? { description } : {}), instance });
+      this.queueLedgerMirror({ kind, concept, ...(description ? { description } : {}), instance, removalSeq });
       return;
     }
     // The ledger lock was just free — a good moment to drain anything queued.
     if (fs.existsSync(this.ledgerMirrorPendingPath())) this.replayLedgerMirrorsSafe();
   }
 
+  /** Read the queue, applying its bounds. Malformed entries and entries cut
+   *  by the size/age caps are never dropped silently: the file is backed up
+   *  (`.corrupt-<ts>`) or the cut is logged. */
   private readPendingMirrors(): PendingLedgerMirror[] {
-    const raw = this.loadJsonFile<unknown>(this.ledgerMirrorPendingPath(), []);
-    return Array.isArray(raw) ? raw.filter((e): e is PendingLedgerMirror =>
+    const file = this.ledgerMirrorPendingPath();
+    const raw = this.loadJsonFile<unknown>(file, []);
+    if (!Array.isArray(raw)) return [];
+    const valid = raw.filter((e): e is PendingLedgerMirror =>
       !!e && typeof e === "object" && typeof (e as PendingLedgerMirror).concept === "string" &&
-      !!(e as PendingLedgerMirror).instance && typeof (e as PendingLedgerMirror).instance.at === "string") : [];
+      ["rejected", "approved", "override"].includes((e as PendingLedgerMirror).kind) &&
+      !!(e as PendingLedgerMirror).instance && typeof (e as PendingLedgerMirror).instance.at === "string");
+    if (valid.length !== raw.length) {
+      const backup = `${file}.corrupt-${Date.now()}`;
+      try { fs.copyFileSync(file, backup); } catch { /* best effort */ }
+      console.error(`[deepPairing] ${raw.length - valid.length} malformed queued ledger mirror(s) skipped; the queue was backed up to ${backup}.`);
+    }
+    const cutoff = Date.now() - MIRROR_QUEUE_MAX_AGE_MS;
+    const fresh = valid.filter((e) => !(Date.parse(e.instance.at) < cutoff));
+    if (fresh.length !== valid.length) {
+      console.error(`[deepPairing] dropped ${valid.length - fresh.length} queued ledger mirror(s) older than 30 days.`);
+    }
+    if (fresh.length > MIRROR_QUEUE_MAX) {
+      console.error(`[deepPairing] the ledger mirror queue is capped at ${MIRROR_QUEUE_MAX}; dropped the ${fresh.length - MIRROR_QUEUE_MAX} oldest.`);
+      return fresh.slice(-MIRROR_QUEUE_MAX);
+    }
+    return fresh;
   }
 
   private writePendingMirrors(entries: PendingLedgerMirror[]): void {
@@ -2076,7 +2109,7 @@ export class FileStore implements IStore {
           (!!r.concept && capConceptLength(r.concept) === entry.concept))) continue; // retired meanwhile
         if (entry.kind === "approved" && entry.description !== undefined && !approved.includes(entry.description)) continue;
         try {
-          getGlobalStore().recordInstance(entry.concept, entry.instance, { exactOnce: true });
+          getGlobalStore().recordInstance(entry.concept, entry.instance, { exactOnce: true, replayedFromSeq: entry.removalSeq ?? 0 });
         } catch (err) {
           if (isFileLockError(err)) { busy = true; keep.push(entry); continue; }
           FileStore.logLedgerMirrorFailure(entry.kind, err); // not retryable: drop, loudly
@@ -2089,20 +2122,31 @@ export class FileStore implements IStore {
 
   /** Drop queued REJECTED mirrors for a concept/description being retired.
    *  Returns how many were dropped. */
-  private cancelQueuedRejections(concept: string, description: string | undefined): number {
-    if (!fs.existsSync(this.ledgerMirrorPendingPath())) return 0;
+  /** Drop queued REJECTED mirrors for a concept/description being retired —
+   *  under the queue lock, together with `retireLocal`, so a replay cannot
+   *  slip in between and drop the entry itself (which would make the retire
+   *  think nothing was queued and publish a stray counter-approval).
+   *  Returns how many were dropped, or "unknown" if the queue lock was busy. */
+  private cancelQueuedRejections(concept: string, description: string | undefined, retireLocal: () => void): number | "unknown" {
+    if (!fs.existsSync(this.ledgerMirrorPendingPath())) { retireLocal(); return 0; }
+    let cancelled: number | "unknown" = "unknown";
     try {
-      return this.withMirrorQueue(() => {
+      this.withMirrorQueue(() => {
+        retireLocal(); // first: a busy preferences lock must not cancel anything
         const entries = this.readPendingMirrors();
         const keep = entries.filter((e) => !(e.kind === "rejected" &&
           (e.concept === concept || (description !== undefined && e.description === description))));
         if (keep.length !== entries.length) this.writePendingMirrors(keep);
-        return entries.length - keep.length;
+        cancelled = entries.length - keep.length;
       });
     } catch (err) {
-      console.error(`[deepPairing] could not cancel a queued ledger mirror:`, err);
-      return 0;
+      // Only a busy QUEUE lock is "couldn't tell"; anything else (a busy
+      // preferences lock → 503) propagates unchanged.
+      if (!isFileLockError(err) || err.path !== `${this.ledgerMirrorPendingPath()}.lock`) throw err;
+      console.error(`[deepPairing] could not check the ledger mirror queue (busy) — the retire's cross-project counter is skipped:`, err);
+      retireLocal();
     }
+    return cancelled;
   }
 
   private static logLedgerMirrorFailure(verdict: string, err: unknown): void {

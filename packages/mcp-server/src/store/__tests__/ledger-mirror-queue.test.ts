@@ -157,6 +157,84 @@ describe("#486 — the cross-project mirror survives a busy ledger lock", () => 
   });
 });
 
+describe("#488 review — clock, corruption, retire races, queue bounds", () => {
+  const logged = (needle: RegExp) =>
+    (console.error as unknown as { mock: { calls: unknown[][] } }).mock.calls.some((c) => needle.test(String(c[0])));
+
+  it("a backward clock step after a remove never drops a NEW rejection (removal order is a sequence, not a time)", async () => {
+    const { getGlobalStore } = await import("../global-store.js");
+    getGlobalStore().recordInstance("redis", { project: "elsewhere", sessionId: "x", verdict: "rejected" });
+    const store = publishingStore();
+    expect(getGlobalStore().removeConcept("redis")).not.toBeNull();
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(Date.now() - 30_000); // NTP step / WSL resume
+    store.recordRejectedApproach({ description: "Use Redis", concept: "redis" });
+    expect(instances("redis")).toHaveLength(1);
+  });
+
+  it("a replay skipped because of a removal is logged", async () => {
+    const { getGlobalStore } = await import("../global-store.js");
+    getGlobalStore().recordInstance("redis", { project: "elsewhere", sessionId: "x", verdict: "rejected" });
+    const store = publishingStore();
+    holdLedgerLock();
+    store.recordRejectedApproach({ description: "Use Redis", concept: "redis" });
+    releaseLedgerLock();
+    getGlobalStore().removeConcept("redis");
+    store.replayLedgerMirrors();
+    expect(instances("redis")).toEqual([]);
+    expect(logged(/skipped a queued cross-project mirror for "redis"/)).toBe(true);
+  });
+
+  it("a corrupt removal record is backed up and salvaged, never silently overwritten", async () => {
+    const { getGlobalStore } = await import("../global-store.js");
+    const sidecar = `${fx.ledgerPath}.removed.json`;
+    getGlobalStore().recordInstance("kafka", { project: "p", sessionId: "s", verdict: "rejected" });
+    fs.writeFileSync(sidecar, '{"seq": 2, "removals": {"redis": 1, "mongo": 2'); // truncated write
+    expect(getGlobalStore().removeConcept("kafka")).not.toBeNull();
+    const backups = fs.readdirSync(path.dirname(sidecar)).filter((f) => f.startsWith(path.basename(sidecar) + ".corrupt-"));
+    expect(backups).toHaveLength(1);
+    expect(logged(/removal record .* is corrupt/)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(sidecar, "utf8"))).toEqual({ seq: 3, removals: { redis: 1, mongo: 2, kafka: 3 } });
+  });
+
+  it("a retire that can't check the queue (lock busy) publishes no stray counter-approval", () => {
+    const store = publishingStore();
+    holdLedgerLock();
+    store.recordRejectedApproach({ description: "Use Redis", concept: "redis" }); // queued, never published
+    releaseLedgerLock();
+    const queueLock = `${pending}.lock`;
+    fs.writeFileSync(queueLock, JSON.stringify({ ...ownLockIdentity()!, pid: process.ppid, processStartTime: null, createdAt: "", nonce: "q" }));
+    try {
+      expect(store.overrideRejectedApproach({ description: "Use Redis", concept: "redis" }).retired).toBe(1);
+    } finally {
+      fs.unlinkSync(queueLock);
+    }
+    const all = () => fs.existsSync(fx.ledgerPath) ? Object.keys(JSON.parse(fs.readFileSync(fx.ledgerPath, "utf8")).concepts) : [];
+    expect(all()).toEqual([]); // no "Retired by you" counter for an unpublished rejection
+    vi.advanceTimersByTime(120_000);
+    expect(all()).toEqual([]); // and the queued rejection doesn't resurrect either
+  });
+
+  it("the queue is capped by size and age, and malformed entries are backed up, not silently dropped", () => {
+    const store = publishingStore();
+    const now = new Date().toISOString();
+    const entry = (i: number, at = now) => ({ kind: "override", concept: `c${i}`, instance: { project: "p", sessionId: "s", verdict: "approved", at }, removalSeq: 0 });
+    const old = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString();
+    fs.mkdirSync(path.dirname(pending), { recursive: true });
+    fs.writeFileSync(pending, JSON.stringify([entry(-1, old), { foo: 1 }, ...Array.from({ length: 205 }, (_, i) => entry(i))]));
+    holdLedgerLock(); // replay stays blocked: everything that survives the bounds stays queued
+    expect(store.replayLedgerMirrors()).toBe(200);
+    const left = JSON.parse(fs.readFileSync(pending, "utf8")) as Array<{ concept: string }>;
+    expect(left).toHaveLength(200);
+    expect(left[0]!.concept).toBe("c5"); // the oldest five beyond the cap were cut
+    expect(left.some((e) => e.concept === "c-1")).toBe(false); // >30 days
+    expect(fs.readdirSync(path.dirname(pending)).some((f) => f.startsWith("ledger-mirror-pending.json.corrupt-"))).toBe(true);
+    expect(logged(/malformed queued ledger mirror/)).toBe(true);
+    expect(logged(/older than 30 days/)).toBe(true);
+    expect(logged(/capped at 200/)).toBe(true);
+  });
+});
+
 describe("#486 — concurrent replayers in separate processes", () => {
   it("four processes replaying the same queue append the mirror exactly once", async () => {
     vi.useRealTimers();
