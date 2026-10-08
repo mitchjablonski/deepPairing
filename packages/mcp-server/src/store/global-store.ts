@@ -29,6 +29,23 @@ import { normalizeConceptKey } from "@deeppairing/shared";
  */
 
 export type PhilosophyVerdict = "rejected" | "approved";
+
+/** #488 review — what recordInstance actually did. Only "written" changed the
+ *  ledger; "duplicate" / "removed" / "ineligible" / "not-published" are
+ *  validated, intentional no-ops; "refused" means the ledger would not accept
+ *  the write (corrupt or unwritable) and nothing was recorded. */
+export type RecordOutcome = "written" | "duplicate" | "removed" | "ineligible" | "not-published" | "refused";
+
+export interface RecordInstanceOptions {
+  /** Skip if this exact (project, sessionId, verdict, at) instance exists. */
+  exactOnce?: boolean;
+  /** A replayed mirror: skip if the concept was removed after this removal sequence. */
+  replayedFromSeq?: number;
+  /** Evaluated under the ledger lock just before appending; false ⇒ "ineligible". */
+  precondition?: () => boolean;
+  /** Only append if the concept already exists (a retire's counter-approval). */
+  onlyIfConceptExists?: boolean;
+}
 export type PhilosophyStance = "avoid" | "prefer" | "mixed";
 
 export interface PhilosophyInstance {
@@ -436,18 +453,26 @@ export class GlobalStore {
     try { return this.readRemovals().seq; } catch { return 0; }
   }
 
-  /** Called under the ledger lock (removeConcept). */
+  /** Called under the ledger lock (removeConcept), BEFORE the deletion.
+   *  Throws if the tombstone can't be made durable — the removal then fails
+   *  rather than acknowledging something a queued mirror could undo. */
   private recordRemoval(key: string): void {
     const current = this.readRemovals();
     const seq = current.seq + 1;
     try {
+      fs.mkdirSync(path.dirname(this.removalsPath()), { recursive: true });
       writeJsonAtomic(this.removalsPath(), { seq, removals: { ...current.removals, [key]: seq } });
     } catch (err) {
-      console.error(`[deepPairing] could not record the removal of "${key}" (a queued mirror could re-add it):`, err);
+      throw new Error(
+        `could not record the removal of "${key}" durably (${this.removalsPath()}: ${(err as Error).message}); ` +
+        "refusing to remove it, because a queued mirror could re-add it.",
+      );
     }
   }
 
-  private write(ledger: LedgerFile): void {
+  /** Returns true only when the ledger was durably replaced (#488 review:
+   *  callers that must not acknowledge a refused write check this). */
+  private write(ledger: LedgerFile): boolean {
     // H1-5 — REFUSE to overwrite a ledger the most recent read couldn't trust.
     // Writing the (empty) fallback shape here is exactly the permanent
     // data-loss bug: recordInstance reads empty-on-corruption, appends one
@@ -464,7 +489,7 @@ export class GlobalStore {
             : `It could NOT be backed up (no snapshot of the current corrupt state exists on disk). `) +
           `Fix or remove the file to resume recording.`,
       );
-      return;
+      return false;
     }
     // H1-5 R1 — never shrink the on-disk ledger (a per-entry DROP happened this
     // read) without first snapshotting the pre-drop bytes. writeJsonAtomic below
@@ -482,8 +507,12 @@ export class GlobalStore {
       // The file on disk is valid again; forget any stale corruption snapshot so
       // a future corruption of this path is treated as new (H1-5 R4).
       corruptSnapshots.delete(this.ledgerPath);
-    } catch {
-      // Silent — losing the ledger is non-fatal for the current session.
+      return true;
+    } catch (err) {
+      // Non-fatal for the current session, but no longer silent: the caller
+      // learns the write did not land (false), and it is logged.
+      console.error(`[deepPairing] GlobalStore: could not write ${this.ledgerPath}:`, err);
+      return false;
     }
   }
 
@@ -515,19 +544,29 @@ export class GlobalStore {
   recordInstance(
     concept: string,
     instance: Omit<PhilosophyInstance, "at"> & { at?: string },
-    opts: { exactOnce?: boolean; replayedFromSeq?: number } = {},
-  ): void {
-    if (!concept.trim()) return;
-    this.transact(() => this.recordInstanceLocked(concept, instance, opts));
+    opts: RecordInstanceOptions = {},
+  ): RecordOutcome {
+    if (!concept.trim()) return "duplicate";
+    return this.transact(() => this.recordInstanceLocked(concept, instance, opts));
   }
 
   private recordInstanceLocked(
     concept: string,
     instance: Omit<PhilosophyInstance, "at"> & { at?: string },
-    opts: { exactOnce?: boolean; replayedFromSeq?: number } = {},
-  ): void {
+    opts: RecordInstanceOptions = {},
+  ): RecordOutcome {
     const key = normalizeKey(concept);
     const ledger = this.read();
+    // #488 review — a corrupt ledger refuses every write (H1-5). Say so, so a
+    // queued mirror is kept rather than acknowledged.
+    if (this.lastReadCorrupt) {
+      this.write(ledger); // refuses (never overwrites a corrupt ledger) and logs the refusal
+      return "refused";
+    }
+    // #488 review — eligibility (publish consent, the local row still there)
+    // is decided HERE, under the ledger lock and from disk, immediately
+    // before appending — not from a snapshot taken before a blocking wait.
+    if (opts.precondition && !opts.precondition()) return "ineligible";
     const now = instance.at ?? new Date().toISOString();
     const nowMs = Date.parse(now);
 
@@ -546,13 +585,16 @@ export class GlobalStore {
       const removedSeq = this.readRemovals().removals[key];
       if (removedSeq !== undefined && removedSeq > opts.replayedFromSeq) {
         console.error(`[deepPairing] skipped a queued cross-project mirror for "${concept}": the concept was removed after it was queued.`);
-        return;
+        return "removed";
       }
     }
+    // A retire's counter-approval only makes sense if something for this
+    // concept was actually published (#488 review).
+    if (opts.onlyIfConceptExists && !existing) return "not-published";
     if (opts.exactOnce && existing?.instances.some((prior) =>
       prior.project === instance.project && prior.sessionId === instance.sessionId &&
       prior.verdict === instance.verdict && prior.at === now)) {
-      return;
+      return "duplicate";
     }
     const finalized: PhilosophyInstance = {
       project: instance.project,
@@ -584,7 +626,7 @@ export class GlobalStore {
             prior.verdict === finalized.verdict,
         )
       ) {
-        return;
+        return "duplicate";
       }
       // II6 — scan recent instances for a duplicate within the window.
       const isRetry = Number.isFinite(nowMs) && existing.instances.some((prior) => {
@@ -595,7 +637,7 @@ export class GlobalStore {
         if (!Number.isFinite(priorMs)) return false;
         return Math.abs(nowMs - priorMs) < GlobalStore.DEDUPE_WINDOW_MS;
       });
-      if (isRetry) return;
+      if (isRetry) return "duplicate";
       existing.instances.push(finalized);
       existing.lastSeenAt = now;
     } else {
@@ -607,7 +649,7 @@ export class GlobalStore {
         lastSeenAt: now,
       };
     }
-    this.write(ledger);
+    return this.write(ledger) ? "written" : "refused";
   }
 
   /**
@@ -660,9 +702,19 @@ export class GlobalStore {
       );
     }
 
-    delete ledger.concepts[key];
-    this.write(ledger);
+    // #488 review — the anti-resurrection tombstone is made durable FIRST;
+    // if it can't be, the removal fails before anything is deleted. Only then
+    // is the concept deleted. An interruption between the two leaves a
+    // tombstone for a concept that is still present: harmless (no queued
+    // mirror can re-add it, new instances still record) and a retry of the
+    // removal completes it.
     this.recordRemoval(key);
+    delete ledger.concepts[key];
+    if (!this.write(ledger)) {
+      throw new Error(
+        `could not write the ledger to remove "${entry.concept}" (${this.ledgerPath}); nothing was removed. Retry the removal.`,
+      );
+    }
     return { concept: entry.concept, instanceCount: entry.instances.length, backupPath };
   }
 

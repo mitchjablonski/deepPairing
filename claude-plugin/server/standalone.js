@@ -28401,23 +28401,30 @@ var GlobalStore = class _GlobalStore {
       return 0;
     }
   }
-  /** Called under the ledger lock (removeConcept). */
+  /** Called under the ledger lock (removeConcept), BEFORE the deletion.
+   *  Throws if the tombstone can't be made durable — the removal then fails
+   *  rather than acknowledging something a queued mirror could undo. */
   recordRemoval(key) {
     const current = this.readRemovals();
     const seq = current.seq + 1;
     try {
+      fs3.mkdirSync(path2.dirname(this.removalsPath()), { recursive: true });
       writeJsonAtomic(this.removalsPath(), { seq, removals: { ...current.removals, [key]: seq } });
     } catch (err) {
-      console.error(`[deepPairing] could not record the removal of "${key}" (a queued mirror could re-add it):`, err);
+      throw new Error(
+        `could not record the removal of "${key}" durably (${this.removalsPath()}: ${err.message}); refusing to remove it, because a queued mirror could re-add it.`
+      );
     }
   }
+  /** Returns true only when the ledger was durably replaced (#488 review:
+   *  callers that must not acknowledge a refused write check this). */
   write(ledger) {
     if (this.lastReadCorrupt) {
       const snap = corruptSnapshots.get(this.ledgerPath);
       console.error(
         `[deepPairing] GlobalStore: refusing to write ${this.ledgerPath} \u2014 the current on-disk ledger is corrupt; not overwriting it with a reset shape. ` + (snap ? `A backup of the corrupt file is at ${snap}. ` : `It could NOT be backed up (no snapshot of the current corrupt state exists on disk). `) + `Fix or remove the file to resume recording.`
       );
-      return;
+      return false;
     }
     if (this.lastReadDroppedEntries) {
       this.snapshotLedger();
@@ -28426,7 +28433,10 @@ var GlobalStore = class _GlobalStore {
       fs3.mkdirSync(path2.dirname(this.ledgerPath), { recursive: true });
       writeJsonAtomic(this.ledgerPath, ledger);
       corruptSnapshots.delete(this.ledgerPath);
-    } catch {
+      return true;
+    } catch (err) {
+      console.error(`[deepPairing] GlobalStore: could not write ${this.ledgerPath}:`, err);
+      return false;
     }
   }
   /**
@@ -28454,12 +28464,17 @@ var GlobalStore = class _GlobalStore {
    */
   static DEDUPE_WINDOW_MS = 5e3;
   recordInstance(concept, instance, opts = {}) {
-    if (!concept.trim()) return;
-    this.transact(() => this.recordInstanceLocked(concept, instance, opts));
+    if (!concept.trim()) return "duplicate";
+    return this.transact(() => this.recordInstanceLocked(concept, instance, opts));
   }
   recordInstanceLocked(concept, instance, opts = {}) {
     const key = normalizeKey(concept);
     const ledger = this.read();
+    if (this.lastReadCorrupt) {
+      this.write(ledger);
+      return "refused";
+    }
+    if (opts.precondition && !opts.precondition()) return "ineligible";
     const now = instance.at ?? (/* @__PURE__ */ new Date()).toISOString();
     const nowMs = Date.parse(now);
     const existing = ledger.concepts[key];
@@ -28467,11 +28482,12 @@ var GlobalStore = class _GlobalStore {
       const removedSeq = this.readRemovals().removals[key];
       if (removedSeq !== void 0 && removedSeq > opts.replayedFromSeq) {
         console.error(`[deepPairing] skipped a queued cross-project mirror for "${concept}": the concept was removed after it was queued.`);
-        return;
+        return "removed";
       }
     }
+    if (opts.onlyIfConceptExists && !existing) return "not-published";
     if (opts.exactOnce && existing?.instances.some((prior) => prior.project === instance.project && prior.sessionId === instance.sessionId && prior.verdict === instance.verdict && prior.at === now)) {
-      return;
+      return "duplicate";
     }
     const finalized = {
       project: instance.project,
@@ -28485,7 +28501,7 @@ var GlobalStore = class _GlobalStore {
       if (finalized.project === "manual" && finalized.sessionId === "seed" && existing.instances.some(
         (prior) => prior.project === "manual" && prior.sessionId === "seed" && prior.verdict === finalized.verdict
       )) {
-        return;
+        return "duplicate";
       }
       const isRetry = Number.isFinite(nowMs) && existing.instances.some((prior) => {
         if (prior.project !== finalized.project) return false;
@@ -28495,7 +28511,7 @@ var GlobalStore = class _GlobalStore {
         if (!Number.isFinite(priorMs)) return false;
         return Math.abs(nowMs - priorMs) < _GlobalStore.DEDUPE_WINDOW_MS;
       });
-      if (isRetry) return;
+      if (isRetry) return "duplicate";
       existing.instances.push(finalized);
       existing.lastSeenAt = now;
     } else {
@@ -28507,7 +28523,7 @@ var GlobalStore = class _GlobalStore {
         lastSeenAt: now
       };
     }
-    this.write(ledger);
+    return this.write(ledger) ? "written" : "refused";
   }
   /**
    * First-class stance removal — deletes the WHOLE concept entry (all
@@ -28554,9 +28570,13 @@ var GlobalStore = class _GlobalStore {
         `could not back the ledger up before removal (${this.ledgerPath}) \u2014 refusing to delete taste history without a reversible copy.`
       );
     }
-    delete ledger.concepts[key];
-    this.write(ledger);
     this.recordRemoval(key);
+    delete ledger.concepts[key];
+    if (!this.write(ledger)) {
+      throw new Error(
+        `could not write the ledger to remove "${entry.concept}" (${this.ledgerPath}); nothing was removed. Retry the removal.`
+      );
+    }
     return { concept: entry.concept, instanceCount: entry.instances.length, backupPath };
   }
   /** Look up a single entry by concept (case-insensitive). */
