@@ -38127,8 +38127,7 @@ var DaemonClient = class {
         );
       }
       await this.register(this.lastRegisterMeta);
-      void fetch(`${this.baseUrl}/recovered`, { method: "POST" }).catch(() => {
-      });
+      void this.notifyRecovered();
       return this.request(path13, init, true);
     }
     const msg = body?.error ?? `request failed (${res.status})`;
@@ -38137,6 +38136,18 @@ var DaemonClient = class {
     if (typeof body?.code === "string") err.code = body.code;
     err.body = body;
     throw err;
+  }
+  /** Notify companion clients after recovery without starting another recovery
+   * cycle. The shared request path supplies the bearer and project binding;
+   * `isRetry` keeps this advisory call bounded. */
+  async notifyRecovered() {
+    try {
+      await this.request("/recovered", { method: "POST" }, true);
+    } catch (err) {
+      console.error(
+        `[deepPairing] session recovery succeeded, but the companion refresh notification failed: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
   }
   async post(path13, body) {
     return this.request(path13, {

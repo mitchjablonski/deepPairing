@@ -33,7 +33,6 @@ import { cliInvocation, mcpServerConfigFor, isInstalledPackage } from "../cli-in
 import { writeJsonAtomic } from "../store/atomic-write.js";
 import { withSessionFlushLock } from "../store/session-records.js";
 import { errorMessage } from "@deeppairing/shared";
-import { demoNarrationLines } from "../demo-script.js";
 
 /**
  * The project this CLI acts on.
@@ -1545,85 +1544,24 @@ function teamInitCmd(force: boolean): void {
  * new user sees the agent being refused by concept" thesis, made concrete.
  */
 async function demoCmd(): Promise<void> {
-  const { ensureDaemon } = await import("../daemon/lifecycle.js");
-  console.log(bold("\n  deepPairing demo"));
-  console.log(`  ${dim("Scripted proof that concept-aware pre-flight blocking actually fires.")}\n`);
-
-  // demoCmd POSTs to /api/demo/run with no project hash (a cold-clone user has
-  // none yet). That route IS reached by the global X-Project-Hash gate — it's a
-  // POST, and the gate's "*" middleware is mounted before the route handler — so
-  // it's explicitly exempted in routes.ts (FD-2): the handler only ever creates
-  // a fresh demo session, so the wrong-store threat model doesn't apply. No
-  // bearer token or hash header is needed here. (An earlier version of this
-  // comment claimed the route was outside the gate; it isn't — it's exempted.)
-  // #168 — thread a progress line into ensureDaemon so a cold boot (~30s on a
-  // 9P filesystem / WSL /mnt/c) shows life instead of a silent freeze.
-  const daemonInfo = await ensureDaemon(cwd, {
-    onProgress: (msg) => console.log(`  ${dim(msg)}`),
-  });
-  const port = daemonInfo.port;
-  console.log(`  ${green("✓")} Daemon ready on port ${port}`);
-
-  let data: { sessionId: string };
-  try {
-    const res = await fetch(`http://localhost:${port}/api/demo/run`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!res.ok) throw new Error(`daemon responded ${res.status}`);
-    data = (await res.json()) as { sessionId: string };
-  } catch (err) {
-    console.error(`  ${red("✗")} Could not start demo: ${errorMessage(err)}`);
+  // #471 — the demo runs in an isolated sandbox (throwaway HOME + synthetic
+  // sample project, its own port window, deleted on exit) instead of starting
+  // the REAL daemon for the current directory and writing demo sessions into
+  // its .deeppairing/. Same runner as the shipped `server/demo.mjs`.
+  const { runIsolatedDemo } = await import("./isolated-demo.js");
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  // dist/cli/init.js → dist/daemon/index.js; a tsx run of src/cli/init.ts →
+  // the built dist beside src (the demo always runs a BUILT daemon with plain node).
+  const daemonScript = [
+    path.join(here, "../daemon/index.js"),
+    path.join(here, "../../dist/daemon/index.js"),
+    path.join(here, "daemon.js"),
+  ].find((p) => fs.existsSync(p));
+  if (!daemonScript) {
+    console.error(`  ${red("✗")} Could not find the built daemon next to ${here}. Run \`pnpm build\` first, or use the plugin's server/demo.mjs.`);
     process.exit(1);
   }
-
-  // Open the companion UI scoped to the demo session. #168 — RESPECT
-  // DEEPPAIRING_NO_OPEN (and the H4 DEEPPAIRING_OPEN_BROWSER) via the shared
-  // shouldAutoOpenBrowser decision helper; the old code auto-opened
-  // UNCONDITIONALLY, ignoring the opt-out that every scripted/CI/agent harness
-  // sets (a WSL2 field test launched real Chrome + left crashpad orphans). On
-  // suppression we print the URL so the human still knows where to look.
-  const url = `http://localhost:${port}/?session=${data.sessionId}`;
-  const { shouldAutoOpenBrowser } = await import("../daemon/auto-open.js");
-  const willOpen = shouldAutoOpenBrowser(process.env);
-  if (willOpen) {
-    try {
-      const { spawn } = await import("node:child_process");
-      const cmd = process.platform === "darwin" ? "open"
-        : process.platform === "win32" ? "cmd"
-        : "xdg-open";
-      const spawnArgs = process.platform === "win32" ? ["/c", "start", "", url] : [url];
-      const child = spawn(cmd, spawnArgs, { stdio: "ignore", detached: true });
-      child.on("error", () => {});
-      child.unref();
-    } catch {}
-  }
-
-  console.log();
-  if (willOpen) {
-    console.log(`  ${bold("Demo running — open the companion UI and watch:")}`);
-  } else {
-    console.log(`  ${bold("Demo running — open")} ${url} ${bold("in your browser and watch:")}`);
-  }
-  console.log(`    ${dim("→")} ${url}`);
-  console.log();
-  console.log(`  ${dim("Script:")}`);
-  for (const line of demoNarrationLines()) {
-    const at = dim(line.at.padEnd(6));
-    console.log(`    ${at}  ${line.text.startsWith("→ 🛡") ? bold(line.text) : line.text}`);
-  }
-  console.log();
-  console.log(`  ${dim("The match is on words (plus a short synonym list), not meaning — a")}`);
-  console.log(`  ${dim("rewording that shares no words gets through. It blocks in this project;")}`);
-  console.log(`  ${dim("turn on cross-project publishing and your other projects get a nudge.")}`);
-  console.log();
-  console.log(`  ${green("Session:")} ${data.sessionId}`);
-  console.log();
-  // #168 — the CLI exits now (no more pinned event loop); tell the user the URL
-  // stays live so they don't think a delayed click will hit a dead daemon.
-  console.log(`  ${dim("The URL stays live for ~10 minutes — no need to keep this terminal open.")}`);
-  console.log();
+  process.exit(await runIsolatedDemo({ daemonScript }));
 }
 
 /**
