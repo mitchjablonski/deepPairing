@@ -432,3 +432,146 @@ It also asked that three understated findings be made explicit:
   reflects seeding traffic, which is why "Agent working" appears in the header.
 - **Emoji glyphs.** These render as boxes in the screenshots; this is
   environmental.
+
+---
+
+## Rerun after fixes (#458, #459)
+
+> Rerun of **S2, S4 and S5**, plus an explicit **D6** check, against `main`
+> `9f3059bc`. That commit includes #458 (D6, sibling freshness, quiet backfill)
+> and #459 (D3, D5 narrowed, D4, D2, D8, D1 mount-only, Shift+`n`, state G).
+>
+> Method and rules are unchanged:
+> - fresh native clone, `pnpm install --frozen-lockfile && pnpm build`;
+> - real daemons seeded through the internal session API;
+> - temp HOME, `DEEPPAIRING_NO_OPEN=1`, `BROWSER=none`,
+>   `DEEPPAIRING_PORT_BASE=26000`;
+> - headless Chromium;
+> - bar OFF and ON at 1280×800 and 1920×1080;
+> - keyboard-only, with ARIA snapshots and live-region logs as before.
+>
+> Live-region entries whose element had `aria-live="off"` at the time are
+> treated as silent; #459's mount-time TurnIndicator uses this. New
+> screenshots are in `attention-walkthroughs/rerun/`.
+>
+> **Live-region convention, applied throughout this section.** Any text a
+> live region holds or changes to after page load counts as a *potential
+> announcement*. That includes content populated during load. Whether a real
+> screen reader speaks content that is already present at load can't be
+> verified with this proxy. The convention therefore cuts both ways: it credits
+> OFF's resume banner on landing (S4), and it counts the load-time
+> "Disconnected…" status as a false announcement (N2).
+
+### Per-scenario verdicts
+
+| # | Before fixes | Now | Evidence |
+|---|---|---|---|
+| **S2** which session is blocked | Same | **Better** | OFF's 6 keys depends on seeding: the `Your turn` pill cycles pending items in creation order, and here the blocker is the first one it reaches. With other pending drafts created earlier, OFF needs more presses. The line reads `DECIDE ▲ Backfill invoices before or after the cutover? HIGH in Billing migration · …`. The expanded queue lists `Backfill invoices… HIGH — Billing migration` and `How the docs build pipeline works — Docs cleanup`. The ARIA text carries "in Billing migration". OFF is unchanged and still has no session name. Keys to open the blocker: 7 ON (skip link → Open) vs 6 OFF (`rerun/s2-*`). |
+| **S4** Claude exited | Mixed | **Better** for sighted/keyboard users and for exit-while-open; **landing gap** for screen readers | **Copy:** the bar now says `Saved — Claude acts on your verdict when the session resumes` (D3 fixed). **Keys:** resume prompt in 9 ON vs 20 OFF, and the clipboard is correct in both. **Live regions, landing on an already-exited agent:** OFF's resume banner region holds `2 questions waiting for Claude` at load. Under the convention above that is a potential announcement. ON says nothing about the open questions until Copy, then `Copied ✓ — resume prompt`. This is a remaining **landing gap**, and the screen-reader "better" applies only to exit-while-open. **Live regions, exit while the tab is open** (new check, `rerun/s4-exit-transition-*`): ON announces `Agent exited — resume to continue` **and** `2 questions waiting for Claude`; OFF announces only the resume banner (its pill stays "Your turn"). |
+| **S5** edge states | Mixed | **Better** (one carry-over) | See below. |
+
+**S5 detail.**
+- **Empty:** same as before. One extra `◇ Nothing needs you` row; on arrival, one bar announcement plus TurnIndicator's.
+- **Disconnected:** the line now reads `⚠ DISCONNECTED · ▲ … (last known)`, with after-text `Disconnected — Claude resumes when it reconnects`.
+  - A `doctor --fix` chip appears in the bar at about 60–65s of outage. We polled every 10s: absent at 55s, present at 65s (`rerun/s5-disconnected-after-1280x800-140s.png`).
+  - **Act buttons are still enabled** while disconnected, in both modes. The decision's two Select buttons have `disabled=false`. This was a nice-to-have and is not fixed.
+- **Replay:** the after-text is now `Replay is read-only — nothing you do here reaches Claude` (D3 in replay fixed). Esc still exits.
+- **Long titles:** unchanged. Every pinned token is unclipped and in the viewport at both widths, and the bar is one line (28px / 33px).
+- **Hold, idle:** the line now reads `■ HELD "global mutable state for config" stopped: Add a ConfigStore singleton that every module imports [Why]`. The record is visible after the toast fades. 10 keys to the record ON vs 18 OFF.
+- **Hold, decision pending:** unchanged and correct: `▲ Where should config be loaded? · Decide 1 · Held 1`.
+
+### Per-defect verdicts
+
+| Defect | Status | Evidence |
+|---|---|---|
+| **D6** "Nothing needs you" with an empty bound session | **Fixed** (both modes) | Explicit recheck: bound to an empty `s_new`, with sibling `s_bill` holding a decision, after a 12s wait. ON: `DECIDE ▲ Backfill invoices… HIGH · … · Claude continues with the option you pick`. OFF: `1 for you` and the item in the sidebar (`rerun/d6-empty-bound-session-*`). **But see N1:** no session label here. |
+| **D3** "after" ignores exit / disconnect / replay | **Fixed** | Exited: "Saved — Claude acts on your verdict when the session resumes". Disconnected: "Disconnected — Claude resumes when it reconnects". Replay: "Replay is read-only — nothing you do here reaches Claude". |
+| **D5 (narrowed)** questions count + copy confirmation | **Fixed** | `next-up-announcer: 2 questions waiting for Claude` on the exit transition. `next-up-announcer: Copied ✓ — resume prompt` on copy. |
+| **D4** HELD line omits what was held | **Fixed** | The line and its accessible text carry the concept and proposal. |
+| **D2** session not named | **Fixed for multi-session merges** | S2 line and queue. See N1 for the single-sibling gap. |
+| **D8** transient false announcement on load | **Not reproduced** | 0 of 12 reloads of a 13-item ON page (was 1 of 12). |
+| **D1 (mount-only)** co-announcement on load | **Fixed** | ON load logs show TurnIndicator rendering with `aria-live="off"` (`Agent working`, `Agent exited — resume to continue`) and no bar announcement. Later transitions are announced (S4 exit-while-open). |
+| **D7** keyboard gaps | **Partly checked** | Shift+`n` is in the #459 changelog; it was not re-measured here, because S3 was out of scope for this rerun. Skip-link reach is unchanged: 3–6 Tabs after the app's focus park. |
+| State G details | **Mostly fixed** | "(last known)" and the `doctor --fix` chip are present. Act buttons are still enabled while disconnected (unchanged, both modes). |
+
+### New defects
+
+**N1 — The session label is missing when every merged item comes from one sibling session.**
+`computeAttention` labels items only when the merged artifacts span more than
+one session (`web/src/lib/attention.ts`, `sessionIds.size > 1`). When the bound
+session is empty and a single sibling holds the work (exactly the D6 case), the
+bar names the item but not its session. The tab is still bound to a
+*different* session, so "which session is blocked?" goes unanswered in the
+case #458 just made visible.
+- *Repro:* register `s_new` (no artifacts) and `s_bill` ("Billing migration")
+  with one decision. Open `?session=s_new` with the bar ON. The line reads
+  `DECIDE ▲ Backfill invoices… HIGH · …` with no "in Billing migration"
+  (`rerun/d6-empty-bound-session-after-1280x800.png`).
+- *Suggested rule:* also label an item when its session is not the bound one.
+
+**N2 (pre-existing, both modes; also visual with the bar ON) — A false outage on every page load.**
+`DisconnectBanner` (`role="status"`) renders `Disconnected from server —
+reconnecting...` before the first WebSocket connect. Every live-region log, ON
+and OFF, before and after the fixes, starts with it about 100–700ms after load.
+Under the convention above, that is a false announcement on every reload.
+
+With the bar ON it is also **visual**. For about 70ms of each load
+(t≈130→201ms) the bar renders `⚠ DISCONNECTED · ◇ Nothing needs you (last known)`
+before the real line. That is a false "nothing" and a false outage at once.
+- *Suggested fix:* a first-connect grace period before showing or announcing
+  the disconnected state.
+
+**N3 (wording, ON) — Disconnected after-text blames Claude.**
+"Disconnected — Claude resumes when it reconnects" describes the *tab's*
+connection as Claude's. "Your choice is sent when this tab reconnects" would be
+accurate. Minor.
+
+**N4 (pre-existing, OFF) — The disconnect banner rounds the outage up.**
+It reads "Still disconnected after **2** min" at about 92s of outage. Minor.
+
+### Residues to track (not blockers)
+
+- **D8 edge.** The fix keeps the baseline silent until hydration settles. If
+  the first snapshot never applies, the bar's announcer and TurnIndicator stay
+  silent until recovery. This is by design but untested here.
+- **#458 count-signal residue.** A sibling session is re-fetched only when its
+  `artifactCount` moves. So:
+  - a sibling's decision that is resolved elsewhere stays listed in Decide
+    (over-report);
+  - new questions on a sibling's existing artifacts don't refresh Waiting
+    (under-report).
+
+  Being fixed in #464.
+
+### Ranking (independent review)
+
+- **Must fix before PR 6:** N1.
+- **Should fix:** N2 (first-connect grace period).
+- **Nice-to-have:** act buttons disabled while disconnected, N3, N4.
+- **Track:** the D8 edge, and the #458 sibling count-signal residue (#464).
+
+N1–N4 and the act buttons are addressed in PR #467, which is in review. Every
+verdict in this section is about `main` `9f3059bc`, not #467.
+
+### Updated recommendation on PR 6
+
+**Every must-fix item from the first pass is fixed and verified.** D6, D3,
+D5 (narrowed), D4 and D2 for multi-session merges all hold in the rerun at both
+sizes. With the bar ON, S2, S4 and S5 are now **better** than with it OFF, and
+no scenario is worse.
+
+**Apart from the pilot, one small item remains: N1.** It is a one-line rule
+change in the same area as D2, and it bites in exactly the case #458
+surfaced. We recommend folding it into PR 6 or landing it just before.
+N2 should be fixed. N3, N4, enabled act buttons while disconnected, and a
+Shift+`n` measurement are not blockers. The S4 landing gap for screen readers
+and the residues above should be tracked.
+
+**PR 6 is justified on this evidence, subject to two things:**
+1. N1 is fixed.
+2. The **real-person, real-screen-reader pilot** that §9 requires still runs
+   before the default flips. Nothing in this rerun replaces it.
+
+The limits listed above still apply. In particular, every screen-reader
+statement here comes from the ARIA tree and live-region proxy, not a real
+screen reader.

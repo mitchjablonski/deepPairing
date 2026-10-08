@@ -18,6 +18,7 @@ import { CarryoverBadge } from "./decision/CarryoverBadge";
 import type { CarryoverState } from "./decision/carryover";
 import { SpeechIcon } from "./icons/ArtifactIcons";
 import { WAITING_TONE } from "../lib/waitingTone";
+import { useOfflineReason } from "../hooks/useOfflineReason";
 
 interface CommentThreadProps {
   artifactId: string;
@@ -227,6 +228,7 @@ export function CommentThread({
   readOnly = false,
   focusOnOpen = false,
 }: CommentThreadProps) {
+  const offline = useOfflineReason(); // #467 review — replies/Ask gate like every act button
   // D9 (H5) — keyed per artifact+anchor so each thread keeps its own draft.
   // Bug1 — key off the STABLE chain-root id, not the per-version artifactId: a
   // supersede advances the selection to v2's new id and remounts this thread,
@@ -282,6 +284,7 @@ export function CommentThread({
   // arrow (`() => handleSubmit()`), never pass the handler to onClick directly
   // — a MouseEvent arg would be truthy and silently flip the intent.
   const handleSubmit = async (intent?: "question") => {
+    if (offline) return; // #467 review — offline: refuse (the button is disabled too)
     if (!input.trim() || submitting) return;
     setSubmitting(true);
     const sent = input;
@@ -383,8 +386,8 @@ export function CommentThread({
         {secondarySubmitLabel && (
           <button
             onClick={() => handleSubmit("question")}
-            disabled={!input.trim() || submitting}
-            title={secondarySubmitTitle}
+            disabled={(!input.trim() || submitting) || !!offline}
+            title={offline ?? (secondarySubmitTitle)}
             className="px-2.5 py-1.5 bg-accent-violet-dim text-accent-violet text-xs rounded
                        hover:bg-accent-violet-dim/80 disabled:bg-surface-elevated disabled:text-text-muted
                        transition-colors shrink-0"
@@ -393,8 +396,9 @@ export function CommentThread({
           </button>
         )}
         <button
+          title={offline ?? undefined}
           onClick={() => handleSubmit()}
-          disabled={!input.trim() || submitting}
+          disabled={(!input.trim() || submitting) || !!offline}
           className="px-2.5 py-1.5 bg-accent-blue-strong text-white text-xs rounded
                      hover:bg-accent-blue/80 disabled:bg-surface-elevated disabled:text-text-muted
                      transition-colors shrink-0"
@@ -443,6 +447,7 @@ export function AskTrigger({
    *  the two actions sit as equal halves of a wide bar. Pill variant only. */
   fullWidth?: boolean;
 }) {
+  const offline = useOfflineReason(); // #467 review — replies/Ask gate like every act button
   const [open, setOpen] = useState(false);
   const [question, setQuestion] = useState("");
   const [sending, setSending] = useState(false);
@@ -483,6 +488,7 @@ export function AskTrigger({
     artifactComments.find((c) => c.author === "agent" && c.parentCommentId === q.id);
 
   const send = async () => {
+    if (offline) return; // #467 review — offline: refuse (the button is disabled too)
     const trimmed = question.trim();
     if (!trimmed || sending) return;
     setSending(true);
@@ -595,8 +601,9 @@ export function AskTrigger({
               className="flex-1 px-2 py-1 bg-surface-primary border border-border-default rounded text-2xs text-text-primary placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-violet"
             />
             <button
+              title={offline ?? undefined}
               onClick={send}
-              disabled={!question.trim() || sending}
+              disabled={(!question.trim() || sending) || !!offline}
               className="px-2 py-1 bg-accent-violet-strong text-white text-2xs rounded hover:bg-accent-violet-strong-hover disabled:opacity-50 press-scale"
             >
               Ask

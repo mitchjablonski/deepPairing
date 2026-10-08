@@ -55,6 +55,10 @@ export interface AttentionInput {
   /** #457 D2 — session id → display name (lib/sessionLabel). Missing ids fall
    *  back to the raw id. */
   sessionLabels?: Record<string, string>;
+  /** #465 N1 — the tab's bound session. An item from ANY other session is
+   *  labelled even when it is the only session contributing (the D6 case: an
+   *  empty bound session, one sibling holding the work). */
+  boundSessionId?: string | null;
   system?: {
     disconnected?: boolean;
     staleDaemon?: boolean;
@@ -206,12 +210,16 @@ export function computeAttention(input: AttentionInput): Attention {
   if (read.length) summary.push({ lane: "read", count: read.length });
 
   // #457 D2 — name the session on every item when more than one is merged.
+  // #465 N1 — …and on any item NOT from the tab's bound session, even when that
+  // sibling is the only session contributing.
   const sessionIds = new Set(artifacts.map((a) => a.sessionId).filter(Boolean));
-  if (sessionIds.size > 1) {
+  const multi = sessionIds.size > 1;
+  const bound = input.boundSessionId ?? null;
+  if (multi || bound) {
     const sessionOf = new Map(artifacts.map((a) => [a.id, a.sessionId] as const));
     for (const it of [...decide, ...read, ...flags, ...waiting]) {
       const sid = it.artifactId ? sessionOf.get(it.artifactId) : undefined;
-      if (sid) it.sessionLabel = input.sessionLabels?.[sid] ?? sid;
+      if (sid && (multi || sid !== bound)) it.sessionLabel = input.sessionLabels?.[sid] ?? sid;
     }
   }
 

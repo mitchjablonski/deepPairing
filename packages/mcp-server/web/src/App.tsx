@@ -13,6 +13,8 @@ import { WaitingForClaude } from "./components/WaitingForClaude";
 import { TurnIndicator } from "./components/TurnIndicator";
 import { NextUpBar } from "./components/NextUpBar";
 import { sessionLabelOf } from "./lib/sessionLabel";
+import { outageMinutes } from "./lib/outage";
+import { useConnectionGraceDriver, useTabOffline } from "./lib/connectionGrace";
 import { usePreferencesStore } from "./stores/preferences";
 import { PendingBanner } from "./components/PendingBanner";
 import { ResumeQuestionsBanner } from "./components/ResumeQuestionsBanner";
@@ -66,6 +68,10 @@ function App() {
   // (D6 bail suppresses idle re-renders); the shared hook re-fires at the
   // staleness boundary so the closing beat appears when the session wraps.
   const agentRecentlyActive = useAgentRecentlyActive();
+  // #465 N2 / #467 review — the one "is this tab offline?" answer (first-connect
+  // grace included), shared with the bar and the act buttons.
+  useConnectionGraceDriver();
+  const tabOffline = useTabOffline();
   // #455 review — the session dot pulses on the SAME source as the pill.
   const agentWorking = useAgentWorking();
   // C5 — no IdleHome/WaitingForClaude flash on refresh: skeleton until the
@@ -878,7 +884,7 @@ function App() {
 
       {/* Disconnected warning — escalates (D8/H4): a blip and a dead daemon
           looked identical forever; past 60s the pair needs to know to act. */}
-      {!connected && <DisconnectBanner />}
+      {tabOffline && <DisconnectBanner />}
 
       {/* Replay scrubber — only renders when replay mode is active */}
       <ReplayScrubber />
@@ -1061,16 +1067,17 @@ function DisconnectBanner() {
   }, []);
   const outageMs = disconnectedSince ? now - disconnectedSince : 0;
   const prolonged = outageMs >= 60_000;
+  // #465 N3 — say it is THIS TAB that lost the daemon, never Claude.
   return (
     <div className="px-3 py-1.5 bg-accent-red-dim/30 border-b border-accent-red/15 text-center" role="status">
       {prolonged ? (
         <span className="text-2xs text-accent-red">
-          Still disconnected after {Math.round(outageMs / 60_000)} min — the daemon may be down. Run{" "}
+          This tab has been offline for {outageMinutes(outageMs)} min — the deepPairing daemon may be down. Run{" "}
           <code className="bg-surface-elevated px-1 py-0.5 rounded">node packages/mcp-server/dist/cli/init.js doctor --fix</code> in the project, then reload.
         </span>
       ) : (
         <span className="text-2xs text-accent-red">
-          Disconnected from server — reconnecting...
+          This tab lost its connection to the deepPairing daemon — reconnecting…
         </span>
       )}
     </div>

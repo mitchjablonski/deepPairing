@@ -8,6 +8,7 @@ import { useReplayStore } from "../stores/replay";
 import { useDraft, clearDraftIfUnchanged, isDraftSending, markDraftSending, useDraftSending } from "../hooks/useDraft";
 import { useAgentRecentlyActive } from "../hooks/useAgentRecentlyActive";
 import { useSentFlash } from "../hooks/useSentFlash";
+import { useOfflineReason } from "../hooks/useOfflineReason";
 
 // Stable empty-array reference so Zustand's store selector doesn't produce
 // a fresh `[]` on every render (which would trigger an infinite loop via
@@ -37,6 +38,8 @@ const SEND_TIMEOUT_MS = 30_000;
  * - Last 3 session messages surfaced as thread history above the input
  */
 export function MessageInput() {
+  // #465 (state G rule 1) — Send disables while disconnected; the text stays.
+  const offline = useOfflineReason();
   // F12 review — this composer BYPASSES the store choke point (own safeFetch)
   // and rendered against the replayed session's thread while SENDING into
   // the live tab binding: a visual reply into history that lands elsewhere.
@@ -137,7 +140,7 @@ export function MessageInput() {
   messageRef.current = message;
 
   const handleSend = async () => {
-    if (!message.trim() || isDraftSending(draftKey)) return;
+    if (!message.trim() || isDraftSending(draftKey) || offline) return; // #465 — ⌘⏎ too
     const release = markDraftSending(draftKey);
     const controller = new AbortController();
     let timedOut = false;
@@ -345,7 +348,8 @@ export function MessageInput() {
         </p>
         <button
           onClick={handleSend}
-          disabled={!message.trim() || sending}
+          disabled={!message.trim() || sending || !!offline}
+          title={offline ?? undefined}
           className="px-3 py-1 bg-accent-blue-strong text-white text-2xs rounded
                      hover:bg-accent-blue/80 disabled:bg-surface-elevated disabled:text-text-muted
                      transition-all duration-[180ms] ease-out press-scale"
