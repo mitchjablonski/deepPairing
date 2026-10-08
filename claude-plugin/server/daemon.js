@@ -27862,6 +27862,34 @@ var FileStore = class _FileStore {
     writeJsonAtomic(this.annotationsPath(), next);
     return true;
   }
+  /**
+   * #472 — load-only annotations read, for the HTTP GET route. The regular
+   * constructor calls `ensureDir()` as a side effect of preparing a session
+   * for WRITES; routing a read through `new FileStore(projectRoot, sessionId)`
+   * meant a syntactically valid but nonexistent sessionId silently created
+   * `.deeppairing/sessions/<id>/` and then reported an empty result as if the
+   * session existed. This reads the sidecar file directly — no instance, no
+   * mkdir — and reports which of three outcomes applies: absent session,
+   * valid session (legacy-empty or populated), or a real read failure (a
+   * corrupt/non-array annotations.json), so the caller can tell "nothing to
+   * show" apart from "couldn't read this" instead of flattening both to 200.
+   */
+  static readAnnotationsIfSessionExists(projectRoot2, sessionId) {
+    const sessionDir = path13.join(projectRoot2, ".deeppairing", "sessions", sessionId);
+    if (!fs14.existsSync(sessionDir)) return { ok: true, exists: false };
+    const annotationsFile = path13.join(sessionDir, "annotations.json");
+    if (!fs14.existsSync(annotationsFile)) return { ok: true, exists: true, annotations: [] };
+    try {
+      const raw2 = fs14.readFileSync(annotationsFile, "utf-8");
+      const parsed = JSON.parse(raw2);
+      if (!Array.isArray(parsed)) {
+        return { ok: false, message: `annotations.json did not contain an array (got ${typeof parsed})` };
+      }
+      return { ok: true, exists: true, annotations: parsed };
+    } catch (err) {
+      return { ok: false, message: errorMessage(err, "Failed to read annotations") };
+    }
+  }
   // --- Posted reviews (R1 #279) ---
   /** Fresh journal reads and short disk claims are shared with CLI processes. */
   get reviewPosts() {
@@ -32368,12 +32396,14 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
       return c.json({ error: "Invalid session ID" }, 400);
     }
-    try {
-      const s = new FileStore(projectRoot2, sessionId);
-      return c.json({ annotations: s.getAnnotations() });
-    } catch {
-      return c.json({ annotations: [] });
+    const result = FileStore.readAnnotationsIfSessionExists(projectRoot2, sessionId);
+    if (!result.ok) {
+      return c.json({ error: result.message }, 500);
     }
+    if (!result.exists) {
+      return c.json({ error: "Session not found" }, 404);
+    }
+    return c.json({ annotations: result.annotations });
   });
   app.post("/api/sessions/:sessionId/annotations", async (c) => {
     const sessionId = c.req.param("sessionId");

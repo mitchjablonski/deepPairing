@@ -2005,6 +2005,43 @@ export class FileStore implements IStore {
     return true;
   }
 
+  /**
+   * #472 — load-only annotations read, for the HTTP GET route. The regular
+   * constructor calls `ensureDir()` as a side effect of preparing a session
+   * for WRITES; routing a read through `new FileStore(projectRoot, sessionId)`
+   * meant a syntactically valid but nonexistent sessionId silently created
+   * `.deeppairing/sessions/<id>/` and then reported an empty result as if the
+   * session existed. This reads the sidecar file directly — no instance, no
+   * mkdir — and reports which of three outcomes applies: absent session,
+   * valid session (legacy-empty or populated), or a real read failure (a
+   * corrupt/non-array annotations.json), so the caller can tell "nothing to
+   * show" apart from "couldn't read this" instead of flattening both to 200.
+   */
+  static readAnnotationsIfSessionExists(
+    projectRoot: string,
+    sessionId: string,
+  ):
+    | { ok: true; exists: true; annotations: SessionAnnotation[] }
+    | { ok: true; exists: false }
+    | { ok: false; message: string } {
+    const sessionDir = path.join(projectRoot, ".deeppairing", "sessions", sessionId);
+    if (!fs.existsSync(sessionDir)) return { ok: true, exists: false };
+    const annotationsFile = path.join(sessionDir, "annotations.json");
+    // A valid session with no annotations.json yet (never annotated) keeps
+    // the legacy empty-array behavior — this is NOT a read failure.
+    if (!fs.existsSync(annotationsFile)) return { ok: true, exists: true, annotations: [] };
+    try {
+      const raw = fs.readFileSync(annotationsFile, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        return { ok: false, message: `annotations.json did not contain an array (got ${typeof parsed})` };
+      }
+      return { ok: true, exists: true, annotations: parsed as SessionAnnotation[] };
+    } catch (err) {
+      return { ok: false, message: errorMessage(err, "Failed to read annotations") };
+    }
+  }
+
   // --- Posted reviews (R1 #279) ---
 
   /** Fresh journal reads and short disk claims are shared with CLI processes. */
