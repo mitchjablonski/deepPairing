@@ -15,6 +15,7 @@ import { OpenInEditorLink } from "../OpenInEditor";
 import { SimpleMarkdown } from "../SimpleMarkdown";
 import { useState, useMemo, useEffect } from "react";
 import { useOfflineReason } from "../../hooks/useOfflineReason";
+import { useUnsavedText } from "../../lib/unsavedText";
 
 interface ResearchArtifactProps {
   artifact: Artifact;
@@ -193,6 +194,7 @@ function FindingTriage({
   const offline = useOfflineReason(); // #477 — act paths gate on the shared offline condition (#467)
   const [promptVerdict, setPromptVerdict] = useState<Verdict | null>(null);
   const [reason, setReason] = useState("");
+  useUnsavedText(`finding-reason:${findingIndex}`, reason); // #487 review (Fable) — Reload asks before discarding it
   const [submitting, setSubmitting] = useState(false);
   const submitComment = useArtifactStore((s) => s.submitComment);
 

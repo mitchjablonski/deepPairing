@@ -4,6 +4,7 @@ import { useArtifactStore } from "../../stores/artifact";
 import { useFocusTrap } from "../../hooks/useFocusTrap";
 import { useOverlayPresence } from "../../stores/overlay";
 import { useOfflineReason } from "../../hooks/useOfflineReason";
+import { useUnsavedText } from "../../lib/unsavedText";
 
 interface FileViewerProps {
   filePath: string;
@@ -32,6 +33,7 @@ export function FileViewer({
   const [selectStart, setSelectStart] = useState<number | null>(null);
   const [selectEnd, setSelectEnd] = useState<number | null>(null);
   const [commentText, setCommentText] = useState("");
+  useUnsavedText(`file-comment:${filePath}`, commentText); // #487 review (Fable) — Reload asks before discarding it
   const [submitting, setSubmitting] = useState(false);
 
   const submitComment = useArtifactStore((s) => s.submitComment);

@@ -160,7 +160,7 @@ function PreflightBlockHeroCard({ hero, onDismiss, action, onOverride }: {
               disabled={!!offline}
               onClick={() => { onOverride(); onDismiss(); }}
               title={offline ?? "False positive? Delete this stance from the project so it stops blocking here. It's a delete, not a narrowing — reject the concept again if you want it back."}
-              className="text-2xs font-medium text-text-muted hover:text-text-secondary hover:underline"
+              className="text-2xs font-medium text-text-muted hover:text-text-secondary hover:underline disabled:opacity-50 disabled:cursor-not-allowed disabled:no-underline"
             >
               Retire this stance
             </button>

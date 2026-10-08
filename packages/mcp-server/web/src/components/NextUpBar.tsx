@@ -6,7 +6,7 @@ import { useReplayStore } from "../stores/replay";
 import { usePreflightBlockStore } from "../stores/preflightBlocks";
 import { computeAttention, type Attention, type AttentionItem, type FailureKind, type SummaryLane } from "../lib/attention";
 import { noAgentLive } from "../lib/liveness";
-import { useTabOffline, useConnectionGraceStore, useHydrationStalled, HYDRATION_STALLED_TEXT, reloadPage } from "../lib/connectionGrace";
+import { useTabOffline, useConnectionGraceStore, useHydrationStalled, HYDRATION_STALLED_TEXT, HYDRATION_STALLED_ANNOUNCEMENT, RELOAD_TITLE, reloadPage } from "../lib/connectionGrace";
 import { useSiblingSyncStore } from "../lib/siblingSync";
 import { sessionLabelsFrom } from "../lib/sessionLabel";
 import { WAITING_TONE } from "../lib/waitingTone";
@@ -332,8 +332,41 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   // HYDRATION_STALL_MS says so truthfully, with Reload (lib/connectionGrace).
   const stalled = hydrationStalled && !hydrated;
   const holding = holdingRaw && !stalled;
-  const primaryText = stalled ? `⚠ ${HYDRATION_STALLED_TEXT}` : holding ? HOLD_TEXT : primaryToken(attention.line);
+  const primaryText = holding ? HOLD_TEXT : primaryToken(attention.line);
   const lineText = stalled ? `⚠ ${HYDRATION_STALLED_TEXT}` : holding ? HOLD_TEXT : attentionLineText(attention);
+  // #487 review (Fable) — announce the stall ONCE, through the one announcer,
+  // when it begins (bar ON had no spoken signal at all).
+  const prevStalled = useRef(stalled);
+  useEffect(() => {
+    if (stalled && !prevStalled.current) setAnnouncement(HYDRATION_STALLED_ANNOUNCEMENT);
+    prevStalled.current = stalled;
+  }, [stalled]);
+
+  // #487 review (Fable) — stalled: ONE honest line. No failure prefix, no
+  // "Decide N"/summary next to "still loading" (those counts may be partial —
+  // broadcasts can land without the snapshot), just the state and Reload.
+  if (stalled) {
+    return (
+      <section ref={sectionRef} id="next-up" tabIndex={-1} aria-label="Next up" data-testid="next-up-bar" data-line={lineText}
+        className="border-b border-border-default bg-surface-secondary">
+        <div className="flex items-center gap-2 px-3 py-1 min-w-0 text-2xs">
+          <span data-token className="min-w-0 truncate font-medium text-accent-amber" title={HYDRATION_STALLED_TEXT}>⚠ {HYDRATION_STALLED_TEXT}</span>
+          <button
+            type="button"
+            onClick={reloadPage}
+            data-testid="next-up-reload"
+            className="shrink-0 px-1.5 py-0.5 rounded border border-border-default text-text-secondary hover:bg-surface-hover"
+            title={RELOAD_TITLE}
+          >
+            Reload
+          </button>
+        </div>
+        <div className="sr-only" role="status" aria-live="polite" aria-atomic="true" data-testid="next-up-announcer">
+          {announcement}
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section
@@ -369,17 +402,6 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
         <span data-token className={`min-w-0 truncate font-medium ${tone}`} style={{ flexShrink: 1 }} title={primaryText}>
           {primaryText}
         </span>
-        {stalled && (
-          <button
-            type="button"
-            onClick={reloadPage}
-            data-testid="next-up-reload"
-            className="shrink-0 px-1.5 py-0.5 rounded border border-border-default text-text-secondary hover:bg-surface-hover"
-            title="This is taking longer than usual — it may still finish, or reload to fetch it again"
-          >
-            Reload
-          </button>
-        )}
         {item?.stakes === "high" && (
           <span className="shrink-0 px-1 rounded bg-accent-red-dim text-accent-red font-semibold">HIGH</span>
         )}

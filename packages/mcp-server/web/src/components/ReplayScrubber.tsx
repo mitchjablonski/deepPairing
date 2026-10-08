@@ -3,6 +3,7 @@ import { formatClockTime } from "../lib/time";
 import { useReplayStore, useAnnotationsByEvent } from "../stores/replay";
 import type { TimelineEvent } from "../lib/timeline";
 import { useOfflineReason } from "../hooks/useOfflineReason";
+import { useUnsavedText } from "../lib/unsavedText";
 
 const svgDefaults = {
   fill: "none",
@@ -273,6 +274,7 @@ function CurrentEventRow({
   const annotationsByEventId = useAnnotationsByEvent();
   const myAnnotations = annotationsByEventId.get(event.id) ?? [];
   const [note, setNote] = useState("");
+  useUnsavedText(`replay-note:${event.id}`, note); // #487 review (Fable) — Reload asks before discarding it
 
   const save = async () => {
     if (offline) return; // #487 review — refused offline (the control is disabled too)
@@ -311,7 +313,7 @@ function CurrentEventRow({
               <button
                 disabled={!!offline}
                 onClick={() => removeAnnotation(a.id)}
-                className="shrink-0 text-text-muted hover:text-accent-red text-[10px]"
+                className="shrink-0 text-text-muted hover:text-accent-red text-[10px] disabled:opacity-50 disabled:cursor-not-allowed disabled:no-underline"
                 title={offline ?? "Delete note"}
               >
                 ✕

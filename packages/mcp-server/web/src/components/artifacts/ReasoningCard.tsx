@@ -9,6 +9,7 @@ import { SimpleMarkdown } from "../SimpleMarkdown";
 import { OpenInEditorLink } from "../OpenInEditor";
 import { useSentFlash } from "../../hooks/useSentFlash";
 import { useOfflineReason } from "../../hooks/useOfflineReason";
+import { useUnsavedText } from "../../lib/unsavedText";
 
 interface Props {
   artifact: Artifact;
@@ -187,6 +188,7 @@ function AlternativeRow({
   const offline = useOfflineReason(); // #487 review — act paths gate on the shared offline condition (#467)
   const [asking, setAsking] = useState(false);
   const [question, setQuestion] = useState("");
+  useUnsavedText(`reasoning-ask:${alt.title}`, question); // #487 review (Fable) — Reload asks before discarding it
   const { sent, flash } = useSentFlash();
 
   const send = async () => {

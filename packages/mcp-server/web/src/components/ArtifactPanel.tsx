@@ -219,13 +219,19 @@ function EditableTitle({ artifact }: { artifact: Artifact }) {
     // the thing a screen-reader user jumps to) sat at h1→h3: a level skip on
     // the PRIMARY content path. The classes are untouched — the level is the
     // whole change, and the artifact's own section headings step to h3 below it.
-    <h2
-      className="text-sm font-semibold text-text-primary leading-[1.2] cursor-pointer hover:text-accent-blue transition-colors"
-      onClick={() => { if (offline) return; setDraft(artifact.title); setEditing(true); }}
-      title={offline ?? "Click to rename"}
-      aria-disabled={offline ? true : undefined}
-    >
-      {artifact.title}
+    // #487 review (Fable) — the rename affordance is a real <button> inside the
+    // heading (a screen reader ignores aria-disabled on a heading), so offline
+    // it is genuinely disabled and stops looking clickable.
+    <h2 className="text-sm font-semibold text-text-primary leading-[1.2]">
+      <button
+        type="button"
+        onClick={() => { setDraft(artifact.title); setEditing(true); }}
+        disabled={!!offline}
+        title={offline ?? "Click to rename"}
+        className="text-left cursor-pointer hover:text-accent-blue transition-colors disabled:cursor-default disabled:hover:text-text-primary"
+      >
+        {artifact.title}
+      </button>
     </h2>
   );
 }

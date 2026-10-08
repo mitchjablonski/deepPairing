@@ -249,7 +249,7 @@ function DecisionRow({ decision, session, isCurrentProject, onSwitchToProject }:
                 disabled={!!offline}
                 onClick={confirm}
                 className="px-2 py-0.5 rounded text-2xs font-semibold bg-accent-amber-dim text-accent-amber
-                           hover:bg-surface-hover transition-colors"
+                           hover:bg-surface-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:no-underline"
               >
                 Confirm close-out
               </button>

@@ -71,17 +71,31 @@ export function useHydrationStalled(): boolean {
   return useConnectionGraceStore((s) => s.hydrationStalled);
 }
 
-/** #487 review — honest: loading may still finish; Reload is an offer, not a
- *  verdict. The 10s bound stays (see HYDRATION_STALL_MS): the snapshot's size
- *  isn't known before it arrives, so the bound can't scale with it — instead the
- *  copy no longer claims failure, and nothing is torn down at 10s. */
-export const HYDRATION_STALLED_TEXT = "Still loading the current state";
+/** #487 review (Fable) — ONE wording for the bar, the banner and the main
+ *  area. Honest: loading may still finish; Reload is an offer. The 10s bound
+ *  stays (the snapshot's size isn't known before it arrives). */
+export const HYDRATION_STALLED_TEXT =
+  "Still loading this session — it's taking longer than usual. It may still finish, or you can reload.";
+export const RELOAD_TITLE = "Reload the page — saved drafts are kept";
+/** The bar announcer's one-time line when the stall begins. */
+export const HYDRATION_STALLED_ANNOUNCEMENT = "Still loading this session — Reload is available";
+
+/**
+ * #487 review (Fable) — Reload asks first when a composer holds unsent text,
+ * through the app's own modal (ReloadConfirmDialog: Keep is the default and
+ * focused choice, Esc keeps) — not window.confirm, where Enter discards.
+ */
+export const useReloadConfirmStore = create<{ open: boolean }>(() => ({ open: false }));
+export function reloadNow(): void {
+  if (typeof window !== "undefined") window.location.reload();
+}
 export function reloadPage(): void {
   if (typeof window === "undefined") return;
-  // #487 review — don't silently discard text typed into a composer whose
-  // draft doesn't persist across a reload.
-  if (hasUnsavedText() && !window.confirm("You have unsent text in this tab — reloading will discard it. Reload anyway?")) return;
-  window.location.reload();
+  if (hasUnsavedText()) {
+    useReloadConfirmStore.setState({ open: true });
+    return;
+  }
+  reloadNow();
 }
 
 /** True when this tab is offline (and it's not just the page loading). */

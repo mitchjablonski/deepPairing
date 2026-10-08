@@ -6,6 +6,7 @@ import { useToastStore } from "../stores/toast";
 import { useAgentRecentlyActive } from "../hooks/useAgentRecentlyActive";
 import { noAgentLive } from "../lib/liveness";
 import { useDraft } from "../hooks/useDraft";
+import { useConnectionGraceStore } from "../lib/connectionGrace";
 import { useOfflineReason } from "../hooks/useOfflineReason";
 
 /**
@@ -158,6 +159,7 @@ export function RequestComposerBanner({ compact = false }: {
   compact?: boolean;
 } = {}) {
   const offline = useOfflineReason(); // #477 — act paths gate on the shared offline condition (#467)
+  const everConnected = useConnectionGraceStore((s) => s.everConnected);
   const submitRequest = useArtifactStore((s) => s.submitRequest);
   const connected = useConnectionStore((s) => s.connected);
   const pushToast = useToastStore((s) => s.push);
@@ -192,7 +194,9 @@ export function RequestComposerBanner({ compact = false }: {
   // session store to persist into). It's hidden entirely until connected.
   // #477 — hidden only before the tab has ever connected. An OUTAGE keeps the
   // row (and any request being typed) on screen, with Send gated + the reason.
-  if (!connected && !offline) return null;
+  // #487 review (Fable) — and a tab that has NEVER connected shows nothing
+  // (offline also covers the post-grace "never connected" case).
+  if (!connected && !(offline && everConnected)) return null;
 
   const pickPreset = (p: (typeof PRESETS)[number]) => {
     setIntent(p.intent);

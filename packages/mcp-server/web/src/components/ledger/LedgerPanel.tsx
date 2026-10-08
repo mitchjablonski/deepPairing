@@ -5,6 +5,7 @@ import { useLedgerStore, ledgerHasStances } from "../../stores/ledger";
 import { normalizeConceptKey } from "@deeppairing/shared";
 import type { LedgerDigest, PhilosophyEntry } from "./types";
 import { useOfflineReason } from "../../hooks/useOfflineReason";
+import { useUnsavedText } from "../../lib/unsavedText";
 
 export function LedgerPanel({
   data,
@@ -377,6 +378,7 @@ function SeedMoreInline() {
 export function SeedAffordance({ onSeeded }: { onSeeded: () => void }) {
   const offline = useOfflineReason(); // #487 review — act paths gate on the shared offline condition (#467)
   const [text, setText] = useState("");
+  useUnsavedText("ledger-seed", text); // #487 review (Fable) — Reload asks before discarding it
   const [verdict, setVerdict] = useState<"approved" | "rejected">("approved");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);

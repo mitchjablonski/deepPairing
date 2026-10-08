@@ -113,7 +113,7 @@ export function OpenQuestionSection({
             type="button"
             onClick={() => void markQuestionResolved(q.id).catch(() => {})}
             title={offline ?? "Mark this question resolved — stops it counting as waiting on the agent"}
-            className="text-accent-blue hover:underline"
+            className="text-accent-blue hover:underline disabled:opacity-50 disabled:cursor-not-allowed disabled:no-underline"
           >
             Mark resolved
           </button>

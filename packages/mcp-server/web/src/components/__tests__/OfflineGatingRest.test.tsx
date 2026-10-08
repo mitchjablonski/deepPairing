@@ -16,7 +16,11 @@ import { PlanArtifact } from "../artifacts/PlanArtifact";
 import { ReasoningCard } from "../artifacts/ReasoningCard";
 import { AutonomySlider } from "../AutonomySlider";
 import { ArtifactStatusActions } from "../artifacts/ArtifactStatusActions";
-import { reloadPage } from "../../lib/connectionGrace";
+import { reloadPage, HYDRATION_STALLED_ANNOUNCEMENT, RELOAD_TITLE } from "../../lib/connectionGrace";
+import { ReloadConfirmDialog } from "../ReloadConfirmDialog";
+import { ArtifactPanel } from "../ArtifactPanel";
+import { ToastLayer } from "../ToastLayer";
+import { useToastStore } from "../../stores/toast";
 
 /**
  * #477 — the act paths #467 left ungated, through the SAME shared offline
@@ -114,7 +118,7 @@ describe("#477 — the remaining act paths gate offline, with the reason, and re
 });
 
 describe("#477 — a connected tab whose first snapshot never applies", () => {
-  it(`bar ON: past ${HYDRATION_STALL_MS / 1000}s the hold becomes "Still loading the current state" with Reload; a late hydration clears it`, () => {
+  it(`bar ON: past ${HYDRATION_STALL_MS / 1000}s the hold becomes the one still-loading line with Reload; a late hydration clears it`, () => {
     vi.useFakeTimers({ now: Date.now() });
     usePreferencesStore.setState({ nextUpBar: true } as any);
     useConnectionStore.setState({ connected: true, hydrated: false } as any);
@@ -124,7 +128,7 @@ describe("#477 — a connected tab whose first snapshot never applies", () => {
     act(() => { vi.advanceTimersByTime(HYDRATION_STALL_MS - 500); });
     expect(line()).toBe("Checking what needs you…"); // not before the bound
     act(() => { vi.advanceTimersByTime(1000); });
-    expect(line()).toBe("⚠ Still loading the current state");
+    expect(line()).toBe("⚠ Still loading this session — it's taking longer than usual. It may still finish, or you can reload.");
     expect(screen.getByTestId("next-up-reload")).toHaveTextContent("Reload");
     act(() => useConnectionStore.setState({ hydrated: true } as any));
     expect(line()).not.toMatch(/Still loading/);
@@ -138,7 +142,7 @@ describe("#477 — a connected tab whose first snapshot never applies", () => {
     act(() => { vi.advanceTimersByTime(HYDRATION_STALL_MS + 500); });
     const banner = screen.getByTestId("hydration-stalled");
     // #487 review — honest: it may still finish; Reload is an offer.
-    expect(banner).toHaveTextContent("Still loading the current state — this is taking longer than usual. It may still finish, or Reload");
+    expect(banner).toHaveTextContent("Still loading this session — it's taking longer than usual. It may still finish, or you can reload. Reload");
     expect(banner.textContent).not.toMatch(/couldn't|never loaded/i);
     expect(banner.closest("[role='status']")).not.toBeNull();
     act(() => useConnectionStore.setState({ hydrated: true } as any));
@@ -213,19 +217,95 @@ describe("#487 review — drafts across the 'still loading' Reload", () => {
     expect((screen.getByRole("textbox", { name: "Reply to Claude's counter" }) as HTMLTextAreaElement).value).toBe("keep mine because…");
   });
 
-  it("the footer comment (not a useDraft) makes Reload ask first; declining keeps the page", () => {
+  it("the footer comment (not a useDraft) makes Reload ask first in the app's dialog — Keep is the default; Esc keeps", () => {
     const reload = vi.fn();
-    const confirm = vi.fn().mockReturnValue(false);
+    const confirm = vi.fn();
     vi.stubGlobal("confirm", confirm);
     Object.defineProperty(window, "location", { configurable: true, value: { ...window.location, reload } });
     const art = { id: "art_f", sessionId: "s1", type: "research", version: 1, parentId: null, title: "T", status: "draft", content: {}, agentReasoning: null, createdAt: now, updatedAt: now } as any;
-    render(<ArtifactStatusActions artifact={art} />);
+    render(<><ArtifactStatusActions artifact={art} /><ReloadConfirmDialog /></>);
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "half-written review note" } });
-    reloadPage();
-    expect(confirm).toHaveBeenCalledTimes(1);
+    act(() => reloadPage());
+    const dialog = screen.getByRole("dialog", { name: /Reload and discard unsent text/ });
+    expect(confirm).not.toHaveBeenCalled(); // never window.confirm (Enter there discards)
     expect(reload).not.toHaveBeenCalled();
-    confirm.mockReturnValue(true);
-    reloadPage();
+    // Esc keeps.
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(reload).not.toHaveBeenCalled();
+    // Keep is the FIRST button (the focus trap's default focus): Enter keeps.
+    act(() => reloadPage());
+    const buttons = screen.getAllByRole("button").filter((b) => screen.getByRole("dialog").contains(b));
+    expect(buttons[0]).toHaveTextContent("Keep my text");
+    fireEvent.click(buttons[0]!);
+    expect(reload).not.toHaveBeenCalled();
+    // Only an explicit "Reload anyway" discards.
+    act(() => reloadPage());
+    fireEvent.click(screen.getByRole("button", { name: "Reload anyway" }));
     expect(reload).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("#487 review (Fable)", () => {
+  const STALL = "Still loading this session — it's taking longer than usual. It may still finish, or you can reload.";
+
+  it("MED 1 — stalled with artifacts: the panel shows them; the bar is ONE line (no prefix, no Decide/summary)", () => {
+    vi.useFakeTimers({ now: Date.now() });
+    usePreferencesStore.setState({ nextUpBar: true } as any);
+    useConnectionStore.setState({ connected: true, hydrated: false } as any);
+    // Broadcasts after a missed snapshot: artifacts exist, the snapshot never applied.
+    useArtifactStore.setState({ artifacts: [{ id: "d1", sessionId: "s1", type: "decision", version: 1, parentId: null, title: "Pick a store", status: "draft", content: { context: "c", decisionId: "x", options: [{ id: "a", title: "A", description: "d", pros: [], cons: [], effort: "low", risk: "low", recommendation: true }] }, agentReasoning: null, createdAt: now, updatedAt: now }] } as any);
+    render(<App />);
+    act(() => { vi.advanceTimersByTime(HYDRATION_STALL_MS + 500); });
+    expect(screen.getByTestId("next-up-bar").getAttribute("data-line")).toBe(`⚠ ${STALL}`);
+    expect(screen.getByTestId("next-up-bar").textContent).not.toMatch(/Decide|DECIDE/);
+    expect(screen.queryByTestId("hydration-unknown")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Pick a store").length).toBeGreaterThan(0); // the panel renders it
+  });
+
+  it("MED 2 — bar ON: the stall is announced ONCE through the bar's announcer", () => {
+    vi.useFakeTimers({ now: Date.now() });
+    usePreferencesStore.setState({ nextUpBar: true } as any);
+    useConnectionStore.setState({ connected: true, hydrated: false } as any);
+    render(<App />);
+    act(() => { vi.advanceTimersByTime(HYDRATION_STALL_MS + 500); });
+    expect(screen.getByTestId("next-up-announcer")).toHaveTextContent(HYDRATION_STALLED_ANNOUNCEMENT);
+    expect(screen.getByTestId("next-up-reload").getAttribute("title")).toBe(RELOAD_TITLE); // LOW 5
+  });
+
+  it("MED 3 — a rail reply registers as unsaved text, so Reload asks first", () => {
+    const reload = vi.fn();
+    Object.defineProperty(window, "location", { configurable: true, value: { ...window.location, reload } });
+    useArtifactStore.setState({
+      artifacts: [{ id: "a1", sessionId: "s1", type: "research", version: 1, parentId: null, title: "A1", status: "draft", content: { summary: "x", findings: [] }, agentReasoning: null, createdAt: now, updatedAt: now }],
+      comments: { a1: [{ id: "c1", sessionId: "s1", target: { artifactId: "a1" }, parentCommentId: null, author: "agent", content: "Here is why", acknowledged: false, createdAt: now }] },
+    } as any);
+    render(<><ConversationRail onClose={() => {}} /><ReloadConfirmDialog /></>);
+    fireEvent.click(screen.getAllByRole("button", { name: "Reply in this thread" })[0]!);
+    fireEvent.change(screen.getByPlaceholderText(/Continue the thread/), { target: { value: "unsent reply" } });
+    act(() => reloadPage());
+    expect(screen.getByTestId("reload-confirm")).toBeInTheDocument();
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("MED 4 — offline controls LOOK disabled: the title rename is a real disabled button; Retire carries disabled styles", () => {
+    const art = { id: "r1", sessionId: "s1", type: "research", version: 1, parentId: null, title: "Audit", status: "draft", content: { summary: "s", findings: [] }, agentReasoning: null, createdAt: now, updatedAt: now } as any;
+    useArtifactStore.setState({ artifacts: [art], selectedArtifactId: "r1" } as any);
+    render(<><ArtifactPanel /><ToastLayer /></>);
+    act(() => goOffline());
+    const rename = screen.getByRole("heading", { name: "Audit" }).querySelector("button")!;
+    expect(rename).toBeDisabled();
+    expect(rename.className).toContain("disabled:cursor-default");
+    act(() => { useToastStore.getState().push({ kind: "preflight-block", title: "Blocked", ttl: 0, hero: { source: "session", concept: "redis", via: "concept" } } as any); });
+    const retire = screen.getByRole("button", { name: /Retire this stance/ });
+    expect(retire).toBeDisabled();
+    expect(retire.className).toMatch(/disabled:opacity-50 disabled:cursor-not-allowed disabled:no-underline/);
+  });
+
+  it("LOW 7 — a tab that has NEVER connected shows no request composer (even past the grace)", () => {
+    useConnectionGraceStore.setState({ everConnected: false, graceOver: true, hydrationStalled: false });
+    useConnectionStore.setState({ connected: false } as any);
+    render(<RequestComposerBanner />);
+    expect(screen.queryByTestId("request-composer")).not.toBeInTheDocument();
   });
 });

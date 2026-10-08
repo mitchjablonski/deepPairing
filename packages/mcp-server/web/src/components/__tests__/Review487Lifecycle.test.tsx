@@ -130,7 +130,7 @@ describe("2 — unknown is not known-empty", () => {
     act(() => { vi.advanceTimersByTime(HYDRATION_STALL_MS); });
     expect(screen.queryByText(/Waiting for Claude/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Open Claude Code in this project/)).not.toBeInTheDocument();
-    expect(screen.getByTestId("hydration-unknown")).toHaveTextContent(/Still loading the current state/);
+    expect(screen.getByTestId("hydration-unknown")).toHaveTextContent(/Still loading this session — it's taking longer than usual/);
   });
 });
 

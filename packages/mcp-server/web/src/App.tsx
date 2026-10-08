@@ -14,7 +14,8 @@ import { TurnIndicator } from "./components/TurnIndicator";
 import { NextUpBar } from "./components/NextUpBar";
 import { sessionLabelOf } from "./lib/sessionLabel";
 import { outageMinutes } from "./lib/outage";
-import { useConnectionGraceDriver, useTabOffline, useHydrationStalled, HYDRATION_STALLED_TEXT, reloadPage } from "./lib/connectionGrace";
+import { useConnectionGraceDriver, useTabOffline, useHydrationStalled, HYDRATION_STALLED_TEXT, RELOAD_TITLE, reloadPage } from "./lib/connectionGrace";
+import { ReloadConfirmDialog } from "./components/ReloadConfirmDialog";
 import { usePreferencesStore } from "./stores/preferences";
 import { PendingBanner } from "./components/PendingBanner";
 import { ResumeQuestionsBanner } from "./components/ResumeQuestionsBanner";
@@ -899,8 +900,8 @@ function App() {
       {hydrationStalled && !hydrated && !nextUpBar && (
         <div className="px-3 py-1.5 bg-accent-amber-dim/40 border-b border-accent-amber/15 text-center" role="status" data-testid="hydration-stalled">
           <span className="text-2xs text-accent-amber">
-            {HYDRATION_STALLED_TEXT} — this is taking longer than usual. It may still finish, or{" "}
-            <button type="button" onClick={reloadPage} className="underline font-medium">Reload</button>
+            {HYDRATION_STALLED_TEXT}{" "}
+            <button type="button" onClick={reloadPage} title={RELOAD_TITLE} className="underline font-medium">Reload</button>
           </span>
         </div>
       )}
@@ -965,14 +966,17 @@ function App() {
             Failed to render — try selecting a different artifact
           </div>
         }>
-          {showHydrationSkeleton
+          {/* #487 review (Fable) — stalled but artifacts DID arrive (broadcasts
+              after a missed snapshot): show them; the stall stays on the
+              bar/banner line only. */}
+          {showHydrationSkeleton && !(hydrationStalled && hasArtifacts)
             ? (hydrationStalled
               // #487 review (Sol P2) — past the watchdog the main area says
               // the same honest thing as the banner/bar (not live: the banner
               // or the bar is the one announcement).
               ? <div className="p-5 text-xs text-text-secondary" data-testid="hydration-unknown">
-                  {HYDRATION_STALLED_TEXT} for this session — it may still finish.{" "}
-                  <button type="button" onClick={reloadPage} className="underline text-accent-blue">Reload</button>
+                  {HYDRATION_STALLED_TEXT}{" "}
+                  <button type="button" onClick={reloadPage} title={RELOAD_TITLE} className="underline text-accent-blue">Reload</button>
                 </div>
               : <HydrationSkeleton />)
             : hasArtifacts
@@ -1052,6 +1056,7 @@ function App() {
       )}
 
       {/* Ephemeral toast stack — pre-flight blocks, etc. */}
+      <ReloadConfirmDialog />
       <ToastLayer />
 
       {/* Q2 — one-time cross-project opt-in, offered immediately after the

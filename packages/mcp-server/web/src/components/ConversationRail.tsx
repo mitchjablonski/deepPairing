@@ -11,6 +11,7 @@ import { suggestionPill } from "../lib/suggestionPill";
 import { ReplyModeToggle, type ReplyMode } from "./ReplyModeToggle";
 import { WAITING_TONE } from "../lib/waitingTone";
 import { useOfflineReason } from "../hooks/useOfflineReason";
+import { useUnsavedText } from "../lib/unsavedText";
 
 // W2 — "last opened" timestamp persisted to sessionStorage so we know
 // which comments arrived since the user last looked at the rail. Stored
@@ -399,6 +400,7 @@ function ThreadEntry({
   // reply target — that's how the user continues the thread.
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyText, setReplyText] = useState("");
+  useUnsavedText(`rail-reply:${comment.id}`, replyText); // #487 review (Fable) — Reload asks before discarding it
   const [replySubmitting, setReplySubmitting] = useState(false);
   // I4 — a reply defaults to a plain comment; the human can flip it to "Ask"
   // so the follow-up carries intent:"question" and re-flags the thread as
