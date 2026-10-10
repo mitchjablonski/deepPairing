@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { classifyStaleResolve, classifyClosedDecision, type DecisionResolveOutcome, type ResolutionAnnouncement } from "./decision-resolve-guard.js";
 import path from "node:path";
 import crypto from "node:crypto";
-import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
+import type { Artifact, ArtifactAdmission, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
 import { ArtifactSchema, suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
@@ -625,6 +625,40 @@ export class FileStore implements IStore {
     if (params.parentId) this.clearRenderFailuresFor(params.parentId);
     this.scheduleFlush();
     return artifact;
+  }
+
+  /**
+   * #470 — create an artifact admitted under a stance allowance, carrying its
+   * operation stamp. Daemon-only: the stamp is attached synchronously after
+   * the create, before any flush can run, so child and stamp land in ONE
+   * write. createArtifact builds its record field by field, so the ordinary
+   * create path (and its passthrough wire body) can never attach a stamp.
+   */
+  createAdmittedArtifact(params: Parameters<FileStore["createArtifact"]>[0], admission: ArtifactAdmission): Artifact {
+    const artifact = this.createArtifact(params);
+    artifact.admission = structuredClone(admission);
+    return artifact;
+  }
+
+  /** #470 — replace an admitted artifact's operation stamp (follow-up
+   *  progress, completedAt). No-op for an unknown or unstamped artifact. */
+  setArtifactAdmission(artifactId: string, admission: ArtifactAdmission): void {
+    this.assertAuthorizationReadable();
+    const art = this.artifacts.find((a) => a.id === artifactId);
+    if (!art?.admission) return;
+    art.admission = structuredClone(admission);
+    this.scheduleFlush();
+  }
+
+  /** #470 — has a comment with this exact id been recorded (any artifact)? */
+  hasComment(commentId: string): boolean {
+    return this.comments.some((c) => c.id === commentId);
+  }
+
+  /** #470 — is a plan review recorded for this artifact? */
+  hasPlanReview(artifactId: string): boolean {
+    this.assertAuthorizationReadable();
+    return this.planReviews.has(artifactId);
   }
 
   /**

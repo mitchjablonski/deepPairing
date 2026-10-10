@@ -38,6 +38,7 @@ import type { LiveDecisionSource } from "../store/session-scan.js";
 import { createHttpRoutes } from "../http/routes.js";
 import { mountStaticUi } from "../http/static-ui.js";
 import { createDaemonRoutes, createActiveSessionRoutes, type SessionMeta } from "./routes.js";
+import { StanceExceptionRegistry, type StanceFaultPoint } from "./stance-exceptions.js";
 import { applyTopLevelGuards } from "../http/guards.js";
 import { runDemoScript } from "../demo-script.js";
 import { recordMetricEvent } from "../store/metrics-store.js";
@@ -159,6 +160,13 @@ export interface CreateDaemonDeps {
   ) => ErrorEmittingWatcher;
   /** A2 heartbeat cadence — 30s in production; tests shrink it. */
   heartbeatIntervalMs?: number;
+  /** #470 — clock for allowance ceilings (tests inject one). */
+  stanceExceptionClock?: () => number;
+  /** #470 — monotonic clock for the 72 h cap (tests inject one). */
+  stanceExceptionMonotonic?: () => number;
+  /** #470 — test seam: throw at a named point of an admitted operation to
+   *  simulate a crash there. Production never passes it. */
+  stanceExceptionFault?: (point: StanceFaultPoint, operationId: string) => void;
 }
 
 export interface Daemon {
@@ -174,6 +182,8 @@ export interface Daemon {
   sessions: Map<string, FileStore>;
   sessionMeta: Map<string, SessionMeta>;
   activeSessions: Set<string>;
+  /** #470 — the in-memory stance-exception registry (O1: never persisted). */
+  stanceExceptions: StanceExceptionRegistry;
   broadcast: (sessionId: string, event: unknown) => void;
   broadcastAll: (event: unknown) => void;
   getClientCount: () => number;
@@ -210,6 +220,9 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     openBrowser = defaultOpenBrowser,
     watch = (dir, listener) => fs.watch(dir, listener),
     heartbeatIntervalMs = 30_000,
+    stanceExceptionClock,
+    stanceExceptionMonotonic,
+    stanceExceptionFault,
   } = deps;
 
   const daemonProjectHash = projectHashOf(projectRoot);
@@ -237,11 +250,26 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   // is why the daemon used to leak a process per project forever.
   const activeSessions = new Set<string>();
   const demoRuns = new Map<string, () => void>();
+  // #470 — active allowances live ONLY here (O1). A restart ends every grant:
+  // each registrationId embeds this instanceId.
+  const stanceExceptions = new StanceExceptionRegistry({
+    instanceId,
+    projectRoot,
+    broadcast: (sessionId, event) => broadcast(sessionId, event),
+    getStore: (sessionId) => sessions.get(sessionId),
+    now: stanceExceptionClock,
+    monotonic: stanceExceptionMonotonic,
+    log,
+    fault: stanceExceptionFault,
+  });
 
   function createSession(sessionId: string): FileStore {
     log(`Creating session: ${sessionId}`);
     const store = new FileStore(projectRoot, sessionId);
     sessions.set(sessionId, store);
+    // #470 (§7) — startup reconciliation: finish any admitted operation a
+    // crash left without completedAt, through the session's operation queue.
+    if (!sessionId.startsWith("demo_")) void stanceExceptions.reconcile(sessionId, store);
     // R1: count session starts so "N sessions deep" stats become real.
     // Demo sessions are excluded — they're throwaway proof of the hook,
     // not pairing work worth measuring.
@@ -306,6 +334,8 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     try {
       const entry = recordPreflightBlock(projectRoot, sessionId, event);
       if (entry) outgoing = { ...event, blockId: entry.id, at: entry.at };
+      // #470 — the in-memory binding a grant is made from (never the file).
+      stanceExceptions.noteBlock(entry, event);
     } catch {
       // Losing the record must never break a broadcast.
     }
@@ -467,7 +497,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
 
   // Mount internal daemon routes (for MCP wrappers).
   // II1 — pass authToken so every /api/internal/* requires Authorization.
-  const daemonRoutes = createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log, projectRoot, daemonAuthToken, activeSessions);
+  const daemonRoutes = createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log, projectRoot, daemonAuthToken, activeSessions, stanceExceptions);
   app.route("/", daemonRoutes);
 
   // Mount public web UI routes (for browser)
@@ -530,6 +560,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
       }
       return out;
     },
+    stanceExceptions,
   );
   app.route("/", publicRoutes);
 
@@ -1409,6 +1440,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     sessions,
     sessionMeta,
     activeSessions,
+    stanceExceptions,
     broadcast,
     broadcastAll,
     getClientCount,

@@ -13,6 +13,7 @@ import { buildFirstCallHint } from "./first-call-hint.js";
 import {
   tryElicit as tryElicitHelper,
   preflightRejectedApproaches as preflightHelper,
+  type PreflightOpts,
   SessionNameLatch,
   getPassiveFeedback as getPassiveFeedbackHelper,
   PresentIdempotencyRegistry,
@@ -1032,7 +1033,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
       proposalStrings: string[],
       proposalPaths: string[] = [],
       proposalConcepts: string[] = [],
-      opts: { advisory?: boolean } = {},
+      opts: PreflightOpts = {},
     ) => preflightHelper(store, broadcast, toolName, proposalStrings, proposalPaths, proposalConcepts, opts);
     const autoNameSession = (title: string) => sessionNameLatch.maybeName(title);
 

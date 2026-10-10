@@ -25441,6 +25441,93 @@ var ExplainerContentSchema = external_exports.object({
   unknowns: external_exports.array(external_exports.string()).optional().describe("Honest gaps: what you could NOT determine and why (e.g. 'I couldn't tell whether the CLI path is covered \u2014 I didn't read cli/init.ts'). Renders above the fold with a one-click Ask.")
 });
 
+// ../shared/dist/schemas/stance-exception.js
+var StanceRefSchema = external_exports.object({
+  description: external_exports.string(),
+  concept: external_exports.string().optional(),
+  rejectedAt: external_exports.string().optional()
+});
+var ProposalSnapshotSchema = external_exports.object({
+  kind: external_exports.enum(["create", "revise"]),
+  type: external_exports.string().min(1),
+  title: external_exports.string().min(1),
+  content: external_exports.record(external_exports.string(), external_exports.unknown()),
+  agentReasoning: external_exports.string().optional(),
+  relatedArtifactIds: external_exports.array(external_exports.string()).optional(),
+  feature: external_exports.string().optional(),
+  parentId: external_exports.string().optional(),
+  version: external_exports.number().int().positive().optional()
+}).strict();
+var ProposalPreconditionSchema = external_exports.discriminatedUnion("kind", [
+  external_exports.object({
+    kind: external_exports.literal("code_change_prior"),
+    filePath: external_exports.string(),
+    /** The prior code_change that supplied `before`, or null when none did. */
+    priorCodeChangeId: external_exports.string().nullable(),
+    /** sha256 of that prior's `after`, or null when there was no prior. */
+    priorAfterHash: external_exports.string().nullable()
+  }).strict(),
+  external_exports.object({
+    kind: external_exports.literal("revise_target"),
+    targetId: external_exports.string(),
+    targetVersion: external_exports.number().int(),
+    targetStatus: external_exports.string(),
+    /** sha256 over every field a revision inherits from its target. */
+    inheritedHash: external_exports.string()
+  }).strict()
+]);
+var StanceGrantOriginSchema = external_exports.enum(["ui", "cli"]);
+var StanceAllowanceReceiptStateSchema = external_exports.enum(["allowed", "used", "changed", "revoked", "ended", "expired"]);
+var StanceAllowanceReceiptSchema = external_exports.object({
+  id: external_exports.string(),
+  /** Which door was used. Self-reported; labels, never authenticates. */
+  grantedVia: StanceGrantOriginSchema,
+  grantedAt: external_exports.string(),
+  reason: external_exports.string(),
+  ceilingAt: external_exports.string(),
+  state: StanceAllowanceReceiptStateSchema,
+  artifactId: external_exports.string().optional(),
+  revokedAt: external_exports.string().optional(),
+  /** Set with `changed`: the new block recorded when the dependency moved. */
+  supersededByBlockId: external_exports.string().optional()
+});
+var AdmissionFollowUpsSchema = external_exports.object({
+  supersede: external_exports.object({
+    parentId: external_exports.string(),
+    /** The parent's status when the claim succeeded. A replay supersedes only
+     *  from this status; any other (a human verdict since) is skipped. */
+    fromStatus: external_exports.string(),
+    skipped: external_exports.string().optional()
+  }).optional(),
+  comment: external_exports.object({ id: external_exports.string(), artifactId: external_exports.string(), content: external_exports.string() }).optional(),
+  decision: external_exports.object({
+    decisionId: external_exports.string(),
+    artifactId: external_exports.string(),
+    context: external_exports.string(),
+    title: external_exports.string().optional(),
+    options: external_exports.array(external_exports.unknown()),
+    stakes: external_exports.enum(["low", "medium", "high"]).optional()
+  }).optional(),
+  planReview: external_exports.boolean().optional(),
+  /** The admitted call's preflight trace, persisted against the child. */
+  trace: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
+});
+var ArtifactAdmissionSchema = external_exports.object({
+  operationId: external_exports.string(),
+  callFingerprint: external_exports.string(),
+  effectiveDigest: external_exports.string(),
+  kind: external_exports.enum(["create", "revise"]),
+  exceptionIds: external_exports.array(external_exports.string()),
+  grantedVia: StanceGrantOriginSchema,
+  followUps: AdmissionFollowUpsSchema,
+  completedAt: external_exports.string().optional()
+});
+var PreflightTraceExceptionSchema = external_exports.object({
+  allowanceIds: external_exports.array(external_exports.string()),
+  grantedVia: StanceGrantOriginSchema,
+  stances: external_exports.array(external_exports.string())
+});
+
 // ../shared/dist/schemas/artifact.js
 var ArtifactTypeSchema = external_exports.enum([
   "research",
@@ -25568,6 +25655,12 @@ var ArtifactSchema = external_exports.object({
    * ABSENCE keeps the stored JSON byte-identical to before.
    */
   featureId: external_exports.string().trim().max(80).optional(),
+  /**
+   * #470 — the operation stamp of an artifact admitted once under a human's
+   * stance allowance. Non-authorizing metadata (see stance-exception.ts).
+   * Optional for backward compatibility; absent on every ordinary artifact.
+   */
+  admission: ArtifactAdmissionSchema.optional(),
   content: external_exports.record(external_exports.string(), external_exports.unknown()),
   agentReasoning: external_exports.string().nullable(),
   relatedArtifactIds: external_exports.array(external_exports.string()).optional(),
@@ -26823,7 +26916,9 @@ var PreflightTraceSchema = external_exports.object({
   /** Concepts that partially matched but didn't block. May be empty. */
   nearMisses: external_exports.array(PreflightNearMissSchema),
   /** Set only when decision === "blocked". */
-  block: PreflightBlockSummarySchema.optional()
+  block: PreflightBlockSummarySchema.optional(),
+  /** #470 — set when this artifact was admitted under a stance allowance. */
+  exception: PreflightTraceExceptionSchema.optional()
 });
 
 // ../shared/dist/normalize.js
@@ -29504,7 +29599,7 @@ ${assembled.join("\n")}`;
 }
 
 // src/mcp/tool-helpers.ts
-import { createHash as createHash2 } from "node:crypto";
+import { createHash as createHash3 } from "node:crypto";
 
 // src/mcp/elicit.ts
 var ELICIT_APPROVE_SCHEMA = {
@@ -29828,7 +29923,10 @@ Do NOT retry with this approach. Propose an alternative. If this is a false posi
               description: match.rejected.description,
               reason: match.rejected.reason,
               concept: match.rejected.concept,
-              via: match.via
+              via: match.via,
+              // #470 — with description + concept, the exact stance row an
+              // allowance binds to.
+              rejectedAt: match.rejected.rejectedAt
             }
           }
         },
@@ -29951,6 +30049,143 @@ function getAdvisoryRecall() {
   return globalStoreAdvisoryRecall;
 }
 
+// src/mcp/proposal-resolution.ts
+import { createHash as createHash2 } from "node:crypto";
+function stableStringify(v2) {
+  if (v2 === null || typeof v2 !== "object") {
+    const s = JSON.stringify(v2);
+    return s === void 0 ? "null" : s;
+  }
+  if (Array.isArray(v2)) return `[${v2.map(stableStringify).join(",")}]`;
+  const obj2 = v2;
+  const keys = Object.keys(obj2).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj2[k])}`).join(",")}}`;
+}
+function sameStance(row, ref) {
+  return row.description === ref.description && (row.concept ?? void 0) === (ref.concept ?? void 0) && (row.rejectedAt ?? void 0) === (ref.rejectedAt ?? void 0);
+}
+var sha256Hex = (s) => createHash2("sha256").update(s).digest("hex");
+var EXCEPTION_TOOL_TYPES = {
+  present_code_change: "code_change",
+  present_options: "decision",
+  revise_artifact: null
+};
+var MAX_SNAPSHOT_BYTES = 48 * 1024;
+function withoutTransportMeta(args) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return args;
+  if (!Object.prototype.hasOwnProperty.call(args, "_meta")) return args;
+  const { _meta: _transport, ...rest } = args;
+  return rest;
+}
+function callFingerprint(toolName, args) {
+  return sha256Hex(stableStringify({
+    v: 1,
+    toolName,
+    type: EXCEPTION_TOOL_TYPES[toolName] ?? null,
+    args: withoutTransportMeta(args) ?? null
+  }));
+}
+function wireForm(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+function newestPriorCodeChange(artifacts, filePath) {
+  return artifacts.filter(
+    (a) => a.type === "code_change" && a.content?.filePath === filePath && typeof a.content?.after === "string" && a.content.after.length > 0
+  ).sort((a, b) => a.createdAt < b.createdAt ? 1 : -1)[0];
+}
+function codeChangePrecondition(artifacts, filePath) {
+  const prior = newestPriorCodeChange(artifacts, filePath);
+  return {
+    kind: "code_change_prior",
+    filePath,
+    priorCodeChangeId: prior?.id ?? null,
+    priorAfterHash: prior ? sha256Hex(prior.content.after) : null
+  };
+}
+async function resolveCodeChange(reader, input) {
+  let before = input.before;
+  let precondition = null;
+  let resolvable = true;
+  if (!before) {
+    try {
+      const artifacts = await reader.getArtifacts();
+      precondition = codeChangePrecondition(artifacts, input.filePath);
+      const prior = newestPriorCodeChange(artifacts, input.filePath);
+      if (prior) before = prior.content.after;
+    } catch {
+      resolvable = false;
+    }
+  }
+  const changeType = before && input.changeType === "create" ? "modify" : input.changeType;
+  return { before, changeType, precondition, resolvable };
+}
+function reviseInheritedHash(target) {
+  let provenance = null;
+  if (target.type === "changeset") {
+    const cs = coerceChangesetContent(target.content);
+    if (cs.reviewIntent === "external") {
+      const { headSha: _reviewedCommit, ...display } = cs.source ?? {};
+      provenance = { reviewIntent: "external", source: cs.source ? display : null };
+    }
+  }
+  return sha256Hex(stableStringify({
+    title: target.title,
+    type: target.type,
+    provenance,
+    stakes: target.content?.stakes ?? null,
+    relatedArtifactIds: target.relatedArtifactIds ?? null,
+    featureId: target.featureId ?? null
+  }));
+}
+function reviseTargetPrecondition(target) {
+  return {
+    kind: "revise_target",
+    targetId: target.id,
+    targetVersion: target.version,
+    targetStatus: target.status,
+    inheritedHash: reviseInheritedHash(target)
+  };
+}
+function deriveReviseContent(old, supplied) {
+  const content = { ...supplied };
+  if (old.type === "changeset") {
+    const oldChangeset = coerceChangesetContent(old.content);
+    if (oldChangeset.reviewIntent === "external") {
+      content.reviewIntent = "external";
+      if (content.source === void 0 && oldChangeset.source) {
+        const { headSha: _reviewedCommit, ...displayProvenance } = oldChangeset.source;
+        content.source = displayProvenance;
+      }
+    }
+  }
+  return content;
+}
+function finalizeReviseContent(old, content) {
+  if (old.type === "changeset") {
+    delete content.reviewState;
+    delete content.reviewReasons;
+  }
+  if (old.type === "decision" && Array.isArray(content.options)) {
+    delete content.decisionId;
+    const oldStakes = old.content?.stakes;
+    if (content.stakes === void 0 && oldStakes !== void 0) content.stakes = oldStakes;
+  }
+  return content;
+}
+function reviseSnapshot(old, title, reason, content) {
+  return wireForm({
+    kind: "revise",
+    type: old.type,
+    title,
+    content,
+    agentReasoning: reason,
+    parentId: old.id,
+    version: old.version + 1,
+    ...old.relatedArtifactIds ? { relatedArtifactIds: old.relatedArtifactIds } : {},
+    ...old.featureId ? { feature: old.featureId } : {}
+  });
+}
+
 // src/mcp/tool-helpers.ts
 async function tryElicit(server, message) {
   if (!terminalApproveEnabled(process.env)) return null;
@@ -29972,8 +30207,18 @@ var ADVISORY_EXEMPT_TOOLS = /* @__PURE__ */ new Set([
   "present_explainer",
   "present_debrief"
 ]);
+function recordPreflightBlockEvent(store, broadcast, event, source) {
+  broadcast(event);
+  void store.recordPreflightBlock?.(event);
+  void store.recordMetric?.({ kind: "preflight_block", source });
+}
 async function preflightRejectedApproaches(store, broadcast, toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], opts = {}) {
-  const memory = await store.getSessionMemory();
+  const fullMemory = await store.getSessionMemory();
+  const exclude = opts.excludeStances ?? [];
+  const memory = exclude.length === 0 ? fullMemory : {
+    ...fullMemory,
+    rejectedApproaches: fullMemory.rejectedApproaches.filter((r) => !exclude.some((ref) => sameStance(r, ref)))
+  };
   const teamPrefs = await store.getTeamPreferences?.() ?? [];
   const localKeys = /* @__PURE__ */ new Set();
   for (const r of memory.rejectedApproaches) {
@@ -29995,7 +30240,7 @@ async function preflightRejectedApproaches(store, broadcast, toolName, proposalS
     globalAdvisoryConcepts
   });
   if (!result.blocked) {
-    for (const nm of result.trace.nearMisses) {
+    for (const nm of opts.excludeStances?.length ? [] : result.trace.nearMisses) {
       if (nm.source === "session" || nm.source === "team") {
         void store.recordMetric?.({ kind: "preflight_near_miss", source: nm.source });
       }
@@ -30005,13 +30250,18 @@ async function preflightRejectedApproaches(store, broadcast, toolName, proposalS
   if (opts.advisory) {
     return { ok: true, trace: result.trace, advisory: result.block.message };
   }
-  broadcast(result.block.broadcastEvent);
-  void store.recordPreflightBlock?.(result.block.broadcastEvent);
-  void store.recordMetric?.({ kind: "preflight_block", source: result.block.source });
+  const blockEvent = result.block.broadcastEvent;
+  if (!opts.deferRecord) {
+    broadcast(blockEvent);
+    void store.recordPreflightBlock?.(blockEvent);
+    void store.recordMetric?.({ kind: "preflight_block", source: result.block.source });
+  }
   const blockSummary = formatPreflightTraceSummary(result.trace);
   return {
     ok: false,
     trace: result.trace,
+    event: blockEvent,
+    source: result.block.source,
     response: {
       content: [{ type: "text", text: result.block.message + blockSummary }],
       isError: true,
@@ -30224,17 +30474,7 @@ var PresentIdempotencyRegistry = class {
   }
 };
 function hashPresentArgs(args) {
-  return createHash2("sha256").update(stableStringify(args)).digest("hex");
-}
-function stableStringify(v2) {
-  if (v2 === null || typeof v2 !== "object") {
-    const s = JSON.stringify(v2);
-    return s === void 0 ? "null" : s;
-  }
-  if (Array.isArray(v2)) return `[${v2.map(stableStringify).join(",")}]`;
-  const obj2 = v2;
-  const keys = Object.keys(obj2).sort();
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj2[k])}`).join(",")}}`;
+  return createHash3("sha256").update(stableStringify(args)).digest("hex");
 }
 function buildDedupResponse(dup, port, extraStructured) {
   const at = Number.isFinite(port) && port > 0 ? ` at localhost:${port}` : "";
@@ -30393,7 +30633,26 @@ var ERROR_CODES = {
    *  ledger, a session flush) stayed held past its bounded wait by a LIVE (or
    *  unverifiable) owner. Nothing was committed; retry, or inspect with
    *  `deeppairing doctor` (dead-owner locks are recovered automatically). */
-  lock_busy: "lock_busy"
+  lock_busy: "lock_busy",
+  /** #470 — stance exceptions ("Allow this proposal once"). No block with that
+   *  id is held by this daemon (unknown, or from an earlier daemon instance). */
+  stance_exception_block_not_found: "stance_exception_block_not_found",
+  /** #470 — the block can't be allowed: a team rule, a demo session, a retired
+   *  stance, an ended session, or no eligible snapshot. */
+  stance_exception_not_eligible: "stance_exception_not_eligible",
+  /** #470 — a grant needs a typed reason of 3–280 characters. */
+  stance_exception_reason_required: "stance_exception_reason_required",
+  /** #470 — a grant must come from the human-facing route, never from a
+   *  registered agent wrapper. */
+  stance_exception_interactive_required: "stance_exception_interactive_required",
+  /** #470 — the claim did not admit this call (used, revoked, ended, expired,
+   *  wrong registration, or a stance retired since). */
+  stance_exception_claim_refused: "stance_exception_claim_refused",
+  /** #470 — something the allowed proposal depended on changed after the grant. */
+  stance_exception_dependencies_changed: "stance_exception_dependencies_changed",
+  /** #470 — an operation stamp's follow-up targets disagree with the lineage
+   *  recorded on the child; a replay refuses rather than act on them. */
+  stance_exception_operation_inconsistent: "stance_exception_operation_inconsistent"
 };
 var USER_FACING_ERROR_CODES = [
   ERROR_CODES.daemon_auth_required,
@@ -33826,9 +34085,9 @@ function artifactProposal(type, title, value) {
     advisory: type === "debrief" || type === "changeset" && c.reviewIntent === "external"
   };
 }
-function preflightArtifact(ctx, toolName, type, title, content) {
+function preflightArtifact(ctx, toolName, type, title, content, opts = {}) {
   const proposal = artifactProposal(type, title, content);
-  return proposal ? ctx.helpers.preflightRejectedApproaches(toolName, proposal.text, proposal.paths, proposal.concepts, { advisory: proposal.advisory }) : null;
+  return proposal ? ctx.helpers.preflightRejectedApproaches(toolName, proposal.text, proposal.paths, proposal.concepts, { ...opts, advisory: proposal.advisory }) : null;
 }
 
 // src/mcp/tools/present-findings.ts
@@ -33902,18 +34161,149 @@ Decline to review in detail at http://localhost:${reviewPort}`
   };
 }
 
+// src/mcp/stance-admission.ts
+var STANCE_MESSAGES = {
+  blockHint: "If this is a false positive, ask your pair to choose **Allow this proposal once** on the block card. Then retry this **identical** call (every argument the same, not only the matched text). You cannot grant this yourself.",
+  admitted: (via, stances, reasons) => `Admitted once under an allowance your pair granted (${via.toUpperCase()}) for stance ${stances.map((s) => `"${s}"`).join(" and ")} (reason: ${reasons.map((r) => `"${r}"`).join("; ")}). It covered this exact version only. If you revise this artifact and the revision still matches the stance, your pair must allow it again. The stance still applies to everything else. A direct edit carrying this content will still prompt your pair.`,
+  replayed: (artifactId) => `Already admitted. Returning the original result for ${artifactId}. Nothing new was created.`,
+  dependencyChanged: (dep) => `The proposal your pair allowed depended on ${dep.what === "target" ? `the state of ${dep.id}` : dep.id ?? "there being no earlier change to this file"}, which changed. Ask your pair to allow the new version.`,
+  versionMismatch: "The allowance your pair granted covers a different version of this call than the one you sent now, so nothing was created. Retry the identical call you were blocked on, or ask your pair to allow this version.",
+  inactive: (state, artifactId, ceilingAt) => state === "used" ? `Your pair's allowance for this exact call was already used${artifactId ? ` (${artifactId})` : ""}.` : state === "revoked" ? "Your pair revoked the allowance for this exact call." : state === "ended" ? "Your pair's allowance for this exact call ended with its Claude session." : state === "expired" ? `Your pair's allowance for this exact call expired${ceilingAt ? ` at ${ceilingAt}` : ""}.` : state === "changed" ? "The allowance for this call was replaced after the proposal changed." : ""
+};
+async function beginStanceOperation(ctx, toolName, args) {
+  const handle = { operationId: `op_${nanoid3(16)}`, callFingerprint: callFingerprint(toolName, args) };
+  if (!ctx.store.runStanceOperation) return { handle };
+  try {
+    const result = await ctx.store.runStanceOperation(handle.operationId, { callFingerprint: handle.callFingerprint });
+    if (result?.status === "replayed") return { handle, replay: result };
+    if (result?.status === "none") return { handle };
+    return { handle, refusal: probeRefusal(false, `unexpected status ${String(result?.status)}`) };
+  } catch (error51) {
+    const e = error51;
+    if (e.status === 404 && !e.code) return { handle };
+    if (e.code === "stance_exception_operation_inconsistent") return { handle, refusal: probeRefusal(true, e.message ?? "") };
+    return { handle, refusal: probeRefusal(false, e.message ?? String(error51)) };
+  }
+}
+function probeRefusal(inconsistent, detail) {
+  return {
+    content: [{
+      type: "text",
+      text: inconsistent ? `An earlier allowed version of this exact call left an operation record that doesn't match its own history, so deepPairing won't finish or repeat it. Nothing new was created. Tell your pair; don't retry this identical call. (${detail})` : `deepPairing couldn't confirm whether an earlier identical call already went through, so nothing new was created. Retry this identical call in a moment. (${detail})`
+    }],
+    isError: true,
+    _meta: { code: inconsistent ? "STANCE_OPERATION_INCONSISTENT" : "STANCE_OPERATION_UNCONFIRMED", retryable: !inconsistent }
+  };
+}
+function admittedResult(op, extra = "") {
+  const artifactId = String(op.artifactId);
+  const decisionId = typeof op.decisionId === "string" ? op.decisionId : void 0;
+  const ids = `${artifactId}${decisionId ? `, decision ${decisionId}` : ""}`;
+  const skipped = typeof op.supersedeSkipped === "string" ? ` (${String(op.parentId)} was left ${op.supersedeSkipped}: your pair closed it after the allowance, so it was not superseded.)` : "";
+  const text = op.status === "replayed" ? `${STANCE_MESSAGES.replayed(ids)}${skipped}` : `Presented for review (${ids}). ${STANCE_MESSAGES.admitted(String(op.grantedVia ?? "ui"), op.stances ?? [], op.reasons ?? [])}${skipped} Call check_feedback for your pair's response.`;
+  const fullText = `${text}${extra}`;
+  return {
+    content: [{ type: "text", text: fullText }],
+    structuredContent: {
+      artifactId,
+      ...decisionId ? { decisionId } : {},
+      admitted: true,
+      ...op.status === "replayed" ? { replayed: true } : {}
+    }
+  };
+}
+function withLine(response, line) {
+  if (!line) return response;
+  const [first, ...rest] = response.content;
+  return { ...response, content: [{ type: "text", text: `${first.text}
+
+${line}` }, ...rest] };
+}
+async function admitBlockedProposal(ctx, input) {
+  const { toolName, handle, pre, resolved } = input;
+  const fits = !!resolved && Buffer.byteLength(JSON.stringify(resolved.snapshot)) <= MAX_SNAPSHOT_BYTES;
+  const exceptionFields = { callFingerprint: handle.callFingerprint, ...fits ? { snapshot: resolved.snapshot, preconditions: resolved.preconditions } : {} };
+  const blockOf = (event) => ({ ...event, ...exceptionFields });
+  const refuse = (event, source, response, line2 = "") => {
+    recordPreflightBlockEvent(ctx.store, ctx.broadcast, blockOf(event), source);
+    const hint = source === "session" && ctx.store.runStanceOperation ? STANCE_MESSAGES.blockHint : "";
+    return { response: withLine(response, [line2, hint].filter(Boolean).join("\n")) };
+  };
+  if (pre.source !== "session" || !ctx.store.inspectStanceExceptions || !ctx.store.runStanceOperation) {
+    return refuse(pre.event, pre.source, pre.response);
+  }
+  let candidates = [];
+  let inactiveLine = "";
+  try {
+    const seen = await ctx.store.inspectStanceExceptions(handle.callFingerprint);
+    candidates = seen.candidates ?? [];
+    const first = (seen.inactive ?? [])[0];
+    if (first?.state) inactiveLine = STANCE_MESSAGES.inactive(first.state, first.artifactId, first.ceilingAt);
+  } catch {
+    candidates = [];
+  }
+  if (candidates.length === 0 || !resolved) return refuse(pre.event, pre.source, pre.response, inactiveLine);
+  const regate = await input.regate(candidates.map((c) => c.stance));
+  if (regate && !regate.ok) return refuse(regate.event, regate.source, regate.response);
+  const result = await ctx.store.runStanceOperation(handle.operationId, {
+    callFingerprint: handle.callFingerprint,
+    admission: {
+      exceptionIds: candidates.map((c) => c.id),
+      toolName,
+      snapshot: resolved.snapshot,
+      preconditions: resolved.preconditions,
+      ...regate?.ok ? { trace: { ...regate.trace } } : {},
+      // Without snapshot fields: the daemon re-attaches this request's.
+      block: { ...pre.event }
+    }
+  });
+  if (result.status === "admitted" || result.status === "replayed") return { admitted: result };
+  const dep = result.dependency;
+  if (result.code === "stance_exception_dependencies_changed" && dep && typeof result.newBlockId === "string") {
+    void ctx.store.recordMetric?.({ kind: "preflight_block", source: "session" });
+    return { response: withLine(pre.response, `${STANCE_MESSAGES.dependencyChanged(dep)}
+${STANCE_MESSAGES.blockHint}`) };
+  }
+  const line = dep ? STANCE_MESSAGES.dependencyChanged(dep) : result.reason === "client_snapshot_mismatch" || result.reason === "snapshot_mismatch" ? STANCE_MESSAGES.versionMismatch : STANCE_MESSAGES.inactive(String(result.state ?? result.reason ?? ""), result.artifactId, result.ceilingAt);
+  return refuse(pre.event, pre.source, pre.response, line);
+}
+
 // src/mcp/tools/present-options.ts
 async function handlePresentOptions(ctx, args) {
   const validated = validatePresentOptionsInput(args);
   if (!validated.ok) return validated.error;
+  const op = await beginStanceOperation(ctx, "present_options", args);
+  if (op.refusal) return op.refusal;
+  if (op.replay) return admittedResult(op.replay);
   const { context, options: validatedOptions, stakes } = validated.data;
   const title = validated.data.title;
   const artifactTitle = title ?? context;
   const proposedOptions = validatedOptions.map(
     (o) => o.visuals?.length ? { ...o, visuals: o.visuals.map((v2, i) => ({ ...v2, id: v2.id ?? `${o.id}_visual_${i}` })) } : o
   );
-  const pre = await preflightArtifact(ctx, "present_options", "decision", artifactTitle, validated.data);
-  if (!pre.ok) return pre.response;
+  const pre = await preflightArtifact(ctx, "present_options", "decision", artifactTitle, validated.data, { deferRecord: true });
+  if (!pre.ok) {
+    const snapshot = wireForm({
+      kind: "create",
+      type: "decision",
+      title: artifactTitle,
+      content: { context, ...title ? { title } : {}, options: proposedOptions, stakes },
+      relatedArtifactIds: args?.relatedFindings,
+      feature: args?.feature
+    });
+    const outcome = await admitBlockedProposal(ctx, {
+      toolName: "present_options",
+      handle: op.handle,
+      pre,
+      resolved: { snapshot, preconditions: [] },
+      regate: (exclude) => preflightArtifact(ctx, "present_options", "decision", artifactTitle, validated.data, { deferRecord: true, excludeStances: exclude })
+    });
+    if ("response" in outcome) return outcome.response;
+    const admitted = (await ctx.store.getArtifacts()).find((a) => a.id === String(outcome.admitted.artifactId));
+    notifyResourcesListChanged(ctx.server);
+    if (admitted) await maybeEmitTaskHandle(ctx.server, admitted, ctx.store);
+    return admittedResult(outcome.admitted, ` They can select at localhost:${ctx.store.getLivePort?.() ?? ctx.port}.`);
+  }
   const dedup = await ctx.helpers.beginPresentIdempotency("present_options", hashPresentArgs(args));
   if (dedup.duplicate) {
     const dupArt = (await ctx.store.getArtifacts()).find((a) => a.id === dedup.duplicate.artifactId);
@@ -35035,6 +35425,12 @@ async function handleReviseArtifact(ctx, args) {
         isError: true
       };
     }
+    const op = await beginStanceOperation(ctx, "revise_artifact", args);
+    if (op.refusal) return op.refusal;
+    if (op.replay) {
+      if (typeof op.replay.parentId === "string") await maybeUpdateTaskStatus(server, op.replay.parentId, store);
+      return admittedResult(op.replay);
+    }
     const all = await store.getArtifacts();
     const old = all.find((a) => a.id === artifactId);
     if (!old) {
@@ -35049,37 +35445,33 @@ async function handleReviseArtifact(ctx, args) {
         isError: true
       };
     }
-    const content = { ...suppliedContent };
-    if (old.type === "changeset") {
-      const oldChangeset = coerceChangesetContent(old.content);
-      if (oldChangeset.reviewIntent === "external") {
-        content.reviewIntent = "external";
-        if (content.source === void 0 && oldChangeset.source) {
-          const { headSha: _reviewedCommit, ...displayProvenance } = oldChangeset.source;
-          content.source = displayProvenance;
-        }
-      }
-    }
+    const content = deriveReviseContent(old, suppliedContent);
     const supersedeValidator = SUPERSEDE_VALIDATORS[old.type];
     if (supersedeValidator) {
       const v2 = supersedeValidator({ title: args?.title ?? old.title, ...content });
       if (!v2.ok) return v2.error;
     }
-    const pre = await preflightArtifact(ctx, "revise_artifact", old.type, String(args?.title ?? old.title), content);
-    if (pre && !pre.ok) return pre.response;
-    if (old.type === "changeset") {
-      delete content.reviewState;
-      delete content.reviewReasons;
+    const pre = await preflightArtifact(ctx, "revise_artifact", old.type, String(args?.title ?? old.title), content, { deferRecord: true });
+    if (pre && !pre.ok) {
+      const snapshot = reviseSnapshot(old, String(args?.title ?? old.title), reason, finalizeReviseContent(old, structuredClone(content)));
+      const outcome = await admitBlockedProposal(ctx, {
+        toolName: "revise_artifact",
+        handle: op.handle,
+        pre,
+        resolved: { snapshot, preconditions: [reviseTargetPrecondition(old)] },
+        regate: (exclude) => preflightArtifact(ctx, "revise_artifact", old.type, String(args?.title ?? old.title), content, { deferRecord: true, excludeStances: exclude })
+      });
+      if ("response" in outcome) return outcome.response;
+      await maybeUpdateTaskStatus(server, old.id, store);
+      notifyResourcesListChanged(server);
+      return admittedResult(outcome.admitted, ` Superseded ${artifactId} (v${old.version + 1} is the draft awaiting review). Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback.`);
     }
+    finalizeReviseContent(old, content);
     const title = String(args?.title ?? old.title);
     const newId = `art_${nanoid3(10)}`;
     const decisionContent = old.type === "decision" ? content : null;
     if (decisionContent && Array.isArray(decisionContent.options)) {
       decisionContent.decisionId = `dec_${nanoid3(10)}`;
-      const oldStakes = old.content?.stakes;
-      if (decisionContent.stakes === void 0 && oldStakes !== void 0) {
-        decisionContent.stakes = oldStakes;
-      }
     }
     const newArtifact = await store.createArtifact({
       id: newId,
@@ -35773,7 +36165,7 @@ function authorizeReviewPost(state, opts) {
 }
 
 // src/store/review-post-journal.ts
-import { createHash as createHash3, randomUUID } from "node:crypto";
+import { createHash as createHash4, randomUUID } from "node:crypto";
 var digestSchema = external_exports.string().regex(/^[0-9a-f]{64}$/);
 var eventSchema = external_exports.enum(["COMMENT", "REQUEST_CHANGES", "APPROVE"]);
 var timestampSchema = external_exports.iso.datetime();
@@ -35863,7 +36255,7 @@ function reviewPostDigest(value) {
     }
     return v2;
   };
-  return createHash3("sha256").update(JSON.stringify(stable(value))).digest("hex");
+  return createHash4("sha256").update(JSON.stringify(stable(value))).digest("hex");
 }
 function resultMatches(identity, result) {
   const states = { COMMENT: "COMMENTED", REQUEST_CHANGES: "CHANGES_REQUESTED", APPROVE: "APPROVED" };
@@ -36206,22 +36598,39 @@ async function handlePresentCodeChange(ctx, args) {
   const validated = validatePresentCodeChangeInput(args);
   if (!validated.ok) return validated.error;
   const { filePath, changeType, before, after, reasoning, confidence, concept } = validated.data;
-  let effectiveBefore = before;
-  let effectiveChangeType = changeType;
-  if (!effectiveBefore) {
-    try {
-      const prior = (await ctx.store.getArtifacts()).filter(
-        (a) => a.type === "code_change" && a.content?.filePath === filePath && typeof a.content?.after === "string" && a.content.after.length > 0
-      ).sort((a, b) => a.createdAt < b.createdAt ? 1 : -1)[0];
-      if (prior) effectiveBefore = prior.content.after;
-    } catch {
-    }
+  const op = await beginStanceOperation(ctx, "present_code_change", args);
+  if (op.refusal) return op.refusal;
+  if (op.replay) return admittedResult(op.replay);
+  const resolution = await resolveCodeChange(ctx.store, { filePath, before, changeType });
+  const effectiveBefore = resolution.before;
+  const effectiveChangeType = resolution.changeType;
+  const pre = await preflightArtifact(ctx, "present_code_change", "code_change", "", validated.data, { deferRecord: true });
+  if (!pre.ok) {
+    const snapshot = wireForm({
+      kind: "create",
+      type: "code_change",
+      title: `${effectiveChangeType} ${filePath}`,
+      content: { filePath, changeType: effectiveChangeType, before: effectiveBefore, after, reasoning, confidence, concept },
+      agentReasoning: reasoning,
+      relatedArtifactIds: args?.relatedFindings,
+      feature: args?.feature
+    });
+    const outcome = await admitBlockedProposal(ctx, {
+      toolName: "present_code_change",
+      handle: op.handle,
+      pre,
+      resolved: resolution.resolvable ? { snapshot, preconditions: resolution.precondition ? [resolution.precondition] : [] } : null,
+      regate: (exclude) => preflightArtifact(ctx, "present_code_change", "code_change", "", validated.data, { deferRecord: true, excludeStances: exclude })
+    });
+    if ("response" in outcome) return outcome.response;
+    const admittedId = String(outcome.admitted.artifactId);
+    const all = await ctx.store.getArtifacts();
+    const admittedArtifact = all.find((a) => a.id === admittedId);
+    notifyResourcesListChanged(ctx.server);
+    if (admittedArtifact) await maybeEmitTaskHandle(ctx.server, admittedArtifact, ctx.store);
+    const notes = codeChangeNotes(all, admittedId, filePath);
+    return admittedResult(outcome.admitted, ` Human can review at localhost:${ctx.store.getLivePort?.() ?? ctx.port}.${notes.closeNote}${notes.changesetNudge}`);
   }
-  if (effectiveBefore && effectiveChangeType === "create") {
-    effectiveChangeType = "modify";
-  }
-  const pre = await preflightArtifact(ctx, "present_code_change", "code_change", "", validated.data);
-  if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_code_change", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
   const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
@@ -36257,13 +36666,7 @@ async function handlePresentCodeChange(ctx, args) {
   notifyResourcesListChanged(ctx.server);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   const allArtifacts = await ctx.store.getArtifacts();
-  const CODE_CLOSED = ["superseded", "retracted", "obsolete"];
-  const hasOtherLiveFile = allArtifacts.some(
-    (a) => a.type === "code_change" && a.id !== id && !CODE_CLOSED.includes(a.status ?? "") && a.content?.filePath !== filePath
-  );
-  const changesetNudge = hasOtherLiveFile ? " 2nd file touched this run \u2014 the default for multi-file work is present_changeset; batch the remaining files into one and close with a present_debrief." : "";
-  const closesTask = !sessionOwesDebrief(allArtifacts);
-  const closeNote = closesTask && !hasOtherLiveFile ? " If this single-file change is the whole task, it closes it \u2014 fold the what-changed-and-why into `reasoning`, no separate present_debrief owed. If more changes follow, batch them into a present_changeset and close with a present_debrief." : "";
+  const { closeNote, changesetNudge } = codeChangeNotes(allArtifacts, id, filePath);
   const changedLines = effectiveBefore.split("\n").length + after.split("\n").length;
   const isSmallEdit = changedLines <= 20;
   const isConfident = (confidence ?? "").toLowerCase() !== "low";
@@ -36285,6 +36688,16 @@ Decline to review the diff at http://localhost:${reviewPort}`
   return {
     content: [{ type: "text", text: `Code change presented for review (${id}): ${effectiveChangeType} ${filePath}. Human can review at localhost:${reviewPort}.${closeNote}${changesetNudge}${formatPreflightTraceSummary(pre.trace)}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }]
   };
+}
+function codeChangeNotes(allArtifacts, id, filePath) {
+  const CODE_CLOSED = ["superseded", "retracted", "obsolete"];
+  const hasOtherLiveFile = allArtifacts.some(
+    (a) => a.type === "code_change" && a.id !== id && !CODE_CLOSED.includes(a.status ?? "") && a.content?.filePath !== filePath
+  );
+  const changesetNudge = hasOtherLiveFile ? " 2nd file touched this run \u2014 the default for multi-file work is present_changeset; batch the remaining files into one and close with a present_debrief." : "";
+  const closesTask = !sessionOwesDebrief(allArtifacts);
+  const closeNote = closesTask && !hasOtherLiveFile ? " If this single-file change is the whole task, it closes it \u2014 fold the what-changed-and-why into `reasoning`, no separate present_debrief owed. If more changes follow, batch them into a present_changeset and close with a present_debrief." : "";
+  return { closeNote, changesetNudge };
 }
 
 // src/mcp/tools/present-changeset.ts
@@ -38061,6 +38474,39 @@ ${tail}`);
   }
 }
 
+// src/daemon/wrapper-shutdown.ts
+function installWrapperShutdown(opts) {
+  const { proc, log: log2, timeoutMs = 500 } = opts;
+  let pending = null;
+  const unregisterOnce = () => pending ??= opts.unregister().catch(() => {
+  });
+  const bounded = () => new Promise((resolve) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    void unregisterOnce().then(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+  proc.on("exit", () => {
+    void unregisterOnce();
+    opts.flush?.().catch(() => {
+    });
+  });
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    proc.on(signal, () => {
+      log2(`Shutting down (${signal})`);
+      void bounded().then(() => proc.exit(0));
+    });
+  }
+  proc.stdin.on("end", () => {
+    void unregisterOnce();
+  });
+  proc.stdin.on("close", () => {
+    void unregisterOnce();
+  });
+  return { unregisterOnce };
+}
+
 // src/daemon/client.ts
 var DaemonClient = class {
   reviewPosts = {
@@ -38091,6 +38537,13 @@ var DaemonClient = class {
    * losing the Y3' guarantee.
    */
   lastRegisterMeta;
+  /**
+   * #470 (§5) — the per-registration secret the daemon ISSUED on /register.
+   * Sent on every later request as X-DeepPairing-Registration so the daemon
+   * binds blocks and claims to the registration that actually made the call.
+   * Only this wrapper's process holds it; a fresh register replaces it.
+   */
+  registrationToken;
   // CC6 — when constructed with the wrapper's projectRoot we can stamp
   // every outbound request with X-Project-Hash. Today this is belt-and-
   // suspenders: the AA4 middleware enforces the header on a single global
@@ -38227,6 +38680,7 @@ var DaemonClient = class {
     const extraHeaders = {};
     if (this.projectHash) extraHeaders["X-Project-Hash"] = this.projectHash;
     if (this.authToken) extraHeaders["Authorization"] = `Bearer ${this.authToken}`;
+    if (this.registrationToken) extraHeaders["X-DeepPairing-Registration"] = this.registrationToken;
     const initWithHash = {
       ...init,
       headers: { ...init.headers ?? {}, ...extraHeaders }
@@ -38334,6 +38788,8 @@ var DaemonClient = class {
     if (!res.ok) {
       throw new Error(`[deepPairing] register failed (${res.status})`);
     }
+    const registered = await res.json().catch(() => ({}));
+    this.registrationToken = typeof registered.registrationToken === "string" ? registered.registrationToken : void 0;
     this.lastRegisterMeta = meta3;
   }
   async renameSession(title) {
@@ -38447,6 +38903,22 @@ var DaemonClient = class {
       await this.post(`/preflight-block`, event);
     } catch {
     }
+  }
+  /**
+   * #470 — the daemon's one authoritative operation route (§7): a probe (no
+   * admission) replays or completes a committed operation; with an admission
+   * it claims the named allowances and creates the allowed snapshot. NOT a
+   * grant: nothing reachable from this client can create an allowance (A1).
+   * Transport errors propagate; the transparent retry re-sends the same
+   * operationId, which the daemon replays.
+   */
+  async runStanceOperation(operationId, body) {
+    return this.post(`/operations/${encodeURIComponent(operationId)}`, body);
+  }
+  /** #470 — read-only (§6 step 2): this registration's active allowances for
+   *  a call fingerprint. Never consumes anything. */
+  async inspectStanceExceptions(callFingerprint2) {
+    return this.get(`/stance-exceptions?fingerprint=${encodeURIComponent(callFingerprint2)}`);
   }
   async markCommentHumanResolved(commentId, resolvedAt) {
     await this.post(`/comments/${commentId}/mark-resolved`, { resolvedAt });
@@ -38866,7 +39338,9 @@ async function main() {
   await client.register({
     title: projectName,
     project: projectName,
-    expectedProjectRoot: projectRoot
+    expectedProjectRoot: projectRoot,
+    // #470 (§5) — a newer split-mode registration ends the older one.
+    splitMode: derived.mode === "split"
   });
   log(`Session registered: ${sessionId} (${projectName})`);
   process.stderr.write(`
@@ -38878,23 +39352,11 @@ async function main() {
   const noop = () => {
   };
   const mcp = createMcpServer(client, noop, port);
-  process.on("exit", () => {
-    client.unregister().catch(() => {
-    });
-    client.forceFlush().catch(() => {
-    });
-  });
-  process.on("SIGINT", () => {
-    log("Shutting down (SIGINT)");
-    client.unregister().catch(() => {
-    });
-    process.exit(0);
-  });
-  process.on("SIGTERM", () => {
-    log("Shutting down (SIGTERM)");
-    client.unregister().catch(() => {
-    });
-    process.exit(0);
+  installWrapperShutdown({
+    proc: process,
+    unregister: () => client.unregister(),
+    flush: () => client.forceFlush(),
+    log
   });
   await mcp.start();
   log("MCP server connected via stdio");
