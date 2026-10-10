@@ -259,13 +259,22 @@ function GateBlockEntry({ block, blocks }: { block: PreflightBlockRecord; blocks
   const [revokeError, setRevokeError] = useState<string | null>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const retireRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => { if (confirming) cancelRef.current?.focus(); }, [confirming]);
+  // #501 review (Luna P2) — Retire… isn't mounted while the confirm shows, so
+  // focus goes back to it AFTER the render that brings it back, never before.
+  const restoreRetireFocus = useRef(false);
+  useEffect(() => {
+    if (confirming) cancelRef.current?.focus();
+    else if (restoreRetireFocus.current) {
+      restoreRetireFocus.current = false;
+      retireRef.current?.focus();
+    }
+  }, [confirming]);
   const serverId = block.serverId ?? block.id;
   const receipt = block.allowance;
   const keyOf = (b: PreflightBlockRecord) => b.serverId ?? b.id;
   const replacement = receipt?.supersededByBlockId ? blocks.find((b) => keyOf(b) === receipt.supersededByBlockId) : undefined;
   const replaced = block.supersedesAllowanceId ? blocks.find((b) => b.allowance?.id === block.supersedesAllowanceId) : undefined;
-  const cancelConfirm = () => { setConfirming(false); retireRef.current?.focus(); };
+  const cancelConfirm = () => { restoreRetireFocus.current = true; setConfirming(false); };
 
   return (
     <li id={gateEntryDomId(serverId)} tabIndex={-1} data-testid="gate-block-entry" className="px-3 py-2 text-2xs outline-none focus:bg-surface-hover">
@@ -295,7 +304,7 @@ function GateBlockEntry({ block, blocks }: { block: PreflightBlockRecord; blocks
       {block.supersedesAllowanceId && (
         <div className="mt-1 text-text-secondary" data-testid="gate-replaces">
           Replaces{" "}
-          <button type="button" className="underline hover:text-text-primary" onClick={() => replaced && openGateLogEntry(keyOf(replaced))} disabled={!replaced}>
+          <button type="button" className="underline cursor-pointer hover:text-text-primary" onClick={() => replaced && openGateLogEntry(keyOf(replaced))} disabled={!replaced}>
             the proposal you allowed
           </button>
           {replaced?.allowance?.grantedAt ? ` at ${new Date(replaced.allowance.grantedAt).toLocaleTimeString()}` : ""}.
@@ -315,7 +324,7 @@ function GateBlockEntry({ block, blocks }: { block: PreflightBlockRecord; blocks
           {receipt.supersededByBlockId ? (
             <>
               Allow{" "}
-              <button type="button" className="underline hover:text-text-primary" onClick={() => openGateLogEntry(receipt.supersededByBlockId)}>
+              <button type="button" className="underline cursor-pointer hover:text-text-primary" onClick={() => openGateLogEntry(receipt.supersededByBlockId)}>
                 the new block
               </button>{" "}
               if you still want it.
@@ -332,7 +341,7 @@ function GateBlockEntry({ block, blocks }: { block: PreflightBlockRecord; blocks
               disabled={!!offline}
               title={offline ?? "Let this exact proposal through once. The stance stays on for everything else."}
               onClick={(e) => openDialog({ blockId: serverId, concept: block.concept, returnFocusTo: e.currentTarget })}
-              className="min-h-[32px] min-w-[32px] px-3 rounded bg-accent-violet text-white text-2xs font-semibold hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="min-h-[32px] min-w-[32px] cursor-pointer px-3 rounded bg-accent-violet text-white text-2xs font-semibold hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Allow once
             </button>
@@ -346,7 +355,7 @@ function GateBlockEntry({ block, blocks }: { block: PreflightBlockRecord; blocks
                 const r = await postRevoke(receipt.id);
                 setRevokeError(r.ok ? null : r.message ?? "Revoke failed");
               }}
-              className="min-h-[32px] min-w-[32px] px-3 rounded border border-border-default text-2xs text-text-secondary hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
+              className="min-h-[32px] min-w-[32px] cursor-pointer px-3 rounded border border-border-default text-2xs text-text-secondary hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Revoke
             </button>
@@ -358,7 +367,7 @@ function GateBlockEntry({ block, blocks }: { block: PreflightBlockRecord; blocks
               disabled={!!offline}
               title={offline ?? undefined}
               onClick={() => setConfirming(true)}
-              className="min-h-[32px] min-w-[32px] px-3 rounded border border-border-default text-2xs text-text-secondary hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
+              className="min-h-[32px] min-w-[32px] cursor-pointer px-3 rounded border border-border-default text-2xs text-text-secondary hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Retire…
             </button>
@@ -381,7 +390,7 @@ function GateBlockEntry({ block, blocks }: { block: PreflightBlockRecord; blocks
           </p>
           <div className="flex gap-2">
             <button ref={cancelRef} type="button" onClick={cancelConfirm}
-              className="min-h-[32px] min-w-[32px] px-3 rounded border border-border-default text-2xs text-text-secondary hover:bg-surface-hover">
+              className="min-h-[32px] min-w-[32px] cursor-pointer px-3 rounded border border-border-default text-2xs text-text-secondary hover:bg-surface-hover">
               Cancel
             </button>
             <button type="button" disabled={!!offline} title={offline ?? undefined}
@@ -389,7 +398,7 @@ function GateBlockEntry({ block, blocks }: { block: PreflightBlockRecord; blocks
                 setConfirming(false);
                 void useLedgerStore.getState().overrideStance({ source: "session", description: block.description ?? block.concept, concept: block.concept });
               }}
-              className="min-h-[32px] min-w-[32px] px-3 rounded bg-accent-red text-white text-2xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed">
+              className="min-h-[32px] min-w-[32px] cursor-pointer px-3 rounded bg-accent-red text-white text-2xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed">
               Retire
             </button>
           </div>

@@ -269,3 +269,17 @@ export function checkPreconditions(artifacts: Artifact[], preconditions: Proposa
   }
   return { ok: true };
 }
+
+/**
+ * #501 review (Fable LOW) — the preconditions as they stand NOW, re-resolved
+ * from `artifacts` (the daemon's own store). A "changed" block carries these,
+ * so its copy can name the actual new dependency ("now depends on a newer
+ * art_x") whatever the client sent.
+ */
+export function currentPreconditions(artifacts: Artifact[], preconditions: ProposalPrecondition[]): ProposalPrecondition[] {
+  return preconditions.map((p) => {
+    if (p.kind === "code_change_prior") return codeChangePrecondition(artifacts, p.filePath);
+    const target = artifacts.find((a) => a.id === p.targetId);
+    return target ? reviseTargetPrecondition(target) : p;
+  });
+}

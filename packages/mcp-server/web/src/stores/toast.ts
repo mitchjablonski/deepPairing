@@ -75,7 +75,19 @@ interface ToastState {
    *  holders (hover + dialog) both have to let go. */
   pause: (id: string) => void;
   resume: (id: string) => void;
+  /** #501 review (Fable HIGH) — the toast's moment is over (its block was
+   *  allowed or changed): drop every hold and dismiss after `ttl`. */
+  settle: (id: string, ttl: number) => void;
+  /** The next focus landing in this toast is a programmatic return (the
+   *  dialog closing), not the reader: it must not hold the toast. */
+  skipNextFocusHold: (id: string) => void;
+  consumeSkipFocusHold: (id: string) => boolean;
 }
+
+/** #501 review (Fable HIGH) — at most this many block toasts on screen; the
+ *  gate log keeps every block, so an older toast is never the only record. */
+export const MAX_BLOCK_TOASTS = 3;
+const skipFocusHold = new Set<string>();
 
 const timers = new Map<string, { handle: ReturnType<typeof setTimeout> | null; remaining: number; startedAt: number; holds: number }>();
 
@@ -93,6 +105,10 @@ export const useToastStore = create<ToastState>((set, get) => ({
       ...t,
     };
     set((s) => ({ toasts: [...s.toasts, toast] }));
+    if (toast.kind === "preflight-block") {
+      const blocks = get().toasts.filter((x) => x.kind === "preflight-block");
+      for (const old of blocks.slice(0, Math.max(0, blocks.length - MAX_BLOCK_TOASTS))) get().dismiss(old.id);
+    }
     // Auto-dismiss unless the toast opted into being sticky.
     if (toast.ttl && toast.ttl > 0) {
       timers.set(id, { handle: setTimeout(() => get().dismiss(id), toast.ttl), remaining: toast.ttl, startedAt: Date.now(), holds: 0 });
@@ -123,6 +139,15 @@ export const useToastStore = create<ToastState>((set, get) => ({
       t.remaining = Math.max(0, t.remaining - (Date.now() - t.startedAt));
     }
   },
+
+  settle: (id, ttl) => {
+    const t = timers.get(id);
+    if (t?.handle) clearTimeout(t.handle);
+    timers.set(id, { handle: setTimeout(() => get().dismiss(id), ttl), remaining: ttl, startedAt: Date.now(), holds: 0 });
+  },
+
+  skipNextFocusHold: (id) => { skipFocusHold.add(id); },
+  consumeSkipFocusHold: (id) => skipFocusHold.delete(id),
 
   resume: (id) => {
     const t = timers.get(id);

@@ -1,7 +1,9 @@
 import type React from "react";
 import type { ReactNode } from "react";
 import { useToastStore, type Toast, type PreflightBlockHero } from "../stores/toast";
+import { useEffect } from "react";
 import { useAllowOnceStore } from "../stores/allowOnce";
+import { usePreflightBlockStore } from "../stores/preflightBlocks";
 import { ineligibleText, openGateLogEntry } from "../lib/stanceException";
 import { useCrossProjectStore } from "../stores/crossProject";
 import { ShieldIcon, CompassIcon } from "./icons/ArtifactIcons";
@@ -77,6 +79,15 @@ function PreflightBlockHeroCard({ hero, onDismiss, action, toastId }: {
 }) {
   const offline = useOfflineReason(); // #487 review — act paths gate on the shared offline condition (#467)
   const style = kindStyles["preflight-block"];
+  // #501 review (Fable HIGH) — the toast follows its block's receipt: once
+  // allowed (or changed), the action is gone, the card says so, and it leaves
+  // on the normal timer however it was held (the dialog's return focus too).
+  const receipt = usePreflightBlockStore((s) =>
+    hero.blockId ? s.blocks.find((b) => (b.serverId ?? b.id) === hero.blockId)?.allowance : undefined);
+  const receiptState = receipt?.state;
+  useEffect(() => {
+    if (receiptState && toastId) useToastStore.getState().settle(toastId, RECEIPT_TTL_MS);
+  }, [receiptState, toastId]);
   const when = humanizeAge(hero.rejectedAt);
   const sourceLabel = hero.source === "team"
     ? hero.addedBy
@@ -94,14 +105,17 @@ function PreflightBlockHeroCard({ hero, onDismiss, action, toastId }: {
   return (
     <div
       className={`flex flex-col gap-2 px-4 py-3 rounded-lg border-2 shadow-xl backdrop-blur-sm animate-fade-in ${style.bg} ${style.border}`}
-      role="alert"
-      aria-live="assertive"
+      // Once acted on, the moment was already spoken (one announcer); the
+      // receipt text must not re-announce as an alert.
+      role={receipt ? undefined : "alert"}
+      aria-live={receipt ? undefined : "assertive"}
+      data-testid="hero-toast"
     >
       <div className="flex items-start gap-2">
         <span className={`flex items-center text-base shrink-0 ${style.accent}`} aria-hidden="true">{style.icon}</span>
         <div className="flex-1 min-w-0">
           <div className="text-xs font-bold text-text-primary">
-            {hero.source === "team" ? "Blocked by team policy" : "Blocked by your taste"}
+            {receipt ? receiptTitle(receipt.state) : hero.source === "team" ? "Blocked by team policy" : "Blocked by your taste"}
           </div>
           <div className={`text-2xs font-semibold mt-0.5 ${style.accent} break-words`}>
             "{hero.concept}"
@@ -129,14 +143,20 @@ function PreflightBlockHeroCard({ hero, onDismiss, action, toastId }: {
         </div>
       )}
 
-      <div className="flex items-center justify-between gap-2 pt-1 border-t border-border-default/40 pl-6">
+      {/* #501 review (Fable MED) — the meta line gets its own row and the
+          actions sit UNDER it, so the 32px primary button never squeezes the
+          meta into one word per line. */}
+      <div className="flex flex-col gap-2 pt-1 border-t border-border-default/40 pl-6">
         <div className="text-[10px] text-text-muted">
           <span>{sourceLabel}</span>
           {when && <> · {when}</>}
           {hero.projectCount && hero.projectCount > 1 && <> · {hero.projectCount} projects</>}
           <span> · {matchDetail}</span>
         </div>
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          {receipt && (
+            <span className="text-2xs font-semibold text-text-primary" data-testid="hero-receipt">{receiptHeadline(receipt.state)}</span>
+          )}
           {/* #470 (§3a) — "Allow this proposal once" is the PRIMARY action:
               filled, accent, a 32px target. Retire is NOT offered here any
               more: it was a one-click muted link right where a misclick lands,
@@ -144,26 +164,26 @@ function PreflightBlockHeroCard({ hero, onDismiss, action, toastId }: {
               entry ("More options"), behind a confirm whose focus starts on
               Cancel. Only a block the daemon says is eligible gets the button;
               any other personal block says why in one line. */}
-          {hero.source === "session" && hero.blockId && hero.eligible && (
+          {hero.source === "session" && hero.blockId && hero.eligible && !receipt && (
             <button
               type="button"
               disabled={!!offline}
               onClick={(e) =>
                 useAllowOnceStore.getState().open({ blockId: hero.blockId!, concept: hero.concept, returnFocusTo: e.currentTarget, toastId })}
               title={offline ?? "Let this exact proposal through once. The stance stays on for everything else."}
-              className="min-h-[32px] min-w-[32px] px-3 rounded bg-accent-violet text-white text-2xs font-semibold hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="min-h-[32px] min-w-[32px] px-3 rounded bg-accent-violet text-white text-2xs font-semibold cursor-pointer hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Allow this proposal once
             </button>
           )}
-          {hero.source === "session" && hero.blockId && hero.eligible === false && (
+          {hero.source === "session" && hero.blockId && hero.eligible === false && !receipt && (
             <span className="text-[10px] text-text-muted italic" data-testid="allow-once-ineligible-line">{ineligibleText(hero.ineligibleReason)}</span>
           )}
           {hero.source === "session" && (
             <button
               type="button"
               onClick={() => openGateLogEntry(hero.blockId)}
-              className="text-2xs font-medium text-text-muted hover:text-text-secondary hover:underline"
+              className="text-2xs font-medium text-text-muted cursor-pointer hover:text-text-secondary hover:underline"
             >
               More options
             </button>
@@ -190,14 +210,39 @@ function PreflightBlockHeroCard({ hero, onDismiss, action, toastId }: {
   );
 }
 
-/** #470 (§3a) — a toast's auto-dismiss pauses while it has hover or focus. */
+/** #501 review (Fable HIGH) — a toast whose block was acted on leaves after
+ *  this long, whatever held it. */
+export const RECEIPT_TTL_MS = 6000;
+
+function receiptTitle(state: string): string {
+  return state === "changed" ? "The proposal you allowed changed" : state === "used" ? "Claude used your allowance" : "Allowed once";
+}
+function receiptHeadline(state: string): string {
+  return state === "changed" ? "A new block is waiting — allow it there if you still want it."
+    : state === "used" ? "Used once. The stance stays on for everything else."
+    : state === "allowed" ? "Claude can retry this proposal."
+    : `Allowance ${state}.`;
+}
+
+/** #470 (§3a) — a toast's auto-dismiss pauses while it has hover or focus.
+ *  #501 review (Fable HIGH) — focus that the dialog RETURNS on close is not
+ *  the reader and holds nothing. */
+const focusHeld = new Set<string>();
 function holdHandlers(id: string) {
-  const { pause, resume } = useToastStore.getState();
+  const { pause, resume, consumeSkipFocusHold } = useToastStore.getState();
   return {
     onMouseEnter: () => pause(id),
     onMouseLeave: () => resume(id),
-    onFocus: (e: React.FocusEvent<HTMLDivElement>) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) pause(id); },
-    onBlur: (e: React.FocusEvent<HTMLDivElement>) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) resume(id); },
+    onFocus: (e: React.FocusEvent<HTMLDivElement>) => {
+      if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+      if (consumeSkipFocusHold(id) || focusHeld.has(id)) return;
+      focusHeld.add(id);
+      pause(id);
+    },
+    onBlur: (e: React.FocusEvent<HTMLDivElement>) => {
+      if (e.currentTarget.contains(e.relatedTarget as Node | null) || !focusHeld.delete(id)) return;
+      resume(id);
+    },
   };
 }
 
@@ -232,7 +277,7 @@ export function ToastLayer() {
   return (
     <div
       data-testid="toast-region"
-      className="fixed bottom-4 right-4 z-[60] flex flex-col gap-2 max-w-[420px] w-[calc(100vw-2rem)] pointer-events-none"
+      className="fixed bottom-4 right-4 z-[60] flex flex-col justify-end gap-2 max-w-[420px] w-[calc(100vw-2rem)] max-h-[calc(100vh-2rem)] overflow-hidden pointer-events-none"
       style={liftPx ? { bottom: liftPx } : undefined}
     >
       {toasts.map((t) => {
@@ -245,7 +290,7 @@ export function ToastLayer() {
           // PreflightBlockHeroCard is already role="alert" internally — the
           // wrapper only restores pointer events (parent is pointer-events-none).
           return (
-            <div key={t.id} className="pointer-events-auto" {...holdHandlers(t.id)}>
+            <div key={t.id} className="pointer-events-auto outline-none" tabIndex={-1} data-toast-id={t.id} {...holdHandlers(t.id)}>
               <PreflightBlockHeroCard
                 hero={t.hero}
                 onDismiss={() => dismiss(t.id)}

@@ -56,6 +56,7 @@ import {
   EXCEPTION_TOOL_TYPES,
   MAX_SNAPSHOT_BYTES,
   checkPreconditions,
+  currentPreconditions,
   effectiveDigest,
   sameStance,
   type PreconditionCheck,
@@ -471,7 +472,7 @@ export class StanceExceptionRegistry {
     return this.enqueue(binding.sessionId, () => {
       // Idempotent: a double grant returns the same allowance.
       const existing = [...this.allowances.values()].find((a) => a.blockId === blockId);
-      if (existing) return { status: 200, body: { allowance: this.view(existing), existing: true } };
+      if (existing) return { status: 200, body: { allowance: this.view(existing), receipt: this.receipt(existing), existing: true } };
       const refuse = (why: string, message: string) =>
         ({ status: 409, body: { error: message, code: ERROR_CODES.stance_exception_not_eligible, reason: why } });
       // D4 — the human's own stances only.
@@ -513,7 +514,9 @@ export class StanceExceptionRegistry {
         e.id === blockId ? { ...e, allowance: receipt, seenAt: e.seenAt ?? iso(grantedAt) } : null);
       this.deps.broadcast(binding.sessionId, { type: "stance_exception_granted", blockId, allowance: receipt, stance: allowance.stance, seenAt: iso(grantedAt) });
       this.log(`[stance-exception] granted ${allowance.id} via=${via} block=${blockId} sid=${binding.sessionId}`);
-      return { status: 201, body: { allowance: this.view(allowance) } };
+      // The receipt and seenAt exactly as written, so a client never has to
+      // invent its own values for them.
+      return { status: 201, body: { allowance: this.view(allowance), receipt, seenAt: iso(grantedAt) } };
     });
   }
 
@@ -751,8 +754,13 @@ export class StanceExceptionRegistry {
     if (request.block && typeof request.block === "object") {
       // The new block carries THIS call's resolution (the request's snapshot),
       // so the human previews what would be created now.
+      // The daemon's OWN re-resolution of what the proposal depends on now
+      // (#501 review): the human-facing "changed" copy names the real
+      // dependency, whatever the client sent.
+      const store = this.deps.getStore(sessionId);
+      const preconditions = store ? currentPreconditions(store.getArtifacts(), request.preconditions) : request.preconditions;
       const ev = this.prepareBlockEvent(sessionId, token, {
-        ...request.block, callFingerprint: fingerprint, snapshot: request.snapshot, preconditions: request.preconditions,
+        ...request.block, callFingerprint: fingerprint, snapshot: request.snapshot, preconditions,
       });
       ev.supersedesAllowanceId = allowances[0]!.id;
       this.deps.broadcast(sessionId, ev);

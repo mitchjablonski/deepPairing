@@ -377,6 +377,13 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
 
       switch (data.type) {
         case "connected": {
+          // #501 review (Astra P2) — a (re)connect may have missed receipt
+          // broadcasts; re-read the durable gate log. Only once it has loaded
+          // before: the first load belongs to the log itself.
+          void import("./preflightBlocks").then(({ usePreflightBlockStore }) => {
+            if (!isCurrent(messageConnection, messageSession)) return;
+            if (usePreflightBlockStore.getState().loaded) void usePreflightBlockStore.getState().load();
+          });
           const supersededRecovery = pendingRecovery;
           const connectedSnapshot = ++snapshotGeneration;
           cancelPendingRecovery();
@@ -795,18 +802,20 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
               const previous = before?.allowance?.state;
               store.applyReceipt(blockId, allowance, typeof data.seenAt === "string" ? data.seenAt : undefined);
               const concept = before?.concept ?? data.stance?.concept ?? data.stance?.description ?? "your stance";
+              if (data.type === "stance_exception_granted") {
+                // One announcement per allowance, shared with this tab's own
+                // HTTP result (order-independent; #501 review).
+                notifyMod.announceGrantOnce(String(allowance.id), concept, { cli: allowance.grantedVia === "cli" });
+                return;
+              }
               let text: string | null = null;
-              const echoed = data.type === "stance_exception_granted" && notifyMod.locallyAnnouncedGrants.delete(blockId);
-              if (echoed) return;
-              if (data.type === "stance_exception_granted" && previous !== "allowed") {
-                text = `Allowed once: '${concept}'. Waiting for Claude to retry.`;
-              } else if (allowance.state === "used" && previous !== "used") {
+              if (allowance.state === "used" && previous !== "used") {
                 text = `Claude used your allowance: ${typeof data.artifactTitle === "string" ? data.artifactTitle : "the allowed proposal"}.`;
               } else if (allowance.state === "changed" && previous !== "changed") {
                 text = "The proposal you allowed changed. A new block is waiting.";
               }
               if (!text) return;
-              notifyMod.notifyStanceMoment(text, { cli: data.type === "stance_exception_granted" && allowance.grantedVia === "cli" });
+              notifyMod.notifyStanceMoment(text);
             });
           break;
         }

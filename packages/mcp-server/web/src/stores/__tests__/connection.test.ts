@@ -507,7 +507,7 @@ describe("connection store — handleMessage dispatch", () => {
     it("#470 — receipts: a grant applies seenAt and raises a toast (stronger for CLI); used names the artifact; this tab's own grant isn't re-announced", async () => {
       const { useToastStore } = await import("../toast");
       const { usePreflightBlockStore } = await import("../preflightBlocks");
-      const { locallyAnnouncedGrants } = await import("../../lib/stanceException");
+      const { announceGrantOnce } = await import("../../lib/stanceException");
       useToastStore.getState().dismissAll();
       usePreflightBlockStore.setState({ blocks: [{ id: "b1", serverId: "blk_1", at: "2026-06-01T00:00:00.000Z", source: "session", concept: "global mutable state", via: "surface" }] } as any);
       useConnectionStore.getState().connect();
@@ -521,14 +521,28 @@ describe("connection store — handleMessage dispatch", () => {
       await flush();
       expect(useToastStore.getState().toasts.at(-1)!.title).toBe("Claude used your allowance: modify src/config.ts.");
       expect(JSON.stringify(useToastStore.getState().toasts)).not.toMatch(/verified|authenticated/i);
-      // A grant this tab made (and already announced) is not announced again.
+      // A grant this tab's HTTP result already announced is not announced again.
       const count = useToastStore.getState().toasts.length;
       usePreflightBlockStore.setState({ blocks: [{ id: "b2", serverId: "blk_2", at: "2026-06-01T00:00:00.000Z", source: "session", concept: "x", via: "surface" }] } as any);
-      locallyAnnouncedGrants.add("blk_2");
+      expect(announceGrantOnce("sx_2", "x")).toBe(true);
       activeAdapter.emit({ type: "stance_exception_granted", blockId: "blk_2", allowance: { ...receipt, id: "sx_2", grantedVia: "ui" }, seenAt: "2026-06-01T01:00:00.000Z" });
       await flush();
-      expect(useToastStore.getState().toasts).toHaveLength(count);
+      expect(useToastStore.getState().toasts).toHaveLength(count + 1);
       expect(usePreflightBlockStore.getState().blocks[0]!.allowance?.id).toBe("sx_2");
+    });
+
+    it("#501 review (Astra P2) — a (re)connect re-reads the durable gate log, so missed receipts reconcile", async () => {
+      const { usePreflightBlockStore } = await import("../preflightBlocks");
+      usePreflightBlockStore.setState({ blocks: [{ id: "blk_1", serverId: "blk_1", at: "2026-06-01T00:00:00.000Z", source: "session", concept: "c", via: "surface" }], liveRev: {}, loaded: true } as any);
+      const receipt = { id: "sx_9", grantedVia: "ui", grantedAt: "2026-06-01T01:00:00.000Z", reason: "fine", ceilingAt: "2026-06-04T01:00:00.000Z", state: "used" };
+      vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(String(url).includes("/api/preflight-blocks")
+        ? { blocks: [{ id: "blk_1", at: "2026-06-01T00:00:00.000Z", source: "session", concept: "c", via: "surface", allowance: receipt, seenAt: "2026-06-01T01:00:00.000Z" }] }
+        : {}), { status: 200, headers: { "Content-Type": "application/json" } })));
+      useConnectionStore.getState().connect();
+      activeAdapter.emit({ type: "connected", state: { sessionId: "s", artifacts: [], comments: [], requests: [], decisions: [] } });
+      await vi.waitFor(() => expect(usePreflightBlockStore.getState().blocks[0]!.allowance?.state).toBe("used"));
+      expect(usePreflightBlockStore.getState().blocks[0]!.seenAt).toBe("2026-06-01T01:00:00.000Z");
+      vi.unstubAllGlobals();
     });
 
     it("II3 — pushes a sticky 'reload to re-bind' toast on a fatal project mismatch (no silent rebind)", async () => {

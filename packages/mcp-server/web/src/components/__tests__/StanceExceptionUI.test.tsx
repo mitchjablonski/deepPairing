@@ -25,7 +25,7 @@ import { useReplayStore } from "../../stores/replay";
 import { useConnectionGraceStore } from "../../lib/connectionGrace";
 import { OFFLINE_ACT_REASON } from "../../hooks/useOfflineReason";
 import { hasUnsavedText } from "../../lib/unsavedText";
-import { REASON_HINT, SCOPE_SENTENCE, receiptLabel } from "../../lib/stanceException";
+import { REASON_HINT, SCOPE_SENTENCE, receiptLabel, resetAnnouncedGrantsForTests } from "../../lib/stanceException";
 
 const CODE_PREVIEW = {
   blockId: "blk_1", source: "session", toolName: "present_code_change", eligible: true,
@@ -78,6 +78,7 @@ function openDialog(opener?: HTMLElement) {
 }
 
 beforeEach(() => {
+  resetAnnouncedGrantsForTests();
   t = 0;
   useAllowOnceStore.setState({ request: null });
   useToastStore.getState().dismissAll();

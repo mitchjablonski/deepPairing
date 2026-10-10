@@ -98,8 +98,8 @@ export async function fetchExceptionPreview(blockId: string): Promise<ExceptionP
 }
 
 export type GrantResult =
-  | { ok: true; allowance: { id: string; state: ReceiptState } }
-  | { ok: false; status: number; message: string };
+  | { ok: true; allowance: { id: string; state: ReceiptState }; receipt?: StanceAllowanceReceipt; seenAt?: string }
+  | { ok: false; status: number; message: string; ambiguous?: boolean };
 
 export async function postGrant(blockId: string, reason: string): Promise<GrantResult> {
   try {
@@ -109,13 +109,21 @@ export async function postGrant(blockId: string, reason: string): Promise<GrantR
       body: JSON.stringify({ reason: reason.trim() }),
     });
     const body = await res.json().catch(() => ({}));
-    if (res.ok && body?.allowance?.id) return { ok: true, allowance: body.allowance };
+    if (res.ok && body?.allowance?.id) {
+      return {
+        ok: true,
+        allowance: body.allowance,
+        ...(body.receipt?.id ? { receipt: body.receipt as StanceAllowanceReceipt } : {}),
+        ...(typeof body.seenAt === "string" ? { seenAt: body.seenAt } : {}),
+      };
+    }
     const message = typeof body?.error === "string" ? body.error
       : res.status === 503 ? "deepPairing is busy writing to disk — try again in a moment."
       : `The allowance wasn't saved (${res.status}).`;
     return { ok: false, status: res.status, message };
   } catch {
-    return { ok: false, status: 0, message: "Couldn't reach deepPairing — nothing was allowed." };
+    // The request may or may not have reached the daemon: don't claim either.
+    return { ok: false, status: 0, ambiguous: true, message: "Couldn't confirm whether this was allowed — check the gate log before trying again." };
   }
 }
 
@@ -162,6 +170,22 @@ export function notifyStanceMoment(text: string, opts: { cli?: boolean } = {}): 
   });
 }
 
-/** Grants this tab made and already announced; the daemon's echo of them is
- *  not a second moment. */
-export const locallyAnnouncedGrants = new Set<string>();
+/**
+ * #501 review (Astra P2) — ONE announcement per allowance, whichever arrives
+ * first: the daemon's `stance_exception_granted` broadcast or this tab's HTTP
+ * result. Keyed by the server-minted allowance id, so the arbitration doesn't
+ * depend on order, and a failed or ambiguous HTTP result announces nothing (if
+ * the grant did land, the broadcast announces it).
+ */
+const announcedAllowances = new Set<string>();
+export function announceGrantOnce(allowanceId: string, concept: string, opts: { cli?: boolean } = {}): boolean {
+  if (announcedAllowances.has(allowanceId)) return false;
+  announcedAllowances.add(allowanceId);
+  notifyStanceMoment(`Allowed once: '${concept}'. Waiting for Claude to retry.`, opts);
+  return true;
+}
+
+/** Tests only: allowance ids are unique per daemon, but test files reuse them. */
+export function resetAnnouncedGrantsForTests(): void {
+  announcedAllowances.clear();
+}

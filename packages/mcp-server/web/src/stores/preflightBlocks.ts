@@ -78,6 +78,13 @@ export interface PreflightBlockRecord {
 
 interface PreflightBlockState {
   blocks: PreflightBlockRecord[];
+  /**
+   * #501 review (Astra P2) — a per-row counter bumped by every LIVE change
+   * (a socket receipt or block). load() snapshots it before fetching and only
+   * merges the durable fields into rows no live event touched meanwhile, so a
+   * stale response can't overwrite a newer receipt.
+   */
+  liveRev: Record<string, number>;
   loaded: boolean;
   /**
    * Q2 — the "you haven't looked at this yet" boundary, persisted so it
@@ -153,10 +160,12 @@ function sameBlock(
 
 export const usePreflightBlockStore = create<PreflightBlockState>((set, get) => ({
   blocks: [],
+  liveRev: {},
   loaded: false,
   lastSeenAt: readLastSeen(),
 
   load: async () => {
+    const revAtStart = { ...get().liveRev };
     try {
       const res = await apiGet(`${apiBase()}/api/preflight-blocks`);
       if (!res.ok) {
@@ -176,10 +185,20 @@ export const usePreflightBlockStore = create<PreflightBlockState>((set, get) => 
         }));
       // Merge UNDER anything already pushed live (a block that arrived on the
       // socket while this fetch was in flight is the same firing).
-      const { blocks } = get();
+      const { blocks, liveRev } = get();
       const merged = [...blocks];
       for (const h of hydrated) {
-        if (!merged.some((m) => sameBlock(m, h))) merged.push(h);
+        const i = merged.findIndex((m) => sameBlock(m, h));
+        if (i < 0) { merged.push(h); continue; }
+        // #501 review (Astra P2) — reconcile the durable, MUTABLE fields of a
+        // row we already hold (the receipt, seenAt, eligibility, linkage),
+        // unless a live event changed this row while the fetch was in flight.
+        const key = merged[i]!.serverId ?? merged[i]!.id;
+        if ((liveRev[key] ?? 0) !== (revAtStart[key] ?? 0)) continue;
+        merged[i] = {
+          ...merged[i]!,
+          ...pickDurable(h),
+        };
       }
       merged.sort((a, b) => b.at.localeCompare(a.at));
       set({ blocks: merged.slice(0, MAX_BLOCKS_KEPT), loaded: true });
@@ -202,7 +221,7 @@ export const usePreflightBlockStore = create<PreflightBlockState>((set, get) => 
     const id = block.serverId ?? `blk_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const record: PreflightBlockRecord = { ...block, id, at };
     const next = [record, ...blocks].slice(0, MAX_BLOCKS_KEPT);
-    set({ blocks: next });
+    set((s) => ({ blocks: next, liveRev: { ...s.liveRev, [id]: (s.liveRev[id] ?? 0) + 1 } }));
   },
 
   focusRequest: null,
@@ -211,10 +230,13 @@ export const usePreflightBlockStore = create<PreflightBlockState>((set, get) => 
 
   applyReceipt: (blockId, allowance, seenAt) => {
     set((s) => ({
+      // Server values only: the daemon's receipt and seenAt replace whatever
+      // this tab held (#501 review).
       blocks: s.blocks.map((b) =>
         b.serverId === blockId || b.id === blockId
-          ? { ...b, allowance, ...(seenAt && !b.seenAt ? { seenAt } : {}) }
+          ? { ...b, allowance, ...(seenAt ? { seenAt } : {}) }
           : b),
+      liveRev: { ...s.liveRev, [blockId]: (s.liveRev[blockId] ?? 0) + 1 },
     }));
   },
 
@@ -230,8 +252,20 @@ export const usePreflightBlockStore = create<PreflightBlockState>((set, get) => 
     set({ lastSeenAt: at });
   },
 
-  clear: () => set({ blocks: [], loaded: false }),
+  clear: () => set({ blocks: [], liveRev: {}, loaded: false }),
 }));
+
+/** The fields of a durable log row that can change after it first fired. */
+function pickDurable(h: PreflightBlockRecord): Partial<PreflightBlockRecord> {
+  const out: Partial<PreflightBlockRecord> = {};
+  if (h.allowance) out.allowance = h.allowance;
+  if (h.seenAt) out.seenAt = h.seenAt;
+  if (typeof h.eligible === "boolean") out.eligible = h.eligible;
+  if (h.ineligibleReason) out.ineligibleReason = h.ineligibleReason;
+  if (h.supersedesAllowanceId) out.supersedesAllowanceId = h.supersedesAllowanceId;
+  if (h.preconditions) out.preconditions = h.preconditions;
+  return out;
+}
 
 /** Q2 — how many held blocks fired after the human last looked. */
 export function unreadBlockCount(state: Pick<PreflightBlockState, "blocks" | "lastSeenAt">): number {

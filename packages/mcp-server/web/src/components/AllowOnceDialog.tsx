@@ -11,8 +11,7 @@ import {
   REASON_HINT,
   SCOPE_SENTENCE,
   fetchExceptionPreview,
-  notifyStanceMoment,
-  locallyAnnouncedGrants,
+  announceGrantOnce,
   ineligibleText,
   postGrant,
   preconditionFooter,
@@ -71,8 +70,16 @@ function AllowOnceDialog({ request }: { request: AllowOnceRequest }) {
     const toastId = request.toastId;
     if (toastId) useToastStore.getState().pause(toastId);
     return () => {
-      if (toastId) useToastStore.getState().resume(toastId);
-      if (opener && opener.isConnected) opener.focus();
+      const toasts = useToastStore.getState();
+      if (toastId) toasts.resume(toastId);
+      // Back to the opener; if it's gone (the toast now shows its receipt),
+      // to the toast itself as a stable anchor. Neither is the reader
+      // hovering, so this focus must not hold the toast (#501 review, Fable).
+      const anchor = toastId ? document.querySelector<HTMLElement>(`[data-toast-id="${toastId}"]`) : null;
+      const target = opener && opener.isConnected ? opener : anchor;
+      if (!target) return;
+      if (toastId && anchor?.contains(target)) toasts.skipNextFocusHold(toastId);
+      target.focus();
     };
   }, [request]);
 
@@ -85,23 +92,23 @@ function AllowOnceDialog({ request }: { request: AllowOnceRequest }) {
     setBusy(true);
     setError(null);
     const res = await postGrant(request.blockId, reason);
-    setBusy(false);
+    // #501 review (Luna P2) — the request this dialog was opened for; a newer
+    // dialog (another block) must never be closed by this completion.
+    const stillCurrent = useAllowOnceStore.getState().request === request;
     if (!res.ok) {
-      setError(res.message);
+      if (stillCurrent) {
+        setBusy(false);
+        setError(res.message);
+      }
       return;
     }
-    // The daemon broadcasts the receipt too; applying it now keeps this tab
-    // honest even if the socket is slow. seenAt drops the hold from Held.
-    const preState = usePreflightBlockStore.getState().blocks.find((b) => b.serverId === request.blockId || b.id === request.blockId);
-    if (preState && !preState.allowance) {
-      usePreflightBlockStore.getState().applyReceipt(request.blockId, {
-        id: res.allowance.id, grantedVia: "ui", grantedAt: new Date().toISOString(), reason: reason.trim(),
-        ceilingAt: new Date(Date.now() + 72 * 3600_000).toISOString(), state: "allowed",
-      }, new Date().toISOString());
-    }
-    locallyAnnouncedGrants.add(request.blockId);
-    notifyStanceMoment(`Allowed once: '${request.concept}'. Waiting for Claude to retry.`);
-    close();
+    // Server values only (#501 review): the daemon's receipt and seenAt. If
+    // the response lacked them, the daemon's broadcast applies them instead.
+    if (res.receipt) usePreflightBlockStore.getState().applyReceipt(request.blockId, res.receipt, res.seenAt);
+    // One announcement per allowance, whichever of this result and the
+    // daemon's broadcast arrives first (#501 review).
+    announceGrantOnce(res.allowance.id, request.concept);
+    if (stillCurrent) close();
   };
 
   // Focus trap over the dialog's own controls (jsdom-safe: no layout reads).
@@ -109,7 +116,9 @@ function AllowOnceDialog({ request }: { request: AllowOnceRequest }) {
     if (e.key === "Escape") {
       e.stopPropagation();
       e.preventDefault();
-      close();
+      // #501 review (Luna P2) — a dispatched grant can't be cancelled, so
+      // Esc doesn't pretend to: it does nothing until the daemon answers.
+      if (!busy) close();
       return;
     }
     if (e.key !== "Tab") return;
@@ -210,15 +219,17 @@ function AllowOnceDialog({ request }: { request: AllowOnceRequest }) {
             onClick={() => void confirm()}
             disabled={!canConfirm}
             title={offline ?? (!eligible ? "This block can't be allowed once." : !valid ? REASON_HINT : undefined)}
-            className="min-h-[32px] min-w-[32px] px-3 rounded bg-accent-violet text-white text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+            className="min-h-[32px] min-w-[32px] px-3 rounded bg-accent-violet text-white text-xs font-semibold cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Allow once
+            {busy ? "Allowing…" : "Allow once"}
           </button>
           <button
             type="button"
             data-trap=""
             onClick={close}
-            className="min-h-[32px] min-w-[32px] px-3 rounded border border-border-default text-xs text-text-secondary hover:bg-surface-hover"
+            disabled={busy}
+            title={busy ? "The request is already on its way; it can't be cancelled now." : undefined}
+            className="min-h-[32px] min-w-[32px] px-3 rounded border border-border-default text-xs text-text-secondary cursor-pointer hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Cancel
           </button>

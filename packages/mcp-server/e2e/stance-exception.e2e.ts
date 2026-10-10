@@ -124,6 +124,15 @@ test("allow once: the hero toast's primary button → dialog → reason + Enter 
   await page.keyboard.press("Enter");
   await expect(dialog).toHaveCount(0);
 
+  // #501 review (Fable HIGH) — the toast now says it was allowed, offers no
+  // action, and LEAVES on its own (the dialog's return focus doesn't hold it),
+  // and the toast column never outgrows the viewport.
+  await expect(page.getByTestId("hero-receipt")).toHaveText("Claude can retry this proposal.");
+  await expect(page.getByRole("button", { name: "Allow this proposal once" })).toHaveCount(0);
+  const region = await page.getByTestId("toast-region").boundingBox();
+  expect(region!.height).toBeLessThanOrEqual(page.viewportSize()!.height);
+  await expect(page.getByTestId("hero-toast")).toHaveCount(0, { timeout: 12_000 });
+
   const list = async () => ((await (await fetch(`${baseURL}/api/stance-exceptions`, { headers: { "X-Project-Hash": projectHash } })).json()) as { allowances: Array<{ id: string; state: string; grantedVia: string }> }).allowances;
   await expect.poll(async () => (await list())[0]?.state, { timeout: 10_000 }).toBe("allowed");
   const allowance = (await list())[0]!;

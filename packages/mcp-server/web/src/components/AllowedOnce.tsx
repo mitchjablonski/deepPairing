@@ -77,7 +77,7 @@ export function LedgerAllowances() {
                 {b.allowance!.state === "allowed" && (
                   <button type="button" disabled={!!offline} title={offline ?? undefined}
                     onClick={async () => { const r = await postRevoke(b.allowance!.id); setError(r.ok ? null : r.message ?? "Revoke failed"); }}
-                    className="min-h-[32px] min-w-[32px] px-2 rounded border border-border-default hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed">
+                    className="min-h-[32px] min-w-[32px] cursor-pointer px-2 rounded border border-border-default hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed">
                     Revoke
                   </button>
                 )}

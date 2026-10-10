@@ -31753,6 +31753,15 @@ function reviseInheritedHash(target) {
     featureId: target.featureId ?? null
   }));
 }
+function reviseTargetPrecondition(target) {
+  return {
+    kind: "revise_target",
+    targetId: target.id,
+    targetVersion: target.version,
+    targetStatus: target.status,
+    inheritedHash: reviseInheritedHash(target)
+  };
+}
 function checkPreconditions(artifacts, preconditions) {
   for (const p of preconditions) {
     if (p.kind === "code_change_prior") {
@@ -31775,6 +31784,13 @@ function checkPreconditions(artifacts, preconditions) {
     }
   }
   return { ok: true };
+}
+function currentPreconditions(artifacts, preconditions) {
+  return preconditions.map((p) => {
+    if (p.kind === "code_change_prior") return codeChangePrecondition(artifacts, p.filePath);
+    const target = artifacts.find((a) => a.id === p.targetId);
+    return target ? reviseTargetPrecondition(target) : p;
+  });
 }
 
 // src/daemon/stance-exceptions.ts
@@ -32045,7 +32061,7 @@ var StanceExceptionRegistry = class {
     }
     return this.enqueue(binding.sessionId, () => {
       const existing = [...this.allowances.values()].find((a) => a.blockId === blockId);
-      if (existing) return { status: 200, body: { allowance: this.view(existing), existing: true } };
+      if (existing) return { status: 200, body: { allowance: this.view(existing), receipt: this.receipt(existing), existing: true } };
       const refuse = (why, message) => ({ status: 409, body: { error: message, code: ERROR_CODES.stance_exception_not_eligible, reason: why } });
       if (binding.source !== "session") return refuse("team_rule", "Team rules can't be allowed once \u2014 only your own stances.");
       if (binding.sessionId.startsWith("demo_")) return refuse("demo_session", "Demo blocks can't be allowed.");
@@ -32083,7 +32099,7 @@ var StanceExceptionRegistry = class {
       updatePreflightBlocks(this.deps.projectRoot, (e) => e.id === blockId ? { ...e, allowance: receipt, seenAt: e.seenAt ?? iso(grantedAt) } : null);
       this.deps.broadcast(binding.sessionId, { type: "stance_exception_granted", blockId, allowance: receipt, stance: allowance.stance, seenAt: iso(grantedAt) });
       this.log(`[stance-exception] granted ${allowance.id} via=${via} block=${blockId} sid=${binding.sessionId}`);
-      return { status: 201, body: { allowance: this.view(allowance) } };
+      return { status: 201, body: { allowance: this.view(allowance), receipt, seenAt: iso(grantedAt) } };
     });
   }
   async revoke(id) {
@@ -32270,11 +32286,13 @@ var StanceExceptionRegistry = class {
     for (const a of allowances) a.state = "changed";
     let newBlockId;
     if (request.block && typeof request.block === "object") {
+      const store = this.deps.getStore(sessionId);
+      const preconditions = store ? currentPreconditions(store.getArtifacts(), request.preconditions) : request.preconditions;
       const ev = this.prepareBlockEvent(sessionId, token, {
         ...request.block,
         callFingerprint: fingerprint,
         snapshot: request.snapshot,
-        preconditions: request.preconditions
+        preconditions
       });
       ev.supersedesAllowanceId = allowances[0].id;
       this.deps.broadcast(sessionId, ev);
