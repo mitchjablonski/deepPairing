@@ -47,6 +47,7 @@ import type { Artifact, DecisionOption } from "@deeppairing/shared";
 import { projectHashOf } from "../project-root.js";
 import { readMetrics, recordMetricEvent } from "../store/metrics-store.js";
 import { readPreflightBlocks } from "../store/preflight-block-log.js";
+import { registerStanceExceptionRoutes, type StanceExceptionRegistry } from "../daemon/stance-exceptions.js";
 import { maybeUpdateTaskStatus } from "../mcp/tasks-probe.js";
 import { corsAllowedOrigin } from "./origin-policy.js";
 import { CommentBodySchema,
@@ -272,6 +273,13 @@ export function createHttpRoutes(
    * the pure disk scan — exactly the pre-#151 behavior.
    */
   getLiveDecisionSources?: () => LiveDecisionSource[],
+  /**
+   * #470 — the daemon's stance-exception registry. When present, the human
+   * grant/revoke/list routes are registered on this app (behind its gates)
+   * and the block log's receipts are served with their derived state.
+   * Absent in standalone/test fixtures: no allowance can exist there.
+   */
+  stanceExceptions?: StanceExceptionRegistry,
 ) {
   const getStore: StoreGetter = typeof storeOrGetter === "function"
     ? storeOrGetter as StoreGetter
@@ -1950,8 +1958,12 @@ export function createHttpRoutes(
     // plugin install with a bad cwd) should render "no blocks yet", not break
     // the page load. Same posture as /api/ledger/digest.
     if (!projectRoot) return c.json({ blocks: [] });
-    return c.json({ blocks: readPreflightBlocks(projectRoot) });
+    const blocks = readPreflightBlocks(projectRoot);
+    return c.json({ blocks: stanceExceptions ? blocks.map((b) => stanceExceptions.deriveReceipt(b)) : blocks });
   });
+
+  // #470 — "Allow this proposal once": grant / revoke / list (human side only).
+  if (stanceExceptions) registerStanceExceptionRoutes(app, stanceExceptions);
 
   // P3: project-scoped team preferences for the companion UI. Reads
   // .deeppairing/team.json via any active session's FileStore (all

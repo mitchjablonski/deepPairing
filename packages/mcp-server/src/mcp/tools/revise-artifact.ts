@@ -1,9 +1,11 @@
 import { nanoid } from "nanoid";
-import { coerceChangesetContent, type DecisionOption } from "@deeppairing/shared";
+import type { DecisionOption } from "@deeppairing/shared";
 import type { ToolContext, ToolResult } from "./types.js";
 import { notifyResourcesListChanged, formatStyleWarnings, persistPreflightTrace } from "../tool-helpers.js";
 import { preflightArtifact } from "../artifact-preflight.js";
 import { maybeUpdateTaskStatus } from "../tasks-probe.js";
+import { deriveReviseContent, finalizeReviseContent, reviseSnapshot, reviseTargetPrecondition } from "../proposal-resolution.js";
+import { admitBlockedProposal, admittedResult, beginStanceOperation } from "../stance-admission.js";
 import {
   validatePresentFindingsInput,
   validatePresentSpecInput,
@@ -65,6 +67,14 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
         isError: true,
       };
     }
+    // #470 (§6 step 0) — BEFORE the closed-parent check: a half-finished
+    // admitted revision has often already superseded its parent, and that
+    // check would wrongly refuse the retry. A replay finishes it instead.
+    const op = await beginStanceOperation(ctx, "revise_artifact", args);
+    if (op.replay) {
+      if (typeof op.replay.parentId === "string") await maybeUpdateTaskStatus(server, op.replay.parentId, store);
+      return admittedResult(op.replay);
+    }
     const all = await store.getArtifacts();
     const old = all.find((a) => a.id === artifactId);
     if (!old) {
@@ -90,17 +100,8 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
     // provenance, but NEVER inherit headSha: changing the content means the
     // old reviewed commit no longer describes v2. A caller that fetched and
     // presented a fresh immutable diff may supply a new source explicitly.
-    const content: Record<string, unknown> = { ...suppliedContent };
-    if (old.type === "changeset") {
-      const oldChangeset = coerceChangesetContent(old.content);
-      if (oldChangeset.reviewIntent === "external") {
-        content.reviewIntent = "external";
-        if (content.source === undefined && oldChangeset.source) {
-          const { headSha: _reviewedCommit, ...displayProvenance } = oldChangeset.source;
-          content.source = displayProvenance;
-        }
-      }
-    }
+    // (#470 — shared with the stance-exception snapshot: deriveReviseContent.)
+    const content = deriveReviseContent(old, suppliedContent);
 
     // F3 — route the new content through the SAME strict validator the
     // original present_* tool uses, keyed on the artifact type. Pre-this,
@@ -115,18 +116,34 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
     }
     // A replacement proposes new work just like its original presentation.
     // Refuse before creating v2 or changing v1 so a blocked revision is atomic.
-    const pre = await preflightArtifact(ctx, "revise_artifact", old.type, String(args?.title ?? old.title), content);
-    if (pre && !pre.ok) return pre.response;
+    const pre = await preflightArtifact(ctx, "revise_artifact", old.type, String(args?.title ?? old.title), content, { deferRecord: true });
+    if (pre && !pre.ok) {
+      // #470 — the revision exactly as it would be persisted (inherited title,
+      // provenance, stakes, refs, feature, parentId/version), bound to the
+      // target's current state. An allowance never carries along the lineage:
+      // a revision that still matches needs its own.
+      const snapshot = reviseSnapshot(old, String(args?.title ?? old.title), reason, finalizeReviseContent(old, structuredClone(content)));
+      const outcome = await admitBlockedProposal(ctx, {
+        toolName: "revise_artifact",
+        handle: op.handle,
+        pre,
+        resolved: { snapshot, preconditions: [reviseTargetPrecondition(old)] },
+        regate: (exclude) => preflightArtifact(ctx, "revise_artifact", old.type, String(args?.title ?? old.title), content, { deferRecord: true, excludeStances: exclude }),
+      });
+      if ("response" in outcome) return outcome.response;
+      await maybeUpdateTaskStatus(server, old.id, store);
+      notifyResourcesListChanged(server);
+      return admittedResult(outcome.admitted);
+    }
     // #171 — reviewState is HUMAN-driven review PROGRESS, never agent input. A
     // v2 changeset must start with FRESH review state: carrying an echoed
     // reviewState/reviewReasons forward would stamp stale ✓ marks and old human
     // objections onto files whose diff just changed. The handler persists the
     // RAW `content` (not the validator's stripped `data`), so drop both here.
     // (present_changeset already ignores them on the create path.)
-    if (old.type === "changeset") {
-      delete content.reviewState;
-      delete content.reviewReasons;
-    }
+    // A superseded decision inherits the old stakes when none are given.
+    // (#470 — shared with the stance-exception snapshot: finalizeReviseContent.)
+    finalizeReviseContent(old, content);
 
     const title = String(args?.title ?? old.title);
     const newId = `art_${nanoid(10)}`;
@@ -144,10 +161,6 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
         : null;
     if (decisionContent && Array.isArray(decisionContent.options)) {
       decisionContent.decisionId = `dec_${nanoid(10)}`;
-      const oldStakes = (old.content as { stakes?: "low" | "medium" | "high" } | null)?.stakes;
-      if (decisionContent.stakes === undefined && oldStakes !== undefined) {
-        decisionContent.stakes = oldStakes;
-      }
     }
     // #158 — the REVISED content is re-scanned for secret shapes: supersede
     // creates a brand-new artifact, so a v2 must not silently drop a v1's

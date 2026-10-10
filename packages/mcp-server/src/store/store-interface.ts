@@ -277,6 +277,14 @@ export interface IStore {
    * Fire-and-forget — must never throw into the caller.
    */
   recordPreflightBlock?(event: unknown): MaybePromise<void>;
+  /**
+   * #470 — stance exceptions, agent side. Implemented by DaemonClient only (an
+   * allowance exists only inside a daemon). Neither can create an allowance:
+   * `runStanceOperation` replays a committed operation or consumes allowances
+   * the HUMAN granted; `inspectStanceExceptions` is read-only.
+   */
+  runStanceOperation?(operationId: string, body: Record<string, unknown>): MaybePromise<Record<string, unknown>>;
+  inspectStanceExceptions?(callFingerprint: string): MaybePromise<{ candidates: Array<Record<string, unknown>>; inactive: Array<Record<string, unknown>> }>;
   listPastSessions?(): MaybePromise<Array<{
     id: string;
     createdAt: string;

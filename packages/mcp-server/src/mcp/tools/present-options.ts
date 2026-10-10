@@ -4,10 +4,16 @@ import { validatePresentOptionsInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
+import type { ProposalSnapshot } from "@deeppairing/shared";
+import { wireForm } from "../proposal-resolution.js";
+import { admitBlockedProposal, admittedResult, beginStanceOperation } from "../stance-admission.js";
 
 export async function handlePresentOptions(ctx: ToolContext, args: any): Promise<ToolResult> {
   const validated = validatePresentOptionsInput(args);
   if (!validated.ok) return validated.error;
+  // #470 (§6 step 0) — replay a committed admitted operation first.
+  const op = await beginStanceOperation(ctx, "present_options", args);
+  if (op.replay) return admittedResult(op.replay);
   const { context, options: validatedOptions, stakes } = validated.data;
   // M1.1 — the short fork-naming title (already trimmed/capped by the input
   // schema). When present it becomes the artifact/session title, the card
@@ -24,8 +30,26 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
       ? { ...o, visuals: o.visuals.map((v, i) => ({ ...v, id: v.id ?? `${o.id}_visual_${i}` })) }
       : o,
   );
-  const pre = (await preflightArtifact(ctx, "present_options", "decision", artifactTitle, validated.data))!;
-  if (!pre.ok) return pre.response;
+  const pre = (await preflightArtifact(ctx, "present_options", "decision", artifactTitle, validated.data, { deferRecord: true }))!;
+  if (!pre.ok) {
+    // #470 — the decision exactly as it would be persisted, minus the
+    // server-minted decisionId (the daemon mints it at admission).
+    const snapshot = wireForm({
+      kind: "create", type: "decision", title: artifactTitle,
+      content: { context, ...(title ? { title } : {}), options: proposedOptions, stakes },
+      relatedArtifactIds: args?.relatedFindings, feature: args?.feature,
+    }) as ProposalSnapshot;
+    const outcome = await admitBlockedProposal(ctx, {
+      toolName: "present_options",
+      handle: op.handle,
+      pre,
+      resolved: { snapshot, preconditions: [] },
+      regate: (exclude) => preflightArtifact(ctx, "present_options", "decision", artifactTitle, validated.data, { deferRecord: true, excludeStances: exclude }),
+    });
+    if ("response" in outcome) return outcome.response;
+    notifyResourcesListChanged(ctx.server);
+    return admittedResult(outcome.admitted);
+  }
 
   // N2 (#226) — short-window de-dup: an identical present_options still in
   // draft returns the existing decision artifact instead of minting a twin.

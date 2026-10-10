@@ -12,6 +12,7 @@
 
 import { createMcpServer } from "./mcp/server.js";
 import { ensureDaemon } from "./daemon/lifecycle.js";
+import { installWrapperShutdown } from "./daemon/wrapper-shutdown.js";
 import { DaemonClient } from "./daemon/client.js";
 import { resolveProjectRoot } from "./project-root.js";
 import { upsertProject } from "./store/project-registry.js";
@@ -126,6 +127,8 @@ async function main() {
     title: projectName,
     project: projectName,
     expectedProjectRoot: projectRoot,
+    // #470 (§5) — a newer split-mode registration ends the older one.
+    splitMode: derived.mode === "split",
   });
   log(`Session registered: ${sessionId} (${projectName})`);
 
@@ -137,20 +140,13 @@ async function main() {
   const noop = () => {};
   const mcp = createMcpServer(client, noop, port);
 
-  // Graceful shutdown
-  process.on("exit", () => {
-    client.unregister().catch(() => {});
-    client.forceFlush().catch(() => {});
-  });
-  process.on("SIGINT", () => {
-    log("Shutting down (SIGINT)");
-    client.unregister().catch(() => {});
-    process.exit(0);
-  });
-  process.on("SIGTERM", () => {
-    log("Shutting down (SIGTERM)");
-    client.unregister().catch(() => {});
-    process.exit(0);
+  // Graceful shutdown. #470 (§5) — signals AWAIT the unregister (bounded) and
+  // stdin closing unregisters, so a session's allowances end with it.
+  installWrapperShutdown({
+    proc: process,
+    unregister: () => client.unregister(),
+    flush: () => client.forceFlush(),
+    log,
   });
 
   // Start MCP server on stdio

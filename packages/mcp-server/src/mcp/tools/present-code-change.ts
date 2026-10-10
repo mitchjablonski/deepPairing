@@ -5,43 +5,50 @@ import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
 import { sessionOwesDebrief } from "../../debrief-gate.js";
 import type { ToolContext, ToolResult } from "./types.js";
+import type { ProposalSnapshot } from "@deeppairing/shared";
+import { resolveCodeChange, wireForm } from "../proposal-resolution.js";
+import { admitBlockedProposal, admittedResult, beginStanceOperation } from "../stance-admission.js";
 
 export async function handlePresentCodeChange(ctx: ToolContext, args: any): Promise<ToolResult> {
   const validated = validatePresentCodeChangeInput(args);
   if (!validated.ok) return validated.error;
   const { filePath, changeType, before, after, reasoning, confidence, concept } = validated.data;
+  // #470 (§6 step 0) — replay a committed admitted operation before any
+  // tool-level early return (N2's dedup included).
+  const op = await beginStanceOperation(ctx, "present_code_change", args);
+  if (op.replay) return admittedResult(op.replay);
 
   // #3 — when `before` is omitted, reconstruct it from the most recent prior
   // code_change for the same file so the UI renders a focused diff instead of
   // the whole file. Do this REGARDLESS of the agent's changeType: agents
   // routinely mislabel a real modification as "create", which (empty before)
   // suppresses the diff and shows the file under a "create" banner. History is
-  // the source of truth, not the label.
-  let effectiveBefore = before;
-  let effectiveChangeType = changeType;
-  if (!effectiveBefore) {
-    try {
-      const prior = (await ctx.store.getArtifacts())
-        .filter((a) =>
-          a.type === "code_change" &&
-          (a.content as any)?.filePath === filePath &&
-          typeof (a.content as any)?.after === "string" &&
-          (a.content as any).after.length > 0,
-        )
-        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
-      if (prior) effectiveBefore = (prior.content as any).after as string;
-    } catch {
-      // best-effort; fall back to the empty before (full-file view)
-    }
-  }
-  // A change with real prior content is a modification, not a creation —
-  // correct the label so the diff renders and the banner is accurate.
-  if (effectiveBefore && effectiveChangeType === "create") {
-    effectiveChangeType = "modify";
-  }
+  // the source of truth, not the label. A change with real prior content is a
+  // modification, not a creation — the label is corrected. #470 — the shared
+  // resolver also records which prior supplied `before` (a precondition).
+  const resolution = await resolveCodeChange(ctx.store, { filePath, before, changeType });
+  const effectiveBefore = resolution.before;
+  const effectiveChangeType = resolution.changeType as typeof changeType;
 
-  const pre = (await preflightArtifact(ctx, "present_code_change", "code_change", "", validated.data))!;
-  if (!pre.ok) return pre.response;
+  const pre = (await preflightArtifact(ctx, "present_code_change", "code_change", "", validated.data, { deferRecord: true }))!;
+  if (!pre.ok) {
+    // #470 — the effective proposal exactly as it would be persisted.
+    const snapshot = wireForm({
+      kind: "create", type: "code_change", title: `${effectiveChangeType} ${filePath}`,
+      content: { filePath, changeType: effectiveChangeType, before: effectiveBefore, after, reasoning, confidence, concept },
+      agentReasoning: reasoning, relatedArtifactIds: args?.relatedFindings, feature: args?.feature,
+    }) as ProposalSnapshot;
+    const outcome = await admitBlockedProposal(ctx, {
+      toolName: "present_code_change",
+      handle: op.handle,
+      pre,
+      resolved: resolution.resolvable ? { snapshot, preconditions: resolution.precondition ? [resolution.precondition] : [] } : null,
+      regate: (exclude) => preflightArtifact(ctx, "present_code_change", "code_change", "", validated.data, { deferRecord: true, excludeStances: exclude }),
+    });
+    if ("response" in outcome) return outcome.response;
+    notifyResourcesListChanged(ctx.server);
+    return admittedResult(outcome.admitted);
+  }
 
   // N2 (#226) — short-window de-dup: an identical present_code_change still in
   // draft returns the existing artifact rather than minting a twin card. Hashes

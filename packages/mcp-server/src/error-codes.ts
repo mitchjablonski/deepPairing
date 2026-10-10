@@ -97,6 +97,25 @@ export const ERROR_CODES = {
    *  unverifiable) owner. Nothing was committed; retry, or inspect with
    *  `deeppairing doctor` (dead-owner locks are recovered automatically). */
   lock_busy: "lock_busy",
+  /** #470 — stance exceptions ("Allow this proposal once"). No block with that
+   *  id is held by this daemon (unknown, or from an earlier daemon instance). */
+  stance_exception_block_not_found: "stance_exception_block_not_found",
+  /** #470 — the block can't be allowed: a team rule, a demo session, a retired
+   *  stance, an ended session, or no eligible snapshot. */
+  stance_exception_not_eligible: "stance_exception_not_eligible",
+  /** #470 — a grant needs a typed reason of 3–280 characters. */
+  stance_exception_reason_required: "stance_exception_reason_required",
+  /** #470 — a grant must come from the human-facing route, never from a
+   *  registered agent wrapper. */
+  stance_exception_interactive_required: "stance_exception_interactive_required",
+  /** #470 — the claim did not admit this call (used, revoked, ended, expired,
+   *  wrong registration, or a stance retired since). */
+  stance_exception_claim_refused: "stance_exception_claim_refused",
+  /** #470 — something the allowed proposal depended on changed after the grant. */
+  stance_exception_dependencies_changed: "stance_exception_dependencies_changed",
+  /** #470 — an operation stamp's follow-up targets disagree with the lineage
+   *  recorded on the child; a replay refuses rather than act on them. */
+  stance_exception_operation_inconsistent: "stance_exception_operation_inconsistent",
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
