@@ -5,7 +5,7 @@ import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
 import { sessionOwesDebrief } from "../../debrief-gate.js";
 import type { ToolContext, ToolResult } from "./types.js";
-import type { ProposalSnapshot } from "@deeppairing/shared";
+import type { Artifact, ProposalSnapshot } from "@deeppairing/shared";
 import { resolveCodeChange, wireForm } from "../proposal-resolution.js";
 import { admitBlockedProposal, admittedResult, beginStanceOperation } from "../stance-admission.js";
 
@@ -16,6 +16,7 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   // #470 (§6 step 0) — replay a committed admitted operation before any
   // tool-level early return (N2's dedup included).
   const op = await beginStanceOperation(ctx, "present_code_change", args);
+  if (op.refusal) return op.refusal;
   if (op.replay) return admittedResult(op.replay);
 
   // #3 — when `before` is omitted, reconstruct it from the most recent prior
@@ -46,8 +47,14 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
       regate: (exclude) => preflightArtifact(ctx, "present_code_change", "code_change", "", validated.data, { deferRecord: true, excludeStances: exclude }),
     });
     if ("response" in outcome) return outcome.response;
+    // #499 review — the admitted path says what the normal path says.
+    const admittedId = String(outcome.admitted.artifactId);
+    const all = await ctx.store.getArtifacts();
+    const admittedArtifact = all.find((a) => a.id === admittedId);
     notifyResourcesListChanged(ctx.server);
-    return admittedResult(outcome.admitted);
+    if (admittedArtifact) await maybeEmitTaskHandle(ctx.server, admittedArtifact, ctx.store);
+    const notes = codeChangeNotes(all, admittedId, filePath);
+    return admittedResult(outcome.admitted, ` Human can review at localhost:${ctx.store.getLivePort?.() ?? ctx.port}.${notes.closeNote}${notes.changesetNudge}`);
   }
 
   // N2 (#226) — short-window de-dup: an identical present_code_change still in
@@ -117,34 +124,7 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   // quick-approve and review return paths carry the same close-note (#215 K1).
   const allArtifacts = await ctx.store.getArtifacts();
 
-  // #215 K1 — the changeset nudge. When the session ALREADY carries a LIVE
-  // code_change for a DIFFERENT filePath this run, the default fix (another
-  // per-file card) is the wrong shape: multi-file work belongs in ONE
-  // present_changeset. Live = not superseded/retracted/obsolete; a re-present of
-  // the SAME file (or a superseded prior of it) is not a distinct file, so it
-  // doesn't trip the nudge. Reuses the getArtifacts() read above.
-  const CODE_CLOSED = ["superseded", "retracted", "obsolete"];
-  const hasOtherLiveFile = allArtifacts.some(
-    (a) =>
-      a.type === "code_change" &&
-      a.id !== id &&
-      !CODE_CLOSED.includes(a.status ?? "") &&
-      (a.content as any)?.filePath !== filePath,
-  );
-  const changesetNudge = hasOtherLiveFile
-    ? " 2nd file touched this run — the default for multi-file work is present_changeset; batch the remaining files into one and close with a present_debrief."
-    : "";
-
-  // AR-fix (#252 review) — closeNote and changesetNudge must never CO-FIRE. In
-  // the post-debrief follow-up lane a LIVE debrief short-circuits
-  // sessionOwesDebrief to false (closesTask=true), so a 2nd-file code_change
-  // presented AFTER a debrief would otherwise emit BOTH "no separate
-  // present_debrief owed" AND "close with a present_debrief". A distinct live
-  // file always means multi-file work → the nudge wins, closeNote is silent.
-  const closesTask = !sessionOwesDebrief(allArtifacts);
-  const closeNote = closesTask && !hasOtherLiveFile
-    ? " If this single-file change is the whole task, it closes it — fold the what-changed-and-why into `reasoning`, no separate present_debrief owed. If more changes follow, batch them into a present_changeset and close with a present_debrief."
-    : "";
+  const { closeNote, changesetNudge } = codeChangeNotes(allArtifacts, id, filePath);
 
   // S7 — quick-approve via elicitation for small, confident edits.
   // Threshold: ≤ 20 changed lines AND no low-confidence flag. Bigger or
@@ -173,4 +153,38 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   return {
     content: [{ type: "text", text: `Code change presented for review (${id}): ${effectiveChangeType} ${filePath}. Human can review at localhost:${reviewPort}.${closeNote}${changesetNudge}${formatPreflightTraceSummary(pre.trace)}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }],
   };
+}
+
+/** #215 K1 / #252 — the changeset nudge and the trivial-fix close-note, shared
+ *  by the normal and the admitted (#470) paths. */
+function codeChangeNotes(allArtifacts: Artifact[], id: string, filePath: string): { closeNote: string; changesetNudge: string } {
+  // #215 K1 — the changeset nudge. When the session ALREADY carries a LIVE
+  // code_change for a DIFFERENT filePath this run, the default fix (another
+  // per-file card) is the wrong shape: multi-file work belongs in ONE
+  // present_changeset. Live = not superseded/retracted/obsolete; a re-present of
+  // the SAME file (or a superseded prior of it) is not a distinct file, so it
+  // doesn't trip the nudge. Reuses the getArtifacts() read above.
+  const CODE_CLOSED = ["superseded", "retracted", "obsolete"];
+  const hasOtherLiveFile = allArtifacts.some(
+    (a) =>
+      a.type === "code_change" &&
+      a.id !== id &&
+      !CODE_CLOSED.includes(a.status ?? "") &&
+      (a.content as any)?.filePath !== filePath,
+  );
+  const changesetNudge = hasOtherLiveFile
+    ? " 2nd file touched this run — the default for multi-file work is present_changeset; batch the remaining files into one and close with a present_debrief."
+    : "";
+
+  // AR-fix (#252 review) — closeNote and changesetNudge must never CO-FIRE. In
+  // the post-debrief follow-up lane a LIVE debrief short-circuits
+  // sessionOwesDebrief to false (closesTask=true), so a 2nd-file code_change
+  // presented AFTER a debrief would otherwise emit BOTH "no separate
+  // present_debrief owed" AND "close with a present_debrief". A distinct live
+  // file always means multi-file work → the nudge wins, closeNote is silent.
+  const closesTask = !sessionOwesDebrief(allArtifacts);
+  const closeNote = closesTask && !hasOtherLiveFile
+    ? " If this single-file change is the whole task, it closes it — fold the what-changed-and-why into `reasoning`, no separate present_debrief owed. If more changes follow, batch them into a present_changeset and close with a present_debrief."
+    : "";
+  return { closeNote, changesetNudge };
 }

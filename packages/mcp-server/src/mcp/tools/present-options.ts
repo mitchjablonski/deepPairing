@@ -13,6 +13,7 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
   if (!validated.ok) return validated.error;
   // #470 (§6 step 0) — replay a committed admitted operation first.
   const op = await beginStanceOperation(ctx, "present_options", args);
+  if (op.refusal) return op.refusal;
   if (op.replay) return admittedResult(op.replay);
   const { context, options: validatedOptions, stakes } = validated.data;
   // M1.1 — the short fork-naming title (already trimmed/capped by the input
@@ -47,8 +48,11 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
       regate: (exclude) => preflightArtifact(ctx, "present_options", "decision", artifactTitle, validated.data, { deferRecord: true, excludeStances: exclude }),
     });
     if ("response" in outcome) return outcome.response;
+    // #499 review — the admitted path says what the normal path says.
+    const admitted = (await ctx.store.getArtifacts()).find((a) => a.id === String(outcome.admitted.artifactId));
     notifyResourcesListChanged(ctx.server);
-    return admittedResult(outcome.admitted);
+    if (admitted) await maybeEmitTaskHandle(ctx.server, admitted, ctx.store);
+    return admittedResult(outcome.admitted, ` They can select at localhost:${ctx.store.getLivePort?.() ?? ctx.port}.`);
   }
 
   // N2 (#226) — short-window de-dup: an identical present_options still in

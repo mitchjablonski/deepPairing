@@ -162,6 +162,8 @@ export interface CreateDaemonDeps {
   heartbeatIntervalMs?: number;
   /** #470 — clock for allowance ceilings (tests inject one). */
   stanceExceptionClock?: () => number;
+  /** #470 — monotonic clock for the 72 h cap (tests inject one). */
+  stanceExceptionMonotonic?: () => number;
   /** #470 — test seam: throw at a named point of an admitted operation to
    *  simulate a crash there. Production never passes it. */
   stanceExceptionFault?: (point: StanceFaultPoint, operationId: string) => void;
@@ -219,6 +221,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     watch = (dir, listener) => fs.watch(dir, listener),
     heartbeatIntervalMs = 30_000,
     stanceExceptionClock,
+    stanceExceptionMonotonic,
     stanceExceptionFault,
   } = deps;
 
@@ -255,6 +258,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     broadcast: (sessionId, event) => broadcast(sessionId, event),
     getStore: (sessionId) => sessions.get(sessionId),
     now: stanceExceptionClock,
+    monotonic: stanceExceptionMonotonic,
     log,
     fault: stanceExceptionFault,
   });

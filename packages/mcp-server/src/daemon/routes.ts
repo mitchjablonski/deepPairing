@@ -526,9 +526,12 @@ export function createDaemonRoutes(
     // Don't delete from the data map — the session's store stays so the web UI
     // can keep reading it. But DO drop it from the active set: with the wrapper
     // gone, the daemon may idle-shut once the UI client also disconnects.
-    activeSessions?.delete(sessionId);
     // #470 (§5) — "ended" means the registration is absent from the live map.
-    stanceExceptions?.unregister(sessionId, c.req.header(REGISTRATION_HEADER));
+    // #499 review P2 — with a registry, the session stays active while ANY of
+    // its registrations is live: a late shutdown from an evicted wrapper, or
+    // one of two fallback-mode wrappers leaving, must not mark it inactive.
+    const stillLive = stanceExceptions ? stanceExceptions.unregister(sessionId, c.req.header(REGISTRATION_HEADER)) : false;
+    if (!stillLive) activeSessions?.delete(sessionId);
     return c.json({ status: "unregistered" });
   });
 

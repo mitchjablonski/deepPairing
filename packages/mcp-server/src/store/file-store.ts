@@ -650,24 +650,6 @@ export class FileStore implements IStore {
     this.scheduleFlush();
   }
 
-  /**
-   * #470 — after a FAILED flush, did this stamped artifact land on disk
-   * anyway? (A flush writes artifacts.json first; a later collection can
-   * fail.) Same posture as isResolutionDurable: any read problem means "not
-   * proven", and a proven write schedules a re-flush for what stayed behind.
-   */
-  isAdmittedArtifactDurable(artifactId: string, operationId: string): boolean {
-    try {
-      const raw = JSON.parse(fs.readFileSync(path.join(this.sessionDir(), "artifacts.json"), "utf8")) as Artifact[];
-      const onDisk = Array.isArray(raw) ? raw.find((a) => a?.id === artifactId) : undefined;
-      const durable = onDisk?.admission?.operationId === operationId;
-      if (durable) { try { this.scheduleFlush(); } catch { /* disposed */ } }
-      return durable;
-    } catch {
-      return false;
-    }
-  }
-
   /** #470 — has a comment with this exact id been recorded (any artifact)? */
   hasComment(commentId: string): boolean {
     return this.comments.some((c) => c.id === commentId);

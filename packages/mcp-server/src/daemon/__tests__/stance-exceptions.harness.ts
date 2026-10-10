@@ -43,6 +43,8 @@ export class StanceWorld {
   readonly dir: string;
   daemon!: Daemon;
   now = Date.parse("2026-10-10T12:00:00.000Z");
+  /** Monotonic ms; a real clock never steps back, the wall clock can. */
+  mono = 1_000_000;
   fault: ((point: StanceFaultPoint, operationId: string) => void) | null = null;
   /** Return true to let the daemon handle the request, then throw a network
    *  error at the client (the response is lost after the commit). */
@@ -83,6 +85,7 @@ export class StanceWorld {
       releaseListenSocket: () => {},
       env: { DEEPPAIRING_NO_OPEN: "1", BROWSER: "none" },
       stanceExceptionClock: () => this.now,
+      stanceExceptionMonotonic: () => this.mono,
       stanceExceptionFault: (point, op) => this.fault?.(point, op),
     });
     // A recording tap on the registry's broadcast seam (it still forwards to

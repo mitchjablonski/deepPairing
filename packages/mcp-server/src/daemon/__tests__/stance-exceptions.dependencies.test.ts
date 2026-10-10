@@ -92,12 +92,16 @@ describe("#470 §10 (5a) — present_code_change with `before` omitted", () => {
 });
 
 describe("#470 §10 (5a) — revise_artifact", () => {
+  const OPTIONS = [
+    { id: "a", title: "Inject config", description: "pass config", pros: ["testable"], cons: ["churn"], effort: "low", risk: "low", recommendation: true },
+    { id: "b", title: "Keep it", description: "status quo", pros: ["none"], cons: ["hard to test"], effort: "low", risk: "low", recommendation: false },
+  ];
   async function reviseSetup() {
     const w = await world.wrapper(SID);
-    await w.call("present_findings", { title: "Config audit", summary: "Inspect", findings: [{ category: "A", detail: "d", significance: "low" }] });
+    await w.call("present_options", { context: "Which config owner?", title: "Config audit", options: OPTIONS });
     const target = world.store(SID).getArtifacts()[0]!;
     holdStance(world.store(SID), STANCE);
-    const args = { artifactId: target.id, mode: "supersede", reason: "r", content: { summary: "Remove global mutable state", findings: [{ category: "A", detail: "d", significance: "low" }] } };
+    const args = { artifactId: target.id, mode: "supersede", reason: "r", content: { context: "Remove global mutable state: which owner?", options: OPTIONS } };
     expect((await w.call("revise_artifact", args)).isError).toBe(true);
     const allowanceId = await world.allowNewest();
     return { w, target, args, allowanceId };
@@ -127,7 +131,7 @@ describe("#470 §10 (5a) — revise_artifact", () => {
     const { w, target, args, allowanceId } = await reviseSetup();
     const block = (await world.blocks()).find((b) => b.allowance?.id === allowanceId)!;
     // Revised by someone else: v2 lands, the target is superseded.
-    expect((await w.call("revise_artifact", { artifactId: target.id, mode: "supersede", reason: "other", content: { summary: "Inject config", findings: [{ category: "A", detail: "d", significance: "low" }] } })).isError).toBeFalsy();
+    expect((await w.call("revise_artifact", { artifactId: target.id, mode: "supersede", reason: "other", content: { context: "Which owner, again?", options: OPTIONS } })).isError).toBeFalsy();
     // The tool refuses before the gate (closed parent) — and the daemon's own
     // re-resolution is the backstop for a direct claim.
     expect((await w.call("revise_artifact", args)).isError).toBe(true);

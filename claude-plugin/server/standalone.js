@@ -34167,6 +34167,7 @@ var STANCE_MESSAGES = {
   admitted: (via, stances, reasons) => `Admitted once under an allowance your pair granted (${via.toUpperCase()}) for stance ${stances.map((s) => `"${s}"`).join(" and ")} (reason: ${reasons.map((r) => `"${r}"`).join("; ")}). It covered this exact version only. If you revise this artifact and the revision still matches the stance, your pair must allow it again. The stance still applies to everything else. A direct edit carrying this content will still prompt your pair.`,
   replayed: (artifactId) => `Already admitted. Returning the original result for ${artifactId}. Nothing new was created.`,
   dependencyChanged: (dep) => `The proposal your pair allowed depended on ${dep.what === "target" ? `the state of ${dep.id}` : dep.id ?? "there being no earlier change to this file"}, which changed. Ask your pair to allow the new version.`,
+  versionMismatch: "The allowance your pair granted covers a different version of this call than the one you sent now, so nothing was created. Retry the identical call you were blocked on, or ask your pair to allow this version.",
   inactive: (state, artifactId, ceilingAt) => state === "used" ? `Your pair's allowance for this exact call was already used${artifactId ? ` (${artifactId})` : ""}.` : state === "revoked" ? "Your pair revoked the allowance for this exact call." : state === "ended" ? "Your pair's allowance for this exact call ended with its Claude session." : state === "expired" ? `Your pair's allowance for this exact call expired${ceilingAt ? ` at ${ceilingAt}` : ""}.` : state === "changed" ? "The allowance for this call was replaced after the proposal changed." : ""
 };
 async function beginStanceOperation(ctx, toolName, args) {
@@ -34175,18 +34176,34 @@ async function beginStanceOperation(ctx, toolName, args) {
   try {
     const result = await ctx.store.runStanceOperation(handle.operationId, { callFingerprint: handle.callFingerprint });
     if (result?.status === "replayed") return { handle, replay: result };
-  } catch {
+    if (result?.status === "none") return { handle };
+    return { handle, refusal: probeRefusal(false, `unexpected status ${String(result?.status)}`) };
+  } catch (error51) {
+    const e = error51;
+    if (e.status === 404 && !e.code) return { handle };
+    if (e.code === "stance_exception_operation_inconsistent") return { handle, refusal: probeRefusal(true, e.message ?? "") };
+    return { handle, refusal: probeRefusal(false, e.message ?? String(error51)) };
   }
-  return { handle };
 }
-function admittedResult(op) {
+function probeRefusal(inconsistent, detail) {
+  return {
+    content: [{
+      type: "text",
+      text: inconsistent ? `An earlier allowed version of this exact call left an operation record that doesn't match its own history, so deepPairing won't finish or repeat it. Nothing new was created. Tell your pair; don't retry this identical call. (${detail})` : `deepPairing couldn't confirm whether an earlier identical call already went through, so nothing new was created. Retry this identical call in a moment. (${detail})`
+    }],
+    isError: true,
+    _meta: { code: inconsistent ? "STANCE_OPERATION_INCONSISTENT" : "STANCE_OPERATION_UNCONFIRMED", retryable: !inconsistent }
+  };
+}
+function admittedResult(op, extra = "") {
   const artifactId = String(op.artifactId);
   const decisionId = typeof op.decisionId === "string" ? op.decisionId : void 0;
   const ids = `${artifactId}${decisionId ? `, decision ${decisionId}` : ""}`;
   const skipped = typeof op.supersedeSkipped === "string" ? ` (${String(op.parentId)} was left ${op.supersedeSkipped}: your pair closed it after the allowance, so it was not superseded.)` : "";
   const text = op.status === "replayed" ? `${STANCE_MESSAGES.replayed(ids)}${skipped}` : `Presented for review (${ids}). ${STANCE_MESSAGES.admitted(String(op.grantedVia ?? "ui"), op.stances ?? [], op.reasons ?? [])}${skipped} Call check_feedback for your pair's response.`;
+  const fullText = `${text}${extra}`;
   return {
-    content: [{ type: "text", text }],
+    content: [{ type: "text", text: fullText }],
     structuredContent: {
       artifactId,
       ...decisionId ? { decisionId } : {},
@@ -34247,7 +34264,7 @@ async function admitBlockedProposal(ctx, input) {
     return { response: withLine(pre.response, `${STANCE_MESSAGES.dependencyChanged(dep)}
 ${STANCE_MESSAGES.blockHint}`) };
   }
-  const line = dep ? STANCE_MESSAGES.dependencyChanged(dep) : STANCE_MESSAGES.inactive(String(result.state ?? result.reason ?? ""), result.artifactId, result.ceilingAt);
+  const line = dep ? STANCE_MESSAGES.dependencyChanged(dep) : result.reason === "client_snapshot_mismatch" || result.reason === "snapshot_mismatch" ? STANCE_MESSAGES.versionMismatch : STANCE_MESSAGES.inactive(String(result.state ?? result.reason ?? ""), result.artifactId, result.ceilingAt);
   return refuse(pre.event, pre.source, pre.response, line);
 }
 
@@ -34256,6 +34273,7 @@ async function handlePresentOptions(ctx, args) {
   const validated = validatePresentOptionsInput(args);
   if (!validated.ok) return validated.error;
   const op = await beginStanceOperation(ctx, "present_options", args);
+  if (op.refusal) return op.refusal;
   if (op.replay) return admittedResult(op.replay);
   const { context, options: validatedOptions, stakes } = validated.data;
   const title = validated.data.title;
@@ -34281,8 +34299,10 @@ async function handlePresentOptions(ctx, args) {
       regate: (exclude) => preflightArtifact(ctx, "present_options", "decision", artifactTitle, validated.data, { deferRecord: true, excludeStances: exclude })
     });
     if ("response" in outcome) return outcome.response;
+    const admitted = (await ctx.store.getArtifacts()).find((a) => a.id === String(outcome.admitted.artifactId));
     notifyResourcesListChanged(ctx.server);
-    return admittedResult(outcome.admitted);
+    if (admitted) await maybeEmitTaskHandle(ctx.server, admitted, ctx.store);
+    return admittedResult(outcome.admitted, ` They can select at localhost:${ctx.store.getLivePort?.() ?? ctx.port}.`);
   }
   const dedup = await ctx.helpers.beginPresentIdempotency("present_options", hashPresentArgs(args));
   if (dedup.duplicate) {
@@ -35406,6 +35426,7 @@ async function handleReviseArtifact(ctx, args) {
       };
     }
     const op = await beginStanceOperation(ctx, "revise_artifact", args);
+    if (op.refusal) return op.refusal;
     if (op.replay) {
       if (typeof op.replay.parentId === "string") await maybeUpdateTaskStatus(server, op.replay.parentId, store);
       return admittedResult(op.replay);
@@ -35443,7 +35464,7 @@ async function handleReviseArtifact(ctx, args) {
       if ("response" in outcome) return outcome.response;
       await maybeUpdateTaskStatus(server, old.id, store);
       notifyResourcesListChanged(server);
-      return admittedResult(outcome.admitted);
+      return admittedResult(outcome.admitted, ` Superseded ${artifactId} (v${old.version + 1} is the draft awaiting review). Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback.`);
     }
     finalizeReviseContent(old, content);
     const title = String(args?.title ?? old.title);
@@ -36578,6 +36599,7 @@ async function handlePresentCodeChange(ctx, args) {
   if (!validated.ok) return validated.error;
   const { filePath, changeType, before, after, reasoning, confidence, concept } = validated.data;
   const op = await beginStanceOperation(ctx, "present_code_change", args);
+  if (op.refusal) return op.refusal;
   if (op.replay) return admittedResult(op.replay);
   const resolution = await resolveCodeChange(ctx.store, { filePath, before, changeType });
   const effectiveBefore = resolution.before;
@@ -36601,8 +36623,13 @@ async function handlePresentCodeChange(ctx, args) {
       regate: (exclude) => preflightArtifact(ctx, "present_code_change", "code_change", "", validated.data, { deferRecord: true, excludeStances: exclude })
     });
     if ("response" in outcome) return outcome.response;
+    const admittedId = String(outcome.admitted.artifactId);
+    const all = await ctx.store.getArtifacts();
+    const admittedArtifact = all.find((a) => a.id === admittedId);
     notifyResourcesListChanged(ctx.server);
-    return admittedResult(outcome.admitted);
+    if (admittedArtifact) await maybeEmitTaskHandle(ctx.server, admittedArtifact, ctx.store);
+    const notes = codeChangeNotes(all, admittedId, filePath);
+    return admittedResult(outcome.admitted, ` Human can review at localhost:${ctx.store.getLivePort?.() ?? ctx.port}.${notes.closeNote}${notes.changesetNudge}`);
   }
   const dedup = await ctx.helpers.beginPresentIdempotency("present_code_change", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
@@ -36639,13 +36666,7 @@ async function handlePresentCodeChange(ctx, args) {
   notifyResourcesListChanged(ctx.server);
   await maybeEmitTaskHandle(ctx.server, artifact, ctx.store);
   const allArtifacts = await ctx.store.getArtifacts();
-  const CODE_CLOSED = ["superseded", "retracted", "obsolete"];
-  const hasOtherLiveFile = allArtifacts.some(
-    (a) => a.type === "code_change" && a.id !== id && !CODE_CLOSED.includes(a.status ?? "") && a.content?.filePath !== filePath
-  );
-  const changesetNudge = hasOtherLiveFile ? " 2nd file touched this run \u2014 the default for multi-file work is present_changeset; batch the remaining files into one and close with a present_debrief." : "";
-  const closesTask = !sessionOwesDebrief(allArtifacts);
-  const closeNote = closesTask && !hasOtherLiveFile ? " If this single-file change is the whole task, it closes it \u2014 fold the what-changed-and-why into `reasoning`, no separate present_debrief owed. If more changes follow, batch them into a present_changeset and close with a present_debrief." : "";
+  const { closeNote, changesetNudge } = codeChangeNotes(allArtifacts, id, filePath);
   const changedLines = effectiveBefore.split("\n").length + after.split("\n").length;
   const isSmallEdit = changedLines <= 20;
   const isConfident = (confidence ?? "").toLowerCase() !== "low";
@@ -36667,6 +36688,16 @@ Decline to review the diff at http://localhost:${reviewPort}`
   return {
     content: [{ type: "text", text: `Code change presented for review (${id}): ${effectiveChangeType} ${filePath}. Human can review at localhost:${reviewPort}.${closeNote}${changesetNudge}${formatPreflightTraceSummary(pre.trace)}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }]
   };
+}
+function codeChangeNotes(allArtifacts, id, filePath) {
+  const CODE_CLOSED = ["superseded", "retracted", "obsolete"];
+  const hasOtherLiveFile = allArtifacts.some(
+    (a) => a.type === "code_change" && a.id !== id && !CODE_CLOSED.includes(a.status ?? "") && a.content?.filePath !== filePath
+  );
+  const changesetNudge = hasOtherLiveFile ? " 2nd file touched this run \u2014 the default for multi-file work is present_changeset; batch the remaining files into one and close with a present_debrief." : "";
+  const closesTask = !sessionOwesDebrief(allArtifacts);
+  const closeNote = closesTask && !hasOtherLiveFile ? " If this single-file change is the whole task, it closes it \u2014 fold the what-changed-and-why into `reasoning`, no separate present_debrief owed. If more changes follow, batch them into a present_changeset and close with a present_debrief." : "";
+  return { closeNote, changesetNudge };
 }
 
 // src/mcp/tools/present-changeset.ts

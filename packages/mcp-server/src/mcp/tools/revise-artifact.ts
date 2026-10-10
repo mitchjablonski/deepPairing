@@ -71,6 +71,7 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
     // admitted revision has often already superseded its parent, and that
     // check would wrongly refuse the retry. A replay finishes it instead.
     const op = await beginStanceOperation(ctx, "revise_artifact", args);
+    if (op.refusal) return op.refusal;
     if (op.replay) {
       if (typeof op.replay.parentId === "string") await maybeUpdateTaskStatus(server, op.replay.parentId, store);
       return admittedResult(op.replay);
@@ -133,7 +134,7 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       if ("response" in outcome) return outcome.response;
       await maybeUpdateTaskStatus(server, old.id, store);
       notifyResourcesListChanged(server);
-      return admittedResult(outcome.admitted);
+      return admittedResult(outcome.admitted, ` Superseded ${artifactId} (v${old.version + 1} is the draft awaiting review). Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback.`);
     }
     // #171 — reviewState is HUMAN-driven review PROGRESS, never agent input. A
     // v2 changeset must start with FRESH review state: carrying an echoed

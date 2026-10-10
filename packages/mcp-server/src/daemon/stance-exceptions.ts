@@ -67,6 +67,13 @@ export const ALLOWANCE_CEILING_MS = 72 * 60 * 60 * 1000;
 export const REGISTRATION_HEADER = "x-deeppairing-registration";
 /** Self-reported grant origin label; `cli` or (default) `ui`. */
 export const GRANT_ORIGIN_HEADER = "x-deeppairing-grant-origin";
+/** The artifact types an allowance can admit — exactly the types whose own
+ *  create tool is wired (present_code_change, present_options). A revise of
+ *  any other type (findings, spec, plan, changeset, explainer, …) is not
+ *  eligible either. */
+const ADMITTABLE_TYPES: ReadonlySet<string> = new Set(
+  Object.values(EXCEPTION_TOOL_TYPES).filter((t): t is string => typeof t === "string"),
+);
 /** In-memory block bindings kept for grants (the log itself keeps 50). */
 const MAX_BLOCK_BINDINGS = 200;
 
@@ -110,6 +117,8 @@ export interface Allowance {
   snapshot: ProposalSnapshot;
   preconditions: ProposalPrecondition[];
   grantedAt: number;
+  /** Monotonic clock at grant: the 72 h cap holds even if the wall clock steps back. */
+  grantedMono: number;
   grantedVia: StanceGrantOrigin;
   reason: string;
   ceilingAt: number;
@@ -136,6 +145,8 @@ export interface StanceExceptionDeps {
   broadcast: (sessionId: string, event: Record<string, unknown>) => void;
   getStore: (sessionId: string) => FileStore | undefined;
   now?: () => number;
+  /** Monotonic ms (performance.now): a wall-clock step back can't extend the cap. */
+  monotonic?: () => number;
   log?: (msg: string) => void;
   fault?: (point: StanceFaultPoint, operationId: string) => void;
 }
@@ -197,10 +208,12 @@ export class StanceExceptionRegistry {
   /** Admitted children not yet announced (first durable commit only). */
   private readonly pendingAnnounce = new Set<string>();
   private readonly now: () => number;
+  private readonly mono: () => number;
   private readonly log: (msg: string) => void;
 
   constructor(private readonly deps: StanceExceptionDeps) {
     this.now = deps.now ?? (() => Date.now());
+    this.mono = deps.monotonic ?? (() => performance.now());
     this.log = deps.log ?? (() => {});
   }
 
@@ -223,17 +236,29 @@ export class StanceExceptionRegistry {
     return { registrationId, registrationToken: token };
   }
 
-  /** /unregister. With the caller's token, only that registration ends; an old
-   *  wrapper that sends none ends every registration of the session. */
-  unregister(sessionId: string, token: string | undefined): void {
-    const reg = this.resolveToken(token);
-    if (token && reg) {
-      if (reg.sessionId === sessionId) this.dropRegistration(reg);
-      return;
+  /**
+   * /unregister. With the caller's token, only that registration ends. A
+   * supplied token that no longer resolves (an evicted wrapper's late
+   * shutdown, #499 review P2) is a NO-OP: it must never end the live
+   * replacement. Only an old wrapper that sends NO token ends every
+   * registration of the session. Returns whether the session still has a
+   * live registration (the route keeps the session active if so).
+   */
+  unregister(sessionId: string, token: string | undefined): boolean {
+    if (token) {
+      const reg = this.resolveToken(token);
+      if (reg && reg.sessionId === sessionId) this.dropRegistration(reg);
+    } else {
+      for (const r of [...this.registrations.values()]) {
+        if (r.sessionId === sessionId) this.dropRegistration(r);
+      }
     }
-    for (const r of [...this.registrations.values()]) {
-      if (r.sessionId === sessionId) this.dropRegistration(r);
-    }
+    return this.hasLiveRegistration(sessionId);
+  }
+
+  hasLiveRegistration(sessionId: string): boolean {
+    for (const r of this.registrations.values()) if (r.sessionId === sessionId) return true;
+    return false;
   }
 
   private dropRegistration(reg: Registration): void {
@@ -292,7 +317,7 @@ export class StanceExceptionRegistry {
     if (source !== "session") return ineligible("team_rule");
     if (sessionId.startsWith("demo_")) return ineligible("demo_session");
     const toolName = typeof event.toolName === "string" ? event.toolName : "";
-    if (!(toolName in EXCEPTION_TOOL_TYPES)) return ineligible("unsupported_tool");
+    if (!Object.hasOwn(EXCEPTION_TOOL_TYPES, toolName)) return ineligible("unsupported_tool");
     if (!stance) return ineligible("no_stance");
     if (!reg || reg.sessionId !== sessionId) return ineligible("no_registration");
     if (!fingerprint) return ineligible("no_snapshot");
@@ -302,6 +327,9 @@ export class StanceExceptionRegistry {
     const expectedType = EXCEPTION_TOOL_TYPES[toolName];
     const expectedKind = toolName === "revise_artifact" ? "revise" : "create";
     if ((expectedType && snap.data.type !== expectedType) || snap.data.kind !== expectedKind) return ineligible("no_snapshot");
+    // Fail closed, consistently: a type whose own create tool can't be allowed
+    // once can't be allowed through revise_artifact either (#499 review).
+    if (!ADMITTABLE_TYPES.has(snap.data.type)) return ineligible("unsupported_tool");
     if (Buffer.byteLength(JSON.stringify(snap.data)) > MAX_SNAPSHOT_BYTES) return ineligible("too_large");
     // The snapshot is persisted on the block entry for the preview, so it
     // passes the same scanner createArtifact uses. Flagged → not persisted.
@@ -345,7 +373,10 @@ export class StanceExceptionRegistry {
   private enqueue<T>(sessionId: string, fn: () => T | Promise<T>): Promise<T> {
     const prev = this.queues.get(sessionId) ?? Promise.resolve();
     const next = prev.catch(() => undefined).then(fn);
-    this.queues.set(sessionId, next.catch(() => undefined));
+    const tail = next.catch(() => undefined);
+    this.queues.set(sessionId, tail);
+    // Prune when idle: nothing queued behind this operation.
+    void tail.then(() => { if (this.queues.get(sessionId) === tail) this.queues.delete(sessionId); });
     return next;
   }
 
@@ -353,7 +384,8 @@ export class StanceExceptionRegistry {
 
   private derived(a: Allowance): DerivedState {
     if (a.state !== "active") return a.state;
-    if (this.now() >= a.ceilingAt) return "expired";
+    // Whichever comes first: the wall-clock ceiling, or 72 h of monotonic time.
+    if (this.now() >= a.ceilingAt || this.mono() - a.grantedMono >= ALLOWANCE_CEILING_MS) return "expired";
     if (!this.isLive(a.registrationId)) return "ended";
     return "active";
   }
@@ -447,6 +479,7 @@ export class StanceExceptionRegistry {
         snapshot: binding.snapshot,
         preconditions: binding.preconditions,
         grantedAt,
+        grantedMono: this.mono(),
         grantedVia: via,
         reason,
         ceilingAt: grantedAt + ALLOWANCE_CEILING_MS,
@@ -558,20 +591,41 @@ export class StanceExceptionRegistry {
       }
       if (a.callFingerprint !== fingerprint) return refused("fingerprint_mismatch");
     }
-    const bound = allowances[0]!;
-    if (allowances.some((a) => a.effectiveDigest !== bound.effectiveDigest)) return refused("snapshot_mismatch");
     // A fresh read of preferences.json: a stance retired since the grant ends it.
     const rows = store.getSessionMemory().rejectedApproaches;
     if (allowances.some((a) => !rows.some((r) => sameStance(r, a.stance)))) return refused("stance_retired");
-    // Re-resolve the preconditions from the daemon's OWN store.
-    const check = checkPreconditions(store.getArtifacts(), bound.preconditions);
-    if (!check.ok) return this.markChanged(sessionId, token, fingerprint, allowances, check, request);
+    // Re-resolve EACH allowance's preconditions from the daemon's OWN store.
+    // Several allowances can share one call fingerprint when the proposal's
+    // dependencies moved between blocks (#499 review P3): only the one(s) bound
+    // to the CURRENT resolution can admit; the rest are stale for good.
+    const artifactsNow = store.getArtifacts();
+    const stale: Array<{ a: Allowance; check: Extract<PreconditionCheck, { ok: false }> }> = [];
+    const current: Allowance[] = [];
+    for (const a of allowances) {
+      const check = checkPreconditions(artifactsNow, a.preconditions);
+      if (check.ok) current.push(a);
+      else stale.push({ a, check });
+    }
+    if (current.length === 0) return this.markChanged(sessionId, token, fingerprint, allowances, stale[0]!.check, request);
     // The client's resolution must hash equal to what was allowed. What is
-    // created is the STORED snapshot either way; a mismatch refuses and
-    // (nothing having moved underneath) leaves the allowance active.
-    if (effectiveDigest(request.snapshot, request.preconditions) !== bound.effectiveDigest) {
+    // created is the STORED snapshot either way; a client whose resolution
+    // differs while nothing moved underneath is refused and leaves its
+    // allowance active (the honest identical retry still works).
+    const requestDigest = effectiveDigest(request.snapshot, request.preconditions);
+    const claimed = current.filter((a) => a.effectiveDigest === requestDigest);
+    // A stale allowance's stance must still be covered by a claimable one, or
+    // this call would pass a stance nobody allowed for THIS version.
+    const uncovered = stale.filter((s) => !claimed.some((c) => sameStance(c.stance, s.a.stance)));
+    if (uncovered.length > 0) return this.markChanged(sessionId, token, fingerprint, uncovered.map((s) => s.a), uncovered[0]!.check, request);
+    const uncoveredCurrent = current.some((a) => !claimed.includes(a) && !claimed.some((c) => sameStance(c.stance, a.stance)));
+    if (claimed.length === 0 || uncoveredCurrent) {
       return { status: "refused", code: ERROR_CODES.stance_exception_dependencies_changed, reason: "client_snapshot_mismatch" };
     }
+    // Stale allowances covered by a claimable one are replaced by it.
+    for (const { a } of stale) this.retireStale(sessionId, a, claimed[0]!.blockId);
+    const bound = claimed[0]!;
+    allowances.length = 0;
+    allowances.push(...claimed);
     for (const a of allowances) a.state = "consumed";
     this.deps.fault?.("after_claim", operationId);
 
@@ -648,6 +702,15 @@ export class StanceExceptionRegistry {
     this.deps.fault?.("after_child_flush", operationId);
     const child = store.getArtifacts().find((a) => a.id === childId)!;
     return this.complete(sessionId, store, child, false);
+  }
+
+  /** #499 review P3 — an allowance whose dependency moved, superseded by a
+   *  newer allowance the human already granted for the CURRENT version. */
+  private retireStale(sessionId: string, a: Allowance, replacementBlockId: string): void {
+    a.state = "changed";
+    const receipt = this.receipt(a, { supersededByBlockId: replacementBlockId });
+    updatePreflightBlocks(this.deps.projectRoot, (e) => (e.id === a.blockId ? { ...e, allowance: receipt } : null));
+    this.deps.broadcast(sessionId, { type: "stance_exception_updated", blockId: a.blockId, allowance: receipt });
   }
 
   /** §7 Races — the dependency moved: refuse, mark `changed`, and record this

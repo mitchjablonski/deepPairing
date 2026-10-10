@@ -24264,7 +24264,7 @@ import fs6 from "node:fs";
 import os3 from "node:os";
 import path5 from "node:path";
 import { randomBytes as randomBytes2 } from "node:crypto";
-import { performance } from "node:perf_hooks";
+import { performance as performance2 } from "node:perf_hooks";
 var DEFAULT_FILE_LOCK_TIMEOUT_MS = 250;
 var heldLocks = /* @__PURE__ */ new Set();
 function isFileLockError(err) {
@@ -24441,7 +24441,7 @@ function withFileLock(lockPath, run, opts = {}) {
   const key = path5.resolve(lockPath);
   if (opts.reentrant && heldLocks.has(key)) return run();
   const label = opts.label ?? "File lock";
-  const deadline = performance.now() + (opts.timeoutMs ?? DEFAULT_FILE_LOCK_TIMEOUT_MS);
+  const deadline = performance2.now() + (opts.timeoutMs ?? DEFAULT_FILE_LOCK_TIMEOUT_MS);
   const waitArray = new Int32Array(new SharedArrayBuffer(4));
   let body;
   let lastState = null;
@@ -24451,7 +24451,7 @@ function withFileLock(lockPath, run, opts = {}) {
     const attempt = breakDeadLock(lockPath);
     if (attempt.broken) continue;
     lastState = attempt.state ?? lastState;
-    if (performance.now() >= deadline) {
+    if (performance2.now() >= deadline) {
       const owner = lastState?.owner;
       const who = owner?.pid ? ` Held by pid ${owner.pid}${owner.hostname ? ` on ${owner.hostname}` : ""} since ${owner.createdAt || "?"}.` : "";
       throw Object.assign(
@@ -27183,28 +27183,6 @@ var FileStore = class _FileStore {
     if (!art?.admission) return;
     art.admission = structuredClone(admission);
     this.scheduleFlush();
-  }
-  /**
-   * #470 — after a FAILED flush, did this stamped artifact land on disk
-   * anyway? (A flush writes artifacts.json first; a later collection can
-   * fail.) Same posture as isResolutionDurable: any read problem means "not
-   * proven", and a proven write schedules a re-flush for what stayed behind.
-   */
-  isAdmittedArtifactDurable(artifactId, operationId) {
-    try {
-      const raw2 = JSON.parse(fs14.readFileSync(path13.join(this.sessionDir(), "artifacts.json"), "utf8"));
-      const onDisk = Array.isArray(raw2) ? raw2.find((a) => a?.id === artifactId) : void 0;
-      const durable = onDisk?.admission?.operationId === operationId;
-      if (durable) {
-        try {
-          this.scheduleFlush();
-        } catch {
-        }
-      }
-      return durable;
-    } catch {
-      return false;
-    }
   }
   /** #470 — has a comment with this exact id been recorded (any artifact)? */
   hasComment(commentId) {
@@ -31789,6 +31767,9 @@ function checkPreconditions(artifacts, preconditions) {
 var ALLOWANCE_CEILING_MS = 72 * 60 * 60 * 1e3;
 var REGISTRATION_HEADER = "x-deeppairing-registration";
 var GRANT_ORIGIN_HEADER = "x-deeppairing-grant-origin";
+var ADMITTABLE_TYPES = new Set(
+  Object.values(EXCEPTION_TOOL_TYPES).filter((t) => typeof t === "string")
+);
 var MAX_BLOCK_BINDINGS = 200;
 function receiptStateOf(state) {
   return state === "active" ? "allowed" : state === "consumed" ? "used" : state;
@@ -31798,6 +31779,7 @@ var StanceExceptionRegistry = class {
   constructor(deps) {
     this.deps = deps;
     this.now = deps.now ?? (() => Date.now());
+    this.mono = deps.monotonic ?? (() => performance.now());
     this.log = deps.log ?? (() => {
     });
   }
@@ -31812,6 +31794,7 @@ var StanceExceptionRegistry = class {
   /** Admitted children not yet announced (first durable commit only). */
   pendingAnnounce = /* @__PURE__ */ new Set();
   now;
+  mono;
   log;
   // --- Registrations (§5) ---------------------------------------------------
   /** Mint a registration for a wrapper's /register. In split mode a newer
@@ -31830,17 +31813,28 @@ var StanceExceptionRegistry = class {
     this.byToken.set(token, registrationId);
     return { registrationId, registrationToken: token };
   }
-  /** /unregister. With the caller's token, only that registration ends; an old
-   *  wrapper that sends none ends every registration of the session. */
+  /**
+   * /unregister. With the caller's token, only that registration ends. A
+   * supplied token that no longer resolves (an evicted wrapper's late
+   * shutdown, #499 review P2) is a NO-OP: it must never end the live
+   * replacement. Only an old wrapper that sends NO token ends every
+   * registration of the session. Returns whether the session still has a
+   * live registration (the route keeps the session active if so).
+   */
   unregister(sessionId, token) {
-    const reg = this.resolveToken(token);
-    if (token && reg) {
-      if (reg.sessionId === sessionId) this.dropRegistration(reg);
-      return;
+    if (token) {
+      const reg = this.resolveToken(token);
+      if (reg && reg.sessionId === sessionId) this.dropRegistration(reg);
+    } else {
+      for (const r of [...this.registrations.values()]) {
+        if (r.sessionId === sessionId) this.dropRegistration(r);
+      }
     }
-    for (const r of [...this.registrations.values()]) {
-      if (r.sessionId === sessionId) this.dropRegistration(r);
-    }
+    return this.hasLiveRegistration(sessionId);
+  }
+  hasLiveRegistration(sessionId) {
+    for (const r of this.registrations.values()) if (r.sessionId === sessionId) return true;
+    return false;
   }
   dropRegistration(reg) {
     this.registrations.delete(reg.registrationId);
@@ -31900,7 +31894,7 @@ var StanceExceptionRegistry = class {
     if (source !== "session") return ineligible("team_rule");
     if (sessionId.startsWith("demo_")) return ineligible("demo_session");
     const toolName = typeof event.toolName === "string" ? event.toolName : "";
-    if (!(toolName in EXCEPTION_TOOL_TYPES)) return ineligible("unsupported_tool");
+    if (!Object.hasOwn(EXCEPTION_TOOL_TYPES, toolName)) return ineligible("unsupported_tool");
     if (!stance) return ineligible("no_stance");
     if (!reg || reg.sessionId !== sessionId) return ineligible("no_registration");
     if (!fingerprint) return ineligible("no_snapshot");
@@ -31910,6 +31904,7 @@ var StanceExceptionRegistry = class {
     const expectedType = EXCEPTION_TOOL_TYPES[toolName];
     const expectedKind = toolName === "revise_artifact" ? "revise" : "create";
     if (expectedType && snap.data.type !== expectedType || snap.data.kind !== expectedKind) return ineligible("no_snapshot");
+    if (!ADMITTABLE_TYPES.has(snap.data.type)) return ineligible("unsupported_tool");
     if (Buffer.byteLength(JSON.stringify(snap.data)) > MAX_SNAPSHOT_BYTES) return ineligible("too_large");
     if (scanContentForSecrets({ title: snap.data.title, content: snap.data.content }).length > 0) return ineligible("secret_flagged");
     const out = {
@@ -31948,13 +31943,17 @@ var StanceExceptionRegistry = class {
   enqueue(sessionId, fn) {
     const prev = this.queues.get(sessionId) ?? Promise.resolve();
     const next = prev.catch(() => void 0).then(fn);
-    this.queues.set(sessionId, next.catch(() => void 0));
+    const tail = next.catch(() => void 0);
+    this.queues.set(sessionId, tail);
+    void tail.then(() => {
+      if (this.queues.get(sessionId) === tail) this.queues.delete(sessionId);
+    });
     return next;
   }
   // --- State -----------------------------------------------------------------
   derived(a) {
     if (a.state !== "active") return a.state;
-    if (this.now() >= a.ceilingAt) return "expired";
+    if (this.now() >= a.ceilingAt || this.mono() - a.grantedMono >= ALLOWANCE_CEILING_MS) return "expired";
     if (!this.isLive(a.registrationId)) return "ended";
     return "active";
   }
@@ -32038,6 +32037,7 @@ var StanceExceptionRegistry = class {
         snapshot: binding.snapshot,
         preconditions: binding.preconditions,
         grantedAt,
+        grantedMono: this.mono(),
         grantedVia: via,
         reason,
         ceilingAt: grantedAt + ALLOWANCE_CEILING_MS
@@ -32122,15 +32122,29 @@ var StanceExceptionRegistry = class {
       }
       if (a.callFingerprint !== fingerprint) return refused("fingerprint_mismatch");
     }
-    const bound = allowances[0];
-    if (allowances.some((a) => a.effectiveDigest !== bound.effectiveDigest)) return refused("snapshot_mismatch");
     const rows = store.getSessionMemory().rejectedApproaches;
     if (allowances.some((a) => !rows.some((r) => sameStance(r, a.stance)))) return refused("stance_retired");
-    const check2 = checkPreconditions(store.getArtifacts(), bound.preconditions);
-    if (!check2.ok) return this.markChanged(sessionId, token, fingerprint, allowances, check2, request);
-    if (effectiveDigest(request.snapshot, request.preconditions) !== bound.effectiveDigest) {
+    const artifactsNow = store.getArtifacts();
+    const stale = [];
+    const current = [];
+    for (const a of allowances) {
+      const check2 = checkPreconditions(artifactsNow, a.preconditions);
+      if (check2.ok) current.push(a);
+      else stale.push({ a, check: check2 });
+    }
+    if (current.length === 0) return this.markChanged(sessionId, token, fingerprint, allowances, stale[0].check, request);
+    const requestDigest = effectiveDigest(request.snapshot, request.preconditions);
+    const claimed = current.filter((a) => a.effectiveDigest === requestDigest);
+    const uncovered = stale.filter((s) => !claimed.some((c) => sameStance(c.stance, s.a.stance)));
+    if (uncovered.length > 0) return this.markChanged(sessionId, token, fingerprint, uncovered.map((s) => s.a), uncovered[0].check, request);
+    const uncoveredCurrent = current.some((a) => !claimed.includes(a) && !claimed.some((c) => sameStance(c.stance, a.stance)));
+    if (claimed.length === 0 || uncoveredCurrent) {
       return { status: "refused", code: ERROR_CODES.stance_exception_dependencies_changed, reason: "client_snapshot_mismatch" };
     }
+    for (const { a } of stale) this.retireStale(sessionId, a, claimed[0].blockId);
+    const bound = claimed[0];
+    allowances.length = 0;
+    allowances.push(...claimed);
     for (const a of allowances) a.state = "consumed";
     this.deps.fault?.("after_claim", operationId);
     const snapshot = structuredClone(bound.snapshot);
@@ -32205,6 +32219,14 @@ var StanceExceptionRegistry = class {
     this.deps.fault?.("after_child_flush", operationId);
     const child = store.getArtifacts().find((a) => a.id === childId);
     return this.complete(sessionId, store, child, false);
+  }
+  /** #499 review P3 — an allowance whose dependency moved, superseded by a
+   *  newer allowance the human already granted for the CURRENT version. */
+  retireStale(sessionId, a, replacementBlockId) {
+    a.state = "changed";
+    const receipt = this.receipt(a, { supersededByBlockId: replacementBlockId });
+    updatePreflightBlocks(this.deps.projectRoot, (e) => e.id === a.blockId ? { ...e, allowance: receipt } : null);
+    this.deps.broadcast(sessionId, { type: "stance_exception_updated", blockId: a.blockId, allowance: receipt });
   }
   /** §7 Races — the dependency moved: refuse, mark `changed`, and record this
    *  call's block as the new entry the human can allow instead. */
@@ -34384,8 +34406,8 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const sessionId = c.req.param("sessionId");
     const store = sessions.get(sessionId);
     if (store) store.forceFlush();
-    activeSessions?.delete(sessionId);
-    stanceExceptions?.unregister(sessionId, c.req.header(REGISTRATION_HEADER));
+    const stillLive = stanceExceptions ? stanceExceptions.unregister(sessionId, c.req.header(REGISTRATION_HEADER)) : false;
+    if (!stillLive) activeSessions?.delete(sessionId);
     return c.json({ status: "unregistered" });
   });
   app.post("/api/internal/sessions/:sessionId/recovered", async (c) => {
@@ -35455,6 +35477,7 @@ function createDaemon(deps) {
     watch = (dir, listener) => fs22.watch(dir, listener),
     heartbeatIntervalMs = 3e4,
     stanceExceptionClock,
+    stanceExceptionMonotonic,
     stanceExceptionFault
   } = deps;
   const daemonProjectHash = projectHashOf(projectRoot2);
@@ -35472,6 +35495,7 @@ function createDaemon(deps) {
     broadcast: (sessionId, event) => broadcast(sessionId, event),
     getStore: (sessionId) => sessions.get(sessionId),
     now: stanceExceptionClock,
+    monotonic: stanceExceptionMonotonic,
     log: log2,
     fault: stanceExceptionFault
   });

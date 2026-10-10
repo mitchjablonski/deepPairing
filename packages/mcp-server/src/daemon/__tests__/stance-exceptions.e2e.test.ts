@@ -90,25 +90,34 @@ describe("#470 admission (§6) — the allowed proposal, exactly once", () => {
   it("revise_artifact: one new version, one supersede, one carryover comment (cmt_op_<operationId>)", async () => {
     world = new StanceWorld();
     const w = await world.wrapper();
-    await w.call("present_findings", { title: "Config", summary: "Inspect config", findings: [{ category: "Architecture", detail: "Use constructor arguments", significance: "high" }] });
+    await w.call("present_options", { context: "Which config owner?", title: "Config owner", options: OPTIONS });
     const v1 = artifactsOf(w.sessionId)[0]!;
     holdStance(world.store(w.sessionId), STANCE);
-    const revise = { artifactId: v1.id, mode: "supersede", reason: "Name the removal", content: { summary: "Remove global mutable state", findings: [{ category: "Architecture", detail: "Inject config", significance: "high" }] } };
+    const revise = { artifactId: v1.id, mode: "supersede", reason: "Name the removal", content: { context: "Remove global mutable state: which owner?", options: OPTIONS } };
     expect((await w.call("revise_artifact", revise)).isError).toBe(true);
     const allowanceId = await world.allowNewest();
     const res = await w.call("revise_artifact", revise);
     expect(res.isError).toBeFalsy();
+    expect(res.text).toContain(`Superseded ${v1.id}`);
     const arts = artifactsOf(w.sessionId);
     const v2 = arts.find((a) => a.parentId === v1.id)!;
     expect(arts).toHaveLength(2);
     expect(v2.version).toBe(2);
-    expect(v2.title).toBe("Config"); // inherited
+    expect(v2.title).toBe("Config owner"); // inherited
     expect(arts.find((a) => a.id === v1.id)!.status).toBe("superseded");
     const comments = world.store(w.sessionId).getCommentsForArtifact(v1.id);
     expect(comments).toHaveLength(1);
     expect(comments[0]!.id).toBe(`cmt_op_${v2.admission!.operationId}`);
     expect(comments[0]!.content).toBe(`Superseded by ${v2.id}: Name the removal`);
     expect(await stateOf(allowanceId)).toBe("used");
+  });
+
+  it("#499 review — the admitted create path says what the normal path says (review URL + close-note)", async () => {
+    world = new StanceWorld();
+    const { w } = await blockedThenAllowed();
+    const res = await w.call("present_code_change", codeArgs());
+    expect(res.text).toContain("Human can review at localhost:");
+    expect(res.text).toContain("If this single-file change is the whole task");
   });
 });
 
@@ -232,18 +241,31 @@ describe("#470 binding (§2) — adversarial 2 and 3", () => {
     expect((await w.call("present_options", changedPros)).isError).toBe(true);
     expect(await stateOf(allowanceId)).toBe("allowed");
 
-    // Research evidence snippet, through revise_artifact (present_findings
-    // admission is a later slice; its blocks are not eligible yet).
+    // A research evidence snippet: findings can't be allowed once — not via
+    // present_findings, and (fail closed, #499 review) not via revise_artifact.
     const store = world.store(w.sessionId);
     store.overrideRejectedApproach({ description: STANCE });
     await w.call("present_findings", { title: "F", summary: "Inspect", findings: [{ category: "A", detail: "d", significance: "low" }] });
     holdStance(store, STANCE);
     const target = artifactsOf(w.sessionId).find((a) => a.type === "research")!;
-    const revise = (snippet: string) => ({ artifactId: target.id, mode: "supersede", reason: "r", content: { summary: "Remove global mutable state", findings: [{ category: "A", detail: "d", significance: "low", evidence: [{ filePath: "src/a.ts", lineStart: 1, lineEnd: 1, snippet, explanation: "where it lives" }] }] } });
-    expect((await w.call("revise_artifact", revise("let a = 1;"))).isError).toBe(true);
-    const research = await world.allowNewest();
-    expect((await w.call("revise_artifact", revise("let a = 2;"))).isError).toBe(true);
-    expect(await stateOf(research)).toBe("allowed");
+    const revise = { artifactId: target.id, mode: "supersede", reason: "r", content: { summary: "Remove global mutable state", findings: [{ category: "A", detail: "d", significance: "low", evidence: [{ filePath: "src/a.ts", lineStart: 1, lineEnd: 1, snippet: "let a = 1;", explanation: "where it lives" }] }] } };
+    expect((await w.call("revise_artifact", revise)).isError).toBe(true);
+    const block = await world.newestBlock();
+    expect(block).toMatchObject({ toolName: "revise_artifact", eligible: false, ineligibleReason: "unsupported_tool" });
+    expect((await world.grant(block.id)).status).toBe(409);
+  });
+
+  it("#499 review — revise eligibility matches the create tools: findings, spec and plan revisions are not eligible", async () => {
+    world = new StanceWorld();
+    const w = await world.wrapper();
+    await w.call("present_spec", { title: "Spec", objective: "ship", requirements: [{ id: "R1", statement: "works", rationale: "core", acceptanceCriteria: ["ok"] }] });
+    await w.call("present_plan", { title: "Plan", steps: [{ description: "extract", reasoning: "reuse" }], estimatedChanges: 1 });
+    holdStance(world.store(w.sessionId), STANCE);
+    const [spec, plan] = ["spec", "plan"].map((t) => artifactsOf(w.sessionId).find((a) => a.type === t)!);
+    await w.call("revise_artifact", { artifactId: spec!.id, mode: "supersede", reason: "r", content: { title: "Spec", objective: "remove global mutable state", requirements: [{ id: "R1", statement: "works", rationale: "core", acceptanceCriteria: ["ok"] }] } });
+    expect(await world.newestBlock()).toMatchObject({ eligible: false, ineligibleReason: "unsupported_tool" });
+    await w.call("revise_artifact", { artifactId: plan!.id, mode: "supersede", reason: "r", content: { title: "Plan", steps: [{ description: "remove global mutable state", reasoning: "testability" }], estimatedChanges: 1 } });
+    expect(await world.newestBlock()).toMatchObject({ eligible: false, ineligibleReason: "unsupported_tool" });
   });
 
   it("paraphrase: a one-character change, a reworded clause, a trailing clause and a different tool are each blocked; P stays active", async () => {
@@ -332,6 +354,47 @@ describe("#470 session end and expiry (§5)", () => {
     const res = await w.call("present_code_change", codeArgs());
     expect(res.isError).toBe(true);
     expect(res.text).toContain("expired");
+  });
+
+  it("#499 review — the cap also runs on a monotonic clock: stepping the wall clock BACK can't extend it", async () => {
+    world = new StanceWorld();
+    const { w, allowanceId } = await blockedThenAllowed();
+    world.now -= 10 * 24 * 3600_000; // the wall clock steps back ten days
+    world.mono += ALLOWANCE_CEILING_MS - 1;
+    expect(await stateOf(allowanceId)).toBe("allowed");
+    world.mono += 1;
+    expect(await stateOf(allowanceId)).toBe("expired");
+    const res = await w.call("present_code_change", codeArgs());
+    expect(res.isError).toBe(true);
+    expect(artifactsOf(w.sessionId)).toHaveLength(0);
+  });
+
+  it("#499 review P2 — a late unregister from an EVICTED wrapper is a no-op: the live replacement and its allowance survive", async () => {
+    world = new StanceWorld();
+    const a = await world.wrapper("sx_split", { split: true });
+    const b = await world.wrapper("sx_split", { split: true }); // evicts A
+    holdStance(world.store("sx_split"), STANCE);
+    await b.call("present_code_change", codeArgs());
+    const allowanceId = await world.allowNewest();
+    await a.client.unregister(); // A's late shutdown, with A's (now unknown) token
+    expect(world.daemon.activeSessions.has("sx_split")).toBe(true);
+    expect(await stateOf(allowanceId)).toBe("allowed");
+    expect((await b.call("present_code_change", codeArgs())).isError).toBeFalsy();
+  });
+
+  it("#499 review P2 — fallback mode: one of two wrappers leaving keeps the session live for the other", async () => {
+    world = new StanceWorld();
+    const one = await world.wrapper("sx_fb");
+    const two = await world.wrapper("sx_fb");
+    holdStance(world.store("sx_fb"), STANCE);
+    await two.call("present_code_change", codeArgs());
+    const allowanceId = await world.allowNewest();
+    await one.client.unregister();
+    expect(world.daemon.activeSessions.has("sx_fb")).toBe(true);
+    expect(await stateOf(allowanceId)).toBe("allowed");
+    await two.client.unregister();
+    expect(world.daemon.activeSessions.has("sx_fb")).toBe(false);
+    expect(await stateOf(allowanceId)).toBe("ended");
   });
 
   it("split mode: a newer registration for the same session evicts the older one; fallback mode does not, and wrapper 2 can't claim wrapper 1's allowance", async () => {

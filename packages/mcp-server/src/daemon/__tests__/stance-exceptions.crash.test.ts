@@ -162,7 +162,9 @@ describe("#470 §10 (4) — a dropped response after commit", () => {
   });
 });
 
-// §10 (5b) — kill at each point, then each recovery path. Every point flushes
+// §10 (5b) — kill at each point, then each recovery path. (A plan revise —
+// and with it the plan-review follow-up — is not eligible since the #499
+// review made revise eligibility match the wired create tools.) Every point flushes
 // before it fires, so "crash here" leaves exactly what a SIGKILL would.
 const MATRIX: Array<[Kind, StanceFaultPoint]> = [
   ["decision-revise", "after_child_flush"],
@@ -170,9 +172,6 @@ const MATRIX: Array<[Kind, StanceFaultPoint]> = [
   ["decision-revise", "after_comment"],
   ["decision-revise", "after_decision"],
   ["decision-revise", "before_completed"],
-  ["plan-revise", "after_child_flush"],
-  ["plan-revise", "after_plan_review"],
-  ["plan-revise", "before_completed"],
   ["options-create", "after_child_flush"],
   ["options-create", "after_decision"],
   ["options-create", "before_completed"],
@@ -384,5 +383,92 @@ describe("#470 §13 condition 3 — a completed-operation replay is read-only", 
     const res = await w.call(tool, args);
     expect(res.text).toContain("Already admitted");
     expect(res.structuredContent).toMatchObject({ replayed: true });
+  });
+});
+
+describe("#499 review P2 — a failed replay probe never falls through to a duplicate create", () => {
+  it("completion keeps failing, the stance is retired, the identical retry: an error, still ONE artifact", async () => {
+    world = new StanceWorld();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { w, tool, args } = await allowed("options-create");
+    world.fault = (point) => { if (point === "before_completed") throw new Error("completion keeps failing"); };
+    expect((await w.call(tool, args)).isError).toBe(true);
+    world.store(SID).overrideRejectedApproach({ description: STANCE });
+    const retry = await w.call(tool, args);
+    expect(retry.isError).toBe(true);
+    expect(retry.text).toContain("couldn't confirm whether an earlier identical call already went through");
+    expect(world.store(SID).getArtifacts().filter((a) => a.type === "decision")).toHaveLength(1);
+    world.fault = null;
+    const healed = await w.call(tool, args);
+    expect(healed.text).toContain("Already admitted");
+    expect(world.store(SID).getArtifacts().filter((a) => a.type === "decision")).toHaveLength(1);
+  });
+
+  it("an INCONSISTENT stamp refuses (not retryable) and creates nothing, even with the stance retired", async () => {
+    world = new StanceWorld();
+    const { w, tool, args, parentId } = await allowed("decision-revise");
+    world.crashAt("after_child_flush");
+    expect((await w.call(tool, args)).isError).toBe(true);
+    const child = world.store(SID).getArtifacts().find((a) => a.admission)!;
+    child.admission!.followUps.comment!.artifactId = "art_elsewhere";
+    world.store(SID).overrideRejectedApproach({ description: STANCE });
+    const retry = await w.call(tool, args);
+    expect(retry.isError).toBe(true);
+    expect(retry.text).toContain("doesn't match its own history");
+    expect(world.store(SID).getArtifacts().filter((a) => a.parentId === parentId)).toHaveLength(1);
+  });
+});
+
+describe("#499 review P3 — two allowances for one call fingerprint never deadlock", () => {
+  it("blocked with no prior, a prior lands, blocked again; both granted → the CURRENT one admits, the stale one is changed", async () => {
+    world = new StanceWorld();
+    const w = await world.wrapper(SID);
+    holdStance(world.store(SID), STANCE);
+    const args = { filePath: "src/config.ts", changeType: "modify", after: "export function loadConfig() { return {}; }", reasoning: "Remove global mutable state from the config loader" };
+    expect((await w.call("present_code_change", args)).isError).toBe(true);
+    const block1 = await world.newestBlock();
+    expect((await w.call("present_code_change", { filePath: "src/config.ts", changeType: "modify", before: "x", after: "let config = {};", reasoning: "tidy" })).isError).toBeFalsy();
+    expect((await w.call("present_code_change", args)).isError).toBe(true);
+    const block2 = await world.newestBlock();
+    expect(block2.id).not.toBe(block1.id);
+    const a1 = ((await (await world.grant(block1.id)).json()) as { allowance: { id: string } }).allowance.id;
+    const a2 = ((await (await world.grant(block2.id)).json()) as { allowance: { id: string } }).allowance.id;
+    const blocksBefore = (await world.blocks()).length;
+    const res = await w.call("present_code_change", args);
+    expect(res.isError).toBeFalsy();
+    expect(res.text).toContain("Admitted once");
+    expect(await stateOf(a2)).toBe("used");
+    expect(await stateOf(a1)).toBe("changed");
+    const old = (await world.blocks()).find((b) => b.id === block1.id)!;
+    expect(old.allowance).toMatchObject({ state: "changed", supersededByBlockId: block2.id });
+    expect((await world.blocks()).length).toBe(blocksBefore); // no new grantable block minted
+    const admitted = world.store(SID).getArtifacts().filter((a) => a.admission);
+    expect(admitted).toHaveLength(1);
+    expect((admitted[0]!.content as { before: string }).before).toBe("let config = {};");
+  });
+
+  it("a client whose resolution matches NO held allowance gets an honest line, not silence", async () => {
+    world = new StanceWorld();
+    const w = await world.wrapper(SID);
+    holdStance(world.store(SID), STANCE);
+    const args = { filePath: "src/config.ts", changeType: "modify", before: "a", after: "b", reasoning: "Remove global mutable state" };
+    await w.call("present_code_change", args);
+    const allowanceId = await world.allowNewest();
+    const block = (await world.blocks()).find((b) => b.allowance?.id === allowanceId)!;
+    const tampered = { ...block.snapshot!, content: { ...block.snapshot!.content, after: "c" } };
+    const res = await world.operation(SID, "op_mismatch", { callFingerprint: block.callFingerprint, admission: { exceptionIds: [allowanceId], toolName: "present_code_change", snapshot: tampered, preconditions: block.preconditions } }, registrationTokenOf(w));
+    expect(await res.json()).toMatchObject({ status: "refused", reason: "client_snapshot_mismatch" });
+    expect(await stateOf(allowanceId)).toBe("allowed");
+  });
+});
+
+describe("#499 review — the per-session queue is pruned when idle", () => {
+  it("after operations settle the queue map holds nothing", async () => {
+    world = new StanceWorld();
+    const { w, tool, args } = await allowed("options-create");
+    await w.call(tool, args);
+    await world.settle();
+    await new Promise((r) => setTimeout(r, 10));
+    expect((world.daemon.stanceExceptions as unknown as { queues: Map<string, unknown> }).queues.size).toBe(0);
   });
 });

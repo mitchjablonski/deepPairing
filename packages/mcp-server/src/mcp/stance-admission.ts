@@ -32,6 +32,9 @@ export const STANCE_MESSAGES = {
   dependencyChanged: (dep: { id: string | null; what: "prior" | "target" }) =>
     `The proposal your pair allowed depended on ${dep.what === "target" ? `the state of ${dep.id}` : (dep.id ?? "there being no earlier change to this file")}, ` +
     `which changed. Ask your pair to allow the new version.`,
+  versionMismatch:
+    "The allowance your pair granted covers a different version of this call than the one you sent now, so nothing was created. " +
+    "Retry the identical call you were blocked on, or ask your pair to allow this version.",
   inactive: (state: string, artifactId?: string, ceilingAt?: string) =>
     state === "used" ? `Your pair's allowance for this exact call was already used${artifactId ? ` (${artifactId})` : ""}.`
     : state === "revoked" ? "Your pair revoked the allowance for this exact call."
@@ -48,26 +51,55 @@ export interface StanceOperationHandle {
 
 type OperationResult = Record<string, unknown> & { status?: string };
 
-/** §6 step 0. `replay` is set when a committed operation was found. */
+/**
+ * §6 step 0. `replay` is set when a committed operation was found; `refusal`
+ * when the daemon could NOT establish whether one exists.
+ *
+ * #499 review P2 — only a DEFINITIVE "none" lets the tool continue. A failed
+ * probe (a transport/server error, or a stamp the daemon refuses as
+ * inconsistent) is not "none": a stamped child may exist, and the stance it
+ * was allowed past may have been retired since, so the normal path could
+ * present a duplicate. The sole compatibility exception is a daemon that has
+ * no operation route at all (a bare 404, no structured code): it predates
+ * allowances, so no admitted operation can exist there.
+ */
 export async function beginStanceOperation(
   ctx: ToolContext,
   toolName: string,
   args: unknown,
-): Promise<{ handle: StanceOperationHandle; replay?: OperationResult }> {
+): Promise<{ handle: StanceOperationHandle; replay?: OperationResult; refusal?: ToolResult }> {
   const handle = { operationId: `op_${nanoid(16)}`, callFingerprint: callFingerprint(toolName, args) };
   if (!ctx.store.runStanceOperation) return { handle };
   try {
     const result = await ctx.store.runStanceOperation(handle.operationId, { callFingerprint: handle.callFingerprint }) as OperationResult;
     if (result?.status === "replayed") return { handle, replay: result };
-  } catch {
-    // Fail-soft: the gate below still refuses anything a consumed allowance
-    // no longer covers, so continuing can't admit what wasn't allowed.
+    if (result?.status === "none") return { handle };
+    return { handle, refusal: probeRefusal(false, `unexpected status ${String(result?.status)}`) };
+  } catch (error) {
+    const e = error as { status?: number; code?: string; message?: string };
+    if (e.status === 404 && !e.code) return { handle };
+    if (e.code === "stance_exception_operation_inconsistent") return { handle, refusal: probeRefusal(true, e.message ?? "") };
+    return { handle, refusal: probeRefusal(false, e.message ?? String(error)) };
   }
-  return { handle };
 }
 
-/** The agent-facing result of an admitted (or replayed) operation. */
-export function admittedResult(op: OperationResult): ToolResult {
+function probeRefusal(inconsistent: boolean, detail: string): ToolResult {
+  return {
+    content: [{
+      type: "text",
+      text: inconsistent
+        ? `An earlier allowed version of this exact call left an operation record that doesn't match its own history, so deepPairing won't finish or repeat it. Nothing new was created. Tell your pair; don't retry this identical call. (${detail})`
+        : `deepPairing couldn't confirm whether an earlier identical call already went through, so nothing new was created. Retry this identical call in a moment. (${detail})`,
+    }],
+    isError: true,
+    _meta: { code: inconsistent ? "STANCE_OPERATION_INCONSISTENT" : "STANCE_OPERATION_UNCONFIRMED", retryable: !inconsistent },
+  } as ToolResult;
+}
+
+/** The agent-facing result of an admitted (or replayed) operation. `extra`
+ *  carries what the tool's normal path would also have said (review URL,
+ *  close-note). */
+export function admittedResult(op: OperationResult, extra = ""): ToolResult {
   const artifactId = String(op.artifactId);
   const decisionId = typeof op.decisionId === "string" ? op.decisionId : undefined;
   const ids = `${artifactId}${decisionId ? `, decision ${decisionId}` : ""}`;
@@ -77,8 +109,9 @@ export function admittedResult(op: OperationResult): ToolResult {
   const text = op.status === "replayed"
     ? `${STANCE_MESSAGES.replayed(ids)}${skipped}`
     : `Presented for review (${ids}). ${STANCE_MESSAGES.admitted(String(op.grantedVia ?? "ui"), (op.stances as string[]) ?? [], (op.reasons as string[]) ?? [])}${skipped} Call check_feedback for your pair's response.`;
+  const fullText = `${text}${extra}`;
   return {
-    content: [{ type: "text", text }],
+    content: [{ type: "text", text: fullText }],
     structuredContent: {
       artifactId,
       ...(decisionId ? { decisionId } : {}),
@@ -166,6 +199,7 @@ export async function admitBlockedProposal(
     return { response: withLine(pre.response, `${STANCE_MESSAGES.dependencyChanged(dep)}\n${STANCE_MESSAGES.blockHint}`) };
   }
   const line = dep ? STANCE_MESSAGES.dependencyChanged(dep)
+    : result.reason === "client_snapshot_mismatch" || result.reason === "snapshot_mismatch" ? STANCE_MESSAGES.versionMismatch
     : STANCE_MESSAGES.inactive(String(result.state ?? result.reason ?? ""), result.artifactId as string | undefined, result.ceilingAt as string | undefined);
   return refuse(pre.event, pre.source, pre.response, line);
 }
