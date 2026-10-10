@@ -9,6 +9,7 @@ import { noAgentLive } from "../lib/liveness";
 import { AGENT_ACTIVE_WINDOW_MS } from "../lib/agentActivity";
 import type { Artifact, Comment, Request } from "@deeppairing/shared";
 import { useReplayStore } from "./replay";
+import { useArtifactStore } from "./artifact";
 import {
   beginSessionTransition,
   captureSessionTransition,
@@ -1044,6 +1045,14 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       const adapter = createAdapter(undefined, sessionId);
       if (sessionId !== undefined && sessionId !== get().sessionId) {
         beginSessionTransition(sessionId);
+        // A fresh binding may follow explicit teardown, which retains the old
+        // same-session last-known frame. Retire that frame synchronously BEFORE
+        // publishing a different identity or opening its adapter: App may show
+        // received artifacts after a missed snapshot, and a deferred reset could
+        // also erase a fast replacement snapshot. Same-binding reconnects and
+        // deliberate replay retention continue through their existing paths.
+        useArtifactStore.getState().reset();
+        set({ hydrated: false, hydratedBinding: null, agentActivityAt: null, agentActiveSince: null });
       }
       set({ adapter, ...(sessionId !== undefined ? { sessionId } : {}) });
 

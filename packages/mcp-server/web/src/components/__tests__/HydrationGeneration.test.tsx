@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
+import App from "../../App";
 
 const { FakeAdapter, adapters } = vi.hoisted(() => {
   class FakeAdapter {
@@ -90,6 +91,39 @@ describe("applied hydration evidence belongs to a retained frame, not just a reu
     act(() => vi.advanceTimersByTime(HYDRATION_STALL_MS + 1));
     expect(ready()).toBe(false);
     expect(useConnectionGraceStore.getState().hydrationStalled).toBe(true);
+    expect(useArtifactStore.getState().artifacts.map((artifact) => artifact.id)).toEqual(["A-artifact"]);
+  });
+
+  it("fresh different-session binding cannot reveal the previous frame after its snapshot stalls", async () => {
+    await appliedA();
+    act(() => useConnectionStore.getState().disconnect());
+    act(() => useConnectionStore.getState().connect("B"));
+    render(<App />);
+    expect(useConnectionStore.getState().sessionId).toBe("B");
+    expect(ready()).toBe(false);
+    act(() => vi.advanceTimersByTime(HYDRATION_STALL_MS + 1));
+    expect(useConnectionGraceStore.getState().hydrationStalled).toBe(true);
+    expect(screen.getByTestId("hydration-unknown")).toBeInTheDocument();
+    expect(useArtifactStore.getState().artifacts).toEqual([]);
+    expect(screen.getByRole("main").querySelector('[data-artifact-id="A-artifact"]')).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send", exact: true })).not.toBeInTheDocument();
+  });
+
+  it("frame retirement precedes a fast fresh snapshot and queued old callbacks cannot erase it", async () => {
+    await appliedA();
+    const old = current();
+    await act(async () => {
+      old.emit(snapshot("A"));
+      useConnectionStore.getState().disconnect();
+      useConnectionStore.getState().connect("B");
+      expect(useArtifactStore.getState().artifacts).toEqual([]);
+      current().emit(snapshot("B"));
+    });
+    await vi.waitFor(() => expect(ready()).toBe(true));
+    expect(useConnectionStore.getState().sessionId).toBe("B");
+    expect(useArtifactStore.getState().artifacts.map((artifact) => artifact.id)).toEqual(["B-artifact"]);
+    act(() => vi.advanceTimersByTime(HYDRATION_STALL_MS + 1));
+    expect(useConnectionGraceStore.getState().hydrationStalled).toBe(false);
   });
 
   it("ordinary same-adapter socket reconnect preserves its actual loaded frame", async () => {
