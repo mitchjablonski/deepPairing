@@ -1,5 +1,0 @@
-<<<<<<<< HEAD:claude-plugin/server/web/assets/artifact-sIK6Rlxg.js
-import{a as e,c as t,d as n,f as r,i,l as a,n as o,o as s,r as c,s as l,t as u,u as d}from"./artifact-CEJkElOF.js";export{u as REFRESH_SESSION_EVENT,o as artifactStoreGeneration,c as chainArtifactIds,i as collectChainComments,e as commentPriorVersion,s as isBackfilled,l as markBackfilled,t as resolveToLiveId,a as restoreRollbacks,d as rootArtifactId,n as snapshotRollbacks,r as useArtifactStore};
-========
-import{a as e,c as t,d as n,f as r,i,l as a,n as o,o as s,r as c,s as l,t as u,u as d}from"./artifact-DBm8RcNL.js";export{u as REFRESH_SESSION_EVENT,o as artifactStoreGeneration,c as chainArtifactIds,i as collectChainComments,e as commentPriorVersion,s as isBackfilled,l as markBackfilled,t as resolveToLiveId,a as restoreRollbacks,d as rootArtifactId,n as snapshotRollbacks,r as useArtifactStore};
->>>>>>>> 47c72cb0 (#503 review: matcher normalisation + route ask, truthful CLI results, safe previews, portable pager, verified hook ownership, doctor):claude-plugin/server/web/assets/artifact-BL6RUqNQ.js
