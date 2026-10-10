@@ -13,6 +13,7 @@ import { useShallow } from "zustand/react/shallow";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
 import { computeLineDiff } from "../../lib/diff";
 import { useEffect, useMemo, useState } from "react";
+import { useOfflineReason } from "../../hooks/useOfflineReason";
 
 /** Clickable badges that link to the finding artifacts that motivated a step */
 function MotivatedByBadges({ labels }: { labels: string[] }) {
@@ -152,6 +153,7 @@ function PlanStepPreview({ step, artifactId, stepIndex }: { step: PlanStep; arti
 }
 
 export function PlanArtifact({ artifact }: PlanArtifactProps) {
+  const offline = useOfflineReason(); // #487 review — act paths gate on the shared offline condition (#467)
   // Coercion boundary: `content.steps` is a guaranteed array and
   // `estimatedChanges` is a number OR a string (M1.3), so the renderer can
   // trust the shape and branch on the type below.
@@ -203,6 +205,7 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
   // sat there looking untouched).
   const [approvingDeltas, setApprovingDeltas] = useState(false);
   const handleApproveWithDeltas = async () => {
+    if (offline) return; // #487 review — refused offline (the control is disabled too)
     if (approvingDeltas) return;
     const accepted = checkedSteps.map((c, i) => c ? i : -1).filter((i) => i >= 0);
     const rejected = checkedSteps.map((c, i) => !c ? i : -1).filter((i) => i >= 0);
@@ -413,8 +416,9 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
             </span>
           </div>
           <button
+            title={offline ?? undefined}
             onClick={handleApproveWithDeltas}
-            disabled={approvingDeltas}
+            disabled={(approvingDeltas) || !!offline}
             className="px-3 py-1.5 bg-accent-green text-white text-xs font-medium rounded
                        hover:bg-accent-green/80 disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
           >

@@ -13,6 +13,9 @@ import { WaitingForClaude } from "./components/WaitingForClaude";
 import { TurnIndicator } from "./components/TurnIndicator";
 import { NextUpBar } from "./components/NextUpBar";
 import { sessionLabelOf } from "./lib/sessionLabel";
+import { outageMinutes } from "./lib/outage";
+import { useConnectionGraceDriver, useTabOffline, useHydrationStalled, HYDRATION_STALLED_TEXT, RELOAD_TITLE, reloadPage } from "./lib/connectionGrace";
+import { ReloadConfirmDialog } from "./components/ReloadConfirmDialog";
 import { usePreferencesStore } from "./stores/preferences";
 import { PendingBanner } from "./components/PendingBanner";
 import { ResumeQuestionsBanner } from "./components/ResumeQuestionsBanner";
@@ -37,7 +40,7 @@ import { ContextBankView } from "./components/ContextBankView";
 import { SkillLoadBanner } from "./components/SkillLoadBanner";
 import { useArtifactStore } from "./stores/artifact";
 import { useReplayStore } from "./stores/replay";
-import { useConnectionStore } from "./stores/connection";
+import { useConnectionStore, selectHydratedForBinding } from "./stores/connection";
 import { usePreflightBlockStore } from "./stores/preflightBlocks";
 import { useCrossProjectStore } from "./stores/crossProject";
 import { useContextBankStore } from "./stores/contextBank";
@@ -66,12 +69,19 @@ function App() {
   // (D6 bail suppresses idle re-renders); the shared hook re-fires at the
   // staleness boundary so the closing beat appears when the session wraps.
   const agentRecentlyActive = useAgentRecentlyActive();
+  // #465 N2 / #467 review — the one "is this tab offline?" answer (first-connect
+  // grace included), shared with the bar and the act buttons.
+  useConnectionGraceDriver();
+  const tabOffline = useTabOffline();
+  const hydrationStalled = useHydrationStalled(); // #477
   // #455 review — the session dot pulses on the SAME source as the pill.
   const agentWorking = useAgentWorking();
   // C5 — no IdleHome/WaitingForClaude flash on refresh: skeleton until the
   // first `connected` payload lands, bounded by a grace timer so a dead
   // daemon still falls through to the real routing (IdleHome is then correct).
-  const hydrated = useConnectionStore((s) => s.hydrated);
+  // #487 review (Sol P2) — hydrated FOR THE CURRENT BINDING (session @
+  // project): a switch doesn't inherit the previous binding's snapshot.
+  const hydrated = useConnectionStore(selectHydratedForBinding);
   const [hydrationGrace, setHydrationGrace] = useState(true);
   useEffect(() => {
     // Review: re-arm whenever hydration is pending (mount AND project switch,
@@ -81,7 +91,12 @@ function App() {
     const t = setTimeout(() => setHydrationGrace(false), 4000);
     return () => clearTimeout(t);
   }, [hydrated]);
-  const showHydrationSkeleton = !hydrated && hydrationGrace;
+  // #487 review (Sol P2) — "unknown" is not "known-empty". While CONNECTED but
+  // the current binding has no applied snapshot, the main area keeps the
+  // skeleton (not WaitingForClaude/IdleHome, which assert an empty session)
+  // until the watchdog fires, then an honest still-loading placeholder. The 4s
+  // grace still lets a DEAD daemon fall through to the real routing.
+  const showHydrationSkeleton = !hydrated && (hydrationGrace || connected);
 
   // C2 review — auto-bind an unbound tab when there's EXACTLY ONE active
   // session: an unbound composer posts to the daemon's default store (map
@@ -878,7 +893,18 @@ function App() {
 
       {/* Disconnected warning — escalates (D8/H4): a blip and a dead daemon
           looked identical forever; past 60s the pair needs to know to act. */}
-      {!connected && <DisconnectBanner />}
+      {tabOffline && <DisconnectBanner />}
+
+      {/* #477 — connected, but the first snapshot never applied: say so, with
+          Reload (bar ON carries the same state on its line). */}
+      {hydrationStalled && !hydrated && !nextUpBar && (
+        <div className="px-3 py-1.5 bg-accent-amber-dim/40 border-b border-accent-amber/15 text-center" role="status" data-testid="hydration-stalled">
+          <span className="text-2xs text-accent-amber">
+            {HYDRATION_STALLED_TEXT}{" "}
+            <button type="button" onClick={reloadPage} title={RELOAD_TITLE} className="underline font-medium">Reload</button>
+          </span>
+        </div>
+      )}
 
       {/* Replay scrubber — only renders when replay mode is active */}
       <ReplayScrubber />
@@ -940,8 +966,19 @@ function App() {
             Failed to render — try selecting a different artifact
           </div>
         }>
-          {showHydrationSkeleton
-            ? <HydrationSkeleton />
+          {/* #487 review (Fable) — stalled but artifacts DID arrive (broadcasts
+              after a missed snapshot): show them; the stall stays on the
+              bar/banner line only. */}
+          {showHydrationSkeleton && !(hydrationStalled && hasArtifacts)
+            ? (hydrationStalled
+              // #487 review (Sol P2) — past the watchdog the main area says
+              // the same honest thing as the banner/bar (not live: the banner
+              // or the bar is the one announcement).
+              ? <div className="p-5 text-xs text-text-secondary" data-testid="hydration-unknown">
+                  {HYDRATION_STALLED_TEXT}{" "}
+                  <button type="button" onClick={reloadPage} title={RELOAD_TITLE} className="underline text-accent-blue">Reload</button>
+                </div>
+              : <HydrationSkeleton />)
             : hasArtifacts
             ? <ArtifactPanel />
             : connected && activeSessions.length > 0 && agentRecentlyActive
@@ -1019,6 +1056,7 @@ function App() {
       )}
 
       {/* Ephemeral toast stack — pre-flight blocks, etc. */}
+      <ReloadConfirmDialog />
       <ToastLayer />
 
       {/* Q2 — one-time cross-project opt-in, offered immediately after the
@@ -1061,16 +1099,17 @@ function DisconnectBanner() {
   }, []);
   const outageMs = disconnectedSince ? now - disconnectedSince : 0;
   const prolonged = outageMs >= 60_000;
+  // #465 N3 — say it is THIS TAB that lost the daemon, never Claude.
   return (
     <div className="px-3 py-1.5 bg-accent-red-dim/30 border-b border-accent-red/15 text-center" role="status">
       {prolonged ? (
         <span className="text-2xs text-accent-red">
-          Still disconnected after {Math.round(outageMs / 60_000)} min — the daemon may be down. Run{" "}
+          This tab has been offline for {outageMinutes(outageMs)} min — the deepPairing daemon may be down. Run{" "}
           <code className="bg-surface-elevated px-1 py-0.5 rounded">node packages/mcp-server/dist/cli/init.js doctor --fix</code> in the project, then reload.
         </span>
       ) : (
         <span className="text-2xs text-accent-red">
-          Disconnected from server — reconnecting...
+          This tab lost its connection to the deepPairing daemon — reconnecting…
         </span>
       )}
     </div>

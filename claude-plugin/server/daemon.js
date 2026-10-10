@@ -2288,7 +2288,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes4, createHash: createHash2 } = __require("crypto");
+    var { randomBytes: randomBytes4, createHash: createHash3 } = __require("crypto");
     var { Duplex, Readable: Readable2 } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -2956,7 +2956,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest = createHash2("sha1").update(key + GUID).digest("base64");
+        const digest = createHash3("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -3325,7 +3325,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash: createHash2 } = __require("crypto");
+    var { createHash: createHash3 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -3632,7 +3632,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest = createHash2("sha1").update(key + GUID).digest("base64");
+        const digest = createHash3("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -19769,6 +19769,42 @@ var DecisionResponseSchema = external_exports.object({
   confidence: DecisionConfidenceSchema.optional(),
   predictedOutcome: external_exports.string().optional()
 });
+var DecisionClosedStatusSchema = external_exports.enum(["superseded", "retracted", "obsolete"]);
+var DECISION_NON_ANSWERABLE_STATUSES = ["rejected", "revised", "superseded", "retracted", "obsolete"];
+var DecisionNonAnswerableStatusSchema = external_exports.enum(DECISION_NON_ANSWERABLE_STATUSES);
+function decisionCanAcceptAnswer(status) {
+  return !DECISION_NON_ANSWERABLE_STATUSES.includes(status);
+}
+function nonAnswerableVerb(status) {
+  switch (status) {
+    case "rejected":
+      return "rejected";
+    case "revised":
+      return "sent back for changes";
+    case "superseded":
+      return "replaced";
+    case "retracted":
+      return "withdrawn";
+    default:
+      return "closed";
+  }
+}
+var DecisionSupersededBySchema = external_exports.object({
+  artifactId: external_exports.string(),
+  decisionId: external_exports.string().optional()
+});
+var DecisionClosedRefusalSchema = external_exports.object({
+  error: external_exports.literal("decision_closed").optional(),
+  code: external_exports.literal("decision_closed"),
+  currentStatus: DecisionClosedStatusSchema,
+  decisionId: external_exports.string().optional(),
+  artifactId: external_exports.string().optional(),
+  supersededBy: DecisionSupersededBySchema.optional(),
+  /** #493 review — the newest version was itself closed: no `supersededBy`
+   *  link (nothing to answer), and this says why. */
+  successorStatus: DecisionNonAnswerableStatusSchema.optional(),
+  message: external_exports.string().optional()
+});
 
 // ../shared/dist/schemas/message.js
 var TextEventSchema = external_exports.object({
@@ -23873,6 +23909,9 @@ var ERROR_CODES = {
   /** Context bank — close-out on a decision the human actually ANSWERED. Closing
    *  it out would overwrite real history with "retired, nobody chose". */
   decision_already_resolved: "decision_already_resolved",
+  /** #492 — a resolve on a decision whose backing artifact is closed
+   *  (superseded / retracted / obsolete): nothing is written. */
+  decision_closed: "decision_closed",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
   comment_not_in_session: "comment_not_in_session",
   /** #172 — take-counter/insist targeted a suggestion the agent hasn't countered. */
@@ -23958,6 +23997,115 @@ var TOOL_ERROR_RETRYABLE = {
 
 // src/store/file-store.ts
 import fs14 from "node:fs";
+
+// src/store/verdict-guard.ts
+var HUMAN_VERDICT_REASONS = /* @__PURE__ */ new Set([
+  "ui_approve_button",
+  "ui_revise_button",
+  "ui_reject_button",
+  "ui_decision_resolve",
+  "ui_bulk_accept"
+]);
+var TERMINAL_VERDICT_STATES = /* @__PURE__ */ new Set([
+  "approved",
+  "revised",
+  "rejected"
+]);
+function isCrossTerminalVerdictFlip(from, to, reason) {
+  return HUMAN_VERDICT_REASONS.has(reason) && TERMINAL_VERDICT_STATES.has(from) && TERMINAL_VERDICT_STATES.has(to) && from !== to;
+}
+
+// src/store/decision-resolve-guard.ts
+function classifyStaleResolve(record2, backing, optionId) {
+  const prior = record2.response;
+  const resolution = prior ? { optionId: prior.optionId, ...prior.reasoning ? { reasoning: prior.reasoning } : {}, ...record2.resolvedAt ? { resolvedAt: record2.resolvedAt } : {} } : void 0;
+  if (resolution && prior.optionId === optionId) {
+    return { kind: "same", ...backing ? { artifactId: backing.id } : {}, resolution };
+  }
+  const closedElsewhere = !!backing && isCrossTerminalVerdictFlip(backing.status, "approved", "ui_decision_resolve");
+  if (!resolution && !closedElsewhere) return null;
+  return {
+    kind: "conflict",
+    ...backing ? { artifactId: backing.id } : {},
+    currentStatus: backing?.status ?? "approved",
+    at: resolution?.resolvedAt ?? backing?.updatedAt,
+    ...resolution ? { resolution } : {}
+  };
+}
+function staleResolveBody(outcome, decisionId) {
+  if (outcome.kind === "same") {
+    return {
+      status: "resolved",
+      alreadyResolved: true,
+      decisionId,
+      ...outcome.artifactId ? { artifactId: outcome.artifactId } : {},
+      resolution: outcome.resolution
+    };
+  }
+  const answered = !!outcome.resolution;
+  const at = outcome.at;
+  return {
+    error: "verdict_already_final",
+    code: "verdict_already_final",
+    currentStatus: outcome.currentStatus,
+    decisionId,
+    ...outcome.artifactId ? { artifactId: outcome.artifactId } : {},
+    ...outcome.resolution ? { resolution: outcome.resolution } : {},
+    at,
+    message: answered ? `This decision was already answered${at ? ` at ${at}` : ""} elsewhere \u2014 your pick wasn't applied; this card now shows the recorded answer.` : `This decision was already ${outcome.currentStatus}${at ? ` at ${at}` : ""} elsewhere \u2014 your pick wasn't applied; this card now shows its current state.`
+  };
+}
+var resolveChains = /* @__PURE__ */ new WeakMap();
+function withDecisionResolveLock(store, fn) {
+  const prev = resolveChains.get(store) ?? Promise.resolve();
+  const next = prev.catch(() => void 0).then(fn);
+  resolveChains.set(store, next.catch(() => void 0));
+  return next;
+}
+var CLOSED_DECISION_STATUSES = /* @__PURE__ */ new Set(["superseded", "retracted", "obsolete"]);
+function classifyClosedDecision(backing, artifacts) {
+  if (!backing) return null;
+  let latest = backing;
+  const seen = /* @__PURE__ */ new Set([backing.id]);
+  for (; ; ) {
+    const next = artifacts.find((a) => a.parentId === latest.id && !seen.has(a.id));
+    if (!next) break;
+    seen.add(next.id);
+    latest = next;
+  }
+  const hasSuccessor = latest !== backing;
+  const status = hasSuccessor ? "superseded" : backing.status;
+  if (decisionCanAcceptAnswer(status) || !CLOSED_DECISION_STATUSES.has(status)) return null;
+  const outcome = {
+    kind: "closed",
+    artifactId: backing.id,
+    currentStatus: status
+  };
+  if (hasSuccessor) {
+    if (!decisionCanAcceptAnswer(latest.status)) {
+      outcome.successorStatus = latest.status;
+    } else {
+      const decisionId = latest.content?.decisionId;
+      outcome.supersededBy = { artifactId: latest.id, ...typeof decisionId === "string" && decisionId ? { decisionId } : {} };
+    }
+  }
+  return outcome;
+}
+function closedResolveBody(outcome, decisionId) {
+  const message = outcome.currentStatus === "superseded" && outcome.successorStatus ? `This question was revised, and the newer version was ${nonAnswerableVerb(outcome.successorStatus)} too \u2014 there's nothing to answer here.` : outcome.currentStatus === "superseded" ? "This question was revised \u2014 answer the new version. Your answer to the old one wasn't recorded." : outcome.currentStatus === "retracted" ? "Claude withdrew this question, so your answer wasn't recorded." : "This question was closed \u2014 it was overtaken by new information, so your answer wasn't recorded.";
+  return {
+    error: "decision_closed",
+    code: "decision_closed",
+    currentStatus: outcome.currentStatus,
+    decisionId,
+    ...outcome.artifactId ? { artifactId: outcome.artifactId } : {},
+    ...outcome.supersededBy ? { supersededBy: outcome.supersededBy } : {},
+    ...outcome.successorStatus ? { successorStatus: outcome.successorStatus } : {},
+    message
+  };
+}
+
+// src/store/file-store.ts
 import path13 from "node:path";
 import crypto4 from "node:crypto";
 
@@ -23993,6 +24141,7 @@ function nanoid3(size = 21) {
 
 // src/store/global-store.ts
 import fs7 from "node:fs";
+import { createHash } from "node:crypto";
 import os4 from "node:os";
 import path6 from "node:path";
 
@@ -24444,13 +24593,99 @@ var GlobalStore = class _GlobalStore {
       reentrant: true
     });
   }
+  /**
+   * #486 — `<ledger>.removed.json`: `{ seq, removals: { [conceptKey]: seq } }`.
+   * `seq` is a MONOTONIC removal counter (never a clock: a backward clock step
+   * must not change which mirrors count as "older than the removal"). A
+   * mirror queued while the ledger was busy carries the `seq` it saw before
+   * its first attempt; on replay it is skipped if its concept was removed
+   * after that. A sidecar, so the ledger's own format is unchanged.
+   */
+  removalsPath() {
+    return `${this.ledgerPath}.removed.json`;
+  }
+  /** Read the removal sidecar. A corrupt file is backed up and salvaged —
+   *  never silently treated as empty (that would lose tombstones). */
+  readRemovals() {
+    let raw2;
+    try {
+      raw2 = fs7.readFileSync(this.removalsPath(), "utf-8");
+    } catch (err) {
+      if (err.code === "ENOENT") return { seq: 0, removals: {} };
+      throw err;
+    }
+    const salvage = (text) => {
+      const out = {};
+      for (const m of text.matchAll(/"((?:[^"\\]|\\.)*)"\s*:\s*(\d+)/g)) {
+        try {
+          const key = JSON.parse(`"${m[1]}"`);
+          if (key !== "seq") out[key] = Number(m[2]);
+        } catch {
+        }
+      }
+      return out;
+    };
+    try {
+      const v = JSON.parse(raw2);
+      if (v && typeof v === "object" && Number.isInteger(v.seq) && v.removals && typeof v.removals === "object" && !Array.isArray(v.removals)) {
+        const removals2 = {};
+        let bad = false;
+        for (const [k, n] of Object.entries(v.removals)) {
+          if (Number.isInteger(n)) removals2[k] = n;
+          else bad = true;
+        }
+        if (!bad) return { seq: v.seq, removals: removals2 };
+      }
+    } catch {
+    }
+    const removals = salvage(raw2);
+    const seqMatch = raw2.match(/"seq"\s*:\s*(\d+)/);
+    const seq = Math.max(0, seqMatch ? Number(seqMatch[1]) : 0, ...Object.values(removals));
+    const backup = `${this.removalsPath()}.corrupt-${createHash("sha256").update(raw2).digest("hex").slice(0, 12)}`;
+    if (!fs7.existsSync(backup)) {
+      try {
+        fs7.copyFileSync(this.removalsPath(), backup);
+      } catch {
+      }
+      console.error(
+        `[deepPairing] GlobalStore: the removal record ${this.removalsPath()} is corrupt; backed up to ${backup} and salvaged ${Object.keys(removals).length} removal(s). Check the backup if a removed stance reappears.`
+      );
+    }
+    return { seq, removals };
+  }
+  /** The current removal sequence — captured by a mirror before its first
+   *  attempt, so its replay can tell whether a removal happened since. */
+  removalSeq() {
+    try {
+      return this.readRemovals().seq;
+    } catch {
+      return 0;
+    }
+  }
+  /** Called under the ledger lock (removeConcept), BEFORE the deletion.
+   *  Throws if the tombstone can't be made durable — the removal then fails
+   *  rather than acknowledging something a queued mirror could undo. */
+  recordRemoval(key) {
+    const current = this.readRemovals();
+    const seq = current.seq + 1;
+    try {
+      fs7.mkdirSync(path6.dirname(this.removalsPath()), { recursive: true });
+      writeJsonAtomic(this.removalsPath(), { seq, removals: { ...current.removals, [key]: seq } });
+    } catch (err) {
+      throw new Error(
+        `could not record the removal of "${key}" durably (${this.removalsPath()}: ${err.message}); refusing to remove it, because a queued mirror could re-add it.`
+      );
+    }
+  }
+  /** Returns true only when the ledger was durably replaced (#488 review:
+   *  callers that must not acknowledge a refused write check this). */
   write(ledger) {
     if (this.lastReadCorrupt) {
       const snap = corruptSnapshots.get(this.ledgerPath);
       console.error(
         `[deepPairing] GlobalStore: refusing to write ${this.ledgerPath} \u2014 the current on-disk ledger is corrupt; not overwriting it with a reset shape. ` + (snap ? `A backup of the corrupt file is at ${snap}. ` : `It could NOT be backed up (no snapshot of the current corrupt state exists on disk). `) + `Fix or remove the file to resume recording.`
       );
-      return;
+      return false;
     }
     if (this.lastReadDroppedEntries) {
       this.snapshotLedger();
@@ -24459,7 +24694,10 @@ var GlobalStore = class _GlobalStore {
       fs7.mkdirSync(path6.dirname(this.ledgerPath), { recursive: true });
       writeJsonAtomic(this.ledgerPath, ledger);
       corruptSnapshots.delete(this.ledgerPath);
-    } catch {
+      return true;
+    } catch (err) {
+      console.error(`[deepPairing] GlobalStore: could not write ${this.ledgerPath}:`, err);
+      return false;
     }
   }
   /**
@@ -24486,16 +24724,32 @@ var GlobalStore = class _GlobalStore {
    * treat as genuine.
    */
   static DEDUPE_WINDOW_MS = 5e3;
-  recordInstance(concept, instance) {
-    if (!concept.trim()) return;
-    this.transact(() => this.recordInstanceLocked(concept, instance));
+  recordInstance(concept, instance, opts = {}) {
+    if (!concept.trim()) return "duplicate";
+    return this.transact(() => this.recordInstanceLocked(concept, instance, opts));
   }
-  recordInstanceLocked(concept, instance) {
+  recordInstanceLocked(concept, instance, opts = {}) {
     const key = normalizeKey(concept);
     const ledger = this.read();
+    if (this.lastReadCorrupt) {
+      this.write(ledger);
+      return "refused";
+    }
+    if (opts.precondition && !opts.precondition()) return "ineligible";
     const now = instance.at ?? (/* @__PURE__ */ new Date()).toISOString();
     const nowMs = Date.parse(now);
     const existing = ledger.concepts[key];
+    if (opts.replayedFromSeq !== void 0) {
+      const removedSeq = this.readRemovals().removals[key];
+      if (removedSeq !== void 0 && removedSeq > opts.replayedFromSeq) {
+        console.error(`[deepPairing] skipped a queued cross-project mirror for "${concept}": the concept was removed after it was queued.`);
+        return "removed";
+      }
+    }
+    if (opts.onlyIfConceptExists && !existing) return "not-published";
+    if (opts.exactOnce && existing?.instances.some((prior) => prior.project === instance.project && prior.sessionId === instance.sessionId && prior.verdict === instance.verdict && prior.at === now)) {
+      return "duplicate";
+    }
     const finalized = {
       project: instance.project,
       sessionId: instance.sessionId,
@@ -24508,7 +24762,7 @@ var GlobalStore = class _GlobalStore {
       if (finalized.project === "manual" && finalized.sessionId === "seed" && existing.instances.some(
         (prior) => prior.project === "manual" && prior.sessionId === "seed" && prior.verdict === finalized.verdict
       )) {
-        return;
+        return "duplicate";
       }
       const isRetry = Number.isFinite(nowMs) && existing.instances.some((prior) => {
         if (prior.project !== finalized.project) return false;
@@ -24518,7 +24772,7 @@ var GlobalStore = class _GlobalStore {
         if (!Number.isFinite(priorMs)) return false;
         return Math.abs(nowMs - priorMs) < _GlobalStore.DEDUPE_WINDOW_MS;
       });
-      if (isRetry) return;
+      if (isRetry) return "duplicate";
       existing.instances.push(finalized);
       existing.lastSeenAt = now;
     } else {
@@ -24530,7 +24784,7 @@ var GlobalStore = class _GlobalStore {
         lastSeenAt: now
       };
     }
-    this.write(ledger);
+    return this.write(ledger) ? "written" : "refused";
   }
   /**
    * First-class stance removal — deletes the WHOLE concept entry (all
@@ -24577,8 +24831,13 @@ var GlobalStore = class _GlobalStore {
         `could not back the ledger up before removal (${this.ledgerPath}) \u2014 refusing to delete taste history without a reversible copy.`
       );
     }
+    this.recordRemoval(key);
     delete ledger.concepts[key];
-    this.write(ledger);
+    if (!this.write(ledger)) {
+      throw new Error(
+        `could not write the ledger to remove "${entry.concept}" (${this.ledgerPath}); nothing was removed. Retry the removal.`
+      );
+    }
     return { concept: entry.concept, instanceCount: entry.instances.length, backupPath };
   }
   /** Look up a single entry by concept (case-insensitive). */
@@ -25811,23 +26070,6 @@ function detectAndRecordGateEscape(args) {
   return true;
 }
 
-// src/store/verdict-guard.ts
-var HUMAN_VERDICT_REASONS = /* @__PURE__ */ new Set([
-  "ui_approve_button",
-  "ui_revise_button",
-  "ui_reject_button",
-  "ui_decision_resolve",
-  "ui_bulk_accept"
-]);
-var TERMINAL_VERDICT_STATES = /* @__PURE__ */ new Set([
-  "approved",
-  "revised",
-  "rejected"
-]);
-function isCrossTerminalVerdictFlip(from, to, reason) {
-  return HUMAN_VERDICT_REASONS.has(reason) && TERMINAL_VERDICT_STATES.has(from) && TERMINAL_VERDICT_STATES.has(to) && from !== to;
-}
-
 // src/store/posted-reviews.ts
 import fs12 from "node:fs";
 import path11 from "node:path";
@@ -25888,7 +26130,7 @@ function appendPostedReview(projectRoot2, sessionId, record2) {
 // src/store/review-post-journal.ts
 import fs13 from "node:fs";
 import path12 from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash as createHash2, randomUUID } from "node:crypto";
 var digestSchema = external_exports.string().regex(/^[0-9a-f]{64}$/);
 var eventSchema = external_exports.enum(["COMMENT", "REQUEST_CHANGES", "APPROVE"]);
 var timestampSchema = external_exports.iso.datetime();
@@ -25978,7 +26220,7 @@ function reviewPostDigest(value) {
     }
     return v;
   };
-  return createHash("sha256").update(JSON.stringify(stable(value))).digest("hex");
+  return createHash2("sha256").update(JSON.stringify(stable(value))).digest("hex");
 }
 function resultMatches(identity, result) {
   const states = { COMMENT: "COMMENTED", REQUEST_CHANGES: "CHANGES_REQUESTED", APPROVE: "APPROVED" };
@@ -26164,7 +26406,7 @@ var ReviewPostJournal = class {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4096) {
       throw new ReviewPostJournalError("invalid", "Claim must be a regular file of at most 4096 bytes; inspect it manually.");
     }
-    return createHash("sha256").update(readBoundedFile(this.claimPath, 4096)).digest("hex");
+    return createHash2("sha256").update(readBoundedFile(this.claimPath, 4096)).digest("hex");
   }
   /** Operator-only, offline coordination: this is NOT a process-liveness proof.
    * The explicit assertion excludes concurrent replacement after comparison. */
@@ -26348,6 +26590,8 @@ var ReviewPostJournal = class {
 
 // src/store/file-store.ts
 var PREFERENCES_LOCK_TIMEOUT_MS = 1e3;
+var MIRROR_QUEUE_MAX = 200;
+var MIRROR_QUEUE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 var LEDGER_EXEMPT_REJECT_TYPES = /* @__PURE__ */ new Set([
   "explainer",
   "debrief"
@@ -26443,6 +26687,7 @@ var FileStore = class _FileStore {
     this.captureRecordBaselines();
     this.loadPreferences();
     this.loadSessionPrefs();
+    if (!this.isDemoSession && fs14.existsSync(this.ledgerMirrorPendingPath())) this.scheduleMirrorReplay(0, 0);
   }
   ensureDir() {
     const sessionDir = path13.join(this.basePath, "sessions", this.sessionId);
@@ -26763,6 +27008,10 @@ var FileStore = class _FileStore {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
+    }
+    if (this.mirrorReplayTimer) {
+      clearTimeout(this.mirrorReplayTimer);
+      this.mirrorReplayTimer = null;
     }
   }
   getSessionId() {
@@ -27355,6 +27604,136 @@ var FileStore = class _FileStore {
     this.scheduleFlush();
     this.notifyFeedbackWaiters();
   }
+  /**
+   * #464 (Astra review) — check-and-resolve in ONE synchronous critical
+   * section: no await separates the stale-resolve classification from the
+   * write, so of two overlapping resolves exactly one writes and the other sees
+   * its answer (a same-pick no-op, or a conflict carrying the winner). See
+   * store/decision-resolve-guard.ts for the outcomes.
+   */
+  resolveDecisionAtomic(decisionId, optionId, reasoning, prediction) {
+    this.assertAuthorizationReadable();
+    const dec = this.decisions.get(decisionId);
+    if (!dec) return { kind: "no_record" };
+    const backing = this.artifacts.find((a) => a.id === dec.artifactId) ?? this.artifacts.find((a) => a.type === "decision" && (a.content?.decisionId === decisionId || a.id === decisionId));
+    const stale = classifyStaleResolve(dec, backing, optionId);
+    if (stale) return stale;
+    const closed = classifyClosedDecision(backing, this.artifacts);
+    if (closed) return closed;
+    const opts = dec.options;
+    if (Array.isArray(opts) && opts.length > 0 && !opts.some((o) => o?.id === optionId)) {
+      return { kind: "invalid_option" };
+    }
+    const prevDecision = structuredClone(dec);
+    const prevBacking = backing ? structuredClone(backing) : void 0;
+    this.feedbackNotifyHolds++;
+    const otherNotifyPending = this.feedbackNotifyPending;
+    this.resolveDecision(decisionId, optionId, reasoning, prediction);
+    this.feedbackNotifyPending = otherNotifyPending;
+    const written = this.decisions.get(decisionId);
+    const backingNow = backing ? this.artifacts.find((a) => a.id === backing.id) : void 0;
+    this.pendingResolutions.set(decisionId, {
+      prevDecision,
+      prevBacking,
+      writtenResponse: written.response,
+      backingStatus: backingNow?.status,
+      backingHistoryLength: (backingNow?.statusHistory ?? []).length
+    });
+    this.unannouncedResolutions.add(decisionId);
+    return { kind: "resolved", ...dec.artifactId ? { artifactId: dec.artifactId } : {} };
+  }
+  /** #484 review — resolutions written by resolveDecisionAtomic whose flush
+   *  hasn't settled yet, with what they replaced. */
+  pendingResolutions = /* @__PURE__ */ new Map();
+  feedbackNotifyHolds = 0;
+  feedbackNotifyPending = false;
+  /**
+   * #484 review — settle a resolveDecisionAtomic write once its flush is known.
+   * committed → release held feedback waiters. NOT committed (the flush threw:
+   * lock busy → 503, review conflict) → roll memory back to exactly what disk
+   * still holds, so getResolvedDecisions / check_feedback never deliver an
+   * answer the human was told didn't complete, and a later different pick isn't
+   * refused as "already answered". The rollback restores only what THIS write
+   * still owns (an artifact another writer changed since is left alone), and no
+   * announcement remains for it. Runs under the per-store resolve lock.
+   */
+  settleResolution(decisionId, committed) {
+    const pending = this.pendingResolutions.get(decisionId);
+    if (!pending) return;
+    this.pendingResolutions.delete(decisionId);
+    if (!committed) {
+      const dec = this.decisions.get(decisionId);
+      if (dec && dec.response === pending.writtenResponse) {
+        for (const k of Object.keys(dec)) delete dec[k];
+        Object.assign(dec, pending.prevDecision);
+      }
+      if (pending.prevBacking) {
+        const art = this.artifacts.find((a) => a.id === pending.prevBacking.id);
+        const history = (art?.statusHistory ?? []).length;
+        if (art && art.status === pending.backingStatus && history === pending.backingHistoryLength) {
+          for (const k of Object.keys(art)) delete art[k];
+          Object.assign(art, pending.prevBacking);
+        }
+      }
+      this.unannouncedResolutions.delete(decisionId);
+      try {
+        this.scheduleFlush();
+      } catch {
+      }
+    }
+    this.feedbackNotifyHolds = Math.max(0, this.feedbackNotifyHolds - 1);
+    if (committed) this.feedbackNotifyPending = true;
+    if (this.feedbackNotifyHolds === 0 && this.feedbackNotifyPending) {
+      this.feedbackNotifyPending = false;
+      this.notifyFeedbackWaiters();
+    }
+  }
+  /**
+   * #490 — after a FAILED flush, did this resolution land on disk anyway? A
+   * flush writes collections in sequence (artifacts → … → decisions → plan
+   * reviews → requests …); a disk error AFTER decisions.json (ENOSPC on a later
+   * file) leaves the answer durable while the flush throws. The route must then
+   * treat the request as committed (announce once, succeed) — not 503 a
+   * decision that is resolved on disk. Reads the file directly; any read
+   * problem means "not proven durable" (→ roll back).
+   */
+  isResolutionDurable(decisionId) {
+    const pending = this.pendingResolutions.get(decisionId);
+    const written = pending?.writtenResponse;
+    if (!written) return false;
+    try {
+      const raw2 = JSON.parse(fs14.readFileSync(path13.join(this.sessionDir(), "decisions.json"), "utf8"));
+      const onDisk = Array.isArray(raw2) ? raw2.find((d) => d?.decisionId === decisionId)?.response : void 0;
+      const durable = !!onDisk && onDisk.optionId === written.optionId && (onDisk.reasoning ?? null) === (written.reasoning ?? null);
+      if (durable) {
+        try {
+          this.scheduleFlush();
+        } catch {
+        }
+      }
+      return durable;
+    } catch {
+      return false;
+    }
+  }
+  /** #484 review — decisions whose answer was written by resolveDecisionAtomic
+   *  but not yet announced after a successful flush. In-memory on purpose: an
+   *  answer that never flushed doesn't survive a restart either. */
+  unannouncedResolutions = /* @__PURE__ */ new Set();
+  takeResolutionAnnouncement(decisionId) {
+    if (!this.unannouncedResolutions.has(decisionId)) return null;
+    const dec = this.decisions.get(decisionId);
+    const response = dec?.response;
+    this.unannouncedResolutions.delete(decisionId);
+    if (!dec || !response) return null;
+    return {
+      optionId: response.optionId,
+      ...response.reasoning ? { reasoning: response.reasoning } : {},
+      ...response.confidence ? { confidence: response.confidence } : {},
+      ...response.predictedOutcome ? { predictedOutcome: response.predictedOutcome } : {},
+      ...dec.artifactId ? { artifactId: dec.artifactId } : {}
+    };
+  }
   getDecisionResponse(decisionId) {
     this.assertAuthorizationReadable();
     return this.decisions.get(decisionId)?.response ?? null;
@@ -27566,12 +27945,7 @@ var FileStore = class _FileStore {
     const conceptKey = concept?.trim() || description.trim();
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
-        getGlobalStore().recordInstance(capConceptLength(conceptKey), {
-          project: this.projectHint,
-          sessionId: this.sessionId,
-          verdict: "rejected",
-          reason
-        });
+        this.mirrorToLedger("rejected", conceptKey, description, reason);
       } catch (err) {
         _FileStore.logLedgerMirrorFailure("rejected", err);
       }
@@ -27642,11 +28016,7 @@ var FileStore = class _FileStore {
     const conceptKey = concept?.trim() || description.trim();
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
-        getGlobalStore().recordInstance(capConceptLength(conceptKey), {
-          project: this.projectHint,
-          sessionId: this.sessionId,
-          verdict: "approved"
-        });
+        this.mirrorToLedger("approved", conceptKey, description);
       } catch (err) {
         _FileStore.logLedgerMirrorFailure("approved", err);
       }
@@ -27679,7 +28049,7 @@ var FileStore = class _FileStore {
   overrideRejectedApproach(params) {
     const { description, concept } = params;
     let retired = 0;
-    this.mutatePreferences((prefs) => {
+    const retireLocal = () => this.mutatePreferences((prefs) => {
       const rejected = this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []);
       const keep = rejected.filter(
         (r) => !(description && r.description === description || concept && r.concept === concept)
@@ -27690,14 +28060,14 @@ var FileStore = class _FileStore {
       return true;
     });
     const conceptKey = concept?.trim() || description?.trim() || "";
+    if (conceptKey && !this.isDemoSession) {
+      this.cancelQueuedRejections(capConceptLength(conceptKey), description, retireLocal);
+    } else {
+      retireLocal();
+    }
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
-        getGlobalStore().recordInstance(capConceptLength(conceptKey), {
-          project: this.projectHint,
-          sessionId: this.sessionId,
-          verdict: "approved",
-          reason: "Retired by you \u2014 the gate was blocking something you wanted"
-        });
+        this.mirrorToLedger("override", conceptKey, description, "Retired by you \u2014 the gate was blocking something you wanted");
       } catch (err) {
         _FileStore.logLedgerMirrorFailure("override", err);
       }
@@ -27754,6 +28124,236 @@ var FileStore = class _FileStore {
       writeJsonAtomic(prefsPath, prefs);
     }, { label: "Project preferences lock", timeoutMs: PREFERENCES_LOCK_TIMEOUT_MS, reentrant: true });
   }
+  // --- #486 — durable cross-project mirror ---
+  //
+  // The mirror into the cross-project ledger is advisory and must not block
+  // the local commit, but a busy ledger lock (ELOCKED past its 1 s bound) used
+  // to DROP it. Now a refused mirror is appended to a small project-local
+  // queue, `.deeppairing/ledger-mirror-pending.json`, and replayed:
+  //   - on a bounded backoff in this process (2 s, 5 s, 15 s, 60 s, unref'd);
+  //   - opportunistically after any later mirror that succeeds;
+  //   - when a FileStore for the project next starts (daemon restart), so a
+  //     queued mirror survives the process that queued it.
+  // A queue rather than only an in-memory retry: the in-memory version loses
+  // the mirror on exactly the restart the issue cares about, and the file is
+  // tiny and project-scoped, like preferences.json.
+  //
+  // Invariants:
+  //   - idempotent: an entry keeps the timestamp of its FIRST attempt, and the
+  //     ledger write is `exactOnce` on (project, sessionId, verdict, at), so a
+  //     replay that already landed — or two concurrent replayers — never adds
+  //     a duplicate instance;
+  //   - never resurrects: a queued rejection is replayed only while its local
+  //     row still exists (a retire removes the row, and cancelQueuedRejections
+  //     drops the entry); a queued approval only while the pattern is still
+  //     approved; nothing is replayed once the publish opt-in is off;
+  //   - #416 locks: the queue has its own lock, always taken BEFORE the ledger
+  //     lock (never the reverse), and a pass stops at the first busy ledger
+  //     lock, so it waits at most one bound;
+  //   - `ledger_write` broadcasts are unchanged: routes emit them for the
+  //     LOCAL record, which is committed before any of this.
+  mirrorReplayTimer = null;
+  static MIRROR_REPLAY_DELAYS_MS = [2e3, 5e3, 15e3, 6e4];
+  ledgerMirrorPendingPath() {
+    return path13.join(this.basePath, "ledger-mirror-pending.json");
+  }
+  /**
+   * #488 review — is this mirror still eligible, judged from DISK (another
+   * process — the CLI, a sibling session — may have changed it)? Runs inside
+   * the ledger lock as a precondition, immediately before the append, so a
+   * withdrawal or retire that completed while a writer waited for the lock
+   * always wins.
+   */
+  mirrorStillEligible(entry) {
+    const prefs = _FileStore.salvageRecord(
+      "preferences.json",
+      this.loadJsonFile(path13.join(this.basePath, "preferences.json"), {}),
+      {}
+    );
+    if (prefs.globalLedgerPublish !== true) return false;
+    if (entry.kind === "rejected") {
+      return this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []).some((r) => entry.description !== void 0 && r.description === entry.description || !!r.concept && capConceptLength(r.concept) === entry.concept);
+    }
+    if (entry.kind === "approved" && entry.description !== void 0) {
+      return Array.isArray(prefs.approvedPatterns) && prefs.approvedPatterns.includes(entry.description);
+    }
+    return true;
+  }
+  mirrorOptions(entry, replay) {
+    return {
+      exactOnce: true,
+      precondition: () => this.mirrorStillEligible(entry),
+      ...entry.kind === "override" ? { onlyIfConceptExists: true } : {},
+      ...replay ? { replayedFromSeq: entry.removalSeq ?? 0 } : {}
+    };
+  }
+  mirrorToLedger(kind, conceptKey, description, reason) {
+    const concept = capConceptLength(conceptKey);
+    const removalSeq = getGlobalStore().removalSeq();
+    const instance = {
+      project: this.projectHint,
+      sessionId: this.sessionId,
+      verdict: kind === "rejected" ? "rejected" : "approved",
+      ...reason ? { reason } : {},
+      at: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    const entry = { kind, concept, ...description ? { description } : {}, instance, removalSeq };
+    let outcome;
+    try {
+      outcome = getGlobalStore().recordInstance(concept, instance, this.mirrorOptions(entry, false));
+    } catch (err) {
+      if (!isFileLockError(err)) _FileStore.logLedgerMirrorFailure(kind, err);
+      this.queueLedgerMirror(entry);
+      return;
+    }
+    if (outcome === "refused") {
+      this.queueLedgerMirror(entry);
+      return;
+    }
+    if (fs14.existsSync(this.ledgerMirrorPendingPath())) this.replayLedgerMirrorsSafe();
+  }
+  /** Read the queue, applying its bounds. Malformed entries and entries cut
+   *  by the size/age caps are never dropped silently: the file is backed up
+   *  (`.corrupt-<ts>`) or the cut is logged. */
+  readPendingMirrors() {
+    const file2 = this.ledgerMirrorPendingPath();
+    const raw2 = this.loadJsonFile(file2, []);
+    if (!Array.isArray(raw2)) return [];
+    const valid = raw2.filter((e) => !!e && typeof e === "object" && typeof e.concept === "string" && ["rejected", "approved", "override"].includes(e.kind) && !!e.instance && typeof e.instance.at === "string");
+    if (valid.length !== raw2.length) {
+      const backup = `${file2}.corrupt-${Date.now()}`;
+      try {
+        fs14.copyFileSync(file2, backup);
+      } catch {
+      }
+      console.error(`[deepPairing] ${raw2.length - valid.length} malformed queued ledger mirror(s) skipped; the queue was backed up to ${backup}.`);
+    }
+    const cutoff = Date.now() - MIRROR_QUEUE_MAX_AGE_MS;
+    const fresh = valid.filter((e) => !(Date.parse(e.instance.at) < cutoff));
+    if (fresh.length !== valid.length) {
+      console.error(`[deepPairing] dropped ${valid.length - fresh.length} queued ledger mirror(s) older than 30 days.`);
+    }
+    if (fresh.length > MIRROR_QUEUE_MAX) {
+      console.error(`[deepPairing] the ledger mirror queue is capped at ${MIRROR_QUEUE_MAX}; dropped the ${fresh.length - MIRROR_QUEUE_MAX} oldest.`);
+      return fresh.slice(-MIRROR_QUEUE_MAX);
+    }
+    return fresh;
+  }
+  writePendingMirrors(entries) {
+    const file2 = this.ledgerMirrorPendingPath();
+    if (entries.length === 0) {
+      try {
+        fs14.unlinkSync(file2);
+      } catch {
+      }
+      return;
+    }
+    writeJsonAtomic(file2, entries);
+  }
+  withMirrorQueue(run) {
+    fs14.mkdirSync(this.basePath, { recursive: true });
+    return withFileLock(`${this.ledgerMirrorPendingPath()}.lock`, run, {
+      label: "Ledger mirror queue lock",
+      timeoutMs: PREFERENCES_LOCK_TIMEOUT_MS,
+      reentrant: true
+    });
+  }
+  queueLedgerMirror(entry) {
+    try {
+      this.withMirrorQueue(() => {
+        const entries = this.readPendingMirrors();
+        entries.push(entry);
+        this.writePendingMirrors(entries);
+      });
+    } catch (err) {
+      _FileStore.logLedgerMirrorFailure(entry.kind, err);
+      return;
+    }
+    console.error(`[deepPairing] cross-project ledger mirror (${entry.kind}) for "${entry.concept}" is queued: the ledger is busy; it will be retried.`);
+    if (!this.mirrorReplayTimer) this.scheduleMirrorReplay(0);
+  }
+  scheduleMirrorReplay(attempt, delay = _FileStore.MIRROR_REPLAY_DELAYS_MS[attempt]) {
+    if (this.disposed || delay === void 0) return;
+    const timer = setTimeout(() => {
+      this.mirrorReplayTimer = null;
+      const remaining = this.replayLedgerMirrorsSafe();
+      if (remaining > 0) this.scheduleMirrorReplay(attempt + 1);
+    }, delay);
+    timer.unref?.();
+    this.mirrorReplayTimer = timer;
+  }
+  /** Never throws; returns how many mirrors are still queued (0 if unknown). */
+  replayLedgerMirrorsSafe() {
+    try {
+      return this.replayLedgerMirrors();
+    } catch (err) {
+      if (errorCode(err) !== "ENOENT") console.error(`[deepPairing] ledger mirror replay failed:`, err);
+      return isFileLockError(err) ? 1 : 0;
+    }
+  }
+  /**
+   * Replay queued mirrors. Returns how many remain queued (the ledger was
+   * busy again). Public for tests and for a caller that wants to drain now.
+   */
+  replayLedgerMirrors() {
+    if (this.isDemoSession || !fs14.existsSync(this.ledgerMirrorPendingPath())) return 0;
+    return this.withMirrorQueue(() => {
+      const entries = this.readPendingMirrors();
+      const keep = [];
+      let stopped = false;
+      for (const entry of entries) {
+        if (stopped) {
+          keep.push(entry);
+          continue;
+        }
+        let outcome;
+        try {
+          outcome = getGlobalStore().recordInstance(entry.concept, entry.instance, this.mirrorOptions(entry, true));
+        } catch (err) {
+          if (!isFileLockError(err)) _FileStore.logLedgerMirrorFailure(entry.kind, err);
+          stopped = true;
+          keep.push(entry);
+          continue;
+        }
+        if (outcome === "refused") {
+          console.error(`[deepPairing] the cross-project ledger refused a queued mirror for "${entry.concept}"; it stays queued.`);
+          stopped = true;
+          keep.push(entry);
+          continue;
+        }
+      }
+      this.writePendingMirrors(keep);
+      return keep.length;
+    });
+  }
+  /** Drop queued REJECTED mirrors for a concept/description being retired.
+   *  Returns how many were dropped. */
+  /** Drop queued REJECTED mirrors for a concept/description being retired —
+   *  under the queue lock, together with `retireLocal`, so a replay cannot
+   *  slip in between and drop the entry itself (which would make the retire
+   *  think nothing was queued and publish a stray counter-approval).
+   *  Returns how many were dropped, or "unknown" if the queue lock was busy. */
+  cancelQueuedRejections(concept, description, retireLocal) {
+    if (!fs14.existsSync(this.ledgerMirrorPendingPath())) {
+      retireLocal();
+      return 0;
+    }
+    let cancelled = "unknown";
+    try {
+      this.withMirrorQueue(() => {
+        retireLocal();
+        const entries = this.readPendingMirrors();
+        const keep = entries.filter((e) => !(e.kind === "rejected" && (e.concept === concept || description !== void 0 && e.description === description)));
+        if (keep.length !== entries.length) this.writePendingMirrors(keep);
+        cancelled = entries.length - keep.length;
+      });
+    } catch (err) {
+      if (!isFileLockError(err) || err.path !== `${this.ledgerMirrorPendingPath()}.lock`) throw err;
+      console.error(`[deepPairing] could not check the ledger mirror queue (busy) \u2014 the retire's cross-project counter is skipped:`, err);
+      retireLocal();
+    }
+    return cancelled;
+  }
   static logLedgerMirrorFailure(verdict, err) {
     console.error(`[deepPairing] cross-project ledger mirror (${verdict}) was not recorded:`, err);
   }
@@ -27790,6 +28390,34 @@ var FileStore = class _FileStore {
     if (next.length === existing.length) return false;
     writeJsonAtomic(this.annotationsPath(), next);
     return true;
+  }
+  /**
+   * #472 — load-only annotations read, for the HTTP GET route. The regular
+   * constructor calls `ensureDir()` as a side effect of preparing a session
+   * for WRITES; routing a read through `new FileStore(projectRoot, sessionId)`
+   * meant a syntactically valid but nonexistent sessionId silently created
+   * `.deeppairing/sessions/<id>/` and then reported an empty result as if the
+   * session existed. This reads the sidecar file directly — no instance, no
+   * mkdir — and reports which of three outcomes applies: absent session,
+   * valid session (legacy-empty or populated), or a real read failure (a
+   * corrupt/non-array annotations.json), so the caller can tell "nothing to
+   * show" apart from "couldn't read this" instead of flattening both to 200.
+   */
+  static readAnnotationsIfSessionExists(projectRoot2, sessionId) {
+    const sessionDir = path13.join(projectRoot2, ".deeppairing", "sessions", sessionId);
+    if (!fs14.existsSync(sessionDir)) return { ok: true, exists: false };
+    const annotationsFile = path13.join(sessionDir, "annotations.json");
+    if (!fs14.existsSync(annotationsFile)) return { ok: true, exists: true, annotations: [] };
+    try {
+      const raw2 = fs14.readFileSync(annotationsFile, "utf-8");
+      const parsed = JSON.parse(raw2);
+      if (!Array.isArray(parsed)) {
+        return { ok: false, message: `annotations.json did not contain an array (got ${typeof parsed})` };
+      }
+      return { ok: true, exists: true, annotations: parsed };
+    } catch (err) {
+      return { ok: false, message: errorMessage(err, "Failed to read annotations") };
+    }
   }
   // --- Posted reviews (R1 #279) ---
   /** Fresh journal reads and short disk claims are shared with CLI processes. */
@@ -27972,6 +28600,10 @@ var FileStore = class _FileStore {
   }
   /** Notify all waiters that feedback has arrived */
   notifyFeedbackWaiters() {
+    if (this.feedbackNotifyHolds > 0) {
+      this.feedbackNotifyPending = true;
+      return;
+    }
     const waiters = this.feedbackWaiters;
     this.feedbackWaiters = [];
     for (const resolve of waiters) resolve();
@@ -30779,7 +31411,7 @@ function htmlExportFileName(sessionId, generatedAt = (/* @__PURE__ */ new Date()
 }
 
 // src/version.ts
-var SERVER_VERSION = "0.1.62";
+var SERVER_VERSION = "0.1.64";
 
 // src/store/rejected-option-recorder.ts
 function optionConceptKey(option) {
@@ -31375,59 +32007,95 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
         404
       );
     }
-    await store.resolveDecision(decisionId, optionId, reasoning);
-    const decision = await store.getDecision(decisionId);
-    if (decision && (await store.getDecisionResponse(decisionId))?.optionId !== optionId) {
-      return c.json(
-        { error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error },
-        400
-      );
-    }
-    let targetArtifactId = decision?.artifactId;
-    let fallbackArtifact;
-    if (!targetArtifactId) {
-      const artifacts = await store.getArtifacts();
-      fallbackArtifact = artifacts.find(
-        (a) => a.type === "decision" && (a.content?.decisionId === decisionId || a.id === decisionId)
-      );
-      targetArtifactId = fallbackArtifact?.id;
-    }
-    if (targetArtifactId && !decision && fallbackArtifact) {
-      if (isCrossTerminalVerdictFlip(fallbackArtifact.status, "approved", "ui_decision_resolve")) {
-        const at = fallbackArtifact.updatedAt;
-        log2(
-          `[decision] REFUSED resolve on ${targetArtifactId}: ${fallbackArtifact.status} \u2192 approved (reason=ui_decision_resolve) \u2014 verdict already final at ${at}`
-        );
-        broadcast({ type: "artifact_updated", artifactId: targetArtifactId, status: fallbackArtifact.status }, sid);
-        return c.json(
-          {
-            error: "verdict_already_final",
-            code: "verdict_already_final",
-            currentStatus: fallbackArtifact.status,
-            at,
-            message: `This decision was already ${fallbackArtifact.status}${at ? ` at ${at}` : ""} in another tab. A finalized verdict can't be reversed \u2014 this tab has been refreshed to the current state.`
-          },
-          409
-        );
+    return withDecisionResolveLock(store, async () => {
+      const outcome = await store.resolveDecisionAtomic(decisionId, optionId, reasoning);
+      let committed = false;
+      try {
+        if (outcome.kind === "closed") {
+          log2(`[decision] REFUSED resolve on closed decision ${decisionId} (${outcome.currentStatus})`);
+          return c.json(closedResolveBody(outcome, decisionId), 409);
+        }
+        if (outcome.kind === "same" || outcome.kind === "conflict") {
+          await store.forceFlush();
+          const late = await store.takeResolutionAnnouncement(decisionId);
+          if (late) {
+            broadcast({ type: "decision_resolved", decisionId, artifactId: late.artifactId, optionId: late.optionId, reasoning: late.reasoning }, sid);
+          }
+        }
+        if (outcome.kind === "same") return c.json(staleResolveBody(outcome, decisionId));
+        if (outcome.kind === "conflict") {
+          const body = staleResolveBody(outcome, decisionId);
+          log2(`[decision] REFUSED stale resolve on ${decisionId}: ${String(body.message)}`);
+          if (outcome.artifactId) broadcast({ type: "artifact_updated", artifactId: outcome.artifactId, status: outcome.currentStatus }, sid);
+          return c.json(body, 409);
+        }
+        if (outcome.kind === "invalid_option") {
+          return c.json(
+            { error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error },
+            400
+          );
+        }
+        const decision = outcome.kind === "resolved" ? await store.getDecision(decisionId) : void 0;
+        let targetArtifactId = decision?.artifactId;
+        let fallbackArtifact;
+        if (!targetArtifactId) {
+          const artifacts = await store.getArtifacts();
+          fallbackArtifact = artifacts.find(
+            (a) => a.type === "decision" && (a.content?.decisionId === decisionId || a.id === decisionId)
+          );
+          targetArtifactId = fallbackArtifact?.id;
+        }
+        if (!decision && fallbackArtifact) {
+          const closed = classifyClosedDecision(fallbackArtifact, await store.getArtifacts());
+          if (closed) return c.json(closedResolveBody(closed, decisionId), 409);
+        }
+        if (targetArtifactId && !decision && fallbackArtifact) {
+          if (isCrossTerminalVerdictFlip(fallbackArtifact.status, "approved", "ui_decision_resolve")) {
+            const at = fallbackArtifact.updatedAt;
+            log2(
+              `[decision] REFUSED resolve on ${targetArtifactId}: ${fallbackArtifact.status} \u2192 approved (reason=ui_decision_resolve) \u2014 verdict already final at ${at}`
+            );
+            broadcast({ type: "artifact_updated", artifactId: targetArtifactId, status: fallbackArtifact.status }, sid);
+            return c.json(
+              {
+                error: "verdict_already_final",
+                code: "verdict_already_final",
+                currentStatus: fallbackArtifact.status,
+                at,
+                message: `This decision was already ${fallbackArtifact.status}${at ? ` at ${at}` : ""} in another tab. A finalized verdict can't be reversed \u2014 this tab has been refreshed to the current state.`
+              },
+              409
+            );
+          }
+        }
+        if (targetArtifactId) {
+          if (!decision) {
+            await store.updateArtifactStatus(targetArtifactId, "approved", "ui_decision_resolve");
+          }
+        }
+        try {
+          await store.forceFlush();
+        } catch (error51) {
+          if (!(outcome.kind === "resolved" && await store.isResolutionDurable(decisionId))) throw error51;
+          log2(`[decision] flush failed after ${decisionId}'s answer was persisted \u2014 treating as committed: ${String(error51)}`);
+        }
+        committed = true;
+        if (targetArtifactId) {
+          await maybeUpdateTaskStatus(null, targetArtifactId, store);
+        }
+        const ann = await store.takeResolutionAnnouncement(decisionId);
+        broadcast({
+          type: "decision_resolved",
+          decisionId,
+          artifactId: ann?.artifactId ?? targetArtifactId,
+          optionId: ann?.optionId ?? optionId,
+          reasoning: ann ? ann.reasoning : reasoning
+        }, sid);
+        return c.json({ status: "resolved", decisionId });
+      } finally {
+        if (outcome.kind === "resolved") await store.settleResolution(decisionId, committed);
       }
-    }
-    if (targetArtifactId) {
-      if (!decision) {
-        await store.updateArtifactStatus(targetArtifactId, "approved", "ui_decision_resolve");
-      }
-    }
-    await store.forceFlush();
-    if (targetArtifactId) {
-      await maybeUpdateTaskStatus(null, targetArtifactId, store);
-    }
-    broadcast({
-      type: "decision_resolved",
-      decisionId,
-      artifactId: targetArtifactId,
-      optionId,
-      reasoning
-    }, sid);
-    return c.json({ status: "resolved", decisionId });
+    });
   });
   app.post("/api/decisions/:decisionId/close-out", async (c) => {
     const decisionId = c.req.param("decisionId");
@@ -32288,12 +32956,14 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
       return c.json({ error: "Invalid session ID" }, 400);
     }
-    try {
-      const s = new FileStore(projectRoot2, sessionId);
-      return c.json({ annotations: s.getAnnotations() });
-    } catch {
-      return c.json({ annotations: [] });
+    const result = FileStore.readAnnotationsIfSessionExists(projectRoot2, sessionId);
+    if (!result.ok) {
+      return c.json({ error: result.message }, 500);
     }
+    if (!result.exists) {
+      return c.json({ error: "Session not found" }, 404);
+    }
+    return c.json({ annotations: result.annotations });
   });
   app.post("/api/sessions/:sessionId/annotations", async (c) => {
     const sessionId = c.req.param("sessionId");
@@ -32660,7 +33330,7 @@ function lockBusyRouteError(log2, c, error51) {
   log2(`[route-error] ${c.req.method} ${c.req.path} \u2192 503 lock_busy: ${error51.message}`);
   return c.json(lockBusyBody(error51), 503);
 }
-function createActiveSessionRoutes(sessions, sessionMeta, daemonHash, activeSessions, logFn) {
+function createActiveSessionRoutes(sessions, sessionMeta, daemonHash, activeSessions, logFn, sessionRevisions) {
   const app = new Hono2();
   app.onError((error51, c) => {
     if (isFileLockError(error51)) return lockBusyRouteError(logFn ?? (() => {
@@ -32691,7 +33361,9 @@ function createActiveSessionRoutes(sessions, sessionMeta, daemonHash, activeSess
         // Per-session-split — the default-view selector picks the
         // most-recently-active LIVE session when a project has >1 bucket.
         // Falls back to registeredAt for pre-activity sessions.
-        lastActivity: meta3?.lastActivity ?? meta3?.registeredAt
+        lastActivity: meta3?.lastActivity ?? meta3?.registeredAt,
+        // #460 — the sibling change signal (status changes + comments too).
+        ...sessionRevisions ? { revision: sessionRevisions.counts.get(id) ?? 0, revisionEpoch: sessionRevisions.epoch } : {}
       };
     });
     return c.json({ sessions: list });
@@ -32819,6 +33491,8 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
   });
   app.post("/api/internal/sessions/:sessionId/recovered", async (c) => {
     const sessionId = c.req.param("sessionId");
+    const r = requireStore(c, sessionId);
+    if (!r.ok) return r.response;
     log2(`[recovered] sid=${sessionId} \u2014 wrapper auto-re-registered after a 404`);
     broadcast(sessionId, { type: "daemon_resumed", sessionId });
     return c.json({ status: "broadcast" });
@@ -33123,15 +33797,38 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     if (typeof optionId !== "string" || optionId.length === 0) {
       return c.json({ error: "optionId is required", code: ERROR_CODES.validation_error }, 400);
     }
-    const prediction = confidence || predictedOutcome ? { confidence, predictedOutcome } : void 0;
-    r.store.resolveDecision(decisionId, optionId, reasoning, prediction);
-    if (r.store.getDecision(decisionId) && r.store.getDecisionResponse(decisionId)?.optionId !== optionId) {
-      return c.json({ error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error }, 400);
-    }
-    const artifactId = r.store.getDecision(decisionId)?.artifactId;
-    await r.store.forceFlush();
-    broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId, optionId, reasoning, confidence, predictedOutcome });
-    return c.json({ status: "resolved" });
+    return withDecisionResolveLock(r.store, async () => {
+      const prediction = confidence || predictedOutcome ? { confidence, predictedOutcome } : void 0;
+      const outcome = r.store.resolveDecisionAtomic(decisionId, optionId, reasoning, prediction);
+      let committed = false;
+      try {
+        if (outcome.kind === "closed") return c.json(closedResolveBody(outcome, decisionId), 409);
+        if (outcome.kind === "same" || outcome.kind === "conflict") {
+          await r.store.forceFlush();
+          const late = r.store.takeResolutionAnnouncement(decisionId);
+          if (late) {
+            broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId: late.artifactId, optionId: late.optionId, reasoning: late.reasoning, confidence: late.confidence, predictedOutcome: late.predictedOutcome });
+          }
+        }
+        if (outcome.kind === "same") return c.json(staleResolveBody(outcome, decisionId));
+        if (outcome.kind === "conflict") return c.json(staleResolveBody(outcome, decisionId), 409);
+        if (outcome.kind === "invalid_option") {
+          return c.json({ error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error }, 400);
+        }
+        const artifactId = r.store.getDecision(decisionId)?.artifactId;
+        try {
+          await r.store.forceFlush();
+        } catch (error51) {
+          if (!r.store.isResolutionDurable(decisionId)) throw error51;
+        }
+        committed = true;
+        r.store.takeResolutionAnnouncement(decisionId);
+        broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId, optionId, reasoning, confidence, predictedOutcome });
+        return c.json({ status: "resolved" });
+      } finally {
+        if (outcome.kind === "resolved") await r.store.settleResolution(decisionId, committed);
+      }
+    });
   });
   app.get("/api/internal/sessions/:sessionId/decisions/pending", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -33803,6 +34500,22 @@ async function defaultOpenBrowser(url2) {
   });
   child.unref();
 }
+var REVISION_EVENTS = /* @__PURE__ */ new Set([
+  "artifact_created",
+  "artifact_updated",
+  "artifact_content_updated",
+  "artifact_renamed",
+  "comment_added",
+  "comment_updated",
+  "question_answered",
+  "decision_resolved",
+  "decisions_acknowledged",
+  "plan_progress_updated",
+  "changeset_review_updated",
+  "request_added",
+  "request_served",
+  "secret_warning"
+]);
 function createDaemon(deps) {
   const {
     projectRoot: projectRoot2,
@@ -33845,8 +34558,13 @@ function createDaemon(deps) {
   const wsClients = /* @__PURE__ */ new Map();
   const globalClients = /* @__PURE__ */ new Set();
   const demoReplayEvents = /* @__PURE__ */ new Map();
+  const sessionRevisions = /* @__PURE__ */ new Map();
+  const revisionEpoch = randomBytes3(6).toString("hex");
   function broadcast(sessionId, event) {
     let outgoing = event;
+    if (REVISION_EVENTS.has(event?.type)) {
+      sessionRevisions.set(sessionId, (sessionRevisions.get(sessionId) ?? 0) + 1);
+    }
     try {
       const entry = recordPreflightBlock(projectRoot2, sessionId, event);
       if (entry) outgoing = { ...event, blockId: entry.id, at: entry.at };
@@ -34155,7 +34873,7 @@ function createDaemon(deps) {
     checkAutoShutdown();
     return c.json({ sessionId, startedAt: (/* @__PURE__ */ new Date()).toISOString() });
   });
-  app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions, log2));
+  app.route("/", createActiveSessionRoutes(sessions, sessionMeta, daemonProjectHash, activeSessions, log2, { epoch: revisionEpoch, counts: sessionRevisions }));
   const __thisDir3 = path22.dirname(fileURLToPath4(import.meta.url));
   const monorepoWebDist = path22.join(__thisDir3, "../../dist/web");
   const webDistCandidates = [monorepoWebDist, path22.join(__thisDir3, "web")];

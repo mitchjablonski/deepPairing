@@ -1,0 +1,103 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { DecisionArtifactView } from "../DecisionCard";
+import { useArtifactStore } from "../../stores/artifact";
+import { useConnectionStore } from "../../stores/connection";
+
+/**
+ * #492 — a stale decision card whose decision was CLOSED elsewhere: the
+ * daemon refuses with 409 decision_closed; the card shows the closed state to
+ * you (second person), links the newer version when there is one, and offers
+ * no Select buttons.
+ */
+const now = "2026-06-01T00:00:00.000Z";
+const OPTS = [
+  { id: "a", title: "Redis", description: "d", pros: [], cons: [], effort: "low", risk: "low", recommendation: true },
+  { id: "b", title: "Postgres", description: "d", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
+];
+const decision = (id: string, decisionId: string, over: Record<string, unknown> = {}) => ({
+  id, sessionId: "s1", type: "decision", version: 1, parentId: null, title: "Which store?", status: "draft",
+  content: { context: "c", decisionId, options: OPTS }, agentReasoning: null, createdAt: now, updatedAt: now, ...over,
+}) as any;
+
+beforeEach(() => {
+  useArtifactStore.getState().reset();
+  useConnectionStore.setState({ connected: true, hydrated: true, sessionId: "s1", activeSessions: [{ sessionId: "s1", live: true }], disconnectedSince: null } as any);
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+describe("#492 — a stale card learns its decision was closed", () => {
+  it("superseded: after the 409 the card says 'revised — answer the new version', links it, and has no Select", async () => {
+    // The stale tab hasn't seen v2 yet (its card still offers Select).
+    const v1 = decision("art_d", "dec_d");
+    const v2 = decision("art_d2", "dec_d2", { parentId: "art_d", version: 2 });
+    useArtifactStore.setState({ artifacts: [v1] } as any);
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+      if (String(url).includes("/api/decisions/dec_d")) {
+        return Promise.resolve(new Response(JSON.stringify({
+          error: "decision_closed", code: "decision_closed", currentStatus: "superseded", decisionId: "dec_d", artifactId: "art_d",
+          supersededBy: { artifactId: "art_d2", decisionId: "dec_d2" },
+          message: "This question was revised — answer the new version. Your answer to the old one wasn't recorded.",
+        }), { status: 409, headers: { "Content-Type": "application/json" } }));
+      }
+      return Promise.resolve(new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }));
+    }));
+    const { rerender } = render(<DecisionArtifactView artifact={v1} />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Select Redis" })); });
+    // The store applied the refusal's status; re-render the view with it.
+    await waitFor(() => expect(useArtifactStore.getState().artifacts.find((a) => a.id === "art_d")?.status).toBe("superseded"));
+    // The refusal re-fetches the owning session (#460), which brings v2 in.
+    act(() => useArtifactStore.getState().addArtifact(v2));
+    rerender(<DecisionArtifactView artifact={useArtifactStore.getState().artifacts.find((a) => a.id === "art_d")!} />);
+    expect(screen.getByTestId("decision-closed")).toHaveTextContent("This question was revised — answer the new version.");
+    expect(screen.queryAllByRole("button", { name: /^Select / })).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Open the new version →" }));
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("art_d2");
+  });
+
+  it("retracted: 'Claude withdrew this question', options readable, no Select", () => {
+    const v1 = decision("art_r", "dec_r", { status: "retracted" });
+    useArtifactStore.setState({ artifacts: [v1] } as any);
+    render(<DecisionArtifactView artifact={v1} />);
+    expect(screen.getByTestId("decision-closed")).toHaveTextContent("Claude withdrew this question");
+    expect(screen.getByText("Redis")).toBeInTheDocument();
+    expect(screen.queryAllByRole("button", { name: /^Select / })).toHaveLength(0);
+  });
+});
+
+describe("#493 review — the card around revisions", () => {
+  it("revise window: v1 still draft but v2 exists → the card is already 'revised' with a link, no Select", () => {
+    const v1 = decision("art_d", "dec_d");
+    const v2 = decision("art_d2", "dec_d2", { parentId: "art_d", version: 2 });
+    useArtifactStore.setState({ artifacts: [v1, v2] } as any);
+    render(<DecisionArtifactView artifact={v1} />);
+    expect(screen.getByTestId("decision-closed")).toHaveTextContent("This question was revised — answer the new version.");
+    expect(screen.getByRole("button", { name: "Open the new version →" })).toBeInTheDocument();
+    expect(screen.queryAllByRole("button", { name: /^Select / })).toHaveLength(0);
+  });
+
+  it("v1 → v2 (retracted): 'the newer version was withdrawn too', and no link to the withdrawn card", () => {
+    const v1 = decision("art_d", "dec_d", { status: "superseded" });
+    const v2 = decision("art_d2", "dec_d2", { parentId: "art_d", version: 2, status: "retracted" });
+    useArtifactStore.setState({ artifacts: [v1, v2] } as any);
+    render(<DecisionArtifactView artifact={v1} />);
+    expect(screen.getByTestId("decision-closed")).toHaveTextContent("This question was revised, and the newer version was withdrawn too — there's nothing to answer here.");
+    expect(screen.queryByRole("button", { name: "Open the new version →" })).not.toBeInTheDocument();
+    expect(screen.queryAllByRole("button", { name: /^Select / })).toHaveLength(0);
+  });
+});
+
+describe("#493 — the card uses the same answerability rule for the successor", () => {
+  const VERB = { rejected: "rejected", revised: "sent back for changes", superseded: "replaced", retracted: "withdrawn", obsolete: "closed" } as const;
+  it.each(Object.keys(VERB) as Array<keyof typeof VERB>)("v1 → v2 (%s): no link; honest copy", (st) => {
+    const v1 = decision("art_d", "dec_d", { status: "superseded" });
+    const v2 = decision("art_d2", "dec_d2", { parentId: "art_d", version: 2, status: st });
+    useArtifactStore.setState({ artifacts: [v1, v2] } as any);
+    render(<DecisionArtifactView artifact={v1} />);
+    expect(screen.getByTestId("decision-closed")).toHaveTextContent(`This question was revised, and the newer version was ${VERB[st]} too — there's nothing to answer here.`);
+    expect(screen.queryByRole("button", { name: "Open the new version →" })).not.toBeInTheDocument();
+  });
+});

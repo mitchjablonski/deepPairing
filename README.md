@@ -52,7 +52,10 @@ boundary. Editors other than Claude Code.
 ### Get started
 
 Install the plugin inside Claude Code. It needs no clone and no build: the
-plugin ships a prebuilt server that runs on Node 20.11+.
+plugin ships a prebuilt server. Node 22 or 24 (current LTS) is recommended and
+what CI tests; Node 20.11+ still works but is deprecated — Node 20 is EOL and
+support is planned for removal no earlier than v0.2.0 (not before January
+2027; see [INSTALL.md](INSTALL.md#nodejs-support-policy)).
 
 ```bash
 /plugin marketplace add https://github.com/mitchjablonski/deepPairing
@@ -62,8 +65,8 @@ plugin ships a prebuilt server that runs on Node 20.11+.
 Then open Claude Code in your own project and ask for real work, for example
 *"Analyze the auth module and propose options."* The first steps are in
 **[Your first review ↓](#your-first-review)**. To look around before
-installing, the **[seeded demo ↓](#watch-the-seeded-demo-source-build)** runs
-without Claude Code but needs a source build.
+installing, the **[sample demo ↓](#try-the-sample-demo-no-build)** runs with
+plain Node. It needs no build and no Claude Code.
 
 ## What you get
 
@@ -277,9 +280,9 @@ So you never have to make the same call twice:
   nested structures, arrays of objects … intentionally not supported" —
   [Final spec](https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation))
   — the right shape for a yes/no, not for the review that is deepPairing's
-  whole point. The differentiator isn't a protocol limit (rich in-client UI is
-  now spec-possible — see the [FAQ](docs/faq.md)); it's the composed review
-  *system* no one else has built: multi-file changeset review with per-line and
+  whole point. The difference isn't a protocol limit (rich in-client UI is
+  now spec-possible — see the [FAQ](docs/faq.md)). It's the composed review
+  system deepPairing focuses on: multi-file changeset review with per-line and
   cross-file comments and suggested edits the agent has to answer, the decision
   workbench with per-part comments and version carryover, region-anchored
   diagram comments, and the debrief/explainer comprehension pair with an
@@ -288,27 +291,70 @@ So you never have to make the same call twice:
 
 ## Beyond Plan Mode
 
-Claude Code's Plan Mode is good at what it does: it drafts a plan and waits for
-your go-ahead before touching code. But the plan is terminal text — you read it,
-approve it or retype it, and once the session moves on it's gone. deepPairing
-makes the plan a *thing you work*: it lands in the companion UI as a checklist
-you comment on line by line, pick between options on, and reject approaches in —
-and the same review surface extends past the plan to the findings, the
-decisions, and the diffs. Your calls don't evaporate when the session ends:
-reject an approach with a reason and it's remembered per-repo. A matching
-`present_*` proposal is refused, and a matching direct edit is paused for your
-approval, before the change lands rather than in the diff after. (Plan Mode in
-other tools has grown too: Cursor saves plans as editable Markdown files —
-[docs](https://cursor.com/docs/agent/plan-mode), checked 2026-09-27.) Plan Mode gets you one gate at the
-start; deepPairing keeps you in the loop at every decision that matters and
-remembers where you stood.
+Plan modes have gotten good, and they aren't one product. As of 2026-10-07,
+their docs say:
 
-|                                | Plan Mode          | deepPairing                          |
-| ------------------------------ | ------------------ | ------------------------------------ |
-| Where the plan lives           | Terminal text      | Commentable artifact in a local UI   |
-| You respond by                 | Approving/retyping | Inline comments, option picks, "why" |
-| Covers                         | The initial plan   | Findings, options, plans, diffs      |
-| Remembers your calls next time | No                 | Per-repo, with a word-matched gate   |
+- **Claude Code plan mode** researches without editing, then asks you to
+  approve. You can choose "No, keep planning" and say what to change, or press
+  `Ctrl+G` to edit the plan in your own editor. Plans are written as files
+  under `~/.claude/plans/` (or your `plansDirectory`)
+  ([permission modes](https://code.claude.com/docs/en/permission-modes#review-and-approve-a-plan)).
+- **Cursor Plan Mode** asks clarifying questions, and you edit the plan in chat
+  or as a Markdown file. Plans are saved in your home directory, and **Save to
+  workspace** moves one into the repo
+  ([plan mode](https://cursor.com/docs/agent/plan-mode)).
+- **VS Code** reviews the agent's *edits*. You accept or reject each change,
+  use **Add Feedback** on a range for the agent to resolve, and **Mark as
+  Reviewed** to track files
+  ([review code edits](https://code.visualstudio.com/docs/agents/run/review-code-edits)).
+
+So editable plans, saved plans, and inline feedback on a diff are not what sets
+deepPairing apart. Its focus is **decision continuity**: the consequential
+calls in a piece of work stay structured, tied to their evidence and your
+reason, and they're still there the next time the agent reaches for the same
+thing.
+
+- **Decisions are their own artifact.** Options arrive as cards with pros,
+  cons, effort and risk, and the agent can flag a hard-to-reverse call as high
+  stakes.
+  You pick or reject on the card, not in a paragraph of plan text.
+- **Evidence sits next to the decision.** Findings carry file:line evidence
+  you comment on, in the same session as the decision card, and plan steps
+  can name the findings that motivated them.
+- **Your reasons are kept.** The project's decisions view lists what was
+  chosen and why, across sessions. A rejection, with its reason, becomes a
+  stance. A later `present_*` proposal that matches it is refused, and a
+  direct edit that matches is paused for your approval. Matching is on words
+  plus a short synonym list, not meaning
+  ([limits](#your-taste-compounds)).
+- **The review keeps going after the plan.** Findings, options, specs, plans,
+  diffs, and the closing debrief all use the same comment-and-answer loop.
+
+|                                     | Claude Code plan mode                 | Cursor Plan Mode               | VS Code edit review                          | deepPairing                                                         |
+| ----------------------------------- | ------------------------------------- | ------------------------------ | -------------------------------------------- | ------------------------------------------------------------------- |
+| What you review                     | A plan, before edits                  | A plan, before building        | The agent's code edits                       | Findings, options, specs, plans, diffs, debrief                     |
+| How you respond                     | Approve, keep planning, or `Ctrl+G` edit | Edit in chat or Markdown    | Accept/reject per change, Add Feedback       | Anchored comments, option picks, "why" questions, reject with reason |
+| Where it's kept                     | `~/.claude/plans/` files              | Home dir, or saved to workspace | The session's changes                       | `.deeppairing/` in the repo, plus a decisions view                  |
+| A rejected approach, next time      | Not covered on the cited page         | Not covered on the cited page  | Not covered on the cited page                | Matched by words: `present_*` refused, direct edit asks             |
+
+*Each cell for another tool describes only what its cited page said on
+2026-10-07. "Not covered" means that page doesn't describe it, not that the
+tool can't do it.*
+
+**Where this might fit (candidate uses, not measured demand):**
+
+- **A migration or large refactor**, where an early call (a dual-write window,
+  a schema shape) constrains weeks of later edits. Rejected alternatives stay
+  on record, so a later session doesn't quietly bring them back.
+- **A technical lead overseeing agent work**, who wants to review the
+  consequential decisions and their evidence rather than every line.
+- **A maintainer handoff.** Ask the agent to export the session as an ADR
+  (`export_session` with `format: "adr"`, or `deeppairing export adr` from a
+  source build). Or share it as a self-contained page from the companion UI's
+  **Share as page (.html)** menu (`/deeppairing:share`), so the next person
+  gets the decisions and reasons along with the diff.
+
+We don't claim time savings for any of these.
 
 ## Install in Claude Code
 
@@ -319,7 +365,11 @@ remembers where you stood.
 /plugin install deeppairing@deeppairing
 ```
 
-- **What you need:** Claude Code and Node 20.11+ on your `PATH`. You don't need
+- **What you need:** Claude Code and Node on your `PATH` — 22 or 24
+  recommended (what CI tests), 20.11+ still works but is deprecated
+  (Node 20 is EOL; support planned for removal no earlier than v0.2.0,
+  not before January 2027 — see
+  [INSTALL.md](INSTALL.md#nodejs-support-policy)). You don't need
   pnpm, a clone or a build.
 - **What you get:** the plugin runs the server bundle committed in
   `claude-plugin/server/`. It also installs the MCP tools, the slash commands
@@ -368,24 +418,45 @@ Each step names where it happens and what to do next.
 staying on *Waiting for Claude*, a daemon that won't start, and MCP startup
 timeouts on WSL `/mnt/c`.
 
-### Watch the seeded demo (source build)
+### Try the sample demo (no build)
 
-The demo drives a scripted session against a real companion. It shows the
-review surface, the explainer walk-through, the end-of-run debrief, and the
-rejection gate blocking a re-proposed approach. It doesn't need Claude Code,
-but it is a **developer path**: it needs a clone and a build.
+The demo plays a **scripted sample**. No AI agent or model runs; a script plays
+the agent's part on synthetic content. In the companion you'll see:
+
+- an agent's proposal, which you reject with a reason;
+- the remembered consequence: the same approach, re-proposed in new words, is
+  refused by the gate;
+- an explainer and a closing debrief that summarise the run.
+
+It runs straight from the shipped plugin bundle with plain Node. Node 22 or 24
+is recommended; 20.11+ works but is deprecated. You don't need a clone build,
+pnpm or Claude Code:
 
 ```bash
-git clone https://github.com/mitchjablonski/deepPairing.git
-cd deepPairing && pnpm install && pnpm build
-node packages/mcp-server/dist/cli/init.js demo
+# From a download of this repo (git clone or a ZIP) — no install, no build:
+node claude-plugin/server/demo.mjs
+
+# Or from an installed plugin — find the bundle once, then run it:
+find ~/.claude/plugins -name demo.mjs -path '*deeppairing*'
+node "<that path>"
 ```
 
-- **What you need:** Node 20.19+, 22.13+ or 24+, and pnpm 10+. This is stricter
-  than the plugin's runtime floor because the locked toolchain requires it; see
-  [INSTALL.md](INSTALL.md).
-- **Demo data:** it runs in a throwaway `demo_…` session. It never writes to
-  your project's preferences or to the cross-project ledger.
+It opens the companion in your browser, or prints the URL when
+`DEEPPAIRING_NO_OPEN=1` is set. **Press Enter (or Ctrl+C) to end it.**
+
+The demo runs in a sandbox:
+
+- **Storage:** a temporary HOME and a synthetic sample project, created under
+  your system temp directory and **deleted when the demo ends**.
+- **Daemon:** its own daemon on its own port range (`41000-41063`). It never
+  starts or contacts the daemon for your projects, and never uses their
+  `3847-3974` range.
+- **Your data:** it never writes to your projects, their preferences or your
+  `~/.deeppairing` cross-project ledger. It sends no telemetry and calls no
+  external model.
+
+`node packages/mcp-server/dist/cli/init.js demo` from a source build runs the
+same sandboxed demo.
 
 ### From source (developer path)
 
@@ -415,6 +486,7 @@ disk and machine.
 | Companion page served | 467–489 ms | 1234–1307 ms |
 | First artifact visible in the companion | 487–514 ms | 1349–1482 ms |
 | A companion comment reaches Claude's `check_feedback` | 509–538 ms | 1644–1741 ms |
+| Sample demo from the shipped bundle (`node claude-plugin/server/demo.mjs`) until the companion is ready | 0.76–1.14 s | 2.8–4.5 s, one 48 s outlier (sandbox temp dir on the `\\wsl.localhost` share) |
 | Source build, cold pnpm store: clone, install, build, demo | 1.4 + 6.0 + 8.3 + 1.9 ≈ 18 s | not measured |
 | Source build, warm pnpm store | 1.3 + 2.1 + 8.3 + 1.9 ≈ 14 s | not measured |
 
@@ -496,17 +568,20 @@ review. See
 
 ## How it compares
 
-Planning, memory, and blocking each exist elsewhere already, as of 2026-09-27.
-Cursor's [Plan Mode](https://cursor.com/docs/agent/plan-mode) saves editable
-plans. Claude Code's [memory](https://code.claude.com/docs/en/memory) carries
-your instructions across sessions, and its
+Planning, memory, blocking, and inline diff feedback each exist elsewhere
+already (sources checked 2026-10-07). Claude Code
+[plan mode](https://code.claude.com/docs/en/permission-modes#review-and-approve-a-plan)
+and Cursor [Plan Mode](https://cursor.com/docs/agent/plan-mode) produce
+editable, saved plans. VS Code lets you
+[comment on agent edits](https://code.visualstudio.com/docs/agents/run/review-code-edits).
+Claude Code's [memory](https://code.claude.com/docs/en/memory) carries your
+instructions across sessions, and its
 [hooks](https://code.claude.com/docs/en/hooks-guide) can deterministically
-block a tool call. deepPairing doesn't claim any one of those alone. What it
-adds is the workflow that joins them: evidence you can comment on, then a
-decision you make on a card, then a review of the change, and a rejection that
-comes back as a checked stance the next time the agent reaches for the same
-thing. (The honest limits of the concept match are above and in
-[docs/faq.md](docs/faq.md).)
+block a tool call. deepPairing doesn't claim any one of those. What it adds is
+decision continuity: the evidence, the decision you made on a card, the review
+of the change, and your rejection come back as a checked stance the next time
+the agent reaches for the same thing. (The limits of the word match are above
+and in [docs/faq.md](docs/faq.md).)
 
 ## Status
 

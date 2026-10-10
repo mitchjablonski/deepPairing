@@ -14,6 +14,8 @@ import { OpenQuestionSection } from "./OpenQuestionSection";
 import { OpenInEditorLink } from "../OpenInEditor";
 import { SimpleMarkdown } from "../SimpleMarkdown";
 import { useState, useMemo, useEffect } from "react";
+import { useOfflineReason } from "../../hooks/useOfflineReason";
+import { useUnsavedText } from "../../lib/unsavedText";
 
 interface ResearchArtifactProps {
   artifact: Artifact;
@@ -189,8 +191,10 @@ function FindingTriage({
    *  live-looking glyph you can click on a draft the agent already took back. */
   locked?: boolean;
 }) {
+  const offline = useOfflineReason(); // #477 — act paths gate on the shared offline condition (#467)
   const [promptVerdict, setPromptVerdict] = useState<Verdict | null>(null);
   const [reason, setReason] = useState("");
+  useUnsavedText(`finding-reason:${findingIndex}`, reason); // #487 review (Fable) — Reload asks before discarding it
   const [submitting, setSubmitting] = useState(false);
   const submitComment = useArtifactStore((s) => s.submitComment);
 
@@ -204,6 +208,7 @@ function FindingTriage({
   );
 
   const submit = async (verdict: Verdict, reasonText = "") => {
+    if (offline) return; // #477 — refused offline (the control is disabled too)
     if (submitting || locked) return; // #204 — a locked (closed/frozen) triad never writes.
     setSubmitting(true);
     try {
@@ -271,9 +276,9 @@ function FindingTriage({
     >
       <button
         onClick={() => submit("approved")}
-        disabled={submitting || locked}
+        disabled={(submitting || locked) || !!offline}
         aria-label={`Approve finding ${findingIndex + 1}`}
-        title={locked ? undefined : `Approve — "${findingTitle.slice(0, 60)}"`}
+        title={offline ?? (locked ? undefined : `Approve — "${findingTitle.slice(0, 60)}"`)}
         className={chipClass(latestVerdict === "approved", "green")}
       >
         ✓
@@ -334,8 +339,9 @@ function FindingTriage({
               Cancel
             </button>
             <button
+              title={offline ?? undefined}
               onClick={() => submit(promptVerdict, reason)}
-              disabled={!reason.trim() || submitting}
+              disabled={(!reason.trim() || submitting) || !!offline}
               // Q4 — same pair as the verdict chips above (2.24:1 amber /
               // 3.35:1 red on dark); text-text-inverse is theme-aware.
               className={`px-2 py-1 text-2xs text-text-inverse rounded press-scale disabled:opacity-50 ${

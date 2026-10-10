@@ -156,6 +156,9 @@ export class ApiError extends Error {
     /** The daemon's structured error code, e.g. "no_active_session" (U0.6). */
     public readonly code: string | null,
     message: string,
+    /** #460 — the daemon's structured error body (e.g. verdict_already_final's
+     *  `currentStatus`), so a caller can apply the truth it carries. */
+    public readonly details: Record<string, unknown> | null = null,
   ) {
     super(message);
     this.name = "ApiError";
@@ -186,8 +189,10 @@ export async function safeFetch(input: RequestInfo, init?: RequestInit): Promise
   // message so the caller can toast something useful.
   let code: string | null = null;
   let message = `Request failed (${res.status}).`;
+  let details: Record<string, unknown> | null = null;
   try {
     const body = await res.clone().json();
+    if (body && typeof body === "object") details = body as Record<string, unknown>;
     if (typeof body?.code === "string") code = body.code;
     // #408 review (L1) — prefer the human-readable `message` when the daemon
     // sends one (`error` is often just the code, e.g. "lock_busy").
@@ -206,5 +211,5 @@ export async function safeFetch(input: RequestInfo, init?: RequestInit): Promise
     message = "No active deepPairing session. Start Claude Code with deepPairing configured, or run `node packages/mcp-server/dist/cli/init.js doctor --fix`.";
   }
 
-  throw new ApiError(res.status, code, message);
+  throw new ApiError(res.status, code, message, details);
 }

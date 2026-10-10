@@ -2,6 +2,7 @@
  * Internal API routes for daemon ↔ MCP wrapper communication.
  * These are called by DaemonClient, not by the web UI.
  */
+import { staleResolveBody, closedResolveBody, withDecisionResolveLock } from "../store/decision-resolve-guard.js";
 import { isFileLockError, lockBusyBody } from "../store/file-lock.js";
 import { Hono } from "hono";
 import type { Context } from "hono";
@@ -238,6 +239,13 @@ export function createActiveSessionRoutes(
   /** #338 (F4) — daemon log sink for unexpected route errors. Optional so
    *  route-logic fixtures don't thread it (undefined ⇒ silent). */
   logFn?: LogFn,
+  /** #460 — per-session change counter (bumped by the daemon's broadcast on
+   *  every state-changing event). Optional: without it the field is omitted and
+   *  clients fall back to `artifactCount` as the change signal. `epoch` (#464
+   *  review) is random per daemon process: the counter restarts at 0 on a
+   *  daemon restart and could climb back to a value a tab cached, so clients
+   *  compare (epoch, revision), never the bare number. */
+  sessionRevisions?: { epoch: string; counts: Map<string, number> },
 ): Hono {
   const app = new Hono();
   app.onError((error, c) => {
@@ -269,6 +277,8 @@ export function createActiveSessionRoutes(
         // most-recently-active LIVE session when a project has >1 bucket.
         // Falls back to registeredAt for pre-activity sessions.
         lastActivity: meta?.lastActivity ?? meta?.registeredAt,
+        // #460 — the sibling change signal (status changes + comments too).
+        ...(sessionRevisions ? { revision: sessionRevisions.counts.get(id) ?? 0, revisionEpoch: sessionRevisions.epoch } : {}),
       };
     });
     return c.json({ sessions: list });
@@ -501,6 +511,8 @@ export function createDaemonRoutes(
   // `daemon_resumed` lets the connected clients refetch full state.
   app.post("/api/internal/sessions/:sessionId/recovered", async (c) => {
     const sessionId = c.req.param("sessionId");
+    const r = requireStore(c, sessionId);
+    if (!r.ok) return r.response;
     log(`[recovered] sid=${sessionId} — wrapper auto-re-registered after a 404`);
     broadcast(sessionId, { type: "daemon_resumed", sessionId });
     return c.json({ status: "broadcast" });
@@ -927,24 +939,60 @@ export function createDaemonRoutes(
     if (typeof optionId !== "string" || optionId.length === 0) {
       return c.json({ error: "optionId is required", code: ERROR_CODES.validation_error }, 400);
     }
-    const prediction = confidence || predictedOutcome ? { confidence, predictedOutcome } : undefined;
-    r.store.resolveDecision(decisionId, optionId, reasoning, prediction);
-    // F2 — honor resolveDecision's fail-closed rejection of an unknown optionId
-    // (only when the decision RECORD exists; a missing record is a no-op here).
-    if (r.store.getDecision(decisionId) && r.store.getDecisionResponse(decisionId)?.optionId !== optionId) {
-      return c.json({ error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error }, 400);
-    }
-    // #209 (J1) — carry the backing artifactId so the web's decision_resolved
-    // handler can flip the status pill to `approved` in an open tab (the store
-    // already advanced it on disk; this closes the live-update gap that left
-    // this path — unlike the public route — broadcasting no artifactId at all).
-    const artifactId = r.store.getDecision(decisionId)?.artifactId;
-    // A response and its backing artifact are one authorization write. Flush
-    // before the daemon claims success; app.onError maps a concurrent proposal
-    // rewrite to the shared session_review_conflict 409, with no broadcast.
-    await r.store.forceFlush();
-    broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId, optionId, reasoning, confidence, predictedOutcome });
-    return c.json({ status: "resolved" });
+    // #464 (Astra review) — the same ATOMIC check-and-resolve as the public
+    // route (FileStore.resolveDecisionAtomic): same pick → true no-op 200;
+    // different pick / closed elsewhere → 409 carrying the recorded winner;
+    // unknown option → 400 (F2, FN5's fail-closed sibling). A missing record
+    // stays a no-op (nothing to resolve), as before.
+    // Serialized per store from the atomic write through its flush — see
+    // withDecisionResolveLock.
+    return withDecisionResolveLock(r.store, async () => {
+      const prediction = confidence || predictedOutcome ? { confidence, predictedOutcome } : undefined;
+      const outcome = r.store.resolveDecisionAtomic(decisionId, optionId, reasoning, prediction);
+      // #484 review — a `resolved` write is settled exactly once: committed after
+      // a durable flush, otherwise ROLLED BACK so memory matches disk (the 503 the
+      // human saw stays true: no delivery, no false "already answered", no event).
+      let committed = false;
+      try {
+        // #484 review — report only what is persisted (see the public route).
+        // #492 — closed decision: 409 decision_closed, nothing written.
+        if (outcome.kind === "closed") return c.json(closedResolveBody(outcome, decisionId), 409);
+        if (outcome.kind === "same" || outcome.kind === "conflict") {
+          await r.store.forceFlush();
+          // #484 review — first successful persistence of an answer whose own
+          // request failed: announce the recorded winner once (see public route).
+          const late = r.store.takeResolutionAnnouncement(decisionId);
+          if (late) {
+            broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId: late.artifactId, optionId: late.optionId, reasoning: late.reasoning, confidence: late.confidence, predictedOutcome: late.predictedOutcome });
+          }
+        }
+        if (outcome.kind === "same") return c.json(staleResolveBody(outcome, decisionId));
+        if (outcome.kind === "conflict") return c.json(staleResolveBody(outcome, decisionId), 409);
+        if (outcome.kind === "invalid_option") {
+          return c.json({ error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error }, 400);
+        }
+        // #209 (J1) — carry the backing artifactId so the web's decision_resolved
+        // handler can flip the status pill to `approved` in an open tab (the store
+        // already advanced it on disk; this closes the live-update gap that left
+        // this path — unlike the public route — broadcasting no artifactId at all).
+        const artifactId = r.store.getDecision(decisionId)?.artifactId;
+        // A response and its backing artifact are one authorization write. Flush
+        // before the daemon claims success; app.onError maps a concurrent proposal
+        // rewrite to the shared session_review_conflict 409, with no broadcast.
+        try {
+          await r.store.forceFlush();
+        } catch (error) {
+          // #490 — see the public route: a durably persisted answer is committed.
+          if (!r.store.isResolutionDurable(decisionId)) throw error;
+        }
+        committed = true; // #484 review — durable: settle as committed
+        r.store.takeResolutionAnnouncement(decisionId); // #484 review — announced now; a retry won't repeat it
+        broadcast(sessionId, { type: "decision_resolved", decisionId, artifactId, optionId, reasoning, confidence, predictedOutcome });
+        return c.json({ status: "resolved" });
+      } finally {
+        if (outcome.kind === "resolved") await r.store.settleResolution(decisionId, committed);
+      }
+    });
   });
 
   app.get("/api/internal/sessions/:sessionId/decisions/pending", (c) => {

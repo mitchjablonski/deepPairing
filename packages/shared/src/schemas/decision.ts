@@ -55,3 +55,58 @@ export const DecisionResponseSchema = z.object({
 });
 
 export type DecisionResponse = z.infer<typeof DecisionResponseSchema>;
+
+
+/**
+ * #492 — the refusal a decision-resolve answers when the decision's backing
+ * artifact was CLOSED (superseded by a newer version, retracted by the agent,
+ * or marked obsolete): 409 `decision_closed`. Every field beyond `code` and
+ * `currentStatus` is optional (backward-compatible). `supersededBy` names the
+ * newer version so a stale card can link to it.
+ */
+export const DecisionClosedStatusSchema = z.enum(["superseded", "retracted", "obsolete"]);
+export type DecisionClosedStatus = z.infer<typeof DecisionClosedStatusSchema>;
+
+/**
+ * #493 review — the ONE definition of "can this decision accept an answer?",
+ * by its artifact's status. A decision in any of these states can't: it was
+ * rejected or sent back (a verdict), replaced by a newer version, withdrawn,
+ * or overtaken. Used both to refuse a late answer and to decide whether a
+ * newer version is worth linking to (a non-answerable successor gets no link).
+ */
+export const DECISION_NON_ANSWERABLE_STATUSES = ["rejected", "revised", "superseded", "retracted", "obsolete"] as const;
+export const DecisionNonAnswerableStatusSchema = z.enum(DECISION_NON_ANSWERABLE_STATUSES);
+export type DecisionNonAnswerableStatus = z.infer<typeof DecisionNonAnswerableStatusSchema>;
+export function decisionCanAcceptAnswer(status: string): boolean {
+  return !(DECISION_NON_ANSWERABLE_STATUSES as readonly string[]).includes(status);
+}
+/** How to say, to you, what happened to a version that can't take an answer. */
+export function nonAnswerableVerb(status: DecisionNonAnswerableStatus): string {
+  switch (status) {
+    case "rejected": return "rejected";
+    case "revised": return "sent back for changes";
+    case "superseded": return "replaced";
+    case "retracted": return "withdrawn";
+    default: return "closed";
+  }
+}
+
+export const DecisionSupersededBySchema = z.object({
+  artifactId: z.string(),
+  decisionId: z.string().optional(),
+});
+export type DecisionSupersededBy = z.infer<typeof DecisionSupersededBySchema>;
+
+export const DecisionClosedRefusalSchema = z.object({
+  error: z.literal("decision_closed").optional(),
+  code: z.literal("decision_closed"),
+  currentStatus: DecisionClosedStatusSchema,
+  decisionId: z.string().optional(),
+  artifactId: z.string().optional(),
+  supersededBy: DecisionSupersededBySchema.optional(),
+  /** #493 review — the newest version was itself closed: no `supersededBy`
+   *  link (nothing to answer), and this says why. */
+  successorStatus: DecisionNonAnswerableStatusSchema.optional(),
+  message: z.string().optional(),
+});
+export type DecisionClosedRefusal = z.infer<typeof DecisionClosedRefusalSchema>;

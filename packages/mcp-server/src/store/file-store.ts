@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { classifyStaleResolve, classifyClosedDecision, type DecisionResolveOutcome, type ResolutionAnnouncement } from "./decision-resolve-guard.js";
 import path from "node:path";
 import crypto from "node:crypto";
 import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
@@ -7,7 +8,7 @@ import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { capConceptLength } from "./concept-hygiene.js";
 import { writeJsonAtomic, writeStringAtomic } from "./atomic-write.js";
-import { withFileLock } from "./file-lock.js";
+import { withFileLock, isFileLockError } from "./file-lock.js";
 import {
   mergeArtifactRecords,
   mergeSessionRecords,
@@ -35,6 +36,24 @@ export type { ProjectGuardrail };
 /** #408 — bounded wait for the project preferences.json transaction lock (one
  *  small JSON read + atomic replace). Past this, fail closed with ELOCKED. */
 const PREFERENCES_LOCK_TIMEOUT_MS = 1000;
+
+/** #486 — one cross-project mirror refused by a busy ledger lock, queued in
+ *  `.deeppairing/ledger-mirror-pending.json` for replay. */
+interface PendingLedgerMirror {
+  kind: "rejected" | "approved" | "override";
+  /** The capped ledger key. */
+  concept: string;
+  /** The local row it mirrors (rejected / approved), for the no-resurrect check. */
+  description?: string;
+  instance: { project: string; sessionId: string; verdict: "rejected" | "approved"; reason?: string; at: string };
+  /** The ledger's monotonic removal sequence seen BEFORE the first attempt;
+   *  a removal of this concept after it wins over the replay. */
+  removalSeq?: number;
+}
+
+/** #486 review — bounds on the pending mirror queue. */
+const MIRROR_QUEUE_MAX = 200;
+const MIRROR_QUEUE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
  * #193 E2 — artifact types whose rejection captures NO cross-project taste
@@ -160,6 +179,9 @@ export class FileStore implements IStore {
     this.captureRecordBaselines();
     this.loadPreferences();
     this.loadSessionPrefs();
+    // #486 — a mirror queued by an earlier process (a daemon that restarted
+    // before its retries succeeded) is replayed once this store is up.
+    if (!this.isDemoSession && fs.existsSync(this.ledgerMirrorPendingPath())) this.scheduleMirrorReplay(0, 0);
   }
 
   private ensureDir(): void {
@@ -525,6 +547,10 @@ export class FileStore implements IStore {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
+    }
+    if (this.mirrorReplayTimer) {
+      clearTimeout(this.mirrorReplayTimer);
+      this.mirrorReplayTimer = null;
     }
   }
 
@@ -1380,6 +1406,169 @@ export class FileStore implements IStore {
     this.notifyFeedbackWaiters();
   }
 
+  /**
+   * #464 (Astra review) — check-and-resolve in ONE synchronous critical
+   * section: no await separates the stale-resolve classification from the
+   * write, so of two overlapping resolves exactly one writes and the other sees
+   * its answer (a same-pick no-op, or a conflict carrying the winner). See
+   * store/decision-resolve-guard.ts for the outcomes.
+   */
+  resolveDecisionAtomic(
+    decisionId: string,
+    optionId: string,
+    reasoning?: string,
+    prediction?: { confidence?: "low" | "medium" | "high"; predictedOutcome?: string },
+  ): DecisionResolveOutcome {
+    this.assertAuthorizationReadable();
+    const dec = this.decisions.get(decisionId);
+    if (!dec) return { kind: "no_record" };
+    const backing = this.artifacts.find((a) => a.id === dec.artifactId) ??
+      this.artifacts.find((a) =>
+        a.type === "decision" &&
+        ((a.content as { decisionId?: string } | null)?.decisionId === decisionId || a.id === decisionId));
+    const stale = classifyStaleResolve(dec, backing, optionId);
+    if (stale) return stale;
+    // #492 — a closed (superseded / retracted / obsolete) decision takes no
+    // new answer; in the same critical section, so it's race-free.
+    const closed = classifyClosedDecision(backing, this.artifacts);
+    if (closed) return closed;
+    // F2 — fail-closed on an option the decision doesn't have (resolveDecision
+    // would silently ignore it).
+    const opts = (dec as { options?: Array<{ id?: string }> }).options;
+    if (Array.isArray(opts) && opts.length > 0 && !opts.some((o) => o?.id === optionId)) {
+      return { kind: "invalid_option" };
+    }
+    // #484 review — snapshot what this write changes, so a failed flush can put
+    // memory back exactly where disk is (settleResolution(…, false)).
+    const prevDecision = structuredClone(dec);
+    const prevBacking = backing ? structuredClone(backing) : undefined;
+    // Hold feedback waiters until the write is durable: a check_feedback long
+    // poll woken now would deliver an answer the flush may still refuse.
+    this.feedbackNotifyHolds++;
+    // #490 — this write's OWN wake-up (resolveDecision / updateArtifactStatus
+    // notify internally) must not count as "another event queued one": restore
+    // the flag after the write, so an uncommitted settle wakes nobody.
+    const otherNotifyPending = this.feedbackNotifyPending;
+    this.resolveDecision(decisionId, optionId, reasoning, prediction);
+    this.feedbackNotifyPending = otherNotifyPending;
+    const written = this.decisions.get(decisionId)!;
+    const backingNow = backing ? this.artifacts.find((a) => a.id === backing.id) : undefined;
+    this.pendingResolutions.set(decisionId, {
+      prevDecision,
+      prevBacking,
+      writtenResponse: written.response,
+      backingStatus: backingNow?.status,
+      backingHistoryLength: ((backingNow as { statusHistory?: unknown[] } | undefined)?.statusHistory ?? []).length,
+    });
+    // #484 review — written, not yet announced (see takeResolutionAnnouncement).
+    this.unannouncedResolutions.add(decisionId);
+    return { kind: "resolved", ...(dec.artifactId ? { artifactId: dec.artifactId } : {}) };
+  }
+
+  /** #484 review — resolutions written by resolveDecisionAtomic whose flush
+   *  hasn't settled yet, with what they replaced. */
+  private pendingResolutions = new Map<string, {
+    prevDecision: DecisionRecord;
+    prevBacking: Artifact | undefined;
+    writtenResponse: DecisionRecord["response"];
+    backingStatus: Artifact["status"] | undefined;
+    backingHistoryLength: number;
+  }>();
+  private feedbackNotifyHolds = 0;
+  private feedbackNotifyPending = false;
+
+  /**
+   * #484 review — settle a resolveDecisionAtomic write once its flush is known.
+   * committed → release held feedback waiters. NOT committed (the flush threw:
+   * lock busy → 503, review conflict) → roll memory back to exactly what disk
+   * still holds, so getResolvedDecisions / check_feedback never deliver an
+   * answer the human was told didn't complete, and a later different pick isn't
+   * refused as "already answered". The rollback restores only what THIS write
+   * still owns (an artifact another writer changed since is left alone), and no
+   * announcement remains for it. Runs under the per-store resolve lock.
+   */
+  settleResolution(decisionId: string, committed: boolean): void {
+    const pending = this.pendingResolutions.get(decisionId);
+    if (!pending) return;
+    this.pendingResolutions.delete(decisionId);
+    if (!committed) {
+      const dec = this.decisions.get(decisionId);
+      if (dec && dec.response === pending.writtenResponse) {
+        for (const k of Object.keys(dec)) delete (dec as unknown as Record<string, unknown>)[k];
+        Object.assign(dec, pending.prevDecision);
+      }
+      if (pending.prevBacking) {
+        const art = this.artifacts.find((a) => a.id === pending.prevBacking!.id);
+        const history = ((art as { statusHistory?: unknown[] } | undefined)?.statusHistory ?? []).length;
+        if (art && art.status === pending.backingStatus && history === pending.backingHistoryLength) {
+          for (const k of Object.keys(art)) delete (art as unknown as Record<string, unknown>)[k];
+          Object.assign(art, pending.prevBacking);
+        }
+      }
+      this.unannouncedResolutions.delete(decisionId);
+      // #490 — a partial flush may have landed the backing artifact (written
+      // before decisions.json) while the decision didn't: re-flush so disk
+      // converges back to this rolled-back state once the store can write.
+      try { this.scheduleFlush(); } catch { /* disposed: nothing to converge */ }
+    }
+    // #490 — wake waiters only for something real: this write COMMITTED, or
+    // another event queued a wake-up during the hold. A rolled-back write is
+    // not news (it was a spurious wake for every long-polling agent).
+    this.feedbackNotifyHolds = Math.max(0, this.feedbackNotifyHolds - 1);
+    if (committed) this.feedbackNotifyPending = true;
+    if (this.feedbackNotifyHolds === 0 && this.feedbackNotifyPending) {
+      this.feedbackNotifyPending = false;
+      this.notifyFeedbackWaiters();
+    }
+  }
+
+  /**
+   * #490 — after a FAILED flush, did this resolution land on disk anyway? A
+   * flush writes collections in sequence (artifacts → … → decisions → plan
+   * reviews → requests …); a disk error AFTER decisions.json (ENOSPC on a later
+   * file) leaves the answer durable while the flush throws. The route must then
+   * treat the request as committed (announce once, succeed) — not 503 a
+   * decision that is resolved on disk. Reads the file directly; any read
+   * problem means "not proven durable" (→ roll back).
+   */
+  isResolutionDurable(decisionId: string): boolean {
+    const pending = this.pendingResolutions.get(decisionId);
+    const written = pending?.writtenResponse;
+    if (!written) return false;
+    try {
+      const raw = JSON.parse(fs.readFileSync(path.join(this.sessionDir(), "decisions.json"), "utf8")) as DecisionRecord[];
+      const onDisk = Array.isArray(raw) ? raw.find((d) => d?.decisionId === decisionId)?.response : undefined;
+      const durable = !!onDisk && onDisk.optionId === written.optionId && (onDisk.reasoning ?? null) === (written.reasoning ?? null);
+      // The flush that just failed left the LATER collections memory-only;
+      // committing here schedules no write of its own, so re-flush to converge
+      // them once the store can write (the rollback path does the same).
+      if (durable) { try { this.scheduleFlush(); } catch { /* disposed */ } }
+      return durable;
+    } catch {
+      return false;
+    }
+  }
+
+  /** #484 review — decisions whose answer was written by resolveDecisionAtomic
+   *  but not yet announced after a successful flush. In-memory on purpose: an
+   *  answer that never flushed doesn't survive a restart either. */
+  private unannouncedResolutions = new Set<string>();
+
+  takeResolutionAnnouncement(decisionId: string): ResolutionAnnouncement | null {
+    if (!this.unannouncedResolutions.has(decisionId)) return null;
+    const dec = this.decisions.get(decisionId);
+    const response = dec?.response;
+    this.unannouncedResolutions.delete(decisionId);
+    if (!dec || !response) return null;
+    return {
+      optionId: response.optionId,
+      ...(response.reasoning ? { reasoning: response.reasoning } : {}),
+      ...(response.confidence ? { confidence: response.confidence } : {}),
+      ...(response.predictedOutcome ? { predictedOutcome: response.predictedOutcome } : {}),
+      ...(dec.artifactId ? { artifactId: dec.artifactId } : {}),
+    };
+  }
+
   getDecisionResponse(decisionId: string): { optionId: string; reasoning?: string } | null {
     this.assertAuthorizationReadable();
     return this.decisions.get(decisionId)?.response ?? null;
@@ -1694,15 +1883,10 @@ export class FileStore implements IStore {
         // say out loud, and an unbounded one published into a shared file is
         // both a storage and a disclosure hazard. Applied at EVERY publish site
         // or an approval and its rejection would bucket under different keys.
-        getGlobalStore().recordInstance(capConceptLength(conceptKey), {
-          project: this.projectHint,
-          sessionId: this.sessionId,
-          verdict: "rejected",
-          reason,
-        });
+        this.mirrorToLedger("rejected", conceptKey, description, reason);
       } catch (err) {
-        // Non-fatal — losing a ledger append doesn't break the session — but
-        // never silent (#406: a busy ledger lock must be visible).
+        // Non-fatal — a failed mirror doesn't break the session — but never
+        // silent (#406). A busy lock is queued and retried (#486).
         FileStore.logLedgerMirrorFailure("rejected", err);
       }
     }
@@ -1790,13 +1974,9 @@ export class FileStore implements IStore {
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
         // Q2 review H2 — same minimum-payload + cap rule as the rejected path.
-        getGlobalStore().recordInstance(capConceptLength(conceptKey), {
-          project: this.projectHint,
-          sessionId: this.sessionId,
-          verdict: "approved",
-        });
+        this.mirrorToLedger("approved", conceptKey, description);
       } catch (err) {
-        // Non-fatal, but never silent (#406).
+        // Non-fatal, but never silent (#406). A busy lock is queued (#486).
         FileStore.logLedgerMirrorFailure("approved", err);
       }
     }
@@ -1831,7 +2011,7 @@ export class FileStore implements IStore {
     // Demo isolation — same never-mirror gate as the record paths.
     // #408 review — local retire first (a busy lock throws before the mirror).
     let retired = 0;
-    this.mutatePreferences((prefs) => {
+    const retireLocal = () => this.mutatePreferences((prefs) => {
       const rejected = this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []);
       const keep = rejected.filter(
         (r) =>
@@ -1844,18 +2024,25 @@ export class FileStore implements IStore {
     });
 
     const conceptKey = concept?.trim() || description?.trim() || "";
+    // #486 / #488 review — retire the local row and drop any queued rejection
+    // mirror for it together (under the queue lock), so a replay can't land it
+    // afterwards. Whether a counter-approval is needed is NOT inferred from
+    // the queue — an entry can survive a crash after its append landed — but
+    // decided by the ledger itself under its lock: the counter is appended
+    // only if the concept was published at all (onlyIfConceptExists), and a
+    // waiting replay re-checks the (now retired) local row before appending.
+    if (conceptKey && !this.isDemoSession) {
+      this.cancelQueuedRejections(capConceptLength(conceptKey), description, retireLocal);
+    } else {
+      retireLocal();
+    }
     if (conceptKey && !this.isDemoSession && this.globalLedgerPublishEnabled()) {
       try {
         // Q2 review LOW — the stored reason said "not my taste", the label of a
         // button that no longer exists. It is written into the user's own data
         // and read back in the Ledger drawer, so it has to match what they
         // clicked: "Retire this stance". Same minimum-payload + cap rule.
-        getGlobalStore().recordInstance(capConceptLength(conceptKey), {
-          project: this.projectHint,
-          sessionId: this.sessionId,
-          verdict: "approved",
-          reason: "Retired by you — the gate was blocking something you wanted",
-        });
+        this.mirrorToLedger("override", conceptKey, description, "Retired by you — the gate was blocking something you wanted");
       } catch (err) {
         // Non-fatal — losing a ledger append doesn't break the override; the
         // local retire below is what clears the block in this project. Never
@@ -1929,6 +2116,246 @@ export class FileStore implements IStore {
     }, { label: "Project preferences lock", timeoutMs: PREFERENCES_LOCK_TIMEOUT_MS, reentrant: true });
   }
 
+  // --- #486 — durable cross-project mirror ---
+  //
+  // The mirror into the cross-project ledger is advisory and must not block
+  // the local commit, but a busy ledger lock (ELOCKED past its 1 s bound) used
+  // to DROP it. Now a refused mirror is appended to a small project-local
+  // queue, `.deeppairing/ledger-mirror-pending.json`, and replayed:
+  //   - on a bounded backoff in this process (2 s, 5 s, 15 s, 60 s, unref'd);
+  //   - opportunistically after any later mirror that succeeds;
+  //   - when a FileStore for the project next starts (daemon restart), so a
+  //     queued mirror survives the process that queued it.
+  // A queue rather than only an in-memory retry: the in-memory version loses
+  // the mirror on exactly the restart the issue cares about, and the file is
+  // tiny and project-scoped, like preferences.json.
+  //
+  // Invariants:
+  //   - idempotent: an entry keeps the timestamp of its FIRST attempt, and the
+  //     ledger write is `exactOnce` on (project, sessionId, verdict, at), so a
+  //     replay that already landed — or two concurrent replayers — never adds
+  //     a duplicate instance;
+  //   - never resurrects: a queued rejection is replayed only while its local
+  //     row still exists (a retire removes the row, and cancelQueuedRejections
+  //     drops the entry); a queued approval only while the pattern is still
+  //     approved; nothing is replayed once the publish opt-in is off;
+  //   - #416 locks: the queue has its own lock, always taken BEFORE the ledger
+  //     lock (never the reverse), and a pass stops at the first busy ledger
+  //     lock, so it waits at most one bound;
+  //   - `ledger_write` broadcasts are unchanged: routes emit them for the
+  //     LOCAL record, which is committed before any of this.
+  private mirrorReplayTimer: ReturnType<typeof setTimeout> | null = null;
+  private static readonly MIRROR_REPLAY_DELAYS_MS = [2_000, 5_000, 15_000, 60_000];
+
+  private ledgerMirrorPendingPath(): string {
+    return path.join(this.basePath, "ledger-mirror-pending.json");
+  }
+
+  /**
+   * #488 review — is this mirror still eligible, judged from DISK (another
+   * process — the CLI, a sibling session — may have changed it)? Runs inside
+   * the ledger lock as a precondition, immediately before the append, so a
+   * withdrawal or retire that completed while a writer waited for the lock
+   * always wins.
+   */
+  private mirrorStillEligible(entry: Pick<PendingLedgerMirror, "kind" | "concept" | "description">): boolean {
+    const prefs = FileStore.salvageRecord(
+      "preferences.json", this.loadJsonFile<unknown>(path.join(this.basePath, "preferences.json"), {}), {} as Record<string, unknown>);
+    if (prefs.globalLedgerPublish !== true) return false;
+    if (entry.kind === "rejected") {
+      return this.normalizeRejectedApproaches(prefs.rejectedApproaches ?? []).some((r) =>
+        (entry.description !== undefined && r.description === entry.description) ||
+        (!!r.concept && capConceptLength(r.concept) === entry.concept));
+    }
+    if (entry.kind === "approved" && entry.description !== undefined) {
+      return Array.isArray(prefs.approvedPatterns) && (prefs.approvedPatterns as unknown[]).includes(entry.description);
+    }
+    return true; // a retire's counter: gated by onlyIfConceptExists instead
+  }
+
+  private mirrorOptions(entry: PendingLedgerMirror, replay: boolean) {
+    return {
+      exactOnce: true,
+      precondition: () => this.mirrorStillEligible(entry),
+      ...(entry.kind === "override" ? { onlyIfConceptExists: true } : {}),
+      ...(replay ? { replayedFromSeq: entry.removalSeq ?? 0 } : {}),
+    };
+  }
+
+  private mirrorToLedger(kind: "rejected" | "approved" | "override", conceptKey: string, description: string | undefined, reason?: string): void {
+    const concept = capConceptLength(conceptKey);
+    // Captured BEFORE the attempt: a removal that lands after this point must
+    // win over a later replay of this mirror (monotonic, not a clock).
+    const removalSeq = getGlobalStore().removalSeq();
+    const instance = {
+      project: this.projectHint,
+      sessionId: this.sessionId,
+      verdict: (kind === "rejected" ? "rejected" : "approved") as "rejected" | "approved",
+      ...(reason ? { reason } : {}),
+      at: new Date().toISOString(),
+    };
+    const entry: PendingLedgerMirror = { kind, concept, ...(description ? { description } : {}), instance, removalSeq };
+    let outcome: string;
+    try {
+      outcome = getGlobalStore().recordInstance(concept, instance, this.mirrorOptions(entry, false));
+    } catch (err) {
+      // Busy lock, or an unreadable removal record: keep the mirror for later.
+      if (!isFileLockError(err)) FileStore.logLedgerMirrorFailure(kind, err);
+      this.queueLedgerMirror(entry);
+      return;
+    }
+    if (outcome === "refused") { this.queueLedgerMirror(entry); return; } // corrupt/unwritable ledger
+    // The ledger lock was just free — a good moment to drain anything queued.
+    if (fs.existsSync(this.ledgerMirrorPendingPath())) this.replayLedgerMirrorsSafe();
+  }
+
+
+  /** Read the queue, applying its bounds. Malformed entries and entries cut
+   *  by the size/age caps are never dropped silently: the file is backed up
+   *  (`.corrupt-<ts>`) or the cut is logged. */
+  private readPendingMirrors(): PendingLedgerMirror[] {
+    const file = this.ledgerMirrorPendingPath();
+    const raw = this.loadJsonFile<unknown>(file, []);
+    if (!Array.isArray(raw)) return [];
+    const valid = raw.filter((e): e is PendingLedgerMirror =>
+      !!e && typeof e === "object" && typeof (e as PendingLedgerMirror).concept === "string" &&
+      ["rejected", "approved", "override"].includes((e as PendingLedgerMirror).kind) &&
+      !!(e as PendingLedgerMirror).instance && typeof (e as PendingLedgerMirror).instance.at === "string");
+    if (valid.length !== raw.length) {
+      const backup = `${file}.corrupt-${Date.now()}`;
+      try { fs.copyFileSync(file, backup); } catch { /* best effort */ }
+      console.error(`[deepPairing] ${raw.length - valid.length} malformed queued ledger mirror(s) skipped; the queue was backed up to ${backup}.`);
+    }
+    const cutoff = Date.now() - MIRROR_QUEUE_MAX_AGE_MS;
+    const fresh = valid.filter((e) => !(Date.parse(e.instance.at) < cutoff));
+    if (fresh.length !== valid.length) {
+      console.error(`[deepPairing] dropped ${valid.length - fresh.length} queued ledger mirror(s) older than 30 days.`);
+    }
+    if (fresh.length > MIRROR_QUEUE_MAX) {
+      console.error(`[deepPairing] the ledger mirror queue is capped at ${MIRROR_QUEUE_MAX}; dropped the ${fresh.length - MIRROR_QUEUE_MAX} oldest.`);
+      return fresh.slice(-MIRROR_QUEUE_MAX);
+    }
+    return fresh;
+  }
+
+  private writePendingMirrors(entries: PendingLedgerMirror[]): void {
+    const file = this.ledgerMirrorPendingPath();
+    if (entries.length === 0) {
+      try { fs.unlinkSync(file); } catch { /* already gone */ }
+      return;
+    }
+    writeJsonAtomic(file, entries);
+  }
+
+  private withMirrorQueue<T>(run: () => T): T {
+    fs.mkdirSync(this.basePath, { recursive: true });
+    return withFileLock(`${this.ledgerMirrorPendingPath()}.lock`, run, {
+      label: "Ledger mirror queue lock", timeoutMs: PREFERENCES_LOCK_TIMEOUT_MS, reentrant: true,
+    });
+  }
+
+  private queueLedgerMirror(entry: PendingLedgerMirror): void {
+    try {
+      this.withMirrorQueue(() => {
+        const entries = this.readPendingMirrors();
+        entries.push(entry);
+        this.writePendingMirrors(entries);
+      });
+    } catch (err) {
+      FileStore.logLedgerMirrorFailure(entry.kind, err);
+      return;
+    }
+    console.error(`[deepPairing] cross-project ledger mirror (${entry.kind}) for "${entry.concept}" is queued: the ledger is busy; it will be retried.`);
+    if (!this.mirrorReplayTimer) this.scheduleMirrorReplay(0);
+  }
+
+  private scheduleMirrorReplay(attempt: number, delay = FileStore.MIRROR_REPLAY_DELAYS_MS[attempt]): void {
+    if (this.disposed || delay === undefined) return;
+    const timer = setTimeout(() => {
+      this.mirrorReplayTimer = null;
+      const remaining = this.replayLedgerMirrorsSafe();
+      if (remaining > 0) this.scheduleMirrorReplay(attempt + 1);
+    }, delay);
+    timer.unref?.();
+    this.mirrorReplayTimer = timer;
+  }
+
+  /** Never throws; returns how many mirrors are still queued (0 if unknown). */
+  private replayLedgerMirrorsSafe(): number {
+    try {
+      return this.replayLedgerMirrors();
+    } catch (err) {
+      if (errorCode(err) !== "ENOENT") console.error(`[deepPairing] ledger mirror replay failed:`, err);
+      return isFileLockError(err) ? 1 : 0;
+    }
+  }
+
+  /**
+   * Replay queued mirrors. Returns how many remain queued (the ledger was
+   * busy again). Public for tests and for a caller that wants to drain now.
+   */
+  replayLedgerMirrors(): number {
+    if (this.isDemoSession || !fs.existsSync(this.ledgerMirrorPendingPath())) return 0;
+    return this.withMirrorQueue(() => {
+      const entries = this.readPendingMirrors();
+      const keep: PendingLedgerMirror[] = [];
+      let stopped = false;
+      for (const entry of entries) {
+        if (stopped) { keep.push(entry); continue; }
+        // Eligibility (consent, local row) is checked under the ledger lock by
+        // the precondition; the entry is dequeued only on an append that
+        // LANDED or a validated, intentional no-op.
+        let outcome: string;
+        try {
+          outcome = getGlobalStore().recordInstance(entry.concept, entry.instance, this.mirrorOptions(entry, true));
+        } catch (err) {
+          // Busy ledger lock, or e.g. an unreadable removal record: keep it
+          // (and everything after it) for the next pass.
+          if (!isFileLockError(err)) FileStore.logLedgerMirrorFailure(entry.kind, err);
+          stopped = true; keep.push(entry); continue;
+        }
+        if (outcome === "refused") {
+          // The ledger would not take the write (corrupt/unwritable) — never
+          // acknowledge it; keep it until the ledger is repaired.
+          console.error(`[deepPairing] the cross-project ledger refused a queued mirror for "${entry.concept}"; it stays queued.`);
+          stopped = true; keep.push(entry); continue;
+        }
+      }
+      this.writePendingMirrors(keep);
+      return keep.length;
+    });
+  }
+
+
+  /** Drop queued REJECTED mirrors for a concept/description being retired.
+   *  Returns how many were dropped. */
+  /** Drop queued REJECTED mirrors for a concept/description being retired —
+   *  under the queue lock, together with `retireLocal`, so a replay cannot
+   *  slip in between and drop the entry itself (which would make the retire
+   *  think nothing was queued and publish a stray counter-approval).
+   *  Returns how many were dropped, or "unknown" if the queue lock was busy. */
+  private cancelQueuedRejections(concept: string, description: string | undefined, retireLocal: () => void): number | "unknown" {
+    if (!fs.existsSync(this.ledgerMirrorPendingPath())) { retireLocal(); return 0; }
+    let cancelled: number | "unknown" = "unknown";
+    try {
+      this.withMirrorQueue(() => {
+        retireLocal(); // first: a busy preferences lock must not cancel anything
+        const entries = this.readPendingMirrors();
+        const keep = entries.filter((e) => !(e.kind === "rejected" &&
+          (e.concept === concept || (description !== undefined && e.description === description))));
+        if (keep.length !== entries.length) this.writePendingMirrors(keep);
+        cancelled = entries.length - keep.length;
+      });
+    } catch (err) {
+      // Only a busy QUEUE lock is "couldn't tell"; anything else (a busy
+      // preferences lock → 503) propagates unchanged.
+      if (!isFileLockError(err) || err.path !== `${this.ledgerMirrorPendingPath()}.lock`) throw err;
+      console.error(`[deepPairing] could not check the ledger mirror queue (busy) — the retire's cross-project counter is skipped:`, err);
+      retireLocal();
+    }
+    return cancelled;
+  }
+
   private static logLedgerMirrorFailure(verdict: string, err: unknown): void {
     console.error(`[deepPairing] cross-project ledger mirror (${verdict}) was not recorded:`, err);
   }
@@ -1970,6 +2397,43 @@ export class FileStore implements IStore {
     if (next.length === existing.length) return false;
     writeJsonAtomic(this.annotationsPath(), next);
     return true;
+  }
+
+  /**
+   * #472 — load-only annotations read, for the HTTP GET route. The regular
+   * constructor calls `ensureDir()` as a side effect of preparing a session
+   * for WRITES; routing a read through `new FileStore(projectRoot, sessionId)`
+   * meant a syntactically valid but nonexistent sessionId silently created
+   * `.deeppairing/sessions/<id>/` and then reported an empty result as if the
+   * session existed. This reads the sidecar file directly — no instance, no
+   * mkdir — and reports which of three outcomes applies: absent session,
+   * valid session (legacy-empty or populated), or a real read failure (a
+   * corrupt/non-array annotations.json), so the caller can tell "nothing to
+   * show" apart from "couldn't read this" instead of flattening both to 200.
+   */
+  static readAnnotationsIfSessionExists(
+    projectRoot: string,
+    sessionId: string,
+  ):
+    | { ok: true; exists: true; annotations: SessionAnnotation[] }
+    | { ok: true; exists: false }
+    | { ok: false; message: string } {
+    const sessionDir = path.join(projectRoot, ".deeppairing", "sessions", sessionId);
+    if (!fs.existsSync(sessionDir)) return { ok: true, exists: false };
+    const annotationsFile = path.join(sessionDir, "annotations.json");
+    // A valid session with no annotations.json yet (never annotated) keeps
+    // the legacy empty-array behavior — this is NOT a read failure.
+    if (!fs.existsSync(annotationsFile)) return { ok: true, exists: true, annotations: [] };
+    try {
+      const raw = fs.readFileSync(annotationsFile, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        return { ok: false, message: `annotations.json did not contain an array (got ${typeof parsed})` };
+      }
+      return { ok: true, exists: true, annotations: parsed as SessionAnnotation[] };
+    } catch (err) {
+      return { ok: false, message: errorMessage(err, "Failed to read annotations") };
+    }
   }
 
   // --- Posted reviews (R1 #279) ---
@@ -2198,6 +2662,9 @@ export class FileStore implements IStore {
 
   /** Notify all waiters that feedback has arrived */
   private notifyFeedbackWaiters(): void {
+    // #484 review — while a resolve's flush is unsettled, defer the wake-up
+    // (settleResolution releases it).
+    if (this.feedbackNotifyHolds > 0) { this.feedbackNotifyPending = true; return; }
     const waiters = this.feedbackWaiters;
     this.feedbackWaiters = [];
     for (const resolve of waiters) resolve();

@@ -70,10 +70,12 @@ Two reasons:
 1. **MCP is the right protocol layer for this.** The pre-flight gate
    needs to be a return value the agent reads and reacts to. MCP
    tools return structured results to the LLM; editor extensions
-   sit in the UI layer and can't refuse the agent's choice. We
-   experimented with the editor-plugin shape and it kept collapsing
-   into "show the user a diff and hope they say no" — which is what
-   Cursor canvases already do.
+   sit in the UI layer. When we built it as an editor plugin, it
+   kept turning into "show the user a diff and hope they say no".
+   (Editors have since added richer agent review, e.g. VS Code's
+   [Add Feedback on agent edits](https://code.visualstudio.com/docs/agents/run/review-code-edits),
+   checked 2026-10-07. What the MCP return value adds is that the agent
+   gets the refusal before anything is written.)
 2. **MCP is portable.** deepPairing runs inside Claude Code today,
    inside a (future) VSCode MCP host tomorrow, inside whatever
    Cursor's MCP support looks like the day after. The ledger and
@@ -129,38 +131,56 @@ elicitation's flat form is what the protocol surface actually gives you
 in this client right now. deepPairing's companion UI is the
 today-working equivalent, and a natural candidate to embed via MCP Apps
 once Claude Code ships support. The point was never "the protocol
-forbids this"; it's the composed review *system* — no competitor has
-built it, on any surface.
+forbids this". It's the composed review system that deepPairing
+focuses on, whichever surface renders it.
 
 The short version: elicitation is the right tool for a yes/no; the
 rich review that makes pairing *feel* like pairing needs the companion
 UI today, and the composed review system behind it regardless of which
 surface eventually renders it.
 
-## "How is this different from Claude Code's Plan Mode?"
+## "How is this different from Plan Mode?"
 
-Plan Mode is good at what it does: draft a plan, wait for your
-go-ahead before touching code. The limit is that the plan is terminal
-text — you approve it or retype it, and once the session moves on it's
-gone. deepPairing makes the plan a **commentable artifact**: it lands
-in the companion UI as a checklist you comment on line by line, pick
-between options on, and reject approaches in — and the same review
-surface extends past the plan to the findings, the decisions, and the
-diffs. Two things Plan Mode doesn't do:
+It depends which plan mode you mean. They differ, and all of them have improved.
+As of 2026-10-07, the docs say:
 
-- **It remembers your calls.** Reject an approach with a reason and
-  the stance is kept per-repo — so you don't re-litigate it next
-  session. Enable cross-project publishing and it's also flagged,
-  advisory, on your other projects.
-- **An enforced gate acts on the rejection.** Re-propose a concept you
-  turned down and a `PreToolUse` prompt stops it *before the edit
-  lands*, in the project where you made the call — not a plan you hope
-  the agent still honors. The same hook backstops your guardrail paths
-  (migrations, CI, infra, secrets): a write there with no findings,
-  options, spec, or plan presented first asks you before it lands.
+- **Claude Code plan mode** researches without editing, then asks you to
+  approve. You can choose "No, keep planning" and say what to change, or press
+  `Ctrl+G` to edit the plan in your own editor. Plan files are written
+  under `~/.claude/plans/` (or your `plansDirectory`)
+  ([permission modes](https://code.claude.com/docs/en/permission-modes#review-and-approve-a-plan)).
+- **Cursor Plan Mode** asks clarifying questions, and you edit the plan in
+  chat or as a Markdown file, saved in your home directory or the workspace
+  ([plan mode](https://cursor.com/docs/agent/plan-mode)).
+- **VS Code** reviews the agent's code edits: accept or reject each change,
+  **Add Feedback** on a range for the agent to resolve, and **Mark as
+  Reviewed**
+  ([review code edits](https://code.visualstudio.com/docs/agents/run/review-code-edits)).
 
-Plan Mode gets you one gate at the start; deepPairing keeps you in the
-loop at every decision that matters and remembers where you stood.
+So deepPairing doesn't pitch "editable plan" or "saved plan" as the
+difference. It focuses on **decision continuity**. The consequential calls in a
+piece of work arrive as their own decision cards (options, pros/cons,
+effort, risk), next to the findings and file:line evidence they rest on. The
+reason you gave is kept in the project's decisions view. A rejection becomes
+a stance that's checked the next time the agent reaches for the same thing:
+
+- **In this project**, a `present_*` proposal that matches the stance is
+  refused (`REJECTED_APPROACH_BLOCKED`), and a direct `Edit`/`Write` that
+  matches gets a `PreToolUse` permission prompt. Matching is on words plus a
+  short synonym list, not meaning, and the hook fails open. See
+  [the README's limits](../README.md#your-taste-compounds).
+- **On your other projects**, it's an advisory nudge, and only if you enabled
+  cross-project publishing.
+- The same hook backstops your guardrail paths (migrations, CI, infra,
+  secrets). A write there with no findings, options, spec, or plan presented
+  first asks you before it lands.
+
+The review also continues past the plan, through specs, diffs, and a
+closing debrief. When the work changes hands, export it as an ADR
+(`export_session` with `format: "adr"`) or share a self-contained page
+(**Share as page (.html)**). Plan mode and deepPairing aren't exclusive. You
+can plan in your tool's plan mode and still route the consequential calls
+through deepPairing.
 
 ## "How is the Philosophy Ledger different from Claude Code's auto-memory?"
 
@@ -228,8 +248,9 @@ The narrative trade-off: cross-project reads are a real advantage,
 but publishing is now opt-in. And to be precise about what's actually
 defensible — the cross-project ledger isn't the moat. Rich cross-session
 recall is table stakes now (Copilot/Cursor memory, CodeRabbit
-Learnings). What's hard to copy is the composed review system and the
-in-loop pre-execution gate that *acts* on a stance the moment the agent
+Learnings). What deepPairing focuses on is decision continuity: the
+composed review system, and the in-loop pre-execution gate that acts on a
+stance (matched by words, not meaning) the moment the agent
 re-proposes it — a refused `present_*` call, or a `PreToolUse`
 permission prompt before a direct edit lands, in the project where you made the call. We think honesty
 about the trust model beats a frictionless poisoning surface.
@@ -312,8 +333,7 @@ collapse — are in the issue tracker tagged `post-launch`.
 
 The MCP server itself is host-agnostic and should work with any MCP
 client. We test against Claude Code because that's the primary
-target and the only client with rich enough elicitation +
-notifications support today. Reports of it working (or breaking) in
+target; we haven't verified other clients. Reports of it working (or breaking) in
 other clients are welcome.
 
 The companion web UI is independent of the MCP host — once any MCP

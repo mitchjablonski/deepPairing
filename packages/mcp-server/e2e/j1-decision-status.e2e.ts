@@ -125,7 +125,8 @@ for (const theme of ["dark", "light"] as const) {
     await expect(page.getByText("In-memory store")).toBeVisible();
     await expect(page.getByText("Retracted by agent").first()).toBeVisible();
     await expect(page.getByText(/Superseded by the caching-layer RFC/i)).toBeVisible();
-    await expect(page.getByRole("button", { name: "Select Redis" })).toBeDisabled();
+    // #492 — a closed decision offers no Select at all.
+    await expect(page.getByRole("button", { name: "Select Redis" })).toHaveCount(0);
     await page.screenshot({ path: path.join(SHOTS, `retracted-decision-reason-dimmed-${theme}.png`), fullPage: false });
 
     // (c) Project Decisions modal — the retracted decision is badged "Withdrawn",
