@@ -12,6 +12,7 @@ import {
   SCOPE_SENTENCE,
   fetchExceptionPreview,
   announceGrantOnce,
+  terminalAllowanceText,
   ineligibleText,
   postGrant,
   preconditionFooter,
@@ -83,7 +84,10 @@ function AllowOnceDialog({ request }: { request: AllowOnceRequest }) {
     };
   }, [request]);
 
-  const eligible = preview !== "loading" && !!preview?.eligible && !!preview.snapshot;
+  // #501 round 4 (Sol P2) — a block that already carries an allowance can't
+  // be allowed again from here: the preview says what state it's in instead.
+  const existingState = preview !== "loading" ? preview?.allowance?.state : undefined;
+  const eligible = preview !== "loading" && !!preview?.eligible && !!preview.snapshot && !existingState;
   const valid = reasonIsValid(reason);
   const canConfirm = eligible && valid && !offline && !busy;
 
@@ -105,6 +109,17 @@ function AllowOnceDialog({ request }: { request: AllowOnceRequest }) {
     // Server values only (#501 review): the daemon's receipt and seenAt. If
     // the response lacked them, the daemon's broadcast applies them instead.
     if (res.receipt) usePreflightBlockStore.getState().applyReceipt(request.blockId, res.receipt, res.seenAt);
+    // #501 round 4 (Sol P2) — an idempotent answer can carry a TERMINAL
+    // allowance (it moved on since the preview): say so, announce nothing,
+    // and keep the dialog open on the truth.
+    const state = res.receipt?.state ?? res.allowance.state;
+    if (state !== "allowed") {
+      if (stillCurrent) {
+        setBusy(false);
+        setError(terminalAllowanceText(state));
+      }
+      return;
+    }
     // One announcement per allowance, whichever of this result and the
     // daemon's broadcast arrives first (#501 review).
     announceGrantOnce(res.allowance.id, request.concept, { blockId: request.blockId });
@@ -178,6 +193,10 @@ function AllowOnceDialog({ request }: { request: AllowOnceRequest }) {
             <div className="text-text-muted">Loading what would be created…</div>
           ) : !preview ? (
             <div className="text-text-secondary">{ineligibleText("session_ended")}</div>
+          ) : existingState ? (
+            <div className="text-text-secondary" data-testid="allow-once-existing">
+              {existingState === "allowed" ? "This proposal is already allowed once, and Claude can retry it." : terminalAllowanceText(existingState)}
+            </div>
           ) : !eligible ? (
             <div className="text-text-secondary" data-testid="allow-once-ineligible">{ineligibleText(preview.ineligibleReason)}</div>
           ) : (

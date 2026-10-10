@@ -98,7 +98,7 @@ export async function fetchExceptionPreview(blockId: string): Promise<ExceptionP
 }
 
 export type GrantResult =
-  | { ok: true; allowance: { id: string; state: ReceiptState }; receipt?: StanceAllowanceReceipt; seenAt?: string }
+  | { ok: true; allowance: { id: string; state: ReceiptState }; receipt?: StanceAllowanceReceipt; seenAt?: string; existing?: boolean }
   | { ok: false; status: number; message: string; ambiguous?: boolean };
 
 export async function postGrant(blockId: string, reason: string): Promise<GrantResult> {
@@ -115,6 +115,7 @@ export async function postGrant(blockId: string, reason: string): Promise<GrantR
         allowance: body.allowance,
         ...(body.receipt?.id ? { receipt: body.receipt as StanceAllowanceReceipt } : {}),
         ...(typeof body.seenAt === "string" ? { seenAt: body.seenAt } : {}),
+        ...(body.existing === true ? { existing: true } : {}),
       };
     }
     const message = typeof body?.error === "string" ? body.error
@@ -163,7 +164,11 @@ export function notifyStanceMoment(text: string, opts: { cli?: boolean; blockId?
   // #501 round 3 (Fable LOW) — when this block's hero toast is on screen, its
   // receipt line IS the record (and, with the bar off, its polite status line
   // is the one announcement); a second toast would only repeat it.
-  const heroShowing = !!opts.blockId && useToastStore.getState().toasts.some((t) => t.hero?.blockId === opts.blockId);
+  // #501 round 4 (Luna P2) — "showing" means RENDERED: block toasts step
+  // aside while the gate log is open, and the log has no live region, so the
+  // fallback toast must speak then.
+  const heroShowing = !!opts.blockId && !usePreflightBlockStore.getState().logOpen &&
+    useToastStore.getState().toasts.some((t) => t.hero?.blockId === opts.blockId);
   if (heroShowing) return;
   useToastStore.getState().push({
     kind: opts.cli ? "block" : "info",
@@ -193,4 +198,10 @@ export function announceGrantOnce(allowanceId: string, concept: string, opts: { 
 /** Tests only: allowance ids are unique per daemon, but test files reuse them. */
 export function resetAnnouncedGrantsForTests(): void {
   announcedAllowances.clear();
+}
+
+/** #501 round 4 (Sol P2) — the truthful line for a block whose allowance is
+ *  no longer `allowed` (it mirrors the CLI). Nothing is re-armed. */
+export function terminalAllowanceText(state: ReceiptState): string {
+  return `This block was already allowed once, and that allowance is now ${state === "used" ? "used" : state}. Nothing new was allowed.`;
 }

@@ -311,3 +311,69 @@ describe("round 3 (Fable) — one receipt on screen; the gate log is never cover
     expect(screen.getAllByTestId("hero-toast")).toHaveLength(3);
   });
 });
+
+describe("round 4 (Luna P2) — exactly one announcement per event, whatever is on screen", () => {
+  /** Live regions that currently speak a stance moment. */
+  const speakers = (needle: RegExp) =>
+    Array.from(document.querySelectorAll('[role="status"],[role="alert"],[aria-live]'))
+      .filter((el) => el.getAttribute("aria-live") !== "off" && needle.test(el.textContent ?? ""))
+      // a nested live region counts once (the innermost)
+      .filter((el, _i, all) => !all.some((o) => o !== el && el.contains(o)));
+  const MOMENT = /Allowed once: 'global mutable state'|Claude can retry this proposal|Claude used your allowance|A new block is waiting|proposal you allowed changed/;
+  const pushHero = () => act(() => { useToastStore.getState().push({ kind: "preflight-block", title: "x", ttl: 0, hero: { source: "session", concept: "global mutable state", via: "surface", blockId: "blk_1", eligible: true } }); });
+
+  async function mount(bar: boolean) {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({})));
+    usePreferencesStore.setState({ nextUpBar: bar });
+    const { ToastLayer } = await import("../ToastLayer");
+    const { NextUpBar } = await import("../NextUpBar");
+    render(<>{bar && <NextUpBar />}<PreflightBlockLog /><ToastLayer /></>);
+    pushHero();
+  }
+  const grant = (id: string) => act(() => {
+    announceGrantOnce(id, "global mutable state", { blockId: "blk_1" });
+    usePreflightBlockStore.getState().applyReceipt("blk_1", { ...SERVER_RECEIPT, id } as any, "2001-01-01T00:00:00.000Z");
+  });
+
+  it("bar OFF + gate log OPEN: the hero isn't rendered, so the fallback toast speaks — once (grant, then used)", async () => {
+    await mount(false);
+    fireEvent.click(screen.getByRole("button", { name: /Show recent gate blocks/ }));
+    expect(screen.queryByTestId("hero-toast")).not.toBeInTheDocument();
+    grant("sx_g");
+    expect(speakers(MOMENT)).toHaveLength(1);
+    act(() => useToastStore.getState().dismissAll());
+    const { notifyStanceMoment } = await import("../../lib/stanceException");
+    act(() => notifyStanceMoment("Claude used your allowance: modify a.", { blockId: "blk_1" }));
+    expect(speakers(MOMENT)).toHaveLength(1);
+  });
+
+  it("bar OFF + gate log CLOSED: the hero's status line speaks, and no fallback toast doubles it", async () => {
+    await mount(false);
+    grant("sx_c");
+    expect(speakers(MOMENT)).toHaveLength(1);
+    expect(grantToasts()).toHaveLength(0);
+  });
+
+  it("bar ON (control): only the bar's announcer speaks, log open or closed", async () => {
+    useConnectionStore.setState({ activeSessions: [{ sessionId: "s1", live: true }], staleDaemon: false, snapshotUnavailable: false, sessionConflict: false } as any);
+    await mount(true);
+    grant("sx_on1");
+    expect(speakers(MOMENT).map((el) => el.getAttribute("data-testid"))).toEqual(["next-up-announcer"]);
+    fireEvent.click(screen.getByRole("button", { name: /Show recent gate blocks/ }));
+    grant("sx_on2");
+    expect(speakers(MOMENT).map((el) => el.getAttribute("data-testid"))).toEqual(["next-up-announcer"]);
+  });
+});
+
+describe("round 4 (Sol P2) — a terminal allowance is never reported as a fresh grant", () => {
+  it("terminal between preview and confirm: the idempotent 200 says what happened, announces nothing, keeps the dialog open", async () => {
+    const d = deferredDaemon();
+    render(<AllowOnceDialogHost />);
+    await openAndSubmit();
+    await act(async () => { d.release({ existing: true, allowance: { id: "sx_r", state: "revoked" }, receipt: { ...SERVER_RECEIPT, id: "sx_r", state: "revoked" } }, 200); });
+    await screen.findByText(/that allowance is now revoked\. Nothing new was allowed\./);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(grantToasts()).toHaveLength(0);
+    expect(usePreflightBlockStore.getState().blocks[0]!.allowance!.state).toBe("revoked");
+  });
+});
