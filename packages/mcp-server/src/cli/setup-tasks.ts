@@ -8,6 +8,7 @@
  * caller as `{ ok: false, message }` instead of throwing, so the daemon can
  * log them without crashing on read-only / sandboxed projects.
  */
+import { STANCE_ALLOW_ASK_COMMAND, STANCE_ALLOW_ASK_MATCHER, STANCE_ALLOW_ASK_REL_PATH, STANCE_ALLOW_ASK_SCRIPT } from "../hooks/stance-allow-ask.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -166,6 +167,8 @@ export const HOOK_MARKERS = {
     cmd.includes("deepPairing") || cmd.includes(".deeppairing/hooks/stop.mjs"),
   PostToolUse: (cmd: string) => cmd.includes(".deeppairing/hooks/checkpoint.mjs"),
   PreToolUse: (cmd: string) => cmd.includes(".deeppairing/hooks/preflight.mjs"),
+  /** #470 — the narrow Bash `ask` row (also a PreToolUse row, matcher Bash). */
+  StanceAllowAsk: (cmd: string) => cmd.includes(".deeppairing/hooks/stance-allow-ask.sh"),
 } as const;
 
 export type LocalHookState = "ok" | "missing" | "legacy" | "redundant";
@@ -728,6 +731,57 @@ export function ensurePreflightHook(projectRoot: string): SetupResult {
   }
 }
 
+// ---------------------------------------------------------------------------
+// #470 slice 3 — the narrow Bash `ask` on `stance allow` (design §3). A second
+// PreToolUse row (matcher "Bash") beside the preflight row, owned the same way
+// (own-the-row by its anchored marker; never touches the preflight row or any
+// user row). The plugin declares the same check natively in hooks/hooks.json.
+// ---------------------------------------------------------------------------
+export function ensureStanceAllowAskHook(projectRoot: string): SetupResult {
+  try {
+    const scriptPath = path.join(projectRoot, STANCE_ALLOW_ASK_REL_PATH);
+    fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+    const current = fs.existsSync(scriptPath) ? fs.readFileSync(scriptPath, "utf-8") : null;
+    const scriptChanged = current !== STANCE_ALLOW_ASK_SCRIPT;
+    if (scriptChanged) fs.writeFileSync(scriptPath, STANCE_ALLOW_ASK_SCRIPT, { mode: 0o755 });
+
+    const claudeDir = path.join(projectRoot, ".claude");
+    const settingsPath = path.join(claudeDir, "settings.local.json");
+    type HookRow = { matcher?: string; command?: string; hooks?: Array<{ type?: string; command?: string }> };
+    let settings: { hooks?: Record<string, HookRow[]> } & Record<string, unknown> = {};
+    if (fs.existsSync(settingsPath)) {
+      try {
+        settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+      } catch {
+        return { ok: false, message: ".claude/settings.local.json is malformed; refusing to overwrite" };
+      }
+    }
+    const hooks = (settings.hooks = settings.hooks ?? {});
+    const rows = (hooks.PreToolUse = hooks.PreToolUse ?? []);
+    const isDpEntry = (entry: HookRow) => {
+      if (typeof entry?.command === "string" && HOOK_MARKERS.StanceAllowAsk(entry.command)) return true;
+      return Array.isArray(entry?.hooks) && entry.hooks.some((h) => typeof h?.command === "string" && HOOK_MARKERS.StanceAllowAsk(h.command));
+    };
+    const isCanonical = (entry: HookRow) =>
+      Array.isArray(entry?.hooks) && entry.hooks.length === 1 && entry.hooks[0]?.type === "command" &&
+      entry.hooks[0]?.command === STANCE_ALLOW_ASK_COMMAND && entry?.matcher === STANCE_ALLOW_ASK_MATCHER;
+    const before = rows.filter(isDpEntry).length;
+    if (before === 1 && rows.some(isCanonical)) {
+      return { ok: true, changed: scriptChanged, message: "Bash `stance allow` ask hook already configured" };
+    }
+    hooks.PreToolUse = rows.filter((e) => !isDpEntry(e));
+    hooks.PreToolUse.push({
+      matcher: STANCE_ALLOW_ASK_MATCHER,
+      hooks: [{ type: "command", command: STANCE_ALLOW_ASK_COMMAND }],
+    });
+    fs.mkdirSync(claudeDir, { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    return { ok: true, changed: true, message: "Installed the Bash `stance allow` ask hook (.deeppairing/hooks/stance-allow-ask.sh)" };
+  } catch (err) {
+    return { ok: false, message: `Failed to install the stance-allow ask hook: ${errorMessage(err)}` };
+  }
+}
+
 /**
  * I6 — double-fire guard. When deepPairing runs as the Claude Code plugin, the
  * plugin already declares the Stop + PreToolUse preflight hooks natively in
@@ -763,13 +817,14 @@ export function runDaemonStartupSetup(projectRoot: string): SetupResult[] {
     results.push({
       ok: true,
       changed: false,
-      message: "Stop + preflight hooks provided by the plugin (skipped settings.local.json install)",
+      message: "Stop + preflight + stance-allow hooks provided by the plugin (skipped settings.local.json install)",
     });
     results.push(ensureCheckpointHook(projectRoot));
   } else {
     results.push(ensureStopHook(projectRoot));
     results.push(ensureCheckpointHook(projectRoot));
     results.push(ensurePreflightHook(projectRoot));
+    results.push(ensureStanceAllowAskHook(projectRoot));
   }
   return results;
 }
