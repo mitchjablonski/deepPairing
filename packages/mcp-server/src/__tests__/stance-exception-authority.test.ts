@@ -90,9 +90,15 @@ describe("#470 A1 — the authority surface", () => {
     expect(src.slice(0, src.indexOf("export function registerStanceExceptionRoutes")).match(/\.grant\(/g) ?? []).toEqual([]);
   });
 
-  it("no CLI subcommand grants (slice 1 ships none; the interactive `stance allow` is slice 3)", () => {
-    for (const file of sourceFiles(path.join(srcDir, "cli"))) {
-      expect(fs.readFileSync(file, "utf8"), file).not.toMatch(/stance[\s"'`]+allow|preflight-blocks\/[^"'`]*\/exception/);
-    }
+  it("the CLI grant (slice 3) is daemon-routed only: one file, the public route, no store or file writes", () => {
+    const hits = sourceFiles(path.join(srcDir, "cli")).filter((f) => /preflight-blocks\/[^"'`]*\/exception/.test(fs.readFileSync(f, "utf8")));
+    expect(hits.map((f) => path.relative(srcDir, f))).toEqual([path.join("cli", "stance-allow.ts")]);
+    const src = fs.readFileSync(path.join(srcDir, "cli", "stance-allow.ts"), "utf8");
+    expect(src).not.toMatch(/FileStore|\/api\/internal\//);
+    // fs is used read-only (finding `less` on PATH): no write of any kind.
+    expect(src).not.toMatch(/\bfs\.(write|append|mkdir|rename|unlink|rm|copy|create|open|truncate|chmod)/);
+    expect([...src.matchAll(/\bfs\.(\w+)/g)].map((m) => m[1])).toEqual(["statSync"]);
+    expect(src).toContain('"X-DeepPairing-Grant-Origin": "cli"');
+    expect(src).not.toContain("X-DeepPairing-Registration");
   });
 });

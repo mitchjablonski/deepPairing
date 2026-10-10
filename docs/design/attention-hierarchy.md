@@ -388,6 +388,13 @@ No Retire control in the bar (principle 5 — the bar routes, it does not act �
 and misclick safety); **Retire stays in the ⋯ gate log.** The hero toast still
 fires. The record clears when the agent next acts or once you have opened it.
 
+*Stance exceptions (#470).* "Allow this proposal once" lives on the hero toast
+and the gate-log entry, never in Held or its [Why] — Held stays read-only. A
+grant writes the block's `seenAt`, so Held drops it; a refusal because the
+allowed proposal's dependency moved records a NEW unread block, so Held rises
+by one; the admitted artifact's Decide "Why" line reads "Admitted under your
+allowance (UI/CLI) for '*stance*': *reason*".
+
 **G. Disconnected with work pending**
 
 ```

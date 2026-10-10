@@ -4365,6 +4365,74 @@ import crypto6 from "node:crypto";
 import fs23 from "node:fs";
 import path23 from "node:path";
 
+// src/hooks/stance-allow-ask.ts
+var STANCE_ALLOW_ASK_REASON = "The agent is trying to grant a stance allowance from the shell. Only allow this if you asked for it.";
+var STANCE_ALLOW_ASK_REL_PATH = ".deeppairing/hooks/stance-allow-ask.sh";
+var STANCE_ALLOW_ASK_COMMAND = `sh "$CLAUDE_PROJECT_DIR/${STANCE_ALLOW_ASK_REL_PATH}"`;
+var STANCE_ALLOW_ASK_MATCHER = "Bash";
+var ASK_JSON = JSON.stringify({
+  hookSpecificOutput: {
+    hookEventName: "PreToolUse",
+    permissionDecision: "ask",
+    permissionDecisionReason: STANCE_ALLOW_ASK_REASON
+  }
+});
+var STANCE_ALLOW_ASK_SCRIPT = `#!/bin/sh
+# deepPairing \u2014 narrow Bash check for \`stance allow\` (#470). GENERATED, do not
+# edit: source is packages/mcp-server/src/hooks/stance-allow-ask.ts.
+# If the agent's Bash command contains "stance allow" (case-insensitive, any
+# whitespace between, after decoding JSON escapes), ask the human first.
+# Every other command: no output, exit 0. A substring check, not a parser.
+LC_ALL=C awk -v sq="'" '
+function hexval(h,   i, c, v) {
+  v = 0; h = tolower(h)
+  for (i = 1; i <= length(h); i++) {
+    c = index("0123456789abcdef", substr(h, i, 1))
+    if (c == 0) return -1
+    v = v * 16 + c - 1
+  }
+  return v
+}
+function decode(s, start,   out, i, n, ch, nx, v) {
+  out = ""; n = length(s)
+  for (i = start; i <= n; i++) {
+    ch = substr(s, i, 1)
+    if (ch == "\\"") return out
+    if (ch == "\\\\") {
+      i++; nx = substr(s, i, 1)
+      if (nx == "n") out = out "\\n"
+      else if (nx == "t") out = out "\\t"
+      else if (nx == "r") out = out "\\r"
+      else if (nx == "b" || nx == "f") out = out " "
+      else if (nx == "u") {
+        v = hexval(substr(s, i + 1, 4)); i += 4
+        if (v == 9 || v == 10 || v == 11 || v == 12 || v == 13 || v == 32 || v == 133 || v == 160) out = out " "
+        else if (v > 32 && v < 127) out = out sprintf("%c", v)
+        else out = out "?"
+      }
+      else out = out nx
+    } else out = out ch
+  }
+  return out
+}
+{ buf = buf $0 "\\n" }
+END {
+  rest = buf
+  while (match(rest, /"command"[ \\t\\r\\n]*:[ \\t\\r\\n]*"/)) {
+    cmd = tolower(decode(rest, RSTART + RLENGTH))
+    # Normalise what the shell would: a backslash-newline continuation and
+    # $IFS / \${IFS} are whitespace; quotes and backslashes only group or
+    # escape, so drop them (quoted words, al""low, \\allow).
+    gsub(/\\\\\\n/, " ", cmd)
+    gsub(/\\$\\{ifs\\}|\\$ifs/, " ", cmd)
+    gsub(sq, "", cmd); gsub(/"/, "", cmd); gsub(/\\\\/, "", cmd)
+    if (cmd ~ /(^|[^a-z0-9_])stance[ \\t\\r\\n\\v\\f]+allow([^a-z0-9_]|$)/ || cmd ~ /preflight-blocks\\/[^ \\t\\r\\n]*\\/exception/) { print ${JSON.stringify(ASK_JSON)}; exit 0 }
+    rest = substr(rest, RSTART + RLENGTH)
+  }
+}'
+exit 0
+`;
+
 // src/cli/setup-tasks.ts
 import fs2 from "node:fs";
 import os from "node:os";
@@ -21052,7 +21120,11 @@ function detectCrossScopeDpEntries(projectRoot2, hookKey, marker) {
 var HOOK_MARKERS = {
   Stop: (cmd) => cmd.includes("deepPairing") || cmd.includes(".deeppairing/hooks/stop.mjs"),
   PostToolUse: (cmd) => cmd.includes(".deeppairing/hooks/checkpoint.mjs"),
-  PreToolUse: (cmd) => cmd.includes(".deeppairing/hooks/preflight.mjs")
+  PreToolUse: (cmd) => cmd.includes(".deeppairing/hooks/preflight.mjs"),
+  /** #470 — the narrow Bash `ask` row. VERIFIED invocation, not a mention:
+   *  only `sh <path>/.deeppairing/hooks/stance-allow-ask.sh` (quoted or not,
+   *  `$CLAUDE_PROJECT_DIR`-anchored or relative) is ours (#503 review). */
+  StanceAllowAsk: (cmd) => /^sh\s+("?)(\$CLAUDE_PROJECT_DIR\/|\.\/)?\.deeppairing\/hooks\/stance-allow-ask\.sh\1$/.test(cmd.trim())
 };
 function ensureDeepPairingDir(projectRoot2) {
   const dpDir2 = path2.join(projectRoot2, ".deeppairing");
@@ -21385,6 +21457,67 @@ function ensurePreflightHook(projectRoot2) {
     return { ok: false, message: `Failed to install preflight hook: ${err}` };
   }
 }
+var isPlainObject2 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+function readAskSettings(settingsPath) {
+  if (!fs2.existsSync(settingsPath)) return { ok: true, settings: {} };
+  let settings;
+  try {
+    settings = JSON.parse(fs2.readFileSync(settingsPath, "utf-8"));
+  } catch {
+    return { ok: false, message: ".claude/settings.local.json is malformed; refusing to overwrite" };
+  }
+  if (!isPlainObject2(settings)) return { ok: false, message: ".claude/settings.local.json is not an object; refusing to overwrite" };
+  if (settings.hooks !== void 0 && !isPlainObject2(settings.hooks)) return { ok: false, message: ".claude/settings.local.json `hooks` is not an object; refusing to overwrite" };
+  const pre = settings.hooks?.PreToolUse;
+  if (pre !== void 0 && !Array.isArray(pre)) return { ok: false, message: ".claude/settings.local.json `hooks.PreToolUse` is not an array; refusing to overwrite" };
+  return { ok: true, settings };
+}
+function withoutAskEntries(rows) {
+  let removed = 0;
+  const out = [];
+  for (const row of rows) {
+    if (typeof row?.command === "string" && HOOK_MARKERS.StanceAllowAsk(row.command)) {
+      removed++;
+      continue;
+    }
+    if (!Array.isArray(row?.hooks)) {
+      out.push(row);
+      continue;
+    }
+    const rest = row.hooks.filter((h) => !(typeof h?.command === "string" && HOOK_MARKERS.StanceAllowAsk(h.command)));
+    removed += row.hooks.length - rest.length;
+    if (rest.length === row.hooks.length) out.push(row);
+    else if (rest.length > 0) out.push({ ...row, hooks: rest });
+  }
+  return { rows: out, removed };
+}
+function ensureStanceAllowAskHook(projectRoot2) {
+  try {
+    const claudeDir = path2.join(projectRoot2, ".claude");
+    const settingsPath = path2.join(claudeDir, "settings.local.json");
+    const read = readAskSettings(settingsPath);
+    if (!read.ok) return { ok: false, message: read.message };
+    const settings = read.settings;
+    const scriptPath = path2.join(projectRoot2, STANCE_ALLOW_ASK_REL_PATH);
+    fs2.mkdirSync(path2.dirname(scriptPath), { recursive: true });
+    const current = fs2.existsSync(scriptPath) ? fs2.readFileSync(scriptPath, "utf-8") : null;
+    const scriptChanged = current !== STANCE_ALLOW_ASK_SCRIPT;
+    if (scriptChanged) fs2.writeFileSync(scriptPath, STANCE_ALLOW_ASK_SCRIPT, { mode: 493 });
+    const hooks = settings.hooks = settings.hooks ?? {};
+    const rows = hooks.PreToolUse ?? [];
+    const isCanonical = (entry) => Array.isArray(entry?.hooks) && entry.hooks.length === 1 && entry.hooks[0]?.type === "command" && entry.hooks[0]?.command === STANCE_ALLOW_ASK_COMMAND && entry?.matcher === STANCE_ALLOW_ASK_MATCHER;
+    const { rows: kept, removed } = withoutAskEntries(rows);
+    if (removed === 1 && rows.some(isCanonical)) {
+      return { ok: true, changed: scriptChanged, message: "Bash `stance allow` ask hook already configured" };
+    }
+    hooks.PreToolUse = [...kept, { matcher: STANCE_ALLOW_ASK_MATCHER, hooks: [{ type: "command", command: STANCE_ALLOW_ASK_COMMAND }] }];
+    fs2.mkdirSync(claudeDir, { recursive: true });
+    fs2.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    return { ok: true, changed: true, message: "Installed the Bash `stance allow` ask hook (.deeppairing/hooks/stance-allow-ask.sh)" };
+  } catch (err) {
+    return { ok: false, message: `Failed to install the stance-allow ask hook: ${errorMessage(err)}` };
+  }
+}
 function isPluginManaged() {
   if (process.env.CLAUDE_PLUGIN_ROOT) return true;
   try {
@@ -21400,13 +21533,14 @@ function runDaemonStartupSetup(projectRoot2) {
     results.push({
       ok: true,
       changed: false,
-      message: "Stop + preflight hooks provided by the plugin (skipped settings.local.json install)"
+      message: "Stop + preflight + stance-allow hooks provided by the plugin (skipped settings.local.json install)"
     });
     results.push(ensureCheckpointHook(projectRoot2));
   } else {
     results.push(ensureStopHook(projectRoot2));
     results.push(ensureCheckpointHook(projectRoot2));
     results.push(ensurePreflightHook(projectRoot2));
+    results.push(ensureStanceAllowAskHook(projectRoot2));
   }
   return results;
 }

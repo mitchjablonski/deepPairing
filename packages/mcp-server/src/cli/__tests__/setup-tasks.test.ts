@@ -671,7 +671,7 @@ describe("runDaemonStartupSetup", () => {
   it("runs all idempotent setup tasks", () => {
     fs.writeFileSync(path.join(tmpDir, ".gitignore"), "node_modules/\n");
     const results = runDaemonStartupSetup(tmpDir);
-    expect(results).toHaveLength(5); // dir, gitignore, stop, checkpoint, preflight
+    expect(results).toHaveLength(6); // dir, gitignore, stop, checkpoint, preflight, stance-allow ask (#470)
     expect(results.every((r) => r.ok)).toBe(true);
     // Re-running is a no-op
     const second = runDaemonStartupSetup(tmpDir);
