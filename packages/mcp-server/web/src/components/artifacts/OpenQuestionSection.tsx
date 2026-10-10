@@ -3,6 +3,7 @@ import { useArtifactStore } from "../../stores/artifact";
 import { useChainComments } from "../../hooks/useChainComments";
 import { CommentThread } from "../CommentThread";
 import { unansweredQuestionIds } from "../../lib/unanswered";
+import { useOfflineReason } from "../../hooks/useOfflineReason";
 
 /**
  * #164 — one open question, rendered as its own bounded section.
@@ -37,6 +38,7 @@ export function OpenQuestionSection({
    *  took back. The prior thread + the "mark resolved" escape hatch stay usable. */
   readOnly?: boolean;
 }) {
+  const offline = useOfflineReason(); // #487 review — act paths gate on the shared offline condition (#467)
   const comments = useChainComments(artifactId); // Bug2 — chain aggregation
   const markQuestionResolved = useArtifactStore((s) => s.markQuestionResolved);
 
@@ -107,10 +109,11 @@ export function OpenQuestionSection({
         <div key={q.id} className="flex items-center gap-2 text-2xs text-text-muted">
           <span className="italic">You asked the agent — awaiting its next turn.</span>
           <button
+            disabled={!!offline}
             type="button"
             onClick={() => void markQuestionResolved(q.id).catch(() => {})}
-            title="Mark this question resolved — stops it counting as waiting on the agent"
-            className="text-accent-blue hover:underline"
+            title={offline ?? "Mark this question resolved — stops it counting as waiting on the agent"}
+            className="text-accent-blue hover:underline disabled:opacity-50 disabled:cursor-not-allowed disabled:no-underline"
           >
             Mark resolved
           </button>

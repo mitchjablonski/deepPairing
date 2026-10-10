@@ -119,11 +119,13 @@ test("(d) retracted decision + (e) retracted debrief write-lock, both themes", a
   for (const theme of ["dark", "light"] as const) {
     await load(page, theme);
 
-    // (d) Retracted decision — options readable, Select disabled + read-only,
-    // Discuss entry + footer actions withheld.
+    // (d) Retracted decision — options readable, NO Select (#492: a closed
+    // decision says so and offers nothing to pick), Discuss entry + footer
+    // actions withheld.
     await selectArtifact(page, "Which session store?");
     await expect(page.getByText("In-memory store")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Select Redis" })).toBeDisabled();
+    await expect(page.getByText("Claude withdrew this question")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Select Redis" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: /Expand to discuss/i })).toHaveCount(0);
     await expect(page.getByRole("button", { name: /Send decision back for revised options/i })).toHaveCount(0);
     await page.screenshot({ path: path.join(SHOTS, `retracted-decision-${theme}.png`), fullPage: false });

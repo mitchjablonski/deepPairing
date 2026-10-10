@@ -11,6 +11,7 @@ import { WAITING_TONE } from "../../lib/waitingTone";
 import { ApproveCountdown } from "./ApproveCountdown";
 import { LANE_MARKS } from "../../lib/laneMarks";
 import { useOfflineReason } from "../../hooks/useOfflineReason";
+import { useUnsavedText } from "../../lib/unsavedText";
 
 interface ArtifactStatusActionsProps {
   artifact: Artifact;
@@ -199,6 +200,9 @@ export function ArtifactStatusActions({
     countdown, countdownMax, countdownPaused,
     atEnd, forceExpanded, userCollapsed,
   } = state;
+  // #487 review — the footer comment isn't a useDraft; register it so the
+  // "still loading" Reload warns before discarding it.
+  useUnsavedText(`footer:${artifact.id}`, comment);
 
   // H1 (#202) — the approve gate. Approving while the human's own suggested
   // edits sit pending/countered silently abandons their proposal (the asymmetry

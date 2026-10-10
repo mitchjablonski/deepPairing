@@ -10,7 +10,7 @@ import { withHash } from "./routes.harness.js";
 class FailingDecisionStore extends FileStore {
   reviewError: Error = new Error("review write failed");
 
-  override resolveDecision(): never {
+  override resolveDecisionAtomic(): never {
     throw this.reviewError;
   }
 }
@@ -18,9 +18,10 @@ class FailingDecisionStore extends FileStore {
 class CountingDecisionStore extends FileStore {
   resolveCalls = 0;
 
-  override resolveDecision(...args: Parameters<FileStore["resolveDecision"]>) {
-    this.resolveCalls++;
-    return super.resolveDecision(...args);
+  override resolveDecisionAtomic(...args: Parameters<FileStore["resolveDecisionAtomic"]>) {
+    const outcome = super.resolveDecisionAtomic(...args);
+    if (outcome.kind === "resolved") this.resolveCalls++;
+    return outcome;
   }
 }
 

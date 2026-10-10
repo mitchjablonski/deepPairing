@@ -130,6 +130,8 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
+    # #494 — a hung step must fail red, not sit pending for hours (normal ~5-6m).
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
 
@@ -147,6 +149,7 @@ jobs:
         run: pnpm build
 
       - name: Install Chromium
+        timeout-minutes: 10
         run: pnpm --filter @deeppairing/mcp-server exec playwright install --with-deps chromium
 
       - name: E2E (companion UI bootstrap + demo)

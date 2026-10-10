@@ -118,6 +118,14 @@ interface ConnectionState {
    *  skeleton instead of flashing IdleHome/WaitingForClaude on every refresh
    *  (the app impersonating its own cold start). */
   hydrated: boolean;
+  /**
+   * #487 review (Sol P2) — WHICH binding (session @ project) the `hydrated`
+   * evidence belongs to. A switch to session B keeps A's `hydrated: true`
+   * until B's snapshot lands; without the binding, B inherited A's applied
+   * state and the watchdog never offered recovery. null = no binding recorded
+   * (nothing in this file writes hydrated:true without one).
+   */
+  hydratedBinding: string | null;
 
   connect: (sessionId?: string) => void;
   disconnect: () => void;
@@ -132,6 +140,17 @@ interface ConnectionState {
   switchProject: (host: string) => Promise<void>;
 }
 
+
+/** #487 review — the session @ project a snapshot was applied for. */
+export function bindingKey(s: { sessionId: string | null; projectRoot: string | null }): string {
+  return `${s.sessionId ?? ""}@${s.projectRoot ?? ""}`;
+}
+/** #487 review — `hydrated`, but only as evidence for the CURRENT binding. An
+ *  ordinary same-binding reconnect keeps it; a switch to another session or
+ *  project does not inherit it. */
+export function selectHydratedForBinding(s: { hydrated: boolean; hydratedBinding: string | null; sessionId: string | null; projectRoot: string | null }): boolean {
+  return s.hydrated && (s.hydratedBinding === null || s.hydratedBinding === bindingKey(s));
+}
 export const useConnectionStore = create<ConnectionState>((set, get) => {
   // Expose on window so artifact store can read sessionId without circular import
   const storeRef = { getState: () => get() };
@@ -445,7 +464,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             if (applied) {
               // A complete snapshot is authoritative: it already contains
               // everything the superseded recovery had buffered.
-              set({ hydrated: true });
+              set({ hydrated: true, hydratedBinding: bindingKey(get()) });
             } else if (previousSessionId !== get().sessionId) {
               // A NEW daemon (AA4) advertised a different session and its
               // snapshot was refused: the old frame belongs to a session this
@@ -473,12 +492,12 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
             // behind it. We now KNOW this daemon's answer for the tab (no
             // session), so the skeleton can lift.
             if (supersededRecovery) drainRecoveryMessages(supersededRecovery);
-            set({ hydrated: true });
+            set({ hydrated: true, hydratedBinding: bindingKey(get()) });
           } else {
             // Replay is active and not exiting: the historical frame stays
             // under its write lock; the live snapshot is deliberately not
             // installed (exiting replay performs its own hydration).
-            set({ hydrated: true });
+            set({ hydrated: true, hydratedBinding: bindingKey(get()) });
           }
 
           if (daemonRestarted) {
@@ -1002,6 +1021,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     agentActivityAt: null,
     agentActiveSince: null,
     hydrated: false,
+    hydratedBinding: null,
     // II2.2 — seed projectHash from the daemon's HTML injection
     // (window.__dpProjectHash) so the VERY FIRST WS connect URL and mutation
     // fetch carry X-Project-Hash. Otherwise the fail-closed gate 403s the

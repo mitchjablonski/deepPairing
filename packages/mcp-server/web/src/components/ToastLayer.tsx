@@ -3,6 +3,7 @@ import { useToastStore, type Toast, type PreflightBlockHero } from "../stores/to
 import { useLedgerStore } from "../stores/ledger";
 import { useCrossProjectStore } from "../stores/crossProject";
 import { ShieldIcon, CompassIcon } from "./icons/ArtifactIcons";
+import { useOfflineReason } from "../hooks/useOfflineReason";
 
 /**
  * R2 — the SVG marks a toast can name via `Toast.icon`, so a store that can't
@@ -72,6 +73,7 @@ function PreflightBlockHeroCard({ hero, onDismiss, action, onOverride }: {
   /** Scope-down this block as a false positive (personal stances only). */
   onOverride?: () => void;
 }) {
+  const offline = useOfflineReason(); // #487 review — act paths gate on the shared offline condition (#467)
   const style = kindStyles["preflight-block"];
   const when = humanizeAge(hero.rejectedAt);
   const sourceLabel = hero.source === "team"
@@ -155,9 +157,10 @@ function PreflightBlockHeroCard({ hero, onDismiss, action, onOverride }: {
               tooltip now claims only what is true in every install. */}
           {hero.source === "session" && onOverride && (
             <button
+              disabled={!!offline}
               onClick={() => { onOverride(); onDismiss(); }}
-              title="False positive? Delete this stance from the project so it stops blocking here. It's a delete, not a narrowing — reject the concept again if you want it back."
-              className="text-2xs font-medium text-text-muted hover:text-text-secondary hover:underline"
+              title={offline ?? "False positive? Delete this stance from the project so it stops blocking here. It's a delete, not a narrowing — reject the concept again if you want it back."}
+              className="text-2xs font-medium text-text-muted hover:text-text-secondary hover:underline disabled:opacity-50 disabled:cursor-not-allowed disabled:no-underline"
             >
               Retire this stance
             </button>

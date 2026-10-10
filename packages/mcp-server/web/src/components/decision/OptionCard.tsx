@@ -27,13 +27,15 @@ interface OptionCardProps {
   onSelect: (optionId: string) => void;
   /** #465 — set while this tab is disconnected: Select disables with this reason. */
   offlineReason?: string | null;
+  /** #492 — the decision is closed: options stay readable, no Select. */
+  hideSelect?: boolean;
   onFocus: (index: number) => void;
   /** D3 review — parent-owned Select button ref so keyboard nav can move DOM
       focus in lockstep with the roving highlight. */
   selectButtonRef: (el: HTMLButtonElement | null) => void;
 }
 
-export function OptionCard({ option, index, focused, submitting, locked = false, artifactId, onSelect, onFocus, selectButtonRef, offlineReason = null }: OptionCardProps) {
+export function OptionCard({ option, index, focused, submitting, locked = false, artifactId, onSelect, onFocus, selectButtonRef, offlineReason = null, hideSelect = false }: OptionCardProps) {
   const offline = offlineReason;
   // #180 — the inline card is a DEFAULT decision surface: a comment you left on
   // this option carries onto the tuned version here too (useChainComments), so
@@ -187,33 +189,36 @@ export function OptionCard({ option, index, focused, submitting, locked = false,
         <span className={`px-1.5 py-0.5 text-2xs rounded ${badgeColors[option.risk]}`}>
           {option.risk} risk
         </span>
-        <button
-          ref={selectButtonRef}
-          data-select-option
-          onClick={() => !submitting && !locked && !offline && onSelect(option.id)}
-          disabled={submitting || locked || !!offline}
-          // Accessible name carries the option title so a SR user
-          // choosing from the buttons list can tell them apart.
-          aria-label={`Select ${option.title}`}
-          // #207 (I2) — the H3 read-only affordance wording on a locked decision.
-          aria-disabled={locked || undefined}
-          title={locked ? "Read-only — this artifact was retracted or is being replayed" : offline ?? undefined}
-          // U4 — keep the roving highlight in lockstep with Tab focus
-          // (this button is now the card's only focusable selector).
-          onFocus={() => !submitting && onFocus(index)}
-          className={`ml-auto min-h-6 px-2.5 py-1 text-2xs font-semibold rounded press-scale transition-colors ${
-            locked
-              ? // #207 (I2 review) — a locked Select must NOT keep the focused/
-                // recommended primary blue fill (it read as clickable); flatten
-                // it to the muted, hover-less resting style like the others.
-                "bg-surface-secondary text-text-muted"
-              : focused
-                ? "bg-accent-blue-strong text-white"
-                : "bg-surface-secondary text-text-secondary hover:bg-accent-blue-strong hover:text-white"
-          } disabled:opacity-50 disabled:cursor-not-allowed`}
-        >
-          Select
-        </button>
+        {/* #492 — a closed decision (revised / withdrawn / obsolete) offers no Select. */}
+        {!hideSelect && (
+          <button
+            ref={selectButtonRef}
+            data-select-option
+            onClick={() => !submitting && !locked && !offline && onSelect(option.id)}
+            disabled={submitting || locked || !!offline}
+            // Accessible name carries the option title so a SR user
+            // choosing from the buttons list can tell them apart.
+            aria-label={`Select ${option.title}`}
+            // #207 (I2) — the H3 read-only affordance wording on a locked decision.
+            aria-disabled={locked || undefined}
+            title={locked ? "Read-only — this artifact was retracted or is being replayed" : offline ?? undefined}
+            // U4 — keep the roving highlight in lockstep with Tab focus
+            // (this button is now the card's only focusable selector).
+            onFocus={() => !submitting && onFocus(index)}
+            className={`ml-auto min-h-6 px-2.5 py-1 text-2xs font-semibold rounded press-scale transition-colors ${
+              locked
+                ? // #207 (I2 review) — a locked Select must NOT keep the focused/
+                  // recommended primary blue fill (it read as clickable); flatten
+                  // it to the muted, hover-less resting style like the others.
+                  "bg-surface-secondary text-text-muted"
+                : focused
+                  ? "bg-accent-blue-strong text-white"
+                  : "bg-surface-secondary text-text-secondary hover:bg-accent-blue-strong hover:text-white"
+            } disabled:opacity-50 disabled:cursor-not-allowed`}
+          >
+            Select
+          </button>
+        )}
       </div>
     </m.div>
   );
