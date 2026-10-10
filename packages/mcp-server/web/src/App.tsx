@@ -872,10 +872,9 @@ function App() {
           stayed silent) while another session held an open decision. */}
       <MultiAgentSync />
 
-      {/* #430 PR 2 — the Next-up bar, opt-in (Settings → Next-up bar, default
-          OFF). Off renders nothing, so the layout is exactly as before; on, it
-          sits under the session tabs IN ADDITION to today's banners (PR 3
-          absorbs them). */}
+      {/* #430 — opt-in preview only: ON, the bar sits under the session tabs
+          and replaces the pending/resume banners below; OFF (the default),
+          the bar is absent and those existing banners remain. */}
       {nextUpBar && (
         <NextUpBar
           quietCards={{

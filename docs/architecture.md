@@ -253,6 +253,23 @@ goes through `safeFetch` in `lib/api.ts` with structured `ApiError`
 typing. Project-hash binding (`X-Project-Hash` header + `?projectHash=`
 WS query) defends against stale-tab routing across daemon restarts.
 
+Public HTTP composition stays in `src/http/routes.ts`, including the shared
+body-size, host, project-hash, bearer-auth, CORS, and error middleware. The
+three current-session review mutations (decision resolve, artifact verdict,
+and per-file changeset review) are mounted from `src/http/review-routes.ts`
+behind a narrow `ReviewStore` capability; cross-project decision close-out
+remains in the parent router because it owns project and transient-store policy.
+
+The review boundary owns transport orchestration, not persistence policy:
+decision resolution uses the store's atomic classification/write capability,
+keeps the per-store resolve lock through flush and settlement, and announces
+only committed answers. A failed flush rolls back an unpersisted answer;
+a partial flush that already persisted the answer is reconciled as committed.
+Closed decisions are refused without writes or success notifications. The
+parent's error boundary still maps lock contention to 503 and review conflicts
+to 409. Further store/domain extraction remains a separate follow-up, not a
+reason to weaken this capability boundary or duplicate store invariants.
+
 The drawer (`YourTasteDrawer.tsx`) carries the four ledger surfaces:
 Stances, Ledger digest, This week (digest), Team. The cold-start home
 (`IdleHome.tsx`) defaults to the Ledger view + a SeedAffordance when

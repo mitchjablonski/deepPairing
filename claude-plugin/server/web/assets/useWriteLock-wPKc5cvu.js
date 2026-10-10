@@ -1,0 +1,1 @@
+import{v as e}from"./artifact-Ddoz04YR.js";import{S as t}from"./index-jDAOp_oa.js";function n(n){let r=t(n,e(e=>e.active));return r===`closed`||r===`frozen`}export{n as t};

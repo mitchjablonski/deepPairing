@@ -106,7 +106,7 @@ describe("applied hydration evidence belongs to a retained frame, not just a reu
     expect(screen.getByTestId("hydration-unknown")).toBeInTheDocument();
     expect(useArtifactStore.getState().artifacts).toEqual([]);
     expect(screen.getByRole("main").querySelector('[data-artifact-id="A-artifact"]')).toBeNull();
-    expect(screen.queryByRole("button", { name: "Send", exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Send$/ })).not.toBeInTheDocument();
   });
 
   it("frame retirement precedes a fast fresh snapshot and queued old callbacks cannot erase it", async () => {
