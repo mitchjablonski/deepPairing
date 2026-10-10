@@ -308,7 +308,10 @@ Do NOT retry with this approach. Propose an alternative. If this is a false posi
               description: match.rejected.description,
               reason: match.rejected.reason,
               concept: match.rejected.concept,
-              via: match.via
+              via: match.via,
+              // #470 — with description + concept, the exact stance row an
+              // allowance binds to.
+              rejectedAt: match.rejected.rejectedAt
             }
           }
         },

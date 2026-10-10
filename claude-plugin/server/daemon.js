@@ -2288,7 +2288,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes4, createHash: createHash3 } = __require("crypto");
+    var { randomBytes: randomBytes5, createHash: createHash4 } = __require("crypto");
     var { Duplex, Readable: Readable2 } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -2826,7 +2826,7 @@ var require_websocket = __commonJS({
         }
       }
       const defaultPort = isSecure ? 443 : 80;
-      const key = randomBytes4(16).toString("base64");
+      const key = randomBytes5(16).toString("base64");
       const request = isSecure ? https.request : http.request;
       const protocolSet = /* @__PURE__ */ new Set();
       let perMessageDeflate;
@@ -2956,7 +2956,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest = createHash3("sha1").update(key + GUID).digest("base64");
+        const digest = createHash4("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -3325,7 +3325,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash: createHash3 } = __require("crypto");
+    var { createHash: createHash4 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -3632,7 +3632,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest = createHash3("sha1").update(key + GUID).digest("base64");
+        const digest = createHash4("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -19414,6 +19414,93 @@ var ExplainerContentSchema = external_exports.object({
   unknowns: external_exports.array(external_exports.string()).optional().describe("Honest gaps: what you could NOT determine and why (e.g. 'I couldn't tell whether the CLI path is covered \u2014 I didn't read cli/init.ts'). Renders above the fold with a one-click Ask.")
 });
 
+// ../shared/dist/schemas/stance-exception.js
+var StanceRefSchema = external_exports.object({
+  description: external_exports.string(),
+  concept: external_exports.string().optional(),
+  rejectedAt: external_exports.string().optional()
+});
+var ProposalSnapshotSchema = external_exports.object({
+  kind: external_exports.enum(["create", "revise"]),
+  type: external_exports.string().min(1),
+  title: external_exports.string().min(1),
+  content: external_exports.record(external_exports.string(), external_exports.unknown()),
+  agentReasoning: external_exports.string().optional(),
+  relatedArtifactIds: external_exports.array(external_exports.string()).optional(),
+  feature: external_exports.string().optional(),
+  parentId: external_exports.string().optional(),
+  version: external_exports.number().int().positive().optional()
+}).strict();
+var ProposalPreconditionSchema = external_exports.discriminatedUnion("kind", [
+  external_exports.object({
+    kind: external_exports.literal("code_change_prior"),
+    filePath: external_exports.string(),
+    /** The prior code_change that supplied `before`, or null when none did. */
+    priorCodeChangeId: external_exports.string().nullable(),
+    /** sha256 of that prior's `after`, or null when there was no prior. */
+    priorAfterHash: external_exports.string().nullable()
+  }).strict(),
+  external_exports.object({
+    kind: external_exports.literal("revise_target"),
+    targetId: external_exports.string(),
+    targetVersion: external_exports.number().int(),
+    targetStatus: external_exports.string(),
+    /** sha256 over every field a revision inherits from its target. */
+    inheritedHash: external_exports.string()
+  }).strict()
+]);
+var StanceGrantOriginSchema = external_exports.enum(["ui", "cli"]);
+var StanceAllowanceReceiptStateSchema = external_exports.enum(["allowed", "used", "changed", "revoked", "ended", "expired"]);
+var StanceAllowanceReceiptSchema = external_exports.object({
+  id: external_exports.string(),
+  /** Which door was used. Self-reported; labels, never authenticates. */
+  grantedVia: StanceGrantOriginSchema,
+  grantedAt: external_exports.string(),
+  reason: external_exports.string(),
+  ceilingAt: external_exports.string(),
+  state: StanceAllowanceReceiptStateSchema,
+  artifactId: external_exports.string().optional(),
+  revokedAt: external_exports.string().optional(),
+  /** Set with `changed`: the new block recorded when the dependency moved. */
+  supersededByBlockId: external_exports.string().optional()
+});
+var AdmissionFollowUpsSchema = external_exports.object({
+  supersede: external_exports.object({
+    parentId: external_exports.string(),
+    /** The parent's status when the claim succeeded. A replay supersedes only
+     *  from this status; any other (a human verdict since) is skipped. */
+    fromStatus: external_exports.string(),
+    skipped: external_exports.string().optional()
+  }).optional(),
+  comment: external_exports.object({ id: external_exports.string(), artifactId: external_exports.string(), content: external_exports.string() }).optional(),
+  decision: external_exports.object({
+    decisionId: external_exports.string(),
+    artifactId: external_exports.string(),
+    context: external_exports.string(),
+    title: external_exports.string().optional(),
+    options: external_exports.array(external_exports.unknown()),
+    stakes: external_exports.enum(["low", "medium", "high"]).optional()
+  }).optional(),
+  planReview: external_exports.boolean().optional(),
+  /** The admitted call's preflight trace, persisted against the child. */
+  trace: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
+});
+var ArtifactAdmissionSchema = external_exports.object({
+  operationId: external_exports.string(),
+  callFingerprint: external_exports.string(),
+  effectiveDigest: external_exports.string(),
+  kind: external_exports.enum(["create", "revise"]),
+  exceptionIds: external_exports.array(external_exports.string()),
+  grantedVia: StanceGrantOriginSchema,
+  followUps: AdmissionFollowUpsSchema,
+  completedAt: external_exports.string().optional()
+});
+var PreflightTraceExceptionSchema = external_exports.object({
+  allowanceIds: external_exports.array(external_exports.string()),
+  grantedVia: StanceGrantOriginSchema,
+  stances: external_exports.array(external_exports.string())
+});
+
 // ../shared/dist/schemas/artifact.js
 var ArtifactTypeSchema = external_exports.enum([
   "research",
@@ -19544,6 +19631,12 @@ var ArtifactSchema = external_exports.object({
    * ABSENCE keeps the stored JSON byte-identical to before.
    */
   featureId: external_exports.string().trim().max(80).optional(),
+  /**
+   * #470 — the operation stamp of an artifact admitted once under a human's
+   * stance allowance. Non-authorizing metadata (see stance-exception.ts).
+   * Optional for backward compatibility; absent on every ordinary artifact.
+   */
+  admission: ArtifactAdmissionSchema.optional(),
   content: external_exports.record(external_exports.string(), external_exports.unknown()),
   agentReasoning: external_exports.string().nullable(),
   relatedArtifactIds: external_exports.array(external_exports.string()).optional(),
@@ -20788,7 +20881,9 @@ var PreflightTraceSchema = external_exports.object({
   /** Concepts that partially matched but didn't block. May be empty. */
   nearMisses: external_exports.array(PreflightNearMissSchema),
   /** Set only when decision === "blocked". */
-  block: PreflightBlockSummarySchema.optional()
+  block: PreflightBlockSummarySchema.optional(),
+  /** #470 — set when this artifact was admitted under a stance allowance. */
+  exception: PreflightTraceExceptionSchema.optional()
 });
 
 // ../shared/dist/normalize.js
@@ -23862,7 +23957,7 @@ import { fileURLToPath as fileURLToPath4 } from "node:url";
 import fs22 from "node:fs";
 import path22 from "node:path";
 import { spawn } from "node:child_process";
-import { randomBytes as randomBytes3 } from "node:crypto";
+import { randomBytes as randomBytes4 } from "node:crypto";
 
 // src/error-codes.ts
 var ERROR_CODES = {
@@ -23942,7 +24037,26 @@ var ERROR_CODES = {
    *  ledger, a session flush) stayed held past its bounded wait by a LIVE (or
    *  unverifiable) owner. Nothing was committed; retry, or inspect with
    *  `deeppairing doctor` (dead-owner locks are recovered automatically). */
-  lock_busy: "lock_busy"
+  lock_busy: "lock_busy",
+  /** #470 — stance exceptions ("Allow this proposal once"). No block with that
+   *  id is held by this daemon (unknown, or from an earlier daemon instance). */
+  stance_exception_block_not_found: "stance_exception_block_not_found",
+  /** #470 — the block can't be allowed: a team rule, a demo session, a retired
+   *  stance, an ended session, or no eligible snapshot. */
+  stance_exception_not_eligible: "stance_exception_not_eligible",
+  /** #470 — a grant needs a typed reason of 3–280 characters. */
+  stance_exception_reason_required: "stance_exception_reason_required",
+  /** #470 — a grant must come from the human-facing route, never from a
+   *  registered agent wrapper. */
+  stance_exception_interactive_required: "stance_exception_interactive_required",
+  /** #470 — the claim did not admit this call (used, revoked, ended, expired,
+   *  wrong registration, or a stance retired since). */
+  stance_exception_claim_refused: "stance_exception_claim_refused",
+  /** #470 — something the allowed proposal depended on changed after the grant. */
+  stance_exception_dependencies_changed: "stance_exception_dependencies_changed",
+  /** #470 — an operation stamp's follow-up targets disagree with the lineage
+   *  recorded on the child; a replay refuses rather than act on them. */
+  stance_exception_operation_inconsistent: "stance_exception_operation_inconsistent"
 };
 var USER_FACING_ERROR_CODES = [
   ERROR_CODES.daemon_auth_required,
@@ -27050,6 +27164,58 @@ var FileStore = class _FileStore {
     return artifact;
   }
   /**
+   * #470 — create an artifact admitted under a stance allowance, carrying its
+   * operation stamp. Daemon-only: the stamp is attached synchronously after
+   * the create, before any flush can run, so child and stamp land in ONE
+   * write. createArtifact builds its record field by field, so the ordinary
+   * create path (and its passthrough wire body) can never attach a stamp.
+   */
+  createAdmittedArtifact(params, admission) {
+    const artifact = this.createArtifact(params);
+    artifact.admission = structuredClone(admission);
+    return artifact;
+  }
+  /** #470 — replace an admitted artifact's operation stamp (follow-up
+   *  progress, completedAt). No-op for an unknown or unstamped artifact. */
+  setArtifactAdmission(artifactId, admission) {
+    this.assertAuthorizationReadable();
+    const art = this.artifacts.find((a) => a.id === artifactId);
+    if (!art?.admission) return;
+    art.admission = structuredClone(admission);
+    this.scheduleFlush();
+  }
+  /**
+   * #470 — after a FAILED flush, did this stamped artifact land on disk
+   * anyway? (A flush writes artifacts.json first; a later collection can
+   * fail.) Same posture as isResolutionDurable: any read problem means "not
+   * proven", and a proven write schedules a re-flush for what stayed behind.
+   */
+  isAdmittedArtifactDurable(artifactId, operationId) {
+    try {
+      const raw2 = JSON.parse(fs14.readFileSync(path13.join(this.sessionDir(), "artifacts.json"), "utf8"));
+      const onDisk = Array.isArray(raw2) ? raw2.find((a) => a?.id === artifactId) : void 0;
+      const durable = onDisk?.admission?.operationId === operationId;
+      if (durable) {
+        try {
+          this.scheduleFlush();
+        } catch {
+        }
+      }
+      return durable;
+    } catch {
+      return false;
+    }
+  }
+  /** #470 — has a comment with this exact id been recorded (any artifact)? */
+  hasComment(commentId) {
+    return this.comments.some((c) => c.id === commentId);
+  }
+  /** #470 — is a plan review recorded for this artifact? */
+  hasPlanReview(artifactId) {
+    this.assertAuthorizationReadable();
+    return this.planReviews.has(artifactId);
+  }
+  /**
    * Compatibility hint for older installed checkpoint hooks. Current hooks
    * use file/session receipts and deliberately ignore this global timestamp.
    */
@@ -29319,16 +29485,16 @@ function scrubProse(text, projectRoot2 = activeProjectRoot) {
 function escText(value) {
   return esc2(scrubProse(value));
 }
-function fmtTimestamp(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return String(iso);
+function fmtTimestamp(iso2) {
+  if (!iso2) return "";
+  const d = new Date(iso2);
+  if (Number.isNaN(d.getTime())) return String(iso2);
   return d.toISOString().replace("T", " ").slice(0, 16) + " UTC";
 }
-function fmtDay(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return String(iso);
+function fmtDay(iso2) {
+  if (!iso2) return "";
+  const d = new Date(iso2);
+  if (Number.isNaN(d.getTime())) return String(iso2);
   return d.toISOString().slice(0, 10);
 }
 function plural(n, one, many = one + "s") {
@@ -31096,12 +31262,12 @@ function replayIcon(kind) {
       return "\u2022";
   }
 }
-function formatTime(iso) {
+function formatTime(iso2) {
   try {
-    const d = new Date(iso);
+    const d = new Date(iso2);
     return d.toISOString().replace("T", " ").slice(0, 19);
   } catch {
-    return iso;
+    return iso2;
   }
 }
 var severityEmoji = {
@@ -31463,6 +31629,18 @@ function readPreflightBlocks(projectRoot2) {
   }
   return [];
 }
+var EXCEPTION_FIELDS = [
+  "artifactType",
+  "callFingerprint",
+  "effectiveDigest",
+  "snapshot",
+  "preconditions",
+  "stance",
+  "registrationId",
+  "eligible",
+  "ineligibleReason",
+  "supersedesAllowanceId"
+];
 var VALID_VIA = /* @__PURE__ */ new Set(["surface", "concept", "avoid", "require"]);
 function blockEntryFromEvent(sessionId, event, now = () => (/* @__PURE__ */ new Date()).toISOString()) {
   if (!event || event.type !== "preflight_blocked") return null;
@@ -31483,7 +31661,8 @@ function blockEntryFromEvent(sessionId, event, now = () => (/* @__PURE__ */ new 
     proposal: match2.proposal,
     reason: match2.reason,
     via,
-    addedBy: match2.addedBy
+    addedBy: match2.addedBy,
+    ...Object.fromEntries(EXCEPTION_FIELDS.filter((k) => event[k] !== void 0).map((k) => [k, event[k]]))
   };
 }
 function recordPreflightBlock(projectRoot2, sessionId, event) {
@@ -31500,6 +31679,710 @@ function recordPreflightBlock(projectRoot2, sessionId, event) {
   } catch {
     return null;
   }
+}
+function updatePreflightBlocks(projectRoot2, mutate) {
+  if (!projectRoot2) return false;
+  try {
+    let changed = false;
+    const blocks = readPreflightBlocks(projectRoot2).map((entry) => {
+      const next = mutate(entry);
+      if (!next) return entry;
+      changed = true;
+      return next;
+    });
+    if (!changed) return false;
+    const file2 = logPath(projectRoot2);
+    fs18.mkdirSync(path17.dirname(file2), { recursive: true });
+    writeJsonAtomic(file2, { version: VERSION3, blocks });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// src/daemon/stance-exceptions.ts
+import { randomBytes as randomBytes3 } from "node:crypto";
+
+// src/mcp/proposal-resolution.ts
+import { createHash as createHash3 } from "node:crypto";
+function stableStringify(v) {
+  if (v === null || typeof v !== "object") {
+    const s = JSON.stringify(v);
+    return s === void 0 ? "null" : s;
+  }
+  if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;
+  const obj2 = v;
+  const keys = Object.keys(obj2).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj2[k])}`).join(",")}}`;
+}
+function sameStance(row, ref) {
+  return row.description === ref.description && (row.concept ?? void 0) === (ref.concept ?? void 0) && (row.rejectedAt ?? void 0) === (ref.rejectedAt ?? void 0);
+}
+var sha256Hex = (s) => createHash3("sha256").update(s).digest("hex");
+var EXCEPTION_TOOL_TYPES = {
+  present_code_change: "code_change",
+  present_options: "decision",
+  revise_artifact: null
+};
+var MAX_SNAPSHOT_BYTES = 48 * 1024;
+function effectiveDigest(snapshot, preconditions) {
+  return sha256Hex(stableStringify({ v: 1, snapshot, preconditions }));
+}
+function newestPriorCodeChange(artifacts, filePath) {
+  return artifacts.filter(
+    (a) => a.type === "code_change" && a.content?.filePath === filePath && typeof a.content?.after === "string" && a.content.after.length > 0
+  ).sort((a, b) => a.createdAt < b.createdAt ? 1 : -1)[0];
+}
+function codeChangePrecondition(artifacts, filePath) {
+  const prior = newestPriorCodeChange(artifacts, filePath);
+  return {
+    kind: "code_change_prior",
+    filePath,
+    priorCodeChangeId: prior?.id ?? null,
+    priorAfterHash: prior ? sha256Hex(prior.content.after) : null
+  };
+}
+var CLOSED_TARGET_STATUSES = /* @__PURE__ */ new Set(["superseded", "retracted", "rejected", "obsolete"]);
+function reviseInheritedHash(target) {
+  let provenance = null;
+  if (target.type === "changeset") {
+    const cs = coerceChangesetContent(target.content);
+    if (cs.reviewIntent === "external") {
+      const { headSha: _reviewedCommit, ...display } = cs.source ?? {};
+      provenance = { reviewIntent: "external", source: cs.source ? display : null };
+    }
+  }
+  return sha256Hex(stableStringify({
+    title: target.title,
+    type: target.type,
+    provenance,
+    stakes: target.content?.stakes ?? null,
+    relatedArtifactIds: target.relatedArtifactIds ?? null,
+    featureId: target.featureId ?? null
+  }));
+}
+function checkPreconditions(artifacts, preconditions) {
+  for (const p of preconditions) {
+    if (p.kind === "code_change_prior") {
+      const now = codeChangePrecondition(artifacts, p.filePath);
+      if (now.priorCodeChangeId === p.priorCodeChangeId && now.priorAfterHash === p.priorAfterHash) continue;
+      const detail = p.priorCodeChangeId === null ? "prior_appeared" : now.priorCodeChangeId === null ? "prior_vanished" : now.priorCodeChangeId !== p.priorCodeChangeId ? "newer_prior" : "prior_edited";
+      return { ok: false, what: "prior", dependencyId: p.priorCodeChangeId, detail };
+    }
+    const target = artifacts.find((a) => a.id === p.targetId);
+    if (!target) return { ok: false, what: "target", dependencyId: p.targetId, detail: "target_missing" };
+    const hasSuccessor = artifacts.some((a) => a.parentId === p.targetId);
+    if (hasSuccessor || target.version !== p.targetVersion || target.status === "superseded") {
+      return { ok: false, what: "target", dependencyId: p.targetId, detail: "target_revised" };
+    }
+    if (target.status !== p.targetStatus || CLOSED_TARGET_STATUSES.has(target.status)) {
+      return { ok: false, what: "target", dependencyId: p.targetId, detail: "target_status" };
+    }
+    if (reviseInheritedHash(target) !== p.inheritedHash) {
+      return { ok: false, what: "target", dependencyId: p.targetId, detail: "target_changed" };
+    }
+  }
+  return { ok: true };
+}
+
+// src/daemon/stance-exceptions.ts
+var ALLOWANCE_CEILING_MS = 72 * 60 * 60 * 1e3;
+var REGISTRATION_HEADER = "x-deeppairing-registration";
+var GRANT_ORIGIN_HEADER = "x-deeppairing-grant-origin";
+var MAX_BLOCK_BINDINGS = 200;
+function receiptStateOf(state) {
+  return state === "active" ? "allowed" : state === "consumed" ? "used" : state;
+}
+var iso = (ms) => new Date(ms).toISOString();
+var StanceExceptionRegistry = class {
+  constructor(deps) {
+    this.deps = deps;
+    this.now = deps.now ?? (() => Date.now());
+    this.log = deps.log ?? (() => {
+    });
+  }
+  deps;
+  registrations = /* @__PURE__ */ new Map();
+  byToken = /* @__PURE__ */ new Map();
+  blocks = /* @__PURE__ */ new Map();
+  /** Events this registry prepared; only these produce grantable bindings. */
+  prepared = /* @__PURE__ */ new WeakSet();
+  allowances = /* @__PURE__ */ new Map();
+  queues = /* @__PURE__ */ new Map();
+  /** Admitted children not yet announced (first durable commit only). */
+  pendingAnnounce = /* @__PURE__ */ new Set();
+  now;
+  log;
+  // --- Registrations (§5) ---------------------------------------------------
+  /** Mint a registration for a wrapper's /register. In split mode a newer
+   *  registration for the same session evicts the older ones (/mcp reconnect,
+   *  --resume); fallback mode shares one session id across conversations, so
+   *  nothing is evicted there. */
+  register(sessionId, opts) {
+    if (opts.split) {
+      for (const reg of [...this.registrations.values()]) {
+        if (reg.sessionId === sessionId) this.dropRegistration(reg);
+      }
+    }
+    const registrationId = `reg_${this.deps.instanceId}_${randomBytes3(8).toString("hex")}`;
+    const token = randomBytes3(32).toString("hex");
+    this.registrations.set(registrationId, { registrationId, sessionId, registeredAt: this.now(), token });
+    this.byToken.set(token, registrationId);
+    return { registrationId, registrationToken: token };
+  }
+  /** /unregister. With the caller's token, only that registration ends; an old
+   *  wrapper that sends none ends every registration of the session. */
+  unregister(sessionId, token) {
+    const reg = this.resolveToken(token);
+    if (token && reg) {
+      if (reg.sessionId === sessionId) this.dropRegistration(reg);
+      return;
+    }
+    for (const r of [...this.registrations.values()]) {
+      if (r.sessionId === sessionId) this.dropRegistration(r);
+    }
+  }
+  dropRegistration(reg) {
+    this.registrations.delete(reg.registrationId);
+    this.byToken.delete(reg.token);
+  }
+  /** The registration THIS daemon issued for a token. Never read from a body. */
+  resolveToken(token) {
+    if (!token) return void 0;
+    const id = this.byToken.get(token);
+    return id ? this.registrations.get(id) : void 0;
+  }
+  isLive(registrationId) {
+    return this.registrations.has(registrationId);
+  }
+  // --- Blocks ---------------------------------------------------------------
+  /**
+   * The internal preflight-block route hands every block through here. The
+   * daemon strips whatever exception fields the caller sent and recomputes
+   * them: the registration comes from the issued token, the digest is
+   * computed here, and eligibility is decided here. Only the returned event
+   * (tracked in `prepared`) can produce a grantable binding.
+   */
+  prepareBlockEvent(sessionId, token, body) {
+    const {
+      artifactType: _a3,
+      callFingerprint: rawFingerprint,
+      effectiveDigest: _d,
+      snapshot: rawSnapshot,
+      preconditions: rawPreconditions,
+      stance: _s,
+      registrationId: _r,
+      eligible: _e,
+      ineligibleReason: _i,
+      supersedesAllowanceId: _x,
+      ...event
+    } = body;
+    const reg = this.resolveToken(token);
+    const match2 = event.match && typeof event.match === "object" ? event.match : {};
+    const source = event.source === "team" ? "team" : "session";
+    const stance = source === "session" && typeof match2.description === "string" ? {
+      description: match2.description,
+      ...typeof match2.concept === "string" ? { concept: match2.concept } : {},
+      ...typeof match2.rejectedAt === "string" ? { rejectedAt: match2.rejectedAt } : {}
+    } : void 0;
+    const fingerprint = typeof rawFingerprint === "string" && /^[0-9a-f]{64}$/.test(rawFingerprint) ? rawFingerprint : void 0;
+    const base = {
+      ...event,
+      ...fingerprint ? { callFingerprint: fingerprint } : {},
+      ...stance ? { stance } : {},
+      ...reg && reg.sessionId === sessionId ? { registrationId: reg.registrationId } : {}
+    };
+    const ineligible = (why) => {
+      const out2 = { ...base, eligible: false, ineligibleReason: why };
+      this.prepared.add(out2);
+      return out2;
+    };
+    if (source !== "session") return ineligible("team_rule");
+    if (sessionId.startsWith("demo_")) return ineligible("demo_session");
+    const toolName = typeof event.toolName === "string" ? event.toolName : "";
+    if (!(toolName in EXCEPTION_TOOL_TYPES)) return ineligible("unsupported_tool");
+    if (!stance) return ineligible("no_stance");
+    if (!reg || reg.sessionId !== sessionId) return ineligible("no_registration");
+    if (!fingerprint) return ineligible("no_snapshot");
+    const snap = ProposalSnapshotSchema.safeParse(rawSnapshot);
+    const pre = external_exports.array(ProposalPreconditionSchema).safeParse(rawPreconditions);
+    if (!snap.success || !pre.success || !ArtifactTypeSchema.safeParse(snap.data.type).success) return ineligible("no_snapshot");
+    const expectedType = EXCEPTION_TOOL_TYPES[toolName];
+    const expectedKind = toolName === "revise_artifact" ? "revise" : "create";
+    if (expectedType && snap.data.type !== expectedType || snap.data.kind !== expectedKind) return ineligible("no_snapshot");
+    if (Buffer.byteLength(JSON.stringify(snap.data)) > MAX_SNAPSHOT_BYTES) return ineligible("too_large");
+    if (scanContentForSecrets({ title: snap.data.title, content: snap.data.content }).length > 0) return ineligible("secret_flagged");
+    const out = {
+      ...base,
+      artifactType: snap.data.type,
+      snapshot: snap.data,
+      preconditions: pre.data,
+      effectiveDigest: effectiveDigest(snap.data, pre.data),
+      eligible: true
+    };
+    this.prepared.add(out);
+    return out;
+  }
+  /** create-daemon's broadcast calls this after it persists a block entry. */
+  noteBlock(entry, event) {
+    if (!entry || !event || typeof event !== "object" || !this.prepared.has(event)) return;
+    const e = event;
+    this.blocks.set(entry.id, {
+      blockId: entry.id,
+      sessionId: entry.sessionId,
+      source: entry.source,
+      toolName: entry.toolName,
+      stance: e.stance,
+      registrationId: e.registrationId,
+      callFingerprint: e.callFingerprint,
+      snapshot: e.snapshot,
+      preconditions: e.preconditions,
+      effectiveDigest: e.effectiveDigest,
+      eligible: e.eligible === true,
+      ineligibleReason: e.ineligibleReason,
+      supersedesAllowanceId: e.supersedesAllowanceId
+    });
+    while (this.blocks.size > MAX_BLOCK_BINDINGS) this.blocks.delete(this.blocks.keys().next().value);
+  }
+  // --- The per-session operation queue (§13 condition 1) ---------------------
+  enqueue(sessionId, fn) {
+    const prev = this.queues.get(sessionId) ?? Promise.resolve();
+    const next = prev.catch(() => void 0).then(fn);
+    this.queues.set(sessionId, next.catch(() => void 0));
+    return next;
+  }
+  // --- State -----------------------------------------------------------------
+  derived(a) {
+    if (a.state !== "active") return a.state;
+    if (this.now() >= a.ceilingAt) return "expired";
+    if (!this.isLive(a.registrationId)) return "ended";
+    return "active";
+  }
+  receipt(a, extra = {}) {
+    return {
+      id: a.id,
+      grantedVia: a.grantedVia,
+      grantedAt: iso(a.grantedAt),
+      reason: a.reason,
+      ceilingAt: iso(a.ceilingAt),
+      state: receiptStateOf(this.derived(a)),
+      ...a.operation ? { artifactId: a.operation.artifactId } : {},
+      ...extra
+    };
+  }
+  /** The receipt as the human should see it now: an `allowed` receipt this
+   *  daemon no longer holds is `ended` (or `expired` past its ceiling). */
+  deriveReceipt(entry) {
+    const r = entry.allowance;
+    if (!r) return entry;
+    const live = this.allowances.get(r.id);
+    let state = r.state;
+    if (live) state = receiptStateOf(this.derived(live));
+    else if (r.state === "allowed") state = this.now() >= Date.parse(r.ceilingAt) ? "expired" : "ended";
+    return state === r.state ? entry : { ...entry, allowance: { ...r, state } };
+  }
+  view(a) {
+    return {
+      id: a.id,
+      blockId: a.blockId,
+      state: receiptStateOf(this.derived(a)),
+      stance: a.stance,
+      sessionId: a.sessionId,
+      toolName: a.toolName,
+      artifactType: a.artifactType,
+      grantedAt: iso(a.grantedAt),
+      grantedVia: a.grantedVia,
+      reason: a.reason,
+      ceilingAt: iso(a.ceilingAt),
+      ...a.operation ? { artifactId: a.operation.artifactId } : {},
+      snapshot: a.snapshot,
+      preconditions: a.preconditions
+    };
+  }
+  list() {
+    return [...this.allowances.values()].map((a) => this.view(a));
+  }
+  // --- Human routes: grant / revoke (§3, §4) -------------------------------
+  async grant(blockId, reason, via) {
+    const binding = this.blocks.get(blockId);
+    if (!binding) {
+      return { status: 404, body: { error: "No block with that id is held by this daemon.", code: ERROR_CODES.stance_exception_block_not_found } };
+    }
+    return this.enqueue(binding.sessionId, () => {
+      const existing = [...this.allowances.values()].find((a) => a.blockId === blockId);
+      if (existing) return { status: 200, body: { allowance: this.view(existing), existing: true } };
+      const refuse = (why, message) => ({ status: 409, body: { error: message, code: ERROR_CODES.stance_exception_not_eligible, reason: why } });
+      if (binding.source !== "session") return refuse("team_rule", "Team rules can't be allowed once \u2014 only your own stances.");
+      if (binding.sessionId.startsWith("demo_")) return refuse("demo_session", "Demo blocks can't be allowed.");
+      if (!binding.eligible || !binding.snapshot || !binding.preconditions || !binding.effectiveDigest || !binding.callFingerprint || !binding.registrationId || !binding.stance || !binding.toolName) {
+        return refuse(binding.ineligibleReason ?? "not_eligible", "This block can't be allowed once.");
+      }
+      if (!this.isLive(binding.registrationId)) return refuse("session_ended", "That Claude session has ended, so there is nothing to allow.");
+      const store = this.deps.getStore(binding.sessionId);
+      const stanceRows = store?.getSessionMemory().rejectedApproaches ?? [];
+      if (!stanceRows.some((r) => sameStance(r, binding.stance))) {
+        return refuse("stance_retired", "That stance is no longer on file (it was retired or changed).");
+      }
+      const grantedAt = this.now();
+      const allowance = {
+        id: `sx_${nanoid3(12)}`,
+        state: "active",
+        blockId,
+        stance: binding.stance,
+        sessionId: binding.sessionId,
+        registrationId: binding.registrationId,
+        toolName: binding.toolName,
+        artifactType: binding.snapshot.type,
+        callFingerprint: binding.callFingerprint,
+        effectiveDigest: binding.effectiveDigest,
+        snapshot: binding.snapshot,
+        preconditions: binding.preconditions,
+        grantedAt,
+        grantedVia: via,
+        reason,
+        ceilingAt: grantedAt + ALLOWANCE_CEILING_MS
+      };
+      this.allowances.set(allowance.id, allowance);
+      const receipt = this.receipt(allowance);
+      updatePreflightBlocks(this.deps.projectRoot, (e) => e.id === blockId ? { ...e, allowance: receipt, seenAt: e.seenAt ?? iso(grantedAt) } : null);
+      this.deps.broadcast(binding.sessionId, { type: "stance_exception_granted", blockId, allowance: receipt, stance: allowance.stance });
+      this.log(`[stance-exception] granted ${allowance.id} via=${via} block=${blockId} sid=${binding.sessionId}`);
+      return { status: 201, body: { allowance: this.view(allowance) } };
+    });
+  }
+  async revoke(id) {
+    const a = this.allowances.get(id);
+    if (!a) return { status: 404, body: { error: "No allowance with that id is held by this daemon.", code: ERROR_CODES.stance_exception_block_not_found } };
+    return this.enqueue(a.sessionId, () => {
+      if (a.state === "consumed") {
+        return { status: 409, body: { error: `Already used by ${a.operation?.artifactId ?? "an artifact"}.`, code: ERROR_CODES.stance_exception_claim_refused, state: "used", artifactId: a.operation?.artifactId } };
+      }
+      if (a.state === "changed") {
+        return { status: 409, body: { error: "Already replaced: the proposal changed after you allowed it.", code: ERROR_CODES.stance_exception_claim_refused, state: "changed" } };
+      }
+      if (a.state === "active") {
+        a.state = "revoked";
+        const revokedAt = iso(this.now());
+        const receipt = this.receipt(a, { revokedAt });
+        updatePreflightBlocks(this.deps.projectRoot, (e) => e.id === a.blockId ? { ...e, allowance: receipt } : null);
+        this.deps.broadcast(a.sessionId, { type: "stance_exception_updated", blockId: a.blockId, allowance: receipt });
+      }
+      return { status: 200, body: { allowance: this.view(a) } };
+    });
+  }
+  // --- Agent side: inspect (read-only) -------------------------------------
+  /** §6 step 2 — never consumes. Candidates: ACTIVE allowances of the calling
+   *  registration for this fingerprint. `inactive` explains a refusal. */
+  inspect(sessionId, token, fingerprint) {
+    const reg = this.resolveToken(token);
+    const candidates = [];
+    const inactive = [];
+    const held = /* @__PURE__ */ new Set();
+    for (const a of this.allowances.values()) {
+      if (a.sessionId !== sessionId || a.callFingerprint !== fingerprint) continue;
+      held.add(a.id);
+      const st = this.derived(a);
+      if (st === "active") {
+        if (reg && a.registrationId === reg.registrationId) {
+          candidates.push({ id: a.id, stance: a.stance, grantedVia: a.grantedVia, reason: a.reason });
+        }
+        continue;
+      }
+      inactive.push({ id: a.id, state: receiptStateOf(st), ...a.operation ? { artifactId: a.operation.artifactId } : {}, ceilingAt: iso(a.ceilingAt) });
+    }
+    for (const e of readPreflightBlocks(this.deps.projectRoot)) {
+      const r = e.allowance;
+      if (!r || held.has(r.id) || e.sessionId !== sessionId || e.callFingerprint !== fingerprint) continue;
+      const shown = this.deriveReceipt(e).allowance;
+      if (shown.state === "used") continue;
+      inactive.push({ id: r.id, state: shown.state, ...r.artifactId ? { artifactId: r.artifactId } : {}, ceilingAt: r.ceilingAt });
+    }
+    return { candidates, inactive };
+  }
+  // --- Agent side: the one authoritative operation route (§7) ---------------
+  runOperation(sessionId, store, token, operationId, fingerprint, request) {
+    return this.enqueue(sessionId, () => {
+      const stamped = findStamped(store.getArtifacts(), operationId, fingerprint);
+      if (stamped) return this.complete(sessionId, store, stamped, true);
+      if (!request) return { status: "none" };
+      return this.claimAndCreate(sessionId, store, token, operationId, fingerprint, request);
+    });
+  }
+  claimAndCreate(sessionId, store, token, operationId, fingerprint, request) {
+    const reg = this.resolveToken(token);
+    const refused = (reason, extra = {}) => ({ status: "refused", code: ERROR_CODES.stance_exception_claim_refused, reason, ...extra });
+    const list = request.exceptionIds.map((id) => this.allowances.get(id));
+    if (list.length === 0 || list.some((a) => !a)) return refused("unknown_allowance");
+    const allowances = list;
+    for (const a of allowances) {
+      if (!reg || a.sessionId !== sessionId || a.registrationId !== reg.registrationId) return refused("not_this_registration");
+      const st = this.derived(a);
+      if (st !== "active") {
+        return refused(st, { state: st, ceilingAt: iso(a.ceilingAt), ...a.operation ? { artifactId: a.operation.artifactId } : {} });
+      }
+      if (a.callFingerprint !== fingerprint) return refused("fingerprint_mismatch");
+    }
+    const bound = allowances[0];
+    if (allowances.some((a) => a.effectiveDigest !== bound.effectiveDigest)) return refused("snapshot_mismatch");
+    const rows = store.getSessionMemory().rejectedApproaches;
+    if (allowances.some((a) => !rows.some((r) => sameStance(r, a.stance)))) return refused("stance_retired");
+    const check2 = checkPreconditions(store.getArtifacts(), bound.preconditions);
+    if (!check2.ok) return this.markChanged(sessionId, token, fingerprint, allowances, check2, request);
+    if (effectiveDigest(request.snapshot, request.preconditions) !== bound.effectiveDigest) {
+      return { status: "refused", code: ERROR_CODES.stance_exception_dependencies_changed, reason: "client_snapshot_mismatch" };
+    }
+    for (const a of allowances) a.state = "consumed";
+    this.deps.fault?.("after_claim", operationId);
+    const snapshot = structuredClone(bound.snapshot);
+    const childId = `art_${nanoid3(10)}`;
+    const content = snapshot.content;
+    const followUps = {};
+    let parent;
+    if (snapshot.kind === "revise") {
+      parent = store.getArtifacts().find((a) => a.id === snapshot.parentId);
+      followUps.supersede = { parentId: snapshot.parentId, fromStatus: parent?.status ?? "missing" };
+      followUps.comment = { id: `cmt_op_${operationId}`, artifactId: snapshot.parentId, content: `Superseded by ${childId}: ${snapshot.agentReasoning ?? ""}` };
+    }
+    if (snapshot.type === "decision" && Array.isArray(content.options)) {
+      const decisionId = `dec_${nanoid3(10)}`;
+      content.decisionId = decisionId;
+      const contextText = typeof content.context === "string" ? content.context : snapshot.title;
+      followUps.decision = {
+        decisionId,
+        artifactId: childId,
+        context: snapshot.kind === "revise" ? contextText : String(content.context ?? ""),
+        ...snapshot.kind === "create" && typeof content.title === "string" ? { title: content.title } : {},
+        options: content.options,
+        ...content.stakes === "low" || content.stakes === "medium" || content.stakes === "high" ? { stakes: content.stakes } : {}
+      };
+    }
+    if (snapshot.type === "plan") followUps.planReview = true;
+    if (request.trace) {
+      followUps.trace = {
+        ...request.trace,
+        version: 1,
+        at: iso(this.now()),
+        artifactId: childId,
+        toolName: request.toolName,
+        exception: { allowanceIds: allowances.map((a) => a.id), grantedVia: bound.grantedVia, stances: allowances.map((a) => a.stance.concept ?? a.stance.description) }
+      };
+    }
+    const admission = {
+      operationId,
+      callFingerprint: fingerprint,
+      effectiveDigest: bound.effectiveDigest,
+      kind: snapshot.kind,
+      exceptionIds: allowances.map((a) => a.id),
+      grantedVia: bound.grantedVia,
+      followUps
+    };
+    for (const a of allowances) a.operation = { id: operationId, artifactId: childId };
+    try {
+      this.deps.fault?.("create_throws", operationId);
+      store.createAdmittedArtifact({
+        id: childId,
+        type: snapshot.type,
+        title: snapshot.title,
+        content,
+        ...snapshot.agentReasoning !== void 0 ? { agentReasoning: snapshot.agentReasoning } : {},
+        ...snapshot.relatedArtifactIds ? { relatedArtifactIds: snapshot.relatedArtifactIds } : {},
+        ...snapshot.parentId ? { parentId: snapshot.parentId } : {},
+        ...snapshot.version ? { version: snapshot.version } : {},
+        ...snapshot.feature ? { feature: snapshot.feature } : {}
+      }, admission);
+    } catch (error51) {
+      if (!store.getArtifacts().some((a) => a.id === childId)) {
+        for (const a of allowances) {
+          a.state = "active";
+          delete a.operation;
+        }
+      }
+      throw error51;
+    }
+    this.pendingAnnounce.add(childId);
+    store.forceFlush();
+    this.announce(sessionId, store, childId);
+    this.deps.fault?.("after_child_flush", operationId);
+    const child = store.getArtifacts().find((a) => a.id === childId);
+    return this.complete(sessionId, store, child, false);
+  }
+  /** §7 Races — the dependency moved: refuse, mark `changed`, and record this
+   *  call's block as the new entry the human can allow instead. */
+  markChanged(sessionId, token, fingerprint, allowances, check2, request) {
+    for (const a of allowances) a.state = "changed";
+    let newBlockId;
+    if (request.block && typeof request.block === "object") {
+      const ev = this.prepareBlockEvent(sessionId, token, {
+        ...request.block,
+        callFingerprint: fingerprint,
+        snapshot: request.snapshot,
+        preconditions: request.preconditions
+      });
+      ev.supersedesAllowanceId = allowances[0].id;
+      this.deps.broadcast(sessionId, ev);
+      newBlockId = [...this.blocks.values()].find((b) => b.supersedesAllowanceId === allowances[0].id)?.blockId;
+    }
+    for (const a of allowances) {
+      const receipt = this.receipt(a, newBlockId ? { supersededByBlockId: newBlockId } : {});
+      updatePreflightBlocks(this.deps.projectRoot, (e) => e.id === a.blockId ? { ...e, allowance: receipt } : null);
+      this.deps.broadcast(sessionId, { type: "stance_exception_updated", blockId: a.blockId, allowance: receipt });
+    }
+    return {
+      status: "refused",
+      code: ERROR_CODES.stance_exception_dependencies_changed,
+      reason: check2.detail,
+      state: "changed",
+      dependency: { id: check2.dependencyId, what: check2.what, detail: check2.detail },
+      ...newBlockId ? { newBlockId } : {}
+    };
+  }
+  /** Steps 4–6: finish every missing follow-up (each checks its own effect),
+   *  set completedAt, mark the receipts used, respond. Shared by a fresh
+   *  admission, both replay shapes, and startup reconciliation. */
+  complete(sessionId, store, child, replayed) {
+    const admission = structuredClone(child.admission);
+    const lineage = lineageProblem(child, admission, store.getArtifacts());
+    if (lineage) {
+      this.log(`[stance-exception] replay refused for ${child.id}: ${lineage}`);
+      return { status: "inconsistent", code: ERROR_CODES.stance_exception_operation_inconsistent, reason: lineage, artifactId: child.id };
+    }
+    const fu = admission.followUps;
+    const opId = admission.operationId;
+    const persist = () => {
+      store.setArtifactAdmission(child.id, admission);
+      store.forceFlush();
+    };
+    if (fu.supersede && !fu.supersede.skipped) {
+      const parent = store.getArtifacts().find((a) => a.id === fu.supersede.parentId);
+      if (parent && parent.status !== "superseded") {
+        if (parent.status === fu.supersede.fromStatus) {
+          store.updateArtifactStatus(parent.id, "superseded", "agent_supersede");
+          this.deps.broadcast(sessionId, { type: "artifact_updated", artifactId: parent.id, status: "superseded", reason: "agent_supersede" });
+        } else {
+          fu.supersede.skipped = parent.status;
+        }
+      } else if (!parent) {
+        fu.supersede.skipped = "missing";
+      }
+      persist();
+      this.deps.fault?.("after_supersede", opId);
+    }
+    if (fu.comment && !store.hasComment(fu.comment.id)) {
+      const comment = store.addComment({ id: fu.comment.id, artifactId: fu.comment.artifactId, content: fu.comment.content, author: "agent" });
+      persist();
+      this.deps.broadcast(sessionId, { type: "comment_added", comment });
+      this.deps.fault?.("after_comment", opId);
+    }
+    if (fu.decision && !store.getDecision(fu.decision.decisionId)) {
+      store.recordDecisionRequest({ ...fu.decision, options: fu.decision.options });
+      persist();
+      this.deps.fault?.("after_decision", opId);
+    }
+    if (fu.planReview && !store.hasPlanReview(child.id)) {
+      store.recordPlanReview(child.id);
+      persist();
+      this.deps.fault?.("after_plan_review", opId);
+    }
+    if (fu.trace && !store.getPreflightTrace(child.id)) {
+      store.recordPreflightTrace(child.id, fu.trace);
+      this.deps.fault?.("after_trace", opId);
+    }
+    this.deps.fault?.("before_completed", opId);
+    store.forceFlush();
+    if (!admission.completedAt) {
+      admission.completedAt = iso(this.now());
+      persist();
+    }
+    this.announce(sessionId, store, child.id);
+    for (const id of admission.exceptionIds) {
+      updatePreflightBlocks(this.deps.projectRoot, (e) => e.allowance?.id === id && (e.allowance.state !== "used" || e.allowance.artifactId !== child.id) ? { ...e, allowance: { ...e.allowance, state: "used", artifactId: child.id } } : null);
+    }
+    const held = admission.exceptionIds.map((id) => this.allowances.get(id)).filter((a) => !!a);
+    const decisionId = child.content.decisionId;
+    return {
+      status: replayed ? "replayed" : "admitted",
+      replayed,
+      artifactId: child.id,
+      ...typeof decisionId === "string" ? { decisionId } : {},
+      ...child.parentId ? { parentId: child.parentId } : {},
+      kind: admission.kind,
+      grantedVia: admission.grantedVia,
+      stances: held.map((a) => a.stance.concept ?? a.stance.description),
+      reasons: held.map((a) => a.reason),
+      ...fu.supersede?.skipped ? { supersedeSkipped: fu.supersede.skipped } : {}
+    };
+  }
+  /** First durable commit only: one artifact_created per admitted child. */
+  announce(sessionId, store, childId) {
+    if (!this.pendingAnnounce.delete(childId)) return;
+    const artifact = store.getArtifacts().find((a) => a.id === childId);
+    if (artifact) this.deps.broadcast(sessionId, { type: "artifact_created", artifact });
+  }
+  /** Startup reconciliation: when the daemon loads a session, finish every
+   *  stamped child that has no completedAt — through the same queue. */
+  reconcile(sessionId, store) {
+    return this.enqueue(sessionId, () => {
+      for (const child of store.getArtifacts()) {
+        if (!child.admission || child.admission.completedAt) continue;
+        try {
+          this.complete(sessionId, store, child, true);
+        } catch (error51) {
+          this.log(`[stance-exception] reconcile ${child.id} failed: ${error51 instanceof Error ? error51.message : String(error51)}`);
+        }
+      }
+    });
+  }
+};
+function findStamped(artifacts, operationId, fingerprint) {
+  const byOp = artifacts.find((a) => a.admission?.operationId === operationId);
+  if (byOp) return byOp;
+  return artifacts.filter((a) => a.admission?.callFingerprint === fingerprint).sort((a, b) => a.createdAt < b.createdAt ? 1 : -1)[0];
+}
+function lineageProblem(child, admission, artifacts) {
+  const fu = admission.followUps ?? {};
+  if (admission.kind === "revise") {
+    if (!child.parentId) return "revise stamp on an artifact with no parent";
+    if (!fu.supersede || fu.supersede.parentId !== child.parentId) return "supersede target is not the child's parent";
+    if (!fu.comment || fu.comment.artifactId !== child.parentId) return "comment target is not the child's parent";
+    if (fu.comment.id !== `cmt_op_${admission.operationId}`) return "comment id is not derived from the operation id";
+    const parent = artifacts.find((a) => a.id === child.parentId);
+    if (parent && child.version !== parent.version + 1) return "child version does not follow its parent";
+  } else if (fu.supersede || fu.comment) {
+    return "create stamp carries revise follow-ups";
+  }
+  if (fu.decision) {
+    const decisionId = child.content.decisionId;
+    if (fu.decision.decisionId !== decisionId || fu.decision.artifactId !== child.id) return "decision target is not the child's decision";
+  }
+  if (fu.planReview && child.type !== "plan") return "plan review on a non-plan artifact";
+  return null;
+}
+var GrantBody = external_exports.object({ reason: external_exports.string() }).strict();
+function registerStanceExceptionRoutes(app, registry2) {
+  const fromAgent = (c) => !!c.req.header(REGISTRATION_HEADER);
+  const agentRefusal = (c) => c.json({ error: "Allowances are granted by your pair in the companion UI, never by the agent.", code: ERROR_CODES.stance_exception_interactive_required }, 403);
+  app.post("/api/preflight-blocks/:blockId/exception", async (c) => {
+    if (fromAgent(c)) return agentRefusal(c);
+    let body;
+    try {
+      body = GrantBody.parse(await c.req.json());
+    } catch {
+      return c.json({ error: "Expected exactly { reason }.", code: ERROR_CODES.validation_error }, 400);
+    }
+    const reason = body.reason.trim();
+    if (reason.length < 3 || reason.length > 280) {
+      return c.json({ error: "Give a reason of 3\u2013280 characters.", code: ERROR_CODES.stance_exception_reason_required }, 400);
+    }
+    const via = c.req.header(GRANT_ORIGIN_HEADER) === "cli" ? "cli" : "ui";
+    const out = await registry2.grant(c.req.param("blockId"), reason, via);
+    return c.json(out.body, out.status);
+  });
+  app.post("/api/stance-exceptions/:id/revoke", async (c) => {
+    if (fromAgent(c)) return agentRefusal(c);
+    const out = await registry2.revoke(c.req.param("id"));
+    return c.json(out.body, out.status);
+  });
+  app.get("/api/stance-exceptions", (c) => c.json({ allowances: registry2.list() }));
 }
 
 // src/mcp/task-handles.ts
@@ -31691,7 +32574,7 @@ function sessionDirExists(projectRoot2, sessionId) {
     return false;
   }
 }
-function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authToken, getLiveDecisionSources) {
+function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authToken, getLiveDecisionSources, stanceExceptions) {
   const getStore = typeof storeOrGetter === "function" ? storeOrGetter : () => storeOrGetter;
   const broadcast = broadcastFn;
   const log2 = logFn ?? (() => {
@@ -32723,8 +33606,10 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
   });
   app.get("/api/preflight-blocks", (c) => {
     if (!projectRoot2) return c.json({ blocks: [] });
-    return c.json({ blocks: readPreflightBlocks(projectRoot2) });
+    const blocks = readPreflightBlocks(projectRoot2);
+    return c.json({ blocks: stanceExceptions ? blocks.map((b) => stanceExceptions.deriveReceipt(b)) : blocks });
   });
+  if (stanceExceptions) registerStanceExceptionRoutes(app, stanceExceptions);
   app.get("/api/team-preferences", async (c) => {
     const store = getStore(getSessionId(c));
     if (!store) return c.json({ preferences: [], exists: false });
@@ -33285,6 +34170,17 @@ var PostedReviewBody = external_exports.object({
   postedAt: external_exports.string().min(1),
   commentCount: external_exports.number().int().nonnegative()
 }).strict();
+var OperationBody = external_exports.object({
+  callFingerprint: external_exports.string().regex(/^[0-9a-f]{64}$/),
+  admission: external_exports.object({
+    exceptionIds: external_exports.array(external_exports.string().min(1)).min(1).max(8),
+    toolName: external_exports.string().min(1),
+    snapshot: ProposalSnapshotSchema,
+    preconditions: external_exports.array(ProposalPreconditionSchema),
+    trace: external_exports.record(external_exports.string(), external_exports.unknown()).optional(),
+    block: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
+  }).strict().optional()
+}).strict();
 var AutonomyPostBody = external_exports.object({ level: AutonomyLevelSchema });
 var DetailDensityPostBody = external_exports.object({ density: DetailDensitySchema });
 var PersonaPostBody = external_exports.object({ persona: PersonaSchema });
@@ -33375,7 +34271,7 @@ function createActiveSessionRoutes(sessions, sessionMeta, daemonHash, activeSess
   });
   return app;
 }
-function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, logFn, daemonProjectRoot, authToken, activeSessions) {
+function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, logFn, daemonProjectRoot, authToken, activeSessions, stanceExceptions) {
   const log2 = logFn ?? (() => {
   });
   const app = new Hono2();
@@ -33465,11 +34361,13 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       lastActivity: (/* @__PURE__ */ new Date()).toISOString()
     });
     activeSessions?.add(sessionId);
+    const registration = stanceExceptions?.register(sessionId, { split: body.splitMode === true });
     return c.json({
       status: "registered",
       sessionId,
       projectRoot: daemonProjectRoot,
-      state: store.getFullState()
+      state: store.getFullState(),
+      ...registration ?? {}
     });
   });
   app.post("/api/internal/sessions/:sessionId/rename", async (c) => {
@@ -33487,6 +34385,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const store = sessions.get(sessionId);
     if (store) store.forceFlush();
     activeSessions?.delete(sessionId);
+    stanceExceptions?.unregister(sessionId, c.req.header(REGISTRATION_HEADER));
     return c.json({ status: "unregistered" });
   });
   app.post("/api/internal/sessions/:sessionId/recovered", async (c) => {
@@ -33766,8 +34665,34 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     if (!body || body.type !== "preflight_blocked") {
       return c.json({ ok: false, reason: "not_a_preflight_block" }, 400);
     }
-    broadcast(sessionId, body);
+    broadcast(sessionId, stanceExceptions ? stanceExceptions.prepareBlockEvent(sessionId, c.req.header(REGISTRATION_HEADER), body) : body);
     return c.json({ ok: true });
+  });
+  app.get("/api/internal/sessions/:sessionId/stance-exceptions", (c) => {
+    const sessionId = c.req.param("sessionId");
+    const r = requireStore(c, sessionId);
+    if (!r.ok) return r.response;
+    if (!stanceExceptions) return c.json({ candidates: [], inactive: [] });
+    const fingerprint = c.req.query("fingerprint") ?? "";
+    return c.json(stanceExceptions.inspect(sessionId, c.req.header(REGISTRATION_HEADER), fingerprint));
+  });
+  app.post("/api/internal/sessions/:sessionId/operations/:operationId", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const r = requireStore(c, sessionId);
+    if (!r.ok) return r.response;
+    const parsed = await parseJsonBody(c, OperationBody);
+    if (!parsed.ok) return parsed.res;
+    if (!stanceExceptions) return c.json({ status: "none" });
+    const outcome = await stanceExceptions.runOperation(
+      sessionId,
+      r.store,
+      c.req.header(REGISTRATION_HEADER),
+      c.req.param("operationId"),
+      parsed.data.callFingerprint,
+      parsed.data.admission
+    );
+    if (outcome.status === "inconsistent") return c.json(outcome, 409);
+    return c.json(outcome);
   });
   app.post("/api/internal/sessions/:sessionId/comments/:commentId/mark-resolved", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -34528,21 +35453,33 @@ function createDaemon(deps) {
     version: version2 = SERVER_VERSION,
     openBrowser = defaultOpenBrowser,
     watch = (dir, listener) => fs22.watch(dir, listener),
-    heartbeatIntervalMs = 3e4
+    heartbeatIntervalMs = 3e4,
+    stanceExceptionClock,
+    stanceExceptionFault
   } = deps;
   const daemonProjectHash = projectHashOf(projectRoot2);
   let boundPort = 0;
   const dpDir2 = path22.join(projectRoot2, ".deeppairing");
   const daemonInfoFile = path22.join(dpDir2, "daemon.json");
-  const instanceId = randomBytes3(12).toString("hex");
+  const instanceId = randomBytes4(12).toString("hex");
   const sessions = /* @__PURE__ */ new Map();
   const sessionMeta = /* @__PURE__ */ new Map();
   const activeSessions = /* @__PURE__ */ new Set();
   const demoRuns = /* @__PURE__ */ new Map();
+  const stanceExceptions = new StanceExceptionRegistry({
+    instanceId,
+    projectRoot: projectRoot2,
+    broadcast: (sessionId, event) => broadcast(sessionId, event),
+    getStore: (sessionId) => sessions.get(sessionId),
+    now: stanceExceptionClock,
+    log: log2,
+    fault: stanceExceptionFault
+  });
   function createSession(sessionId) {
     log2(`Creating session: ${sessionId}`);
     const store = new FileStore(projectRoot2, sessionId);
     sessions.set(sessionId, store);
+    if (!sessionId.startsWith("demo_")) void stanceExceptions.reconcile(sessionId, store);
     if (!sessionId.startsWith("demo_")) {
       try {
         recordMetricEvent(projectRoot2, { kind: "session_started" });
@@ -34559,7 +35496,7 @@ function createDaemon(deps) {
   const globalClients = /* @__PURE__ */ new Set();
   const demoReplayEvents = /* @__PURE__ */ new Map();
   const sessionRevisions = /* @__PURE__ */ new Map();
-  const revisionEpoch = randomBytes3(6).toString("hex");
+  const revisionEpoch = randomBytes4(6).toString("hex");
   function broadcast(sessionId, event) {
     let outgoing = event;
     if (REVISION_EVENTS.has(event?.type)) {
@@ -34568,6 +35505,7 @@ function createDaemon(deps) {
     try {
       const entry = recordPreflightBlock(projectRoot2, sessionId, event);
       if (entry) outgoing = { ...event, blockId: entry.id, at: entry.at };
+      stanceExceptions.noteBlock(entry, event);
     } catch {
     }
     if (sessionId.startsWith("demo_") && outgoing?.type === "preflight_blocked") {
@@ -34672,7 +35610,7 @@ function createDaemon(deps) {
     origin: (origin) => corsAllowedOrigin(origin)
   }));
   applyTopLevelGuards(app, { maxBodyBytes: 64 * 1024 });
-  const daemonRoutes = createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log2, projectRoot2, daemonAuthToken2, activeSessions);
+  const daemonRoutes = createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log2, projectRoot2, daemonAuthToken2, activeSessions, stanceExceptions);
   app.route("/", daemonRoutes);
   const publicRoutes = createHttpRoutes(
     (sessionId) => {
@@ -34715,7 +35653,8 @@ function createDaemon(deps) {
         }
       }
       return out;
-    }
+    },
+    stanceExceptions
   );
   app.route("/", publicRoutes);
   const PENDING_REVIEWABLE = /* @__PURE__ */ new Set(["research", "spec", "plan", "decision", "code_change", "changeset", "debrief"]);
@@ -34862,7 +35801,7 @@ function createDaemon(deps) {
       activeSessions.delete(oldest);
       demoReplayEvents.delete(oldest);
     }
-    const sessionId = `demo_${Date.now()}_${randomBytes3(4).toString("hex")}`;
+    const sessionId = `demo_${Date.now()}_${randomBytes4(4).toString("hex")}`;
     const store = createSession(sessionId);
     sessionMeta.set(sessionId, {
       title: "deepPairing demo",
@@ -35288,6 +36227,7 @@ function createDaemon(deps) {
     sessions,
     sessionMeta,
     activeSessions,
+    stanceExceptions,
     broadcast,
     broadcastAll,
     getClientCount,
