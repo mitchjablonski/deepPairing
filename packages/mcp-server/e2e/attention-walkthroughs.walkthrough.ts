@@ -145,6 +145,9 @@ for (const row of MATRIX) {
             await openPrimary(evidence);
             await evidence.check("keyboard action opened the sibling decision without rebinding the tab", async () => {
               await expect(page.locator('[data-artifact-id="billing_decision"]')).toBeVisible();
+              // The selected wrapper appears before the lazy DecisionCard.
+              // Capture completed content, not its transient skeleton.
+              for (const option of ["Redis", "In-process"]) await expect(page.getByRole("button", { name: `Select ${option}`, exact: true })).toBeVisible();
               expect(await page.evaluate(() => (window as unknown as { __dpConnectionStore: { getState(): { sessionId: string } } }).__dpConnectionStore.getState().sessionId)).toBe(row.scenario.boundSession);
             });
             if (row.mode === "ON") await evidence.activate(page.getByRole("button", { name: "Expand next-up details", exact: true }));
