@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { ProposalPrecondition, StanceAllowanceReceipt } from "@deeppairing/shared";
 import { apiBase, apiGet } from "../lib/api";
 
 /**
@@ -57,6 +58,22 @@ export interface PreflightBlockRecord {
    * (never persisted) and for a pre-Q2 daemon.
    */
   serverId?: string;
+  // #470 — stance exceptions. All set by the daemon; absent on older daemons.
+  /** The present_* tool the block refused. */
+  toolName?: string;
+  /** Whether "Allow this proposal once" can be offered for this block. */
+  eligible?: boolean;
+  ineligibleReason?: string;
+  /** The receipt of the allowance granted on this block. */
+  allowance?: StanceAllowanceReceipt;
+  /** Daemon-written when you acted on it (a grant): Held no longer counts it. */
+  seenAt?: string;
+  /** This block replaced an allowance whose dependency moved. */
+  supersedesAllowanceId?: string;
+  /** What this block's proposal depended on (names the "newer art_x"). */
+  preconditions?: ProposalPrecondition[];
+  /** The exact stance row (identity for Retire). */
+  description?: string;
 }
 
 interface PreflightBlockState {
@@ -72,6 +89,13 @@ interface PreflightBlockState {
   load: () => Promise<void>;
   /** Merge a single block from a `preflight_blocked` broadcast event. */
   pushBlock: (block: Omit<PreflightBlockRecord, "id" | "at"> & { at?: string }) => void;
+  /** #470 — apply a daemon receipt (grant / used / changed / revoked) to a block. */
+  applyReceipt: (blockId: string, allowance: StanceAllowanceReceipt, seenAt?: string) => void;
+  /** #470 — a request to open the ⋯ gate log at one entry (toast "More
+   *  options", the changed-state links). `seq` re-fires the same id. */
+  focusRequest: { blockId?: string; seq: number } | null;
+  requestFocus: (blockId?: string) => void;
+  clearFocusRequest: () => void;
   /** Q2 — mark everything currently held as seen (called when the log is opened). */
   markSeen: () => void;
   clear: () => void;
@@ -181,6 +205,19 @@ export const usePreflightBlockStore = create<PreflightBlockState>((set, get) => 
     set({ blocks: next });
   },
 
+  focusRequest: null,
+  requestFocus: (blockId) => set((s) => ({ focusRequest: { blockId, seq: (s.focusRequest?.seq ?? 0) + 1 } })),
+  clearFocusRequest: () => set({ focusRequest: null }),
+
+  applyReceipt: (blockId, allowance, seenAt) => {
+    set((s) => ({
+      blocks: s.blocks.map((b) =>
+        b.serverId === blockId || b.id === blockId
+          ? { ...b, allowance, ...(seenAt && !b.seenAt ? { seenAt } : {}) }
+          : b),
+    }));
+  },
+
   markSeen: () => {
     const { blocks } = get();
     // Newest block's timestamp, or now when the log is empty.
@@ -199,6 +236,8 @@ export const usePreflightBlockStore = create<PreflightBlockState>((set, get) => 
 /** Q2 — how many held blocks fired after the human last looked. */
 export function unreadBlockCount(state: Pick<PreflightBlockState, "blocks" | "lastSeenAt">): number {
   const { blocks, lastSeenAt } = state;
-  if (!lastSeenAt) return blocks.length;
-  return blocks.filter((b) => b.at.localeCompare(lastSeenAt) > 0).length;
+  // #470 (§4a) — a block you acted on (a grant) is seen, whatever the boundary.
+  const pending = blocks.filter((b) => !b.seenAt);
+  if (!lastSeenAt) return pending.length;
+  return pending.filter((b) => b.at.localeCompare(lastSeenAt) > 0).length;
 }

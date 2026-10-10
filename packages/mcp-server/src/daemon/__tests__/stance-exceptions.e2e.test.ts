@@ -551,3 +551,36 @@ describe("#470 receipts never claim an authenticated identity (§13 condition 3)
     expect(surfaces).not.toMatch(/grantedBy/);
   });
 });
+
+describe("#470 slice 2 — the daemon side the UI reads", () => {
+  it("the preview route serves the daemon's in-memory record (not the file); unknown → 404; an ended session → not eligible", async () => {
+    world = new StanceWorld();
+    const w = await world.wrapper();
+    holdStance(world.store(w.sessionId), STANCE);
+    await w.call("present_code_change", codeArgs());
+    const block = await world.newestBlock();
+    // Tamper with the on-disk preview: the route must not serve the file.
+    const file = path.join(world.dir, ".deeppairing", "preflight-blocks.json");
+    const log = JSON.parse(fs.readFileSync(file, "utf8"));
+    log.blocks[0].snapshot.content.after = "TAMPERED";
+    fs.writeFileSync(file, JSON.stringify(log));
+    const res = await world.publicRequest(`/api/preflight-blocks/${block.id}/exception`);
+    const preview = await res.json();
+    expect(preview).toMatchObject({ eligible: true, toolName: "present_code_change", stance: { description: STANCE } });
+    expect(preview.snapshot.content.after).toBe(codeArgs().after);
+    expect((await world.publicRequest("/api/preflight-blocks/blk_nope/exception")).status).toBe(404);
+    await w.client.unregister();
+    expect(await (await world.publicRequest(`/api/preflight-blocks/${block.id}/exception`)).json()).toMatchObject({ eligible: false, ineligibleReason: "session_ended" });
+  });
+
+  it("a grant broadcasts seenAt; a use broadcasts the `used` receipt with the artifact's title, once", async () => {
+    world = new StanceWorld();
+    const { w } = await blockedThenAllowed();
+    expect(world.events.find((e) => e.type === "stance_exception_granted")).toMatchObject({ seenAt: expect.any(String) });
+    await w.call("present_code_change", codeArgs());
+    await w.call("present_code_change", codeArgs()); // a replay
+    const used = world.events.filter((e) => e.type === "stance_exception_updated" && (e.allowance as { state: string }).state === "used");
+    expect(used).toHaveLength(1);
+    expect(used[0]).toMatchObject({ artifactTitle: "modify src/config.ts" });
+  });
+});

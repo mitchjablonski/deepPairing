@@ -488,6 +488,49 @@ describe("connection store — handleMessage dispatch", () => {
       expect(typeof blocks[0]!.at).toBe("string");
     });
 
+    it("#470 — an eligible block carries its durable id and eligibility onto the hero toast and the log record", async () => {
+      const { useToastStore } = await import("../toast");
+      const { usePreflightBlockStore } = await import("../preflightBlocks");
+      useToastStore.getState().dismissAll();
+      usePreflightBlockStore.getState().clear();
+      useConnectionStore.getState().connect();
+      activeAdapter.emit({
+        type: "preflight_blocked", toolName: "present_code_change", source: "session", blockId: "blk_9", eligible: true,
+        supersedesAllowanceId: "sx_old", preconditions: [{ kind: "code_change_prior", filePath: "a.ts", priorCodeChangeId: "art_x", priorAfterHash: "h" }],
+        match: { concept: "global mutable state", description: "global mutable state", proposal: "remove it", via: "surface" },
+      });
+      await flush();
+      expect(useToastStore.getState().toasts[0]!.hero).toMatchObject({ blockId: "blk_9", eligible: true });
+      expect(usePreflightBlockStore.getState().blocks[0]).toMatchObject({ serverId: "blk_9", eligible: true, supersedesAllowanceId: "sx_old" });
+    });
+
+    it("#470 — receipts: a grant applies seenAt and raises a toast (stronger for CLI); used names the artifact; this tab's own grant isn't re-announced", async () => {
+      const { useToastStore } = await import("../toast");
+      const { usePreflightBlockStore } = await import("../preflightBlocks");
+      const { locallyAnnouncedGrants } = await import("../../lib/stanceException");
+      useToastStore.getState().dismissAll();
+      usePreflightBlockStore.setState({ blocks: [{ id: "b1", serverId: "blk_1", at: "2026-06-01T00:00:00.000Z", source: "session", concept: "global mutable state", via: "surface" }] } as any);
+      useConnectionStore.getState().connect();
+      const receipt = { id: "sx_1", grantedVia: "cli", grantedAt: "2026-06-01T01:00:00.000Z", reason: "fine", ceilingAt: "2026-06-04T01:00:00.000Z", state: "allowed" };
+      activeAdapter.emit({ type: "stance_exception_granted", blockId: "blk_1", allowance: receipt, seenAt: "2026-06-01T01:00:00.000Z" });
+      await flush();
+      expect(usePreflightBlockStore.getState().blocks[0]).toMatchObject({ seenAt: "2026-06-01T01:00:00.000Z", allowance: { state: "allowed" } });
+      const grantToast = useToastStore.getState().toasts.at(-1)!;
+      expect(grantToast).toMatchObject({ title: "Allowed once: 'global mutable state'. Waiting for Claude to retry.", strong: true });
+      activeAdapter.emit({ type: "stance_exception_updated", blockId: "blk_1", allowance: { ...receipt, state: "used", artifactId: "art_1" }, artifactTitle: "modify src/config.ts" });
+      await flush();
+      expect(useToastStore.getState().toasts.at(-1)!.title).toBe("Claude used your allowance: modify src/config.ts.");
+      expect(JSON.stringify(useToastStore.getState().toasts)).not.toMatch(/verified|authenticated/i);
+      // A grant this tab made (and already announced) is not announced again.
+      const count = useToastStore.getState().toasts.length;
+      usePreflightBlockStore.setState({ blocks: [{ id: "b2", serverId: "blk_2", at: "2026-06-01T00:00:00.000Z", source: "session", concept: "x", via: "surface" }] } as any);
+      locallyAnnouncedGrants.add("blk_2");
+      activeAdapter.emit({ type: "stance_exception_granted", blockId: "blk_2", allowance: { ...receipt, id: "sx_2", grantedVia: "ui" }, seenAt: "2026-06-01T01:00:00.000Z" });
+      await flush();
+      expect(useToastStore.getState().toasts).toHaveLength(count);
+      expect(usePreflightBlockStore.getState().blocks[0]!.allowance?.id).toBe("sx_2");
+    });
+
     it("II3 — pushes a sticky 'reload to re-bind' toast on a fatal project mismatch (no silent rebind)", async () => {
       const { useToastStore } = await import("../toast");
       useToastStore.getState().dismissAll();

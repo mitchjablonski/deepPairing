@@ -434,6 +434,29 @@ export class StanceExceptionRegistry {
     };
   }
 
+  /**
+   * What the grant dialog previews — served from the daemon's OWN in-memory
+   * block record, the same one grant() binds to, never the block-log file. A
+   * block this daemon doesn't hold (restart, unknown id) can't be allowed.
+   */
+  preview(blockId: string): Record<string, unknown> | null {
+    const b = this.blocks.get(blockId);
+    if (!b) return null;
+    const existing = [...this.allowances.values()].find((a) => a.blockId === blockId);
+    const live = !!b.registrationId && this.isLive(b.registrationId);
+    return {
+      blockId,
+      source: b.source,
+      toolName: b.toolName,
+      eligible: b.eligible && live,
+      ineligibleReason: !b.eligible ? (b.ineligibleReason ?? "not_eligible") : !live ? "session_ended" : undefined,
+      stance: b.stance,
+      snapshot: b.snapshot,
+      preconditions: b.preconditions,
+      ...(existing ? { allowance: this.receipt(existing) } : {}),
+    };
+  }
+
   list() {
     return [...this.allowances.values()].map((a) => this.view(a));
   }
@@ -488,7 +511,7 @@ export class StanceExceptionRegistry {
       const receipt = this.receipt(allowance);
       updatePreflightBlocks(this.deps.projectRoot, (e) =>
         e.id === blockId ? { ...e, allowance: receipt, seenAt: e.seenAt ?? iso(grantedAt) } : null);
-      this.deps.broadcast(binding.sessionId, { type: "stance_exception_granted", blockId, allowance: receipt, stance: allowance.stance });
+      this.deps.broadcast(binding.sessionId, { type: "stance_exception_granted", blockId, allowance: receipt, stance: allowance.stance, seenAt: iso(grantedAt) });
       this.log(`[stance-exception] granted ${allowance.id} via=${via} block=${blockId} sid=${binding.sessionId}`);
       return { status: 201, body: { allowance: this.view(allowance) } };
     });
@@ -816,10 +839,17 @@ export class StanceExceptionRegistry {
     }
     this.announce(sessionId, store, child.id);
     for (const id of admission.exceptionIds) {
-      updatePreflightBlocks(this.deps.projectRoot, (e) =>
-        e.allowance?.id === id && (e.allowance.state !== "used" || e.allowance.artifactId !== child.id)
-          ? { ...e, allowance: { ...e.allowance, state: "used", artifactId: child.id } }
-          : null);
+      const used: PreflightBlockEntry[] = [];
+      updatePreflightBlocks(this.deps.projectRoot, (e) => {
+        if (e.allowance?.id !== id || (e.allowance.state === "used" && e.allowance.artifactId === child.id)) return null;
+        const next = { ...e, allowance: { ...e.allowance, state: "used" as const, artifactId: child.id } };
+        used.push(next);
+        return next;
+      });
+      // Open tabs flip "allowed" → "used" once, on the receipt's first write.
+      for (const e of used) {
+        this.deps.broadcast(sessionId, { type: "stance_exception_updated", blockId: e.id, allowance: e.allowance, artifactId: child.id, artifactTitle: child.title });
+      }
     }
     const held = admission.exceptionIds.map((id) => this.allowances.get(id)).filter((a): a is Allowance => !!a);
     const decisionId = (child.content as { decisionId?: unknown }).decisionId;
@@ -931,4 +961,11 @@ export function registerStanceExceptionRoutes(app: Hono, registry: StanceExcepti
   });
 
   app.get("/api/stance-exceptions", (c) => c.json({ allowances: registry.list() }));
+
+  // The dialog's preview, from the daemon's in-memory record (never the file).
+  app.get("/api/preflight-blocks/:blockId/exception", (c) => {
+    const preview = registry.preview(c.req.param("blockId"));
+    if (!preview) return c.json({ error: "No block with that id is held by this daemon.", code: ERROR_CODES.stance_exception_block_not_found }, 404);
+    return c.json(preview);
+  });
 }

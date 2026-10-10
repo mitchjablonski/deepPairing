@@ -1,6 +1,8 @@
+import type React from "react";
 import type { ReactNode } from "react";
 import { useToastStore, type Toast, type PreflightBlockHero } from "../stores/toast";
-import { useLedgerStore } from "../stores/ledger";
+import { useAllowOnceStore } from "../stores/allowOnce";
+import { ineligibleText, openGateLogEntry } from "../lib/stanceException";
 import { useCrossProjectStore } from "../stores/crossProject";
 import { ShieldIcon, CompassIcon } from "./icons/ArtifactIcons";
 import { useOfflineReason } from "../hooks/useOfflineReason";
@@ -66,12 +68,12 @@ function humanizeAge(iso?: string): string | null {
   return `${Math.round(days / 365)} years ago`;
 }
 
-function PreflightBlockHeroCard({ hero, onDismiss, action, onOverride }: {
+function PreflightBlockHeroCard({ hero, onDismiss, action, toastId }: {
   hero: PreflightBlockHero;
   onDismiss: () => void;
   action?: { label: string; onClick: () => void };
-  /** Scope-down this block as a false positive (personal stances only). */
-  onOverride?: () => void;
+  /** #470 — the toast's id, so the dialog it opens can pause its auto-dismiss. */
+  toastId?: string;
 }) {
   const offline = useOfflineReason(); // #487 review — act paths gate on the shared offline condition (#467)
   const style = kindStyles["preflight-block"];
@@ -135,34 +137,35 @@ function PreflightBlockHeroCard({ hero, onDismiss, action, onOverride }: {
           <span> · {matchDetail}</span>
         </div>
         <div className="flex items-center gap-3 shrink-0">
-          {/* The escape hatch for a false positive. The gate is fuzzy by
-              design, so this is the safety valve — personal stances only. Team
-              rules live in a committed file, so we point the user there instead
-              of mutating it.
-
-              Q2 — RENAMED from "Not my taste", which described a feature we
-              don't have. That label (and its tooltip) said the stance was
-              "scoped down"; overrideRejectedApproach actually DELETES the
-              entry from this project's rejectedApproaches and records an
-              approval instance against the concept. Nothing narrows — the
-              stance stops existing here. Round 12 flagged it; rather than
-              build scoping under a shipped label, the label now says what the
-              button does. (True scoping — "allow this concept under
-              packages/x/**" — is a real future feature, not this one.)
-
-              Q2 review item 5 — the tooltip then over-corrected by promising it
-              "stays in your ledger history as an override". That write is gated
-              on cross-project publishing, which is OFF by default: on a default
-              install the entry is simply deleted and no history is kept. The
-              tooltip now claims only what is true in every install. */}
-          {hero.source === "session" && onOverride && (
+          {/* #470 (§3a) — "Allow this proposal once" is the PRIMARY action:
+              filled, accent, a 32px target. Retire is NOT offered here any
+              more: it was a one-click muted link right where a misclick lands,
+              and it deletes the stance everywhere. It now lives on the gate-log
+              entry ("More options"), behind a confirm whose focus starts on
+              Cancel. Only a block the daemon says is eligible gets the button;
+              any other personal block says why in one line. */}
+          {hero.source === "session" && hero.blockId && hero.eligible && (
             <button
+              type="button"
               disabled={!!offline}
-              onClick={() => { onOverride(); onDismiss(); }}
-              title={offline ?? "False positive? Delete this stance from the project so it stops blocking here. It's a delete, not a narrowing — reject the concept again if you want it back."}
-              className="text-2xs font-medium text-text-muted hover:text-text-secondary hover:underline disabled:opacity-50 disabled:cursor-not-allowed disabled:no-underline"
+              onClick={(e) =>
+                useAllowOnceStore.getState().open({ blockId: hero.blockId!, concept: hero.concept, returnFocusTo: e.currentTarget, toastId })}
+              title={offline ?? "Let this exact proposal through once. The stance stays on for everything else."}
+              className="min-h-[32px] min-w-[32px] px-3 rounded bg-accent-violet text-white text-2xs font-semibold hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Retire this stance
+              Allow this proposal once
+            </button>
+          )}
+          {hero.source === "session" && hero.blockId && hero.eligible === false && (
+            <span className="text-[10px] text-text-muted italic" data-testid="allow-once-ineligible-line">{ineligibleText(hero.ineligibleReason)}</span>
+          )}
+          {hero.source === "session" && (
+            <button
+              type="button"
+              onClick={() => openGateLogEntry(hero.blockId)}
+              className="text-2xs font-medium text-text-muted hover:text-text-secondary hover:underline"
+            >
+              More options
             </button>
           )}
           {hero.source === "team" && (
@@ -185,6 +188,17 @@ function PreflightBlockHeroCard({ hero, onDismiss, action, onOverride }: {
       </div>
     </div>
   );
+}
+
+/** #470 (§3a) — a toast's auto-dismiss pauses while it has hover or focus. */
+function holdHandlers(id: string) {
+  const { pause, resume } = useToastStore.getState();
+  return {
+    onMouseEnter: () => pause(id),
+    onMouseLeave: () => resume(id),
+    onFocus: (e: React.FocusEvent<HTMLDivElement>) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) pause(id); },
+    onBlur: (e: React.FocusEvent<HTMLDivElement>) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) resume(id); },
+  };
 }
 
 /**
@@ -231,18 +245,12 @@ export function ToastLayer() {
           // PreflightBlockHeroCard is already role="alert" internally — the
           // wrapper only restores pointer events (parent is pointer-events-none).
           return (
-            <div key={t.id} className="pointer-events-auto">
+            <div key={t.id} className="pointer-events-auto" {...holdHandlers(t.id)}>
               <PreflightBlockHeroCard
                 hero={t.hero}
                 onDismiss={() => dismiss(t.id)}
                 action={t.action}
-                onOverride={() =>
-                  void useLedgerStore.getState().overrideStance({
-                    source: t.hero!.source,
-                    description: t.hero!.description,
-                    concept: t.hero!.concept,
-                  })
-                }
+                toastId={t.id}
               />
             </div>
           );
@@ -254,9 +262,12 @@ export function ToastLayer() {
         return (
           <div
             key={t.id}
-            role={assertive ? "alert" : "status"}
-            aria-live={assertive ? "assertive" : "polite"}
-            className={`pointer-events-auto flex items-start gap-2 px-3 py-2.5 rounded-lg border shadow-lg backdrop-blur-sm animate-fade-in ${style.bg} ${style.border}`}
+            // #470 — a quiet toast was already spoken by the one announcer.
+            role={t.quiet ? undefined : assertive ? "alert" : "status"}
+            aria-live={t.quiet ? undefined : assertive ? "assertive" : "polite"}
+            data-testid={t.strong ? "toast-strong" : undefined}
+            {...holdHandlers(t.id)}
+            className={`pointer-events-auto flex items-start gap-2 px-3 py-2.5 rounded-lg border shadow-lg backdrop-blur-sm animate-fade-in ${style.bg} ${style.border} ${t.strong ? "border-2 ring-1 ring-accent-amber/60" : ""}`}
           >
             {/* Q4 — decorative: the toast's title/body carry the message, and
                 the role=alert already announces them. */}

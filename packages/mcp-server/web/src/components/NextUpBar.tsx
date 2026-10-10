@@ -3,7 +3,8 @@ import type { Artifact } from "@deeppairing/shared";
 import { useArtifactStore, artifactStoreGeneration, isBackfilled } from "../stores/artifact";
 import { useConnectionStore, selectHydratedForBinding } from "../stores/connection";
 import { useReplayStore } from "../stores/replay";
-import { usePreflightBlockStore } from "../stores/preflightBlocks";
+import { usePreflightBlockStore, type PreflightBlockRecord } from "../stores/preflightBlocks";
+import { useAnnounceStore } from "../stores/announce";
 import { computeAttention, type Attention, type AttentionItem, type FailureKind, type SummaryLane } from "../lib/attention";
 import { noAgentLive } from "../lib/liveness";
 import { useTabOffline, useConnectionGraceStore, useHydrationStalled, HYDRATION_STALLED_TEXT, HYDRATION_STALLED_ANNOUNCEMENT, RELOAD_TITLE, reloadPage } from "../lib/connectionGrace";
@@ -90,8 +91,22 @@ export function attentionLineText(a: Attention): string {
 }
 
 /** §4.4 — "why it matters", from the item's own content. Never invented. */
-function whyFor(item: AttentionItem, artifacts: Artifact[]): string {
+/** #470 (§4a) — the Decide "Why" line for an artifact admitted under your
+ *  allowance. The label names the door (UI/CLI), never a person. */
+export function admittedWhy(a: Artifact | undefined, blocks: PreflightBlockRecord[]): string | null {
+  const adm = a?.admission;
+  if (!adm) return null;
+  const via = adm.grantedVia === "cli" ? "CLI" : "UI";
+  const receipt = blocks.find((b) => b.allowance && adm.exceptionIds.includes(b.allowance.id));
+  const stance = receipt ? ` for '${receipt.concept}'` : "";
+  const reason = receipt?.allowance?.reason ? `: ${receipt.allowance.reason}` : "";
+  return `Admitted under your allowance (${via})${stance}${reason}`;
+}
+
+function whyFor(item: AttentionItem, artifacts: Artifact[], blocks: PreflightBlockRecord[] = []): string {
   const a = item.artifactId ? artifacts.find((x) => x.id === item.artifactId) : undefined;
+  const admitted = admittedWhy(a, blocks);
+  if (admitted) return admitted;
   if (item.kind === "decision") {
     const ctx = (a?.content as { context?: unknown } | undefined)?.context;
     return typeof ctx === "string" ? ctx : "";
@@ -195,7 +210,8 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
       replay: replayActive,
       // Unread stance holds (the same boundary the ⋯ gate log uses).
       holds: blocks
-        .filter((b) => !lastSeenAt || b.at > lastSeenAt)
+        // #470 (§4a) — a block you allowed is seen (daemon-written seenAt).
+        .filter((b) => !b.seenAt && (!lastSeenAt || b.at > lastSeenAt))
         .map((b) => ({ id: b.id, title: b.proposal ? `"${b.concept}" stopped: ${b.proposal}` : `"${b.concept}"`, at: b.at })),
     },
   }), [artifacts, comments, requests, sessionLabels, boundSessionId, tabOffline, staleDaemon, snapshotUnavailable, sessionConflict, replayActive, blocks, lastSeenAt]);
@@ -228,7 +244,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   const openQuestionCount = openQuestions.length;
   const resumeCase = agentGone && openQuestionCount > 0;
   const oldestQuestion = openQuestions[0]; // waiting is oldest-first
-  const why = item ? whyFor(item, artifacts) : "";
+  const why = item ? whyFor(item, artifacts, blocks) : "";
   const reach: AgentReach = replayActive ? "replay" : tabOffline ? "disconnected" : agentGone ? "gone" : "live";
   const after = item ? afterFor(item, artifacts, reach) : "";
   // #430 PR 5 — the request pips + resume bridge (moved here from the
@@ -296,6 +312,14 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
     // attention.next is derived from the same memo as nextId.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nextId]);
+
+  // #470 (§3a) — stance-exception moments speak through this SAME announcer.
+  const announceSeq = useAnnounceStore((s) => s.seq);
+  const prevAnnounceSeq = useRef(announceSeq);
+  useEffect(() => {
+    if (announceSeq !== prevAnnounceSeq.current) setAnnouncement(useAnnounceStore.getState().message);
+    prevAnnounceSeq.current = announceSeq;
+  }, [announceSeq]);
 
   // #457 D5 — with the bar ON, ResumeQuestionsBanner (and its aria-live) is
   // absorbed, so the exit/resume state spoke nothing. The SAME single announcer

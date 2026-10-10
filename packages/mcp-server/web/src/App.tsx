@@ -1,3 +1,4 @@
+import { AllowOnceDialogHost } from "./components/AllowOnceDialog";
 import { useEffect, useRef, useState } from "react";
 import { apiGet, apiBase } from "./lib/api";
 import { ArtifactPanel, MultiAgentSync } from "./components/ArtifactPanel";
@@ -1057,6 +1058,8 @@ function App() {
       {/* Ephemeral toast stack — pre-flight blocks, etc. */}
       <ReloadConfirmDialog />
       <ToastLayer />
+      {/* #470 — the one "Allow this proposal once" dialog. */}
+      <AllowOnceDialogHost />
 
       {/* Q2 — one-time cross-project opt-in, offered immediately after the
           first "Reject & remember" in this project (and never again). Renders
