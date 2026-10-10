@@ -12,7 +12,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { StanceWorld, holdStance, FAKE_PORT } from "../../daemon/__tests__/stance-exceptions.harness.js";
-import { defaultPager, renderSnapshot, runStanceCommand, unifiedDiff, type StanceIo } from "../stance-allow.js";
+import { defaultPager, PAGER_UNAVAILABLE, renderSnapshot, runStanceCommand, unifiedDiff, type StanceIo } from "../stance-allow.js";
 
 let world: StanceWorld | undefined;
 afterEach(async () => { await world?.dispose(); world = undefined; });
@@ -198,5 +198,55 @@ describe("the shipped CLI binary", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("#503 review (Sol) — truthful results, safe previews, a portable path", () => {
+  it("a lost grant response after the daemon recorded it says 'couldn't confirm', never 'nothing was allowed'", async () => {
+    const b = await blocked();
+    world!.drop = (url, init) => url.includes("/exception") && init?.method === "POST";
+    const t = terminal(world!);
+    expect(await runStanceCommand(["allow", b.blockId], t.io)).toBe(1);
+    expect(t.err.join("")).toContain("Couldn't confirm whether the grant went through");
+    expect(t.err.join("")).not.toContain("Nothing was allowed");
+    expect(await world!.allowances()).toEqual([expect.objectContaining({ state: "allowed", grantedVia: "cli" })]);
+  });
+
+  it("an idempotent repeat on a REVOKED allowance reports it truthfully and re-arms nothing", async () => {
+    const b = await blocked();
+    expect(await runStanceCommand(["allow", b.blockId], terminal(world!).io)).toBe(0);
+    const id = (await world!.allowances())[0]!.id as string;
+    expect((await world!.revoke(id)).status).toBe(200);
+    const t = terminal(world!);
+    expect(await runStanceCommand(["allow", b.blockId], t.io)).toBe(1);
+    expect(t.err.join("")).toContain(`(${id}) is now revoked. Nothing new was allowed.`);
+    expect(t.out.join("")).not.toContain("Claude can now retry");
+    expect((await world!.allowances())[0]!.state).toBe("revoked");
+  });
+
+  it("agent-supplied control bytes can't drive your terminal: the preview and the list show them escaped", async () => {
+    world = new StanceWorld("dp-sx-cli-");
+    world.daemon.writeDaemonInfo(FAKE_PORT);
+    const w = await world.wrapper();
+    holdStance(world.store(w.sessionId), STANCE);
+    await w.call("present_code_change", { ...ARGS, after: "ok\x1b[2J\x1b[Hhidden\rover\x07" });
+    const t = terminal(world, { answers: ["reason with \x1b[31mred", "allow"] });
+    expect(await runStanceCommand(["allow", (await world.newestBlock()).id], t.io)).toBe(0);
+    expect(t.paged[0]).not.toMatch(/[\x07\x1b\r]/);
+    expect(t.paged[0]).toContain("ok^[[2J^[[Hhidden^Mover^G");
+    const list = terminal(world);
+    await runStanceCommand(["exceptions"], list.io);
+    expect(list.out.join("")).not.toMatch(/\x1b/);
+  });
+
+  it("no $PAGER and no `less` (e.g. Windows): the runner reports it, and the CLI shows the whole preview and asks you to confirm reading it", async () => {
+    expect(await defaultPager("x", { PATH: "" })).toBe(PAGER_UNAVAILABLE);
+    const b = await blocked();
+    const t = terminal(world!, { page: async () => PAGER_UNAVAILABLE, answers: ["", "the removal is the point", "allow"] });
+    expect(await runStanceCommand(["allow", b.blockId], t.io)).toBe(0);
+    expect(t.out.join("")).toContain("--- a/src/config.ts");
+    expect(t.events[0]).toMatch(/^prompt:That's the whole proposal/);
+    const eof = terminal(world!, { page: async () => PAGER_UNAVAILABLE, answers: [] });
+    expect(await runStanceCommand(["allow", b.blockId], eof.io)).toBe(1); // confirmation never given
   });
 });

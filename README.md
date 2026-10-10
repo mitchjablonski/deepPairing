@@ -39,7 +39,8 @@ still needs your eyes.
   doesn't check `Bash` or notebook edits against your stances, and if it
   breaks, it lets the edit through. One narrow `Bash` check asks you before
   the agent's shell runs `stance allow`; that's the only Bash command it
-  looks at.
+  looks at. (Like every hook prompt, it depends on Claude Code's permission
+  mode: in `bypassPermissions` or `dontAsk` an `ask` is treated as `allow`.)
 - **Other projects — a nudge only.** It's off until you turn on cross-project
   publishing, and it never blocks.
 
@@ -252,10 +253,13 @@ So you never have to make the same call twice:
       here.
 
     Allowances are granted by you, not by the agent: the agent has no tool
-    for it, and when its shell runs `stance allow` you get a prompt. That is
-    human-only by design, not by enforcement: a process running as your user
-    can still script a terminal, slip past the shell check's substring match,
-    or call the daemon's route directly. Receipts (the block log, the badge,
+    for it, and when its shell runs `stance allow` (or names the grant route,
+    say with `curl`) you get a prompt. That prompt depends on Claude Code's permission mode: in `bypassPermissions` or `dontAsk` mode an `ask` is treated as `allow`, and in non-interactive (`-p`) or auto mode it becomes `deny`. That is human-only by
+    design, not by enforcement: a process running as your user can still
+    script a terminal, build the command or the URL at runtime so the shell
+    check doesn't see it, or call the daemon's route directly with the token
+    it can read. The shell check also asks on harmless text that contains the
+    words, such as `grep -rn "stance allow"` or a commit message. Receipts (the block log, the badge,
     the debrief and export lists) cover these supported paths; they are not
     tamper-evident and don't identify who granted anything. (Blocks from a
     committed **team rule** can't be allowed once; they point you to

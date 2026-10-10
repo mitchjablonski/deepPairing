@@ -18,10 +18,22 @@
  *    as before. No stance or guardrail logic, no logging.
  *  - POSIX `sh` + `awk`, so it doesn't start `node` on every Bash call.
  *
- * Honest limits (documented in README/SECURITY): it is a substring check, not
- * a shell parser. Splitting the words (`s=stance; deeppairing $s allow`),
- * encoding the command, a script written to disk, or `curl` to the route all
- * get past it. It makes the obvious path a human prompt; it detects nothing.
+ * Before matching it normalises what a shell would: a backslash-newline and
+ * `$IFS` / `${IFS}` count as whitespace, and quotes and backslashes (which only
+ * group or escape) are dropped — so `stance 'allow'`, `"stance" allow`,
+ * `al""low`, `\allow` and `stance${IFS}allow` all ask. It also asks when a
+ * command names the grant route itself (`preflight-blocks/…/exception`, e.g.
+ * a `curl`), the cheap common case of going around the CLI.
+ *
+ * Honest limits (documented in README/SECURITY): it is a pattern check, not a
+ * shell parser. A word built at runtime (`s=stance; deeppairing $s allow`), an
+ * encoded command, a script written to disk, or a URL assembled at runtime all
+ * get past it. It also asks on harmless text that contains the words, such as
+ * `grep -rn "stance allow"` or a commit message — narrowing that by command
+ * name would reopen `grep x; deeppairing stance allow`. A payload whose
+ * command matches asks even if the rest of the payload is malformed (it reads
+ * any "command" string it can find); a payload with no recognisable command
+ * stays silent. It makes the obvious path a human prompt; it detects nothing.
  *
  * The plugin ships a committed copy at claude-plugin/hooks/stance-allow-ask.sh
  * (pinned equal to this string by a test); `init` writes this same text to
@@ -50,7 +62,7 @@ export const STANCE_ALLOW_ASK_SCRIPT = `#!/bin/sh
 # If the agent's Bash command contains "stance allow" (case-insensitive, any
 # whitespace between, after decoding JSON escapes), ask the human first.
 # Every other command: no output, exit 0. A substring check, not a parser.
-LC_ALL=C awk '
+LC_ALL=C awk -v sq="'" '
 function hexval(h,   i, c, v) {
   v = 0; h = tolower(h)
   for (i = 1; i <= length(h); i++) {
@@ -87,7 +99,13 @@ END {
   rest = buf
   while (match(rest, /"command"[ \\t\\r\\n]*:[ \\t\\r\\n]*"/)) {
     cmd = tolower(decode(rest, RSTART + RLENGTH))
-    if (cmd ~ /(^|[^a-z0-9_])stance[ \\t\\r\\n\\v\\f]+allow([^a-z0-9_]|$)/) { print ${JSON.stringify(ASK_JSON)}; exit 0 }
+    # Normalise what the shell would: a backslash-newline continuation and
+    # $IFS / \${IFS} are whitespace; quotes and backslashes only group or
+    # escape, so drop them (quoted words, al""low, \\allow).
+    gsub(/\\\\\\n/, " ", cmd)
+    gsub(/\\$\\{ifs\\}|\\$ifs/, " ", cmd)
+    gsub(sq, "", cmd); gsub(/"/, "", cmd); gsub(/\\\\/, "", cmd)
+    if (cmd ~ /(^|[^a-z0-9_])stance[ \\t\\r\\n\\v\\f]+allow([^a-z0-9_]|$)/ || cmd ~ /preflight-blocks\\/[^ \\t\\r\\n]*\\/exception/) { print ${JSON.stringify(ASK_JSON)}; exit 0 }
     rest = substr(rest, RSTART + RLENGTH)
   }
 }'

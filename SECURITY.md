@@ -123,10 +123,13 @@ model assumes:
   companion UI or the interactive `deeppairing stance allow` command,
   both reaching the daemon's bearer-gated route; the agent has no tool
   for it, and the narrow `Bash` hook below asks you when the agent's
-  shell runs `stance allow`. A process running as your user can still
-  script a terminal, slip past that hook's substring match (split the
-  words, encode the command, run a script from a file), or call the
-  route directly with the token. The allowance itself lives only in
+  shell runs `stance allow` or names the grant route. That prompt depends on Claude Code's permission mode: in `bypassPermissions` or `dontAsk` mode an `ask` is treated as `allow`, and in non-interactive (`-p`) or auto mode it becomes `deny`.
+  A process running as your user can still script a terminal, get past
+  that hook's pattern match (build the words or the URL at runtime,
+  encode the command, run a script from a file), or read the bearer token
+  from `.deeppairing/daemon.json` (or its runtime sidecar) and call
+  `POST /api/preflight-blocks/<id>/exception` itself — the hook only asks
+  when the route's path appears literally in the command. The allowance itself lives only in
   the daemon's memory — no file can create one — but the receipts
   (the block-log entry, the artifact badge, the debrief and export
   lists) are **not tamper-evident**, and the `UI`/`CLI` label is a
@@ -198,12 +201,22 @@ deepPairing installs three Claude Code hooks, all local-only, network-free, and 
     rejection there and it sticks across sessions.
 - **PreToolUse, `Bash` only (`hooks/stance-allow-ask.sh`)** — a POSIX
   `sh` + `awk` script, so no `node` start per shell command. If the agent's
-  `Bash` command contains `stance allow` (any case, any whitespace between,
-  after decoding JSON escapes), it returns `permissionDecision: "ask"` with
-  "The agent is trying to grant a stance allowance from the shell. Only allow
-  this if you asked for it." For every other command it prints nothing and
-  exits 0. It is a substring check, not a shell parser — see the stance
-  allowance residuals above. It reads only its stdin and writes nothing.
+  `Bash` command contains the words `stance allow` (any case, any whitespace
+  between) or the grant route's path `preflight-blocks/…/exception`, it
+  returns `permissionDecision: "ask"` with "The agent is trying to grant a
+  stance allowance from the shell. Only allow this if you asked for it." Before
+  matching it decodes JSON escapes and normalises what a shell would: quotes
+  and backslashes are dropped, and `$IFS`/`${IFS}` and a backslash-newline
+  count as whitespace. For every other command it prints nothing and exits 0.
+  A payload with no recognisable command stays silent; a matching command asks
+  even if the rest of the payload is malformed. It is a pattern check, not a
+  shell parser — see the stance allowance residuals above — and it also asks
+  on harmless text containing the words (a `grep`, a commit message). A user
+  allow rule such as `Bash(deeppairing:*)` does not skip it: checked live on
+  Claude Code 2.1.293, unsandboxed, with that allow rule in place, in
+  non-interactive (`-p`) mode, where the hook's `ask` became a refusal. Before
+  Claude Code v2.1.211, auto mode's classifier could approve unsandboxed Bash
+  despite a hook's `ask`. That prompt depends on Claude Code's permission mode: in `bypassPermissions` or `dontAsk` mode an `ask` is treated as `allow`, and in non-interactive (`-p`) or auto mode it becomes `deny`. It reads only its stdin and writes nothing.
 - **Stop (`server/stop.mjs`)** runs when the agent finishes a turn. It only
   writes an advisory nudge to stderr (e.g. "pending artifacts need review") and
   always exits 0 — it can never trap the agent in a loop or block a stop.

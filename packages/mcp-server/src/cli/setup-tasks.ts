@@ -167,8 +167,11 @@ export const HOOK_MARKERS = {
     cmd.includes("deepPairing") || cmd.includes(".deeppairing/hooks/stop.mjs"),
   PostToolUse: (cmd: string) => cmd.includes(".deeppairing/hooks/checkpoint.mjs"),
   PreToolUse: (cmd: string) => cmd.includes(".deeppairing/hooks/preflight.mjs"),
-  /** #470 — the narrow Bash `ask` row (also a PreToolUse row, matcher Bash). */
-  StanceAllowAsk: (cmd: string) => cmd.includes(".deeppairing/hooks/stance-allow-ask.sh"),
+  /** #470 — the narrow Bash `ask` row. VERIFIED invocation, not a mention:
+   *  only `sh <path>/.deeppairing/hooks/stance-allow-ask.sh` (quoted or not,
+   *  `$CLAUDE_PROJECT_DIR`-anchored or relative) is ours (#503 review). */
+  StanceAllowAsk: (cmd: string) =>
+    /^sh\s+("?)(\$CLAUDE_PROJECT_DIR\/|\.\/)?\.deeppairing\/hooks\/stance-allow-ask\.sh\1$/.test(cmd.trim()),
 } as const;
 
 export type LocalHookState = "ok" | "missing" | "legacy" | "redundant";
@@ -737,49 +740,103 @@ export function ensurePreflightHook(projectRoot: string): SetupResult {
 // (own-the-row by its anchored marker; never touches the preflight row or any
 // user row). The plugin declares the same check natively in hooks/hooks.json.
 // ---------------------------------------------------------------------------
+type AskHookEntry = { type?: string; command?: string } & Record<string, unknown>;
+type AskHookRow = { matcher?: string; command?: string; hooks?: AskHookEntry[] } & Record<string, unknown>;
+const isPlainObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+
+/** Read settings.local.json for the Bash ask row, refusing shapes we can't
+ *  safely rewrite (#503 review: `hooks: []` used to "install" into nothing). */
+function readAskSettings(settingsPath: string): { ok: true; settings: Record<string, unknown> & { hooks?: Record<string, unknown> } } | { ok: false; message: string } {
+  if (!fs.existsSync(settingsPath)) return { ok: true, settings: {} };
+  let settings: unknown;
+  try {
+    settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+  } catch {
+    return { ok: false, message: ".claude/settings.local.json is malformed; refusing to overwrite" };
+  }
+  if (!isPlainObject(settings)) return { ok: false, message: ".claude/settings.local.json is not an object; refusing to overwrite" };
+  if (settings.hooks !== undefined && !isPlainObject(settings.hooks)) return { ok: false, message: ".claude/settings.local.json `hooks` is not an object; refusing to overwrite" };
+  const pre = (settings.hooks as Record<string, unknown> | undefined)?.PreToolUse;
+  if (pre !== undefined && !Array.isArray(pre)) return { ok: false, message: ".claude/settings.local.json `hooks.PreToolUse` is not an array; refusing to overwrite" };
+  return { ok: true, settings: settings as Record<string, unknown> & { hooks?: Record<string, unknown> } };
+}
+
+/** Remove ONLY our verified nested entries; a row keeps its other commands,
+ *  matcher and metadata, and is dropped only if nothing of the user's is left. */
+function withoutAskEntries(rows: AskHookRow[]): { rows: AskHookRow[]; removed: number } {
+  let removed = 0;
+  const out: AskHookRow[] = [];
+  for (const row of rows) {
+    if (typeof row?.command === "string" && HOOK_MARKERS.StanceAllowAsk(row.command)) { removed++; continue; }
+    if (!Array.isArray(row?.hooks)) { out.push(row); continue; }
+    const rest = row.hooks.filter((h) => !(typeof h?.command === "string" && HOOK_MARKERS.StanceAllowAsk(h.command)));
+    removed += row.hooks.length - rest.length;
+    if (rest.length === row.hooks.length) out.push(row);
+    else if (rest.length > 0) out.push({ ...row, hooks: rest });
+  }
+  return { rows: out, removed };
+}
+
 export function ensureStanceAllowAskHook(projectRoot: string): SetupResult {
   try {
+    const claudeDir = path.join(projectRoot, ".claude");
+    const settingsPath = path.join(claudeDir, "settings.local.json");
+    const read = readAskSettings(settingsPath);
+    if (!read.ok) return { ok: false, message: read.message };
+    const settings = read.settings;
+
     const scriptPath = path.join(projectRoot, STANCE_ALLOW_ASK_REL_PATH);
     fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
     const current = fs.existsSync(scriptPath) ? fs.readFileSync(scriptPath, "utf-8") : null;
     const scriptChanged = current !== STANCE_ALLOW_ASK_SCRIPT;
     if (scriptChanged) fs.writeFileSync(scriptPath, STANCE_ALLOW_ASK_SCRIPT, { mode: 0o755 });
 
-    const claudeDir = path.join(projectRoot, ".claude");
-    const settingsPath = path.join(claudeDir, "settings.local.json");
-    type HookRow = { matcher?: string; command?: string; hooks?: Array<{ type?: string; command?: string }> };
-    let settings: { hooks?: Record<string, HookRow[]> } & Record<string, unknown> = {};
-    if (fs.existsSync(settingsPath)) {
-      try {
-        settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
-      } catch {
-        return { ok: false, message: ".claude/settings.local.json is malformed; refusing to overwrite" };
-      }
-    }
-    const hooks = (settings.hooks = settings.hooks ?? {});
-    const rows = (hooks.PreToolUse = hooks.PreToolUse ?? []);
-    const isDpEntry = (entry: HookRow) => {
-      if (typeof entry?.command === "string" && HOOK_MARKERS.StanceAllowAsk(entry.command)) return true;
-      return Array.isArray(entry?.hooks) && entry.hooks.some((h) => typeof h?.command === "string" && HOOK_MARKERS.StanceAllowAsk(h.command));
-    };
-    const isCanonical = (entry: HookRow) =>
+    const hooks = (settings.hooks = settings.hooks ?? {}) as Record<string, unknown>;
+    const rows = (hooks.PreToolUse ?? []) as AskHookRow[];
+    const isCanonical = (entry: AskHookRow) =>
       Array.isArray(entry?.hooks) && entry.hooks.length === 1 && entry.hooks[0]?.type === "command" &&
       entry.hooks[0]?.command === STANCE_ALLOW_ASK_COMMAND && entry?.matcher === STANCE_ALLOW_ASK_MATCHER;
-    const before = rows.filter(isDpEntry).length;
-    if (before === 1 && rows.some(isCanonical)) {
+    const { rows: kept, removed } = withoutAskEntries(rows);
+    if (removed === 1 && rows.some(isCanonical)) {
       return { ok: true, changed: scriptChanged, message: "Bash `stance allow` ask hook already configured" };
     }
-    hooks.PreToolUse = rows.filter((e) => !isDpEntry(e));
-    hooks.PreToolUse.push({
-      matcher: STANCE_ALLOW_ASK_MATCHER,
-      hooks: [{ type: "command", command: STANCE_ALLOW_ASK_COMMAND }],
-    });
+    hooks.PreToolUse = [...kept, { matcher: STANCE_ALLOW_ASK_MATCHER, hooks: [{ type: "command", command: STANCE_ALLOW_ASK_COMMAND }] }];
     fs.mkdirSync(claudeDir, { recursive: true });
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
     return { ok: true, changed: true, message: "Installed the Bash `stance allow` ask hook (.deeppairing/hooks/stance-allow-ask.sh)" };
   } catch (err) {
     return { ok: false, message: `Failed to install the stance-allow ask hook: ${errorMessage(err)}` };
   }
+}
+
+/** #503 review — `doctor --fix` for a redundant project-local row under the
+ *  plugin: removes only our verified entries. */
+export function removeStanceAllowAskHook(projectRoot: string): SetupResult {
+  try {
+    const settingsPath = path.join(projectRoot, ".claude", "settings.local.json");
+    const read = readAskSettings(settingsPath);
+    if (!read.ok) return { ok: false, message: read.message };
+    const hooks = read.settings.hooks as Record<string, unknown> | undefined;
+    const rows = (hooks?.PreToolUse ?? []) as AskHookRow[];
+    const { rows: kept, removed } = withoutAskEntries(rows);
+    if (removed === 0) return { ok: true, changed: false, message: "No project-local Bash ask hook to remove" };
+    hooks!.PreToolUse = kept;
+    fs.writeFileSync(settingsPath, JSON.stringify(read.settings, null, 2));
+    return { ok: true, changed: true, message: "Removed the redundant project-local Bash ask hook (the plugin provides it)" };
+  } catch (err) {
+    return { ok: false, message: `Could not remove the Bash ask hook: ${errorMessage(err)}` };
+  }
+}
+
+/** #503 review — doctor's view of the Bash ask row (same per-mode truth as
+ *  diagnoseLocalHooks: the plugin declares it natively). */
+export function diagnoseStanceAllowAskHook(projectRoot: string, pluginManaged: boolean): LocalHookState {
+  const settings = readJsonOrNull(path.join(projectRoot, ".claude", "settings.local.json"));
+  const rows = Array.isArray(settings?.hooks?.PreToolUse) ? (settings.hooks.PreToolUse as AskHookRow[]) : [];
+  const present = withoutAskEntries(rows).removed > 0;
+  const scriptPresent = fs.existsSync(path.join(projectRoot, STANCE_ALLOW_ASK_REL_PATH));
+  if (pluginManaged) return present ? "redundant" : "ok";
+  return present && scriptPresent ? "ok" : "missing";
 }
 
 /**

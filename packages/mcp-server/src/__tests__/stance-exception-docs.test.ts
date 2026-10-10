@@ -47,4 +47,15 @@ describe("#470 docs match the behaviour", () => {
     expect(skill).toContain("retry the IDENTICAL call only after they say they did");
     expect(skill).toContain("Never try to grant it yourself");
   });
+
+  it("#503 review — every 'you get a prompt' claim carries the permission-mode caveat, and SECURITY states the route residual precisely", () => {
+    for (const rel of ["README.md", "SECURITY.md"]) {
+      const doc = read(rel);
+      expect(doc, rel).toContain("in `bypassPermissions` or `dontAsk` mode an `ask` is treated as `allow`, and in non-interactive (`-p`) or auto mode it becomes `deny`");
+    }
+    expect(read("claude-plugin/skills/pairing-protocol/SKILL.md")).toContain("in `bypassPermissions`/`dontAsk` that prompt is skipped");
+    const sec = read("SECURITY.md");
+    expect(sec).toContain("read the bearer token from `.deeppairing/daemon.json` (or its runtime sidecar) and call `POST /api/preflight-blocks/<id>/exception` itself");
+    expect(sec).toContain("a matching command asks even if the rest of the payload is malformed");
+  });
 });

@@ -293,7 +293,7 @@ Prior rejection reason: "${match.rejected.reason}"` : "";
 Matched on underlying concept: "${match.rejected.concept}". A paraphrased proposal still counts \u2014 the user has rejected this kind of approach.` : "";
       const message = `REJECTED_APPROACH_BLOCKED: ${toolName} refused \u2014 your proposal contains "${match.proposal}" which the user previously rejected ("${match.rejected.description}").${reasonLine}${conceptLine}
 
-Do NOT retry with this approach. Propose an alternative. If this is a false positive or conditions have changed, ask the human to override this block in the companion UI's Ledger before retrying. Mentioning the rejected concept in present_findings is checked by this same gate. The artifact was NOT created.`;
+Do NOT retry with this approach. Propose an alternative. If this is a false positive or conditions have changed, ask the human to allow this proposal once or retire the stance from the companion UI's gate log before retrying. Mentioning the rejected concept in present_findings is checked by this same gate. The artifact was NOT created.`;
       return {
         blocked: true,
         block: {

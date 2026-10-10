@@ -961,6 +961,29 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
       });
   }
 
+  // #470 / #503 review — the narrow Bash `stance allow` ask row.
+  {
+    const { diagnoseStanceAllowAskHook, removeStanceAllowAskHook } = await import("./setup-tasks.js");
+    switch (diagnoseStanceAllowAskHook(cwd, pluginManaged)) {
+      case "ok":
+        console.log(`  ${green("✓")} Bash \`stance allow\` ask hook ${pluginManaged ? "provided by the plugin" : "configured"}`);
+        break;
+      case "redundant":
+        console.log(`  ${yellow("!")} Bash \`stance allow\` ask hook is duplicated in settings.local.json — the plugin already provides it`);
+        fixes.push({
+          label: "Remove the redundant project-local Bash ask hook (the plugin provides it natively)",
+          apply: () => { const r = removeStanceAllowAskHook(cwd); return { ok: r.ok, message: r.message }; },
+        });
+        break;
+      default:
+        console.log(`  ${yellow("!")} Bash \`stance allow\` ask hook NOT configured (the agent's shell could run \`stance allow\` without a prompt)`);
+        fixes.push({
+          label: "Add the Bash `stance allow` ask hook to .claude/settings.local.json",
+          apply: () => { const r = ensureStanceAllowAskHook(cwd); return { ok: r.ok, message: r.message }; },
+        });
+    }
+  }
+
   // X2 — cross-scope hook detection. Even with the canonical entry in
   // .local, deepPairing rows may linger in user-level (~/.claude/settings.json)
   // or project-shared (.claude/settings.json) — leftover from earlier

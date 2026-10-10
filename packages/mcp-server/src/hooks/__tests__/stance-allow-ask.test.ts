@@ -13,7 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { ensurePreflightHook, ensureStanceAllowAskHook } from "../../cli/setup-tasks.js";
+import { diagnoseStanceAllowAskHook, ensurePreflightHook, ensureStanceAllowAskHook, removeStanceAllowAskHook } from "../../cli/setup-tasks.js";
 import {
   STANCE_ALLOW_ASK_COMMAND,
   STANCE_ALLOW_ASK_PLUGIN_COMMAND,
@@ -144,17 +144,95 @@ describe("narrow by construction", () => {
     expect(r.ms).toBeLessThan(5_000);
   });
 
-  it("malformed or empty payloads fail open (silent, exit 0)", () => {
+  it("a payload with no recognisable command stays silent; a matching command asks even if the rest is malformed (the documented contract)", () => {
     const { root, command } = installedProject();
     for (const payload of ["", "{", "not json", '{"tool_input":{}}']) {
       const r = run(command, payload, { CLAUDE_PROJECT_DIR: root });
       expect(r.status).toBe(0);
       expect(r.stdout).toBe("");
     }
+    expect(asks(run(command, '{"tool_input":{"command":"deeppairing stance allow x"', { CLAUDE_PROJECT_DIR: root }))).toBe(true);
   });
 
   it("documented residual: splitting the words gets past it (a substring check, not a parser)", () => {
     const { root, command } = installedProject();
     expect(run(command, bash("s=stance; deeppairing $s allow blk_1"), { CLAUDE_PROJECT_DIR: root }).stdout).toBe("");
+  });
+});
+
+describe("#503 review — quoting, IFS and continuation evasions are normalised; the grant route asks too", () => {
+  const EVASIONS = [
+    "deeppairing stance 'allow' blk_1",
+    'deeppairing stance "allow" blk_1',
+    'deeppairing "stance" allow blk_1',
+    'deeppairing stance al""low blk_1',
+    "deeppairing stance \\allow blk_1",
+    "deeppairing stance \\\nallow blk_1",
+    "deeppairing stance${IFS}allow blk_1",
+    "deeppairing stance$IFS'allow' blk_1",
+    "curl -X POST http://localhost:4000/api/preflight-blocks/blk_1/exception -d '{\"reason\":\"x\"}'",
+    "wget --post-data='{}' http://127.0.0.1:4000/api/preflight-blocks/blk_1/exception",
+    "node -e \"fetch('http://localhost:4000/api/preflight-blocks/blk_1/exception',{method:'POST'})\"",
+  ];
+  it.each(EVASIONS)("%j → ask", (cmd) => {
+    const { root, command } = installedProject();
+    expect(asks(run(command, bash(cmd), { CLAUDE_PROJECT_DIR: root }))).toBe(true);
+  });
+
+  it("documented false positives (asks on harmless text with the words) are no worse than before", () => {
+    const { root, command } = installedProject();
+    expect(asks(run(command, bash('grep -rn "stance allow" docs'), { CLAUDE_PROJECT_DIR: root }))).toBe(true);
+    expect(asks(run(command, bash("git commit -m 'document stance allow'"), { CLAUDE_PROJECT_DIR: root }))).toBe(true);
+    for (const quiet of ["echo 'stance; allow'", "printf instance allowance", "grep -ri stance .", "deeppairing stance exceptions"]) {
+      expect(run(command, bash(quiet), { CLAUDE_PROJECT_DIR: root }).stdout, quiet).toBe("");
+    }
+  });
+});
+
+describe("#503 review — the installer owns only its verified entries", () => {
+  function project(settings: unknown) {
+    const base = path.join(process.cwd(), "node_modules", ".cache");
+    fs.mkdirSync(base, { recursive: true });
+    const root = fs.mkdtempSync(path.join(base, "dp-sx-own-"));
+    scratch.push(root);
+    fs.mkdirSync(path.join(root, ".claude"));
+    const file = path.join(root, ".claude", "settings.local.json");
+    fs.writeFileSync(file, JSON.stringify(settings));
+    return { root, file, read: () => JSON.parse(fs.readFileSync(file, "utf8")) };
+  }
+
+  it("a mixed row keeps the user's audit command, its matcher and metadata", () => {
+    const p = project({ hooks: { PreToolUse: [{ matcher: "Bash", note: "mine", hooks: [{ type: "command", command: "my-audit" }, { type: "command", command: STANCE_ALLOW_ASK_COMMAND }] }] } });
+    expect(ensureStanceAllowAskHook(p.root).ok).toBe(true);
+    const rows = p.read().hooks.PreToolUse;
+    expect(rows).toContainEqual({ matcher: "Bash", note: "mine", hooks: [{ type: "command", command: "my-audit" }] });
+    expect(rows.filter((r: { hooks: Array<{ command: string }> }) => r.hooks.some((h) => h.command === STANCE_ALLOW_ASK_COMMAND))).toHaveLength(1);
+  });
+
+  it("a user row that merely MENTIONS the script path is not ours and survives", () => {
+    const mention = { matcher: "Read", hooks: [{ type: "command", command: 'printf "%s" .deeppairing/hooks/stance-allow-ask.sh' }] };
+    const p = project({ hooks: { PreToolUse: [mention] } });
+    expect(ensureStanceAllowAskHook(p.root).ok).toBe(true);
+    expect(p.read().hooks.PreToolUse).toContainEqual(mention);
+  });
+
+  it("an invalid settings shape (hooks: [], PreToolUse not an array) is refused and left untouched", () => {
+    for (const bad of [{ hooks: [] }, { hooks: { PreToolUse: {} } }, []]) {
+      const p = project(bad);
+      const r = ensureStanceAllowAskHook(p.root);
+      expect(r.ok).toBe(false);
+      expect(p.read()).toEqual(bad);
+    }
+  });
+
+  it("doctor: missing → ok after install; under the plugin a local row is redundant and removing it keeps user entries", () => {
+    const p = project({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "my-audit" }] }] } });
+    expect(diagnoseStanceAllowAskHook(p.root, false)).toBe("missing");
+    ensureStanceAllowAskHook(p.root);
+    expect(diagnoseStanceAllowAskHook(p.root, false)).toBe("ok");
+    expect(diagnoseStanceAllowAskHook(p.root, true)).toBe("redundant");
+    expect(removeStanceAllowAskHook(p.root)).toMatchObject({ ok: true, changed: true });
+    expect(diagnoseStanceAllowAskHook(p.root, true)).toBe("ok");
+    expect(p.read().hooks.PreToolUse).toEqual([{ matcher: "Bash", hooks: [{ type: "command", command: "my-audit" }] }]);
   });
 });

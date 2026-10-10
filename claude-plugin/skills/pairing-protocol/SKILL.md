@@ -625,8 +625,10 @@ proposal to exclude the rejected approach, or present_findings first to make
 the case for reconsidering. The one exception: if it's a false positive, ask
 your pair to choose **Allow this proposal once** on the block card, and retry
 the IDENTICAL call only after they say they did. Never try to grant it
-yourself — you have no tool for it, and running `stance allow` in your shell
-prompts your pair.
+yourself — you have no tool for it, and running `stance allow` (or calling
+its route) in your shell prompts your pair in the normal permission modes; in
+`bypassPermissions`/`dontAsk` that prompt is skipped and in non-interactive mode
+the command is refused, so either way it is not yours to run.
 
 ## Guardrails
 

@@ -4,7 +4,7 @@
 # If the agent's Bash command contains "stance allow" (case-insensitive, any
 # whitespace between, after decoding JSON escapes), ask the human first.
 # Every other command: no output, exit 0. A substring check, not a parser.
-LC_ALL=C awk '
+LC_ALL=C awk -v sq="'" '
 function hexval(h,   i, c, v) {
   v = 0; h = tolower(h)
   for (i = 1; i <= length(h); i++) {
@@ -41,7 +41,13 @@ END {
   rest = buf
   while (match(rest, /"command"[ \t\r\n]*:[ \t\r\n]*"/)) {
     cmd = tolower(decode(rest, RSTART + RLENGTH))
-    if (cmd ~ /(^|[^a-z0-9_])stance[ \t\r\n\v\f]+allow([^a-z0-9_]|$)/) { print "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"The agent is trying to grant a stance allowance from the shell. Only allow this if you asked for it.\"}}"; exit 0 }
+    # Normalise what the shell would: a backslash-newline continuation and
+    # $IFS / ${IFS} are whitespace; quotes and backslashes only group or
+    # escape, so drop them (quoted words, al""low, \allow).
+    gsub(/\\\n/, " ", cmd)
+    gsub(/\$\{ifs\}|\$ifs/, " ", cmd)
+    gsub(sq, "", cmd); gsub(/"/, "", cmd); gsub(/\\/, "", cmd)
+    if (cmd ~ /(^|[^a-z0-9_])stance[ \t\r\n\v\f]+allow([^a-z0-9_]|$)/ || cmd ~ /preflight-blocks\/[^ \t\r\n]*\/exception/) { print "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"The agent is trying to grant a stance allowance from the shell. Only allow this if you asked for it.\"}}"; exit 0 }
     rest = substr(rest, RSTART + RLENGTH)
   }
 }'
