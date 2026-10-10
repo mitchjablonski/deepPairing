@@ -541,37 +541,35 @@ It reads "Still disconnected after **2** min" at about 92s of outage. Minor.
   - new questions on a sibling's existing artifacts don't refresh Waiting
     (under-report).
 
-  Being fixed in #464.
+  Fixed in #464 (merged 2026-10-08 UTC; 2026-10-07 local time).
 
-### Ranking (independent review)
+### Status after #467 and remaining PR 6 gates (2026-10-10)
 
-- **Must fix before PR 6:** N1.
-- **Should fix:** N2 (first-connect grace period).
-- **Nice-to-have:** act buttons disabled while disconnected, N3, N4.
-- **Track:** the D8 edge, and the #458 sibling count-signal residue (#464).
+The rerun above was performed against `main` `9f3059bc`, before #467. PR #467
+(head `d4a10ee6d183c227815d2553314331240b1e800b`; merged 2026-10-08 UTC as
+`13051f4e4a98c37b5cd994454a171e86faa635a1`) addressed N1–N4 and the
+disconnected act-button gating. Current `main` `cd87e715` includes that merge;
+in particular, N1's single-sibling/bound-session case is now handled in
+`packages/mcp-server/web/src/lib/attention.ts`. This is implementation status,
+not a new walkthrough result: the screenshots and verdicts above remain
+evidence from the older revisions and must not be read as verification of the
+post-#467 UI.
 
-N1–N4 and the act buttons are addressed in PR #467, which is in review. Every
-verdict in this section is about `main` `9f3059bc`, not #467.
+Before PR 6:
 
-### Updated recommendation on PR 6
+1. Rerun the five before/after task walkthroughs against current `main` and
+   refresh the screenshots and findings at 1280×800 and 1920×1080. The existing
+   walkthroughs used v0.1.61 and selectively reran S2/S4/S5 plus D6 on
+   `9f3059bc`; the document describes the Playwright method but does not include
+   a checked-in runner or command. Accessibility-tree and live-region logs are
+   still proxies, not real screen-reader evidence.
+2. Complete the consent-gated external pilot tracked in #434, including real
+   participants and a real screen reader, then feed back the anonymized findings
+   and limitations. Protocol preparation merged as #435 on 2026-10-08; #434
+   remains open, and its approval requirements still apply before outreach,
+   recruitment, or data collection.
 
-**Every must-fix item from the first pass is fixed and verified.** D6, D3,
-D5 (narrowed), D4 and D2 for multi-session merges all hold in the rerun at both
-sizes. With the bar ON, S2, S4 and S5 are now **better** than with it OFF, and
-no scenario is worse.
-
-**Apart from the pilot, one small item remains: N1.** It is a one-line rule
-change in the same area as D2, and it bites in exactly the case #458
-surfaced. We recommend folding it into PR 6 or landing it just before.
-N2 should be fixed. N3, N4, enabled act buttons while disconnected, and a
-Shift+`n` measurement are not blockers. The S4 landing gap for screen readers
-and the residues above should be tracked.
-
-**PR 6 is justified on this evidence, subject to two things:**
-1. N1 is fixed.
-2. The **real-person, real-screen-reader pilot** that §9 requires still runs
-   before the default flips. Nothing in this rerun replaces it.
-
-The limits listed above still apply. In particular, every screen-reader
-statement here comes from the ARIA tree and live-region proxy, not a real
-screen reader.
+Only after the current-main walkthrough gate and pilot findings are addressed
+should PR 6 flip the default and delete the old banner components, with the
+independent review required by #430. Do not call screenshots or scripted runs
+alone usability validation.

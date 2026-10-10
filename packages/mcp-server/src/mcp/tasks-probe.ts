@@ -91,7 +91,7 @@ export async function maybeEmitTaskHandle(
 export async function maybeUpdateTaskStatus(
   _server: Server | null,
   _artifactId: string,
-  _store: IStore,
+  _store: Pick<IStore, "getArtifacts">,
 ): Promise<void> {
   if (!MCP_TASKS_ENABLED) return;
   // TODO(2026-Q3, SDK v2 stable): re-derive the handle from the current

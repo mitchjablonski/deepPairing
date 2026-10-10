@@ -60,7 +60,8 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
               />
               <span>
                 Show one line under the session tabs with what needs you next, why it matters, and what
-                happens when you respond. It is shown alongside today&apos;s banners for now.
+                happens when you respond. When enabled, it replaces the pending-items and unanswered-question banners;
+                turn it off to restore them.
               </span>
             </label>
           </section>
