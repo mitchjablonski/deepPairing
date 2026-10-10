@@ -39,8 +39,9 @@ still needs your eyes.
   doesn't check `Bash` or notebook edits against your stances, and if it
   breaks, it lets the edit through. One narrow `Bash` check asks you before
   the agent's shell runs `stance allow`; that's the only Bash command it
-  looks at. (Like every hook prompt, it depends on Claude Code's permission
-  mode: in `bypassPermissions` or `dontAsk` an `ask` is treated as `allow`.)
+  looks at. (Like every hook prompt, it depends on how Claude Code is running:
+  `bypassPermissions` skips it and `dontAsk` refuses the command instead; see
+  [SECURITY.md](SECURITY.md#hooks-what-the-plugin-runs-on-your-machine).)
 - **Other projects — a nudge only.** It's off until you turn on cross-project
   publishing, and it never blocks.
 
@@ -254,7 +255,7 @@ So you never have to make the same call twice:
 
     Allowances are granted by you, not by the agent: the agent has no tool
     for it, and when its shell runs `stance allow` (or names the grant route,
-    say with `curl`) you get a prompt. That prompt depends on Claude Code's permission mode: in `bypassPermissions` or `dontAsk` mode an `ask` is treated as `allow`, and in non-interactive (`-p`) or auto mode it becomes `deny`. That is human-only by
+    say with `curl`) you get a prompt. Whether you actually see that prompt depends on how Claude Code is running: `bypassPermissions` skips prompts, so the command can run without one; `dontAsk` denies it instead of asking; and a `-p` run with no one to answer denies it (details and sources in [SECURITY.md](SECURITY.md#hooks-what-the-plugin-runs-on-your-machine)). That is human-only by
     design, not by enforcement: a process running as your user can still
     script a terminal, build the command or the URL at runtime so the shell
     check doesn't see it, or call the daemon's route directly with the token

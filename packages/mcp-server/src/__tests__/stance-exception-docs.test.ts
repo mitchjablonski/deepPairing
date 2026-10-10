@@ -49,11 +49,26 @@ describe("#470 docs match the behaviour", () => {
   });
 
   it("#503 review — every 'you get a prompt' claim carries the permission-mode caveat, and SECURITY states the route residual precisely", () => {
-    for (const rel of ["README.md", "SECURITY.md"]) {
-      const doc = read(rel);
-      expect(doc, rel).toContain("in `bypassPermissions` or `dontAsk` mode an `ask` is treated as `allow`, and in non-interactive (`-p`) or auto mode it becomes `deny`");
+    // #503 round 2 (Luna) — the docs say what Claude Code's own docs say, no
+    // more: dontAsk DENIES, auto still prompts, -p depends on the host.
+    const flat = (rel: string) => read(rel).replace(/\s+/g, " ");
+    for (const rel of ["README.md", "SECURITY.md", "claude-plugin/skills/pairing-protocol/SKILL.md"]) {
+      const doc = flat(rel);
+      expect(doc, rel).not.toMatch(/treated as `allow`|that prompt is skipped|auto mode it becomes `deny`/);
     }
-    expect(read("claude-plugin/skills/pairing-protocol/SKILL.md")).toContain("in `bypassPermissions`/`dontAsk` that prompt is skipped");
+    expect(flat("README.md")).toContain("`bypassPermissions` skips prompts, so the command can run without one; `dontAsk` denies it instead of asking; and a `-p` run with no one to answer denies it");
+    const security = flat("SECURITY.md");
+    for (const quote of [
+      "\"Auto-denies every call that would otherwise prompt\"",
+      "the classifier can still deny the tool call, but it can't approve the call silently",
+      "Pass `none` when nobody can answer, and Claude Code denies them instead",
+      "read conservatively, `dontAsk` never shows you this prompt",
+      "Claude Code v2.1.293, unsandboxed, a hostless `-p` run (no Agent SDK host, no `--permission-prompt-tool`), with that allow rule in place",
+      "https://code.claude.com/docs/en/hooks#pretooluse-decision-control",
+      "https://code.claude.com/docs/en/permissions#permission-modes",
+      "https://code.claude.com/docs/en/cli-reference",
+    ]) expect(security).toContain(quote);
+    expect(flat("claude-plugin/skills/pairing-protocol/SKILL.md")).toContain("In `dontAsk` or a `-p` run with no one to answer, the command is refused; in `bypassPermissions` there may be no prompt at all.");
     const sec = read("SECURITY.md");
     expect(sec).toContain("read the bearer token from `.deeppairing/daemon.json` (or its runtime sidecar) and call `POST /api/preflight-blocks/<id>/exception` itself");
     expect(sec).toContain("a matching command asks even if the rest of the payload is malformed");

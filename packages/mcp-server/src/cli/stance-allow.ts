@@ -91,6 +91,17 @@ export function safeText(value: string): string {
   });
 }
 
+/** Every string (keys included) in an agent-supplied value, made safe. The
+ *  one choke point the renderers go through, so no field can be missed. */
+export function sanitizeDeep<T>(value: T): T {
+  if (typeof value === "string") return safeText(value) as T;
+  if (Array.isArray(value)) return value.map((v) => sanitizeDeep(v)) as T;
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([k, v]) => [safeText(k), sanitizeDeep(v)])) as T;
+  }
+  return value;
+}
+
 function color(env: NodeJS.ProcessEnv) {
   const on = !env.NO_COLOR;
   const wrap = (code: string) => (s: string) => (on ? `\x1b[${code}m${s}\x1b[0m` : s);
@@ -138,7 +149,10 @@ export function unifiedDiff(filePath: string, before: string, after: string, env
 }
 
 /** The snapshot as readable text — never raw JSON (§3 "Preview"). */
-export function renderSnapshot(snapshot: ProposalSnapshot, env: NodeJS.ProcessEnv): string {
+export function renderSnapshot(rawSnapshot: ProposalSnapshot, env: NodeJS.ProcessEnv): string {
+  // #503 review round 2 (Sol P2) — sanitise the WHOLE snapshot here, once,
+  // before any field is read: decision arrays, titles, option text, paths.
+  const snapshot = sanitizeDeep(rawSnapshot);
   const c = color(env);
   const content = snapshot.content as Record<string, unknown>;
   const text = (v: unknown) => (typeof v === "string" ? safeText(v) : "");
@@ -229,7 +243,7 @@ export async function runStanceCommand(args: string[], io: StanceIo): Promise<nu
     }
     const res = await io.fetch(`${target.base}/api/stance-exceptions`, { headers: target.headers }).catch(() => null);
     if (!res?.ok) return fail("Couldn't read allowances from the deepPairing daemon.");
-    const { allowances } = await res.json() as { allowances: Array<{ id: string; state: string; grantedVia: string; reason: string; stance: { concept?: string; description: string }; artifactId?: string }> };
+    const { allowances } = sanitizeDeep(await res.json() as { allowances: Array<{ id: string; state: string; grantedVia: string; reason: string; stance: { concept?: string; description: string }; artifactId?: string }> });
     if (allowances.length === 0) { io.write("  No allowances held by this daemon.\n"); return 0; }
     for (const a of allowances) {
       io.write(`  ${safeText(a.id)}  ${safeText(a.state).padEnd(8)} ${safeText(a.grantedVia).toUpperCase()}  '${safeText(a.stance.concept ?? a.stance.description)}' — “${safeText(a.reason)}”${a.artifactId ? ` → ${safeText(a.artifactId)}` : ""}\n`);
@@ -252,7 +266,7 @@ export async function runStanceCommand(args: string[], io: StanceIo): Promise<nu
   if (!res) return fail("Couldn't reach the deepPairing daemon.");
   if (res.status === 404) return fail(`No block ${blockId} is held by the running daemon.`);
   if (!res.ok) return fail(`The daemon refused the preview (${res.status}).`);
-  const preview = await res.json() as Preview;
+  const preview = sanitizeDeep(await res.json() as Preview);
   if (!preview.eligible || !preview.snapshot) return fail(`This block can't be allowed once (${preview.ineligibleReason ?? "not eligible"}).`);
 
   const stance = safeText(preview.stance?.concept ?? preview.stance?.description ?? "your stance");
@@ -293,10 +307,18 @@ export async function runStanceCommand(args: string[], io: StanceIo): Promise<nu
     method: "POST", headers: target.headers, body: JSON.stringify({ reason }),
   }).catch(() => null);
   if (!grant) return unconfirmed();
-  const body = await grant.json().catch(() => null) as { error?: string; existing?: boolean; allowance?: { id: string; state: string; ceilingAt: string } } | null;
-  if (grant.status >= 500 && !body?.error) return unconfirmed();
-  if (!grant.ok || !body?.allowance) return fail(safeText(body?.error ?? `The daemon refused the grant (${grant.status}).`));
-  const a = body.allowance;
+  const body = await grant.json().catch(() => null) as { error?: unknown; existing?: boolean; allowance?: { id?: unknown; state?: unknown; ceilingAt?: unknown } } | null;
+  // #503 review round 2 (Sol P2) — a SUCCESS status whose body we can't read,
+  // or whose receipt isn't the expected shape, is unconfirmed: the daemon may
+  // well have recorded the grant. Only a well-formed receipt is success.
+  if (grant.ok) {
+    const r = body?.allowance;
+    if (!r || typeof r.id !== "string" || typeof r.state !== "string" || typeof r.ceilingAt !== "string") return unconfirmed();
+  } else {
+    if (grant.status >= 500 && typeof body?.error !== "string") return unconfirmed();
+    return fail(safeText(typeof body?.error === "string" ? body.error : `The daemon refused the grant (${grant.status}).`));
+  }
+  const a = body!.allowance as { id: string; state: string; ceilingAt: string };
   // An idempotent repeat returns the block's EXISTING allowance, whatever its
   // state now: say so truthfully, never as a fresh grant (#503 review).
   if (a.state !== "allowed") {

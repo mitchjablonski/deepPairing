@@ -626,9 +626,10 @@ the case for reconsidering. The one exception: if it's a false positive, ask
 your pair to choose **Allow this proposal once** on the block card, and retry
 the IDENTICAL call only after they say they did. Never try to grant it
 yourself — you have no tool for it, and running `stance allow` (or calling
-its route) in your shell prompts your pair in the normal permission modes; in
-`bypassPermissions`/`dontAsk` that prompt is skipped and in non-interactive mode
-the command is refused, so either way it is not yours to run.
+its route) in your shell asks your pair in the default, `acceptEdits`, `plan` and `auto` modes. In
+`dontAsk` or a `-p` run with no one to answer, the command is refused; in
+`bypassPermissions` there may be no prompt at all. In every mode, it is not
+yours to run.
 
 ## Guardrails
 

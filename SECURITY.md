@@ -123,7 +123,7 @@ model assumes:
   companion UI or the interactive `deeppairing stance allow` command,
   both reaching the daemon's bearer-gated route; the agent has no tool
   for it, and the narrow `Bash` hook below asks you when the agent's
-  shell runs `stance allow` or names the grant route. That prompt depends on Claude Code's permission mode: in `bypassPermissions` or `dontAsk` mode an `ask` is treated as `allow`, and in non-interactive (`-p`) or auto mode it becomes `deny`.
+  shell runs `stance allow` or names the grant route. Whether you see that prompt depends on how Claude Code is running (see the Bash hook below).
   A process running as your user can still script a terminal, get past
   that hook's pattern match (build the words or the URL at runtime,
   encode the command, run a script from a file), or read the bearer token
@@ -212,11 +212,36 @@ deepPairing installs three Claude Code hooks, all local-only, network-free, and 
   even if the rest of the payload is malformed. It is a pattern check, not a
   shell parser — see the stance allowance residuals above — and it also asks
   on harmless text containing the words (a `grep`, a commit message). A user
-  allow rule such as `Bash(deeppairing:*)` does not skip it: checked live on
-  Claude Code 2.1.293, unsandboxed, with that allow rule in place, in
-  non-interactive (`-p`) mode, where the hook's `ask` became a refusal. Before
-  Claude Code v2.1.211, auto mode's classifier could approve unsandboxed Bash
-  despite a hook's `ask`. That prompt depends on Claude Code's permission mode: in `bypassPermissions` or `dontAsk` mode an `ask` is treated as `allow`, and in non-interactive (`-p`) or auto mode it becomes `deny`. It reads only its stdin and writes nothing.
+  allow rule such as `Bash(deeppairing:*)` does not skip it. That was checked
+  live once, under exactly these conditions: Claude Code v2.1.293, unsandboxed,
+  a hostless `-p` run (no Agent SDK host, no `--permission-prompt-tool`), with
+  that allow rule in place. The hook's `ask` became a refusal, as the docs say
+  a hostless `-p` run does. No other mode was checked live.
+
+  Whether you actually see that prompt depends on how Claude Code is running. What its docs say, mode by mode:
+
+  - **Default, `acceptEdits`, `plan`:** a hook's `"ask"` "prompts the user to confirm"
+    ([hooks: PreToolUse decision control](https://code.claude.com/docs/en/hooks#pretooluse-decision-control)).
+  - **`auto`:** "A hook's `"ask"` also forces a permission prompt in auto mode: the
+    classifier can still deny the tool call, but it can't approve the call silently.
+    Before v2.1.211, the classifier could approve a Bash command running outside the
+    sandbox without showing the prompt the hook requested" (same page).
+  - **`bypassPermissions`:** "Skips permission prompts, except for the actions no mode
+    auto-approves" ([permissions: permission modes](https://code.claude.com/docs/en/permissions#permission-modes)),
+    so the command can run without a prompt.
+  - **`dontAsk`:** "Auto-denies every call that would otherwise prompt" (same page), so
+    the command is refused, not asked about. The hooks page doesn't single this mode
+    out; read conservatively, `dontAsk` never shows you this prompt.
+  - **`-p` (print mode):** prompts go to whoever can answer them. "With the default
+    `host`, Claude Code sends them to the Agent SDK host or the `--permission-prompt-tool`
+    tool. Pass `none` when nobody can answer, and Claude Code denies them instead"
+    ([CLI reference: `--permission-prompts`](https://code.claude.com/docs/en/cli-reference)).
+    With no host, the call is denied ([hooks](https://code.claude.com/docs/en/hooks#pretooluse-decision-control)).
+
+  So you get a prompt in the default, `acceptEdits`, `plan` and `auto` modes and a
+  refusal where nobody can answer; in `bypassPermissions` it is no protection.
+
+  It reads only its stdin and writes nothing.
 - **Stop (`server/stop.mjs`)** runs when the agent finishes a turn. It only
   writes an advisory nudge to stderr (e.g. "pending artifacts need review") and
   always exits 0 — it can never trap the agent in a loop or block a stop.

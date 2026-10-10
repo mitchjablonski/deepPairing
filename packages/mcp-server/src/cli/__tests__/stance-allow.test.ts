@@ -250,3 +250,65 @@ describe("#503 review (Sol) — truthful results, safe previews, a portable path
     expect(await runStanceCommand(["allow", b.blockId], eof.io)).toBe(1); // confirmation never given
   });
 });
+
+describe("#503 review round 2 (Sol) — every displayed field is safe; a success we can't read is unconfirmed", () => {
+  const CONTROLS = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/;
+  const BAD = "x\x1b[8mhidden\rover\x07\x9b2J";
+
+  it.each([
+    ["decision title", { kind: "create", type: "decision", title: BAD, content: { options: [] } }],
+    ["decision context", { kind: "create", type: "decision", title: "t", content: { context: BAD, options: [] } }],
+    ["option title", { kind: "create", type: "decision", title: "t", content: { options: [{ title: BAD }] } }],
+    ["option description", { kind: "create", type: "decision", title: "t", content: { options: [{ title: "o", description: BAD }] } }],
+    ["option pros", { kind: "create", type: "decision", title: "t", content: { options: [{ title: "o", pros: ["fine", BAD] }] } }],
+    ["option cons", { kind: "create", type: "decision", title: "t", content: { options: [{ title: "o", cons: [BAD] }] } }],
+    ["code file path", { kind: "create", type: "code_change", title: "t", content: { filePath: BAD, before: "a", after: "b" } }],
+    ["code before", { kind: "create", type: "code_change", title: "t", content: { filePath: "a.ts", before: BAD, after: "b" } }],
+    ["code after", { kind: "create", type: "code_change", title: "t", content: { filePath: "a.ts", before: "a", after: BAD } }],
+    ["code reasoning", { kind: "create", type: "code_change", title: "t", content: { filePath: "a.ts", before: "a", after: "b", reasoning: BAD } }],
+    ["generic title", { kind: "revise", type: "research", title: BAD, content: {} }],
+    ["generic nested string", { kind: "revise", type: "research", title: "t", content: { findings: [{ detail: BAD }] } }],
+    ["generic key", { kind: "revise", type: "research", title: "t", content: { [BAD]: "v" } }],
+  ] as const)("%s reaches the preview escaped", (_field, snapshot) => {
+    for (const env of [{ NO_COLOR: "1" }, {}] as NodeJS.ProcessEnv[]) {
+      const out = renderSnapshot(snapshot as never, env).replace(/\x1b\[\d+m/g, ""); // the renderer's own colours only
+      expect(out).not.toMatch(CONTROLS);
+      expect(out).toContain("^[[8mhidden^Mover^G");
+    }
+  });
+
+  it("a real present_options block with controls in pros/cons pages clean (NO_COLOR)", async () => {
+    world = new StanceWorld("dp-sx-cli-");
+    world.daemon.writeDaemonInfo(FAKE_PORT);
+    const w = await world.wrapper();
+    holdStance(world.store(w.sessionId), STANCE);
+    const options = [
+      { id: "a", title: "Inject", description: "d", pros: [`fast${BAD}`], cons: [BAD], effort: "low", risk: "low", recommendation: true },
+      { id: "b", title: "Keep", description: "d", pros: ["x"], cons: ["y"], effort: "low", risk: "low", recommendation: false },
+    ];
+    await w.call("present_options", { context: "Remove global mutable state?", title: "Owner", options });
+    const t = terminal(world);
+    expect(await runStanceCommand(["allow", (await world.newestBlock()).id], t.io)).toBe(0);
+    expect(t.paged[0]).not.toMatch(CONTROLS);
+    expect(t.paged[0]).toContain("Pros: fastx^[[8mhidden^Mover^G");
+  });
+
+  it.each([
+    ["an unreadable 201 body", () => new Response("<<not json>>", { status: 201 })],
+    ["a 201 with the wrong shape", () => new Response(JSON.stringify({ allowance: { id: 7 } }), { status: 201, headers: { "Content-Type": "application/json" } })],
+    ["a 201 with no allowance", () => new Response(JSON.stringify({ ok: true }), { status: 201, headers: { "Content-Type": "application/json" } })],
+  ])("%s after the daemon really granted: 'couldn't confirm', never 'refused' or 'nothing was allowed'", async (_label, replacement) => {
+    const b = await blocked();
+    const t = terminal(world!, {
+      fetch: async (input, init) => {
+        const res = await globalThis.fetch(input, init); // the real route commits
+        return init?.method === "POST" && String(input).includes("/exception") ? replacement() : res;
+      },
+    });
+    expect(await runStanceCommand(["allow", b.blockId], t.io)).toBe(1);
+    const err = t.err.join("");
+    expect(err).toContain("Couldn't confirm whether the grant went through");
+    expect(err).not.toMatch(/refused|Nothing was allowed/);
+    expect(await world!.allowances()).toEqual([expect.objectContaining({ state: "allowed", grantedVia: "cli" })]);
+  });
+});
