@@ -120,9 +120,9 @@ interface ConnectionState {
   hydrated: boolean;
   /**
    * #487 review (Sol P2) — WHICH binding (session @ project) the `hydrated`
-   * evidence belongs to. A switch to session B keeps A's `hydrated: true`
-   * until B's snapshot lands; without the binding, B inherited A's applied
-   * state and the watchdog never offered recovery. null = no binding recorded
+   * evidence belongs to when a frame is deliberately retained during a switch.
+   * A reset or explicit teardown retires that evidence; ordinary socket drops
+   * keep it. null = no binding recorded
    * (nothing in this file writes hydrated:true without one).
    */
   hydratedBinding: string | null;
@@ -1042,9 +1042,13 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
 
       let thisConnection = connectionGeneration;
       const adapter = createAdapter(undefined, sessionId);
-      set({ adapter });
+      if (sessionId !== undefined && sessionId !== get().sessionId) {
+        beginSessionTransition(sessionId);
+      }
+      set({ adapter, ...(sessionId !== undefined ? { sessionId } : {}) });
 
       adapter.onConnect(() => {
+        if (get().adapter !== adapter) return;
         // #339 — a chunk that failed to load during the outage poisoned this
         // document's module map. Recheck the asset origin, which need not be
         // this selected API daemon. Normal connection/hydration continues;
@@ -1062,9 +1066,13 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         useHookStatusStore.getState().load();
       });
 
-      adapter.onMessage((data) => handleMessage(data, thisConnection));
+      adapter.onMessage((data) => {
+        if (get().adapter !== adapter) return;
+        handleMessage(data, thisConnection);
+      });
 
       adapter.onDisconnect(() => {
+        if (get().adapter !== adapter) return;
         // A socket drop (including refreshUrl's project-hash reconnect) is a
         // transport generation change, not a user navigation. Connection,
         // session and snapshot generations below still fence every async WS /
@@ -1098,6 +1106,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       // safe recovery: it refetches the live daemon's hash and rebinds
       // the tab deliberately.
       adapter.onFatalMismatch?.(() => {
+        if (get().adapter !== adapter) return;
         set({ connected: false, staleDaemon: true });
         // #430 PR 5 — the one shared stale-daemon toast (lib/daemon-restart):
         // same wording and dedup as the REST path, so the two never stack.
@@ -1110,6 +1119,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
       });
 
       adapter.onConnectionRefused?.((info) => {
+        if (get().adapter !== adapter) return;
         const transition = captureSessionTransition(get().sessionId);
         set((state) => ({ connected: false, disconnectedSince: state.disconnectedSince ?? Date.now() }));
         const named = info.sessionId ?? null;
@@ -1160,7 +1170,9 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         snapshotGeneration++;
         cancelPendingRecovery();
         adapter.disconnect();
-        set({ connected: false, adapter: null });
+        // A fresh adapter must earn its own applied-state evidence. Ordinary
+        // socket reconnects use onDisconnect above and keep the valid frame.
+        set({ connected: false, adapter: null, hydrated: false, hydratedBinding: null });
       }
     },
 
@@ -1174,7 +1186,14 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         // Publish the new identity before the async reset, then open the
         // replacement socket only after that reset has completed. This keeps a
         // fast hydration from being erased by a late import continuation.
-        set({ sessionId, agentActivityAt: null, agentActiveSince: null });
+        // Retire evidence alongside a semantic frame reset. Otherwise A -> B
+        // -> A revives A's old key after its artifacts were cleared. Replay's
+        // preserveStateUntilConnected path deliberately retains the actual
+        // frame; its existing binding still identifies that retained evidence.
+        set({
+          sessionId, agentActivityAt: null, agentActiveSince: null,
+          ...(!options?.preserveStateUntilConnected ? { hydrated: false, hydratedBinding: null } : {}),
+        });
         void import("./artifact").then(({ useArtifactStore }) => {
           if (
             get().adapter !== adapter ||
