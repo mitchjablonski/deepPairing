@@ -805,7 +805,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
               if (data.type === "stance_exception_granted") {
                 // One announcement per allowance, shared with this tab's own
                 // HTTP result (order-independent; #501 review).
-                notifyMod.announceGrantOnce(String(allowance.id), concept, { cli: allowance.grantedVia === "cli" });
+                notifyMod.announceGrantOnce(String(allowance.id), concept, { cli: allowance.grantedVia === "cli", blockId });
                 return;
               }
               let text: string | null = null;
@@ -815,7 +815,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
                 text = "The proposal you allowed changed. A new block is waiting.";
               }
               if (!text) return;
-              notifyMod.notifyStanceMoment(text);
+              notifyMod.notifyStanceMoment(text, { blockId });
             });
           break;
         }

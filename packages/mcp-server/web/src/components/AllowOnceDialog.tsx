@@ -107,7 +107,7 @@ function AllowOnceDialog({ request }: { request: AllowOnceRequest }) {
     if (res.receipt) usePreflightBlockStore.getState().applyReceipt(request.blockId, res.receipt, res.seenAt);
     // One announcement per allowance, whichever of this result and the
     // daemon's broadcast arrives first (#501 review).
-    announceGrantOnce(res.allowance.id, request.concept);
+    announceGrantOnce(res.allowance.id, request.concept, { blockId: request.blockId });
     if (stillCurrent) close();
   };
 

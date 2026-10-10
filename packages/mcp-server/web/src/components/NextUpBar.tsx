@@ -317,7 +317,13 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   const announceSeq = useAnnounceStore((s) => s.seq);
   const prevAnnounceSeq = useRef(announceSeq);
   useEffect(() => {
-    if (announceSeq !== prevAnnounceSeq.current) setAnnouncement(useAnnounceStore.getState().message);
+    // #501 review round 3 (Sol P2) — two genuinely new moments can share
+    // their words (two grants on one stance). Identical text would be no DOM
+    // change, so nothing would be spoken: alternate an invisible zero-width
+    // space per event so every new event mutates the region exactly once.
+    if (announceSeq !== prevAnnounceSeq.current) {
+      setAnnouncement(`${useAnnounceStore.getState().message}${announceSeq % 2 === 1 ? "\u200B" : ""}`);
+    }
     prevAnnounceSeq.current = announceSeq;
   }, [announceSeq]);
 

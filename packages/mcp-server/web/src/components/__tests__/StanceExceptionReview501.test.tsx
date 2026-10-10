@@ -224,3 +224,90 @@ describe("Fable MED/LOW — footer layout and cursors", () => {
     }
   });
 });
+
+describe("round 3 (Astra P2) — a late HTTP receipt never regresses a newer terminal state", () => {
+  it.each(["used", "changed", "revoked", "ended"])("POST pending → socket granted → socket %s → delayed HTTP 201 'allowed': the store stays terminal", async (terminal) => {
+    const d = deferredDaemon();
+    render(<AllowOnceDialogHost />);
+    await openAndSubmit();
+    act(() => usePreflightBlockStore.getState().applyReceipt("blk_1", { ...SERVER_RECEIPT } as any, "2001-01-01T00:00:00.000Z"));
+    act(() => usePreflightBlockStore.getState().applyReceipt("blk_1", { ...SERVER_RECEIPT, state: terminal, ...(terminal === "used" ? { artifactId: "art_1" } : {}) } as any));
+    await act(async () => { d.release({ allowance: { id: SERVER_RECEIPT.id, state: "allowed" }, receipt: SERVER_RECEIPT, seenAt: "2001-01-01T00:00:00.000Z" }); });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(usePreflightBlockStore.getState().blocks[0]!.allowance!.state).toBe(terminal);
+  });
+
+  it("a reload carrying an older 'allowed' doesn't regress a terminal receipt either, while terminal-to-terminal updates apply", async () => {
+    act(() => usePreflightBlockStore.getState().applyReceipt("blk_1", { ...SERVER_RECEIPT, state: "ended" } as any));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({ blocks: [{ ...block(), allowance: SERVER_RECEIPT }] })));
+    usePreflightBlockStore.setState({ liveRev: {} } as any);
+    await usePreflightBlockStore.getState().load();
+    expect(usePreflightBlockStore.getState().blocks[0]!.allowance!.state).toBe("ended");
+    act(() => usePreflightBlockStore.getState().applyReceipt("blk_1", { ...SERVER_RECEIPT, state: "used", artifactId: "art_9" } as any));
+    expect(usePreflightBlockStore.getState().blocks[0]!.allowance).toMatchObject({ state: "used", artifactId: "art_9" });
+  });
+});
+
+describe("round 3 (Sol P2) — two grants on the same stance are each spoken (bar ON)", () => {
+  it("MutationObserver: exactly one live-region mutation per grant, even with identical words", async () => {
+    const { NextUpBar } = await import("../NextUpBar");
+    usePreferencesStore.setState({ nextUpBar: true });
+    useConnectionStore.setState({ connected: true, hydrated: true, sessionId: "s1", activeSessions: [{ sessionId: "s1", live: true }], staleDaemon: false, snapshotUnavailable: false, sessionConflict: false } as any);
+    render(<NextUpBar />);
+    const region = screen.getByTestId("next-up-announcer");
+    const observer = new MutationObserver(() => {});
+    observer.observe(region, { childList: true, characterData: true, subtree: true });
+    const changed = () => observer.takeRecords().length > 0;
+    act(() => { announceGrantOnce("sx_a", "global mutable state"); });
+    expect(changed()).toBe(true);
+    act(() => { announceGrantOnce("sx_b", "global mutable state"); });
+    expect(changed()).toBe(true);
+    // …while the SAME allowance (HTTP + socket) still speaks only once.
+    act(() => { announceGrantOnce("sx_b", "global mutable state"); });
+    expect(changed()).toBe(false);
+    expect(region.textContent).toContain("Allowed once: 'global mutable state'. Waiting for Claude to retry.");
+    observer.disconnect();
+  });
+});
+
+describe("round 3 (Fable) — one receipt on screen; the gate log is never covered", () => {
+  const pushHero = (blockId = "blk_1") => act(() => { useToastStore.getState().push({ kind: "preflight-block", title: "x", ttl: 0, hero: { source: "session", concept: "global mutable state", via: "surface", blockId, eligible: true } }); });
+
+  it("with the block's hero toast up, a grant adds NO second 'Allowed once:' toast; the hero's polite status line (bar off) carries it once", async () => {
+    const { ToastLayer } = await import("../ToastLayer");
+    render(<ToastLayer />);
+    pushHero();
+    const status = screen.getByTestId("hero-receipt");
+    expect(status).toHaveAttribute("role", "status"); // present BEFORE its text arrives
+    expect(status).toHaveTextContent("");
+    act(() => { announceGrantOnce("sx_1", "global mutable state", { blockId: "blk_1" }); });
+    act(() => usePreflightBlockStore.getState().applyReceipt("blk_1", SERVER_RECEIPT as any, "2001-01-01T00:00:00.000Z"));
+    expect(grantToasts()).toHaveLength(0);
+    expect(status).toHaveTextContent("Claude can retry this proposal.");
+  });
+
+  it("with no hero toast on screen (e.g. a CLI grant later), the info toast is the record", () => {
+    act(() => { announceGrantOnce("sx_2", "global mutable state", { blockId: "blk_gone" }); });
+    expect(grantToasts()).toHaveLength(1);
+  });
+
+  it("bar ON: the hero receipt line is not a second live region", async () => {
+    usePreferencesStore.setState({ nextUpBar: true });
+    const { ToastLayer } = await import("../ToastLayer");
+    render(<ToastLayer />);
+    pushHero();
+    expect(screen.getByTestId("hero-receipt")).not.toHaveAttribute("role");
+  });
+
+  it("while the gate log is open, the block toasts step aside (and return when it closes)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({})));
+    const { ToastLayer } = await import("../ToastLayer");
+    render(<><PreflightBlockLog /><ToastLayer /></>);
+    pushHero("blk_1"); pushHero("blk_2"); pushHero("blk_3");
+    expect(screen.getAllByTestId("hero-toast")).toHaveLength(3);
+    fireEvent.click(screen.getByRole("button", { name: /Show recent gate blocks/ }));
+    expect(screen.queryAllByTestId("hero-toast")).toHaveLength(0);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.getAllByTestId("hero-toast")).toHaveLength(3);
+  });
+});

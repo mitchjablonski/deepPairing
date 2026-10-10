@@ -4,6 +4,7 @@ import { useToastStore, type Toast, type PreflightBlockHero } from "../stores/to
 import { useEffect } from "react";
 import { useAllowOnceStore } from "../stores/allowOnce";
 import { usePreflightBlockStore } from "../stores/preflightBlocks";
+import { usePreferencesStore } from "../stores/preferences";
 import { ineligibleText, openGateLogEntry } from "../lib/stanceException";
 import { useCrossProjectStore } from "../stores/crossProject";
 import { ShieldIcon, CompassIcon } from "./icons/ArtifactIcons";
@@ -85,6 +86,7 @@ function PreflightBlockHeroCard({ hero, onDismiss, action, toastId }: {
   const receipt = usePreflightBlockStore((s) =>
     hero.blockId ? s.blocks.find((b) => (b.serverId ?? b.id) === hero.blockId)?.allowance : undefined);
   const receiptState = receipt?.state;
+  const barOn = usePreferencesStore((s) => s.nextUpBar);
   useEffect(() => {
     if (receiptState && toastId) useToastStore.getState().settle(toastId, RECEIPT_TTL_MS);
   }, [receiptState, toastId]);
@@ -154,9 +156,18 @@ function PreflightBlockHeroCard({ hero, onDismiss, action, toastId }: {
           <span> · {matchDetail}</span>
         </div>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          {receipt && (
-            <span className="text-2xs font-semibold text-text-primary" data-testid="hero-receipt">{receiptHeadline(receipt.state)}</span>
-          )}
+          {/* #501 round 3 — the ONE place a receipt shows while this toast is
+              up. With the bar off this line is the announcement (a polite
+              status that exists before its text arrives); with the bar on the
+              bar's announcer speaks and this stays silent. */}
+          <span
+            className={`text-2xs font-semibold text-text-primary ${receipt ? "" : "sr-only"}`}
+            data-testid="hero-receipt"
+            role={barOn ? undefined : "status"}
+            aria-live={barOn ? undefined : "polite"}
+          >
+            {receipt ? receiptHeadline(receipt.state, receipt.grantedVia) : ""}
+          </span>
           {/* #470 (§3a) — "Allow this proposal once" is the PRIMARY action:
               filled, accent, a 32px target. Retire is NOT offered here any
               more: it was a one-click muted link right where a misclick lands,
@@ -217,10 +228,10 @@ export const RECEIPT_TTL_MS = 6000;
 function receiptTitle(state: string): string {
   return state === "changed" ? "The proposal you allowed changed" : state === "used" ? "Claude used your allowance" : "Allowed once";
 }
-function receiptHeadline(state: string): string {
+function receiptHeadline(state: string, via?: string): string {
   return state === "changed" ? "A new block is waiting — allow it there if you still want it."
     : state === "used" ? "Used once. The stance stays on for everything else."
-    : state === "allowed" ? "Claude can retry this proposal."
+    : state === "allowed" ? (via === "cli" ? "Granted from the command line. Claude can retry this proposal." : "Claude can retry this proposal.")
     : `Allowance ${state}.`;
 }
 
@@ -252,6 +263,7 @@ function holdHandlers(id: string) {
  */
 export function ToastLayer() {
   const { toasts, dismiss } = useToastStore();
+  const logOpen = usePreflightBlockStore((s) => s.logOpen);
   /**
    * R2 — the first-reject cross-project card shares this exact corner and now
    * sits ABOVE this layer (z-[70] vs z-[60]) because it is the rarer, more
@@ -286,6 +298,9 @@ export function ToastLayer() {
         const assertive = t.kind === "error" || t.kind === "block" || t.kind === "preflight-block";
         // Hero shape for the rejection-block moment — the most distinctive
         // thing deepPairing does; it deserves the larger card.
+        // #501 round 3 (Fable MED) — the gate log lists these same blocks;
+        // while it's open the block toasts step aside instead of covering it.
+        if (t.kind === "preflight-block" && logOpen) return null;
         if (t.kind === "preflight-block" && t.hero) {
           // PreflightBlockHeroCard is already role="alert" internally — the
           // wrapper only restores pointer events (parent is pointer-events-none).

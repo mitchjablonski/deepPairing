@@ -99,6 +99,8 @@ export function PreflightBlockLog() {
     if (open && loaded) markSeen();
   }, [open, loaded, markSeen]);
   useOverlayPresence(open); // UX4 — only while the popover is open (the chip is always mounted)
+  const setLogOpen = usePreflightBlockStore((s) => s.setLogOpen);
+  useEffect(() => { setLogOpen(open); return () => setLogOpen(false); }, [open, setLogOpen]);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
 

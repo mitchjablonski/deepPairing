@@ -157,9 +157,14 @@ export function gateEntryDomId(blockId: string): string {
  * with the bar off, the toast's own polite role is the announcement. A CLI
  * grant gets the stronger style (it didn't come from this screen).
  */
-export function notifyStanceMoment(text: string, opts: { cli?: boolean } = {}): void {
+export function notifyStanceMoment(text: string, opts: { cli?: boolean; blockId?: string } = {}): void {
   const barOn = usePreferencesStore.getState().nextUpBar;
   if (barOn) announce(text);
+  // #501 round 3 (Fable LOW) — when this block's hero toast is on screen, its
+  // receipt line IS the record (and, with the bar off, its polite status line
+  // is the one announcement); a second toast would only repeat it.
+  const heroShowing = !!opts.blockId && useToastStore.getState().toasts.some((t) => t.hero?.blockId === opts.blockId);
+  if (heroShowing) return;
   useToastStore.getState().push({
     kind: opts.cli ? "block" : "info",
     icon: "shield",
@@ -178,7 +183,7 @@ export function notifyStanceMoment(text: string, opts: { cli?: boolean } = {}): 
  * the grant did land, the broadcast announces it).
  */
 const announcedAllowances = new Set<string>();
-export function announceGrantOnce(allowanceId: string, concept: string, opts: { cli?: boolean } = {}): boolean {
+export function announceGrantOnce(allowanceId: string, concept: string, opts: { cli?: boolean; blockId?: string } = {}): boolean {
   if (announcedAllowances.has(allowanceId)) return false;
   announcedAllowances.add(allowanceId);
   notifyStanceMoment(`Allowed once: '${concept}'. Waiting for Claude to retry.`, opts);

@@ -101,6 +101,10 @@ interface PreflightBlockState {
   /** #470 — a request to open the ⋯ gate log at one entry (toast "More
    *  options", the changed-state links). `seq` re-fires the same id. */
   focusRequest: { blockId?: string; seq: number } | null;
+  /** #501 round 3 (Fable MED) — the gate log is open: the block toasts it
+   *  duplicates step aside so they can't cover it. */
+  logOpen: boolean;
+  setLogOpen: (open: boolean) => void;
   requestFocus: (blockId?: string) => void;
   clearFocusRequest: () => void;
   /** Q2 — mark everything currently held as seen (called when the log is opened). */
@@ -195,9 +199,11 @@ export const usePreflightBlockStore = create<PreflightBlockState>((set, get) => 
         // unless a live event changed this row while the fetch was in flight.
         const key = merged[i]!.serverId ?? merged[i]!.id;
         if ((liveRev[key] ?? 0) !== (revAtStart[key] ?? 0)) continue;
+        const durable = pickDurable(h);
         merged[i] = {
           ...merged[i]!,
-          ...pickDurable(h),
+          ...durable,
+          ...(durable.allowance ? { allowance: mergeReceipt(merged[i]!.allowance, durable.allowance) } : {}),
         };
       }
       merged.sort((a, b) => b.at.localeCompare(a.at));
@@ -225,6 +231,8 @@ export const usePreflightBlockStore = create<PreflightBlockState>((set, get) => 
   },
 
   focusRequest: null,
+  logOpen: false,
+  setLogOpen: (logOpen) => set({ logOpen }),
   requestFocus: (blockId) => set((s) => ({ focusRequest: { blockId, seq: (s.focusRequest?.seq ?? 0) + 1 } })),
   clearFocusRequest: () => set({ focusRequest: null }),
 
@@ -234,7 +242,7 @@ export const usePreflightBlockStore = create<PreflightBlockState>((set, get) => 
       // this tab held (#501 review).
       blocks: s.blocks.map((b) =>
         b.serverId === blockId || b.id === blockId
-          ? { ...b, allowance, ...(seenAt ? { seenAt } : {}) }
+          ? { ...b, allowance: mergeReceipt(b.allowance, allowance), ...(seenAt ? { seenAt } : {}) }
           : b),
       liveRev: { ...s.liveRev, [blockId]: (s.liveRev[blockId] ?? 0) + 1 },
     }));
@@ -254,6 +262,22 @@ export const usePreflightBlockStore = create<PreflightBlockState>((set, get) => 
 
   clear: () => set({ blocks: [], liveRev: {}, loaded: false }),
 }));
+
+/**
+ * #501 review round 3 (Astra P2) — receipts only move FORWARD. Every receipt
+ * value is the daemon's, but they arrive by different paths (this tab's HTTP
+ * result, the socket, a reload), in any order. Once an allowance has reached a
+ * terminal state (used / changed / revoked / ended / expired), a late `allowed`
+ * for the same allowance is stale and is ignored; terminal-to-terminal updates
+ * (e.g. a reload turning "ended" into the daemon's "used") still apply.
+ */
+const TERMINAL_RECEIPT: ReadonlySet<string> = new Set(["used", "changed", "revoked", "ended", "expired"]);
+export function mergeReceipt(current: StanceAllowanceReceipt | undefined, incoming: StanceAllowanceReceipt): StanceAllowanceReceipt {
+  if (current && current.id === incoming.id && TERMINAL_RECEIPT.has(current.state) && !TERMINAL_RECEIPT.has(incoming.state)) {
+    return current;
+  }
+  return incoming;
+}
 
 /** The fields of a durable log row that can change after it first fired. */
 function pickDurable(h: PreflightBlockRecord): Partial<PreflightBlockRecord> {

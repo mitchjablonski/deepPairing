@@ -232,6 +232,8 @@ describe("§10 Web — placement, targets and auto-dismiss", () => {
     const allow = screen.getByRole("button", { name: "Allow once" });
     const retire = screen.getByRole("button", { name: "Retire…" });
     for (const b of [allow, retire]) expect(b.className).toMatch(/min-h-\[32px\] min-w-\[32px\]/);
+    // The block toasts step aside while the gate log is open (#501 round 3).
+    fireEvent.keyDown(document, { key: "Escape" });
 
     let id = "";
     act(() => { id = useToastStore.getState().push({ kind: "preflight-block", title: "x", ttl: 1000, hero: { source: "session", concept: "global mutable state", via: "surface", blockId: "blk_1", eligible: true } }); });

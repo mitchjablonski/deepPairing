@@ -131,6 +131,9 @@ test("allow once: the hero toast's primary button → dialog → reason + Enter 
   await expect(page.getByRole("button", { name: "Allow this proposal once" })).toHaveCount(0);
   const region = await page.getByTestId("toast-region").boundingBox();
   expect(region!.height).toBeLessThanOrEqual(page.viewportSize()!.height);
+  // Hover is a deliberate hold (§3a); the pointer is still where you clicked
+  // Allow, so move it off the toast as a reader would.
+  await page.mouse.move(5, 5);
   await expect(page.getByTestId("hero-toast")).toHaveCount(0, { timeout: 12_000 });
 
   const list = async () => ((await (await fetch(`${baseURL}/api/stance-exceptions`, { headers: { "X-Project-Hash": projectHash } })).json()) as { allowances: Array<{ id: string; state: string; grantedVia: string }> }).allowances;
@@ -153,4 +156,29 @@ test("allow once: the hero toast's primary button → dialog → reason + Enter 
   await expect(page.getByTestId("allowed-once-badge")).toHaveText("Allowed once (UI)", { timeout: 15_000 });
   await expect.poll(async () => (await list())[0]?.state, { timeout: 10_000 }).toBe("used");
   await expect(page.locator("body")).not.toContainText(/verified/i);
+});
+
+test("#501 round 3 (Fable) — three block toasts never cover the gate log opened from 'More options'", async ({ page }) => {
+  await page.goto(`${baseURL}/?session=${SID}`);
+  await page.waitForLoadState("networkidle");
+  const prefs = JSON.parse(fs.readFileSync(path.join(projectRoot, ".deeppairing", "preferences.json"), "utf8"));
+  const row = prefs.rejectedApproaches.find((r: { description: string }) => r.description === STANCE);
+  for (let i = 0; i < 3; i++) {
+    const res = await internal("/preflight-block", {
+      type: "preflight_blocked", toolName: "present_code_change", source: "session",
+      match: { proposal: `${SNAPSHOT.content.reasoning} ${i}`, description: STANCE, concept: STANCE, reason: "hard to test", via: "surface", rejectedAt: row.rejectedAt },
+      callFingerprint: String(i).repeat(64), snapshot: { ...SNAPSHOT, content: { ...SNAPSHOT.content, after: `export const v${i} = 1;` } }, preconditions: [],
+    });
+    expect(res.ok).toBe(true);
+  }
+  await expect(page.getByTestId("hero-toast")).toHaveCount(3, { timeout: 15_000 });
+  await page.getByRole("button", { name: "More options" }).first().click();
+  const popover = page.getByTestId("gate-block-log");
+  await expect(popover).toBeVisible();
+  const box = (await popover.boundingBox())!;
+  const covered = await page.evaluate(([x, y]) => {
+    const el = document.elementFromPoint(x, y);
+    return !el?.closest('[data-testid="gate-block-log"]');
+  }, [box.x + box.width / 2, box.y + box.height / 2]);
+  expect(covered, "the gate-log popover's centre is covered by something").toBe(false);
 });
