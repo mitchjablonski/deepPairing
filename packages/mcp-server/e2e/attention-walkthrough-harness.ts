@@ -44,6 +44,17 @@ const LIMITS = {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const digest = (value: Buffer | string) => createHash("sha256").update(value).digest("hex");
 
+/** Secondary evidence I/O must neither hide a causal row error nor turn an
+ * otherwise successful row into a pass when its evidence could not publish. */
+export async function finishWalkthrough(failure: unknown, publish: () => Promise<void>): Promise<void> {
+  try { await publish(); }
+  catch (error) {
+    if (failure !== undefined) throw new AggregateError([failure, error], "Walkthrough failed and evidence publication also failed");
+    throw error;
+  }
+  if (failure !== undefined) throw failure;
+}
+
 async function directoryDigest(directory: string): Promise<{ sha256: string; files: number }> {
   const entries = (await fs.readdir(directory, { recursive: true })).sort();
   const manifest: Array<{ path: string; sha256: string }> = [];

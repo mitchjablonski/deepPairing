@@ -23,9 +23,10 @@ actual matrix, not asserted to reproduce the old report's 44 runs. Each JSON
 includes the complete manifest, exact checkout SHA/runtime/browser, seed-input
 digest, actual keyboard presses/focus stops, assertions, bounded ARIA and live
 DOM text, relative screenshot paths, cleanup outcome and explicit limits.
-One additional infrastructure fault test proves a simulated full/unwritable
+Two additional infrastructure fault tests prove a simulated full/unwritable
 diagnostic output cannot prevent real owned-daemon cleanup or hide its original
-setup error; it is not counted as a walkthrough matrix row.
+setup error, and evidence publication cannot mask a primary row failure or
+silently pass without published evidence; neither is a walkthrough matrix row.
 
 JSON records tracked-worktree dirtiness and its diff digest, exact harness and
 lockfile digests, and the actual built daemon entry/module tree, served web tree

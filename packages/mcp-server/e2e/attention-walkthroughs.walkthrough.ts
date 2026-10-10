@@ -1,6 +1,6 @@
 import { test, expect } from "./test.js";
 import fs from "node:fs/promises";
-import { AttentionDaemon, AttentionEvidence, type SeedOperation, type WalkthroughCase } from "./attention-walkthrough-harness.js";
+import { AttentionDaemon, AttentionEvidence, finishWalkthrough, type SeedOperation, type WalkthroughCase } from "./attention-walkthrough-harness.js";
 
 const op = (session: string, route: string, body: unknown): SeedOperation => ({ session, route, body });
 const register = (session: string, title: string) => op(session, "register", { title });
@@ -143,6 +143,10 @@ for (const row of MATRIX) {
           case "S2":
           case "S5-empty-bound-sibling":
             await openPrimary(evidence);
+            await evidence.check("keyboard action opened the sibling decision without rebinding the tab", async () => {
+              await expect(page.locator('[data-artifact-id="billing_decision"]')).toBeVisible();
+              expect(await page.evaluate(() => (window as unknown as { __dpConnectionStore: { getState(): { sessionId: string } } }).__dpConnectionStore.getState().sessionId)).toBe(row.scenario.boundSession);
+            });
             if (row.mode === "ON") await evidence.activate(page.getByRole("button", { name: "Expand next-up details", exact: true }));
             await evidence.capture("opened-blocker");
             break;
@@ -170,7 +174,10 @@ for (const row of MATRIX) {
             if (row.scenario.id === "S4-exit-transition") {
               await daemon.post("rate", "unregister", {});
             }
-            await evidence.check("exited state is exposed", () => expect(page.getByText(/Agent exited — resume to continue/)).toBeVisible({ timeout: 20_000 }));
+            await evidence.check("exited state is exposed", () => expect(row.mode === "ON"
+              ? page.getByText(/Agent exited — resume to continue/)
+              : page.getByRole("button", { name: "2 questions waiting for Claude", exact: true })
+            ).toBeVisible({ timeout: 20_000 }));
             await evidence.activate(page.getByRole("button", { name: "Copy resume prompt", exact: true }));
             await evidence.check("clipboard holds the synthetic two-question resume prompt", async () => {
               await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("2 questions");
@@ -198,9 +205,19 @@ for (const row of MATRIX) {
             await evidence.capture("disconnected");
             break;
           case "S5-replay":
+            await evidence.check("historical decision is visible but its choice actions are read-only", async () => {
+              await expect(page.locator('[data-artifact-id="past_decision"]')).toBeVisible();
+              for (const option of ["Redis", "In-process"]) await expect(page.getByRole("button", { name: `Select ${option}`, exact: true })).toBeDisabled();
+            });
             await evidence.capture("read-only-replay");
             await evidence.press("Escape");
-            await evidence.check("Escape returns to the live frame", () => expect(page.getByText(/Replay mode/)).toHaveCount(0, { timeout: 20_000 }));
+            await evidence.check("Escape returns to the hydrated live binding without historical residue", async () => {
+              await expect(page.getByText(/Replay mode/)).toHaveCount(0, { timeout: 20_000 });
+              await hydrated(evidence);
+              expect(await page.evaluate(() => (window as unknown as { __dpConnectionStore: { getState(): { sessionId: string } } }).__dpConnectionStore.getState().sessionId)).toBe("live");
+              await expect(page.locator('[data-artifact-id="past_decision"]')).toHaveCount(0);
+              await expect(page.getByRole("button", { name: "Select Redis", exact: true })).toHaveCount(0);
+            });
             await evidence.capture("replay-exited");
             break;
           case "S5-long-titles":
@@ -239,10 +256,9 @@ for (const row of MATRIX) {
         await evidence.capture("failure").catch(() => undefined);
       } finally {
         try { if (daemon) { await daemon.close(info); cleanup = "removed"; } }
-        catch (error) { failure ??= error; }
-        await evidence.save(failure ? "failed" : "passed", cleanup, failure, daemon?.seedJournal, daemon?.runtimes);
+        catch (error) { failure = failure === undefined ? error : new AggregateError([failure, error], "Walkthrough failed and owned cleanup was not confirmed"); }
+        await finishWalkthrough(failure, () => evidence.save(failure === undefined ? "passed" : "failed", cleanup, failure, daemon?.seedJournal, daemon?.runtimes));
       }
-      if (failure) throw failure;
     });
   });
 }
@@ -263,4 +279,17 @@ test("HARNESS fault: failed diagnostic attachments cannot skip cleanup or replac
   expect(failedAttachments).toBeGreaterThanOrEqual(2); // create catch AND stop.
   expect(ownedRoot).not.toBe("");
   await expect(fs.access(ownedRoot)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+test("HARNESS fault: evidence publication cannot mask a primary row failure or silently pass", async () => {
+  const primary = new Error("synthetic causal row assertion");
+  const secondary = new Error("synthetic evidence output full/unwritable");
+  let caught: unknown;
+  try { await finishWalkthrough(primary, async () => { throw secondary; }); }
+  catch (error) { caught = error; }
+  expect(caught).toBeInstanceOf(AggregateError);
+  expect((caught as AggregateError).errors).toEqual([primary, secondary]);
+  await expect(finishWalkthrough(undefined, async () => { throw secondary; })).rejects.toBe(secondary);
+  await expect(finishWalkthrough(primary, async () => undefined)).rejects.toBe(primary);
+  await expect(finishWalkthrough(undefined, async () => undefined)).resolves.toBeUndefined();
 });
