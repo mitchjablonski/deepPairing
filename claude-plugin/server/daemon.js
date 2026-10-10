@@ -31602,6 +31602,305 @@ function isAllowedWsOrigin(origin, hostHeader) {
   }
 }
 
+// src/http/route-helpers.ts
+var NO_SESSION_RESPONSE = {
+  error: "No active deepPairing session. Start Claude Code with deepPairing configured to create one.",
+  code: ERROR_CODES.no_active_session
+};
+async function readJsonValue(c) {
+  const invalid = () => ({ ok: false, res: c.json({ error: "invalid JSON", code: ERROR_CODES.validation_error }, 400) });
+  let raw2;
+  try {
+    raw2 = await c.req.text();
+  } catch {
+    return invalid();
+  }
+  if (raw2.trim() === "") return invalid();
+  try {
+    return { ok: true, value: JSON.parse(raw2) };
+  } catch {
+    return invalid();
+  }
+}
+function getSessionId(c) {
+  return c.req.header("X-Session-Id") ?? void 0;
+}
+
+// src/http/review-routes.ts
+function createReviewRoutes({
+  getStore,
+  broadcast,
+  log: log2,
+  updateTaskStatus
+}) {
+  const app = new Hono2();
+  app.post("/api/decisions/:decisionId", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const decisionId = c.req.param("decisionId");
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = DecisionResolveBodySchema.safeParse(bodyVal.value);
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    const { optionId, reasoning } = parsed.data;
+    const knownRecord = await store.getDecision(decisionId);
+    const knownArtifact = (await store.getArtifacts()).some(
+      (a) => a.type === "decision" && (a.content?.decisionId === decisionId || a.id === decisionId)
+    );
+    if (!knownRecord && !knownArtifact) {
+      return c.json(
+        {
+          error: "decision_not_in_session",
+          code: "decision_not_in_session",
+          message: "This decision belongs to a different session than the one this tab is bound to."
+        },
+        404
+      );
+    }
+    return withDecisionResolveLock(store, async () => {
+      const outcome = await store.resolveDecisionAtomic(decisionId, optionId, reasoning);
+      let committed = false;
+      try {
+        if (outcome.kind === "closed") {
+          log2(`[decision] REFUSED resolve on closed decision ${decisionId} (${outcome.currentStatus})`);
+          return c.json(closedResolveBody(outcome, decisionId), 409);
+        }
+        if (outcome.kind === "same" || outcome.kind === "conflict") {
+          await store.forceFlush();
+          const late = await store.takeResolutionAnnouncement(decisionId);
+          if (late) {
+            broadcast({ type: "decision_resolved", decisionId, artifactId: late.artifactId, optionId: late.optionId, reasoning: late.reasoning }, sid);
+          }
+        }
+        if (outcome.kind === "same") return c.json(staleResolveBody(outcome, decisionId));
+        if (outcome.kind === "conflict") {
+          const body = staleResolveBody(outcome, decisionId);
+          log2(`[decision] REFUSED stale resolve on ${decisionId}: ${String(body.message)}`);
+          if (outcome.artifactId) broadcast({ type: "artifact_updated", artifactId: outcome.artifactId, status: outcome.currentStatus }, sid);
+          return c.json(body, 409);
+        }
+        if (outcome.kind === "invalid_option") {
+          return c.json(
+            { error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error },
+            400
+          );
+        }
+        const decision = outcome.kind === "resolved" ? await store.getDecision(decisionId) : void 0;
+        let targetArtifactId = decision?.artifactId;
+        let fallbackArtifact;
+        if (!targetArtifactId) {
+          const artifacts = await store.getArtifacts();
+          fallbackArtifact = artifacts.find(
+            (a) => a.type === "decision" && (a.content?.decisionId === decisionId || a.id === decisionId)
+          );
+          targetArtifactId = fallbackArtifact?.id;
+        }
+        if (!decision && fallbackArtifact) {
+          const closed = classifyClosedDecision(fallbackArtifact, await store.getArtifacts());
+          if (closed) return c.json(closedResolveBody(closed, decisionId), 409);
+        }
+        if (targetArtifactId && !decision && fallbackArtifact) {
+          if (isCrossTerminalVerdictFlip(fallbackArtifact.status, "approved", "ui_decision_resolve")) {
+            const at = fallbackArtifact.updatedAt;
+            log2(
+              `[decision] REFUSED resolve on ${targetArtifactId}: ${fallbackArtifact.status} \u2192 approved (reason=ui_decision_resolve) \u2014 verdict already final at ${at}`
+            );
+            broadcast({ type: "artifact_updated", artifactId: targetArtifactId, status: fallbackArtifact.status }, sid);
+            return c.json(
+              {
+                error: "verdict_already_final",
+                code: "verdict_already_final",
+                currentStatus: fallbackArtifact.status,
+                at,
+                message: `This decision was already ${fallbackArtifact.status}${at ? ` at ${at}` : ""} in another tab. A finalized verdict can't be reversed \u2014 this tab has been refreshed to the current state.`
+              },
+              409
+            );
+          }
+        }
+        if (targetArtifactId) {
+          if (!decision) {
+            await store.updateArtifactStatus(targetArtifactId, "approved", "ui_decision_resolve");
+          }
+        }
+        try {
+          await store.forceFlush();
+        } catch (error51) {
+          if (!(outcome.kind === "resolved" && await store.isResolutionDurable(decisionId))) throw error51;
+          log2(`[decision] flush failed after ${decisionId}'s answer was persisted \u2014 treating as committed: ${String(error51)}`);
+        }
+        committed = true;
+        if (targetArtifactId) {
+          await updateTaskStatus(targetArtifactId, store);
+        }
+        const ann = await store.takeResolutionAnnouncement(decisionId);
+        broadcast({
+          type: "decision_resolved",
+          decisionId,
+          artifactId: ann?.artifactId ?? targetArtifactId,
+          optionId: ann?.optionId ?? optionId,
+          reasoning: ann ? ann.reasoning : reasoning
+        }, sid);
+        return c.json({ status: "resolved", decisionId });
+      } finally {
+        if (outcome.kind === "resolved") await store.settleResolution(decisionId, committed);
+      }
+    });
+  });
+  app.post("/api/artifacts/:artifactId/status", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const storeSid = store.getSessionId?.() ?? "(unknown)";
+    const artifactId = c.req.param("artifactId");
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = StatusUpdateBodySchema.safeParse(bodyVal.value);
+    if (!parsed.success) {
+      log2(`[status] REJECTED \u2014 body schema invalid for ${artifactId} (header.sid=${sid ?? "(none)"}, store.sid=${storeSid}): ${parsed.error.issues[0]?.message}`);
+      return c.json(formatZodIssues(parsed.error), 400);
+    }
+    const { status, feedback, concept: humanConcept } = parsed.data;
+    const artsBefore = await store.getArtifacts();
+    const target = artsBefore.find((a) => a.id === artifactId);
+    const reason = status === "approved" ? "ui_approve_button" : status === "revised" ? "ui_revise_button" : status === "obsolete" ? "ui_dismiss_obsolete" : "ui_reject_button";
+    log2(
+      `[status] header.sid=${sid ?? "(none)"} store.sid=${storeSid} artifactId=${artifactId} targetFound=${!!target} fromStatus=${target?.status ?? "(missing)"} toStatus=${status} reason=${reason}`
+    );
+    if (!target) {
+      return c.json(
+        {
+          error: "artifact_not_in_session",
+          code: "artifact_not_in_session",
+          message: "This artifact belongs to a different session than the one this tab is bound to."
+        },
+        404
+      );
+    }
+    if (isCrossTerminalVerdictFlip(target.status, status, reason)) {
+      const at = target.updatedAt;
+      log2(
+        `[status] REFUSED cross-tab verdict flip on ${artifactId}: ${target.status} \u2192 ${status} (reason=${reason}) \u2014 verdict already final at ${at}`
+      );
+      broadcast({ type: "artifact_updated", artifactId, status: target.status }, sid);
+      return c.json(
+        {
+          error: "verdict_already_final",
+          code: "verdict_already_final",
+          currentStatus: target.status,
+          at,
+          message: `This artifact was already ${target.status}${at ? ` at ${at}` : ""} in another tab. A finalized verdict can't be reversed \u2014 this tab has been refreshed to the current state.`
+        },
+        409
+      );
+    }
+    let rejection = null;
+    if (status === "rejected") {
+      const artifact = target;
+      if (artifact && LEDGER_EXEMPT_REJECT_TYPES.has(artifact.type)) {
+      } else if (artifact && artifact.type !== "decision") {
+        const artConcept = artifact.content?.concept?.name;
+        const changesetFallback = artifact.type === "changeset" ? stripLeadingPathToken(artifact.title) : void 0;
+        const concept = humanConcept?.trim() || artConcept || changesetFallback || void 0;
+        rejection = { description: artifact.title, reason: feedback?.trim() || void 0, sourceArtifactId: artifactId, concept };
+      } else if (artifact && artifact.type === "decision") {
+        const content = artifact.content;
+        const context = content?.context?.trim() || artifact.title;
+        const concept = humanConcept?.trim() || content?.title?.trim() || context || void 0;
+        rejection = { description: artifact.title, reason: feedback?.trim() || void 0, sourceArtifactId: artifactId, concept };
+      }
+    }
+    let retractOnConflict = null;
+    let recordAfterFlush = false;
+    if (rejection && await store.previewReviewConflict?.(artifactId, status)) {
+      recordAfterFlush = true;
+    } else if (rejection) {
+      const had = (await store.getSessionMemory()).rejectedApproaches.some((r) => r.description === rejection.description);
+      await store.recordRejectedApproach(rejection);
+      if (!had) retractOnConflict = rejection.description;
+    }
+    await store.updateArtifactStatus(artifactId, status, reason);
+    if (status !== "obsolete") {
+      await store.resolvePlanReview(artifactId, status, feedback);
+    }
+    await updateTaskStatus(artifactId, store);
+    if (feedback) {
+      const comment = await store.addComment({
+        id: `cmt_${nanoid3(10)}`,
+        artifactId,
+        content: feedback,
+        author: "human",
+        verdictFeedback: true
+      });
+      broadcast({ type: "comment_added", comment }, sid);
+    }
+    try {
+      await store.forceFlush();
+    } catch (err) {
+      if (isSessionReviewConflictError(err)) {
+        if (retractOnConflict) {
+          try {
+            await store.retractRejectedApproach?.(retractOnConflict);
+          } catch (retractErr) {
+            console.error(`[deepPairing] could not retract rejection after a review conflict: ${retractErr}`);
+          }
+        }
+        return c.json({
+          error: "session_review_conflict",
+          code: ERROR_CODES.session_review_conflict,
+          message: err.message
+        }, 409);
+      }
+      console.error(`[deepPairing] verdict flush failed (verdict landed in memory; debounced flush will retry): ${err}`);
+    }
+    if (rejection && recordAfterFlush) await store.recordRejectedApproach(rejection);
+    if (rejection) broadcast({ type: "ledger_write", kind: "rejected", ...rejection }, sid);
+    broadcast({ type: "artifact_updated", artifactId, status }, sid);
+    return c.json({ status: "updated", artifactId });
+  });
+  app.post("/api/artifacts/:artifactId/changeset-review", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const artifactId = c.req.param("artifactId");
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = ChangesetReviewBodySchema.safeParse(bodyVal.value);
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    const { filePath, state, reason } = parsed.data;
+    const target = (await store.getArtifacts()).find((a) => a.id === artifactId);
+    if (!target) {
+      return c.json(
+        {
+          error: "artifact_not_in_session",
+          code: "artifact_not_in_session",
+          message: "This artifact belongs to a different session than the one this tab is bound to."
+        },
+        404
+      );
+    }
+    if (!store.setChangesetFileReview) {
+      return c.json({ error: "unsupported", code: "unsupported", message: "This store can't persist changeset review state." }, 409);
+    }
+    const updated = await store.setChangesetFileReview(artifactId, filePath, state, reason);
+    if (!updated) {
+      return c.json(
+        {
+          error: "not_a_changeset_file",
+          code: "not_a_changeset_file",
+          message: "That artifact is not a changeset, or the file path is not part of it."
+        },
+        400
+      );
+    }
+    await store.forceFlush();
+    broadcast({ type: "changeset_review_updated", artifact: updated }, sid);
+    return c.json({ status: "updated", artifactId });
+  });
+  return app;
+}
+
 // src/http/routes.ts
 async function demoLedgerOverlay(sessionId, store) {
   if (!sessionId?.startsWith("demo_") || !store) return [];
@@ -31631,24 +31930,6 @@ async function demoLedgerOverlay(sessionId, store) {
   } catch {
     return [];
   }
-}
-async function readJsonValue(c) {
-  const invalid = () => ({ ok: false, res: c.json({ error: "invalid JSON", code: ERROR_CODES.validation_error }, 400) });
-  let raw2;
-  try {
-    raw2 = await c.req.text();
-  } catch {
-    return invalid();
-  }
-  if (raw2.trim() === "") return invalid();
-  try {
-    return { ok: true, value: JSON.parse(raw2) };
-  } catch {
-    return invalid();
-  }
-}
-function getSessionId(c) {
-  return c.req.header("X-Session-Id") ?? void 0;
 }
 function checkProjectHash(c, daemonHash) {
   if (!daemonHash) return null;
@@ -31777,10 +32058,6 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     }
     return c.json({ error: "Internal server error" }, 500);
   });
-  const NO_SESSION_RESPONSE = {
-    error: "No active deepPairing session. Start Claude Code with deepPairing configured to create one.",
-    code: ERROR_CODES.no_active_session
-  };
   app.get("/api/state", async (c) => {
     const store = getStore(getSessionId(c));
     if (!store) return c.json(EMPTY_STATE);
@@ -31983,120 +32260,12 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     }
     return c.json({ status: parsed.data.action, commentId, comment: comment ?? null });
   });
-  app.post("/api/decisions/:decisionId", async (c) => {
-    const sid = getSessionId(c);
-    const store = getStore(sid);
-    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-    const decisionId = c.req.param("decisionId");
-    const bodyVal = await readJsonValue(c);
-    if (!bodyVal.ok) return bodyVal.res;
-    const parsed = DecisionResolveBodySchema.safeParse(bodyVal.value);
-    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
-    const { optionId, reasoning } = parsed.data;
-    const knownRecord = await store.getDecision(decisionId);
-    const knownArtifact = (await store.getArtifacts()).some(
-      (a) => a.type === "decision" && (a.content?.decisionId === decisionId || a.id === decisionId)
-    );
-    if (!knownRecord && !knownArtifact) {
-      return c.json(
-        {
-          error: "decision_not_in_session",
-          code: "decision_not_in_session",
-          message: "This decision belongs to a different session than the one this tab is bound to."
-        },
-        404
-      );
-    }
-    return withDecisionResolveLock(store, async () => {
-      const outcome = await store.resolveDecisionAtomic(decisionId, optionId, reasoning);
-      let committed = false;
-      try {
-        if (outcome.kind === "closed") {
-          log2(`[decision] REFUSED resolve on closed decision ${decisionId} (${outcome.currentStatus})`);
-          return c.json(closedResolveBody(outcome, decisionId), 409);
-        }
-        if (outcome.kind === "same" || outcome.kind === "conflict") {
-          await store.forceFlush();
-          const late = await store.takeResolutionAnnouncement(decisionId);
-          if (late) {
-            broadcast({ type: "decision_resolved", decisionId, artifactId: late.artifactId, optionId: late.optionId, reasoning: late.reasoning }, sid);
-          }
-        }
-        if (outcome.kind === "same") return c.json(staleResolveBody(outcome, decisionId));
-        if (outcome.kind === "conflict") {
-          const body = staleResolveBody(outcome, decisionId);
-          log2(`[decision] REFUSED stale resolve on ${decisionId}: ${String(body.message)}`);
-          if (outcome.artifactId) broadcast({ type: "artifact_updated", artifactId: outcome.artifactId, status: outcome.currentStatus }, sid);
-          return c.json(body, 409);
-        }
-        if (outcome.kind === "invalid_option") {
-          return c.json(
-            { error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error },
-            400
-          );
-        }
-        const decision = outcome.kind === "resolved" ? await store.getDecision(decisionId) : void 0;
-        let targetArtifactId = decision?.artifactId;
-        let fallbackArtifact;
-        if (!targetArtifactId) {
-          const artifacts = await store.getArtifacts();
-          fallbackArtifact = artifacts.find(
-            (a) => a.type === "decision" && (a.content?.decisionId === decisionId || a.id === decisionId)
-          );
-          targetArtifactId = fallbackArtifact?.id;
-        }
-        if (!decision && fallbackArtifact) {
-          const closed = classifyClosedDecision(fallbackArtifact, await store.getArtifacts());
-          if (closed) return c.json(closedResolveBody(closed, decisionId), 409);
-        }
-        if (targetArtifactId && !decision && fallbackArtifact) {
-          if (isCrossTerminalVerdictFlip(fallbackArtifact.status, "approved", "ui_decision_resolve")) {
-            const at = fallbackArtifact.updatedAt;
-            log2(
-              `[decision] REFUSED resolve on ${targetArtifactId}: ${fallbackArtifact.status} \u2192 approved (reason=ui_decision_resolve) \u2014 verdict already final at ${at}`
-            );
-            broadcast({ type: "artifact_updated", artifactId: targetArtifactId, status: fallbackArtifact.status }, sid);
-            return c.json(
-              {
-                error: "verdict_already_final",
-                code: "verdict_already_final",
-                currentStatus: fallbackArtifact.status,
-                at,
-                message: `This decision was already ${fallbackArtifact.status}${at ? ` at ${at}` : ""} in another tab. A finalized verdict can't be reversed \u2014 this tab has been refreshed to the current state.`
-              },
-              409
-            );
-          }
-        }
-        if (targetArtifactId) {
-          if (!decision) {
-            await store.updateArtifactStatus(targetArtifactId, "approved", "ui_decision_resolve");
-          }
-        }
-        try {
-          await store.forceFlush();
-        } catch (error51) {
-          if (!(outcome.kind === "resolved" && await store.isResolutionDurable(decisionId))) throw error51;
-          log2(`[decision] flush failed after ${decisionId}'s answer was persisted \u2014 treating as committed: ${String(error51)}`);
-        }
-        committed = true;
-        if (targetArtifactId) {
-          await maybeUpdateTaskStatus(null, targetArtifactId, store);
-        }
-        const ann = await store.takeResolutionAnnouncement(decisionId);
-        broadcast({
-          type: "decision_resolved",
-          decisionId,
-          artifactId: ann?.artifactId ?? targetArtifactId,
-          optionId: ann?.optionId ?? optionId,
-          reasoning: ann ? ann.reasoning : reasoning
-        }, sid);
-        return c.json({ status: "resolved", decisionId });
-      } finally {
-        if (outcome.kind === "resolved") await store.settleResolution(decisionId, committed);
-      }
-    });
-  });
+  app.route("/", createReviewRoutes({
+    getStore,
+    broadcast,
+    log: log2,
+    updateTaskStatus: async (artifactId, store) => maybeUpdateTaskStatus(null, artifactId, store)
+  }));
   app.post("/api/decisions/:decisionId/close-out", async (c) => {
     const decisionId = c.req.param("decisionId");
     const bodyVal = await readJsonValue(c);
@@ -32191,117 +32360,6 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
       });
     }
   });
-  app.post("/api/artifacts/:artifactId/status", async (c) => {
-    const sid = getSessionId(c);
-    const store = getStore(sid);
-    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-    const storeSid = store.getSessionId?.() ?? "(unknown)";
-    const artifactId = c.req.param("artifactId");
-    const bodyVal = await readJsonValue(c);
-    if (!bodyVal.ok) return bodyVal.res;
-    const parsed = StatusUpdateBodySchema.safeParse(bodyVal.value);
-    if (!parsed.success) {
-      log2(`[status] REJECTED \u2014 body schema invalid for ${artifactId} (header.sid=${sid ?? "(none)"}, store.sid=${storeSid}): ${parsed.error.issues[0]?.message}`);
-      return c.json(formatZodIssues(parsed.error), 400);
-    }
-    const { status, feedback, concept: humanConcept } = parsed.data;
-    const artsBefore = await store.getArtifacts();
-    const target = artsBefore.find((a) => a.id === artifactId);
-    const reason = status === "approved" ? "ui_approve_button" : status === "revised" ? "ui_revise_button" : status === "obsolete" ? "ui_dismiss_obsolete" : "ui_reject_button";
-    log2(
-      `[status] header.sid=${sid ?? "(none)"} store.sid=${storeSid} artifactId=${artifactId} targetFound=${!!target} fromStatus=${target?.status ?? "(missing)"} toStatus=${status} reason=${reason}`
-    );
-    if (!target) {
-      return c.json(
-        {
-          error: "artifact_not_in_session",
-          code: "artifact_not_in_session",
-          message: "This artifact belongs to a different session than the one this tab is bound to."
-        },
-        404
-      );
-    }
-    if (isCrossTerminalVerdictFlip(target.status, status, reason)) {
-      const at = target.updatedAt;
-      log2(
-        `[status] REFUSED cross-tab verdict flip on ${artifactId}: ${target.status} \u2192 ${status} (reason=${reason}) \u2014 verdict already final at ${at}`
-      );
-      broadcast({ type: "artifact_updated", artifactId, status: target.status }, sid);
-      return c.json(
-        {
-          error: "verdict_already_final",
-          code: "verdict_already_final",
-          currentStatus: target.status,
-          at,
-          message: `This artifact was already ${target.status}${at ? ` at ${at}` : ""} in another tab. A finalized verdict can't be reversed \u2014 this tab has been refreshed to the current state.`
-        },
-        409
-      );
-    }
-    let rejection = null;
-    if (status === "rejected") {
-      const artifact = target;
-      if (artifact && LEDGER_EXEMPT_REJECT_TYPES.has(artifact.type)) {
-      } else if (artifact && artifact.type !== "decision") {
-        const artConcept = artifact.content?.concept?.name;
-        const changesetFallback = artifact.type === "changeset" ? stripLeadingPathToken(artifact.title) : void 0;
-        const concept = humanConcept?.trim() || artConcept || changesetFallback || void 0;
-        rejection = { description: artifact.title, reason: feedback?.trim() || void 0, sourceArtifactId: artifactId, concept };
-      } else if (artifact && artifact.type === "decision") {
-        const content = artifact.content;
-        const context = content?.context?.trim() || artifact.title;
-        const concept = humanConcept?.trim() || content?.title?.trim() || context || void 0;
-        rejection = { description: artifact.title, reason: feedback?.trim() || void 0, sourceArtifactId: artifactId, concept };
-      }
-    }
-    let retractOnConflict = null;
-    let recordAfterFlush = false;
-    if (rejection && await store.previewReviewConflict?.(artifactId, status)) {
-      recordAfterFlush = true;
-    } else if (rejection) {
-      const had = (await store.getSessionMemory()).rejectedApproaches.some((r) => r.description === rejection.description);
-      await store.recordRejectedApproach(rejection);
-      if (!had) retractOnConflict = rejection.description;
-    }
-    await store.updateArtifactStatus(artifactId, status, reason);
-    if (status !== "obsolete") {
-      await store.resolvePlanReview(artifactId, status, feedback);
-    }
-    await maybeUpdateTaskStatus(null, artifactId, store);
-    if (feedback) {
-      const comment = await store.addComment({
-        id: `cmt_${nanoid3(10)}`,
-        artifactId,
-        content: feedback,
-        author: "human",
-        verdictFeedback: true
-      });
-      broadcast({ type: "comment_added", comment }, sid);
-    }
-    try {
-      await store.forceFlush();
-    } catch (err) {
-      if (isSessionReviewConflictError(err)) {
-        if (retractOnConflict) {
-          try {
-            await store.retractRejectedApproach?.(retractOnConflict);
-          } catch (retractErr) {
-            console.error(`[deepPairing] could not retract rejection after a review conflict: ${retractErr}`);
-          }
-        }
-        return c.json({
-          error: "session_review_conflict",
-          code: ERROR_CODES.session_review_conflict,
-          message: err.message
-        }, 409);
-      }
-      console.error(`[deepPairing] verdict flush failed (verdict landed in memory; debounced flush will retry): ${err}`);
-    }
-    if (rejection && recordAfterFlush) await store.recordRejectedApproach(rejection);
-    if (rejection) broadcast({ type: "ledger_write", kind: "rejected", ...rejection }, sid);
-    broadcast({ type: "artifact_updated", artifactId, status }, sid);
-    return c.json({ status: "updated", artifactId });
-  });
   app.post("/api/artifacts/:artifactId/rename", async (c) => {
     const sid = getSessionId(c);
     const store = getStore(sid);
@@ -32325,45 +32383,6 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     await store.renameArtifact(artifactId, title);
     broadcast({ type: "artifact_renamed", artifactId, title }, sid);
     return c.json({ status: "renamed", artifactId });
-  });
-  app.post("/api/artifacts/:artifactId/changeset-review", async (c) => {
-    const sid = getSessionId(c);
-    const store = getStore(sid);
-    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-    const artifactId = c.req.param("artifactId");
-    const bodyVal = await readJsonValue(c);
-    if (!bodyVal.ok) return bodyVal.res;
-    const parsed = ChangesetReviewBodySchema.safeParse(bodyVal.value);
-    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
-    const { filePath, state, reason } = parsed.data;
-    const target = (await store.getArtifacts()).find((a) => a.id === artifactId);
-    if (!target) {
-      return c.json(
-        {
-          error: "artifact_not_in_session",
-          code: "artifact_not_in_session",
-          message: "This artifact belongs to a different session than the one this tab is bound to."
-        },
-        404
-      );
-    }
-    if (!store.setChangesetFileReview) {
-      return c.json({ error: "unsupported", code: "unsupported", message: "This store can't persist changeset review state." }, 409);
-    }
-    const updated = await store.setChangesetFileReview(artifactId, filePath, state, reason);
-    if (!updated) {
-      return c.json(
-        {
-          error: "not_a_changeset_file",
-          code: "not_a_changeset_file",
-          message: "That artifact is not a changeset, or the file path is not part of it."
-        },
-        400
-      );
-    }
-    await store.forceFlush();
-    broadcast({ type: "changeset_review_updated", artifact: updated }, sid);
-    return c.json({ status: "updated", artifactId });
   });
   app.get("/api/artifacts/:artifactId/comments", async (c) => {
     const store = getStore(getSessionId(c));
