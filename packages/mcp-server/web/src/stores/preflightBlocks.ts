@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { ProposalPrecondition, StanceAllowanceReceipt } from "@deeppairing/shared";
 import { apiBase, apiGet } from "../lib/api";
 
 /**
@@ -57,10 +58,33 @@ export interface PreflightBlockRecord {
    * (never persisted) and for a pre-Q2 daemon.
    */
   serverId?: string;
+  // #470 — stance exceptions. All set by the daemon; absent on older daemons.
+  /** The present_* tool the block refused. */
+  toolName?: string;
+  /** Whether "Allow this proposal once" can be offered for this block. */
+  eligible?: boolean;
+  ineligibleReason?: string;
+  /** The receipt of the allowance granted on this block. */
+  allowance?: StanceAllowanceReceipt;
+  /** Daemon-written when you acted on it (a grant): Held no longer counts it. */
+  seenAt?: string;
+  /** This block replaced an allowance whose dependency moved. */
+  supersedesAllowanceId?: string;
+  /** What this block's proposal depended on (names the "newer art_x"). */
+  preconditions?: ProposalPrecondition[];
+  /** The exact stance row (identity for Retire). */
+  description?: string;
 }
 
 interface PreflightBlockState {
   blocks: PreflightBlockRecord[];
+  /**
+   * #501 review (Astra P2) — a per-row counter bumped by every LIVE change
+   * (a socket receipt or block). load() snapshots it before fetching and only
+   * merges the durable fields into rows no live event touched meanwhile, so a
+   * stale response can't overwrite a newer receipt.
+   */
+  liveRev: Record<string, number>;
   loaded: boolean;
   /**
    * Q2 — the "you haven't looked at this yet" boundary, persisted so it
@@ -72,6 +96,17 @@ interface PreflightBlockState {
   load: () => Promise<void>;
   /** Merge a single block from a `preflight_blocked` broadcast event. */
   pushBlock: (block: Omit<PreflightBlockRecord, "id" | "at"> & { at?: string }) => void;
+  /** #470 — apply a daemon receipt (grant / used / changed / revoked) to a block. */
+  applyReceipt: (blockId: string, allowance: StanceAllowanceReceipt, seenAt?: string) => void;
+  /** #470 — a request to open the ⋯ gate log at one entry (toast "More
+   *  options", the changed-state links). `seq` re-fires the same id. */
+  focusRequest: { blockId?: string; seq: number } | null;
+  /** #501 round 3 (Fable MED) — the gate log is open: the block toasts it
+   *  duplicates step aside so they can't cover it. */
+  logOpen: boolean;
+  setLogOpen: (open: boolean) => void;
+  requestFocus: (blockId?: string) => void;
+  clearFocusRequest: () => void;
   /** Q2 — mark everything currently held as seen (called when the log is opened). */
   markSeen: () => void;
   clear: () => void;
@@ -129,10 +164,12 @@ function sameBlock(
 
 export const usePreflightBlockStore = create<PreflightBlockState>((set, get) => ({
   blocks: [],
+  liveRev: {},
   loaded: false,
   lastSeenAt: readLastSeen(),
 
   load: async () => {
+    const revAtStart = { ...get().liveRev };
     try {
       const res = await apiGet(`${apiBase()}/api/preflight-blocks`);
       if (!res.ok) {
@@ -152,10 +189,22 @@ export const usePreflightBlockStore = create<PreflightBlockState>((set, get) => 
         }));
       // Merge UNDER anything already pushed live (a block that arrived on the
       // socket while this fetch was in flight is the same firing).
-      const { blocks } = get();
+      const { blocks, liveRev } = get();
       const merged = [...blocks];
       for (const h of hydrated) {
-        if (!merged.some((m) => sameBlock(m, h))) merged.push(h);
+        const i = merged.findIndex((m) => sameBlock(m, h));
+        if (i < 0) { merged.push(h); continue; }
+        // #501 review (Astra P2) — reconcile the durable, MUTABLE fields of a
+        // row we already hold (the receipt, seenAt, eligibility, linkage),
+        // unless a live event changed this row while the fetch was in flight.
+        const key = merged[i]!.serverId ?? merged[i]!.id;
+        if ((liveRev[key] ?? 0) !== (revAtStart[key] ?? 0)) continue;
+        const durable = pickDurable(h);
+        merged[i] = {
+          ...merged[i]!,
+          ...durable,
+          ...(durable.allowance ? { allowance: mergeReceipt(merged[i]!.allowance, durable.allowance) } : {}),
+        };
       }
       merged.sort((a, b) => b.at.localeCompare(a.at));
       set({ blocks: merged.slice(0, MAX_BLOCKS_KEPT), loaded: true });
@@ -178,7 +227,25 @@ export const usePreflightBlockStore = create<PreflightBlockState>((set, get) => 
     const id = block.serverId ?? `blk_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const record: PreflightBlockRecord = { ...block, id, at };
     const next = [record, ...blocks].slice(0, MAX_BLOCKS_KEPT);
-    set({ blocks: next });
+    set((s) => ({ blocks: next, liveRev: { ...s.liveRev, [id]: (s.liveRev[id] ?? 0) + 1 } }));
+  },
+
+  focusRequest: null,
+  logOpen: false,
+  setLogOpen: (logOpen) => set({ logOpen }),
+  requestFocus: (blockId) => set((s) => ({ focusRequest: { blockId, seq: (s.focusRequest?.seq ?? 0) + 1 } })),
+  clearFocusRequest: () => set({ focusRequest: null }),
+
+  applyReceipt: (blockId, allowance, seenAt) => {
+    set((s) => ({
+      // Server values only: the daemon's receipt and seenAt replace whatever
+      // this tab held (#501 review).
+      blocks: s.blocks.map((b) =>
+        b.serverId === blockId || b.id === blockId
+          ? { ...b, allowance: mergeReceipt(b.allowance, allowance), ...(seenAt ? { seenAt } : {}) }
+          : b),
+      liveRev: { ...s.liveRev, [blockId]: (s.liveRev[blockId] ?? 0) + 1 },
+    }));
   },
 
   markSeen: () => {
@@ -193,12 +260,42 @@ export const usePreflightBlockStore = create<PreflightBlockState>((set, get) => 
     set({ lastSeenAt: at });
   },
 
-  clear: () => set({ blocks: [], loaded: false }),
+  clear: () => set({ blocks: [], liveRev: {}, loaded: false }),
 }));
+
+/**
+ * #501 review round 3 (Astra P2) — receipts only move FORWARD. Every receipt
+ * value is the daemon's, but they arrive by different paths (this tab's HTTP
+ * result, the socket, a reload), in any order. Once an allowance has reached a
+ * terminal state (used / changed / revoked / ended / expired), a late `allowed`
+ * for the same allowance is stale and is ignored; terminal-to-terminal updates
+ * (e.g. a reload turning "ended" into the daemon's "used") still apply.
+ */
+const TERMINAL_RECEIPT: ReadonlySet<string> = new Set(["used", "changed", "revoked", "ended", "expired"]);
+export function mergeReceipt(current: StanceAllowanceReceipt | undefined, incoming: StanceAllowanceReceipt): StanceAllowanceReceipt {
+  if (current && current.id === incoming.id && TERMINAL_RECEIPT.has(current.state) && !TERMINAL_RECEIPT.has(incoming.state)) {
+    return current;
+  }
+  return incoming;
+}
+
+/** The fields of a durable log row that can change after it first fired. */
+function pickDurable(h: PreflightBlockRecord): Partial<PreflightBlockRecord> {
+  const out: Partial<PreflightBlockRecord> = {};
+  if (h.allowance) out.allowance = h.allowance;
+  if (h.seenAt) out.seenAt = h.seenAt;
+  if (typeof h.eligible === "boolean") out.eligible = h.eligible;
+  if (h.ineligibleReason) out.ineligibleReason = h.ineligibleReason;
+  if (h.supersedesAllowanceId) out.supersedesAllowanceId = h.supersedesAllowanceId;
+  if (h.preconditions) out.preconditions = h.preconditions;
+  return out;
+}
 
 /** Q2 — how many held blocks fired after the human last looked. */
 export function unreadBlockCount(state: Pick<PreflightBlockState, "blocks" | "lastSeenAt">): number {
   const { blocks, lastSeenAt } = state;
-  if (!lastSeenAt) return blocks.length;
-  return blocks.filter((b) => b.at.localeCompare(lastSeenAt) > 0).length;
+  // #470 (§4a) — a block you acted on (a grant) is seen, whatever the boundary.
+  const pending = blocks.filter((b) => !b.seenAt);
+  if (!lastSeenAt) return pending.length;
+  return pending.filter((b) => b.at.localeCompare(lastSeenAt) > 0).length;
 }

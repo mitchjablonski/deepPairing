@@ -289,7 +289,7 @@ describe("#487 review (Fable)", () => {
     expect(reload).not.toHaveBeenCalled();
   });
 
-  it("MED 4 — offline controls LOOK disabled: the title rename is a real disabled button; Retire carries disabled styles", () => {
+  it("MED 4 — offline controls LOOK disabled: the title rename is a real disabled button; Allow once (#470, which replaced the toast's Retire) carries disabled styles", () => {
     const art = { id: "r1", sessionId: "s1", type: "research", version: 1, parentId: null, title: "Audit", status: "draft", content: { summary: "s", findings: [] }, agentReasoning: null, createdAt: now, updatedAt: now } as any;
     useArtifactStore.setState({ artifacts: [art], selectedArtifactId: "r1" } as any);
     render(<><ArtifactPanel /><ToastLayer /></>);
@@ -297,10 +297,10 @@ describe("#487 review (Fable)", () => {
     const rename = screen.getByRole("heading", { name: "Audit" }).querySelector("button")!;
     expect(rename).toBeDisabled();
     expect(rename.className).toContain("disabled:cursor-default");
-    act(() => { useToastStore.getState().push({ kind: "preflight-block", title: "Blocked", ttl: 0, hero: { source: "session", concept: "redis", via: "concept" } } as any); });
-    const retire = screen.getByRole("button", { name: /Retire this stance/ });
-    expect(retire).toBeDisabled();
-    expect(retire.className).toMatch(/disabled:opacity-50 disabled:cursor-not-allowed disabled:no-underline/);
+    act(() => { useToastStore.getState().push({ kind: "preflight-block", title: "Blocked", ttl: 0, hero: { source: "session", concept: "redis", via: "concept", blockId: "blk_1", eligible: true } } as any); });
+    const allow = screen.getByRole("button", { name: "Allow this proposal once" });
+    expectGated(allow);
+    expect(allow.className).toMatch(/disabled:opacity-50 disabled:cursor-not-allowed/);
   });
 
   it("LOW 7 — a tab that has NEVER connected shows no request composer (even past the grace)", () => {

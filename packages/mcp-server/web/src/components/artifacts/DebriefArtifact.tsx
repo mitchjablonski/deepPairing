@@ -1,3 +1,4 @@
+import { AllowedOnceSection } from "../AllowedOnce";
 import { useMemo, useState, type ReactNode } from "react";
 import type { Artifact, Comment, DebriefContent } from "@deeppairing/shared";
 import { coerceDebriefContent } from "@deeppairing/shared";
@@ -558,6 +559,10 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
           So `suppressRejectConcept` de-fangs Reject — no "name the pattern"
           cross-project ledger capture (the server guards this authoritatively
           too). Approve / Request-changes stay fully meaningful. */}
+      {/* #470 — system section from the artifacts' own stamps; the agent's
+          debrief content can't suppress it. */}
+      <AllowedOnceSection sessionId={artifact.sessionId} />
+
       <ArtifactStatusActions artifact={artifact} suppressRejectConcept />
     </div>
   );

@@ -377,6 +377,13 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
 
       switch (data.type) {
         case "connected": {
+          // #501 review (Astra P2) — a (re)connect may have missed receipt
+          // broadcasts; re-read the durable gate log. Only once it has loaded
+          // before: the first load belongs to the log itself.
+          void import("./preflightBlocks").then(({ usePreflightBlockStore }) => {
+            if (!isCurrent(messageConnection, messageSession)) return;
+            if (usePreflightBlockStore.getState().loaded) void usePreflightBlockStore.getState().load();
+          });
           const supersededRecovery = pendingRecovery;
           const connectedSnapshot = ++snapshotGeneration;
           cancelPendingRecovery();
@@ -731,6 +738,11 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
                 addedBy: match.addedBy,
                 rejectedAt: match.rejectedAt,
                 projectCount: match.projectCount,
+                // #470 — which durable block this is, and whether the daemon
+                // says it can be allowed once.
+                blockId: typeof data.blockId === "string" ? data.blockId : undefined,
+                eligible: typeof data.eligible === "boolean" ? data.eligible : undefined,
+                ineligibleReason: typeof data.ineligibleReason === "string" ? data.ineligibleReason : undefined,
               },
               ttl: 12000,
               action: {
@@ -760,8 +772,51 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
               // content key.
               serverId: data.blockId,
               at: data.at,
+              // #470 — stance-exception fields (absent on older daemons).
+              toolName: data.toolName,
+              eligible: typeof data.eligible === "boolean" ? data.eligible : undefined,
+              ineligibleReason: data.ineligibleReason,
+              supersedesAllowanceId: data.supersedesAllowanceId,
+              preconditions: Array.isArray(data.preconditions) ? data.preconditions : undefined,
+              description: match.description,
             });
           });
+          break;
+        }
+
+        // #470 — "Allow this proposal once" receipts. The daemon writes the
+        // receipt (and, on a grant, seenAt so Held drops the block); open tabs
+        // follow here. Each moment is spoken ONCE: through the bar's single
+        // announcer when the bar is on (the toast then stays quiet), else by
+        // the toast's own polite role.
+        case "stance_exception_granted":
+        case "stance_exception_updated": {
+          const allowance = data.allowance;
+          const blockId = typeof data.blockId === "string" ? data.blockId : undefined;
+          if (!allowance || !blockId) break;
+          void Promise.all([import("./preflightBlocks"), import("../lib/stanceException")])
+            .then(([blocksMod, notifyMod]) => {
+              if (!isCurrent(messageConnection, messageSession)) return;
+              const store = blocksMod.usePreflightBlockStore.getState();
+              const before = store.blocks.find((b) => b.serverId === blockId || b.id === blockId);
+              const previous = before?.allowance?.state;
+              store.applyReceipt(blockId, allowance, typeof data.seenAt === "string" ? data.seenAt : undefined);
+              const concept = before?.concept ?? data.stance?.concept ?? data.stance?.description ?? "your stance";
+              if (data.type === "stance_exception_granted") {
+                // One announcement per allowance, shared with this tab's own
+                // HTTP result (order-independent; #501 review).
+                notifyMod.announceGrantOnce(String(allowance.id), concept, { cli: allowance.grantedVia === "cli", blockId });
+                return;
+              }
+              let text: string | null = null;
+              if (allowance.state === "used" && previous !== "used") {
+                text = `Claude used your allowance: ${typeof data.artifactTitle === "string" ? data.artifactTitle : "the allowed proposal"}.`;
+              } else if (allowance.state === "changed" && previous !== "changed") {
+                text = "The proposal you allowed changed. A new block is waiting.";
+              }
+              if (!text) return;
+              notifyMod.notifyStanceMoment(text, { blockId });
+            });
           break;
         }
 

@@ -74,7 +74,7 @@ describe("#470 A1 — the authority surface", () => {
         expect(`${r.method} ${r.path}`).not.toMatch(/exception$|grant|allow/i);
         if (r.path.includes("stance-exceptions")) expect(r.method).toBe("GET"); // inspect is read-only
       }
-      const grants = routes.filter((r) => /\/exception$/.test(r.path));
+      const grants = routes.filter((r) => r.method !== "GET" && /\/exception$/.test(r.path));
       expect(grants.map((r) => `${r.method} ${r.path}`)).toEqual(["POST /api/preflight-blocks/:blockId/exception"]);
     } finally {
       daemon.dispose();
