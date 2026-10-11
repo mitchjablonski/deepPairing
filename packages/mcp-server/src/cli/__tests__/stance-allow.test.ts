@@ -42,13 +42,13 @@ function terminal(target: { dir: string }, over: Partial<StanceIo> & { answers?:
   return { io, events, out, err, paged };
 }
 
-async function blocked(): Promise<{ blockId: string; sessionId: string; call: () => Promise<{ isError?: boolean }> }> {
+async function blocked(args = ARGS): Promise<{ blockId: string; sessionId: string; call: () => Promise<{ isError?: boolean }> }> {
   world = new StanceWorld("dp-sx-cli-");
   world.daemon.writeDaemonInfo(FAKE_PORT); // the CLI discovers the daemon like any client
   const w = await world.wrapper();
   holdStance(world.store(w.sessionId), STANCE);
-  expect((await w.call("present_code_change", ARGS)).isError).toBe(true);
-  return { blockId: (await world.newestBlock()).id, sessionId: w.sessionId, call: () => w.call("present_code_change", ARGS) };
+  expect((await w.call("present_code_change", args)).isError).toBe(true);
+  return { blockId: (await world.newestBlock()).id, sessionId: w.sessionId, call: () => w.call("present_code_change", args) };
 }
 
 describe("stance allow — daemon-routed (A1), interactive, previewed", () => {
@@ -339,7 +339,7 @@ describe("#503 review round 3 (Sol P2) — the preview never hides a real differ
   });
 
   it("property: distinct raw strings never render the same (exhaustive to length 3, then 20k seeded over a hostile alphabet)", () => {
-    const alphabet = ["a", "^", "M", "[", "\\", "x", "0", "d", "U", "+", "2", "E", "⟨", "⟩", "C", "R", "\r", "\x1b", "\x07", "\x9b", "\x7f", "\u202e", "\u2066", "\u200b", "\u200d", "\ufeff", "\u2028", "\t", "\ud800", "\udc00", "\u{e0041}"];
+    const alphabet = ["a", "^", "M", "[", "\\", "x", "0", "d", "U", "+", "2", "E", "⟨", "⟩", "C", "R", "\r", "\x1b", "\x07", "\x9b", "\x7f", "\u202e", "\u2066", "\u200b", "\u200d", "\ufeff", "\u2028", "\t", "\ud800", "\udc00", "\u{e0041}", " ", "\u3164", "\u2800", "\u034f", "\u00a0", "\u115f", "\ufe0f", "\u{e0100}"];
     let seed = 470;
     const rnd = (n: number) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
     const seen = new Map<string, string>();
@@ -374,5 +374,101 @@ describe("#503 review round 3 (Sol P2) — the preview never hides a real differ
 
   it("ordinary code stays readable: tabs, newlines, backslashes, carets and non-ASCII letters pass through", () => {
     expect(safeText("\tconst re = /\\d+\\^/; // naïve 日本 ⟩")).toBe("\tconst re = /\\d+\\^/; // naïve 日本 ⟩");
+  });
+});
+
+describe("#506 — visible whitespace and invisible-character fidelity", () => {
+  const diff = (before: string, after: string) => unifiedDiff("a.ts", before, after, { NO_COLOR: "1" });
+
+  it.each([
+    ["x", "x ", "-x", "+x⟨SPACE⟩"],
+    ["\tx", "  x", "-⟨TAB⟩x", "+⟨SPACE⟩⟨SPACE⟩x"],
+    ["a b", "ab", "-a⟨SPACE⟩b", "+ab"],
+    [" ", "\t", "-⟨SPACE⟩", "+⟨TAB⟩"],
+  ])("whitespace-only raw %j -> %j stays distinct", (before, after, removed, added) => {
+    const shown = diff(before, after);
+    expect(shown).toContain(removed);
+    expect(shown).toContain(added);
+    expect(shown).toContain("Whitespace on marked change lines");
+    expect(shown).not.toContain("(no changes)");
+  });
+
+  it("mixed hunks mark whitespace-only counterparts, not ordinary edits or unchanged context", () => {
+    const shown = diff("same context\na b\nold value", "same context\nab\nnew value");
+    expect(shown).toContain(" same context");
+    expect(shown).toContain("-a⟨SPACE⟩b");
+    expect(shown).toContain("+ab");
+    expect(shown).toContain("-old value");
+    expect(shown).toContain("+new value");
+    expect(shown).not.toContain("same⟨SPACE⟩context");
+  });
+
+  it.each([["x", "x\n", "absent", "present"], ["x\n", "x", "present", "absent"]])(
+    "final newline raw %j -> %j gets honest endpoint metadata", (before, after, oldState, newState) => {
+      const shown = diff(before, after);
+      expect(shown).toContain(`Final newline (LF): before ${oldState}; after ${newState}.`);
+      expect(shown).not.toContain("(no changes)");
+      expect(shown).toContain("Changed empty lines contain no characters");
+    },
+  );
+
+  it("an extra EOF blank line is a real added empty line, not a fictional LF change", () => {
+    const shown = diff("x\n", "x\n\n");
+    expect(shown).toContain("@@ -1,2 +1,3 @@");
+    expect(shown.split("\n").filter((l) => l === "+")).toHaveLength(1);
+    expect(shown).not.toContain("Final newline (LF)");
+    expect(diff("x \t\n", "x \t\n")).toContain("(no changes)");
+    expect(diff("x \t\n", "x \t\n")).not.toContain("Whitespace on marked");
+  });
+
+  it.each([0x3164, 0x2800, 0x034f, 0x115f, 0x1160, 0xffa0, 0x17b4, 0x17b5,
+    0x00a0, 0x1680, 0x2007, 0x202f, 0x205f, 0x3000, 0xfe0f, 0xe0100])(
+    "invisible U+%s has an explicit distinct token in every preview", (cp) => {
+      const ch = String.fromCodePoint(cp);
+      const token = `⟨U+${cp.toString(16).toUpperCase().padStart(4, "0")}⟩`;
+      expect(safeText(ch)).toBe(token);
+      expect(safeText(token)).not.toBe(token);
+      expect(diff("x", `x${ch}`)).toContain(`+x${token}`);
+      expect(renderSnapshot({ kind: "create", type: "decision", title: ch,
+        content: { context: ch, options: [] } } as never, { NO_COLOR: "1" })).toContain(token);
+    },
+  );
+
+  it("ordinary emoji/non-Latin text stays readable; variation selectors deliberately become visible tokens", () => {
+    expect(safeText("😀 日本 café e\u0301")).toBe("😀 日本 café e\u0301");
+    expect(safeText("✈\ufe0f")).toBe("✈⟨U+FE0F⟩");
+  });
+
+  it("whitespace-mode encoding stays injective, including literal marker tokens", () => {
+    const alphabet = ["", " ", "\t", "⟨", "⟩", "SPACE", "TAB", "⟨SPACE⟩", "⟨TAB⟩", "\u3164", "\u034f", "\u2800", "\r", "\n", "😀"];
+    const seen = new Map<string, string>();
+    for (const a of alphabet) for (const b of alphabet) for (const c of alphabet) {
+      const raw = a + b + c;
+      const shown = safeText(raw, true);
+      const prior = seen.get(shown);
+      if (prior !== undefined) expect(prior).toBe(raw);
+      seen.set(shown, raw);
+    }
+    expect(safeText(" \t", true)).toBe("⟨SPACE⟩⟨TAB⟩");
+    expect(safeText("⟨SPACE⟩⟨TAB⟩", true)).toBe("⟨⟨⟩SPACE⟩⟨⟨⟩TAB⟩");
+    expect(diff("⟨SPACE⟩", " ")).toContain("-⟨⟨⟩SPACE⟩");
+  });
+
+  it("the real daemon-routed CLI pages whitespace and invisible markers before explicit reason/allow; raw retry still matches", async () => {
+    const b = await blocked({ ...ARGS, before: "let config = {};", after: "let config = {}; \u3164\u2800\u034f" });
+    const t = terminal(world!);
+    expect(await runStanceCommand(["allow", b.blockId], t.io)).toBe(0);
+    expect(t.paged[0]).toContain("⟨U+3164⟩⟨U+2800⟩⟨U+034F⟩");
+    expect(t.events[0]).toBe("page");
+    expect((await b.call()).isError).toBeFalsy();
+    expect((await world!.allowances())[0]?.state).toBe("used");
+  });
+
+  it("the real daemon-routed whitespace-only preview marks changed lines and aborting confirmation grants nothing", async () => {
+    const b = await blocked({ ...ARGS, before: "let config = {};", after: "let config = {}; " });
+    const t = terminal(world!, { answers: ["reviewed whitespace", "no"] });
+    expect(await runStanceCommand(["allow", b.blockId], t.io)).toBe(1);
+    expect(t.paged[0]).toContain("+let⟨SPACE⟩config⟨SPACE⟩=⟨SPACE⟩{};⟨SPACE⟩");
+    expect(await world!.allowances()).toHaveLength(0);
   });
 });
