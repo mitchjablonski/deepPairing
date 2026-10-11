@@ -10,6 +10,7 @@ import { createMcpServer } from "../../mcp/server.js";
 import { deriveSessionId } from "../../session-id.js";
 import { FileStore } from "../../store/file-store.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
+import { beginHookSpawn, hookSpawnDiagnostic, observeHookChild } from "../../__tests__/hook-spawn-diagnostics.js";
 
 let fx: GlobalStoreFixture;
 let root: string;
@@ -64,30 +65,40 @@ function fireCount() {
     return Array.isArray(state.fires) ? state.fires.length : 0;
   } catch { return 0; }
 }
-function expectOneCheckpointFire(before: number) {
-  const state = JSON.parse(fs.readFileSync(path.join(root, ".deeppairing/hooks-state.json"), "utf8"));
-  expect(state.fires).toHaveLength(before + 1);
-  expect(state.fires.at(-1)).toMatchObject({hook: "checkpoint", exitCode: 0});
-  expect(state.fires.at(-1).reason).not.toMatch(/^error:/);
+function expectOneCheckpointFire(before: number, diagnostic: string) {
+  // A missing/corrupt fire log should also retain the subprocess evidence.
+  let state;
+  try {
+    state = JSON.parse(fs.readFileSync(path.join(root, ".deeppairing/hooks-state.json"), "utf8"));
+  } catch {
+    expect.fail(`Unable to read checkpoint fire log: ${diagnostic}`);
+  }
+  expect(state.fires, diagnostic).toHaveLength(before + 1);
+  expect(state.fires.at(-1), diagnostic).toMatchObject({hook: "checkpoint", exitCode: 0});
+  expect(state.fires.at(-1).reason, diagnostic).not.toMatch(/^error:/);
 }
 function hook(filePath = "src/a.ts", session: string | undefined = "session-a") {
   const before = fireCount();
+  const observation = beginHookSpawn("generated checkpoint", 5000, path.join(root, ".deeppairing/hooks-state.json"));
   const r = spawnSync(process.execPath, [path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
     input: event(filePath, session), encoding: "utf8", timeout: 5000, cwd: root, env: env(),
   });
-  expect(r.error).toBeUndefined();
-  expect(r.status, r.stderr).toBe(0);
-  expectOneCheckpointFire(before);
+  const diagnostic = hookSpawnDiagnostic(observation, r);
+  expect(r.error, diagnostic).toBeUndefined();
+  expect(r.status, diagnostic).toBe(0);
+  expectOneCheckpointFire(before, diagnostic);
   return r.stderr;
 }
 function runHook(payload: Record<string, unknown>, childEnv: NodeJS.ProcessEnv) {
   const before = fireCount();
+  const observation = beginHookSpawn("generated checkpoint", 5000, path.join(root, ".deeppairing/hooks-state.json"));
   const r = spawnSync(process.execPath, [path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
     input: JSON.stringify(payload), encoding: "utf8", timeout: 5000, cwd: root, env: childEnv,
   });
-  expect(r.error).toBeUndefined();
-  expect(r.status, r.stderr).toBe(0);
-  expectOneCheckpointFire(before);
+  const diagnostic = hookSpawnDiagnostic(observation, r);
+  expect(r.error, diagnostic).toBeUndefined();
+  expect(r.status, diagnostic).toBe(0);
+  expectOneCheckpointFire(before, diagnostic);
   return r.stderr;
 }
 function marker(file = "src/a.ts", session = "session-a") {
@@ -216,11 +227,12 @@ describe("file/session checkpoint receipts", () => {
   });
   it("uses the event session instead of a stale inherited session identity", () => {
     present();
+    const observation = beginHookSpawn("generated checkpoint", 5000, path.join(root, ".deeppairing/hooks-state.json"));
     const r = spawnSync(process.execPath, [path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
       cwd: root, input: event("src/a.ts"), encoding: "utf8", timeout: 5000,
       env: {...env(), CLAUDE_CODE_SESSION_ID: "session-b"},
     });
-    expect(r.status, r.stderr).toBe(0);
+    expect(r.status, hookSpawnDiagnostic(observation, r)).toBe(0);
     expect(r.stderr).toBe("");
     expect(fs.existsSync(marker())).toBe(false);
   });
@@ -245,11 +257,12 @@ describe("file/session checkpoint receipts", () => {
   });
   it("uses the environment session when the event omits its identity", () => {
     present();
+    const observation = beginHookSpawn("generated checkpoint", 5000, path.join(root, ".deeppairing/hooks-state.json"));
     const r = spawnSync(process.execPath, [path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
       cwd: root, input: JSON.stringify({tool_name: "Edit", tool_input: {file_path: "src/a.ts"}}),
       encoding: "utf8", timeout: 5000, env: {...env(), CLAUDE_CODE_SESSION_ID: "session-a"},
     });
-    expect(r.status, r.stderr).toBe(0);
+    expect(r.status, hookSpawnDiagnostic(observation, r)).toBe(0);
     expect(r.stderr).toBe("");
     expect(fs.existsSync(marker())).toBe(false);
   });
@@ -261,11 +274,12 @@ describe("file/session checkpoint receipts", () => {
     delete childEnv.CLAUDE_PROJECT_DIR;
     delete childEnv.DEEPPAIRING_PROJECT_ROOT;
     delete childEnv.CLAUDE_CODE_SESSION_ID;
+    const observation = beginHookSpawn("generated checkpoint", 5000, path.join(root, ".deeppairing/hooks-state.json"));
     const r = spawnSync(process.execPath, [path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
       cwd: childRoot, input: JSON.stringify({...JSON.parse(event("src/a.ts")), cwd: root}),
       encoding: "utf8", timeout: 5000, env: childEnv,
     });
-    expect(r.status, r.stderr).toBe(0);
+    expect(r.status, hookSpawnDiagnostic(observation, r)).toBe(0);
     expect(r.stderr).toBe("");
     expect(fs.existsSync(path.join(childRoot, ".deeppairing"))).toBe(false);
     const state = JSON.parse(fs.readFileSync(path.join(root, ".deeppairing/hooks-state.json"), "utf8"));
@@ -334,18 +348,21 @@ describe("file/session checkpoint receipts", () => {
   });
   it("lets only one concurrent hook claim a receipt", async () => {
     present();
-    const run = () => new Promise<string>((resolve, reject) => {
+    const run = async () => {
+      const observation = beginHookSpawn("generated checkpoint", 5000, path.join(root, ".deeppairing/hooks-state.json"));
       const child = spawn(process.execPath, [path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
         cwd: root, env: env(), stdio: ["pipe", "pipe", "pipe"], timeout: 5000,
       });
-      let stderr = "";
-      child.stderr.on("data", d => { stderr += d; });
-      child.on("error", reject);
-      child.on("close", code => code === 0 ? resolve(stderr) : reject(new Error(stderr)));
-      child.stdin.end(event("src/a.ts"));
-    });
+      const observed = observeHookChild(child, observation);
+      child.stdin!.end(event("src/a.ts"));
+      const result = await observed;
+      expect(result.error, result.diagnostic).toBeUndefined();
+      expect(result.status, result.diagnostic).toBe(0);
+      return result;
+    };
     const results = await Promise.all([run(), run()]);
-    expect(results.filter(s => s === "")).toHaveLength(1);
-    expect(results.filter(s => s.includes("present_code_change"))).toHaveLength(1);
+    const diagnostic = results.map(result => result.diagnostic).join("\n");
+    expect(results.filter(result => result.stderr === ""), diagnostic).toHaveLength(1);
+    expect(results.filter(result => result.stderr.includes("present_code_change")), diagnostic).toHaveLength(1);
   });
 });
