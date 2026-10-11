@@ -79,15 +79,30 @@ export function defaultPager(text: string, env: NodeJS.ProcessEnv): Promise<numb
 }
 
 /**
- * #503 review (Sol P2) — agent-supplied text must not drive your terminal. C0
- * and C1 control bytes (ESC, CR, BEL, the 8-bit CSI, …) are shown as visible
- * escapes; newlines and tabs stay readable. Only this renderer's own colour
- * codes reach the pager.
+ * #503 review (Sol P2, then the round-3 fidelity P2) — agent-supplied text
+ * must not drive your terminal, and it must not be able to look like other
+ * text either.
+ *
+ * Shown as a visible token instead of raw: every C0/C1 control except tab and
+ * newline, every Unicode format character (bidi overrides and isolates such as
+ * U+202E, zero-width spaces and joiners, the BOM, tag characters), lone
+ * surrogates, and the line/paragraph separators U+2028/U+2029.
+ *
+ * The escaping is INJECTIVE, so two different raw strings never display the
+ * same: each hidden character becomes `⟨NAME⟩` (`⟨CR⟩`, `⟨ESC⟩`,
+ * `⟨U+202E⟩`), and a literal `⟨` in the input becomes `⟨⟨⟩`. Every `⟨` in the
+ * output therefore starts a token that ends at the next `⟩`, the token names
+ * are distinct, and decoding is unambiguous. A real CR (`⟨CR⟩`) can't collide
+ * with the typed characters `^M`, `\r` or even `⟨CR⟩` (shown `⟨⟨⟩CR⟩`).
+ * Apply it exactly once per displayed string.
  */
+const HIDDEN = /[^\P{Cc}\t\n]|\p{Cf}|\p{Cs}|\p{Zl}|\p{Zp}|⟨/gu;
+const NAMED: Record<number, string> = { 0x00: "NUL", 0x07: "BEL", 0x08: "BS", 0x0b: "VT", 0x0c: "FF", 0x0d: "CR", 0x1b: "ESC", 0x7f: "DEL" };
 export function safeText(value: string): string {
-  return value.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, (c) => {
-    const code = c.charCodeAt(0);
-    return code < 0x20 ? `^${String.fromCharCode(code + 64)}` : code === 0x7f ? "^?" : `\\x${code.toString(16)}`;
+  return value.replace(HIDDEN, (ch) => {
+    if (ch === "⟨") return "⟨⟨⟩";
+    const cp = ch.codePointAt(0)!;
+    return `⟨${NAMED[cp] ?? `U+${cp.toString(16).toUpperCase().padStart(4, "0")}`}⟩`;
   });
 }
 
@@ -150,20 +165,27 @@ export function unifiedDiff(filePath: string, before: string, after: string, env
 
 /** The snapshot as readable text — never raw JSON (§3 "Preview"). */
 export function renderSnapshot(rawSnapshot: ProposalSnapshot, env: NodeJS.ProcessEnv): string {
-  // #503 review round 2 (Sol P2) — sanitise the WHOLE snapshot here, once,
-  // before any field is read: decision arrays, titles, option text, paths.
-  const snapshot = sanitizeDeep(rawSnapshot);
   const c = color(env);
-  const content = snapshot.content as Record<string, unknown>;
-  const text = (v: unknown) => (typeof v === "string" ? safeText(v) : "");
-  if (snapshot.type === "code_change") {
+  const raw = (v: unknown) => (typeof v === "string" ? v : "");
+  if (rawSnapshot.type === "code_change") {
+    // #503 round 3 (Sol P2) — diff the RAW before/after, then escape each
+    // displayed line (unifiedDiff does), so the comparison sees exactly what
+    // the agent sent and "(no changes)" means the texts really are equal.
+    const rc = rawSnapshot.content as Record<string, unknown>;
+    const reasoning = raw(rc.reasoning);
     return [
-      unifiedDiff(text(content.filePath), text(content.before), text(content.after), env),
+      unifiedDiff(raw(rc.filePath), raw(rc.before), raw(rc.after), env),
       "",
-      text(content.reasoning) && `Reasoning: ${text(content.reasoning)}`,
+      reasoning && `Reasoning: ${safeText(reasoning)}`,
     ].filter((l) => l !== "").join("\n");
   }
-  const out: string[] = [c.bold(safeText(snapshot.title))];
+  // #503 round 2 (Sol P2) — every other shape is escaped once, up front, so no
+  // displayed field (decision arrays, titles, option text, keys) is missed.
+  // Below this line strings are already safe: don't escape them again.
+  const snapshot = sanitizeDeep(rawSnapshot);
+  const content = snapshot.content as Record<string, unknown>;
+  const text = raw;
+  const out: string[] = [c.bold(text(snapshot.title))];
   if (snapshot.type === "decision") {
     if (text(content.context)) out.push("", text(content.context));
     for (const o of (Array.isArray(content.options) ? content.options : []) as Array<Record<string, unknown>>) {
@@ -176,13 +198,13 @@ export function renderSnapshot(rawSnapshot: ProposalSnapshot, env: NodeJS.Proces
   }
   // Any other shape: each field as readable lines.
   const walk = (value: unknown, indent: string): void => {
-    if (typeof value === "string") { out.push(`${indent}${safeText(value)}`); return; }
+    if (typeof value === "string") { out.push(`${indent}${value}`); return; }
     if (Array.isArray(value)) { value.forEach((v) => walk(v, `${indent}  `)); return; }
     if (value && typeof value === "object") {
       for (const [k, v] of Object.entries(value)) {
-        if (typeof v === "string") out.push(`${indent}${safeText(k)}: ${safeText(v)}`);
+        if (typeof v === "string") out.push(`${indent}${k}: ${v}`);
         else if (typeof v === "number" || typeof v === "boolean") out.push(`${indent}${k}: ${String(v)}`);
-        else { out.push(`${indent}${safeText(k)}:`); walk(v, `${indent}  `); }
+        else { out.push(`${indent}${k}:`); walk(v, `${indent}  `); }
       }
     }
   };
@@ -246,7 +268,8 @@ export async function runStanceCommand(args: string[], io: StanceIo): Promise<nu
     const { allowances } = sanitizeDeep(await res.json() as { allowances: Array<{ id: string; state: string; grantedVia: string; reason: string; stance: { concept?: string; description: string }; artifactId?: string }> });
     if (allowances.length === 0) { io.write("  No allowances held by this daemon.\n"); return 0; }
     for (const a of allowances) {
-      io.write(`  ${safeText(a.id)}  ${safeText(a.state).padEnd(8)} ${safeText(a.grantedVia).toUpperCase()}  '${safeText(a.stance.concept ?? a.stance.description)}' — “${safeText(a.reason)}”${a.artifactId ? ` → ${safeText(a.artifactId)}` : ""}\n`);
+      // Already escaped once by sanitizeDeep above.
+      io.write(`  ${a.id}  ${a.state.padEnd(8)} ${a.grantedVia.toUpperCase()}  '${a.stance.concept ?? a.stance.description}' — “${a.reason}”${a.artifactId ? ` → ${a.artifactId}` : ""}\n`);
     }
     return 0;
   }
@@ -266,8 +289,10 @@ export async function runStanceCommand(args: string[], io: StanceIo): Promise<nu
   if (!res) return fail("Couldn't reach the deepPairing daemon.");
   if (res.status === 404) return fail(`No block ${blockId} is held by the running daemon.`);
   if (!res.ok) return fail(`The daemon refused the preview (${res.status}).`);
-  const preview = sanitizeDeep(await res.json() as Preview);
-  if (!preview.eligible || !preview.snapshot) return fail(`This block can't be allowed once (${preview.ineligibleReason ?? "not eligible"}).`);
+  // Kept RAW: renderSnapshot diffs the raw code and escapes what it displays;
+  // every other displayed field is escaped where it is shown.
+  const preview = await res.json() as Preview;
+  if (!preview.eligible || !preview.snapshot) return fail(`This block can't be allowed once (${safeText(preview.ineligibleReason ?? "not eligible")}).`);
 
   const stance = safeText(preview.stance?.concept ?? preview.stance?.description ?? "your stance");
   const page = [

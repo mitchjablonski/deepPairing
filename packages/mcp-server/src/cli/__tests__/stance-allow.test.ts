@@ -12,7 +12,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { StanceWorld, holdStance, FAKE_PORT } from "../../daemon/__tests__/stance-exceptions.harness.js";
-import { defaultPager, PAGER_UNAVAILABLE, renderSnapshot, runStanceCommand, unifiedDiff, type StanceIo } from "../stance-allow.js";
+import { defaultPager, PAGER_UNAVAILABLE, renderSnapshot, runStanceCommand, safeText, unifiedDiff, type StanceIo } from "../stance-allow.js";
 
 let world: StanceWorld | undefined;
 afterEach(async () => { await world?.dispose(); world = undefined; });
@@ -233,7 +233,7 @@ describe("#503 review (Sol) — truthful results, safe previews, a portable path
     const t = terminal(world, { answers: ["reason with \x1b[31mred", "allow"] });
     expect(await runStanceCommand(["allow", (await world.newestBlock()).id], t.io)).toBe(0);
     expect(t.paged[0]).not.toMatch(/[\x07\x1b\r]/);
-    expect(t.paged[0]).toContain("ok^[[2J^[[Hhidden^Mover^G");
+    expect(t.paged[0]).toContain("ok⟨ESC⟩[2J⟨ESC⟩[Hhidden⟨CR⟩over⟨BEL⟩");
     const list = terminal(world);
     await runStanceCommand(["exceptions"], list.io);
     expect(list.out.join("")).not.toMatch(/\x1b/);
@@ -273,7 +273,7 @@ describe("#503 review round 2 (Sol) — every displayed field is safe; a success
     for (const env of [{ NO_COLOR: "1" }, {}] as NodeJS.ProcessEnv[]) {
       const out = renderSnapshot(snapshot as never, env).replace(/\x1b\[\d+m/g, ""); // the renderer's own colours only
       expect(out).not.toMatch(CONTROLS);
-      expect(out).toContain("^[[8mhidden^Mover^G");
+      expect(out).toContain("⟨ESC⟩[8mhidden⟨CR⟩over⟨BEL⟩⟨U+009B⟩2J");
     }
   });
 
@@ -290,7 +290,7 @@ describe("#503 review round 2 (Sol) — every displayed field is safe; a success
     const t = terminal(world);
     expect(await runStanceCommand(["allow", (await world.newestBlock()).id], t.io)).toBe(0);
     expect(t.paged[0]).not.toMatch(CONTROLS);
-    expect(t.paged[0]).toContain("Pros: fastx^[[8mhidden^Mover^G");
+    expect(t.paged[0]).toContain("Pros: fastx⟨ESC⟩[8mhidden⟨CR⟩over⟨BEL⟩");
   });
 
   it.each([
@@ -310,5 +310,69 @@ describe("#503 review round 2 (Sol) — every displayed field is safe; a success
     expect(err).toContain("Couldn't confirm whether the grant went through");
     expect(err).not.toMatch(/refused|Nothing was allowed/);
     expect(await world!.allowances()).toEqual([expect.objectContaining({ state: "allowed", grantedVia: "cli" })]);
+  });
+});
+
+describe("#503 review round 3 (Sol P2) — the preview never hides a real difference", () => {
+  const strip = (s: string) => s.replace(/\x1b\[\d+m/g, "");
+  const code = (before: string, after: string) =>
+    strip(renderSnapshot({ kind: "create", type: "code_change", title: "t", content: { filePath: "a.ts", before, after } } as never, { NO_COLOR: "1" }));
+
+  it("a real CR before and a typed ^M after: a hunk, never '(no changes)'", () => {
+    const out = code("const s = 'x\rY';", "const s = 'x^MY';");
+    expect(out).not.toContain("(no changes)");
+    expect(out).toContain("-const s = 'x⟨CR⟩Y';");
+    expect(out).toContain("+const s = 'x^MY';");
+  });
+
+  it.each([
+    ["\r", "^M"], ["\r", "\\r"], ["\r", "⟨CR⟩"], ["\x1b", "^["], ["\x1b", "⟨ESC⟩"], ["\u202e", "⟨U+202E⟩"],
+    ["\x9b", "\\x9b"], ["\x7f", "^?"], ["⟨", "⟨⟨⟩"], ["\u200b", ""], ["\ud800", "\ufffd"],
+  ])("raw %j vs literal %j differ in the diff", (a, b) => {
+    const out = code(`v = '${a}'`, `v = '${b}'`);
+    expect(out).not.toContain("(no changes)");
+    expect(out.split("\n").filter((l) => /^[+-]v/.test(l))).toHaveLength(2);
+  });
+
+  it("only truly equal texts say '(no changes)'", () => {
+    expect(code("same\r\nline", "same\r\nline")).toContain("(no changes)");
+  });
+
+  it("property: distinct raw strings never render the same (exhaustive to length 3, then 20k seeded over a hostile alphabet)", () => {
+    const alphabet = ["a", "^", "M", "[", "\\", "x", "0", "d", "U", "+", "2", "E", "⟨", "⟩", "C", "R", "\r", "\x1b", "\x07", "\x9b", "\x7f", "\u202e", "\u2066", "\u200b", "\u200d", "\ufeff", "\u2028", "\t", "\ud800", "\udc00", "\u{e0041}"];
+    let seed = 470;
+    const rnd = (n: number) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+    const seen = new Map<string, string>();
+    const check = (raw: string) => {
+      const shown = safeText(raw);
+      const prior = seen.get(shown);
+      if (prior !== undefined) expect(prior, JSON.stringify([prior, raw, shown])).toBe(raw);
+      seen.set(shown, raw);
+    };
+    // Exhaustive over every string of length <= 3 (the short collisions), then random longer ones.
+    for (const a of alphabet) { check(a); for (const b of alphabet) { check(a + b); for (const c of alphabet) check(a + b + c); } }
+    for (let i = 0; i < 20_000; i++) {
+      let raw = "";
+      const len = 1 + rnd(6);
+      for (let k = 0; k < len; k++) raw += alphabet[rnd(alphabet.length)];
+      const shown = safeText(raw);
+      const prior = seen.get(shown);
+      if (prior !== undefined) expect(prior, JSON.stringify([prior, raw, shown])).toBe(raw);
+      seen.set(shown, raw);
+    }
+  });
+
+  it("LOW: bidi overrides, isolates, zero-width and BOM characters are marked visibly (Trojan source)", () => {
+    const trojan = "if (isAdmin) {\u202e } \u2066// check\u2069 \u200b\u200c\u200d\u2060\ufeff\u061c\u00ad";
+    const shown = safeText(trojan);
+    expect(shown).toBe("if (isAdmin) {⟨U+202E⟩ } ⟨U+2066⟩// check⟨U+2069⟩ ⟨U+200B⟩⟨U+200C⟩⟨U+200D⟩⟨U+2060⟩⟨U+FEFF⟩⟨U+061C⟩⟨U+00AD⟩");
+    expect(shown).not.toMatch(/[\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/);
+    const out = code("ok", `ok${trojan}`);
+    expect(out).toContain("⟨U+202E⟩");
+    expect(out).not.toMatch(/[\u202a-\u202e\u2066-\u2069]/);
+  });
+
+  it("ordinary code stays readable: tabs, newlines, backslashes, carets and non-ASCII letters pass through", () => {
+    expect(safeText("\tconst re = /\\d+\\^/; // naïve 日本 ⟩")).toBe("\tconst re = /\\d+\\^/; // naïve 日本 ⟩");
   });
 });
