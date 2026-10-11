@@ -15,7 +15,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { FileStore } from "../file-store.js";
 import { ownLockIdentity } from "../file-lock.js";
-import { finishLedgerChild, observeLedgerChild } from "./ledger-child-handoff.js";
+import { finishLedgerChild, ledgerWorkBudget, observeLedgerChild } from "./ledger-child-handoff.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 
 let fx: GlobalStoreFixture;
@@ -359,6 +359,9 @@ describe("#488 Sol review — landed-but-queued retire, durable removal, refused
 
   it("delayed-child control: the parent's live retry can drain the queue before the child imports", async () => {
     vi.useRealTimers();
+    // Outer 60s includes enqueue (~1s), one shared 40s work budget, possible
+    // 4s forced collection, and the full 5+2+2s finally cleanup reserve.
+    const remainingBudget = ledgerWorkBudget(40_000);
     const store = publishingStore();
     holdLedgerLock();
     store.recordRejectedApproach({ description: "Use Redis", concept: "redis" });
@@ -380,11 +383,11 @@ describe("#488 Sol review — landed-but-queued retire, durable removal, refused
     const observed = observeLedgerChild(spawn(process.execPath, ["--import", import.meta.resolve("tsx"), "--input-type=module", "--eval", program, fx.dir], { env, stdio: ["pipe", "pipe", "pipe"] }));
     let primary: unknown;
     try {
-      await observed.wait(() => observed.stdout.includes("import-gated"), 30_000, "child import gate");
-      await observed.wait(() => !fs.existsSync(pending), 30_000, "parent retry drained queue");
+      await observed.wait(() => observed.stdout.includes("import-gated"), remainingBudget(), "child import gate");
+      await observed.wait(() => !fs.existsSync(pending), remainingBudget(), "parent retry drained queue");
       expect(instances("redis")).toHaveLength(1);
       observed.child.stdin!.end("go");
-      await observed.collect(30_000);
+      await observed.collect(remainingBudget());
       expect(observed.result?.code, observed.diagnostic()).toBe(0);
       expect(observed.stdout).toContain("remaining=0");
       await expect(observed.ownedQueue(`${pending}.lock`, 100)).rejects.toThrow("child stopped");

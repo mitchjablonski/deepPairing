@@ -6,6 +6,12 @@ import { performance } from "node:perf_hooks";
 const OUTPUT_LIMIT = 2048;
 const pause = () => new Promise<void>((resolve) => setTimeout(resolve, 5));
 
+/** Sequential phases spend one elapsed budget; none starts a fresh deadline. */
+export function ledgerWorkBudget(totalMs: number): () => number {
+  const deadline = performance.now() + totalMs;
+  return () => Math.max(0, deadline - performance.now());
+}
+
 export function observeLedgerChild(child: ChildProcess) {
   const started = performance.now();
   const wallStart = Date.now();

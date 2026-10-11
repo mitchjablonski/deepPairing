@@ -4,7 +4,18 @@ import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { expect, it, vi } from "vitest";
-import { finishLedgerChild, observeLedgerChild } from "./ledger-child-handoff.js";
+import { finishLedgerChild, ledgerWorkBudget, observeLedgerChild } from "./ledger-child-handoff.js";
+
+it("exhausted sequential work phases get zero new budget even with a frozen wall clock", async () => {
+  const wall = vi.spyOn(Date, "now").mockReturnValue(0);
+  try {
+    const remaining = ledgerWorkBudget(20);
+    expect(remaining()).toBeGreaterThan(0);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(remaining()).toBe(0);
+    expect(remaining()).toBe(0); // the next phase cannot restart the budget
+  } finally { wall.mockRestore(); }
+});
 
 it("rejects another writer's lock and bounds its watchdog despite a frozen wall clock", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ledger-handoff-"));
