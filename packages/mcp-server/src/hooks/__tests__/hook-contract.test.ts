@@ -52,7 +52,7 @@ import { spawn, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { buildSync } from "esbuild";
 import { ensureStopHook, ensureCheckpointHook } from "../../cli/setup-tasks.js";
 import { beginHookSpawn, hookSpawnDiagnostic, observeHookChild } from "../../__tests__/hook-spawn-diagnostics.js";
-import { prepareHookLockObserver } from "../../__tests__/hook-lock-diagnostics.js";
+import { HOOK_LOCK_FIXTURE_EPOCH_MS, prepareHookLockObserver } from "../../__tests__/hook-lock-diagnostics.js";
 
 const TIMEOUT = 10_000;
 
@@ -210,13 +210,15 @@ type RunOptions = {
   coreScript?: string;
   /** Clock/syscall metadata only; never enabled for other contract cases. */
   observeLockClock?: boolean;
+  /** Only the explicitly aged stale-lock fixtures, never general hook tests. */
+  fixtureEpochMs?: number;
 };
 
 function run(lane: Lane, root: string, opts: RunOptions = {}): SpawnSyncReturns<string> & { diagnostic: string } {
   const args: string[] = [];
   const observation = beginHookSpawn(lane, TIMEOUT, statePath(root));
   if (opts.observeLockClock) {
-    args.push("--import", pathToFileURL(prepareHookLockObserver(observation, opts.preload)).href);
+    args.push("--import", pathToFileURL(prepareHookLockObserver(observation, opts.preload, { fixtureEpochMs: opts.fixtureEpochMs })).href);
   } else if (opts.preload) {
     const preload = path.join(root, `preload.${Math.random().toString(16).slice(2)}.mjs`);
     fs.writeFileSync(preload, opts.preload);
@@ -407,7 +409,9 @@ describe.each(ALL_LANES)("%s — stale lock recovery", (lane) => {
     const lock = statePath(root) + ".lock";
     fs.mkdirSync(path.dirname(lock), { recursive: true });
     fs.writeFileSync(lock, "");
-    const old = new Date(Date.now() - 10_000);
+    // The child uses this same epoch plus monotonic elapsed time. A host wall
+    // clock step cannot turn this deliberately stale fixture into a live lock.
+    const old = new Date(HOOK_LOCK_FIXTURE_EPOCH_MS - 10_000);
     fs.utimesSync(lock, old, old);
     return lock;
   }
@@ -417,13 +421,13 @@ describe.each(ALL_LANES)("%s — stale lock recovery", (lane) => {
     const lock = plantStaleLock(root);
     let diagnostic = "";
     if (kindOf(lane) === "core") {
-      const result = run(lane, root, { observeLockClock: true });
+      const result = run(lane, root, { observeLockClock: true, fixtureEpochMs: HOOK_LOCK_FIXTURE_EPOCH_MS });
       diagnostic = result.diagnostic;
       expect(result.error, diagnostic).toBeUndefined();
       expect(result.status, result.diagnostic).toBe(0);
       expect(result.stdout.trim(), result.diagnostic).toBe(lock);
     } else {
-      expectOneCleanFire(lane, root, { observeLockClock: true }, value => { diagnostic = value; });
+      expectOneCleanFire(lane, root, { observeLockClock: true, fixtureEpochMs: HOOK_LOCK_FIXTURE_EPOCH_MS }, value => { diagnostic = value; });
     }
     expect(fs.existsSync(lock), diagnostic).toBe(false);
   });
@@ -455,13 +459,13 @@ fs.openSync = (p, ...a) => {
 `;
     let diagnostic = "";
     if (kindOf(lane) === "core") {
-      const result = run(lane, root, { preload, observeLockClock: true });
+      const result = run(lane, root, { preload, observeLockClock: true, fixtureEpochMs: HOOK_LOCK_FIXTURE_EPOCH_MS });
       diagnostic = result.diagnostic;
       expect(result.error, result.diagnostic).toBeUndefined();
       expect(result.status, result.diagnostic).toBe(0);
       expect(result.stdout.trim(), `stale-lock recovery was skipped once the deadline passed: ${result.diagnostic}`).toBe(lock);
     } else {
-      expectOneCleanFire(lane, root, { preload, observeLockClock: true }, value => { diagnostic = value; });
+      expectOneCleanFire(lane, root, { preload, observeLockClock: true, fixtureEpochMs: HOOK_LOCK_FIXTURE_EPOCH_MS }, value => { diagnostic = value; });
     }
     expect(fs.existsSync(lock), `the stale lock survived: ${diagnostic}`).toBe(false);
   });
@@ -474,13 +478,13 @@ fs.openSync = (p, ...a) => {
     const env = { DP_FAULT_LOG: log };
     let diagnostic = "";
     if (kindOf(lane) === "core") {
-      const result = run(lane, root, { preload, env, observeLockClock: true });
+      const result = run(lane, root, { preload, env, observeLockClock: true, fixtureEpochMs: HOOK_LOCK_FIXTURE_EPOCH_MS });
       diagnostic = result.diagnostic;
       expect(result.error, result.diagnostic).toBeUndefined();
       expect(result.status, result.diagnostic).toBe(0);
       expect(result.stdout.trim(), result.diagnostic).toBe("null");
     } else {
-      expectOneCleanFire(lane, root, { preload, env, observeLockClock: true }, value => { diagnostic = value; });
+      expectOneCleanFire(lane, root, { preload, env, observeLockClock: true, fixtureEpochMs: HOOK_LOCK_FIXTURE_EPOCH_MS }, value => { diagnostic = value; });
     }
     // The unlink must actually have been attempted: the whole point of the
     // one-shot brokeStale guard is that the breaker RUNS here and then stops.
