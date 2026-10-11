@@ -13,23 +13,28 @@ import { FileStore } from "../../store/file-store.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { beginHookSpawn, hookSpawnDiagnostic, observeHookChild } from "../../__tests__/hook-spawn-diagnostics.js";
 import { prepareCheckpointReceiptObserver, checkpointReceiptDiagnostic } from "../../__tests__/checkpoint-receipt-diagnostics.js";
+import { CHECKPOINT_FIXTURE_EPOCH_MS, normalizeMintedCheckpointReceipt } from "../../__tests__/checkpoint-controlled-fixture.js";
 
 let fx: GlobalStoreFixture;
 let root: string;
 let store: FileStore;
 let nextId: number;
+let fixtureEpoch: number | undefined;
 beforeEach(() => {
   fx = withGlobalStore("dp-checkpoint-scope-");
   root = fx.dir;
   nextId = 0;
+  fixtureEpoch = CHECKPOINT_FIXTURE_EPOCH_MS;
   store = fx.track(new FileStore(root, deriveSessionId(root, "session-a").sessionId));
   ensureCheckpointHook(root);
 });
 afterEach(() => fx.dispose());
 
 function present(filePath = "src/a.ts", target = store) {
-  return target.createArtifact({id: `change-${++nextId}`, type: "code_change", title: "edit",
+  const artifact = target.createArtifact({id: `change-${++nextId}`, type: "code_change", title: "edit",
     content: {filePath, changeType: "modify", before: "old", after: "new", reasoning: "why"}});
+  if (fixtureEpoch !== undefined) normalizeMintedCheckpointReceipt(root, artifact, filePath, fixtureEpoch);
+  return artifact;
 }
 function env() {
   const result = {...process.env, CLAUDE_PROJECT_DIR: root};
@@ -55,6 +60,9 @@ async function presentChangeset(reviewIntent?: "external") {
     expect(result.isError).not.toBe(true);
     const artifact = store.getArtifacts().find(value => value.type === "changeset");
     expect(artifact).toBeDefined();
+    if (fixtureEpoch !== undefined && !reviewIntent) {
+      for (const file of ["src/a.ts", "src/b.ts"]) normalizeMintedCheckpointReceipt(root, artifact!, file, fixtureEpoch);
+    }
     return artifact!;
   } finally {
     await client.close();
@@ -86,7 +94,7 @@ function hook(filePath = "src/a.ts", session: string | undefined = "session-a") 
 function runHook(payload: Record<string, unknown>, childEnv: NodeJS.ProcessEnv) {
   const before = fireCount();
   const observation = beginHookSpawn("generated checkpoint", 5000, path.join(root, ".deeppairing/hooks-state.json"));
-  const receipt = prepareCheckpointReceiptObserver(observation.statePath);
+  const receipt = prepareCheckpointReceiptObserver(observation.statePath, { epochMs: fixtureEpoch });
   const r = spawnSync(process.execPath, ["--import", pathToFileURL(receipt.preloadPath).href, path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
     input: JSON.stringify(payload), encoding: "utf8", timeout: 5000, cwd: root, env: childEnv,
   });
@@ -101,7 +109,28 @@ function marker(file = "src/a.ts", session = "session-a") {
   return path.join(root, ".deeppairing/sessions", deriveSessionId(root, session).sessionId, "code-checkpoints", key + ".json");
 }
 
-describe("file/session checkpoint receipts", () => {
+// Scope/identity/claim cases declare controlled freshness, but still verify real
+// artifact mint metadata and TTL before normalizing owned receipts. Native smoke
+// and native future/expiry controls opt out explicitly; no environment-wide fake.
+describe("file/session checkpoint receipts (explicit clock premise)", () => {
+  it("real-clock smoke: genuine presentation is consumed exactly once", () => {
+    fixtureEpoch = undefined;
+    present();
+    hook().toBe("");
+    expect(fs.existsSync(marker())).toBe(false);
+    hook().toContain("present_code_change");
+  });
+  it("real-clock smoke: genuine changeset keeps its mint TTL and consumes both files", async () => {
+    fixtureEpoch = undefined;
+    const artifact = await presentChangeset();
+    for (const file of ["src/a.ts", "src/b.ts"]) {
+      const receipt = JSON.parse(fs.readFileSync(marker(file), "utf8"));
+      expect(receipt.at).toBe(artifact.createdAt);
+      expect(Date.parse(receipt.expiresAt) - Date.parse(receipt.at)).toBe(600_000);
+      hook(file).toBe("");
+      expect(fs.existsSync(marker(file))).toBe(false);
+    }
+  });
   it("matches relative presentation to absolute edit and consumes the receipt once", () => {
     present();
     hook(path.join(root, "src/a.ts")).toBe("");
@@ -143,12 +172,14 @@ describe("file/session checkpoint receipts", () => {
     expect(fs.readdirSync(path.dirname(marker()))).toHaveLength(0);
   });
   it("does not break artifact creation when the receipt directory cannot be written", () => {
+    fixtureEpoch = undefined; // Deliberately no receipt exists to normalize.
     fs.writeFileSync(path.dirname(marker()), "not a directory");
     expect(() => present()).not.toThrow();
     expect(store.getArtifacts()).toHaveLength(1);
     hook().toContain("present_code_change");
   });
   it.each([-120_000, 120_000, NaN])("rejects expired, future or invalid timestamps (%s)", offset => {
+    fixtureEpoch = undefined; // Preserve genuine native-clock authority coverage.
     present();
     const p = marker();
     const m = JSON.parse(fs.readFileSync(p, "utf8"));
@@ -223,7 +254,8 @@ describe("file/session checkpoint receipts", () => {
   it("uses the event session instead of a stale inherited session identity", () => {
     present();
     const observation = beginHookSpawn("generated checkpoint", 5000, path.join(root, ".deeppairing/hooks-state.json"));
-    const r = spawnSync(process.execPath, [path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
+    const receipt = prepareCheckpointReceiptObserver(observation.statePath, { epochMs: fixtureEpoch });
+    const r = spawnSync(process.execPath, ["--import", pathToFileURL(receipt.preloadPath).href, path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
       cwd: root, input: event("src/a.ts"), encoding: "utf8", timeout: 5000,
       env: {...env(), CLAUDE_CODE_SESSION_ID: "session-b"},
     });
@@ -253,7 +285,8 @@ describe("file/session checkpoint receipts", () => {
   it("uses the environment session when the event omits its identity", () => {
     present();
     const observation = beginHookSpawn("generated checkpoint", 5000, path.join(root, ".deeppairing/hooks-state.json"));
-    const r = spawnSync(process.execPath, [path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
+    const receipt = prepareCheckpointReceiptObserver(observation.statePath, { epochMs: fixtureEpoch });
+    const r = spawnSync(process.execPath, ["--import", pathToFileURL(receipt.preloadPath).href, path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
       cwd: root, input: JSON.stringify({tool_name: "Edit", tool_input: {file_path: "src/a.ts"}}),
       encoding: "utf8", timeout: 5000, env: {...env(), CLAUDE_CODE_SESSION_ID: "session-a"},
     });
@@ -270,7 +303,8 @@ describe("file/session checkpoint receipts", () => {
     delete childEnv.DEEPPAIRING_PROJECT_ROOT;
     delete childEnv.CLAUDE_CODE_SESSION_ID;
     const observation = beginHookSpawn("generated checkpoint", 5000, path.join(root, ".deeppairing/hooks-state.json"));
-    const r = spawnSync(process.execPath, [path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
+    const receipt = prepareCheckpointReceiptObserver(observation.statePath, { epochMs: fixtureEpoch });
+    const r = spawnSync(process.execPath, ["--import", pathToFileURL(receipt.preloadPath).href, path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
       cwd: childRoot, input: JSON.stringify({...JSON.parse(event("src/a.ts")), cwd: root}),
       encoding: "utf8", timeout: 5000, env: childEnv,
     });
@@ -317,13 +351,13 @@ describe("file/session checkpoint receipts", () => {
     present();
     let m = JSON.parse(fs.readFileSync(marker(), "utf8"));
     expect(Date.parse(m.expiresAt) - Date.parse(m.at)).toBe(60_000);
-    m.at = new Date(Date.now() - 90_000).toISOString();
-    m.expiresAt = new Date(Date.now() + 10_000).toISOString();
+    m.at = new Date(CHECKPOINT_FIXTURE_EPOCH_MS - 90_000).toISOString();
+    m.expiresAt = new Date(CHECKPOINT_FIXTURE_EPOCH_MS + 10_000).toISOString();
     fs.writeFileSync(marker(), JSON.stringify(m));
     hook().toBe("");
     present();
     m = JSON.parse(fs.readFileSync(marker(), "utf8"));
-    m.at = new Date(Date.now() - 61_000).toISOString();
+    m.at = new Date(CHECKPOINT_FIXTURE_EPOCH_MS - 61_000).toISOString();
     delete m.expiresAt;
     fs.writeFileSync(marker(), JSON.stringify(m));
     hook().toContain("present_code_change");
@@ -334,10 +368,10 @@ describe("file/session checkpoint receipts", () => {
     const m = JSON.parse(fs.readFileSync(marker(), "utf8"));
     expect(Date.parse(m.expiresAt) - Date.parse(m.at)).toBe(10 * 60_000);
   });
-  it.each(["invalid", new Date(Date.now() - 1).toISOString()])("rejects invalid or expired explicit expiry %s", expiresAt => {
+  it.each(["invalid", "expired"])("rejects invalid or expired explicit expiry %s", expiryCase => {
     present();
     const m = JSON.parse(fs.readFileSync(marker(), "utf8"));
-    m.expiresAt = expiresAt;
+    m.expiresAt = expiryCase === "invalid" ? "invalid" : new Date(CHECKPOINT_FIXTURE_EPOCH_MS - 1).toISOString();
     fs.writeFileSync(marker(), JSON.stringify(m));
     hook().toContain("present_code_change");
   });
@@ -345,7 +379,8 @@ describe("file/session checkpoint receipts", () => {
     present();
     const run = async () => {
       const observation = beginHookSpawn("generated checkpoint", 5000, path.join(root, ".deeppairing/hooks-state.json"));
-      const child = spawn(process.execPath, [path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
+      const receipt = prepareCheckpointReceiptObserver(observation.statePath, { epochMs: fixtureEpoch });
+      const child = spawn(process.execPath, ["--import", pathToFileURL(receipt.preloadPath).href, path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
         cwd: root, env: env(), stdio: ["pipe", "pipe", "pipe"], timeout: 5000,
       });
       const observed = observeHookChild(child, observation);
