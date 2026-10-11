@@ -1,6 +1,7 @@
 /** Test-only evidence for #500; no retries, deadline changes or hook policy. */
 import fs from "node:fs";
 import type { ChildProcess } from "node:child_process";
+import { hookLockEvidence } from "./hook-lock-diagnostics.js";
 
 const OUTPUT_LIMIT = 1024;
 
@@ -41,12 +42,14 @@ function stateSummary(statePath: string) {
     const summary = errorSummary(error);
     stateIssue = summary?.code ?? summary?.name ?? "unreadable";
   }
-  let lock: { present: boolean; ageMs?: number; issue?: string };
+  let lock: { present: boolean; wallMs: number; mtimeMs?: number; ageMs?: number; issue?: string };
+  const wallMs = Date.now();
   try {
-    lock = { present: true, ageMs: Math.max(0, Math.round(Date.now() - fs.statSync(`${statePath}.lock`).mtimeMs)) };
+    const mtimeMs = fs.statSync(`${statePath}.lock`).mtimeMs;
+    lock = { present: true, wallMs, mtimeMs, ageMs: Math.round(wallMs - mtimeMs) };
   } catch (error) {
     const summary = errorSummary(error);
-    lock = { present: false, ...(summary?.code === "ENOENT" ? {} : { issue: summary?.code ?? "unreadable" }) };
+    lock = { present: false, wallMs, ...(summary?.code === "ENOENT" ? {} : { issue: summary?.code ?? "unreadable" }) };
   }
   return { fireCount, lastReason, stateIssue, lock };
 }
@@ -57,11 +60,14 @@ export interface HookSpawnObservation {
   startedAt: number;
   statePath: string;
   beforeFireCount: number | null;
+  startedWallMs: number;
+  beforeLock: ReturnType<typeof stateSummary>["lock"];
+  childLockEvidencePath?: string;
 }
 
 export function beginHookSpawn(lane: string, deadlineMs: number, statePath: string): HookSpawnObservation {
-  const beforeFireCount = stateSummary(statePath).fireCount;
-  return { lane, deadlineMs, statePath, beforeFireCount, startedAt: performance.now() };
+  const before = stateSummary(statePath);
+  return { lane, deadlineMs, statePath, beforeFireCount: before.fireCount, beforeLock: before.lock, startedWallMs: Date.now(), startedAt: performance.now() };
 }
 
 interface HookExit {
@@ -78,6 +84,10 @@ export function hookSpawnDiagnostic(observation: HookSpawnObservation, result: H
     lane: bounded(observation.lane, 120),
     elapsedMs: Math.round(performance.now() - observation.startedAt),
     deadlineMs: observation.deadlineMs,
+    startedWallMs: observation.startedWallMs,
+    finishedWallMs: Date.now(),
+    beforeLock: observation.beforeLock,
+    childLock: hookLockEvidence(observation),
     exitCode: result.status,
     signal: result.signal,
     error: errorSummary(result.error),
