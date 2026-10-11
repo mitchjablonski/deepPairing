@@ -430,9 +430,9 @@ function sleepSync(ms) {
   } catch {
   }
 }
-function acquireHookStateLock(statePath, now = Date.now()) {
+function acquireHookStateLock(statePath, _now = Date.now()) {
   const lock = `${statePath}.lock`;
-  const deadline = now + LOCK_MAX_WAIT_MS;
+  const deadline = process.hrtime.bigint() + BigInt(LOCK_MAX_WAIT_MS) * 1000000n;
   let brokeStale = false;
   for (; ; ) {
     try {
@@ -449,7 +449,7 @@ function acquireHookStateLock(statePath, now = Date.now()) {
       } catch (staleErr) {
         if (errnoCode(staleErr) !== "ENOENT") return null;
       }
-      if (Date.now() >= deadline) return null;
+      if (process.hrtime.bigint() >= deadline) return null;
       sleepSync(LOCK_SPIN_MS);
     }
   }
