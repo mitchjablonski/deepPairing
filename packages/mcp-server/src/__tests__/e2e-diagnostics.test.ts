@@ -45,11 +45,13 @@ function childStatusDiagnostic(
   const safeDurationMs = Number.isFinite(durationMs)
     ? Math.max(0, Math.min(MAX_CHILD_DIAGNOSTIC_DURATION_MS, Math.round(durationMs)))
     : null;
+  const durationCapped = Number.isFinite(durationMs) && durationMs > MAX_CHILD_DIAGNOSTIC_DURATION_MS;
   return `Playwright subprocess exit metadata: ${JSON.stringify({
     status,
     signal: safeSignal,
     errorCode: safeErrorCode,
     durationMs: safeDurationMs,
+    durationCapped,
   })}`;
 }
 
@@ -82,12 +84,14 @@ async function capturedBody(proc: ChildProcess): Promise<Buffer> {
 describe("E2E daemon diagnostics", () => {
   it("keeps subprocess failure metadata bounded and free of child output", () => {
     expect(childStatusDiagnostic(null, "SIGTERM", "ETIMEDOUT", 20_004.4)).toBe(
-      'Playwright subprocess exit metadata: {"status":null,"signal":"SIGTERM","errorCode":"ETIMEDOUT","durationMs":20004}',
+      'Playwright subprocess exit metadata: {"status":null,"signal":"SIGTERM","errorCode":"ETIMEDOUT","durationMs":20004,"durationCapped":false}',
     );
     expect(childStatusDiagnostic(null, "not-a-signal" as NodeJS.Signals, "token=secret", Infinity)).toBe(
-      'Playwright subprocess exit metadata: {"status":null,"signal":null,"errorCode":null,"durationMs":null}',
+      'Playwright subprocess exit metadata: {"status":null,"signal":null,"errorCode":null,"durationMs":null,"durationCapped":false}',
     );
-    expect(childStatusDiagnostic(null, null, undefined, 999_999)).toContain('"durationMs":60000');
+    const capped = childStatusDiagnostic(null, null, undefined, 999_999);
+    expect(capped).toContain('"durationMs":60000');
+    expect(capped).toContain('"durationCapped":true');
   });
 
   it("scrubs common credential forms and credentials embedded in URLs", () => {
