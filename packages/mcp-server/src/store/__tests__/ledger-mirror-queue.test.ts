@@ -15,6 +15,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { FileStore } from "../file-store.js";
 import { ownLockIdentity } from "../file-lock.js";
+import { finishLedgerChild, observeLedgerChild } from "./ledger-child-handoff.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 
 let fx: GlobalStoreFixture;
@@ -356,12 +357,53 @@ describe("#488 Sol review — landed-but-queued retire, durable removal, refused
     expect(verdicts("redis")).toEqual(["rejected"]);
   });
 
+  it("delayed-child control: the parent's live retry can drain the queue before the child imports", async () => {
+    vi.useRealTimers();
+    const store = publishingStore();
+    holdLedgerLock();
+    store.recordRejectedApproach({ description: "Use Redis", concept: "redis" });
+    releaseLedgerLock();
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    // An explicit gate, not a guessed slow-host delay. Keep the original
+    // parent's retry live to demonstrate why path-presence polling was unsafe.
+    const program = `
+      process.stdout.write('import-gated\\n');
+      await new Promise(resolve => process.stdin.once('data', resolve));
+      process.stdin.pause();
+      const { FileStore } = await import(${JSON.stringify(pathToFileURL(path.resolve(here, "../file-store.ts")).href)});
+      const store = new FileStore(process.argv[1], 'delayed-replayer');
+      const remaining = store.replayLedgerMirrors(); store.dispose();
+      process.stdout.write('remaining=' + remaining);
+    `;
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: fx.dir, USERPROFILE: fx.dir };
+    delete env.VITEST; delete env.NODE_ENV;
+    const observed = observeLedgerChild(spawn(process.execPath, ["--import", import.meta.resolve("tsx"), "--input-type=module", "--eval", program, fx.dir], { env, stdio: ["pipe", "pipe", "pipe"] }));
+    let primary: unknown;
+    try {
+      await observed.wait(() => observed.stdout.includes("import-gated"), 30_000, "child import gate");
+      await observed.wait(() => !fs.existsSync(pending), 30_000, "parent retry drained queue");
+      expect(instances("redis")).toHaveLength(1);
+      observed.child.stdin!.end("go");
+      await observed.collect(30_000);
+      expect(observed.result?.code, observed.diagnostic()).toBe(0);
+      expect(observed.stdout).toContain("remaining=0");
+      await expect(observed.ownedQueue(`${pending}.lock`, 100)).rejects.toThrow("child stopped");
+    } catch (error) { primary = error; throw error; }
+    finally {
+      await finishLedgerChild(observed, () => { observed.child.stdin?.end(); }, primary);
+    }
+  }, 60_000);
+
   for (const action of ["withdraw consent", "retire the rejection"] as const) {
     it(`cross-process: a replayer WAITING on the ledger lock cannot publish after the parent completes "${action}"`, async () => {
       vi.useRealTimers();
       const store = publishingStore();
       holdLedgerLock();
       store.recordRejectedApproach({ description: "Use Redis", concept: "redis" });
+      // Only cancel this fixture's competing replay/debounce timers. dispose
+      // does not erase the durable queue/preferences or disable sync mutation.
+      store.dispose();
+      expect(JSON.parse(fs.readFileSync(pending, "utf8"))).toHaveLength(1);
       releaseLedgerLock();
 
       // The child's ledger is the default under HOME=fixture (VITEST scrubbed).
@@ -375,26 +417,23 @@ describe("#488 Sol review — landed-but-queued retire, durable removal, refused
         const s = new FileStore(process.argv[1], "replayer");
         // Keep replaying: on a loaded host one wait may outlast the 1 s bound
         // (ELOCKED keeps the entry); the next pass then waits again.
-        const deadline = Date.now() + 20000;
+        const deadline = performance.now() + 20000;
         let remaining = s.replayLedgerMirrors();
-        while (remaining > 0 && Date.now() < deadline) remaining = s.replayLedgerMirrors();
+        while (remaining > 0 && performance.now() < deadline) remaining = s.replayLedgerMirrors();
         s.dispose();
         process.stdout.write(String(remaining));
       `;
       const env: NodeJS.ProcessEnv = { ...process.env, HOME: fx.dir, USERPROFILE: fx.dir };
       delete env.VITEST; delete env.NODE_ENV;
       const child = spawn(process.execPath, ["--import", import.meta.resolve("tsx"), "--input-type=module", "--eval", program, fx.dir], { env, stdio: ["ignore", "pipe", "pipe"] });
-      let out = ""; child.stdout!.on("data", (d) => { out += d; });
-      const exited = new Promise<number | null>((r) => child.once("exit", r));
+      const observed = observeLedgerChild(child);
+      let primary: unknown;
       try {
-        // The child holds the queue lock and is now blocked on the ledger lock.
+        // Prove CHILD ownership, not just a transient file from any writer.
         const queueLock = `${pending}.lock`;
-        const deadline = Date.now() + 30_000;
-        while (!fs.existsSync(queueLock)) {
-          if (Date.now() > deadline) throw new Error("child never reached the queue");
-          await new Promise((r) => setTimeout(r, 5));
-        }
+        const nonce = await observed.ownedQueue(queueLock);
         await new Promise((r) => setTimeout(r, 100));
+        expect(JSON.parse(fs.readFileSync(queueLock, "utf8")), observed.diagnostic()).toMatchObject({ pid: child.pid, nonce });
         const prefsPath = path.join(fx.dir, ".deeppairing", "preferences.json");
         if (action === "withdraw consent") {
           store.setGlobalLedgerPublish(false);
@@ -407,11 +446,14 @@ describe("#488 Sol review — landed-but-queued retire, durable removal, refused
           });
           expect(JSON.parse(fs.readFileSync(prefsPath, "utf8")).rejectedApproaches).toEqual([]);
         }
-      } finally {
-        fs.unlinkSync(childLock); // only now may the waiting replay proceed
+      } catch (error) { primary = error; throw error; }
+      finally {
+        // Always collect our child BEFORE afterEach removes its fixture, even
+        // when handoff/assertions failed. Hung children are terminated boundedly.
+        await finishLedgerChild(observed, () => { fs.unlinkSync(childLock); }, primary);
       }
-      expect(await exited).toBe(0);
-      expect(out).toBe("0"); // dequeued as an intentional no-op…
+      expect(observed.result?.code, observed.diagnostic()).toBe(0);
+      expect(observed.stdout, observed.diagnostic()).toBe("0"); // dequeued as an intentional no-op…
       const concepts = fs.existsSync(childLedger) ? Object.keys(JSON.parse(fs.readFileSync(childLedger, "utf8")).concepts) : [];
       expect(concepts).toEqual([]); // …and nothing was published
     }, 60_000);
