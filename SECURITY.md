@@ -151,13 +151,33 @@ model assumes:
 
 deepPairing installs three Claude Code hooks, all local-only, network-free, and fail-open:
 
-- **PreToolUse (`server/preflight.mjs`)** runs before Edit/Write/MultiEdit and
-  can raise a prompt for **two** distinct reasons. Both return
+- **PreToolUse (`server/preflight.mjs`)** runs before Edit/Write/MultiEdit/NotebookEdit and
+  can raise a prompt for **three** distinct reasons. Both return
   `permissionDecision: "ask"` — a prompt you can approve or decline. Neither
   ever emits `deny` or silently blocks. Any error, a missing ledger, or a
   non-matching edit exits 0 (allow), so a hook fault can never stop your work.
   - **Rejected approach.** The proposed change matches an approach you
     previously rejected in this project.
+  - **deepPairing's own state (`deeppairing-state`).** The edit targets
+    `.deeppairing/preferences.json` (your stances: an edit there could quietly
+    retire one), `.deeppairing/team.json` (your team's committed rules), or a
+    file in `.deeppairing/hooks/` (the scripts that raise these prompts,
+    including `stance-allow-ask.sh`). This one **always asks**. A live
+    findings/options/spec/plan doesn't silence it, the 30-minute dedup window
+    doesn't apply, and `DEEPPAIRING_GUARDRAIL_BACKSTOP=off` doesn't switch it
+    off. It is the only reason NotebookEdit is matched at all. The path check
+    resolves relative paths, `.`/`..`, symlinks (including a symlink to a
+    file that doesn't exist yet), Windows separators and `\\?\` prefixes,
+    trailing dots and spaces, NTFS stream suffixes such as `::$DATA`, and
+    case, and it matches a `.deeppairing/` directory at any depth. What it
+    does **not** cover: hard links, Windows 8.3 short names (`DEEPPA~1`), and
+    every write that isn't one of those four tools. **Bash writes**
+    (`echo > .deeppairing/preferences.json`, `sed -i`, `cp`, `mv`, `tee`) are
+    outside it on purpose; the only Bash command any deepPairing hook looks at
+    is `stance allow` (below). The same permission-mode caveats as that Bash
+    hook apply: you see the prompt in the default, `acceptEdits`, `plan` and
+    `auto` modes; `dontAsk` and a `-p` run with no one to answer refuse the
+    edit; and `bypassPermissions` skips the prompt, so the edit can land.
   - **Guardrail backstop.** The edit targets a guardrail path — a migration
     directory, CI config (`.github/workflows/`, `.gitlab-ci.yml`, `Jenkinsfile`,
     `.circleci/`), infrastructure (`Dockerfile*`, compose files, `terraform/`,

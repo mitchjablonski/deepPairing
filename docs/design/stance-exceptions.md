@@ -372,6 +372,13 @@ Allowances no longer live on disk, so editing a file cannot grant one. The
   unprompted, silent Retire) or edit the committed `team.json`.
 - **What it does not cover.** Bash writes to these files are outside the
   narrow Bash matcher, on purpose.
+- **As built (slice 4).** The class also guards `.deeppairing/hooks/*`: the
+  #503 review flagged the installed `stance-allow-ask.sh` as the same
+  residual, and `preflight.mjs` is the script that raises this very prompt.
+  `NotebookEdit` joins the preflight matcher for this class only. The path
+  check normalises `.`/`..`, symlinks, Windows separators, `\\?\` prefixes,
+  trailing dots and spaces, NTFS stream suffixes and case. The backstop
+  opt-out (`DEEPPAIRING_GUARDRAIL_BACKSTOP=off`) does not reach it.
 
 ### What the audit trail does and does not promise
 

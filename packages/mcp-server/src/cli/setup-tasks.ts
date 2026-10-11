@@ -212,9 +212,18 @@ export function diagnoseLocalHooks(projectRoot: string, pluginManaged: boolean):
     ? (stopPresent ? "redundant" : "ok")
     : (stopPresent ? (stopLegacy ? "legacy" : "ok") : "missing");
   const checkpointState: LocalHookState = checkpointPresent ? "ok" : "missing";
+  // #470 slice 4 — a local row whose matcher predates NotebookEdit is "legacy":
+  // it still runs, but misses NotebookEdit edits to deepPairing's state.
+  const preflightRows = Array.isArray(settings?.hooks?.PreToolUse) ? settings.hooks.PreToolUse : [];
+  const preflightCurrent = preflightRows.some(
+    (e: any) =>
+      e?.matcher === PREFLIGHT_MATCHER &&
+      Array.isArray(e?.hooks) &&
+      e.hooks.some((h: any) => typeof h?.command === "string" && HOOK_MARKERS.PreToolUse(h.command)),
+  );
   const preflightState: LocalHookState = pluginManaged
     ? (preflightPresent ? "redundant" : "ok")
-    : (preflightPresent ? "ok" : "missing");
+    : (preflightPresent ? (preflightCurrent ? "ok" : "legacy") : "missing");
 
   return [
     { hook: "Stop", state: stopState },
@@ -508,7 +517,10 @@ export function ensureCheckpointHook(projectRoot: string): SetupResult {
 // ---------------------------------------------------------------------------
 const PREFLIGHT_SCRIPT_REL_PATH = ".deeppairing/hooks/preflight.mjs";
 const PREFLIGHT_HOOK_COMMAND = `node "$CLAUDE_PROJECT_DIR/${PREFLIGHT_SCRIPT_REL_PATH}"`;
-const PREFLIGHT_MATCHER = "Write|Edit|MultiEdit";
+// #470 slice 4 — NotebookEdit joins the matcher for the deeppairing-state
+// class (the core runs only that class for it). An older row without it is
+// not canonical, so the next install rewrites it and doctor reports it.
+export const PREFLIGHT_MATCHER = "Write|Edit|MultiEdit|NotebookEdit";
 
 /** Absolute file URL of the built matcher core, so the generated hook (which
  *  runs via plain `node` from .deeppairing/hooks/) can import it regardless of
@@ -621,11 +633,12 @@ function ledgersPresent(projectRoot) {
 // deleted outright rather than derived: a second definition, however generated,
 // is a second thing to get wrong.
 async function targetsGuardrailPath(projectRoot, toolInput) {
-  const fp = (toolInput && (toolInput.file_path || toolInput.filePath)) || "";
+  const fp = (toolInput && (toolInput.file_path || toolInput.filePath || toolInput.notebook_path)) || "";
   if (typeof fp !== "string" || !fp) return false;
   try {
     const rules = await import(RULES_URL);
-    return rules.matchGuardrailPath(projectRoot, [fp]) !== null;
+    // #470 slice 4 — a deepPairing state file is the third reason to keep going.
+    return rules.matchGuardrailPath(projectRoot, [fp]) !== null || rules.toolInputTargetsDeeppairingState(projectRoot, toolInput);
   } catch {
     // FAIL SAFE, not fail-silent: if the rule module can't be loaded (an
     // unbuilt tree, a moved install), keep going and let the matcher core —
@@ -647,7 +660,7 @@ process.stdin.on("end", async () => {
     // R1 (#279) — one documented precedence in every hook lane:
     // CLAUDE_PROJECT_DIR > DEEPPAIRING_PROJECT_ROOT > the event's cwd > ours.
     const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || ev.cwd || process.cwd();
-    if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit") {
+    if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit" && toolName !== "NotebookEdit") {
       process.exit(0);
     }
     if (!ledgersPresent(projectRoot) && !(await targetsGuardrailPath(projectRoot, toolInput))) {

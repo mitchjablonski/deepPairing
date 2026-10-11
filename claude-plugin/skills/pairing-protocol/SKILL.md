@@ -670,6 +670,14 @@ above, because a spurious ask costs this mechanism more than a missed one.
 Even when autonomy is "autonomous", escalate to supervised for changes touching
 these paths — that's the Escalated class, and it's on you to recognize it.
 
+**deepPairing's own state is not yours to edit.** An `Edit`, `Write`,
+`MultiEdit` or `NotebookEdit` to `.deeppairing/preferences.json`,
+`.deeppairing/team.json` or anything in `.deeppairing/hooks/` **always** asks
+your pair, whatever ceremony is live and however recently it asked. Don't edit
+those files to change a stance, a team rule or a hook, and don't route around
+the prompt through the shell. If a stance or rule is wrong, say so and let your
+pair change it.
+
 **The preflight backstop** is the safety net under that judgment call — and it
 does exactly this, no more:
 

@@ -1,6 +1,8 @@
 import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);
 
 // src/guardrail-rules.ts
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 var GUARDRAIL_RULES = [
   {
@@ -86,12 +88,93 @@ function toolInputTargetsGuardrail(projectRoot, toolInput) {
     return false;
   }
 }
+var DEEPPAIRING_STATE_CATEGORY = "deeppairing-state";
+var STATE_PATTERN = /(^|\/)\.deeppairing\/(preferences\.json|team\.json|hooks\/[^/]+)$/;
+function canonicalForm(p) {
+  return p.replace(/\\/g, "/").split("/").map((seg) => seg === "." || seg === ".." ? seg : seg.replace(/:.*$/, "").replace(/[. ]+$/, "")).join("/").toLowerCase();
+}
+function realpathish(abs, hops = 0) {
+  try {
+    return fs.realpathSync.native(abs);
+  } catch {
+  }
+  if (hops < 8) {
+    try {
+      const target = fs.readlinkSync(abs);
+      return realpathish(path.resolve(path.dirname(abs), target), hops + 1);
+    } catch {
+    }
+  }
+  const rest = [];
+  let cur = abs;
+  for (let i = 0; i < 64; i++) {
+    const parent = path.dirname(cur);
+    if (parent === cur) return null;
+    rest.unshift(path.basename(cur));
+    cur = parent;
+    try {
+      return path.join(fs.realpathSync.native(cur), ...rest);
+    } catch {
+    }
+  }
+  return null;
+}
+function matchDeeppairingStatePath(projectRoot, raw) {
+  try {
+    if (typeof raw !== "string" || !raw) return null;
+    const unprefixed = raw.replace(/^(\\\\|\/\/)[?.](\\|\/)/, "");
+    const slashed = unprefixed.replace(/\\/g, "/");
+    const cleaned = slashed.split("/").map((seg) => seg === "." || seg === ".." || /^[A-Za-z]:$/.test(seg) ? seg : seg.replace(/:.*$/, "").replace(/[. ]+$/, "") || seg).join("/");
+    const candidates = /* @__PURE__ */ new Set([slashed, cleaned]);
+    const spellings = [slashed, cleaned];
+    if (/^~\//.test(cleaned)) spellings.push(path.join(os.homedir(), cleaned.slice(2)));
+    for (const c of spellings) {
+      const abs2 = path.resolve(projectRoot, c);
+      candidates.add(abs2);
+      const real = realpathish(abs2);
+      if (real) candidates.add(real);
+    }
+    let hit = false;
+    let kind = "preferences";
+    for (const c of candidates) {
+      const m = STATE_PATTERN.exec(canonicalForm(c));
+      if (m) {
+        hit = true;
+        const file = m[2] ?? "";
+        kind = file.startsWith("hooks/") ? "hooks" : file === "team.json" ? "team" : "preferences";
+        break;
+      }
+    }
+    if (!hit) return null;
+    const abs = path.resolve(projectRoot, cleaned);
+    const rel = path.relative(projectRoot, abs).replace(/\\/g, "/");
+    const shown = rel && !rel.startsWith("../") && rel !== ".." && !path.isAbsolute(rel) ? rel : abs.replace(/\\/g, "/");
+    return { category: DEEPPAIRING_STATE_CATEGORY, path: shown, kind };
+  } catch {
+    return null;
+  }
+}
+function toolInputTargetPath(toolInput) {
+  const input = toolInput;
+  return input?.file_path ?? input?.filePath ?? input?.notebook_path;
+}
+function toolInputTargetsDeeppairingState(projectRoot, toolInput) {
+  try {
+    return matchDeeppairingStatePath(projectRoot, toolInputTargetPath(toolInput)) !== null;
+  } catch {
+    return false;
+  }
+}
 export {
+  DEEPPAIRING_STATE_CATEGORY,
   GUARDRAIL_EXCLUDED_SEGMENTS,
   GUARDRAIL_RULES,
+  matchDeeppairingStatePath,
   matchGuardrailPath,
   matchesGuardrailDir,
   matchesGuardrailFile,
   ruleForRelPath,
+  toolInputTargetPath,
+  toolInputTargetsDeeppairingState,
   toolInputTargetsGuardrail
 };

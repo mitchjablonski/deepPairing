@@ -1,11 +1,11 @@
 import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);
 
 // src/cli/preflight-hook-entry.ts
-import fs3 from "node:fs";
+import fs4 from "node:fs";
 import path4 from "node:path";
 
 // src/cli/preflight-hook-core.ts
-import fs2 from "node:fs";
+import fs3 from "node:fs";
 import path3 from "node:path";
 
 // src/mcp/preflight-validator.ts
@@ -519,6 +519,8 @@ function hookStatePath(projectRoot) {
 }
 
 // src/guardrail-rules.ts
+import fs2 from "node:fs";
+import os from "node:os";
 import path2 from "node:path";
 var GUARDRAIL_RULES = [
   {
@@ -604,13 +606,90 @@ function toolInputTargetsGuardrail(projectRoot, toolInput) {
     return false;
   }
 }
+var DEEPPAIRING_STATE_CATEGORY = "deeppairing-state";
+var STATE_PATTERN = /(^|\/)\.deeppairing\/(preferences\.json|team\.json|hooks\/[^/]+)$/;
+function canonicalForm(p) {
+  return p.replace(/\\/g, "/").split("/").map((seg) => seg === "." || seg === ".." ? seg : seg.replace(/:.*$/, "").replace(/[. ]+$/, "")).join("/").toLowerCase();
+}
+function realpathish(abs, hops = 0) {
+  try {
+    return fs2.realpathSync.native(abs);
+  } catch {
+  }
+  if (hops < 8) {
+    try {
+      const target = fs2.readlinkSync(abs);
+      return realpathish(path2.resolve(path2.dirname(abs), target), hops + 1);
+    } catch {
+    }
+  }
+  const rest = [];
+  let cur = abs;
+  for (let i = 0; i < 64; i++) {
+    const parent = path2.dirname(cur);
+    if (parent === cur) return null;
+    rest.unshift(path2.basename(cur));
+    cur = parent;
+    try {
+      return path2.join(fs2.realpathSync.native(cur), ...rest);
+    } catch {
+    }
+  }
+  return null;
+}
+function matchDeeppairingStatePath(projectRoot, raw) {
+  try {
+    if (typeof raw !== "string" || !raw) return null;
+    const unprefixed = raw.replace(/^(\\\\|\/\/)[?.](\\|\/)/, "");
+    const slashed = unprefixed.replace(/\\/g, "/");
+    const cleaned = slashed.split("/").map((seg) => seg === "." || seg === ".." || /^[A-Za-z]:$/.test(seg) ? seg : seg.replace(/:.*$/, "").replace(/[. ]+$/, "") || seg).join("/");
+    const candidates = /* @__PURE__ */ new Set([slashed, cleaned]);
+    const spellings = [slashed, cleaned];
+    if (/^~\//.test(cleaned)) spellings.push(path2.join(os.homedir(), cleaned.slice(2)));
+    for (const c of spellings) {
+      const abs2 = path2.resolve(projectRoot, c);
+      candidates.add(abs2);
+      const real = realpathish(abs2);
+      if (real) candidates.add(real);
+    }
+    let hit = false;
+    let kind = "preferences";
+    for (const c of candidates) {
+      const m = STATE_PATTERN.exec(canonicalForm(c));
+      if (m) {
+        hit = true;
+        const file = m[2] ?? "";
+        kind = file.startsWith("hooks/") ? "hooks" : file === "team.json" ? "team" : "preferences";
+        break;
+      }
+    }
+    if (!hit) return null;
+    const abs = path2.resolve(projectRoot, cleaned);
+    const rel = path2.relative(projectRoot, abs).replace(/\\/g, "/");
+    const shown = rel && !rel.startsWith("../") && rel !== ".." && !path2.isAbsolute(rel) ? rel : abs.replace(/\\/g, "/");
+    return { category: DEEPPAIRING_STATE_CATEGORY, path: shown, kind };
+  } catch {
+    return null;
+  }
+}
+function toolInputTargetPath(toolInput) {
+  const input2 = toolInput;
+  return input2?.file_path ?? input2?.filePath ?? input2?.notebook_path;
+}
+function toolInputTargetsDeeppairingState(projectRoot, toolInput) {
+  try {
+    return matchDeeppairingStatePath(projectRoot, toolInputTargetPath(toolInput)) !== null;
+  } catch {
+    return false;
+  }
+}
 
 // src/cli/preflight-hook-core.ts
 function readRejectedApproaches(projectRoot) {
   const p = path3.join(projectRoot, ".deeppairing", "preferences.json");
   try {
-    if (!fs2.existsSync(p)) return [];
-    const raw = JSON.parse(fs2.readFileSync(p, "utf-8"));
+    if (!fs3.existsSync(p)) return [];
+    const raw = JSON.parse(fs3.readFileSync(p, "utf-8"));
     const list = raw?.rejectedApproaches;
     if (!Array.isArray(list)) return [];
     return list.map(
@@ -629,8 +708,8 @@ function readRejectedApproaches(projectRoot) {
 function readTeamPreferences(projectRoot) {
   const p = path3.join(projectRoot, ".deeppairing", "team.json");
   try {
-    if (!fs2.existsSync(p)) return [];
-    const stripped = fs2.readFileSync(p, "utf-8").split("\n").map((l) => /^\s*\/\//.test(l) ? "" : l).join("\n");
+    if (!fs3.existsSync(p)) return [];
+    const stripped = fs3.readFileSync(p, "utf-8").split("\n").map((l) => /^\s*\/\//.test(l) ? "" : l).join("\n");
     const raw = JSON.parse(stripped);
     if (!raw || raw.version !== 1 || !Array.isArray(raw.preferences)) return [];
     const KINDS = /* @__PURE__ */ new Set(["require", "prefer", "avoid"]);
@@ -683,8 +762,8 @@ function readSessionCeremony(projectRoot, now = Date.now()) {
   const sessionsDir = path3.join(projectRoot, ".deeppairing", "sessions");
   let ids;
   try {
-    if (!fs2.existsSync(sessionsDir)) return { reachable: false, hasLiveCeremony: false };
-    ids = fs2.readdirSync(sessionsDir);
+    if (!fs3.existsSync(sessionsDir)) return { reachable: false, hasLiveCeremony: false };
+    ids = fs3.readdirSync(sessionsDir);
   } catch {
     return { reachable: false, hasLiveCeremony: false };
   }
@@ -696,9 +775,9 @@ function readSessionCeremony(projectRoot, now = Date.now()) {
     let arr;
     try {
       const af = path3.join(sessionsDir, id, "artifacts.json");
-      if (!fs2.existsSync(af)) continue;
+      if (!fs3.existsSync(af)) continue;
       storesSeen++;
-      arr = JSON.parse(fs2.readFileSync(af, "utf-8"));
+      arr = JSON.parse(fs3.readFileSync(af, "utf-8"));
       if (!Array.isArray(arr)) continue;
     } catch {
       continue;
@@ -718,7 +797,7 @@ function readSessionCeremony(projectRoot, now = Date.now()) {
 function guardrailAskSuppressed(projectRoot, category, matchedPath, now = Date.now()) {
   try {
     const sp = path3.join(projectRoot, ".deeppairing", "hooks-state.json");
-    const state = JSON.parse(fs2.readFileSync(sp, "utf-8"));
+    const state = JSON.parse(fs3.readFileSync(sp, "utf-8"));
     const entry = state?.guardrailAsks?.[category];
     const at = PER_PATH_DEDUP_CLASSES.has(category) ? entry && typeof entry === "object" ? entry[matchedPath] : void 0 : entry;
     if (typeof at !== "string") return false;
@@ -756,7 +835,9 @@ function recordHookFire(projectRoot, decision, now = Date.now()) {
       reason: decision.guardrail ? `guardrail:${decision.guardrail.category}` : decision.source || "blocked"
     },
     (state) => {
-      if (decision.guardrail) stampGuardrailAsk(state, decision.guardrail, now);
+      if (decision.guardrail && decision.guardrail.category !== DEEPPAIRING_STATE_CATEGORY) {
+        stampGuardrailAsk(state, decision.guardrail, now);
+      }
     }
   );
 }
@@ -783,10 +864,36 @@ function evaluateGuardrailBackstop(args) {
     return null;
   }
 }
+function deeppairingStateReason(match) {
+  const what = match.kind === "preferences" ? "It's where your stances live: an edit here can quietly retire one." : match.kind === "team" ? "It holds your team's committed rules: an edit here changes them for everyone." : "It's one of the hook scripts that make these prompts: an edit here can switch a prompt off.";
+  return `Allow this edit to ${match.path}? It's deepPairing's own state. ${what} deepPairing always asks about this file, whatever else is going on.
+[DEEPPAIRING_STATE \u2014 agent: don't edit deepPairing's state files to change a stance, rule or hook. On a decline, ask your pair to make the change themselves.]`;
+}
+function evaluateDeeppairingState(args) {
+  try {
+    const match = matchDeeppairingStatePath(args.projectRoot, toolInputTargetPath(args.toolInput));
+    if (!match) return null;
+    return {
+      fire: true,
+      reason: deeppairingStateReason(match),
+      source: "guardrail",
+      guardrail: {
+        category: DEEPPAIRING_STATE_CATEGORY,
+        path: match.path,
+        rationale: "deepPairing's own state: your stances, team rules and hook scripts.",
+        note: "deepPairing's own state"
+      }
+    };
+  } catch {
+    return null;
+  }
+}
 function evaluatePreflightHook(args) {
   const { toolName, toolInput, projectRoot } = args;
+  const state = evaluateDeeppairingState({ toolInput, projectRoot });
+  if (toolName === "NotebookEdit") return state ?? { fire: false };
   const { strings, paths } = buildProposals(toolName, toolInput);
-  if (strings.length === 0) return { fire: false };
+  if (strings.length === 0) return state ?? { fire: false };
   const result = runPreflight({
     toolName,
     proposalStrings: strings,
@@ -795,20 +902,24 @@ function evaluatePreflightHook(args) {
     teamPreferences: readTeamPreferences(projectRoot)
   });
   if (result.blocked) {
-    return { fire: true, reason: toHookReason(result.block.message), source: result.block.source };
+    const reason = toHookReason(result.block.message);
+    return state ? { ...state, reason: `${reason}
+
+${state.reason}`, source: result.block.source } : { fire: true, reason, source: result.block.source };
   }
+  if (state) return state;
   return evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env }) ?? { fire: false };
 }
 
 // src/cli/preflight-hook-entry.ts
 function ledgersPresent(root) {
   try {
-    const prefs = JSON.parse(fs3.readFileSync(path4.join(root, ".deeppairing", "preferences.json"), "utf-8"));
+    const prefs = JSON.parse(fs4.readFileSync(path4.join(root, ".deeppairing", "preferences.json"), "utf-8"));
     if (Array.isArray(prefs?.rejectedApproaches) && prefs.rejectedApproaches.length > 0) return true;
   } catch {
   }
   try {
-    if (fs3.existsSync(path4.join(root, ".deeppairing", "team.json"))) return true;
+    if (fs4.existsSync(path4.join(root, ".deeppairing", "team.json"))) return true;
   } catch {
   }
   return false;
@@ -824,10 +935,10 @@ process.stdin.on("end", () => {
     const toolName = ev.tool_name || "";
     const toolInput = ev.tool_input || ev.input || {};
     const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || ev.cwd || process.cwd();
-    if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit") {
+    if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit" && toolName !== "NotebookEdit") {
       process.exit(0);
     }
-    if (!ledgersPresent(projectRoot) && !toolInputTargetsGuardrail(projectRoot, toolInput)) {
+    if (!ledgersPresent(projectRoot) && !toolInputTargetsGuardrail(projectRoot, toolInput) && !toolInputTargetsDeeppairingState(projectRoot, toolInput)) {
       process.exit(0);
     }
     const decision = evaluatePreflightHook({ toolName, toolInput, projectRoot });

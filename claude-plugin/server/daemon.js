@@ -21264,7 +21264,7 @@ function ensureCheckpointHook(projectRoot2) {
 }
 var PREFLIGHT_SCRIPT_REL_PATH = ".deeppairing/hooks/preflight.mjs";
 var PREFLIGHT_HOOK_COMMAND = `node "$CLAUDE_PROJECT_DIR/${PREFLIGHT_SCRIPT_REL_PATH}"`;
-var PREFLIGHT_MATCHER = "Write|Edit|MultiEdit";
+var PREFLIGHT_MATCHER = "Write|Edit|MultiEdit|NotebookEdit";
 function resolvePreflightCoreUrl() {
   const here = path2.dirname(fileURLToPath2(import.meta.url));
   const distCandidate = path2.join(here, "preflight-hook-core.js");
@@ -21359,11 +21359,12 @@ function ledgersPresent(projectRoot) {
 // deleted outright rather than derived: a second definition, however generated,
 // is a second thing to get wrong.
 async function targetsGuardrailPath(projectRoot, toolInput) {
-  const fp = (toolInput && (toolInput.file_path || toolInput.filePath)) || "";
+  const fp = (toolInput && (toolInput.file_path || toolInput.filePath || toolInput.notebook_path)) || "";
   if (typeof fp !== "string" || !fp) return false;
   try {
     const rules = await import(RULES_URL);
-    return rules.matchGuardrailPath(projectRoot, [fp]) !== null;
+    // #470 slice 4 \u2014 a deepPairing state file is the third reason to keep going.
+    return rules.matchGuardrailPath(projectRoot, [fp]) !== null || rules.toolInputTargetsDeeppairingState(projectRoot, toolInput);
   } catch {
     // FAIL SAFE, not fail-silent: if the rule module can't be loaded (an
     // unbuilt tree, a moved install), keep going and let the matcher core \u2014
@@ -21385,7 +21386,7 @@ process.stdin.on("end", async () => {
     // R1 (#279) \u2014 one documented precedence in every hook lane:
     // CLAUDE_PROJECT_DIR > DEEPPAIRING_PROJECT_ROOT > the event's cwd > ours.
     const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || ev.cwd || process.cwd();
-    if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit") {
+    if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit" && toolName !== "NotebookEdit") {
       process.exit(0);
     }
     if (!ledgersPresent(projectRoot) && !(await targetsGuardrailPath(projectRoot, toolInput))) {
