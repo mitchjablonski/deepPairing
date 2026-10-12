@@ -123,6 +123,16 @@ persist as annotations on the brief and reach the agent through
 acceptance criteria. The declared `file_map` and `tasks[]` are collapsed by
 default. The approve bar is the spec's own.
 
+**What is binding after approval.** The binding boundary is the **approved
+brief version's `delegation` lists plus every strike annotation recorded on
+that exact version**, in persistence order. A strike after approval does not
+create a new version and needs no re-approval: it is binding from the moment
+it is persisted, it only ever moves a line from decide-alone to will-ask, and
+the agent cannot reverse it. The agent changes the lists only by superseding
+the brief, which makes a new draft version that needs your approval again.
+Annotations on a superseded version are copied forward onto the replacement
+by the server, so a strike survives a reclassification.
+
 **Size by class (D5, decided).** Trivial, low-risk work gets **a terminal
 note and no card**: the agent writes the five answers as three lines in its own
 chat reply and proceeds, since terminal elicitation is off by default and the
@@ -159,7 +169,8 @@ boundary is defined in the protocol instead:
   directory, or to add a dependency, change a schema, or touch CI.
 - **Action.** Stop. Supersede the brief with `risk: "escalated"` (or the
   widened `file_map`) and the reason. Wait for approval. Until then the run is
-  paused, and the Next-up bar shows the superseded brief as the Decide item.
+  paused, and the Next-up bar shows the **new draft replacement brief** as the
+  Decide item. The superseded predecessor is not pending and is not shown.
 - **Server check (S1).** `present_changeset` carrying a `brief` ref compares
   `files[].path` against `matchGuardrailPath` and the brief's declared files.
   A guardrail path under a trivial or low-risk brief, or an undeclared path
@@ -247,15 +258,24 @@ overrides that order when `packet` is present.
 8. **Sections**, collapsed. **Deferred. Open questions.**
 
 **Controls and approvals.** **Open the diff** routes to the changeset, the
-landing act, and it **never arms a countdown** (D3). Inside a formed packet the
-debrief's own approve/reject bar (`DebriefArtifact.tsx:562`) is **hidden**:
-**approving the changeset closes the debrief too**, unless the debrief has an
-open Ask, in which case the debrief stays pending with "1 question open" and
-its bar returns. Rejecting or sending back the changeset leaves the debrief
-pending as a separate item (§3a). So a low-risk run is **two approvals**, the
-brief and the diff, not three. **Walk me through it** emits a packet-scoped
-`explain` request, answered with a `present_explainer` ordered by the WHERE
-map. Pull only.
+landing act, and a packet-intended changeset **never arms a countdown** (D3,
+§3b). Each member changeset keeps its own approve. The packet header shows
+**"Diffs landed x of N"**. The debrief's own approve/reject bar
+(`DebriefArtifact.tsx:562`) is **hidden while any member is still draft**, so
+you are never offered a verdict on a story whose diffs you have not landed.
+
+**Completion** is one rule: the debrief completes when **every exact member is
+`approved` and no Ask on the debrief is open**. Approving the last member
+with no Ask open completes it in the same operation, so for the 1:1 case a
+low-risk run is **two approvals**, the brief and the diff. For N members it
+is the brief plus N member approvals, and never more. When members are all
+approved but an Ask is open, or when the packet formed already landed, the
+debrief's bar returns as **"Close the packet"**, so a manual completion is
+always reachable, including after an Ask is answered later. Rejecting or
+sending back any member dissolves the packet and leaves the debrief pending
+as its own item (§3a). **Walk me through it** emits a packet-scoped `explain`
+request, answered with a `present_explainer` ordered by the WHERE map. Pull
+only.
 
 **Accessibility.** Done-when and proof statuses carry text labels ("met",
 "not met", "pass", "not run"), never glyph or colour alone. The map has the
@@ -270,8 +290,8 @@ loads unchanged and a tool call without the field is byte-identical to today.
 | Need | Reuse | New (all optional) |
 |---|---|---|
 | Intent check | `present_spec` | `SpecContent.delegation?: { decideAlone: string[], willAsk: string[], risk: "trivial" \| "low-risk" \| "escalated", riskWhy: string }`. Declared files ride the existing `visuals[]` `file_map`. |
-| Brief identity | Artifact `id`, `version`, `parentId`, `status` | `BriefRef = { artifactId: string, version: number }`, carried as `ChangesetContent.brief?` and `DebriefContent.brief?` (§3a). |
-| Packet identity | — | `DebriefContent.packet?: { changesets: Array<{ artifactId: string, version: number }> }` (§3a). |
+| Brief identity | Artifact `id`, `version`, `parentId`, `status` | `BriefRef = { artifactId: string, version: number }`, carried as `ChangesetContent.brief?` and `DebriefContent.brief?`. A packet requires every member's `brief` to **equal** the debrief's (§3a). |
+| Packet identity | — | `DebriefContent.packet?: { changesets: Array<{ artifactId: string, version: number }> }` (§3a). `isPacketIntended(artifact)` in shared: a changeset with `brief`, or a debrief with `packet`, from creation and for life (§3b). |
 | Done-when report | Spec `requirements[].id` | `DebriefContent.doneWhen?: Array<{ requirementId: string, status: "met" \| "partial" \| "not-met", note?: string }>`, resolved against `brief`. |
 | Scope flags | `matchGuardrailPath` | `ChangesetContent.scopeFlags?: Array<{ kind: "guardrail-path" \| "outside-declared-scope", path: string }>`, written by the server. |
 | Ambient progress | `update_plan_progress`, plan strip | `SpecTask.status?`, `SpecTask.statusNote?`. `update_plan_progress` accepts a spec id and warns on a non-approved spec exactly as it does for plans. |
@@ -292,16 +312,24 @@ widens: the autonomy level.
 **The brief.** A run is bound to one **approved spec head**: `{ artifactId,
 version }` of the spec whose status is `approved` at the moment the first task
 starts. Supersede creates a new artifact id with `parentId` and `version + 1`
-(`revise-artifact.ts`), so the lineage root is found by walking `parentId`, and
-the head is the newest `approved` artifact in that lineage. A run whose brief
-is superseded mid-run (the reclassification case) re-binds to the new approved
-head, and the packet names that one. `requirementId` collides across specs, so
-`doneWhen` is always read against `brief`, never bare.
+(`revise-artifact.ts`), so the lineage root is found by walking `parentId`.
+The **canonical approved head** of a lineage is the single `approved` artifact
+with the greatest `version`. If two approved artifacts share that version, or
+the lineage cannot be walked, the head is **ambiguous**: no packet forms,
+nothing is rebound, and the server warns `brief_head_ambiguous`. Ties are
+never broken by `createdAt`. A run whose brief is superseded mid-run (the
+reclassification case) continues under the **new** approved head, and every
+artifact created after that point carries the new ref. A ref to a superseded
+version is **stale**: it is never silently rebound, the agent is told to
+supersede the artifact with the new ref. `requirementId` collides across
+specs, so `doneWhen` is always read against `brief`, never bare.
 
-**The changeset.** The packet names each changeset by exact `{ artifactId,
-version }`. A split run lists every part. Cardinality: **one debrief to one or
-more changesets, each changeset in at most one packet.** `sections[].changesetRef`
-keeps its per-section meaning and does not define the packet.
+**The changeset.** Each changeset created in a run carries `brief`, the same
+BriefRef the agent is running under. The packet names each changeset by exact
+`{ artifactId, version }`. A split run lists every part. Cardinality: **one
+debrief to one or more changesets, each changeset in at most one packet.**
+`sections[].changesetRef` keeps its per-section meaning and does not define
+the packet.
 
 **Derivation, in one place.** `derivePackets(artifacts)` is a pure function in
 `packages/shared` with no React and no store access. `computeAttention` (web)
@@ -309,11 +337,22 @@ and `computeDaemonPendingCount` (daemon) both call it, and the existing parity
 test is extended to assert equal counts for every case in §11. A packet forms
 only when all of these hold:
 
-- the debrief is `draft`, carries `brief` and `packet`, and the brief resolves
-  to an artifact in the same session whose status is `approved`;
-- every listed changeset resolves to an artifact in the same session with the
-  **exact** version and a status of `draft` or `approved`;
-- no other draft debrief lists the same changeset.
+- the debrief is `type: "debrief"`, status `draft`, and carries `brief` and a
+  `packet` whose `changesets` is non-empty with **distinct** `artifactId`s;
+- `brief` resolves to a `type: "spec"` artifact in the same session at the
+  **exact** `version`, with status `approved`, which is the **canonical
+  approved head** of its lineage (above);
+- every listed changeset resolves to a `type: "changeset"` artifact in the
+  same session at the **exact** version, with status `draft` or `approved`,
+  whose own `ChangesetContent.brief` **equals** the debrief's `brief` in both
+  `artifactId` and `version`. A changeset without `brief` never joins;
+- no other draft debrief lists any of the same changesets.
+
+The counterexample this closes: approved specs A and B in one session, a
+changeset C bound to B, a debrief D bound to A listing C. Without the equal-brief predicate that formed a
+packet and showed A's acceptance criteria over B's work. The equal-brief
+predicate fails, no packet forms, and D carries a "diff was built under a
+different brief" line.
 
 When a packet forms, the Decide lane shows one item routed to the debrief, the
 pending count is one for the group, and the changesets stay listed under the
@@ -325,12 +364,33 @@ absorbed into a packet that does not form.
 |---|---|
 | Changeset superseded (version mismatch) | Packet dissolves. The new changeset and the debrief are separate items. The debrief carries a "diff revised since this packet" line, and `present_debrief`/`revise_artifact` warn the agent to supersede the debrief with the new ref. |
 | Changeset rejected | Packet dissolves. The debrief stays a Decide item with a "diff rejected" line. The rejection reaches the agent as today. |
-| Changeset approved, debrief draft | Packet stays, labelled "landed, read the packet". Approving the debrief closes it. |
+| Some members approved, others draft | Packet stays, header "Diffs landed x of N", debrief bar hidden. Approving a non-last member never completes the debrief. |
+| All members approved, debrief draft (including a packet that formed already landed) | Packet stays, labelled "landed, read the packet". The debrief's bar shows as **Close the packet**, the manual completion. |
+| Last member approved while an Ask on the debrief is open | The member lands. The debrief stays `draft` with "1 question open". When the Ask is answered, **Close the packet** appears. Nothing completes on its own. |
+| Changeset bound to a different brief than the debrief | No packet. Both items pending. Debrief line "diff was built under a different brief". Server warn. |
+| Brief ref points at a superseded version (stale) | No packet. Never rebound. Server warn `brief_ref_stale` naming the current head. |
+| Ambiguous approved head | No packet. Server warn `brief_head_ambiguous`. |
 | Debrief superseded | The new debrief's `packet` takes over if it resolves. The old one is `superseded` and not pending. |
 | Debrief rejected or retracted | The changesets stand alone as today. |
 | Brief missing, draft, rejected or in another session | No packet. Both items pending. Server warn at present time, the dangling-ref pattern (`present-debrief.ts`). |
 | Two draft debriefs name one changeset | No packet for either. Three separate items. Server warn. |
 | Debrief with `packet` but no `brief` | No packet. The grouping requires the brief so done-when is always checkable. |
+
+**Commit-time revalidation and recovery.** A member approve is a daemon
+operation, not a web assumption. On commit the daemon re-derives the packet
+from the **current** store: membership, exact versions, statuses and open
+Asks. If the clicked member is no longer the exact version the tab saw, the
+approve is **refused** with "this diff was revised, reload", and nothing is
+written. If revalidation passes, the member's status is written first. Then,
+if this was the last member and no Ask is open, the debrief's `approved`
+status is written as a second record with `reason: "packet_complete"` and the
+member's operation id. The two writes are not assumed to be one physical
+write. **Recovery:** on startup, and on every derivation, a packet whose
+members are all `approved`, whose debrief is `draft`, and whose last member
+approval carries `packet_complete` intent is completed idempotently by the
+daemon. One that lacks the intent, because an Ask was open or the packet
+formed already landed, shows **Close the packet** instead. Either way the
+state after a crash is the state the human would have reached.
 
 ### 3b. The fourth level and its migration (D1, decided)
 
@@ -347,10 +407,20 @@ its close is more than any. The policy record gains one `delegate` line and
 and an absent field reads as `supervised` today (`file-store.ts:123`). So for
 the one-time migration: **present means chosen, absent means default.**
 
+**Sequencing (S1 stages, S6 activates).** S1 adds `delegate` to the enum, the
+policy record, the enum guard and the slider, so a person can **opt in by
+clicking it**, and nothing else. In S1 an absent field **still reads as
+`supervised`**, no migration marker is written and no announcement renders.
+The migration, the new default and the announcement activate **together at
+S6**, after S2 to S5 have shipped the brief, packet and run renderers and the
+§7 dogfood and independent review have passed. D1's decision that everyone on
+the default moves is unchanged. This is sequencing, so the renderers exist
+before anyone is moved onto them. At S6:
+
 - A project with `autonomyLevel` present keeps it. No change, no notice.
 - A project with it absent reads as `delegate` (Mitch, reaffirmed
   2026-10-11: everyone on the default moves, announced once). On first load
-  after upgrade the daemon writes `autonomyLevel: "delegate"` and
+  after the S6 upgrade the daemon writes `autonomyLevel: "delegate"` and
   `autonomyDefaultMigratedAt` and broadcasts `preference_changed`. The
   announcement is **one line at the top of the first brief**, not a collapsed
   Read-lane item: "You're on Delegate now — one brief, a quiet run, one
@@ -365,16 +435,37 @@ the one-time migration: **present means chosen, absent means default.**
 - Writing the value explicitly means an **older daemon** reading the file
   fails the enum guard and falls back to `supervised`, the fail-safe
   direction. A downgrade never arms more automation.
-- Caveat for S1: audit every writer of `autonomyLevel` (`init`, the CLI, the
-  routes). Any writer that persisted `supervised` without a human click leaves
+- Caveat, audited in S1 and enforced at S6: every writer of `autonomyLevel`
+  (`init`, the CLI, the routes). Any writer that persisted `supervised` without a human click leaves
   that project on `supervised`. That is the safe error, and it is accepted.
   Going forward the slider and CLI also write `autonomyChosenBy: "human"`, so
   the next migration has a clean key.
 
-**The countdown.** `ArtifactStatusActions.tsx:288` arms auto-approve when the
-level is not `supervised`. S1 changes that to an allowlist of `balanced` and
-`autonomous`, so `delegate` never arms it, and adds "never for a packet
-member" so the preset under `autonomous` cannot auto-approve a packet (D3).
+**The countdown, and eligibility from creation.** `ArtifactStatusActions.tsx:283-290`
+arms auto-approve for a `draft` with `confidence: "high"` when the level is
+not `supervised`, and cancels only on particular transitions (typing, Escape,
+replay). Changing the arm predicate alone is not enough, because the changeset
+arrives **before** the debrief, so at the moment it is drafted no packet has
+formed, and a rejected debrief or a stale ref can dissolve a packet later and
+hand the member back to the ordinary path. So eligibility is **persistent and
+independent of formation**: `isPacketIntended(artifact)` is true for any
+changeset carrying `brief` and any debrief carrying `packet`, from creation
+and for life, since content is immutable and membership history is retained
+by the refs themselves. S1 then makes three changes:
+
+- the arm predicate becomes an allowlist of `balanced` and `autonomous`
+  **and** `!isPacketIntended(artifact)`, so `delegate` never arms and a
+  packet-intended artifact never arms at any level, formed or not;
+- an effect watches the artifact and the store generation and **cancels an
+  already-armed countdown** when the artifact is, or becomes, packet-intended
+  (late hydration, a snapshot replacing the record), setting
+  `countdownPaused` so it cannot re-arm;
+- the daemon **rechecks at commit**: an approve carrying the auto-approve
+  reason on a packet-intended artifact is refused, whatever the tab believed.
+
+Ordinary artifacts, with no `brief` and no `packet`, arm and cancel exactly as
+today. The dogfood's "omit `confidence`" (§7) is the S0 workaround; this is
+the durable contract.
 
 ## 4. Agent protocol and SKILL changes
 
@@ -439,9 +530,10 @@ wrong and the agent re-briefs. It is never a reason to decide alone.
 
 **The honest cost.** Counted properly, a low-risk
 delegated run is **three screens** (the brief, the packet, the diff) and,
-before §2c's combined approval, **three approvals** (brief, changeset,
-debrief). With the combined approval it is **two approvals**, and the diff
-screen is optional when the packet satisfies you. Trivial work saves the brief
+before §2c's completion rule, **three approvals** (brief, changeset,
+debrief). With completion it is **two approvals for the 1:1 case**, the brief
+and the one diff, and the diff screen is optional when the packet satisfies
+you. A run split into N changesets costs the brief plus N member approvals. Trivial work saves the brief
 card only: it still ends with a `present_code_change` card, one screen and one
 approval, exactly as today. Each declared ask adds one card, by your choice.
 
@@ -540,13 +632,13 @@ guidance or the shape, not in UI.
 | Slice | Contents | Depends on | Visible |
 |---|---|---|---|
 | **S0** | This document. `delegate.md` preset. SKILL "Delegated work" paragraph. | — | Guidance only. Runs §7. |
-| **S1** | §3 fields and `BriefRef`/`packet`/`scopeFlags`. `delegate` enum, policy line, slider entry, migration and announcement (§3b). Countdown allowlist. `derivePackets` in shared with the §11 cases. `update_plan_progress` on specs. Server nudges and scope check. Validators, fixtures, goldens. | S0 gate | Agent-facing, plus the one-time announcement. Content renders as today where no renderer exists. |
-| **S2** | Debrief renders the §2c packet layout: scope strip, header row with done-when and proof and the inline not-met expansion, hotspots, "None stated" unknowns, collapsed sections. Combined approval: the debrief's bar hides inside a formed packet and the changeset approve closes it unless an Ask is open. Text status labels. | S1 | Only when `packet` is present. |
+| **S1** | §3 fields and `BriefRef`/`packet`/`scopeFlags`. `delegate` enum, policy line, enum guard and slider entry as **explicit opt-in only**: absent preferences still read `supervised`, no migration marker, no announcement (§3b). Countdown allowlist plus `isPacketIntended`, the cancel effect and the commit recheck. `derivePackets` and `isPacketIntended` in shared with the §11 cases. Commit-time revalidation and `packet_complete` recovery. `update_plan_progress` on specs. Server nudges, scope check and the `brief_ref_stale` / `brief_head_ambiguous` warns. Validators, fixtures, goldens. | S0 gate | Agent-facing. The slider shows a fourth choice. Content renders as today where no renderer exists. |
+| **S2** | Debrief renders the §2c packet layout: scope strip, header row with done-when, proof, "Diffs landed x of N" and the inline not-met expansion, hotspots, "None stated" unknowns, collapsed sections. Completion: the debrief's bar hides while any member is draft, the last member approve completes unless an Ask is open, **Close the packet** otherwise. Text status labels. | S1 | Only when `packet` is present. |
 | **S2a** | Brief renderer: risk chip, will-ask and decide-alone lists with Strike and Undo, keyboard listbox, strikes as annotations delivered via `check_feedback`, file map and tasks collapsed. | S1 | Only when `delegation` is present. |
 | **S3** | WHERE map: breadcrumb, `file_map` with `edges` as a graph, changed-node styling, click-to-file, dashed "(unverified)" paths, the list alternative, expanded by default only across top-level directories. | S1 | Only when edges are present. |
 | **S4** | Attention: packet item from `derivePackets`, PACKET line, the run states of §2b (never "Up to date", "Task x/y · last signal", "No signal", "Run stopped"), quieting while an approved brief runs, spec tasks in TurnIndicator and plan strip. Parity test extended. | S1, #430 PR 3 | Behind `nextUpBar` until PR 6 flips it. |
 | **S5** | Packet Walk-me-through target. Comprehension prompt behind `comprehensionPrompt`. Metrics: packet latency, feedback by block, quick approvals. | S2, S4 | Opt-in. |
-| **S6** | Default flip to `delegate` with the migration live. README "What you get" gains one bullet. Re-run §7 on current `main` first, independent review. | S1 to S5 | Yes. |
+| **S6** | The default flip to `delegate`, the one-time migration and the announcement on the first brief and the TurnIndicator, **activated together** (§3b). The `autonomyLevel` writer audit enforced. README "What you get" gains one bullet. Re-run §7 on current `main` first, independent review. | S1 to S5 | Yes. The first moment any default user is moved. |
 
 Each slice: focused tests, full `web/src` suite where it touches web,
 typecheck, `pnpm build:clean` bundle, independent sign-off.
@@ -624,11 +716,32 @@ typecheck, `pnpm build:clean` bundle, independent sign-off.
 **Packet derivation (`derivePackets`, shared, unit).** For each row in the
 §3a fallback table: the expected packet set, the expected per-artifact
 visibility, and `computeAttention` and `computeDaemonPendingCount` returning
-the **same** count. Additional cases: an approved brief in another session,
-a brief whose lineage has two approved heads (the newest wins, the test pins
-it), a changeset with the right id and a stale version, a debrief naming a
-changeset that is `retracted`, a demo session (never forms a packet), an
-artifact with a missing `createdAt`.
+the **same** count. Negative cases, each asserting **no packet and every item
+visible on both sides**: the A/B/C/D counterexample (changeset bound to B,
+debrief bound to A), a member whose `brief` differs only in `version`, a
+member with no `brief`, a debrief `brief` at a superseded version (stale, and
+the warn names the head), a lineage with two approved artifacts at the same
+greatest version (ambiguous, deterministic, no `createdAt` tie-break), a
+`packet` with duplicate `artifactId`s, an empty `changesets`, a `brief`
+pointing at a `plan` or a `changeset` rather than a `spec`, a member that is a
+`code_change` rather than a `changeset`, an approved brief in another session,
+a member with the right id and a stale version, a member that is `retracted`,
+a demo session, an artifact with a missing `createdAt`.
+
+**Lifecycle (daemon route plus shared derivation).** C1 approved while C2 is
+draft: packet stays, "Diffs landed 1 of 2", debrief `draft`, bar hidden. C2
+approved with no Ask: C2 written, then the debrief `approved` with
+`packet_complete`. An Ask arrives after C1 lands and before C2: approving C2
+lands C2, the debrief stays `draft` with "1 question open", and answering the
+Ask makes **Close the packet** appear and clicking it approves the debrief. A
+packet that forms with all members already approved shows **Close the packet**
+from the start. C2 superseded between the tab's click and the commit: the
+approve is refused with "this diff was revised, reload", nothing is written,
+and the new C2 and the debrief show as separate items. A daemon restart
+between the member write and the debrief write: startup recovery completes the
+debrief when the member carries `packet_complete` intent, and shows **Close
+the packet** when it does not. A rejected member dissolves the packet and the
+debrief stays pending alone.
 
 **Nothing hidden (web).** With a packet formed, the `⌄` expansion lists every
 member and `n` visits each member in order. With a packet dissolved, every
@@ -656,16 +769,28 @@ undeclared path under a different top-level directory yields
 `outside-declared-scope`. Excluded trees (`fixtures/`, `node_modules/`) yield
 none, matching `GUARDRAIL_EXCLUDED_SEGMENTS`.
 
-**Countdown.** With level `delegate`, no artifact arms the countdown. With
-level `autonomous`, a packet member does not arm it and a non-member does, as
-today. With `supervised`, nothing arms, as today.
+**Countdown and eligibility.** With level `delegate`, no artifact arms the
+countdown. With level `autonomous` or `balanced`: a changeset carrying
+`brief` and `confidence: "high"` that arrives **before** any debrief exists
+never arms. The same changeset after its packet dissolves (debrief rejected,
+or a stale ref) still never arms. A countdown armed on an ordinary artifact is
+**cancelled** when a snapshot replaces that record with a packet-intended one,
+and `countdownPaused` prevents a re-arm. The daemon refuses an auto-approve
+reason on a packet-intended artifact at commit. An ordinary `confidence:
+"high"` changeset with no `brief` arms and auto-approves exactly as today.
+With `supervised`, nothing arms, as today.
 
-**Migration.** `preferences.json` with `autonomyLevel: "balanced"` is
-untouched and no notice renders. An absent field becomes `delegate` with
-`autonomyDefaultMigratedAt`, one `preference_changed` broadcast, one Read-lane
-item that clears on open and never returns. A file written by S1 and read by
-the v0.1.64 daemon loads as `supervised`. A poisoned value still loads as
-`supervised`.
+**Migration, staged then activated.** After S1: `preferences.json` with an
+absent `autonomyLevel` still reads `supervised`, no `autonomyDefaultMigratedAt`
+is written, no announcement renders, and clicking Delegate in the slider
+writes `autonomyLevel: "delegate"` plus `autonomyChosenBy: "human"`. After S6:
+a present `autonomyLevel: "balanced"` is untouched and no notice renders. An
+absent field becomes `delegate` with `autonomyDefaultMigratedAt`, one
+`preference_changed` broadcast, and the one-line announcement at the top of
+the **first brief**, or once in the **TurnIndicator status line** when no
+brief is posted, with **Switch back**, shown once and never again. A file
+written with `delegate` and read by the v0.1.64 daemon loads as `supervised`.
+A poisoned value still loads as `supervised`.
 
 **Progress on specs.** `update_plan_progress` on a `draft` spec records and
 warns with the plan's wording. On an `approved` spec the pill reads "Task x/y
@@ -680,11 +805,19 @@ unfinished, a System item reads "Run stopped at task 3/5, no packet" with the
 resume prompt. With all tasks done and no packet, "Finishing — packet next".
 With no brief running, today's pill is byte-identical.
 
-**Combined approval.** Inside a formed packet the debrief renders no approve
-bar. Approving the changeset sets the debrief `approved` in the same store
-write. With an unanswered Ask on the debrief, the changeset approve lands, the
-debrief stays `draft` with "1 question open" and its bar returns. Rejecting
-the changeset leaves the debrief pending as its own item.
+**Completion (1:1).** Inside a formed packet with one draft member the
+debrief renders no approve bar. Approving the member revalidates on the
+daemon, writes the member, then writes the debrief `approved` with
+`packet_complete`. With an unanswered Ask on the debrief, the member lands,
+the debrief stays `draft` with "1 question open", and its bar returns as
+**Close the packet** once the Ask is answered. Rejecting the member leaves
+the debrief pending as its own item. The N-member cases are under
+"Lifecycle" above.
+
+**Binding after approval.** A strike recorded after the brief's approval is
+delivered on the next `check_feedback` and the server nudge fires if the
+packet's `decisionsMade` names the struck line. Superseding the brief copies
+its strike annotations onto the replacement.
 
 **Brief renderer.** Striking a decide-alone line moves it to will-ask, shows
 Undo for ten seconds, persists an annotation, and reaches the agent on the
