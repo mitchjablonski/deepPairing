@@ -423,6 +423,21 @@ describe("S0 — delegate.md carries the five moves and the run rules", () => {
     expect(text).toMatch(/Never post a second one/);
   });
 
+  it("names only fields that exist: no `risk:` field, file_map and diagram are visuals", () => {
+    const sk = flat(skill());
+    const para = sk.slice(sk.indexOf("Delegated work"), sk.indexOf("## When to use which tool"));
+    for (const t of [text, para]) {
+      expect(t).not.toMatch(/risk: ?"/);
+      expect(t).not.toContain("`risk:");
+    }
+    expect(text).toContain('`kind: "file_map"`');
+    expect(text).toContain('`kind: "diagram"`');
+    expect(text).toContain("`alternative`");
+    expect(text).toContain("`acceptanceCriteria`");
+    expect(text).toContain("Risk class: escalated");
+    expect(para).toContain("Risk class: escalated");
+  });
+
   it("the SKILL carries a Delegated work paragraph in the Cadence section", () => {
     const sk = flat(skill());
     const at = sk.indexOf("Delegated work");

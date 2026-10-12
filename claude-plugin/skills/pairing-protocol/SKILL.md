@@ -240,9 +240,11 @@ a `high` draft arms the auto-approve countdown.
   done being unreachable as written. **Uncertainty escalates.** Batch only what you
   are sure is your own.
 - **Reclassification boundary.** A low-risk brief silences the guardrail hook, so
-  you are the check. A guardrail path, a file outside the brief's `file_map` in
+  you are the check. A guardrail path, a file outside the brief's `file_map` visual in
   another package, a new dependency, or a schema or CI change means stop,
-  `revise_artifact` the brief as `escalated` with the reason, and wait for approval.
+  supersede the brief with `revise_artifact` and new `content` whose `context`
+  says `Risk class: escalated` and whose `file_map` visual lists the new files,
+  then wait for approval.
 - **Packet caps.** `needsYourEyes` is three at most, ranked, with lines. Proof is
   what you ran; `not-run` is valid with a reason. One debrief, superseded, never
   duplicated.

@@ -31,12 +31,12 @@ the issue isn't found, say so plainly and stop. Don't brief from a guess.
 **(2) Brief.** One `present_spec`, and nothing else first:
 
 - `objective` — one sentence.
-- `requirements[]` — each with an acceptance check I could run.
+- `requirements[]` — each with `acceptanceCriteria` I could run.
 - `context` — four headed lines: `Decide alone:` (calls you'll make without me),
   `Will ask:` (calls you'll bring to me, a promise), `Risk class:` (trivial,
   low-risk or escalated), `Why:` (the reason for that class).
 - `tasks[]` — your intended steps.
-- `file_map` — the files you declare you'll touch.
+- `visuals[]` with one entry of `kind: "file_map"` — its `files` are the paths you declare you'll touch.
 
 Poll `check_feedback` until I approve it. Do nothing else meanwhile. Everything
 I add to your will-ask list gets a card too. **Trivial work skips the card:**
@@ -54,26 +54,27 @@ these:
 - done being unreachable as written. Name the scope fork; never redefine done.
 
 **Stop and re-brief** if you're about to edit a guardrail path, a file outside
-your declared `file_map` in a different top-level package or directory, add a
-dependency, or change a schema or CI. `revise_artifact` the brief with
-`risk: "escalated"` (or the widened `file_map`) and the reason, then wait for my
-approval. A low-risk brief silences the guardrail hook, so this rule is the only
+your declared `file_map` visual in a different top-level package or directory, add a
+dependency, or change a schema or CI. supersede the brief:
+`revise_artifact` with `mode: "supersede"`, a `reason`, and new `content` whose
+`context` has the line `Risk class: escalated` and whose `file_map` visual lists
+the newly declared files. Then wait for my approval. A low-risk brief silences the guardrail hook, so this rule is the only
 thing that stops you. Until spec tasks carry a status, post one `log_reasoning`
 per *completed task*, with the task as `action`.
 
-**(4) Packet.** `present_changeset` with `summary`, `risks[]` and a `diagram` of
-the changed files and their neighbours. Then **one** `present_debrief` with the
+**(4) Packet.** `present_changeset` with `summary`, `risks[]` and a `visuals[]`
+entry of `kind: "diagram"` showing the changed files and their neighbours. Then **one** `present_debrief` with the
 same `feature`:
 
-- `changesetRef` on the first section, and a `Brief:` line naming the spec title
-  and version;
+- `sections[]`, the first with `changesetRef` set and a `Brief:` line in its
+  `body` naming the spec title and version;
 - `summary` in three sentences;
 - a `Done when` section, one line per requirement id;
 - `needsYourEyes[]`, three at most, ranked, each with file and lines in `why`;
-- `decisionsMade[]`, each with the alternatives you passed over;
-- `Not sure about` — what you doubt, or say "none" if so;
-- `Proof` — the commands you ran and what came back. `not-run` is a valid
-  outcome, with a reason;
+- `decisionsMade[]`, each with `what`, `why` and the `alternative` you passed over;
+- a `Not sure about` section — what you doubt, or "none";
+- a `Proof` section — the commands you ran and what came back. `not-run` is a
+  valid outcome, with a reason;
 - `deferred[]`.
 
 **(5) Wait.** Poll `check_feedback`, answer what I raise, and if I ask for a
