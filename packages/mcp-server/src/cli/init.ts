@@ -22,6 +22,7 @@ import {
   ensureStopHook,
   ensureCheckpointHook,
   ensurePreflightHook,
+  ensureStanceAllowAskHook,
   HOOK_MARKERS,
 } from "./setup-tasks.js";
 import readline from "node:readline";
@@ -444,6 +445,17 @@ async function main(opts: { offerDemo?: boolean; yes?: boolean; dryRun?: boolean
     console.log(`  ${green("✓")} ${preflightResult.message} (blocks re-proposing concepts you've rejected)`);
   } else {
     console.log(`  ${dim("✓")} ${preflightResult.message}`);
+  }
+
+  // #470 — the narrow Bash `ask`: when the agent's shell runs `stance allow`,
+  // you get a prompt. Same own-the-row install as the preflight row.
+  const askResult = ensureStanceAllowAskHook(cwd);
+  if (!askResult.ok) {
+    console.log(`  ${yellow("!")} ${askResult.message}`);
+  } else if (askResult.changed) {
+    console.log(`  ${green("✓")} ${askResult.message} (asks you before the agent's shell can grant an allowance)`);
+  } else {
+    console.log(`  ${dim("✓")} ${askResult.message}`);
   }
 
   // III8 — one-time prompt for the cross-project ledger publish opt-in.
@@ -947,6 +959,29 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
         label: "Add PreToolUse rejection-gate hook to .claude/settings.local.json",
         apply: () => { const r = ensurePreflightHook(cwd); return { ok: r.ok, message: r.message }; },
       });
+  }
+
+  // #470 / #503 review — the narrow Bash `stance allow` ask row.
+  {
+    const { diagnoseStanceAllowAskHook, removeStanceAllowAskHook } = await import("./setup-tasks.js");
+    switch (diagnoseStanceAllowAskHook(cwd, pluginManaged)) {
+      case "ok":
+        console.log(`  ${green("✓")} Bash \`stance allow\` ask hook ${pluginManaged ? "provided by the plugin" : "configured"}`);
+        break;
+      case "redundant":
+        console.log(`  ${yellow("!")} Bash \`stance allow\` ask hook is duplicated in settings.local.json — the plugin already provides it`);
+        fixes.push({
+          label: "Remove the redundant project-local Bash ask hook (the plugin provides it natively)",
+          apply: () => { const r = removeStanceAllowAskHook(cwd); return { ok: r.ok, message: r.message }; },
+        });
+        break;
+      default:
+        console.log(`  ${yellow("!")} Bash \`stance allow\` ask hook NOT configured (the agent's shell could run \`stance allow\` without a prompt)`);
+        fixes.push({
+          label: "Add the Bash `stance allow` ask hook to .claude/settings.local.json",
+          apply: () => { const r = ensureStanceAllowAskHook(cwd); return { ok: r.ok, message: r.message }; },
+        });
+    }
   }
 
   // X2 — cross-scope hook detection. Even with the canonical entry in
@@ -2076,6 +2111,10 @@ ${helpInvocations}
                                           operator entry inside the plugin bundle — run
                                           \`node <plugin>/server/review-posts.mjs --help\`; a
                                           marketplace install has no \`dp\` binary.)
+    dp stance allow <blockId>              Allow ONE blocked proposal past your stance, once (interactive
+                                           only: shows the proposal in your pager, asks for a reason and
+                                           a typed "allow"; the stance stays on for everything else)
+    dp stance exceptions [revoke <id>]     List this daemon's allowances, or revoke one before it's used
     dp --help                              Show this help message
     dp --version                           Show version
 `);
@@ -2171,6 +2210,14 @@ ${helpInvocations}
   listCmd().catch((err) => {
     console.error(`  ${red("✗")} list failed: ${errorMessage(err)}`);
     process.exit(1);
+  });
+} else if (cmd === "stance") {
+  // #470 — daemon-routed; the daemon's registry decides (A1). Interactive only.
+  import("./stance-allow.js").then(async ({ runStanceCommand, processStanceIo }) => {
+    process.exitCode = await runStanceCommand(args.slice(1), processStanceIo(cwd));
+  }).catch((err) => {
+    console.error(`  ${red("✗")} stance failed: ${errorMessage(err)}`);
+    process.exitCode = 1;
   });
 } else if (cmd === "review-posts") {
   import("./review-posts.js").then(async ({ reviewPostsCommand, reconcileReviewPostCommand }) => {

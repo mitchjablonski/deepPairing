@@ -60,7 +60,7 @@ function daemonInfoPath(projectRoot: string): string {
   return path.join(projectRoot, ".deeppairing", DAEMON_FILE);
 }
 
-function readDaemonInfo(projectRoot: string): DaemonInfo | null {
+export function readDaemonInfo(projectRoot: string): DaemonInfo | null {
   const infoPath = daemonInfoPath(projectRoot);
   try {
     if (!fs.existsSync(infoPath)) return null;

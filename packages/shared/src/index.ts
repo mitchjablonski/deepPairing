@@ -372,3 +372,5 @@ export {
   type ArtifactProseResult,
 } from "./prose-lint.js";
 export { LedgerDigestSchema, type LedgerDigest } from "./schemas/ledger-digest.js";
+
+export { computeLineDiff, collapseDiff, type DiffLine, type DiffGap, type DiffRow } from "./line-diff.js";

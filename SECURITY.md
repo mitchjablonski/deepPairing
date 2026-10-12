@@ -118,6 +118,23 @@ model assumes:
     `deeppairing doctor --fix` command (`pnpm link --global`'d after
     `pnpm build`; pre-1.0 the package is not on npm yet).
 
+- **Stance allowances are human-only by design, not by enforcement.**
+  "Allow this proposal once" (#470) is granted only through the
+  companion UI or the interactive `deeppairing stance allow` command,
+  both reaching the daemon's bearer-gated route; the agent has no tool
+  for it, and the narrow `Bash` hook below asks you when the agent's
+  shell runs `stance allow` or names the grant route. Whether you see that prompt depends on how Claude Code is running (see the Bash hook below).
+  A process running as your user can still script a terminal, get past
+  that hook's pattern match (build the words or the URL at runtime,
+  encode the command, run a script from a file), or read the bearer token
+  from `.deeppairing/daemon.json` (or its runtime sidecar) and call
+  `POST /api/preflight-blocks/<id>/exception` itself — the hook only asks
+  when the route's path appears literally in the command. The allowance itself lives only in
+  the daemon's memory — no file can create one — but the receipts
+  (the block-log entry, the artifact badge, the debrief and export
+  lists) are **not tamper-evident**, and the `UI`/`CLI` label is a
+  self-reported header: it names the door used, never who used it.
+
 ## Sensitive surfaces to be aware of
 
 - `~/.deeppairing/philosophy/v1.json` — global cross-project ledger.
@@ -132,7 +149,7 @@ model assumes:
 
 ### Hooks (what the plugin runs on your machine)
 
-deepPairing installs two Claude Code hooks, both local-only, network-free, and fail-open:
+deepPairing installs three Claude Code hooks, all local-only, network-free, and fail-open:
 
 - **PreToolUse (`server/preflight.mjs`)** runs before Edit/Write/MultiEdit and
   can raise a prompt for **two** distinct reasons. Both return
@@ -182,11 +199,54 @@ deepPairing installs two Claude Code hooks, both local-only, network-free, and f
     immediate retry of the same edit goes through without a prompt. The
     rejected-approach gate is the durable half of the mechanism — record the
     rejection there and it sticks across sessions.
+- **PreToolUse, `Bash` only (`hooks/stance-allow-ask.sh`)** — a POSIX
+  `sh` + `awk` script, so no `node` start per shell command. If the agent's
+  `Bash` command contains the words `stance allow` (any case, any whitespace
+  between) or the grant route's path `preflight-blocks/…/exception`, it
+  returns `permissionDecision: "ask"` with "The agent is trying to grant a
+  stance allowance from the shell. Only allow this if you asked for it." Before
+  matching it decodes JSON escapes and normalises what a shell would: quotes
+  and backslashes are dropped, and `$IFS`/`${IFS}` and a backslash-newline
+  count as whitespace. For every other command it prints nothing and exits 0.
+  A payload with no recognisable command stays silent; a matching command asks
+  even if the rest of the payload is malformed. It is a pattern check, not a
+  shell parser — see the stance allowance residuals above — and it also asks
+  on harmless text containing the words (a `grep`, a commit message). A user
+  allow rule such as `Bash(deeppairing:*)` does not skip it. That was checked
+  live once, under exactly these conditions: Claude Code v2.1.293, unsandboxed,
+  a hostless `-p` run (no Agent SDK host, no `--permission-prompt-tool`), with
+  that allow rule in place. The hook's `ask` became a refusal, as the docs say
+  a hostless `-p` run does. No other mode was checked live.
+
+  Whether you actually see that prompt depends on how Claude Code is running. What its docs say, mode by mode:
+
+  - **Default, `acceptEdits`, `plan`:** a hook's `"ask"` "prompts the user to confirm"
+    ([hooks: PreToolUse decision control](https://code.claude.com/docs/en/hooks#pretooluse-decision-control)).
+  - **`auto`:** "A hook's `"ask"` also forces a permission prompt in auto mode: the
+    classifier can still deny the tool call, but it can't approve the call silently.
+    Before v2.1.211, the classifier could approve a Bash command running outside the
+    sandbox without showing the prompt the hook requested" (same page).
+  - **`bypassPermissions`:** "Skips permission prompts, except for the actions no mode
+    auto-approves" ([permissions: permission modes](https://code.claude.com/docs/en/permissions#permission-modes)),
+    so the command can run without a prompt.
+  - **`dontAsk`:** "Auto-denies every call that would otherwise prompt" (same page), so
+    the command is refused, not asked about. The hooks page doesn't single this mode
+    out; read conservatively, `dontAsk` never shows you this prompt.
+  - **`-p` (print mode):** prompts go to whoever can answer them. "With the default
+    `host`, Claude Code sends them to the Agent SDK host or the `--permission-prompt-tool`
+    tool. Pass `none` when nobody can answer, and Claude Code denies them instead"
+    ([CLI reference: `--permission-prompts`](https://code.claude.com/docs/en/cli-reference)).
+    With no host, the call is denied ([hooks](https://code.claude.com/docs/en/hooks#pretooluse-decision-control)).
+
+  So you get a prompt in the default, `acceptEdits`, `plan` and `auto` modes and a
+  refusal where nobody can answer; in `bypassPermissions` it is no protection.
+
+  It reads only its stdin and writes nothing.
 - **Stop (`server/stop.mjs`)** runs when the agent finishes a turn. It only
   writes an advisory nudge to stderr (e.g. "pending artifacts need review") and
   always exits 0 — it can never trap the agent in a loop or block a stop.
 
-Both hooks read only local JSON under `.deeppairing/`. Their only write is
+The preflight and Stop hooks read only local JSON under `.deeppairing/`. Their only write is
 `.deeppairing/hooks-state.json` — the small advisory log of hook fires the
 companion UI reads, which also carries the guardrail backstop's
 "already asked about this" timestamps — written temp-file-plus-rename under a

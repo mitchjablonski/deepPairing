@@ -32,17 +32,22 @@ still needs your eyes.
   module-level mutable settings object"* shares too few words with that
   concept, so it gets through. False positives happen too: *"remove global
   mutable state from config"* is refused, because it contains every word of
-  the concept. One click on "Retire this stance" clears it.
+  the concept. Choose **Allow this proposal once** to let that exact
+  proposal through and keep the stance; **Retire this stance** deletes it.
 - **Direct `Edit`/`Write`/`MultiEdit` — you're asked, not refused.** A `PreToolUse`
-  hook pauses a matching edit with a permission prompt, and you decide. It does
-  not see `Bash` or notebook edits, and if it breaks, it lets the edit
-  through.
+  hook pauses a matching edit with a permission prompt, and you decide. It
+  doesn't check `Bash` or notebook edits against your stances, and if it
+  breaks, it lets the edit through. One narrow `Bash` check asks you before
+  the agent's shell runs `stance allow`; that's the only Bash command it
+  looks at. (Like every hook prompt, it depends on how Claude Code is running:
+  `bypassPermissions` skips it and `dontAsk` refuses the command instead; see
+  [SECURITY.md](SECURITY.md#hooks-what-the-plugin-runs-on-your-machine).)
 - **Other projects — a nudge only.** It's off until you turn on cross-project
   publishing, and it never blocks.
 
 *MIT · no account · no telemetry · 3,000+ tests · everything stays on your disk.*
 
-![The enforcement moment — the agent re-proposes a concept you rejected ("global mutable state for config"), and a "Blocked by your taste" card stops it before the edit lands, showing the reason you gave and a one-click override.](docs/assets/enforcement.png)
+![The enforcement moment — the agent re-proposes a concept you rejected ("global mutable state for config"), and a "Blocked by your taste" card stops it before the edit lands, showing the reason you gave. This capture predates the card's **Allow this proposal once** button; Retire now lives in the gate log, behind a confirm.](docs/assets/enforcement.png)
 
 **Poor fit:** one-line fixes and throwaway scripts (the review is heavier than
 the change). Fully unattended runs where nobody will look at the UI. Teams that
@@ -193,15 +198,22 @@ So you never have to make the same call twice:
   guarantees:
   - **`present_*` tools, this project: refused.** A matching proposal gets a
     `REJECTED_APPROACH_BLOCKED` error, the artifact is not recorded, and your
-    reason is quoted back. `revise_artifact` runs the same check. For
+    reason is quoted back. `revise_artifact` runs the same check. The one
+    exception is a proposal you allowed once (from the companion UI, or the
+    interactive CLI): that exact proposal goes through, once, and the
+    artifact carries an "Allowed once" badge. For
     `present_debrief` and an external-PR `present_changeset`, a match is
     reported as advice instead, because those describe work that already
     exists.
   - **Direct `Edit`/`Write`/`MultiEdit`, this project: asked.** The
     `PreToolUse` hook runs the same matcher on the new text and file path,
     and a match becomes a Claude Code permission prompt (`ask`). It never
-    returns `deny`, so you can allow the edit. It doesn't see `Bash` or
-    `NotebookEdit`. It only reads this project's stances, and it fails open:
+    returns `deny`, so you can allow the edit. It doesn't check `Bash` or
+    `NotebookEdit` against your stances; one narrow `Bash` check asks before
+    the shell grants a stance allowance, and that is the only Bash command it
+    looks at. An allowance never removes this prompt: a direct edit carrying
+    an allowed proposal still asks. It only reads this project's stances, and
+    it fails open:
     if it errors, or the stance file can't be parsed, the edit proceeds.
   - **Other projects: a nudge, never a block.** Turn on **cross-project
     publishing** (off by default; see below) and a matching proposal elsewhere
@@ -223,11 +235,36 @@ So you never have to make the same call twice:
     you reject a finding, plan, or spec without typing one, the stance is
     just its title, and only that phrase (word-bounded) is matched. None of
     the rewordings above would be caught.
-  - **False positives and overrides.** A proposal to *remove* global mutable
-    state from config is refused too, because it contains every word of the
-    concept. **"Retire this stance"** on the block card deletes the stance
-    from this project and lets the proposal through. (Blocks from a committed
-    **team rule** point you to `.deeppairing/team.json` instead.) Tests:
+  - **False positives: allow once, or retire.** A proposal to *remove* global
+    mutable state from config is refused too, because it contains every word
+    of the concept. You have two ways out:
+    - **Allow this proposal once** (the block card's main button, or
+      `deeppairing stance allow <blockId>` in your own terminal). You see
+      exactly what would be created, give a reason, and that exact proposal
+      gets through the next time the agent retries the identical call. It is
+      single-use, and it ends with the Claude session or after 72 hours,
+      whichever comes first. The stance stays on for everything else. The
+      allowance lives only in the daemon's memory, so a restart ends it; it
+      is never mirrored to the cross-project ledger, and it records no
+      approval. If what the proposal depends on changes first (say, a newer
+      change to the same file), the allowance doesn't apply and you get a new
+      block to look at instead.
+    - **Retire this stance** (in the ⋯ gate log, behind a confirm) deletes
+      the stance from this project. It stops blocking everywhere, not just
+      here.
+
+    Allowances are granted by you, not by the agent: the agent has no tool
+    for it, and when its shell runs `stance allow` (or names the grant route,
+    say with `curl`) you get a prompt. Whether you actually see that prompt depends on how Claude Code is running: `bypassPermissions` skips prompts, so the command can run without one; `dontAsk` denies it instead of asking; and a `-p` run with no one to answer denies it (details and sources in [SECURITY.md](SECURITY.md#hooks-what-the-plugin-runs-on-your-machine)). That is human-only by
+    design, not by enforcement: a process running as your user can still
+    script a terminal, build the command or the URL at runtime so the shell
+    check doesn't see it, or call the daemon's route directly with the token
+    it can read. The shell check also asks on harmless text that contains the
+    words, such as `grep -rn "stance allow"` or a commit message. Receipts (the block log, the badge,
+    the debrief and export lists) cover these supported paths; they are not
+    tamper-evident and don't identify who granted anything. (Blocks from a
+    committed **team rule** can't be allowed once; they point you to
+    `.deeppairing/team.json` instead.) Tests:
     [preflight-validator](packages/mcp-server/src/mcp/__tests__/preflight-validator.test.ts),
     [paraphrase-alias](packages/mcp-server/src/mcp/__tests__/paraphrase-alias.test.ts),
     [preflight-hook-core](packages/mcp-server/src/cli/__tests__/preflight-hook-core.test.ts),

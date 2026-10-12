@@ -35,33 +35,40 @@ actually works.
 Real concern, and we don't pretend they don't happen. Concept-match
 is deliberately conservative — token-based plus a small **curated
 synonym layer**, not fuzzy similarity — precisely to keep false
-blocks rare while still catching common rewordings. Two mitigations:
+blocks rare while still catching common rewordings. When one does
+fire wrongly, you have two ways out:
 
-1. **Every block is one-click overridable** from the companion UI:
-   **Retire this stance** on the block card. The agent proceeds, and
-   the stance is dropped from this project's `rejectedApproaches`,
-   so it never gates here again.
-2. **The override is recorded, not silent.** It lands in the ledger
-   as an approval against that concept, so the history shows you
-   changed your mind rather than quietly losing the stance.
+1. **Allow this proposal once.** It's the main button on the block
+   card (or `deeppairing stance allow <blockId>` in your own
+   terminal). You see exactly what would be created, give a reason,
+   and that exact proposal gets through when the agent retries the
+   identical call. It is single-use and ends with the Claude session
+   or after 72 hours. The stance stays on for everything else. It is
+   **not** mirrored to the cross-project ledger and records no
+   approval: it lives only in the daemon's memory.
+2. **Retire this stance.** It sits in the ⋯ gate log, behind a
+   confirm, because it deletes the stance from this project's
+   `rejectedApproaches`: it stops blocking everywhere, not just here.
+   With cross-project publishing on, the retire is also recorded in
+   the ledger as an approval against that concept.
 
-   To be precise about what that button does *not* do: it retires
-   the stance wholesale — it does not narrow it to "everywhere
-   except this path". Per-path scoping is a real thing we may build;
-   it isn't what this is. If you want the stance back afterwards,
+   To be precise about what Retire does *not* do: it retires the
+   stance wholesale — it does not narrow it to "everywhere except
+   this path". Per-path scoping is a real thing we may build; it
+   isn't what this is. If you want the stance back afterwards,
    reject the concept again.
 
 Expect the early sessions on a real project to involve some
-calibration via overrides, as the concepts you name find their
+calibration, as the concepts you name find their
 level. We don't have a defensible number for how often the gate
 fires after that — it depends entirely on how many stances you've
 recorded and how broadly you worded them — so we're not going to
 quote one. What we can say is what the mechanism does: it fires
 only on a lexical match against a concept *you* named, and every
-fire is one click from an override — which retires that stance
-wholesale (see above), so the concept won't gate here again until
-you reject it anew. It does not narrow the stance to "everywhere
-except this path."
+fire on your own stance can be allowed once for that exact proposal,
+keeping the stance, or retired wholesale (see above). Retire doesn't
+narrow the stance to "everywhere except this path"; Allow once is
+the narrow option.
 
 ## "Why MCP and not a Cursor / Continue / editor extension?"
 
