@@ -55,9 +55,9 @@ function parseCommand(src: string): { keys: string[]; values: Record<string, str
 }
 
 describe("Q6 — the PR command files keep the shape of the other four", () => {
-  const ALL = ["post-pr.md", "review-pr.md", "review.md", "share.md", "stance.md", "start.md"];
+  const ALL = ["delegate.md", "post-pr.md", "review-pr.md", "review.md", "share.md", "stance.md", "start.md"];
 
-  it("the command set is exactly the six on disk (a new file must be a deliberate addition)", () => {
+  it("the command set is exactly the seven on disk (a new file must be a deliberate addition)", () => {
     expect(fs.readdirSync(commandsDir).sort()).toEqual(ALL);
   });
 
@@ -401,5 +401,33 @@ describe("Q6 B2/B3 — the ledger sweep's citation is writable, and TRUE", () =>
     const hint = res.text.slice(res.text.indexOf("Strong 'avoid' stances"));
     expect(hint).toContain("same drift problem here");
     expect(hint).not.toContain("fine for the single-instance worker");
+  });
+});
+
+describe("S0 — delegate.md carries the five moves and the run rules", () => {
+  const text = flat(read(path.join(commandsDir, "delegate.md")));
+
+  it("takes an argument and names the five moves in order", () => {
+    expect(text).toContain("$ARGUMENTS");
+    const idx = ["(1) Read", "(2) Brief", "(3) Run", "(4) Packet", "(5) Wait"].map((m) => text.indexOf(m));
+    expect(idx.every((i) => i >= 0)).toBe(true);
+    expect([...idx].sort((a, b) => a - b)).toEqual(idx);
+  });
+
+  it("carries the load-bearing rules", () => {
+    expect(text).toMatch(/Omit `confidence` on every artifact/);
+    expect(text).toContain("auto-approve countdown");
+    expect(text).toMatch(/uncertainty escalates/i);
+    expect(text).toContain("openQuestions");
+    expect(text).toContain("`supervised`");
+    expect(text).toMatch(/Never post a second one/);
+  });
+
+  it("the SKILL carries a Delegated work paragraph in the Cadence section", () => {
+    const sk = flat(skill());
+    const at = sk.indexOf("Delegated work");
+    expect(at).toBeGreaterThan(sk.indexOf("## Cadence"));
+    expect(at).toBeLessThan(sk.indexOf("## When to use which tool"));
+    expect(sk).toContain("Words to the agent");
   });
 });
