@@ -179,9 +179,13 @@ deepPairing installs three Claude Code hooks, all local-only, network-free, and 
     every write that isn't one of those four tools, and the code these hooks
     run from outside `.deeppairing/`: the plugin's installed copies of
     `server/preflight.mjs` and `hooks/stance-allow-ask.sh` (in Claude Code's
-    plugin cache), and the built matcher core that the init-generated
-    `preflight.mjs` imports (`dist/cli/preflight-hook-core.js` in the
-    deepPairing install). An agent edit to those files is not asked about. **Bash writes**
+    plugin cache), the plugin's `hooks/hooks.json` that registers them, the
+    built matcher core that the init-generated `preflight.mjs` imports
+    (`dist/cli/preflight-hook-core.js` in the deepPairing install), and the
+    path-matching module that both the init fast path and that core import
+    (`dist/guardrail-rules.js`). An agent edit to those files is not asked
+    about. Disabling or uninstalling the plugin removes the guard entirely,
+    along with every other hook it registers. **Bash writes**
     (`echo > .deeppairing/preferences.json`, `sed -i`, `cp`, `mv`, `tee`) are
     outside it on purpose; the only Bash command any deepPairing hook looks at
     is `stance allow` (below). The same permission-mode caveats as that Bash

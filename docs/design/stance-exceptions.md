@@ -383,10 +383,13 @@ Allowances no longer live on disk, so editing a file cannot grant one. The
   followed before the next `..`), `hooks/` covers every descendant, and
   `.claude/settings.json` / `.claude/settings.local.json` join the class,
   because removing a hook row switches these prompts off. **Residuals:** the
-  plugin-cache copies of `preflight.mjs` and `stance-allow-ask.sh`, and the
-  built core (`dist/cli/preflight-hook-core.js`) that the init-generated hook
-  imports through `CORE_URL`. They live outside `.deeppairing/` and are not
-  guarded.
+  plugin-cache copies of `preflight.mjs` and `stance-allow-ask.sh`, the
+  plugin's `hooks/hooks.json` that registers them, the built core
+  (`dist/cli/preflight-hook-core.js`) that the init-generated hook imports
+  through `CORE_URL`, and the matcher module (`dist/guardrail-rules.js`) that
+  both the init fast path and that core import. They live outside
+  `.deeppairing/` and are not guarded. Disabling or uninstalling the plugin
+  removes the guard entirely.
 
 ### What the audit trail does and does not promise
 
