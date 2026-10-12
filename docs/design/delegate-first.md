@@ -388,13 +388,29 @@ that member is the **last unapproved member** of a formed packet **and no Ask
 on the target debrief is open at that moment**, the same record also carries
 a `packetCompletionIntent` that names the **exact packet
 the human's approval was computed against**: `{ debriefId, debriefVersion,
-brief: BriefRef, members: Array<{ artifactId, version }>, at, state:
+brief: BriefRef, members: Array<{ artifactId, version }>, askGeneration, at, state:
 "pending" }`. The intent is scoped to that debrief id and version. It is
 **never transferred** to a successor or replacement debrief, or to any packet
 whose brief or member set differs. A non-last member approval, or a last one
 made while an Ask is open, writes **no intent at all**, so there is nothing
 for a later recovery to complete once that Ask is answered. `derivePackets`
 stays pure and never reads intents.
+
+**Ask ordering is durable, not a clock comparison.** `askGeneration` is the
+target debrief's durable Ask-history generation, captured in the serialized
+member-approval operation. Creating or reopening an Ask advances it; answering,
+deleting or compacting an Ask never rolls it back. Ordinary replies and Asks
+on other debriefs do not advance it. It survives restart and is never reused
+or reconstructed from timestamps. `at` is display/audit metadata only: equal
+timestamps, a backward wall-clock step, and a new process's monotonic clock
+cannot establish whether an Ask happened after approval. A debrief with no
+Ask history has a durably established initial generation, distinct from
+missing or ambiguous history. Persisting an Ask and advancing its generation
+must be one crash-safe logical mutation; an acknowledged Ask must never be
+recoverable without its advance. Missing or ambiguous history fails closed
+to manual completion, not generation zero. S1 must choose a durable journal
+or equivalent representation satisfying this contract; an in-memory counter
+is insufficient.
 
 **An intent is consumed exactly once.** Immediately after the member write
 the daemon evaluates the predicate below. Whatever the outcome, the intent is
@@ -403,8 +419,8 @@ id and is itself the spend, and on failure a small `spent` write with the
 reason follows. **Recovery acts only on an intent that immediate completion
 never evaluated**, which is the crash window between the member write and
 the evaluation's own write. A recovered `pending` intent is spent without
-completing when its target debrief is no longer `draft`, when **any Ask was
-created on the target debrief after `intent.at`, open or since answered**, or
+completing when its target debrief is no longer `draft`, when **the target's
+Ask generation differs from the captured value or cannot be verified**, or
 when the predicate fails. Only a `pending` intent whose target still matches
 and has had no Ask since completes, once. Nothing ever re-evaluates a spent
 intent, so an Ask that was open when the diff landed, and was answered
@@ -416,6 +432,13 @@ target)` holds when: the debrief with exactly `target.debriefId` and
 `target.brief`, its `packet.changesets` equals `target.members` as a set,
 every member is `approved` at its exact version, no Ask on the debrief is
 open, and `derivePackets` on the current store forms exactly this packet.
+Intent-driven callers also require the captured Ask generation to match, even
+if a later Ask has already been answered. All three callers serialize final
+validation and the completion write with Ask mutations, member-status changes
+and artifact revisions: no mutation may slip between the check and the write.
+This is a commit-time guarantee, not a web snapshot or an earlier read before
+an asynchronous wait. Manual Close uses current state under the same
+serialization, so a spent intent never prevents a new explicit human action.
 The three callers are:
 
 - **immediate completion**, after the last member's write, when the written
@@ -834,13 +857,31 @@ evaluation fails and spends the intent, D1 stays `draft` with "1 question
 open", and Close appears when the Ask is answered. **The Ask is answered and
 the daemon restarts before anyone clicks Close: D1 stays `draft` and Close is
 shown**, because the intent is spent and recovery never re-evaluates it. An
-Ask created after `intent.at` on a still-`pending` intent, found at recovery,
-answered or not: spent, no completion, Close shown. A restart with D1 already
+Ask created or reopened after a still-`pending` intent advances the target's
+Ask generation; found at recovery, answered or not: spent, no completion,
+Close shown. A restart with D1 already
 `approved` and its intent still on disk: no write, no broadcast. A restart
 with D1 `draft`, members approved, no Ask, intent naming exactly D1: completed
 once. Manual Close on a packet with an open Ask: refused with "1 question
 open". Manual Close after a member was superseded: refused, the packet has
 dissolved.
+
+**Clock-independent recovery and mutation ordering.** Intent creation and a
+later Ask share the same wall-clock timestamp; the Ask is answered before a
+restart: the generation differs, no completion, Close shown. Repeat with the
+wall clock stepping backwards between intent and Ask: identical result. An
+older answered Ask reopened and answered after the intent also revokes it.
+Deleting or compacting that Ask does not erase the generation advance. A
+crash during Ask persistence must recover both Ask and generation, or refuse
+automatic completion if the mutation's ordering cannot be established. A
+known-empty history survives restart and allows the unchanged target to
+complete once; missing or ambiguous history never masquerades as empty.
+An ordinary reply or an Ask on another debrief does not revoke the intent.
+Pause immediately after final validation, concurrently attempt Ask creation
+or a member revision, then resume: the mutations are serialized. If the
+mutation commits first, completion revalidates and refuses; if completion
+commits first, the later mutation remains visible and cannot be consumed by
+the old intent. Manual Close obeys the same ordering and open-Ask predicate.
 
 **Nothing hidden (web).** With a packet formed, the `⌄` expansion lists every
 member and `n` visits each member in order. With a packet dissolved, every
