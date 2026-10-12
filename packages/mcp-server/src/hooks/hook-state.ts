@@ -133,9 +133,14 @@ function sleepSync(ms: number): void {
  * prevent. `brokeStale` keeps the loop bounded (one stat, one unlink, at most)
  * while restoring recovery on a slow filesystem.
  */
-export function acquireHookStateLock(statePath: string, now: number = Date.now()): string | null {
+export function acquireHookStateLock(statePath: string, _now: number = Date.now()): string | null {
   const lock = `${statePath}.lock`;
-  const deadline = now + LOCK_MAX_WAIT_MS;
+  // #511 — duration is monotonic, not civil time. A backward adjustment or
+  // frozen Date.now must not stretch the 500 ms retry budget indefinitely.
+  // Keep the legacy optional wall-clock argument for source/API compatibility
+  // (no current caller supplies it), but it cannot seed an elapsed deadline.
+  // Stale-mtime classification below deliberately remains wall-clock based.
+  const deadline = process.hrtime.bigint() + BigInt(LOCK_MAX_WAIT_MS) * 1_000_000n;
   let brokeStale = false;
   for (;;) {
     try {
@@ -157,7 +162,7 @@ export function acquireHookStateLock(statePath: string, now: number = Date.now()
         // deadline and backoff. A stat/unlink permission error is terminal.
         if (errnoCode(staleErr) !== "ENOENT") return null;
       }
-      if (Date.now() >= deadline) return null;
+      if (process.hrtime.bigint() >= deadline) return null;
       sleepSync(LOCK_SPIN_MS);
     }
   }

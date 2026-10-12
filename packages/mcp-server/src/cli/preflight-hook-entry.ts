@@ -7,7 +7,8 @@
  * evaluatePreflightHook (and the shared matcher it wraps) so this file is fully
  * self-contained; the plugin's hooks/hooks.json invokes it as
  * `node "${CLAUDE_PLUGIN_ROOT}/server/preflight.mjs"` with matcher
- * Write|Edit|MultiEdit.
+ * Write|Edit|MultiEdit|NotebookEdit (#470 slice 4: NotebookEdit for the
+ * deeppairing-state class only).
  *
  * Contract, identical to the init-path script:
  *   - only Edit/Write/MultiEdit are considered; anything else exits 0;
@@ -27,7 +28,7 @@ import path from "node:path";
 // capped `fires` entry AND stamps the guardrail dedup record in a single
 // read-modify-write, in the core, so the two hand-maintained hook copies can't
 // drift on the write shape. (This entry's own recordFire is gone.)
-import { evaluatePreflightHook, recordHookFire, toolInputTargetsGuardrail } from "./preflight-hook-core.js";
+import { evaluatePreflightHook, recordHookFire, toolInputTargetsDeeppairingState, toolInputTargetsGuardrail } from "./preflight-hook-core.js";
 
 /** PP1 — cheap pre-check so the common case (no rejections, no team.json) skips
  *  the matcher entirely. Reading the small preferences.json is ms. */
@@ -59,7 +60,8 @@ process.stdin.on("end", () => {
     // R1 (#279) — one documented precedence in every hook lane:
     // CLAUDE_PROJECT_DIR > DEEPPAIRING_PROJECT_ROOT > the event's cwd > ours.
     const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || ev.cwd || process.cwd();
-    if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit") {
+    // #470 slice 4 — NotebookEdit is matched too, for the deeppairing-state class only.
+    if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit" && toolName !== "NotebookEdit") {
       process.exit(0);
     }
     // P1 — the fast path has TWO reasons to keep going: a seeded ledger (the
@@ -70,7 +72,11 @@ process.stdin.on("end", () => {
     // of regex tests; measured at ~0.003 ms on a miss), and the whole matcher
     // core is already inlined into this bundle by esbuild, so it costs nothing
     // extra here.
-    if (!ledgersPresent(projectRoot) && !toolInputTargetsGuardrail(projectRoot, toolInput)) {
+    if (
+      !ledgersPresent(projectRoot) &&
+      !toolInputTargetsGuardrail(projectRoot, toolInput) &&
+      !toolInputTargetsDeeppairingState(projectRoot, toolInput)
+    ) {
       process.exit(0); // nothing to match against — skip the matcher
     }
     const decision = evaluatePreflightHook({ toolName, toolInput, projectRoot });

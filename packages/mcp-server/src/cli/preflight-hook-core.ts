@@ -8,10 +8,25 @@ import { appendHookFire, hookStatePath } from "../hooks/hook-state.js";
 // F14's hand-written "loose superset" prefilter is GONE: the hook entries call
 // matchGuardrailPath (the authoritative matcher) in their early exit instead,
 // so there is no second definition left to drift. See guardrail-rules.ts.
-import { GUARDRAIL_RULES, matchGuardrailPath, toolInputTargetsGuardrail } from "../guardrail-rules.js";
-import type { GuardrailMatch, GuardrailRule } from "../guardrail-rules.js";
-export { GUARDRAIL_RULES, matchGuardrailPath, toolInputTargetsGuardrail };
-export type { GuardrailMatch, GuardrailRule };
+import {
+  DEEPPAIRING_STATE_CATEGORY,
+  GUARDRAIL_RULES,
+  matchDeeppairingStatePath,
+  matchGuardrailPath,
+  toolInputTargetPath,
+  toolInputTargetsDeeppairingState,
+  toolInputTargetsGuardrail,
+} from "../guardrail-rules.js";
+import type { GuardrailMatch, GuardrailRule, StateMatch } from "../guardrail-rules.js";
+export {
+  DEEPPAIRING_STATE_CATEGORY,
+  GUARDRAIL_RULES,
+  matchDeeppairingStatePath,
+  matchGuardrailPath,
+  toolInputTargetsDeeppairingState,
+  toolInputTargetsGuardrail,
+};
+export type { GuardrailMatch, GuardrailRule, StateMatch };
 import type { RejectedApproach } from "../store/store-interface.js";
 import type { TeamPreference } from "@deeppairing/shared";
 
@@ -489,7 +504,10 @@ export function recordHookFire(projectRoot: string, decision: HookDecision, now:
       reason: decision.guardrail ? `guardrail:${decision.guardrail.category}` : decision.source || "blocked",
     },
     (state) => {
-      if (decision.guardrail) stampGuardrailAsk(state, decision.guardrail, now);
+      // #470 slice 4 — the deeppairing-state class never dedups, so it never stamps.
+      if (decision.guardrail && decision.guardrail.category !== DEEPPAIRING_STATE_CATEGORY) {
+        stampGuardrailAsk(state, decision.guardrail, now);
+      }
     },
   );
 }
@@ -562,6 +580,50 @@ export function evaluateGuardrailBackstop(args: {
   }
 }
 
+/** #470 slice 4 — the human-facing ask for a deepPairing state file. Written
+ *  for the prompt first, with the agent instruction on a bracketed last line
+ *  (the same sequencing as guardrailReason). */
+export function deeppairingStateReason(match: StateMatch): string {
+  const what =
+    match.kind === "preferences"
+      ? "It's where your stances live: an edit here can quietly retire one."
+      : match.kind === "team"
+        ? "It holds your team's committed rules: an edit here changes them for everyone."
+        : match.kind === "hooks"
+          ? "It's one of the hook scripts that make these prompts: an edit here can switch a prompt off."
+          : "It's a Claude Code settings file that registers deepPairing's hooks: an edit here can remove these prompts.";
+  const whose = match.kind === "claude-settings" ? "It guards deepPairing's prompts." : "It's deepPairing's own state.";
+  return (
+    `Allow this edit to ${match.path}? ${whose} ${what} ` +
+    `deepPairing always asks about this file, whatever else is going on.\n` +
+    `[DEEPPAIRING_STATE — agent: don't edit deepPairing's state files to change a stance, rule or hook. ` +
+    `On a decline, ask your pair to make the change themselves.]`
+  );
+}
+
+/** #470 slice 4 — the `deeppairing-state` guardrail class. Always asks: no
+ *  ceremony skip, no dedup, and the backstop opt-out doesn't reach it. Pure;
+ *  any fault is "no decision" (the other gates still run). */
+export function evaluateDeeppairingState(args: { toolInput: unknown; projectRoot: string }): HookDecision | null {
+  try {
+    const match = matchDeeppairingStatePath(args.projectRoot, toolInputTargetPath(args.toolInput));
+    if (!match) return null;
+    return {
+      fire: true,
+      reason: deeppairingStateReason(match),
+      source: "guardrail",
+      guardrail: {
+        category: DEEPPAIRING_STATE_CATEGORY,
+        path: match.path,
+        rationale: "deepPairing's own state: your stances, team rules, hook scripts and the settings that register them.",
+        note: "deepPairing's own state",
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Evaluate a PreToolUse Edit/Write/MultiEdit against the project's rejected
  *  approaches + team prefs, then (P1) against the guardrail backstop. Returns
  *  `fire` + the reason to surface, or {fire:false}.
@@ -579,8 +641,15 @@ export function evaluatePreflightHook(args: {
   env?: Record<string, string | undefined>;
 }): HookDecision {
   const { toolName, toolInput, projectRoot } = args;
+  // #470 slice 4 — decided first and independently of everything below, so
+  // no ceremony, dedup window or opt-out can silence it. One prompt per call:
+  // when the rejected-approach gate also fires, its message leads (pinned
+  // verbatim) and the state note is appended to the SAME ask.
+  const state = evaluateDeeppairingState({ toolInput, projectRoot });
+  // NotebookEdit is matched only for this class; the other gates are unchanged.
+  if (toolName === "NotebookEdit") return state ?? { fire: false };
   const { strings, paths } = buildProposals(toolName, toolInput);
-  if (strings.length === 0) return { fire: false };
+  if (strings.length === 0) return state ?? { fire: false };
 
   const result = runPreflight({
     toolName,
@@ -594,7 +663,11 @@ export function evaluatePreflightHook(args: {
     // created" tail AND reword "refused" → "paused for your review" (the gate
     // asks the human, it doesn't hard-refuse). The REJECTED_APPROACH_BLOCKED
     // prefix + the rationale/concept/reason are preserved.
-    return { fire: true, reason: toHookReason(result.block.message), source: result.block.source };
+    const reason = toHookReason(result.block.message);
+    return state
+      ? { ...state, reason: `${reason}\n\n${state.reason}`, source: result.block.source }
+      : { fire: true, reason, source: result.block.source };
   }
+  if (state) return state;
   return evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env }) ?? { fire: false };
 }

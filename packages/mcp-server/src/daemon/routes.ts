@@ -16,6 +16,8 @@ import { recordMetricEvent } from "../store/metrics-store.js";
 import { projectHashGate } from "../http/guards.js";
 import { ReviewPostJournalError, reviewPostIdentitySchema, reviewPostLeaseSchema, reviewPostResultSchema } from "../store/review-post-journal.js";
 import { isSessionReviewConflictError } from "../store/session-records.js";
+import { REGISTRATION_HEADER, type StanceExceptionRegistry } from "./stance-exceptions.js";
+import { ProposalPreconditionSchema, ProposalSnapshotSchema } from "@deeppairing/shared";
 
 const ReviewPostOperationBody = z.discriminatedUnion("action", [
   z.object({ action: z.literal("reserve"), identity: reviewPostIdentitySchema, repost: z.boolean() }).strict(),
@@ -98,6 +100,19 @@ const PostedReviewBody = z
     commentCount: z.number().int().nonnegative(),
   })
   .strict();
+// #470 — the operation route body. Strict: nothing but the call identity and,
+// for a claim, the allowances it names plus the client's own resolution.
+const OperationBody = z.object({
+  callFingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+  admission: z.object({
+    exceptionIds: z.array(z.string().min(1)).min(1).max(8),
+    toolName: z.string().min(1),
+    snapshot: ProposalSnapshotSchema,
+    preconditions: z.array(ProposalPreconditionSchema),
+    trace: z.record(z.string(), z.unknown()).optional(),
+    block: z.record(z.string(), z.unknown()).optional(),
+  }).strict().optional(),
+}).strict();
 // Preference-setter bodies — validated against the SHARED enum schemas so the
 // internal route rejects a poison value the same way /api/preferences does.
 const AutonomyPostBody = z.object({ level: AutonomyLevelSchema });
@@ -340,6 +355,13 @@ export function createDaemonRoutes(
    * Optional so route-logic test fixtures don't have to thread it.
    */
   activeSessions?: Set<string>,
+  /**
+   * #470 — the daemon's in-memory stance-exception registry. Optional so
+   * route-logic fixtures don't thread it. These INTERNAL routes only ever
+   * register wrappers, inspect (read-only) and run admitted operations; none of
+   * them can grant (A1 — granting is the public human route's job alone).
+   */
+  stanceExceptions?: StanceExceptionRegistry,
 ) {
   // U0.6 — same diagnostic seam as routes.ts. Wrapper-side mutations log
   // here; we want both UI clicks and agent-driven status updates in one log.
@@ -473,11 +495,15 @@ export function createDaemonRoutes(
     });
     // C-3 — mark this session's wrapper as live so idle-shutdown holds off.
     activeSessions?.add(sessionId);
+    // #470 (§5) — the daemon ISSUES the registration: an id embedding its
+    // instance, and a per-registration secret the wrapper echoes on every call.
+    const registration = stanceExceptions?.register(sessionId, { split: (body as { splitMode?: unknown }).splitMode === true });
     return c.json({
       status: "registered",
       sessionId,
       projectRoot: daemonProjectRoot,
       state: store.getFullState(),
+      ...(registration ?? {}),
     });
   });
 
@@ -500,7 +526,12 @@ export function createDaemonRoutes(
     // Don't delete from the data map — the session's store stays so the web UI
     // can keep reading it. But DO drop it from the active set: with the wrapper
     // gone, the daemon may idle-shut once the UI client also disconnects.
-    activeSessions?.delete(sessionId);
+    // #470 (§5) — "ended" means the registration is absent from the live map.
+    // #499 review P2 — with a registry, the session stays active while ANY of
+    // its registrations is live: a late shutdown from an evicted wrapper, or
+    // one of two fallback-mode wrappers leaving, must not mark it inactive.
+    const stillLive = stanceExceptions ? stanceExceptions.unregister(sessionId, c.req.header(REGISTRATION_HEADER)) : false;
+    if (!stillLive) activeSessions?.delete(sessionId);
     return c.json({ status: "unregistered" });
   });
 
@@ -888,8 +919,41 @@ export function createDaemonRoutes(
     if (!body || body.type !== "preflight_blocked") {
       return c.json({ ok: false, reason: "not_a_preflight_block" }, 400);
     }
-    broadcast(sessionId, body);
+    // #470 — the daemon recomputes every stance-exception field (registration
+    // from the issued token, digest, eligibility); the caller's copies are dropped.
+    broadcast(sessionId, stanceExceptions ? stanceExceptions.prepareBlockEvent(sessionId, c.req.header(REGISTRATION_HEADER), body) : body);
     return c.json({ ok: true });
+  });
+
+  // --- #470 Stance exceptions (agent side: inspect + the operation route) ---
+
+  // §6 step 2 — read-only. Never consumes; lists only the CALLING
+  // registration's active allowances for this call fingerprint.
+  app.get("/api/internal/sessions/:sessionId/stance-exceptions", (c) => {
+    const sessionId = c.req.param("sessionId");
+    const r = requireStore(c, sessionId);
+    if (!r.ok) return r.response;
+    if (!stanceExceptions) return c.json({ candidates: [], inactive: [] });
+    const fingerprint = c.req.query("fingerprint") ?? "";
+    return c.json(stanceExceptions.inspect(sessionId, c.req.header(REGISTRATION_HEADER), fingerprint));
+  });
+
+  // §7 — the ONE authoritative operation route: replay/complete (no body
+  // admission) or claim + create + follow-ups, all inside the session's queue.
+  // Refusals are domain results (200 + status), like the plan-progress route.
+  app.post("/api/internal/sessions/:sessionId/operations/:operationId", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const r = requireStore(c, sessionId);
+    if (!r.ok) return r.response;
+    const parsed = await parseJsonBody(c, OperationBody);
+    if (!parsed.ok) return parsed.res;
+    if (!stanceExceptions) return c.json({ status: "none" });
+    const outcome = await stanceExceptions.runOperation(
+      sessionId, r.store, c.req.header(REGISTRATION_HEADER), c.req.param("operationId"),
+      parsed.data.callFingerprint, parsed.data.admission,
+    );
+    if (outcome.status === "inconsistent") return c.json(outcome, 409);
+    return c.json(outcome);
   });
 
   app.post("/api/internal/sessions/:sessionId/comments/:commentId/mark-resolved", async (c) => {

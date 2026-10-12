@@ -10,6 +10,7 @@ import {
   DebriefContentSchema,
   ExplainerContentSchema,
 } from "./content-types.js";
+import { ArtifactAdmissionSchema } from "./stance-exception.js";
 
 export const ArtifactTypeSchema = z.enum([
   "research",
@@ -251,6 +252,12 @@ export const ArtifactSchema = z.object({
    * ABSENCE keeps the stored JSON byte-identical to before.
    */
   featureId: z.string().trim().max(80).optional(),
+  /**
+   * #470 — the operation stamp of an artifact admitted once under a human's
+   * stance allowance. Non-authorizing metadata (see stance-exception.ts).
+   * Optional for backward compatibility; absent on every ordinary artifact.
+   */
+  admission: ArtifactAdmissionSchema.optional(),
   content: z.record(z.string(), z.unknown()),
   agentReasoning: z.string().nullable(),
   relatedArtifactIds: z.array(z.string()).optional(),

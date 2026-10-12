@@ -1,4 +1,5 @@
 import type { ToolContext } from "./tools/types.js";
+import type { PreflightOpts } from "./tool-helpers.js";
 
 const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -61,7 +62,7 @@ export function artifactProposal(type: string, title: string, value: unknown) {
   };
 }
 
-export function preflightArtifact(ctx: ToolContext, toolName: string, type: string, title: string, content: unknown) {
+export function preflightArtifact(ctx: ToolContext, toolName: string, type: string, title: string, content: unknown, opts: Omit<PreflightOpts, "advisory"> = {}) {
   const proposal = artifactProposal(type, title, content);
-  return proposal ? ctx.helpers.preflightRejectedApproaches(toolName, proposal.text, proposal.paths, proposal.concepts, { advisory: proposal.advisory }) : null;
+  return proposal ? ctx.helpers.preflightRejectedApproaches(toolName, proposal.text, proposal.paths, proposal.concepts, { ...opts, advisory: proposal.advisory }) : null;
 }

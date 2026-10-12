@@ -2288,7 +2288,7 @@ var require_websocket = __commonJS({
     var http = __require("http");
     var net = __require("net");
     var tls = __require("tls");
-    var { randomBytes: randomBytes4, createHash: createHash3 } = __require("crypto");
+    var { randomBytes: randomBytes5, createHash: createHash4 } = __require("crypto");
     var { Duplex, Readable: Readable2 } = __require("stream");
     var { URL: URL2 } = __require("url");
     var PerMessageDeflate2 = require_permessage_deflate();
@@ -2826,7 +2826,7 @@ var require_websocket = __commonJS({
         }
       }
       const defaultPort = isSecure ? 443 : 80;
-      const key = randomBytes4(16).toString("base64");
+      const key = randomBytes5(16).toString("base64");
       const request = isSecure ? https.request : http.request;
       const protocolSet = /* @__PURE__ */ new Set();
       let perMessageDeflate;
@@ -2956,7 +2956,7 @@ var require_websocket = __commonJS({
           abortHandshake(websocket, socket, "Invalid Upgrade header");
           return;
         }
-        const digest = createHash3("sha1").update(key + GUID).digest("base64");
+        const digest = createHash4("sha1").update(key + GUID).digest("base64");
         if (res.headers["sec-websocket-accept"] !== digest) {
           abortHandshake(websocket, socket, "Invalid Sec-WebSocket-Accept header");
           return;
@@ -3325,7 +3325,7 @@ var require_websocket_server = __commonJS({
     var EventEmitter = __require("events");
     var http = __require("http");
     var { Duplex } = __require("stream");
-    var { createHash: createHash3 } = __require("crypto");
+    var { createHash: createHash4 } = __require("crypto");
     var extension2 = require_extension();
     var PerMessageDeflate2 = require_permessage_deflate();
     var subprotocol2 = require_subprotocol();
@@ -3632,7 +3632,7 @@ var require_websocket_server = __commonJS({
           );
         }
         if (this._state > RUNNING) return abortHandshake(socket, 503);
-        const digest = createHash3("sha1").update(key + GUID).digest("base64");
+        const digest = createHash4("sha1").update(key + GUID).digest("base64");
         const headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
@@ -4364,6 +4364,74 @@ var serve = (options, listeningListener) => {
 import crypto6 from "node:crypto";
 import fs23 from "node:fs";
 import path23 from "node:path";
+
+// src/hooks/stance-allow-ask.ts
+var STANCE_ALLOW_ASK_REASON = "The agent is trying to grant a stance allowance from the shell. Only allow this if you asked for it.";
+var STANCE_ALLOW_ASK_REL_PATH = ".deeppairing/hooks/stance-allow-ask.sh";
+var STANCE_ALLOW_ASK_COMMAND = `sh "$CLAUDE_PROJECT_DIR/${STANCE_ALLOW_ASK_REL_PATH}"`;
+var STANCE_ALLOW_ASK_MATCHER = "Bash";
+var ASK_JSON = JSON.stringify({
+  hookSpecificOutput: {
+    hookEventName: "PreToolUse",
+    permissionDecision: "ask",
+    permissionDecisionReason: STANCE_ALLOW_ASK_REASON
+  }
+});
+var STANCE_ALLOW_ASK_SCRIPT = `#!/bin/sh
+# deepPairing \u2014 narrow Bash check for \`stance allow\` (#470). GENERATED, do not
+# edit: source is packages/mcp-server/src/hooks/stance-allow-ask.ts.
+# If the agent's Bash command contains "stance allow" (case-insensitive, any
+# whitespace between, after decoding JSON escapes), ask the human first.
+# Every other command: no output, exit 0. A substring check, not a parser.
+LC_ALL=C awk -v sq="'" '
+function hexval(h,   i, c, v) {
+  v = 0; h = tolower(h)
+  for (i = 1; i <= length(h); i++) {
+    c = index("0123456789abcdef", substr(h, i, 1))
+    if (c == 0) return -1
+    v = v * 16 + c - 1
+  }
+  return v
+}
+function decode(s, start,   out, i, n, ch, nx, v) {
+  out = ""; n = length(s)
+  for (i = start; i <= n; i++) {
+    ch = substr(s, i, 1)
+    if (ch == "\\"") return out
+    if (ch == "\\\\") {
+      i++; nx = substr(s, i, 1)
+      if (nx == "n") out = out "\\n"
+      else if (nx == "t") out = out "\\t"
+      else if (nx == "r") out = out "\\r"
+      else if (nx == "b" || nx == "f") out = out " "
+      else if (nx == "u") {
+        v = hexval(substr(s, i + 1, 4)); i += 4
+        if (v == 9 || v == 10 || v == 11 || v == 12 || v == 13 || v == 32 || v == 133 || v == 160) out = out " "
+        else if (v > 32 && v < 127) out = out sprintf("%c", v)
+        else out = out "?"
+      }
+      else out = out nx
+    } else out = out ch
+  }
+  return out
+}
+{ buf = buf $0 "\\n" }
+END {
+  rest = buf
+  while (match(rest, /"command"[ \\t\\r\\n]*:[ \\t\\r\\n]*"/)) {
+    cmd = tolower(decode(rest, RSTART + RLENGTH))
+    # Normalise what the shell would: a backslash-newline continuation and
+    # $IFS / \${IFS} are whitespace; quotes and backslashes only group or
+    # escape, so drop them (quoted words, al""low, \\allow).
+    gsub(/\\\\\\n/, " ", cmd)
+    gsub(/\\$\\{ifs\\}|\\$ifs/, " ", cmd)
+    gsub(sq, "", cmd); gsub(/"/, "", cmd); gsub(/\\\\/, "", cmd)
+    if (cmd ~ /(^|[^a-z0-9_])stance[ \\t\\r\\n\\v\\f]+allow([^a-z0-9_]|$)/ || cmd ~ /preflight-blocks\\/[^ \\t\\r\\n]*\\/exception/) { print ${JSON.stringify(ASK_JSON)}; exit 0 }
+    rest = substr(rest, RSTART + RLENGTH)
+  }
+}'
+exit 0
+`;
 
 // src/cli/setup-tasks.ts
 import fs2 from "node:fs";
@@ -19414,6 +19482,93 @@ var ExplainerContentSchema = external_exports.object({
   unknowns: external_exports.array(external_exports.string()).optional().describe("Honest gaps: what you could NOT determine and why (e.g. 'I couldn't tell whether the CLI path is covered \u2014 I didn't read cli/init.ts'). Renders above the fold with a one-click Ask.")
 });
 
+// ../shared/dist/schemas/stance-exception.js
+var StanceRefSchema = external_exports.object({
+  description: external_exports.string(),
+  concept: external_exports.string().optional(),
+  rejectedAt: external_exports.string().optional()
+});
+var ProposalSnapshotSchema = external_exports.object({
+  kind: external_exports.enum(["create", "revise"]),
+  type: external_exports.string().min(1),
+  title: external_exports.string().min(1),
+  content: external_exports.record(external_exports.string(), external_exports.unknown()),
+  agentReasoning: external_exports.string().optional(),
+  relatedArtifactIds: external_exports.array(external_exports.string()).optional(),
+  feature: external_exports.string().optional(),
+  parentId: external_exports.string().optional(),
+  version: external_exports.number().int().positive().optional()
+}).strict();
+var ProposalPreconditionSchema = external_exports.discriminatedUnion("kind", [
+  external_exports.object({
+    kind: external_exports.literal("code_change_prior"),
+    filePath: external_exports.string(),
+    /** The prior code_change that supplied `before`, or null when none did. */
+    priorCodeChangeId: external_exports.string().nullable(),
+    /** sha256 of that prior's `after`, or null when there was no prior. */
+    priorAfterHash: external_exports.string().nullable()
+  }).strict(),
+  external_exports.object({
+    kind: external_exports.literal("revise_target"),
+    targetId: external_exports.string(),
+    targetVersion: external_exports.number().int(),
+    targetStatus: external_exports.string(),
+    /** sha256 over every field a revision inherits from its target. */
+    inheritedHash: external_exports.string()
+  }).strict()
+]);
+var StanceGrantOriginSchema = external_exports.enum(["ui", "cli"]);
+var StanceAllowanceReceiptStateSchema = external_exports.enum(["allowed", "used", "changed", "revoked", "ended", "expired"]);
+var StanceAllowanceReceiptSchema = external_exports.object({
+  id: external_exports.string(),
+  /** Which door was used. Self-reported; labels, never authenticates. */
+  grantedVia: StanceGrantOriginSchema,
+  grantedAt: external_exports.string(),
+  reason: external_exports.string(),
+  ceilingAt: external_exports.string(),
+  state: StanceAllowanceReceiptStateSchema,
+  artifactId: external_exports.string().optional(),
+  revokedAt: external_exports.string().optional(),
+  /** Set with `changed`: the new block recorded when the dependency moved. */
+  supersededByBlockId: external_exports.string().optional()
+});
+var AdmissionFollowUpsSchema = external_exports.object({
+  supersede: external_exports.object({
+    parentId: external_exports.string(),
+    /** The parent's status when the claim succeeded. A replay supersedes only
+     *  from this status; any other (a human verdict since) is skipped. */
+    fromStatus: external_exports.string(),
+    skipped: external_exports.string().optional()
+  }).optional(),
+  comment: external_exports.object({ id: external_exports.string(), artifactId: external_exports.string(), content: external_exports.string() }).optional(),
+  decision: external_exports.object({
+    decisionId: external_exports.string(),
+    artifactId: external_exports.string(),
+    context: external_exports.string(),
+    title: external_exports.string().optional(),
+    options: external_exports.array(external_exports.unknown()),
+    stakes: external_exports.enum(["low", "medium", "high"]).optional()
+  }).optional(),
+  planReview: external_exports.boolean().optional(),
+  /** The admitted call's preflight trace, persisted against the child. */
+  trace: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
+});
+var ArtifactAdmissionSchema = external_exports.object({
+  operationId: external_exports.string(),
+  callFingerprint: external_exports.string(),
+  effectiveDigest: external_exports.string(),
+  kind: external_exports.enum(["create", "revise"]),
+  exceptionIds: external_exports.array(external_exports.string()),
+  grantedVia: StanceGrantOriginSchema,
+  followUps: AdmissionFollowUpsSchema,
+  completedAt: external_exports.string().optional()
+});
+var PreflightTraceExceptionSchema = external_exports.object({
+  allowanceIds: external_exports.array(external_exports.string()),
+  grantedVia: StanceGrantOriginSchema,
+  stances: external_exports.array(external_exports.string())
+});
+
 // ../shared/dist/schemas/artifact.js
 var ArtifactTypeSchema = external_exports.enum([
   "research",
@@ -19544,6 +19699,12 @@ var ArtifactSchema = external_exports.object({
    * ABSENCE keeps the stored JSON byte-identical to before.
    */
   featureId: external_exports.string().trim().max(80).optional(),
+  /**
+   * #470 — the operation stamp of an artifact admitted once under a human's
+   * stance allowance. Non-authorizing metadata (see stance-exception.ts).
+   * Optional for backward compatibility; absent on every ordinary artifact.
+   */
+  admission: ArtifactAdmissionSchema.optional(),
   content: external_exports.record(external_exports.string(), external_exports.unknown()),
   agentReasoning: external_exports.string().nullable(),
   relatedArtifactIds: external_exports.array(external_exports.string()).optional(),
@@ -20576,7 +20737,14 @@ var StatusUpdateBodySchema = external_exports.object({
    * named concept, then the artifact title (legacy behavior). Naming it
    * explicitly is what lets a future paraphrase get caught across projects.
    */
-  concept: external_exports.string().optional()
+  concept: external_exports.string().optional(),
+  /**
+   * #521 — marks an approval as the confidence auto-approve countdown (not a
+   * human click). The server re-checks, at commit, that the current autonomy
+   * level still permits it and refuses (409 auto_approve_not_permitted) if not.
+   * Absent = an explicit human action, never gated.
+   */
+  reason: external_exports.enum(["auto_confidence"]).optional()
 });
 var DecisionCloseOutBodySchema = external_exports.object({
   projectRoot: external_exports.string().max(4096).optional(),
@@ -20788,7 +20956,9 @@ var PreflightTraceSchema = external_exports.object({
   /** Concepts that partially matched but didn't block. May be empty. */
   nearMisses: external_exports.array(PreflightNearMissSchema),
   /** Set only when decision === "blocked". */
-  block: PreflightBlockSummarySchema.optional()
+  block: PreflightBlockSummarySchema.optional(),
+  /** #470 — set when this artifact was admitted under a stance allowance. */
+  exception: PreflightTraceExceptionSchema.optional()
 });
 
 // ../shared/dist/normalize.js
@@ -20910,8 +21080,8 @@ var LedgerDigestSchema = external_exports.object({
 });
 
 // src/cli/hook-scripts.generated.ts
-var STOP_HOOK_SCRIPT = '#!/usr/bin/env node\n// deepPairing Stop hook \u2014 installed by ensureStopHook (X7 / X9).\n// GENERATED \u2014 do not edit. Source: packages/mcp-server/src/cli/stop-hook-entry.ts\n// Regenerate: pnpm --filter @deeppairing/mcp-server gen:hooks\n// src/hooks/stop-hook.ts\nimport fs2 from "node:fs";\nimport path2 from "node:path";\n\n// src/debrief-gate.ts\nvar CODE_CLOSED_STATUSES = ["superseded", "retracted", "obsolete"];\nvar DEBRIEF_DEAD_STATUSES = ["superseded", "retracted", "obsolete", "rejected"];\nvar CEREMONY_TYPES = ["decision", "spec", "plan"];\nfunction isExternalReview(a) {\n  if (a?.type !== "changeset") return false;\n  const content = a?.content;\n  return !!content && typeof content === "object" && content.reviewIntent === "external";\n}\nfunction sessionOwesDebrief(artifacts, isRecent = () => true) {\n  const hasLiveDebrief = artifacts.some(\n    (a) => a?.type === "debrief" && !DEBRIEF_DEAD_STATUSES.includes(a?.status ?? "")\n  );\n  if (hasLiveDebrief) return false;\n  const recentCode = artifacts.filter(\n    (a) => (a?.type === "code_change" || a?.type === "changeset") && !isExternalReview(a) && !CODE_CLOSED_STATUSES.includes(a?.status ?? "") && isRecent(a)\n  );\n  if (recentCode.length === 0) return false;\n  const changesets = recentCode.filter((a) => a?.type === "changeset").length;\n  const codeChanges = recentCode.filter((a) => a?.type === "code_change").length;\n  const hasCeremony = artifacts.some((a) => CEREMONY_TYPES.includes(a?.type ?? "")) || artifacts.some((a) => a?.type === "debrief");\n  const trivial = changesets === 0 && codeChanges === 1 && !hasCeremony;\n  return !trivial;\n}\n\n// src/hooks/hook-state.ts\nimport fs from "node:fs";\nimport path from "node:path";\nvar FIRE_LOG_CAP = 50;\nvar LOCK_STALE_MS = 5e3;\nvar LOCK_SPIN_MS = 2;\nvar LOCK_MAX_WAIT_MS = 500;\nfunction errnoCode(err) {\n  if (typeof err === "object" && err !== null && "code" in err) {\n    const code = err.code;\n    if (typeof code === "string") return code;\n  }\n  return void 0;\n}\nfunction hookErrorMessage(err) {\n  if (typeof err === "object" && err !== null && "message" in err) {\n    const message = err.message;\n    if (typeof message === "string") return message;\n  }\n  return String(err);\n}\nfunction resolveHookProjectRoot(eventCwd) {\n  return process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || (typeof eventCwd === "string" && eventCwd ? eventCwd : "") || process.cwd();\n}\nfunction sleepSync(ms) {\n  try {\n    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);\n  } catch {\n  }\n}\nfunction acquireHookStateLock(statePath, now = Date.now()) {\n  const lock = `${statePath}.lock`;\n  const deadline = now + LOCK_MAX_WAIT_MS;\n  let brokeStale = false;\n  for (; ; ) {\n    try {\n      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));\n      return lock;\n    } catch (error) {\n      if (errnoCode(error) !== "EEXIST") return null;\n      try {\n        if (!brokeStale && Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {\n          brokeStale = true;\n          fs.unlinkSync(lock);\n          continue;\n        }\n      } catch (staleErr) {\n        if (errnoCode(staleErr) !== "ENOENT") return null;\n      }\n      if (Date.now() >= deadline) return null;\n      sleepSync(LOCK_SPIN_MS);\n    }\n  }\n}\nfunction releaseHookStateLock(lock) {\n  if (!lock) return;\n  try {\n    fs.unlinkSync(lock);\n  } catch {\n  }\n}\nfunction readHookState(statePath) {\n  let raw;\n  try {\n    raw = fs.readFileSync(statePath, "utf-8");\n  } catch {\n    return { version: 1 };\n  }\n  try {\n    const parsed = JSON.parse(raw);\n    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;\n  } catch {\n  }\n  try {\n    const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");\n    fs.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);\n  } catch {\n  }\n  return { version: 1 };\n}\nfunction writeHookStateAtomic(statePath, state) {\n  const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 10)}`;\n  try {\n    fs.writeFileSync(tmp, JSON.stringify(state));\n    fs.renameSync(tmp, statePath);\n  } catch (err) {\n    try {\n      fs.unlinkSync(tmp);\n    } catch {\n    }\n    throw err;\n  }\n}\nfunction appendHookFire(statePath, fire, mutate) {\n  try {\n    fs.mkdirSync(path.dirname(statePath), { recursive: true });\n    const lock = acquireHookStateLock(statePath);\n    try {\n      const state = readHookState(statePath);\n      state.version = 1;\n      const fires = Array.isArray(state.fires) ? state.fires : [];\n      fires.push(fire);\n      state.fires = fires.slice(-FIRE_LOG_CAP);\n      mutate?.(state);\n      writeHookStateAtomic(statePath, state);\n    } finally {\n      releaseHookStateLock(lock);\n    }\n  } catch {\n  }\n}\nfunction hookStatePath(projectRoot) {\n  return path.join(projectRoot, ".deeppairing", "hooks-state.json");\n}\n\n// src/hooks/stop-hook.ts\nvar HOOK_NAME = "stop";\nvar MAX_AGE_MS = 30 * 60 * 1e3;\nvar BLOCKING_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset"];\nfunction runStopHook(now = Date.now()) {\n  const projectRoot = resolveHookProjectRoot();\n  function exit(code, reason) {\n    appendHookFire(hookStatePath(projectRoot), {\n      at: (/* @__PURE__ */ new Date()).toISOString(),\n      hook: HOOK_NAME,\n      exitCode: code,\n      reason\n    });\n    process.exit(code);\n  }\n  try {\n    const sessionsDir = path2.join(projectRoot, ".deeppairing", "sessions");\n    if (!fs2.existsSync(sessionsDir)) exit(0, "no sessions dir");\n    let owesDebriefSession = null;\n    for (const id of fs2.readdirSync(sessionsDir)) {\n      const af = path2.join(sessionsDir, id, "artifacts.json");\n      if (!fs2.existsSync(af)) continue;\n      let arr;\n      try {\n        arr = JSON.parse(fs2.readFileSync(af, "utf-8"));\n      } catch {\n        continue;\n      }\n      if (!Array.isArray(arr)) continue;\n      const artifacts = arr;\n      const blocking = artifacts.some((x) => {\n        if (x?.status !== "draft") return false;\n        if (!x?.type || !BLOCKING_TYPES.includes(x.type)) return false;\n        const t = x?.createdAt ? new Date(x.createdAt).getTime() : 0;\n        if (t && now - t > MAX_AGE_MS) return false;\n        return true;\n      });\n      if (blocking) {\n        process.stderr.write("deepPairing: pending artifacts need review \\u2014 call check_feedback\\n");\n        exit(0, "pending artifacts in " + id);\n      }\n      if (owesDebriefSession === null) {\n        const owes = sessionOwesDebrief(artifacts, (x) => {\n          const t = x?.createdAt ? new Date(x.createdAt).getTime() : 0;\n          return !t || now - t <= MAX_AGE_MS;\n        });\n        if (owes) owesDebriefSession = id;\n      }\n    }\n    if (owesDebriefSession !== null) {\n      process.stderr.write(\n        "deepPairing: code was presented but no present_debrief yet \\u2014 end the run with one so your pair gets the walk-through\\n"\n      );\n      exit(0, "owes debrief in " + owesDebriefSession);\n    }\n    exit(0, "pass: no blocking drafts");\n  } catch (err) {\n    exit(0, "error: " + hookErrorMessage(err));\n  }\n}\n\n// src/cli/stop-hook-entry.ts\nrunStopHook();\n';
-var CHECKPOINT_HOOK_SCRIPT = '#!/usr/bin/env node\n// deepPairing checkpoint hook (V2) \u2014 installed by ensureCheckpointHook.\n// GENERATED \u2014 do not edit. Source: packages/mcp-server/src/cli/checkpoint-hook-entry.ts\n// Regenerate: pnpm --filter @deeppairing/mcp-server gen:hooks\n// src/hooks/checkpoint-hook.ts\nimport fs2 from "node:fs";\nimport path3 from "node:path";\nimport crypto2 from "node:crypto";\n\n// src/session-id.ts\nimport crypto from "node:crypto";\nimport path from "node:path";\nfunction deriveSessionId(projectRoot, claudeSessionIdRaw) {\n  const projectName = path.basename(projectRoot);\n  const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);\n  const projectHash = crypto.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);\n  const base = `session_${safeProjectName}_${projectHash}`;\n  const sanitized = (claudeSessionIdRaw ?? "").replace(/[^a-zA-Z0-9-]/g, "").slice(0, 64);\n  if (sanitized.length === 0) {\n    return { sessionId: base, mode: "fallback" };\n  }\n  return { sessionId: `${base}_${sanitized}`, mode: "split", claudeSessionId: sanitized };\n}\n\n// src/hooks/hook-state.ts\nimport fs from "node:fs";\nimport path2 from "node:path";\nvar FIRE_LOG_CAP = 50;\nvar LOCK_STALE_MS = 5e3;\nvar LOCK_SPIN_MS = 2;\nvar LOCK_MAX_WAIT_MS = 500;\nfunction errnoCode(err) {\n  if (typeof err === "object" && err !== null && "code" in err) {\n    const code = err.code;\n    if (typeof code === "string") return code;\n  }\n  return void 0;\n}\nfunction hookErrorMessage(err) {\n  if (typeof err === "object" && err !== null && "message" in err) {\n    const message = err.message;\n    if (typeof message === "string") return message;\n  }\n  return String(err);\n}\nfunction resolveHookProjectRoot(eventCwd) {\n  return process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || (typeof eventCwd === "string" && eventCwd ? eventCwd : "") || process.cwd();\n}\nfunction sleepSync(ms) {\n  try {\n    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);\n  } catch {\n  }\n}\nfunction acquireHookStateLock(statePath, now = Date.now()) {\n  const lock = `${statePath}.lock`;\n  const deadline = now + LOCK_MAX_WAIT_MS;\n  let brokeStale = false;\n  for (; ; ) {\n    try {\n      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));\n      return lock;\n    } catch (error) {\n      if (errnoCode(error) !== "EEXIST") return null;\n      try {\n        if (!brokeStale && Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {\n          brokeStale = true;\n          fs.unlinkSync(lock);\n          continue;\n        }\n      } catch (staleErr) {\n        if (errnoCode(staleErr) !== "ENOENT") return null;\n      }\n      if (Date.now() >= deadline) return null;\n      sleepSync(LOCK_SPIN_MS);\n    }\n  }\n}\nfunction releaseHookStateLock(lock) {\n  if (!lock) return;\n  try {\n    fs.unlinkSync(lock);\n  } catch {\n  }\n}\nfunction readHookState(statePath) {\n  let raw;\n  try {\n    raw = fs.readFileSync(statePath, "utf-8");\n  } catch {\n    return { version: 1 };\n  }\n  try {\n    const parsed = JSON.parse(raw);\n    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;\n  } catch {\n  }\n  try {\n    const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");\n    fs.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);\n  } catch {\n  }\n  return { version: 1 };\n}\nfunction writeHookStateAtomic(statePath, state) {\n  const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 10)}`;\n  try {\n    fs.writeFileSync(tmp, JSON.stringify(state));\n    fs.renameSync(tmp, statePath);\n  } catch (err) {\n    try {\n      fs.unlinkSync(tmp);\n    } catch {\n    }\n    throw err;\n  }\n}\nfunction appendHookFire(statePath, fire, mutate) {\n  try {\n    fs.mkdirSync(path2.dirname(statePath), { recursive: true });\n    const lock = acquireHookStateLock(statePath);\n    try {\n      const state = readHookState(statePath);\n      state.version = 1;\n      const fires = Array.isArray(state.fires) ? state.fires : [];\n      fires.push(fire);\n      state.fires = fires.slice(-FIRE_LOG_CAP);\n      mutate?.(state);\n      writeHookStateAtomic(statePath, state);\n    } finally {\n      releaseHookStateLock(lock);\n    }\n  } catch {\n  }\n}\nfunction hookStatePath(projectRoot) {\n  return path2.join(projectRoot, ".deeppairing", "hooks-state.json");\n}\n\n// src/hooks/checkpoint-hook.ts\nvar HOOK_NAME = "checkpoint";\nvar EDIT_TOOLS = ["Write", "Edit", "MultiEdit"];\nvar RECEIPT_TTL_MS = 60 * 1e3;\nvar SKIP_BASENAMES = /* @__PURE__ */ new Set([\n  // Lockfiles only \u2014 manifest files (package.json, Cargo.toml, etc.) are\n  // policy and should still nag.\n  "package-lock.json",\n  "pnpm-lock.yaml",\n  "yarn.lock",\n  "bun.lockb",\n  "uv.lock",\n  "poetry.lock",\n  "Cargo.lock",\n  "Gemfile.lock",\n  "go.sum",\n  "composer.lock"\n]);\nvar SKIP_PATH_PREFIXES = [\n  // Generated / vendored output \u2014 not human-authored source.\n  "dist/",\n  "build/",\n  "node_modules/",\n  ".deeppairing/",\n  ".next/",\n  ".turbo/",\n  ".cache/",\n  "coverage/",\n  ".nyc_output/",\n  // IDE-local config \u2014 workspace settings, not project decisions.\n  ".vscode/",\n  ".idea/"\n];\nfunction isTrivialFile(filePath) {\n  if (!filePath || filePath === "(unknown)") return false;\n  const norm = filePath.replace(/\\\\/g, "/");\n  const base = norm.split("/").pop() || "";\n  if (SKIP_BASENAMES.has(base)) return true;\n  for (const prefix of SKIP_PATH_PREFIXES) {\n    if (norm.includes("/" + prefix) || norm.startsWith(prefix)) return true;\n  }\n  return false;\n}\nvar NAG = "deepPairing: {TOOL} on {FILE} with no present_code_change for it. Present EVERY code change BEFORE the Write/Edit \\u2014 including small follow-on edits, new files (tests, configs), and each file of a multi-file change, not just the \'main\' one. A write straight to disk never reaches the human\'s review surface; they can\'t see or comment on it. If you skipped this for prior edits this session, backfill them now with present_code_change. (Per-Edit Checkpoint rule. Lockfiles and generated paths are auto-skipped.)\\n";\nfunction claimReceipt(dpDir, sessionId, absolutePath, now) {\n  const key = crypto2.createHash("sha256").update(absolutePath).digest("hex");\n  const markerPath = path3.join(dpDir, "sessions", sessionId, "code-checkpoints", key + ".json");\n  const claimPath = markerPath + ".claim." + process.pid + "." + crypto2.randomBytes(8).toString("hex");\n  fs2.renameSync(markerPath, claimPath);\n  try {\n    const m = JSON.parse(fs2.readFileSync(claimPath, "utf8"));\n    if (!m || typeof m !== "object") return false;\n    const r = m;\n    const at = typeof r.at === "string" ? Date.parse(r.at) : NaN;\n    const expiresAt = r.expiresAt === void 0 ? at + RECEIPT_TTL_MS : typeof r.expiresAt === "string" ? Date.parse(r.expiresAt) : NaN;\n    return r.version === 1 && r.sessionId === sessionId && r.filePath === absolutePath && typeof r.artifactId === "string" && r.artifactId.length > 0 && Number.isFinite(at) && Number.isFinite(expiresAt) && expiresAt >= at && now >= at && // a future-dated receipt is a clock fault, not coverage\n    now <= expiresAt;\n  } finally {\n    try {\n      fs2.unlinkSync(claimPath);\n    } catch {\n    }\n  }\n}\nfunction runCheckpointHook(stdin2, now = Date.now()) {\n  let statePath = hookStatePath(resolveHookProjectRoot());\n  let resolvedCandidateIds = [];\n  function exit(code, reason) {\n    appendHookFire(statePath, { at: (/* @__PURE__ */ new Date()).toISOString(), hook: HOOK_NAME, exitCode: code, reason, resolvedCandidateIds });\n    process.exit(code);\n  }\n  try {\n    const ev = stdin2 ? JSON.parse(stdin2) : {};\n    const projectRoot = path3.resolve(resolveHookProjectRoot(ev.cwd));\n    statePath = hookStatePath(projectRoot);\n    const tool = typeof ev.tool_name === "string" && ev.tool_name || typeof ev.toolName === "string" && ev.toolName || "";\n    if (!EDIT_TOOLS.includes(tool)) exit(0, "skip: tool=" + (tool || "(unknown)"));\n    const rawFilePath = (ev.tool_input && (ev.tool_input.file_path ?? ev.tool_input.filePath)) ?? (ev.input && ev.input.file_path);\n    const filePath = typeof rawFilePath === "string" && rawFilePath ? rawFilePath : "(unknown)";\n    if (isTrivialFile(filePath)) exit(0, "skip: trivial file " + filePath);\n    const dpDir = path3.join(projectRoot, ".deeppairing");\n    if (!fs2.existsSync(path3.join(dpDir, "sessions"))) exit(0, "skip: no sessions dir");\n    const eventHasIdentity = Object.prototype.hasOwnProperty.call(ev, "session_id");\n    const malformedEventIdentity = eventHasIdentity && ev.session_id !== "" && typeof ev.session_id !== "string";\n    const rawCandidates = [ev.session_id, process.env.CLAUDE_CODE_SESSION_ID];\n    const anyNonemptyIdentity = rawCandidates.some((value) => typeof value === "string" && value.length > 0);\n    for (const raw of rawCandidates) {\n      if (typeof raw !== "string" || !raw) continue;\n      const derived = deriveSessionId(projectRoot, raw);\n      if (derived.mode !== "split") continue;\n      if (!resolvedCandidateIds.includes(derived.sessionId)) resolvedCandidateIds.push(derived.sessionId);\n    }\n    if (resolvedCandidateIds.length === 0 && !anyNonemptyIdentity && !malformedEventIdentity) {\n      resolvedCandidateIds = [deriveSessionId(projectRoot, "").sessionId];\n    }\n    let covered = false;\n    if (filePath !== "(unknown)" && filePath.trim()) {\n      for (const sessionId of resolvedCandidateIds) {\n        try {\n          covered = claimReceipt(dpDir, sessionId, path3.resolve(projectRoot, filePath), now);\n        } catch {\n        }\n        if (covered) break;\n      }\n    }\n    if (!covered) {\n      process.stderr.write(NAG.replace("{TOOL}", tool).replace("{FILE}", filePath));\n      exit(0, "nag: " + tool + " on " + filePath);\n    }\n    exit(0, "pass: fresh checkpoint covers " + filePath);\n  } catch (err) {\n    exit(0, "error: " + hookErrorMessage(err));\n  }\n}\n\n// src/cli/checkpoint-hook-entry.ts\nvar stdin = "";\nprocess.stdin.setEncoding("utf-8");\nprocess.stdin.on("data", (c) => {\n  stdin += c;\n});\nprocess.stdin.on("end", () => {\n  runCheckpointHook(stdin);\n});\n';
+var STOP_HOOK_SCRIPT = '#!/usr/bin/env node\n// deepPairing Stop hook \u2014 installed by ensureStopHook (X7 / X9).\n// GENERATED \u2014 do not edit. Source: packages/mcp-server/src/cli/stop-hook-entry.ts\n// Regenerate: pnpm --filter @deeppairing/mcp-server gen:hooks\n// src/hooks/stop-hook.ts\nimport fs2 from "node:fs";\nimport path2 from "node:path";\n\n// src/debrief-gate.ts\nvar CODE_CLOSED_STATUSES = ["superseded", "retracted", "obsolete"];\nvar DEBRIEF_DEAD_STATUSES = ["superseded", "retracted", "obsolete", "rejected"];\nvar CEREMONY_TYPES = ["decision", "spec", "plan"];\nfunction isExternalReview(a) {\n  if (a?.type !== "changeset") return false;\n  const content = a?.content;\n  return !!content && typeof content === "object" && content.reviewIntent === "external";\n}\nfunction sessionOwesDebrief(artifacts, isRecent = () => true) {\n  const hasLiveDebrief = artifacts.some(\n    (a) => a?.type === "debrief" && !DEBRIEF_DEAD_STATUSES.includes(a?.status ?? "")\n  );\n  if (hasLiveDebrief) return false;\n  const recentCode = artifacts.filter(\n    (a) => (a?.type === "code_change" || a?.type === "changeset") && !isExternalReview(a) && !CODE_CLOSED_STATUSES.includes(a?.status ?? "") && isRecent(a)\n  );\n  if (recentCode.length === 0) return false;\n  const changesets = recentCode.filter((a) => a?.type === "changeset").length;\n  const codeChanges = recentCode.filter((a) => a?.type === "code_change").length;\n  const hasCeremony = artifacts.some((a) => CEREMONY_TYPES.includes(a?.type ?? "")) || artifacts.some((a) => a?.type === "debrief");\n  const trivial = changesets === 0 && codeChanges === 1 && !hasCeremony;\n  return !trivial;\n}\n\n// src/hooks/hook-state.ts\nimport fs from "node:fs";\nimport path from "node:path";\nvar FIRE_LOG_CAP = 50;\nvar LOCK_STALE_MS = 5e3;\nvar LOCK_SPIN_MS = 2;\nvar LOCK_MAX_WAIT_MS = 500;\nfunction errnoCode(err) {\n  if (typeof err === "object" && err !== null && "code" in err) {\n    const code = err.code;\n    if (typeof code === "string") return code;\n  }\n  return void 0;\n}\nfunction hookErrorMessage(err) {\n  if (typeof err === "object" && err !== null && "message" in err) {\n    const message = err.message;\n    if (typeof message === "string") return message;\n  }\n  return String(err);\n}\nfunction resolveHookProjectRoot(eventCwd) {\n  return process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || (typeof eventCwd === "string" && eventCwd ? eventCwd : "") || process.cwd();\n}\nfunction sleepSync(ms) {\n  try {\n    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);\n  } catch {\n  }\n}\nfunction acquireHookStateLock(statePath, _now = Date.now()) {\n  const lock = `${statePath}.lock`;\n  const deadline = process.hrtime.bigint() + BigInt(LOCK_MAX_WAIT_MS) * 1000000n;\n  let brokeStale = false;\n  for (; ; ) {\n    try {\n      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));\n      return lock;\n    } catch (error) {\n      if (errnoCode(error) !== "EEXIST") return null;\n      try {\n        if (!brokeStale && Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {\n          brokeStale = true;\n          fs.unlinkSync(lock);\n          continue;\n        }\n      } catch (staleErr) {\n        if (errnoCode(staleErr) !== "ENOENT") return null;\n      }\n      if (process.hrtime.bigint() >= deadline) return null;\n      sleepSync(LOCK_SPIN_MS);\n    }\n  }\n}\nfunction releaseHookStateLock(lock) {\n  if (!lock) return;\n  try {\n    fs.unlinkSync(lock);\n  } catch {\n  }\n}\nfunction readHookState(statePath) {\n  let raw;\n  try {\n    raw = fs.readFileSync(statePath, "utf-8");\n  } catch {\n    return { version: 1 };\n  }\n  try {\n    const parsed = JSON.parse(raw);\n    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;\n  } catch {\n  }\n  try {\n    const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");\n    fs.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);\n  } catch {\n  }\n  return { version: 1 };\n}\nfunction writeHookStateAtomic(statePath, state) {\n  const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 10)}`;\n  try {\n    fs.writeFileSync(tmp, JSON.stringify(state));\n    fs.renameSync(tmp, statePath);\n  } catch (err) {\n    try {\n      fs.unlinkSync(tmp);\n    } catch {\n    }\n    throw err;\n  }\n}\nfunction appendHookFire(statePath, fire, mutate) {\n  try {\n    fs.mkdirSync(path.dirname(statePath), { recursive: true });\n    const lock = acquireHookStateLock(statePath);\n    try {\n      const state = readHookState(statePath);\n      state.version = 1;\n      const fires = Array.isArray(state.fires) ? state.fires : [];\n      fires.push(fire);\n      state.fires = fires.slice(-FIRE_LOG_CAP);\n      mutate?.(state);\n      writeHookStateAtomic(statePath, state);\n    } finally {\n      releaseHookStateLock(lock);\n    }\n  } catch {\n  }\n}\nfunction hookStatePath(projectRoot) {\n  return path.join(projectRoot, ".deeppairing", "hooks-state.json");\n}\n\n// src/hooks/stop-hook.ts\nvar HOOK_NAME = "stop";\nvar MAX_AGE_MS = 30 * 60 * 1e3;\nvar BLOCKING_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset"];\nfunction runStopHook(now = Date.now()) {\n  const projectRoot = resolveHookProjectRoot();\n  function exit(code, reason) {\n    appendHookFire(hookStatePath(projectRoot), {\n      at: (/* @__PURE__ */ new Date()).toISOString(),\n      hook: HOOK_NAME,\n      exitCode: code,\n      reason\n    });\n    process.exit(code);\n  }\n  try {\n    const sessionsDir = path2.join(projectRoot, ".deeppairing", "sessions");\n    if (!fs2.existsSync(sessionsDir)) exit(0, "no sessions dir");\n    let owesDebriefSession = null;\n    for (const id of fs2.readdirSync(sessionsDir)) {\n      const af = path2.join(sessionsDir, id, "artifacts.json");\n      if (!fs2.existsSync(af)) continue;\n      let arr;\n      try {\n        arr = JSON.parse(fs2.readFileSync(af, "utf-8"));\n      } catch {\n        continue;\n      }\n      if (!Array.isArray(arr)) continue;\n      const artifacts = arr;\n      const blocking = artifacts.some((x) => {\n        if (x?.status !== "draft") return false;\n        if (!x?.type || !BLOCKING_TYPES.includes(x.type)) return false;\n        const t = x?.createdAt ? new Date(x.createdAt).getTime() : 0;\n        if (t && now - t > MAX_AGE_MS) return false;\n        return true;\n      });\n      if (blocking) {\n        process.stderr.write("deepPairing: pending artifacts need review \\u2014 call check_feedback\\n");\n        exit(0, "pending artifacts in " + id);\n      }\n      if (owesDebriefSession === null) {\n        const owes = sessionOwesDebrief(artifacts, (x) => {\n          const t = x?.createdAt ? new Date(x.createdAt).getTime() : 0;\n          return !t || now - t <= MAX_AGE_MS;\n        });\n        if (owes) owesDebriefSession = id;\n      }\n    }\n    if (owesDebriefSession !== null) {\n      process.stderr.write(\n        "deepPairing: code was presented but no present_debrief yet \\u2014 end the run with one so your pair gets the walk-through\\n"\n      );\n      exit(0, "owes debrief in " + owesDebriefSession);\n    }\n    exit(0, "pass: no blocking drafts");\n  } catch (err) {\n    exit(0, "error: " + hookErrorMessage(err));\n  }\n}\n\n// src/cli/stop-hook-entry.ts\nrunStopHook();\n';
+var CHECKPOINT_HOOK_SCRIPT = '#!/usr/bin/env node\n// deepPairing checkpoint hook (V2) \u2014 installed by ensureCheckpointHook.\n// GENERATED \u2014 do not edit. Source: packages/mcp-server/src/cli/checkpoint-hook-entry.ts\n// Regenerate: pnpm --filter @deeppairing/mcp-server gen:hooks\n// src/hooks/checkpoint-hook.ts\nimport fs2 from "node:fs";\nimport path3 from "node:path";\nimport crypto2 from "node:crypto";\n\n// src/session-id.ts\nimport crypto from "node:crypto";\nimport path from "node:path";\nfunction deriveSessionId(projectRoot, claudeSessionIdRaw) {\n  const projectName = path.basename(projectRoot);\n  const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);\n  const projectHash = crypto.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);\n  const base = `session_${safeProjectName}_${projectHash}`;\n  const sanitized = (claudeSessionIdRaw ?? "").replace(/[^a-zA-Z0-9-]/g, "").slice(0, 64);\n  if (sanitized.length === 0) {\n    return { sessionId: base, mode: "fallback" };\n  }\n  return { sessionId: `${base}_${sanitized}`, mode: "split", claudeSessionId: sanitized };\n}\n\n// src/hooks/hook-state.ts\nimport fs from "node:fs";\nimport path2 from "node:path";\nvar FIRE_LOG_CAP = 50;\nvar LOCK_STALE_MS = 5e3;\nvar LOCK_SPIN_MS = 2;\nvar LOCK_MAX_WAIT_MS = 500;\nfunction errnoCode(err) {\n  if (typeof err === "object" && err !== null && "code" in err) {\n    const code = err.code;\n    if (typeof code === "string") return code;\n  }\n  return void 0;\n}\nfunction hookErrorMessage(err) {\n  if (typeof err === "object" && err !== null && "message" in err) {\n    const message = err.message;\n    if (typeof message === "string") return message;\n  }\n  return String(err);\n}\nfunction resolveHookProjectRoot(eventCwd) {\n  return process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || (typeof eventCwd === "string" && eventCwd ? eventCwd : "") || process.cwd();\n}\nfunction sleepSync(ms) {\n  try {\n    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);\n  } catch {\n  }\n}\nfunction acquireHookStateLock(statePath, _now = Date.now()) {\n  const lock = `${statePath}.lock`;\n  const deadline = process.hrtime.bigint() + BigInt(LOCK_MAX_WAIT_MS) * 1000000n;\n  let brokeStale = false;\n  for (; ; ) {\n    try {\n      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));\n      return lock;\n    } catch (error) {\n      if (errnoCode(error) !== "EEXIST") return null;\n      try {\n        if (!brokeStale && Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {\n          brokeStale = true;\n          fs.unlinkSync(lock);\n          continue;\n        }\n      } catch (staleErr) {\n        if (errnoCode(staleErr) !== "ENOENT") return null;\n      }\n      if (process.hrtime.bigint() >= deadline) return null;\n      sleepSync(LOCK_SPIN_MS);\n    }\n  }\n}\nfunction releaseHookStateLock(lock) {\n  if (!lock) return;\n  try {\n    fs.unlinkSync(lock);\n  } catch {\n  }\n}\nfunction readHookState(statePath) {\n  let raw;\n  try {\n    raw = fs.readFileSync(statePath, "utf-8");\n  } catch {\n    return { version: 1 };\n  }\n  try {\n    const parsed = JSON.parse(raw);\n    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;\n  } catch {\n  }\n  try {\n    const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");\n    fs.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);\n  } catch {\n  }\n  return { version: 1 };\n}\nfunction writeHookStateAtomic(statePath, state) {\n  const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 10)}`;\n  try {\n    fs.writeFileSync(tmp, JSON.stringify(state));\n    fs.renameSync(tmp, statePath);\n  } catch (err) {\n    try {\n      fs.unlinkSync(tmp);\n    } catch {\n    }\n    throw err;\n  }\n}\nfunction appendHookFire(statePath, fire, mutate) {\n  try {\n    fs.mkdirSync(path2.dirname(statePath), { recursive: true });\n    const lock = acquireHookStateLock(statePath);\n    try {\n      const state = readHookState(statePath);\n      state.version = 1;\n      const fires = Array.isArray(state.fires) ? state.fires : [];\n      fires.push(fire);\n      state.fires = fires.slice(-FIRE_LOG_CAP);\n      mutate?.(state);\n      writeHookStateAtomic(statePath, state);\n    } finally {\n      releaseHookStateLock(lock);\n    }\n  } catch {\n  }\n}\nfunction hookStatePath(projectRoot) {\n  return path2.join(projectRoot, ".deeppairing", "hooks-state.json");\n}\n\n// src/hooks/checkpoint-hook.ts\nvar HOOK_NAME = "checkpoint";\nvar EDIT_TOOLS = ["Write", "Edit", "MultiEdit"];\nvar RECEIPT_TTL_MS = 60 * 1e3;\nvar SKIP_BASENAMES = /* @__PURE__ */ new Set([\n  // Lockfiles only \u2014 manifest files (package.json, Cargo.toml, etc.) are\n  // policy and should still nag.\n  "package-lock.json",\n  "pnpm-lock.yaml",\n  "yarn.lock",\n  "bun.lockb",\n  "uv.lock",\n  "poetry.lock",\n  "Cargo.lock",\n  "Gemfile.lock",\n  "go.sum",\n  "composer.lock"\n]);\nvar SKIP_PATH_PREFIXES = [\n  // Generated / vendored output \u2014 not human-authored source.\n  "dist/",\n  "build/",\n  "node_modules/",\n  ".deeppairing/",\n  ".next/",\n  ".turbo/",\n  ".cache/",\n  "coverage/",\n  ".nyc_output/",\n  // IDE-local config \u2014 workspace settings, not project decisions.\n  ".vscode/",\n  ".idea/"\n];\nfunction isTrivialFile(filePath) {\n  if (!filePath || filePath === "(unknown)") return false;\n  const norm = filePath.replace(/\\\\/g, "/");\n  const base = norm.split("/").pop() || "";\n  if (SKIP_BASENAMES.has(base)) return true;\n  for (const prefix of SKIP_PATH_PREFIXES) {\n    if (norm.includes("/" + prefix) || norm.startsWith(prefix)) return true;\n  }\n  return false;\n}\nvar NAG = "deepPairing: {TOOL} on {FILE} with no present_code_change for it. Present EVERY code change BEFORE the Write/Edit \\u2014 including small follow-on edits, new files (tests, configs), and each file of a multi-file change, not just the \'main\' one. A write straight to disk never reaches the human\'s review surface; they can\'t see or comment on it. If you skipped this for prior edits this session, backfill them now with present_code_change. (Per-Edit Checkpoint rule. Lockfiles and generated paths are auto-skipped.)\\n";\nfunction claimReceipt(dpDir, sessionId, absolutePath, now) {\n  const key = crypto2.createHash("sha256").update(absolutePath).digest("hex");\n  const markerPath = path3.join(dpDir, "sessions", sessionId, "code-checkpoints", key + ".json");\n  const claimPath = markerPath + ".claim." + process.pid + "." + crypto2.randomBytes(8).toString("hex");\n  fs2.renameSync(markerPath, claimPath);\n  try {\n    const m = JSON.parse(fs2.readFileSync(claimPath, "utf8"));\n    if (!m || typeof m !== "object") return false;\n    const r = m;\n    const at = typeof r.at === "string" ? Date.parse(r.at) : NaN;\n    const expiresAt = r.expiresAt === void 0 ? at + RECEIPT_TTL_MS : typeof r.expiresAt === "string" ? Date.parse(r.expiresAt) : NaN;\n    return r.version === 1 && r.sessionId === sessionId && r.filePath === absolutePath && typeof r.artifactId === "string" && r.artifactId.length > 0 && Number.isFinite(at) && Number.isFinite(expiresAt) && expiresAt >= at && now >= at && // a future-dated receipt is a clock fault, not coverage\n    now <= expiresAt;\n  } finally {\n    try {\n      fs2.unlinkSync(claimPath);\n    } catch {\n    }\n  }\n}\nfunction runCheckpointHook(stdin2, now = Date.now()) {\n  let statePath = hookStatePath(resolveHookProjectRoot());\n  let resolvedCandidateIds = [];\n  function exit(code, reason) {\n    appendHookFire(statePath, { at: (/* @__PURE__ */ new Date()).toISOString(), hook: HOOK_NAME, exitCode: code, reason, resolvedCandidateIds });\n    process.exit(code);\n  }\n  try {\n    const ev = stdin2 ? JSON.parse(stdin2) : {};\n    const projectRoot = path3.resolve(resolveHookProjectRoot(ev.cwd));\n    statePath = hookStatePath(projectRoot);\n    const tool = typeof ev.tool_name === "string" && ev.tool_name || typeof ev.toolName === "string" && ev.toolName || "";\n    if (!EDIT_TOOLS.includes(tool)) exit(0, "skip: tool=" + (tool || "(unknown)"));\n    const rawFilePath = (ev.tool_input && (ev.tool_input.file_path ?? ev.tool_input.filePath)) ?? (ev.input && ev.input.file_path);\n    const filePath = typeof rawFilePath === "string" && rawFilePath ? rawFilePath : "(unknown)";\n    if (isTrivialFile(filePath)) exit(0, "skip: trivial file " + filePath);\n    const dpDir = path3.join(projectRoot, ".deeppairing");\n    if (!fs2.existsSync(path3.join(dpDir, "sessions"))) exit(0, "skip: no sessions dir");\n    const eventHasIdentity = Object.prototype.hasOwnProperty.call(ev, "session_id");\n    const malformedEventIdentity = eventHasIdentity && ev.session_id !== "" && typeof ev.session_id !== "string";\n    const rawCandidates = [ev.session_id, process.env.CLAUDE_CODE_SESSION_ID];\n    const anyNonemptyIdentity = rawCandidates.some((value) => typeof value === "string" && value.length > 0);\n    for (const raw of rawCandidates) {\n      if (typeof raw !== "string" || !raw) continue;\n      const derived = deriveSessionId(projectRoot, raw);\n      if (derived.mode !== "split") continue;\n      if (!resolvedCandidateIds.includes(derived.sessionId)) resolvedCandidateIds.push(derived.sessionId);\n    }\n    if (resolvedCandidateIds.length === 0 && !anyNonemptyIdentity && !malformedEventIdentity) {\n      resolvedCandidateIds = [deriveSessionId(projectRoot, "").sessionId];\n    }\n    let covered = false;\n    if (filePath !== "(unknown)" && filePath.trim()) {\n      for (const sessionId of resolvedCandidateIds) {\n        try {\n          covered = claimReceipt(dpDir, sessionId, path3.resolve(projectRoot, filePath), now);\n        } catch {\n        }\n        if (covered) break;\n      }\n    }\n    if (!covered) {\n      process.stderr.write(NAG.replace("{TOOL}", tool).replace("{FILE}", filePath));\n      exit(0, "nag: " + tool + " on " + filePath);\n    }\n    exit(0, "pass: fresh checkpoint covers " + filePath);\n  } catch (err) {\n    exit(0, "error: " + hookErrorMessage(err));\n  }\n}\n\n// src/cli/checkpoint-hook-entry.ts\nvar stdin = "";\nprocess.stdin.setEncoding("utf-8");\nprocess.stdin.on("data", (c) => {\n  stdin += c;\n});\nprocess.stdin.on("end", () => {\n  runCheckpointHook(stdin);\n});\n';
 
 // src/cli/setup-tasks.ts
 function scopeFiles(projectRoot2) {
@@ -20957,7 +21127,11 @@ function detectCrossScopeDpEntries(projectRoot2, hookKey, marker) {
 var HOOK_MARKERS = {
   Stop: (cmd) => cmd.includes("deepPairing") || cmd.includes(".deeppairing/hooks/stop.mjs"),
   PostToolUse: (cmd) => cmd.includes(".deeppairing/hooks/checkpoint.mjs"),
-  PreToolUse: (cmd) => cmd.includes(".deeppairing/hooks/preflight.mjs")
+  PreToolUse: (cmd) => cmd.includes(".deeppairing/hooks/preflight.mjs"),
+  /** #470 — the narrow Bash `ask` row. VERIFIED invocation, not a mention:
+   *  only `sh <path>/.deeppairing/hooks/stance-allow-ask.sh` (quoted or not,
+   *  `$CLAUDE_PROJECT_DIR`-anchored or relative) is ours (#503 review). */
+  StanceAllowAsk: (cmd) => /^sh\s+("?)(\$CLAUDE_PROJECT_DIR\/|\.\/)?\.deeppairing\/hooks\/stance-allow-ask\.sh\1$/.test(cmd.trim())
 };
 function ensureDeepPairingDir(projectRoot2) {
   const dpDir2 = path2.join(projectRoot2, ".deeppairing");
@@ -21097,7 +21271,15 @@ function ensureCheckpointHook(projectRoot2) {
 }
 var PREFLIGHT_SCRIPT_REL_PATH = ".deeppairing/hooks/preflight.mjs";
 var PREFLIGHT_HOOK_COMMAND = `node "$CLAUDE_PROJECT_DIR/${PREFLIGHT_SCRIPT_REL_PATH}"`;
-var PREFLIGHT_MATCHER = "Write|Edit|MultiEdit";
+var PREFLIGHT_MATCHER = "Write|Edit|MultiEdit|NotebookEdit";
+function isPreflightCommandEntry(h) {
+  const e = h;
+  return e?.type === "command" && typeof e.command === "string" && HOOK_MARKERS.PreToolUse(e.command);
+}
+function isCurrentPreflightRow(row) {
+  const r = row;
+  return r?.matcher === PREFLIGHT_MATCHER && Array.isArray(r.hooks) && r.hooks.some(isPreflightCommandEntry);
+}
 function resolvePreflightCoreUrl() {
   const here = path2.dirname(fileURLToPath2(import.meta.url));
   const distCandidate = path2.join(here, "preflight-hook-core.js");
@@ -21192,11 +21374,12 @@ function ledgersPresent(projectRoot) {
 // deleted outright rather than derived: a second definition, however generated,
 // is a second thing to get wrong.
 async function targetsGuardrailPath(projectRoot, toolInput) {
-  const fp = (toolInput && (toolInput.file_path || toolInput.filePath)) || "";
+  const fp = (toolInput && (toolInput.file_path || toolInput.filePath || toolInput.notebook_path)) || "";
   if (typeof fp !== "string" || !fp) return false;
   try {
     const rules = await import(RULES_URL);
-    return rules.matchGuardrailPath(projectRoot, [fp]) !== null;
+    // #470 slice 4 \u2014 a deepPairing state file is the third reason to keep going.
+    return rules.matchGuardrailPath(projectRoot, [fp]) !== null || rules.toolInputTargetsDeeppairingState(projectRoot, toolInput);
   } catch {
     // FAIL SAFE, not fail-silent: if the rule module can't be loaded (an
     // unbuilt tree, a moved install), keep going and let the matcher core \u2014
@@ -21218,7 +21401,7 @@ process.stdin.on("end", async () => {
     // R1 (#279) \u2014 one documented precedence in every hook lane:
     // CLAUDE_PROJECT_DIR > DEEPPAIRING_PROJECT_ROOT > the event's cwd > ours.
     const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || ev.cwd || process.cwd();
-    if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit") {
+    if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit" && toolName !== "NotebookEdit") {
       process.exit(0);
     }
     if (!ledgersPresent(projectRoot) && !(await targetsGuardrailPath(projectRoot, toolInput))) {
@@ -21256,38 +21439,89 @@ function ensurePreflightHook(projectRoot2) {
     fs2.writeFileSync(scriptPath, preflightHookScript(core.url, resolveGuardrailRulesUrl()));
     fs2.chmodSync(scriptPath, 493);
     const inactiveNote = core.exists ? "" : " (matcher core not built yet \u2014 gate inactive until next build)";
-    let settings = {};
-    if (fs2.existsSync(settingsPath)) {
-      try {
-        settings = JSON.parse(fs2.readFileSync(settingsPath, "utf-8"));
-      } catch {
-        return { ok: false, message: ".claude/settings.local.json is malformed; refusing to overwrite" };
-      }
-    }
-    settings.hooks = settings.hooks ?? {};
-    settings.hooks.PreToolUse = settings.hooks.PreToolUse ?? [];
-    const isDpEntry = (entry) => {
-      if (typeof entry?.command === "string" && HOOK_MARKERS.PreToolUse(entry.command)) return true;
-      if (Array.isArray(entry?.hooks)) {
-        return entry.hooks.some((h) => typeof h?.command === "string" && HOOK_MARKERS.PreToolUse(h.command));
-      }
-      return false;
-    };
-    const isCanonical = (entry) => Array.isArray(entry?.hooks) && entry.hooks.length === 1 && entry.hooks[0]?.type === "command" && entry.hooks[0]?.command === PREFLIGHT_HOOK_COMMAND && entry?.matcher === PREFLIGHT_MATCHER;
-    const beforeCount = settings.hooks.PreToolUse.filter(isDpEntry).length;
-    if (beforeCount === 1 && settings.hooks.PreToolUse.some(isCanonical)) {
+    const read = readAskSettings(settingsPath);
+    if (!read.ok) return { ok: false, message: read.message };
+    const settings = read.settings;
+    const hooks = settings.hooks = settings.hooks ?? {};
+    const rows = hooks.PreToolUse ?? [];
+    const isCanonical = (entry) => isCurrentPreflightRow(entry) && Array.isArray(entry.hooks) && entry.hooks.length === 1 && entry.hooks[0]?.command === PREFLIGHT_HOOK_COMMAND;
+    const { rows: kept, removed } = withoutOwnedEntries(rows, HOOK_MARKERS.PreToolUse);
+    if (removed === 1 && rows.some(isCanonical)) {
       return { ok: true, changed: false, message: `PreToolUse preflight hook already configured${inactiveNote}` };
     }
-    settings.hooks.PreToolUse = settings.hooks.PreToolUse.filter((e) => !isDpEntry(e));
-    settings.hooks.PreToolUse.push({
-      matcher: PREFLIGHT_MATCHER,
-      hooks: [{ type: "command", command: PREFLIGHT_HOOK_COMMAND }]
-    });
+    hooks.PreToolUse = [
+      ...kept,
+      { matcher: PREFLIGHT_MATCHER, hooks: [{ type: "command", command: PREFLIGHT_HOOK_COMMAND }] }
+    ];
     fs2.mkdirSync(claudeDir, { recursive: true });
     fs2.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
     return { ok: true, changed: true, message: `Installed PreToolUse preflight hook${inactiveNote}` };
   } catch (err) {
     return { ok: false, message: `Failed to install preflight hook: ${err}` };
+  }
+}
+var isPlainObject2 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+function readAskSettings(settingsPath) {
+  if (!fs2.existsSync(settingsPath)) return { ok: true, settings: {} };
+  let settings;
+  try {
+    settings = JSON.parse(fs2.readFileSync(settingsPath, "utf-8"));
+  } catch {
+    return { ok: false, message: ".claude/settings.local.json is malformed; refusing to overwrite" };
+  }
+  if (!isPlainObject2(settings)) return { ok: false, message: ".claude/settings.local.json is not an object; refusing to overwrite" };
+  if (settings.hooks !== void 0 && !isPlainObject2(settings.hooks)) return { ok: false, message: ".claude/settings.local.json `hooks` is not an object; refusing to overwrite" };
+  const pre = settings.hooks?.PreToolUse;
+  if (pre !== void 0 && !Array.isArray(pre)) return { ok: false, message: ".claude/settings.local.json `hooks.PreToolUse` is not an array; refusing to overwrite" };
+  return { ok: true, settings };
+}
+function withoutOwnedEntries(rows, owned) {
+  let removed = 0;
+  const out = [];
+  for (const row of rows) {
+    if (typeof row?.command === "string" && owned(row.command)) {
+      removed++;
+      continue;
+    }
+    if (!Array.isArray(row?.hooks)) {
+      out.push(row);
+      continue;
+    }
+    const rest = row.hooks.filter((h) => !(typeof h?.command === "string" && owned(h.command)));
+    removed += row.hooks.length - rest.length;
+    if (rest.length === row.hooks.length) out.push(row);
+    else if (rest.length > 0) out.push({ ...row, hooks: rest });
+  }
+  return { rows: out, removed };
+}
+function withoutAskEntries(rows) {
+  return withoutOwnedEntries(rows, HOOK_MARKERS.StanceAllowAsk);
+}
+function ensureStanceAllowAskHook(projectRoot2) {
+  try {
+    const claudeDir = path2.join(projectRoot2, ".claude");
+    const settingsPath = path2.join(claudeDir, "settings.local.json");
+    const read = readAskSettings(settingsPath);
+    if (!read.ok) return { ok: false, message: read.message };
+    const settings = read.settings;
+    const scriptPath = path2.join(projectRoot2, STANCE_ALLOW_ASK_REL_PATH);
+    fs2.mkdirSync(path2.dirname(scriptPath), { recursive: true });
+    const current = fs2.existsSync(scriptPath) ? fs2.readFileSync(scriptPath, "utf-8") : null;
+    const scriptChanged = current !== STANCE_ALLOW_ASK_SCRIPT;
+    if (scriptChanged) fs2.writeFileSync(scriptPath, STANCE_ALLOW_ASK_SCRIPT, { mode: 493 });
+    const hooks = settings.hooks = settings.hooks ?? {};
+    const rows = hooks.PreToolUse ?? [];
+    const isCanonical = (entry) => Array.isArray(entry?.hooks) && entry.hooks.length === 1 && entry.hooks[0]?.type === "command" && entry.hooks[0]?.command === STANCE_ALLOW_ASK_COMMAND && entry?.matcher === STANCE_ALLOW_ASK_MATCHER;
+    const { rows: kept, removed } = withoutAskEntries(rows);
+    if (removed === 1 && rows.some(isCanonical)) {
+      return { ok: true, changed: scriptChanged, message: "Bash `stance allow` ask hook already configured" };
+    }
+    hooks.PreToolUse = [...kept, { matcher: STANCE_ALLOW_ASK_MATCHER, hooks: [{ type: "command", command: STANCE_ALLOW_ASK_COMMAND }] }];
+    fs2.mkdirSync(claudeDir, { recursive: true });
+    fs2.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    return { ok: true, changed: true, message: "Installed the Bash `stance allow` ask hook (.deeppairing/hooks/stance-allow-ask.sh)" };
+  } catch (err) {
+    return { ok: false, message: `Failed to install the stance-allow ask hook: ${errorMessage(err)}` };
   }
 }
 function isPluginManaged() {
@@ -21305,13 +21539,14 @@ function runDaemonStartupSetup(projectRoot2) {
     results.push({
       ok: true,
       changed: false,
-      message: "Stop + preflight hooks provided by the plugin (skipped settings.local.json install)"
+      message: "Stop + preflight + stance-allow hooks provided by the plugin (skipped settings.local.json install)"
     });
     results.push(ensureCheckpointHook(projectRoot2));
   } else {
     results.push(ensureStopHook(projectRoot2));
     results.push(ensureCheckpointHook(projectRoot2));
     results.push(ensurePreflightHook(projectRoot2));
+    results.push(ensureStanceAllowAskHook(projectRoot2));
   }
   return results;
 }
@@ -23862,7 +24097,7 @@ import { fileURLToPath as fileURLToPath4 } from "node:url";
 import fs22 from "node:fs";
 import path22 from "node:path";
 import { spawn } from "node:child_process";
-import { randomBytes as randomBytes3 } from "node:crypto";
+import { randomBytes as randomBytes4 } from "node:crypto";
 
 // src/error-codes.ts
 var ERROR_CODES = {
@@ -23897,6 +24132,9 @@ var ERROR_CODES = {
    *  (approved↔rejected↔revised). The route refuses with 409 + the current
    *  status so the stale tab refreshes to truth. See store/verdict-guard.ts. */
   verdict_already_final: "verdict_already_final",
+  /** #521 — a confidence AUTO-approval reached the daemon after the autonomy level
+   *  (or the artifact) no longer permitted it. 409, no state change. */
+  auto_approve_not_permitted: "auto_approve_not_permitted",
   /** A review verdict raced a change to the artifact content being reviewed. */
   session_review_conflict: "session_review_conflict",
   /** F6 — decision resolve for a decision the bound session doesn't know. */
@@ -23942,7 +24180,26 @@ var ERROR_CODES = {
    *  ledger, a session flush) stayed held past its bounded wait by a LIVE (or
    *  unverifiable) owner. Nothing was committed; retry, or inspect with
    *  `deeppairing doctor` (dead-owner locks are recovered automatically). */
-  lock_busy: "lock_busy"
+  lock_busy: "lock_busy",
+  /** #470 — stance exceptions ("Allow this proposal once"). No block with that
+   *  id is held by this daemon (unknown, or from an earlier daemon instance). */
+  stance_exception_block_not_found: "stance_exception_block_not_found",
+  /** #470 — the block can't be allowed: a team rule, a demo session, a retired
+   *  stance, an ended session, or no eligible snapshot. */
+  stance_exception_not_eligible: "stance_exception_not_eligible",
+  /** #470 — a grant needs a typed reason of 3–280 characters. */
+  stance_exception_reason_required: "stance_exception_reason_required",
+  /** #470 — a grant must come from the human-facing route, never from a
+   *  registered agent wrapper. */
+  stance_exception_interactive_required: "stance_exception_interactive_required",
+  /** #470 — the claim did not admit this call (used, revoked, ended, expired,
+   *  wrong registration, or a stance retired since). */
+  stance_exception_claim_refused: "stance_exception_claim_refused",
+  /** #470 — something the allowed proposal depended on changed after the grant. */
+  stance_exception_dependencies_changed: "stance_exception_dependencies_changed",
+  /** #470 — an operation stamp's follow-up targets disagree with the lineage
+   *  recorded on the child; a replay refuses rather than act on them. */
+  stance_exception_operation_inconsistent: "stance_exception_operation_inconsistent"
 };
 var USER_FACING_ERROR_CODES = [
   ERROR_CODES.daemon_auth_required,
@@ -24150,7 +24407,7 @@ import fs6 from "node:fs";
 import os3 from "node:os";
 import path5 from "node:path";
 import { randomBytes as randomBytes2 } from "node:crypto";
-import { performance } from "node:perf_hooks";
+import { performance as performance2 } from "node:perf_hooks";
 var DEFAULT_FILE_LOCK_TIMEOUT_MS = 250;
 var heldLocks = /* @__PURE__ */ new Set();
 function isFileLockError(err) {
@@ -24327,7 +24584,7 @@ function withFileLock(lockPath, run, opts = {}) {
   const key = path5.resolve(lockPath);
   if (opts.reentrant && heldLocks.has(key)) return run();
   const label = opts.label ?? "File lock";
-  const deadline = performance.now() + (opts.timeoutMs ?? DEFAULT_FILE_LOCK_TIMEOUT_MS);
+  const deadline = performance2.now() + (opts.timeoutMs ?? DEFAULT_FILE_LOCK_TIMEOUT_MS);
   const waitArray = new Int32Array(new SharedArrayBuffer(4));
   let body;
   let lastState = null;
@@ -24337,7 +24594,7 @@ function withFileLock(lockPath, run, opts = {}) {
     const attempt = breakDeadLock(lockPath);
     if (attempt.broken) continue;
     lastState = attempt.state ?? lastState;
-    if (performance.now() >= deadline) {
+    if (performance2.now() >= deadline) {
       const owner = lastState?.owner;
       const who = owner?.pid ? ` Held by pid ${owner.pid}${owner.hostname ? ` on ${owner.hostname}` : ""} since ${owner.createdAt || "?"}.` : "";
       throw Object.assign(
@@ -27050,6 +27307,36 @@ var FileStore = class _FileStore {
     return artifact;
   }
   /**
+   * #470 — create an artifact admitted under a stance allowance, carrying its
+   * operation stamp. Daemon-only: the stamp is attached synchronously after
+   * the create, before any flush can run, so child and stamp land in ONE
+   * write. createArtifact builds its record field by field, so the ordinary
+   * create path (and its passthrough wire body) can never attach a stamp.
+   */
+  createAdmittedArtifact(params, admission) {
+    const artifact = this.createArtifact(params);
+    artifact.admission = structuredClone(admission);
+    return artifact;
+  }
+  /** #470 — replace an admitted artifact's operation stamp (follow-up
+   *  progress, completedAt). No-op for an unknown or unstamped artifact. */
+  setArtifactAdmission(artifactId, admission) {
+    this.assertAuthorizationReadable();
+    const art = this.artifacts.find((a) => a.id === artifactId);
+    if (!art?.admission) return;
+    art.admission = structuredClone(admission);
+    this.scheduleFlush();
+  }
+  /** #470 — has a comment with this exact id been recorded (any artifact)? */
+  hasComment(commentId) {
+    return this.comments.some((c) => c.id === commentId);
+  }
+  /** #470 — is a plan review recorded for this artifact? */
+  hasPlanReview(artifactId) {
+    this.assertAuthorizationReadable();
+    return this.planReviews.has(artifactId);
+  }
+  /**
    * Compatibility hint for older installed checkpoint hooks. Current hooks
    * use file/session receipts and deliberately ignore this global timestamp.
    */
@@ -29319,16 +29606,16 @@ function scrubProse(text, projectRoot2 = activeProjectRoot) {
 function escText(value) {
   return esc2(scrubProse(value));
 }
-function fmtTimestamp(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return String(iso);
+function fmtTimestamp(iso2) {
+  if (!iso2) return "";
+  const d = new Date(iso2);
+  if (Number.isNaN(d.getTime())) return String(iso2);
   return d.toISOString().replace("T", " ").slice(0, 16) + " UTC";
 }
-function fmtDay(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return String(iso);
+function fmtDay(iso2) {
+  if (!iso2) return "";
+  const d = new Date(iso2);
+  if (Number.isNaN(d.getTime())) return String(iso2);
   return d.toISOString().slice(0, 10);
 }
 function plural(n, one, many = one + "s") {
@@ -30491,6 +30778,8 @@ function renderSessionPage(state, options) {
   const secretBanner = secretLabels.length ? `<div class="secret-banner" role="note">${SHIELD_MARK}<p><strong>Check this page before you send it.</strong> The export scan matched ${plural(secretCount, "credential-shaped value")} in this session's material: ${secretLabels.map((l) => esc2(l)).join(", ")}. ` + (includeCode ? `The values are not repeated here \u2014 search the page for them, and re-export with code omitted if they are real.` : `Code bodies were omitted from this page, so any secret that lived only in code isn't shown here \u2014 but check the prose (summaries, comments, the narrative) before sending.`) + `</p></div>` : "";
   const scanFootnote = options.secretLabels !== void 0 ? `<span class="scan-note">Secret-shape scan ran before export (depth ${DEFAULT_SCAN_DEPTH}, heuristic \u2014 not a guarantee).</span>` : "";
   const stancesSection = untimedStances.length ? `<section><h2>Standing stances</h2><p>Recorded without a timestamp, so they can't be placed on the timeline \u2014 but the gate enforces them all the same.</p><ul class="stances">${untimedStances.map((r) => `<li><strong>${escText(r.description)}</strong>${r.reason ? ` \u2014 \u201C${escText(r.reason)}\u201D` : ""}${r.concept ? ` <code>${esc2(r.concept)}</code>` : ""}</li>`).join("")}</ul></section>` : "";
+  const allowedOnce = state.artifacts.filter((a) => a.admission);
+  const allowedSection = allowedOnce.length ? `<section><h2>Allowed once</h2><p>Each of these was blocked by your stance, then let through once because you allowed that exact proposal. The stance stayed on for everything else.</p><ul class="stances">${allowedOnce.map((a) => `<li><strong>${escText(a.title)}</strong> <code>${esc2(a.id)}</code> \u2014 allowed once (${a.admission.grantedVia === "cli" ? "CLI" : "UI"}), ${esc2(a.status)}</li>`).join("")}</ul></section>` : "";
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -30525,6 +30814,7 @@ ${sizeNote}
 </section>
 
 ${stancesSection}
+${allowedSection}
 
 <footer>
 <span>Generated by deepPairing${version2 ? ` v${esc2(version2)}` : ""} \u2014 ${esc2(fmtTimestamp(generatedAt))}</span>
@@ -30908,6 +31198,12 @@ function formatChangesetSections(state) {
   }
   return sections;
 }
+function allowedOnceLines(artifacts) {
+  return artifacts.filter((a) => a.admission).map((a) => {
+    const via = a.admission.grantedVia === "cli" ? "CLI" : "UI";
+    return `- **${scrubProse(a.title)}** (\`${a.id}\`) \u2014 allowed once past your stance (${via}); status: ${a.status}`;
+  });
+}
 function formatFull(state) {
   const sections = [];
   sections.push(`# deepPairing Session Report
@@ -31017,6 +31313,11 @@ function formatFull(state) {
     }
     sections.push("\n</details>\n");
   }
+  const allowed = allowedOnceLines(state.artifacts);
+  if (allowed.length > 0) {
+    sections.push("## Allowed once\n");
+    sections.push(...allowed, "");
+  }
   sections.push("---\n*Generated by [deepPairing](https://github.com/deeppairing)*");
   return sections.join("\n");
 }
@@ -31096,12 +31397,12 @@ function replayIcon(kind) {
       return "\u2022";
   }
 }
-function formatTime(iso) {
+function formatTime(iso2) {
   try {
-    const d = new Date(iso);
+    const d = new Date(iso2);
     return d.toISOString().replace("T", " ").slice(0, 19);
   } catch {
-    return iso;
+    return iso2;
   }
 }
 var severityEmoji = {
@@ -31411,7 +31712,7 @@ function htmlExportFileName(sessionId, generatedAt = (/* @__PURE__ */ new Date()
 }
 
 // src/version.ts
-var SERVER_VERSION = "0.1.64";
+var SERVER_VERSION = "0.1.65";
 
 // src/store/rejected-option-recorder.ts
 function optionConceptKey(option) {
@@ -31463,6 +31764,18 @@ function readPreflightBlocks(projectRoot2) {
   }
   return [];
 }
+var EXCEPTION_FIELDS = [
+  "artifactType",
+  "callFingerprint",
+  "effectiveDigest",
+  "snapshot",
+  "preconditions",
+  "stance",
+  "registrationId",
+  "eligible",
+  "ineligibleReason",
+  "supersedesAllowanceId"
+];
 var VALID_VIA = /* @__PURE__ */ new Set(["surface", "concept", "avoid", "require"]);
 function blockEntryFromEvent(sessionId, event, now = () => (/* @__PURE__ */ new Date()).toISOString()) {
   if (!event || event.type !== "preflight_blocked") return null;
@@ -31483,7 +31796,8 @@ function blockEntryFromEvent(sessionId, event, now = () => (/* @__PURE__ */ new 
     proposal: match2.proposal,
     reason: match2.reason,
     via,
-    addedBy: match2.addedBy
+    addedBy: match2.addedBy,
+    ...Object.fromEntries(EXCEPTION_FIELDS.filter((k) => event[k] !== void 0).map((k) => [k, event[k]]))
   };
 }
 function recordPreflightBlock(projectRoot2, sessionId, event) {
@@ -31500,6 +31814,808 @@ function recordPreflightBlock(projectRoot2, sessionId, event) {
   } catch {
     return null;
   }
+}
+function updatePreflightBlocks(projectRoot2, mutate) {
+  if (!projectRoot2) return false;
+  try {
+    let changed = false;
+    const blocks = readPreflightBlocks(projectRoot2).map((entry) => {
+      const next = mutate(entry);
+      if (!next) return entry;
+      changed = true;
+      return next;
+    });
+    if (!changed) return false;
+    const file2 = logPath(projectRoot2);
+    fs18.mkdirSync(path17.dirname(file2), { recursive: true });
+    writeJsonAtomic(file2, { version: VERSION3, blocks });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// src/daemon/stance-exceptions.ts
+import { randomBytes as randomBytes3 } from "node:crypto";
+
+// src/mcp/proposal-resolution.ts
+import { createHash as createHash3 } from "node:crypto";
+function stableStringify(v) {
+  if (v === null || typeof v !== "object") {
+    const s = JSON.stringify(v);
+    return s === void 0 ? "null" : s;
+  }
+  if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;
+  const obj2 = v;
+  const keys = Object.keys(obj2).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj2[k])}`).join(",")}}`;
+}
+function sameStance(row, ref) {
+  return row.description === ref.description && (row.concept ?? void 0) === (ref.concept ?? void 0) && (row.rejectedAt ?? void 0) === (ref.rejectedAt ?? void 0);
+}
+var sha256Hex = (s) => createHash3("sha256").update(s).digest("hex");
+var EXCEPTION_TOOL_TYPES = {
+  present_code_change: "code_change",
+  present_options: "decision",
+  revise_artifact: null
+};
+var MAX_SNAPSHOT_BYTES = 48 * 1024;
+function effectiveDigest(snapshot, preconditions) {
+  return sha256Hex(stableStringify({ v: 1, snapshot, preconditions }));
+}
+function newestPriorCodeChange(artifacts, filePath) {
+  return artifacts.filter(
+    (a) => a.type === "code_change" && a.content?.filePath === filePath && typeof a.content?.after === "string" && a.content.after.length > 0
+  ).sort((a, b) => a.createdAt < b.createdAt ? 1 : -1)[0];
+}
+function codeChangePrecondition(artifacts, filePath) {
+  const prior = newestPriorCodeChange(artifacts, filePath);
+  return {
+    kind: "code_change_prior",
+    filePath,
+    priorCodeChangeId: prior?.id ?? null,
+    priorAfterHash: prior ? sha256Hex(prior.content.after) : null
+  };
+}
+var CLOSED_TARGET_STATUSES = /* @__PURE__ */ new Set(["superseded", "retracted", "rejected", "obsolete"]);
+function reviseInheritedHash(target) {
+  let provenance = null;
+  if (target.type === "changeset") {
+    const cs = coerceChangesetContent(target.content);
+    if (cs.reviewIntent === "external") {
+      const { headSha: _reviewedCommit, ...display } = cs.source ?? {};
+      provenance = { reviewIntent: "external", source: cs.source ? display : null };
+    }
+  }
+  return sha256Hex(stableStringify({
+    title: target.title,
+    type: target.type,
+    provenance,
+    stakes: target.content?.stakes ?? null,
+    relatedArtifactIds: target.relatedArtifactIds ?? null,
+    featureId: target.featureId ?? null
+  }));
+}
+function reviseTargetPrecondition(target) {
+  return {
+    kind: "revise_target",
+    targetId: target.id,
+    targetVersion: target.version,
+    targetStatus: target.status,
+    inheritedHash: reviseInheritedHash(target)
+  };
+}
+function checkPreconditions(artifacts, preconditions) {
+  for (const p of preconditions) {
+    if (p.kind === "code_change_prior") {
+      const now = codeChangePrecondition(artifacts, p.filePath);
+      if (now.priorCodeChangeId === p.priorCodeChangeId && now.priorAfterHash === p.priorAfterHash) continue;
+      const detail = p.priorCodeChangeId === null ? "prior_appeared" : now.priorCodeChangeId === null ? "prior_vanished" : now.priorCodeChangeId !== p.priorCodeChangeId ? "newer_prior" : "prior_edited";
+      return { ok: false, what: "prior", dependencyId: p.priorCodeChangeId, detail };
+    }
+    const target = artifacts.find((a) => a.id === p.targetId);
+    if (!target) return { ok: false, what: "target", dependencyId: p.targetId, detail: "target_missing" };
+    const hasSuccessor = artifacts.some((a) => a.parentId === p.targetId);
+    if (hasSuccessor || target.version !== p.targetVersion || target.status === "superseded") {
+      return { ok: false, what: "target", dependencyId: p.targetId, detail: "target_revised" };
+    }
+    if (target.status !== p.targetStatus || CLOSED_TARGET_STATUSES.has(target.status)) {
+      return { ok: false, what: "target", dependencyId: p.targetId, detail: "target_status" };
+    }
+    if (reviseInheritedHash(target) !== p.inheritedHash) {
+      return { ok: false, what: "target", dependencyId: p.targetId, detail: "target_changed" };
+    }
+  }
+  return { ok: true };
+}
+function currentPreconditions(artifacts, preconditions) {
+  return preconditions.map((p) => {
+    if (p.kind === "code_change_prior") return codeChangePrecondition(artifacts, p.filePath);
+    const target = artifacts.find((a) => a.id === p.targetId);
+    return target ? reviseTargetPrecondition(target) : p;
+  });
+}
+
+// src/daemon/stance-exceptions.ts
+var ALLOWANCE_CEILING_MS = 72 * 60 * 60 * 1e3;
+var REGISTRATION_HEADER = "x-deeppairing-registration";
+var GRANT_ORIGIN_HEADER = "x-deeppairing-grant-origin";
+var ADMITTABLE_TYPES = new Set(
+  Object.values(EXCEPTION_TOOL_TYPES).filter((t) => typeof t === "string")
+);
+var MAX_BLOCK_BINDINGS = 200;
+function receiptStateOf(state) {
+  return state === "active" ? "allowed" : state === "consumed" ? "used" : state;
+}
+var iso = (ms) => new Date(ms).toISOString();
+var StanceExceptionRegistry = class {
+  constructor(deps) {
+    this.deps = deps;
+    this.now = deps.now ?? (() => Date.now());
+    this.mono = deps.monotonic ?? (() => performance.now());
+    this.log = deps.log ?? (() => {
+    });
+  }
+  deps;
+  registrations = /* @__PURE__ */ new Map();
+  byToken = /* @__PURE__ */ new Map();
+  blocks = /* @__PURE__ */ new Map();
+  /** Events this registry prepared; only these produce grantable bindings. */
+  prepared = /* @__PURE__ */ new WeakSet();
+  allowances = /* @__PURE__ */ new Map();
+  queues = /* @__PURE__ */ new Map();
+  /** Admitted children not yet announced (first durable commit only). */
+  pendingAnnounce = /* @__PURE__ */ new Set();
+  now;
+  mono;
+  log;
+  // --- Registrations (§5) ---------------------------------------------------
+  /** Mint a registration for a wrapper's /register. In split mode a newer
+   *  registration for the same session evicts the older ones (/mcp reconnect,
+   *  --resume); fallback mode shares one session id across conversations, so
+   *  nothing is evicted there. */
+  register(sessionId, opts) {
+    if (opts.split) {
+      for (const reg of [...this.registrations.values()]) {
+        if (reg.sessionId === sessionId) this.dropRegistration(reg);
+      }
+    }
+    const registrationId = `reg_${this.deps.instanceId}_${randomBytes3(8).toString("hex")}`;
+    const token = randomBytes3(32).toString("hex");
+    this.registrations.set(registrationId, { registrationId, sessionId, registeredAt: this.now(), token });
+    this.byToken.set(token, registrationId);
+    return { registrationId, registrationToken: token };
+  }
+  /**
+   * /unregister. With the caller's token, only that registration ends. A
+   * supplied token that no longer resolves (an evicted wrapper's late
+   * shutdown, #499 review P2) is a NO-OP: it must never end the live
+   * replacement. Only an old wrapper that sends NO token ends every
+   * registration of the session. Returns whether the session still has a
+   * live registration (the route keeps the session active if so).
+   */
+  unregister(sessionId, token) {
+    if (token) {
+      const reg = this.resolveToken(token);
+      if (reg && reg.sessionId === sessionId) this.dropRegistration(reg);
+    } else {
+      for (const r of [...this.registrations.values()]) {
+        if (r.sessionId === sessionId) this.dropRegistration(r);
+      }
+    }
+    return this.hasLiveRegistration(sessionId);
+  }
+  hasLiveRegistration(sessionId) {
+    for (const r of this.registrations.values()) if (r.sessionId === sessionId) return true;
+    return false;
+  }
+  dropRegistration(reg) {
+    this.registrations.delete(reg.registrationId);
+    this.byToken.delete(reg.token);
+  }
+  /** The registration THIS daemon issued for a token. Never read from a body. */
+  resolveToken(token) {
+    if (!token) return void 0;
+    const id = this.byToken.get(token);
+    return id ? this.registrations.get(id) : void 0;
+  }
+  isLive(registrationId) {
+    return this.registrations.has(registrationId);
+  }
+  // --- Blocks ---------------------------------------------------------------
+  /**
+   * The internal preflight-block route hands every block through here. The
+   * daemon strips whatever exception fields the caller sent and recomputes
+   * them: the registration comes from the issued token, the digest is
+   * computed here, and eligibility is decided here. Only the returned event
+   * (tracked in `prepared`) can produce a grantable binding.
+   */
+  prepareBlockEvent(sessionId, token, body) {
+    const {
+      artifactType: _a3,
+      callFingerprint: rawFingerprint,
+      effectiveDigest: _d,
+      snapshot: rawSnapshot,
+      preconditions: rawPreconditions,
+      stance: _s,
+      registrationId: _r,
+      eligible: _e,
+      ineligibleReason: _i,
+      supersedesAllowanceId: _x,
+      ...event
+    } = body;
+    const reg = this.resolveToken(token);
+    const match2 = event.match && typeof event.match === "object" ? event.match : {};
+    const source = event.source === "team" ? "team" : "session";
+    const stance = source === "session" && typeof match2.description === "string" ? {
+      description: match2.description,
+      ...typeof match2.concept === "string" ? { concept: match2.concept } : {},
+      ...typeof match2.rejectedAt === "string" ? { rejectedAt: match2.rejectedAt } : {}
+    } : void 0;
+    const fingerprint = typeof rawFingerprint === "string" && /^[0-9a-f]{64}$/.test(rawFingerprint) ? rawFingerprint : void 0;
+    const base = {
+      ...event,
+      ...fingerprint ? { callFingerprint: fingerprint } : {},
+      ...stance ? { stance } : {},
+      ...reg && reg.sessionId === sessionId ? { registrationId: reg.registrationId } : {}
+    };
+    const ineligible = (why) => {
+      const out2 = { ...base, eligible: false, ineligibleReason: why };
+      this.prepared.add(out2);
+      return out2;
+    };
+    if (source !== "session") return ineligible("team_rule");
+    if (sessionId.startsWith("demo_")) return ineligible("demo_session");
+    const toolName = typeof event.toolName === "string" ? event.toolName : "";
+    if (!Object.hasOwn(EXCEPTION_TOOL_TYPES, toolName)) return ineligible("unsupported_tool");
+    if (!stance) return ineligible("no_stance");
+    if (!reg || reg.sessionId !== sessionId) return ineligible("no_registration");
+    if (!fingerprint) return ineligible("no_snapshot");
+    const snap = ProposalSnapshotSchema.safeParse(rawSnapshot);
+    const pre = external_exports.array(ProposalPreconditionSchema).safeParse(rawPreconditions);
+    if (!snap.success || !pre.success || !ArtifactTypeSchema.safeParse(snap.data.type).success) return ineligible("no_snapshot");
+    const expectedType = EXCEPTION_TOOL_TYPES[toolName];
+    const expectedKind = toolName === "revise_artifact" ? "revise" : "create";
+    if (expectedType && snap.data.type !== expectedType || snap.data.kind !== expectedKind) return ineligible("no_snapshot");
+    if (!ADMITTABLE_TYPES.has(snap.data.type)) return ineligible("unsupported_tool");
+    if (Buffer.byteLength(JSON.stringify(snap.data)) > MAX_SNAPSHOT_BYTES) return ineligible("too_large");
+    if (scanContentForSecrets({ title: snap.data.title, content: snap.data.content }).length > 0) return ineligible("secret_flagged");
+    const out = {
+      ...base,
+      artifactType: snap.data.type,
+      snapshot: snap.data,
+      preconditions: pre.data,
+      effectiveDigest: effectiveDigest(snap.data, pre.data),
+      eligible: true
+    };
+    this.prepared.add(out);
+    return out;
+  }
+  /** create-daemon's broadcast calls this after it persists a block entry. */
+  noteBlock(entry, event) {
+    if (!entry || !event || typeof event !== "object" || !this.prepared.has(event)) return;
+    const e = event;
+    this.blocks.set(entry.id, {
+      blockId: entry.id,
+      sessionId: entry.sessionId,
+      source: entry.source,
+      toolName: entry.toolName,
+      stance: e.stance,
+      registrationId: e.registrationId,
+      callFingerprint: e.callFingerprint,
+      snapshot: e.snapshot,
+      preconditions: e.preconditions,
+      effectiveDigest: e.effectiveDigest,
+      eligible: e.eligible === true,
+      ineligibleReason: e.ineligibleReason,
+      supersedesAllowanceId: e.supersedesAllowanceId
+    });
+    while (this.blocks.size > MAX_BLOCK_BINDINGS) this.blocks.delete(this.blocks.keys().next().value);
+  }
+  // --- The per-session operation queue (§13 condition 1) ---------------------
+  enqueue(sessionId, fn) {
+    const prev = this.queues.get(sessionId) ?? Promise.resolve();
+    const next = prev.catch(() => void 0).then(fn);
+    const tail = next.catch(() => void 0);
+    this.queues.set(sessionId, tail);
+    void tail.then(() => {
+      if (this.queues.get(sessionId) === tail) this.queues.delete(sessionId);
+    });
+    return next;
+  }
+  // --- State -----------------------------------------------------------------
+  derived(a) {
+    if (a.state !== "active") return a.state;
+    if (this.now() >= a.ceilingAt || this.mono() - a.grantedMono >= ALLOWANCE_CEILING_MS) return "expired";
+    if (!this.isLive(a.registrationId)) return "ended";
+    return "active";
+  }
+  receipt(a, extra = {}) {
+    return {
+      id: a.id,
+      grantedVia: a.grantedVia,
+      grantedAt: iso(a.grantedAt),
+      reason: a.reason,
+      ceilingAt: iso(a.ceilingAt),
+      state: receiptStateOf(this.derived(a)),
+      ...a.operation ? { artifactId: a.operation.artifactId } : {},
+      ...extra
+    };
+  }
+  /** The receipt as the human should see it now: an `allowed` receipt this
+   *  daemon no longer holds is `ended` (or `expired` past its ceiling). */
+  deriveReceipt(entry) {
+    const r = entry.allowance;
+    if (!r) return entry;
+    const live = this.allowances.get(r.id);
+    let state = r.state;
+    if (live) state = receiptStateOf(this.derived(live));
+    else if (r.state === "allowed") state = this.now() >= Date.parse(r.ceilingAt) ? "expired" : "ended";
+    return state === r.state ? entry : { ...entry, allowance: { ...r, state } };
+  }
+  view(a) {
+    return {
+      id: a.id,
+      blockId: a.blockId,
+      state: receiptStateOf(this.derived(a)),
+      stance: a.stance,
+      sessionId: a.sessionId,
+      toolName: a.toolName,
+      artifactType: a.artifactType,
+      grantedAt: iso(a.grantedAt),
+      grantedVia: a.grantedVia,
+      reason: a.reason,
+      ceilingAt: iso(a.ceilingAt),
+      ...a.operation ? { artifactId: a.operation.artifactId } : {},
+      snapshot: a.snapshot,
+      preconditions: a.preconditions
+    };
+  }
+  /**
+   * What the grant dialog previews — served from the daemon's OWN in-memory
+   * block record, the same one grant() binds to, never the block-log file. A
+   * block this daemon doesn't hold (restart, unknown id) can't be allowed.
+   */
+  preview(blockId) {
+    const b = this.blocks.get(blockId);
+    if (!b) return null;
+    const existing = [...this.allowances.values()].find((a) => a.blockId === blockId);
+    const live = !!b.registrationId && this.isLive(b.registrationId);
+    return {
+      blockId,
+      source: b.source,
+      toolName: b.toolName,
+      eligible: b.eligible && live,
+      ineligibleReason: !b.eligible ? b.ineligibleReason ?? "not_eligible" : !live ? "session_ended" : void 0,
+      stance: b.stance,
+      snapshot: b.snapshot,
+      preconditions: b.preconditions,
+      ...existing ? { allowance: this.receipt(existing) } : {}
+    };
+  }
+  list() {
+    return [...this.allowances.values()].map((a) => this.view(a));
+  }
+  // --- Human routes: grant / revoke (§3, §4) -------------------------------
+  async grant(blockId, reason, via) {
+    const binding = this.blocks.get(blockId);
+    if (!binding) {
+      return { status: 404, body: { error: "No block with that id is held by this daemon.", code: ERROR_CODES.stance_exception_block_not_found } };
+    }
+    return this.enqueue(binding.sessionId, () => {
+      const existing = [...this.allowances.values()].find((a) => a.blockId === blockId);
+      if (existing) return { status: 200, body: { allowance: this.view(existing), receipt: this.receipt(existing), existing: true } };
+      const refuse = (why, message) => ({ status: 409, body: { error: message, code: ERROR_CODES.stance_exception_not_eligible, reason: why } });
+      if (binding.source !== "session") return refuse("team_rule", "Team rules can't be allowed once \u2014 only your own stances.");
+      if (binding.sessionId.startsWith("demo_")) return refuse("demo_session", "Demo blocks can't be allowed.");
+      if (!binding.eligible || !binding.snapshot || !binding.preconditions || !binding.effectiveDigest || !binding.callFingerprint || !binding.registrationId || !binding.stance || !binding.toolName) {
+        return refuse(binding.ineligibleReason ?? "not_eligible", "This block can't be allowed once.");
+      }
+      if (!this.isLive(binding.registrationId)) return refuse("session_ended", "That Claude session has ended, so there is nothing to allow.");
+      const store = this.deps.getStore(binding.sessionId);
+      const stanceRows = store?.getSessionMemory().rejectedApproaches ?? [];
+      if (!stanceRows.some((r) => sameStance(r, binding.stance))) {
+        return refuse("stance_retired", "That stance is no longer on file (it was retired or changed).");
+      }
+      const grantedAt = this.now();
+      const allowance = {
+        id: `sx_${nanoid3(12)}`,
+        state: "active",
+        blockId,
+        stance: binding.stance,
+        sessionId: binding.sessionId,
+        registrationId: binding.registrationId,
+        toolName: binding.toolName,
+        artifactType: binding.snapshot.type,
+        callFingerprint: binding.callFingerprint,
+        effectiveDigest: binding.effectiveDigest,
+        snapshot: binding.snapshot,
+        preconditions: binding.preconditions,
+        grantedAt,
+        grantedMono: this.mono(),
+        grantedVia: via,
+        reason,
+        ceilingAt: grantedAt + ALLOWANCE_CEILING_MS
+      };
+      this.allowances.set(allowance.id, allowance);
+      const receipt = this.receipt(allowance);
+      updatePreflightBlocks(this.deps.projectRoot, (e) => e.id === blockId ? { ...e, allowance: receipt, seenAt: e.seenAt ?? iso(grantedAt) } : null);
+      this.deps.broadcast(binding.sessionId, { type: "stance_exception_granted", blockId, allowance: receipt, stance: allowance.stance, seenAt: iso(grantedAt) });
+      this.log(`[stance-exception] granted ${allowance.id} via=${via} block=${blockId} sid=${binding.sessionId}`);
+      return { status: 201, body: { allowance: this.view(allowance), receipt, seenAt: iso(grantedAt) } };
+    });
+  }
+  async revoke(id) {
+    const a = this.allowances.get(id);
+    if (!a) return { status: 404, body: { error: "No allowance with that id is held by this daemon.", code: ERROR_CODES.stance_exception_block_not_found } };
+    return this.enqueue(a.sessionId, () => {
+      if (a.state === "consumed") {
+        return { status: 409, body: { error: `Already used by ${a.operation?.artifactId ?? "an artifact"}.`, code: ERROR_CODES.stance_exception_claim_refused, state: "used", artifactId: a.operation?.artifactId } };
+      }
+      if (a.state === "changed") {
+        return { status: 409, body: { error: "Already replaced: the proposal changed after you allowed it.", code: ERROR_CODES.stance_exception_claim_refused, state: "changed" } };
+      }
+      if (a.state === "active") {
+        a.state = "revoked";
+        const revokedAt = iso(this.now());
+        const receipt = this.receipt(a, { revokedAt });
+        updatePreflightBlocks(this.deps.projectRoot, (e) => e.id === a.blockId ? { ...e, allowance: receipt } : null);
+        this.deps.broadcast(a.sessionId, { type: "stance_exception_updated", blockId: a.blockId, allowance: receipt });
+      }
+      return { status: 200, body: { allowance: this.view(a) } };
+    });
+  }
+  // --- Agent side: inspect (read-only) -------------------------------------
+  /** §6 step 2 — never consumes. Candidates: ACTIVE allowances of the calling
+   *  registration for this fingerprint. `inactive` explains a refusal. */
+  inspect(sessionId, token, fingerprint) {
+    const reg = this.resolveToken(token);
+    const candidates = [];
+    const inactive = [];
+    const held = /* @__PURE__ */ new Set();
+    for (const a of this.allowances.values()) {
+      if (a.sessionId !== sessionId || a.callFingerprint !== fingerprint) continue;
+      held.add(a.id);
+      const st = this.derived(a);
+      if (st === "active") {
+        if (reg && a.registrationId === reg.registrationId) {
+          candidates.push({ id: a.id, stance: a.stance, grantedVia: a.grantedVia, reason: a.reason });
+        }
+        continue;
+      }
+      inactive.push({ id: a.id, state: receiptStateOf(st), ...a.operation ? { artifactId: a.operation.artifactId } : {}, ceilingAt: iso(a.ceilingAt) });
+    }
+    for (const e of readPreflightBlocks(this.deps.projectRoot)) {
+      const r = e.allowance;
+      if (!r || held.has(r.id) || e.sessionId !== sessionId || e.callFingerprint !== fingerprint) continue;
+      const shown = this.deriveReceipt(e).allowance;
+      if (shown.state === "used") continue;
+      inactive.push({ id: r.id, state: shown.state, ...r.artifactId ? { artifactId: r.artifactId } : {}, ceilingAt: r.ceilingAt });
+    }
+    return { candidates, inactive };
+  }
+  // --- Agent side: the one authoritative operation route (§7) ---------------
+  runOperation(sessionId, store, token, operationId, fingerprint, request) {
+    return this.enqueue(sessionId, () => {
+      const stamped = findStamped(store.getArtifacts(), operationId, fingerprint);
+      if (stamped) return this.complete(sessionId, store, stamped, true);
+      if (!request) return { status: "none" };
+      return this.claimAndCreate(sessionId, store, token, operationId, fingerprint, request);
+    });
+  }
+  claimAndCreate(sessionId, store, token, operationId, fingerprint, request) {
+    const reg = this.resolveToken(token);
+    const refused = (reason, extra = {}) => ({ status: "refused", code: ERROR_CODES.stance_exception_claim_refused, reason, ...extra });
+    const list = request.exceptionIds.map((id) => this.allowances.get(id));
+    if (list.length === 0 || list.some((a) => !a)) return refused("unknown_allowance");
+    const allowances = list;
+    for (const a of allowances) {
+      if (!reg || a.sessionId !== sessionId || a.registrationId !== reg.registrationId) return refused("not_this_registration");
+      const st = this.derived(a);
+      if (st !== "active") {
+        return refused(st, { state: st, ceilingAt: iso(a.ceilingAt), ...a.operation ? { artifactId: a.operation.artifactId } : {} });
+      }
+      if (a.callFingerprint !== fingerprint) return refused("fingerprint_mismatch");
+    }
+    const rows = store.getSessionMemory().rejectedApproaches;
+    if (allowances.some((a) => !rows.some((r) => sameStance(r, a.stance)))) return refused("stance_retired");
+    const artifactsNow = store.getArtifacts();
+    const stale = [];
+    const current = [];
+    for (const a of allowances) {
+      const check2 = checkPreconditions(artifactsNow, a.preconditions);
+      if (check2.ok) current.push(a);
+      else stale.push({ a, check: check2 });
+    }
+    if (current.length === 0) return this.markChanged(sessionId, token, fingerprint, allowances, stale[0].check, request);
+    const requestDigest = effectiveDigest(request.snapshot, request.preconditions);
+    const claimed = current.filter((a) => a.effectiveDigest === requestDigest);
+    const uncovered = stale.filter((s) => !claimed.some((c) => sameStance(c.stance, s.a.stance)));
+    if (uncovered.length > 0) return this.markChanged(sessionId, token, fingerprint, uncovered.map((s) => s.a), uncovered[0].check, request);
+    const uncoveredCurrent = current.some((a) => !claimed.includes(a) && !claimed.some((c) => sameStance(c.stance, a.stance)));
+    if (claimed.length === 0 || uncoveredCurrent) {
+      return { status: "refused", code: ERROR_CODES.stance_exception_dependencies_changed, reason: "client_snapshot_mismatch" };
+    }
+    for (const { a } of stale) this.retireStale(sessionId, a, claimed[0].blockId);
+    const bound = claimed[0];
+    allowances.length = 0;
+    allowances.push(...claimed);
+    for (const a of allowances) a.state = "consumed";
+    this.deps.fault?.("after_claim", operationId);
+    const snapshot = structuredClone(bound.snapshot);
+    const childId = `art_${nanoid3(10)}`;
+    const content = snapshot.content;
+    const followUps = {};
+    let parent;
+    if (snapshot.kind === "revise") {
+      parent = store.getArtifacts().find((a) => a.id === snapshot.parentId);
+      followUps.supersede = { parentId: snapshot.parentId, fromStatus: parent?.status ?? "missing" };
+      followUps.comment = { id: `cmt_op_${operationId}`, artifactId: snapshot.parentId, content: `Superseded by ${childId}: ${snapshot.agentReasoning ?? ""}` };
+    }
+    if (snapshot.type === "decision" && Array.isArray(content.options)) {
+      const decisionId = `dec_${nanoid3(10)}`;
+      content.decisionId = decisionId;
+      const contextText = typeof content.context === "string" ? content.context : snapshot.title;
+      followUps.decision = {
+        decisionId,
+        artifactId: childId,
+        context: snapshot.kind === "revise" ? contextText : String(content.context ?? ""),
+        ...snapshot.kind === "create" && typeof content.title === "string" ? { title: content.title } : {},
+        options: content.options,
+        ...content.stakes === "low" || content.stakes === "medium" || content.stakes === "high" ? { stakes: content.stakes } : {}
+      };
+    }
+    if (snapshot.type === "plan") followUps.planReview = true;
+    if (request.trace) {
+      followUps.trace = {
+        ...request.trace,
+        version: 1,
+        at: iso(this.now()),
+        artifactId: childId,
+        toolName: request.toolName,
+        exception: { allowanceIds: allowances.map((a) => a.id), grantedVia: bound.grantedVia, stances: allowances.map((a) => a.stance.concept ?? a.stance.description) }
+      };
+    }
+    const admission = {
+      operationId,
+      callFingerprint: fingerprint,
+      effectiveDigest: bound.effectiveDigest,
+      kind: snapshot.kind,
+      exceptionIds: allowances.map((a) => a.id),
+      grantedVia: bound.grantedVia,
+      followUps
+    };
+    for (const a of allowances) a.operation = { id: operationId, artifactId: childId };
+    try {
+      this.deps.fault?.("create_throws", operationId);
+      store.createAdmittedArtifact({
+        id: childId,
+        type: snapshot.type,
+        title: snapshot.title,
+        content,
+        ...snapshot.agentReasoning !== void 0 ? { agentReasoning: snapshot.agentReasoning } : {},
+        ...snapshot.relatedArtifactIds ? { relatedArtifactIds: snapshot.relatedArtifactIds } : {},
+        ...snapshot.parentId ? { parentId: snapshot.parentId } : {},
+        ...snapshot.version ? { version: snapshot.version } : {},
+        ...snapshot.feature ? { feature: snapshot.feature } : {}
+      }, admission);
+    } catch (error51) {
+      if (!store.getArtifacts().some((a) => a.id === childId)) {
+        for (const a of allowances) {
+          a.state = "active";
+          delete a.operation;
+        }
+      }
+      throw error51;
+    }
+    this.pendingAnnounce.add(childId);
+    store.forceFlush();
+    this.announce(sessionId, store, childId);
+    this.deps.fault?.("after_child_flush", operationId);
+    const child = store.getArtifacts().find((a) => a.id === childId);
+    return this.complete(sessionId, store, child, false);
+  }
+  /** #499 review P3 — an allowance whose dependency moved, superseded by a
+   *  newer allowance the human already granted for the CURRENT version. */
+  retireStale(sessionId, a, replacementBlockId) {
+    a.state = "changed";
+    const receipt = this.receipt(a, { supersededByBlockId: replacementBlockId });
+    updatePreflightBlocks(this.deps.projectRoot, (e) => e.id === a.blockId ? { ...e, allowance: receipt } : null);
+    this.deps.broadcast(sessionId, { type: "stance_exception_updated", blockId: a.blockId, allowance: receipt });
+  }
+  /** §7 Races — the dependency moved: refuse, mark `changed`, and record this
+   *  call's block as the new entry the human can allow instead. */
+  markChanged(sessionId, token, fingerprint, allowances, check2, request) {
+    for (const a of allowances) a.state = "changed";
+    let newBlockId;
+    if (request.block && typeof request.block === "object") {
+      const store = this.deps.getStore(sessionId);
+      const preconditions = store ? currentPreconditions(store.getArtifacts(), request.preconditions) : request.preconditions;
+      const ev = this.prepareBlockEvent(sessionId, token, {
+        ...request.block,
+        callFingerprint: fingerprint,
+        snapshot: request.snapshot,
+        preconditions
+      });
+      ev.supersedesAllowanceId = allowances[0].id;
+      this.deps.broadcast(sessionId, ev);
+      newBlockId = [...this.blocks.values()].find((b) => b.supersedesAllowanceId === allowances[0].id)?.blockId;
+    }
+    for (const a of allowances) {
+      const receipt = this.receipt(a, newBlockId ? { supersededByBlockId: newBlockId } : {});
+      updatePreflightBlocks(this.deps.projectRoot, (e) => e.id === a.blockId ? { ...e, allowance: receipt } : null);
+      this.deps.broadcast(sessionId, { type: "stance_exception_updated", blockId: a.blockId, allowance: receipt });
+    }
+    return {
+      status: "refused",
+      code: ERROR_CODES.stance_exception_dependencies_changed,
+      reason: check2.detail,
+      state: "changed",
+      dependency: { id: check2.dependencyId, what: check2.what, detail: check2.detail },
+      ...newBlockId ? { newBlockId } : {}
+    };
+  }
+  /** Steps 4–6: finish every missing follow-up (each checks its own effect),
+   *  set completedAt, mark the receipts used, respond. Shared by a fresh
+   *  admission, both replay shapes, and startup reconciliation. */
+  complete(sessionId, store, child, replayed) {
+    const admission = structuredClone(child.admission);
+    const lineage = lineageProblem(child, admission, store.getArtifacts());
+    if (lineage) {
+      this.log(`[stance-exception] replay refused for ${child.id}: ${lineage}`);
+      return { status: "inconsistent", code: ERROR_CODES.stance_exception_operation_inconsistent, reason: lineage, artifactId: child.id };
+    }
+    const fu = admission.followUps;
+    const opId = admission.operationId;
+    const persist = () => {
+      store.setArtifactAdmission(child.id, admission);
+      store.forceFlush();
+    };
+    if (fu.supersede && !fu.supersede.skipped) {
+      const parent = store.getArtifacts().find((a) => a.id === fu.supersede.parentId);
+      if (parent && parent.status !== "superseded") {
+        if (parent.status === fu.supersede.fromStatus) {
+          store.updateArtifactStatus(parent.id, "superseded", "agent_supersede");
+          this.deps.broadcast(sessionId, { type: "artifact_updated", artifactId: parent.id, status: "superseded", reason: "agent_supersede" });
+        } else {
+          fu.supersede.skipped = parent.status;
+        }
+      } else if (!parent) {
+        fu.supersede.skipped = "missing";
+      }
+      persist();
+      this.deps.fault?.("after_supersede", opId);
+    }
+    if (fu.comment && !store.hasComment(fu.comment.id)) {
+      const comment = store.addComment({ id: fu.comment.id, artifactId: fu.comment.artifactId, content: fu.comment.content, author: "agent" });
+      persist();
+      this.deps.broadcast(sessionId, { type: "comment_added", comment });
+      this.deps.fault?.("after_comment", opId);
+    }
+    if (fu.decision && !store.getDecision(fu.decision.decisionId)) {
+      store.recordDecisionRequest({ ...fu.decision, options: fu.decision.options });
+      persist();
+      this.deps.fault?.("after_decision", opId);
+    }
+    if (fu.planReview && !store.hasPlanReview(child.id)) {
+      store.recordPlanReview(child.id);
+      persist();
+      this.deps.fault?.("after_plan_review", opId);
+    }
+    if (fu.trace && !store.getPreflightTrace(child.id)) {
+      store.recordPreflightTrace(child.id, fu.trace);
+      this.deps.fault?.("after_trace", opId);
+    }
+    this.deps.fault?.("before_completed", opId);
+    store.forceFlush();
+    if (!admission.completedAt) {
+      admission.completedAt = iso(this.now());
+      persist();
+    }
+    this.announce(sessionId, store, child.id);
+    for (const id of admission.exceptionIds) {
+      const used = [];
+      updatePreflightBlocks(this.deps.projectRoot, (e) => {
+        if (e.allowance?.id !== id || e.allowance.state === "used" && e.allowance.artifactId === child.id) return null;
+        const next = { ...e, allowance: { ...e.allowance, state: "used", artifactId: child.id } };
+        used.push(next);
+        return next;
+      });
+      for (const e of used) {
+        this.deps.broadcast(sessionId, { type: "stance_exception_updated", blockId: e.id, allowance: e.allowance, artifactId: child.id, artifactTitle: child.title });
+      }
+    }
+    const held = admission.exceptionIds.map((id) => this.allowances.get(id)).filter((a) => !!a);
+    const decisionId = child.content.decisionId;
+    return {
+      status: replayed ? "replayed" : "admitted",
+      replayed,
+      artifactId: child.id,
+      ...typeof decisionId === "string" ? { decisionId } : {},
+      ...child.parentId ? { parentId: child.parentId } : {},
+      kind: admission.kind,
+      grantedVia: admission.grantedVia,
+      stances: held.map((a) => a.stance.concept ?? a.stance.description),
+      reasons: held.map((a) => a.reason),
+      ...fu.supersede?.skipped ? { supersedeSkipped: fu.supersede.skipped } : {}
+    };
+  }
+  /** First durable commit only: one artifact_created per admitted child. */
+  announce(sessionId, store, childId) {
+    if (!this.pendingAnnounce.delete(childId)) return;
+    const artifact = store.getArtifacts().find((a) => a.id === childId);
+    if (artifact) this.deps.broadcast(sessionId, { type: "artifact_created", artifact });
+  }
+  /** Startup reconciliation: when the daemon loads a session, finish every
+   *  stamped child that has no completedAt — through the same queue. */
+  reconcile(sessionId, store) {
+    return this.enqueue(sessionId, () => {
+      for (const child of store.getArtifacts()) {
+        if (!child.admission || child.admission.completedAt) continue;
+        try {
+          this.complete(sessionId, store, child, true);
+        } catch (error51) {
+          this.log(`[stance-exception] reconcile ${child.id} failed: ${error51 instanceof Error ? error51.message : String(error51)}`);
+        }
+      }
+    });
+  }
+};
+function findStamped(artifacts, operationId, fingerprint) {
+  const byOp = artifacts.find((a) => a.admission?.operationId === operationId);
+  if (byOp) return byOp;
+  return artifacts.filter((a) => a.admission?.callFingerprint === fingerprint).sort((a, b) => a.createdAt < b.createdAt ? 1 : -1)[0];
+}
+function lineageProblem(child, admission, artifacts) {
+  const fu = admission.followUps ?? {};
+  if (admission.kind === "revise") {
+    if (!child.parentId) return "revise stamp on an artifact with no parent";
+    if (!fu.supersede || fu.supersede.parentId !== child.parentId) return "supersede target is not the child's parent";
+    if (!fu.comment || fu.comment.artifactId !== child.parentId) return "comment target is not the child's parent";
+    if (fu.comment.id !== `cmt_op_${admission.operationId}`) return "comment id is not derived from the operation id";
+    const parent = artifacts.find((a) => a.id === child.parentId);
+    if (parent && child.version !== parent.version + 1) return "child version does not follow its parent";
+  } else if (fu.supersede || fu.comment) {
+    return "create stamp carries revise follow-ups";
+  }
+  if (fu.decision) {
+    const decisionId = child.content.decisionId;
+    if (fu.decision.decisionId !== decisionId || fu.decision.artifactId !== child.id) return "decision target is not the child's decision";
+  }
+  if (fu.planReview && child.type !== "plan") return "plan review on a non-plan artifact";
+  return null;
+}
+var GrantBody = external_exports.object({ reason: external_exports.string() }).strict();
+function registerStanceExceptionRoutes(app, registry2) {
+  const fromAgent = (c) => !!c.req.header(REGISTRATION_HEADER);
+  const agentRefusal = (c) => c.json({ error: "Allowances are granted by your pair in the companion UI, never by the agent.", code: ERROR_CODES.stance_exception_interactive_required }, 403);
+  app.post("/api/preflight-blocks/:blockId/exception", async (c) => {
+    if (fromAgent(c)) return agentRefusal(c);
+    let body;
+    try {
+      body = GrantBody.parse(await c.req.json());
+    } catch {
+      return c.json({ error: "Expected exactly { reason }.", code: ERROR_CODES.validation_error }, 400);
+    }
+    const reason = body.reason.trim();
+    if (reason.length < 3 || reason.length > 280) {
+      return c.json({ error: "Give a reason of 3\u2013280 characters.", code: ERROR_CODES.stance_exception_reason_required }, 400);
+    }
+    const via = c.req.header(GRANT_ORIGIN_HEADER) === "cli" ? "cli" : "ui";
+    const out = await registry2.grant(c.req.param("blockId"), reason, via);
+    return c.json(out.body, out.status);
+  });
+  app.post("/api/stance-exceptions/:id/revoke", async (c) => {
+    if (fromAgent(c)) return agentRefusal(c);
+    const out = await registry2.revoke(c.req.param("id"));
+    return c.json(out.body, out.status);
+  });
+  app.get("/api/stance-exceptions", (c) => c.json({ allowances: registry2.list() }));
+  app.get("/api/preflight-blocks/:blockId/exception", (c) => {
+    const preview = registry2.preview(c.req.param("blockId"));
+    if (!preview) return c.json({ error: "No block with that id is held by this daemon.", code: ERROR_CODES.stance_exception_block_not_found }, 404);
+    return c.json(preview);
+  });
 }
 
 // src/mcp/task-handles.ts
@@ -31761,7 +32877,7 @@ function createReviewRoutes({
       log2(`[status] REJECTED \u2014 body schema invalid for ${artifactId} (header.sid=${sid ?? "(none)"}, store.sid=${storeSid}): ${parsed.error.issues[0]?.message}`);
       return c.json(formatZodIssues(parsed.error), 400);
     }
-    const { status, feedback, concept: humanConcept } = parsed.data;
+    const { status, feedback, concept: humanConcept, reason: autoReason } = parsed.data;
     const artsBefore = await store.getArtifacts();
     const target = artsBefore.find((a) => a.id === artifactId);
     const reason = status === "approved" ? "ui_approve_button" : status === "revised" ? "ui_revise_button" : status === "obsolete" ? "ui_dismiss_obsolete" : "ui_reject_button";
@@ -31777,6 +32893,22 @@ function createReviewRoutes({
         },
         404
       );
+    }
+    if (autoReason === "auto_confidence") {
+      const level = await store.getAutonomyLevel();
+      const confidence = target.content?.confidence;
+      if (status !== "approved" || level === "supervised" || confidence !== "high" || target.status !== "draft") {
+        log2(`[status] REFUSED auto-approve on ${artifactId}: level=${level} confidence=${confidence ?? "(none)"} status=${target.status}`);
+        return c.json(
+          {
+            error: "auto_approve_not_permitted",
+            code: "auto_approve_not_permitted",
+            autonomyLevel: level,
+            message: "Auto-approval is no longer permitted (the autonomy level or the artifact changed). Nothing was approved \u2014 review it and approve yourself."
+          },
+          409
+        );
+      }
     }
     if (isCrossTerminalVerdictFlip(target.status, status, reason)) {
       const at = target.updatedAt;
@@ -31972,7 +33104,7 @@ function sessionDirExists(projectRoot2, sessionId) {
     return false;
   }
 }
-function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authToken, getLiveDecisionSources) {
+function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authToken, getLiveDecisionSources, stanceExceptions) {
   const getStore = typeof storeOrGetter === "function" ? storeOrGetter : () => storeOrGetter;
   const broadcast = broadcastFn;
   const log2 = logFn ?? (() => {
@@ -32742,8 +33874,10 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
   });
   app.get("/api/preflight-blocks", (c) => {
     if (!projectRoot2) return c.json({ blocks: [] });
-    return c.json({ blocks: readPreflightBlocks(projectRoot2) });
+    const blocks = readPreflightBlocks(projectRoot2);
+    return c.json({ blocks: stanceExceptions ? blocks.map((b) => stanceExceptions.deriveReceipt(b)) : blocks });
   });
+  if (stanceExceptions) registerStanceExceptionRoutes(app, stanceExceptions);
   app.get("/api/team-preferences", async (c) => {
     const store = getStore(getSessionId(c));
     if (!store) return c.json({ preferences: [], exists: false });
@@ -33304,6 +34438,17 @@ var PostedReviewBody = external_exports.object({
   postedAt: external_exports.string().min(1),
   commentCount: external_exports.number().int().nonnegative()
 }).strict();
+var OperationBody = external_exports.object({
+  callFingerprint: external_exports.string().regex(/^[0-9a-f]{64}$/),
+  admission: external_exports.object({
+    exceptionIds: external_exports.array(external_exports.string().min(1)).min(1).max(8),
+    toolName: external_exports.string().min(1),
+    snapshot: ProposalSnapshotSchema,
+    preconditions: external_exports.array(ProposalPreconditionSchema),
+    trace: external_exports.record(external_exports.string(), external_exports.unknown()).optional(),
+    block: external_exports.record(external_exports.string(), external_exports.unknown()).optional()
+  }).strict().optional()
+}).strict();
 var AutonomyPostBody = external_exports.object({ level: AutonomyLevelSchema });
 var DetailDensityPostBody = external_exports.object({ density: DetailDensitySchema });
 var PersonaPostBody = external_exports.object({ persona: PersonaSchema });
@@ -33394,7 +34539,7 @@ function createActiveSessionRoutes(sessions, sessionMeta, daemonHash, activeSess
   });
   return app;
 }
-function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, logFn, daemonProjectRoot, authToken, activeSessions) {
+function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, logFn, daemonProjectRoot, authToken, activeSessions, stanceExceptions) {
   const log2 = logFn ?? (() => {
   });
   const app = new Hono2();
@@ -33484,11 +34629,13 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
       lastActivity: (/* @__PURE__ */ new Date()).toISOString()
     });
     activeSessions?.add(sessionId);
+    const registration = stanceExceptions?.register(sessionId, { split: body.splitMode === true });
     return c.json({
       status: "registered",
       sessionId,
       projectRoot: daemonProjectRoot,
-      state: store.getFullState()
+      state: store.getFullState(),
+      ...registration ?? {}
     });
   });
   app.post("/api/internal/sessions/:sessionId/rename", async (c) => {
@@ -33505,7 +34652,8 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const sessionId = c.req.param("sessionId");
     const store = sessions.get(sessionId);
     if (store) store.forceFlush();
-    activeSessions?.delete(sessionId);
+    const stillLive = stanceExceptions ? stanceExceptions.unregister(sessionId, c.req.header(REGISTRATION_HEADER)) : false;
+    if (!stillLive) activeSessions?.delete(sessionId);
     return c.json({ status: "unregistered" });
   });
   app.post("/api/internal/sessions/:sessionId/recovered", async (c) => {
@@ -33785,8 +34933,34 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     if (!body || body.type !== "preflight_blocked") {
       return c.json({ ok: false, reason: "not_a_preflight_block" }, 400);
     }
-    broadcast(sessionId, body);
+    broadcast(sessionId, stanceExceptions ? stanceExceptions.prepareBlockEvent(sessionId, c.req.header(REGISTRATION_HEADER), body) : body);
     return c.json({ ok: true });
+  });
+  app.get("/api/internal/sessions/:sessionId/stance-exceptions", (c) => {
+    const sessionId = c.req.param("sessionId");
+    const r = requireStore(c, sessionId);
+    if (!r.ok) return r.response;
+    if (!stanceExceptions) return c.json({ candidates: [], inactive: [] });
+    const fingerprint = c.req.query("fingerprint") ?? "";
+    return c.json(stanceExceptions.inspect(sessionId, c.req.header(REGISTRATION_HEADER), fingerprint));
+  });
+  app.post("/api/internal/sessions/:sessionId/operations/:operationId", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const r = requireStore(c, sessionId);
+    if (!r.ok) return r.response;
+    const parsed = await parseJsonBody(c, OperationBody);
+    if (!parsed.ok) return parsed.res;
+    if (!stanceExceptions) return c.json({ status: "none" });
+    const outcome = await stanceExceptions.runOperation(
+      sessionId,
+      r.store,
+      c.req.header(REGISTRATION_HEADER),
+      c.req.param("operationId"),
+      parsed.data.callFingerprint,
+      parsed.data.admission
+    );
+    if (outcome.status === "inconsistent") return c.json(outcome, 409);
+    return c.json(outcome);
   });
   app.post("/api/internal/sessions/:sessionId/comments/:commentId/mark-resolved", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -34547,21 +35721,35 @@ function createDaemon(deps) {
     version: version2 = SERVER_VERSION,
     openBrowser = defaultOpenBrowser,
     watch = (dir, listener) => fs22.watch(dir, listener),
-    heartbeatIntervalMs = 3e4
+    heartbeatIntervalMs = 3e4,
+    stanceExceptionClock,
+    stanceExceptionMonotonic,
+    stanceExceptionFault
   } = deps;
   const daemonProjectHash = projectHashOf(projectRoot2);
   let boundPort = 0;
   const dpDir2 = path22.join(projectRoot2, ".deeppairing");
   const daemonInfoFile = path22.join(dpDir2, "daemon.json");
-  const instanceId = randomBytes3(12).toString("hex");
+  const instanceId = randomBytes4(12).toString("hex");
   const sessions = /* @__PURE__ */ new Map();
   const sessionMeta = /* @__PURE__ */ new Map();
   const activeSessions = /* @__PURE__ */ new Set();
   const demoRuns = /* @__PURE__ */ new Map();
+  const stanceExceptions = new StanceExceptionRegistry({
+    instanceId,
+    projectRoot: projectRoot2,
+    broadcast: (sessionId, event) => broadcast(sessionId, event),
+    getStore: (sessionId) => sessions.get(sessionId),
+    now: stanceExceptionClock,
+    monotonic: stanceExceptionMonotonic,
+    log: log2,
+    fault: stanceExceptionFault
+  });
   function createSession(sessionId) {
     log2(`Creating session: ${sessionId}`);
     const store = new FileStore(projectRoot2, sessionId);
     sessions.set(sessionId, store);
+    if (!sessionId.startsWith("demo_")) void stanceExceptions.reconcile(sessionId, store);
     if (!sessionId.startsWith("demo_")) {
       try {
         recordMetricEvent(projectRoot2, { kind: "session_started" });
@@ -34578,7 +35766,7 @@ function createDaemon(deps) {
   const globalClients = /* @__PURE__ */ new Set();
   const demoReplayEvents = /* @__PURE__ */ new Map();
   const sessionRevisions = /* @__PURE__ */ new Map();
-  const revisionEpoch = randomBytes3(6).toString("hex");
+  const revisionEpoch = randomBytes4(6).toString("hex");
   function broadcast(sessionId, event) {
     let outgoing = event;
     if (REVISION_EVENTS.has(event?.type)) {
@@ -34587,6 +35775,7 @@ function createDaemon(deps) {
     try {
       const entry = recordPreflightBlock(projectRoot2, sessionId, event);
       if (entry) outgoing = { ...event, blockId: entry.id, at: entry.at };
+      stanceExceptions.noteBlock(entry, event);
     } catch {
     }
     if (sessionId.startsWith("demo_") && outgoing?.type === "preflight_blocked") {
@@ -34691,7 +35880,7 @@ function createDaemon(deps) {
     origin: (origin) => corsAllowedOrigin(origin)
   }));
   applyTopLevelGuards(app, { maxBodyBytes: 64 * 1024 });
-  const daemonRoutes = createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log2, projectRoot2, daemonAuthToken2, activeSessions);
+  const daemonRoutes = createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log2, projectRoot2, daemonAuthToken2, activeSessions, stanceExceptions);
   app.route("/", daemonRoutes);
   const publicRoutes = createHttpRoutes(
     (sessionId) => {
@@ -34734,7 +35923,8 @@ function createDaemon(deps) {
         }
       }
       return out;
-    }
+    },
+    stanceExceptions
   );
   app.route("/", publicRoutes);
   const PENDING_REVIEWABLE = /* @__PURE__ */ new Set(["research", "spec", "plan", "decision", "code_change", "changeset", "debrief"]);
@@ -34881,7 +36071,7 @@ function createDaemon(deps) {
       activeSessions.delete(oldest);
       demoReplayEvents.delete(oldest);
     }
-    const sessionId = `demo_${Date.now()}_${randomBytes3(4).toString("hex")}`;
+    const sessionId = `demo_${Date.now()}_${randomBytes4(4).toString("hex")}`;
     const store = createSession(sessionId);
     sessionMeta.set(sessionId, {
       title: "deepPairing demo",
@@ -35307,6 +36497,7 @@ function createDaemon(deps) {
     sessions,
     sessionMeta,
     activeSessions,
+    stanceExceptions,
     broadcast,
     broadcastAll,
     getClientCount,

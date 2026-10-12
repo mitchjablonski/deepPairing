@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { once } from "node:events";
 import { PassThrough } from "node:stream";
 import { spawnSync, type ChildProcess } from "node:child_process";
+import { performance } from "node:perf_hooks";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -30,6 +31,30 @@ function fakeProcess() {
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const diagnosticDirs: string[] = [];
+const MAX_CHILD_DIAGNOSTIC_DURATION_MS = 60_000;
+
+/** Failure-only metadata; deliberately excludes child output and error messages. */
+function childStatusDiagnostic(
+  status: number | null,
+  signal: NodeJS.Signals | null,
+  errorCode: string | undefined,
+  durationMs: number,
+): string {
+  const safeSignal = signal && /^SIG[A-Z0-9]{1,12}$/.test(signal) ? signal : null;
+  const safeErrorCode = errorCode && /^[A-Z][A-Z0-9_]{0,31}$/.test(errorCode) ? errorCode : null;
+  const safeDurationMs = Number.isFinite(durationMs)
+    ? Math.max(0, Math.min(MAX_CHILD_DIAGNOSTIC_DURATION_MS, Math.round(durationMs)))
+    : null;
+  const durationCapped = Number.isFinite(durationMs) && durationMs > MAX_CHILD_DIAGNOSTIC_DURATION_MS;
+  return `Playwright subprocess exit metadata: ${JSON.stringify({
+    status,
+    signal: safeSignal,
+    errorCode: safeErrorCode,
+    durationMs: safeDurationMs,
+    durationCapped,
+  })}`;
+}
+
 afterEach(() => {
   for (const dir of diagnosticDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -57,6 +82,18 @@ async function capturedBody(proc: ChildProcess): Promise<Buffer> {
 }
 
 describe("E2E daemon diagnostics", () => {
+  it("keeps subprocess failure metadata bounded and free of child output", () => {
+    expect(childStatusDiagnostic(null, "SIGTERM", "ETIMEDOUT", 20_004.4)).toBe(
+      'Playwright subprocess exit metadata: {"status":null,"signal":"SIGTERM","errorCode":"ETIMEDOUT","durationMs":20004,"durationCapped":false}',
+    );
+    expect(childStatusDiagnostic(null, "not-a-signal" as NodeJS.Signals, "token=secret", Infinity)).toBe(
+      'Playwright subprocess exit metadata: {"status":null,"signal":null,"errorCode":null,"durationMs":null,"durationCapped":false}',
+    );
+    const capped = childStatusDiagnostic(null, null, undefined, 999_999);
+    expect(capped).toContain('"durationMs":60000');
+    expect(capped).toContain('"durationCapped":true');
+  });
+
   it("scrubs common credential forms and credentials embedded in URLs", () => {
     const output = redactDiagnostic([
       'password="double-secret"',
@@ -208,15 +245,17 @@ describe("E2E daemon diagnostics", () => {
     try {
       const cli = path.join(packageRoot, "node_modules", "@playwright", "test", "cli.js");
       const config = path.join(packageRoot, "e2e", "fixtures", "playwright.config.ts");
+      const startedAt = performance.now();
       const run = spawnSync(process.execPath, [cli, "test", "--config", config], {
         cwd: packageRoot,
         env: { ...process.env, DP_SETUP_DIAGNOSTIC_OUTPUT: outputDir },
         encoding: "utf8",
         timeout: 20_000,
       });
+      const durationMs = performance.now() - startedAt;
 
       const report = `${run.stdout}\n${run.stderr}`;
-      expect(run.status, report).toBe(1);
+      expect(run.status, childStatusDiagnostic(run.status, run.signal, run.error?.code, durationMs)).toBe(1);
       expect(report).toContain("deliberate beforeAll seed failure");
       expect(report).toContain("attachment #1: daemon-diagnostics");
       const files = fs.readdirSync(outputDir, { recursive: true })
@@ -238,15 +277,17 @@ describe("E2E daemon diagnostics", () => {
     try {
       const cli = path.join(packageRoot, "node_modules", "@playwright", "test", "cli.js");
       const config = path.join(packageRoot, "e2e", "fixtures", "hook-timeout-diagnostics.config.ts");
+      const startedAt = performance.now();
       const run = spawnSync(process.execPath, [cli, "test", "--config", config], {
         cwd: packageRoot,
         env: { ...process.env, DP_HOOK_TIMEOUT_DIAGNOSTIC_OUTPUT: outputDir },
         encoding: "utf8",
         timeout: 20_000,
       });
+      const durationMs = performance.now() - startedAt;
 
       const report = `${run.stdout}\n${run.stderr}`;
-      expect(run.status, report).toBe(1);
+      expect(run.status, childStatusDiagnostic(run.status, run.signal, run.error?.code, durationMs)).toBe(1);
       expect(report).toContain('"beforeAll" hook timeout of 1500ms exceeded.');
       expect(report).toContain("daemon-log-diagnostics (text/plain)");
       const files = fs.readdirSync(outputDir, { recursive: true })

@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 /**
@@ -239,6 +241,219 @@ export function toolInputTargetsGuardrail(projectRoot: string, toolInput: unknow
     const fp = input?.file_path ?? input?.filePath;
     if (typeof fp !== "string" || !fp) return false;
     return matchGuardrailPath(projectRoot, [fp]) !== null;
+  } catch {
+    return false;
+  }
+}
+
+// ===========================================================================
+// #470 slice 4 — THE `deeppairing-state` GUARDRAIL CLASS (design
+// stance-exceptions.md §"Direct file edits", §10 row 7).
+// ===========================================================================
+//
+// deepPairing's own state files. An agent Edit/Write/MultiEdit/NotebookEdit to
+// one of them ALWAYS asks: no ceremony skip, no dedup window, and the
+// DEEPPAIRING_GUARDRAIL_BACKSTOP opt-out does not switch it off (that opt-out
+// is for the protocol backstop; this class protects the stances themselves).
+//
+//   - `.deeppairing/preferences.json` — your stance rows. Deleting or
+//     rewriting one is an unprompted, silent Retire.
+//   - `.deeppairing/team.json` — the committed team rules.
+//   - `.deeppairing/hooks/<file>` — the init-installed hook scripts
+//     (preflight.mjs, stance-allow-ask.sh, stop.mjs, checkpoint.mjs). Editing
+//     one can switch these very prompts off; the #503 review flagged
+//     stance-allow-ask.sh as the same residual. The whole directory is guarded,
+//     not just that one script: preflight.mjs is the script that asks here.
+//
+// It is a PATH check, so it has to survive trivial path variants. Every
+// candidate spelling of the target is normalised and tested:
+//   - relative or absolute, with `.`/`..`, resolved against the project root;
+//   - Windows separators, a `\\?\` prefix, trailing dots/spaces on a segment
+//     and an NTFS stream suffix (`preferences.json::$DATA`), all of which name
+//     the same file on Windows;
+//   - case, folded on EVERY platform (a case-insensitive volume — macOS,
+//     Windows, WSL's /mnt/c — would otherwise let `.DeepPairing/Team.JSON`
+//     through; on a case-sensitive one the extra ask is harmless);
+//   - symlinks, via realpath of the target, or of its deepest existing
+//     ancestor for a file that doesn't exist yet.
+// The match is at ANY depth of the resolved absolute path, inside or outside
+// the project, so another project's or a symlinked-in copy asks too.
+//
+// Residuals, stated: hard links, Windows 8.3 short names (`DEEPPA~1`), and any
+// write that isn't an Edit/Write/MultiEdit/NotebookEdit tool call — Bash
+// writes (`echo >`, `sed -i`, `cp`, `mv`, `tee`) are outside this check by
+// design (the narrow Bash matcher only looks at `stance allow`).
+
+export const DEEPPAIRING_STATE_CATEGORY = "deeppairing-state";
+
+// #505 review (Sol P2) — `hooks/` guards every DESCENDANT, not just direct
+// children (`.deeppairing/hooks/lib/permission.mjs`). (Claude P3) — Claude
+// Code's own settings files carry the hook rows, so editing one can remove
+// these prompts: `.claude/settings.json` and `.claude/settings.local.json`
+// (project or user scope) always ask too.
+const STATE_PATTERN = /(^|\/)(?:\.deeppairing\/(preferences\.json|team\.json|hooks\/.+)|\.claude\/(settings(?:\.local)?\.json))$/;
+
+export interface StateMatch {
+  category: typeof DEEPPAIRING_STATE_CATEGORY;
+  /** What the human sees named: project-relative when inside it, else absolute. */
+  path: string;
+  kind: "preferences" | "team" | "hooks" | "claude-settings";
+}
+
+/** One spelling → the comparable form: `/` separators, no Windows trailing
+ *  dots/spaces or stream suffix on any segment, lower case. */
+function canonicalForm(p: string): string {
+  return p
+    .replace(/\\/g, "/")
+    .split("/")
+    .map((seg) => (seg === "." || seg === ".." ? seg : seg.replace(/:.*$/, "").replace(/[. ]+$/, "")))
+    .join("/")
+    .toLowerCase();
+}
+
+/** Realpath of `abs`, or of its deepest existing ancestor plus the rest. A
+ *  dangling symlink (its target doesn't exist yet) is followed by hand. */
+function realpathish(abs: string, hops = 0): string | null {
+  try {
+    return fs.realpathSync.native(abs);
+  } catch {
+    /* not there yet, or a dangling link — walk up */
+  }
+  if (hops < 8) {
+    try {
+      const target = fs.readlinkSync(abs);
+      return realpathish(path.resolve(path.dirname(abs), target), hops + 1);
+    } catch {
+      /* not a link */
+    }
+  }
+  const rest: string[] = [];
+  let cur = abs;
+  for (let i = 0; i < 64; i++) {
+    const parent = path.dirname(cur);
+    if (parent === cur) return null;
+    rest.unshift(path.basename(cur));
+    cur = parent;
+    try {
+      return path.join(fs.realpathSync.native(cur), ...rest);
+    } catch {
+      /* keep walking */
+    }
+  }
+  return null;
+}
+
+/**
+ * #505 review (Sol P2) — resolve the way the FILESYSTEM does, not lexically.
+ * `alias/../preferences.json` with `alias` → `.deeppairing/hooks` opens
+ * `.deeppairing/preferences.json`: the kernel follows `alias` first and only
+ * then takes its parent. `path.resolve` collapses `alias/..` to nothing and
+ * lands somewhere else. So walk segment by segment from the base, realpath-ing
+ * every prefix that exists before applying the next `..`. A missing entry is
+ * kept as written and the walk goes on (stricter than the kernel, which would
+ * fail a `..` past a missing directory: an extra ask, never a missed one).
+ */
+function physicalResolve(base: string, spelling: string): string | null {
+  try {
+    const absolute = path.isAbsolute(spelling);
+    // Never path.resolve the spelling itself: that would collapse `..` lexically.
+    const root = absolute ? path.parse(spelling).root : "";
+    let cur = absolute ? root : base;
+    try { cur = fs.realpathSync.native(cur); } catch { /* keep as written */ }
+    const segs = (absolute ? spelling.slice(root.length) : spelling).split(/[\\/]+/);
+    for (let i = 0; i < segs.length; i++) {
+      const seg = segs[i]!;
+      if (seg === "" || seg === ".") continue;
+      if (seg === "..") { cur = path.dirname(cur); continue; }
+      cur = path.join(cur, seg);
+      // Every prefix is re-checked (no latch): after `missing/..` the walk is
+      // back on real directories, and a link met later must still be followed.
+      try {
+        cur = fs.realpathSync.native(cur);
+      } catch {
+        // A dangling link is followed by hand; a missing entry stays as written.
+        try {
+          if (fs.lstatSync(cur).isSymbolicLink()) {
+            const followed = realpathish(cur);
+            if (followed) cur = followed;
+          }
+        } catch { /* missing */ }
+      }
+    }
+    return cur;
+  } catch {
+    return null;
+  }
+}
+
+/** Is `raw` (an agent-supplied tool path) one of deepPairing's state files?
+ *  Never throws; anything it cannot read is "no match". */
+export function matchDeeppairingStatePath(projectRoot: string, raw: unknown): StateMatch | null {
+  try {
+    if (typeof raw !== "string" || !raw) return null;
+    // `\\?\C:\x` and `//?/C:/x` are the same file as `C:\x`.
+    const unprefixed = raw.replace(/^(\\\\|\/\/)[?.](\\|\/)/, "");
+    const slashed = unprefixed.replace(/\\/g, "/");
+    // A segment-level clean BEFORE resolving, so `.deeppairing./x` or
+    // `.deeppairing /x` collapses like Windows does and `..` still resolves.
+    const cleaned = slashed
+      .split("/")
+      .map((seg) => (seg === "." || seg === ".." || /^[A-Za-z]:$/.test(seg) ? seg : seg.replace(/:.*$/, "").replace(/[. ]+$/, "") || seg))
+      .join("/");
+    const candidates = new Set<string>([slashed, cleaned]);
+    const spellings = [slashed, cleaned];
+    // `~/…` is a home-relative spelling some tools expand.
+    if (/^~\//.test(cleaned)) spellings.push(path.join(os.homedir(), cleaned.slice(2)));
+    // Filesystem-semantics resolutions come FIRST: they name the file the
+    // write would really open, so they are also what the human is shown.
+    const ordered: string[] = [];
+    for (const c of spellings) {
+      const physical = physicalResolve(projectRoot, c);
+      if (physical) ordered.push(physical);
+    }
+    for (const c of spellings) {
+      const abs = path.resolve(projectRoot, c);
+      ordered.push(abs);
+      const real = realpathish(abs);
+      if (real) ordered.push(real);
+    }
+    ordered.push(...candidates);
+    for (const c of ordered) {
+      const m = STATE_PATTERN.exec(canonicalForm(c));
+      if (!m) continue;
+      const file = m[2] ?? "";
+      const kind: StateMatch["kind"] = m[3] ? "claude-settings" : file.startsWith("hooks/") ? "hooks" : file === "team.json" ? "team" : "preferences";
+      return { category: DEEPPAIRING_STATE_CATEGORY, path: displayPath(projectRoot, c), kind };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Project-relative (against the root as written or its realpath) when the
+ *  path is inside the project, else absolute; always with `/`. */
+function displayPath(projectRoot: string, candidate: string): string {
+  const roots = [projectRoot];
+  try { roots.push(fs.realpathSync.native(projectRoot)); } catch { /* as written */ }
+  const abs = path.isAbsolute(candidate) ? candidate : path.resolve(projectRoot, candidate);
+  for (const root of roots) {
+    const rel = path.relative(root, abs).replace(/\\/g, "/");
+    if (rel && rel !== ".." && !rel.startsWith("../") && !path.isAbsolute(rel)) return rel;
+  }
+  return abs.replace(/\\/g, "/");
+}
+
+/** The target path of an Edit/Write/MultiEdit (`file_path`) or NotebookEdit
+ *  (`notebook_path`) tool_input. */
+export function toolInputTargetPath(toolInput: unknown): unknown {
+  const input = toolInput as { file_path?: unknown; filePath?: unknown; notebook_path?: unknown } | null;
+  return input?.file_path ?? input?.filePath ?? input?.notebook_path;
+}
+
+export function toolInputTargetsDeeppairingState(projectRoot: string, toolInput: unknown): boolean {
+  try {
+    return matchDeeppairingStatePath(projectRoot, toolInputTargetPath(toolInput)) !== null;
   } catch {
     return false;
   }

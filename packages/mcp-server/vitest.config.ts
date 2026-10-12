@@ -7,11 +7,10 @@ const STD_EXCLUDE = [
   "**/e2e/**",
 ];
 
-// Real-spawn suites: each boots one or more REAL daemon processes (tsx cold
-// start + bind + daemon.json poll). They live in their own `server-spawn`
-// project with fileParallelism: false so the heavy spawns never stack on each
-// other — under full-run contention on WSL /mnt/c (9P latency) three
-// concurrent tsx cold-starts were the main latency-straggler source.
+// Real-spawn and process-harness suites: these boot REAL daemon processes or
+// launch bounded process-level negative controls. They live in their own
+// `server-spawn` project with fileParallelism: false so heavy subprocess work
+// does not stack within this lane.
 const SPAWN_SUITES = [
   "src/__tests__/daemon-sigterm-port-release.test.ts",
   // #341 — real daemon.log retention through the e2e diagnostics harness.
@@ -27,6 +26,9 @@ const SPAWN_SUITES = [
   "src/__tests__/plugin-bundle-boot.test.ts",
   // #426 — a real daemon that dies during startup must fail ensureDaemon fast.
   "src/__tests__/ensure-daemon-early-exit.test.ts",
+  // Playwright subprocess diagnostics have bounded child caps but need this
+  // lane's 60s per-test backstop; their individual 20s caps remain unchanged.
+  "src/__tests__/e2e-diagnostics.test.ts",
 ];
 
 // Port isolation: computes a per-run + per-worker DEEPPAIRING_PORT_BASE so

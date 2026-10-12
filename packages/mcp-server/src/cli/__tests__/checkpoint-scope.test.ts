@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ensureCheckpointHook } from "../setup-tasks.js";
@@ -11,23 +12,29 @@ import { deriveSessionId } from "../../session-id.js";
 import { FileStore } from "../../store/file-store.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 import { beginHookSpawn, hookSpawnDiagnostic, observeHookChild } from "../../__tests__/hook-spawn-diagnostics.js";
+import { prepareCheckpointReceiptObserver, checkpointReceiptDiagnostic } from "../../__tests__/checkpoint-receipt-diagnostics.js";
+import { CHECKPOINT_FIXTURE_EPOCH_MS, normalizeMintedCheckpointReceipt } from "../../__tests__/checkpoint-controlled-fixture.js";
 
 let fx: GlobalStoreFixture;
 let root: string;
 let store: FileStore;
 let nextId: number;
+let fixtureEpoch: number | undefined;
 beforeEach(() => {
   fx = withGlobalStore("dp-checkpoint-scope-");
   root = fx.dir;
   nextId = 0;
+  fixtureEpoch = CHECKPOINT_FIXTURE_EPOCH_MS;
   store = fx.track(new FileStore(root, deriveSessionId(root, "session-a").sessionId));
   ensureCheckpointHook(root);
 });
 afterEach(() => fx.dispose());
 
 function present(filePath = "src/a.ts", target = store) {
-  return target.createArtifact({id: `change-${++nextId}`, type: "code_change", title: "edit",
+  const artifact = target.createArtifact({id: `change-${++nextId}`, type: "code_change", title: "edit",
     content: {filePath, changeType: "modify", before: "old", after: "new", reasoning: "why"}});
+  if (fixtureEpoch !== undefined) normalizeMintedCheckpointReceipt(root, artifact, filePath, fixtureEpoch);
+  return artifact;
 }
 function env() {
   const result = {...process.env, CLAUDE_PROJECT_DIR: root};
@@ -53,6 +60,9 @@ async function presentChangeset(reviewIntent?: "external") {
     expect(result.isError).not.toBe(true);
     const artifact = store.getArtifacts().find(value => value.type === "changeset");
     expect(artifact).toBeDefined();
+    if (fixtureEpoch !== undefined && !reviewIntent) {
+      for (const file of ["src/a.ts", "src/b.ts"]) normalizeMintedCheckpointReceipt(root, artifact!, file, fixtureEpoch);
+    }
     return artifact!;
   } finally {
     await client.close();
@@ -78,82 +88,98 @@ function expectOneCheckpointFire(before: number, diagnostic: string) {
   expect(state.fires.at(-1).reason, diagnostic).not.toMatch(/^error:/);
 }
 function hook(filePath = "src/a.ts", session: string | undefined = "session-a") {
-  const before = fireCount();
-  const observation = beginHookSpawn("generated checkpoint", 5000, path.join(root, ".deeppairing/hooks-state.json"));
-  const r = spawnSync(process.execPath, [path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
-    input: event(filePath, session), encoding: "utf8", timeout: 5000, cwd: root, env: env(),
-  });
-  const diagnostic = hookSpawnDiagnostic(observation, r);
-  expect(r.error, diagnostic).toBeUndefined();
-  expect(r.status, diagnostic).toBe(0);
-  expectOneCheckpointFire(before, diagnostic);
-  return r.stderr;
+  return runHook(JSON.parse(event(filePath, session)), env());
 }
+/** Return an evidence-backed output assertion so final stderr failures retain it. */
 function runHook(payload: Record<string, unknown>, childEnv: NodeJS.ProcessEnv) {
   const before = fireCount();
   const observation = beginHookSpawn("generated checkpoint", 5000, path.join(root, ".deeppairing/hooks-state.json"));
-  const r = spawnSync(process.execPath, [path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
+  const receipt = prepareCheckpointReceiptObserver(observation.statePath, { epochMs: fixtureEpoch });
+  const r = spawnSync(process.execPath, ["--import", pathToFileURL(receipt.preloadPath).href, path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
     input: JSON.stringify(payload), encoding: "utf8", timeout: 5000, cwd: root, env: childEnv,
   });
-  const diagnostic = hookSpawnDiagnostic(observation, r);
+  const diagnostic = checkpointReceiptDiagnostic(hookSpawnDiagnostic(observation, r), receipt.evidencePath);
   expect(r.error, diagnostic).toBeUndefined();
   expect(r.status, diagnostic).toBe(0);
   expectOneCheckpointFire(before, diagnostic);
-  return r.stderr;
+  return expect(r.stderr, diagnostic);
 }
 function marker(file = "src/a.ts", session = "session-a") {
   const key = crypto.createHash("sha256").update(path.resolve(root, file)).digest("hex");
   return path.join(root, ".deeppairing/sessions", deriveSessionId(root, session).sessionId, "code-checkpoints", key + ".json");
 }
 
-describe("file/session checkpoint receipts", () => {
+// Scope/identity/claim cases declare controlled freshness, but still verify real
+// artifact mint metadata and TTL before normalizing owned receipts. Native smoke
+// and native future/expiry controls opt out explicitly; no environment-wide fake.
+describe("file/session checkpoint receipts (explicit clock premise)", () => {
+  it("real-clock smoke: genuine presentation is consumed exactly once", () => {
+    fixtureEpoch = undefined;
+    present();
+    hook().toBe("");
+    expect(fs.existsSync(marker())).toBe(false);
+    hook().toContain("present_code_change");
+  });
+  it("real-clock smoke: genuine changeset keeps its mint TTL and consumes both files", async () => {
+    fixtureEpoch = undefined;
+    const artifact = await presentChangeset();
+    for (const file of ["src/a.ts", "src/b.ts"]) {
+      const receipt = JSON.parse(fs.readFileSync(marker(file), "utf8"));
+      expect(receipt.at).toBe(artifact.createdAt);
+      expect(Date.parse(receipt.expiresAt) - Date.parse(receipt.at)).toBe(600_000);
+      hook(file).toBe("");
+      expect(fs.existsSync(marker(file))).toBe(false);
+    }
+  });
   it("matches relative presentation to absolute edit and consumes the receipt once", () => {
     present();
-    expect(hook(path.join(root, "src/a.ts"))).toBe("");
-    expect(hook()).toContain("present_code_change");
+    hook(path.join(root, "src/a.ts")).toBe("");
+    hook().toContain("present_code_change");
   });
   it("normalizes dot segments in paths", () => {
     present("src/../src/a.ts");
-    expect(hook("./src/a.ts")).toBe("");
+    hook("./src/a.ts").toBe("");
   });
   it("does not let file A cover B, and preserves A's receipt", () => {
     present();
-    expect(hook("src/b.ts")).toContain("present_code_change");
-    expect(hook()).toBe("");
+    hook("src/b.ts").toContain("present_code_change");
+    hook().toBe("");
   });
   it("retains independently presented files", () => {
     present(); present("src/b.ts");
-    expect(hook()).toBe("");
-    expect(hook("src/b.ts")).toBe("");
+    hook().toBe("");
+    hook("src/b.ts").toBe("");
   });
   it("does not let session A cover session B", () => {
     present();
-    expect(hook("src/a.ts", "session-b")).toContain("present_code_change");
-    expect(hook()).toBe("");
+    hook("src/a.ts", "session-b").toContain("present_code_change");
+    hook().toBe("");
   });
   it("keeps concurrent sessions' receipts independent even for the same file", () => {
     const other = fx.track(new FileStore(root, deriveSessionId(root, "session-b").sessionId));
     present(); present("src/a.ts", other);
-    expect(hook()).toBe("");
-    expect(hook("src/a.ts", "session-b")).toBe("");
+    hook().toBe("");
+    hook("src/a.ts", "session-b").toBe("");
   });
   it("ignores legacy project-wide timestamps", () => {
     fs.writeFileSync(path.join(root, ".deeppairing/last-code-change.json"), JSON.stringify({at: new Date().toISOString()}));
-    expect(hook()).toContain("present_code_change");
+    hook().toContain("present_code_change");
   });
   it("treats corrupt receipts as missing and clears the claimed file", () => {
     present();
     fs.writeFileSync(marker(), "{bad");
-    expect(hook()).toContain("present_code_change");
+    hook().toContain("present_code_change");
     expect(fs.readdirSync(path.dirname(marker()))).toHaveLength(0);
   });
   it("does not break artifact creation when the receipt directory cannot be written", () => {
+    fixtureEpoch = undefined; // Deliberately no receipt exists to normalize.
     fs.writeFileSync(path.dirname(marker()), "not a directory");
     expect(() => present()).not.toThrow();
     expect(store.getArtifacts()).toHaveLength(1);
-    expect(hook()).toContain("present_code_change");
+    hook().toContain("present_code_change");
   });
   it.each([-120_000, 120_000, NaN])("rejects expired, future or invalid timestamps (%s)", offset => {
+    fixtureEpoch = undefined; // Preserve genuine native-clock authority coverage.
     present();
     const p = marker();
     const m = JSON.parse(fs.readFileSync(p, "utf8"));
@@ -162,7 +188,7 @@ describe("file/session checkpoint receipts", () => {
     // the historical 60-second lifetime derived from `at`.
     delete m.expiresAt;
     fs.writeFileSync(p, JSON.stringify(m));
-    expect(hook()).toContain("present_code_change");
+    hook().toContain("present_code_change");
   });
   it.each(["filePath", "sessionId", "artifactId", "version"])("rejects malformed receipt metadata: %s", key => {
     present();
@@ -170,23 +196,23 @@ describe("file/session checkpoint receipts", () => {
     const m = JSON.parse(fs.readFileSync(p, "utf8"));
     m[key] = null;
     fs.writeFileSync(p, JSON.stringify(m));
-    expect(hook()).toContain("present_code_change");
+    hook().toContain("present_code_change");
   });
   it.each(["rejected", "revised", "superseded", "retracted", "obsolete"] as const)("revokes %s artifacts", status => {
     const a = present();
     store.updateArtifactStatus(a.id, status);
-    expect(hook()).toContain("present_code_change");
+    hook().toContain("present_code_change");
   });
   it("superseding an older artifact preserves the newer presentation", () => {
     const old = present(); present();
     store.updateArtifactStatus(old.id, "superseded");
-    expect(hook()).toBe("");
+    hook().toBe("");
   });
   it("approval does not turn one receipt into reusable coverage", () => {
     const a = present();
-    expect(hook()).toBe("");
+    hook().toBe("");
     store.updateArtifactStatus(a.id, "approved");
-    expect(hook()).toContain("present_code_change");
+    hook().toContain("present_code_change");
   });
   it("mints ten-minute receipts through present_changeset and consumes only the edited file", async () => {
     const artifact = await presentChangeset();
@@ -196,18 +222,18 @@ describe("file/session checkpoint receipts", () => {
       expect(receipt).toMatchObject({ artifactId: artifact.id, sessionId: store.getSessionId(), filePath: path.resolve(root, file) });
       expect(Date.parse(receipt.expiresAt) - Date.parse(receipt.at)).toBe(10 * 60_000);
     }
-    expect(hook()).toBe("");
+    hook().toBe("");
     expect(fs.existsSync(marker())).toBe(false);
     expect(fs.existsSync(marker("src/b.ts"))).toBe(true);
-    expect(hook("src/b.ts")).toBe("");
+    hook("src/b.ts").toBe("");
     expect(fs.existsSync(marker("src/b.ts"))).toBe(false);
-    expect(hook()).toContain("present_code_change");
+    hook().toContain("present_code_change");
   });
   it("external present_changeset does not mint local edit receipts", async () => {
     await presentChangeset("external");
     expect(fs.existsSync(marker())).toBe(false);
     expect(fs.existsSync(marker("src/b.ts"))).toBe(false);
-    expect(hook()).toContain("present_code_change");
+    hook().toContain("present_code_change");
   });
   it.each(["rejected", "revised", "superseded", "retracted", "obsolete"] as const)("revokes every file receipt of a %s changeset", status => {
     const artifact = store.createArtifact({ id: "set", type: "changeset", title: "two files",
@@ -217,53 +243,55 @@ describe("file/session checkpoint receipts", () => {
     store.updateArtifactStatus(artifact.id, status);
     expect(fs.existsSync(marker())).toBe(false);
     expect(fs.existsSync(marker("src/b.ts"))).toBe(false);
-    expect(hook()).toContain("present_code_change");
+    hook().toContain("present_code_change");
   });
   it("uses the same sanitized session ID as the wrapper", () => {
     const raw = "a/b_" + "c".repeat(100);
     const other = fx.track(new FileStore(root, deriveSessionId(root, raw).sessionId));
     present("src/a.ts", other);
-    expect(hook("src/a.ts", raw)).toBe("");
+    hook("src/a.ts", raw).toBe("");
   });
   it("uses the event session instead of a stale inherited session identity", () => {
     present();
     const observation = beginHookSpawn("generated checkpoint", 5000, path.join(root, ".deeppairing/hooks-state.json"));
-    const r = spawnSync(process.execPath, [path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
+    const receipt = prepareCheckpointReceiptObserver(observation.statePath, { epochMs: fixtureEpoch });
+    const r = spawnSync(process.execPath, ["--import", pathToFileURL(receipt.preloadPath).href, path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
       cwd: root, input: event("src/a.ts"), encoding: "utf8", timeout: 5000,
       env: {...env(), CLAUDE_CODE_SESSION_ID: "session-b"},
     });
     expect(r.status, hookSpawnDiagnostic(observation, r)).toBe(0);
-    expect(r.stderr).toBe("");
+    expect(r.stderr, hookSpawnDiagnostic(observation, r)).toBe("");
     expect(fs.existsSync(marker())).toBe(false);
   });
   it("falls through a missing event receipt to a valid environment receipt", () => {
     present();
-    expect(runHook({tool_name: "Edit", session_id: "missing", tool_input: {file_path: "src/a.ts"}},
-      {...env(), CLAUDE_CODE_SESSION_ID: "session-a"})).toBe("");
+    runHook({tool_name: "Edit", session_id: "missing", tool_input: {file_path: "src/a.ts"}},
+      {...env(), CLAUDE_CODE_SESSION_ID: "session-a"}).toBe("");
   });
   it("falls through a corrupt event receipt to a valid environment receipt", () => {
     const bad = fx.track(new FileStore(root, deriveSessionId(root, "bad").sessionId));
     present("src/a.ts", bad); present();
     fs.writeFileSync(marker("src/a.ts", "bad"), "{bad");
-    expect(runHook({tool_name: "Edit", session_id: "bad", tool_input: {file_path: "src/a.ts"}},
-      {...env(), CLAUDE_CODE_SESSION_ID: "session-a"})).toBe("");
+    runHook({tool_name: "Edit", session_id: "bad", tool_input: {file_path: "src/a.ts"}},
+      {...env(), CLAUDE_CODE_SESSION_ID: "session-a"}).toBe("");
   });
   it("event priority consumes only its valid receipt", () => {
     const other = fx.track(new FileStore(root, deriveSessionId(root, "session-b").sessionId));
     present(); present("src/a.ts", other);
-    expect(runHook({tool_name: "Edit", session_id: "session-a", tool_input: {file_path: "src/a.ts"}},
-      {...env(), CLAUDE_CODE_SESSION_ID: "session-b"})).toBe("");
+    runHook({tool_name: "Edit", session_id: "session-a", tool_input: {file_path: "src/a.ts"}},
+      {...env(), CLAUDE_CODE_SESSION_ID: "session-b"}).toBe("");
     expect(fs.existsSync(marker("src/a.ts", "session-b"))).toBe(true);
   });
   it("uses the environment session when the event omits its identity", () => {
     present();
     const observation = beginHookSpawn("generated checkpoint", 5000, path.join(root, ".deeppairing/hooks-state.json"));
-    const r = spawnSync(process.execPath, [path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
+    const receipt = prepareCheckpointReceiptObserver(observation.statePath, { epochMs: fixtureEpoch });
+    const r = spawnSync(process.execPath, ["--import", pathToFileURL(receipt.preloadPath).href, path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
       cwd: root, input: JSON.stringify({tool_name: "Edit", tool_input: {file_path: "src/a.ts"}}),
       encoding: "utf8", timeout: 5000, env: {...env(), CLAUDE_CODE_SESSION_ID: "session-a"},
     });
     expect(r.status, hookSpawnDiagnostic(observation, r)).toBe(0);
-    expect(r.stderr).toBe("");
+    expect(r.stderr, hookSpawnDiagnostic(observation, r)).toBe("");
     expect(fs.existsSync(marker())).toBe(false);
   });
   it("uses event cwd for both coverage and fire logging when root env is absent", () => {
@@ -275,12 +303,13 @@ describe("file/session checkpoint receipts", () => {
     delete childEnv.DEEPPAIRING_PROJECT_ROOT;
     delete childEnv.CLAUDE_CODE_SESSION_ID;
     const observation = beginHookSpawn("generated checkpoint", 5000, path.join(root, ".deeppairing/hooks-state.json"));
-    const r = spawnSync(process.execPath, [path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
+    const receipt = prepareCheckpointReceiptObserver(observation.statePath, { epochMs: fixtureEpoch });
+    const r = spawnSync(process.execPath, ["--import", pathToFileURL(receipt.preloadPath).href, path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
       cwd: childRoot, input: JSON.stringify({...JSON.parse(event("src/a.ts")), cwd: root}),
       encoding: "utf8", timeout: 5000, env: childEnv,
     });
     expect(r.status, hookSpawnDiagnostic(observation, r)).toBe(0);
-    expect(r.stderr).toBe("");
+    expect(r.stderr, hookSpawnDiagnostic(observation, r)).toBe("");
     expect(fs.existsSync(path.join(childRoot, ".deeppairing"))).toBe(false);
     const state = JSON.parse(fs.readFileSync(path.join(root, ".deeppairing/hooks-state.json"), "utf8"));
     expect(state.fires.at(-1).reason).toMatch(/^pass:/);
@@ -289,49 +318,49 @@ describe("file/session checkpoint receipts", () => {
     const legacy = fx.track(new FileStore(root, deriveSessionId(root).sessionId));
     present("src/a.ts", legacy);
     // Empty identity selects the wrapper's per-project fallback.
-    expect(hook("src/a.ts", "")).toBe("");
+    hook("src/a.ts", "").toBe("");
     present();
-    expect(hook("src/a.ts", "")).toContain("present_code_change");
+    hook("src/a.ts", "").toContain("present_code_change");
   });
   it("does not map a malformed nonempty identity into the fallback session", () => {
     const legacy = fx.track(new FileStore(root, deriveSessionId(root).sessionId));
     present("src/a.ts", legacy);
-    expect(hook("src/a.ts", "../")).toContain("present_code_change");
-    expect(hook("src/a.ts", "")).toBe("");
+    hook("src/a.ts", "../").toContain("present_code_change");
+    hook("src/a.ts", "").toBe("");
   });
   it.each([null, 42, {}])("does not map malformed event identity %j into the fallback session", session_id => {
     const legacy = fx.track(new FileStore(root, deriveSessionId(root).sessionId));
     present("src/a.ts", legacy);
-    expect(runHook({tool_name: "Edit", session_id, tool_input: {file_path: "src/a.ts"}}, env()))
+    runHook({tool_name: "Edit", session_id, tool_input: {file_path: "src/a.ts"}}, env())
       .toContain("present_code_change");
     expect(fs.existsSync(marker("src/a.ts", ""))).toBe(true);
   });
   it("does not scan an unrelated third session", () => {
     const third = fx.track(new FileStore(root, deriveSessionId(root, "third").sessionId));
     present("src/a.ts", third);
-    expect(runHook({tool_name: "Edit", session_id: "missing", tool_input: {file_path: "src/a.ts"}}, env()))
+    runHook({tool_name: "Edit", session_id: "missing", tool_input: {file_path: "src/a.ts"}}, env())
       .toContain("present_code_change");
     expect(fs.existsSync(marker("src/a.ts", "third"))).toBe(true);
   });
   it("resolves a project root with a trailing separator identically", () => {
     present();
-    expect(runHook({tool_name: "Edit", session_id: "session-a", tool_input: {file_path: "src/a.ts"}},
-      {...env(), CLAUDE_PROJECT_DIR: root + path.sep})).toBe("");
+    runHook({tool_name: "Edit", session_id: "session-a", tool_input: {file_path: "src/a.ts"}},
+      {...env(), CLAUDE_PROJECT_DIR: root + path.sep}).toBe("");
   });
   it("honors explicit expiry while legacy receipts keep the 60-second default", () => {
     present();
     let m = JSON.parse(fs.readFileSync(marker(), "utf8"));
     expect(Date.parse(m.expiresAt) - Date.parse(m.at)).toBe(60_000);
-    m.at = new Date(Date.now() - 90_000).toISOString();
-    m.expiresAt = new Date(Date.now() + 10_000).toISOString();
+    m.at = new Date(CHECKPOINT_FIXTURE_EPOCH_MS - 90_000).toISOString();
+    m.expiresAt = new Date(CHECKPOINT_FIXTURE_EPOCH_MS + 10_000).toISOString();
     fs.writeFileSync(marker(), JSON.stringify(m));
-    expect(hook()).toBe("");
+    hook().toBe("");
     present();
     m = JSON.parse(fs.readFileSync(marker(), "utf8"));
-    m.at = new Date(Date.now() - 61_000).toISOString();
+    m.at = new Date(CHECKPOINT_FIXTURE_EPOCH_MS - 61_000).toISOString();
     delete m.expiresAt;
     fs.writeFileSync(marker(), JSON.stringify(m));
-    expect(hook()).toContain("present_code_change");
+    hook().toContain("present_code_change");
   });
   it("stamps changeset receipts with a ten-minute expiry", () => {
     store.createArtifact({id: "long", type: "changeset", title: "long",
@@ -339,18 +368,19 @@ describe("file/session checkpoint receipts", () => {
     const m = JSON.parse(fs.readFileSync(marker(), "utf8"));
     expect(Date.parse(m.expiresAt) - Date.parse(m.at)).toBe(10 * 60_000);
   });
-  it.each(["invalid", new Date(Date.now() - 1).toISOString()])("rejects invalid or expired explicit expiry %s", expiresAt => {
+  it.each(["invalid", "expired"])("rejects invalid or expired explicit expiry %s", expiryCase => {
     present();
     const m = JSON.parse(fs.readFileSync(marker(), "utf8"));
-    m.expiresAt = expiresAt;
+    m.expiresAt = expiryCase === "invalid" ? "invalid" : new Date(CHECKPOINT_FIXTURE_EPOCH_MS - 1).toISOString();
     fs.writeFileSync(marker(), JSON.stringify(m));
-    expect(hook()).toContain("present_code_change");
+    hook().toContain("present_code_change");
   });
   it("lets only one concurrent hook claim a receipt", async () => {
     present();
     const run = async () => {
       const observation = beginHookSpawn("generated checkpoint", 5000, path.join(root, ".deeppairing/hooks-state.json"));
-      const child = spawn(process.execPath, [path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
+      const receipt = prepareCheckpointReceiptObserver(observation.statePath, { epochMs: fixtureEpoch });
+      const child = spawn(process.execPath, ["--import", pathToFileURL(receipt.preloadPath).href, path.join(root, ".deeppairing/hooks/checkpoint.mjs")], {
         cwd: root, env: env(), stdio: ["pipe", "pipe", "pipe"], timeout: 5000,
       });
       const observed = observeHookChild(child, observation);

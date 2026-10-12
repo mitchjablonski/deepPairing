@@ -671,7 +671,7 @@ describe("runDaemonStartupSetup", () => {
   it("runs all idempotent setup tasks", () => {
     fs.writeFileSync(path.join(tmpDir, ".gitignore"), "node_modules/\n");
     const results = runDaemonStartupSetup(tmpDir);
-    expect(results).toHaveLength(5); // dir, gitignore, stop, checkpoint, preflight
+    expect(results).toHaveLength(6); // dir, gitignore, stop, checkpoint, preflight, stance-allow ask (#470)
     expect(results.every((r) => r.ok)).toBe(true);
     // Re-running is a no-op
     const second = runDaemonStartupSetup(tmpDir);
@@ -859,7 +859,7 @@ describe("ensurePreflightHook (WP5 — platform-level rejected-approach gate)", 
     expect(fs.existsSync(path.join(tmpDir, ".deeppairing/hooks/preflight.mjs"))).toBe(true);
     const settings = JSON.parse(fs.readFileSync(path.join(tmpDir, ".claude/settings.local.json"), "utf-8"));
     expect(settings.hooks.PreToolUse).toHaveLength(1);
-    expect(settings.hooks.PreToolUse[0].matcher).toBe("Write|Edit|MultiEdit");
+    expect(settings.hooks.PreToolUse[0].matcher).toBe("Write|Edit|MultiEdit|NotebookEdit");
     expect(settings.hooks.PreToolUse[0].hooks[0].command).toContain("preflight.mjs");
   });
 

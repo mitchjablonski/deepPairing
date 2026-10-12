@@ -1,3 +1,4 @@
+import { LedgerAllowances } from "./AllowedOnce";
 import { useEffect, useState } from "react";
 import { errorMessage } from "@deeppairing/shared";
 import { apiGet, apiBase } from "../lib/api";
@@ -161,6 +162,8 @@ export function LedgerDrawer({
 
         {tab === "stances" && (
           <>
+            {/* #470 — allowances per stance, with Revoke. */}
+            <LedgerAllowances />
             <div className="px-5 py-3 border-b border-border-default flex gap-1 flex-wrap">
               <FilterPill active={filter === "all"} onClick={() => setFilter("all")} label={`All (${entries?.length ?? 0})`} />
               <FilterPill active={filter === "avoid"} onClick={() => setFilter("avoid")} label={`Avoid (${avoid})`} tone="red" />

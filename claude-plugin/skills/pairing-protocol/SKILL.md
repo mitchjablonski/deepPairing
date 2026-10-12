@@ -622,7 +622,14 @@ rejection by surface name OR underlying concept is blocked in THIS project
 (same-project enforcement); a match against the cross-project ledger is
 advisory (it flags, it doesn't block). Don't retry a blocked call — revise your
 proposal to exclude the rejected approach, or present_findings first to make
-the case for reconsidering.
+the case for reconsidering. The one exception: if it's a false positive, ask
+your pair to choose **Allow this proposal once** on the block card, and retry
+the IDENTICAL call only after they say they did. Never try to grant it
+yourself — you have no tool for it, and running `stance allow` (or calling
+its route) in your shell asks your pair in the default, `acceptEdits`, `plan` and `auto` modes. In
+`dontAsk` or a `-p` run with no one to answer, the command is refused; in
+`bypassPermissions` there may be no prompt at all. In every mode, it is not
+yours to run.
 
 ## Guardrails
 
@@ -662,6 +669,16 @@ above, because a spurious ask costs this mechanism more than a missed one.
 
 Even when autonomy is "autonomous", escalate to supervised for changes touching
 these paths — that's the Escalated class, and it's on you to recognize it.
+
+**deepPairing's own state is not yours to edit.** An `Edit`, `Write`,
+`MultiEdit` or `NotebookEdit` to `.deeppairing/preferences.json`,
+`.deeppairing/team.json`, anything in `.deeppairing/hooks/`, or the
+`.claude/settings.json` / `.claude/settings.local.json` that register these
+hooks **always** asks
+your pair, whatever ceremony is live and however recently it asked. Don't edit
+those files to change a stance, a team rule or a hook, and don't route around
+the prompt through the shell. If a stance or rule is wrong, say so and let your
+pair change it.
 
 **The preflight backstop** is the safety net under that judgment call — and it
 does exactly this, no more:

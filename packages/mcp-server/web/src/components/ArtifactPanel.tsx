@@ -49,6 +49,7 @@ import { CausalChain } from "./CausalChain";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { PreflightBreadcrumb } from "./PreflightBreadcrumb";
 import { SecretWarningBanner } from "./SecretWarningBanner";
+import { AllowedOnceBadge } from "./AllowedOnce";
 import { WAITING_TONE } from "../lib/waitingTone";
 import { computeAttention } from "../lib/attention";
 import { laneMarksFrom, laneMarkFor, type LaneMark } from "../lib/laneMarks";
@@ -393,6 +394,8 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
           the type-specific renderer (which contains the flagged text) even
           loads. Renders null unless the server-side scan matched. */}
       <SecretWarningBanner artifact={artifact} />
+      {/* #470 — persistent receipt: this proposal was let past your stance once. */}
+      <AllowedOnceBadge artifact={artifact} />
 
       {/* L1 (#194) — a stale cached tab can receive a FUTURE artifact type a
           newer daemon pushes; the type-specific renderer chain below has no

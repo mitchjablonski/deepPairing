@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { IStore } from "../store/store-interface.js";
-import type { TeamPreference, Comment, ProseMode, ProseSeverity } from "@deeppairing/shared";
+import type { TeamPreference, Comment, ProseMode, ProseSeverity, StanceRef } from "@deeppairing/shared";
 import { lintArtifactContent, lintProse, bySeverity } from "@deeppairing/shared";
 import type { ToolResult } from "./tools/types.js";
 import {
@@ -10,6 +10,7 @@ import {
 } from "./elicit.js";
 import { runPreflight, type PreflightTracePartial } from "./preflight-validator.js";
 import { getAdvisoryRecall, tokenSetKey } from "./advisory-recall.js";
+import { stableStringify, sameStance } from "./proposal-resolution.js";
 
 type BroadcastFn = (event: any) => void;
 
@@ -118,7 +119,35 @@ export type PreflightHelperResult =
         _meta?: { code?: string; retryable?: boolean };
       };
       trace: PreflightTracePartial;
+      /** #470 — the `preflight_blocked` event and its lane. With
+       *  `opts.deferRecord` the caller owns broadcasting/recording it. */
+      event: PreflightBlockedEvent;
+      source: "session" | "team";
     };
+
+export type PreflightBlockedEvent = { type: "preflight_blocked"; toolName: string; source: "session" | "team"; match: Record<string, unknown> } & Record<string, unknown>;
+
+export interface PreflightOpts {
+  advisory?: boolean;
+  /**
+   * #470 — skip the block side effects (broadcast, block-log record, metric):
+   * the stance-exception admission path decides whether this refusal is
+   * recorded at all (an admitted retry is not a new block) and with which
+   * fields. The caller MUST call recordPreflightBlockEvent for any block it
+   * returns.
+   */
+  deferRecord?: boolean;
+  /** #470 — the re-gate: ignore exactly these stance rows for this call only. */
+  excludeStances?: StanceRef[];
+}
+
+
+/** The block side effects preflightRejectedApproaches takes when not deferred. */
+export function recordPreflightBlockEvent(store: IStore, broadcast: BroadcastFn, event: PreflightBlockedEvent, source: "session" | "team"): void {
+  broadcast(event);
+  void store.recordPreflightBlock?.(event);
+  void store.recordMetric?.({ kind: "preflight_block", source });
+}
 
 export async function preflightRejectedApproaches(
   store: IStore,
@@ -140,9 +169,14 @@ export async function preflightRejectedApproaches(
    * advisories-that-read-as-refusals would corrupt exactly the surface round 13
    * asked us to make durable.
    */
-  opts: { advisory?: boolean } = {},
+  opts: PreflightOpts = {},
 ): Promise<PreflightHelperResult> {
-  const memory = await store.getSessionMemory();
+  const fullMemory = await store.getSessionMemory();
+  const exclude = opts.excludeStances ?? [];
+  const memory = exclude.length === 0 ? fullMemory : {
+    ...fullMemory,
+    rejectedApproaches: fullMemory.rejectedApproaches.filter((r) => !exclude.some((ref) => sameStance(r, ref))),
+  };
   // AA7b — typed optional method on IStore.
   const teamPrefs: TeamPreference[] = (await store.getTeamPreferences?.()) ?? [];
 
@@ -201,7 +235,8 @@ export async function preflightRejectedApproaches(
     // data-driven. Cross-project ("global") near-misses are a different signal
     // (advisory nudge), so they're excluded from this counter. Fire-and-forget;
     // recordMetric is a no-op on stores that don't implement it.
-    for (const nm of result.trace.nearMisses) {
+    // #470 — an allowance re-gate is not a fresh consult: telemetry skips it.
+    for (const nm of opts.excludeStances?.length ? [] : result.trace.nearMisses) {
       if (nm.source === "session" || nm.source === "team") {
         void store.recordMetric?.({ kind: "preflight_near_miss", source: nm.source });
       }
@@ -218,28 +253,31 @@ export async function preflightRejectedApproaches(
     return { ok: true, trace: result.trace, advisory: result.block.message };
   }
 
-  // Make the invisible moat felt: broadcast the block so the companion UI
-  // can surface a toast.
-  broadcast(result.block.broadcastEvent);
+  const blockEvent = result.block.broadcastEvent as PreflightBlockedEvent;
+  if (!opts.deferRecord) {
+    // Make the invisible moat felt: broadcast the block so the companion UI
+    // can surface a toast.
+    broadcast(blockEvent);
 
-  // Q2 — ...except that in the PRODUCTION install path the line above reaches
-  // nobody: standalone.ts hands createMcpServer a `noop` broadcast (the daemon
-  // does its own broadcasting on mutations it owns), and a block is not a
-  // mutation the daemon ever sees. So the single most distinctive deepPairing
-  // moment fired invisibly for everyone except demo users — whose block IS
-  // daemon-side, and is even replayed to late joiners. Route it explicitly, on
-  // the same F1 seam the metric already uses: the daemon fans it to attached
-  // tabs (live toast) AND persists it to the project block log (durable, so a
-  // closed browser or a reload no longer erases the moment). Fire-and-forget:
-  // the refusal below is already correct; surfacing must never be able to
-  // break it.
-  void store.recordPreflightBlock?.(result.block.broadcastEvent);
+    // Q2 — ...except that in the PRODUCTION install path the line above reaches
+    // nobody: standalone.ts hands createMcpServer a `noop` broadcast (the daemon
+    // does its own broadcasting on mutations it owns), and a block is not a
+    // mutation the daemon ever sees. So the single most distinctive deepPairing
+    // moment fired invisibly for everyone except demo users — whose block IS
+    // daemon-side, and is even replayed to late joiners. Route it explicitly, on
+    // the same F1 seam the metric already uses: the daemon fans it to attached
+    // tabs (live toast) AND persists it to the project block log (durable, so a
+    // closed browser or a reload no longer erases the moment). Fire-and-forget:
+    // the refusal below is already correct; surfacing must never be able to
+    // break it.
+    void store.recordPreflightBlock?.(blockEvent);
 
-  // F1 — record the preflight-block metric at its truth point. The broadcast
-  // above is a no-op in standalone (the wrapper's broadcast), so the daemon's
-  // tap never saw a real block; route it to the daemon explicitly instead.
-  // Fire-and-forget (DaemonClient.recordMetric swallows errors).
-  void store.recordMetric?.({ kind: "preflight_block", source: result.block.source });
+    // F1 — record the preflight-block metric at its truth point. The broadcast
+    // above is a no-op in standalone (the wrapper's broadcast), so the daemon's
+    // tap never saw a real block; route it to the daemon explicitly instead.
+    // Fire-and-forget (DaemonClient.recordMetric swallows errors).
+    void store.recordMetric?.({ kind: "preflight_block", source: result.block.source });
+  }
 
   // CC1 — append the trace summary to the block message too. Pre-CC1 the
   // agent saw the matched concept on block ("...which the user previously
@@ -254,6 +292,8 @@ export async function preflightRejectedApproaches(
   return {
     ok: false,
     trace: result.trace,
+    event: blockEvent,
+    source: result.block.source,
     response: {
       content: [{ type: "text", text: result.block.message + blockSummary }],
       isError: true as const,
@@ -725,16 +765,6 @@ export function hashPresentArgs(args: unknown): string {
   return createHash("sha256").update(stableStringify(args)).digest("hex");
 }
 
-function stableStringify(v: unknown): string {
-  if (v === null || typeof v !== "object") {
-    const s = JSON.stringify(v);
-    return s === undefined ? "null" : s;
-  }
-  if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;
-  const obj = v as Record<string, unknown>;
-  const keys = Object.keys(obj).sort();
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(",")}}`;
-}
 
 /**
  * N2 — the success response returned in place of minting a twin. Generic across

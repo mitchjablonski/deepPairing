@@ -46,6 +46,9 @@ export function DiagnosticsMenu({ onOpenLedger }: { onOpenLedger: () => void }) 
   // HookStatus's own `fireKindLabel`. Primitive selectors so the trigger
   // re-renders only when the signal actually flips.
   const hasGateBlocks = usePreflightBlockStore((s) => unreadBlockCount(s) > 0);
+  // #470 — a request to open the gate log at an entry opens this menu first.
+  const focusSeq = usePreflightBlockStore((s) => s.focusRequest?.seq);
+  useEffect(() => { if (focusSeq) setOpen(true); }, [focusSeq]);
   const hasHookNag = useHookStatusStore((s) => (s.fires[0] ? fireKindLabel(s.fires[0]).tone === "nag" : false));
   const attention = hasGateBlocks || hasHookNag;
 
@@ -59,6 +62,8 @@ export function DiagnosticsMenu({ onOpenLedger }: { onOpenLedger: () => void }) 
       const target = e.target as Node | null;
       if (panelRef.current?.contains(target ?? null)) return;
       if (triggerRef.current?.contains(target ?? null)) return;
+      // #470 — the Allow-once dialog opened from the gate log is not "outside".
+      if ((target as Element | null)?.closest?.("[data-allow-once-dialog]")) return;
       setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
