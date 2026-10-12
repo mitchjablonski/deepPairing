@@ -26717,7 +26717,14 @@ var StatusUpdateBodySchema = external_exports.object({
    * named concept, then the artifact title (legacy behavior). Naming it
    * explicitly is what lets a future paraphrase get caught across projects.
    */
-  concept: external_exports.string().optional()
+  concept: external_exports.string().optional(),
+  /**
+   * #521 — marks an approval as the confidence auto-approve countdown (not a
+   * human click). The server re-checks, at commit, that the current autonomy
+   * level still permits it and refuses (409 auto_approve_not_permitted) if not.
+   * Absent = an explicit human action, never gated.
+   */
+  reason: external_exports.enum(["auto_confidence"]).optional()
 });
 var DecisionCloseOutBodySchema = external_exports.object({
   projectRoot: external_exports.string().max(4096).optional(),
@@ -30588,6 +30595,9 @@ var ERROR_CODES = {
    *  (approved↔rejected↔revised). The route refuses with 409 + the current
    *  status so the stale tab refreshes to truth. See store/verdict-guard.ts. */
   verdict_already_final: "verdict_already_final",
+  /** #521 — a confidence AUTO-approval reached the daemon after the autonomy level
+   *  (or the artifact) no longer permitted it. 409, no state change. */
+  auto_approve_not_permitted: "auto_approve_not_permitted",
   /** A review verdict raced a change to the artifact content being reviewed. */
   session_review_conflict: "session_review_conflict",
   /** F6 — decision resolve for a decision the bound session doesn't know. */

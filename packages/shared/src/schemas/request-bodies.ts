@@ -101,6 +101,13 @@ export const StatusUpdateBodySchema = z.object({
    * explicitly is what lets a future paraphrase get caught across projects.
    */
   concept: z.string().optional(),
+  /**
+   * #521 — marks an approval as the confidence auto-approve countdown (not a
+   * human click). The server re-checks, at commit, that the current autonomy
+   * level still permits it and refuses (409 auto_approve_not_permitted) if not.
+   * Absent = an explicit human action, never gated.
+   */
+  reason: z.enum(["auto_confidence"]).optional(),
 });
 export type StatusUpdateBody = z.infer<typeof StatusUpdateBodySchema>;
 
