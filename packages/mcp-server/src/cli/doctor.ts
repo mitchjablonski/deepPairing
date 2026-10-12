@@ -409,34 +409,40 @@ export async function doctor(cwd: string, opts: { fix?: boolean; yes?: boolean; 
   // the shipped entry free of esbuild lazy initializers (the #437 boot class).
   const hookLocalPath = path.join(cwd, ".claude", "settings.local.json");
   const pluginManaged = opts.pluginManaged ?? isPluginManaged();
+  const pluginHookSource = opts.protectSharedScopes
+    ? "declared by the installed plugin (activation not verified)" : "provided by the plugin";
+  if (pluginManaged && opts.protectSharedScopes) {
+    console.log(`  ${yellow("!")} Plugin activation is not verified. Before approving local hook removal, verify deepPairing is enabled for this project in Claude Code; otherwise its review gates would be disabled.`);
+  }
   const hookState: Record<string, string> = {};
   for (const d of diagnoseLocalHooks(cwd, pluginManaged)) hookState[d.hook] = d.state;
 
   // Stop hook.
   switch (hookState.Stop) {
     case "ok":
-      console.log(`  ${green("✓")} Claude Code Stop hook ${pluginManaged ? "provided by the plugin" : "configured"}`);
+      console.log(`  ${green("✓")} Claude Code Stop hook ${pluginManaged ? pluginHookSource : "configured"}`);
       break;
     case "legacy":
       console.log(`  ${yellow("!")} Claude Code Stop hook uses the legacy flat shape (Claude Code warns "Invalid settings / hooks: Expected array")`);
       fixes.push({
         label: "Replace legacy Stop-hook entry with the correct nested shape",
         // ensureStopHook heals legacy entries before re-installing.
-        apply: () => { const r = ensureStopHook(cwd); return { ok: r.ok, message: r.message }; },
+        apply: () => { const r = ensureStopHook(cwd, { backup: true }); return { ok: r.ok, message: r.message }; },
       });
       break;
     case "redundant":
-      console.log(`  ${yellow("!")} Stop hook is duplicated in settings.local.json — the plugin already provides it, so BOTH fire on every stop`);
+      console.log(`  ${yellow("!")} Local Stop hook overlaps the installed plugin declaration — redundant only if the plugin is enabled for this project`);
       fixes.push({
-        label: "Remove the redundant project-local Stop hook (the plugin provides it natively)",
-        apply: () => { const r = cleanDpEntriesFromScope(hookLocalPath, "Stop", HOOK_MARKERS.Stop); return { ok: r.ok, message: r.message }; },
+        label: "Remove the project-local Stop hook (verify the plugin is enabled before approving)",
+        requiresExplicitConfirmation: opts.protectSharedScopes,
+        apply: () => { const r = cleanDpEntriesFromScope(hookLocalPath, "Stop", HOOK_MARKERS.Stop, { backup: true }); return { ok: r.ok, message: r.message }; },
       });
       break;
     default: // "missing"
       console.log(`  ${yellow("!")} Claude Code Stop hook NOT configured (agent can stop while artifacts are unreviewed)`);
       fixes.push({
         label: "Add Stop hook to .claude/settings.local.json",
-        apply: () => { const r = ensureStopHook(cwd); return { ok: r.ok, message: r.message }; },
+        apply: () => { const r = ensureStopHook(cwd, { backup: true }); return { ok: r.ok, message: r.message }; },
       });
   }
 
@@ -448,7 +454,7 @@ export async function doctor(cwd: string, opts: { fix?: boolean; yes?: boolean; 
     console.log(`  ${yellow("!")} Per-edit checkpoint hook NOT configured (agent can batch Write/Edit without present_code_change)`);
     fixes.push({
       label: "Add PostToolUse checkpoint hook to .claude/settings.local.json",
-      apply: () => { const r = ensureCheckpointHook(cwd); return { ok: r.ok, message: r.message }; },
+      apply: () => { const r = ensureCheckpointHook(cwd, { backup: true }); return { ok: r.ok, message: r.message }; },
     });
   }
 
@@ -457,27 +463,28 @@ export async function doctor(cwd: string, opts: { fix?: boolean; yes?: boolean; 
   // never offered a fix even though the redundant row now fires on every edit).
   switch (hookState.PreToolUse) {
     case "ok":
-      console.log(`  ${green("✓")} PreToolUse rejection-gate hook ${pluginManaged ? "provided by the plugin" : "configured"}`);
+      console.log(`  ${green("✓")} PreToolUse rejection-gate hook ${pluginManaged ? pluginHookSource : "configured"}`);
       break;
     case "redundant":
-      console.log(`  ${yellow("!")} PreToolUse rejection-gate hook is duplicated in settings.local.json — the plugin already provides it, so BOTH fire on every Write/Edit`);
+      console.log(`  ${yellow("!")} Local PreToolUse rejection-gate hook overlaps the installed plugin declaration — redundant only if the plugin is enabled for this project`);
       fixes.push({
-        label: "Remove the redundant project-local PreToolUse rejection-gate hook (the plugin provides it natively)",
-        apply: () => { const r = cleanDpEntriesFromScope(hookLocalPath, "PreToolUse", HOOK_MARKERS.PreToolUse); return { ok: r.ok, message: r.message }; },
+        label: "Remove the project-local PreToolUse rejection-gate hook (verify the plugin is enabled before approving)",
+        requiresExplicitConfirmation: opts.protectSharedScopes,
+        apply: () => { const r = cleanDpEntriesFromScope(hookLocalPath, "PreToolUse", HOOK_MARKERS.PreToolUse, { backup: true }); return { ok: r.ok, message: r.message }; },
       });
       break;
     case "legacy":
       console.log(`  ${yellow("!")} PreToolUse rejection-gate hook is an older install that doesn't cover NotebookEdit (edits to deepPairing's own state through a notebook won't ask)`);
       fixes.push({
         label: "Update the PreToolUse rejection-gate hook in .claude/settings.local.json",
-        apply: () => { const r = ensurePreflightHook(cwd); return { ok: r.ok, message: r.message }; },
+        apply: () => { const r = ensurePreflightHook(cwd, { backup: true }); return { ok: r.ok, message: r.message }; },
       });
       break;
     default: // "missing"
       console.log(`  ${yellow("!")} PreToolUse rejection-gate hook NOT configured (rejected concepts won't be blocked before the edit lands)`);
       fixes.push({
         label: "Add PreToolUse rejection-gate hook to .claude/settings.local.json",
-        apply: () => { const r = ensurePreflightHook(cwd); return { ok: r.ok, message: r.message }; },
+        apply: () => { const r = ensurePreflightHook(cwd, { backup: true }); return { ok: r.ok, message: r.message }; },
       });
   }
 
@@ -485,20 +492,21 @@ export async function doctor(cwd: string, opts: { fix?: boolean; yes?: boolean; 
   {
     switch (diagnoseStanceAllowAskHook(cwd, pluginManaged)) {
       case "ok":
-        console.log(`  ${green("✓")} Bash \`stance allow\` ask hook ${pluginManaged ? "provided by the plugin" : "configured"}`);
+        console.log(`  ${green("✓")} Bash \`stance allow\` ask hook ${pluginManaged ? pluginHookSource : "configured"}`);
         break;
       case "redundant":
-        console.log(`  ${yellow("!")} Bash \`stance allow\` ask hook is duplicated in settings.local.json — the plugin already provides it`);
+        console.log(`  ${yellow("!")} Local Bash \`stance allow\` ask hook overlaps the installed plugin declaration — redundant only if the plugin is enabled for this project`);
         fixes.push({
-          label: "Remove the redundant project-local Bash ask hook (the plugin provides it natively)",
-          apply: () => { const r = removeStanceAllowAskHook(cwd); return { ok: r.ok, message: r.message }; },
+          label: "Remove the project-local Bash ask hook (verify the plugin is enabled before approving)",
+          requiresExplicitConfirmation: opts.protectSharedScopes,
+          apply: () => { const r = removeStanceAllowAskHook(cwd, { backup: true }); return { ok: r.ok, message: r.message }; },
         });
         break;
       default:
         console.log(`  ${yellow("!")} Bash \`stance allow\` ask hook NOT configured (the agent's shell could run \`stance allow\` without a prompt)`);
         fixes.push({
           label: "Add the Bash `stance allow` ask hook to .claude/settings.local.json",
-          apply: () => { const r = ensureStanceAllowAskHook(cwd); return { ok: r.ok, message: r.message }; },
+          apply: () => { const r = ensureStanceAllowAskHook(cwd, { backup: true }); return { ok: r.ok, message: r.message }; },
         });
     }
   }
@@ -526,7 +534,7 @@ export async function doctor(cwd: string, opts: { fix?: boolean; yes?: boolean; 
       apply: () => {
         let removed = 0;
         for (const s of crossScopeStop) {
-          const r = cleanDpEntriesFromScope(s.path, "Stop", HOOK_MARKERS.Stop);
+          const r = cleanDpEntriesFromScope(s.path, "Stop", HOOK_MARKERS.Stop, { backup: true });
           if (!r.ok) return { ok: false, message: r.message };
           removed += r.removed;
         }
@@ -546,7 +554,7 @@ export async function doctor(cwd: string, opts: { fix?: boolean; yes?: boolean; 
       apply: () => {
         let removed = 0;
         for (const s of crossScopeCheckpoint) {
-          const r = cleanDpEntriesFromScope(s.path, "PostToolUse", HOOK_MARKERS.PostToolUse);
+          const r = cleanDpEntriesFromScope(s.path, "PostToolUse", HOOK_MARKERS.PostToolUse, { backup: true });
           if (!r.ok) return { ok: false, message: r.message };
           removed += r.removed;
         }

@@ -11,8 +11,11 @@ const help = `deepPairing doctor
 Usage: node "${entry}" [--fix] [--yes | -y]
 
 Reports without changing files by default. --fix proposes repairs; --yes accepts
-project-local repairs only. Shared/user hooks, global locks and daemon termination need
-interactive confirmation. Clock diagnostics never change host time or services.
+project-local repairs only. Local plugin-hook removal, shared/user hooks, global
+locks and daemon termination need interactive confirmation. Before removing local
+hooks, verify the plugin is enabled for this project; activation is not verified.
+Settings repairs back up original bytes beside the file before overwriting it.
+Clock diagnostics never change host time or services.
 Project: CLAUDE_PROJECT_DIR, else DEEPPAIRING_PROJECT_ROOT, else current directory.
 `;
 if (argv.length === 1 && ["--help", "-h", "help"].includes(argv[0] ?? "")) {

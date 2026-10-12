@@ -5,8 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ownLockIdentity } from "../store/file-lock.js";
+import { shQuote } from "../store/ledger-health.js";
 
 const pluginSrc = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../claude-plugin");
+const hasPosixTerminal = process.platform !== "win32" &&
+  spawnSync("script", ["--version"], { encoding: "utf8" }).status === 0;
 let tmp: string;
 let plugin: string;
 let project: string;
@@ -60,6 +63,85 @@ function settings(root: string, name: string, data: unknown) {
 }
 
 describe("marketplace doctor, without dist or npm dependencies", () => {
+  it.runIf(hasPosixTerminal)("confirmed terminal repair backs up local/shared/user settings and preserves mixed siblings", () => {
+    const dp = { type: "command", command: "node .deeppairing/hooks/stop.mjs" };
+    const own = { type: "command", command: "node ci/own-hook.mjs" };
+    const rows = [{ matcher: "*", timeout: 23, hooks: [dp, own] }];
+    settings(project, "settings.local.json", { enabledPlugins: { "deeppairing@deeppairing": true }, hooks: {
+      Stop: rows,
+      PreToolUse: [
+        { matcher: "Write|Edit", hooks: [{ type: "command", command: "node .deeppairing/hooks/preflight.mjs" }, own] },
+        { matcher: "Bash", hooks: [{ type: "command", command: 'sh "$CLAUDE_PROJECT_DIR/.deeppairing/hooks/stance-allow-ask.sh"' }, own] },
+      ],
+      PostToolUse: [{ hooks: [{ type: "command", command: "node .deeppairing/hooks/checkpoint.mjs" }] }],
+    } });
+    settings(project, "settings.json", { hooks: { Stop: rows } });
+    settings(home, "settings.json", { hooks: { Stop: rows } });
+    const files = [path.join(project, ".claude", "settings.local.json"),
+      path.join(project, ".claude", "settings.json"), path.join(home, ".claude", "settings.json")];
+    const originals = files.map((file) => fs.readFileSync(file));
+    const result = spawnSync("script", ["--quiet", "--return", "--command",
+      `${shQuote(process.execPath)} ${shQuote(entry)} --fix`, "/dev/null"], {
+      cwd: project, input: "y\n", encoding: "utf8", timeout: 20_000,
+      env: { HOME: home, USERPROFILE: home, DEEPPAIRING_PORT_BASE: process.env.DEEPPAIRING_PORT_BASE,
+        DEEPPAIRING_PORT_SPAN: process.env.DEEPPAIRING_PORT_SPAN },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("verify deepPairing is enabled for this project");
+    expect(result.stdout).toContain("Apply all");
+    expect(result.stdout).not.toContain("Cancelled");
+    for (const [index, file] of files.entries()) {
+      const dir = path.dirname(file);
+      const backups = fs.readdirSync(dir).filter((name) => name.startsWith(path.basename(file) + ".deeppairing-backup-"));
+      expect(backups.length).toBeGreaterThanOrEqual(1);
+      expect(backups.some((name) => fs.readFileSync(path.join(dir, name)).equals(originals[index]!))).toBe(true);
+      expect(result.stdout).toContain("Settings backup:");
+      const repaired = JSON.parse(fs.readFileSync(file, "utf8"));
+      expect(repaired.hooks.Stop).toEqual([{ matcher: "*", timeout: 23, hooks: [own] }]);
+    }
+    const local = JSON.parse(fs.readFileSync(files[0]!, "utf8"));
+    expect(local.hooks.PreToolUse).toEqual([
+      { matcher: "Write|Edit", hooks: [own] }, { matcher: "Bash", hooks: [own] },
+    ]);
+    expect(local.enabledPlugins).toEqual({ "deeppairing@deeppairing": true });
+  });
+
+  it("retains every local gate and mixed sibling when the installed plugin is disabled", () => {
+    settings(project, "settings.local.json", {
+      enabledPlugins: { "deeppairing@deeppairing": false },
+      permissions: { allow: ["Read"] },
+      hooks: {
+        Stop: [{ matcher: "*", hooks: [
+          { type: "command", command: "node .deeppairing/hooks/stop.mjs" },
+          { type: "command", command: "node my-own/stop.mjs" },
+        ] }],
+        PreToolUse: [
+          { matcher: "Write|Edit", hooks: [
+            { type: "command", command: "node .deeppairing/hooks/preflight.mjs" },
+            { type: "command", command: "node ci/lint.mjs" },
+          ] },
+          { matcher: "Bash", hooks: [
+            { type: "command", command: 'sh "$CLAUDE_PROJECT_DIR/.deeppairing/hooks/stance-allow-ask.sh"' },
+            { type: "command", command: "echo user-bash-hook" },
+          ] },
+        ],
+        PostToolUse: [{ hooks: [{ type: "command", command: "node .deeppairing/hooks/checkpoint.mjs" }] }],
+      },
+    });
+    const before = snapshot(project);
+    const result = run(["--fix", "--yes"]);
+    expect(result.status).toBe(0);
+    expect(snapshot(project)).toEqual(before);
+    expect(result.text).toContain("Plugin activation is not verified");
+    expect(result.text).toContain("verify deepPairing is enabled for this project");
+    expect(result.text).toContain("SKIPPED Remove the project-local Stop hook");
+    expect(result.text).toContain("SKIPPED Remove the project-local PreToolUse rejection-gate hook");
+    expect(result.text).toContain("SKIPPED Remove the project-local Bash ask hook");
+    expect(result.text).not.toContain("Settings backup:");
+    expect(snapshot(home)).toEqual({});
+  });
+
   it("--fix --yes clears local dead locks but preserves global dead locks", () => {
     const identity = ownLockIdentity();
     expect(identity).toBeTruthy();
@@ -133,7 +215,7 @@ describe("marketplace doctor, without dist or npm dependencies", () => {
     expect(result.text).toContain(`deepPairing project: ${project} (cwd)`);
     expect(result.text).toContain("daemon.json is malformed");
     expect(result.text).toMatch(/System clock is steady|Your system clock/);
-    expect(result.text).toContain("provided by the plugin");
+    expect(result.text).toContain("activation not verified");
     expect(result.text).toMatch(/Philosophy ledger/);
     expect(result.text).toContain("GET http://localhost:");
     expect(snapshot(project)).toEqual(beforeProject);
@@ -190,9 +272,15 @@ describe("marketplace doctor, without dist or npm dependencies", () => {
     expect(fs.readFileSync(path.join(project, ".gitignore"), "utf8")).toContain(".deeppairing/");
     const local = JSON.parse(fs.readFileSync(path.join(project, ".claude", "settings.local.json"), "utf8"));
     expect(local.env).toEqual({ KEEP: "local" });
-    expect(local.hooks.Stop).toEqual([{ matcher: "*", timeout: 33, hooks: [ownStop] }]);
-    expect(local.hooks.PreToolUse).toEqual([{ matcher: "Write|Edit", hooks: [ownPreflight] }]);
+    expect(local.hooks.Stop).toEqual([{ matcher: "*", timeout: 33, hooks: [dpStop, ownStop] }]);
+    expect(local.hooks.PreToolUse).toEqual([{ matcher: "Write|Edit", hooks: [dpPreflight, ownPreflight] }]);
     expect(local.hooks.PostToolUse).toHaveLength(1);
+    const backups = fs.readdirSync(path.join(project, ".claude"))
+      .filter((name) => name.startsWith("settings.local.json.deeppairing-backup-"));
+    expect(backups).toHaveLength(1);
+    expect(fs.readFileSync(path.join(project, ".claude", backups[0]!)).toString("base64"))
+      .toBe(beforeProject[path.join(".claude", "settings.local.json")]);
+    expect(repaired.text).toContain(`Settings backup: ${path.join(project, ".claude", backups[0]!)}`);
     const checkpoint = path.join(project, ".deeppairing", "hooks", "checkpoint.mjs");
     expect(fs.existsSync(checkpoint)).toBe(true);
     const smoke = spawnSync(process.execPath, [checkpoint], {

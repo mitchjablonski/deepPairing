@@ -80,11 +80,26 @@ accepting repairs. The default run only reports; `--fix` proposes and prompts
 for repairs. In a noninteractive shell, `--fix` cancels without writing.
 
 `--fix --yes` accepts project-local repairs such as stale daemon metadata,
-gitignore, the checkpoint hook, redundant local plugin-hook rows and verified
-dead session locks. Shared/user hook cleanup, global lock removal and daemon termination require
-interactive confirmation and are skipped under `--yes`. Unrelated hooks are
-preserved. Clock checks only warn; doctor never changes host time or services,
-and never repairs the philosophy ledger automatically.
+gitignore, the checkpoint hook and verified dead session locks. Removing local
+Stop, PreToolUse or Bash ask hooks, shared/user hook cleanup, global lock removal
+and daemon termination require interactive confirmation and are skipped under
+`--yes`. An installed plugin can be disabled for a project: doctor cannot
+verify activation, so verify deepPairing is enabled in Claude Code before
+approving local hook removal. Otherwise removing those rows disables the gates.
+Unrelated hooks are preserved.
+
+Before a settings repair overwrites an existing file, doctor saves its exact
+original bytes beside it as `<file>.deeppairing-backup-<uuid>`, prints the backup
+path, and refuses the settings mutation if the backup cannot be saved. Backups
+do not replace earlier backups. On POSIX, backup mode is restricted to the
+source owner's read/write permissions; on Windows, backups inherit the
+containing directory's ACLs. Report-only, cancelled and unchanged settings
+runs create none. New settings files have no
+original to back up. This safeguard applies to both bundled and npm doctor
+settings repairs. Both doctors also inspect the philosophy ledger without
+writing a corrupt-file snapshot; other store readers retain snapshot behavior.
+Clock checks only warn; doctor never changes host time or services, and never
+repairs the philosophy ledger automatically.
 
 ## 2. Local plugin from a clone
 

@@ -17328,6 +17328,7 @@ exit 0
 
 // src/cli/setup-tasks.ts
 import fs10 from "node:fs";
+import { randomUUID } from "node:crypto";
 import os4 from "node:os";
 import path8 from "node:path";
 import { fileURLToPath as fileURLToPath3, pathToFileURL } from "node:url";
@@ -17337,6 +17338,35 @@ var STOP_HOOK_SCRIPT = '#!/usr/bin/env node\n// deepPairing Stop hook \u2014 ins
 var CHECKPOINT_HOOK_SCRIPT = '#!/usr/bin/env node\n// deepPairing checkpoint hook (V2) \u2014 installed by ensureCheckpointHook.\n// GENERATED \u2014 do not edit. Source: packages/mcp-server/src/cli/checkpoint-hook-entry.ts\n// Regenerate: pnpm --filter @deeppairing/mcp-server gen:hooks\n// src/hooks/checkpoint-hook.ts\nimport fs2 from "node:fs";\nimport path3 from "node:path";\nimport crypto2 from "node:crypto";\n\n// src/session-id.ts\nimport crypto from "node:crypto";\nimport path from "node:path";\nfunction deriveSessionId(projectRoot, claudeSessionIdRaw) {\n  const projectName = path.basename(projectRoot);\n  const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);\n  const projectHash = crypto.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);\n  const base = `session_${safeProjectName}_${projectHash}`;\n  const sanitized = (claudeSessionIdRaw ?? "").replace(/[^a-zA-Z0-9-]/g, "").slice(0, 64);\n  if (sanitized.length === 0) {\n    return { sessionId: base, mode: "fallback" };\n  }\n  return { sessionId: `${base}_${sanitized}`, mode: "split", claudeSessionId: sanitized };\n}\n\n// src/hooks/hook-state.ts\nimport fs from "node:fs";\nimport path2 from "node:path";\nvar FIRE_LOG_CAP = 50;\nvar LOCK_STALE_MS = 5e3;\nvar LOCK_SPIN_MS = 2;\nvar LOCK_MAX_WAIT_MS = 500;\nfunction errnoCode(err) {\n  if (typeof err === "object" && err !== null && "code" in err) {\n    const code = err.code;\n    if (typeof code === "string") return code;\n  }\n  return void 0;\n}\nfunction hookErrorMessage(err) {\n  if (typeof err === "object" && err !== null && "message" in err) {\n    const message = err.message;\n    if (typeof message === "string") return message;\n  }\n  return String(err);\n}\nfunction resolveHookProjectRoot(eventCwd) {\n  return process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || (typeof eventCwd === "string" && eventCwd ? eventCwd : "") || process.cwd();\n}\nfunction sleepSync(ms) {\n  try {\n    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);\n  } catch {\n  }\n}\nfunction acquireHookStateLock(statePath, _now = Date.now()) {\n  const lock = `${statePath}.lock`;\n  const deadline = process.hrtime.bigint() + BigInt(LOCK_MAX_WAIT_MS) * 1000000n;\n  let brokeStale = false;\n  for (; ; ) {\n    try {\n      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));\n      return lock;\n    } catch (error) {\n      if (errnoCode(error) !== "EEXIST") return null;\n      try {\n        if (!brokeStale && Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {\n          brokeStale = true;\n          fs.unlinkSync(lock);\n          continue;\n        }\n      } catch (staleErr) {\n        if (errnoCode(staleErr) !== "ENOENT") return null;\n      }\n      if (process.hrtime.bigint() >= deadline) return null;\n      sleepSync(LOCK_SPIN_MS);\n    }\n  }\n}\nfunction releaseHookStateLock(lock) {\n  if (!lock) return;\n  try {\n    fs.unlinkSync(lock);\n  } catch {\n  }\n}\nfunction readHookState(statePath) {\n  let raw;\n  try {\n    raw = fs.readFileSync(statePath, "utf-8");\n  } catch {\n    return { version: 1 };\n  }\n  try {\n    const parsed = JSON.parse(raw);\n    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;\n  } catch {\n  }\n  try {\n    const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");\n    fs.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);\n  } catch {\n  }\n  return { version: 1 };\n}\nfunction writeHookStateAtomic(statePath, state) {\n  const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 10)}`;\n  try {\n    fs.writeFileSync(tmp, JSON.stringify(state));\n    fs.renameSync(tmp, statePath);\n  } catch (err) {\n    try {\n      fs.unlinkSync(tmp);\n    } catch {\n    }\n    throw err;\n  }\n}\nfunction appendHookFire(statePath, fire, mutate) {\n  try {\n    fs.mkdirSync(path2.dirname(statePath), { recursive: true });\n    const lock = acquireHookStateLock(statePath);\n    try {\n      const state = readHookState(statePath);\n      state.version = 1;\n      const fires = Array.isArray(state.fires) ? state.fires : [];\n      fires.push(fire);\n      state.fires = fires.slice(-FIRE_LOG_CAP);\n      mutate?.(state);\n      writeHookStateAtomic(statePath, state);\n    } finally {\n      releaseHookStateLock(lock);\n    }\n  } catch {\n  }\n}\nfunction hookStatePath(projectRoot) {\n  return path2.join(projectRoot, ".deeppairing", "hooks-state.json");\n}\n\n// src/hooks/checkpoint-hook.ts\nvar HOOK_NAME = "checkpoint";\nvar EDIT_TOOLS = ["Write", "Edit", "MultiEdit"];\nvar RECEIPT_TTL_MS = 60 * 1e3;\nvar SKIP_BASENAMES = /* @__PURE__ */ new Set([\n  // Lockfiles only \u2014 manifest files (package.json, Cargo.toml, etc.) are\n  // policy and should still nag.\n  "package-lock.json",\n  "pnpm-lock.yaml",\n  "yarn.lock",\n  "bun.lockb",\n  "uv.lock",\n  "poetry.lock",\n  "Cargo.lock",\n  "Gemfile.lock",\n  "go.sum",\n  "composer.lock"\n]);\nvar SKIP_PATH_PREFIXES = [\n  // Generated / vendored output \u2014 not human-authored source.\n  "dist/",\n  "build/",\n  "node_modules/",\n  ".deeppairing/",\n  ".next/",\n  ".turbo/",\n  ".cache/",\n  "coverage/",\n  ".nyc_output/",\n  // IDE-local config \u2014 workspace settings, not project decisions.\n  ".vscode/",\n  ".idea/"\n];\nfunction isTrivialFile(filePath) {\n  if (!filePath || filePath === "(unknown)") return false;\n  const norm = filePath.replace(/\\\\/g, "/");\n  const base = norm.split("/").pop() || "";\n  if (SKIP_BASENAMES.has(base)) return true;\n  for (const prefix of SKIP_PATH_PREFIXES) {\n    if (norm.includes("/" + prefix) || norm.startsWith(prefix)) return true;\n  }\n  return false;\n}\nvar NAG = "deepPairing: {TOOL} on {FILE} with no present_code_change for it. Present EVERY code change BEFORE the Write/Edit \\u2014 including small follow-on edits, new files (tests, configs), and each file of a multi-file change, not just the \'main\' one. A write straight to disk never reaches the human\'s review surface; they can\'t see or comment on it. If you skipped this for prior edits this session, backfill them now with present_code_change. (Per-Edit Checkpoint rule. Lockfiles and generated paths are auto-skipped.)\\n";\nfunction claimReceipt(dpDir, sessionId, absolutePath, now) {\n  const key = crypto2.createHash("sha256").update(absolutePath).digest("hex");\n  const markerPath = path3.join(dpDir, "sessions", sessionId, "code-checkpoints", key + ".json");\n  const claimPath = markerPath + ".claim." + process.pid + "." + crypto2.randomBytes(8).toString("hex");\n  fs2.renameSync(markerPath, claimPath);\n  try {\n    const m = JSON.parse(fs2.readFileSync(claimPath, "utf8"));\n    if (!m || typeof m !== "object") return false;\n    const r = m;\n    const at = typeof r.at === "string" ? Date.parse(r.at) : NaN;\n    const expiresAt = r.expiresAt === void 0 ? at + RECEIPT_TTL_MS : typeof r.expiresAt === "string" ? Date.parse(r.expiresAt) : NaN;\n    return r.version === 1 && r.sessionId === sessionId && r.filePath === absolutePath && typeof r.artifactId === "string" && r.artifactId.length > 0 && Number.isFinite(at) && Number.isFinite(expiresAt) && expiresAt >= at && now >= at && // a future-dated receipt is a clock fault, not coverage\n    now <= expiresAt;\n  } finally {\n    try {\n      fs2.unlinkSync(claimPath);\n    } catch {\n    }\n  }\n}\nfunction runCheckpointHook(stdin2, now = Date.now()) {\n  let statePath = hookStatePath(resolveHookProjectRoot());\n  let resolvedCandidateIds = [];\n  function exit(code, reason) {\n    appendHookFire(statePath, { at: (/* @__PURE__ */ new Date()).toISOString(), hook: HOOK_NAME, exitCode: code, reason, resolvedCandidateIds });\n    process.exit(code);\n  }\n  try {\n    const ev = stdin2 ? JSON.parse(stdin2) : {};\n    const projectRoot = path3.resolve(resolveHookProjectRoot(ev.cwd));\n    statePath = hookStatePath(projectRoot);\n    const tool = typeof ev.tool_name === "string" && ev.tool_name || typeof ev.toolName === "string" && ev.toolName || "";\n    if (!EDIT_TOOLS.includes(tool)) exit(0, "skip: tool=" + (tool || "(unknown)"));\n    const rawFilePath = (ev.tool_input && (ev.tool_input.file_path ?? ev.tool_input.filePath)) ?? (ev.input && ev.input.file_path);\n    const filePath = typeof rawFilePath === "string" && rawFilePath ? rawFilePath : "(unknown)";\n    if (isTrivialFile(filePath)) exit(0, "skip: trivial file " + filePath);\n    const dpDir = path3.join(projectRoot, ".deeppairing");\n    if (!fs2.existsSync(path3.join(dpDir, "sessions"))) exit(0, "skip: no sessions dir");\n    const eventHasIdentity = Object.prototype.hasOwnProperty.call(ev, "session_id");\n    const malformedEventIdentity = eventHasIdentity && ev.session_id !== "" && typeof ev.session_id !== "string";\n    const rawCandidates = [ev.session_id, process.env.CLAUDE_CODE_SESSION_ID];\n    const anyNonemptyIdentity = rawCandidates.some((value) => typeof value === "string" && value.length > 0);\n    for (const raw of rawCandidates) {\n      if (typeof raw !== "string" || !raw) continue;\n      const derived = deriveSessionId(projectRoot, raw);\n      if (derived.mode !== "split") continue;\n      if (!resolvedCandidateIds.includes(derived.sessionId)) resolvedCandidateIds.push(derived.sessionId);\n    }\n    if (resolvedCandidateIds.length === 0 && !anyNonemptyIdentity && !malformedEventIdentity) {\n      resolvedCandidateIds = [deriveSessionId(projectRoot, "").sessionId];\n    }\n    let covered = false;\n    if (filePath !== "(unknown)" && filePath.trim()) {\n      for (const sessionId of resolvedCandidateIds) {\n        try {\n          covered = claimReceipt(dpDir, sessionId, path3.resolve(projectRoot, filePath), now);\n        } catch {\n        }\n        if (covered) break;\n      }\n    }\n    if (!covered) {\n      process.stderr.write(NAG.replace("{TOOL}", tool).replace("{FILE}", filePath));\n      exit(0, "nag: " + tool + " on " + filePath);\n    }\n    exit(0, "pass: fresh checkpoint covers " + filePath);\n  } catch (err) {\n    exit(0, "error: " + hookErrorMessage(err));\n  }\n}\n\n// src/cli/checkpoint-hook-entry.ts\nvar stdin = "";\nprocess.stdin.setEncoding("utf-8");\nprocess.stdin.on("data", (c) => {\n  stdin += c;\n});\nprocess.stdin.on("end", () => {\n  runCheckpointHook(stdin);\n});\n';
 
 // src/cli/setup-tasks.ts
+function writeHookSettings(settingsPath, settings, opts) {
+  const next = JSON.stringify(settings, null, 2);
+  if (opts.backup) {
+    try {
+      let original;
+      try {
+        original = fs10.readFileSync(settingsPath);
+      } catch (err) {
+        if (err.code !== "ENOENT") throw err;
+      }
+      if (original?.equals(Buffer.from(next))) return;
+      if (original) {
+        const backupPath = `${settingsPath}.deeppairing-backup-${randomUUID()}`;
+        const mode = fs10.statSync(settingsPath).mode & 384;
+        const fd = fs10.openSync(backupPath, "wx", mode);
+        try {
+          fs10.writeFileSync(fd, original);
+          fs10.fsyncSync(fd);
+        } finally {
+          fs10.closeSync(fd);
+        }
+        console.error(`[deepPairing] Settings backup: ${backupPath}`);
+      }
+    } catch (err) {
+      throw new Error(`Settings backup failed; original settings were not overwritten: ${errorMessage(err)}`);
+    }
+  }
+  fs10.writeFileSync(settingsPath, next);
+}
 function scopeFiles(projectRoot) {
   return [
     { scope: "user", path: path8.join(os4.homedir(), ".claude", "settings.json") },
@@ -17377,7 +17407,7 @@ function detectCrossScopeDpEntries(projectRoot, hookKey, marker) {
   }
   return out;
 }
-function cleanDpEntriesFromScope(scopePath, hookKey, marker) {
+function cleanDpEntriesFromScope(scopePath, hookKey, marker, opts = {}) {
   const settings = readJsonOrNull(scopePath);
   if (settings === null) return { ok: true, removed: 0, message: `Skipped ${scopePath} (missing or malformed)` };
   const entries = settings?.hooks?.[hookKey];
@@ -17399,7 +17429,7 @@ function cleanDpEntriesFromScope(scopePath, hookKey, marker) {
   if (removed === 0) return { ok: true, removed: 0, message: `No deepPairing ${hookKey} entries to remove in ${scopePath}` };
   try {
     settings.hooks[hookKey] = kept;
-    fs10.writeFileSync(scopePath, JSON.stringify(settings, null, 2));
+    writeHookSettings(scopePath, settings, opts);
     return { ok: true, removed, message: `Removed ${removed} deepPairing ${hookKey} entr${removed === 1 ? "y" : "ies"} from ${scopePath}` };
   } catch (err) {
     return { ok: false, removed: 0, message: `Could not write ${scopePath}: ${errorMessage(err)}` };
@@ -17455,7 +17485,7 @@ function ensureGitignoreEntry(projectRoot) {
 }
 var STOP_SCRIPT_REL_PATH = ".deeppairing/hooks/stop.mjs";
 var STOP_HOOK_COMMAND = `node "$CLAUDE_PROJECT_DIR/${STOP_SCRIPT_REL_PATH}"`;
-function ensureStopHook(projectRoot) {
+function ensureStopHook(projectRoot, opts = {}) {
   const claudeDir = path8.join(projectRoot, ".claude");
   const settingsPath = path8.join(claudeDir, "settings.local.json");
   const scriptPath = path8.join(projectRoot, STOP_SCRIPT_REL_PATH);
@@ -17494,7 +17524,7 @@ function ensureStopHook(projectRoot) {
       hooks: [{ type: "command", command: STOP_HOOK_COMMAND }]
     });
     fs10.mkdirSync(claudeDir, { recursive: true });
-    fs10.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    writeHookSettings(settingsPath, settings, opts);
     let msg = hadLegacy ? "Added Stop hook (replaced legacy flat-shape entry that triggered /doctor warnings)" : beforeDpCount > 1 ? `Added Stop hook (replaced ${beforeDpCount} stale deepPairing entries)` : beforeDpCount === 1 ? "Replaced stale Stop hook entry with the current canonical version" : "Added Stop hook to .claude/settings.local.json";
     const otherScopes = detectCrossScopeDpEntries(projectRoot, "Stop", HOOK_MARKERS.Stop).filter((s) => s.scope !== "project-local" && s.count > 0);
     const [firstScope] = otherScopes;
@@ -17508,7 +17538,7 @@ function ensureStopHook(projectRoot) {
   }
 }
 var CHECKPOINT_SCRIPT_REL_PATH = ".deeppairing/hooks/checkpoint.mjs";
-function ensureCheckpointHook(projectRoot) {
+function ensureCheckpointHook(projectRoot, opts = {}) {
   const claudeDir = path8.join(projectRoot, ".claude");
   const settingsPath = path8.join(claudeDir, "settings.local.json");
   const scriptPath = path8.join(projectRoot, CHECKPOINT_SCRIPT_REL_PATH);
@@ -17546,7 +17576,7 @@ function ensureCheckpointHook(projectRoot) {
       hooks: [{ type: "command", command: CANONICAL_CMD }]
     });
     fs10.mkdirSync(claudeDir, { recursive: true });
-    fs10.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    writeHookSettings(settingsPath, settings, opts);
     let msg = beforeDpCount > 1 ? `Added PostToolUse checkpoint hook (replaced ${beforeDpCount} stale entries)` : beforeDpCount === 1 ? "Replaced stale checkpoint hook entry with the current canonical version" : "Added PostToolUse checkpoint hook (.deeppairing/hooks/checkpoint.mjs)";
     const otherScopes = detectCrossScopeDpEntries(projectRoot, "PostToolUse", HOOK_MARKERS.PostToolUse).filter((s) => s.scope !== "project-local" && s.count > 0);
     const [firstScope] = otherScopes;
@@ -17719,7 +17749,7 @@ process.stdin.on("end", async () => {
 });
 `;
 }
-function ensurePreflightHook(projectRoot) {
+function ensurePreflightHook(projectRoot, opts = {}) {
   const claudeDir = path8.join(projectRoot, ".claude");
   const settingsPath = path8.join(claudeDir, "settings.local.json");
   const scriptPath = path8.join(projectRoot, PREFLIGHT_SCRIPT_REL_PATH);
@@ -17744,7 +17774,7 @@ function ensurePreflightHook(projectRoot) {
       { matcher: PREFLIGHT_MATCHER, hooks: [{ type: "command", command: PREFLIGHT_HOOK_COMMAND }] }
     ];
     fs10.mkdirSync(claudeDir, { recursive: true });
-    fs10.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    writeHookSettings(settingsPath, settings, opts);
     return { ok: true, changed: true, message: `Installed PreToolUse preflight hook${inactiveNote}` };
   } catch (err) {
     return { ok: false, message: `Failed to install preflight hook: ${err}` };
@@ -17787,7 +17817,7 @@ function withoutOwnedEntries(rows, owned) {
 function withoutAskEntries(rows) {
   return withoutOwnedEntries(rows, HOOK_MARKERS.StanceAllowAsk);
 }
-function ensureStanceAllowAskHook(projectRoot) {
+function ensureStanceAllowAskHook(projectRoot, opts = {}) {
   try {
     const claudeDir = path8.join(projectRoot, ".claude");
     const settingsPath = path8.join(claudeDir, "settings.local.json");
@@ -17808,13 +17838,13 @@ function ensureStanceAllowAskHook(projectRoot) {
     }
     hooks.PreToolUse = [...kept, { matcher: STANCE_ALLOW_ASK_MATCHER, hooks: [{ type: "command", command: STANCE_ALLOW_ASK_COMMAND }] }];
     fs10.mkdirSync(claudeDir, { recursive: true });
-    fs10.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    writeHookSettings(settingsPath, settings, opts);
     return { ok: true, changed: true, message: "Installed the Bash `stance allow` ask hook (.deeppairing/hooks/stance-allow-ask.sh)" };
   } catch (err) {
     return { ok: false, message: `Failed to install the stance-allow ask hook: ${errorMessage(err)}` };
   }
 }
-function removeStanceAllowAskHook(projectRoot) {
+function removeStanceAllowAskHook(projectRoot, opts = {}) {
   try {
     const settingsPath = path8.join(projectRoot, ".claude", "settings.local.json");
     const read = readAskSettings(settingsPath);
@@ -17824,7 +17854,7 @@ function removeStanceAllowAskHook(projectRoot) {
     const { rows: kept, removed } = withoutAskEntries(rows);
     if (removed === 0) return { ok: true, changed: false, message: "No project-local Bash ask hook to remove" };
     hooks.PreToolUse = kept;
-    fs10.writeFileSync(settingsPath, JSON.stringify(read.settings, null, 2));
+    writeHookSettings(settingsPath, read.settings, opts);
     return { ok: true, changed: true, message: "Removed the redundant project-local Bash ask hook (the plugin provides it)" };
   } catch (err) {
     return { ok: false, message: `Could not remove the Bash ask hook: ${errorMessage(err)}` };
@@ -18131,11 +18161,15 @@ async function doctor(cwd, opts = {}) {
   }
   const hookLocalPath = path9.join(cwd, ".claude", "settings.local.json");
   const pluginManaged = opts.pluginManaged ?? isPluginManaged();
+  const pluginHookSource = opts.protectSharedScopes ? "declared by the installed plugin (activation not verified)" : "provided by the plugin";
+  if (pluginManaged && opts.protectSharedScopes) {
+    console.log(`  ${yellow("!")} Plugin activation is not verified. Before approving local hook removal, verify deepPairing is enabled for this project in Claude Code; otherwise its review gates would be disabled.`);
+  }
   const hookState = {};
   for (const d of diagnoseLocalHooks(cwd, pluginManaged)) hookState[d.hook] = d.state;
   switch (hookState.Stop) {
     case "ok":
-      console.log(`  ${green("\u2713")} Claude Code Stop hook ${pluginManaged ? "provided by the plugin" : "configured"}`);
+      console.log(`  ${green("\u2713")} Claude Code Stop hook ${pluginManaged ? pluginHookSource : "configured"}`);
       break;
     case "legacy":
       console.log(`  ${yellow("!")} Claude Code Stop hook uses the legacy flat shape (Claude Code warns "Invalid settings / hooks: Expected array")`);
@@ -18143,17 +18177,18 @@ async function doctor(cwd, opts = {}) {
         label: "Replace legacy Stop-hook entry with the correct nested shape",
         // ensureStopHook heals legacy entries before re-installing.
         apply: () => {
-          const r = ensureStopHook(cwd);
+          const r = ensureStopHook(cwd, { backup: true });
           return { ok: r.ok, message: r.message };
         }
       });
       break;
     case "redundant":
-      console.log(`  ${yellow("!")} Stop hook is duplicated in settings.local.json \u2014 the plugin already provides it, so BOTH fire on every stop`);
+      console.log(`  ${yellow("!")} Local Stop hook overlaps the installed plugin declaration \u2014 redundant only if the plugin is enabled for this project`);
       fixes.push({
-        label: "Remove the redundant project-local Stop hook (the plugin provides it natively)",
+        label: "Remove the project-local Stop hook (verify the plugin is enabled before approving)",
+        requiresExplicitConfirmation: opts.protectSharedScopes,
         apply: () => {
-          const r = cleanDpEntriesFromScope(hookLocalPath, "Stop", HOOK_MARKERS.Stop);
+          const r = cleanDpEntriesFromScope(hookLocalPath, "Stop", HOOK_MARKERS.Stop, { backup: true });
           return { ok: r.ok, message: r.message };
         }
       });
@@ -18163,7 +18198,7 @@ async function doctor(cwd, opts = {}) {
       fixes.push({
         label: "Add Stop hook to .claude/settings.local.json",
         apply: () => {
-          const r = ensureStopHook(cwd);
+          const r = ensureStopHook(cwd, { backup: true });
           return { ok: r.ok, message: r.message };
         }
       });
@@ -18175,21 +18210,22 @@ async function doctor(cwd, opts = {}) {
     fixes.push({
       label: "Add PostToolUse checkpoint hook to .claude/settings.local.json",
       apply: () => {
-        const r = ensureCheckpointHook(cwd);
+        const r = ensureCheckpointHook(cwd, { backup: true });
         return { ok: r.ok, message: r.message };
       }
     });
   }
   switch (hookState.PreToolUse) {
     case "ok":
-      console.log(`  ${green("\u2713")} PreToolUse rejection-gate hook ${pluginManaged ? "provided by the plugin" : "configured"}`);
+      console.log(`  ${green("\u2713")} PreToolUse rejection-gate hook ${pluginManaged ? pluginHookSource : "configured"}`);
       break;
     case "redundant":
-      console.log(`  ${yellow("!")} PreToolUse rejection-gate hook is duplicated in settings.local.json \u2014 the plugin already provides it, so BOTH fire on every Write/Edit`);
+      console.log(`  ${yellow("!")} Local PreToolUse rejection-gate hook overlaps the installed plugin declaration \u2014 redundant only if the plugin is enabled for this project`);
       fixes.push({
-        label: "Remove the redundant project-local PreToolUse rejection-gate hook (the plugin provides it natively)",
+        label: "Remove the project-local PreToolUse rejection-gate hook (verify the plugin is enabled before approving)",
+        requiresExplicitConfirmation: opts.protectSharedScopes,
         apply: () => {
-          const r = cleanDpEntriesFromScope(hookLocalPath, "PreToolUse", HOOK_MARKERS.PreToolUse);
+          const r = cleanDpEntriesFromScope(hookLocalPath, "PreToolUse", HOOK_MARKERS.PreToolUse, { backup: true });
           return { ok: r.ok, message: r.message };
         }
       });
@@ -18199,7 +18235,7 @@ async function doctor(cwd, opts = {}) {
       fixes.push({
         label: "Update the PreToolUse rejection-gate hook in .claude/settings.local.json",
         apply: () => {
-          const r = ensurePreflightHook(cwd);
+          const r = ensurePreflightHook(cwd, { backup: true });
           return { ok: r.ok, message: r.message };
         }
       });
@@ -18209,7 +18245,7 @@ async function doctor(cwd, opts = {}) {
       fixes.push({
         label: "Add PreToolUse rejection-gate hook to .claude/settings.local.json",
         apply: () => {
-          const r = ensurePreflightHook(cwd);
+          const r = ensurePreflightHook(cwd, { backup: true });
           return { ok: r.ok, message: r.message };
         }
       });
@@ -18217,14 +18253,15 @@ async function doctor(cwd, opts = {}) {
   {
     switch (diagnoseStanceAllowAskHook(cwd, pluginManaged)) {
       case "ok":
-        console.log(`  ${green("\u2713")} Bash \`stance allow\` ask hook ${pluginManaged ? "provided by the plugin" : "configured"}`);
+        console.log(`  ${green("\u2713")} Bash \`stance allow\` ask hook ${pluginManaged ? pluginHookSource : "configured"}`);
         break;
       case "redundant":
-        console.log(`  ${yellow("!")} Bash \`stance allow\` ask hook is duplicated in settings.local.json \u2014 the plugin already provides it`);
+        console.log(`  ${yellow("!")} Local Bash \`stance allow\` ask hook overlaps the installed plugin declaration \u2014 redundant only if the plugin is enabled for this project`);
         fixes.push({
-          label: "Remove the redundant project-local Bash ask hook (the plugin provides it natively)",
+          label: "Remove the project-local Bash ask hook (verify the plugin is enabled before approving)",
+          requiresExplicitConfirmation: opts.protectSharedScopes,
           apply: () => {
-            const r = removeStanceAllowAskHook(cwd);
+            const r = removeStanceAllowAskHook(cwd, { backup: true });
             return { ok: r.ok, message: r.message };
           }
         });
@@ -18234,7 +18271,7 @@ async function doctor(cwd, opts = {}) {
         fixes.push({
           label: "Add the Bash `stance allow` ask hook to .claude/settings.local.json",
           apply: () => {
-            const r = ensureStanceAllowAskHook(cwd);
+            const r = ensureStanceAllowAskHook(cwd, { backup: true });
             return { ok: r.ok, message: r.message };
           }
         });
@@ -18254,7 +18291,7 @@ async function doctor(cwd, opts = {}) {
       apply: () => {
         let removed = 0;
         for (const s of crossScopeStop) {
-          const r = cleanDpEntriesFromScope(s.path, "Stop", HOOK_MARKERS.Stop);
+          const r = cleanDpEntriesFromScope(s.path, "Stop", HOOK_MARKERS.Stop, { backup: true });
           if (!r.ok) return { ok: false, message: r.message };
           removed += r.removed;
         }
@@ -18274,7 +18311,7 @@ async function doctor(cwd, opts = {}) {
       apply: () => {
         let removed = 0;
         for (const s of crossScopeCheckpoint) {
-          const r = cleanDpEntriesFromScope(s.path, "PostToolUse", HOOK_MARKERS.PostToolUse);
+          const r = cleanDpEntriesFromScope(s.path, "PostToolUse", HOOK_MARKERS.PostToolUse, { backup: true });
           if (!r.ok) return { ok: false, message: r.message };
           removed += r.removed;
         }
@@ -18426,8 +18463,11 @@ var help = `deepPairing doctor
 Usage: node "${entry}" [--fix] [--yes | -y]
 
 Reports without changing files by default. --fix proposes repairs; --yes accepts
-project-local repairs only. Shared/user hooks, global locks and daemon termination need
-interactive confirmation. Clock diagnostics never change host time or services.
+project-local repairs only. Local plugin-hook removal, shared/user hooks, global
+locks and daemon termination need interactive confirmation. Before removing local
+hooks, verify the plugin is enabled for this project; activation is not verified.
+Settings repairs back up original bytes beside the file before overwriting it.
+Clock diagnostics never change host time or services.
 Project: CLAUDE_PROJECT_DIR, else DEEPPAIRING_PROJECT_ROOT, else current directory.
 `;
 if (argv.length === 1 && ["--help", "-h", "help"].includes(argv[0] ?? "")) {
