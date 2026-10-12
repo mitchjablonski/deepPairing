@@ -384,14 +384,17 @@ from the **current** store: membership, exact versions, statuses and open
 Asks. If the clicked member is no longer the exact version the tab saw, the
 approve is **refused** with "this diff was revised, reload", and nothing is
 written. If revalidation passes, the member's status is written first. When
-that member is the **last unapproved member** of a formed packet, the same
-record also carries a `packetCompletionIntent` that names the **exact packet
+that member is the **last unapproved member** of a formed packet **and no Ask
+on the target debrief is open at that moment**, the same record also carries
+a `packetCompletionIntent` that names the **exact packet
 the human's approval was computed against**: `{ debriefId, debriefVersion,
 brief: BriefRef, members: Array<{ artifactId, version }>, at, state:
 "pending" }`. The intent is scoped to that debrief id and version. It is
 **never transferred** to a successor or replacement debrief, or to any packet
-whose brief or member set differs. A non-last member approval writes no
-intent. `derivePackets` stays pure and never reads intents.
+whose brief or member set differs. A non-last member approval, or a last one
+made while an Ask is open, writes **no intent at all**, so there is nothing
+for a later recovery to complete once that Ask is answered. `derivePackets`
+stays pure and never reads intents.
 
 **An intent is consumed exactly once.** Immediately after the member write
 the daemon evaluates the predicate below. Whatever the outcome, the intent is
@@ -486,15 +489,17 @@ before anyone is moved onto them. At S6:
 
 **The countdown, and eligibility from creation.** `ArtifactStatusActions.tsx:283-290`
 arms auto-approve for a `draft` with `confidence: "high"` when the level is
-not `supervised`, and cancels only on particular transitions (typing, Escape,
-replay). Changing the arm predicate alone is not enough, because the changeset
+not `supervised`. Since #522 it cancels an auto-armed countdown when
+`shouldAutoApprove` turns false and re-checks `autoEligibleNow` at tick zero.
+Adding packet intent to those predicates is still not enough on its own,
+because the changeset
 arrives **before** the debrief, so at the moment it is drafted no packet has
 formed, and a rejected debrief or a stale ref can dissolve a packet later and
 hand the member back to the ordinary path. So eligibility is **persistent and
 independent of formation**: `isPacketIntended(artifact)` is true for any
 changeset carrying `brief` and any debrief carrying `packet`, from creation
 and for life, since content is immutable and membership history is retained
-by the refs themselves. S1 then makes three changes:
+by the refs themselves. S1 then does the following:
 
 - the arm predicate becomes an allowlist of `balanced` and `autonomous`
   **and** `!isPacketIntended(artifact)`, so `delegate` never arms and a
@@ -512,9 +517,11 @@ by the refs themselves. S1 then makes three changes:
   `auto_approve_not_permitted`**, no state change, and the tab shows the
   "Auto-approve was cancelled" toast. A human click is never refused on
   these grounds;
-- **the S1 delta is two predicates, nothing more.** On the web,
-  `shouldAutoApprove` gains the allowlist `balanced` or `autonomous` and
-  `!isPacketIntended(artifact)`. Because #522's cancel effect keys on
+- **the S1 delta is three predicates, nothing more.** On the web, both
+  `shouldAutoApprove` and #522's tick-time `autoEligibleNow` gain the
+  allowlist `balanced` or `autonomous` and `!isPacketIntended(artifact)`, so
+  a countdown that reaches zero is re-checked against the same two conditions
+  and cancels instead of committing. Because #522's cancel effect keys on
   `shouldAutoApprove`, a countdown already armed on an artifact that becomes
   packet-intended, or on any artifact when the dial moves to Delegate or
   Supervised, cancels with no new effect. On the daemon, the
@@ -700,7 +707,7 @@ guidance or the shape, not in UI.
 | Slice | Contents | Depends on | Visible |
 |---|---|---|---|
 | **S0** | This document. `delegate.md` preset. SKILL "Delegated work" paragraph. | — | Guidance only. Runs §7. |
-| **S1** | §3 fields and `BriefRef`/`packet`/`scopeFlags`. `delegate` enum, policy line, enum guard and slider entry as **explicit opt-in only**: absent preferences still read `supervised`, no migration marker, no announcement (§3b). Countdown allowlist plus `isPacketIntended`, the cancel effect and the commit recheck. `derivePackets` and `isPacketIntended` in shared with the §11 cases. Commit-time revalidation and `packet_complete` recovery. `update_plan_progress` on specs. Server nudges, scope check and the `brief_ref_stale` / `brief_head_ambiguous` warns. Validators, fixtures, goldens. | S0 gate | Agent-facing. The slider shows a fourth choice. Content renders as today where no renderer exists. |
+| **S1** | §3 fields and `BriefRef`/`packet`/`scopeFlags`. `delegate` enum, policy line, enum guard and slider entry as **explicit opt-in only**: absent preferences still read `supervised`, no migration marker, no announcement (§3b). Countdown allowlist plus `isPacketIntended` on `shouldAutoApprove`, on #522's tick-time `autoEligibleNow`, and on the daemon's `auto_confidence` check. `derivePackets` and `isPacketIntended` in shared with the §11 cases. Commit-time revalidation and `packet_complete` recovery. `update_plan_progress` on specs. Server nudges, scope check and the `brief_ref_stale` / `brief_head_ambiguous` warns. Validators, fixtures, goldens. | S0 gate | Agent-facing. The slider shows a fourth choice. Content renders as today where no renderer exists. |
 | **S2** | Debrief renders the §2c packet layout: scope strip, header row with done-when, proof, "Diffs landed x of N" and the inline not-met expansion, hotspots, "None stated" unknowns, collapsed sections. Completion: the debrief's bar hides while any member is draft, the last member approve completes unless an Ask is open, **Close the packet** otherwise. Text status labels. | S1 | Only when `packet` is present. |
 | **S2a** | Brief renderer: risk chip, will-ask and decide-alone lists with Strike and Undo, keyboard listbox, strikes as annotations delivered via `check_feedback`, file map and tasks collapsed. | S1 | Only when `delegation` is present. |
 | **S3** | WHERE map: breadcrumb, `file_map` with `edges` as a graph, changed-node styling, click-to-file, dashed "(unverified)" paths, the list alternative, expanded by default only across top-level directories. | S1 | Only when edges are present. |
@@ -813,7 +820,11 @@ spent the intent: recovery does nothing and **Close the packet** shows. A
 non-last member's approval writes no intent. A rejected member dissolves the
 packet and the debrief stays pending alone.
 
-**Intent is scoped to the exact target.** C approved completes D1. The agent
+**Intent is scoped to the exact target.** An Ask is open on D1 when C, the
+last member, is approved: C lands, **no intent is written**, D1 shows "1
+question open". The daemon then crashes before any evaluation and the Ask is
+answered before the restart: recovery finds no intent, D1 stays `draft`, and
+**Close the packet** is shown. C approved with no Ask open completes D1. The agent
 supersedes D1 into draft D2 listing the same approved C: D2 stays `draft`,
 recovery does nothing, and D2 shows **Close the packet**. A persisted intent
 whose target debrief has since been superseded, or whose recorded `brief` or
@@ -858,7 +869,10 @@ undeclared path under a different top-level directory yields
 none, matching `GUARDRAIL_EXCLUDED_SEGMENTS`.
 
 **Countdown and eligibility.** With level `delegate`, no artifact arms the
-countdown. With level `autonomous` or `balanced`: a changeset carrying
+countdown. A countdown already at zero when the record it was armed on is
+replaced by a packet-intended one, or when the dial has just moved to
+`delegate`: `autoEligibleNow` fails and the tick cancels instead of
+committing. With level `autonomous` or `balanced`: a changeset carrying
 `brief` and `confidence: "high"` that arrives **before** any debrief exists
 never arms. The same changeset after its packet dissolves (debrief rejected,
 or a stale ref) still never arms. A countdown armed on an ordinary artifact is
