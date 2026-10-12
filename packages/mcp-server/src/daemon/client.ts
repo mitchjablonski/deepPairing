@@ -49,7 +49,16 @@ export class DaemonClient implements IStore {
     title?: string;
     project?: string;
     expectedProjectRoot?: string;
+    /** #470 (§5) — split-mode sessions evict an older registration. */
+    splitMode?: boolean;
   };
+  /**
+   * #470 (§5) — the per-registration secret the daemon ISSUED on /register.
+   * Sent on every later request as X-DeepPairing-Registration so the daemon
+   * binds blocks and claims to the registration that actually made the call.
+   * Only this wrapper's process holds it; a fresh register replaces it.
+   */
+  private registrationToken: string | undefined;
 
   // CC6 — when constructed with the wrapper's projectRoot we can stamp
   // every outbound request with X-Project-Hash. Today this is belt-and-
@@ -210,6 +219,7 @@ export class DaemonClient implements IStore {
     const extraHeaders: Record<string, string> = {};
     if (this.projectHash) extraHeaders["X-Project-Hash"] = this.projectHash;
     if (this.authToken) extraHeaders["Authorization"] = `Bearer ${this.authToken}`;
+    if (this.registrationToken) extraHeaders["X-DeepPairing-Registration"] = this.registrationToken;
     const initWithHash = {
       ...init,
       headers: { ...(init.headers ?? {}), ...extraHeaders },
@@ -349,6 +359,7 @@ export class DaemonClient implements IStore {
     title?: string;
     project?: string;
     expectedProjectRoot?: string;
+    splitMode?: boolean;
   }): Promise<void> {
     // CC6 — register() bypasses request() (it has its own 403 handling)
     // so add the X-Project-Hash header here too. Without this, the very
@@ -413,6 +424,9 @@ export class DaemonClient implements IStore {
     if (!res.ok) {
       throw new Error(`[deepPairing] register failed (${res.status})`);
     }
+    // #470 — adopt the issued registration (an older daemon issues none).
+    const registered = await res.json().catch(() => ({})) as { registrationToken?: unknown };
+    this.registrationToken = typeof registered.registrationToken === "string" ? registered.registrationToken : undefined;
     // AA2 — cache meta ONLY after a successful register. The recover path
     // in request() replays this on 404 session_not_registered.
     this.lastRegisterMeta = meta;
@@ -559,6 +573,24 @@ export class DaemonClient implements IStore {
    */
   async recordPreflightBlock(event: unknown): Promise<void> {
     try { await this.post(`/preflight-block`, event); } catch { /* surfacing — never break a tool call */ }
+  }
+
+  /**
+   * #470 — the daemon's one authoritative operation route (§7): a probe (no
+   * admission) replays or completes a committed operation; with an admission
+   * it claims the named allowances and creates the allowed snapshot. NOT a
+   * grant: nothing reachable from this client can create an allowance (A1).
+   * Transport errors propagate; the transparent retry re-sends the same
+   * operationId, which the daemon replays.
+   */
+  async runStanceOperation(operationId: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.post(`/operations/${encodeURIComponent(operationId)}`, body);
+  }
+
+  /** #470 — read-only (§6 step 2): this registration's active allowances for
+   *  a call fingerprint. Never consumes anything. */
+  async inspectStanceExceptions(callFingerprint: string): Promise<{ candidates: Array<Record<string, unknown>>; inactive: Array<Record<string, unknown>> }> {
+    return this.get(`/stance-exceptions?fingerprint=${encodeURIComponent(callFingerprint)}`);
   }
 
   async markCommentHumanResolved(commentId: string, resolvedAt?: string): Promise<void> {

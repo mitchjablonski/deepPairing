@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PreflightTraceExceptionSchema } from "./stance-exception.js";
 
 /**
  * Y1' — preflight trace.
@@ -81,6 +82,8 @@ export const PreflightTraceSchema = z.object({
   nearMisses: z.array(PreflightNearMissSchema),
   /** Set only when decision === "blocked". */
   block: PreflightBlockSummarySchema.optional(),
+  /** #470 — set when this artifact was admitted under a stance allowance. */
+  exception: PreflightTraceExceptionSchema.optional(),
 });
 
 export type PreflightTrace = z.infer<typeof PreflightTraceSchema>;

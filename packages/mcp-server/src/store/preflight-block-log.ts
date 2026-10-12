@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { writeJsonAtomic } from "./atomic-write.js";
+import type { ProposalPrecondition, ProposalSnapshot, StanceAllowanceReceipt, StanceRef } from "@deeppairing/shared";
 
 /**
  * Q2 — DURABLE PREFLIGHT BLOCKS.
@@ -53,6 +54,31 @@ export interface PreflightBlockEntry {
   /** How the match was made. */
   via: "surface" | "concept" | "avoid" | "require";
   addedBy?: string;
+  // #470 — stance exceptions. All optional, all written by the daemon only.
+  // None of this is authority: the daemon grants from its IN-MEMORY copy of the
+  // block, never from this file (editing it can't arm an allowance).
+  /** The artifact type the refused call would have created. */
+  artifactType?: string;
+  /** Locates a retry of the refused call (raw args, minus transport _meta). */
+  callFingerprint?: string;
+  /** Daemon-computed sha256 over snapshot + preconditions. */
+  effectiveDigest?: string;
+  /** What would be created — the preview's source. Omitted when not eligible. */
+  snapshot?: ProposalSnapshot;
+  preconditions?: ProposalPrecondition[];
+  /** The exact stance row that matched. */
+  stance?: StanceRef;
+  /** The daemon-issued registration that made the refused call. */
+  registrationId?: string;
+  /** Whether "Allow this proposal once" can be offered for this block. */
+  eligible?: boolean;
+  ineligibleReason?: string;
+  /** The receipt of the allowance granted on this block, if any. */
+  allowance?: StanceAllowanceReceipt;
+  /** Set when this block replaced an allowance whose dependency moved. */
+  supersedesAllowanceId?: string;
+  /** Set when the human acted on this block (a grant), so Held drops it. */
+  seenAt?: string;
 }
 
 export interface PreflightBlockLogFile {
@@ -136,7 +162,26 @@ export interface PreflightBlockedEventLike {
     via?: string;
     addedBy?: string;
   };
+  // #470 — set only by the daemon's internal preflight-block route, which
+  // strips any caller-supplied copies and recomputes them.
+  artifactType?: string;
+  callFingerprint?: string;
+  effectiveDigest?: string;
+  snapshot?: ProposalSnapshot;
+  preconditions?: ProposalPrecondition[];
+  stance?: StanceRef;
+  registrationId?: string;
+  eligible?: boolean;
+  ineligibleReason?: string;
+  supersedesAllowanceId?: string;
 }
+
+/** #470 — the stance-exception fields a daemon-prepared event carries onto its
+ *  log entry, omitted when absent so a plain block's entry is unchanged. */
+const EXCEPTION_FIELDS = [
+  "artifactType", "callFingerprint", "effectiveDigest", "snapshot", "preconditions",
+  "stance", "registrationId", "eligible", "ineligibleReason", "supersedesAllowanceId",
+] as const;
 
 const VALID_VIA = new Set(["surface", "concept", "avoid", "require"]);
 
@@ -169,6 +214,7 @@ export function blockEntryFromEvent(
     reason: match.reason,
     via: via as PreflightBlockEntry["via"],
     addedBy: match.addedBy,
+    ...Object.fromEntries(EXCEPTION_FIELDS.filter((k) => event[k] !== undefined).map((k) => [k, event[k]])),
   };
 }
 
@@ -198,6 +244,36 @@ export function recordPreflightBlock(
   } catch {
     // Non-fatal — losing the record is strictly better than breaking the block.
     return null;
+  }
+}
+
+/**
+ * #470 — rewrite entries in place (receipts, seenAt, the changed linkage). The
+ * daemon is the only writer and this read-modify-write is synchronous, so it
+ * can't interleave with another daemon-side write. Fail-soft like the append:
+ * returns false when nothing was written. A receipt is a record, not
+ * authority, so losing one never changes what an allowance admits.
+ */
+export function updatePreflightBlocks(
+  projectRoot: string,
+  mutate: (entry: PreflightBlockEntry) => PreflightBlockEntry | null,
+): boolean {
+  if (!projectRoot) return false;
+  try {
+    let changed = false;
+    const blocks = readPreflightBlocks(projectRoot).map((entry) => {
+      const next = mutate(entry);
+      if (!next) return entry;
+      changed = true;
+      return next;
+    });
+    if (!changed) return false;
+    const file = logPath(projectRoot);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    writeJsonAtomic(file, { version: VERSION, blocks } satisfies PreflightBlockLogFile);
+    return true;
+  } catch {
+    return false;
   }
 }
 

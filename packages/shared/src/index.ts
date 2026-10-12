@@ -195,6 +195,26 @@ export {
 } from "./schemas/team-preferences.js";
 
 export {
+  StanceRefSchema,
+  ProposalSnapshotSchema,
+  ProposalPreconditionSchema,
+  StanceGrantOriginSchema,
+  StanceAllowanceReceiptStateSchema,
+  StanceAllowanceReceiptSchema,
+  AdmissionFollowUpsSchema,
+  ArtifactAdmissionSchema,
+  PreflightTraceExceptionSchema,
+  type StanceRef,
+  type ProposalSnapshot,
+  type ProposalPrecondition,
+  type StanceGrantOrigin,
+  type StanceAllowanceReceiptState,
+  type StanceAllowanceReceipt,
+  type AdmissionFollowUps,
+  type ArtifactAdmission,
+} from "./schemas/stance-exception.js";
+
+export {
   PreflightConsideredConceptSchema,
   PreflightNearMissSchema,
   PreflightBlockSummarySchema,

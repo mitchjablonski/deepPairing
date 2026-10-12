@@ -757,6 +757,9 @@ export function runPreflight(input: PreflightInput): PreflightResult {
               reason: match.rejected.reason,
               concept: match.rejected.concept,
               via: match.via,
+              // #470 — with description + concept, the exact stance row an
+              // allowance binds to.
+              rejectedAt: match.rejected.rejectedAt,
             },
           },
         },

@@ -5,43 +5,57 @@ import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
 import { sessionOwesDebrief } from "../../debrief-gate.js";
 import type { ToolContext, ToolResult } from "./types.js";
+import type { Artifact, ProposalSnapshot } from "@deeppairing/shared";
+import { resolveCodeChange, wireForm } from "../proposal-resolution.js";
+import { admitBlockedProposal, admittedResult, beginStanceOperation } from "../stance-admission.js";
 
 export async function handlePresentCodeChange(ctx: ToolContext, args: any): Promise<ToolResult> {
   const validated = validatePresentCodeChangeInput(args);
   if (!validated.ok) return validated.error;
   const { filePath, changeType, before, after, reasoning, confidence, concept } = validated.data;
+  // #470 (§6 step 0) — replay a committed admitted operation before any
+  // tool-level early return (N2's dedup included).
+  const op = await beginStanceOperation(ctx, "present_code_change", args);
+  if (op.refusal) return op.refusal;
+  if (op.replay) return admittedResult(op.replay);
 
   // #3 — when `before` is omitted, reconstruct it from the most recent prior
   // code_change for the same file so the UI renders a focused diff instead of
   // the whole file. Do this REGARDLESS of the agent's changeType: agents
   // routinely mislabel a real modification as "create", which (empty before)
   // suppresses the diff and shows the file under a "create" banner. History is
-  // the source of truth, not the label.
-  let effectiveBefore = before;
-  let effectiveChangeType = changeType;
-  if (!effectiveBefore) {
-    try {
-      const prior = (await ctx.store.getArtifacts())
-        .filter((a) =>
-          a.type === "code_change" &&
-          (a.content as any)?.filePath === filePath &&
-          typeof (a.content as any)?.after === "string" &&
-          (a.content as any).after.length > 0,
-        )
-        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
-      if (prior) effectiveBefore = (prior.content as any).after as string;
-    } catch {
-      // best-effort; fall back to the empty before (full-file view)
-    }
-  }
-  // A change with real prior content is a modification, not a creation —
-  // correct the label so the diff renders and the banner is accurate.
-  if (effectiveBefore && effectiveChangeType === "create") {
-    effectiveChangeType = "modify";
-  }
+  // the source of truth, not the label. A change with real prior content is a
+  // modification, not a creation — the label is corrected. #470 — the shared
+  // resolver also records which prior supplied `before` (a precondition).
+  const resolution = await resolveCodeChange(ctx.store, { filePath, before, changeType });
+  const effectiveBefore = resolution.before;
+  const effectiveChangeType = resolution.changeType as typeof changeType;
 
-  const pre = (await preflightArtifact(ctx, "present_code_change", "code_change", "", validated.data))!;
-  if (!pre.ok) return pre.response;
+  const pre = (await preflightArtifact(ctx, "present_code_change", "code_change", "", validated.data, { deferRecord: true }))!;
+  if (!pre.ok) {
+    // #470 — the effective proposal exactly as it would be persisted.
+    const snapshot = wireForm({
+      kind: "create", type: "code_change", title: `${effectiveChangeType} ${filePath}`,
+      content: { filePath, changeType: effectiveChangeType, before: effectiveBefore, after, reasoning, confidence, concept },
+      agentReasoning: reasoning, relatedArtifactIds: args?.relatedFindings, feature: args?.feature,
+    }) as ProposalSnapshot;
+    const outcome = await admitBlockedProposal(ctx, {
+      toolName: "present_code_change",
+      handle: op.handle,
+      pre,
+      resolved: resolution.resolvable ? { snapshot, preconditions: resolution.precondition ? [resolution.precondition] : [] } : null,
+      regate: (exclude) => preflightArtifact(ctx, "present_code_change", "code_change", "", validated.data, { deferRecord: true, excludeStances: exclude }),
+    });
+    if ("response" in outcome) return outcome.response;
+    // #499 review — the admitted path says what the normal path says.
+    const admittedId = String(outcome.admitted.artifactId);
+    const all = await ctx.store.getArtifacts();
+    const admittedArtifact = all.find((a) => a.id === admittedId);
+    notifyResourcesListChanged(ctx.server);
+    if (admittedArtifact) await maybeEmitTaskHandle(ctx.server, admittedArtifact, ctx.store);
+    const notes = codeChangeNotes(all, admittedId, filePath);
+    return admittedResult(outcome.admitted, ` Human can review at localhost:${ctx.store.getLivePort?.() ?? ctx.port}.${notes.closeNote}${notes.changesetNudge}`);
+  }
 
   // N2 (#226) — short-window de-dup: an identical present_code_change still in
   // draft returns the existing artifact rather than minting a twin card. Hashes
@@ -110,34 +124,7 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   // quick-approve and review return paths carry the same close-note (#215 K1).
   const allArtifacts = await ctx.store.getArtifacts();
 
-  // #215 K1 — the changeset nudge. When the session ALREADY carries a LIVE
-  // code_change for a DIFFERENT filePath this run, the default fix (another
-  // per-file card) is the wrong shape: multi-file work belongs in ONE
-  // present_changeset. Live = not superseded/retracted/obsolete; a re-present of
-  // the SAME file (or a superseded prior of it) is not a distinct file, so it
-  // doesn't trip the nudge. Reuses the getArtifacts() read above.
-  const CODE_CLOSED = ["superseded", "retracted", "obsolete"];
-  const hasOtherLiveFile = allArtifacts.some(
-    (a) =>
-      a.type === "code_change" &&
-      a.id !== id &&
-      !CODE_CLOSED.includes(a.status ?? "") &&
-      (a.content as any)?.filePath !== filePath,
-  );
-  const changesetNudge = hasOtherLiveFile
-    ? " 2nd file touched this run — the default for multi-file work is present_changeset; batch the remaining files into one and close with a present_debrief."
-    : "";
-
-  // AR-fix (#252 review) — closeNote and changesetNudge must never CO-FIRE. In
-  // the post-debrief follow-up lane a LIVE debrief short-circuits
-  // sessionOwesDebrief to false (closesTask=true), so a 2nd-file code_change
-  // presented AFTER a debrief would otherwise emit BOTH "no separate
-  // present_debrief owed" AND "close with a present_debrief". A distinct live
-  // file always means multi-file work → the nudge wins, closeNote is silent.
-  const closesTask = !sessionOwesDebrief(allArtifacts);
-  const closeNote = closesTask && !hasOtherLiveFile
-    ? " If this single-file change is the whole task, it closes it — fold the what-changed-and-why into `reasoning`, no separate present_debrief owed. If more changes follow, batch them into a present_changeset and close with a present_debrief."
-    : "";
+  const { closeNote, changesetNudge } = codeChangeNotes(allArtifacts, id, filePath);
 
   // S7 — quick-approve via elicitation for small, confident edits.
   // Threshold: ≤ 20 changed lines AND no low-confidence flag. Bigger or
@@ -166,4 +153,38 @@ export async function handlePresentCodeChange(ctx: ToolContext, args: any): Prom
   return {
     content: [{ type: "text", text: `Code change presented for review (${id}): ${effectiveChangeType} ${filePath}. Human can review at localhost:${reviewPort}.${closeNote}${changesetNudge}${formatPreflightTraceSummary(pre.trace)}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }],
   };
+}
+
+/** #215 K1 / #252 — the changeset nudge and the trivial-fix close-note, shared
+ *  by the normal and the admitted (#470) paths. */
+function codeChangeNotes(allArtifacts: Artifact[], id: string, filePath: string): { closeNote: string; changesetNudge: string } {
+  // #215 K1 — the changeset nudge. When the session ALREADY carries a LIVE
+  // code_change for a DIFFERENT filePath this run, the default fix (another
+  // per-file card) is the wrong shape: multi-file work belongs in ONE
+  // present_changeset. Live = not superseded/retracted/obsolete; a re-present of
+  // the SAME file (or a superseded prior of it) is not a distinct file, so it
+  // doesn't trip the nudge. Reuses the getArtifacts() read above.
+  const CODE_CLOSED = ["superseded", "retracted", "obsolete"];
+  const hasOtherLiveFile = allArtifacts.some(
+    (a) =>
+      a.type === "code_change" &&
+      a.id !== id &&
+      !CODE_CLOSED.includes(a.status ?? "") &&
+      (a.content as any)?.filePath !== filePath,
+  );
+  const changesetNudge = hasOtherLiveFile
+    ? " 2nd file touched this run — the default for multi-file work is present_changeset; batch the remaining files into one and close with a present_debrief."
+    : "";
+
+  // AR-fix (#252 review) — closeNote and changesetNudge must never CO-FIRE. In
+  // the post-debrief follow-up lane a LIVE debrief short-circuits
+  // sessionOwesDebrief to false (closesTask=true), so a 2nd-file code_change
+  // presented AFTER a debrief would otherwise emit BOTH "no separate
+  // present_debrief owed" AND "close with a present_debrief". A distinct live
+  // file always means multi-file work → the nudge wins, closeNote is silent.
+  const closesTask = !sessionOwesDebrief(allArtifacts);
+  const closeNote = closesTask && !hasOtherLiveFile
+    ? " If this single-file change is the whole task, it closes it — fold the what-changed-and-why into `reasoning`, no separate present_debrief owed. If more changes follow, batch them into a present_changeset and close with a present_debrief."
+    : "";
+  return { closeNote, changesetNudge };
 }
