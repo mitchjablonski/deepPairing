@@ -57,13 +57,13 @@ describe("Z5b / AA3 — doctor handles Y3' project_mismatch", () => {
   // SIGTERM as fallback, --yes mode skips it. These pins defend the
   // surface against a future cleanup.
   it("doctor surfaces a fix when the daemon on the candidate port serves a different projectRoot", () => {
-    const init = read("cli/init.ts");
+    const init = read("cli/doctor.ts");
     expect(init).toMatch(/Daemon on :\$\{port\} serves a different project/);
     expect(init).toMatch(/project_mismatch/);
   });
 
   it("AA3: fix label mentions cooperative evict (not SIGTERM as the headline action)", () => {
-    const init = read("cli/init.ts");
+    const init = read("cli/doctor.ts");
     // The Z5b "Stop the squatting daemon" copy was misleading because
     // it implied SIGTERM was the primary path. AA3 reframes around
     // "ask daemon to release port" so the user knows it's cooperative.
@@ -72,7 +72,7 @@ describe("Z5b / AA3 — doctor handles Y3' project_mismatch", () => {
   });
 
   it("AA3: project-mismatch fix carries requiresExplicitConfirmation flag", () => {
-    const init = read("cli/init.ts");
+    const init = read("cli/doctor.ts");
     // --yes mode must skip cross-project actions. Pin both the flag on
     // the descriptor AND the loop's skip handling.
     expect(init).toMatch(/requiresExplicitConfirmation: true/);
@@ -80,13 +80,13 @@ describe("Z5b / AA3 — doctor handles Y3' project_mismatch", () => {
   });
 
   it("AA3: SIGTERM fallback branches on Windows (Node has no real SIGTERM)", () => {
-    const init = read("cli/init.ts");
+    const init = read("cli/doctor.ts");
     expect(init).toMatch(/process\.platform === "win32"/);
     expect(init).toMatch(/no SIGTERM equivalent/);
   });
 
   it("AA3: re-probes the daemon before acting (defends against PID reuse)", () => {
-    const init = read("cli/init.ts");
+    const init = read("cli/doctor.ts");
     expect(init).toMatch(/re-probe to confirm nothing drifted/i);
   });
 });
@@ -122,7 +122,7 @@ describe("doctor port sweep wraps like the daemon binds (review catch)", () => {
     // Source-shape pin (matches this suite's style): the candidate must use
     // the daemon's modulo wrap, not a linear preferred+attempt walk that
     // exits the reserved range for projects hashing into the last slots.
-    const src = read("cli/init.ts");
+    const src = read("cli/doctor.ts");
     expect(src).toMatch(/BASE_PORT \+ \(\(preferred - BASE_PORT \+ attempt\) % PORT_SPAN\)/);
     expect(src).not.toMatch(/const candidate = preferred \+ attempt/);
   });

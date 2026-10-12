@@ -29,6 +29,20 @@ afterEach(() => {
 });
 
 describe("buildLedgerHealthReport", () => {
+  it.each(["{broken", "null", "[]", '{"version":99,"concepts":{}}'])(
+    "read-only diagnostics preserve corrupt bytes and create no snapshot: %s",
+    (raw) => {
+      fs.writeFileSync(ledgerPath, raw);
+      const report = buildLedgerHealthReport(store, { readOnly: true });
+      expect(report.state).toBe("frozen");
+      expect(report.reason).toBeTruthy();
+      expect(report.backupPath).toBeUndefined();
+      expect(report.corruptSnapshots).toEqual([]);
+      expect(fs.readFileSync(ledgerPath, "utf8")).toBe(raw);
+      expect(fs.readdirSync(tmpDir)).toEqual(["philosophy.json"]);
+    },
+  );
+
   it("reports parses:true / state ok on a healthy ledger", () => {
     store.recordInstance("argon2id", { project: "p", sessionId: "s", verdict: "approved" });
     const report = buildLedgerHealthReport(store);

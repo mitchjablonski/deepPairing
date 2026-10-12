@@ -4435,6 +4435,7 @@ exit 0
 
 // src/cli/setup-tasks.ts
 import fs2 from "node:fs";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path2 from "node:path";
 import { fileURLToPath as fileURLToPath2, pathToFileURL } from "node:url";
@@ -4458,6 +4459,12 @@ function resolveCompiledCliPath() {
   return candidates.find((p) => fs.existsSync(p)) ?? null;
 }
 function cliInvocation(subcommand = "") {
+  if (subcommand === "doctor" || subcommand.startsWith("doctor ")) {
+    const doctorEntry = path.join(__thisDir, "doctor.mjs");
+    if (fs.existsSync(doctorEntry)) {
+      return `node "${doctorEntry}"${subcommand.slice("doctor".length)}`;
+    }
+  }
   return formatCliInvocation({
     installed: isInstalledPackage(),
     cliPath: resolveCompiledCliPath(),
@@ -21084,6 +21091,35 @@ var STOP_HOOK_SCRIPT = '#!/usr/bin/env node\n// deepPairing Stop hook \u2014 ins
 var CHECKPOINT_HOOK_SCRIPT = '#!/usr/bin/env node\n// deepPairing checkpoint hook (V2) \u2014 installed by ensureCheckpointHook.\n// GENERATED \u2014 do not edit. Source: packages/mcp-server/src/cli/checkpoint-hook-entry.ts\n// Regenerate: pnpm --filter @deeppairing/mcp-server gen:hooks\n// src/hooks/checkpoint-hook.ts\nimport fs2 from "node:fs";\nimport path3 from "node:path";\nimport crypto2 from "node:crypto";\n\n// src/session-id.ts\nimport crypto from "node:crypto";\nimport path from "node:path";\nfunction deriveSessionId(projectRoot, claudeSessionIdRaw) {\n  const projectName = path.basename(projectRoot);\n  const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);\n  const projectHash = crypto.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);\n  const base = `session_${safeProjectName}_${projectHash}`;\n  const sanitized = (claudeSessionIdRaw ?? "").replace(/[^a-zA-Z0-9-]/g, "").slice(0, 64);\n  if (sanitized.length === 0) {\n    return { sessionId: base, mode: "fallback" };\n  }\n  return { sessionId: `${base}_${sanitized}`, mode: "split", claudeSessionId: sanitized };\n}\n\n// src/hooks/hook-state.ts\nimport fs from "node:fs";\nimport path2 from "node:path";\nvar FIRE_LOG_CAP = 50;\nvar LOCK_STALE_MS = 5e3;\nvar LOCK_SPIN_MS = 2;\nvar LOCK_MAX_WAIT_MS = 500;\nfunction errnoCode(err) {\n  if (typeof err === "object" && err !== null && "code" in err) {\n    const code = err.code;\n    if (typeof code === "string") return code;\n  }\n  return void 0;\n}\nfunction hookErrorMessage(err) {\n  if (typeof err === "object" && err !== null && "message" in err) {\n    const message = err.message;\n    if (typeof message === "string") return message;\n  }\n  return String(err);\n}\nfunction resolveHookProjectRoot(eventCwd) {\n  return process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || (typeof eventCwd === "string" && eventCwd ? eventCwd : "") || process.cwd();\n}\nfunction sleepSync(ms) {\n  try {\n    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);\n  } catch {\n  }\n}\nfunction acquireHookStateLock(statePath, _now = Date.now()) {\n  const lock = `${statePath}.lock`;\n  const deadline = process.hrtime.bigint() + BigInt(LOCK_MAX_WAIT_MS) * 1000000n;\n  let brokeStale = false;\n  for (; ; ) {\n    try {\n      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));\n      return lock;\n    } catch (error) {\n      if (errnoCode(error) !== "EEXIST") return null;\n      try {\n        if (!brokeStale && Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {\n          brokeStale = true;\n          fs.unlinkSync(lock);\n          continue;\n        }\n      } catch (staleErr) {\n        if (errnoCode(staleErr) !== "ENOENT") return null;\n      }\n      if (process.hrtime.bigint() >= deadline) return null;\n      sleepSync(LOCK_SPIN_MS);\n    }\n  }\n}\nfunction releaseHookStateLock(lock) {\n  if (!lock) return;\n  try {\n    fs.unlinkSync(lock);\n  } catch {\n  }\n}\nfunction readHookState(statePath) {\n  let raw;\n  try {\n    raw = fs.readFileSync(statePath, "utf-8");\n  } catch {\n    return { version: 1 };\n  }\n  try {\n    const parsed = JSON.parse(raw);\n    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;\n  } catch {\n  }\n  try {\n    const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");\n    fs.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);\n  } catch {\n  }\n  return { version: 1 };\n}\nfunction writeHookStateAtomic(statePath, state) {\n  const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 10)}`;\n  try {\n    fs.writeFileSync(tmp, JSON.stringify(state));\n    fs.renameSync(tmp, statePath);\n  } catch (err) {\n    try {\n      fs.unlinkSync(tmp);\n    } catch {\n    }\n    throw err;\n  }\n}\nfunction appendHookFire(statePath, fire, mutate) {\n  try {\n    fs.mkdirSync(path2.dirname(statePath), { recursive: true });\n    const lock = acquireHookStateLock(statePath);\n    try {\n      const state = readHookState(statePath);\n      state.version = 1;\n      const fires = Array.isArray(state.fires) ? state.fires : [];\n      fires.push(fire);\n      state.fires = fires.slice(-FIRE_LOG_CAP);\n      mutate?.(state);\n      writeHookStateAtomic(statePath, state);\n    } finally {\n      releaseHookStateLock(lock);\n    }\n  } catch {\n  }\n}\nfunction hookStatePath(projectRoot) {\n  return path2.join(projectRoot, ".deeppairing", "hooks-state.json");\n}\n\n// src/hooks/checkpoint-hook.ts\nvar HOOK_NAME = "checkpoint";\nvar EDIT_TOOLS = ["Write", "Edit", "MultiEdit"];\nvar RECEIPT_TTL_MS = 60 * 1e3;\nvar SKIP_BASENAMES = /* @__PURE__ */ new Set([\n  // Lockfiles only \u2014 manifest files (package.json, Cargo.toml, etc.) are\n  // policy and should still nag.\n  "package-lock.json",\n  "pnpm-lock.yaml",\n  "yarn.lock",\n  "bun.lockb",\n  "uv.lock",\n  "poetry.lock",\n  "Cargo.lock",\n  "Gemfile.lock",\n  "go.sum",\n  "composer.lock"\n]);\nvar SKIP_PATH_PREFIXES = [\n  // Generated / vendored output \u2014 not human-authored source.\n  "dist/",\n  "build/",\n  "node_modules/",\n  ".deeppairing/",\n  ".next/",\n  ".turbo/",\n  ".cache/",\n  "coverage/",\n  ".nyc_output/",\n  // IDE-local config \u2014 workspace settings, not project decisions.\n  ".vscode/",\n  ".idea/"\n];\nfunction isTrivialFile(filePath) {\n  if (!filePath || filePath === "(unknown)") return false;\n  const norm = filePath.replace(/\\\\/g, "/");\n  const base = norm.split("/").pop() || "";\n  if (SKIP_BASENAMES.has(base)) return true;\n  for (const prefix of SKIP_PATH_PREFIXES) {\n    if (norm.includes("/" + prefix) || norm.startsWith(prefix)) return true;\n  }\n  return false;\n}\nvar NAG = "deepPairing: {TOOL} on {FILE} with no present_code_change for it. Present EVERY code change BEFORE the Write/Edit \\u2014 including small follow-on edits, new files (tests, configs), and each file of a multi-file change, not just the \'main\' one. A write straight to disk never reaches the human\'s review surface; they can\'t see or comment on it. If you skipped this for prior edits this session, backfill them now with present_code_change. (Per-Edit Checkpoint rule. Lockfiles and generated paths are auto-skipped.)\\n";\nfunction claimReceipt(dpDir, sessionId, absolutePath, now) {\n  const key = crypto2.createHash("sha256").update(absolutePath).digest("hex");\n  const markerPath = path3.join(dpDir, "sessions", sessionId, "code-checkpoints", key + ".json");\n  const claimPath = markerPath + ".claim." + process.pid + "." + crypto2.randomBytes(8).toString("hex");\n  fs2.renameSync(markerPath, claimPath);\n  try {\n    const m = JSON.parse(fs2.readFileSync(claimPath, "utf8"));\n    if (!m || typeof m !== "object") return false;\n    const r = m;\n    const at = typeof r.at === "string" ? Date.parse(r.at) : NaN;\n    const expiresAt = r.expiresAt === void 0 ? at + RECEIPT_TTL_MS : typeof r.expiresAt === "string" ? Date.parse(r.expiresAt) : NaN;\n    return r.version === 1 && r.sessionId === sessionId && r.filePath === absolutePath && typeof r.artifactId === "string" && r.artifactId.length > 0 && Number.isFinite(at) && Number.isFinite(expiresAt) && expiresAt >= at && now >= at && // a future-dated receipt is a clock fault, not coverage\n    now <= expiresAt;\n  } finally {\n    try {\n      fs2.unlinkSync(claimPath);\n    } catch {\n    }\n  }\n}\nfunction runCheckpointHook(stdin2, now = Date.now()) {\n  let statePath = hookStatePath(resolveHookProjectRoot());\n  let resolvedCandidateIds = [];\n  function exit(code, reason) {\n    appendHookFire(statePath, { at: (/* @__PURE__ */ new Date()).toISOString(), hook: HOOK_NAME, exitCode: code, reason, resolvedCandidateIds });\n    process.exit(code);\n  }\n  try {\n    const ev = stdin2 ? JSON.parse(stdin2) : {};\n    const projectRoot = path3.resolve(resolveHookProjectRoot(ev.cwd));\n    statePath = hookStatePath(projectRoot);\n    const tool = typeof ev.tool_name === "string" && ev.tool_name || typeof ev.toolName === "string" && ev.toolName || "";\n    if (!EDIT_TOOLS.includes(tool)) exit(0, "skip: tool=" + (tool || "(unknown)"));\n    const rawFilePath = (ev.tool_input && (ev.tool_input.file_path ?? ev.tool_input.filePath)) ?? (ev.input && ev.input.file_path);\n    const filePath = typeof rawFilePath === "string" && rawFilePath ? rawFilePath : "(unknown)";\n    if (isTrivialFile(filePath)) exit(0, "skip: trivial file " + filePath);\n    const dpDir = path3.join(projectRoot, ".deeppairing");\n    if (!fs2.existsSync(path3.join(dpDir, "sessions"))) exit(0, "skip: no sessions dir");\n    const eventHasIdentity = Object.prototype.hasOwnProperty.call(ev, "session_id");\n    const malformedEventIdentity = eventHasIdentity && ev.session_id !== "" && typeof ev.session_id !== "string";\n    const rawCandidates = [ev.session_id, process.env.CLAUDE_CODE_SESSION_ID];\n    const anyNonemptyIdentity = rawCandidates.some((value) => typeof value === "string" && value.length > 0);\n    for (const raw of rawCandidates) {\n      if (typeof raw !== "string" || !raw) continue;\n      const derived = deriveSessionId(projectRoot, raw);\n      if (derived.mode !== "split") continue;\n      if (!resolvedCandidateIds.includes(derived.sessionId)) resolvedCandidateIds.push(derived.sessionId);\n    }\n    if (resolvedCandidateIds.length === 0 && !anyNonemptyIdentity && !malformedEventIdentity) {\n      resolvedCandidateIds = [deriveSessionId(projectRoot, "").sessionId];\n    }\n    let covered = false;\n    if (filePath !== "(unknown)" && filePath.trim()) {\n      for (const sessionId of resolvedCandidateIds) {\n        try {\n          covered = claimReceipt(dpDir, sessionId, path3.resolve(projectRoot, filePath), now);\n        } catch {\n        }\n        if (covered) break;\n      }\n    }\n    if (!covered) {\n      process.stderr.write(NAG.replace("{TOOL}", tool).replace("{FILE}", filePath));\n      exit(0, "nag: " + tool + " on " + filePath);\n    }\n    exit(0, "pass: fresh checkpoint covers " + filePath);\n  } catch (err) {\n    exit(0, "error: " + hookErrorMessage(err));\n  }\n}\n\n// src/cli/checkpoint-hook-entry.ts\nvar stdin = "";\nprocess.stdin.setEncoding("utf-8");\nprocess.stdin.on("data", (c) => {\n  stdin += c;\n});\nprocess.stdin.on("end", () => {\n  runCheckpointHook(stdin);\n});\n';
 
 // src/cli/setup-tasks.ts
+function writeHookSettings(settingsPath, settings, opts) {
+  const next = JSON.stringify(settings, null, 2);
+  if (opts.backup) {
+    try {
+      let original;
+      try {
+        original = fs2.readFileSync(settingsPath);
+      } catch (err) {
+        if (err.code !== "ENOENT") throw err;
+      }
+      if (original?.equals(Buffer.from(next))) return;
+      if (original) {
+        const backupPath = `${settingsPath}.deeppairing-backup-${randomUUID()}`;
+        const mode = fs2.statSync(settingsPath).mode & 384;
+        const fd = fs2.openSync(backupPath, "wx", mode);
+        try {
+          fs2.writeFileSync(fd, original);
+          fs2.fsyncSync(fd);
+        } finally {
+          fs2.closeSync(fd);
+        }
+        console.error(`[deepPairing] Settings backup: ${backupPath}`);
+      }
+    } catch (err) {
+      throw new Error(`Settings backup failed; original settings were not overwritten: ${errorMessage(err)}`);
+    }
+  }
+  fs2.writeFileSync(settingsPath, next);
+}
 function scopeFiles(projectRoot2) {
   return [
     { scope: "user", path: path2.join(os.homedir(), ".claude", "settings.json") },
@@ -21165,7 +21201,7 @@ function ensureGitignoreEntry(projectRoot2) {
 }
 var STOP_SCRIPT_REL_PATH = ".deeppairing/hooks/stop.mjs";
 var STOP_HOOK_COMMAND = `node "$CLAUDE_PROJECT_DIR/${STOP_SCRIPT_REL_PATH}"`;
-function ensureStopHook(projectRoot2) {
+function ensureStopHook(projectRoot2, opts = {}) {
   const claudeDir = path2.join(projectRoot2, ".claude");
   const settingsPath = path2.join(claudeDir, "settings.local.json");
   const scriptPath = path2.join(projectRoot2, STOP_SCRIPT_REL_PATH);
@@ -21204,7 +21240,7 @@ function ensureStopHook(projectRoot2) {
       hooks: [{ type: "command", command: STOP_HOOK_COMMAND }]
     });
     fs2.mkdirSync(claudeDir, { recursive: true });
-    fs2.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    writeHookSettings(settingsPath, settings, opts);
     let msg = hadLegacy ? "Added Stop hook (replaced legacy flat-shape entry that triggered /doctor warnings)" : beforeDpCount > 1 ? `Added Stop hook (replaced ${beforeDpCount} stale deepPairing entries)` : beforeDpCount === 1 ? "Replaced stale Stop hook entry with the current canonical version" : "Added Stop hook to .claude/settings.local.json";
     const otherScopes = detectCrossScopeDpEntries(projectRoot2, "Stop", HOOK_MARKERS.Stop).filter((s) => s.scope !== "project-local" && s.count > 0);
     const [firstScope] = otherScopes;
@@ -21218,7 +21254,7 @@ function ensureStopHook(projectRoot2) {
   }
 }
 var CHECKPOINT_SCRIPT_REL_PATH = ".deeppairing/hooks/checkpoint.mjs";
-function ensureCheckpointHook(projectRoot2) {
+function ensureCheckpointHook(projectRoot2, opts = {}) {
   const claudeDir = path2.join(projectRoot2, ".claude");
   const settingsPath = path2.join(claudeDir, "settings.local.json");
   const scriptPath = path2.join(projectRoot2, CHECKPOINT_SCRIPT_REL_PATH);
@@ -21256,7 +21292,7 @@ function ensureCheckpointHook(projectRoot2) {
       hooks: [{ type: "command", command: CANONICAL_CMD }]
     });
     fs2.mkdirSync(claudeDir, { recursive: true });
-    fs2.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    writeHookSettings(settingsPath, settings, opts);
     let msg = beforeDpCount > 1 ? `Added PostToolUse checkpoint hook (replaced ${beforeDpCount} stale entries)` : beforeDpCount === 1 ? "Replaced stale checkpoint hook entry with the current canonical version" : "Added PostToolUse checkpoint hook (.deeppairing/hooks/checkpoint.mjs)";
     const otherScopes = detectCrossScopeDpEntries(projectRoot2, "PostToolUse", HOOK_MARKERS.PostToolUse).filter((s) => s.scope !== "project-local" && s.count > 0);
     const [firstScope] = otherScopes;
@@ -21429,7 +21465,7 @@ process.stdin.on("end", async () => {
 });
 `;
 }
-function ensurePreflightHook(projectRoot2) {
+function ensurePreflightHook(projectRoot2, opts = {}) {
   const claudeDir = path2.join(projectRoot2, ".claude");
   const settingsPath = path2.join(claudeDir, "settings.local.json");
   const scriptPath = path2.join(projectRoot2, PREFLIGHT_SCRIPT_REL_PATH);
@@ -21454,7 +21490,7 @@ function ensurePreflightHook(projectRoot2) {
       { matcher: PREFLIGHT_MATCHER, hooks: [{ type: "command", command: PREFLIGHT_HOOK_COMMAND }] }
     ];
     fs2.mkdirSync(claudeDir, { recursive: true });
-    fs2.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    writeHookSettings(settingsPath, settings, opts);
     return { ok: true, changed: true, message: `Installed PreToolUse preflight hook${inactiveNote}` };
   } catch (err) {
     return { ok: false, message: `Failed to install preflight hook: ${err}` };
@@ -21497,7 +21533,7 @@ function withoutOwnedEntries(rows, owned) {
 function withoutAskEntries(rows) {
   return withoutOwnedEntries(rows, HOOK_MARKERS.StanceAllowAsk);
 }
-function ensureStanceAllowAskHook(projectRoot2) {
+function ensureStanceAllowAskHook(projectRoot2, opts = {}) {
   try {
     const claudeDir = path2.join(projectRoot2, ".claude");
     const settingsPath = path2.join(claudeDir, "settings.local.json");
@@ -21518,7 +21554,7 @@ function ensureStanceAllowAskHook(projectRoot2) {
     }
     hooks.PreToolUse = [...kept, { matcher: STANCE_ALLOW_ASK_MATCHER, hooks: [{ type: "command", command: STANCE_ALLOW_ASK_COMMAND }] }];
     fs2.mkdirSync(claudeDir, { recursive: true });
-    fs2.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    writeHookSettings(settingsPath, settings, opts);
     return { ok: true, changed: true, message: "Installed the Bash `stance allow` ask hook (.deeppairing/hooks/stance-allow-ask.sh)" };
   } catch (err) {
     return { ok: false, message: `Failed to install the stance-allow ask hook: ${errorMessage(err)}` };
@@ -24703,8 +24739,8 @@ var GlobalStore = class _GlobalStore {
    * writes are being refused. `backupPath` is the `.corrupt-<ts>` snapshot when
    * one was captured this process; absent when even the copy failed.
    */
-  getHealth() {
-    this.read();
+  getHealth(opts = {}) {
+    this.read(!opts.readOnly);
     if (this.lastReadCorrupt) {
       const backupPath = corruptSnapshots.get(this.ledgerPath);
       return {
@@ -24735,10 +24771,11 @@ var GlobalStore = class _GlobalStore {
    * write() destroyed the ledger. Snapshot once per path per current corruption
    * so read-only callers hitting a persistently bad file don't storm snapshots.
    */
-  markCorrupt(err) {
+  markCorrupt(err, snapshot = true) {
     this.lastReadCorrupt = true;
     const msg = err?.message ?? String(err);
     this.lastReadCorruptReason = msg;
+    if (!snapshot) return;
     const existing = corruptSnapshots.get(this.ledgerPath);
     if (existing) return;
     const backup = this.snapshotLedger();
@@ -24779,7 +24816,7 @@ var GlobalStore = class _GlobalStore {
     return { entry: { key, concept, instances, firstSeenAt, lastSeenAt }, reconstructed };
   }
   /** Load the entire ledger. Returns an empty shape on first run or corruption. */
-  read() {
+  read(snapshotCorrupt = true) {
     const emptyConcepts = () => /* @__PURE__ */ Object.create(null);
     this.lastReadCorrupt = false;
     this.lastReadCorruptReason = void 0;
@@ -24792,7 +24829,7 @@ var GlobalStore = class _GlobalStore {
     try {
       raw2 = fs7.readFileSync(this.ledgerPath, "utf-8");
     } catch (err) {
-      this.markCorrupt(err);
+      this.markCorrupt(err, snapshotCorrupt);
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
     if (raw2.trim() === "") {
@@ -24804,17 +24841,17 @@ var GlobalStore = class _GlobalStore {
     try {
       parsed = JSON.parse(raw2);
     } catch (err) {
-      this.markCorrupt(err);
+      this.markCorrupt(err, snapshotCorrupt);
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
       const rootKind = parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed;
-      this.markCorrupt(new Error(`unexpected ledger root (${rootKind})`));
+      this.markCorrupt(new Error(`unexpected ledger root (${rootKind})`), snapshotCorrupt);
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
     const top = parsed;
     if (top.version !== LEDGER_VERSION || typeof top.concepts !== "object" || !top.concepts) {
-      this.markCorrupt(new Error(`unexpected ledger shape (version=${JSON.stringify(top.version)})`));
+      this.markCorrupt(new Error(`unexpected ledger shape (version=${JSON.stringify(top.version)})`), snapshotCorrupt);
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
     const concepts = emptyConcepts();
@@ -26387,7 +26424,7 @@ function appendPostedReview(projectRoot2, sessionId, record2) {
 // src/store/review-post-journal.ts
 import fs13 from "node:fs";
 import path12 from "node:path";
-import { createHash as createHash2, randomUUID } from "node:crypto";
+import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
 var digestSchema = external_exports.string().regex(/^[0-9a-f]{64}$/);
 var eventSchema = external_exports.enum(["COMMENT", "REQUEST_CHANGES", "APPROVE"]);
 var timestampSchema = external_exports.iso.datetime();
@@ -26571,7 +26608,7 @@ var ReviewPostJournal = class {
     }
   }
   claim(fn) {
-    const token = randomUUID();
+    const token = randomUUID2();
     let fd;
     try {
       fd = fs13.openSync(this.claimPath, "wx", 384);
@@ -26718,7 +26755,7 @@ var ReviewPostJournal = class {
         throw new ReviewPostJournalError("blocked", "This session already posted or acknowledged an uncertain post to that PR; fresh human repost authorization is required.");
       }
       if (journal.operations.length >= 4096) throw new ReviewPostJournalError("blocked", "Review-post journal is full; stop writers and perform a history-preserving migration before posting. Do not delete or reset the journal.");
-      const lease = { operationId: randomUUID(), token: randomUUID() };
+      const lease = { operationId: randomUUID2(), token: randomUUID2() };
       const now = (/* @__PURE__ */ new Date()).toISOString();
       journal.operations.push({
         id: lease.operationId,

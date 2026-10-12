@@ -10,6 +10,7 @@
  */
 import { STANCE_ALLOW_ASK_COMMAND, STANCE_ALLOW_ASK_MATCHER, STANCE_ALLOW_ASK_REL_PATH, STANCE_ALLOW_ASK_SCRIPT } from "../hooks/stance-allow-ask.js";
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -26,6 +27,34 @@ import { CHECKPOINT_HOOK_SCRIPT, STOP_HOOK_SCRIPT } from "./hook-scripts.generat
 export type SetupResult =
   | { ok: true; changed: boolean; message: string }
   | { ok: false; message: string };
+
+/** Doctor opts into backups; daemon/startup and init callers keep their policy. */
+export interface SettingsRepairOptions { backup?: boolean }
+
+function writeHookSettings(settingsPath: string, settings: unknown, opts: SettingsRepairOptions): void {
+  const next = JSON.stringify(settings, null, 2);
+  if (opts.backup) {
+    try {
+      let original: Buffer | undefined;
+      try { original = fs.readFileSync(settingsPath); }
+      catch (err) { if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err; }
+      if (original?.equals(Buffer.from(next))) return;
+      if (original) {
+        const backupPath = `${settingsPath}.deeppairing-backup-${randomUUID()}`;
+        // Restrict POSIX mode; Windows inherits the containing directory's
+        // ACLs. Exclusive creation never replaces an existing backup.
+        const mode = fs.statSync(settingsPath).mode & 0o600;
+        const fd = fs.openSync(backupPath, "wx", mode);
+        try { fs.writeFileSync(fd, original); fs.fsyncSync(fd); }
+        finally { fs.closeSync(fd); }
+        console.error(`[deepPairing] Settings backup: ${backupPath}`);
+      }
+    } catch (err) {
+      throw new Error(`Settings backup failed; original settings were not overwritten: ${errorMessage(err)}`);
+    }
+  }
+  fs.writeFileSync(settingsPath, next);
+}
 
 /**
  * X2 — cross-scope hook detection / dedup.
@@ -116,22 +145,29 @@ export function cleanDpEntriesFromScope(
   scopePath: string,
   hookKey: HookKey,
   marker: (cmd: string) => boolean,
+  opts: SettingsRepairOptions = {},
 ): { ok: boolean; removed: number; message: string } {
   const settings = readJsonOrNull(scopePath);
   if (settings === null) return { ok: true, removed: 0, message: `Skipped ${scopePath} (missing or malformed)` };
   const entries = settings?.hooks?.[hookKey];
   if (!Array.isArray(entries)) return { ok: true, removed: 0, message: `No ${hookKey} entries in ${scopePath}` };
-  const before = entries.length;
-  const kept = entries.filter((e: any) => {
-    if (typeof e?.command === "string" && marker(e.command)) return false;
-    if (Array.isArray(e?.hooks) && e.hooks.some((h: any) => typeof h?.command === "string" && marker(h.command))) return false;
-    return true;
+  let removed = 0;
+  const kept = entries.flatMap((e: any) => {
+    // Claude allows several hook commands in one matching row. Removing the
+    // whole row would also delete unrelated commands alongside deepPairing.
+    if (Array.isArray(e?.hooks)) {
+      const hooks = e.hooks.filter((h: any) => !(typeof h?.command === "string" && marker(h.command)));
+      if (hooks.length === e.hooks.length) return [e];
+      removed++;
+      return hooks.length > 0 ? [{ ...e, hooks }] : [];
+    }
+    if (typeof e?.command === "string" && marker(e.command)) { removed++; return []; }
+    return [e];
   });
-  const removed = before - kept.length;
   if (removed === 0) return { ok: true, removed: 0, message: `No deepPairing ${hookKey} entries to remove in ${scopePath}` };
   try {
     settings.hooks[hookKey] = kept;
-    fs.writeFileSync(scopePath, JSON.stringify(settings, null, 2));
+    writeHookSettings(scopePath, settings, opts);
     return { ok: true, removed, message: `Removed ${removed} deepPairing ${hookKey} entr${removed === 1 ? "y" : "ies"} from ${scopePath}` };
   } catch (err) {
     return { ok: false, removed: 0, message: `Could not write ${scopePath}: ${errorMessage(err)}` };
@@ -283,7 +319,7 @@ const STOP_SCRIPT_REL_PATH = ".deeppairing/hooks/stop.mjs";
 // and fails with MODULE_NOT_FOUND. $CLAUDE_PROJECT_DIR is cwd-independent.
 const STOP_HOOK_COMMAND = `node "$CLAUDE_PROJECT_DIR/${STOP_SCRIPT_REL_PATH}"`;
 
-export function ensureStopHook(projectRoot: string): SetupResult {
+export function ensureStopHook(projectRoot: string, opts: SettingsRepairOptions = {}): SetupResult {
   const claudeDir = path.join(projectRoot, ".claude");
   const settingsPath = path.join(claudeDir, "settings.local.json");
   const scriptPath = path.join(projectRoot, STOP_SCRIPT_REL_PATH);
@@ -363,7 +399,7 @@ export function ensureStopHook(projectRoot: string): SetupResult {
       hooks: [{ type: "command", command: STOP_HOOK_COMMAND }],
     });
     fs.mkdirSync(claudeDir, { recursive: true });
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    writeHookSettings(settingsPath, settings, opts);
     let msg = hadLegacy
       ? "Added Stop hook (replaced legacy flat-shape entry that triggered /doctor warnings)"
       : beforeDpCount > 1
@@ -413,7 +449,7 @@ export function ensureStopHook(projectRoot: string): SetupResult {
 
 const CHECKPOINT_SCRIPT_REL_PATH = ".deeppairing/hooks/checkpoint.mjs";
 
-export function ensureCheckpointHook(projectRoot: string): SetupResult {
+export function ensureCheckpointHook(projectRoot: string, opts: SettingsRepairOptions = {}): SetupResult {
   const claudeDir = path.join(projectRoot, ".claude");
   const settingsPath = path.join(claudeDir, "settings.local.json");
   const scriptPath = path.join(projectRoot, CHECKPOINT_SCRIPT_REL_PATH);
@@ -476,7 +512,7 @@ export function ensureCheckpointHook(projectRoot: string): SetupResult {
       hooks: [{ type: "command", command: CANONICAL_CMD }],
     });
     fs.mkdirSync(claudeDir, { recursive: true });
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    writeHookSettings(settingsPath, settings, opts);
     let msg = beforeDpCount > 1
       ? `Added PostToolUse checkpoint hook (replaced ${beforeDpCount} stale entries)`
       : beforeDpCount === 1
@@ -700,7 +736,7 @@ process.stdin.on("end", async () => {
  *  the deepPairing PreToolUse entry: removes only OUR nested entries (a user's
  *  own commands in a shared row survive, with the row's matcher and metadata)
  *  and writes exactly one canonical row. */
-export function ensurePreflightHook(projectRoot: string): SetupResult {
+export function ensurePreflightHook(projectRoot: string, opts: SettingsRepairOptions = {}): SetupResult {
   const claudeDir = path.join(projectRoot, ".claude");
   const settingsPath = path.join(claudeDir, "settings.local.json");
   const scriptPath = path.join(projectRoot, PREFLIGHT_SCRIPT_REL_PATH);
@@ -736,7 +772,7 @@ export function ensurePreflightHook(projectRoot: string): SetupResult {
       { matcher: PREFLIGHT_MATCHER, hooks: [{ type: "command", command: PREFLIGHT_HOOK_COMMAND }] },
     ];
     fs.mkdirSync(claudeDir, { recursive: true });
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    writeHookSettings(settingsPath, settings, opts);
     return { ok: true, changed: true, message: `Installed PreToolUse preflight hook${inactiveNote}` };
   } catch (err) {
     return { ok: false, message: `Failed to install preflight hook: ${err}` };
@@ -789,7 +825,7 @@ function withoutAskEntries(rows: AskHookRow[]): { rows: AskHookRow[]; removed: n
   return withoutOwnedEntries(rows, HOOK_MARKERS.StanceAllowAsk);
 }
 
-export function ensureStanceAllowAskHook(projectRoot: string): SetupResult {
+export function ensureStanceAllowAskHook(projectRoot: string, opts: SettingsRepairOptions = {}): SetupResult {
   try {
     const claudeDir = path.join(projectRoot, ".claude");
     const settingsPath = path.join(claudeDir, "settings.local.json");
@@ -814,7 +850,7 @@ export function ensureStanceAllowAskHook(projectRoot: string): SetupResult {
     }
     hooks.PreToolUse = [...kept, { matcher: STANCE_ALLOW_ASK_MATCHER, hooks: [{ type: "command", command: STANCE_ALLOW_ASK_COMMAND }] }];
     fs.mkdirSync(claudeDir, { recursive: true });
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    writeHookSettings(settingsPath, settings, opts);
     return { ok: true, changed: true, message: "Installed the Bash `stance allow` ask hook (.deeppairing/hooks/stance-allow-ask.sh)" };
   } catch (err) {
     return { ok: false, message: `Failed to install the stance-allow ask hook: ${errorMessage(err)}` };
@@ -823,7 +859,7 @@ export function ensureStanceAllowAskHook(projectRoot: string): SetupResult {
 
 /** #503 review — `doctor --fix` for a redundant project-local row under the
  *  plugin: removes only our verified entries. */
-export function removeStanceAllowAskHook(projectRoot: string): SetupResult {
+export function removeStanceAllowAskHook(projectRoot: string, opts: SettingsRepairOptions = {}): SetupResult {
   try {
     const settingsPath = path.join(projectRoot, ".claude", "settings.local.json");
     const read = readAskSettings(settingsPath);
@@ -833,7 +869,7 @@ export function removeStanceAllowAskHook(projectRoot: string): SetupResult {
     const { rows: kept, removed } = withoutAskEntries(rows);
     if (removed === 0) return { ok: true, changed: false, message: "No project-local Bash ask hook to remove" };
     hooks!.PreToolUse = kept;
-    fs.writeFileSync(settingsPath, JSON.stringify(read.settings, null, 2));
+    writeHookSettings(settingsPath, read.settings, opts);
     return { ok: true, changed: true, message: "Removed the redundant project-local Bash ask hook (the plugin provides it)" };
   } catch (err) {
     return { ok: false, message: `Could not remove the Bash ask hook: ${errorMessage(err)}` };

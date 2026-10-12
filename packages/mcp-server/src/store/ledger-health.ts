@@ -48,8 +48,8 @@ export interface LedgerHealthReport {
 }
 
 /** Gather ledger-health facts from a GlobalStore (which knows its own path). */
-export function buildLedgerHealthReport(store: GlobalStore): LedgerHealthReport {
-  const health = store.getHealth();
+export function buildLedgerHealthReport(store: GlobalStore, opts: { readOnly?: boolean } = {}): LedgerHealthReport {
+  const health = store.getHealth(opts);
   const ledgerPath = health.ledgerPath;
 
   // Scan the ledger dir for `.corrupt-*` snapshots left by ANY prior freeze —

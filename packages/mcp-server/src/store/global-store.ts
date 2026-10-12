@@ -189,8 +189,8 @@ export class GlobalStore {
    * writes are being refused. `backupPath` is the `.corrupt-<ts>` snapshot when
    * one was captured this process; absent when even the copy failed.
    */
-  getHealth(): { state: "ok" | "frozen"; ledgerPath: string; backupPath?: string; reason?: string } {
-    this.read(); // refresh lastReadCorrupt + the per-path corrupt-snapshot map
+  getHealth(opts: { readOnly?: boolean } = {}): { state: "ok" | "frozen"; ledgerPath: string; backupPath?: string; reason?: string } {
+    this.read(!opts.readOnly); // doctor inspects corruption without creating snapshots
     if (this.lastReadCorrupt) {
       const backupPath = corruptSnapshots.get(this.ledgerPath);
       return {
@@ -223,13 +223,14 @@ export class GlobalStore {
    * write() destroyed the ledger. Snapshot once per path per current corruption
    * so read-only callers hitting a persistently bad file don't storm snapshots.
    */
-  private markCorrupt(err: unknown): void {
+  private markCorrupt(err: unknown, snapshot = true): void {
     this.lastReadCorrupt = true;
     const msg = (err as { message?: string })?.message ?? String(err);
     // H2-1 — remember the reason for getHealth() even when the snapshot was
     // already taken this corruption (the early-return below skips re-logging,
     // but a later getHealth() still needs to name why the ledger is frozen).
     this.lastReadCorruptReason = msg;
+    if (!snapshot) return;
     const existing = corruptSnapshots.get(this.ledgerPath);
     if (existing) return; // this corruption is already snapshotted + logged
     const backup = this.snapshotLedger();
@@ -285,7 +286,7 @@ export class GlobalStore {
   }
 
   /** Load the entire ledger. Returns an empty shape on first run or corruption. */
-  private read(): LedgerFile {
+  private read(snapshotCorrupt = true): LedgerFile {
     // SEC1 — the concepts map is keyed by user/agent-supplied concept names.
     // Use a null-prototype map so a key of `__proto__`/`constructor` is a normal
     // own property (not Object.prototype / the constructor), which otherwise made
@@ -306,7 +307,7 @@ export class GlobalStore {
     } catch (err) {
       // Unreadable (EACCES/EBUSY/…) — can't trust it; treat as corrupt so a
       // later write() doesn't reset the file we simply couldn't open.
-      this.markCorrupt(err);
+      this.markCorrupt(err, snapshotCorrupt);
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
     // H1-5 R3 — a 0-byte / whitespace-only file is FIRST RUN, not corruption.
@@ -326,7 +327,7 @@ export class GlobalStore {
     } catch (err) {
       // H1-5 — was `catch { return empty }` with NO backup, NO log; the next
       // write() then persisted the empty shape over the ledger. Now: back up + log.
-      this.markCorrupt(err);
+      this.markCorrupt(err, snapshotCorrupt);
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
     // H1-5 R2 — route null / arrays / non-objects through markCorrupt too.
@@ -335,14 +336,14 @@ export class GlobalStore {
     // which wrapped the whole body). Guard the root before dereferencing.
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
       const rootKind = parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed;
-      this.markCorrupt(new Error(`unexpected ledger root (${rootKind})`));
+      this.markCorrupt(new Error(`unexpected ledger root (${rootKind})`), snapshotCorrupt);
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
     const top = parsed as Partial<LedgerFile>;
     if (top.version !== LEDGER_VERSION || typeof top.concepts !== "object" || !top.concepts) {
       // Parseable JSON but a wrong top-level shape — same treatment: preserve
       // and refuse to overwrite rather than silently reset.
-      this.markCorrupt(new Error(`unexpected ledger shape (version=${JSON.stringify(top.version)})`));
+      this.markCorrupt(new Error(`unexpected ledger shape (version=${JSON.stringify(top.version)})`), snapshotCorrupt);
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
     // Top-level shape is sound (NOT corruption) — salvage per entry with

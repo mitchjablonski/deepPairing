@@ -126,7 +126,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Plugin bundle boot (shipped claude-plugin/, no dist fallback)
-        run: pnpm --filter @deeppairing/mcp-server exec vitest run src/__tests__/plugin-bundle-boot.test.ts
+        run: pnpm --filter @deeppairing/mcp-server exec vitest run src/__tests__/plugin-bundle-boot.test.ts src/__tests__/plugin-doctor-entry.test.ts
 
   e2e:
     runs-on: ubuntu-latest

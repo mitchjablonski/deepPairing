@@ -58,10 +58,48 @@ GitHub SSH keys. The `owner/repo` shorthand can resolve to SSH and fail with
      plugin hooks. -->
 
 This adds the slash commands (`/deeppairing:start`, `:review`, `:stance`,
-`:share`, `:review-pr`, `:post-pr`), the proactively-loaded `pairing-protocol` skill, and
+`:share`, `:review-pr`, `:post-pr`, `:doctor`), the proactively-loaded `pairing-protocol` skill, and
 — as of v0.1.1 — the **PreToolUse rejection-gate + Stop checkpoint hooks
 natively** (declared in `claude-plugin/hooks/hooks.json`, active the moment the
 plugin loads — no `init`, no `.mcp.json`, no session restart).
+
+### Diagnose a marketplace install
+
+Run `/deeppairing:doctor` in Claude Code, or use the shipped entry from your
+project's terminal (replace the example path with your installed plugin path):
+
+```bash
+node "/path/to/installed/claude-plugin/server/doctor.mjs"
+node "/path/to/installed/claude-plugin/server/doctor.mjs" --fix
+```
+
+No npm package, source build, or `dist/` directory is needed. Doctor prints the
+project it resolved: `CLAUDE_PROJECT_DIR` takes precedence over
+`DEEPPAIRING_PROJECT_ROOT`, then the current directory. Check that path before
+accepting repairs. The default run only reports; `--fix` proposes and prompts
+for repairs. In a noninteractive shell, `--fix` cancels without writing.
+
+`--fix --yes` accepts project-local repairs such as stale daemon metadata,
+gitignore, the checkpoint hook and verified dead session locks. Removing local
+Stop, PreToolUse or Bash ask hooks, shared/user hook cleanup, global lock removal
+and daemon termination require interactive confirmation and are skipped under
+`--yes`. An installed plugin can be disabled for a project: doctor cannot
+verify activation, so verify deepPairing is enabled in Claude Code before
+approving local hook removal. Otherwise removing those rows disables the gates.
+Unrelated hooks are preserved.
+
+Before a settings repair overwrites an existing file, doctor saves its exact
+original bytes beside it as `<file>.deeppairing-backup-<uuid>`, prints the backup
+path, and refuses the settings mutation if the backup cannot be saved. Backups
+do not replace earlier backups. On POSIX, backup mode is restricted to the
+source owner's read/write permissions; on Windows, backups inherit the
+containing directory's ACLs. Report-only, cancelled and unchanged settings
+runs create none. New settings files have no
+original to back up. This safeguard applies to both bundled and npm doctor
+settings repairs. Both doctors also inspect the philosophy ledger without
+writing a corrupt-file snapshot; other store readers retain snapshot behavior.
+Clock checks only warn; doctor never changes host time or services, and never
+repairs the philosophy ledger automatically.
 
 ## 2. Local plugin from a clone
 
@@ -110,7 +148,7 @@ can't detect the plugin, so running `init` explicitly **will** double-install
 those two hooks. Clean up the redundant `settings.local.json` rows with:
 
 ```bash
-node packages/mcp-server/dist/cli/init.js doctor --fix
+node "/path/to/installed/claude-plugin/server/doctor.mjs" --fix
 ```
 
 ## After install

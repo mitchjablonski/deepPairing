@@ -55,9 +55,9 @@ function parseCommand(src: string): { keys: string[]; values: Record<string, str
 }
 
 describe("Q6 — the PR command files keep the shape of the other four", () => {
-  const ALL = ["delegate.md", "post-pr.md", "review-pr.md", "review.md", "share.md", "stance.md", "start.md"];
+  const ALL = ["delegate.md", "doctor.md", "post-pr.md", "review-pr.md", "review.md", "share.md", "stance.md", "start.md"];
 
-  it("the command set is exactly the seven on disk (a new file must be a deliberate addition)", () => {
+  it("the command set is exactly the eight on disk (a new file must be a deliberate addition)", () => {
     expect(fs.readdirSync(commandsDir).sort()).toEqual(ALL);
   });
 
