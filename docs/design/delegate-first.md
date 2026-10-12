@@ -622,9 +622,12 @@ missing, the content goes in prose under a fixed heading.
    lean on.
 2. **Brief.** One `present_spec`. `objective` in one sentence. `requirements[]`
    with checkable acceptance. `context` with headed lines `Decide alone:`,
-   `Will ask:`, `Risk class:`, `Why:`. `tasks[]` as intended steps. A
-   `file_map` of declared files. **Omit `confidence` on every artifact in the
-   run**: at `balanced` a `confidence: "high"` draft arms the auto-approve
+   `Will ask:`, `Risk class:`, `Why:`. `tasks[]` as intended steps. The
+   declared files as a `visuals[]` entry with `kind: "file_map"` and `files[]`
+   (`PlanVisualSchema`). **Omit `confidence` on the two tools that accept it
+   at content level today, `present_code_change` and `log_reasoning`**
+   (`validate-tool-input.ts:1039,1144`): at `balanced` a `confidence: "high"`
+   draft arms the auto-approve
    countdown (`ArtifactStatusActions.tsx:283-290`), which would break D3
    before the allowlist exists. Poll `check_feedback` until it is approved.
    Do nothing else first. For trivial work, write the five answers in chat
@@ -633,16 +636,21 @@ missing, the content goes in prose under a fixed heading.
    architectural or irreversible fork, any uncertainty about authority or
    risk, an unroutable block, or unreachable done. On a guardrail path, an
    undeclared package, a dependency, a schema or CI change: stop, supersede
-   the brief as escalated, wait. Post nothing else. Until spec tasks have a
+   the brief via `revise_artifact` (`mode: "supersede"`) with new `content`
+   whose `context` line reads `Risk class: escalated` and says why, then
+   wait. No `risk` field exists today, and `context` is a plain string. Post
+   nothing else. Until spec tasks have a
    status, post one `log_reasoning` per **completed task** with the task as
    `action`.
-4. **Packet.** `present_changeset` with `summary`, `risks[]`, and a `diagram`
-   of changed files and neighbours. Then `present_debrief` with the same
-   `feature`, `changesetRef` on the first section, a `Brief:` line naming the
-   spec title and version, `summary` of three sentences, a `Done when`
-   section by requirement id, `needsYourEyes[]` capped at three with lines
-   in `why`, `decisionsMade[]` with alternatives, `Not sure about`, `Proof`
-   with commands and outcomes, `deferred[]`.
+4. **Packet.** `present_changeset` with `summary`, `risks[]`, and a
+   `visuals[]` entry with `kind: "diagram"` (Mermaid `source`) of changed
+   files and neighbours. Then `present_debrief` with the same `feature`,
+   `changesetRef` on the first of its `sections[]`, a `Brief:` line in the
+   `summary` naming the spec title and version, the `summary` itself at most
+   three sentences, a `Done when` section by requirement id, `needsYourEyes[]`
+   capped at three with lines in `why`, `decisionsMade[]` each with its
+   `alternative`, a `Not sure about` section, a `Proof` section with commands
+   and outcomes, and `deferred[]`.
 5. **Wait.** Poll, answer, serve Walk-me-through with a scoped explainer.
    Supersede, never post a second debrief.
 
