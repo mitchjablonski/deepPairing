@@ -62,8 +62,8 @@ describe("stance allow — daemon-routed (A1), interactive, previewed", () => {
     expect(page).toContain("--- a/src/config.ts");
     expect(page).toContain("+++ b/src/config.ts");
     expect(page).toMatch(/@@ -1,\d+ \+1,\d+ @@/);
-    expect(page).toContain("-let config = {};");
-    expect(page).toContain("+export function loadConfig() { return {}; }");
+    expect(page).toContain("-let⟨SPACE⟩config⟨SPACE⟩=⟨SPACE⟩{};");
+    expect(page).toContain("+export⟨SPACE⟩function⟨SPACE⟩loadConfig()⟨SPACE⟩{⟨SPACE⟩return⟨SPACE⟩{};⟨SPACE⟩}");
     expect(page).not.toMatch(ANSI);
     expect(page).not.toMatch(/^\s*\{"/m);
     const allowances = await world!.allowances();
@@ -454,11 +454,81 @@ describe("#506 — visible whitespace and invisible-character fidelity", () => {
     expect(diff("⟨SPACE⟩", " ")).toContain("-⟨⟨⟩SPACE⟩");
   });
 
+  it.each([
+    ["foo(x) ", "foo(y)", "-foo(x)⟨SPACE⟩", "+foo(y)"],
+    ["foo(x)", "foo(y)\t", "-foo(x)", "+foo(y)⟨TAB⟩"],
+    ["\tfoo(x)", "  foo(y)", "-⟨TAB⟩foo(x)", "+⟨SPACE⟩⟨SPACE⟩foo(y)"],
+    ["old  value", "new value", "-old⟨SPACE⟩⟨SPACE⟩value", "+new⟨SPACE⟩value"],
+    ["a bc", "ab c", "-a⟨SPACE⟩bc", "+ab⟨SPACE⟩c"],
+    ["foo(x) \t", "foo(y) \t", "-foo(x)⟨SPACE⟩⟨TAB⟩", "+foo(y)⟨SPACE⟩⟨TAB⟩"],
+  ])("#518: mixed edit %j -> %j exposes whitespace", (before, after, removed, added) => {
+    const shown = diff(before, after);
+    expect(shown.split("\n")).toContain(removed);
+    expect(shown.split("\n")).toContain(added);
+    expect(shown).toContain("Whitespace on marked change lines");
+  });
+
+  it("#518: replacement pairing stays within change blocks and handles unequal line counts", () => {
+    const shown = diff("old value\nanchor here\nfoo(x) \nlast value", "new value\nanchor here\nfoo(y)\nextra value\nlast changed");
+    expect(shown).toContain("-old value\n+new value");
+    expect(shown).toContain(" anchor here");
+    expect(shown).toContain("-foo(x)⟨SPACE⟩");
+    expect(shown).toContain("+foo(y)");
+    expect(diff("anchor", "anchor\nnew value \t")).toContain("+new⟨SPACE⟩value⟨SPACE⟩⟨TAB⟩");
+    expect(diff("old value \t\nanchor", "anchor")).toContain("-old⟨SPACE⟩value⟨SPACE⟩⟨TAB⟩");
+  });
+
+  it("#518: brute-force mixed pairs expose changed whitespace and preserve preview injectivity", () => {
+    const strings = [""];
+    const alphabet = ["a", "b", " ", "\t"];
+    for (const a of alphabet) {
+      strings.push(a);
+      for (const b of alphabet) {
+        strings.push(a + b);
+        for (const c of alphabet) strings.push(a + b + c);
+      }
+    }
+    const whitespace = (s: string) => [...s].flatMap((ch, index) => ch === " " || ch === "\t" ? [[index, ch]] : []);
+    const seen = new Map<string, string>();
+    const check = (before: string, after: string) => {
+      if (before === after) return;
+      const shown = diff(before, after);
+      const rawPair = JSON.stringify([before, after]);
+      const prior = seen.get(shown);
+      if (prior !== undefined) expect(prior, rawPair).toBe(rawPair);
+      seen.set(shown, rawPair);
+      const differs = JSON.stringify(whitespace(before)) !== JSON.stringify(whitespace(after));
+      if (differs || /[ \t]$/.test(before)) {
+        expect(shown.split("\n"), rawPair).toContain(`-${safeText(before, true)}`);
+      }
+      if (differs || /[ \t]$/.test(after)) {
+        expect(shown.split("\n"), rawPair).toContain(`+${safeText(after, true)}`);
+      }
+    };
+    for (const before of strings) for (const after of strings) check(before, after);
+    // Exercise literal delimiters/tokens next to selectively marked whitespace.
+    const hostile = ["⟨", "⟩", "⟨SPACE⟩", "⟨TAB⟩", "\r", "\u3164", "😀"];
+    for (const token of hostile) for (const whitespace of ["", " ", "\t", " \t"]) {
+      check(`a${token}${whitespace}`, `b${token}`);
+      check(`a${token}`, `b${token}${whitespace}`);
+    }
+  });
+
   it("the real daemon-routed CLI pages whitespace and invisible markers before explicit reason/allow; raw retry still matches", async () => {
     const b = await blocked({ ...ARGS, before: "let config = {};", after: "let config = {}; \u3164\u2800\u034f" });
     const t = terminal(world!);
     expect(await runStanceCommand(["allow", b.blockId], t.io)).toBe(0);
     expect(t.paged[0]).toContain("⟨U+3164⟩⟨U+2800⟩⟨U+034F⟩");
+    expect(t.events[0]).toBe("page");
+    expect((await b.call()).isError).toBeFalsy();
+    expect((await world!.allowances())[0]?.state).toBe("used");
+  });
+
+  it("#518: the daemon-routed mixed preview exposes removed whitespace and still admits the exact raw retry", async () => {
+    const b = await blocked({ ...ARGS, before: "let config = {}; \t", after: "let config = { ready: true };" });
+    const t = terminal(world!);
+    expect(await runStanceCommand(["allow", b.blockId], t.io)).toBe(0);
+    expect(t.paged[0]).toContain("-let⟨SPACE⟩config⟨SPACE⟩=⟨SPACE⟩{};⟨SPACE⟩⟨TAB⟩");
     expect(t.events[0]).toBe("page");
     expect((await b.call()).isError).toBeFalsy();
     expect((await world!.allowances())[0]?.state).toBe("used");
