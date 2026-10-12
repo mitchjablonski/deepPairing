@@ -31712,7 +31712,7 @@ function htmlExportFileName(sessionId, generatedAt = (/* @__PURE__ */ new Date()
 }
 
 // src/version.ts
-var SERVER_VERSION = "0.1.65";
+var SERVER_VERSION = "0.1.66";
 
 // src/store/rejected-option-recorder.ts
 function optionConceptKey(option) {
