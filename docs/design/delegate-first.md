@@ -730,7 +730,7 @@ guidance or the shape, not in UI.
 | Slice | Contents | Depends on | Visible |
 |---|---|---|---|
 | **S0** | This document. `delegate.md` preset. SKILL "Delegated work" paragraph. | — | Guidance only. Runs §7. |
-| **S1** | §3 fields and `BriefRef`/`packet`/`scopeFlags`. `delegate` enum, policy line, enum guard and slider entry as **explicit opt-in only**: absent preferences still read `supervised`, no migration marker, no announcement (§3b). Countdown allowlist plus `isPacketIntended` on `shouldAutoApprove`, on #522's tick-time `autoEligibleNow`, and on the daemon's `auto_confidence` check. `derivePackets` and `isPacketIntended` in shared with the §11 cases. Commit-time revalidation and `packet_complete` recovery. `update_plan_progress` on specs. Server nudges, scope check and the `brief_ref_stale` / `brief_head_ambiguous` warns. Validators, fixtures, goldens. | S0 gate | Agent-facing. The slider shows a fourth choice. Content renders as today where no renderer exists. |
+| **S1** | §3 fields and `BriefRef`/`packet`/`scopeFlags`. `delegate` enum, policy line, enum guard and slider entry as **explicit opt-in only**: absent preferences still read `supervised`, no migration marker, no announcement (§3b). Countdown allowlist plus `isPacketIntended` on `shouldAutoApprove`, on #522's tick-time `autoEligibleNow`, and on the daemon's `auto_confidence` check. `derivePackets` and `isPacketIntended` in shared with the §11 cases. Durable per-debrief Ask-generation storage, serialized commit-time revalidation and `packet_complete` recovery. `update_plan_progress` on specs. Server nudges, scope check and the `brief_ref_stale` / `brief_head_ambiguous` warns. Validators, fixtures, goldens. | S0 gate | Agent-facing. The slider shows a fourth choice. Content renders as today where no renderer exists. |
 | **S2** | Debrief renders the §2c packet layout: scope strip, header row with done-when, proof, "Diffs landed x of N" and the inline not-met expansion, hotspots, "None stated" unknowns, collapsed sections. Completion: the debrief's bar hides while any member is draft, the last member approve completes unless an Ask is open, **Close the packet** otherwise. Text status labels. | S1 | Only when `packet` is present. |
 | **S2a** | Brief renderer: risk chip, will-ask and decide-alone lists with Strike and Undo, keyboard listbox, strikes as annotations delivered via `check_feedback`, file map and tasks collapsed. | S1 | Only when `delegation` is present. |
 | **S3** | WHERE map: breadcrumb, `file_map` with `edges` as a graph, changed-node styling, click-to-file, dashed "(unverified)" paths, the list alternative, expanded by default only across top-level directories. | S1 | Only when edges are present. |
@@ -877,6 +877,7 @@ automatic completion if the mutation's ordering cannot be established. A
 known-empty history survives restart and allows the unchanged target to
 complete once; missing or ambiguous history never masquerades as empty.
 An ordinary reply or an Ask on another debrief does not revoke the intent.
+Use an injected store/commit barrier in the test harness, not timing sleeps.
 Pause immediately after final validation, concurrently attempt Ask creation
 or a member revision, then resume: the mutations are serialized. If the
 mutation commits first, completion revalidates and refuses; if completion
