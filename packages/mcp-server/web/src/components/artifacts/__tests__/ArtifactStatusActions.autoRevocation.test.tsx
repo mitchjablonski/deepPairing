@@ -7,6 +7,7 @@ import type { Artifact } from "@deeppairing/shared";
 import { ArtifactStatusActions } from "../ArtifactStatusActions";
 import { useArtifactStore } from "../../../stores/artifact";
 import { useConnectionStore } from "../../../stores/connection";
+import { useToastStore } from "../../../stores/toast";
 
 type Level = "supervised" | "balanced" | "autonomous";
 
@@ -44,14 +45,46 @@ afterEach(() => {
 });
 
 describe("#521 — auto-approve countdown revocation", () => {
-  it("control: a countdown that stays eligible still auto-approves, tagged auto_confidence", () => {
+  it("control: a countdown that stays eligible still auto-approves", () => {
     useConnectionStore.setState({ autonomyLevel: "balanced" });
     render(<ArtifactStatusActions artifact={artifact()} />);
     expect(screen.getByText(/auto-approve in/i)).toBeInTheDocument();
     tick(11);
     expect(statusCalls()).toHaveLength(1);
-    const body = JSON.parse(statusCalls()[0]![1].body);
-    expect(body).toMatchObject({ status: "approved", reason: "auto_confidence" });
+    expect(JSON.parse(statusCalls()[0]![1].body)).toMatchObject({ status: "approved" });
+  });
+
+  it("the auto approval is tagged reason: auto_confidence", () => {
+    useConnectionStore.setState({ autonomyLevel: "balanced" });
+    render(<ArtifactStatusActions artifact={artifact()} />);
+    tick(11);
+    expect(JSON.parse(statusCalls()[0]![1].body)).toMatchObject({ status: "approved", reason: "auto_confidence" });
+  });
+
+  it("a daemon 409 auto_approve_not_permitted at commit: no unhandled rejection, one calm toast, no error toast", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown) => { unhandled.push(e); };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      useToastStore.setState({ toasts: [] });
+      (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+        new Response(JSON.stringify({ error: "auto_approve_not_permitted", code: "auto_approve_not_permitted", message: "no" }), {
+          status: 409,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      useConnectionStore.setState({ autonomyLevel: "balanced" });
+      render(<ArtifactStatusActions artifact={artifact()} />);
+      for (let i = 0; i < 11; i++) await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      for (let i = 0; i < 5; i++) await act(async () => { await new Promise<void>((r) => process.nextTick(r)); });
+      expect(statusCalls()).toHaveLength(1);
+      expect(unhandled).toEqual([]);
+      const toasts = useToastStore.getState().toasts;
+      expect(toasts.filter((t) => t.kind === "error")).toHaveLength(0);
+      expect(toasts.filter((t) => t.kind === "info")).toHaveLength(1);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
   });
 
   it.each<[Level, Level]>([

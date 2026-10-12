@@ -397,7 +397,10 @@ async function optimisticArtifactPatch<K extends keyof Artifact>(
         ),
       }));
     }
-    if (!switchedAwayFrom(sessionAtCall)) await toastApiError(errorLabel, err);
+    // #521 — a refused AUTO approval is not an error: the caller (the countdown
+    // tick) says so calmly itself, so no second error toast here.
+    const autoRefused = err instanceof ApiError && err.code === "auto_approve_not_permitted";
+    if (!autoRefused && !switchedAwayFrom(sessionAtCall)) await toastApiError(errorLabel, err);
     throw err;
   }
 }

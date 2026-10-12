@@ -356,7 +356,19 @@ export function ArtifactStatusActions({
         } else if (openSugRef.current.total > 0) {
           setApproveConfirm(true);
         } else if (countdownAuto) {
-          updateArtifactStatus(artifact.id, "approved", undefined, undefined, "auto_confidence");
+          // #521 — fire-and-forget, so the daemon's commit-time refusal must be
+          // caught here. One calm info toast (not an error): the human changed
+          // the level, so the draft quietly staying a draft deserves a line,
+          // but nothing went wrong. The store already rolled back.
+          updateArtifactStatus(artifact.id, "approved", undefined, undefined, "auto_confidence").catch((err) => {
+            if ((err as { code?: string } | null)?.code === "auto_approve_not_permitted") {
+              useToastStore.getState().push({
+                kind: "info",
+                title: "Auto-approve was cancelled",
+                body: "The autonomy level changed, so this wasn't approved. Review it when you're ready.",
+              });
+            }
+          });
         } else {
           updateArtifactStatus(artifact.id, "approved");
         }
