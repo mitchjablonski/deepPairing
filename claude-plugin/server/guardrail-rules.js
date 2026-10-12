@@ -1,6 +1,8 @@
 import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);
 
 // src/guardrail-rules.ts
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 var GUARDRAIL_RULES = [
   {
@@ -86,12 +88,139 @@ function toolInputTargetsGuardrail(projectRoot, toolInput) {
     return false;
   }
 }
+var DEEPPAIRING_STATE_CATEGORY = "deeppairing-state";
+var STATE_PATTERN = /(^|\/)(?:\.deeppairing\/(preferences\.json|team\.json|hooks\/.+)|\.claude\/(settings(?:\.local)?\.json))$/;
+function canonicalForm(p) {
+  return p.replace(/\\/g, "/").split("/").map((seg) => seg === "." || seg === ".." ? seg : seg.replace(/:.*$/, "").replace(/[. ]+$/, "")).join("/").toLowerCase();
+}
+function realpathish(abs, hops = 0) {
+  try {
+    return fs.realpathSync.native(abs);
+  } catch {
+  }
+  if (hops < 8) {
+    try {
+      const target = fs.readlinkSync(abs);
+      return realpathish(path.resolve(path.dirname(abs), target), hops + 1);
+    } catch {
+    }
+  }
+  const rest = [];
+  let cur = abs;
+  for (let i = 0; i < 64; i++) {
+    const parent = path.dirname(cur);
+    if (parent === cur) return null;
+    rest.unshift(path.basename(cur));
+    cur = parent;
+    try {
+      return path.join(fs.realpathSync.native(cur), ...rest);
+    } catch {
+    }
+  }
+  return null;
+}
+function physicalResolve(base, spelling) {
+  try {
+    const absolute = path.isAbsolute(spelling);
+    const root = absolute ? path.parse(spelling).root : "";
+    let cur = absolute ? root : base;
+    try {
+      cur = fs.realpathSync.native(cur);
+    } catch {
+    }
+    const segs = (absolute ? spelling.slice(root.length) : spelling).split(/[\\/]+/);
+    for (let i = 0; i < segs.length; i++) {
+      const seg = segs[i];
+      if (seg === "" || seg === ".") continue;
+      if (seg === "..") {
+        cur = path.dirname(cur);
+        continue;
+      }
+      cur = path.join(cur, seg);
+      try {
+        cur = fs.realpathSync.native(cur);
+      } catch {
+        try {
+          if (fs.lstatSync(cur).isSymbolicLink()) {
+            const followed = realpathish(cur);
+            if (followed) cur = followed;
+          }
+        } catch {
+        }
+      }
+    }
+    return cur;
+  } catch {
+    return null;
+  }
+}
+function matchDeeppairingStatePath(projectRoot, raw) {
+  try {
+    if (typeof raw !== "string" || !raw) return null;
+    const unprefixed = raw.replace(/^(\\\\|\/\/)[?.](\\|\/)/, "");
+    const slashed = unprefixed.replace(/\\/g, "/");
+    const cleaned = slashed.split("/").map((seg) => seg === "." || seg === ".." || /^[A-Za-z]:$/.test(seg) ? seg : seg.replace(/:.*$/, "").replace(/[. ]+$/, "") || seg).join("/");
+    const candidates = /* @__PURE__ */ new Set([slashed, cleaned]);
+    const spellings = [slashed, cleaned];
+    if (/^~\//.test(cleaned)) spellings.push(path.join(os.homedir(), cleaned.slice(2)));
+    const ordered = [];
+    for (const c of spellings) {
+      const physical = physicalResolve(projectRoot, c);
+      if (physical) ordered.push(physical);
+    }
+    for (const c of spellings) {
+      const abs = path.resolve(projectRoot, c);
+      ordered.push(abs);
+      const real = realpathish(abs);
+      if (real) ordered.push(real);
+    }
+    ordered.push(...candidates);
+    for (const c of ordered) {
+      const m = STATE_PATTERN.exec(canonicalForm(c));
+      if (!m) continue;
+      const file = m[2] ?? "";
+      const kind = m[3] ? "claude-settings" : file.startsWith("hooks/") ? "hooks" : file === "team.json" ? "team" : "preferences";
+      return { category: DEEPPAIRING_STATE_CATEGORY, path: displayPath(projectRoot, c), kind };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+function displayPath(projectRoot, candidate) {
+  const roots = [projectRoot];
+  try {
+    roots.push(fs.realpathSync.native(projectRoot));
+  } catch {
+  }
+  const abs = path.isAbsolute(candidate) ? candidate : path.resolve(projectRoot, candidate);
+  for (const root of roots) {
+    const rel = path.relative(root, abs).replace(/\\/g, "/");
+    if (rel && rel !== ".." && !rel.startsWith("../") && !path.isAbsolute(rel)) return rel;
+  }
+  return abs.replace(/\\/g, "/");
+}
+function toolInputTargetPath(toolInput) {
+  const input = toolInput;
+  return input?.file_path ?? input?.filePath ?? input?.notebook_path;
+}
+function toolInputTargetsDeeppairingState(projectRoot, toolInput) {
+  try {
+    return matchDeeppairingStatePath(projectRoot, toolInputTargetPath(toolInput)) !== null;
+  } catch {
+    return false;
+  }
+}
 export {
+  DEEPPAIRING_STATE_CATEGORY,
   GUARDRAIL_EXCLUDED_SEGMENTS,
   GUARDRAIL_RULES,
+  matchDeeppairingStatePath,
   matchGuardrailPath,
   matchesGuardrailDir,
   matchesGuardrailFile,
   ruleForRelPath,
+  toolInputTargetPath,
+  toolInputTargetsDeeppairingState,
   toolInputTargetsGuardrail
 };

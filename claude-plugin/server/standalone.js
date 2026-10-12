@@ -33963,7 +33963,7 @@ function resolveProjectRoot(opts = {}) {
 }
 
 // src/version.ts
-var SERVER_VERSION = "0.1.64";
+var SERVER_VERSION = "0.1.65";
 function parseSemver(v2) {
   const m = /^\s*(\d+)\.(\d+)\.(\d+)/.exec(v2);
   if (!m) return null;

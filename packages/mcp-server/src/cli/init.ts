@@ -953,6 +953,13 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
         apply: () => { const r = cleanDpEntriesFromScope(hookLocalPath, "PreToolUse", HOOK_MARKERS.PreToolUse); return { ok: r.ok, message: r.message }; },
       });
       break;
+    case "legacy":
+      console.log(`  ${yellow("!")} PreToolUse rejection-gate hook is an older install that doesn't cover NotebookEdit (edits to deepPairing's own state through a notebook won't ask)`);
+      fixes.push({
+        label: "Update the PreToolUse rejection-gate hook in .claude/settings.local.json",
+        apply: () => { const r = ensurePreflightHook(cwd); return { ok: r.ok, message: r.message }; },
+      });
+      break;
     default: // "missing"
       console.log(`  ${yellow("!")} PreToolUse rejection-gate hook NOT configured (rejected concepts won't be blocked before the edit lands)`);
       fixes.push({
