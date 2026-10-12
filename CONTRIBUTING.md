@@ -50,6 +50,19 @@ git add claude-plugin/server
 
 Never regenerate the bundle with a warm `pnpm build`, and never with `pnpm --filter @deeppairing/mcp-server build` alone (that does **not** rebuild `@deeppairing/shared`; the root turbo build orders shared → mcp-server). `build:clean` is the only path guaranteed to match CI.
 
+### WSL: clock drift
+
+If you develop under WSL2 and see flaky hook, lock or receipt tests (stale-lock or "future-dated receipt" failures), your clock may be stepping backwards. This happens when the Windows Time service is stopped, so the WSL VM clock is re-stepped against the host. Run `deeppairing doctor` (`node packages/mcp-server/dist/cli/init.js doctor`); it samples the wall clock against the monotonic clock for under half a second and warns if it jumps or drifts.
+
+Fix, in an admin PowerShell:
+
+```powershell
+Set-Service W32Time -StartupType Automatic; Start-Service W32Time; w32tm /resync
+wsl --shutdown
+```
+
+On plain Linux, check `timedatectl` and that NTP is active.
+
 ## Project structure
 
 ```

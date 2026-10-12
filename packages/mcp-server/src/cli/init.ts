@@ -11,6 +11,7 @@
  */
 
 import fs from "node:fs";
+import { checkClock } from "./clock-check.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_PORT, MAX_PORT_ATTEMPTS, probeDaemonIdentity, evictDaemon, daemonAuthHeaders, describeDaemonVersionHealth } from "../daemon/lifecycle.js";
@@ -861,6 +862,18 @@ async function doctor(opts: { fix?: boolean; yes?: boolean } = {}) {
     }
   } else {
     console.log(`  ${yellow("!")} No daemon.log found`);
+  }
+
+  // 5b. #500 — system clock health (warning only; a host setting, no --fix).
+  {
+    const clock = await checkClock();
+    if (clock.ok) {
+      console.log(`  ${green("✓")} System clock is steady`);
+    } else {
+      const [head, ...rest] = clock.messageLines;
+      console.log(`  ${yellow("!")} ${head}`);
+      for (const l of rest) console.log(`    ${dim(l)}`);
+    }
   }
 
   // 6. Project-setup checks (.gitignore + Stop hook). These catch the
