@@ -30595,6 +30595,9 @@ var ERROR_CODES = {
    *  (approved↔rejected↔revised). The route refuses with 409 + the current
    *  status so the stale tab refreshes to truth. See store/verdict-guard.ts. */
   verdict_already_final: "verdict_already_final",
+  /** #521 — a confidence AUTO-approval reached the daemon after the autonomy level
+   *  (or the artifact) no longer permitted it. 409, no state change. */
+  auto_approve_not_permitted: "auto_approve_not_permitted",
   /** A review verdict raced a change to the artifact content being reviewed. */
   session_review_conflict: "session_review_conflict",
   /** F6 — decision resolve for a decision the bound session doesn't know. */
