@@ -162,3 +162,24 @@ describe("#470 §10 (5a) — created from the snapshot, never the client's conte
     expect((admitted()[0]!.content as { after: string }).after).toBe(blockedArgs.after);
   });
 });
+
+describe("#501 review (Fable) — the changed block names the REAL new dependency", () => {
+  it("even when the client's request carries stale preconditions, the new block's are the daemon's own", async () => {
+    world = new StanceWorld();
+    const w = await world.wrapper(SID);
+    holdStance(world.store(SID), STANCE);
+    const createArgs = { ...blockedArgs, changeType: "create" };
+    expect((await w.call("present_code_change", createArgs)).isError).toBe(true);
+    const block = await world.newestBlock();
+    const allowanceId = await world.allowNewest();
+    expect((await w.call("present_code_change", clean("let config = {};"))).isError).toBeFalsy();
+    const prior = world.store(SID).getArtifacts().find((a) => a.type === "code_change")!;
+    const res = await world.operation(SID, "op_stale", {
+      callFingerprint: block.callFingerprint,
+      admission: { exceptionIds: [allowanceId], toolName: "present_code_change", snapshot: block.snapshot, preconditions: block.preconditions, block: { type: "preflight_blocked", toolName: "present_code_change", source: "session", match: { description: STANCE, concept: STANCE, rejectedAt: block.stance?.rejectedAt, proposal: "x", via: "surface" } } },
+    }, registrationTokenOf(w));
+    expect(await res.json()).toMatchObject({ status: "refused", reason: "prior_appeared" });
+    const newEntry = (await world.blocks()).find((b) => b.supersedesAllowanceId === allowanceId)!;
+    expect(newEntry.preconditions).toEqual([expect.objectContaining({ kind: "code_change_prior", priorCodeChangeId: prior.id })]);
+  });
+});

@@ -154,33 +154,38 @@ describe("ToastLayer", () => {
       expect(screen.queryByText(/proposed:/i)).not.toBeInTheDocument();
     });
 
-    // Q2 — the label reads "Retire this stance" now. The old "Not my taste"
-    // (and its "scopes the stance down" tooltip) described a feature we don't
-    // have: overrideRejectedApproach DELETES the entry from this project's
-    // rejectedApproaches and records an approval instance. Nothing narrows.
-    it("offers 'Retire this stance' on a personal block, and clicking it overrides + dismisses", async () => {
-      const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: "overridden", retired: 1 }) });
-      vi.stubGlobal("fetch", fetchMock);
+    // #470 (§3a) — BEHAVIOUR CHANGE. The toast used to carry "Retire this
+    // stance" as a one-click muted link: a destructive delete-everywhere right
+    // where a misclick lands. Retire now lives on the gate-log entry behind a
+    // confirm; the toast's primary action is "Allow this proposal once".
+    it("offers NO Retire control on a personal block; 'Allow this proposal once' is the primary 32px button; 'More options' opens the gate log at the entry", async () => {
       push("preflight-block", {
         title: "x",
-        hero: heroOf({ source: "session", concept: "pay-per-request hosting", description: "Deploy: Railway", via: "concept" }),
+        hero: heroOf({ source: "session", concept: "pay-per-request hosting", description: "Deploy: Railway", via: "concept", blockId: "blk_1", eligible: true }),
       });
       render(<ToastLayer />);
-      await userEvent.click(screen.getByRole("button", { name: /retire this stance/i }));
-      // POSTs the override with the stance identity (description + concept).
-      const call = fetchMock.mock.calls.find((c: any) => String(c[0]).includes("/api/philosophy/override"));
-      expect(call).toBeTruthy();
-      const body = JSON.parse(call![1].body);
-      expect(body).toMatchObject({ source: "session", description: "Deploy: Railway", concept: "pay-per-request hosting" });
-      // The block toast is dismissed after overriding.
-      expect(screen.queryByText("Blocked by your taste")).not.toBeInTheDocument();
-      vi.unstubAllGlobals();
+      expect(screen.queryByRole("button", { name: /retire/i })).not.toBeInTheDocument();
+      const allow = screen.getByRole("button", { name: "Allow this proposal once" });
+      expect(allow.className).toMatch(/min-h-\[32px\]/);
+      expect(allow.className).toMatch(/min-w-\[32px\]/);
+      expect(allow.className).toMatch(/bg-accent-violet/);
+      await userEvent.click(screen.getByRole("button", { name: "More options" }));
+      const { usePreflightBlockStore } = await import("../../stores/preflightBlocks");
+      expect(usePreflightBlockStore.getState().focusRequest?.blockId).toBe("blk_1");
+    });
+
+    it("an ineligible personal block shows no Allow-once button, just an honest line", () => {
+      push("preflight-block", { title: "x", hero: heroOf({ source: "session", blockId: "blk_2", eligible: false, ineligibleReason: "unsupported_tool" }) });
+      render(<ToastLayer />);
+      expect(screen.queryByRole("button", { name: /allow/i })).not.toBeInTheDocument();
+      expect(screen.getByTestId("allow-once-ineligible-line")).toHaveTextContent("isn't available for this kind of proposal yet");
     });
 
     it("does NOT offer override on a team block — points to team.json instead", () => {
       push("preflight-block", { title: "x", hero: heroOf({ source: "team", via: "avoid" }) });
       render(<ToastLayer />);
-      expect(screen.queryByRole("button", { name: /retire this stance/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /retire/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /allow/i })).not.toBeInTheDocument();
       expect(screen.getByText(/edit team\.json/i)).toBeInTheDocument();
     });
   });

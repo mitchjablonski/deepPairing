@@ -5,6 +5,16 @@ import {
   type PreflightBlockRecord,
 } from "../stores/preflightBlocks";
 import { useOverlayPresence } from "../stores/overlay";
+import { useAllowOnceStore } from "../stores/allowOnce";
+import { useLedgerStore } from "../stores/ledger";
+import { useOfflineReason } from "../hooks/useOfflineReason";
+import {
+  gateEntryDomId,
+  ineligibleText,
+  openGateLogEntry,
+  postRevoke,
+  receiptLabel,
+} from "../lib/stanceException";
 
 /**
  * #169 — header chip + popover surfacing recent pre-flight GATE BLOCKS.
@@ -89,6 +99,8 @@ export function PreflightBlockLog() {
     if (open && loaded) markSeen();
   }, [open, loaded, markSeen]);
   useOverlayPresence(open); // UX4 — only while the popover is open (the chip is always mounted)
+  const setLogOpen = usePreflightBlockStore((s) => s.setLogOpen);
+  useEffect(() => { setLogOpen(open); return () => setLogOpen(false); }, [open, setLogOpen]);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
 
@@ -100,6 +112,8 @@ export function PreflightBlockLog() {
       const target = e.target as Node | null;
       if (popoverRef.current?.contains(target ?? null)) return;
       if (triggerRef.current?.contains(target ?? null)) return;
+      // #470 — the Allow-once dialog this log opened is not "outside".
+      if ((target as Element | null)?.closest?.("[data-allow-once-dialog]")) return;
       setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
@@ -113,10 +127,35 @@ export function PreflightBlockLog() {
     };
   }, [open]);
 
+  // #470 — "More options" on the toast and the changed-state links open this
+  // log at one entry and move focus to it (an explicit request).
+  const focusRequest = usePreflightBlockStore((s) => s.focusRequest);
+  const clearFocusRequest = usePreflightBlockStore((s) => s.clearFocusRequest);
+  const [showAll, setShowAll] = useState(false);
+  useEffect(() => {
+    if (!focusRequest) return;
+    setOpen(true);
+    const id = focusRequest.blockId;
+    if (id && blocks.findIndex((b) => (b.serverId ?? b.id) === id) >= POPOVER_LIMIT) setShowAll(true);
+  }, [focusRequest, blocks]);
+  useEffect(() => {
+    if (!open || !focusRequest) return;
+    const id = focusRequest.blockId;
+    const t = setTimeout(() => {
+      const el = id ? document.getElementById(gateEntryDomId(id)) : null;
+      if (el) {
+        el.focus();
+        el.scrollIntoView?.({ block: "nearest" });
+      }
+      clearFocusRequest();
+    }, 0);
+    return () => clearTimeout(t);
+  }, [open, focusRequest, showAll, clearFocusRequest]);
+
   const hasBlocks = blocks.length > 0;
   const unread = unreadBlockCount({ blocks, lastSeenAt });
   const dotClass = hasBlocks ? "bg-accent-amber" : "bg-text-muted/60";
-  const recent = blocks.slice(0, POPOVER_LIMIT);
+  const recent = showAll ? blocks : blocks.slice(0, POPOVER_LIMIT);
 
   return (
     <div className="relative">
@@ -199,38 +238,7 @@ export function PreflightBlockLog() {
           ) : (
             <ul className="max-h-72 overflow-y-auto divide-y divide-border-default">
               {recent.map((block) => (
-                <li key={block.id} className="px-3 py-2 text-2xs">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-semibold text-text-primary break-words min-w-0">
-                      "{block.concept}"
-                    </span>
-                    <span className="shrink-0 text-[10px] text-text-muted" title={block.at}>
-                      {formatRelative(block.at)}
-                    </span>
-                  </div>
-                  {block.proposal && block.proposal !== block.concept && (
-                    <div className="mt-0.5 text-text-muted break-words">
-                      {/* R2 (contrast) — was `text-text-muted/70`: 3.02:1 dark
-                          / 2.95:1 light on surface-elevated, the worst pairing
-                          in the batch and, of all places, in the moat's own
-                          panel. The alpha modifier was doing the job a token
-                          should do (PendingBanner:113-117 documents this exact
-                          class). A LABEL should read stronger than its value
-                          anyway, so it steps UP to the solid secondary token:
-                          8.29:1 dark / 8.77:1 light, and the row still reads as
-                          label + quote because the value stays muted. */}
-                      <span className="text-text-secondary">Proposed:</span> "{block.proposal}"
-                    </div>
-                  )}
-                  {block.reason && (
-                    <div className="mt-0.5 italic text-text-secondary break-words">
-                      "{block.reason}"
-                    </div>
-                  )}
-                  <div className="mt-1 text-[10px] text-text-muted">
-                    {sourceLabel(block)} · {matchDetail(block.via)}
-                  </div>
-                </li>
+                <GateBlockEntry key={block.id} block={block} blocks={blocks} />
               ))}
             </ul>
           )}
@@ -238,4 +246,179 @@ export function PreflightBlockLog() {
       )}
     </div>
   );
+}
+
+/**
+ * #470 (§3a, §4) — one gate-log entry: what fired, plus the actions. "Allow
+ * once" is the primary 32px button; "Retire…" is a secondary 32px button behind
+ * a one-step confirm whose focus starts on Cancel (so Enter never retires).
+ * The receipt shows the allowance's state; "changed" links both ways.
+ */
+function GateBlockEntry({ block, blocks }: { block: PreflightBlockRecord; blocks: PreflightBlockRecord[] }) {
+  const offline = useOfflineReason();
+  const openDialog = useAllowOnceStore((s) => s.open);
+  const [confirming, setConfirming] = useState(false);
+  const [revokeError, setRevokeError] = useState<string | null>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const retireRef = useRef<HTMLButtonElement>(null);
+  // #501 review (Luna P2) — Retire… isn't mounted while the confirm shows, so
+  // focus goes back to it AFTER the render that brings it back, never before.
+  const restoreRetireFocus = useRef(false);
+  useEffect(() => {
+    if (confirming) cancelRef.current?.focus();
+    else if (restoreRetireFocus.current) {
+      restoreRetireFocus.current = false;
+      retireRef.current?.focus();
+    }
+  }, [confirming]);
+  const serverId = block.serverId ?? block.id;
+  const receipt = block.allowance;
+  const keyOf = (b: PreflightBlockRecord) => b.serverId ?? b.id;
+  const replacement = receipt?.supersededByBlockId ? blocks.find((b) => keyOf(b) === receipt.supersededByBlockId) : undefined;
+  const replaced = block.supersedesAllowanceId ? blocks.find((b) => b.allowance?.id === block.supersedesAllowanceId) : undefined;
+  const cancelConfirm = () => { restoreRetireFocus.current = true; setConfirming(false); };
+
+  return (
+    <li id={gateEntryDomId(serverId)} tabIndex={-1} data-testid="gate-block-entry" className="px-3 py-2 text-2xs outline-none focus:bg-surface-hover">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-semibold text-text-primary break-words min-w-0">
+          "{block.concept}"
+        </span>
+        <span className="shrink-0 text-[10px] text-text-muted" title={block.at}>
+          {formatRelative(block.at)}
+        </span>
+      </div>
+      {block.proposal && block.proposal !== block.concept && (
+        <div className="mt-0.5 text-text-muted break-words">
+          {/* R2 (contrast) — the label reads stronger than its value. */}
+          <span className="text-text-secondary">Proposed:</span> "{block.proposal}"
+        </div>
+      )}
+      {block.reason && (
+        <div className="mt-0.5 italic text-text-secondary break-words">
+          "{block.reason}"
+        </div>
+      )}
+      <div className="mt-1 text-[10px] text-text-muted">
+        {sourceLabel(block)} · {matchDetail(block.via)}
+      </div>
+
+      {block.supersedesAllowanceId && (
+        <div className="mt-1 text-text-secondary" data-testid="gate-replaces">
+          Replaces{" "}
+          <button type="button" className="underline cursor-pointer hover:text-text-primary" onClick={() => replaced && openGateLogEntry(keyOf(replaced))} disabled={!replaced}>
+            the proposal you allowed
+          </button>
+          {replaced?.allowance?.grantedAt ? ` at ${new Date(replaced.allowance.grantedAt).toLocaleTimeString()}` : ""}.
+        </div>
+      )}
+
+      {receipt && (
+        <div className="mt-1 text-text-secondary" data-testid="gate-receipt" data-state={receipt.state}>
+          <span className="font-medium">{receiptLabel(receipt.state, receipt.grantedVia)}</span>
+          {receipt.reason && <span className="italic"> — “{receipt.reason}”</span>}
+          {receipt.state === "used" && receipt.artifactId && <span> → {receipt.artifactId}</span>}
+        </div>
+      )}
+      {receipt?.state === "changed" && (
+        <div className="mt-1 text-text-secondary" data-testid="gate-changed">
+          {changedSentence(replacement)}{" "}
+          {receipt.supersededByBlockId ? (
+            <>
+              Allow{" "}
+              <button type="button" className="underline cursor-pointer hover:text-text-primary" onClick={() => openGateLogEntry(receipt.supersededByBlockId)}>
+                the new block
+              </button>{" "}
+              if you still want it.
+            </>
+          ) : null}
+        </div>
+      )}
+
+      {block.source === "session" && (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {block.eligible && !receipt && (
+            <button
+              type="button"
+              disabled={!!offline}
+              title={offline ?? "Let this exact proposal through once. The stance stays on for everything else."}
+              onClick={(e) => openDialog({ blockId: serverId, concept: block.concept, returnFocusTo: e.currentTarget })}
+              className="min-h-[32px] min-w-[32px] cursor-pointer px-3 rounded bg-accent-violet text-white text-2xs font-semibold hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Allow once
+            </button>
+          )}
+          {receipt?.state === "allowed" && (
+            <button
+              type="button"
+              disabled={!!offline}
+              title={offline ?? "Turn this allowance off before Claude uses it."}
+              onClick={async () => {
+                const r = await postRevoke(receipt.id);
+                setRevokeError(r.ok ? null : r.message ?? "Revoke failed");
+              }}
+              className="min-h-[32px] min-w-[32px] cursor-pointer px-3 rounded border border-border-default text-2xs text-text-secondary hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Revoke
+            </button>
+          )}
+          {!confirming && (
+            <button
+              ref={retireRef}
+              type="button"
+              disabled={!!offline}
+              title={offline ?? undefined}
+              onClick={() => setConfirming(true)}
+              className="min-h-[32px] min-w-[32px] cursor-pointer px-3 rounded border border-border-default text-2xs text-text-secondary hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Retire…
+            </button>
+          )}
+          {block.eligible === false && block.ineligibleReason && (
+            <span className="text-[10px] text-text-muted italic" data-testid="gate-ineligible">{ineligibleText(block.ineligibleReason)}</span>
+          )}
+        </div>
+      )}
+      {confirming && (
+        <div
+          role="group"
+          aria-label={`Retire '${block.concept}'?`}
+          data-testid="retire-confirm"
+          onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); cancelConfirm(); } }}
+          className="mt-2 rounded border border-accent-red/40 bg-accent-red-dim/20 p-2 space-y-2"
+        >
+          <p className="text-text-primary">
+            Retire '{block.concept}'? This deletes the stance from this project. It stops blocking everywhere, not just here.
+          </p>
+          <div className="flex gap-2">
+            <button ref={cancelRef} type="button" onClick={cancelConfirm}
+              className="min-h-[32px] min-w-[32px] cursor-pointer px-3 rounded border border-border-default text-2xs text-text-secondary hover:bg-surface-hover">
+              Cancel
+            </button>
+            <button type="button" disabled={!!offline} title={offline ?? undefined}
+              onClick={() => {
+                setConfirming(false);
+                void useLedgerStore.getState().overrideStance({ source: "session", description: block.description ?? block.concept, concept: block.concept });
+              }}
+              className="min-h-[32px] min-w-[32px] cursor-pointer px-3 rounded bg-accent-red text-white text-2xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed">
+              Retire
+            </button>
+          </div>
+        </div>
+      )}
+      {revokeError && <div role="alert" className="mt-1 text-accent-red">{revokeError}</div>}
+    </li>
+  );
+}
+
+/** Second person, about the agent's NEW dependency (§4 "Where you see it"). */
+function changedSentence(replacement: PreflightBlockRecord | undefined): string {
+  const p = replacement?.preconditions?.[0];
+  if (p?.kind === "code_change_prior" && p.priorCodeChangeId) {
+    return `The agent's proposal now depends on a newer ${p.priorCodeChangeId}.`;
+  }
+  if (p?.kind === "revise_target") {
+    return `${p.targetId} changed after you allowed this revision.`;
+  }
+  return "The agent's proposal changed after you allowed it.";
 }
