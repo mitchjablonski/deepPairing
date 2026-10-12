@@ -51,6 +51,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { buildSync } from "esbuild";
 import { ensureStopHook, ensureCheckpointHook } from "../../cli/setup-tasks.js";
+import { beginHookSpawn, hookSpawnDiagnostic, observeHookChild } from "../../__tests__/hook-spawn-diagnostics.js";
+import { HOOK_LOCK_FIXTURE_EPOCH_MS, prepareHookLockObserver } from "../../__tests__/hook-lock-diagnostics.js";
 
 const TIMEOUT = 10_000;
 
@@ -206,11 +208,18 @@ type RunOptions = {
   env?: Record<string, string | undefined>;
   /** `core` lane only — the expression to evaluate against the module. */
   coreScript?: string;
+  /** Clock/syscall metadata only; never enabled for other contract cases. */
+  observeLockClock?: boolean;
+  /** Only the explicitly aged stale-lock fixtures, never general hook tests. */
+  fixtureEpochMs?: number;
 };
 
-function run(lane: Lane, root: string, opts: RunOptions = {}): SpawnSyncReturns<string> {
+function run(lane: Lane, root: string, opts: RunOptions = {}): SpawnSyncReturns<string> & { diagnostic: string } {
   const args: string[] = [];
-  if (opts.preload) {
+  const observation = beginHookSpawn(lane, TIMEOUT, statePath(root));
+  if (opts.observeLockClock) {
+    args.push("--import", pathToFileURL(prepareHookLockObserver(observation, opts.preload, { fixtureEpochMs: opts.fixtureEpochMs })).href);
+  } else if (opts.preload) {
     const preload = path.join(root, `preload.${Math.random().toString(16).slice(2)}.mjs`);
     fs.writeFileSync(preload, opts.preload);
     args.push("--import", pathToFileURL(preload).href);
@@ -227,31 +236,33 @@ function run(lane: Lane, root: string, opts: RunOptions = {}): SpawnSyncReturns<
   } else {
     args.push(scriptFor(lane, root));
   }
-  return spawnSync(process.execPath, args, {
+  const result = spawnSync(process.execPath, args, {
     cwd: root,
     encoding: "utf8",
     input: opts.input ?? defaultInput(lane),
     timeout: TIMEOUT,
     env: { ...process.env, CLAUDE_PROJECT_DIR: root, DEEPPAIRING_PROJECT_ROOT: root, ...opts.env },
   });
+  return { ...result, diagnostic: hookSpawnDiagnostic(observation, result) };
 }
 
 /** Exit 0, never deny, no uncaught stack, and exactly one new fire record. */
-function expectOneCleanFire(lane: Lane, root: string, opts: RunOptions = {}): string {
+function expectOneCleanFire(lane: Lane, root: string, opts: RunOptions = {}, capture?: (diagnostic: string) => void): string {
   const before = fires(root).length;
   const result = run(lane, root, opts);
+  capture?.(result.diagnostic);
   // `result.error` is set when spawnSync had to kill the child on `timeout` —
   // this is the assertion that turns a hang into a failure.
-  expect(result.error, `${lane}: ${result.stderr}`).toBeUndefined();
-  expect(result.status, `${lane}: ${result.stderr}`).toBe(0);
-  expect(result.stdout).not.toContain("deny");
-  expect(result.stderr).not.toContain("ReferenceError");
-  expect(result.stderr, `${lane} leaked a stack trace`).not.toMatch(/^\s+at .+:\d+:\d+$/m);
+  expect(result.error, result.diagnostic).toBeUndefined();
+  expect(result.status, result.diagnostic).toBe(0);
+  expect(result.stdout, result.diagnostic).not.toContain("deny");
+  expect(result.stderr, result.diagnostic).not.toContain("ReferenceError");
+  expect(result.stderr, `${lane} leaked a stack trace: ${result.diagnostic}`).not.toMatch(/^\s+at .+:\d+:\d+$/m);
   const after = fires(root);
-  expect(after.length - before, `${lane} fire delta`).toBe(1);
+  expect(after.length - before, `${lane} fire delta: ${result.diagnostic}`).toBe(1);
   const record = after.at(-1) as { exitCode?: number; reason?: string };
-  expect(record.exitCode).toBe(0);
-  expect(typeof record.reason).toBe("string");
+  expect(record.exitCode, result.diagnostic).toBe(0);
+  expect(typeof record.reason, result.diagnostic).toBe("string");
   return record.reason!;
 }
 
@@ -340,6 +351,7 @@ describe.each(HOOK_LANES)("%s — missing directories", (lane) => {
     const jail = fs.mkdtempSync(path.join(os.tmpdir(), "dp-contract-jail-"));
     roots.push(jail);
     fs.writeFileSync(path.join(jail, ".deeppairing"), "not a directory");
+    const observation = beginHookSpawn(lane, TIMEOUT, statePath(jail));
     const result = spawnSync(process.execPath, [script], {
       cwd: jail,
       encoding: "utf8",
@@ -347,9 +359,10 @@ describe.each(HOOK_LANES)("%s — missing directories", (lane) => {
       timeout: TIMEOUT,
       env: { ...process.env, CLAUDE_PROJECT_DIR: jail, DEEPPAIRING_PROJECT_ROOT: jail },
     });
-    expect(result.error, result.stderr).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).not.toContain("deny");
+    const diagnostic = hookSpawnDiagnostic(observation, result);
+    expect(result.error, diagnostic).toBeUndefined();
+    expect(result.status, diagnostic).toBe(0);
+    expect(result.stdout, diagnostic).not.toContain("deny");
   });
 });
 
@@ -380,10 +393,10 @@ describe.each(ALL_LANES)("%s — filesystem faults on the lock", (lane) => {
     const env = { DP_FAULT_LOG: log };
     if (kindOf(lane) === "core") {
       const result = run(lane, root, { preload, env });
-      expect(result.error, result.stderr).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
+      expect(result.error, result.diagnostic).toBeUndefined();
+      expect(result.status, result.diagnostic).toBe(0);
       // null means "proceed unsynchronized", never "throw" and never "spin".
-      expect(result.stdout.trim()).toBe("null");
+      expect(result.stdout.trim(), result.diagnostic).toBe("null");
     } else {
       expectOneCleanFire(lane, root, { preload, env });
     }
@@ -396,7 +409,9 @@ describe.each(ALL_LANES)("%s — stale lock recovery", (lane) => {
     const lock = statePath(root) + ".lock";
     fs.mkdirSync(path.dirname(lock), { recursive: true });
     fs.writeFileSync(lock, "");
-    const old = new Date(Date.now() - 10_000);
+    // The child uses this same epoch plus monotonic elapsed time. A host wall
+    // clock step cannot turn this deliberately stale fixture into a live lock.
+    const old = new Date(HOOK_LOCK_FIXTURE_EPOCH_MS - 10_000);
     fs.utimesSync(lock, old, old);
     return lock;
   }
@@ -404,14 +419,17 @@ describe.each(ALL_LANES)("%s — stale lock recovery", (lane) => {
   it("breaks a stale lock and leaves none behind", () => {
     const root = makeRoot();
     const lock = plantStaleLock(root);
+    let diagnostic = "";
     if (kindOf(lane) === "core") {
-      const result = run(lane, root);
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout.trim()).toBe(lock);
+      const result = run(lane, root, { observeLockClock: true, fixtureEpochMs: HOOK_LOCK_FIXTURE_EPOCH_MS });
+      diagnostic = result.diagnostic;
+      expect(result.error, diagnostic).toBeUndefined();
+      expect(result.status, result.diagnostic).toBe(0);
+      expect(result.stdout.trim(), result.diagnostic).toBe(lock);
     } else {
-      expectOneCleanFire(lane, root);
+      expectOneCleanFire(lane, root, { observeLockClock: true, fixtureEpochMs: HOOK_LOCK_FIXTURE_EPOCH_MS }, value => { diagnostic = value; });
     }
-    expect(fs.existsSync(lock)).toBe(false);
+    expect(fs.existsSync(lock), diagnostic).toBe(false);
   });
 
   /**
@@ -439,15 +457,17 @@ fs.openSync = (p, ...a) => {
   return real(p, ...a);
 };
 `;
+    let diagnostic = "";
     if (kindOf(lane) === "core") {
-      const result = run(lane, root, { preload });
-      expect(result.error, result.stderr).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout.trim(), "stale-lock recovery was skipped once the deadline passed").toBe(lock);
+      const result = run(lane, root, { preload, observeLockClock: true, fixtureEpochMs: HOOK_LOCK_FIXTURE_EPOCH_MS });
+      diagnostic = result.diagnostic;
+      expect(result.error, result.diagnostic).toBeUndefined();
+      expect(result.status, result.diagnostic).toBe(0);
+      expect(result.stdout.trim(), `stale-lock recovery was skipped once the deadline passed: ${result.diagnostic}`).toBe(lock);
     } else {
-      expectOneCleanFire(lane, root, { preload });
+      expectOneCleanFire(lane, root, { preload, observeLockClock: true, fixtureEpochMs: HOOK_LOCK_FIXTURE_EPOCH_MS }, value => { diagnostic = value; });
     }
-    expect(fs.existsSync(lock), "the stale lock survived — no code will ever remove it").toBe(false);
+    expect(fs.existsSync(lock), `the stale lock survived: ${diagnostic}`).toBe(false);
   });
 
   it("gives up bounded on a stale lock it cannot unlink", () => {
@@ -456,16 +476,20 @@ fs.openSync = (p, ...a) => {
     const log = faultLog(root);
     const preload = fsFault("hooks-state.json.lock", { unlinkSync: "EACCES", openSync: "EEXIST" });
     const env = { DP_FAULT_LOG: log };
+    let diagnostic = "";
     if (kindOf(lane) === "core") {
-      const result = run(lane, root, { preload, env });
-      expect(result.error, result.stderr).toBeUndefined();
-      expect(result.stdout.trim()).toBe("null");
+      const result = run(lane, root, { preload, env, observeLockClock: true, fixtureEpochMs: HOOK_LOCK_FIXTURE_EPOCH_MS });
+      diagnostic = result.diagnostic;
+      expect(result.error, result.diagnostic).toBeUndefined();
+      expect(result.status, result.diagnostic).toBe(0);
+      expect(result.stdout.trim(), result.diagnostic).toBe("null");
     } else {
-      expectOneCleanFire(lane, root, { preload, env });
+      expectOneCleanFire(lane, root, { preload, env, observeLockClock: true, fixtureEpochMs: HOOK_LOCK_FIXTURE_EPOCH_MS }, value => { diagnostic = value; });
     }
     // The unlink must actually have been attempted: the whole point of the
     // one-shot brokeStale guard is that the breaker RUNS here and then stops.
-    expect(fs.readFileSync(log, "utf8")).toContain("unlinkSync:EACCES");
+    expect(fs.existsSync(log), diagnostic).toBe(true);
+    expect(fs.readFileSync(log, "utf8"), diagnostic).toContain("unlinkSync:EACCES");
   });
 });
 
@@ -515,25 +539,26 @@ describe.each(HOOK_LANES)("%s — contention", (lane) => {
       const root = makeRoot();
       const N = 8;
       const script = scriptFor(lane, root);
-      const codes = await Promise.all(
-        Array.from({ length: N }, () =>
-          new Promise<number | null>((resolve, reject) => {
-            const child = spawn(process.execPath, [script], {
-              cwd: root,
-              env: { ...process.env, CLAUDE_PROJECT_DIR: root, DEEPPAIRING_PROJECT_ROOT: root },
-              stdio: ["pipe", "ignore", "ignore"],
-              timeout: TIMEOUT,
-            });
-            child.stdin.end(defaultInput(lane));
-            child.on("error", reject);
-            child.on("exit", resolve);
-          }),
-        ),
+      const results = await Promise.all(
+        Array.from({ length: N }, () => {
+          const observation = beginHookSpawn(lane, TIMEOUT, statePath(root));
+          const child = spawn(process.execPath, [script], {
+            cwd: root,
+            env: { ...process.env, CLAUDE_PROJECT_DIR: root, DEEPPAIRING_PROJECT_ROOT: root },
+            stdio: ["pipe", "pipe", "pipe"],
+            timeout: TIMEOUT,
+          });
+          const result = observeHookChild(child, observation);
+          child.stdin!.end(defaultInput(lane));
+          return result;
+        }),
       );
-      expect(codes).toEqual(Array.from({ length: N }, () => 0));
+      const diagnostic = results.map(result => result.diagnostic).join("\n");
+      expect(results.map(result => result.error), diagnostic).toEqual(Array.from({ length: N }, () => undefined));
+      expect(results.map(result => result.status), diagnostic).toEqual(Array.from({ length: N }, () => 0));
       // The lock exists so that 8 read-modify-writes do not collapse into 4.
-      expect(fires(root).length).toBe(N);
-      expect(fs.existsSync(statePath(root) + ".lock")).toBe(false);
+      expect(fires(root).length, diagnostic).toBe(N);
+      expect(fs.existsSync(statePath(root) + ".lock"), diagnostic).toBe(false);
     },
     TIMEOUT * 3,
   );
