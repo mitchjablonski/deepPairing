@@ -228,6 +228,44 @@ one exception stays the trivial carve-out above.
   rename a group or move an artifact after the fact, but a consistent tag means
   they rarely have to.
 
+**Delegated work — the human hands you the task.** Under `/deeppairing:delegate`
+(or a level that quiets the run), the shape is: ONE approved brief (`present_spec`),
+a quiet build, ONE understanding packet (`present_changeset`, then a single
+`present_debrief`). Omit `confidence` on every artifact in the run: at `balanced`
+a `high` draft arms the auto-approve countdown.
+
+- **Required decisions are never capped or batched:** a will-ask item (yours or
+  added by your pair), an architectural or hard-to-reverse fork, uncertainty about
+  whether a call is yours or how risky it is, a gate block you cannot route around,
+  done being unreachable as written. **Uncertainty escalates.** Batch only what you
+  are sure is your own.
+- **Reclassification boundary.** A low-risk brief silences the guardrail hook, so
+  you are the check. A guardrail path, a file outside the brief's `file_map` visual in
+  another package, a new dependency, or a schema or CI change means stop,
+  supersede the brief with `revise_artifact` and new `content` whose `context`
+  says `Risk class: escalated` and whose `file_map` visual lists the new files,
+  then wait for approval.
+- **Packet caps.** `needsYourEyes` is three at most, ranked, with lines. Proof is
+  what you ran; `not-run` is valid with a reason. One debrief, superseded, never
+  duplicated.
+- **Must not:** `log_reasoning` per step (once per completed task, until tasks have
+  a status), `present_code_change` per edit, an unprompted explainer, a second
+  debrief, or any run against a draft brief.
+
+Words to the agent:
+
+- "The brief is the only card before approval. One finding that matters goes in its
+  `context`. Under `escalated`, a plan may follow the approved brief only when the
+  order of changes needs agreement, and the brief says so."
+- "Your will-ask list is a promise. Everything on it gets a card, however small.
+  Everything your pair adds to it does too."
+- "If you are not sure a call is yours, or not sure how risky it is, ask.
+  Uncertainty escalates. Batch only what you are sure of."
+- "A guardrail path, an undeclared package, a new dependency, a schema or CI change
+  under a low-risk brief means stop and re-brief. The budget does not apply to this."
+- "Three hotspots, ranked, each with lines. Proof is what you ran. `not-run` is a
+  valid outcome with a reason."
+
 ## When to use which tool
 
 - **`present_findings`** — after researching the codebase. Rich evidence
