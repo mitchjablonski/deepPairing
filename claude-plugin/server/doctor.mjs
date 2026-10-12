@@ -18012,6 +18012,7 @@ async function doctor(cwd, opts = {}) {
         const expectedPid = mine.pid;
         fixes.push({
           label: `Restart stale daemon (PID ${expectedPid}, running ${mine.version ? "v" + mine.version : "unversioned"} < plugin v${SERVER_VERSION})`,
+          requiresExplicitConfirmation: opts.protectSharedScopes,
           apply: async () => {
             const reprobe = await probeDaemonIdentity(port);
             if (!reprobe) {
@@ -18314,7 +18315,8 @@ async function doctor(cwd, opts = {}) {
     console.log(`  ${dim(`\xB7 Could not check philosophy ledger health: ${err}`)}`);
   }
   try {
-    const roots = [dpDir, path9.dirname(getGlobalStore().getLedgerPath())];
+    const globalDir = path9.dirname(getGlobalStore().getLedgerPath());
+    const roots = [dpDir, globalDir];
     const rank = { clear: 0, doctor: 1, recover: 2, break: 3, lock: 4 };
     const locks = inspectLocks(roots).sort((a, b) => rank[a.kind] - rank[b.kind]);
     if (locks.length === 0) {
@@ -18331,6 +18333,7 @@ async function doctor(cwd, opts = {}) {
         } else if (lock.state === "dead") {
           fixes.push({
             label: `Remove dead-owner ${what.toLowerCase()} ${lock.path}`,
+            requiresExplicitConfirmation: opts.protectSharedScopes && (lock.path === globalDir || lock.path.startsWith(globalDir + path9.sep)),
             apply: () => {
               try {
                 const r = clearDeadLockFile(lock.path);
@@ -18423,7 +18426,7 @@ var help = `deepPairing doctor
 Usage: node "${entry}" [--fix] [--yes | -y]
 
 Reports without changing files by default. --fix proposes repairs; --yes accepts
-project-local repairs only. Shared/user hook cleanup and daemon termination need
+project-local repairs only. Shared/user hooks, global locks and daemon termination need
 interactive confirmation. Clock diagnostics never change host time or services.
 Project: CLAUDE_PROJECT_DIR, else DEEPPAIRING_PROJECT_ROOT, else current directory.
 `;

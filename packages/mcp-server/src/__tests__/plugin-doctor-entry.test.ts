@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ownLockIdentity } from "../store/file-lock.js";
 
 const pluginSrc = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../claude-plugin");
 let tmp: string;
@@ -59,6 +60,64 @@ function settings(root: string, name: string, data: unknown) {
 }
 
 describe("marketplace doctor, without dist or npm dependencies", () => {
+  it("--fix --yes clears local dead locks but preserves global dead locks", () => {
+    const identity = ownLockIdentity();
+    expect(identity).toBeTruthy();
+    const dead = spawnSync(process.execPath, ["-e", ""]);
+    expect(dead.status).toBe(0);
+    const owner = JSON.stringify({ ...identity, pid: dead.pid, processStartTime: null,
+      createdAt: "2020-01-01T00:00:00.000Z", nonce: "doctor-scope-test" });
+    const localDir = path.join(project, ".deeppairing");
+    const globalDir = path.join(home, ".deeppairing", "philosophy");
+    fs.mkdirSync(localDir, { recursive: true });
+    fs.mkdirSync(globalDir, { recursive: true });
+    const localLock = path.join(localDir, "session.json.lock");
+    const globalLock = path.join(globalDir, "v1.json.lock");
+    fs.writeFileSync(localLock, owner);
+    fs.writeFileSync(globalLock, owner);
+    const beforeHome = snapshot(home);
+    const result = run(["--fix", "--yes"]);
+    expect(result.status).toBe(0);
+    expect(result.text).toContain(`SKIPPED Remove dead-owner lock ${globalLock}`);
+    expect(fs.existsSync(localLock)).toBe(false);
+    expect(snapshot(home)).toEqual(beforeHome);
+  });
+
+  it("--fix --yes does not terminate this project's older daemon", async () => {
+    // An owned HTTP child advertises an old daemon identity. A faulty repair
+    // can only terminate this disposable child, never an unrelated process.
+    const child = spawn(process.execPath, ["--input-type=module", "-e", `
+      import http from "node:http";
+      const projectRoot = process.argv[1];
+      const server = http.createServer((req, res) => {
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify(req.url === "/api/daemon-info"
+          ? { pid: process.pid, projectRoot, startedAt: "2020-01-01T00:00:00.000Z", version: "0.0.1" }
+          : req.url === "/api/active-sessions" ? { sessions: [] } : {}));
+      });
+      server.listen(0, "127.0.0.1", () => console.log(server.address().port));
+    `, project], { stdio: ["ignore", "pipe", "pipe"], env: { HOME: home, USERPROFILE: home } });
+    const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+    try {
+      const port = await new Promise<number>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("owned HTTP child did not start")), 5000);
+        child.once("error", (err) => { clearTimeout(timer); reject(err); });
+        child.stdout.once("data", (data: Buffer) => { clearTimeout(timer); resolve(Number(data.toString().trim())); });
+      });
+      fs.mkdirSync(path.join(project, ".deeppairing"));
+      fs.writeFileSync(path.join(project, ".deeppairing", "daemon.json"),
+        JSON.stringify({ pid: child.pid, port, startedAt: "2020-01-01T00:00:00.000Z" }));
+      const result = run(["--fix", "--yes"]);
+      expect(result.status).toBe(0);
+      expect(result.text).toContain("SKIPPED Restart stale daemon");
+      expect(await fetch(`http://127.0.0.1:${port}/api/daemon-info`).then((res) => res.ok, () => false)).toBe(true);
+      expect(snapshot(home)).toEqual({});
+    } finally {
+      child.kill();
+      await exited;
+    }
+  });
+
   it("reports all existing checks from a different project, with spaces and no plugin env", () => {
     expect(fs.existsSync(path.join(tmp, "node_modules"))).toBe(false);
     expect(fs.existsSync(path.join(plugin, "packages"))).toBe(false);

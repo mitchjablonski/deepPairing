@@ -81,7 +81,7 @@ for repairs. In a noninteractive shell, `--fix` cancels without writing.
 
 `--fix --yes` accepts project-local repairs such as stale daemon metadata,
 gitignore, the checkpoint hook, redundant local plugin-hook rows and verified
-dead session locks. Shared/user hook cleanup and daemon termination require
+dead session locks. Shared/user hook cleanup, global lock removal and daemon termination require
 interactive confirmation and are skipped under `--yes`. Unrelated hooks are
 preserved. Clock checks only warn; doctor never changes host time or services,
 and never repairs the philosophy ledger automatically.

@@ -11,7 +11,7 @@ const help = `deepPairing doctor
 Usage: node "${entry}" [--fix] [--yes | -y]
 
 Reports without changing files by default. --fix proposes repairs; --yes accepts
-project-local repairs only. Shared/user hook cleanup and daemon termination need
+project-local repairs only. Shared/user hooks, global locks and daemon termination need
 interactive confirmation. Clock diagnostics never change host time or services.
 Project: CLAUDE_PROJECT_DIR, else DEEPPAIRING_PROJECT_ROOT, else current directory.
 `;

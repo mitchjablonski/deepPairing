@@ -17,8 +17,8 @@ If I explicitly requested `--fix`, run the same command with `--fix` to show the
 proposed repairs. Interactive confirmation happens in the terminal. If the shell
 cannot prompt, report the proposed repairs and give me the exact command to run
 myself; do not add `--yes` unless I explicitly requested unattended repairs.
-Unattended repairs use `--fix --yes` and skip shared/user hook cleanup and daemon
-termination. Do not interpolate arbitrary arguments into shell commands. Only
+Unattended repairs use `--fix --yes` and skip shared/user hook cleanup, global
+lock removal and daemon termination. Do not interpolate arbitrary arguments into shell commands. Only
 accept `--fix`, `--yes` or `-y` (the latter two require `--fix`); for any other
 arguments, show `node "${CLAUDE_PLUGIN_ROOT}/server/doctor.mjs" --help`.
 

@@ -246,6 +246,7 @@ export async function doctor(cwd: string, opts: { fix?: boolean; yes?: boolean; 
         const expectedPid = mine.pid;
         fixes.push({
           label: `Restart stale daemon (PID ${expectedPid}, running ${mine.version ? "v" + mine.version : "unversioned"} < plugin v${SERVER_VERSION})`,
+          requiresExplicitConfirmation: opts.protectSharedScopes,
           apply: async () => {
             // Re-confirm identity so we never signal a recycled pid or a daemon
             // that changed under us between diagnosis and apply.
@@ -611,7 +612,8 @@ export async function doctor(cwd: string, opts: { fix?: boolean; yes?: boolean; 
   // breakDeadLock, a stranded `.break` via the writers' `.recover` guard, and a
   // stranded `.break.recover` (a double crash; doctor is its ONLY remover).
   try {
-    const roots = [dpDir, path.dirname(getGlobalStore().getLedgerPath())];
+    const globalDir = path.dirname(getGlobalStore().getLedgerPath());
+    const roots = [dpDir, globalDir];
     // Fix order matters for a stranded chain: .recover, then .break, then the lock.
     const rank = { clear: 0, doctor: 1, recover: 2, break: 3, lock: 4 } as const;
     const locks = inspectLocks(roots).sort((a, b) => rank[a.kind] - rank[b.kind]);
@@ -632,6 +634,8 @@ export async function doctor(cwd: string, opts: { fix?: boolean; yes?: boolean; 
         } else if (lock.state === "dead") {
           fixes.push({
             label: `Remove dead-owner ${what.toLowerCase()} ${lock.path}`,
+            requiresExplicitConfirmation: opts.protectSharedScopes &&
+              (lock.path === globalDir || lock.path.startsWith(globalDir + path.sep)),
             apply: () => {
               try {
                 const r = clearDeadLockFile(lock.path);
