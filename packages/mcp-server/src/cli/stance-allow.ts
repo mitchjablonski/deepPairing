@@ -86,7 +86,9 @@ export function defaultPager(text: string, env: NodeJS.ProcessEnv): Promise<numb
  * Shown as a visible token instead of raw: every C0/C1 control except tab and
  * newline, every Unicode format character (bidi overrides and isolates such as
  * U+202E, zero-width spaces and joiners, the BOM, tag characters), lone
- * surrogates, and the line/paragraph separators U+2028/U+2029.
+ * surrogates, the line/paragraph separators, non-ASCII spaces, and default
+ * ignorable characters (including invisible fillers and variation selectors).
+ * Braille blank U+2800 is invisible too, though not default-ignorable.
  *
  * The escaping is INJECTIVE, so two different raw strings never display the
  * same: each hidden character becomes `⟨NAME⟩` (`⟨CR⟩`, `⟨ESC⟩`,
@@ -96,10 +98,13 @@ export function defaultPager(text: string, env: NodeJS.ProcessEnv): Promise<numb
  * with the typed characters `^M`, `\r` or even `⟨CR⟩` (shown `⟨⟨⟩CR⟩`).
  * Apply it exactly once per displayed string.
  */
-const HIDDEN = /[^\P{Cc}\t\n]|\p{Cf}|\p{Cs}|\p{Zl}|\p{Zp}|⟨/gu;
-const NAMED: Record<number, string> = { 0x00: "NUL", 0x07: "BEL", 0x08: "BS", 0x0b: "VT", 0x0c: "FF", 0x0d: "CR", 0x1b: "ESC", 0x7f: "DEL" };
-export function safeText(value: string): string {
+const HIDDEN = /[^\P{Cc}\t\n]|\p{Cf}|\p{Cs}|\p{Zl}|\p{Zp}|[^\P{Zs} ]|\p{Default_Ignorable_Code_Point}|\u2800|⟨|[ \t]/gu;
+const NAMED: Record<number, string> = { 0x00: "NUL", 0x07: "BEL", 0x08: "BS", 0x09: "TAB", 0x0b: "VT", 0x0c: "FF", 0x0d: "CR", 0x1b: "ESC", 0x20: "SPACE", 0x7f: "DEL" };
+export function safeText(value: string, markWhitespace = false): string {
   return value.replace(HIDDEN, (ch) => {
+    // #506 — only changed whitespace-sensitive diff lines opt in. Tokens use
+    // the same reserved delimiter, so a literal ⟨SPACE⟩ cannot impersonate one.
+    if (!markWhitespace && (ch === " " || ch === "\t")) return ch;
     if (ch === "⟨") return "⟨⟨⟩";
     const cp = ch.codePointAt(0)!;
     return `⟨${NAMED[cp] ?? `U+${cp.toString(16).toUpperCase().padStart(4, "0")}`}⟩`;
@@ -139,6 +144,21 @@ export function unifiedDiff(filePath: string, before: string, after: string, env
   const out: string[] = [c.bold(`--- a/${safeText(filePath)}`), c.bold(`+++ b/${safeText(filePath)}`)];
   const changed = lines.map((l, i) => (l.type === "unchanged" ? -1 : i)).filter((i) => i >= 0);
   if (changed.length === 0) return [...out, c.dim("(no changes)")].join("\n");
+  // Compare raw text, never display-normalized text. Mark spaces/tabs where
+  // they are the only difference (including mixed proposals with ordinary
+  // edits elsewhere); leave unchanged context and ordinary edits readable.
+  const withoutHorizontalSpace = (s: string) => s.replace(/[ \t]/g, "");
+  const removed = new Set(lines.filter((l) => l.type === "removed").map((l) => withoutHorizontalSpace(l.content)));
+  const added = new Set(lines.filter((l) => l.type === "added").map((l) => withoutHorizontalSpace(l.content)));
+  const onlyWhitespace = before.replace(/[ \t\n]/g, "") === after.replace(/[ \t\n]/g, "");
+  const markLine = (l: (typeof lines)[number]) => l.type !== "unchanged" &&
+    (onlyWhitespace || (l.type === "removed" ? added : removed).has(withoutHorizontalSpace(l.content)));
+  if (lines.some((l) => markLine(l) && /[ \t]/.test(l.content))) {
+    out.push(c.dim("Whitespace on marked change lines: ⟨SPACE⟩ = space; ⟨TAB⟩ = tab. Unchanged context is not marked."));
+  }
+  if (lines.some((l) => l.type !== "unchanged" && l.content === "")) {
+    out.push(c.dim("Changed empty lines contain no characters and are shown as a bare + or -."));
+  }
   // Group changes into hunks with `context` lines around each.
   let i = 0;
   while (i < changed.length) {
@@ -155,10 +175,15 @@ export function unifiedDiff(filePath: string, before: string, after: string, env
     const newCount = hunk.filter((l) => l.type !== "removed").length;
     out.push(c.cyan(`@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`));
     for (const l of hunk) {
-      const line = safeText(l.content);
+      const line = safeText(l.content, markLine(l));
       out.push(l.type === "added" ? c.green(`+${line}`) : l.type === "removed" ? c.red(`-${line}`) : ` ${line}`);
     }
     i++;
+  }
+  // LF is a line separator, not part of DiffLine.content. State the real
+  // endpoint difference explicitly rather than inventing a character/line.
+  if (before.endsWith("\n") !== after.endsWith("\n")) {
+    out.push(c.dim(`Final newline (LF): before ${before.endsWith("\n") ? "present" : "absent"}; after ${after.endsWith("\n") ? "present" : "absent"}.`));
   }
   return out.join("\n");
 }
