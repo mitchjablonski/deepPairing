@@ -215,12 +215,7 @@ export function diagnoseLocalHooks(projectRoot: string, pluginManaged: boolean):
   // #470 slice 4 — a local row whose matcher predates NotebookEdit is "legacy":
   // it still runs, but misses NotebookEdit edits to deepPairing's state.
   const preflightRows = Array.isArray(settings?.hooks?.PreToolUse) ? settings.hooks.PreToolUse : [];
-  const preflightCurrent = preflightRows.some(
-    (e: any) =>
-      e?.matcher === PREFLIGHT_MATCHER &&
-      Array.isArray(e?.hooks) &&
-      e.hooks.some((h: any) => typeof h?.command === "string" && HOOK_MARKERS.PreToolUse(h.command)),
-  );
+  const preflightCurrent = preflightRows.some(isCurrentPreflightRow);
   const preflightState: LocalHookState = pluginManaged
     ? (preflightPresent ? "redundant" : "ok")
     : (preflightPresent ? (preflightCurrent ? "ok" : "legacy") : "missing");
@@ -522,6 +517,18 @@ const PREFLIGHT_HOOK_COMMAND = `node "$CLAUDE_PROJECT_DIR/${PREFLIGHT_SCRIPT_REL
 // not canonical, so the next install rewrites it and doctor reports it.
 export const PREFLIGHT_MATCHER = "Write|Edit|MultiEdit|NotebookEdit";
 
+/** #505 review (Luna) — ONE definition of "a current preflight row", shared by
+ *  ensurePreflightHook and diagnoseLocalHooks: the current matcher and a
+ *  nested `type: "command"` entry that is ours. */
+function isPreflightCommandEntry(h: unknown): boolean {
+  const e = h as { type?: unknown; command?: unknown } | null;
+  return e?.type === "command" && typeof e.command === "string" && HOOK_MARKERS.PreToolUse(e.command);
+}
+function isCurrentPreflightRow(row: unknown): boolean {
+  const r = row as { matcher?: unknown; hooks?: unknown } | null;
+  return r?.matcher === PREFLIGHT_MATCHER && Array.isArray(r.hooks) && r.hooks.some(isPreflightCommandEntry);
+}
+
 /** Absolute file URL of the built matcher core, so the generated hook (which
  *  runs via plain `node` from .deeppairing/hooks/) can import it regardless of
  *  install layout. Prefers the built dist/cli copy; falls back gracefully. If
@@ -690,8 +697,9 @@ process.stdin.on("end", async () => {
 }
 
 /** Install the PreToolUse preflight hook (matcher Write|Edit|MultiEdit). Owns
- *  the deepPairing PreToolUse row: drops any prior DP entry and writes exactly
- *  one canonical entry (same own-the-row discipline as the Stop hook). */
+ *  the deepPairing PreToolUse entry: removes only OUR nested entries (a user's
+ *  own commands in a shared row survive, with the row's matcher and metadata)
+ *  and writes exactly one canonical row. */
 export function ensurePreflightHook(projectRoot: string): SetupResult {
   const claudeDir = path.join(projectRoot, ".claude");
   const settingsPath = path.join(claudeDir, "settings.local.json");
@@ -705,40 +713,28 @@ export function ensurePreflightHook(projectRoot: string): SetupResult {
     // fails open (gate inactive) until a build + re-stamp on next startup.
     const inactiveNote = core.exists ? "" : " (matcher core not built yet — gate inactive until next build)";
 
-    let settings: any = {};
-    if (fs.existsSync(settingsPath)) {
-      try {
-        settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
-      } catch {
-        return { ok: false, message: ".claude/settings.local.json is malformed; refusing to overwrite" };
-      }
-    }
-    settings.hooks = settings.hooks ?? {};
-    settings.hooks.PreToolUse = settings.hooks.PreToolUse ?? [];
-
-    const isDpEntry = (entry: any) => {
-      if (typeof entry?.command === "string" && HOOK_MARKERS.PreToolUse(entry.command)) return true;
-      if (Array.isArray(entry?.hooks)) {
-        return entry.hooks.some((h: any) => typeof h?.command === "string" && HOOK_MARKERS.PreToolUse(h.command));
-      }
-      return false;
-    };
-    const isCanonical = (entry: any) =>
-      Array.isArray(entry?.hooks) &&
+    // #505 review (Luna P2) — the same shape checks and the same surgical,
+    // nested-entry removal as the Bash ask row (#503): a row that mixes our
+    // entry with a user's own command keeps the user's command, its matcher
+    // and its metadata. Only our entries move to the one canonical row.
+    const read = readAskSettings(settingsPath);
+    if (!read.ok) return { ok: false, message: read.message };
+    const settings = read.settings;
+    const hooks = (settings.hooks = settings.hooks ?? {}) as Record<string, unknown>;
+    const rows = (hooks.PreToolUse ?? []) as AskHookRow[];
+    const isCanonical = (entry: AskHookRow) =>
+      isCurrentPreflightRow(entry) &&
+      Array.isArray(entry.hooks) &&
       entry.hooks.length === 1 &&
-      entry.hooks[0]?.type === "command" &&
-      entry.hooks[0]?.command === PREFLIGHT_HOOK_COMMAND &&
-      entry?.matcher === PREFLIGHT_MATCHER;
-
-    const beforeCount = settings.hooks.PreToolUse.filter(isDpEntry).length;
-    if (beforeCount === 1 && settings.hooks.PreToolUse.some(isCanonical)) {
+      entry.hooks[0]?.command === PREFLIGHT_HOOK_COMMAND;
+    const { rows: kept, removed } = withoutOwnedEntries(rows, HOOK_MARKERS.PreToolUse);
+    if (removed === 1 && rows.some(isCanonical)) {
       return { ok: true, changed: false, message: `PreToolUse preflight hook already configured${inactiveNote}` };
     }
-    settings.hooks.PreToolUse = settings.hooks.PreToolUse.filter((e: any) => !isDpEntry(e));
-    settings.hooks.PreToolUse.push({
-      matcher: PREFLIGHT_MATCHER,
-      hooks: [{ type: "command", command: PREFLIGHT_HOOK_COMMAND }],
-    });
+    hooks.PreToolUse = [
+      ...kept,
+      { matcher: PREFLIGHT_MATCHER, hooks: [{ type: "command", command: PREFLIGHT_HOOK_COMMAND }] },
+    ];
     fs.mkdirSync(claudeDir, { recursive: true });
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
     return { ok: true, changed: true, message: `Installed PreToolUse preflight hook${inactiveNote}` };
@@ -776,18 +772,21 @@ function readAskSettings(settingsPath: string): { ok: true; settings: Record<str
 
 /** Remove ONLY our verified nested entries; a row keeps its other commands,
  *  matcher and metadata, and is dropped only if nothing of the user's is left. */
-function withoutAskEntries(rows: AskHookRow[]): { rows: AskHookRow[]; removed: number } {
+function withoutOwnedEntries(rows: AskHookRow[], owned: (cmd: string) => boolean): { rows: AskHookRow[]; removed: number } {
   let removed = 0;
   const out: AskHookRow[] = [];
   for (const row of rows) {
-    if (typeof row?.command === "string" && HOOK_MARKERS.StanceAllowAsk(row.command)) { removed++; continue; }
+    if (typeof row?.command === "string" && owned(row.command)) { removed++; continue; }
     if (!Array.isArray(row?.hooks)) { out.push(row); continue; }
-    const rest = row.hooks.filter((h) => !(typeof h?.command === "string" && HOOK_MARKERS.StanceAllowAsk(h.command)));
+    const rest = row.hooks.filter((h) => !(typeof h?.command === "string" && owned(h.command)));
     removed += row.hooks.length - rest.length;
     if (rest.length === row.hooks.length) out.push(row);
     else if (rest.length > 0) out.push({ ...row, hooks: rest });
   }
   return { rows: out, removed };
+}
+function withoutAskEntries(rows: AskHookRow[]): { rows: AskHookRow[]; removed: number } {
+  return withoutOwnedEntries(rows, HOOK_MARKERS.StanceAllowAsk);
 }
 
 export function ensureStanceAllowAskHook(projectRoot: string): SetupResult {

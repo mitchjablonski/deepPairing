@@ -589,9 +589,12 @@ export function deeppairingStateReason(match: StateMatch): string {
       ? "It's where your stances live: an edit here can quietly retire one."
       : match.kind === "team"
         ? "It holds your team's committed rules: an edit here changes them for everyone."
-        : "It's one of the hook scripts that make these prompts: an edit here can switch a prompt off.";
+        : match.kind === "hooks"
+          ? "It's one of the hook scripts that make these prompts: an edit here can switch a prompt off."
+          : "It's a Claude Code settings file that registers deepPairing's hooks: an edit here can remove these prompts.";
+  const whose = match.kind === "claude-settings" ? "It guards deepPairing's prompts." : "It's deepPairing's own state.";
   return (
-    `Allow this edit to ${match.path}? It's deepPairing's own state. ${what} ` +
+    `Allow this edit to ${match.path}? ${whose} ${what} ` +
     `deepPairing always asks about this file, whatever else is going on.\n` +
     `[DEEPPAIRING_STATE — agent: don't edit deepPairing's state files to change a stance, rule or hook. ` +
     `On a decline, ask your pair to make the change themselves.]`
@@ -612,7 +615,7 @@ export function evaluateDeeppairingState(args: { toolInput: unknown; projectRoot
       guardrail: {
         category: DEEPPAIRING_STATE_CATEGORY,
         path: match.path,
-        rationale: "deepPairing's own state: your stances, team rules and hook scripts.",
+        rationale: "deepPairing's own state: your stances, team rules, hook scripts and the settings that register them.",
         note: "deepPairing's own state",
       },
     };

@@ -286,13 +286,18 @@ export function toolInputTargetsGuardrail(projectRoot: string, toolInput: unknow
 
 export const DEEPPAIRING_STATE_CATEGORY = "deeppairing-state";
 
-const STATE_PATTERN = /(^|\/)\.deeppairing\/(preferences\.json|team\.json|hooks\/[^/]+)$/;
+// #505 review (Sol P2) — `hooks/` guards every DESCENDANT, not just direct
+// children (`.deeppairing/hooks/lib/permission.mjs`). (Claude P3) — Claude
+// Code's own settings files carry the hook rows, so editing one can remove
+// these prompts: `.claude/settings.json` and `.claude/settings.local.json`
+// (project or user scope) always ask too.
+const STATE_PATTERN = /(^|\/)(?:\.deeppairing\/(preferences\.json|team\.json|hooks\/.+)|\.claude\/(settings(?:\.local)?\.json))$/;
 
 export interface StateMatch {
   category: typeof DEEPPAIRING_STATE_CATEGORY;
   /** What the human sees named: project-relative when inside it, else absolute. */
   path: string;
-  kind: "preferences" | "team" | "hooks";
+  kind: "preferences" | "team" | "hooks" | "claude-settings";
 }
 
 /** One spelling → the comparable form: `/` separators, no Windows trailing
@@ -338,6 +343,49 @@ function realpathish(abs: string, hops = 0): string | null {
   return null;
 }
 
+/**
+ * #505 review (Sol P2) — resolve the way the FILESYSTEM does, not lexically.
+ * `alias/../preferences.json` with `alias` → `.deeppairing/hooks` opens
+ * `.deeppairing/preferences.json`: the kernel follows `alias` first and only
+ * then takes its parent. `path.resolve` collapses `alias/..` to nothing and
+ * lands somewhere else. So walk segment by segment from the base, realpath-ing
+ * every prefix that exists before applying the next `..`. A missing entry is
+ * kept as written and the walk goes on (stricter than the kernel, which would
+ * fail a `..` past a missing directory: an extra ask, never a missed one).
+ */
+function physicalResolve(base: string, spelling: string): string | null {
+  try {
+    const absolute = path.isAbsolute(spelling);
+    // Never path.resolve the spelling itself: that would collapse `..` lexically.
+    const root = absolute ? path.parse(spelling).root : "";
+    let cur = absolute ? root : base;
+    try { cur = fs.realpathSync.native(cur); } catch { /* keep as written */ }
+    const segs = (absolute ? spelling.slice(root.length) : spelling).split(/[\\/]+/);
+    for (let i = 0; i < segs.length; i++) {
+      const seg = segs[i]!;
+      if (seg === "" || seg === ".") continue;
+      if (seg === "..") { cur = path.dirname(cur); continue; }
+      cur = path.join(cur, seg);
+      // Every prefix is re-checked (no latch): after `missing/..` the walk is
+      // back on real directories, and a link met later must still be followed.
+      try {
+        cur = fs.realpathSync.native(cur);
+      } catch {
+        // A dangling link is followed by hand; a missing entry stays as written.
+        try {
+          if (fs.lstatSync(cur).isSymbolicLink()) {
+            const followed = realpathish(cur);
+            if (followed) cur = followed;
+          }
+        } catch { /* missing */ }
+      }
+    }
+    return cur;
+  } catch {
+    return null;
+  }
+}
+
 /** Is `raw` (an agent-supplied tool path) one of deepPairing's state files?
  *  Never throws; anything it cannot read is "no match". */
 export function matchDeeppairingStatePath(projectRoot: string, raw: unknown): StateMatch | null {
@@ -356,31 +404,44 @@ export function matchDeeppairingStatePath(projectRoot: string, raw: unknown): St
     const spellings = [slashed, cleaned];
     // `~/…` is a home-relative spelling some tools expand.
     if (/^~\//.test(cleaned)) spellings.push(path.join(os.homedir(), cleaned.slice(2)));
+    // Filesystem-semantics resolutions come FIRST: they name the file the
+    // write would really open, so they are also what the human is shown.
+    const ordered: string[] = [];
+    for (const c of spellings) {
+      const physical = physicalResolve(projectRoot, c);
+      if (physical) ordered.push(physical);
+    }
     for (const c of spellings) {
       const abs = path.resolve(projectRoot, c);
-      candidates.add(abs);
+      ordered.push(abs);
       const real = realpathish(abs);
-      if (real) candidates.add(real);
+      if (real) ordered.push(real);
     }
-    let hit = false;
-    let kind: StateMatch["kind"] = "preferences";
-    for (const c of candidates) {
+    ordered.push(...candidates);
+    for (const c of ordered) {
       const m = STATE_PATTERN.exec(canonicalForm(c));
-      if (m) {
-        hit = true;
-        const file = m[2] ?? "";
-        kind = file.startsWith("hooks/") ? "hooks" : file === "team.json" ? "team" : "preferences";
-        break;
-      }
+      if (!m) continue;
+      const file = m[2] ?? "";
+      const kind: StateMatch["kind"] = m[3] ? "claude-settings" : file.startsWith("hooks/") ? "hooks" : file === "team.json" ? "team" : "preferences";
+      return { category: DEEPPAIRING_STATE_CATEGORY, path: displayPath(projectRoot, c), kind };
     }
-    if (!hit) return null;
-    const abs = path.resolve(projectRoot, cleaned);
-    const rel = path.relative(projectRoot, abs).replace(/\\/g, "/");
-    const shown = rel && !rel.startsWith("../") && rel !== ".." && !path.isAbsolute(rel) ? rel : abs.replace(/\\/g, "/");
-    return { category: DEEPPAIRING_STATE_CATEGORY, path: shown, kind };
+    return null;
   } catch {
     return null;
   }
+}
+
+/** Project-relative (against the root as written or its realpath) when the
+ *  path is inside the project, else absolute; always with `/`. */
+function displayPath(projectRoot: string, candidate: string): string {
+  const roots = [projectRoot];
+  try { roots.push(fs.realpathSync.native(projectRoot)); } catch { /* as written */ }
+  const abs = path.isAbsolute(candidate) ? candidate : path.resolve(projectRoot, candidate);
+  for (const root of roots) {
+    const rel = path.relative(root, abs).replace(/\\/g, "/");
+    if (rel && rel !== ".." && !rel.startsWith("../") && !path.isAbsolute(rel)) return rel;
+  }
+  return abs.replace(/\\/g, "/");
 }
 
 /** The target path of an Edit/Write/MultiEdit (`file_path`) or NotebookEdit

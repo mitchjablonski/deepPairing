@@ -89,7 +89,7 @@ function toolInputTargetsGuardrail(projectRoot, toolInput) {
   }
 }
 var DEEPPAIRING_STATE_CATEGORY = "deeppairing-state";
-var STATE_PATTERN = /(^|\/)\.deeppairing\/(preferences\.json|team\.json|hooks\/[^/]+)$/;
+var STATE_PATTERN = /(^|\/)(?:\.deeppairing\/(preferences\.json|team\.json|hooks\/.+)|\.claude\/(settings(?:\.local)?\.json))$/;
 function canonicalForm(p) {
   return p.replace(/\\/g, "/").split("/").map((seg) => seg === "." || seg === ".." ? seg : seg.replace(/:.*$/, "").replace(/[. ]+$/, "")).join("/").toLowerCase();
 }
@@ -119,6 +119,41 @@ function realpathish(abs, hops = 0) {
   }
   return null;
 }
+function physicalResolve(base, spelling) {
+  try {
+    const absolute = path.isAbsolute(spelling);
+    const root = absolute ? path.parse(spelling).root : "";
+    let cur = absolute ? root : base;
+    try {
+      cur = fs.realpathSync.native(cur);
+    } catch {
+    }
+    const segs = (absolute ? spelling.slice(root.length) : spelling).split(/[\\/]+/);
+    for (let i = 0; i < segs.length; i++) {
+      const seg = segs[i];
+      if (seg === "" || seg === ".") continue;
+      if (seg === "..") {
+        cur = path.dirname(cur);
+        continue;
+      }
+      cur = path.join(cur, seg);
+      try {
+        cur = fs.realpathSync.native(cur);
+      } catch {
+        try {
+          if (fs.lstatSync(cur).isSymbolicLink()) {
+            const followed = realpathish(cur);
+            if (followed) cur = followed;
+          }
+        } catch {
+        }
+      }
+    }
+    return cur;
+  } catch {
+    return null;
+  }
+}
 function matchDeeppairingStatePath(projectRoot, raw) {
   try {
     if (typeof raw !== "string" || !raw) return null;
@@ -128,31 +163,42 @@ function matchDeeppairingStatePath(projectRoot, raw) {
     const candidates = /* @__PURE__ */ new Set([slashed, cleaned]);
     const spellings = [slashed, cleaned];
     if (/^~\//.test(cleaned)) spellings.push(path.join(os.homedir(), cleaned.slice(2)));
+    const ordered = [];
     for (const c of spellings) {
-      const abs2 = path.resolve(projectRoot, c);
-      candidates.add(abs2);
-      const real = realpathish(abs2);
-      if (real) candidates.add(real);
+      const physical = physicalResolve(projectRoot, c);
+      if (physical) ordered.push(physical);
     }
-    let hit = false;
-    let kind = "preferences";
-    for (const c of candidates) {
+    for (const c of spellings) {
+      const abs = path.resolve(projectRoot, c);
+      ordered.push(abs);
+      const real = realpathish(abs);
+      if (real) ordered.push(real);
+    }
+    ordered.push(...candidates);
+    for (const c of ordered) {
       const m = STATE_PATTERN.exec(canonicalForm(c));
-      if (m) {
-        hit = true;
-        const file = m[2] ?? "";
-        kind = file.startsWith("hooks/") ? "hooks" : file === "team.json" ? "team" : "preferences";
-        break;
-      }
+      if (!m) continue;
+      const file = m[2] ?? "";
+      const kind = m[3] ? "claude-settings" : file.startsWith("hooks/") ? "hooks" : file === "team.json" ? "team" : "preferences";
+      return { category: DEEPPAIRING_STATE_CATEGORY, path: displayPath(projectRoot, c), kind };
     }
-    if (!hit) return null;
-    const abs = path.resolve(projectRoot, cleaned);
-    const rel = path.relative(projectRoot, abs).replace(/\\/g, "/");
-    const shown = rel && !rel.startsWith("../") && rel !== ".." && !path.isAbsolute(rel) ? rel : abs.replace(/\\/g, "/");
-    return { category: DEEPPAIRING_STATE_CATEGORY, path: shown, kind };
+    return null;
   } catch {
     return null;
   }
+}
+function displayPath(projectRoot, candidate) {
+  const roots = [projectRoot];
+  try {
+    roots.push(fs.realpathSync.native(projectRoot));
+  } catch {
+  }
+  const abs = path.isAbsolute(candidate) ? candidate : path.resolve(projectRoot, candidate);
+  for (const root of roots) {
+    const rel = path.relative(root, abs).replace(/\\/g, "/");
+    if (rel && rel !== ".." && !rel.startsWith("../") && !path.isAbsolute(rel)) return rel;
+  }
+  return abs.replace(/\\/g, "/");
 }
 function toolInputTargetPath(toolInput) {
   const input = toolInput;

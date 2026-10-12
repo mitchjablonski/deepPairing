@@ -607,7 +607,7 @@ function toolInputTargetsGuardrail(projectRoot, toolInput) {
   }
 }
 var DEEPPAIRING_STATE_CATEGORY = "deeppairing-state";
-var STATE_PATTERN = /(^|\/)\.deeppairing\/(preferences\.json|team\.json|hooks\/[^/]+)$/;
+var STATE_PATTERN = /(^|\/)(?:\.deeppairing\/(preferences\.json|team\.json|hooks\/.+)|\.claude\/(settings(?:\.local)?\.json))$/;
 function canonicalForm(p) {
   return p.replace(/\\/g, "/").split("/").map((seg) => seg === "." || seg === ".." ? seg : seg.replace(/:.*$/, "").replace(/[. ]+$/, "")).join("/").toLowerCase();
 }
@@ -637,6 +637,41 @@ function realpathish(abs, hops = 0) {
   }
   return null;
 }
+function physicalResolve(base, spelling) {
+  try {
+    const absolute = path2.isAbsolute(spelling);
+    const root = absolute ? path2.parse(spelling).root : "";
+    let cur = absolute ? root : base;
+    try {
+      cur = fs2.realpathSync.native(cur);
+    } catch {
+    }
+    const segs = (absolute ? spelling.slice(root.length) : spelling).split(/[\\/]+/);
+    for (let i = 0; i < segs.length; i++) {
+      const seg = segs[i];
+      if (seg === "" || seg === ".") continue;
+      if (seg === "..") {
+        cur = path2.dirname(cur);
+        continue;
+      }
+      cur = path2.join(cur, seg);
+      try {
+        cur = fs2.realpathSync.native(cur);
+      } catch {
+        try {
+          if (fs2.lstatSync(cur).isSymbolicLink()) {
+            const followed = realpathish(cur);
+            if (followed) cur = followed;
+          }
+        } catch {
+        }
+      }
+    }
+    return cur;
+  } catch {
+    return null;
+  }
+}
 function matchDeeppairingStatePath(projectRoot, raw) {
   try {
     if (typeof raw !== "string" || !raw) return null;
@@ -646,31 +681,42 @@ function matchDeeppairingStatePath(projectRoot, raw) {
     const candidates = /* @__PURE__ */ new Set([slashed, cleaned]);
     const spellings = [slashed, cleaned];
     if (/^~\//.test(cleaned)) spellings.push(path2.join(os.homedir(), cleaned.slice(2)));
+    const ordered = [];
     for (const c of spellings) {
-      const abs2 = path2.resolve(projectRoot, c);
-      candidates.add(abs2);
-      const real = realpathish(abs2);
-      if (real) candidates.add(real);
+      const physical = physicalResolve(projectRoot, c);
+      if (physical) ordered.push(physical);
     }
-    let hit = false;
-    let kind = "preferences";
-    for (const c of candidates) {
+    for (const c of spellings) {
+      const abs = path2.resolve(projectRoot, c);
+      ordered.push(abs);
+      const real = realpathish(abs);
+      if (real) ordered.push(real);
+    }
+    ordered.push(...candidates);
+    for (const c of ordered) {
       const m = STATE_PATTERN.exec(canonicalForm(c));
-      if (m) {
-        hit = true;
-        const file = m[2] ?? "";
-        kind = file.startsWith("hooks/") ? "hooks" : file === "team.json" ? "team" : "preferences";
-        break;
-      }
+      if (!m) continue;
+      const file = m[2] ?? "";
+      const kind = m[3] ? "claude-settings" : file.startsWith("hooks/") ? "hooks" : file === "team.json" ? "team" : "preferences";
+      return { category: DEEPPAIRING_STATE_CATEGORY, path: displayPath(projectRoot, c), kind };
     }
-    if (!hit) return null;
-    const abs = path2.resolve(projectRoot, cleaned);
-    const rel = path2.relative(projectRoot, abs).replace(/\\/g, "/");
-    const shown = rel && !rel.startsWith("../") && rel !== ".." && !path2.isAbsolute(rel) ? rel : abs.replace(/\\/g, "/");
-    return { category: DEEPPAIRING_STATE_CATEGORY, path: shown, kind };
+    return null;
   } catch {
     return null;
   }
+}
+function displayPath(projectRoot, candidate) {
+  const roots = [projectRoot];
+  try {
+    roots.push(fs2.realpathSync.native(projectRoot));
+  } catch {
+  }
+  const abs = path2.isAbsolute(candidate) ? candidate : path2.resolve(projectRoot, candidate);
+  for (const root of roots) {
+    const rel = path2.relative(root, abs).replace(/\\/g, "/");
+    if (rel && rel !== ".." && !rel.startsWith("../") && !path2.isAbsolute(rel)) return rel;
+  }
+  return abs.replace(/\\/g, "/");
 }
 function toolInputTargetPath(toolInput) {
   const input2 = toolInput;
@@ -865,8 +911,9 @@ function evaluateGuardrailBackstop(args) {
   }
 }
 function deeppairingStateReason(match) {
-  const what = match.kind === "preferences" ? "It's where your stances live: an edit here can quietly retire one." : match.kind === "team" ? "It holds your team's committed rules: an edit here changes them for everyone." : "It's one of the hook scripts that make these prompts: an edit here can switch a prompt off.";
-  return `Allow this edit to ${match.path}? It's deepPairing's own state. ${what} deepPairing always asks about this file, whatever else is going on.
+  const what = match.kind === "preferences" ? "It's where your stances live: an edit here can quietly retire one." : match.kind === "team" ? "It holds your team's committed rules: an edit here changes them for everyone." : match.kind === "hooks" ? "It's one of the hook scripts that make these prompts: an edit here can switch a prompt off." : "It's a Claude Code settings file that registers deepPairing's hooks: an edit here can remove these prompts.";
+  const whose = match.kind === "claude-settings" ? "It guards deepPairing's prompts." : "It's deepPairing's own state.";
+  return `Allow this edit to ${match.path}? ${whose} ${what} deepPairing always asks about this file, whatever else is going on.
 [DEEPPAIRING_STATE \u2014 agent: don't edit deepPairing's state files to change a stance, rule or hook. On a decline, ask your pair to make the change themselves.]`;
 }
 function evaluateDeeppairingState(args) {
@@ -880,7 +927,7 @@ function evaluateDeeppairingState(args) {
       guardrail: {
         category: DEEPPAIRING_STATE_CATEGORY,
         path: match.path,
-        rationale: "deepPairing's own state: your stances, team rules and hook scripts.",
+        rationale: "deepPairing's own state: your stances, team rules, hook scripts and the settings that register them.",
         note: "deepPairing's own state"
       }
     };

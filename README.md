@@ -38,8 +38,9 @@ still needs your eyes.
   hook pauses a matching edit with a permission prompt, and you decide. It
   doesn't check `Bash` or notebook edits against your stances, and if it
   breaks, it lets the edit through. An agent edit to deepPairing's own state
-  (`.deeppairing/preferences.json`, `team.json`, or a script in
-  `.deeppairing/hooks/`) always asks, notebook edits included, because
+  (`.deeppairing/preferences.json`, `team.json`, anything in
+  `.deeppairing/hooks/`, or the `.claude/settings*.json` files that register
+  these hooks) always asks, notebook edits included, because
   rewriting the file would quietly drop a stance; a shell write to them
   (`echo >`, `sed -i`, `cp`) isn't checked. One narrow `Bash` check asks you before
   the agent's shell runs `stance allow`; that's the only Bash command it

@@ -60,7 +60,19 @@ function evasionCorpus(): Array<[string, string]> {
   fs.symlinkSync(path.join(dir, ".deeppairing"), path.join(dir, "state-link"));
   fs.symlinkSync(path.join(dir, ".deeppairing", "preferences.json"), path.join(dir, "notes.json"));
   fs.symlinkSync(dir, path.join(parent, "alias"));
+  // #505 review (Sol P2) — a symlink INTO .deeppairing/hooks, then `..`.
+  fs.symlinkSync(path.join(dir, ".deeppairing", "hooks"), path.join(dir, "hooks-alias"));
   return [
+    ["hooks-alias/../preferences.json", "preferences"],
+    [path.join(dir, "hooks-alias") + "/../team.json", "team"],
+    ["src/../hooks-alias/../preferences.json", "preferences"],
+    [".deeppairing/hooks/lib/permission.mjs", "hooks"],
+    [".deeppairing/hooks/a/b/c.js", "hooks"],
+    [".deeppairing\\hooks\\lib\\x.sh", "hooks"],
+    [".claude/settings.json", "claude-settings"],
+    [".claude/settings.local.json", "claude-settings"],
+    [".Claude\\Settings.Local.JSON", "claude-settings"],
+    ["~/.claude/settings.json", "claude-settings"],
     [".deeppairing/preferences.json", "preferences"],
     ["./.deeppairing/preferences.json", "preferences"],
     [abs(".deeppairing/preferences.json"), "preferences"],
@@ -111,6 +123,11 @@ const LEGIT = [
   ".deeppairing-old/team.json",
   "docs/.deeppairing.md",
   "src/hooks/preflight.mjs",
+  ".claude/commands/review.md",
+  ".claude/agents/reviewer.md",
+  ".claude/settings.json.bak",
+  "claude/settings.json",
+  "src/.claude-settings.json",
 ];
 
 describe("the matcher: path variants don't get past it", () => {
@@ -118,6 +135,16 @@ describe("the matcher: path variants don't get past it", () => {
     for (const [spelling, kind] of evasionCorpus()) {
       expect(matchDeeppairingStatePath(dir, spelling), spelling).toMatchObject({ category: DEEPPAIRING_STATE_CATEGORY, kind });
     }
+  });
+
+  it("#505 (Sol P2) — symlink then `..` resolves like the filesystem; the write/read control proves the target", () => {
+    fs.symlinkSync(path.join(dir, ".deeppairing", "hooks"), path.join(dir, "hooks-alias"));
+    const raw = `${dir}/hooks-alias/../preferences.json`;
+    fs.writeFileSync(raw, "{\"probe\":1}"); // the kernel follows the link before `..`
+    expect(fs.readFileSync(path.join(dir, ".deeppairing", "preferences.json"), "utf8")).toBe("{\"probe\":1}");
+    expect(path.resolve(raw)).toBe(path.join(dir, "preferences.json")); // what lexical resolution wrongly says
+    expect(matchDeeppairingStatePath(dir, raw)).toMatchObject({ kind: "preferences", path: ".deeppairing/preferences.json" });
+    expect(matchDeeppairingStatePath(dir, "hooks-alias/../preferences.json")?.path).toBe(".deeppairing/preferences.json");
   });
 
   it("names the project-relative path to the human", () => {
@@ -237,7 +264,7 @@ describe.each(launchers)("real hook launch: %s", (_name, install, built) => {
     for (const [spelling] of corpus) {
       const out = launch(command, { tool_name: "Write", tool_input: { file_path: spelling, content: "{}" } });
       expect(out?.hookSpecificOutput.permissionDecision, spelling).toBe("ask");
-      expect(out?.hookSpecificOutput.permissionDecisionReason).toContain("deepPairing's own state");
+      expect(out?.hookSpecificOutput.permissionDecisionReason).toMatch(/deepPairing's own state|guards deepPairing's prompts/);
     }
     const nb = launch(command, { tool_name: "NotebookEdit", tool_input: { notebook_path: ".deeppairing/team.json", new_source: "x" } });
     expect(nb?.hookSpecificOutput.permissionDecision).toBe("ask");
@@ -259,6 +286,51 @@ describe.each(launchers)("real hook launch: %s", (_name, install, built) => {
 });
 
 describe("install, idempotence and doctor", () => {
+  const sp = () => path.join(dir, ".claude", "settings.local.json");
+  const dpRow = (matcher: string) => ({ matcher, hooks: [{ type: "command", command: 'node "$CLAUDE_PROJECT_DIR/.deeppairing/hooks/preflight.mjs"' }] });
+
+  it("#505 (Luna P2) — a legacy MIXED row keeps the user's command, matcher and metadata; only our entry moves", () => {
+    fs.mkdirSync(path.dirname(sp()), { recursive: true });
+    const mixed = {
+      matcher: "Write|Edit|MultiEdit",
+      description: "team audit",
+      hooks: [
+        { type: "command", command: 'node "$CLAUDE_PROJECT_DIR/.deeppairing/hooks/preflight.mjs"' },
+        { type: "command", command: "node user-audit.mjs", timeout: 5 },
+      ],
+    };
+    fs.writeFileSync(sp(), JSON.stringify({ hooks: { PreToolUse: [mixed] }, env: { KEEP: "1" } }));
+    expect(diagnoseLocalHooks(dir, false).find((d) => d.hook === "PreToolUse")?.state).toBe("legacy");
+    expect(ensurePreflightHook(dir)).toMatchObject({ ok: true, changed: true });
+    const after = JSON.parse(fs.readFileSync(sp(), "utf8"));
+    expect(after.env).toEqual({ KEEP: "1" });
+    expect(after.hooks.PreToolUse).toEqual([
+      { matcher: "Write|Edit|MultiEdit", description: "team audit", hooks: [{ type: "command", command: "node user-audit.mjs", timeout: 5 }] },
+      dpRow(PREFLIGHT_MATCHER),
+    ]);
+    expect(diagnoseLocalHooks(dir, false).find((d) => d.hook === "PreToolUse")?.state).toBe("ok");
+    expect(ensurePreflightHook(dir)).toMatchObject({ ok: true, changed: false });
+  });
+
+  it("refuses to rewrite a settings shape it can't edit safely", () => {
+    fs.mkdirSync(path.dirname(sp()), { recursive: true });
+    for (const bad of [{ hooks: [] }, { hooks: { PreToolUse: {} } }, []]) {
+      fs.writeFileSync(sp(), JSON.stringify(bad));
+      expect(ensurePreflightHook(dir).ok).toBe(false);
+      expect(JSON.parse(fs.readFileSync(sp(), "utf8"))).toEqual(bad);
+    }
+  });
+
+  it("#505 (Luna) — doctor and the installer agree: a row without type=command is not current", () => {
+    fs.mkdirSync(path.dirname(sp()), { recursive: true });
+    const row = dpRow(PREFLIGHT_MATCHER);
+    delete (row.hooks[0] as { type?: string }).type;
+    fs.writeFileSync(sp(), JSON.stringify({ hooks: { PreToolUse: [row] } }));
+    expect(diagnoseLocalHooks(dir, false).find((d) => d.hook === "PreToolUse")?.state).toBe("legacy");
+    expect(ensurePreflightHook(dir)).toMatchObject({ ok: true, changed: true });
+    expect(diagnoseLocalHooks(dir, false).find((d) => d.hook === "PreToolUse")?.state).toBe("ok");
+  });
+
   it("installs the NotebookEdit-aware matcher and is idempotent", () => {
     expect(PREFLIGHT_MATCHER).toBe("Write|Edit|MultiEdit|NotebookEdit");
     expect(ensurePreflightHook(dir)).toMatchObject({ ok: true, changed: true });
