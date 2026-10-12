@@ -397,7 +397,10 @@ async function optimisticArtifactPatch<K extends keyof Artifact>(
         ),
       }));
     }
-    if (!switchedAwayFrom(sessionAtCall)) await toastApiError(errorLabel, err);
+    // #521 — a refused AUTO approval is not an error: the caller (the countdown
+    // tick) says so calmly itself, so no second error toast here.
+    const autoRefused = err instanceof ApiError && err.code === "auto_approve_not_permitted";
+    if (!autoRefused && !switchedAwayFrom(sessionAtCall)) await toastApiError(errorLabel, err);
     throw err;
   }
 }
@@ -522,6 +525,9 @@ export interface ArtifactState {
     // On reject only: the human-named pattern, persisted as the cross-project
     // ledger key (server falls back to the agent's concept / the title).
     concept?: string,
+    // #521 — "auto_confidence" marks the confidence countdown's approval so
+    // the server can re-check the autonomy level at commit. Omitted = human.
+    reason?: "auto_confidence",
   ) => Promise<void>;
 
   resolveDecision: (
@@ -1133,7 +1139,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     }
   },
 
-  updateArtifactStatus: async (artifactId, status, feedback, concept) => {
+  updateArtifactStatus: async (artifactId, status, feedback, concept, reason) => {
     assertNotReplay("Review");
     // Bug A — refuse (with an honest toast) before the optimistic flip if this
     // artifact is owned by a session another daemon serves; the POST would 409
@@ -1161,7 +1167,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
           method: "POST",
           headers: sessionHeaders(get().owningSession(artifactId)),
           // `concept` is sent on reject only — the human-named ledger key.
-          body: JSON.stringify({ status, feedback, concept }),
+          body: JSON.stringify(reason ? { status, feedback, concept, reason } : { status, feedback, concept }),
         }),
       status === "approved" ? "Approve" : status === "rejected" ? "Reject" : "Revise",
     );
