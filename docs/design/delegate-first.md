@@ -1,31 +1,12 @@
 # Delegate-first pairing — quiet runs, understanding packets (proposal)
 
-> **Status: PROPOSAL, revision 3. Docs only, no code.** Written for Mitch's
-> product decision, Fable's UX review and Astra's architecture review.
->
-> **Revision 3** answers the independent UX review of `91b21d8e` (CHANGES,
-> §12): the quiet run never reads "Up to date" and has silence and exit
-> states (§2b), the packet gets a fixed above-the-fold layout with scope
-> flags first and proof in the header (§2c), approving the diff inside a
-> packet closes the debrief so a low-risk run is two approvals not three
-> (§2c, §5), the brief gets its own renderer slice (§2a, §8), the dogfood
-> omits `confidence` and adds a baseline run (§7), the cost is stated
-> honestly (§5), the announcement is one line on the first brief with no
-> "ceremony" in user copy (§3b), §2a and §4 agree on the plan, and
-> accessibility is specified (§2c, §11). Mitch reaffirmed D1's migration on
-> 2026-10-11 (§9), and the reviewer's concern is recorded under §10.
->
-> **Revision 2** records Mitch's decisions of 2026-10-11 (§9: D1 a fourth
-> ceremony level that becomes the default, D3 one combined packet never
-> auto-approved, D5 trivial work gets a terminal note, D9 the comprehension
-> prompt off and offered once) and answers Astra's CHANGES review of
-> `f970a190` (§12). The four gaps it closes: the wrong-risk-class residual and
-> a reclassification boundary (§2b, §10), canonical brief and changeset
-> identity with a shared packet derivation (§3a), supervised byte-identical
-> with an explicit escalation rule and a budget that never caps a required
-> decision (§2b, §5), and measurement honesty (§6, §7). §11 adds acceptance
-> criteria with failure-state and parity cases. No UI expansion and no
-> rollout flip are approved by this revision.
+> **Status: PROPOSAL, revision 4. Docs only, no code.** Written for Mitch's
+> product decision, Fable's UX review and Astra's architecture review. Mitch's
+> decisions are recorded in §9. The revision history and every review
+> response live in the comments on
+> [PR #507](https://github.com/mitchjablonski/deepPairing/pull/507). This
+> document reads as the current contract. No UI expansion and no rollout
+> flip are approved by it.
 >
 > Source audited at `main` 08e05772 (v0.1.64). Paths are relative to
 > `packages/mcp-server/` unless they start with `packages/` or
@@ -126,8 +107,8 @@ the right thing" surface. The brief is the **only card before approval** at
 every class. Under `escalated`, a plan may follow the approved brief when the
 order of changes needs your agreement, and the brief says so in its will-ask
 list ("the migration order"). That is the middle gear unchanged, and §4 uses
-the same words. The spec also silences the guardrail backstop, which rev 1
-called a benefit and rev 2 calls a residual (§2b).
+the same words. The spec also silences the guardrail backstop, which is a
+residual, not a benefit (§2b).
 
 **How the brief renders (S2a).** Today a spec shows `context` as prose, so a
 brief's risk and asks would be buried and a 30-second approval is not
@@ -135,7 +116,8 @@ realistic. The brief renderer puts a header row first: the risk chip with its
 reason, then **"I'll ask you about"** and **"I'll decide alone"** as two short
 lists. Each decide-alone line has a **Strike** control that moves it to the
 ask list, with an Undo for ten seconds, and the two lists are a roving-tabindex
-listbox so striking works from the keyboard (`s` strikes, `u` undoes). Strikes
+listbox so striking works from the keyboard (`s` strikes, `u` undoes, both
+added to `KeyboardShortcutHelp.tsx` and the `?` overlay). Strikes
 persist as annotations on the brief and reach the agent through
 `check_feedback` as "moved to will-ask". Requirements follow, with their
 acceptance criteria. The declared `file_map` and `tasks[]` are collapsed by
@@ -158,13 +140,13 @@ interruptions** are what the budget in §5 limits.
 |---|---|---|
 | An item on the brief's **will-ask** list, including one you added | `present_options` or a question | Always, at any stakes. Your declared boundary outranks the agent's stakes estimate. |
 | An **architectural or hard-to-reverse fork** not on the list | `present_options` | Always. This is the existing floor in `autonomy-policy.ts`, unchanged. |
-| **Uncertainty** about whether a choice is the agent's to make, or about its risk | `present_options` | **Uncertainty escalates.** The agent batches only what it is sure is its own. This replaces rev 1's "fold an uncertain fork into `decisionsMade`". |
+| **Uncertainty** about whether a choice is the agent's to make, or about its risk | `present_options` | **Uncertainty escalates.** The agent batches only what it is sure is its own. |
 | A **gate block** the agent cannot route around while meeting done | HELD record plus one `present_options` naming the blocked road as an option it cannot take | Always. |
 | **Done is unreachable** as written | One `present_options` naming the scope fork | Always. The agent never redefines done. |
 | **Scope or class change** (below) | Supersede the brief, wait for approval | Always. |
 
-**The reclassification boundary.** Rev 1 said a wrong risk class is caught by
-the guardrail backstop. It is not. `evaluateGuardrailBackstop` returns silently
+**The reclassification boundary.** A wrong risk class is **not** caught by the
+guardrail backstop. `evaluateGuardrailBackstop` returns silently
 whenever `readSessionCeremony` finds any live ceremony artifact, draft
 included, in any recent session of the project, and the brief is such an
 artifact. **A low-risk brief silences the one hook that would have asked
@@ -375,6 +357,11 @@ the one-time migration: **present means chosen, absent means default.**
   packet. Full, Light and Minimal are unchanged. [Switch back]". It shows
   once and is gone. No toast. The word "ceremony" never appears in user copy
   (`AutonomySlider.tsx:12-18` dropped it for a reason).
+- **Trivial-only users never post a brief**, so they would never see that
+  line. For them the same sentence shows **once** as the TurnIndicator status
+  line on the first session after the migration, with the same Switch back,
+  and it stays available under the Autonomy dial in Settings as "Changed to
+  Delegate on <date> · Switch back" until the dial is next clicked.
 - Writing the value explicitly means an **older daemon** reading the file
   fails the enum guard and falls back to `supervised`, the fail-safe
   direction. A downgrade never arms more automation.
@@ -450,7 +437,7 @@ wrong and the agent re-briefs. It is never a reason to decide alone.
 | Explainers | When you pull one | 0 unprompted. |
 | Debriefs | Exactly 1, superseded if it changes | — |
 
-**The honest cost.** Rev 1 said "two sittings". Counted properly, a low-risk
+**The honest cost.** Counted properly, a low-risk
 delegated run is **three screens** (the brief, the packet, the diff) and,
 before §2c's combined approval, **three approvals** (brief, changeset,
 debrief). With the combined approval it is **two approvals**, and the diff
@@ -478,8 +465,7 @@ cause.
   opening. Shown in SessionMetrics as "quick approvals" with the tooltip "an
   interaction count, not a comprehension measure". No scroll or click-order
   inference: an expert review, a short packet and assistive-technology
-  navigation all approve fast and all look the same. Rev 1's "approved
-  unread" label is withdrawn.
+  navigation all approve fast and all look the same.
 - **Self-rated comprehension, opt-in (D9).** With `comprehensionPrompt` on,
   the debrief's "Got it" shows one line, "How well could you explain this
   change to a colleague? 1 to 4", and an optional "what would you check
@@ -576,8 +562,8 @@ typecheck, `pnpm build:clean` bundle, independent sign-off.
   `/deeppairing:delegate` preset stays. **Reaffirmed 2026-10-11** after the
   UX review questioned moving default users: everyone on the default moves.
 - **D3. One combined packet.** The debrief is the front door, the diff is one
-  click behind, and it is **never auto-approved**. Rev 1's D4 (the countdown)
-  is folded in: it never arms on a packet member at any level.
+  click behind, and it is **never auto-approved**. The countdown never arms
+  on a packet member at any level.
 - **D5. Trivial, low-risk work gets a terminal note and no card.** The note
   is the agent's chat line, since elicitation is off by default.
 - **D9. The comprehension prompt is off by default and offered once.**
@@ -682,9 +668,9 @@ the v0.1.64 daemon loads as `supervised`. A poisoned value still loads as
 `supervised`.
 
 **Progress on specs.** `update_plan_progress` on a `draft` spec records and
-warns with the plan's wording. On an `approved` spec the TurnIndicator reads
-"Working on <title> — task x of y" and the strip renders. On a `rejected`
-spec it warns and nothing quiets.
+warns with the plan's wording. On an `approved` spec the pill reads "Task x/y
+· last signal <age>" per the §2b run-state table and the strip renders. On a
+`rejected` spec it warns and nothing quiets.
 
 **Run states.** With an approved brief at task 3/5 and no agent signal for
 2 minutes, the pill reads "Task 3/5 · last signal 2m ago" and never "Up to
@@ -710,35 +696,9 @@ both fold states, the map and its list alternative.
 debrief loads unchanged. A `present_debrief` without `brief` or `packet`
 produces byte-identical content to today.
 
-## 12. Review response map
+## 12. Review history
 
-### Rev 3: independent UX review CHANGES at `91b21d8e`
-
-| Finding | Addressed in |
-|---|---|
-| **HIGH 1.** "Up to date" mid-run. Never during a running brief, "Task x/y · last signal", "No signal" at ~10 min, "Run stopped" on exit. | §1 agent-activity row; §2b run-state table; §8 S4; §11 "Run states" |
-| **HIGH 2.** Packet order: scope strip first, header with done and proof and the diff button, summary, hotspots with an evidence nudge, "None stated" unknowns, WHERE breadcrumb below the fold, sections collapsed, not-met expands inline. | §2c in full; §8 S2 |
-| **HIGH 3.** Double approval. Changeset approve closes the debrief unless an Ask is open, debrief bar hidden in a packet. | §2c "Controls and approvals"; §5 honest cost; §8 S2; §11 "Combined approval" |
-| **MED 4.** Brief renderer slice: risk chip, strikeable lists with undo, file map and tasks collapsed. | §2a "How the brief renders"; §8 S2a; §11 "Brief renderer" |
-| **MED 5.** Dogfood auto-approve on `confidence: "high"` at `balanced`. Omit `confidence`, add a baseline run, D6 soft gate. | §1 ceremony row; §7 steps and gate |
-| **MED 6.** Honest cost: three screens, three approvals, trivial still ends with a card. | §5 "The honest cost" |
-| **MED 7.** Migration: keep D1, record the concern and mitigations. | §9 D1 reaffirmed; §10 "Migration surprise" |
-| **LOW 8.** No "ceremony" in user copy, announcement one line on the first brief. | §3b |
-| **LOW 9.** §2a and §4 reconciled on the plan. | §2a "Why the spec, and where the plan went"; §4 first bullet |
-| **LOW 10.** Accessibility: list alternative, text status labels, "(unverified)", keyboard striking. | §2c "Accessibility" and item 6; §2a; §11 |
-
-### Rev 2: Astra CHANGES at `f970a190`, and Mitch's decisions of 2026-10-11
-
-| Finding | Source | Addressed in |
-|---|---|---|
-| **(1)** The backstop is silenced by any live ceremony, draft included, and does not bind edits to the brief. Retain the residual, define a reclassification boundary, do not claim the path gate catches it. | Astra | §1 risk-classing row; §2b "The reclassification boundary" and its server check; §3 `scopeFlags`; §5 backstop row; §10 first bullet; §11 "Scope flags" |
-| **(2)** No stable brief or changeset binding. `requirementId` collides, `feature` is a label, `changesetRef` is per section. Specify identity, approved revision, exact version, cardinality, fallbacks. Derive identically on server and web, keep unmatched work visible. | Astra | §3 `BriefRef`, `packet`, `doneWhen` against `brief`; §3a in full; §9 D10; §10 "Packet grouping that hides work"; §11 "Packet derivation" and "Nothing hidden" |
-| **(3)** Thresholds "regardless of dial" and "every autonomy level" conflict with supervised byte-identical. Honour declared will-ask boundaries including a human-added low-stakes ask. Replace "batch an uncertain fork" with uncertainty-escalates. The budget never overrides a required decision. Separate mandatory from nuisance. | Astra | §2a item 4 binding; §2b required-decision table and "Which dial this applies to"; §3b; §4 words to the agent; §5 two-column budget; §11 "Supervised byte-identity" and "Will-ask binding" |
-| **(4)** "Approved-unread" over-claims. Label it a limited interaction proxy, non-judgemental, no comprehension or causality from click order. The dogfood gate must not reward suppressing a legitimate second interruption. | Astra | §6 "Quick approvals" and the opening sentence; §7 record and gate; §10 "Comprehension debt" and "The rubber-stamp moment" |
-| Failure-state and parity cases in acceptance criteria | Astra | §11 |
-| D1 fourth level, new default, migration respecting explicit choices, preset kept | Mitch | §0, §3 "Fourth level", §3b, §8 S1 and S6, §9, §11 "Migration" |
-| D3 one combined packet, never auto-approved | Mitch | §2c, §3b "The countdown", §9, §11 "Countdown" |
-| D5 terminal note, no card for trivial work | Mitch | §1 terminal-approval row (elicitation is off by default), §2a "Size by class", §9 |
-| D9 comprehension prompt off, offered once | Mitch | §6, §9 |
+Every review and its response, revision by revision, is in the comments on
+[PR #507](https://github.com/mitchjablonski/deepPairing/pull/507).
 
 No code is changed by this document.
