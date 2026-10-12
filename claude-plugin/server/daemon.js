@@ -21264,7 +21264,15 @@ function ensureCheckpointHook(projectRoot2) {
 }
 var PREFLIGHT_SCRIPT_REL_PATH = ".deeppairing/hooks/preflight.mjs";
 var PREFLIGHT_HOOK_COMMAND = `node "$CLAUDE_PROJECT_DIR/${PREFLIGHT_SCRIPT_REL_PATH}"`;
-var PREFLIGHT_MATCHER = "Write|Edit|MultiEdit";
+var PREFLIGHT_MATCHER = "Write|Edit|MultiEdit|NotebookEdit";
+function isPreflightCommandEntry(h) {
+  const e = h;
+  return e?.type === "command" && typeof e.command === "string" && HOOK_MARKERS.PreToolUse(e.command);
+}
+function isCurrentPreflightRow(row) {
+  const r = row;
+  return r?.matcher === PREFLIGHT_MATCHER && Array.isArray(r.hooks) && r.hooks.some(isPreflightCommandEntry);
+}
 function resolvePreflightCoreUrl() {
   const here = path2.dirname(fileURLToPath2(import.meta.url));
   const distCandidate = path2.join(here, "preflight-hook-core.js");
@@ -21359,11 +21367,12 @@ function ledgersPresent(projectRoot) {
 // deleted outright rather than derived: a second definition, however generated,
 // is a second thing to get wrong.
 async function targetsGuardrailPath(projectRoot, toolInput) {
-  const fp = (toolInput && (toolInput.file_path || toolInput.filePath)) || "";
+  const fp = (toolInput && (toolInput.file_path || toolInput.filePath || toolInput.notebook_path)) || "";
   if (typeof fp !== "string" || !fp) return false;
   try {
     const rules = await import(RULES_URL);
-    return rules.matchGuardrailPath(projectRoot, [fp]) !== null;
+    // #470 slice 4 \u2014 a deepPairing state file is the third reason to keep going.
+    return rules.matchGuardrailPath(projectRoot, [fp]) !== null || rules.toolInputTargetsDeeppairingState(projectRoot, toolInput);
   } catch {
     // FAIL SAFE, not fail-silent: if the rule module can't be loaded (an
     // unbuilt tree, a moved install), keep going and let the matcher core \u2014
@@ -21385,7 +21394,7 @@ process.stdin.on("end", async () => {
     // R1 (#279) \u2014 one documented precedence in every hook lane:
     // CLAUDE_PROJECT_DIR > DEEPPAIRING_PROJECT_ROOT > the event's cwd > ours.
     const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || ev.cwd || process.cwd();
-    if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit") {
+    if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit" && toolName !== "NotebookEdit") {
       process.exit(0);
     }
     if (!ledgersPresent(projectRoot) && !(await targetsGuardrailPath(projectRoot, toolInput))) {
@@ -21423,33 +21432,20 @@ function ensurePreflightHook(projectRoot2) {
     fs2.writeFileSync(scriptPath, preflightHookScript(core.url, resolveGuardrailRulesUrl()));
     fs2.chmodSync(scriptPath, 493);
     const inactiveNote = core.exists ? "" : " (matcher core not built yet \u2014 gate inactive until next build)";
-    let settings = {};
-    if (fs2.existsSync(settingsPath)) {
-      try {
-        settings = JSON.parse(fs2.readFileSync(settingsPath, "utf-8"));
-      } catch {
-        return { ok: false, message: ".claude/settings.local.json is malformed; refusing to overwrite" };
-      }
-    }
-    settings.hooks = settings.hooks ?? {};
-    settings.hooks.PreToolUse = settings.hooks.PreToolUse ?? [];
-    const isDpEntry = (entry) => {
-      if (typeof entry?.command === "string" && HOOK_MARKERS.PreToolUse(entry.command)) return true;
-      if (Array.isArray(entry?.hooks)) {
-        return entry.hooks.some((h) => typeof h?.command === "string" && HOOK_MARKERS.PreToolUse(h.command));
-      }
-      return false;
-    };
-    const isCanonical = (entry) => Array.isArray(entry?.hooks) && entry.hooks.length === 1 && entry.hooks[0]?.type === "command" && entry.hooks[0]?.command === PREFLIGHT_HOOK_COMMAND && entry?.matcher === PREFLIGHT_MATCHER;
-    const beforeCount = settings.hooks.PreToolUse.filter(isDpEntry).length;
-    if (beforeCount === 1 && settings.hooks.PreToolUse.some(isCanonical)) {
+    const read = readAskSettings(settingsPath);
+    if (!read.ok) return { ok: false, message: read.message };
+    const settings = read.settings;
+    const hooks = settings.hooks = settings.hooks ?? {};
+    const rows = hooks.PreToolUse ?? [];
+    const isCanonical = (entry) => isCurrentPreflightRow(entry) && Array.isArray(entry.hooks) && entry.hooks.length === 1 && entry.hooks[0]?.command === PREFLIGHT_HOOK_COMMAND;
+    const { rows: kept, removed } = withoutOwnedEntries(rows, HOOK_MARKERS.PreToolUse);
+    if (removed === 1 && rows.some(isCanonical)) {
       return { ok: true, changed: false, message: `PreToolUse preflight hook already configured${inactiveNote}` };
     }
-    settings.hooks.PreToolUse = settings.hooks.PreToolUse.filter((e) => !isDpEntry(e));
-    settings.hooks.PreToolUse.push({
-      matcher: PREFLIGHT_MATCHER,
-      hooks: [{ type: "command", command: PREFLIGHT_HOOK_COMMAND }]
-    });
+    hooks.PreToolUse = [
+      ...kept,
+      { matcher: PREFLIGHT_MATCHER, hooks: [{ type: "command", command: PREFLIGHT_HOOK_COMMAND }] }
+    ];
     fs2.mkdirSync(claudeDir, { recursive: true });
     fs2.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
     return { ok: true, changed: true, message: `Installed PreToolUse preflight hook${inactiveNote}` };
@@ -21472,11 +21468,11 @@ function readAskSettings(settingsPath) {
   if (pre !== void 0 && !Array.isArray(pre)) return { ok: false, message: ".claude/settings.local.json `hooks.PreToolUse` is not an array; refusing to overwrite" };
   return { ok: true, settings };
 }
-function withoutAskEntries(rows) {
+function withoutOwnedEntries(rows, owned) {
   let removed = 0;
   const out = [];
   for (const row of rows) {
-    if (typeof row?.command === "string" && HOOK_MARKERS.StanceAllowAsk(row.command)) {
+    if (typeof row?.command === "string" && owned(row.command)) {
       removed++;
       continue;
     }
@@ -21484,12 +21480,15 @@ function withoutAskEntries(rows) {
       out.push(row);
       continue;
     }
-    const rest = row.hooks.filter((h) => !(typeof h?.command === "string" && HOOK_MARKERS.StanceAllowAsk(h.command)));
+    const rest = row.hooks.filter((h) => !(typeof h?.command === "string" && owned(h.command)));
     removed += row.hooks.length - rest.length;
     if (rest.length === row.hooks.length) out.push(row);
     else if (rest.length > 0) out.push({ ...row, hooks: rest });
   }
   return { rows: out, removed };
+}
+function withoutAskEntries(rows) {
+  return withoutOwnedEntries(rows, HOOK_MARKERS.StanceAllowAsk);
 }
 function ensureStanceAllowAskHook(projectRoot2) {
   try {

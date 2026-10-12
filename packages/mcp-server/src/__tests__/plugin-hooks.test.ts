@@ -29,9 +29,9 @@ const bundlesBuilt = fs.existsSync(preflightBundle) && fs.existsSync(stopBundle)
 describe("plugin hooks declaration (hooks/hooks.json)", () => {
   const hooksJson = JSON.parse(fs.readFileSync(path.join(pluginDir, "hooks", "hooks.json"), "utf-8"));
 
-  it("declares a PreToolUse gate on Write|Edit|MultiEdit invoking the bundled preflight script", () => {
+  it("declares a PreToolUse gate on Write|Edit|MultiEdit|NotebookEdit invoking the bundled preflight script", () => {
     const entry = hooksJson.hooks.PreToolUse?.[0];
-    expect(entry.matcher).toBe("Write|Edit|MultiEdit");
+    expect(entry.matcher).toBe("Write|Edit|MultiEdit|NotebookEdit");
     const cmd = entry.hooks?.[0]?.command ?? "";
     expect(entry.hooks[0].type).toBe("command");
     expect(cmd).toContain("${CLAUDE_PLUGIN_ROOT}");

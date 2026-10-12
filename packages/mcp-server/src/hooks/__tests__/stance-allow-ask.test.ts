@@ -58,7 +58,7 @@ const asks = (r: { stdout: string }) => {
 describe("both registrations exist and run the same check", () => {
   it("the plugin's hooks.json declares the Bash row beside (not instead of) the preflight row, and ships the exact script", () => {
     const hooks = JSON.parse(fs.readFileSync(path.join(pluginRoot, "hooks", "hooks.json"), "utf8")).hooks;
-    expect(hooks.PreToolUse.map((e: { matcher: string }) => e.matcher)).toEqual(["Write|Edit|MultiEdit", "Bash"]);
+    expect(hooks.PreToolUse.map((e: { matcher: string }) => e.matcher)).toEqual(["Write|Edit|MultiEdit|NotebookEdit", "Bash"]);
     expect(hooks.PreToolUse[1].hooks).toEqual([{ type: "command", command: STANCE_ALLOW_ASK_PLUGIN_COMMAND }]);
     expect(fs.readFileSync(path.join(pluginRoot, "hooks", "stance-allow-ask.sh"), "utf8")).toBe(STANCE_ALLOW_ASK_SCRIPT);
   });
@@ -77,7 +77,7 @@ describe("both registrations exist and run the same check", () => {
     const after = JSON.parse(fs.readFileSync(settingsPath, "utf8")).hooks.PreToolUse;
     expect(after.filter((e: { hooks: Array<{ command: string }> }) => e.hooks[0]!.command === STANCE_ALLOW_ASK_COMMAND)).toHaveLength(1);
     expect(after.some((e: { hooks: Array<{ command: string }> }) => e.hooks[0]!.command === "my-own-bash-audit")).toBe(true);
-    expect(after.some((e: { matcher: string }) => e.matcher === "Write|Edit|MultiEdit")).toBe(true);
+    expect(after.some((e: { matcher: string }) => e.matcher === "Write|Edit|MultiEdit|NotebookEdit")).toBe(true);
   });
 });
 

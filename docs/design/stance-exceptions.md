@@ -372,6 +372,24 @@ Allowances no longer live on disk, so editing a file cannot grant one. The
   unprompted, silent Retire) or edit the committed `team.json`.
 - **What it does not cover.** Bash writes to these files are outside the
   narrow Bash matcher, on purpose.
+- **As built (slice 4).** The class also guards `.deeppairing/hooks/*`: the
+  #503 review flagged the installed `stance-allow-ask.sh` as the same
+  residual, and `preflight.mjs` is the script that raises this very prompt.
+  `NotebookEdit` joins the preflight matcher for this class only. The path
+  check normalises `.`/`..`, symlinks, Windows separators, `\\?\` prefixes,
+  trailing dots and spaces, NTFS stream suffixes and case. The backstop
+  opt-out (`DEEPPAIRING_GUARDRAIL_BACKSTOP=off`) does not reach it.
+- **#505 review.** Paths resolve with filesystem semantics first (a symlink is
+  followed before the next `..`), `hooks/` covers every descendant, and
+  `.claude/settings.json` / `.claude/settings.local.json` join the class,
+  because removing a hook row switches these prompts off. **Residuals:** the
+  plugin-cache copies of `preflight.mjs` and `stance-allow-ask.sh`, the
+  plugin's `hooks/hooks.json` that registers them, the built core
+  (`dist/cli/preflight-hook-core.js`) that the init-generated hook imports
+  through `CORE_URL`, and the matcher module (`dist/guardrail-rules.js`) that
+  both the init fast path and that core import. They live outside
+  `.deeppairing/` and are not guarded. Disabling or uninstalling the plugin
+  removes the guard entirely.
 
 ### What the audit trail does and does not promise
 
