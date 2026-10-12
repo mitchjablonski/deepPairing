@@ -144,15 +144,39 @@ export function unifiedDiff(filePath: string, before: string, after: string, env
   const out: string[] = [c.bold(`--- a/${safeText(filePath)}`), c.bold(`+++ b/${safeText(filePath)}`)];
   const changed = lines.map((l, i) => (l.type === "unchanged" ? -1 : i)).filter((i) => i >= 0);
   if (changed.length === 0) return [...out, c.dim("(no changes)")].join("\n");
-  // Compare raw text, never display-normalized text. Mark spaces/tabs where
-  // they are the only difference (including mixed proposals with ordinary
-  // edits elsewhere); leave unchanged context and ordinary edits readable.
+  // Compare raw text, never display-normalized text. Retain whitespace-only
+  // counterparts even in mixed proposals, then inspect replacement pairs.
   const withoutHorizontalSpace = (s: string) => s.replace(/[ \t]/g, "");
   const removed = new Set(lines.filter((l) => l.type === "removed").map((l) => withoutHorizontalSpace(l.content)));
   const added = new Set(lines.filter((l) => l.type === "added").map((l) => withoutHorizontalSpace(l.content)));
   const onlyWhitespace = before.replace(/[ \t\n]/g, "") === after.replace(/[ \t\n]/g, "");
+  const mixedWhitespace = new Set<(typeof lines)[number]>();
+  const whitespaceRuns = (s: string) => JSON.stringify([...s.matchAll(/[ \t]+/g)].map((m) => [m.index, m[0]]));
+  // A contiguous change block has no authoritative character alignment.
+  // Pair removed/added lines in order and conservatively mark the whole pair
+  // when whitespace moves or changes. Never pair across unchanged context.
+  let oldBlock: typeof lines = [];
+  let newBlock: typeof lines = [];
+  const finishBlock = () => {
+    for (let k = 0; k < Math.min(oldBlock.length, newBlock.length); k++) {
+      const oldLine = oldBlock[k]!;
+      const newLine = newBlock[k]!;
+      if (whitespaceRuns(oldLine.content) !== whitespaceRuns(newLine.content)) {
+        mixedWhitespace.add(oldLine);
+        mixedWhitespace.add(newLine);
+      }
+    }
+    oldBlock = [];
+    newBlock = [];
+  };
+  for (const l of lines) {
+    if (l.type === "unchanged") finishBlock();
+    else (l.type === "removed" ? oldBlock : newBlock).push(l);
+  }
+  finishBlock();
   const markLine = (l: (typeof lines)[number]) => l.type !== "unchanged" &&
-    (onlyWhitespace || (l.type === "removed" ? added : removed).has(withoutHorizontalSpace(l.content)));
+    (onlyWhitespace || /[ \t]$/.test(l.content) || mixedWhitespace.has(l) ||
+      (l.type === "removed" ? added : removed).has(withoutHorizontalSpace(l.content)));
   if (lines.some((l) => markLine(l) && /[ \t]/.test(l.content))) {
     out.push(c.dim("Whitespace on marked change lines: ⟨SPACE⟩ = space; ⟨TAB⟩ = tab. Unchanged context is not marked."));
   }
