@@ -20,6 +20,7 @@ import { getSessionId, NO_SESSION_RESPONSE, readJsonValue } from "./route-helper
 export type ReviewStore = Pick<
   IStore,
   | "addComment"
+  | "getAutonomyLevel"
   | "forceFlush"
   | "getArtifacts"
   | "getDecision"
@@ -279,7 +280,7 @@ export function createReviewRoutes({
       log(`[status] REJECTED — body schema invalid for ${artifactId} (header.sid=${sid ?? "(none)"}, store.sid=${storeSid}): ${parsed.error.issues[0]?.message}`);
       return c.json(formatZodIssues(parsed.error), 400);
     }
-    const { status, feedback, concept: humanConcept } = parsed.data;
+    const { status, feedback, concept: humanConcept, reason: autoReason } = parsed.data;
 
     // U0.6 diagnostic — log the routing decision so we can confirm whether
     // the UI's X-Session-Id matches the store the artifact actually lives
@@ -312,6 +313,29 @@ export function createReviewRoutes({
           message: "This artifact belongs to a different session than the one this tab is bound to." },
         404,
       );
+    }
+
+    // #521 — an AUTO (confidence countdown) approval must still be permitted
+    // at commit time: the human may have lowered the autonomy level (or the
+    // artifact may have been revised) after the countdown armed / the request
+    // was dispatched. Typed refusal, no state change. A human click carries no
+    // auto reason and is never gated.
+    if (autoReason === "auto_confidence") {
+      const level = await store.getAutonomyLevel();
+      const confidence = (target.content as { confidence?: string } | null)?.confidence;
+      if (status !== "approved" || level === "supervised" || confidence !== "high" || target.status !== "draft") {
+        log(`[status] REFUSED auto-approve on ${artifactId}: level=${level} confidence=${confidence ?? "(none)"} status=${target.status}`);
+        return c.json(
+          {
+            error: "auto_approve_not_permitted",
+            code: "auto_approve_not_permitted",
+            autonomyLevel: level,
+            message:
+              "Auto-approval is no longer permitted (the autonomy level or the artifact changed). Nothing was approved — review it and approve yourself.",
+          },
+          409,
+        );
+      }
     }
 
     // O3 (#231) — cross-tab last-wins verdict guard. A stale second tab (opened

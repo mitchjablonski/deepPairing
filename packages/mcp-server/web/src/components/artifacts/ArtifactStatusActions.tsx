@@ -57,6 +57,9 @@ interface FooterState {
   countdownMax: number;
   /** A cancelled countdown STAYS paused so confidence-auto-arm can't re-fire. */
   countdownPaused: boolean;
+  /** #521 — the armed countdown is the confidence AUTO-approve (revocable on
+   *  eligibility loss), not the human's `a`/⏎ keymap confirm. */
+  countdownAuto: boolean;
   /** B6 — sentinel visibility (user reached the artifact's natural end). */
   atEnd: boolean;
   /** Voluntary expansion (Respond… click, textarea focus, `r` shortcut). */
@@ -73,6 +76,7 @@ export const INITIAL_FOOTER_STATE: FooterState = {
   countdown: null,
   countdownMax: COUNTDOWN_SECONDS,
   countdownPaused: false,
+  countdownAuto: false,
   atEnd: true,
   forceExpanded: false,
   userCollapsed: false,
@@ -80,7 +84,7 @@ export const INITIAL_FOOTER_STATE: FooterState = {
 
 type FooterAction =
   | { type: "typed"; comment: string }
-  | { type: "armCountdown"; seconds: number }
+  | { type: "armCountdown"; seconds: number; auto?: boolean }
   | { type: "cancelCountdown" }
   | { type: "tick" }
   | { type: "beginReject"; concept: string }
@@ -98,7 +102,7 @@ type FooterAction =
  *  without un-collapse, a user who minimized earlier had the panel snap to
  *  compact under their Cancel click). */
 function cancelled(s: FooterState): FooterState {
-  return { ...s, countdown: null, countdownPaused: true, userCollapsed: false };
+  return { ...s, countdown: null, countdownPaused: true, countdownAuto: false, userCollapsed: false };
 }
 
 export function footerReducer(s: FooterState, a: FooterAction): FooterState {
@@ -114,6 +118,7 @@ export function footerReducer(s: FooterState, a: FooterAction): FooterState {
         countdownPaused: false,
         countdownMax: a.seconds,
         countdown: a.seconds,
+        countdownAuto: !!a.auto,
       };
     case "cancelCountdown":
       return cancelled(s);
@@ -197,7 +202,7 @@ export function ArtifactStatusActions({
   const offline = useOfflineReason();
   const {
     comment, submitting, rejecting, rejectConcept,
-    countdown, countdownMax, countdownPaused,
+    countdown, countdownMax, countdownPaused, countdownAuto,
     atEnd, forceExpanded, userCollapsed,
   } = state;
   // #487 review — the footer comment isn't a useDraft; register it so the
@@ -291,9 +296,33 @@ export function ArtifactStatusActions({
 
   useEffect(() => {
     if (shouldAutoApprove && countdown === null && !comment) {
-      dispatch({ type: "armCountdown", seconds: COUNTDOWN_SECONDS });
+      dispatch({ type: "armCountdown", seconds: COUNTDOWN_SECONDS, auto: true });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- E6 reducer: typing-cancels-countdown is a transition, not a dep — see the reducer header
+  }, [shouldAutoApprove]);
+
+  // #521 — eligibility is re-read from CURRENT state at commit time (props via
+  // refs, autonomy level straight from the store) so a revocation between the
+  // last render and the tick can't slip through.
+  const eligibilityRef = useRef({ status: artifact.status, confidence, hideApprove, replayActive });
+  eligibilityRef.current = { status: artifact.status, confidence, hideApprove, replayActive };
+  const autoEligibleNow = () => {
+    const e = eligibilityRef.current;
+    return (
+      !e.replayActive &&
+      e.status === "draft" &&
+      e.confidence === "high" &&
+      useConnectionStore.getState().autonomyLevel !== "supervised" &&
+      !e.hideApprove
+    );
+  };
+
+  // #521 — any eligibility input revoked (level lowered, confidence changed,
+  // status left draft, hideApprove, replay) cancels an armed AUTO countdown
+  // immediately. The human's own keymap countdown is never revoked here.
+  useEffect(() => {
+    if (!shouldAutoApprove && countdownAuto && countdown !== null) dispatch({ type: "cancelCountdown" });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the eligibility transition; countdown/auto are guards
   }, [shouldAutoApprove]);
 
   // #465 — an armed auto-approve must not fire into a dead connection.
@@ -321,8 +350,13 @@ export function ArtifactStatusActions({
         // auto-approve commit. Route BOTH through the open-suggestion gate: with
         // an open suggestion the window elapsing surfaces the confirm instead of
         // silently approving.
-        if (openSugRef.current.total > 0) {
+        if (countdownAuto && !autoEligibleNow()) {
+          // #521 — revoked before commit: abort, no approval.
+          dispatch({ type: "cancelCountdown" });
+        } else if (openSugRef.current.total > 0) {
           setApproveConfirm(true);
+        } else if (countdownAuto) {
+          updateArtifactStatus(artifact.id, "approved", undefined, undefined, "auto_confidence");
         } else {
           updateArtifactStatus(artifact.id, "approved");
         }
