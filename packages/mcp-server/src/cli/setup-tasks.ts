@@ -121,13 +121,19 @@ export function cleanDpEntriesFromScope(
   if (settings === null) return { ok: true, removed: 0, message: `Skipped ${scopePath} (missing or malformed)` };
   const entries = settings?.hooks?.[hookKey];
   if (!Array.isArray(entries)) return { ok: true, removed: 0, message: `No ${hookKey} entries in ${scopePath}` };
-  const before = entries.length;
-  const kept = entries.filter((e: any) => {
-    if (typeof e?.command === "string" && marker(e.command)) return false;
-    if (Array.isArray(e?.hooks) && e.hooks.some((h: any) => typeof h?.command === "string" && marker(h.command))) return false;
-    return true;
+  let removed = 0;
+  const kept = entries.flatMap((e: any) => {
+    // Claude allows several hook commands in one matching row. Removing the
+    // whole row would also delete unrelated commands alongside deepPairing.
+    if (Array.isArray(e?.hooks)) {
+      const hooks = e.hooks.filter((h: any) => !(typeof h?.command === "string" && marker(h.command)));
+      if (hooks.length === e.hooks.length) return [e];
+      removed++;
+      return hooks.length > 0 ? [{ ...e, hooks }] : [];
+    }
+    if (typeof e?.command === "string" && marker(e.command)) { removed++; return []; }
+    return [e];
   });
-  const removed = before - kept.length;
   if (removed === 0) return { ok: true, removed: 0, message: `No deepPairing ${hookKey} entries to remove in ${scopePath}` };
   try {
     settings.hooks[hookKey] = kept;

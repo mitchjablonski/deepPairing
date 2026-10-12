@@ -58,10 +58,33 @@ GitHub SSH keys. The `owner/repo` shorthand can resolve to SSH and fail with
      plugin hooks. -->
 
 This adds the slash commands (`/deeppairing:start`, `:review`, `:stance`,
-`:share`, `:review-pr`, `:post-pr`), the proactively-loaded `pairing-protocol` skill, and
+`:share`, `:review-pr`, `:post-pr`, `:doctor`), the proactively-loaded `pairing-protocol` skill, and
 — as of v0.1.1 — the **PreToolUse rejection-gate + Stop checkpoint hooks
 natively** (declared in `claude-plugin/hooks/hooks.json`, active the moment the
 plugin loads — no `init`, no `.mcp.json`, no session restart).
+
+### Diagnose a marketplace install
+
+Run `/deeppairing:doctor` in Claude Code, or use the shipped entry from your
+project's terminal (replace the example path with your installed plugin path):
+
+```bash
+node "/path/to/installed/claude-plugin/server/doctor.mjs"
+node "/path/to/installed/claude-plugin/server/doctor.mjs" --fix
+```
+
+No npm package, source build, or `dist/` directory is needed. Doctor prints the
+project it resolved: `CLAUDE_PROJECT_DIR` takes precedence over
+`DEEPPAIRING_PROJECT_ROOT`, then the current directory. Check that path before
+accepting repairs. The default run only reports; `--fix` proposes and prompts
+for repairs. In a noninteractive shell, `--fix` cancels without writing.
+
+`--fix --yes` accepts project-local repairs such as stale daemon metadata,
+gitignore, the checkpoint hook, redundant local plugin-hook rows and verified
+dead session locks. Shared/user hook cleanup and daemon termination require
+interactive confirmation and are skipped under `--yes`. Unrelated hooks are
+preserved. Clock checks only warn; doctor never changes host time or services,
+and never repairs the philosophy ledger automatically.
 
 ## 2. Local plugin from a clone
 
@@ -110,7 +133,7 @@ can't detect the plugin, so running `init` explicitly **will** double-install
 those two hooks. Clean up the redundant `settings.local.json` rows with:
 
 ```bash
-node packages/mcp-server/dist/cli/init.js doctor --fix
+node "/path/to/installed/claude-plugin/server/doctor.mjs" --fix
 ```
 
 ## After install

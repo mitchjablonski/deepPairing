@@ -28309,8 +28309,8 @@ var GlobalStore = class _GlobalStore {
    * writes are being refused. `backupPath` is the `.corrupt-<ts>` snapshot when
    * one was captured this process; absent when even the copy failed.
    */
-  getHealth() {
-    this.read();
+  getHealth(opts = {}) {
+    this.read(!opts.readOnly);
     if (this.lastReadCorrupt) {
       const backupPath = corruptSnapshots.get(this.ledgerPath);
       return {
@@ -28341,10 +28341,11 @@ var GlobalStore = class _GlobalStore {
    * write() destroyed the ledger. Snapshot once per path per current corruption
    * so read-only callers hitting a persistently bad file don't storm snapshots.
    */
-  markCorrupt(err) {
+  markCorrupt(err, snapshot = true) {
     this.lastReadCorrupt = true;
     const msg = err?.message ?? String(err);
     this.lastReadCorruptReason = msg;
+    if (!snapshot) return;
     const existing = corruptSnapshots.get(this.ledgerPath);
     if (existing) return;
     const backup = this.snapshotLedger();
@@ -28385,7 +28386,7 @@ var GlobalStore = class _GlobalStore {
     return { entry: { key, concept, instances, firstSeenAt, lastSeenAt }, reconstructed };
   }
   /** Load the entire ledger. Returns an empty shape on first run or corruption. */
-  read() {
+  read(snapshotCorrupt = true) {
     const emptyConcepts = () => /* @__PURE__ */ Object.create(null);
     this.lastReadCorrupt = false;
     this.lastReadCorruptReason = void 0;
@@ -28398,7 +28399,7 @@ var GlobalStore = class _GlobalStore {
     try {
       raw = fs3.readFileSync(this.ledgerPath, "utf-8");
     } catch (err) {
-      this.markCorrupt(err);
+      this.markCorrupt(err, snapshotCorrupt);
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
     if (raw.trim() === "") {
@@ -28410,17 +28411,17 @@ var GlobalStore = class _GlobalStore {
     try {
       parsed = JSON.parse(raw);
     } catch (err) {
-      this.markCorrupt(err);
+      this.markCorrupt(err, snapshotCorrupt);
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
       const rootKind = parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed;
-      this.markCorrupt(new Error(`unexpected ledger root (${rootKind})`));
+      this.markCorrupt(new Error(`unexpected ledger root (${rootKind})`), snapshotCorrupt);
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
     const top = parsed;
     if (top.version !== LEDGER_VERSION || typeof top.concepts !== "object" || !top.concepts) {
-      this.markCorrupt(new Error(`unexpected ledger shape (version=${JSON.stringify(top.version)})`));
+      this.markCorrupt(new Error(`unexpected ledger shape (version=${JSON.stringify(top.version)})`), snapshotCorrupt);
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
     const concepts = emptyConcepts();
@@ -29130,6 +29131,12 @@ function resolveCompiledCliPath() {
   return candidates.find((p) => fs4.existsSync(p)) ?? null;
 }
 function cliInvocation(subcommand = "") {
+  if (subcommand === "doctor" || subcommand.startsWith("doctor ")) {
+    const doctorEntry = path3.join(__thisDir, "doctor.mjs");
+    if (fs4.existsSync(doctorEntry)) {
+      return `node "${doctorEntry}"${subcommand.slice("doctor".length)}`;
+    }
+  }
   return formatCliInvocation({
     installed: isInstalledPackage(),
     cliPath: resolveCompiledCliPath(),

@@ -60,6 +60,14 @@ function resolveCompiledCliPath(): string | null {
  *    path when the compiled CLI can't be located (TS-source dev via tsx).
  */
 export function cliInvocation(subcommand = ""): string {
+  // The bundled doctor has no dist CLI or npm install. Prefer its shipped
+  // entry even when a marketplace cache happens to contain node_modules.
+  if (subcommand === "doctor" || subcommand.startsWith("doctor ")) {
+    const doctorEntry = path.join(__thisDir, "doctor.mjs");
+    if (fs.existsSync(doctorEntry)) {
+      return `node "${doctorEntry}"${subcommand.slice("doctor".length)}`;
+    }
+  }
   return formatCliInvocation({
     installed: isInstalledPackage(),
     cliPath: resolveCompiledCliPath(),
