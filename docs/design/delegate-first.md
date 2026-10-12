@@ -1,6 +1,6 @@
 # Delegate-first pairing — quiet runs, understanding packets (proposal)
 
-> **Status: PROPOSAL, revision 4. Docs only, no code.** Written for Mitch's
+> **Status: PROPOSAL, revision 6. Docs only, no code.** Written for Mitch's
 > product decision, Fable's UX review and Astra's architecture review. Mitch's
 > decisions are recorded in §9. The revision history and every review
 > response live in the comments on
@@ -268,7 +268,9 @@ you are never offered a verdict on a story whose diffs you have not landed.
 `approved` and no Ask on the debrief is open**. Approving the last member
 with no Ask open completes it in the same operation, so for the 1:1 case a
 low-risk run is **two approvals**, the brief and the diff. For N members it
-is the brief plus N member approvals, and never more. When members are all
+is the brief plus N member approvals, plus one manual **Close the packet**
+whenever an Ask was open at the last landing or the packet formed already
+landed. When members are all
 approved but an Ask is open, or when the packet formed already landed, the
 debrief's bar returns as **"Close the packet"**, so a manual completion is
 always reachable, including after an Ask is answered later. Rejecting or
@@ -381,16 +383,41 @@ operation, not a web assumption. On commit the daemon re-derives the packet
 from the **current** store: membership, exact versions, statuses and open
 Asks. If the clicked member is no longer the exact version the tab saw, the
 approve is **refused** with "this diff was revised, reload", and nothing is
-written. If revalidation passes, the member's status is written first. Then,
-if this was the last member and no Ask is open, the debrief's `approved`
-status is written as a second record with `reason: "packet_complete"` and the
-member's operation id. The two writes are not assumed to be one physical
-write. **Recovery:** on startup, and on every derivation, a packet whose
-members are all `approved`, whose debrief is `draft`, and whose last member
-approval carries `packet_complete` intent is completed idempotently by the
-daemon. One that lacks the intent, because an Ask was open or the packet
-formed already landed, shows **Close the packet** instead. Either way the
-state after a crash is the state the human would have reached.
+written. If revalidation passes, the member's status is written first, and
+**in the same record** the daemon persists a `packetCompletionIntent` that
+names the **exact packet the human's approval was computed against**:
+`{ debriefId, debriefVersion, brief: BriefRef, members: Array<{ artifactId,
+version }> }`. The intent is scoped to that debrief id and version. It is
+**never transferred** to a successor or replacement debrief, or to any packet
+whose brief or member set differs. `derivePackets` stays pure and never reads
+intents.
+
+**One completion predicate, three callers.** `canCompletePacket(store,
+target)` holds when: the debrief with exactly `target.debriefId` and
+`target.debriefVersion` exists and is `draft`, its `brief` equals
+`target.brief`, its `packet.changesets` equals `target.members` as a set,
+every member is `approved` at its exact version, no Ask on the debrief is
+open, and `derivePackets` on the current store forms exactly this packet.
+The three callers are:
+
+- **immediate completion**, after the member write, when the written intent's
+  target satisfies the predicate now, which writes the debrief `approved`
+  with `reason: "packet_complete"` and the intent as a second record;
+- **recovery**, on daemon startup, for every persisted intent whose target
+  debrief is still `draft`: complete only when the predicate holds for that
+  exact target, and otherwise do nothing. An intent whose target is already
+  `approved` is a no-op, so a restart is idempotent;
+- **manual Close the packet**, which runs the same predicate against the
+  debrief the human is looking at as the target, with no intent needed.
+
+So when approving C completes D1 and the agent then supersedes D1 into a draft
+D2 listing the same approved C, D2 has a new id, no intent names it, and the
+recovery pass does nothing. D2 stays `draft` and shows **Close the packet**,
+exactly as an already-landed packet should. An Ask that arrives before
+completion or before recovery fails the predicate, and the packet waits for
+the manual Close once the Ask is answered. The two writes are not assumed to
+be one physical write, and the state after a crash is the state the human
+would have reached.
 
 ### 3b. The fourth level and its migration (D1, decided)
 
@@ -456,12 +483,28 @@ by the refs themselves. S1 then makes three changes:
 - the arm predicate becomes an allowlist of `balanced` and `autonomous`
   **and** `!isPacketIntended(artifact)`, so `delegate` never arms and a
   packet-intended artifact never arms at any level, formed or not;
-- an effect watches the artifact and the store generation and **cancels an
-  already-armed countdown** when the artifact is, or becomes, packet-intended
-  (late hydration, a snapshot replacing the record), setting
-  `countdownPaused` so it cannot re-arm;
-- the daemon **rechecks at commit**: an approve carrying the auto-approve
-  reason on a packet-intended artifact is refused, whatever the tab believed.
+- the reducer records **how** a countdown was armed, `armedBy: "confidence"`
+  for the auto path and `"human"` for the `a`/⏎ keymap, and the commit at
+  `ArtifactStatusActions.tsx:327` passes a matching reason,
+  `auto_confidence` or `human`, so an explicit human approval stays distinct
+  from a confidence-triggered one all the way to disk;
+- an effect watches **every** input of eligibility, the autonomy level, the
+  artifact's packet intent, the store generation, `hideApprove` and
+  `offline`, and **cancels a confidence-armed countdown the moment any of
+  them revokes eligibility**, including a switch to Delegate or Supervised
+  mid-countdown, setting `countdownPaused` so it cannot re-arm. Today the arm
+  effect (`:292-297`) only arms and never cancels, and the tick (`:314-337`)
+  never re-reads the level before committing, so a changeset armed at
+  `balanced` would still approve after the human switched to Delegate. A
+  human-armed countdown is an explicit act and is not cancelled by a level
+  change, only by the existing Escape, typing, offline and `hideApprove`
+  rules;
+- the daemon **rechecks at commit** for the `auto_confidence` reason: the
+  **current** `autonomyLevel` must be `balanced` or `autonomous` and the
+  artifact must not be packet-intended, whatever the tab believed when it
+  dispatched. Otherwise the approve is refused, the artifact stays `draft`,
+  and the tab shows "auto-approve cancelled: your autonomy level changed".
+  A `human` reason is never refused on these grounds.
 
 Ordinary artifacts, with no `brief` and no `packet`, arm and cancel exactly as
 today. The dogfood's "omit `confidence`" (§7) is the S0 workaround; this is
@@ -743,6 +786,20 @@ debrief when the member carries `packet_complete` intent, and shows **Close
 the packet** when it does not. A rejected member dissolves the packet and the
 debrief stays pending alone.
 
+**Intent is scoped to the exact target.** C approved completes D1. The agent
+supersedes D1 into draft D2 listing the same approved C: D2 stays `draft`,
+recovery does nothing, and D2 shows **Close the packet**. A persisted intent
+whose target debrief has since been superseded, or whose recorded `brief` or
+member set differs from the current debrief's: recovery does nothing. An Ask
+arrives on D1 after C's write and before immediate completion: D1 stays
+`draft` with "1 question open", recovery after a restart still does nothing,
+and Close appears when the Ask is answered. A restart with D1 already
+`approved` and its intent still on disk: no write, no broadcast. A restart
+with D1 `draft`, members approved, no Ask, intent naming exactly D1: completed
+once. Manual Close on a packet with an open Ask: refused with "1 question
+open". Manual Close after a member was superseded: refused, the packet has
+dissolved.
+
 **Nothing hidden (web).** With a packet formed, the `⌄` expansion lists every
 member and `n` visits each member in order. With a packet dissolved, every
 member is a sidebar row and a bar item. Axe scans pass in both states.
@@ -779,6 +836,18 @@ and `countdownPaused` prevents a re-arm. The daemon refuses an auto-approve
 reason on a packet-intended artifact at commit. An ordinary `confidence:
 "high"` changeset with no `brief` arms and auto-approves exactly as today.
 With `supervised`, nothing arms, as today.
+
+**Countdown revocation on a level change.** An ordinary high-confidence
+changeset armed at `balanced`: switching the dial to Delegate before expiry
+cancels the countdown and it stays `draft`. The same at `autonomous` switched
+to Supervised: cancelled. Switched from `balanced` to `autonomous`: keeps
+running. A countdown armed by `a` at `balanced`, then the dial switched to
+Delegate: keeps running and commits with reason `human`. A tick-zero dispatch
+with reason `auto_confidence` whose daemon commit finds the level changed to
+`delegate` in between: refused, `draft`, the tab shows the cancellation line.
+The same dispatch with reason `human`: lands. A tab that never re-rendered
+after a level change still cannot auto-approve, because the daemon reads the
+current level.
 
 **Migration, staged then activated.** After S1: `preferences.json` with an
 absent `autonomyLevel` still reads `supervised`, no `autonomyDefaultMigratedAt`
