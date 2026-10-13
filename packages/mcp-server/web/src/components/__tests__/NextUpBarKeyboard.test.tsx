@@ -90,10 +90,10 @@ describe("#529 — Next-up disclosure keyboard ownership", () => {
     why.focus();
     fireEvent.click(why);
     expect(why.isConnected).toBe(false);
-    const section = screen.getByRole("region", { name: "Next up" });
-    section.focus();
-    fireEvent.keyDown(section, { key: "Escape" });
     expect(toggle()).toHaveFocus();
+    fireEvent.keyDown(toggle(), { key: "Escape" });
+    expect(toggle()).toHaveFocus();
+    expect(document.getElementById("next-up-details")).toBeNull();
   });
 
   it("returns to a connected explicit-event opener, falling back if it was removed", () => {
@@ -140,5 +140,31 @@ describe("#529 — Next-up disclosure keyboard ownership", () => {
     act(() => useArtifactStore.getState().updateArtifact("one", "obsolete"));
     expect(outside).toHaveFocus();
     expect(useArtifactStore.getState().selectedArtifactId).toBe("one");
+  });
+
+  it("recovers only an actually focused explicit opener when it disappears", () => {
+    const { rerender } = render(<NextUpBar quietCards={{ wrap: <div>Synthetic recap</div> }} />);
+    const recap = screen.getByRole("button", { name: "Recap ⌄" });
+    recap.focus();
+    fireEvent.click(recap);
+    rerender(<NextUpBar />);
+    expect(recap.isConnected).toBe(false);
+    expect(toggle()).toHaveFocus();
+    fireEvent.keyDown(toggle(), { key: "Escape" });
+    expect(document.getElementById("next-up-details")).toBeNull();
+  });
+
+  it("relinquishes opener ownership after leaving the bar, including a later body focus", () => {
+    const { rerender } = render(<><button>Outside</button><NextUpBar quietCards={{ wrap: <div>Synthetic recap</div> }} /></>);
+    const recap = screen.getByRole("button", { name: "Recap ⌄" });
+    recap.focus();
+    fireEvent.click(recap);
+    const outside = screen.getByRole("button", { name: "Outside" });
+    outside.focus();
+    outside.blur();
+    expect(document.activeElement).toBe(document.body);
+    rerender(<><button>Outside</button><NextUpBar /></>);
+    expect(recap.isConnected).toBe(false);
+    expect(document.activeElement).toBe(document.body);
   });
 });

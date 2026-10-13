@@ -229,9 +229,14 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   const [expanded, setExpanded] = useState<false | "all" | "high">(false);
   const disclosureRef = useRef<HTMLButtonElement>(null);
   const openerRef = useRef<HTMLElement | null>(null);
-  const focusedQueueRef = useRef<HTMLButtonElement | null>(null);
+  const focusedControlRef = useRef<HTMLElement | null>(null);
   const expandFrom = (mode: false | "all" | "high", opener: HTMLElement) => {
-    if (mode) openerRef.current = opener;
+    if (mode) {
+      openerRef.current = opener;
+      // Why marks the hold seen and removes itself in this same commit. Only
+      // claim its focus when it actually held focus during the explicit open.
+      focusedControlRef.current = document.activeElement === opener ? opener : null;
+    }
     setExpanded(mode);
   };
   const returnQueueFocus = () => {
@@ -240,12 +245,12 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
       ? opener : disclosureRef.current;
     target?.focus({ preventScroll: true });
   };
-  // A live status update can remove the queue button that held focus. Recover
-  // only that lost focus; ordinary arrivals and updates must never move it.
+  // A status update can remove a focused queue button; an explicit open can
+  // remove its own opener. Recover only lost focus still owned by this bar.
   useLayoutEffect(() => {
-    const previous = focusedQueueRef.current;
+    const previous = focusedControlRef.current;
     if (previous && !previous.isConnected) {
-      focusedQueueRef.current = null;
+      focusedControlRef.current = null;
       if (document.activeElement === document.body) disclosureRef.current?.focus({ preventScroll: true });
     }
   });
@@ -456,10 +461,12 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
       onKeyDown={queueKeyDown}
       onFocusCapture={(event) => {
         const target = event.target as HTMLElement;
-        focusedQueueRef.current = target.matches("[data-next-up-queue-item]") ? target as HTMLButtonElement : null;
+        focusedControlRef.current = target.matches("[data-next-up-queue-item]") || target === openerRef.current ? target : null;
       }}
       onBlurCapture={(event) => {
-        if (event.target === focusedQueueRef.current) focusedQueueRef.current = null;
+        // Leaving the bar/control relinquishes ownership, even when the new
+        // focus is body. A stale opener must never reclaim that focus later.
+        if (event.target === focusedControlRef.current) focusedControlRef.current = null;
       }}
       className="border-b border-border-default bg-surface-secondary"
     >

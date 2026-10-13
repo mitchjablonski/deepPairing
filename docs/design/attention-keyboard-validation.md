@@ -28,8 +28,9 @@ Ordered lists and ordinary buttons remain. Up/Down and Home/End move focus among
 enabled queue buttons, stopping at the ends, without selecting an artifact.
 Escape is consumed inside the expanded bar before App can exit replay or move
 focus elsewhere; focus returns to the actual opening control, or the disclosure
-if that control has disappeared. A removed queue button gets a fallback only
-when it was focused, is disconnected, and the browser's active element is body.
+if that control has disappeared. A removed queue button or explicit opener gets
+a fallback only when it was focused, is disconnected, and the browser's active
+element is body. Focus/blur tracking relinquishes ownership when the user leaves.
 Surviving controls, other parts of the app, editables, card arrows, modified
 chords, Tab and Enter retain their existing behavior.
 
@@ -38,8 +39,21 @@ passed (50/50, 6.4 minutes). An overlapping diagnostic invocation cleared the
 shared output directory during that run, so its retained files are not a
 complete 48-row evidence pack; the console result establishes execution only.
 Subsequent probes use separate output directories. The corrected focused
-browser journeys pass both themes and live arrival/status/removal/approval;
-43 adjacent component checks pass, including the existing live-region guards.
+browser journeys cover both themes and live arrival/status/removal/approval;
+adjacent component checks include the existing live-region guards. The initial
+unbounded full web run on `9050e3e0` had two load-sensitive failures (a lazy
+footer query and a 10-second fixture timeout); both passed in isolation, and
+the full bounded rerun passed all 162 files / 2,109 tests without changing
+assertions, timeouts or mocks.
+
+Independent adversarial review of `9050e3e0` caught an additional real gap:
+keyboard Why removed its own focused opener, so immediate Escape still reached
+App. The original held-state browser test inserted a Tab and the unit test
+manually focused the section, concealing that gap. The repair now tracks the
+actually focused explicit opener as well as queue buttons. Both regressions
+require immediate Escape with no intervening Tab or scripted focus; further
+controls cover an opener disappearing later and leaving the bar before removal.
+The same review requested precise dark/light limitations, now corrected above.
 
 The checked-in focused suite adds 18 dark/light state rows (A–G, empty, replay),
 each with collapsed and expanded full-page WCAG 2/2.1 A/AA axe scans, plus three

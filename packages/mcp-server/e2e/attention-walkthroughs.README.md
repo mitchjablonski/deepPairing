@@ -70,6 +70,8 @@ historical report's counts. Internal API seeding is not a live agent; it affects
 activity signals. ARIA/live text is a bounded potential-announcement proxy,
 not NVDA/JAWS/VoiceOver speech. The harness makes no usability verdict, measures
 no people or trust, does not replace the external pilot, does not change the
-rollout default and does not close #430. The long-disconnect escalation,
-alternate themes/zoom/high-contrast/mobile/webview and real screen readers are
-not measured. See `docs/design/attention-walkthroughs.md` for historical evidence.
+rollout default and does not close #430. The original 48-row matrix uses dark
+theme; the focused #529 suite also checks light theme. Other themes, actual
+browser zoom, high contrast, mobile/webview, real screen readers and the
+long-disconnect escalation are not measured. See
+`docs/design/attention-walkthroughs.md` for historical evidence.

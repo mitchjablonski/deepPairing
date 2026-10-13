@@ -193,11 +193,13 @@ for (const theme of ["dark", "light"] as const) for (const state of barStates) {
         await e.activate(page.getByRole("button", { name: "Collapse next-up details", exact: true }));
         await e.activate(page.getByRole("button", { name: "Why", exact: true }));
         await expect(page.getByRole("button", { name: "Why", exact: true })).toHaveCount(0);
-        // Why marks the hold seen and removes itself; Tab into the remaining
-        // disclosure gives Escape a local event target, never script focus.
-        await tabTo(e, page.getByRole("button", { name: "Collapse next-up details", exact: true }));
+        await e.check("keyboard Why removal immediately recovers to disclosure", () => expect(page.getByRole("button", { name: "Collapse next-up details", exact: true })).toBeFocused());
+        await e.capture("why-opener-recovered");
+        // No intervening Tab or scripted focus: the very next keyboard action
+        // must close the disclosure instead of falling through to App.
         await e.press("Escape");
         await e.check("removed Why opener uses stable disclosure fallback", () => expect(page.getByRole("button", { name: "Expand next-up details", exact: true })).toBeFocused());
+        await e.check("immediate Escape closes the held expansion", () => expect(page.locator("#next-up-details")).toHaveCount(0));
       }
       if (state.id === "replay") {
         await e.press("Escape");
