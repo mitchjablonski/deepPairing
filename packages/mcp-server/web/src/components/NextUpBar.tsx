@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Artifact } from "@deeppairing/shared";
 import { useArtifactStore, artifactStoreGeneration, isBackfilled } from "../stores/artifact";
 import { useConnectionStore, selectHydratedForBinding } from "../stores/connection";
@@ -227,6 +227,57 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   }, [connected]);
   const prolongedOutage = tabOffline && disconnectedSince != null && nowMs - disconnectedSince >= 60_000;
   const [expanded, setExpanded] = useState<false | "all" | "high">(false);
+  const disclosureRef = useRef<HTMLButtonElement>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
+  const focusedControlRef = useRef<HTMLElement | null>(null);
+  const expandFrom = (mode: false | "all" | "high", opener: HTMLElement) => {
+    if (mode) {
+      openerRef.current = opener;
+      // Why marks the hold seen and removes itself in this same commit. Only
+      // claim its focus when it actually held focus during the explicit open.
+      focusedControlRef.current = document.activeElement === opener ? opener : null;
+    }
+    setExpanded(mode);
+  };
+  const returnQueueFocus = () => {
+    const opener = openerRef.current;
+    const target = opener?.isConnected && opener !== document.body && !(opener instanceof HTMLButtonElement && opener.disabled)
+      ? opener : disclosureRef.current;
+    target?.focus({ preventScroll: true });
+  };
+  // A status update can remove a focused queue button; an explicit open can
+  // remove its own opener. Recover only lost focus still owned by this bar.
+  useLayoutEffect(() => {
+    const previous = focusedControlRef.current;
+    if (previous && !previous.isConnected) {
+      focusedControlRef.current = null;
+      if (document.activeElement === document.body) disclosureRef.current?.focus({ preventScroll: true });
+    }
+  });
+  const queueKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (!expanded || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const target = event.target as HTMLElement;
+    if (target.matches("input, textarea, select") || target.isContentEditable || target.closest('[role="dialog"]')) return;
+    if (event.key === "Escape") {
+      // Consume the local disclosure's Escape before App's global handler can
+      // move focus to main or exit replay behind the still-open queue.
+      event.preventDefault();
+      event.stopPropagation();
+      setExpanded(false);
+      returnQueueFocus();
+      return;
+    }
+    if (!target.matches("[data-next-up-queue-item]") || !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("#next-up-details [data-next-up-queue-item]:not(:disabled)"));
+    const index = buttons.indexOf(target as HTMLButtonElement);
+    if (index < 0) return;
+    const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
+      : Math.max(0, Math.min(buttons.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)));
+    // Stop at the queue's ends. Navigation never selects or answers an item.
+    event.preventDefault();
+    event.stopPropagation();
+    buttons[next]?.focus();
+  };
   // The holds whose "Why" was opened: shown in the expansion after they are
   // marked seen (which, like opening the ⋯ gate log, clears them from the lane).
   const [whyHolds, setWhyHolds] = useState<AttentionItem[]>([]);
@@ -275,6 +326,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   const sectionRef = useRef<HTMLElement>(null);
   useEffect(() => {
     const open = () => {
+      openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       setExpanded("all");
       sectionRef.current?.focus();
     };
@@ -406,6 +458,16 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
       aria-label="Next up"
       data-testid="next-up-bar"
       data-line={lineText}
+      onKeyDown={queueKeyDown}
+      onFocusCapture={(event) => {
+        const target = event.target as HTMLElement;
+        focusedControlRef.current = target.matches("[data-next-up-queue-item]") || target === openerRef.current ? target : null;
+      }}
+      onBlurCapture={(event) => {
+        // Leaving the bar/control relinquishes ownership, even when the new
+        // focus is body. A stale opener must never reclaim that focus later.
+        if (event.target === focusedControlRef.current) focusedControlRef.current = null;
+      }}
       className="border-b border-border-default bg-surface-secondary"
     >
       <div className="flex items-center gap-2 px-3 py-1 min-w-0 text-2xs">
@@ -459,12 +521,12 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
         {primary.lane === "held" && (
           <button
             type="button"
-            onClick={() => {
+            onClick={(event) => {
               // Opening the record counts as seeing it — the same lastSeenAt
               // boundary the ⋯ gate log sets when it is opened.
               setWhyHolds(attention.lanes.held);
               markBlocksSeen();
-              setExpanded("all");
+              expandFrom("all", event.currentTarget);
             }}
             className="shrink-0 px-1.5 py-0.5 rounded border border-border-default text-text-secondary hover:bg-surface-hover"
           >
@@ -499,7 +561,9 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
               key={s.lane}
               type="button"
               data-token
-              onClick={() => setExpanded((e) => (e === "high" ? false : "high"))}
+              onClick={(event) => expandFrom(expanded === "high" ? false : "high", event.currentTarget)}
+              aria-expanded={expanded === "high"}
+              aria-controls="next-up-details"
               className="shrink-0 px-1.5 py-0.5 rounded bg-accent-red-dim text-accent-red font-semibold"
             >
               {SUMMARY_TEXT[s.lane](s.count)}
@@ -517,7 +581,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
             type="button"
             data-token
             data-testid="next-up-next-step"
-            onClick={() => setExpanded("all")}
+            onClick={(event) => expandFrom("all", event.currentTarget)}
             className={`shrink-0 px-1.5 py-0.5 rounded ${WAITING_TONE.chip} ${WAITING_TONE.chipHover}`}
             title="The demo's next step: install deepPairing in Claude Code"
           >
@@ -529,7 +593,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
             type="button"
             data-token
             data-testid="next-up-recap"
-            onClick={() => setExpanded("all")}
+            onClick={(event) => expandFrom("all", event.currentTarget)}
             className="shrink-0 px-1.5 py-0.5 rounded bg-surface-elevated text-text-secondary hover:bg-surface-hover"
             title="Session recap"
           >
@@ -537,11 +601,12 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
           </button>
         )}
         <button
+          ref={disclosureRef}
           type="button"
           aria-expanded={!!expanded}
           aria-controls="next-up-details"
           aria-label={expanded ? "Collapse next-up details" : "Expand next-up details"}
-          onClick={() => setExpanded((e) => (e ? false : "all"))}
+          onClick={(event) => expandFrom(expanded ? false : "all", event.currentTarget)}
           className="shrink-0 px-1 text-text-muted hover:text-text-secondary"
         >
           {expanded ? "⌃" : "⌄"}
@@ -614,7 +679,7 @@ function Queue({ title, items, onOpen }: { title: string; items: AttentionItem[]
         {items.map((it) => (
           <li key={it.id}>
             {it.artifactId ? (
-              <button type="button" onClick={() => onOpen(it.artifactId!)} className="hover:underline text-left">
+              <button type="button" data-next-up-queue-item onClick={() => onOpen(it.artifactId!)} className="hover:underline text-left">
                 {it.title}
               </button>
             ) : (

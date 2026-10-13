@@ -75,7 +75,7 @@ async function runtimeProvenance(): Promise<RuntimeProvenance> {
   const web = await directoryDigest(path.join(packageRoot, "dist/web"));
   const shared = await directoryDigest(path.resolve(packageRoot, "../shared/dist"));
   const harness = [];
-  for (const relative of ["playwright.attention.config.ts", "e2e/attention-walkthrough-harness.ts", "e2e/attention-walkthroughs.walkthrough.ts"]) {
+  for (const relative of ["playwright.attention.config.ts", "e2e/attention-walkthrough-harness.ts", "e2e/attention-walkthroughs.walkthrough.ts", "e2e/attention-keyboard.walkthrough.ts"]) {
     harness.push({ path: relative, sha256: digest(await fs.readFile(path.join(packageRoot, relative))) });
   }
   return {
@@ -253,15 +253,17 @@ export class AttentionEvidence {
   private readonly started = Date.now();
   private keyboardTruncated = false;
   private pressCount = 0;
+  private theme: "dark" | "light" = "dark";
 
   constructor(readonly page: Page, readonly info: TestInfo, readonly row: {
     scenario: WalkthroughCase; mode: "OFF" | "ON"; viewport: { width: number; height: number }; manifest: string[];
   }) {}
 
-  async observe(): Promise<void> {
-    await this.page.addInitScript(({ mode, limits }) => {
+  async observe(theme: "dark" | "light" = "dark"): Promise<void> {
+    this.theme = theme;
+    await this.page.addInitScript(({ mode, theme, limits }) => {
       localStorage.setItem("dp-next-up-bar", mode === "ON" ? "1" : "0");
-      localStorage.setItem("dp-theme", "dark");
+      localStorage.setItem("dp-theme", theme);
       const evidence = { entries: [] as Array<{ atMs: number; role: string | null; live: string | null; text: string }>, truncated: false };
       (window as unknown as { __attentionEvidence: typeof evidence }).__attentionEvidence = evidence;
       const last = new WeakMap<Element, string>();
@@ -281,7 +283,7 @@ export class AttentionEvidence {
       observer.observe(document, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["aria-live", "role"] });
       document.addEventListener("DOMContentLoaded", sample, { once: true });
       window.addEventListener("pagehide", () => observer.disconnect(), { once: true });
-    }, { mode: this.row.mode, limits: LIMITS });
+    }, { mode: this.row.mode, theme, limits: LIMITS });
   }
 
   async press(key: string): Promise<void> {
@@ -346,7 +348,7 @@ export class AttentionEvidence {
         builtRuntimeStable: startups.every((start) => start.distManifestSha256 === atSave.distManifestSha256 && start.sharedManifestSha256 === atSave.sharedManifestSha256),
         provenanceLimit: "A clean tracked tree is not cold-build proof. Actual built runtime and harness digests are recorded; build:clean is a documented precondition, not inferred from HEAD.",
       },
-      syntheticOnly: true, status, cleanup, mode: this.row.mode, viewport: this.row.viewport,
+      syntheticOnly: true, status, cleanup, mode: this.row.mode, theme: this.theme, viewport: this.row.viewport,
       scenario: { id: this.row.scenario.id, task: this.row.scenario.task, boundSession: this.row.scenario.boundSession },
       matrix: { caseCount: this.row.manifest.length, cases: this.row.manifest },
       seedDigest: createHash("sha256").update(JSON.stringify(executedSeed)).digest("hex"),
@@ -357,7 +359,7 @@ export class AttentionEvidence {
       assertions: this.assertions, captures: this.captures, liveRegions,
       limitations: [
         "Synthetic internal API seeding is not a live Claude task; seeding influences agent-activity signals.",
-        "Chromium, dark, reduced motion, two desktop sizes only; no humans, real screen readers, speech timing, usability verdict, pilot or default-rollout approval.",
+        `Chromium, ${this.theme}, reduced motion, desktop only; no humans, real screen readers, speech timing, usability verdict, pilot or default-rollout approval.`,
         "ARIA/live DOM changes are bounded potential-announcement proxies, not accessibility speech; aria-live=off is excluded.",
         "Disconnected sampled after browser-observed outage; the 60-second escalation is not measured.",
         "Tab-search journeys are reproducible automation, not optimal human paths or legacy keystroke-count replication.",
