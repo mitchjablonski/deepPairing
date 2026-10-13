@@ -28,6 +28,26 @@ diagnostic output cannot prevent real owned-daemon cleanup or hide its original
 setup error, and evidence publication cannot mask a primary row failure or
 silently pass without published evidence; neither is a walkthrough matrix row.
 
+`attention-keyboard.walkthrough.ts` adds 21 focused checks outside that manifest:
+two dark/light keyboard journeys, one live arrival/status/removal/action journey,
+and nine bar states in each theme (A–G, empty and replay). Each state scans the
+whole page with axe both collapsed and expanded. These use the same isolated
+daemon/evidence helpers at 1280×800 and verify the actual applied theme. The
+complete attention command therefore runs 71 tests. For only this regression:
+
+```sh
+pnpm --filter @deeppairing/mcp-server exec playwright test --config playwright.attention.config.ts attention-keyboard --output test-results/attention-keyboard
+```
+
+Use different output directories for concurrent invocations: Playwright clears
+its selected output directory at startup. Queue arrows (Up/Down, Home/End) only
+move focus between queue buttons and stop at the ends; normal Tab/Enter and
+modified chords keep their existing behavior. Escape closes the local expansion
+and returns to the actual opener, with the disclosure as fallback if it vanished.
+The live test distinguishes snapshot-backfilled (silent) next transitions from
+a fresh next item's single polite potential announcement. This is DOM evidence,
+not screen-reader speech or a human comprehension result.
+
 JSON records tracked-worktree dirtiness and its diff digest, exact harness and
 lockfile digests, and the actual built daemon entry/module tree, served web tree
 and shared-runtime fingerprints at each startup and after the row. HEAD alone
