@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { canonicalizeWorktreePath } from "./git-worktree.js";
+
+// #532 — re-exported so the init-generated hook (which imports THIS leaf by
+// URL) resolves the project root through the same worktree canonicalisation.
+export { resolveHookRoots } from "./git-worktree.js";
 
 /**
  * Q1 (round-12) — THE ONE GUARDRAIL RULE TABLE.
@@ -216,8 +221,17 @@ export function matchGuardrailPath(projectRoot: string, paths: string[]): Guardr
     for (const raw of paths) {
       if (typeof raw !== "string" || !raw) continue;
       const abs = path.resolve(projectRoot, raw);
-      const rel = path.relative(projectRoot, abs).replace(/\\/g, "/");
-      if (!rel || rel === ".." || rel.startsWith("../")) continue; // outside the project
+      let rel = path.relative(projectRoot, abs).replace(/\\/g, "/");
+      if (!rel || rel === ".." || rel.startsWith("../") || path.isAbsolute(rel)) {
+        // #532 — outside the root, but maybe inside a git linked worktree of
+        // it: the root is canonicalised to the main checkout, and an absolute
+        // edit in `<worktree>/migrations/…` must still be the guardrail path
+        // it is. Map it to the same repo-relative path in the main checkout.
+        const mapped = canonicalizeWorktreePath(abs);
+        if (!mapped.worktree) continue; // outside the project
+        rel = path.relative(projectRoot, mapped.path).replace(/\\/g, "/");
+        if (!rel || rel === ".." || rel.startsWith("../") || path.isAbsolute(rel)) continue;
+      }
       const rule = ruleForRelPath(rel);
       if (rule) return { category: rule.category, path: rel, rationale: rule.rationale, note: rule.note };
     }

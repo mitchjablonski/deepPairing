@@ -7,24 +7,107 @@ var __export = (target, all) => {
 };
 
 // src/cli/doctor.ts
-import fs11 from "node:fs";
-import path9 from "node:path";
+import fs12 from "node:fs";
+import path10 from "node:path";
 import readline from "node:readline";
 
 // src/daemon/lifecycle.ts
-import fs4 from "node:fs";
-import path4 from "node:path";
+import fs5 from "node:fs";
+import path5 from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // src/daemon/token.ts
-import fs2 from "node:fs";
+import fs3 from "node:fs";
 import os from "node:os";
-import path2 from "node:path";
+import path3 from "node:path";
 
 // src/project-root.ts
-import path from "node:path";
-import fs from "node:fs";
+import path2 from "node:path";
+import fs2 from "node:fs";
 import crypto from "node:crypto";
+
+// src/git-worktree.ts
+import fs from "node:fs";
+import path from "node:path";
+function sameDir(a, b) {
+  try {
+    return fs.realpathSync.native(a) === fs.realpathSync.native(b);
+  } catch {
+    return path.resolve(a) === path.resolve(b);
+  }
+}
+function parseLinkedWorktree(top, dotGitFile) {
+  try {
+    const raw = fs.readFileSync(dotGitFile, "utf8");
+    const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(raw);
+    if (!m) return null;
+    const gitdir = path.resolve(top, m[1]);
+    let common;
+    try {
+      common = fs.readFileSync(path.join(gitdir, "commondir"), "utf8").trim();
+    } catch {
+      return null;
+    }
+    if (!common) return null;
+    const commonDir = path.resolve(gitdir, common);
+    if (path.basename(commonDir) !== ".git") return null;
+    try {
+      const config2 = fs.readFileSync(path.join(commonDir, "config"), "utf8");
+      if (/^[ \t]*bare[ \t]*=[ \t]*true[ \t]*$/im.test(config2)) return null;
+    } catch {
+      return null;
+    }
+    const mainTop = path.dirname(commonDir);
+    const mainDotGit = path.join(mainTop, ".git");
+    if (!fs.statSync(mainDotGit).isDirectory() || !sameDir(mainDotGit, commonDir)) return null;
+    if (sameDir(mainTop, top)) return null;
+    return { worktreeTop: top, mainTop };
+  } catch {
+    return null;
+  }
+}
+function findLinkedWorktree(p) {
+  try {
+    let cur = path.resolve(p);
+    for (let i = 0; i < 256; i++) {
+      const dotGit = path.join(cur, ".git");
+      let st;
+      try {
+        st = fs.statSync(dotGit);
+      } catch {
+        st = void 0;
+      }
+      if (st) return st.isFile() ? parseLinkedWorktree(cur, dotGit) : null;
+      const parent = path.dirname(cur);
+      if (parent === cur) return null;
+      cur = parent;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+function canonicalizeWorktreePath(p) {
+  const abs = path.resolve(p);
+  const worktree = findLinkedWorktree(abs);
+  if (!worktree) return { path: abs, worktree: null };
+  const rel = path.relative(worktree.worktreeTop, abs);
+  return { path: rel ? path.join(worktree.mainTop, rel) : worktree.mainTop, worktree };
+}
+function canonicalProjectDir(dir) {
+  const abs = path.resolve(dir);
+  const mapped = canonicalizeWorktreePath(abs);
+  if (!mapped.worktree) return { projectRoot: abs, worktree: null };
+  let projectRoot = mapped.path;
+  try {
+    if (!fs.statSync(projectRoot).isDirectory()) projectRoot = mapped.worktree.mainTop;
+  } catch {
+    projectRoot = mapped.worktree.mainTop;
+  }
+  return { projectRoot, worktree: mapped.worktree };
+}
+
+// src/project-root.ts
 function projectHashOf(projectRoot) {
   return crypto.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);
 }
@@ -62,6 +145,11 @@ var PORT_SPAN = portWindow.span;
 function preferredPortFor(projectRoot) {
   return BASE_PORT + parseInt(projectHashOf(projectRoot), 16) % PORT_SPAN;
 }
+function canonical(root, source) {
+  const { projectRoot, worktree } = canonicalProjectDir(root);
+  if (!worktree) return { projectRoot: root, source };
+  return { projectRoot, source, worktree: { ...worktree, workspaceRoot: root } };
+}
 function resolveProjectRoot(opts = {}) {
   const env = opts.env ?? process.env;
   const cwd = opts.cwd ?? (() => process.cwd());
@@ -72,36 +160,37 @@ function resolveProjectRoot(opts = {}) {
   for (const c of candidates) {
     const v = c.value?.trim();
     if (!v) continue;
-    if (!path.isAbsolute(v)) continue;
+    if (!path2.isAbsolute(v)) continue;
     try {
-      if (!fs.statSync(v).isDirectory()) continue;
+      if (!fs2.statSync(v).isDirectory()) continue;
     } catch {
       continue;
     }
-    return { projectRoot: path.resolve(v), source: c.source };
+    if (c.source === "DEEPPAIRING_PROJECT_ROOT") return { projectRoot: path2.resolve(v), source: c.source };
+    return canonical(path2.resolve(v), c.source);
   }
-  return { projectRoot: path.resolve(cwd()), source: "cwd" };
+  return canonical(path2.resolve(cwd()), "cwd");
 }
 
 // src/daemon/token.ts
 function runtimeBaseDir() {
   const xdg = process.env.XDG_RUNTIME_DIR?.trim();
-  if (xdg && path2.isAbsolute(xdg)) {
+  if (xdg && path3.isAbsolute(xdg)) {
     try {
-      if (fs2.statSync(xdg).isDirectory()) return path2.join(xdg, "deeppairing");
+      if (fs3.statSync(xdg).isDirectory()) return path3.join(xdg, "deeppairing");
     } catch {
     }
   }
-  return path2.join(os.tmpdir(), "deeppairing");
+  return path3.join(os.tmpdir(), "deeppairing");
 }
 function tokenSidecarPath(projectRoot) {
-  return path2.join(runtimeBaseDir(), `${projectHashOf(projectRoot)}.json`);
+  return path3.join(runtimeBaseDir(), `${projectHashOf(projectRoot)}.json`);
 }
 function readTokenSidecar(projectRoot) {
   try {
     const file2 = tokenSidecarPath(projectRoot);
-    if (!fs2.existsSync(file2)) return null;
-    return JSON.parse(fs2.readFileSync(file2, "utf-8"));
+    if (!fs3.existsSync(file2)) return null;
+    return JSON.parse(fs3.readFileSync(file2, "utf-8"));
   } catch {
     return null;
   }
@@ -126,27 +215,27 @@ function compareServerVersions(a, b) {
 }
 
 // src/cli-invocation.ts
-import fs3 from "node:fs";
-import path3 from "node:path";
+import fs4 from "node:fs";
+import path4 from "node:path";
 import { fileURLToPath } from "node:url";
 var __thisFile = fileURLToPath(import.meta.url);
-var __thisDir = path3.dirname(__thisFile);
+var __thisDir = path4.dirname(__thisFile);
 var PACKAGE_NAME = "@deeppairing/mcp-server";
 function isInstalledPackage(modulePath = __thisFile) {
   return modulePath.split(/[\\/]/).includes("node_modules");
 }
 function resolveCompiledCliPath() {
   const candidates = [
-    path3.join(__thisDir, "cli", "init.js"),
+    path4.join(__thisDir, "cli", "init.js"),
     // dist/ → dist/cli/init.js
-    path3.join(__thisDir, "..", "cli", "init.js")
+    path4.join(__thisDir, "..", "cli", "init.js")
   ];
-  return candidates.find((p) => fs3.existsSync(p)) ?? null;
+  return candidates.find((p) => fs4.existsSync(p)) ?? null;
 }
 function cliInvocation(subcommand = "") {
   if (subcommand === "doctor" || subcommand.startsWith("doctor ")) {
-    const doctorEntry = path3.join(__thisDir, "doctor.mjs");
-    if (fs3.existsSync(doctorEntry)) {
+    const doctorEntry = path4.join(__thisDir, "doctor.mjs");
+    if (fs4.existsSync(doctorEntry)) {
       return `node "${doctorEntry}"${subcommand.slice("doctor".length)}`;
     }
   }
@@ -931,10 +1020,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path10) {
-  if (!path10)
+function getElementAtPath(obj, path11) {
+  if (!path11)
     return obj;
-  return path10.reduce((acc, key) => acc?.[key], obj);
+  return path11.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1343,11 +1432,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path10, issues) {
+function prefixIssues(path11, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path10);
+    iss.path.unshift(path11);
     return iss;
   });
 }
@@ -1494,16 +1583,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path10 = []) => {
+  const processError = (error52, path11 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path10, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path11, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
       } else {
-        const fullpath = [...path10, ...issue2.path];
+        const fullpath = [...path11, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -1530,17 +1619,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path10 = []) => {
+  const processError = (error52, path11 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path10, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path11, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
       } else {
-        const fullpath = [...path10, ...issue2.path];
+        const fullpath = [...path11, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -1572,8 +1661,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path10 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path10) {
+  const path11 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path11) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -14265,13 +14354,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path10 = ref.slice(1).split("/").filter(Boolean);
-  if (path10.length === 0) {
+  const path11 = ref.slice(1).split("/").filter(Boolean);
+  if (path11.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path10[0] === defsKey) {
-    const key = path10[1];
+  if (path11[0] === defsKey) {
+    const key = path11[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -16119,17 +16208,17 @@ var LedgerDigestSchema = external_exports.object({
 });
 
 // src/daemon/lifecycle.ts
-var __thisDir2 = path4.dirname(fileURLToPath2(import.meta.url));
+var __thisDir2 = path5.dirname(fileURLToPath2(import.meta.url));
 var DAEMON_FILE = "daemon.json";
 var MAX_PORT_ATTEMPTS = 10;
 function daemonInfoPath(projectRoot) {
-  return path4.join(projectRoot, ".deeppairing", DAEMON_FILE);
+  return path5.join(projectRoot, ".deeppairing", DAEMON_FILE);
 }
 function readDaemonInfo(projectRoot) {
   const infoPath = daemonInfoPath(projectRoot);
   try {
-    if (!fs4.existsSync(infoPath)) return null;
-    const info = JSON.parse(fs4.readFileSync(infoPath, "utf-8"));
+    if (!fs5.existsSync(infoPath)) return null;
+    const info = JSON.parse(fs5.readFileSync(infoPath, "utf-8"));
     if (!info.authToken) {
       const sidecar = readTokenSidecar(projectRoot);
       if (sidecar?.authToken && (sidecar.pid === void 0 || sidecar.pid === info.pid)) {
@@ -16231,13 +16320,13 @@ function describeDaemonVersionHealth(runningVersion, pluginVersion) {
 }
 
 // src/store/global-store.ts
-import fs7 from "node:fs";
+import fs8 from "node:fs";
 import { createHash } from "node:crypto";
 import os3 from "node:os";
-import path6 from "node:path";
+import path7 from "node:path";
 
 // src/store/atomic-write.ts
-import fs5 from "node:fs";
+import fs6 from "node:fs";
 import { randomBytes } from "node:crypto";
 function writeJsonAtomic(filePath, value, indent = 2, opts) {
   writeStringAtomic(filePath, JSON.stringify(value, null, indent), opts);
@@ -16246,25 +16335,25 @@ function writeStringAtomic(filePath, data, opts) {
   const tmp = filePath + ".tmp." + process.pid + "." + Date.now() + "." + randomBytes(4).toString("hex");
   try {
     if (opts?.mode !== void 0) {
-      const O_NOFOLLOW = fs5.constants.O_NOFOLLOW ?? 0;
-      const fd = fs5.openSync(
+      const O_NOFOLLOW = fs6.constants.O_NOFOLLOW ?? 0;
+      const fd = fs6.openSync(
         tmp,
-        fs5.constants.O_WRONLY | fs5.constants.O_CREAT | fs5.constants.O_EXCL | O_NOFOLLOW,
+        fs6.constants.O_WRONLY | fs6.constants.O_CREAT | fs6.constants.O_EXCL | O_NOFOLLOW,
         opts.mode
       );
       try {
-        fs5.fchmodSync(fd, opts.mode);
-        fs5.writeFileSync(fd, data);
+        fs6.fchmodSync(fd, opts.mode);
+        fs6.writeFileSync(fd, data);
       } finally {
-        fs5.closeSync(fd);
+        fs6.closeSync(fd);
       }
     } else {
-      fs5.writeFileSync(tmp, data);
+      fs6.writeFileSync(tmp, data);
     }
-    fs5.renameSync(tmp, filePath);
+    fs6.renameSync(tmp, filePath);
   } catch (err) {
     try {
-      fs5.unlinkSync(tmp);
+      fs6.unlinkSync(tmp);
     } catch {
     }
     throw err;
@@ -16272,9 +16361,9 @@ function writeStringAtomic(filePath, data, opts) {
 }
 
 // src/store/file-lock.ts
-import fs6 from "node:fs";
+import fs7 from "node:fs";
 import os2 from "node:os";
-import path5 from "node:path";
+import path6 from "node:path";
 import { randomBytes as randomBytes2 } from "node:crypto";
 import { performance as performance2 } from "node:perf_hooks";
 var DEFAULT_FILE_LOCK_TIMEOUT_MS = 250;
@@ -16282,7 +16371,7 @@ var heldLocks = /* @__PURE__ */ new Set();
 function readStartTime(pid) {
   if (process.platform !== "linux") return null;
   try {
-    const stat = fs6.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const stat = fs7.readFileSync(`/proc/${pid}/stat`, "utf8");
     const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
     return fields[22 - 3] ?? null;
   } catch {
@@ -16295,8 +16384,8 @@ function currentHostIdentity() {
       return {
         platform: "linux",
         hostname: os2.hostname(),
-        bootId: fs6.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(),
-        pidNamespace: fs6.readlinkSync("/proc/self/ns/pid")
+        bootId: fs7.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(),
+        pidNamespace: fs7.readlinkSync("/proc/self/ns/pid")
       };
     }
     return {
@@ -16368,29 +16457,29 @@ function ownerState(raw) {
 function claim(file2) {
   let fd;
   try {
-    fd = fs6.openSync(file2, "wx", 384);
+    fd = fs7.openSync(file2, "wx", 384);
   } catch (err) {
     if (err.code === "EEXIST") return null;
     throw err;
   }
   const body = ownBody();
   try {
-    fs6.writeFileSync(fd, body);
+    fs7.writeFileSync(fd, body);
   } catch (err) {
-    fs6.closeSync(fd);
+    fs7.closeSync(fd);
     try {
-      fs6.unlinkSync(file2);
+      fs7.unlinkSync(file2);
     } catch {
     }
     throw err;
   }
-  fs6.closeSync(fd);
+  fs7.closeSync(fd);
   return body;
 }
 function release(file2, body, label) {
   let current;
   try {
-    current = fs6.readFileSync(file2, "utf8");
+    current = fs7.readFileSync(file2, "utf8");
   } catch (err) {
     if (err.code !== "ENOENT") throw err;
     current = null;
@@ -16401,7 +16490,7 @@ function release(file2, body, label) {
     );
     return false;
   }
-  fs6.unlinkSync(file2);
+  fs7.unlinkSync(file2);
   return true;
 }
 function unlinkIfUnchanged(file2, judged, guard) {
@@ -16410,13 +16499,13 @@ function unlinkIfUnchanged(file2, judged, guard) {
   try {
     let now;
     try {
-      now = fs6.readFileSync(file2, "utf8");
+      now = fs7.readFileSync(file2, "utf8");
     } catch (err) {
       if (err.code === "ENOENT") return false;
       throw err;
     }
     if (now !== judged) return false;
-    fs6.unlinkSync(file2);
+    fs7.unlinkSync(file2);
     return true;
   } finally {
     release(guard, mine, "lock-break guard");
@@ -16424,7 +16513,7 @@ function unlinkIfUnchanged(file2, judged, guard) {
 }
 function readIfExists(file2) {
   try {
-    return fs6.readFileSync(file2, "utf8");
+    return fs7.readFileSync(file2, "utf8");
   } catch (err) {
     if (err.code === "ENOENT") return null;
     throw err;
@@ -16484,7 +16573,7 @@ function clearDeadLockFile(file2) {
     if (state.state !== "dead") return { removed: false, reason: `owner is ${state.state}` };
     if (file2.endsWith(".lock.break.recover")) {
       if (readIfExists(file2) !== raw) return { removed: false, reason: "changed while inspecting" };
-      fs6.unlinkSync(file2);
+      fs7.unlinkSync(file2);
       return { removed: true, reason: state.why };
     }
     if (file2.endsWith(".lock.break")) {
@@ -16500,7 +16589,7 @@ function clearDeadLockFile(file2) {
   }
 }
 function withFileLock(lockPath, run, opts = {}) {
-  const key = path5.resolve(lockPath);
+  const key = path6.resolve(lockPath);
   if (opts.reentrant && heldLocks.has(key)) return run();
   const label = opts.label ?? "File lock";
   const deadline = performance2.now() + (opts.timeoutMs ?? DEFAULT_FILE_LOCK_TIMEOUT_MS);
@@ -16552,12 +16641,12 @@ function inspectLocks(roots, maxDepth = 4) {
   const walk = (dir, depth) => {
     let entries;
     try {
-      entries = fs6.readdirSync(dir, { withFileTypes: true });
+      entries = fs7.readdirSync(dir, { withFileTypes: true });
     } catch {
       return;
     }
     for (const entry2 of entries) {
-      const full = path5.join(dir, entry2.name);
+      const full = path6.join(dir, entry2.name);
       if (entry2.isDirectory()) {
         if (depth < maxDepth) walk(full, depth + 1);
       } else if (entry2.isFile() && /\.lock(\.break(\.recover)?|\.doctor(\.clear)?)?$/.test(entry2.name)) {
@@ -16565,8 +16654,8 @@ function inspectLocks(roots, maxDepth = 4) {
         let raw = "";
         let ageMs = null;
         try {
-          raw = fs6.readFileSync(full, "utf8");
-          ageMs = Date.now() - fs6.statSync(full).mtimeMs;
+          raw = fs7.readFileSync(full, "utf8");
+          ageMs = Date.now() - fs7.statSync(full).mtimeMs;
         } catch {
         }
         const s = ownerState(raw);
@@ -16590,7 +16679,7 @@ function salvageLog(label, message) {
 var LEDGER_VERSION = 1;
 var LEDGER_LOCK_TIMEOUT_MS = 1e3;
 function realHomeLedgerPath() {
-  return path6.join(os3.homedir(), ".deeppairing", "philosophy", `v${LEDGER_VERSION}.json`);
+  return path7.join(os3.homedir(), ".deeppairing", "philosophy", `v${LEDGER_VERSION}.json`);
 }
 function defaultLedgerPath() {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
@@ -16670,7 +16759,7 @@ var GlobalStore = class _GlobalStore {
   snapshotLedger(prefix = "corrupt") {
     const backup = `${this.ledgerPath}.${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     try {
-      fs7.copyFileSync(this.ledgerPath, backup);
+      fs8.copyFileSync(this.ledgerPath, backup);
       return backup;
     } catch {
       return null;
@@ -16734,13 +16823,13 @@ var GlobalStore = class _GlobalStore {
     this.lastReadCorrupt = false;
     this.lastReadCorruptReason = void 0;
     this.lastReadDroppedEntries = false;
-    if (!fs7.existsSync(this.ledgerPath)) {
+    if (!fs8.existsSync(this.ledgerPath)) {
       corruptSnapshots.delete(this.ledgerPath);
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
     }
     let raw;
     try {
-      raw = fs7.readFileSync(this.ledgerPath, "utf-8");
+      raw = fs8.readFileSync(this.ledgerPath, "utf-8");
     } catch (err) {
       this.markCorrupt(err, snapshotCorrupt);
       return { version: LEDGER_VERSION, concepts: emptyConcepts() };
@@ -16793,7 +16882,7 @@ var GlobalStore = class _GlobalStore {
    * throws ELOCKED; it is never broken by age (see file-lock.ts).
    */
   transact(mutate) {
-    fs7.mkdirSync(path6.dirname(this.ledgerPath), { recursive: true });
+    fs8.mkdirSync(path7.dirname(this.ledgerPath), { recursive: true });
     return withFileLock(`${this.ledgerPath}.lock`, mutate, {
       label: "Philosophy ledger lock",
       timeoutMs: LEDGER_LOCK_TIMEOUT_MS,
@@ -16816,7 +16905,7 @@ var GlobalStore = class _GlobalStore {
   readRemovals() {
     let raw;
     try {
-      raw = fs7.readFileSync(this.removalsPath(), "utf-8");
+      raw = fs8.readFileSync(this.removalsPath(), "utf-8");
     } catch (err) {
       if (err.code === "ENOENT") return { seq: 0, removals: {} };
       throw err;
@@ -16849,9 +16938,9 @@ var GlobalStore = class _GlobalStore {
     const seqMatch = raw.match(/"seq"\s*:\s*(\d+)/);
     const seq = Math.max(0, seqMatch ? Number(seqMatch[1]) : 0, ...Object.values(removals));
     const backup = `${this.removalsPath()}.corrupt-${createHash("sha256").update(raw).digest("hex").slice(0, 12)}`;
-    if (!fs7.existsSync(backup)) {
+    if (!fs8.existsSync(backup)) {
       try {
-        fs7.copyFileSync(this.removalsPath(), backup);
+        fs8.copyFileSync(this.removalsPath(), backup);
       } catch {
       }
       console.error(
@@ -16876,7 +16965,7 @@ var GlobalStore = class _GlobalStore {
     const current = this.readRemovals();
     const seq = current.seq + 1;
     try {
-      fs7.mkdirSync(path6.dirname(this.removalsPath()), { recursive: true });
+      fs8.mkdirSync(path7.dirname(this.removalsPath()), { recursive: true });
       writeJsonAtomic(this.removalsPath(), { seq, removals: { ...current.removals, [key]: seq } });
     } catch (err) {
       throw new Error(
@@ -16898,7 +16987,7 @@ var GlobalStore = class _GlobalStore {
       this.snapshotLedger();
     }
     try {
-      fs7.mkdirSync(path6.dirname(this.ledgerPath), { recursive: true });
+      fs8.mkdirSync(path7.dirname(this.ledgerPath), { recursive: true });
       writeJsonAtomic(this.ledgerPath, ledger);
       corruptSnapshots.delete(this.ledgerPath);
       return true;
@@ -17166,8 +17255,8 @@ function getGlobalStore() {
 }
 
 // src/store/ledger-health.ts
-import fs8 from "node:fs";
-import path7 from "node:path";
+import fs9 from "node:fs";
+import path8 from "node:path";
 function shQuote(s) {
   return "'" + s.replace(/'/g, "'\\''") + "'";
 }
@@ -17176,9 +17265,9 @@ function buildLedgerHealthReport(store, opts = {}) {
   const ledgerPath = health.ledgerPath;
   let corruptSnapshots2 = [];
   try {
-    const dir = path7.dirname(ledgerPath);
-    const base = path7.basename(ledgerPath);
-    corruptSnapshots2 = fs8.readdirSync(dir).filter((f) => f.startsWith(base + ".corrupt-")).map((f) => path7.join(dir, f)).sort();
+    const dir = path8.dirname(ledgerPath);
+    const base = path8.basename(ledgerPath);
+    corruptSnapshots2 = fs9.readdirSync(dir).filter((f) => f.startsWith(base + ".corrupt-")).map((f) => path8.join(dir, f)).sort();
   } catch {
   }
   if (health.state === "ok") {
@@ -17186,7 +17275,7 @@ function buildLedgerHealthReport(store, opts = {}) {
   }
   let sizeBytes;
   try {
-    sizeBytes = fs8.statSync(ledgerPath).size;
+    sizeBytes = fs9.statSync(ledgerPath).size;
   } catch {
   }
   const asidePath = `${ledgerPath}.unreadable-${Date.now()}`;
@@ -17206,7 +17295,7 @@ function buildLedgerHealthReport(store, opts = {}) {
 }
 
 // src/cli/clock-check.ts
-import fs9 from "node:fs";
+import fs10 from "node:fs";
 var realSources = {
   now: () => Date.now(),
   mono: () => performance.now(),
@@ -17214,7 +17303,7 @@ var realSources = {
 };
 function defaultReadProcVersion() {
   try {
-    return fs9.readFileSync("/proc/version", "utf-8");
+    return fs10.readFileSync("/proc/version", "utf-8");
   } catch {
     return null;
   }
@@ -17327,15 +17416,15 @@ exit 0
 `;
 
 // src/cli/setup-tasks.ts
-import fs10 from "node:fs";
+import fs11 from "node:fs";
 import { randomUUID } from "node:crypto";
 import os4 from "node:os";
-import path8 from "node:path";
+import path9 from "node:path";
 import { fileURLToPath as fileURLToPath3, pathToFileURL } from "node:url";
 
 // src/cli/hook-scripts.generated.ts
-var STOP_HOOK_SCRIPT = '#!/usr/bin/env node\n// deepPairing Stop hook \u2014 installed by ensureStopHook (X7 / X9).\n// GENERATED \u2014 do not edit. Source: packages/mcp-server/src/cli/stop-hook-entry.ts\n// Regenerate: pnpm --filter @deeppairing/mcp-server gen:hooks\n// src/hooks/stop-hook.ts\nimport fs2 from "node:fs";\nimport path2 from "node:path";\n\n// src/debrief-gate.ts\nvar CODE_CLOSED_STATUSES = ["superseded", "retracted", "obsolete"];\nvar DEBRIEF_DEAD_STATUSES = ["superseded", "retracted", "obsolete", "rejected"];\nvar CEREMONY_TYPES = ["decision", "spec", "plan"];\nfunction isExternalReview(a) {\n  if (a?.type !== "changeset") return false;\n  const content = a?.content;\n  return !!content && typeof content === "object" && content.reviewIntent === "external";\n}\nfunction sessionOwesDebrief(artifacts, isRecent = () => true) {\n  const hasLiveDebrief = artifacts.some(\n    (a) => a?.type === "debrief" && !DEBRIEF_DEAD_STATUSES.includes(a?.status ?? "")\n  );\n  if (hasLiveDebrief) return false;\n  const recentCode = artifacts.filter(\n    (a) => (a?.type === "code_change" || a?.type === "changeset") && !isExternalReview(a) && !CODE_CLOSED_STATUSES.includes(a?.status ?? "") && isRecent(a)\n  );\n  if (recentCode.length === 0) return false;\n  const changesets = recentCode.filter((a) => a?.type === "changeset").length;\n  const codeChanges = recentCode.filter((a) => a?.type === "code_change").length;\n  const hasCeremony = artifacts.some((a) => CEREMONY_TYPES.includes(a?.type ?? "")) || artifacts.some((a) => a?.type === "debrief");\n  const trivial = changesets === 0 && codeChanges === 1 && !hasCeremony;\n  return !trivial;\n}\n\n// src/hooks/hook-state.ts\nimport fs from "node:fs";\nimport path from "node:path";\nvar FIRE_LOG_CAP = 50;\nvar LOCK_STALE_MS = 5e3;\nvar LOCK_SPIN_MS = 2;\nvar LOCK_MAX_WAIT_MS = 500;\nfunction errnoCode(err) {\n  if (typeof err === "object" && err !== null && "code" in err) {\n    const code = err.code;\n    if (typeof code === "string") return code;\n  }\n  return void 0;\n}\nfunction hookErrorMessage(err) {\n  if (typeof err === "object" && err !== null && "message" in err) {\n    const message = err.message;\n    if (typeof message === "string") return message;\n  }\n  return String(err);\n}\nfunction resolveHookProjectRoot(eventCwd) {\n  return process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || (typeof eventCwd === "string" && eventCwd ? eventCwd : "") || process.cwd();\n}\nfunction sleepSync(ms) {\n  try {\n    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);\n  } catch {\n  }\n}\nfunction acquireHookStateLock(statePath, _now = Date.now()) {\n  const lock = `${statePath}.lock`;\n  const deadline = process.hrtime.bigint() + BigInt(LOCK_MAX_WAIT_MS) * 1000000n;\n  let brokeStale = false;\n  for (; ; ) {\n    try {\n      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));\n      return lock;\n    } catch (error) {\n      if (errnoCode(error) !== "EEXIST") return null;\n      try {\n        if (!brokeStale && Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {\n          brokeStale = true;\n          fs.unlinkSync(lock);\n          continue;\n        }\n      } catch (staleErr) {\n        if (errnoCode(staleErr) !== "ENOENT") return null;\n      }\n      if (process.hrtime.bigint() >= deadline) return null;\n      sleepSync(LOCK_SPIN_MS);\n    }\n  }\n}\nfunction releaseHookStateLock(lock) {\n  if (!lock) return;\n  try {\n    fs.unlinkSync(lock);\n  } catch {\n  }\n}\nfunction readHookState(statePath) {\n  let raw;\n  try {\n    raw = fs.readFileSync(statePath, "utf-8");\n  } catch {\n    return { version: 1 };\n  }\n  try {\n    const parsed = JSON.parse(raw);\n    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;\n  } catch {\n  }\n  try {\n    const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");\n    fs.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);\n  } catch {\n  }\n  return { version: 1 };\n}\nfunction writeHookStateAtomic(statePath, state) {\n  const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 10)}`;\n  try {\n    fs.writeFileSync(tmp, JSON.stringify(state));\n    fs.renameSync(tmp, statePath);\n  } catch (err) {\n    try {\n      fs.unlinkSync(tmp);\n    } catch {\n    }\n    throw err;\n  }\n}\nfunction appendHookFire(statePath, fire, mutate) {\n  try {\n    fs.mkdirSync(path.dirname(statePath), { recursive: true });\n    const lock = acquireHookStateLock(statePath);\n    try {\n      const state = readHookState(statePath);\n      state.version = 1;\n      const fires = Array.isArray(state.fires) ? state.fires : [];\n      fires.push(fire);\n      state.fires = fires.slice(-FIRE_LOG_CAP);\n      mutate?.(state);\n      writeHookStateAtomic(statePath, state);\n    } finally {\n      releaseHookStateLock(lock);\n    }\n  } catch {\n  }\n}\nfunction hookStatePath(projectRoot) {\n  return path.join(projectRoot, ".deeppairing", "hooks-state.json");\n}\n\n// src/hooks/stop-hook.ts\nvar HOOK_NAME = "stop";\nvar MAX_AGE_MS = 30 * 60 * 1e3;\nvar BLOCKING_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset"];\nfunction runStopHook(now = Date.now()) {\n  const projectRoot = resolveHookProjectRoot();\n  function exit(code, reason) {\n    appendHookFire(hookStatePath(projectRoot), {\n      at: (/* @__PURE__ */ new Date()).toISOString(),\n      hook: HOOK_NAME,\n      exitCode: code,\n      reason\n    });\n    process.exit(code);\n  }\n  try {\n    const sessionsDir = path2.join(projectRoot, ".deeppairing", "sessions");\n    if (!fs2.existsSync(sessionsDir)) exit(0, "no sessions dir");\n    let owesDebriefSession = null;\n    for (const id of fs2.readdirSync(sessionsDir)) {\n      const af = path2.join(sessionsDir, id, "artifacts.json");\n      if (!fs2.existsSync(af)) continue;\n      let arr;\n      try {\n        arr = JSON.parse(fs2.readFileSync(af, "utf-8"));\n      } catch {\n        continue;\n      }\n      if (!Array.isArray(arr)) continue;\n      const artifacts = arr;\n      const blocking = artifacts.some((x) => {\n        if (x?.status !== "draft") return false;\n        if (!x?.type || !BLOCKING_TYPES.includes(x.type)) return false;\n        const t = x?.createdAt ? new Date(x.createdAt).getTime() : 0;\n        if (t && now - t > MAX_AGE_MS) return false;\n        return true;\n      });\n      if (blocking) {\n        process.stderr.write("deepPairing: pending artifacts need review \\u2014 call check_feedback\\n");\n        exit(0, "pending artifacts in " + id);\n      }\n      if (owesDebriefSession === null) {\n        const owes = sessionOwesDebrief(artifacts, (x) => {\n          const t = x?.createdAt ? new Date(x.createdAt).getTime() : 0;\n          return !t || now - t <= MAX_AGE_MS;\n        });\n        if (owes) owesDebriefSession = id;\n      }\n    }\n    if (owesDebriefSession !== null) {\n      process.stderr.write(\n        "deepPairing: code was presented but no present_debrief yet \\u2014 end the run with one so your pair gets the walk-through\\n"\n      );\n      exit(0, "owes debrief in " + owesDebriefSession);\n    }\n    exit(0, "pass: no blocking drafts");\n  } catch (err) {\n    exit(0, "error: " + hookErrorMessage(err));\n  }\n}\n\n// src/cli/stop-hook-entry.ts\nrunStopHook();\n';
-var CHECKPOINT_HOOK_SCRIPT = '#!/usr/bin/env node\n// deepPairing checkpoint hook (V2) \u2014 installed by ensureCheckpointHook.\n// GENERATED \u2014 do not edit. Source: packages/mcp-server/src/cli/checkpoint-hook-entry.ts\n// Regenerate: pnpm --filter @deeppairing/mcp-server gen:hooks\n// src/hooks/checkpoint-hook.ts\nimport fs2 from "node:fs";\nimport path3 from "node:path";\nimport crypto2 from "node:crypto";\n\n// src/session-id.ts\nimport crypto from "node:crypto";\nimport path from "node:path";\nfunction deriveSessionId(projectRoot, claudeSessionIdRaw) {\n  const projectName = path.basename(projectRoot);\n  const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);\n  const projectHash = crypto.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);\n  const base = `session_${safeProjectName}_${projectHash}`;\n  const sanitized = (claudeSessionIdRaw ?? "").replace(/[^a-zA-Z0-9-]/g, "").slice(0, 64);\n  if (sanitized.length === 0) {\n    return { sessionId: base, mode: "fallback" };\n  }\n  return { sessionId: `${base}_${sanitized}`, mode: "split", claudeSessionId: sanitized };\n}\n\n// src/hooks/hook-state.ts\nimport fs from "node:fs";\nimport path2 from "node:path";\nvar FIRE_LOG_CAP = 50;\nvar LOCK_STALE_MS = 5e3;\nvar LOCK_SPIN_MS = 2;\nvar LOCK_MAX_WAIT_MS = 500;\nfunction errnoCode(err) {\n  if (typeof err === "object" && err !== null && "code" in err) {\n    const code = err.code;\n    if (typeof code === "string") return code;\n  }\n  return void 0;\n}\nfunction hookErrorMessage(err) {\n  if (typeof err === "object" && err !== null && "message" in err) {\n    const message = err.message;\n    if (typeof message === "string") return message;\n  }\n  return String(err);\n}\nfunction resolveHookProjectRoot(eventCwd) {\n  return process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || (typeof eventCwd === "string" && eventCwd ? eventCwd : "") || process.cwd();\n}\nfunction sleepSync(ms) {\n  try {\n    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);\n  } catch {\n  }\n}\nfunction acquireHookStateLock(statePath, _now = Date.now()) {\n  const lock = `${statePath}.lock`;\n  const deadline = process.hrtime.bigint() + BigInt(LOCK_MAX_WAIT_MS) * 1000000n;\n  let brokeStale = false;\n  for (; ; ) {\n    try {\n      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));\n      return lock;\n    } catch (error) {\n      if (errnoCode(error) !== "EEXIST") return null;\n      try {\n        if (!brokeStale && Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {\n          brokeStale = true;\n          fs.unlinkSync(lock);\n          continue;\n        }\n      } catch (staleErr) {\n        if (errnoCode(staleErr) !== "ENOENT") return null;\n      }\n      if (process.hrtime.bigint() >= deadline) return null;\n      sleepSync(LOCK_SPIN_MS);\n    }\n  }\n}\nfunction releaseHookStateLock(lock) {\n  if (!lock) return;\n  try {\n    fs.unlinkSync(lock);\n  } catch {\n  }\n}\nfunction readHookState(statePath) {\n  let raw;\n  try {\n    raw = fs.readFileSync(statePath, "utf-8");\n  } catch {\n    return { version: 1 };\n  }\n  try {\n    const parsed = JSON.parse(raw);\n    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;\n  } catch {\n  }\n  try {\n    const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");\n    fs.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);\n  } catch {\n  }\n  return { version: 1 };\n}\nfunction writeHookStateAtomic(statePath, state) {\n  const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 10)}`;\n  try {\n    fs.writeFileSync(tmp, JSON.stringify(state));\n    fs.renameSync(tmp, statePath);\n  } catch (err) {\n    try {\n      fs.unlinkSync(tmp);\n    } catch {\n    }\n    throw err;\n  }\n}\nfunction appendHookFire(statePath, fire, mutate) {\n  try {\n    fs.mkdirSync(path2.dirname(statePath), { recursive: true });\n    const lock = acquireHookStateLock(statePath);\n    try {\n      const state = readHookState(statePath);\n      state.version = 1;\n      const fires = Array.isArray(state.fires) ? state.fires : [];\n      fires.push(fire);\n      state.fires = fires.slice(-FIRE_LOG_CAP);\n      mutate?.(state);\n      writeHookStateAtomic(statePath, state);\n    } finally {\n      releaseHookStateLock(lock);\n    }\n  } catch {\n  }\n}\nfunction hookStatePath(projectRoot) {\n  return path2.join(projectRoot, ".deeppairing", "hooks-state.json");\n}\n\n// src/hooks/checkpoint-hook.ts\nvar HOOK_NAME = "checkpoint";\nvar EDIT_TOOLS = ["Write", "Edit", "MultiEdit"];\nvar RECEIPT_TTL_MS = 60 * 1e3;\nvar SKIP_BASENAMES = /* @__PURE__ */ new Set([\n  // Lockfiles only \u2014 manifest files (package.json, Cargo.toml, etc.) are\n  // policy and should still nag.\n  "package-lock.json",\n  "pnpm-lock.yaml",\n  "yarn.lock",\n  "bun.lockb",\n  "uv.lock",\n  "poetry.lock",\n  "Cargo.lock",\n  "Gemfile.lock",\n  "go.sum",\n  "composer.lock"\n]);\nvar SKIP_PATH_PREFIXES = [\n  // Generated / vendored output \u2014 not human-authored source.\n  "dist/",\n  "build/",\n  "node_modules/",\n  ".deeppairing/",\n  ".next/",\n  ".turbo/",\n  ".cache/",\n  "coverage/",\n  ".nyc_output/",\n  // IDE-local config \u2014 workspace settings, not project decisions.\n  ".vscode/",\n  ".idea/"\n];\nfunction isTrivialFile(filePath) {\n  if (!filePath || filePath === "(unknown)") return false;\n  const norm = filePath.replace(/\\\\/g, "/");\n  const base = norm.split("/").pop() || "";\n  if (SKIP_BASENAMES.has(base)) return true;\n  for (const prefix of SKIP_PATH_PREFIXES) {\n    if (norm.includes("/" + prefix) || norm.startsWith(prefix)) return true;\n  }\n  return false;\n}\nvar NAG = "deepPairing: {TOOL} on {FILE} with no present_code_change for it. Present EVERY code change BEFORE the Write/Edit \\u2014 including small follow-on edits, new files (tests, configs), and each file of a multi-file change, not just the \'main\' one. A write straight to disk never reaches the human\'s review surface; they can\'t see or comment on it. If you skipped this for prior edits this session, backfill them now with present_code_change. (Per-Edit Checkpoint rule. Lockfiles and generated paths are auto-skipped.)\\n";\nfunction claimReceipt(dpDir, sessionId, absolutePath, now) {\n  const key = crypto2.createHash("sha256").update(absolutePath).digest("hex");\n  const markerPath = path3.join(dpDir, "sessions", sessionId, "code-checkpoints", key + ".json");\n  const claimPath = markerPath + ".claim." + process.pid + "." + crypto2.randomBytes(8).toString("hex");\n  fs2.renameSync(markerPath, claimPath);\n  try {\n    const m = JSON.parse(fs2.readFileSync(claimPath, "utf8"));\n    if (!m || typeof m !== "object") return false;\n    const r = m;\n    const at = typeof r.at === "string" ? Date.parse(r.at) : NaN;\n    const expiresAt = r.expiresAt === void 0 ? at + RECEIPT_TTL_MS : typeof r.expiresAt === "string" ? Date.parse(r.expiresAt) : NaN;\n    return r.version === 1 && r.sessionId === sessionId && r.filePath === absolutePath && typeof r.artifactId === "string" && r.artifactId.length > 0 && Number.isFinite(at) && Number.isFinite(expiresAt) && expiresAt >= at && now >= at && // a future-dated receipt is a clock fault, not coverage\n    now <= expiresAt;\n  } finally {\n    try {\n      fs2.unlinkSync(claimPath);\n    } catch {\n    }\n  }\n}\nfunction runCheckpointHook(stdin2, now = Date.now()) {\n  let statePath = hookStatePath(resolveHookProjectRoot());\n  let resolvedCandidateIds = [];\n  function exit(code, reason) {\n    appendHookFire(statePath, { at: (/* @__PURE__ */ new Date()).toISOString(), hook: HOOK_NAME, exitCode: code, reason, resolvedCandidateIds });\n    process.exit(code);\n  }\n  try {\n    const ev = stdin2 ? JSON.parse(stdin2) : {};\n    const projectRoot = path3.resolve(resolveHookProjectRoot(ev.cwd));\n    statePath = hookStatePath(projectRoot);\n    const tool = typeof ev.tool_name === "string" && ev.tool_name || typeof ev.toolName === "string" && ev.toolName || "";\n    if (!EDIT_TOOLS.includes(tool)) exit(0, "skip: tool=" + (tool || "(unknown)"));\n    const rawFilePath = (ev.tool_input && (ev.tool_input.file_path ?? ev.tool_input.filePath)) ?? (ev.input && ev.input.file_path);\n    const filePath = typeof rawFilePath === "string" && rawFilePath ? rawFilePath : "(unknown)";\n    if (isTrivialFile(filePath)) exit(0, "skip: trivial file " + filePath);\n    const dpDir = path3.join(projectRoot, ".deeppairing");\n    if (!fs2.existsSync(path3.join(dpDir, "sessions"))) exit(0, "skip: no sessions dir");\n    const eventHasIdentity = Object.prototype.hasOwnProperty.call(ev, "session_id");\n    const malformedEventIdentity = eventHasIdentity && ev.session_id !== "" && typeof ev.session_id !== "string";\n    const rawCandidates = [ev.session_id, process.env.CLAUDE_CODE_SESSION_ID];\n    const anyNonemptyIdentity = rawCandidates.some((value) => typeof value === "string" && value.length > 0);\n    for (const raw of rawCandidates) {\n      if (typeof raw !== "string" || !raw) continue;\n      const derived = deriveSessionId(projectRoot, raw);\n      if (derived.mode !== "split") continue;\n      if (!resolvedCandidateIds.includes(derived.sessionId)) resolvedCandidateIds.push(derived.sessionId);\n    }\n    if (resolvedCandidateIds.length === 0 && !anyNonemptyIdentity && !malformedEventIdentity) {\n      resolvedCandidateIds = [deriveSessionId(projectRoot, "").sessionId];\n    }\n    let covered = false;\n    if (filePath !== "(unknown)" && filePath.trim()) {\n      for (const sessionId of resolvedCandidateIds) {\n        try {\n          covered = claimReceipt(dpDir, sessionId, path3.resolve(projectRoot, filePath), now);\n        } catch {\n        }\n        if (covered) break;\n      }\n    }\n    if (!covered) {\n      process.stderr.write(NAG.replace("{TOOL}", tool).replace("{FILE}", filePath));\n      exit(0, "nag: " + tool + " on " + filePath);\n    }\n    exit(0, "pass: fresh checkpoint covers " + filePath);\n  } catch (err) {\n    exit(0, "error: " + hookErrorMessage(err));\n  }\n}\n\n// src/cli/checkpoint-hook-entry.ts\nvar stdin = "";\nprocess.stdin.setEncoding("utf-8");\nprocess.stdin.on("data", (c) => {\n  stdin += c;\n});\nprocess.stdin.on("end", () => {\n  runCheckpointHook(stdin);\n});\n';
+var STOP_HOOK_SCRIPT = '#!/usr/bin/env node\n// deepPairing Stop hook \u2014 installed by ensureStopHook (X7 / X9).\n// GENERATED \u2014 do not edit. Source: packages/mcp-server/src/cli/stop-hook-entry.ts\n// Regenerate: pnpm --filter @deeppairing/mcp-server gen:hooks\n// src/hooks/stop-hook.ts\nimport fs3 from "node:fs";\nimport path3 from "node:path";\n\n// src/debrief-gate.ts\nvar CODE_CLOSED_STATUSES = ["superseded", "retracted", "obsolete"];\nvar DEBRIEF_DEAD_STATUSES = ["superseded", "retracted", "obsolete", "rejected"];\nvar CEREMONY_TYPES = ["decision", "spec", "plan"];\nfunction isExternalReview(a) {\n  if (a?.type !== "changeset") return false;\n  const content = a?.content;\n  return !!content && typeof content === "object" && content.reviewIntent === "external";\n}\nfunction sessionOwesDebrief(artifacts, isRecent = () => true) {\n  const hasLiveDebrief = artifacts.some(\n    (a) => a?.type === "debrief" && !DEBRIEF_DEAD_STATUSES.includes(a?.status ?? "")\n  );\n  if (hasLiveDebrief) return false;\n  const recentCode = artifacts.filter(\n    (a) => (a?.type === "code_change" || a?.type === "changeset") && !isExternalReview(a) && !CODE_CLOSED_STATUSES.includes(a?.status ?? "") && isRecent(a)\n  );\n  if (recentCode.length === 0) return false;\n  const changesets = recentCode.filter((a) => a?.type === "changeset").length;\n  const codeChanges = recentCode.filter((a) => a?.type === "code_change").length;\n  const hasCeremony = artifacts.some((a) => CEREMONY_TYPES.includes(a?.type ?? "")) || artifacts.some((a) => a?.type === "debrief");\n  const trivial = changesets === 0 && codeChanges === 1 && !hasCeremony;\n  return !trivial;\n}\n\n// src/hooks/hook-state.ts\nimport fs2 from "node:fs";\nimport path2 from "node:path";\n\n// src/git-worktree.ts\nimport fs from "node:fs";\nimport path from "node:path";\nfunction sameDir(a, b) {\n  try {\n    return fs.realpathSync.native(a) === fs.realpathSync.native(b);\n  } catch {\n    return path.resolve(a) === path.resolve(b);\n  }\n}\nfunction parseLinkedWorktree(top, dotGitFile) {\n  try {\n    const raw = fs.readFileSync(dotGitFile, "utf8");\n    const m = /^gitdir:[ \\t]*(.+?)[ \\t]*$/m.exec(raw);\n    if (!m) return null;\n    const gitdir = path.resolve(top, m[1]);\n    let common;\n    try {\n      common = fs.readFileSync(path.join(gitdir, "commondir"), "utf8").trim();\n    } catch {\n      return null;\n    }\n    if (!common) return null;\n    const commonDir = path.resolve(gitdir, common);\n    if (path.basename(commonDir) !== ".git") return null;\n    try {\n      const config = fs.readFileSync(path.join(commonDir, "config"), "utf8");\n      if (/^[ \\t]*bare[ \\t]*=[ \\t]*true[ \\t]*$/im.test(config)) return null;\n    } catch {\n      return null;\n    }\n    const mainTop = path.dirname(commonDir);\n    const mainDotGit = path.join(mainTop, ".git");\n    if (!fs.statSync(mainDotGit).isDirectory() || !sameDir(mainDotGit, commonDir)) return null;\n    if (sameDir(mainTop, top)) return null;\n    return { worktreeTop: top, mainTop };\n  } catch {\n    return null;\n  }\n}\nfunction findLinkedWorktree(p) {\n  try {\n    let cur = path.resolve(p);\n    for (let i = 0; i < 256; i++) {\n      const dotGit = path.join(cur, ".git");\n      let st;\n      try {\n        st = fs.statSync(dotGit);\n      } catch {\n        st = void 0;\n      }\n      if (st) return st.isFile() ? parseLinkedWorktree(cur, dotGit) : null;\n      const parent = path.dirname(cur);\n      if (parent === cur) return null;\n      cur = parent;\n    }\n    return null;\n  } catch {\n    return null;\n  }\n}\nfunction canonicalizeWorktreePath(p) {\n  const abs = path.resolve(p);\n  const worktree = findLinkedWorktree(abs);\n  if (!worktree) return { path: abs, worktree: null };\n  const rel = path.relative(worktree.worktreeTop, abs);\n  return { path: rel ? path.join(worktree.mainTop, rel) : worktree.mainTop, worktree };\n}\nfunction canonicalProjectDir(dir) {\n  const abs = path.resolve(dir);\n  const mapped = canonicalizeWorktreePath(abs);\n  if (!mapped.worktree) return { projectRoot: abs, worktree: null };\n  let projectRoot = mapped.path;\n  try {\n    if (!fs.statSync(projectRoot).isDirectory()) projectRoot = mapped.worktree.mainTop;\n  } catch {\n    projectRoot = mapped.worktree.mainTop;\n  }\n  return { projectRoot, worktree: mapped.worktree };\n}\nfunction resolveHookRoots(eventCwd, env = process.env, cwd = () => process.cwd()) {\n  const claude = env.CLAUDE_PROJECT_DIR;\n  const explicit = env.DEEPPAIRING_PROJECT_ROOT;\n  if (!claude && explicit) return { projectRoot: explicit, workspaceRoot: explicit, worktree: null };\n  const raw = claude || (typeof eventCwd === "string" && eventCwd ? eventCwd : "") || cwd();\n  try {\n    const { projectRoot, worktree } = canonicalProjectDir(raw);\n    return worktree ? { projectRoot, workspaceRoot: raw, worktree } : { projectRoot: raw, workspaceRoot: raw, worktree: null };\n  } catch {\n    return { projectRoot: raw, workspaceRoot: raw, worktree: null };\n  }\n}\n\n// src/hooks/hook-state.ts\nvar FIRE_LOG_CAP = 50;\nvar LOCK_STALE_MS = 5e3;\nvar LOCK_SPIN_MS = 2;\nvar LOCK_MAX_WAIT_MS = 500;\nfunction errnoCode(err) {\n  if (typeof err === "object" && err !== null && "code" in err) {\n    const code = err.code;\n    if (typeof code === "string") return code;\n  }\n  return void 0;\n}\nfunction hookErrorMessage(err) {\n  if (typeof err === "object" && err !== null && "message" in err) {\n    const message = err.message;\n    if (typeof message === "string") return message;\n  }\n  return String(err);\n}\nfunction resolveHookProjectRoot(eventCwd) {\n  return resolveHookRoots(eventCwd).projectRoot;\n}\nfunction sleepSync(ms) {\n  try {\n    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);\n  } catch {\n  }\n}\nfunction acquireHookStateLock(statePath, _now = Date.now()) {\n  const lock = `${statePath}.lock`;\n  const deadline = process.hrtime.bigint() + BigInt(LOCK_MAX_WAIT_MS) * 1000000n;\n  let brokeStale = false;\n  for (; ; ) {\n    try {\n      fs2.closeSync(fs2.openSync(lock, fs2.constants.O_CREAT | fs2.constants.O_EXCL | fs2.constants.O_WRONLY));\n      return lock;\n    } catch (error) {\n      if (errnoCode(error) !== "EEXIST") return null;\n      try {\n        if (!brokeStale && Date.now() - fs2.statSync(lock).mtimeMs > LOCK_STALE_MS) {\n          brokeStale = true;\n          fs2.unlinkSync(lock);\n          continue;\n        }\n      } catch (staleErr) {\n        if (errnoCode(staleErr) !== "ENOENT") return null;\n      }\n      if (process.hrtime.bigint() >= deadline) return null;\n      sleepSync(LOCK_SPIN_MS);\n    }\n  }\n}\nfunction releaseHookStateLock(lock) {\n  if (!lock) return;\n  try {\n    fs2.unlinkSync(lock);\n  } catch {\n  }\n}\nfunction readHookState(statePath) {\n  let raw;\n  try {\n    raw = fs2.readFileSync(statePath, "utf-8");\n  } catch {\n    return { version: 1 };\n  }\n  try {\n    const parsed = JSON.parse(raw);\n    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;\n  } catch {\n  }\n  try {\n    const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");\n    fs2.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);\n  } catch {\n  }\n  return { version: 1 };\n}\nfunction writeHookStateAtomic(statePath, state) {\n  const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 10)}`;\n  try {\n    fs2.writeFileSync(tmp, JSON.stringify(state));\n    fs2.renameSync(tmp, statePath);\n  } catch (err) {\n    try {\n      fs2.unlinkSync(tmp);\n    } catch {\n    }\n    throw err;\n  }\n}\nfunction appendHookFire(statePath, fire, mutate) {\n  try {\n    fs2.mkdirSync(path2.dirname(statePath), { recursive: true });\n    const lock = acquireHookStateLock(statePath);\n    try {\n      const state = readHookState(statePath);\n      state.version = 1;\n      const fires = Array.isArray(state.fires) ? state.fires : [];\n      fires.push(fire);\n      state.fires = fires.slice(-FIRE_LOG_CAP);\n      mutate?.(state);\n      writeHookStateAtomic(statePath, state);\n    } finally {\n      releaseHookStateLock(lock);\n    }\n  } catch {\n  }\n}\nfunction hookStatePath(projectRoot) {\n  return path2.join(projectRoot, ".deeppairing", "hooks-state.json");\n}\n\n// src/hooks/stop-hook.ts\nvar HOOK_NAME = "stop";\nvar MAX_AGE_MS = 30 * 60 * 1e3;\nvar BLOCKING_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset"];\nfunction runStopHook(now = Date.now()) {\n  const projectRoot = resolveHookProjectRoot();\n  function exit(code, reason) {\n    appendHookFire(hookStatePath(projectRoot), {\n      at: (/* @__PURE__ */ new Date()).toISOString(),\n      hook: HOOK_NAME,\n      exitCode: code,\n      reason\n    });\n    process.exit(code);\n  }\n  try {\n    const sessionsDir = path3.join(projectRoot, ".deeppairing", "sessions");\n    if (!fs3.existsSync(sessionsDir)) exit(0, "no sessions dir");\n    let owesDebriefSession = null;\n    for (const id of fs3.readdirSync(sessionsDir)) {\n      const af = path3.join(sessionsDir, id, "artifacts.json");\n      if (!fs3.existsSync(af)) continue;\n      let arr;\n      try {\n        arr = JSON.parse(fs3.readFileSync(af, "utf-8"));\n      } catch {\n        continue;\n      }\n      if (!Array.isArray(arr)) continue;\n      const artifacts = arr;\n      const blocking = artifacts.some((x) => {\n        if (x?.status !== "draft") return false;\n        if (!x?.type || !BLOCKING_TYPES.includes(x.type)) return false;\n        const t = x?.createdAt ? new Date(x.createdAt).getTime() : 0;\n        if (t && now - t > MAX_AGE_MS) return false;\n        return true;\n      });\n      if (blocking) {\n        process.stderr.write("deepPairing: pending artifacts need review \\u2014 call check_feedback\\n");\n        exit(0, "pending artifacts in " + id);\n      }\n      if (owesDebriefSession === null) {\n        const owes = sessionOwesDebrief(artifacts, (x) => {\n          const t = x?.createdAt ? new Date(x.createdAt).getTime() : 0;\n          return !t || now - t <= MAX_AGE_MS;\n        });\n        if (owes) owesDebriefSession = id;\n      }\n    }\n    if (owesDebriefSession !== null) {\n      process.stderr.write(\n        "deepPairing: code was presented but no present_debrief yet \\u2014 end the run with one so your pair gets the walk-through\\n"\n      );\n      exit(0, "owes debrief in " + owesDebriefSession);\n    }\n    exit(0, "pass: no blocking drafts");\n  } catch (err) {\n    exit(0, "error: " + hookErrorMessage(err));\n  }\n}\n\n// src/cli/stop-hook-entry.ts\nrunStopHook();\n';
+var CHECKPOINT_HOOK_SCRIPT = '#!/usr/bin/env node\n// deepPairing checkpoint hook (V2) \u2014 installed by ensureCheckpointHook.\n// GENERATED \u2014 do not edit. Source: packages/mcp-server/src/cli/checkpoint-hook-entry.ts\n// Regenerate: pnpm --filter @deeppairing/mcp-server gen:hooks\n// src/hooks/checkpoint-hook.ts\nimport fs3 from "node:fs";\nimport path4 from "node:path";\nimport crypto2 from "node:crypto";\n\n// src/session-id.ts\nimport crypto from "node:crypto";\nimport path from "node:path";\nfunction deriveSessionId(projectRoot, claudeSessionIdRaw) {\n  const projectName = path.basename(projectRoot);\n  const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);\n  const projectHash = crypto.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);\n  const base = `session_${safeProjectName}_${projectHash}`;\n  const sanitized = (claudeSessionIdRaw ?? "").replace(/[^a-zA-Z0-9-]/g, "").slice(0, 64);\n  if (sanitized.length === 0) {\n    return { sessionId: base, mode: "fallback" };\n  }\n  return { sessionId: `${base}_${sanitized}`, mode: "split", claudeSessionId: sanitized };\n}\n\n// src/git-worktree.ts\nimport fs from "node:fs";\nimport path2 from "node:path";\nfunction sameDir(a, b) {\n  try {\n    return fs.realpathSync.native(a) === fs.realpathSync.native(b);\n  } catch {\n    return path2.resolve(a) === path2.resolve(b);\n  }\n}\nfunction parseLinkedWorktree(top, dotGitFile) {\n  try {\n    const raw = fs.readFileSync(dotGitFile, "utf8");\n    const m = /^gitdir:[ \\t]*(.+?)[ \\t]*$/m.exec(raw);\n    if (!m) return null;\n    const gitdir = path2.resolve(top, m[1]);\n    let common;\n    try {\n      common = fs.readFileSync(path2.join(gitdir, "commondir"), "utf8").trim();\n    } catch {\n      return null;\n    }\n    if (!common) return null;\n    const commonDir = path2.resolve(gitdir, common);\n    if (path2.basename(commonDir) !== ".git") return null;\n    try {\n      const config = fs.readFileSync(path2.join(commonDir, "config"), "utf8");\n      if (/^[ \\t]*bare[ \\t]*=[ \\t]*true[ \\t]*$/im.test(config)) return null;\n    } catch {\n      return null;\n    }\n    const mainTop = path2.dirname(commonDir);\n    const mainDotGit = path2.join(mainTop, ".git");\n    if (!fs.statSync(mainDotGit).isDirectory() || !sameDir(mainDotGit, commonDir)) return null;\n    if (sameDir(mainTop, top)) return null;\n    return { worktreeTop: top, mainTop };\n  } catch {\n    return null;\n  }\n}\nfunction findLinkedWorktree(p) {\n  try {\n    let cur = path2.resolve(p);\n    for (let i = 0; i < 256; i++) {\n      const dotGit = path2.join(cur, ".git");\n      let st;\n      try {\n        st = fs.statSync(dotGit);\n      } catch {\n        st = void 0;\n      }\n      if (st) return st.isFile() ? parseLinkedWorktree(cur, dotGit) : null;\n      const parent = path2.dirname(cur);\n      if (parent === cur) return null;\n      cur = parent;\n    }\n    return null;\n  } catch {\n    return null;\n  }\n}\nfunction canonicalizeWorktreePath(p) {\n  const abs = path2.resolve(p);\n  const worktree = findLinkedWorktree(abs);\n  if (!worktree) return { path: abs, worktree: null };\n  const rel = path2.relative(worktree.worktreeTop, abs);\n  return { path: rel ? path2.join(worktree.mainTop, rel) : worktree.mainTop, worktree };\n}\nfunction canonicalProjectDir(dir) {\n  const abs = path2.resolve(dir);\n  const mapped = canonicalizeWorktreePath(abs);\n  if (!mapped.worktree) return { projectRoot: abs, worktree: null };\n  let projectRoot = mapped.path;\n  try {\n    if (!fs.statSync(projectRoot).isDirectory()) projectRoot = mapped.worktree.mainTop;\n  } catch {\n    projectRoot = mapped.worktree.mainTop;\n  }\n  return { projectRoot, worktree: mapped.worktree };\n}\nfunction resolveHookRoots(eventCwd, env = process.env, cwd = () => process.cwd()) {\n  const claude = env.CLAUDE_PROJECT_DIR;\n  const explicit = env.DEEPPAIRING_PROJECT_ROOT;\n  if (!claude && explicit) return { projectRoot: explicit, workspaceRoot: explicit, worktree: null };\n  const raw = claude || (typeof eventCwd === "string" && eventCwd ? eventCwd : "") || cwd();\n  try {\n    const { projectRoot, worktree } = canonicalProjectDir(raw);\n    return worktree ? { projectRoot, workspaceRoot: raw, worktree } : { projectRoot: raw, workspaceRoot: raw, worktree: null };\n  } catch {\n    return { projectRoot: raw, workspaceRoot: raw, worktree: null };\n  }\n}\n\n// src/hooks/hook-state.ts\nimport fs2 from "node:fs";\nimport path3 from "node:path";\nvar FIRE_LOG_CAP = 50;\nvar LOCK_STALE_MS = 5e3;\nvar LOCK_SPIN_MS = 2;\nvar LOCK_MAX_WAIT_MS = 500;\nfunction errnoCode(err) {\n  if (typeof err === "object" && err !== null && "code" in err) {\n    const code = err.code;\n    if (typeof code === "string") return code;\n  }\n  return void 0;\n}\nfunction hookErrorMessage(err) {\n  if (typeof err === "object" && err !== null && "message" in err) {\n    const message = err.message;\n    if (typeof message === "string") return message;\n  }\n  return String(err);\n}\nfunction resolveHookProjectRoot(eventCwd) {\n  return resolveHookRoots(eventCwd).projectRoot;\n}\nfunction sleepSync(ms) {\n  try {\n    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);\n  } catch {\n  }\n}\nfunction acquireHookStateLock(statePath, _now = Date.now()) {\n  const lock = `${statePath}.lock`;\n  const deadline = process.hrtime.bigint() + BigInt(LOCK_MAX_WAIT_MS) * 1000000n;\n  let brokeStale = false;\n  for (; ; ) {\n    try {\n      fs2.closeSync(fs2.openSync(lock, fs2.constants.O_CREAT | fs2.constants.O_EXCL | fs2.constants.O_WRONLY));\n      return lock;\n    } catch (error) {\n      if (errnoCode(error) !== "EEXIST") return null;\n      try {\n        if (!brokeStale && Date.now() - fs2.statSync(lock).mtimeMs > LOCK_STALE_MS) {\n          brokeStale = true;\n          fs2.unlinkSync(lock);\n          continue;\n        }\n      } catch (staleErr) {\n        if (errnoCode(staleErr) !== "ENOENT") return null;\n      }\n      if (process.hrtime.bigint() >= deadline) return null;\n      sleepSync(LOCK_SPIN_MS);\n    }\n  }\n}\nfunction releaseHookStateLock(lock) {\n  if (!lock) return;\n  try {\n    fs2.unlinkSync(lock);\n  } catch {\n  }\n}\nfunction readHookState(statePath) {\n  let raw;\n  try {\n    raw = fs2.readFileSync(statePath, "utf-8");\n  } catch {\n    return { version: 1 };\n  }\n  try {\n    const parsed = JSON.parse(raw);\n    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;\n  } catch {\n  }\n  try {\n    const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");\n    fs2.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);\n  } catch {\n  }\n  return { version: 1 };\n}\nfunction writeHookStateAtomic(statePath, state) {\n  const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 10)}`;\n  try {\n    fs2.writeFileSync(tmp, JSON.stringify(state));\n    fs2.renameSync(tmp, statePath);\n  } catch (err) {\n    try {\n      fs2.unlinkSync(tmp);\n    } catch {\n    }\n    throw err;\n  }\n}\nfunction appendHookFire(statePath, fire, mutate) {\n  try {\n    fs2.mkdirSync(path3.dirname(statePath), { recursive: true });\n    const lock = acquireHookStateLock(statePath);\n    try {\n      const state = readHookState(statePath);\n      state.version = 1;\n      const fires = Array.isArray(state.fires) ? state.fires : [];\n      fires.push(fire);\n      state.fires = fires.slice(-FIRE_LOG_CAP);\n      mutate?.(state);\n      writeHookStateAtomic(statePath, state);\n    } finally {\n      releaseHookStateLock(lock);\n    }\n  } catch {\n  }\n}\nfunction hookStatePath(projectRoot) {\n  return path3.join(projectRoot, ".deeppairing", "hooks-state.json");\n}\n\n// src/hooks/checkpoint-hook.ts\nvar HOOK_NAME = "checkpoint";\nvar EDIT_TOOLS = ["Write", "Edit", "MultiEdit"];\nvar RECEIPT_TTL_MS = 60 * 1e3;\nvar SKIP_BASENAMES = /* @__PURE__ */ new Set([\n  // Lockfiles only \u2014 manifest files (package.json, Cargo.toml, etc.) are\n  // policy and should still nag.\n  "package-lock.json",\n  "pnpm-lock.yaml",\n  "yarn.lock",\n  "bun.lockb",\n  "uv.lock",\n  "poetry.lock",\n  "Cargo.lock",\n  "Gemfile.lock",\n  "go.sum",\n  "composer.lock"\n]);\nvar SKIP_PATH_PREFIXES = [\n  // Generated / vendored output \u2014 not human-authored source.\n  "dist/",\n  "build/",\n  "node_modules/",\n  ".deeppairing/",\n  ".next/",\n  ".turbo/",\n  ".cache/",\n  "coverage/",\n  ".nyc_output/",\n  // IDE-local config \u2014 workspace settings, not project decisions.\n  ".vscode/",\n  ".idea/"\n];\nfunction isTrivialFile(filePath) {\n  if (!filePath || filePath === "(unknown)") return false;\n  const norm = filePath.replace(/\\\\/g, "/");\n  const base = norm.split("/").pop() || "";\n  if (SKIP_BASENAMES.has(base)) return true;\n  for (const prefix of SKIP_PATH_PREFIXES) {\n    if (norm.includes("/" + prefix) || norm.startsWith(prefix)) return true;\n  }\n  return false;\n}\nvar NAG = "deepPairing: {TOOL} on {FILE} with no present_code_change for it. Present EVERY code change BEFORE the Write/Edit \\u2014 including small follow-on edits, new files (tests, configs), and each file of a multi-file change, not just the \'main\' one. A write straight to disk never reaches the human\'s review surface; they can\'t see or comment on it. If you skipped this for prior edits this session, backfill them now with present_code_change. (Per-Edit Checkpoint rule. Lockfiles and generated paths are auto-skipped.)\\n";\nfunction claimReceipt(dpDir, sessionId, absolutePath, now) {\n  const key = crypto2.createHash("sha256").update(absolutePath).digest("hex");\n  const markerPath = path4.join(dpDir, "sessions", sessionId, "code-checkpoints", key + ".json");\n  const claimPath = markerPath + ".claim." + process.pid + "." + crypto2.randomBytes(8).toString("hex");\n  fs3.renameSync(markerPath, claimPath);\n  try {\n    const m = JSON.parse(fs3.readFileSync(claimPath, "utf8"));\n    if (!m || typeof m !== "object") return false;\n    const r = m;\n    const at = typeof r.at === "string" ? Date.parse(r.at) : NaN;\n    const expiresAt = r.expiresAt === void 0 ? at + RECEIPT_TTL_MS : typeof r.expiresAt === "string" ? Date.parse(r.expiresAt) : NaN;\n    return r.version === 1 && r.sessionId === sessionId && r.filePath === absolutePath && typeof r.artifactId === "string" && r.artifactId.length > 0 && Number.isFinite(at) && Number.isFinite(expiresAt) && expiresAt >= at && now >= at && // a future-dated receipt is a clock fault, not coverage\n    now <= expiresAt;\n  } finally {\n    try {\n      fs3.unlinkSync(claimPath);\n    } catch {\n    }\n  }\n}\nfunction runCheckpointHook(stdin2, now = Date.now()) {\n  let statePath = hookStatePath(resolveHookProjectRoot());\n  let resolvedCandidateIds = [];\n  function exit(code, reason) {\n    appendHookFire(statePath, { at: (/* @__PURE__ */ new Date()).toISOString(), hook: HOOK_NAME, exitCode: code, reason, resolvedCandidateIds });\n    process.exit(code);\n  }\n  try {\n    const ev = stdin2 ? JSON.parse(stdin2) : {};\n    const projectRoot = path4.resolve(resolveHookProjectRoot(ev.cwd));\n    statePath = hookStatePath(projectRoot);\n    const tool = typeof ev.tool_name === "string" && ev.tool_name || typeof ev.toolName === "string" && ev.toolName || "";\n    if (!EDIT_TOOLS.includes(tool)) exit(0, "skip: tool=" + (tool || "(unknown)"));\n    const rawFilePath = (ev.tool_input && (ev.tool_input.file_path ?? ev.tool_input.filePath)) ?? (ev.input && ev.input.file_path);\n    const filePath = typeof rawFilePath === "string" && rawFilePath ? rawFilePath : "(unknown)";\n    if (isTrivialFile(filePath)) exit(0, "skip: trivial file " + filePath);\n    const dpDir = path4.join(projectRoot, ".deeppairing");\n    if (!fs3.existsSync(path4.join(dpDir, "sessions"))) exit(0, "skip: no sessions dir");\n    const eventHasIdentity = Object.prototype.hasOwnProperty.call(ev, "session_id");\n    const malformedEventIdentity = eventHasIdentity && ev.session_id !== "" && typeof ev.session_id !== "string";\n    const rawCandidates = [ev.session_id, process.env.CLAUDE_CODE_SESSION_ID];\n    const anyNonemptyIdentity = rawCandidates.some((value) => typeof value === "string" && value.length > 0);\n    for (const raw of rawCandidates) {\n      if (typeof raw !== "string" || !raw) continue;\n      const derived = deriveSessionId(projectRoot, raw);\n      if (derived.mode !== "split") continue;\n      if (!resolvedCandidateIds.includes(derived.sessionId)) resolvedCandidateIds.push(derived.sessionId);\n    }\n    if (resolvedCandidateIds.length === 0 && !anyNonemptyIdentity && !malformedEventIdentity) {\n      resolvedCandidateIds = [deriveSessionId(projectRoot, "").sessionId];\n    }\n    let covered = false;\n    if (filePath !== "(unknown)" && filePath.trim()) {\n      for (const sessionId of resolvedCandidateIds) {\n        try {\n          covered = claimReceipt(dpDir, sessionId, canonicalizeWorktreePath(path4.resolve(projectRoot, filePath)).path, now);\n        } catch {\n        }\n        if (covered) break;\n      }\n    }\n    if (!covered) {\n      process.stderr.write(NAG.replace("{TOOL}", tool).replace("{FILE}", filePath));\n      exit(0, "nag: " + tool + " on " + filePath);\n    }\n    exit(0, "pass: fresh checkpoint covers " + filePath);\n  } catch (err) {\n    exit(0, "error: " + hookErrorMessage(err));\n  }\n}\n\n// src/cli/checkpoint-hook-entry.ts\nvar stdin = "";\nprocess.stdin.setEncoding("utf-8");\nprocess.stdin.on("data", (c) => {\n  stdin += c;\n});\nprocess.stdin.on("end", () => {\n  runCheckpointHook(stdin);\n});\n';
 
 // src/cli/setup-tasks.ts
 function writeHookSettings(settingsPath, settings, opts) {
@@ -17344,20 +17433,20 @@ function writeHookSettings(settingsPath, settings, opts) {
     try {
       let original;
       try {
-        original = fs10.readFileSync(settingsPath);
+        original = fs11.readFileSync(settingsPath);
       } catch (err) {
         if (err.code !== "ENOENT") throw err;
       }
       if (original?.equals(Buffer.from(next))) return;
       if (original) {
         const backupPath = `${settingsPath}.deeppairing-backup-${randomUUID()}`;
-        const mode = fs10.statSync(settingsPath).mode & 384;
-        const fd = fs10.openSync(backupPath, "wx", mode);
+        const mode = fs11.statSync(settingsPath).mode & 384;
+        const fd = fs11.openSync(backupPath, "wx", mode);
         try {
-          fs10.writeFileSync(fd, original);
-          fs10.fsyncSync(fd);
+          fs11.writeFileSync(fd, original);
+          fs11.fsyncSync(fd);
         } finally {
-          fs10.closeSync(fd);
+          fs11.closeSync(fd);
         }
         console.error(`[deepPairing] Settings backup: ${backupPath}`);
       }
@@ -17365,19 +17454,19 @@ function writeHookSettings(settingsPath, settings, opts) {
       throw new Error(`Settings backup failed; original settings were not overwritten: ${errorMessage(err)}`);
     }
   }
-  fs10.writeFileSync(settingsPath, next);
+  fs11.writeFileSync(settingsPath, next);
 }
 function scopeFiles(projectRoot) {
   return [
-    { scope: "user", path: path8.join(os4.homedir(), ".claude", "settings.json") },
-    { scope: "project-shared", path: path8.join(projectRoot, ".claude", "settings.json") },
-    { scope: "project-local", path: path8.join(projectRoot, ".claude", "settings.local.json") }
+    { scope: "user", path: path9.join(os4.homedir(), ".claude", "settings.json") },
+    { scope: "project-shared", path: path9.join(projectRoot, ".claude", "settings.json") },
+    { scope: "project-local", path: path9.join(projectRoot, ".claude", "settings.local.json") }
   ];
 }
 function readJsonOrNull(filePath) {
   try {
-    if (!fs10.existsSync(filePath)) return null;
-    return JSON.parse(fs10.readFileSync(filePath, "utf-8"));
+    if (!fs11.existsSync(filePath)) return null;
+    return JSON.parse(fs11.readFileSync(filePath, "utf-8"));
   } catch {
     return null;
   }
@@ -17445,7 +17534,7 @@ var HOOK_MARKERS = {
   StanceAllowAsk: (cmd) => /^sh\s+("?)(\$CLAUDE_PROJECT_DIR\/|\.\/)?\.deeppairing\/hooks\/stance-allow-ask\.sh\1$/.test(cmd.trim())
 };
 function diagnoseLocalHooks(projectRoot, pluginManaged) {
-  const settingsPath = path8.join(projectRoot, ".claude", "settings.local.json");
+  const settingsPath = path9.join(projectRoot, ".claude", "settings.local.json");
   const settings = readJsonOrNull(settingsPath);
   const stopPresent = countDpEntries(settings, "Stop", HOOK_MARKERS.Stop) > 0;
   const stopEntries = Array.isArray(settings?.hooks?.Stop) ? settings.hooks.Stop : [];
@@ -17466,17 +17555,17 @@ function diagnoseLocalHooks(projectRoot, pluginManaged) {
   ];
 }
 function ensureGitignoreEntry(projectRoot) {
-  const gitignorePath = path8.join(projectRoot, ".gitignore");
+  const gitignorePath = path9.join(projectRoot, ".gitignore");
   try {
-    if (!fs10.existsSync(gitignorePath)) {
+    if (!fs11.existsSync(gitignorePath)) {
       return { ok: true, changed: false, message: "No .gitignore present (skipped)" };
     }
-    const content = fs10.readFileSync(gitignorePath, "utf-8");
+    const content = fs11.readFileSync(gitignorePath, "utf-8");
     if (content.includes(".deeppairing/") || content.includes(".deeppairing")) {
       return { ok: true, changed: false, message: ".gitignore already lists .deeppairing/" };
     }
     const sep = content.endsWith("\n") ? "" : "\n";
-    fs10.appendFileSync(gitignorePath, `${sep}.deeppairing/
+    fs11.appendFileSync(gitignorePath, `${sep}.deeppairing/
 `);
     return { ok: true, changed: true, message: "Added .deeppairing/ to .gitignore" };
   } catch (err) {
@@ -17486,17 +17575,17 @@ function ensureGitignoreEntry(projectRoot) {
 var STOP_SCRIPT_REL_PATH = ".deeppairing/hooks/stop.mjs";
 var STOP_HOOK_COMMAND = `node "$CLAUDE_PROJECT_DIR/${STOP_SCRIPT_REL_PATH}"`;
 function ensureStopHook(projectRoot, opts = {}) {
-  const claudeDir = path8.join(projectRoot, ".claude");
-  const settingsPath = path8.join(claudeDir, "settings.local.json");
-  const scriptPath = path8.join(projectRoot, STOP_SCRIPT_REL_PATH);
+  const claudeDir = path9.join(projectRoot, ".claude");
+  const settingsPath = path9.join(claudeDir, "settings.local.json");
+  const scriptPath = path9.join(projectRoot, STOP_SCRIPT_REL_PATH);
   try {
-    fs10.mkdirSync(path8.dirname(scriptPath), { recursive: true });
-    fs10.writeFileSync(scriptPath, STOP_HOOK_SCRIPT);
-    fs10.chmodSync(scriptPath, 493);
+    fs11.mkdirSync(path9.dirname(scriptPath), { recursive: true });
+    fs11.writeFileSync(scriptPath, STOP_HOOK_SCRIPT);
+    fs11.chmodSync(scriptPath, 493);
     let settings = {};
-    if (fs10.existsSync(settingsPath)) {
+    if (fs11.existsSync(settingsPath)) {
       try {
-        settings = JSON.parse(fs10.readFileSync(settingsPath, "utf-8"));
+        settings = JSON.parse(fs11.readFileSync(settingsPath, "utf-8"));
       } catch {
         return { ok: false, message: ".claude/settings.local.json is malformed; refusing to overwrite" };
       }
@@ -17523,7 +17612,7 @@ function ensureStopHook(projectRoot, opts = {}) {
       matcher: "",
       hooks: [{ type: "command", command: STOP_HOOK_COMMAND }]
     });
-    fs10.mkdirSync(claudeDir, { recursive: true });
+    fs11.mkdirSync(claudeDir, { recursive: true });
     writeHookSettings(settingsPath, settings, opts);
     let msg = hadLegacy ? "Added Stop hook (replaced legacy flat-shape entry that triggered /doctor warnings)" : beforeDpCount > 1 ? `Added Stop hook (replaced ${beforeDpCount} stale deepPairing entries)` : beforeDpCount === 1 ? "Replaced stale Stop hook entry with the current canonical version" : "Added Stop hook to .claude/settings.local.json";
     const otherScopes = detectCrossScopeDpEntries(projectRoot, "Stop", HOOK_MARKERS.Stop).filter((s) => s.scope !== "project-local" && s.count > 0);
@@ -17539,17 +17628,17 @@ function ensureStopHook(projectRoot, opts = {}) {
 }
 var CHECKPOINT_SCRIPT_REL_PATH = ".deeppairing/hooks/checkpoint.mjs";
 function ensureCheckpointHook(projectRoot, opts = {}) {
-  const claudeDir = path8.join(projectRoot, ".claude");
-  const settingsPath = path8.join(claudeDir, "settings.local.json");
-  const scriptPath = path8.join(projectRoot, CHECKPOINT_SCRIPT_REL_PATH);
+  const claudeDir = path9.join(projectRoot, ".claude");
+  const settingsPath = path9.join(claudeDir, "settings.local.json");
+  const scriptPath = path9.join(projectRoot, CHECKPOINT_SCRIPT_REL_PATH);
   try {
-    fs10.mkdirSync(path8.dirname(scriptPath), { recursive: true });
-    fs10.writeFileSync(scriptPath, CHECKPOINT_HOOK_SCRIPT);
-    fs10.chmodSync(scriptPath, 493);
+    fs11.mkdirSync(path9.dirname(scriptPath), { recursive: true });
+    fs11.writeFileSync(scriptPath, CHECKPOINT_HOOK_SCRIPT);
+    fs11.chmodSync(scriptPath, 493);
     let settings = {};
-    if (fs10.existsSync(settingsPath)) {
+    if (fs11.existsSync(settingsPath)) {
       try {
-        settings = JSON.parse(fs10.readFileSync(settingsPath, "utf-8"));
+        settings = JSON.parse(fs11.readFileSync(settingsPath, "utf-8"));
       } catch {
         return { ok: false, message: ".claude/settings.local.json is malformed; refusing to overwrite" };
       }
@@ -17575,7 +17664,7 @@ function ensureCheckpointHook(projectRoot, opts = {}) {
       matcher: "Write|Edit|MultiEdit",
       hooks: [{ type: "command", command: CANONICAL_CMD }]
     });
-    fs10.mkdirSync(claudeDir, { recursive: true });
+    fs11.mkdirSync(claudeDir, { recursive: true });
     writeHookSettings(settingsPath, settings, opts);
     let msg = beforeDpCount > 1 ? `Added PostToolUse checkpoint hook (replaced ${beforeDpCount} stale entries)` : beforeDpCount === 1 ? "Replaced stale checkpoint hook entry with the current canonical version" : "Added PostToolUse checkpoint hook (.deeppairing/hooks/checkpoint.mjs)";
     const otherScopes = detectCrossScopeDpEntries(projectRoot, "PostToolUse", HOOK_MARKERS.PostToolUse).filter((s) => s.scope !== "project-local" && s.count > 0);
@@ -17601,27 +17690,27 @@ function isCurrentPreflightRow(row) {
   return r?.matcher === PREFLIGHT_MATCHER && Array.isArray(r.hooks) && r.hooks.some(isPreflightCommandEntry);
 }
 function resolvePreflightCoreUrl() {
-  const here = path8.dirname(fileURLToPath3(import.meta.url));
-  const distCandidate = path8.join(here, "preflight-hook-core.js");
+  const here = path9.dirname(fileURLToPath3(import.meta.url));
+  const distCandidate = path9.join(here, "preflight-hook-core.js");
   const candidates = [
     distCandidate,
-    path8.join(here, "../../dist/cli/preflight-hook-core.js")
+    path9.join(here, "../../dist/cli/preflight-hook-core.js")
     // src/cli via tsx, after a build
   ];
-  const found = candidates.find((c) => fs10.existsSync(c));
+  const found = candidates.find((c) => fs11.existsSync(c));
   return { url: pathToFileURL(found ?? distCandidate).href, exists: Boolean(found) };
 }
 function resolveGuardrailRulesUrl() {
-  const here = path8.dirname(fileURLToPath3(import.meta.url));
-  const besideEntry = path8.join(here, "guardrail-rules.js");
-  const distCandidate = path8.join(here, "..", "guardrail-rules.js");
+  const here = path9.dirname(fileURLToPath3(import.meta.url));
+  const besideEntry = path9.join(here, "guardrail-rules.js");
+  const distCandidate = path9.join(here, "..", "guardrail-rules.js");
   const candidates = [
     besideEntry,
     distCandidate,
-    path8.join(here, "../../dist/guardrail-rules.js")
+    path9.join(here, "../../dist/guardrail-rules.js")
     // src/cli via tsx, after a build
   ];
-  const found = candidates.find((c) => fs10.existsSync(c));
+  const found = candidates.find((c) => fs11.existsSync(c));
   return pathToFileURL(found ?? distCandidate).href;
 }
 function preflightHookScript(coreUrl, rulesUrl) {
@@ -17663,6 +17752,21 @@ function ledgersPresent(projectRoot) {
   } catch {}
   try {
     if (fs.existsSync(path.join(projectRoot, ".deeppairing", "team.json"))) return true;
+  } catch {}
+  return false;
+}
+
+// #532 \u2014 a few stat calls: is the nearest .git (walking up) a FILE? That is a
+// linked worktree or a submodule; resolveHookRoots tells them apart.
+function nearestDotGitIsFile(dir) {
+  try {
+    let cur = path.resolve(dir);
+    for (let i = 0; i < 256; i++) {
+      try { return fs.statSync(path.join(cur, ".git")).isFile(); } catch {}
+      const parent = path.dirname(cur);
+      if (parent === cur) return false;
+      cur = parent;
+    }
   } catch {}
   return false;
 }
@@ -17720,7 +17824,13 @@ process.stdin.on("end", async () => {
     const toolInput = ev.tool_input || ev.input || {};
     // R1 (#279) \u2014 one documented precedence in every hook lane:
     // CLAUDE_PROJECT_DIR > DEEPPAIRING_PROJECT_ROOT > the event's cwd > ours.
-    const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || ev.cwd || process.cwd();
+    let projectRoot = process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || ev.cwd || process.cwd();
+    // #532 \u2014 inside a git LINKED WORKTREE the project is the main checkout (the
+    // shared ledger), via the rule leaf's resolveHookRoots. Only paid when the
+    // nearest .git is a FILE; a main checkout or non-git dir skips the import.
+    if (nearestDotGitIsFile(projectRoot)) {
+      try { projectRoot = (await import(RULES_URL)).resolveHookRoots(ev.cwd).projectRoot; } catch {}
+    }
     if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit" && toolName !== "NotebookEdit") {
       process.exit(0);
     }
@@ -17750,14 +17860,14 @@ process.stdin.on("end", async () => {
 `;
 }
 function ensurePreflightHook(projectRoot, opts = {}) {
-  const claudeDir = path8.join(projectRoot, ".claude");
-  const settingsPath = path8.join(claudeDir, "settings.local.json");
-  const scriptPath = path8.join(projectRoot, PREFLIGHT_SCRIPT_REL_PATH);
+  const claudeDir = path9.join(projectRoot, ".claude");
+  const settingsPath = path9.join(claudeDir, "settings.local.json");
+  const scriptPath = path9.join(projectRoot, PREFLIGHT_SCRIPT_REL_PATH);
   try {
     const core = resolvePreflightCoreUrl();
-    fs10.mkdirSync(path8.dirname(scriptPath), { recursive: true });
-    fs10.writeFileSync(scriptPath, preflightHookScript(core.url, resolveGuardrailRulesUrl()));
-    fs10.chmodSync(scriptPath, 493);
+    fs11.mkdirSync(path9.dirname(scriptPath), { recursive: true });
+    fs11.writeFileSync(scriptPath, preflightHookScript(core.url, resolveGuardrailRulesUrl()));
+    fs11.chmodSync(scriptPath, 493);
     const inactiveNote = core.exists ? "" : " (matcher core not built yet \u2014 gate inactive until next build)";
     const read = readAskSettings(settingsPath);
     if (!read.ok) return { ok: false, message: read.message };
@@ -17773,7 +17883,7 @@ function ensurePreflightHook(projectRoot, opts = {}) {
       ...kept,
       { matcher: PREFLIGHT_MATCHER, hooks: [{ type: "command", command: PREFLIGHT_HOOK_COMMAND }] }
     ];
-    fs10.mkdirSync(claudeDir, { recursive: true });
+    fs11.mkdirSync(claudeDir, { recursive: true });
     writeHookSettings(settingsPath, settings, opts);
     return { ok: true, changed: true, message: `Installed PreToolUse preflight hook${inactiveNote}` };
   } catch (err) {
@@ -17782,10 +17892,10 @@ function ensurePreflightHook(projectRoot, opts = {}) {
 }
 var isPlainObject2 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 function readAskSettings(settingsPath) {
-  if (!fs10.existsSync(settingsPath)) return { ok: true, settings: {} };
+  if (!fs11.existsSync(settingsPath)) return { ok: true, settings: {} };
   let settings;
   try {
-    settings = JSON.parse(fs10.readFileSync(settingsPath, "utf-8"));
+    settings = JSON.parse(fs11.readFileSync(settingsPath, "utf-8"));
   } catch {
     return { ok: false, message: ".claude/settings.local.json is malformed; refusing to overwrite" };
   }
@@ -17819,16 +17929,16 @@ function withoutAskEntries(rows) {
 }
 function ensureStanceAllowAskHook(projectRoot, opts = {}) {
   try {
-    const claudeDir = path8.join(projectRoot, ".claude");
-    const settingsPath = path8.join(claudeDir, "settings.local.json");
+    const claudeDir = path9.join(projectRoot, ".claude");
+    const settingsPath = path9.join(claudeDir, "settings.local.json");
     const read = readAskSettings(settingsPath);
     if (!read.ok) return { ok: false, message: read.message };
     const settings = read.settings;
-    const scriptPath = path8.join(projectRoot, STANCE_ALLOW_ASK_REL_PATH);
-    fs10.mkdirSync(path8.dirname(scriptPath), { recursive: true });
-    const current = fs10.existsSync(scriptPath) ? fs10.readFileSync(scriptPath, "utf-8") : null;
+    const scriptPath = path9.join(projectRoot, STANCE_ALLOW_ASK_REL_PATH);
+    fs11.mkdirSync(path9.dirname(scriptPath), { recursive: true });
+    const current = fs11.existsSync(scriptPath) ? fs11.readFileSync(scriptPath, "utf-8") : null;
     const scriptChanged = current !== STANCE_ALLOW_ASK_SCRIPT;
-    if (scriptChanged) fs10.writeFileSync(scriptPath, STANCE_ALLOW_ASK_SCRIPT, { mode: 493 });
+    if (scriptChanged) fs11.writeFileSync(scriptPath, STANCE_ALLOW_ASK_SCRIPT, { mode: 493 });
     const hooks = settings.hooks = settings.hooks ?? {};
     const rows = hooks.PreToolUse ?? [];
     const isCanonical = (entry2) => Array.isArray(entry2?.hooks) && entry2.hooks.length === 1 && entry2.hooks[0]?.type === "command" && entry2.hooks[0]?.command === STANCE_ALLOW_ASK_COMMAND && entry2?.matcher === STANCE_ALLOW_ASK_MATCHER;
@@ -17837,7 +17947,7 @@ function ensureStanceAllowAskHook(projectRoot, opts = {}) {
       return { ok: true, changed: scriptChanged, message: "Bash `stance allow` ask hook already configured" };
     }
     hooks.PreToolUse = [...kept, { matcher: STANCE_ALLOW_ASK_MATCHER, hooks: [{ type: "command", command: STANCE_ALLOW_ASK_COMMAND }] }];
-    fs10.mkdirSync(claudeDir, { recursive: true });
+    fs11.mkdirSync(claudeDir, { recursive: true });
     writeHookSettings(settingsPath, settings, opts);
     return { ok: true, changed: true, message: "Installed the Bash `stance allow` ask hook (.deeppairing/hooks/stance-allow-ask.sh)" };
   } catch (err) {
@@ -17846,7 +17956,7 @@ function ensureStanceAllowAskHook(projectRoot, opts = {}) {
 }
 function removeStanceAllowAskHook(projectRoot, opts = {}) {
   try {
-    const settingsPath = path8.join(projectRoot, ".claude", "settings.local.json");
+    const settingsPath = path9.join(projectRoot, ".claude", "settings.local.json");
     const read = readAskSettings(settingsPath);
     if (!read.ok) return { ok: false, message: read.message };
     const hooks = read.settings.hooks;
@@ -17861,18 +17971,18 @@ function removeStanceAllowAskHook(projectRoot, opts = {}) {
   }
 }
 function diagnoseStanceAllowAskHook(projectRoot, pluginManaged) {
-  const settings = readJsonOrNull(path8.join(projectRoot, ".claude", "settings.local.json"));
+  const settings = readJsonOrNull(path9.join(projectRoot, ".claude", "settings.local.json"));
   const rows = Array.isArray(settings?.hooks?.PreToolUse) ? settings.hooks.PreToolUse : [];
   const present = withoutAskEntries(rows).removed > 0;
-  const scriptPresent = fs10.existsSync(path8.join(projectRoot, STANCE_ALLOW_ASK_REL_PATH));
+  const scriptPresent = fs11.existsSync(path9.join(projectRoot, STANCE_ALLOW_ASK_REL_PATH));
   if (pluginManaged) return present ? "redundant" : "ok";
   return present && scriptPresent ? "ok" : "missing";
 }
 function isPluginManaged() {
   if (process.env.CLAUDE_PLUGIN_ROOT) return true;
   try {
-    const here = path8.dirname(fileURLToPath3(import.meta.url));
-    return fs10.existsSync(path8.join(here, "..", ".claude-plugin", "plugin.json"));
+    const here = path9.dirname(fileURLToPath3(import.meta.url));
+    return fs11.existsSync(path9.join(here, "..", ".claude-plugin", "plugin.json"));
   } catch {
     return false;
   }
@@ -17896,14 +18006,14 @@ function bold(text) {
 }
 async function doctor(cwd, opts = {}) {
   console.log(bold("\n  deepPairing doctor\n"));
-  const dpDir = path9.join(cwd, ".deeppairing");
-  const infoFile = path9.join(dpDir, "daemon.json");
-  const logFile = path9.join(dpDir, "daemon.log");
+  const dpDir = path10.join(cwd, ".deeppairing");
+  const infoFile = path10.join(dpDir, "daemon.json");
+  const logFile = path10.join(dpDir, "daemon.log");
   const fixes = [];
   let info = null;
-  if (fs11.existsSync(infoFile)) {
+  if (fs12.existsSync(infoFile)) {
     try {
-      info = JSON.parse(fs11.readFileSync(infoFile, "utf-8"));
+      info = JSON.parse(fs12.readFileSync(infoFile, "utf-8"));
       console.log(`  ${green("\u2713")} .deeppairing/daemon.json present`);
       console.log(`    ${dim("pid:")}       ${info?.pid ?? "?"}`);
       console.log(`    ${dim("port:")}      ${info?.port ?? "?"}`);
@@ -17914,7 +18024,7 @@ async function doctor(cwd, opts = {}) {
         label: "Delete malformed .deeppairing/daemon.json",
         apply: () => {
           try {
-            fs11.unlinkSync(infoFile);
+            fs12.unlinkSync(infoFile);
             return { ok: true, message: "Deleted" };
           } catch (e) {
             return { ok: false, message: errorMessage(e) };
@@ -17938,7 +18048,7 @@ async function doctor(cwd, opts = {}) {
         label: `Remove stale daemon.json (PID ${info.pid} is dead)`,
         apply: () => {
           try {
-            fs11.unlinkSync(infoFile);
+            fs12.unlinkSync(infoFile);
             return { ok: true, message: "Removed" };
           } catch (e) {
             return { ok: false, message: errorMessage(e) };
@@ -18111,9 +18221,9 @@ async function doctor(cwd, opts = {}) {
     }
   }
   let daemonFatalHint = null;
-  if (fs11.existsSync(logFile)) {
+  if (fs12.existsSync(logFile)) {
     try {
-      const content = fs11.readFileSync(logFile, "utf-8");
+      const content = fs12.readFileSync(logFile, "utf-8");
       const allLines = content.trim().split("\n");
       const lines = allLines.slice(-10);
       console.log(`
@@ -18141,9 +18251,9 @@ async function doctor(cwd, opts = {}) {
       for (const l of rest) console.log(`    ${dim(l)}`);
     }
   }
-  const gitignorePath = path9.join(cwd, ".gitignore");
-  if (fs11.existsSync(gitignorePath)) {
-    const content = fs11.readFileSync(gitignorePath, "utf-8");
+  const gitignorePath = path10.join(cwd, ".gitignore");
+  if (fs12.existsSync(gitignorePath)) {
+    const content = fs12.readFileSync(gitignorePath, "utf-8");
     if (content.includes(".deeppairing/") || content.includes(".deeppairing")) {
       console.log(`  ${green("\u2713")} .gitignore lists .deeppairing/`);
     } else {
@@ -18159,7 +18269,7 @@ async function doctor(cwd, opts = {}) {
   } else {
     console.log(`  ${dim("\xB7")} No .gitignore in this directory (skipping that check)`);
   }
-  const hookLocalPath = path9.join(cwd, ".claude", "settings.local.json");
+  const hookLocalPath = path10.join(cwd, ".claude", "settings.local.json");
   const pluginManaged = opts.pluginManaged ?? isPluginManaged();
   const pluginHookSource = opts.protectSharedScopes ? "declared by the installed plugin (activation not verified)" : "provided by the plugin";
   if (pluginManaged && opts.protectSharedScopes) {
@@ -18352,7 +18462,7 @@ async function doctor(cwd, opts = {}) {
     console.log(`  ${dim(`\xB7 Could not check philosophy ledger health: ${err}`)}`);
   }
   try {
-    const globalDir = path9.dirname(getGlobalStore().getLedgerPath());
+    const globalDir = path10.dirname(getGlobalStore().getLedgerPath());
     const roots = [dpDir, globalDir];
     const rank = { clear: 0, doctor: 1, recover: 2, break: 3, lock: 4 };
     const locks = inspectLocks(roots).sort((a, b) => rank[a.kind] - rank[b.kind]);
@@ -18370,7 +18480,7 @@ async function doctor(cwd, opts = {}) {
         } else if (lock.state === "dead") {
           fixes.push({
             label: `Remove dead-owner ${what.toLowerCase()} ${lock.path}`,
-            requiresExplicitConfirmation: opts.protectSharedScopes && (lock.path === globalDir || lock.path.startsWith(globalDir + path9.sep)),
+            requiresExplicitConfirmation: opts.protectSharedScopes && (lock.path === globalDir || lock.path.startsWith(globalDir + path10.sep)),
             apply: () => {
               try {
                 const r = clearDeadLockFile(lock.path);
@@ -18479,6 +18589,9 @@ ${help}`);
 } else {
   const resolved = resolveProjectRoot();
   console.log(`deepPairing project: ${resolved.projectRoot} (${resolved.source})`);
+  if (resolved.worktree) {
+    console.log(`  (git worktree ${resolved.worktree.workspaceRoot} shares the main checkout's project \u2014 #532)`);
+  }
   void doctor(resolved.projectRoot, {
     fix: argv.includes("--fix"),
     yes: argv.includes("--yes") || argv.includes("-y"),

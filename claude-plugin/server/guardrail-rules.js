@@ -1,9 +1,104 @@
 import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);
 
 // src/guardrail-rules.ts
-import fs from "node:fs";
+import fs2 from "node:fs";
 import os from "node:os";
+import path2 from "node:path";
+
+// src/git-worktree.ts
+import fs from "node:fs";
 import path from "node:path";
+function sameDir(a, b) {
+  try {
+    return fs.realpathSync.native(a) === fs.realpathSync.native(b);
+  } catch {
+    return path.resolve(a) === path.resolve(b);
+  }
+}
+function parseLinkedWorktree(top, dotGitFile) {
+  try {
+    const raw = fs.readFileSync(dotGitFile, "utf8");
+    const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(raw);
+    if (!m) return null;
+    const gitdir = path.resolve(top, m[1]);
+    let common;
+    try {
+      common = fs.readFileSync(path.join(gitdir, "commondir"), "utf8").trim();
+    } catch {
+      return null;
+    }
+    if (!common) return null;
+    const commonDir = path.resolve(gitdir, common);
+    if (path.basename(commonDir) !== ".git") return null;
+    try {
+      const config = fs.readFileSync(path.join(commonDir, "config"), "utf8");
+      if (/^[ \t]*bare[ \t]*=[ \t]*true[ \t]*$/im.test(config)) return null;
+    } catch {
+      return null;
+    }
+    const mainTop = path.dirname(commonDir);
+    const mainDotGit = path.join(mainTop, ".git");
+    if (!fs.statSync(mainDotGit).isDirectory() || !sameDir(mainDotGit, commonDir)) return null;
+    if (sameDir(mainTop, top)) return null;
+    return { worktreeTop: top, mainTop };
+  } catch {
+    return null;
+  }
+}
+function findLinkedWorktree(p) {
+  try {
+    let cur = path.resolve(p);
+    for (let i = 0; i < 256; i++) {
+      const dotGit = path.join(cur, ".git");
+      let st;
+      try {
+        st = fs.statSync(dotGit);
+      } catch {
+        st = void 0;
+      }
+      if (st) return st.isFile() ? parseLinkedWorktree(cur, dotGit) : null;
+      const parent = path.dirname(cur);
+      if (parent === cur) return null;
+      cur = parent;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+function canonicalizeWorktreePath(p) {
+  const abs = path.resolve(p);
+  const worktree = findLinkedWorktree(abs);
+  if (!worktree) return { path: abs, worktree: null };
+  const rel = path.relative(worktree.worktreeTop, abs);
+  return { path: rel ? path.join(worktree.mainTop, rel) : worktree.mainTop, worktree };
+}
+function canonicalProjectDir(dir) {
+  const abs = path.resolve(dir);
+  const mapped = canonicalizeWorktreePath(abs);
+  if (!mapped.worktree) return { projectRoot: abs, worktree: null };
+  let projectRoot = mapped.path;
+  try {
+    if (!fs.statSync(projectRoot).isDirectory()) projectRoot = mapped.worktree.mainTop;
+  } catch {
+    projectRoot = mapped.worktree.mainTop;
+  }
+  return { projectRoot, worktree: mapped.worktree };
+}
+function resolveHookRoots(eventCwd, env = process.env, cwd = () => process.cwd()) {
+  const claude = env.CLAUDE_PROJECT_DIR;
+  const explicit = env.DEEPPAIRING_PROJECT_ROOT;
+  if (!claude && explicit) return { projectRoot: explicit, workspaceRoot: explicit, worktree: null };
+  const raw = claude || (typeof eventCwd === "string" && eventCwd ? eventCwd : "") || cwd();
+  try {
+    const { projectRoot, worktree } = canonicalProjectDir(raw);
+    return worktree ? { projectRoot, workspaceRoot: raw, worktree } : { projectRoot: raw, workspaceRoot: raw, worktree: null };
+  } catch {
+    return { projectRoot: raw, workspaceRoot: raw, worktree: null };
+  }
+}
+
+// src/guardrail-rules.ts
 var GUARDRAIL_RULES = [
   {
     category: "migrations",
@@ -67,9 +162,14 @@ function matchGuardrailPath(projectRoot, paths) {
   try {
     for (const raw of paths) {
       if (typeof raw !== "string" || !raw) continue;
-      const abs = path.resolve(projectRoot, raw);
-      const rel = path.relative(projectRoot, abs).replace(/\\/g, "/");
-      if (!rel || rel === ".." || rel.startsWith("../")) continue;
+      const abs = path2.resolve(projectRoot, raw);
+      let rel = path2.relative(projectRoot, abs).replace(/\\/g, "/");
+      if (!rel || rel === ".." || rel.startsWith("../") || path2.isAbsolute(rel)) {
+        const mapped = canonicalizeWorktreePath(abs);
+        if (!mapped.worktree) continue;
+        rel = path2.relative(projectRoot, mapped.path).replace(/\\/g, "/");
+        if (!rel || rel === ".." || rel.startsWith("../") || path2.isAbsolute(rel)) continue;
+      }
       const rule = ruleForRelPath(rel);
       if (rule) return { category: rule.category, path: rel, rationale: rule.rationale, note: rule.note };
     }
@@ -95,25 +195,25 @@ function canonicalForm(p) {
 }
 function realpathish(abs, hops = 0) {
   try {
-    return fs.realpathSync.native(abs);
+    return fs2.realpathSync.native(abs);
   } catch {
   }
   if (hops < 8) {
     try {
-      const target = fs.readlinkSync(abs);
-      return realpathish(path.resolve(path.dirname(abs), target), hops + 1);
+      const target = fs2.readlinkSync(abs);
+      return realpathish(path2.resolve(path2.dirname(abs), target), hops + 1);
     } catch {
     }
   }
   const rest = [];
   let cur = abs;
   for (let i = 0; i < 64; i++) {
-    const parent = path.dirname(cur);
+    const parent = path2.dirname(cur);
     if (parent === cur) return null;
-    rest.unshift(path.basename(cur));
+    rest.unshift(path2.basename(cur));
     cur = parent;
     try {
-      return path.join(fs.realpathSync.native(cur), ...rest);
+      return path2.join(fs2.realpathSync.native(cur), ...rest);
     } catch {
     }
   }
@@ -121,11 +221,11 @@ function realpathish(abs, hops = 0) {
 }
 function physicalResolve(base, spelling) {
   try {
-    const absolute = path.isAbsolute(spelling);
-    const root = absolute ? path.parse(spelling).root : "";
+    const absolute = path2.isAbsolute(spelling);
+    const root = absolute ? path2.parse(spelling).root : "";
     let cur = absolute ? root : base;
     try {
-      cur = fs.realpathSync.native(cur);
+      cur = fs2.realpathSync.native(cur);
     } catch {
     }
     const segs = (absolute ? spelling.slice(root.length) : spelling).split(/[\\/]+/);
@@ -133,15 +233,15 @@ function physicalResolve(base, spelling) {
       const seg = segs[i];
       if (seg === "" || seg === ".") continue;
       if (seg === "..") {
-        cur = path.dirname(cur);
+        cur = path2.dirname(cur);
         continue;
       }
-      cur = path.join(cur, seg);
+      cur = path2.join(cur, seg);
       try {
-        cur = fs.realpathSync.native(cur);
+        cur = fs2.realpathSync.native(cur);
       } catch {
         try {
-          if (fs.lstatSync(cur).isSymbolicLink()) {
+          if (fs2.lstatSync(cur).isSymbolicLink()) {
             const followed = realpathish(cur);
             if (followed) cur = followed;
           }
@@ -162,14 +262,14 @@ function matchDeeppairingStatePath(projectRoot, raw) {
     const cleaned = slashed.split("/").map((seg) => seg === "." || seg === ".." || /^[A-Za-z]:$/.test(seg) ? seg : seg.replace(/:.*$/, "").replace(/[. ]+$/, "") || seg).join("/");
     const candidates = /* @__PURE__ */ new Set([slashed, cleaned]);
     const spellings = [slashed, cleaned];
-    if (/^~\//.test(cleaned)) spellings.push(path.join(os.homedir(), cleaned.slice(2)));
+    if (/^~\//.test(cleaned)) spellings.push(path2.join(os.homedir(), cleaned.slice(2)));
     const ordered = [];
     for (const c of spellings) {
       const physical = physicalResolve(projectRoot, c);
       if (physical) ordered.push(physical);
     }
     for (const c of spellings) {
-      const abs = path.resolve(projectRoot, c);
+      const abs = path2.resolve(projectRoot, c);
       ordered.push(abs);
       const real = realpathish(abs);
       if (real) ordered.push(real);
@@ -190,13 +290,13 @@ function matchDeeppairingStatePath(projectRoot, raw) {
 function displayPath(projectRoot, candidate) {
   const roots = [projectRoot];
   try {
-    roots.push(fs.realpathSync.native(projectRoot));
+    roots.push(fs2.realpathSync.native(projectRoot));
   } catch {
   }
-  const abs = path.isAbsolute(candidate) ? candidate : path.resolve(projectRoot, candidate);
+  const abs = path2.isAbsolute(candidate) ? candidate : path2.resolve(projectRoot, candidate);
   for (const root of roots) {
-    const rel = path.relative(root, abs).replace(/\\/g, "/");
-    if (rel && rel !== ".." && !rel.startsWith("../") && !path.isAbsolute(rel)) return rel;
+    const rel = path2.relative(root, abs).replace(/\\/g, "/");
+    if (rel && rel !== ".." && !rel.startsWith("../") && !path2.isAbsolute(rel)) return rel;
   }
   return abs.replace(/\\/g, "/");
 }
@@ -219,6 +319,7 @@ export {
   matchGuardrailPath,
   matchesGuardrailDir,
   matchesGuardrailFile,
+  resolveHookRoots,
   ruleForRelPath,
   toolInputTargetPath,
   toolInputTargetsDeeppairingState,

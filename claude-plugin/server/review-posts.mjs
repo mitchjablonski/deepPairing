@@ -7,12 +7,95 @@ var __export = (target, all) => {
 };
 
 // src/cli/review-posts-entry.ts
-import path4 from "node:path";
+import path5 from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/project-root.ts
-import path from "node:path";
+import path2 from "node:path";
+import fs2 from "node:fs";
+
+// src/git-worktree.ts
 import fs from "node:fs";
+import path from "node:path";
+function sameDir(a, b) {
+  try {
+    return fs.realpathSync.native(a) === fs.realpathSync.native(b);
+  } catch {
+    return path.resolve(a) === path.resolve(b);
+  }
+}
+function parseLinkedWorktree(top, dotGitFile) {
+  try {
+    const raw = fs.readFileSync(dotGitFile, "utf8");
+    const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(raw);
+    if (!m) return null;
+    const gitdir = path.resolve(top, m[1]);
+    let common;
+    try {
+      common = fs.readFileSync(path.join(gitdir, "commondir"), "utf8").trim();
+    } catch {
+      return null;
+    }
+    if (!common) return null;
+    const commonDir = path.resolve(gitdir, common);
+    if (path.basename(commonDir) !== ".git") return null;
+    try {
+      const config2 = fs.readFileSync(path.join(commonDir, "config"), "utf8");
+      if (/^[ \t]*bare[ \t]*=[ \t]*true[ \t]*$/im.test(config2)) return null;
+    } catch {
+      return null;
+    }
+    const mainTop = path.dirname(commonDir);
+    const mainDotGit = path.join(mainTop, ".git");
+    if (!fs.statSync(mainDotGit).isDirectory() || !sameDir(mainDotGit, commonDir)) return null;
+    if (sameDir(mainTop, top)) return null;
+    return { worktreeTop: top, mainTop };
+  } catch {
+    return null;
+  }
+}
+function findLinkedWorktree(p) {
+  try {
+    let cur = path.resolve(p);
+    for (let i = 0; i < 256; i++) {
+      const dotGit = path.join(cur, ".git");
+      let st;
+      try {
+        st = fs.statSync(dotGit);
+      } catch {
+        st = void 0;
+      }
+      if (st) return st.isFile() ? parseLinkedWorktree(cur, dotGit) : null;
+      const parent = path.dirname(cur);
+      if (parent === cur) return null;
+      cur = parent;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+function canonicalizeWorktreePath(p) {
+  const abs = path.resolve(p);
+  const worktree = findLinkedWorktree(abs);
+  if (!worktree) return { path: abs, worktree: null };
+  const rel = path.relative(worktree.worktreeTop, abs);
+  return { path: rel ? path.join(worktree.mainTop, rel) : worktree.mainTop, worktree };
+}
+function canonicalProjectDir(dir) {
+  const abs = path.resolve(dir);
+  const mapped = canonicalizeWorktreePath(abs);
+  if (!mapped.worktree) return { projectRoot: abs, worktree: null };
+  let projectRoot = mapped.path;
+  try {
+    if (!fs.statSync(projectRoot).isDirectory()) projectRoot = mapped.worktree.mainTop;
+  } catch {
+    projectRoot = mapped.worktree.mainTop;
+  }
+  return { projectRoot, worktree: mapped.worktree };
+}
+
+// src/project-root.ts
 var DEFAULT_BASE_PORT = 3847;
 var DEFAULT_PORT_SPAN = 128;
 function resolvePortWindow(env = process.env, warn = (msg) => {
@@ -44,6 +127,11 @@ function resolvePortWindow(env = process.env, warn = (msg) => {
 var portWindow = resolvePortWindow();
 var BASE_PORT = portWindow.base;
 var PORT_SPAN = portWindow.span;
+function canonical(root, source) {
+  const { projectRoot, worktree } = canonicalProjectDir(root);
+  if (!worktree) return { projectRoot: root, source };
+  return { projectRoot, source, worktree: { ...worktree, workspaceRoot: root } };
+}
 function resolveProjectRoot(opts = {}) {
   const env = opts.env ?? process.env;
   const cwd = opts.cwd ?? (() => process.cwd());
@@ -54,20 +142,21 @@ function resolveProjectRoot(opts = {}) {
   for (const c of candidates) {
     const v = c.value?.trim();
     if (!v) continue;
-    if (!path.isAbsolute(v)) continue;
+    if (!path2.isAbsolute(v)) continue;
     try {
-      if (!fs.statSync(v).isDirectory()) continue;
+      if (!fs2.statSync(v).isDirectory()) continue;
     } catch {
       continue;
     }
-    return { projectRoot: path.resolve(v), source: c.source };
+    if (c.source === "DEEPPAIRING_PROJECT_ROOT") return { projectRoot: path2.resolve(v), source: c.source };
+    return canonical(path2.resolve(v), c.source);
   }
-  return { projectRoot: path.resolve(cwd()), source: "cwd" };
+  return canonical(path2.resolve(cwd()), "cwd");
 }
 
 // src/store/review-post-journal.ts
-import fs3 from "node:fs";
-import path2 from "node:path";
+import fs4 from "node:fs";
+import path3 from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 
 // ../../node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/external.js
@@ -836,10 +925,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path5) {
-  if (!path5)
+function getElementAtPath(obj, path6) {
+  if (!path6)
     return obj;
-  return path5.reduce((acc, key) => acc?.[key], obj);
+  return path6.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1248,11 +1337,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path5, issues) {
+function prefixIssues(path6, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path5);
+    iss.path.unshift(path6);
     return iss;
   });
 }
@@ -1399,16 +1488,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path5 = []) => {
+  const processError = (error52, path6 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path5, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path6, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path5, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path5, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
       } else {
-        const fullpath = [...path5, ...issue2.path];
+        const fullpath = [...path6, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -1435,17 +1524,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path5 = []) => {
+  const processError = (error52, path6 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path5, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path6, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path5, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path5, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
       } else {
-        const fullpath = [...path5, ...issue2.path];
+        const fullpath = [...path6, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -1477,8 +1566,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path5 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path5) {
+  const path6 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path6) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -14170,13 +14259,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path5 = ref.slice(1).split("/").filter(Boolean);
-  if (path5.length === 0) {
+  const path6 = ref.slice(1).split("/").filter(Boolean);
+  if (path6.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path5[0] === defsKey) {
-    const key = path5[1];
+  if (path6[0] === defsKey) {
+    const key = path6[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -14585,7 +14674,7 @@ function date4(params) {
 config(en_default());
 
 // src/store/atomic-write.ts
-import fs2 from "node:fs";
+import fs3 from "node:fs";
 import { randomBytes } from "node:crypto";
 function writeJsonAtomic(filePath, value, indent = 2, opts) {
   writeStringAtomic(filePath, JSON.stringify(value, null, indent), opts);
@@ -14594,25 +14683,25 @@ function writeStringAtomic(filePath, data, opts) {
   const tmp = filePath + ".tmp." + process.pid + "." + Date.now() + "." + randomBytes(4).toString("hex");
   try {
     if (opts?.mode !== void 0) {
-      const O_NOFOLLOW = fs2.constants.O_NOFOLLOW ?? 0;
-      const fd = fs2.openSync(
+      const O_NOFOLLOW = fs3.constants.O_NOFOLLOW ?? 0;
+      const fd = fs3.openSync(
         tmp,
-        fs2.constants.O_WRONLY | fs2.constants.O_CREAT | fs2.constants.O_EXCL | O_NOFOLLOW,
+        fs3.constants.O_WRONLY | fs3.constants.O_CREAT | fs3.constants.O_EXCL | O_NOFOLLOW,
         opts.mode
       );
       try {
-        fs2.fchmodSync(fd, opts.mode);
-        fs2.writeFileSync(fd, data);
+        fs3.fchmodSync(fd, opts.mode);
+        fs3.writeFileSync(fd, data);
       } finally {
-        fs2.closeSync(fd);
+        fs3.closeSync(fd);
       }
     } else {
-      fs2.writeFileSync(tmp, data);
+      fs3.writeFileSync(tmp, data);
     }
-    fs2.renameSync(tmp, filePath);
+    fs3.renameSync(tmp, filePath);
   } catch (err) {
     try {
-      fs2.unlinkSync(tmp);
+      fs3.unlinkSync(tmp);
     } catch {
     }
     throw err;
@@ -14751,17 +14840,17 @@ function resultMatches(identity, result) {
   return result.state === states[identity.event] && (!identity.reviewedHeadSha || result.commitId === identity.reviewedHeadSha) && result.htmlUrl.toLowerCase() === `${identity.target}#pullrequestreview-${result.id}`;
 }
 function readBoundedFile(file2, maxBytes) {
-  const entry2 = fs3.lstatSync(file2);
+  const entry2 = fs4.lstatSync(file2);
   if (!entry2.isFile() || entry2.isSymbolicLink()) throw new Error("Inspection requires a regular non-symlink file");
-  const fd = fs3.openSync(file2, fs3.constants.O_RDONLY | (fs3.constants.O_NONBLOCK ?? 0));
+  const fd = fs4.openSync(file2, fs4.constants.O_RDONLY | (fs4.constants.O_NONBLOCK ?? 0));
   try {
-    const stat = fs3.fstatSync(fd);
+    const stat = fs4.fstatSync(fd);
     if (!stat.isFile() || stat.size > maxBytes) throw new Error("File exceeds inspection safety limit or is not regular");
     const chunks = [];
     let total = 0;
     while (total <= maxBytes) {
       const chunk = Buffer.alloc(Math.min(64 * 1024, maxBytes + 1 - total));
-      const count = fs3.readSync(fd, chunk, 0, chunk.length, null);
+      const count = fs4.readSync(fd, chunk, 0, chunk.length, null);
       if (count === 0) return Buffer.concat(chunks, total);
       total += count;
       if (total > maxBytes) throw new Error("File exceeds inspection safety limit");
@@ -14769,7 +14858,7 @@ function readBoundedFile(file2, maxBytes) {
     }
     throw new Error("File exceeds inspection safety limit");
   } finally {
-    fs3.closeSync(fd);
+    fs4.closeSync(fd);
   }
 }
 function validateReviewPostResult(identity, result) {
@@ -14786,11 +14875,11 @@ var ReviewPostJournal = class {
     if (!sessionId || sessionId === "." || sessionId.includes("..") || /[/\\\0]/.test(sessionId) || sessionId.trim() !== sessionId || /[. ]$/.test(sessionId)) {
       throw new ReviewPostJournalError("invalid", "Invalid session ID for review-post journal");
     }
-    const dir = path2.join(projectRoot, ".deeppairing", "sessions", sessionId);
-    this.journalPath = path2.join(dir, "review-post-operations.json");
-    this.claimPath = path2.join(dir, ".review-post.lock");
-    this.legacyPath = path2.join(dir, "posted-reviews.json");
-    this.markerPath = path2.join(dir, ".review-post-protocol-v1");
+    const dir = path3.join(projectRoot, ".deeppairing", "sessions", sessionId);
+    this.journalPath = path3.join(dir, "review-post-operations.json");
+    this.claimPath = path3.join(dir, ".review-post.lock");
+    this.legacyPath = path3.join(dir, "posted-reviews.json");
+    this.markerPath = path3.join(dir, ".review-post-protocol-v1");
   }
   sessionId;
   persist;
@@ -14814,7 +14903,7 @@ var ReviewPostJournal = class {
       }
       return journal;
     } catch (err) {
-      if (err.code === "ENOENT" && !fs3.existsSync(this.markerPath)) {
+      if (err.code === "ENOENT" && !fs4.existsSync(this.markerPath)) {
         return { version: 1, operations: [] };
       }
       throw new ReviewPostJournalError("corrupt", `Review-post journal is unreadable or invalid: ${this.journalPath}. Preserve it and inspect before posting.`);
@@ -14848,7 +14937,7 @@ var ReviewPostJournal = class {
     const token = randomUUID();
     let fd;
     try {
-      fd = fs3.openSync(this.claimPath, "wx", 384);
+      fd = fs4.openSync(this.claimPath, "wx", 384);
     } catch (err) {
       if (err.code === "EEXIST") {
         throw new ReviewPostJournalError("busy", "Review-post state is locked. Retry later; never remove a claim while a writer may still be running.");
@@ -14856,13 +14945,13 @@ var ReviewPostJournal = class {
       throw err;
     }
     try {
-      fs3.writeFileSync(fd, token);
+      fs4.writeFileSync(fd, token);
     } catch (err) {
-      fs3.closeSync(fd);
-      fs3.unlinkSync(this.claimPath);
+      fs4.closeSync(fd);
+      fs4.unlinkSync(this.claimPath);
       throw err;
     }
-    fs3.closeSync(fd);
+    fs4.closeSync(fd);
     let primaryFailed = false;
     try {
       return fn();
@@ -14871,10 +14960,10 @@ var ReviewPostJournal = class {
       throw err;
     } finally {
       try {
-        if (fs3.readFileSync(this.claimPath, "utf8") !== token) {
+        if (fs4.readFileSync(this.claimPath, "utf8") !== token) {
           throw new ReviewPostJournalError("stale", "Review-post claim changed while held; stop writers and inspect state.");
         }
-        fs3.unlinkSync(this.claimPath);
+        fs4.unlinkSync(this.claimPath);
       } catch (err) {
         if (!primaryFailed) {
           if (err.code === "ENOENT") {
@@ -14892,7 +14981,7 @@ var ReviewPostJournal = class {
   inspect() {
     const metadata = (file2) => {
       try {
-        const stat = fs3.lstatSync(file2);
+        const stat = fs4.lstatSync(file2);
         return {
           path: file2,
           exists: true,
@@ -14927,7 +15016,7 @@ var ReviewPostJournal = class {
   readClaimDigest() {
     let stat;
     try {
-      stat = fs3.lstatSync(this.claimPath);
+      stat = fs4.lstatSync(this.claimPath);
     } catch (err) {
       if (err.code === "ENOENT") {
         throw new ReviewPostJournalError("stale", "Review-post claim is absent; nothing was removed. Re-inspect state before restarting writers.");
@@ -14949,7 +15038,7 @@ var ReviewPostJournal = class {
       throw new ReviewPostJournalError("stale", "Claim changed since inspection; it was not removed.");
     }
     try {
-      fs3.unlinkSync(this.claimPath);
+      fs4.unlinkSync(this.claimPath);
     } catch (err) {
       if (err.code === "ENOENT") {
         throw new ReviewPostJournalError(
@@ -15003,8 +15092,8 @@ var ReviewPostJournal = class {
         createdAt: now,
         updatedAt: now
       });
-      if (!fs3.existsSync(this.markerPath)) {
-        fs3.writeFileSync(this.markerPath, "1\n", { flag: "wx", mode: 384 });
+      if (!fs4.existsSync(this.markerPath)) {
+        fs4.writeFileSync(this.markerPath, "1\n", { flag: "wx", mode: 384 });
       }
       this.persist(this.journalPath, journal);
       return lease;
@@ -15137,8 +15226,8 @@ function requireCanonicalTarget(target) {
   if (!parsed.owner || !parsed.repo) {
     throw new Error("A prepared review target must be a full canonical github.com pull-request URL.");
   }
-  const canonical = `https://github.com/${parsed.owner}/${parsed.repo}/pull/${parsed.number}`;
-  if (target.trim().toLowerCase() !== canonical.toLowerCase()) {
+  const canonical2 = `https://github.com/${parsed.owner}/${parsed.repo}/pull/${parsed.number}`;
+  if (target.trim().toLowerCase() !== canonical2.toLowerCase()) {
     throw new Error("A prepared review target must not contain a tab, query, fragment, or non-canonical suffix.");
   }
   return { owner: parsed.owner, repo: parsed.repo, number: parsed.number };
@@ -15337,11 +15426,11 @@ async function reconcileReviewPostCommand(projectRoot, args) {
 }
 
 // src/cli/session-selection.ts
-import fs4 from "node:fs";
-import path3 from "node:path";
+import fs5 from "node:fs";
+import path4 from "node:path";
 function readSessionDirectories(projectRoot) {
   try {
-    return fs4.readdirSync(path3.join(projectRoot, ".deeppairing", "sessions"), { withFileTypes: true }).filter((entry2) => entry2.isDirectory()).map((entry2) => entry2.name);
+    return fs5.readdirSync(path4.join(projectRoot, ".deeppairing", "sessions"), { withFileTypes: true }).filter((entry2) => entry2.isDirectory()).map((entry2) => entry2.name);
   } catch {
     return [];
   }
@@ -15424,7 +15513,7 @@ async function main(argv, entryPath) {
   }
 }
 var entry = fileURLToPath(import.meta.url);
-if (process.argv[1] && path4.resolve(process.argv[1]) === entry) {
+if (process.argv[1] && path5.resolve(process.argv[1]) === entry) {
   void main(process.argv.slice(2), entry).then((code) => {
     process.exitCode = code;
   });

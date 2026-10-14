@@ -27,6 +27,7 @@ import { isCrossTerminalVerdictFlip } from "./verdict-guard.js";
 import { readPostedReviews, appendPostedReview, type PostedReviewRecord } from "./posted-reviews.js";
 import { ReviewPostJournal } from "./review-post-journal.js";
 import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, RenderFailureRecord, StatusTransitionReason , RecordDecisionParams } from "./store-interface.js";
+import { canonicalizeWorktreePath } from "../git-worktree.js";
 
 export type { DecisionRecord, PlanReviewRecord };
 // Re-exported so existing `import { ProjectGuardrail } from "./file-store.js"`
@@ -684,7 +685,9 @@ export class FileStore implements IStore {
     const files = artifact.type === "code_change" ? [content.filePath]
       : artifact.type === "changeset" && Array.isArray(content.files) ? content.files.map(f => f?.path) : [];
     return [...new Set(files.filter((f): f is string => typeof f === "string" && f.trim().length > 0)
-      .map(f => path.resolve(this.projectRoot, f)))];
+      // #532 — canonical across git worktrees: a worktree path keys on the same
+      // repo-relative path in the main checkout, matching the checkpoint hook.
+      .map(f => canonicalizeWorktreePath(path.resolve(this.projectRoot, f)).path))];
   }
 
   private codeCheckpointPath(filePath: string): string {

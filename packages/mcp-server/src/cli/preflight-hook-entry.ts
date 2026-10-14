@@ -28,6 +28,7 @@ import path from "node:path";
 // capped `fires` entry AND stamps the guardrail dedup record in a single
 // read-modify-write, in the core, so the two hand-maintained hook copies can't
 // drift on the write shape. (This entry's own recordFire is gone.)
+import { resolveHookRoots } from "../git-worktree.js";
 import { evaluatePreflightHook, recordHookFire, toolInputTargetsDeeppairingState, toolInputTargetsGuardrail } from "./preflight-hook-core.js";
 
 /** PP1 — cheap pre-check so the common case (no rejections, no team.json) skips
@@ -59,7 +60,9 @@ process.stdin.on("end", () => {
     const toolInput = ev.tool_input || ev.input || {};
     // R1 (#279) — one documented precedence in every hook lane:
     // CLAUDE_PROJECT_DIR > DEEPPAIRING_PROJECT_ROOT > the event's cwd > ours.
-    const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || ev.cwd || process.cwd();
+    // #532 — canonicalised to the main checkout inside a git linked worktree,
+    // so a worktree agent is gated by the SAME ledger (not an empty one).
+    const projectRoot = resolveHookRoots(ev.cwd).projectRoot;
     // #470 slice 4 — NotebookEdit is matched too, for the deeppairing-state class only.
     if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit" && toolName !== "NotebookEdit") {
       process.exit(0);

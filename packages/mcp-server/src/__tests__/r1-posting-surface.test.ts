@@ -481,9 +481,14 @@ describe("R1 riders — the documented project-root env chain", () => {
    * — a generated script that was never regenerated fails here.
    */
   it("the project-root chain is defined once and reaches every emitted hook", () => {
-    const definition = fs.readFileSync(path.join(srcDir, "hooks", "hook-state.ts"), "utf-8");
-    const CHAIN = "process.env.CLAUDE_PROJECT_DIR ||\n    process.env.DEEPPAIRING_PROJECT_ROOT ||";
-    expect(definition).toContain(CHAIN);
+    // #532 — the chain now lives in git-worktree.ts's resolveHookRoots (it
+    // canonicalises a git linked worktree to its main checkout); hook-state's
+    // resolveHookProjectRoot delegates to it.
+    const definition = fs.readFileSync(path.join(srcDir, "git-worktree.ts"), "utf-8");
+    expect(definition).toContain("const claude = env.CLAUDE_PROJECT_DIR;");
+    expect(definition).toContain("const explicit = env.DEEPPAIRING_PROJECT_ROOT;");
+    expect(definition).toContain('const raw = claude || (typeof eventCwd === "string" && eventCwd ? eventCwd : "") || cwd();');
+    expect(fs.readFileSync(path.join(srcDir, "hooks", "hook-state.ts"), "utf-8")).toContain("return resolveHookRoots(eventCwd).projectRoot;");
     // The pre-R1 line that ignored DEEPPAIRING_PROJECT_ROOT, anywhere in the
     // hook lane, would mean a hook writing into whatever directory it was
     // launched from.
@@ -493,7 +498,8 @@ describe("R1 riders — the documented project-root env chain", () => {
       );
     }
     for (const script of [STOP_HOOK_SCRIPT, CHECKPOINT_HOOK_SCRIPT]) {
-      expect(script).toContain("process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT");
+      expect(script).toContain("const claude = env.CLAUDE_PROJECT_DIR;");
+      expect(script).toContain("const explicit = env.DEEPPAIRING_PROJECT_ROOT;");
     }
   });
 
@@ -501,7 +507,11 @@ describe("R1 riders — the documented project-root env chain", () => {
     const entry = fs.readFileSync(path.join(srcDir, "cli", "preflight-hook-entry.ts"), "utf-8");
     const generated = fs.readFileSync(path.join(srcDir, "cli", "setup-tasks.ts"), "utf-8");
     const CHAIN = "process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || ev.cwd || process.cwd()";
-    expect(entry).toContain(CHAIN);
+    // #532 — the plugin entry goes through resolveHookRoots (same chain, plus
+    // the worktree canonicalisation); the generated script keeps the inline
+    // chain and upgrades it through the rule leaf's resolveHookRoots.
+    expect(entry).toContain("resolveHookRoots(ev.cwd).projectRoot");
     expect(generated).toContain(CHAIN);
+    expect(generated).toContain("resolveHookRoots(ev.cwd).projectRoot");
   });
 });

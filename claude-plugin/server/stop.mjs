@@ -1,8 +1,8 @@
 import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);
 
 // src/hooks/stop-hook.ts
-import fs2 from "node:fs";
-import path2 from "node:path";
+import fs3 from "node:fs";
+import path3 from "node:path";
 
 // src/debrief-gate.ts
 var CODE_CLOSED_STATUSES = ["superseded", "retracted", "obsolete"];
@@ -30,8 +30,103 @@ function sessionOwesDebrief(artifacts, isRecent = () => true) {
 }
 
 // src/hooks/hook-state.ts
+import fs2 from "node:fs";
+import path2 from "node:path";
+
+// src/git-worktree.ts
 import fs from "node:fs";
 import path from "node:path";
+function sameDir(a, b) {
+  try {
+    return fs.realpathSync.native(a) === fs.realpathSync.native(b);
+  } catch {
+    return path.resolve(a) === path.resolve(b);
+  }
+}
+function parseLinkedWorktree(top, dotGitFile) {
+  try {
+    const raw = fs.readFileSync(dotGitFile, "utf8");
+    const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(raw);
+    if (!m) return null;
+    const gitdir = path.resolve(top, m[1]);
+    let common;
+    try {
+      common = fs.readFileSync(path.join(gitdir, "commondir"), "utf8").trim();
+    } catch {
+      return null;
+    }
+    if (!common) return null;
+    const commonDir = path.resolve(gitdir, common);
+    if (path.basename(commonDir) !== ".git") return null;
+    try {
+      const config = fs.readFileSync(path.join(commonDir, "config"), "utf8");
+      if (/^[ \t]*bare[ \t]*=[ \t]*true[ \t]*$/im.test(config)) return null;
+    } catch {
+      return null;
+    }
+    const mainTop = path.dirname(commonDir);
+    const mainDotGit = path.join(mainTop, ".git");
+    if (!fs.statSync(mainDotGit).isDirectory() || !sameDir(mainDotGit, commonDir)) return null;
+    if (sameDir(mainTop, top)) return null;
+    return { worktreeTop: top, mainTop };
+  } catch {
+    return null;
+  }
+}
+function findLinkedWorktree(p) {
+  try {
+    let cur = path.resolve(p);
+    for (let i = 0; i < 256; i++) {
+      const dotGit = path.join(cur, ".git");
+      let st;
+      try {
+        st = fs.statSync(dotGit);
+      } catch {
+        st = void 0;
+      }
+      if (st) return st.isFile() ? parseLinkedWorktree(cur, dotGit) : null;
+      const parent = path.dirname(cur);
+      if (parent === cur) return null;
+      cur = parent;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+function canonicalizeWorktreePath(p) {
+  const abs = path.resolve(p);
+  const worktree = findLinkedWorktree(abs);
+  if (!worktree) return { path: abs, worktree: null };
+  const rel = path.relative(worktree.worktreeTop, abs);
+  return { path: rel ? path.join(worktree.mainTop, rel) : worktree.mainTop, worktree };
+}
+function canonicalProjectDir(dir) {
+  const abs = path.resolve(dir);
+  const mapped = canonicalizeWorktreePath(abs);
+  if (!mapped.worktree) return { projectRoot: abs, worktree: null };
+  let projectRoot = mapped.path;
+  try {
+    if (!fs.statSync(projectRoot).isDirectory()) projectRoot = mapped.worktree.mainTop;
+  } catch {
+    projectRoot = mapped.worktree.mainTop;
+  }
+  return { projectRoot, worktree: mapped.worktree };
+}
+function resolveHookRoots(eventCwd, env = process.env, cwd = () => process.cwd()) {
+  const claude = env.CLAUDE_PROJECT_DIR;
+  const explicit = env.DEEPPAIRING_PROJECT_ROOT;
+  if (!claude && explicit) return { projectRoot: explicit, workspaceRoot: explicit, worktree: null };
+  const raw = claude || (typeof eventCwd === "string" && eventCwd ? eventCwd : "") || cwd();
+  try {
+    const { projectRoot, worktree } = canonicalProjectDir(raw);
+    return worktree ? { projectRoot, workspaceRoot: raw, worktree } : { projectRoot: raw, workspaceRoot: raw, worktree: null };
+  } catch {
+    return { projectRoot: raw, workspaceRoot: raw, worktree: null };
+  }
+}
+
+// src/hooks/hook-state.ts
 var FIRE_LOG_CAP = 50;
 var LOCK_STALE_MS = 5e3;
 var LOCK_SPIN_MS = 2;
@@ -51,7 +146,7 @@ function hookErrorMessage(err) {
   return String(err);
 }
 function resolveHookProjectRoot(eventCwd) {
-  return process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || (typeof eventCwd === "string" && eventCwd ? eventCwd : "") || process.cwd();
+  return resolveHookRoots(eventCwd).projectRoot;
 }
 function sleepSync(ms) {
   try {
@@ -65,14 +160,14 @@ function acquireHookStateLock(statePath, _now = Date.now()) {
   let brokeStale = false;
   for (; ; ) {
     try {
-      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
+      fs2.closeSync(fs2.openSync(lock, fs2.constants.O_CREAT | fs2.constants.O_EXCL | fs2.constants.O_WRONLY));
       return lock;
     } catch (error) {
       if (errnoCode(error) !== "EEXIST") return null;
       try {
-        if (!brokeStale && Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {
+        if (!brokeStale && Date.now() - fs2.statSync(lock).mtimeMs > LOCK_STALE_MS) {
           brokeStale = true;
-          fs.unlinkSync(lock);
+          fs2.unlinkSync(lock);
           continue;
         }
       } catch (staleErr) {
@@ -86,14 +181,14 @@ function acquireHookStateLock(statePath, _now = Date.now()) {
 function releaseHookStateLock(lock) {
   if (!lock) return;
   try {
-    fs.unlinkSync(lock);
+    fs2.unlinkSync(lock);
   } catch {
   }
 }
 function readHookState(statePath) {
   let raw;
   try {
-    raw = fs.readFileSync(statePath, "utf-8");
+    raw = fs2.readFileSync(statePath, "utf-8");
   } catch {
     return { version: 1 };
   }
@@ -104,7 +199,7 @@ function readHookState(statePath) {
   }
   try {
     const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-    fs.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);
+    fs2.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);
   } catch {
   }
   return { version: 1 };
@@ -112,11 +207,11 @@ function readHookState(statePath) {
 function writeHookStateAtomic(statePath, state) {
   const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 10)}`;
   try {
-    fs.writeFileSync(tmp, JSON.stringify(state));
-    fs.renameSync(tmp, statePath);
+    fs2.writeFileSync(tmp, JSON.stringify(state));
+    fs2.renameSync(tmp, statePath);
   } catch (err) {
     try {
-      fs.unlinkSync(tmp);
+      fs2.unlinkSync(tmp);
     } catch {
     }
     throw err;
@@ -124,7 +219,7 @@ function writeHookStateAtomic(statePath, state) {
 }
 function appendHookFire(statePath, fire, mutate) {
   try {
-    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    fs2.mkdirSync(path2.dirname(statePath), { recursive: true });
     const lock = acquireHookStateLock(statePath);
     try {
       const state = readHookState(statePath);
@@ -141,7 +236,7 @@ function appendHookFire(statePath, fire, mutate) {
   }
 }
 function hookStatePath(projectRoot) {
-  return path.join(projectRoot, ".deeppairing", "hooks-state.json");
+  return path2.join(projectRoot, ".deeppairing", "hooks-state.json");
 }
 
 // src/hooks/stop-hook.ts
@@ -160,15 +255,15 @@ function runStopHook(now = Date.now()) {
     process.exit(code);
   }
   try {
-    const sessionsDir = path2.join(projectRoot, ".deeppairing", "sessions");
-    if (!fs2.existsSync(sessionsDir)) exit(0, "no sessions dir");
+    const sessionsDir = path3.join(projectRoot, ".deeppairing", "sessions");
+    if (!fs3.existsSync(sessionsDir)) exit(0, "no sessions dir");
     let owesDebriefSession = null;
-    for (const id of fs2.readdirSync(sessionsDir)) {
-      const af = path2.join(sessionsDir, id, "artifacts.json");
-      if (!fs2.existsSync(af)) continue;
+    for (const id of fs3.readdirSync(sessionsDir)) {
+      const af = path3.join(sessionsDir, id, "artifacts.json");
+      if (!fs3.existsSync(af)) continue;
       let arr;
       try {
-        arr = JSON.parse(fs2.readFileSync(af, "utf-8"));
+        arr = JSON.parse(fs3.readFileSync(af, "utf-8"));
       } catch {
         continue;
       }

@@ -27,6 +27,9 @@ if (argv.length === 1 && ["--help", "-h", "help"].includes(argv[0] ?? "")) {
 } else {
   const resolved = resolveProjectRoot();
   console.log(`deepPairing project: ${resolved.projectRoot} (${resolved.source})`);
+  if (resolved.worktree) {
+    console.log(`  (git worktree ${resolved.worktree.workspaceRoot} shares the main checkout's project — #532)`);
+  }
   void doctor(resolved.projectRoot, {
     fix: argv.includes("--fix"),
     yes: argv.includes("--yes") || argv.includes("-y"),
