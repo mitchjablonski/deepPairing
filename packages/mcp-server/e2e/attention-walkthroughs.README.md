@@ -1,5 +1,10 @@
 # Synthetic attention walkthrough harness (#430)
 
+Ordinary PR CI now runs the bounded three-test keyboard/accessibility smoke in
+[`attention-ci-smoke.README.md`](attention-ci-smoke.README.md). The larger matrix
+below remains opt-in; normal E2E output uses its separate `test-results/e2e`
+directory and CI does not upload this matrix's screenshots/evidence JSON.
+
 From a clean checkout with Node 22 and the repository's pinned pnpm:
 
 ```sh

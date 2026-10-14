@@ -152,19 +152,23 @@ jobs:
         timeout-minutes: 10
         run: pnpm --filter @deeppairing/mcp-server exec playwright install --with-deps chromium
 
-      - name: E2E (companion UI bootstrap + demo)
+      - name: Next-up smoke selection (actual normal E2E script, exactly 3 cases)
+        timeout-minutes: 2
+        run: pnpm --filter @deeppairing/mcp-server test:e2e:attention-selection
+
+      - name: E2E (companion UI bootstrap + demo + Next-up smoke)
         run: pnpm --filter @deeppairing/mcp-server test:e2e
 
       - name: Upload Playwright failure diagnostics
         # A failed attempt can pass on retry while the job finishes green.
-        # Collect only failure evidence; raw trace archives stay local.
+        # Collect only bounded redacted diagnostics and failure screenshots.
+        # Raw trace archives and unredacted DOM error-context stay local.
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-failure-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             packages/mcp-server/test-results/**/test-failed-*.png
-            packages/mcp-server/test-results/**/error-context.md
             packages/mcp-server/test-results/**/*diagnostics*.txt
           if-no-files-found: ignore
           retention-days: 7

@@ -22,7 +22,7 @@ Object.assign(process.env, playwrightPortEnv(process.env, process.pid));
 export default defineConfig({
   testDir: "./e2e",
   testMatch: "**/*.e2e.ts",
-  outputDir: "test-results",
+  outputDir: "test-results/e2e",
   timeout: 30_000,
   fullyParallel: false,
   workers: 1,

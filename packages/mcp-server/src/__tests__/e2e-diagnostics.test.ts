@@ -537,7 +537,6 @@ describe("E2E daemon diagnostics", () => {
     const paths = upload.match(/packages\/mcp-server\/test-results\/[^\r\n]+/g);
     expect(paths).toEqual([
       "packages/mcp-server/test-results/**/test-failed-*.png",
-      "packages/mcp-server/test-results/**/error-context.md",
       "packages/mcp-server/test-results/**/*diagnostics*.txt",
     ]);
   });
