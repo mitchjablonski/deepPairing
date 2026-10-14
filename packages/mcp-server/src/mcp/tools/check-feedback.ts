@@ -9,6 +9,15 @@ import { composeOptionRejectReason, recordRejectedOption } from "../../store/rej
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
 import { sessionOwesDebrief } from "../../debrief-gate.js";
 import { cliInvocation } from "../../cli-invocation.js";
+import {
+  PendingAcks,
+  PRESENTER_LIVE_WINDOW_MS,
+  consumerKey,
+  feedbackStoreView,
+  livePresenters,
+  notePresenterActivity,
+  parseFeedbackFilter,
+} from "./feedback-ownership.js";
 
 /**
  * H2-1 — surface a FROZEN cross-project philosophy ledger. v0.1.6 makes the
@@ -192,6 +201,97 @@ function scopeHasSignal(
  *     via `_meta` codes.
  */
 export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolResult> {
+  // #533 — ownership filter + crash-safe hand-off. The design and its
+  // rationale live in feedback-ownership.ts; in short:
+  //   - `{presentedBy?, artifactIds?}` scopes what this poll reads AND acks to
+  //     the caller's own artifacts; no filter → the legacy poll, except that a
+  //     live presenter's feedback is reserved for it (only once labels exist).
+  //   - every acknowledge* the assembly makes is BUFFERED and flushed only
+  //     after the full response exists and the call wasn't cancelled. A throw
+  //     or cancel anywhere before that leaves the items unacknowledged, so the
+  //     next poll re-delivers them with the same ids (at-least-once).
+  const now = Date.now();
+  const filter = parseFeedbackFilter(args);
+  if (filter?.presentedBy) notePresenterActivity(ctx.state, filter.presentedBy, now);
+  const reserved = filter ? new Set<string>() : livePresenters(ctx.state, now);
+  const pending = new PendingAcks();
+  const heldBackFor = new Set<string>();
+  const view = feedbackStoreView(ctx.store, { filter, reserved, pending, heldBackFor });
+
+  // A filtered consumer keeps its OWN report-once sets + poll counter, so a
+  // subagent's rejection/plan verdict is reported to it even if the
+  // coordinator already saw it (a verdict is state, not a consumable).
+  let state = ctx.state;
+  if (filter) {
+    ctx.state.feedbackConsumers ??= {};
+    const key = consumerKey(filter);
+    const c = (ctx.state.feedbackConsumers[key] ??= {
+      checkFeedbackPollCount: 0,
+      reportedRejectedVerdicts: new Set<string>(),
+      reportedPlanVerdicts: new Set<string>(),
+    });
+    state = c;
+  }
+  const rejectedBefore = new Set(state.reportedRejectedVerdicts);
+  const plansBefore = new Set(state.reportedPlanVerdicts);
+  const rollback = () => {
+    state.reportedRejectedVerdicts.clear();
+    for (const id of rejectedBefore) state.reportedRejectedVerdicts.add(id);
+    state.reportedPlanVerdicts.clear();
+    for (const id of plansBefore) state.reportedPlanVerdicts.add(id);
+  };
+
+  let result: ToolResult;
+  try {
+    result = await assembleCheckFeedback({ ...ctx, store: view, state }, args);
+  } catch (err) {
+    // Nothing was acknowledged (the acks are still in the buffer), so this
+    // poll's items come back next time with the same ids.
+    rollback();
+    throw err;
+  }
+  if (ctx.signal?.aborted) {
+    // The client cancelled (e.g. Esc during the long-poll): this result will
+    // never reach the model, so acknowledge nothing — re-deliver next poll.
+    rollback();
+    return result;
+  }
+  const ackErrors = await pending.flush(ctx.store);
+
+  const notes: string[] = [];
+  if (filter) {
+    notes.push(
+      `\n\n(Filtered to ${filter.presentedBy ? `presentedBy "${filter.presentedBy}"` : ""}${filter.presentedBy && filter.artifactIds ? " + " : ""}${filter.artifactIds ? `artifacts ${filter.artifactIds.join(", ")}` : ""} — only your own artifacts' feedback is shown and consumed; session directives, requests and other agents' feedback stay for their owner / the coordinator.)`,
+    );
+  } else if (heldBackFor.size > 0) {
+    notes.push(
+      `\n\n(Held back for live presenter${heldBackFor.size === 1 ? "" : "s"} ${[...heldBackFor].map((l) => `"${l}"`).join(", ")}: feedback on their artifacts is left for their own filtered check_feedback; it falls through to this unfiltered poll once they go quiet for ${PRESENTER_LIVE_WINDOW_MS / 60000} min.)`,
+    );
+  }
+  if (ackErrors.length > 0) {
+    notes.push(
+      `\n\n⚠️ Acknowledging this delivery failed (${errorMessage(ackErrors[0])}) — some items above may be delivered AGAIN on the next check_feedback with the same ids. Skip any id you already acted on.`,
+    );
+  }
+  if (notes.length === 0) return result;
+  const [first, ...rest] = result.content;
+  return {
+    ...result,
+    content: [{ ...first!, text: `${first?.text ?? ""}${notes.join("")}` }, ...rest],
+    ...(result.structuredContent
+      ? {
+          structuredContent: {
+            ...result.structuredContent,
+            ...(filter ? { filter } : {}),
+            ...(heldBackFor.size > 0 ? { heldBackFor: [...heldBackFor] } : {}),
+            ...(ackErrors.length > 0 ? { ackFailed: true } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolResult> {
   const { store, server, broadcast, port } = ctx;
 
   // I7 — the LIVE companion UI URL, from the daemon's real bound port. This is

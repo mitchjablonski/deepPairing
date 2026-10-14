@@ -570,6 +570,7 @@ export class FileStore implements IStore {
     parentId?: string | null;
     version?: number;
     feature?: string | null;
+    presentedBy?: string | null;
   }): Artifact {
     // #338 (F1) — a frozen writer refuses BEFORE any side effect. Pre-this a
     // createArtifact on a conflicted store pushed the record into memory,
@@ -585,6 +586,10 @@ export class FileStore implements IStore {
     // unsluggable tag yields undefined → the field is OMITTED from the stored
     // artifact, keeping clean JSON byte-identical to pre-#206.
     const featureId = normalizeFeatureId(params.feature)?.slug;
+    const presentedBy =
+      typeof params.presentedBy === "string" && params.presentedBy.trim()
+        ? params.presentedBy.trim().slice(0, 80)
+        : undefined;
     // #162 — the store scans AUTHORITATIVELY, mirroring addComment. Pre-#162
     // the tool handlers pre-scanned and passed `secretWarnings` in, and this
     // method trusted the param — so a bearer-authed caller POSTing straight to
@@ -613,6 +618,8 @@ export class FileStore implements IStore {
       ...(secretWarnings.length > 0 ? { secretWarnings } : {}),
       // #206 (I1) — same omit-when-empty discipline for the feature tag.
       ...(featureId ? { featureId } : {}),
+      // #533 — the presenter label, same omit-when-empty discipline.
+      ...(presentedBy ? { presentedBy } : {}),
       createdAt: now,
       updatedAt: now,
     };

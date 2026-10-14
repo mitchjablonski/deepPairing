@@ -551,6 +551,9 @@ Words to the agent:
   first-call hint or a `check_feedback` response surfaces questions carried
   over from an earlier run (the human asked them after the last run stopped
   polling), drain those with `answer_question` BEFORE starting new work.
+  As a subagent, pass `presentedBy` on your `present_*` calls and filter
+  `check_feedback` to your own artifacts (`presentedBy` / `artifactIds`).
+  An item id you already acted on may come back after a failed poll: skip it.
 
 ## Pairing on a PR (a common workflow)
 

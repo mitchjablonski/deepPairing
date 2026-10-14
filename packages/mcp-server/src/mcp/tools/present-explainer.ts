@@ -61,6 +61,8 @@ export async function handlePresentExplainer(ctx: ToolContext, args: Record<stri
       content,
       relatedArtifactIds,
       feature: args?.feature as string | undefined,
+      // #533 — the presenting agent's label (check_feedback ownership filter).
+      presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : undefined,
     });
   } catch (e) {
     dedup.abort?.();
