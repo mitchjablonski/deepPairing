@@ -405,8 +405,16 @@ async function main(opts: { offerDemo?: boolean; yes?: boolean; dryRun?: boolean
     console.log(`  ${green("✓")} ${dirResult.message}`);
   }
 
+  // #538 — hook rows and scripts are per Claude Code session project dir (the
+  // worktree itself); everything else (ledger, sessions, daemon) stays on the
+  // canonical main-checkout root above (#536). In a main checkout hookRoot === cwd.
+  const hookRoot = resolveProjectRoot().worktree?.workspaceRoot ?? cwd;
+  if (hookRoot !== cwd) {
+    console.log(`  ${dim("·")} Git worktree ${hookRoot}: installing hook rows here; the ledger and sessions stay shared with ${cwd}`);
+  }
+
   // 5. Set up Claude Code Stop hook (idempotent; shared with daemon startup setup)
-  const hookResult = ensureStopHook(cwd);
+  const hookResult = ensureStopHook(hookRoot);
   if (!hookResult.ok) {
     console.log(`  ${yellow("!")} ${hookResult.message}`);
   } else if (hookResult.changed) {
@@ -418,7 +426,7 @@ async function main(opts: { offerDemo?: boolean; yes?: boolean; dryRun?: boolean
   // V2 — PostToolUse checkpoint hook. Forces present_code_change before
   // each Write/Edit/MultiEdit so the agent can't ship a wall of edits
   // silently after a green-lit plan.
-  const ckptResult = ensureCheckpointHook(cwd);
+  const ckptResult = ensureCheckpointHook(hookRoot);
   if (!ckptResult.ok) {
     console.log(`  ${yellow("!")} ${ckptResult.message}`);
   } else if (ckptResult.changed) {
@@ -436,7 +444,7 @@ async function main(opts: { offerDemo?: boolean; yes?: boolean; dryRun?: boolean
   // writes nothing. In the rare init-AND-plugin case it double-installs like
   // the Stop hook does; doctor now detects that under plugin mode and offers
   // to remove the redundant project-local rows under --fix (#196).
-  const preflightResult = ensurePreflightHook(cwd);
+  const preflightResult = ensurePreflightHook(hookRoot);
   if (!preflightResult.ok) {
     console.log(`  ${yellow("!")} ${preflightResult.message}`);
   } else if (preflightResult.changed) {
@@ -447,7 +455,7 @@ async function main(opts: { offerDemo?: boolean; yes?: boolean; dryRun?: boolean
 
   // #470 — the narrow Bash `ask`: when the agent's shell runs `stance allow`,
   // you get a prompt. Same own-the-row install as the preflight row.
-  const askResult = ensureStanceAllowAskHook(cwd);
+  const askResult = ensureStanceAllowAskHook(hookRoot);
   if (!askResult.ok) {
     console.log(`  ${yellow("!")} ${askResult.message}`);
   } else if (askResult.changed) {

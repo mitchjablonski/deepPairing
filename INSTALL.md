@@ -145,7 +145,7 @@ hasn't installed the plugin).
 `init` hooks live in the gitignored `.claude/settings.local.json` and
 `.deeppairing/hooks/`, so a fresh `git worktree` (including `isolation: worktree`
 subagents) starts with **no** deepPairing hooks: the rejection gate and
-guardrails don't run there until you initialise that worktree too. Worktrees
+guardrails don't run there until you run `deeppairing init` inside that worktree too (it writes the hook rows into the worktree and keeps the ledger shared with the main checkout). Worktrees
 share the main checkout's ledger and daemon (since #536), but not its hook
 rows. `deeppairing doctor` and the agent's first-call preamble warn when they
 see this (report-only; nothing is installed for you). The plugin install is

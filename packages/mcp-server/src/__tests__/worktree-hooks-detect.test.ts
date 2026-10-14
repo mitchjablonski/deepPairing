@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { doctor } from "../cli/doctor.js";
 import { ensureCheckpointHook, ensurePreflightHook, ensureStopHook } from "../cli/setup-tasks.js";
@@ -16,6 +17,8 @@ import { buildFirstCallHint } from "../mcp/first-call-hint.js";
 import { FileStore } from "../store/file-store.js";
 
 const hasGit = spawnSync("git", ["--version"], { encoding: "utf8" }).status === 0;
+const pkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const initJs = path.join(pkgRoot, "dist", "cli", "init.js");
 const WARN = "deepPairing's hooks are installed in the main checkout but not here";
 
 let base = "";
@@ -151,4 +154,43 @@ describe.skipIf(!hasGit)("#538 worktree without the main checkout's hooks", () =
       }
     });
   });
+
+  it.skipIf(!fs.existsSync(initJs))("e2e: real `init` in a worktree installs the rows THERE, the real preflight hook blocks a stance rejected in main, main is untouched", async () => {
+    const REJECTED = "global mutable state for config";
+    const wt2 = path.join(base, "wt-e2e");
+    git(main, "worktree", "add", "-q", "-b", "feat-e2e", wt2);
+    fs.mkdirSync(path.join(main, ".deeppairing"), { recursive: true });
+    fs.writeFileSync(path.join(main, ".deeppairing", "preferences.json"), JSON.stringify({
+      rejectedApproaches: [{ description: REJECTED, reason: "Keep configuration explicit" }],
+    }));
+    const mainSettings = path.join(main, ".claude", "settings.local.json");
+    const mainBefore = fs.readFileSync(mainSettings, "utf8");
+    expect(await runDoctor(main, { workspaceDir: wt2, pluginManaged: false })).toContain(WARN);
+
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: path.join(base, "home"), DEEPPAIRING_NO_OPEN: "1", BROWSER: "none", FORCE_COLOR: "0", NO_COLOR: "1" };
+    delete env.CLAUDE_PROJECT_DIR; delete env.DEEPPAIRING_PROJECT_ROOT; delete env.CLAUDE_PLUGIN_ROOT;
+    const r = spawnSync(process.execPath, [initJs, "init", "--yes", "--no-demo"], { cwd: wt2, env, encoding: "utf8", timeout: 60_000 });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+
+    const wtSettingsPath = path.join(wt2, ".claude", "settings.local.json");
+    const wtSettings = fs.readFileSync(wtSettingsPath, "utf8");
+    expect(wtSettings).toContain(".deeppairing/hooks/preflight.mjs");
+    expect(wtSettings).toContain(".deeppairing/hooks/checkpoint.mjs");
+    expect(fs.existsSync(path.join(wt2, ".deeppairing", "hooks", "preflight.mjs"))).toBe(true);
+    expect(fs.readFileSync(mainSettings, "utf8")).toBe(mainBefore);
+    // Data stays on the canonical main root: no per-worktree sessions/ledger.
+    expect(fs.existsSync(path.join(wt2, ".deeppairing", "sessions"))).toBe(false);
+
+    // The worktree's own installed hook, launched as Claude Code would.
+    const hook = spawnSync(process.execPath, [path.join(wt2, ".deeppairing", "hooks", "preflight.mjs")], {
+      cwd: wt2, env: { ...env, CLAUDE_PROJECT_DIR: wt2 }, encoding: "utf8", timeout: 30_000,
+      input: JSON.stringify({ tool_name: "Edit", cwd: wt2, tool_input: { file_path: path.join(wt2, "src", "config.ts"), new_string: REJECTED } }),
+    });
+    expect(hook.status, hook.stderr).toBe(0);
+    expect(JSON.parse(hook.stdout).hookSpecificOutput).toMatchObject({
+      permissionDecision: "ask", permissionDecisionReason: expect.stringContaining("REJECTED_APPROACH_BLOCKED"),
+    });
+
+    expect(await runDoctor(main, { workspaceDir: wt2, pluginManaged: false })).not.toContain(WARN);
+  }, 120_000);
 });
