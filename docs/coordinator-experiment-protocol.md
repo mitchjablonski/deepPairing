@@ -132,10 +132,12 @@ pass before dispatch. Unknown is a blocker, not a silent default.
    when the agreed harness test is permitted. A prompt saying “don't poll” alone
    does not establish exclusion. If inheritance cannot be controlled or verified,
    stop; a separate harness with the verified configuration is a scope decision.
-4. The lead-only trial requires verified lead routing and worker/reviewer tool
-   exclusion, not observation of nonexistent worker MCP connections. Mark the
-   worker MCP inheritance/attribution probe **not applicable** with exclusion
-   evidence when those connections are excluded. Require a real runtime probe
+4. The lead-only trial requires verified lead routing and worker/reviewer
+   DeepPairing tool-access exclusion, including the actual inventory check.
+   Mark the worker MCP inheritance/attribution probe **not applicable** only
+   with verified tool-access exclusion and no worker/reviewer-owned DeepPairing
+   connection. The shared lead transport may remain; this is not evidence of
+   transport disconnection. Require a real attribution probe
    only if inherited MCP connections or cross-harness attribution are separately
    agreed in scope; do not add them just to complete a checklist. In that case,
    shared-parent versus distinct MCP-visible identity remains unverified until

@@ -61,8 +61,10 @@ section. Do not silently omit them or copy token values here.
   canonical shared ledger root, branch/full HEAD and active-hook evidence:
 - Missing evidence/blocker and stop/reconciliation decision:
 
-Required unknowns block dispatch. Worker/reviewer MCP identity is not required
-when their connections are excluded. A source audit or simulation does not
+Required unknowns block dispatch. Worker/reviewer MCP attribution is N/A only
+with verified DeepPairing tool-access exclusion, an actual inventory check and
+no worker/reviewer-owned DeepPairing connection. The shared lead transport may
+remain; N/A does not establish transport disconnection. A source audit or simulation does not
 verify runtime parity or override a failed exclusion check.
 
 ## Identity and brief reference
