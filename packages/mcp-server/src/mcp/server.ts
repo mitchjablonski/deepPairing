@@ -37,7 +37,7 @@ import { handlePresentExplainer } from "./tools/present-explainer.js";
 import { handleRecall } from "./tools/recall.js";
 import { handleGetCompanionUrl } from "./tools/get-companion-url.js";
 import type { ToolContext, ToolResult, ToolState } from "./tools/types.js";
-import { feedbackStoreView, livePresenters, notePresenterActivity, parseFeedbackFilter } from "./tools/feedback-ownership.js";
+import { feedbackStoreView, liveReservations, parseFeedbackFilter } from "./tools/feedback-ownership.js";
 import { SERVER_VERSION } from "../version.js";
 import { BASE_PORT } from "../project-root.js";
 
@@ -166,7 +166,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
         description:
           "Poll for the human's response to artifacts you've presented. The human responds in the companion UI; this tool waits up to 30s and returns status + any comments / decisions / plan verdicts." +
           "\n\n`waitFor` scopes which artifact-STATUS signal wakes the long-poll: 'decision' wakes on a resolved present_options, 'plan_review' on a plan status transition, 'artifact_status' on any artifact status change, 'comments'/'any' (default) on any feedback. A narrow scope ignores unrelated status transitions while you wait for the one you presented — but a human COMMENT (or question) ALWAYS wakes the poll and is ALWAYS returned regardless of scope: human input is never swallowed. So after present_options with waitFor='decision', a human who comments instead of picking is surfaced immediately (with the decision still flagged pending), not left polling forever." +
-          "\n\nSubagents share this session: pass `presentedBy` (the same label you gave your present_* calls) and/or `artifactIds` to receive and consume ONLY the feedback on your own artifacts; everything else stays for its owner or the coordinator's unfiltered poll. Delivery is at-least-once: every item carries a stable id (comment `id`, `decisionId`), and an item from a poll that errored or was cancelled comes back on the next poll with the same id — skip any id you already acted on.",
+          "\n\nSubagents share this session: pass `presentedBy` (the same label you gave your present_* calls) and/or `artifactIds` to receive and consume ONLY the feedback on your own artifacts; everything else stays for its owner or the coordinator's unfiltered poll. While a filtered poller is live (polling, or polled in the last 60s) the unfiltered poll leaves its feedback alone and says so (`heldBackFor`, status 'held' instead of 'proceed'); once it stops polling, that feedback reaches the unfiltered poll. Delivery is at-least-once: every item carries a stable id (comment `id`, `decisionId`), and an item from a poll that errored or was cancelled comes back on the next poll with the same id — skip any id you already acted on.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -194,8 +194,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
           properties: {
             status: {
               type: "string",
-              enum: ["feedback", "waiting", "proceed"],
-              description: "feedback = something to act on below; waiting = reviews still pending; proceed = clear.",
+              enum: ["feedback", "waiting", "proceed", "held"],
+              description: "feedback = something to act on below; waiting = reviews still pending; proceed = clear; held = (#533) nothing else owed, but feedback is held for a live subagent's own filtered poll (see heldBackFor/held) — not clear, poll again.",
             },
             suggestedAction: {
               type: "string",
@@ -206,6 +206,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
             waitFor: { type: "string", description: "Present on a scoped still-waiting response." },
             filter: { type: "object", description: "#533 — echo of the presentedBy/artifactIds filter on a filtered poll." },
             heldBackFor: { type: "array", items: { type: "string" }, description: "#533 — live presenter labels whose feedback this unfiltered poll left for them." },
+            held: { type: "array", items: { type: "object" }, description: "#533 — per held-back consumer: label, counts, and releaseInSec (or inFlight)." },
             ackFailed: { type: "boolean", description: "#533 — acknowledging this delivery failed; items may be re-delivered with the same ids." },
             summary: {
               type: "object",
@@ -1000,9 +1001,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
   // #533 — presenter liveness + per-filter consumer state (see
   // tools/feedback-ownership.ts). Per MCP connection, like the sets above:
   // subagents share this connection, which is exactly why they need labels.
-  const presenterLastSeen: Record<string, number> = {};
+  const liveConsumers: NonNullable<ToolState["liveConsumers"]> = {};
   const feedbackConsumers: NonNullable<ToolState["feedbackConsumers"]> = {};
-  const ownershipState = { presenterLastSeen } as ToolState;
 
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const { name, arguments: rawArgs } = request.params;
@@ -1054,21 +1054,25 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
     ) => preflightHelper(store, broadcast, toolName, proposalStrings, proposalPaths, proposalConcepts, opts);
     const autoNameSession = (title: string) => sessionNameLatch.maybeName(title);
 
-    // #533 — a present_* carrying `presentedBy` marks that label live, and the
-    // passive-feedback drain appended to tool results honours ownership too:
-    // a labelled present_* drains only its own artifacts' comments, and any
-    // other call skips a live presenter's. With no labels in use the view is a
-    // pass-through, so legacy sessions are byte-identical.
-    const isPresent = name.startsWith("present_");
-    if (isPresent) notePresenterActivity(ownershipState, args?.presentedBy);
-    const passiveFilter = isPresent ? parseFeedbackFilter({ presentedBy: args?.presentedBy }) : null;
-    const passiveStore = feedbackStoreView(store, {
-      filter: passiveFilter,
-      reserved: passiveFilter ? new Set<string>() : livePresenters(ownershipState),
-      pending: null,
-    });
-    // X4 — the drain itself lives in tool-helpers.ts.
-    const scopedPassiveFeedback = (excludeIds?: string[]) => getPassiveFeedbackHelper(passiveStore, excludeIds);
+    // #533 — the passive-feedback drain appended to tool results honours
+    // ownership: a labelled present_* drains only its own artifacts' comments,
+    // any other call skips a live filtered consumer's, and a comment claimed
+    // by an in-flight check_feedback is never echoed twice. With no filters in
+    // use the view passes everything through, so legacy sessions are
+    // byte-identical. X4 — the drain itself lives in tool-helpers.ts.
+    const passiveFilter = name.startsWith("present_") ? parseFeedbackFilter({ presentedBy: args?.presentedBy }) : null;
+    const scopedPassiveFeedback = async (excludeIds?: string[]) => {
+      const view = feedbackStoreView(store, {
+        filter: passiveFilter,
+        reservations: passiveFilter ? [] : liveReservations({ liveConsumers } as ToolState),
+        pending: null,
+      });
+      try {
+        return await getPassiveFeedbackHelper(view.store, excludeIds);
+      } finally {
+        view.release();
+      }
+    };
 
     // X4 — ToolContext for handlers extracted to tools/. Cases that still
     // live in this switch can ignore it; new extractions just pull from ctx.
@@ -1092,7 +1096,7 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
         set checkFeedbackPollCount(v) { checkFeedbackPollCount = v; },
         reportedRejectedVerdicts,
         reportedPlanVerdicts,
-        presenterLastSeen,
+        liveConsumers,
         feedbackConsumers,
       },
       // B3 — per-request progress token for check_feedback's heartbeats.

@@ -10,13 +10,17 @@ import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
 import { sessionOwesDebrief } from "../../debrief-gate.js";
 import { cliInvocation } from "../../cli-invocation.js";
 import {
+  LIVE_POLL_GRACE_MS,
   PendingAcks,
-  PRESENTER_LIVE_WINDOW_MS,
-  consumerKey,
+  beginConsumer,
+  describeHeld,
+  endConsumer,
   feedbackStoreView,
-  livePresenters,
-  notePresenterActivity,
+  liveReservations,
   parseFeedbackFilter,
+  type FeedbackFilter,
+  type HeldTally,
+  type Reservation,
 } from "./feedback-ownership.js";
 
 /**
@@ -201,22 +205,23 @@ function scopeHasSignal(
  *     via `_meta` codes.
  */
 export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolResult> {
-  // #533 — ownership filter + crash-safe hand-off. The design and its
-  // rationale live in feedback-ownership.ts; in short:
+  // #533 — ownership filter, reservations, claims and the crash-safe
+  // hand-off. The design and its rationale live in feedback-ownership.ts; in
+  // short:
   //   - `{presentedBy?, artifactIds?}` scopes what this poll reads AND acks to
   //     the caller's own artifacts; no filter → the legacy poll, except that a
-  //     live presenter's feedback is reserved for it (only once labels exist).
+  //     LIVE filtered consumer's feedback is held back for it (status "held").
+  //   - items this poll selects are claimed, so a concurrent poll can't
+  //     deliver them too; claims drop when the poll ends, however it ends.
   //   - every acknowledge* the assembly makes is BUFFERED and flushed only
   //     after the full response exists and the call wasn't cancelled. A throw
   //     or cancel anywhere before that leaves the items unacknowledged, so the
   //     next poll re-delivers them with the same ids (at-least-once).
-  const now = Date.now();
   const filter = parseFeedbackFilter(args);
-  if (filter?.presentedBy) notePresenterActivity(ctx.state, filter.presentedBy, now);
-  const reserved = filter ? new Set<string>() : livePresenters(ctx.state, now);
+  const consumer = filter ? beginConsumer(ctx.state, filter) : null;
+  const reservations = filter ? [] : liveReservations(ctx.state);
   const pending = new PendingAcks();
-  const heldBackFor = new Set<string>();
-  const view = feedbackStoreView(ctx.store, { filter, reserved, pending, heldBackFor });
+  const view = feedbackStoreView(ctx.store, { filter, reservations, pending });
 
   // A filtered consumer keeps its OWN report-once sets + poll counter, so a
   // subagent's rejection/plan verdict is reported to it even if the
@@ -224,13 +229,11 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
   let state = ctx.state;
   if (filter) {
     ctx.state.feedbackConsumers ??= {};
-    const key = consumerKey(filter);
-    const c = (ctx.state.feedbackConsumers[key] ??= {
+    state = ctx.state.feedbackConsumers[consumer!] ??= {
       checkFeedbackPollCount: 0,
       reportedRejectedVerdicts: new Set<string>(),
       reportedPlanVerdicts: new Set<string>(),
-    });
-    state = c;
+    };
   }
   const rejectedBefore = new Set(state.reportedRejectedVerdicts);
   const plansBefore = new Set(state.reportedPlanVerdicts);
@@ -241,31 +244,67 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     for (const id of plansBefore) state.reportedPlanVerdicts.add(id);
   };
 
-  let result: ToolResult;
   try {
-    result = await assembleCheckFeedback({ ...ctx, store: view, state }, args);
-  } catch (err) {
-    // Nothing was acknowledged (the acks are still in the buffer), so this
-    // poll's items come back next time with the same ids.
-    rollback();
-    throw err;
+    let result: ToolResult;
+    try {
+      result = await assembleCheckFeedback({ ...ctx, store: view.store, state }, args);
+    } catch (err) {
+      // Nothing was acknowledged (the acks are still in the buffer), so this
+      // poll's items come back next time with the same ids.
+      rollback();
+      throw err;
+    }
+    if (ctx.signal?.aborted) {
+      // The client cancelled (e.g. Esc during the long-poll): this result will
+      // never reach the model, so acknowledge nothing — re-deliver next poll.
+      rollback();
+      return result;
+    }
+    const ackErrors = await pending.flush(ctx.store);
+    return annotateResult(result, { filter, reservations, held: view.held, ackErrors });
+  } finally {
+    view.release();
+    if (consumer) endConsumer(ctx.state, consumer);
   }
-  if (ctx.signal?.aborted) {
-    // The client cancelled (e.g. Esc during the long-poll): this result will
-    // never reach the model, so acknowledge nothing — re-deliver next poll.
-    rollback();
-    return result;
+}
+
+/** #533 — the filter echo, the held-back report and the ack-failure note.
+ *  Adds nothing to a legacy poll that held nothing back and acked cleanly. */
+function annotateResult(
+  result: ToolResult,
+  o: { filter: FeedbackFilter | null; reservations: Reservation[]; held: HeldTally; ackErrors: unknown[] },
+): ToolResult {
+  const { filter, reservations, held, ackErrors } = o;
+  const heldLines: string[] = [];
+  const heldStructured: Array<Record<string, unknown>> = [];
+  for (const [label, tally] of Object.entries(held)) {
+    const { total, text } = describeHeld(tally);
+    if (total === 0) continue;
+    const r = reservations.find((x) => x.label === label);
+    const releaseInSec = r?.releaseInMs == null ? null : Math.max(1, Math.ceil(r.releaseInMs / 1000));
+    const when =
+      releaseInSec === null
+        ? `while its check_feedback is open, then ${LIVE_POLL_GRACE_MS / 1000}s`
+        : `released to you in ${releaseInSec}s if it doesn't poll again`;
+    heldLines.push(`${text} held for "${label}" (${when})`);
+    heldStructured.push({
+      label,
+      count: total,
+      decisions: tally.decisions.size,
+      comments: tally.comments.size,
+      ...(releaseInSec !== null ? { releaseInSec } : { inFlight: true }),
+    });
   }
-  const ackErrors = await pending.flush(ctx.store);
 
   const notes: string[] = [];
   if (filter) {
     notes.push(
       `\n\n(Filtered to ${filter.presentedBy ? `presentedBy "${filter.presentedBy}"` : ""}${filter.presentedBy && filter.artifactIds ? " + " : ""}${filter.artifactIds ? `artifacts ${filter.artifactIds.join(", ")}` : ""} — only your own artifacts' feedback is shown and consumed; session directives, requests and other agents' feedback stay for their owner / the coordinator.)`,
     );
-  } else if (heldBackFor.size > 0) {
+  }
+  if (heldLines.length > 0) {
     notes.push(
-      `\n\n(Held back for live presenter${heldBackFor.size === 1 ? "" : "s"} ${[...heldBackFor].map((l) => `"${l}"`).join(", ")}: feedback on their artifacts is left for their own filtered check_feedback; it falls through to this unfiltered poll once they go quiet for ${PRESENTER_LIVE_WINDOW_MS / 60000} min.)`,
+      `\n\n⏸ HELD for a live subagent — not lost, not yours to act on yet: ${heldLines.join("; ")}. Its owner is polling for it; if the owner stops polling, it falls through to this unfiltered poll.`,
     );
   }
   if (ackErrors.length > 0) {
@@ -274,20 +313,26 @@ export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<
     );
   }
   if (notes.length === 0) return result;
-  const [first, ...rest] = result.content;
+
+  let text = result.content[0]?.text ?? "";
+  let sc = result.structuredContent;
+  if (heldStructured.length > 0 && sc) {
+    // Never "proceed" while something is held: the coordinator must know a
+    // human answer exists that it hasn't seen.
+    const heldAction = `Something is held for a live subagent (${heldLines.join("; ")}) — don't treat this as clear; call check_feedback again.`;
+    if (sc.status === "proceed") {
+      text = text.replace("Suggested action: You may proceed with implementation.", `Suggested action: ${heldAction}`);
+      sc = { ...sc, status: "held", suggestedAction: heldAction };
+    }
+    sc = { ...sc, heldBackFor: heldStructured.map((h) => h.label), held: heldStructured };
+  }
+  if (sc && filter) sc = { ...sc, filter };
+  if (sc && ackErrors.length > 0) sc = { ...sc, ackFailed: true };
+  const [, ...rest] = result.content;
   return {
     ...result,
-    content: [{ ...first!, text: `${first?.text ?? ""}${notes.join("")}` }, ...rest],
-    ...(result.structuredContent
-      ? {
-          structuredContent: {
-            ...result.structuredContent,
-            ...(filter ? { filter } : {}),
-            ...(heldBackFor.size > 0 ? { heldBackFor: [...heldBackFor] } : {}),
-            ...(ackErrors.length > 0 ? { ackFailed: true } : {}),
-          },
-        }
-      : {}),
+    content: [{ type: "text", text: `${text}${notes.join("")}` }, ...rest],
+    ...(sc ? { structuredContent: sc } : {}),
   };
 }
 

@@ -15,7 +15,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createMcpServer } from "../server.js";
 import { handleCheckFeedback } from "../tools/check-feedback.js";
-import { PRESENTER_LIVE_WINDOW_MS } from "../tools/feedback-ownership.js";
+import { LIVE_POLL_GRACE_MS } from "../tools/feedback-ownership.js";
 import type { ToolContext } from "../tools/types.js";
 import { FileStore } from "../../store/file-store.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
@@ -84,7 +84,7 @@ const commentIds = (sc: Record<string, any>) =>
 const decisionArtifacts = (sc: Record<string, any>) => (sc.decisions ?? []).map((d: any) => d.artifactId).sort();
 
 describe("#533 routing — presentedBy + check_feedback filter", () => {
-  it("a filtered poll returns and acks ONLY its own feedback; the other presenter's stays for its owner, then orphans reach the coordinator", async () => {
+  it("a filtered poll returns and acks ONLY its own feedback; a live consumer's is held (status held), then orphans reach the coordinator after the grace window", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-10-13T12:00:00.000Z"));
     const store = fx.track(new FileStore(fx.dir, "own_s1"));
@@ -102,6 +102,11 @@ describe("#533 routing — presentedBy + check_feedback filter", () => {
     expect(artB.presentedBy).toBe("builder:b");
     expect(artC.presentedBy).toBeUndefined();
 
+    // builder:b polls once (it has an immediate comment, so no long-poll) → live.
+    store.addComment({ id: "cmt_b0", artifactId: artB.id, content: "B: early note", author: "human", target: { artifactId: artB.id } });
+    const b0 = await call("check_feedback", { presentedBy: "builder:b" });
+    expect(commentIds(b0.sc)).toEqual(["cmt_b0"]);
+
     for (const d of store.getPendingDecisions()) store.resolveDecision(d.decisionId, "a", "pick a");
     store.addComment({ id: "cmt_a", artifactId: artA.id, content: "A: watch the TTL", author: "human", target: { artifactId: artA.id } });
     store.addComment({ id: "cmt_b", artifactId: artB.id, content: "B: watch eviction", author: "human", target: { artifactId: artB.id } });
@@ -116,21 +121,21 @@ describe("#533 routing — presentedBy + check_feedback filter", () => {
     expect(a.sc.filter).toEqual({ presentedBy: "builder:a" });
     expect(a.text).not.toContain("B: watch eviction");
     expect(a.text).not.toContain("focus on auth");
-    // Only A's items were acknowledged.
     expect(store.getUnacknowledgedComments().map((c) => c.id).sort()).toEqual(["cmt_b", "cmt_c", "cmt_dir"]);
     expect(store.getResolvedDecisions().map((d) => d.artifactId)).toEqual([artB.id]);
 
-    // The coordinator polls UNFILTERED while builder:b is live: it gets its own
-    // comment + the session directive, and B's feedback is held back for B.
+    // The coordinator polls UNFILTERED within builder:b's grace window: its own
+    // comment + the directive, and B's feedback is HELD — and said so.
     const coord = await call("check_feedback");
     expect(commentIds(coord.sc)).toEqual(["cmt_c", "cmt_dir"]);
     expect(decisionArtifacts(coord.sc)).toEqual([]);
     expect(coord.sc.heldBackFor).toEqual(["builder:b"]);
+    expect(coord.sc.held).toEqual([expect.objectContaining({ label: "builder:b", count: 3, decisions: 1, comments: 1 })]);
+    expect(coord.text).toContain('1 decision, 1 comment, 1 status change held for "builder:b"');
     expect(store.getUnacknowledgedComments().map((c) => c.id)).toEqual(["cmt_b"]);
 
-    // builder:b went quiet past the window → its leftovers are orphans and
-    // reach the coordinator's unfiltered poll.
-    vi.setSystemTime(new Date(Date.now() + PRESENTER_LIVE_WINDOW_MS + 1000));
+    // builder:b went quiet past the grace window → orphans reach the coordinator.
+    vi.setSystemTime(new Date(Date.now() + LIVE_POLL_GRACE_MS + 1000));
     const orphan = await call("check_feedback");
     expect(commentIds(orphan.sc)).toEqual(["cmt_b"]);
     expect(decisionArtifacts(orphan.sc)).toEqual([artB.id]);
@@ -139,7 +144,63 @@ describe("#533 routing — presentedBy + check_feedback filter", () => {
     expect(store.getResolvedDecisions()).toEqual([]);
   });
 
-  it("a live presenter's own filtered poll gets its feedback; artifactIds filters follow revisions", async () => {
+  it("a presenter that exits without polling reserves nothing: its decision reaches the coordinator at once", async () => {
+    const store = fx.track(new FileStore(fx.dir, "own_exit0"));
+    const call = await connect(store);
+    await call("present_options", { context: "Cache?", title: "X cache", options: OPTIONS("X"), presentedBy: "builder:x" });
+    for (const d of store.getPendingDecisions()) store.resolveDecision(d.decisionId, "a", "go");
+    const coord = await call("check_feedback");
+    expect(coord.sc.decisions).toHaveLength(1);
+    expect(coord.sc.status).not.toBe("held");
+  });
+
+  it("a presenter that polled then exited: the coordinator sees status 'held' (never 'proceed'), then gets the decision within the short grace window, not 5 minutes", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-13T12:00:00.000Z"));
+    const store = fx.track(new FileStore(fx.dir, "own_exit1"));
+    const call = await connect(store);
+    await call("present_options", { context: "Cache?", title: "X cache", options: OPTIONS("X"), presentedBy: "builder:x" });
+    const art = store.getArtifacts()[0]!;
+    store.addComment({ id: "cmt_x0", artifactId: art.id, content: "first", author: "human", target: { artifactId: art.id } });
+    await call("check_feedback", { presentedBy: "builder:x" }); // then the builder exits
+    for (const d of store.getPendingDecisions()) store.resolveDecision(d.decisionId, "a", "go");
+
+    const held = await call("check_feedback");
+    expect(held.sc.status).toBe("held");
+    expect(held.sc.decisions).toEqual([]);
+    expect(held.sc.suggestedAction).toContain('1 decision, 1 status change held for "builder:x"');
+    expect(held.text).not.toContain("You may proceed with implementation.");
+    expect(held.sc.held[0].releaseInSec).toBeLessThanOrEqual(LIVE_POLL_GRACE_MS / 1000);
+
+    vi.setSystemTime(new Date(Date.now() + LIVE_POLL_GRACE_MS + 1000));
+    const released = await call("check_feedback");
+    expect(released.sc.decisions).toHaveLength(1);
+    expect(released.sc.status).not.toBe("held");
+    expect(LIVE_POLL_GRACE_MS).toBeLessThanOrEqual(60_000);
+  });
+
+  it("an artifactIds-only consumer is protected like a label: its artifacts are reserved while it is live", async () => {
+    const store = fx.track(new FileStore(fx.dir, "own_ids"));
+    const call = await connect(store);
+    await call("present_findings", { title: "X audit", summary: "x", findings: [{ category: "c", detail: "d", significance: "low" }] });
+    const x = store.getArtifacts()[0]!;
+    store.updateArtifactStatus(x.id, "approved");
+    store.addComment({ id: "cmt_x0", artifactId: x.id, content: "first", author: "human", target: { artifactId: x.id } });
+    const sub0 = await call("check_feedback", { artifactIds: [x.id] });
+    expect(commentIds(sub0.sc)).toEqual(["cmt_x0"]);
+
+    store.addComment({ id: "cmt_x1", artifactId: x.id, content: "for the subagent", author: "human", target: { artifactId: x.id } });
+    const coord = await call("check_feedback");
+    expect(commentIds(coord.sc)).toEqual([]);
+    expect(coord.sc.heldBackFor).toEqual([`artifacts ${x.id}`]);
+    expect(coord.sc.status).toBe("held");
+    expect(store.getUnacknowledgedComments().map((c) => c.id)).toEqual(["cmt_x1"]);
+
+    const sub1 = await call("check_feedback", { artifactIds: [x.id] });
+    expect(commentIds(sub1.sc)).toEqual(["cmt_x1"]);
+  });
+
+  it("artifactIds filters follow revisions; revise_artifact carries presentedBy", async () => {
     const store = fx.track(new FileStore(fx.dir, "own_s2"));
     const call = await connect(store);
     await call("present_findings", { title: "B audit", summary: "b", findings: [{ category: "c", detail: "d", significance: "low" }], presentedBy: "reviewer" });
@@ -155,6 +216,54 @@ describe("#533 routing — presentedBy + check_feedback filter", () => {
     expect(commentIds(byId.sc)).toEqual(["cmt_v2"]);
     expect(store.getUnacknowledgedComments().map((c) => c.id)).toEqual(["cmt_other"]);
   });
+
+  it("a filtered long-poll wakes only for its OWN feedback", async () => {
+    const store = fx.track(new FileStore(fx.dir, "own_wake"));
+    const call = await connect(store);
+    await call("present_options", { context: "Cache for A?", title: "A cache", options: OPTIONS("A"), presentedBy: "builder:a" });
+    await call("present_findings", { title: "B audit", summary: "b", findings: [{ category: "c", detail: "d", significance: "low" }], presentedBy: "builder:b" });
+    const artA = store.getArtifacts().find((a) => a.presentedBy === "builder:a")!;
+    const artB = store.getArtifacts().find((a) => a.presentedBy === "builder:b")!;
+    const poll = call("check_feedback", { presentedBy: "builder:a" });
+    await new Promise((r) => setTimeout(r, 100));
+    store.addComment({ id: "cmt_b", artifactId: artB.id, content: "for B", author: "human", target: { artifactId: artB.id } });
+    await new Promise((r) => setTimeout(r, 400));
+    store.addComment({ id: "cmt_a", artifactId: artA.id, content: "for A", author: "human", target: { artifactId: artA.id } });
+    const a = await poll;
+    expect(commentIds(a.sc)).toEqual(["cmt_a"]);
+    expect(store.getUnacknowledgedComments().map((c) => c.id)).toEqual(["cmt_b"]);
+  });
+});
+
+describe("#533 claims — concurrent polls never double-deliver", () => {
+  async function seeded(name: string) {
+    const store = fx.track(new FileStore(fx.dir, name));
+    const call = await connect(store);
+    await call("present_findings", { title: "Audit", summary: "s", findings: [{ category: "c", detail: "d", significance: "low" }], presentedBy: "builder:a" });
+    const art = store.getArtifacts()[0]!;
+    store.updateArtifactStatus(art.id, "approved");
+    const ids = ["c1", "c2", "c3", "c4", "c5", "c6"];
+    for (const id of ids) store.addComment({ id, artifactId: art.id, content: `note ${id}`, author: "human", target: { artifactId: art.id } });
+    return { store, call, ids };
+  }
+
+  for (const [label, argsA, argsB] of [
+    ["same-label filtered polls", { presentedBy: "builder:a" }, { presentedBy: "builder:a" }],
+    ["filtered vs unfiltered", { presentedBy: "builder:a" }, {}],
+    ["two unfiltered polls", {}, {}],
+  ] as const) {
+    it(label, async () => {
+      for (let round = 0; round < 5; round++) {
+        const { store, call, ids } = await seeded(`own_cc_${label.length}_${round}`);
+        const [r1, r2] = await Promise.all([call("check_feedback", { ...argsA }), call("check_feedback", { ...argsB })]);
+        const got = [...commentIds(r1.sc), ...commentIds(r2.sc)];
+        expect(new Set(got).size, `round ${round}: ${got.join(",")}`).toBe(got.length);
+        // Whatever neither delivered is still unacknowledged (not lost).
+        const left = store.getUnacknowledgedComments().map((c) => c.id);
+        expect([...got, ...left].sort()).toEqual([...ids].sort());
+      }
+    });
+  }
 });
 
 describe("#533 unfiltered poll is unchanged", () => {

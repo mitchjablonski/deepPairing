@@ -34464,7 +34464,8 @@ function sessionOwesDebrief(artifacts, isRecent = () => true) {
 }
 
 // src/mcp/tools/feedback-ownership.ts
-var PRESENTER_LIVE_WINDOW_MS = 5 * 60 * 1e3;
+import { performance as performance2 } from "node:perf_hooks";
+var LIVE_POLL_GRACE_MS = 60 * 1e3;
 function parseFeedbackFilter(args) {
   const a = args ?? {};
   const filter = {};
@@ -34481,26 +34482,40 @@ function consumerKey(filter) {
   if (filter.presentedBy && !filter.artifactIds) return `by:${filter.presentedBy}`;
   return JSON.stringify({ by: filter.presentedBy ?? null, ids: [...filter.artifactIds ?? []].sort() });
 }
-function notePresenterActivity(state, label, now = Date.now()) {
-  if (typeof label !== "string" || !label.trim()) return;
-  state.presenterLastSeen ??= {};
-  state.presenterLastSeen[label.trim().slice(0, 80)] = now;
+function consumerLabel(filter) {
+  if (filter.presentedBy) return filter.presentedBy;
+  return `artifacts ${(filter.artifactIds ?? []).join(", ")}`;
 }
-function livePresenters(state, now = Date.now(), exclude) {
-  const live = /* @__PURE__ */ new Set();
-  for (const [label, at] of Object.entries(state.presenterLastSeen ?? {})) {
-    if (label !== exclude && now - at <= PRESENTER_LIVE_WINDOW_MS) live.add(label);
+function beginConsumer(state, filter, now = Date.now()) {
+  const key = consumerKey(filter);
+  state.liveConsumers ??= {};
+  const c = state.liveConsumers[key] ??= { filter, inflight: 0, lastAt: now };
+  c.inflight++;
+  c.lastAt = now;
+  return key;
+}
+function endConsumer(state, key, now = Date.now()) {
+  const c = state.liveConsumers?.[key];
+  if (!c) return;
+  c.inflight = Math.max(0, c.inflight - 1);
+  c.lastAt = now;
+}
+function liveReservations(state, now = Date.now()) {
+  const out = [];
+  for (const c of Object.values(state.liveConsumers ?? {})) {
+    const since = now - c.lastAt;
+    if (c.inflight > 0) out.push({ label: consumerLabel(c.filter), filter: c.filter, releaseInMs: null });
+    else if (since <= LIVE_POLL_GRACE_MS) {
+      out.push({ label: consumerLabel(c.filter), filter: c.filter, releaseInMs: LIVE_POLL_GRACE_MS - since });
+    }
   }
-  return live;
+  return out;
 }
 var PendingAcks = class {
   comments = [];
   decisions = [];
   statusChanges = [];
   renderFailures = [];
-  get empty() {
-    return this.comments.length === 0 && this.decisions.length === 0 && this.statusChanges.length === 0 && this.renderFailures.length === 0;
-  }
   /** Flush every lane; a failing lane does not stop the others. Returns the
    *  errors (an un-flushed lane simply re-delivers next poll). */
   async flush(store) {
@@ -34534,30 +34549,76 @@ function matchesFilter(a, byId, filter) {
   }
   return true;
 }
+var claimsByStore = /* @__PURE__ */ new WeakMap();
 function feedbackStoreView(store, opts) {
-  const { filter, reserved, pending, heldBackFor } = opts;
-  const scoping = filter !== null || reserved.size > 0;
+  const { filter, reservations, pending } = opts;
+  const scoping = filter !== null || reservations.length > 0;
+  const token = /* @__PURE__ */ Symbol("check_feedback poll");
+  let claims = claimsByStore.get(store);
+  if (!claims) {
+    claims = /* @__PURE__ */ new Map();
+    claimsByStore.set(store, claims);
+  }
+  const claimTable = claims;
+  const mine = [];
+  const held = {};
   const allArtifacts = async () => await store.getArtifacts() ?? [];
-  const owns = async () => {
+  const ownership = async () => {
     const arts = await allArtifacts();
     const byId = {};
     for (const a of arts) byId[a.id] = a;
     return (artifactId) => {
       const a = artifactId ? byId[artifactId] : void 0;
-      if (filter) return a !== void 0 && matchesFilter(a, byId, filter);
-      if (a?.presentedBy && reserved.has(a.presentedBy)) {
-        heldBackFor?.add(a.presentedBy);
-        return false;
-      }
-      return true;
+      if (filter) return a !== void 0 && matchesFilter(a, byId, filter) ? null : "";
+      if (!a) return null;
+      for (const r of reservations) if (matchesFilter(a, byId, r.filter)) return r.label;
+      return null;
     };
   };
-  const scoped = (read, key) => async () => {
+  const consumable = (lane, read, artifactOf, idOf, claim2) => async () => {
     const rows = await read() ?? [];
-    const keep = await owns();
-    return rows.filter((x) => keep(key(x)));
+    const owner = scoping ? await ownership() : null;
+    const out = [];
+    for (const x of rows) {
+      if (owner) {
+        const heldBy = owner(artifactOf(x));
+        if (heldBy !== null) {
+          if (heldBy) {
+            const t = held[heldBy] ??= { comments: /* @__PURE__ */ new Set(), decisions: /* @__PURE__ */ new Set(), statusChanges: /* @__PURE__ */ new Set(), renderFailures: /* @__PURE__ */ new Set() };
+            t[lane].add(idOf(x));
+          }
+          continue;
+        }
+      }
+      const key = `${lane}:${idOf(x)}`;
+      const by = claimTable.get(key);
+      if (by && by !== token) continue;
+      if (claim2 && !by) {
+        claimTable.set(key, token);
+        mine.push(key);
+      }
+      out.push(x);
+    }
+    return out;
   };
-  const overrides = {};
+  const commentsLane = (claim2) => consumable("comments", () => store.getUnacknowledgedComments(), (c) => c.target.artifactId, (c) => c.id, claim2);
+  const decisionsLane = (claim2) => consumable("decisions", () => store.getResolvedDecisions(), (d) => d.artifactId, (d) => d.decisionId, claim2);
+  const statusLane = (claim2) => consumable("statusChanges", () => store.getUnacknowledgedStatusChanges(), (a) => a.id, (a) => a.id, claim2);
+  const renderLane = (claim2) => consumable(
+    "renderFailures",
+    () => store.getUnacknowledgedRenderFailures?.(),
+    (f) => f.artifactId,
+    (f) => `${f.artifactId}/${f.visualId}`,
+    claim2
+  );
+  const overrides = {
+    getUnacknowledgedComments: commentsLane(true),
+    getResolvedDecisions: decisionsLane(true),
+    getUnacknowledgedStatusChanges: statusLane(true)
+  };
+  if (typeof store.getUnacknowledgedRenderFailures === "function") {
+    overrides.getUnacknowledgedRenderFailures = renderLane(true);
+  }
   if (pending) {
     overrides.acknowledgeComments = (ids) => void pending.comments.push(...ids);
     overrides.acknowledgeDecisions = (ids) => void pending.decisions.push(...ids);
@@ -34567,36 +34628,43 @@ function feedbackStoreView(store, opts) {
     }
   }
   if (scoping) {
-    overrides.getUnacknowledgedComments = scoped(
-      () => store.getUnacknowledgedComments(),
-      (c) => c.target.artifactId
-    );
-    overrides.getResolvedDecisions = scoped(() => store.getResolvedDecisions(), (d) => d.artifactId);
-    overrides.getUnacknowledgedStatusChanges = scoped(() => store.getUnacknowledgedStatusChanges(), (a) => a.id);
-    if (typeof store.getUnacknowledgedRenderFailures === "function") {
-      overrides.getUnacknowledgedRenderFailures = scoped(
-        () => store.getUnacknowledgedRenderFailures(),
-        (f) => f.artifactId
-      );
-    }
+    const peekLanes = [commentsLane(false), decisionsLane(false), statusLane(false)];
+    if (typeof store.getUnacknowledgedRenderFailures === "function") peekLanes.push(renderLane(false));
+    overrides.waitForFeedback = async (timeoutMs = 3e4) => {
+      const deadline = performance2.now() + timeoutMs;
+      for (; ; ) {
+        const remaining = deadline - performance2.now();
+        if (remaining <= 0) return;
+        const started = performance2.now();
+        await store.waitForFeedback(Math.ceil(remaining));
+        if (performance2.now() >= deadline) return;
+        for (const peek of peekLanes) if ((await peek()).length > 0) return;
+        if (performance2.now() - started < 50) await new Promise((r) => setTimeout(r, 100));
+      }
+    };
   }
   if (filter) {
-    overrides.getArtifacts = scoped(() => allArtifacts(), (a) => a.id);
-    overrides.getPendingDecisions = scoped(() => store.getPendingDecisions(), (d) => d.artifactId);
-    overrides.getPendingPlanReviews = scoped(() => store.getPendingPlanReviews(), (p) => p.artifactId);
+    const own = (read, artifactOf) => async () => {
+      const rows = await read() ?? [];
+      const owner = await ownership();
+      return rows.filter((x) => owner(artifactOf(x)) === null);
+    };
+    overrides.getArtifacts = own(() => allArtifacts(), (a) => a.id);
+    overrides.getPendingDecisions = own(() => store.getPendingDecisions(), (d) => d.artifactId);
+    overrides.getPendingPlanReviews = own(() => store.getPendingPlanReviews(), (p) => p.artifactId);
     overrides.getFullState = async () => {
       const full = await store.getFullState();
-      const keep = await owns();
+      const owner = await ownership();
       return {
         ...full,
-        artifacts: (full.artifacts ?? []).filter((a) => keep(a.id)),
-        comments: (full.comments ?? []).filter((c) => keep(c.target.artifactId)),
+        artifacts: (full.artifacts ?? []).filter((a) => owner(a.id) === null),
+        comments: (full.comments ?? []).filter((c) => owner(c.target.artifactId) === null),
         // Human requests are addressed to the session, not to one presenter.
         requests: []
       };
     };
   }
-  return new Proxy(store, {
+  const view = new Proxy(store, {
     get(target, prop2, _receiver) {
       if (typeof prop2 === "string" && Object.prototype.hasOwnProperty.call(overrides, prop2)) {
         return overrides[prop2];
@@ -34605,6 +34673,27 @@ function feedbackStoreView(store, opts) {
       return typeof v2 === "function" ? v2.bind(target) : v2;
     }
   });
+  return {
+    store: view,
+    held,
+    release() {
+      for (const key of mine.splice(0)) {
+        if (claimTable.get(key) === token) claimTable.delete(key);
+      }
+    }
+  };
+}
+function describeHeld(t) {
+  const parts = [];
+  const add = (n, one, many) => {
+    if (n > 0) parts.push(`${n} ${n === 1 ? one : many}`);
+  };
+  add(t.decisions.size, "decision", "decisions");
+  add(t.comments.size, "comment", "comments");
+  add(t.statusChanges.size, "status change", "status changes");
+  add(t.renderFailures.size, "render failure", "render failures");
+  const total = t.decisions.size + t.comments.size + t.statusChanges.size + t.renderFailures.size;
+  return { total, text: parts.join(", ") };
 }
 
 // src/mcp/tools/check-feedback.ts
@@ -34691,23 +34780,19 @@ function scopeHasSignal(scope, signals) {
   }
 }
 async function handleCheckFeedback(ctx, args) {
-  const now = Date.now();
   const filter = parseFeedbackFilter(args);
-  if (filter?.presentedBy) notePresenterActivity(ctx.state, filter.presentedBy, now);
-  const reserved = filter ? /* @__PURE__ */ new Set() : livePresenters(ctx.state, now);
+  const consumer = filter ? beginConsumer(ctx.state, filter) : null;
+  const reservations = filter ? [] : liveReservations(ctx.state);
   const pending = new PendingAcks();
-  const heldBackFor = /* @__PURE__ */ new Set();
-  const view = feedbackStoreView(ctx.store, { filter, reserved, pending, heldBackFor });
+  const view = feedbackStoreView(ctx.store, { filter, reservations, pending });
   let state = ctx.state;
   if (filter) {
     ctx.state.feedbackConsumers ??= {};
-    const key = consumerKey(filter);
-    const c = ctx.state.feedbackConsumers[key] ??= {
+    state = ctx.state.feedbackConsumers[consumer] ??= {
       checkFeedbackPollCount: 0,
       reportedRejectedVerdicts: /* @__PURE__ */ new Set(),
       reportedPlanVerdicts: /* @__PURE__ */ new Set()
     };
-    state = c;
   }
   const rejectedBefore = new Set(state.reportedRejectedVerdicts);
   const plansBefore = new Set(state.reportedPlanVerdicts);
@@ -34717,18 +34802,44 @@ async function handleCheckFeedback(ctx, args) {
     state.reportedPlanVerdicts.clear();
     for (const id of plansBefore) state.reportedPlanVerdicts.add(id);
   };
-  let result;
   try {
-    result = await assembleCheckFeedback({ ...ctx, store: view, state }, args);
-  } catch (err) {
-    rollback();
-    throw err;
+    let result;
+    try {
+      result = await assembleCheckFeedback({ ...ctx, store: view.store, state }, args);
+    } catch (err) {
+      rollback();
+      throw err;
+    }
+    if (ctx.signal?.aborted) {
+      rollback();
+      return result;
+    }
+    const ackErrors = await pending.flush(ctx.store);
+    return annotateResult(result, { filter, reservations, held: view.held, ackErrors });
+  } finally {
+    view.release();
+    if (consumer) endConsumer(ctx.state, consumer);
   }
-  if (ctx.signal?.aborted) {
-    rollback();
-    return result;
+}
+function annotateResult(result, o) {
+  const { filter, reservations, held, ackErrors } = o;
+  const heldLines = [];
+  const heldStructured = [];
+  for (const [label, tally] of Object.entries(held)) {
+    const { total, text: text2 } = describeHeld(tally);
+    if (total === 0) continue;
+    const r = reservations.find((x) => x.label === label);
+    const releaseInSec = r?.releaseInMs == null ? null : Math.max(1, Math.ceil(r.releaseInMs / 1e3));
+    const when = releaseInSec === null ? `while its check_feedback is open, then ${LIVE_POLL_GRACE_MS / 1e3}s` : `released to you in ${releaseInSec}s if it doesn't poll again`;
+    heldLines.push(`${text2} held for "${label}" (${when})`);
+    heldStructured.push({
+      label,
+      count: total,
+      decisions: tally.decisions.size,
+      comments: tally.comments.size,
+      ...releaseInSec !== null ? { releaseInSec } : { inFlight: true }
+    });
   }
-  const ackErrors = await pending.flush(ctx.store);
   const notes = [];
   if (filter) {
     notes.push(
@@ -34736,11 +34847,12 @@ async function handleCheckFeedback(ctx, args) {
 
 (Filtered to ${filter.presentedBy ? `presentedBy "${filter.presentedBy}"` : ""}${filter.presentedBy && filter.artifactIds ? " + " : ""}${filter.artifactIds ? `artifacts ${filter.artifactIds.join(", ")}` : ""} \u2014 only your own artifacts' feedback is shown and consumed; session directives, requests and other agents' feedback stay for their owner / the coordinator.)`
     );
-  } else if (heldBackFor.size > 0) {
+  }
+  if (heldLines.length > 0) {
     notes.push(
       `
 
-(Held back for live presenter${heldBackFor.size === 1 ? "" : "s"} ${[...heldBackFor].map((l) => `"${l}"`).join(", ")}: feedback on their artifacts is left for their own filtered check_feedback; it falls through to this unfiltered poll once they go quiet for ${PRESENTER_LIVE_WINDOW_MS / 6e4} min.)`
+\u23F8 HELD for a live subagent \u2014 not lost, not yours to act on yet: ${heldLines.join("; ")}. Its owner is polling for it; if the owner stops polling, it falls through to this unfiltered poll.`
     );
   }
   if (ackErrors.length > 0) {
@@ -34751,18 +34863,23 @@ async function handleCheckFeedback(ctx, args) {
     );
   }
   if (notes.length === 0) return result;
-  const [first, ...rest] = result.content;
+  let text = result.content[0]?.text ?? "";
+  let sc = result.structuredContent;
+  if (heldStructured.length > 0 && sc) {
+    const heldAction = `Something is held for a live subagent (${heldLines.join("; ")}) \u2014 don't treat this as clear; call check_feedback again.`;
+    if (sc.status === "proceed") {
+      text = text.replace("Suggested action: You may proceed with implementation.", `Suggested action: ${heldAction}`);
+      sc = { ...sc, status: "held", suggestedAction: heldAction };
+    }
+    sc = { ...sc, heldBackFor: heldStructured.map((h) => h.label), held: heldStructured };
+  }
+  if (sc && filter) sc = { ...sc, filter };
+  if (sc && ackErrors.length > 0) sc = { ...sc, ackFailed: true };
+  const [, ...rest] = result.content;
   return {
     ...result,
-    content: [{ ...first, text: `${first?.text ?? ""}${notes.join("")}` }, ...rest],
-    ...result.structuredContent ? {
-      structuredContent: {
-        ...result.structuredContent,
-        ...filter ? { filter } : {},
-        ...heldBackFor.size > 0 ? { heldBackFor: [...heldBackFor] } : {},
-        ...ackErrors.length > 0 ? { ackFailed: true } : {}
-      }
-    } : {}
+    content: [{ type: "text", text: `${text}${notes.join("")}` }, ...rest],
+    ...sc ? { structuredContent: sc } : {}
   };
 }
 async function assembleCheckFeedback(ctx, args) {
@@ -37549,7 +37666,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "check_feedback",
         annotations: { title: "Check feedback", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-        description: "Poll for the human's response to artifacts you've presented. The human responds in the companion UI; this tool waits up to 30s and returns status + any comments / decisions / plan verdicts.\n\n`waitFor` scopes which artifact-STATUS signal wakes the long-poll: 'decision' wakes on a resolved present_options, 'plan_review' on a plan status transition, 'artifact_status' on any artifact status change, 'comments'/'any' (default) on any feedback. A narrow scope ignores unrelated status transitions while you wait for the one you presented \u2014 but a human COMMENT (or question) ALWAYS wakes the poll and is ALWAYS returned regardless of scope: human input is never swallowed. So after present_options with waitFor='decision', a human who comments instead of picking is surfaced immediately (with the decision still flagged pending), not left polling forever.\n\nSubagents share this session: pass `presentedBy` (the same label you gave your present_* calls) and/or `artifactIds` to receive and consume ONLY the feedback on your own artifacts; everything else stays for its owner or the coordinator's unfiltered poll. Delivery is at-least-once: every item carries a stable id (comment `id`, `decisionId`), and an item from a poll that errored or was cancelled comes back on the next poll with the same id \u2014 skip any id you already acted on.",
+        description: "Poll for the human's response to artifacts you've presented. The human responds in the companion UI; this tool waits up to 30s and returns status + any comments / decisions / plan verdicts.\n\n`waitFor` scopes which artifact-STATUS signal wakes the long-poll: 'decision' wakes on a resolved present_options, 'plan_review' on a plan status transition, 'artifact_status' on any artifact status change, 'comments'/'any' (default) on any feedback. A narrow scope ignores unrelated status transitions while you wait for the one you presented \u2014 but a human COMMENT (or question) ALWAYS wakes the poll and is ALWAYS returned regardless of scope: human input is never swallowed. So after present_options with waitFor='decision', a human who comments instead of picking is surfaced immediately (with the decision still flagged pending), not left polling forever.\n\nSubagents share this session: pass `presentedBy` (the same label you gave your present_* calls) and/or `artifactIds` to receive and consume ONLY the feedback on your own artifacts; everything else stays for its owner or the coordinator's unfiltered poll. While a filtered poller is live (polling, or polled in the last 60s) the unfiltered poll leaves its feedback alone and says so (`heldBackFor`, status 'held' instead of 'proceed'); once it stops polling, that feedback reaches the unfiltered poll. Delivery is at-least-once: every item carries a stable id (comment `id`, `decisionId`), and an item from a poll that errored or was cancelled comes back on the next poll with the same id \u2014 skip any id you already acted on.",
         inputSchema: {
           type: "object",
           properties: {
@@ -37577,8 +37694,8 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
           properties: {
             status: {
               type: "string",
-              enum: ["feedback", "waiting", "proceed"],
-              description: "feedback = something to act on below; waiting = reviews still pending; proceed = clear."
+              enum: ["feedback", "waiting", "proceed", "held"],
+              description: "feedback = something to act on below; waiting = reviews still pending; proceed = clear; held = (#533) nothing else owed, but feedback is held for a live subagent's own filtered poll (see heldBackFor/held) \u2014 not clear, poll again."
             },
             suggestedAction: {
               type: "string",
@@ -37589,6 +37706,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
             waitFor: { type: "string", description: "Present on a scoped still-waiting response." },
             filter: { type: "object", description: "#533 \u2014 echo of the presentedBy/artifactIds filter on a filtered poll." },
             heldBackFor: { type: "array", items: { type: "string" }, description: "#533 \u2014 live presenter labels whose feedback this unfiltered poll left for them." },
+            held: { type: "array", items: { type: "object" }, description: "#533 \u2014 per held-back consumer: label, counts, and releaseInSec (or inFlight)." },
             ackFailed: { type: "boolean", description: "#533 \u2014 acknowledging this delivery failed; items may be re-delivered with the same ids." },
             summary: {
               type: "object",
@@ -38182,9 +38300,8 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
   let checkFeedbackPollCount = 0;
   const reportedRejectedVerdicts = /* @__PURE__ */ new Set();
   const reportedPlanVerdicts = /* @__PURE__ */ new Set();
-  const presenterLastSeen = {};
+  const liveConsumers = {};
   const feedbackConsumers = {};
-  const ownershipState = { presenterLastSeen };
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const { name, arguments: rawArgs } = request.params;
     const args = rawArgs ?? {};
@@ -38196,15 +38313,19 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
     const tryElicit2 = (message) => tryElicit(server, message);
     const preflightRejectedApproaches2 = (toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], opts = {}) => preflightRejectedApproaches(store, broadcast, toolName, proposalStrings, proposalPaths, proposalConcepts, opts);
     const autoNameSession = (title) => sessionNameLatch.maybeName(title);
-    const isPresent = name.startsWith("present_");
-    if (isPresent) notePresenterActivity(ownershipState, args?.presentedBy);
-    const passiveFilter = isPresent ? parseFeedbackFilter({ presentedBy: args?.presentedBy }) : null;
-    const passiveStore = feedbackStoreView(store, {
-      filter: passiveFilter,
-      reserved: passiveFilter ? /* @__PURE__ */ new Set() : livePresenters(ownershipState),
-      pending: null
-    });
-    const scopedPassiveFeedback = (excludeIds) => getPassiveFeedback(passiveStore, excludeIds);
+    const passiveFilter = name.startsWith("present_") ? parseFeedbackFilter({ presentedBy: args?.presentedBy }) : null;
+    const scopedPassiveFeedback = async (excludeIds) => {
+      const view = feedbackStoreView(store, {
+        filter: passiveFilter,
+        reservations: passiveFilter ? [] : liveReservations({ liveConsumers }),
+        pending: null
+      });
+      try {
+        return await getPassiveFeedback(view.store, excludeIds);
+      } finally {
+        view.release();
+      }
+    };
     const ctx = {
       server,
       store,
@@ -38226,7 +38347,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
         },
         reportedRejectedVerdicts,
         reportedPlanVerdicts,
-        presenterLastSeen,
+        liveConsumers,
         feedbackConsumers
       },
       // B3 — per-request progress token for check_feedback's heartbeats.
