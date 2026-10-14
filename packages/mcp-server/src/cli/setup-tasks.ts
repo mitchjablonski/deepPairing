@@ -649,6 +649,21 @@ function ledgersPresent(projectRoot) {
   return false;
 }
 
+// #532 — a few stat calls: is the nearest .git (walking up) a FILE? That is a
+// linked worktree or a submodule; resolveHookRoots tells them apart.
+function nearestDotGitIsFile(dir) {
+  try {
+    let cur = path.resolve(dir);
+    for (let i = 0; i < 256; i++) {
+      try { return fs.statSync(path.join(cur, ".git")).isFile(); } catch {}
+      const parent = path.dirname(cur);
+      if (parent === cur) return false;
+      cur = parent;
+    }
+  } catch {}
+  return false;
+}
+
 // Q1 — the GUARDRAIL BACKSTOP's early-exit test. The backstop has no ledger to
 // be seeded, so the ledger fast-path above would hide it entirely; a guardrail
 // path is the second reason to keep going.
@@ -702,7 +717,13 @@ process.stdin.on("end", async () => {
     const toolInput = ev.tool_input || ev.input || {};
     // R1 (#279) — one documented precedence in every hook lane:
     // CLAUDE_PROJECT_DIR > DEEPPAIRING_PROJECT_ROOT > the event's cwd > ours.
-    const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || ev.cwd || process.cwd();
+    let projectRoot = process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || ev.cwd || process.cwd();
+    // #532 — inside a git LINKED WORKTREE the project is the main checkout (the
+    // shared ledger), via the rule leaf's resolveHookRoots. Only paid when the
+    // nearest .git is a FILE; a main checkout or non-git dir skips the import.
+    if (nearestDotGitIsFile(projectRoot)) {
+      try { projectRoot = (await import(RULES_URL)).resolveHookRoots(ev.cwd).projectRoot; } catch {}
+    }
     if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit" && toolName !== "NotebookEdit") {
       process.exit(0);
     }

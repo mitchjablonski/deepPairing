@@ -1,12 +1,147 @@
 import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);
 
 // src/cli/preflight-hook-entry.ts
-import fs4 from "node:fs";
-import path4 from "node:path";
+import fs5 from "node:fs";
+import path5 from "node:path";
+
+// src/git-worktree.ts
+import fs from "node:fs";
+import path from "node:path";
+function samePath(a, b) {
+  try {
+    return fs.realpathSync.native(a) === fs.realpathSync.native(b);
+  } catch {
+    return path.resolve(a) === path.resolve(b);
+  }
+}
+function isGitDir(dir) {
+  try {
+    return fs.statSync(path.join(dir, "HEAD")).isFile() && fs.statSync(path.join(dir, "objects")).isDirectory() && fs.statSync(path.join(dir, "refs")).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function readGitdirPointer(top, dotGitFile) {
+  const raw = fs.readFileSync(dotGitFile, "utf8");
+  const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(raw);
+  return m ? path.resolve(top, m[1]) : null;
+}
+function inspectDotGitFile(top, dotGitFile) {
+  try {
+    const gitdir = readGitdirPointer(top, dotGitFile);
+    if (!gitdir) return { worktree: null, rejected: `${dotGitFile} has no "gitdir:" line` };
+    let common;
+    try {
+      common = fs.readFileSync(path.join(gitdir, "commondir"), "utf8").trim();
+    } catch {
+      return { worktree: null };
+    }
+    if (!common) return { worktree: null, rejected: `${gitdir}/commondir is empty` };
+    const commonDir = path.resolve(gitdir, common);
+    if (path.basename(commonDir) !== ".git") return { worktree: null };
+    if (!isGitDir(commonDir)) return { worktree: null, rejected: `${commonDir} is not a git directory` };
+    try {
+      const config = fs.readFileSync(path.join(commonDir, "config"), "utf8");
+      if (/^[ \t]*bare[ \t]*=[ \t]*true[ \t]*$/im.test(config)) return { worktree: null };
+    } catch {
+      return { worktree: null, rejected: `${commonDir} has no config` };
+    }
+    let back;
+    try {
+      back = fs.readFileSync(path.join(gitdir, "gitdir"), "utf8").trim();
+    } catch {
+      return { worktree: null, rejected: `${gitdir} has no gitdir back-reference` };
+    }
+    if (!back || !samePath(path.resolve(gitdir, back), dotGitFile)) {
+      return { worktree: null, rejected: `${gitdir}/gitdir does not point back at ${dotGitFile}` };
+    }
+    if (!samePath(path.dirname(gitdir), path.join(commonDir, "worktrees"))) {
+      return { worktree: null, rejected: `${gitdir} is not under ${commonDir}/worktrees` };
+    }
+    const mainTop = path.dirname(commonDir);
+    const mainDotGit = path.join(mainTop, ".git");
+    if (!fs.statSync(mainDotGit).isDirectory() || !samePath(mainDotGit, commonDir)) {
+      return { worktree: null, rejected: `${mainDotGit} is not the common dir ${commonDir}` };
+    }
+    if (samePath(mainTop, top)) return { worktree: null };
+    return { worktree: { worktreeTop: top, mainTop } };
+  } catch (err) {
+    return { worktree: null, rejected: `${dotGitFile} unreadable: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+function inspect(p) {
+  try {
+    let cur = path.resolve(p);
+    for (let i = 0; i < 256; i++) {
+      const dotGit = path.join(cur, ".git");
+      let st;
+      try {
+        st = fs.statSync(dotGit);
+      } catch {
+        st = void 0;
+      }
+      if (st) return st.isFile() ? inspectDotGitFile(cur, dotGit) : { worktree: null };
+      const parent = path.dirname(cur);
+      if (parent === cur) return { worktree: null };
+      cur = parent;
+    }
+    return { worktree: null };
+  } catch {
+    return { worktree: null };
+  }
+}
+function isLinkedWorktreeGitFile(abs) {
+  try {
+    if (!fs.lstatSync(abs).isFile()) return false;
+    const gitdir = readGitdirPointer(path.dirname(abs), abs);
+    return !!gitdir && fs.statSync(path.join(gitdir, "commondir")).isFile();
+  } catch {
+    return false;
+  }
+}
+function findLinkedWorktree(p) {
+  return inspect(p).worktree;
+}
+function canonicalizeWorktreePath(p) {
+  const abs = path.resolve(p);
+  const worktree = findLinkedWorktree(abs);
+  if (!worktree) return { path: abs, worktree: null };
+  return mapInto(abs, worktree);
+}
+function mapInto(abs, worktree) {
+  const rel = path.relative(worktree.worktreeTop, abs);
+  return { path: rel ? path.join(worktree.mainTop, rel) : worktree.mainTop, worktree };
+}
+function canonicalProjectDir(dir) {
+  const abs = path.resolve(dir);
+  const found = inspect(abs);
+  if (!found.worktree) return found.rejected ? { projectRoot: abs, worktree: null, rejected: found.rejected } : { projectRoot: abs, worktree: null };
+  const mapped = mapInto(abs, found.worktree);
+  let projectRoot = mapped.path;
+  try {
+    if (!fs.statSync(projectRoot).isDirectory()) projectRoot = mapped.worktree.mainTop;
+  } catch {
+    projectRoot = mapped.worktree.mainTop;
+  }
+  return { projectRoot, worktree: mapped.worktree };
+}
+function resolveHookRoots(eventCwd, env = process.env, cwd = () => process.cwd()) {
+  const claude = env.CLAUDE_PROJECT_DIR;
+  const explicit = env.DEEPPAIRING_PROJECT_ROOT;
+  if (!claude && explicit) return { projectRoot: explicit, workspaceRoot: explicit, worktree: null };
+  const raw = claude || (typeof eventCwd === "string" && eventCwd ? eventCwd : "") || cwd();
+  try {
+    const { projectRoot, worktree, rejected } = canonicalProjectDir(raw);
+    if (worktree) return { projectRoot, workspaceRoot: raw, worktree };
+    return rejected ? { projectRoot: raw, workspaceRoot: raw, worktree: null, rejected } : { projectRoot: raw, workspaceRoot: raw, worktree: null };
+  } catch {
+    return { projectRoot: raw, workspaceRoot: raw, worktree: null };
+  }
+}
 
 // src/cli/preflight-hook-core.ts
-import fs3 from "node:fs";
-import path3 from "node:path";
+import fs4 from "node:fs";
+import path4 from "node:path";
 
 // src/mcp/preflight-validator.ts
 function normalizeConceptKey(name) {
@@ -414,8 +549,8 @@ function sessionHasLivePreWorkCeremony(artifacts, isRecent = () => true) {
 }
 
 // src/hooks/hook-state.ts
-import fs from "node:fs";
-import path from "node:path";
+import fs2 from "node:fs";
+import path2 from "node:path";
 var FIRE_LOG_CAP = 50;
 var LOCK_STALE_MS = 5e3;
 var LOCK_SPIN_MS = 2;
@@ -439,14 +574,14 @@ function acquireHookStateLock(statePath, _now = Date.now()) {
   let brokeStale = false;
   for (; ; ) {
     try {
-      fs.closeSync(fs.openSync(lock, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY));
+      fs2.closeSync(fs2.openSync(lock, fs2.constants.O_CREAT | fs2.constants.O_EXCL | fs2.constants.O_WRONLY));
       return lock;
     } catch (error) {
       if (errnoCode(error) !== "EEXIST") return null;
       try {
-        if (!brokeStale && Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) {
+        if (!brokeStale && Date.now() - fs2.statSync(lock).mtimeMs > LOCK_STALE_MS) {
           brokeStale = true;
-          fs.unlinkSync(lock);
+          fs2.unlinkSync(lock);
           continue;
         }
       } catch (staleErr) {
@@ -460,14 +595,14 @@ function acquireHookStateLock(statePath, _now = Date.now()) {
 function releaseHookStateLock(lock) {
   if (!lock) return;
   try {
-    fs.unlinkSync(lock);
+    fs2.unlinkSync(lock);
   } catch {
   }
 }
 function readHookState(statePath) {
   let raw;
   try {
-    raw = fs.readFileSync(statePath, "utf-8");
+    raw = fs2.readFileSync(statePath, "utf-8");
   } catch {
     return { version: 1 };
   }
@@ -478,7 +613,7 @@ function readHookState(statePath) {
   }
   try {
     const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-    fs.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);
+    fs2.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);
   } catch {
   }
   return { version: 1 };
@@ -486,11 +621,11 @@ function readHookState(statePath) {
 function writeHookStateAtomic(statePath, state) {
   const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 10)}`;
   try {
-    fs.writeFileSync(tmp, JSON.stringify(state));
-    fs.renameSync(tmp, statePath);
+    fs2.writeFileSync(tmp, JSON.stringify(state));
+    fs2.renameSync(tmp, statePath);
   } catch (err) {
     try {
-      fs.unlinkSync(tmp);
+      fs2.unlinkSync(tmp);
     } catch {
     }
     throw err;
@@ -498,7 +633,7 @@ function writeHookStateAtomic(statePath, state) {
 }
 function appendHookFire(statePath, fire, mutate) {
   try {
-    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    fs2.mkdirSync(path2.dirname(statePath), { recursive: true });
     const lock = acquireHookStateLock(statePath);
     try {
       const state = readHookState(statePath);
@@ -515,13 +650,13 @@ function appendHookFire(statePath, fire, mutate) {
   }
 }
 function hookStatePath(projectRoot) {
-  return path.join(projectRoot, ".deeppairing", "hooks-state.json");
+  return path2.join(projectRoot, ".deeppairing", "hooks-state.json");
 }
 
 // src/guardrail-rules.ts
-import fs2 from "node:fs";
+import fs3 from "node:fs";
 import os from "node:os";
-import path2 from "node:path";
+import path3 from "node:path";
 var GUARDRAIL_RULES = [
   {
     category: "migrations",
@@ -585,9 +720,14 @@ function matchGuardrailPath(projectRoot, paths) {
   try {
     for (const raw of paths) {
       if (typeof raw !== "string" || !raw) continue;
-      const abs = path2.resolve(projectRoot, raw);
-      const rel = path2.relative(projectRoot, abs).replace(/\\/g, "/");
-      if (!rel || rel === ".." || rel.startsWith("../")) continue;
+      const abs = path3.resolve(projectRoot, raw);
+      let rel = path3.relative(projectRoot, abs).replace(/\\/g, "/");
+      if (!rel || rel === ".." || rel.startsWith("../") || path3.isAbsolute(rel)) {
+        const mapped = canonicalizeWorktreePath(abs);
+        if (!mapped.worktree) continue;
+        rel = path3.relative(projectRoot, mapped.path).replace(/\\/g, "/");
+        if (!rel || rel === ".." || rel.startsWith("../") || path3.isAbsolute(rel)) continue;
+      }
       const rule = ruleForRelPath(rel);
       if (rule) return { category: rule.category, path: rel, rationale: rule.rationale, note: rule.note };
     }
@@ -613,25 +753,25 @@ function canonicalForm(p) {
 }
 function realpathish(abs, hops = 0) {
   try {
-    return fs2.realpathSync.native(abs);
+    return fs3.realpathSync.native(abs);
   } catch {
   }
   if (hops < 8) {
     try {
-      const target = fs2.readlinkSync(abs);
-      return realpathish(path2.resolve(path2.dirname(abs), target), hops + 1);
+      const target = fs3.readlinkSync(abs);
+      return realpathish(path3.resolve(path3.dirname(abs), target), hops + 1);
     } catch {
     }
   }
   const rest = [];
   let cur = abs;
   for (let i = 0; i < 64; i++) {
-    const parent = path2.dirname(cur);
+    const parent = path3.dirname(cur);
     if (parent === cur) return null;
-    rest.unshift(path2.basename(cur));
+    rest.unshift(path3.basename(cur));
     cur = parent;
     try {
-      return path2.join(fs2.realpathSync.native(cur), ...rest);
+      return path3.join(fs3.realpathSync.native(cur), ...rest);
     } catch {
     }
   }
@@ -639,11 +779,11 @@ function realpathish(abs, hops = 0) {
 }
 function physicalResolve(base, spelling) {
   try {
-    const absolute = path2.isAbsolute(spelling);
-    const root = absolute ? path2.parse(spelling).root : "";
+    const absolute = path3.isAbsolute(spelling);
+    const root = absolute ? path3.parse(spelling).root : "";
     let cur = absolute ? root : base;
     try {
-      cur = fs2.realpathSync.native(cur);
+      cur = fs3.realpathSync.native(cur);
     } catch {
     }
     const segs = (absolute ? spelling.slice(root.length) : spelling).split(/[\\/]+/);
@@ -651,15 +791,15 @@ function physicalResolve(base, spelling) {
       const seg = segs[i];
       if (seg === "" || seg === ".") continue;
       if (seg === "..") {
-        cur = path2.dirname(cur);
+        cur = path3.dirname(cur);
         continue;
       }
-      cur = path2.join(cur, seg);
+      cur = path3.join(cur, seg);
       try {
-        cur = fs2.realpathSync.native(cur);
+        cur = fs3.realpathSync.native(cur);
       } catch {
         try {
-          if (fs2.lstatSync(cur).isSymbolicLink()) {
+          if (fs3.lstatSync(cur).isSymbolicLink()) {
             const followed = realpathish(cur);
             if (followed) cur = followed;
           }
@@ -680,14 +820,14 @@ function matchDeeppairingStatePath(projectRoot, raw) {
     const cleaned = slashed.split("/").map((seg) => seg === "." || seg === ".." || /^[A-Za-z]:$/.test(seg) ? seg : seg.replace(/:.*$/, "").replace(/[. ]+$/, "") || seg).join("/");
     const candidates = /* @__PURE__ */ new Set([slashed, cleaned]);
     const spellings = [slashed, cleaned];
-    if (/^~\//.test(cleaned)) spellings.push(path2.join(os.homedir(), cleaned.slice(2)));
+    if (/^~\//.test(cleaned)) spellings.push(path3.join(os.homedir(), cleaned.slice(2)));
     const ordered = [];
     for (const c of spellings) {
       const physical = physicalResolve(projectRoot, c);
       if (physical) ordered.push(physical);
     }
     for (const c of spellings) {
-      const abs = path2.resolve(projectRoot, c);
+      const abs = path3.resolve(projectRoot, c);
       ordered.push(abs);
       const real = realpathish(abs);
       if (real) ordered.push(real);
@@ -695,7 +835,12 @@ function matchDeeppairingStatePath(projectRoot, raw) {
     ordered.push(...candidates);
     for (const c of ordered) {
       const m = STATE_PATTERN.exec(canonicalForm(c));
-      if (!m) continue;
+      if (!m) {
+        if (path3.isAbsolute(c) && canonicalForm(c).split("/").pop() === ".git" && isLinkedWorktreeGitFile(c)) {
+          return { category: DEEPPAIRING_STATE_CATEGORY, path: displayPath(projectRoot, c), kind: "worktree-link" };
+        }
+        continue;
+      }
       const file = m[2] ?? "";
       const kind = m[3] ? "claude-settings" : file.startsWith("hooks/") ? "hooks" : file === "team.json" ? "team" : "preferences";
       return { category: DEEPPAIRING_STATE_CATEGORY, path: displayPath(projectRoot, c), kind };
@@ -708,13 +853,13 @@ function matchDeeppairingStatePath(projectRoot, raw) {
 function displayPath(projectRoot, candidate) {
   const roots = [projectRoot];
   try {
-    roots.push(fs2.realpathSync.native(projectRoot));
+    roots.push(fs3.realpathSync.native(projectRoot));
   } catch {
   }
-  const abs = path2.isAbsolute(candidate) ? candidate : path2.resolve(projectRoot, candidate);
+  const abs = path3.isAbsolute(candidate) ? candidate : path3.resolve(projectRoot, candidate);
   for (const root of roots) {
-    const rel = path2.relative(root, abs).replace(/\\/g, "/");
-    if (rel && rel !== ".." && !rel.startsWith("../") && !path2.isAbsolute(rel)) return rel;
+    const rel = path3.relative(root, abs).replace(/\\/g, "/");
+    if (rel && rel !== ".." && !rel.startsWith("../") && !path3.isAbsolute(rel)) return rel;
   }
   return abs.replace(/\\/g, "/");
 }
@@ -732,10 +877,10 @@ function toolInputTargetsDeeppairingState(projectRoot, toolInput) {
 
 // src/cli/preflight-hook-core.ts
 function readRejectedApproaches(projectRoot) {
-  const p = path3.join(projectRoot, ".deeppairing", "preferences.json");
+  const p = path4.join(projectRoot, ".deeppairing", "preferences.json");
   try {
-    if (!fs3.existsSync(p)) return [];
-    const raw = JSON.parse(fs3.readFileSync(p, "utf-8"));
+    if (!fs4.existsSync(p)) return [];
+    const raw = JSON.parse(fs4.readFileSync(p, "utf-8"));
     const list = raw?.rejectedApproaches;
     if (!Array.isArray(list)) return [];
     return list.map(
@@ -752,10 +897,10 @@ function readRejectedApproaches(projectRoot) {
   }
 }
 function readTeamPreferences(projectRoot) {
-  const p = path3.join(projectRoot, ".deeppairing", "team.json");
+  const p = path4.join(projectRoot, ".deeppairing", "team.json");
   try {
-    if (!fs3.existsSync(p)) return [];
-    const stripped = fs3.readFileSync(p, "utf-8").split("\n").map((l) => /^\s*\/\//.test(l) ? "" : l).join("\n");
+    if (!fs4.existsSync(p)) return [];
+    const stripped = fs4.readFileSync(p, "utf-8").split("\n").map((l) => /^\s*\/\//.test(l) ? "" : l).join("\n");
     const raw = JSON.parse(stripped);
     if (!raw || raw.version !== 1 || !Array.isArray(raw.preferences)) return [];
     const KINDS = /* @__PURE__ */ new Set(["require", "prefer", "avoid"]);
@@ -805,11 +950,11 @@ function withinWindow(t, now, maxAgeMs) {
 }
 var PER_PATH_DEDUP_CLASSES = /* @__PURE__ */ new Set(["migrations", "secrets"]);
 function readSessionCeremony(projectRoot, now = Date.now()) {
-  const sessionsDir = path3.join(projectRoot, ".deeppairing", "sessions");
+  const sessionsDir = path4.join(projectRoot, ".deeppairing", "sessions");
   let ids;
   try {
-    if (!fs3.existsSync(sessionsDir)) return { reachable: false, hasLiveCeremony: false };
-    ids = fs3.readdirSync(sessionsDir);
+    if (!fs4.existsSync(sessionsDir)) return { reachable: false, hasLiveCeremony: false };
+    ids = fs4.readdirSync(sessionsDir);
   } catch {
     return { reachable: false, hasLiveCeremony: false };
   }
@@ -820,10 +965,10 @@ function readSessionCeremony(projectRoot, now = Date.now()) {
     if (id.startsWith("demo_")) continue;
     let arr;
     try {
-      const af = path3.join(sessionsDir, id, "artifacts.json");
-      if (!fs3.existsSync(af)) continue;
+      const af = path4.join(sessionsDir, id, "artifacts.json");
+      if (!fs4.existsSync(af)) continue;
       storesSeen++;
-      arr = JSON.parse(fs3.readFileSync(af, "utf-8"));
+      arr = JSON.parse(fs4.readFileSync(af, "utf-8"));
       if (!Array.isArray(arr)) continue;
     } catch {
       continue;
@@ -842,8 +987,8 @@ function readSessionCeremony(projectRoot, now = Date.now()) {
 }
 function guardrailAskSuppressed(projectRoot, category, matchedPath, now = Date.now()) {
   try {
-    const sp = path3.join(projectRoot, ".deeppairing", "hooks-state.json");
-    const state = JSON.parse(fs3.readFileSync(sp, "utf-8"));
+    const sp = path4.join(projectRoot, ".deeppairing", "hooks-state.json");
+    const state = JSON.parse(fs4.readFileSync(sp, "utf-8"));
     const entry = state?.guardrailAsks?.[category];
     const at = PER_PATH_DEDUP_CLASSES.has(category) ? entry && typeof entry === "object" ? entry[matchedPath] : void 0 : entry;
     if (typeof at !== "string") return false;
@@ -911,8 +1056,8 @@ function evaluateGuardrailBackstop(args) {
   }
 }
 function deeppairingStateReason(match) {
-  const what = match.kind === "preferences" ? "It's where your stances live: an edit here can quietly retire one." : match.kind === "team" ? "It holds your team's committed rules: an edit here changes them for everyone." : match.kind === "hooks" ? "It's one of the hook scripts that make these prompts: an edit here can switch a prompt off." : "It's a Claude Code settings file that registers deepPairing's hooks: an edit here can remove these prompts.";
-  const whose = match.kind === "claude-settings" ? "It guards deepPairing's prompts." : "It's deepPairing's own state.";
+  const what = match.kind === "preferences" ? "It's where your stances live: an edit here can quietly retire one." : match.kind === "team" ? "It holds your team's committed rules: an edit here changes them for everyone." : match.kind === "hooks" ? "It's one of the hook scripts that make these prompts: an edit here can switch a prompt off." : match.kind === "worktree-link" ? "It's this git worktree's link to its main checkout, which decides whose stances apply here: an edit can point the worktree at an empty ledger." : "It's a Claude Code settings file that registers deepPairing's hooks: an edit here can remove these prompts.";
+  const whose = match.kind === "claude-settings" || match.kind === "worktree-link" ? "It guards deepPairing's prompts." : "It's deepPairing's own state.";
   return `Allow this edit to ${match.path}? ${whose} ${what} deepPairing always asks about this file, whatever else is going on.
 [DEEPPAIRING_STATE \u2014 agent: don't edit deepPairing's state files to change a stance, rule or hook. On a decline, ask your pair to make the change themselves.]`;
 }
@@ -961,12 +1106,12 @@ ${state.reason}`, source: result.block.source } : { fire: true, reason, source: 
 // src/cli/preflight-hook-entry.ts
 function ledgersPresent(root) {
   try {
-    const prefs = JSON.parse(fs4.readFileSync(path4.join(root, ".deeppairing", "preferences.json"), "utf-8"));
+    const prefs = JSON.parse(fs5.readFileSync(path5.join(root, ".deeppairing", "preferences.json"), "utf-8"));
     if (Array.isArray(prefs?.rejectedApproaches) && prefs.rejectedApproaches.length > 0) return true;
   } catch {
   }
   try {
-    if (fs4.existsSync(path4.join(root, ".deeppairing", "team.json"))) return true;
+    if (fs5.existsSync(path5.join(root, ".deeppairing", "team.json"))) return true;
   } catch {
   }
   return false;
@@ -981,7 +1126,9 @@ process.stdin.on("end", () => {
     const ev = JSON.parse(input || "{}");
     const toolName = ev.tool_name || "";
     const toolInput = ev.tool_input || ev.input || {};
-    const projectRoot = process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || ev.cwd || process.cwd();
+    const roots = resolveHookRoots(ev.cwd);
+    const projectRoot = roots.projectRoot;
+    if (roots.rejected) process.stderr.write("[deepPairing] git worktree link not honoured: " + roots.rejected + "\n");
     if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit" && toolName !== "NotebookEdit") {
       process.exit(0);
     }

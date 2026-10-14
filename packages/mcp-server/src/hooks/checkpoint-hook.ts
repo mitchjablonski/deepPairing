@@ -26,6 +26,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { deriveSessionId } from "../session-id.js";
+import { canonicalizeWorktreePath } from "../git-worktree.js";
 import { appendHookFire, hookErrorMessage, hookStatePath, resolveHookProjectRoot } from "./hook-state.js";
 
 const HOOK_NAME = "checkpoint";
@@ -196,7 +197,10 @@ export function runCheckpointHook(stdin: string, now: number = Date.now()): neve
     if (filePath !== "(unknown)" && filePath.trim()) {
       for (const sessionId of resolvedCandidateIds) {
         try {
-          covered = claimReceipt(dpDir, sessionId, path.resolve(projectRoot, filePath), now);
+          // #532 — the receipt key is canonical: an edit inside a git linked
+          // worktree keys on the same repo-relative path in the main checkout,
+          // exactly as file-store writes it (the root is the main checkout).
+          covered = claimReceipt(dpDir, sessionId, canonicalizeWorktreePath(path.resolve(projectRoot, filePath)).path, now);
         } catch {
           /* missing/corrupt receipt: try the next known lineage candidate */
         }

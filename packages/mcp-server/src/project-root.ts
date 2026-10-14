@@ -29,6 +29,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
+import { canonicalProjectDir, type LinkedWorktree } from "./git-worktree.js";
 
 /**
  * AA4 — short, deterministic identity for a projectRoot. Same shape as
@@ -127,6 +128,14 @@ export type ProjectRootSource = "CLAUDE_PROJECT_DIR" | "DEEPPAIRING_PROJECT_ROOT
 export interface ResolvedProjectRoot {
   projectRoot: string;
   source: ProjectRootSource;
+  /** #532 — set when the winning signal was a git LINKED WORKTREE and the
+   *  root was redirected to its main checkout (see git-worktree.ts).
+   *  `workspaceRoot` is the un-redirected directory the signal named. */
+  worktree?: LinkedWorktree & { workspaceRoot: string };
+  /** #536 review — a `.git` file that LOOKED like a linked worktree but failed
+   *  validation (forged/broken back-pointer, garbage). The root was NOT
+   *  redirected; this says why, for the wrapper log and doctor. */
+  worktreeRejected?: string;
 }
 
 export interface ResolveProjectRootOptions {
@@ -134,6 +143,21 @@ export interface ResolveProjectRootOptions {
   env?: NodeJS.ProcessEnv;
   /** Defaults to process.cwd(). Override for tests. */
   cwd?: () => string;
+}
+
+/**
+ * #532 — one deepPairing project per repository: a root that is (inside) a git
+ * linked worktree resolves to the MAIN CHECKOUT, so the ledger, daemon port,
+ * sessions and preferences are shared across the main checkout and all its
+ * worktrees (an empty per-worktree ledger used to fail the rejection gate
+ * open). An explicit DEEPPAIRING_PROJECT_ROOT is taken as written — never
+ * redirected. Non-git dirs, main checkouts, submodules and bare-repo
+ * worktrees are unchanged.
+ */
+function canonical(root: string, source: ProjectRootSource): ResolvedProjectRoot {
+  const { projectRoot, worktree, rejected } = canonicalProjectDir(root);
+  if (!worktree) return rejected ? { projectRoot: root, source, worktreeRejected: rejected } : { projectRoot: root, source };
+  return { projectRoot, source, worktree: { ...worktree, workspaceRoot: root } };
 }
 
 export function resolveProjectRoot(opts: ResolveProjectRootOptions = {}): ResolvedProjectRoot {
@@ -156,8 +180,9 @@ export function resolveProjectRoot(opts: ResolveProjectRootOptions = {}): Resolv
     } catch {
       continue;
     }
-    return { projectRoot: path.resolve(v), source: c.source };
+    if (c.source === "DEEPPAIRING_PROJECT_ROOT") return { projectRoot: path.resolve(v), source: c.source };
+    return canonical(path.resolve(v), c.source);
   }
 
-  return { projectRoot: path.resolve(cwd()), source: "cwd" };
+  return canonical(path.resolve(cwd()), "cwd");
 }

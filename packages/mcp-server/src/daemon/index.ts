@@ -26,12 +26,15 @@ import path from "node:path";
 import { runDaemonStartupSetup } from "../cli/setup-tasks.js";
 import { upsertProject } from "../store/project-registry.js";
 import { flushAllMetrics } from "../store/metrics-store.js";
+import { canonicalProjectDir } from "../git-worktree.js";
 import { preferredPortFor, BASE_PORT, PORT_SPAN } from "../project-root.js";
 import { cliInvocation } from "../cli-invocation.js";
 import { createDaemon } from "./create-daemon.js";
 
 const MAX_PORT_ATTEMPTS = 10;
-const projectRoot = process.env.DEEPPAIRING_PROJECT_ROOT ?? process.cwd();
+// #532 — the wrapper always passes the (already canonical) root; a bare
+// launch from a git linked worktree resolves to its main checkout too.
+const projectRoot = process.env.DEEPPAIRING_PROJECT_ROOT ?? canonicalProjectDir(process.cwd()).projectRoot;
 const dpDir = path.join(projectRoot, ".deeppairing");
 const logFile = path.join(dpDir, "daemon.log");
 const startedAt = new Date().toISOString();
