@@ -193,4 +193,68 @@ describe.skipIf(!hasGit)("#538 worktree without the main checkout's hooks", () =
 
     expect(await runDoctor(main, { workspaceDir: wt2, pluginManaged: false })).not.toContain(WARN);
   }, 120_000);
+
+  describe.skipIf(!fs.existsSync(initJs))("init in a worktree: .mcp.json, CLAUDE.md and settings backup", () => {
+    function runInit(cwd: string) {
+      const env: NodeJS.ProcessEnv = { ...process.env, HOME: path.join(base, "home"), DEEPPAIRING_NO_OPEN: "1", BROWSER: "none", FORCE_COLOR: "0", NO_COLOR: "1" };
+      delete env.CLAUDE_PROJECT_DIR; delete env.DEEPPAIRING_PROJECT_ROOT; delete env.CLAUDE_PLUGIN_ROOT;
+      const r = spawnSync(process.execPath, [initJs, "init", "--yes", "--no-demo"], { cwd, env, encoding: "utf8", timeout: 60_000 });
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      return r.stdout;
+    }
+    function repoWithInit(name: string, track: boolean): { repo: string; wt: string } {
+      const repo = path.join(base, name);
+      fs.mkdirSync(repo);
+      git(repo, "init", "-q", "-b", "main");
+      fs.writeFileSync(path.join(repo, "README.md"), "x\n");
+      git(repo, "add", "."); git(repo, "commit", "-q", "-m", "init");
+      runInit(repo);
+      if (track) {
+        git(repo, "add", ".mcp.json", "CLAUDE.md");
+        git(repo, "commit", "-q", "-m", "track dp config");
+      }
+      const w = path.join(base, `${name}-wt`);
+      git(repo, "worktree", "add", "-q", "-b", `${name}-b`, w);
+      return { repo, wt: w };
+    }
+
+    it("untracked in main: installs .mcp.json and the CLAUDE.md protocol into the worktree", () => {
+      const { repo, wt: w } = repoWithInit("untracked", false);
+      expect(fs.existsSync(path.join(w, ".mcp.json"))).toBe(false);
+      const mainMcp = fs.readFileSync(path.join(repo, ".mcp.json"), "utf8");
+      const mainMd = fs.readFileSync(path.join(repo, "CLAUDE.md"), "utf8");
+      const out = runInit(w);
+      expect(out).not.toContain(".mcp.json already has deeppairing configured");
+      expect(JSON.parse(fs.readFileSync(path.join(w, ".mcp.json"), "utf8")).mcpServers.deeppairing).toBeTruthy();
+      expect(fs.readFileSync(path.join(w, "CLAUDE.md"), "utf8")).toContain("<!-- deepPairing -->");
+      expect(fs.readFileSync(path.join(repo, ".mcp.json"), "utf8")).toBe(mainMcp);
+      expect(fs.readFileSync(path.join(repo, "CLAUDE.md"), "utf8")).toBe(mainMd);
+    });
+
+    it("tracked in main: the worktree already has them and init leaves them alone", () => {
+      const { wt: w } = repoWithInit("tracked", true);
+      const mcp = fs.readFileSync(path.join(w, ".mcp.json"), "utf8");
+      const md = fs.readFileSync(path.join(w, "CLAUDE.md"), "utf8");
+      const out = runInit(w);
+      expect(out).toContain(".mcp.json already has deeppairing configured");
+      expect(out).toContain("CLAUDE.md already has deepPairing instructions");
+      expect(fs.readFileSync(path.join(w, ".mcp.json"), "utf8")).toBe(mcp);
+      expect(fs.readFileSync(path.join(w, "CLAUDE.md"), "utf8")).toBe(md);
+    });
+
+    it("backs up an existing worktree settings file (exact bytes) before rewriting", () => {
+      const { wt: w } = repoWithInit("backup", false);
+      const settings = path.join(w, ".claude", "settings.local.json");
+      fs.mkdirSync(path.dirname(settings), { recursive: true });
+      const original = '{ "permissions": {"allow": ["Bash(ls)"]}  }\n';
+      fs.writeFileSync(settings, original);
+      runInit(w);
+      const backups = fs.readdirSync(path.dirname(settings)).filter((f) => f.startsWith("settings.local.json.deeppairing-backup-"));
+      expect(backups.length).toBeGreaterThan(0);
+      // One backup per rewrite; the first holds the user's exact original bytes.
+      expect(backups.map((f) => fs.readFileSync(path.join(path.dirname(settings), f), "utf8"))).toContain(original);
+      expect(fs.readFileSync(settings, "utf8")).toContain("Bash(ls)");
+      expect(fs.readFileSync(settings, "utf8")).toContain("preflight.mjs");
+    });
+  });
 });
