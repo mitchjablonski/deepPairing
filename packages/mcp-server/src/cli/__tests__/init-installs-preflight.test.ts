@@ -25,7 +25,7 @@ describe("init installs the PreToolUse rejection-gate hook (#170)", () => {
   });
 
   it("calls ensurePreflightHook(hookRoot) (the session project dir, #538) in the setup path", () => {
-    expect(initSrc).toMatch(/ensurePreflightHook\(cwd\)/);
+    expect(initSrc).toMatch(/ensurePreflightHook\(hookRoot\)/);
   });
 
   it("wires it alongside the Stop + checkpoint hooks (not inside the doctor command)", () => {
