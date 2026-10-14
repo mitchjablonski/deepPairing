@@ -24,15 +24,15 @@ describe("init installs the PreToolUse rejection-gate hook (#170)", () => {
     expect(initSrc).toMatch(/import[\s\S]+?ensurePreflightHook[\s\S]+?from "\.\/setup-tasks\.js"/);
   });
 
-  it("calls ensurePreflightHook(cwd) in the setup path", () => {
-    expect(initSrc).toMatch(/ensurePreflightHook\(cwd\)/);
+  it("calls ensurePreflightHook(hookRoot, the session project dir, #538) in the setup path", () => {
+    expect(initSrc).toMatch(/ensurePreflightHook\(hookRoot/);
   });
 
   it("wires it alongside the Stop + checkpoint hooks (not inside the doctor command)", () => {
     // All three ensure* calls should appear in main()'s setup sequence, in order.
-    const stopIdx = initSrc.indexOf("ensureStopHook(cwd)");
-    const ckptIdx = initSrc.indexOf("ensureCheckpointHook(cwd)");
-    const preIdx = initSrc.indexOf("ensurePreflightHook(cwd)");
+    const stopIdx = initSrc.indexOf("ensureStopHook(hookRoot");
+    const ckptIdx = initSrc.indexOf("ensureCheckpointHook(hookRoot");
+    const preIdx = initSrc.indexOf("ensurePreflightHook(hookRoot");
     expect(stopIdx).toBeGreaterThan(-1);
     expect(ckptIdx).toBeGreaterThan(stopIdx);
     expect(preIdx).toBeGreaterThan(ckptIdx);

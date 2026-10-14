@@ -6,6 +6,9 @@ import { AUTONOMY_POLICY_LINE, type AutonomyLevel } from "./autonomy-policy.js";
 import { PENDING_DRAFT_TYPES } from "./tools/types.js";
 import { requestSecretNote, requestScopeNote, artifactHumanLabel } from "./tools/check-feedback-delivery.js";
 import { cliInvocation } from "../cli-invocation.js";
+import { resolveProjectRoot } from "../project-root.js";
+import { isPluginManaged } from "../cli/setup-tasks.js";
+import { detectWorktreeMissingHooks } from "../worktree-hooks.js";
 
 /** N2 (#226 scope 4) — age in ms of the OLDEST pending draft, or null if no
  *  draft carries a parseable createdAt. Used to flag an abandoned-arc backlog. */
@@ -266,6 +269,8 @@ export async function buildFirstCallHint(
    * comment, whichever lane it sat in.
    */
   answeredCommentIds: readonly string[] = [],
+  /** #538 — test seam: the directory the agent works in / plugin-managed flag. */
+  env: { workspaceDir?: string; pluginManaged?: boolean } = {},
 ): Promise<string> {
   const answeringCommentIds = new Set(answeredCommentIds.filter((id) => typeof id === "string" && id.length > 0));
   // EE1 — three-tier ordering for assembly:
@@ -828,6 +833,20 @@ export async function buildFirstCallHint(
     if (guidance) obligationsParts.push(guidance);
   } catch {
     // Non-fatal — absent/unreadable preference falls back to "auto" (no guidance).
+  }
+
+  // #538 — init-installed hooks don't exist in a fresh git worktree. One short
+  // line (uncapped tier) so the agent tells the human; silent otherwise.
+  try {
+    const workspaceDir = env.workspaceDir ?? resolveProjectRoot().worktree?.workspaceRoot;
+    if (workspaceDir && !(env.pluginManaged ?? isPluginManaged())) {
+      const missing = detectWorktreeMissingHooks(workspaceDir);
+      if (missing) {
+        obligationsParts.push(`⚠ Tell the human: this is a git worktree of ${missing.mainTop} and deepPairing's hooks are installed only there, so the rejection gate and guardrails won't run here. They should run \`deeppairing init\` in this worktree or use the plugin install.`);
+      }
+    }
+  } catch {
+    // Non-fatal — detection is advisory.
   }
 
   // #148 — autonomy dial, same uncapped-tier pattern as detail density above.

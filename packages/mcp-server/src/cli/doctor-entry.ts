@@ -38,6 +38,7 @@ if (argv.length === 1 && ["--help", "-h", "help"].includes(argv[0] ?? "")) {
     yes: argv.includes("--yes") || argv.includes("-y"),
     protectSharedScopes: true,
     pluginManaged: true,
+    workspaceDir: resolved.worktree?.workspaceRoot,
   }).catch((err: unknown) => {
     console.error(`doctor failed: ${err instanceof Error ? err.message : String(err)}`);
     process.exitCode = 1;
