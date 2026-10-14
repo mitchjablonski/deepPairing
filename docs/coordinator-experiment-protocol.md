@@ -4,7 +4,7 @@ Status: **preparation only; no real trial has started**. Tracks
 [#540](https://github.com/mitchjablonski/deepPairing/issues/540). This first slice
 may merge independently; #540 remains open for the real trial and human
 observations. Neither this document nor a filled synthetic record authorizes a
-live paid model call, a harness launch, or a merge.
+live trial model call, a trial harness launch, or a merge.
 
 Use the [blank run record](coordinator-experiment-run-template.md). GitHub is
 authoritative for issue ownership, PR heads, reviews and merge state. Agora is
@@ -62,15 +62,26 @@ The record must name the authority and its scope; do not invent a universal
 requirement for a new human click when existing delegated authority applies.
 If scope or applicability is uncertain, stop for clarification.
 
-The root coordinator and Opus agree the protocol/configuration and select the
-real issue with its owner. Selection is **pending**, not delegated to this
-preparation slice. #531 is a separate CI task and cannot retrospectively count
-as this trial. Choose a real issue with two natural, non-overlapping worker
-scopes; do not manufacture parallelism or take over another owner's work.
+The root coordinator and Opus have selected the candidate **session-scoped hook
+behavior** work package: existing Claude-owned #534 (guardrail backstop scope)
+and #535 (Stop scope), with Opus leading two separate-worktree workers and a
+non-author reviewer. [The recorded refinement](https://github.com/mitchjablonski/deepPairing/issues/540#issuecomment-6158558465)
+explicitly changes the original single-issue wording to these two named child
+issues in one bounded package, not an open-ended backlog. Owner details and
+readiness are still pending; no workers have launched. Do not manufacture
+parallelism, add work, or take over another owner's implementation.
+
+Opus identifies PR #536/#532 and PR #539/#533 as prerequisites. Record their
+review owners, reviewed merged SHAs and relevance at readiness; landing them
+alone does not permit launch. The protocol/configuration, worker exclusions,
+attempt/time/usage limits, authority mapping and human-observation method must
+also be agreed. #531 is a separate, closed CI task and cannot retrospectively
+count as this trial.
 
 Freeze these fields in the run record:
 
-- Real issue and owner consent; repository, full base SHA, protocol commit,
+- Named cohesive work package/child issues and owner consent; repository,
+  full base SHA, protocol commit,
   product/plugin SHA, existing feature flags and effective autonomy settings.
 - Exact lead/worker/reviewer harness versions, model IDs, reasoning settings,
   launch configuration and tool/MCP allowlists. Unknown pricing or unavailable
@@ -78,7 +89,8 @@ Freeze these fields in the run record:
   subscription access is a zero-cost API or inventing unsupported auth.
 - One fresh lead session, two worker scopes, one independent reviewer; each
   role's actual observed runtime identity, attempt and owned worktree/path.
-- One issue only; a finite elapsed-time window, allowed tests, maximum worker
+- Only the two predeclared child issues; a finite elapsed-time window, allowed
+  tests, maximum worker
   attempts, interruption/revision exercises and cleanup scope. Set these before
   the run; do not extend them silently after a failure. Planned disruptions
   affect only experiment-owned processes and local work, never a real user's
@@ -95,7 +107,7 @@ Freeze these fields in the run record:
 Record pass, fail or unknown, with evidence and time. All required checks must
 pass before dispatch. Unknown is a blocker, not a silent default.
 
-1. Confirm the selected issue's owner, exact source/configuration SHAs and the
+1. Confirm the selected package's child-issue owners, exact source/configuration SHAs and the
    agreed limits. Resolve overlapping writers and relevant fix dependencies.
 2. Inspect the actual lead's MCP/tool inventory and real session registration.
    Record project root and session ID as observed, including fallback mode.

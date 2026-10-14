@@ -15,13 +15,19 @@ source-audit / simulated; unknown values stay unknown.
 
 - Record owner, single writer and approved evidence/access location:
 - Frozen setup agreement reference and date, containing the protocol commit,
-  selected real issue/owner consent, repository/full base and product/plugin
+  selected cohesive work package/child-issue owner consent, repository/full base and product/plugin
   SHAs, exact harness/model versions and sanitized launch/tool configuration:
 - Applicable human instruction/delegated policy; exact scope and reference:
 - Agreed finite time/attempt/test/usage limits, required asks, interruption
   burden, owned failure-exercise targets, observer and cleanup scope:
 - Trial launch authorized? Source/time (blank until applicable):
-- Selection status: pending / agreed; #531 is not this trial:
+- Candidate: session-scoped hook behavior, #534 + #535; Opus lead, two
+  separate-worktree workers and non-author reviewer. Recorded scope refinement:
+  [#540 decision](https://github.com/mitchjablonski/deepPairing/issues/540#issuecomment-6158558465).
+  Readiness/owner-detail status and launch authority (still pending):
+- Prerequisite review owners, reviewed merged SHAs and relevance for
+  PR #536/#532 and PR #539/#533; landing alone does not authorize launch:
+- #531 is a separate closed CI task, not this trial:
 - Related-fix decision reference: owner, issue/PR, reviewed SHA and
   needed / not needed / blocked rationale for #532/#533/#534/#535/#538:
 - Any configuration/version break or changed setup agreement:
@@ -33,7 +39,7 @@ section. Do not silently omit them or copy token values here.
 
 | Required check | Pass / fail / unknown | Evidence reference; actual SHA/time |
 | --- | --- | --- |
-| Issue selected with owner; setup/limits/authority agreed | | |
+| Named work package/child owners; setup/limits/authority agreed | | |
 | Lead DeepPairing inventory and actual project/session routing | | |
 | Worker A DeepPairing tool/MCP/credential exclusion verified | | |
 | Worker B DeepPairing tool/MCP/credential exclusion verified | | |
