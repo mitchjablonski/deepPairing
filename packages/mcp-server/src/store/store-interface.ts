@@ -90,6 +90,12 @@ export interface CreateArtifactParams {
    * title-prefix of the same milestone land on the ONE group key.
    */
   feature?: string | null;
+  /**
+   * #533 — the presenting agent's label (see Artifact.presentedBy). The store
+   * normalizes (trim, cap 80) and OMITS it when empty, so unlabeled artifacts
+   * stay byte-identical.
+   */
+  presentedBy?: string | null;
   // #162 — `secretWarnings` was REMOVED from this param shape: the store now
   // scans `content` authoritatively at create time (parity with addComment),
   // so callers no longer pre-compute or pass warnings — they read the result

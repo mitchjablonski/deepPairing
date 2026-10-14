@@ -25656,6 +25656,17 @@ var ArtifactSchema = external_exports.object({
    */
   featureId: external_exports.string().trim().max(80).optional(),
   /**
+   * #533 — WHO presented this artifact: a short agent label or role
+   * ("coordinator", "builder:auth-fix", "reviewer"), from the optional
+   * `presentedBy` param on the present_* tools (revise_artifact carries it onto
+   * the successor). Subagents share the parent's MCP connection and therefore
+   * the session bucket; this label is what lets `check_feedback({presentedBy})`
+   * return (and acknowledge) ONLY the feedback on that agent's own artifacts.
+   * Optional for backward compatibility; absent → the artifact is unowned and
+   * its feedback flows to any unfiltered poll, exactly as before.
+   */
+  presentedBy: external_exports.string().trim().min(1).max(80).optional(),
+  /**
    * #470 — the operation stamp of an artifact admitted once under a human's
    * stance allowance. Non-authorizing metadata (see stance-exception.ts).
    * Optional for backward compatibility; absent on every ordinary artifact.
@@ -31308,6 +31319,7 @@ function validateLogReasoningInput(args) {
 var ARTIFACT_TITLE = external_exports.string().min(1).describe("Descriptive title for this artifact (e.g. 'Authentication System Analysis')");
 var SERVED_REQUEST_ID = external_exports.string().optional().describe("If this artifact serves a human request (from check_feedback's 'Human requests' block), the request id (e.g. 'req_ab12cd34ef') \u2014 links it so the request clears");
 var FEATURE_TAG = external_exports.string().optional().describe("A short, STABLE tag for the feature/milestone this work belongs to (e.g. 'milestone-7', 'auth-rework'). Keep it IDENTICAL across every artifact of the same feature so they group together in the Features view \u2014 match the human's milestone naming if one exists; don't invent a new tag per run.");
+var PRESENTED_BY = external_exports.string().optional().describe("Optional label for WHO is presenting (e.g. 'coordinator', 'builder:auth-fix', 'reviewer'). Subagents: set it, then call check_feedback({presentedBy}) with the same label so you receive (and consume) only the feedback on your own artifacts.");
 var TOOL_INPUT_SCHEMAS = {
   // #206 (I1) — `feature` is advertised on EVERY artifact-creating tool (the
   // whole point of slice 2: tag at the source so grouping recall stops leaking).
@@ -31316,18 +31328,21 @@ var TOOL_INPUT_SCHEMAS = {
   // and threads it to createArtifact, which normalizes + persists featureId.
   present_findings: ResearchContentSchema.extend({
     title: ARTIFACT_TITLE.optional(),
-    feature: FEATURE_TAG
+    feature: FEATURE_TAG,
+    presentedBy: PRESENTED_BY
   }),
   present_options: PresentOptionsInputSchema.extend({
     relatedFindings: external_exports.array(external_exports.string()).optional().describe("Artifact IDs of findings that motivated this decision"),
-    feature: FEATURE_TAG
+    feature: FEATURE_TAG,
+    presentedBy: PRESENTED_BY
   }),
-  present_spec: SpecContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG }),
+  present_spec: SpecContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG, presentedBy: PRESENTED_BY }),
   present_plan: PlanContentSchema.extend({
     title: ARTIFACT_TITLE,
     relatedFindings: external_exports.array(external_exports.string()).optional().describe("Artifact IDs of findings that motivated this plan"),
     servedRequestId: SERVED_REQUEST_ID,
-    feature: FEATURE_TAG
+    feature: FEATURE_TAG,
+    presentedBy: PRESENTED_BY
   }),
   present_code_change: CodeChangeContentSchema.extend({
     before: external_exports.string().optional().describe("Code before the change \u2014 omit for created files (server defaults to empty)"),
@@ -31336,22 +31351,23 @@ var TOOL_INPUT_SCHEMAS = {
     // derived schema stopped advertising it: finding→code-change links died
     // of undiscoverability.
     relatedFindings: external_exports.array(external_exports.string()).optional().describe("Artifact IDs of findings that motivated this change"),
-    feature: FEATURE_TAG
+    feature: FEATURE_TAG,
+    presentedBy: PRESENTED_BY
   }),
   log_reasoning: ReasoningContentSchema,
   // #171/#175 — multi-file changeset. `reviewState` and `reviewReasons` are
   // HUMAN-driven (set via the review route), so they're omitted from the
   // advertised input — the agent never sends them.
-  present_changeset: ChangesetContentSchema.omit({ reviewState: true, reviewReasons: true }).extend({ title: ARTIFACT_TITLE, feature: FEATURE_TAG }),
+  present_changeset: ChangesetContentSchema.omit({ reviewState: true, reviewReasons: true }).extend({ title: ARTIFACT_TITLE, feature: FEATURE_TAG, presentedBy: PRESENTED_BY }),
   // #190 — the end-of-feature debrief. `summary` is the only required content
   // field (all others optional-tolerant); title is artifact-level.
-  present_debrief: DebriefContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG }),
+  present_debrief: DebriefContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG, presentedBy: PRESENTED_BY }),
   // #190 A2 — the read-only explainer walk-through. `title`, `overview`, and a
   // non-empty `sections[]` are the required core; `title` lives IN the content
   // schema (it doubles as the artifact title). G1 (#198b) adds the optional
   // servedRequestId linkage (the validator ignores it — it builds its own
   // content object from named fields — so it stays advertisement-only).
-  present_explainer: ExplainerContentSchema.extend({ servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG })
+  present_explainer: ExplainerContentSchema.extend({ servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG, presentedBy: PRESENTED_BY })
 };
 function toMcpInputSchema(schema) {
   const js = external_exports.toJSONSchema(schema, { io: "input" });
@@ -34148,7 +34164,9 @@ async function handlePresentFindings(ctx, args) {
       title: args?.title ?? "Research Findings",
       content,
       // #206 (I1) — the feature tag; the store normalizes it to a stable slug.
-      feature: args?.feature
+      feature: args?.feature,
+      // #533 — the presenting agent's label (check_feedback ownership filter).
+      presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : void 0
     });
   } catch (e) {
     dedup.abort?.();
@@ -34357,7 +34375,9 @@ async function handlePresentOptions(ctx, args) {
       title: artifactTitle,
       content,
       relatedArtifactIds: args?.relatedFindings,
-      feature: args?.feature
+      feature: args?.feature,
+      // #533 — the presenting agent's label (check_feedback ownership filter).
+      presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : void 0
     });
   } catch (e) {
     dedup.abort?.();
@@ -34441,6 +34461,239 @@ function sessionOwesDebrief(artifacts, isRecent = () => true) {
   const hasCeremony = artifacts.some((a) => CEREMONY_TYPES.includes(a?.type ?? "")) || artifacts.some((a) => a?.type === "debrief");
   const trivial = changesets === 0 && codeChanges === 1 && !hasCeremony;
   return !trivial;
+}
+
+// src/mcp/tools/feedback-ownership.ts
+import { performance as performance2 } from "node:perf_hooks";
+var LIVE_POLL_GRACE_MS = 60 * 1e3;
+function parseFeedbackFilter(args) {
+  const a = args ?? {};
+  const filter = {};
+  if (typeof a.presentedBy === "string" && a.presentedBy.trim()) {
+    filter.presentedBy = a.presentedBy.trim().slice(0, 80);
+  }
+  if (Array.isArray(a.artifactIds)) {
+    const ids = a.artifactIds.filter((x) => typeof x === "string" && x.length > 0);
+    if (ids.length > 0) filter.artifactIds = ids;
+  }
+  return filter.presentedBy || filter.artifactIds ? filter : null;
+}
+function consumerKey(filter) {
+  if (filter.presentedBy && !filter.artifactIds) return `by:${filter.presentedBy}`;
+  return JSON.stringify({ by: filter.presentedBy ?? null, ids: [...filter.artifactIds ?? []].sort() });
+}
+function consumerLabel(filter) {
+  if (filter.presentedBy) return filter.presentedBy;
+  return `artifacts ${(filter.artifactIds ?? []).join(", ")}`;
+}
+function beginConsumer(state, filter, now = Date.now()) {
+  const key = consumerKey(filter);
+  state.liveConsumers ??= {};
+  const c = state.liveConsumers[key] ??= { filter, inflight: 0, lastAt: now };
+  c.inflight++;
+  c.lastAt = now;
+  return key;
+}
+function endConsumer(state, key, now = Date.now()) {
+  const c = state.liveConsumers?.[key];
+  if (!c) return;
+  c.inflight = Math.max(0, c.inflight - 1);
+  c.lastAt = now;
+}
+function liveReservations(state, now = Date.now()) {
+  const out = [];
+  for (const c of Object.values(state.liveConsumers ?? {})) {
+    const since = now - c.lastAt;
+    if (c.inflight > 0) out.push({ label: consumerLabel(c.filter), filter: c.filter, releaseInMs: null });
+    else if (since <= LIVE_POLL_GRACE_MS) {
+      out.push({ label: consumerLabel(c.filter), filter: c.filter, releaseInMs: LIVE_POLL_GRACE_MS - since });
+    }
+  }
+  return out;
+}
+var PendingAcks = class {
+  comments = [];
+  decisions = [];
+  statusChanges = [];
+  renderFailures = [];
+  /** Flush every lane; a failing lane does not stop the others. Returns the
+   *  errors (an un-flushed lane simply re-delivers next poll). */
+  async flush(store) {
+    const errors = [];
+    const run2 = async (fn) => {
+      try {
+        await fn();
+      } catch (err) {
+        errors.push(err);
+      }
+    };
+    if (this.comments.length > 0) await run2(() => store.acknowledgeComments(this.comments));
+    if (this.decisions.length > 0) await run2(() => store.acknowledgeDecisions(this.decisions));
+    if (this.statusChanges.length > 0) await run2(() => store.acknowledgeStatusChanges(this.statusChanges));
+    if (this.renderFailures.length > 0) await run2(() => store.acknowledgeRenderFailures?.(this.renderFailures));
+    return errors;
+  }
+};
+function matchesFilter(a, byId, filter) {
+  if (filter.presentedBy && a.presentedBy !== filter.presentedBy) return false;
+  if (filter.artifactIds) {
+    const wanted = new Set(filter.artifactIds);
+    let cur = a;
+    const seen = /* @__PURE__ */ new Set();
+    while (cur && !seen.has(cur.id)) {
+      if (wanted.has(cur.id)) return true;
+      seen.add(cur.id);
+      cur = cur.parentId ? byId[cur.parentId] : void 0;
+    }
+    return false;
+  }
+  return true;
+}
+var claimsByStore = /* @__PURE__ */ new WeakMap();
+function feedbackStoreView(store, opts) {
+  const { filter, reservations, pending } = opts;
+  const scoping = filter !== null || reservations.length > 0;
+  const token = /* @__PURE__ */ Symbol("check_feedback poll");
+  let claims = claimsByStore.get(store);
+  if (!claims) {
+    claims = /* @__PURE__ */ new Map();
+    claimsByStore.set(store, claims);
+  }
+  const claimTable = claims;
+  const mine = [];
+  const held = {};
+  const allArtifacts = async () => await store.getArtifacts() ?? [];
+  const ownership = async () => {
+    const arts = await allArtifacts();
+    const byId = {};
+    for (const a of arts) byId[a.id] = a;
+    return (artifactId) => {
+      const a = artifactId ? byId[artifactId] : void 0;
+      if (filter) return a !== void 0 && matchesFilter(a, byId, filter) ? null : "";
+      if (!a) return null;
+      for (const r of reservations) if (matchesFilter(a, byId, r.filter)) return r.label;
+      return null;
+    };
+  };
+  const consumable = (lane, read, artifactOf, idOf, claim2) => async () => {
+    const rows = await read() ?? [];
+    const owner = scoping ? await ownership() : null;
+    const out = [];
+    for (const x of rows) {
+      if (owner) {
+        const heldBy = owner(artifactOf(x));
+        if (heldBy !== null) {
+          if (heldBy) {
+            const t = held[heldBy] ??= { comments: /* @__PURE__ */ new Set(), decisions: /* @__PURE__ */ new Set(), statusChanges: /* @__PURE__ */ new Set(), renderFailures: /* @__PURE__ */ new Set() };
+            t[lane].add(idOf(x));
+          }
+          continue;
+        }
+      }
+      const key = `${lane}:${idOf(x)}`;
+      const by = claimTable.get(key);
+      if (by && by !== token) continue;
+      if (claim2 && !by) {
+        claimTable.set(key, token);
+        mine.push(key);
+      }
+      out.push(x);
+    }
+    return out;
+  };
+  const commentsLane = (claim2) => consumable("comments", () => store.getUnacknowledgedComments(), (c) => c.target.artifactId, (c) => c.id, claim2);
+  const decisionsLane = (claim2) => consumable("decisions", () => store.getResolvedDecisions(), (d) => d.artifactId, (d) => d.decisionId, claim2);
+  const statusLane = (claim2) => consumable("statusChanges", () => store.getUnacknowledgedStatusChanges(), (a) => a.id, (a) => a.id, claim2);
+  const renderLane = (claim2) => consumable(
+    "renderFailures",
+    () => store.getUnacknowledgedRenderFailures?.(),
+    (f) => f.artifactId,
+    (f) => `${f.artifactId}/${f.visualId}`,
+    claim2
+  );
+  const overrides = {
+    getUnacknowledgedComments: commentsLane(true),
+    getResolvedDecisions: decisionsLane(true),
+    getUnacknowledgedStatusChanges: statusLane(true)
+  };
+  if (typeof store.getUnacknowledgedRenderFailures === "function") {
+    overrides.getUnacknowledgedRenderFailures = renderLane(true);
+  }
+  if (pending) {
+    overrides.acknowledgeComments = (ids) => void pending.comments.push(...ids);
+    overrides.acknowledgeDecisions = (ids) => void pending.decisions.push(...ids);
+    overrides.acknowledgeStatusChanges = (ids) => void pending.statusChanges.push(...ids);
+    if (typeof store.acknowledgeRenderFailures === "function") {
+      overrides.acknowledgeRenderFailures = (refs) => void pending.renderFailures.push(...refs);
+    }
+  }
+  if (scoping) {
+    const peekLanes = [commentsLane(false), decisionsLane(false), statusLane(false)];
+    if (typeof store.getUnacknowledgedRenderFailures === "function") peekLanes.push(renderLane(false));
+    overrides.waitForFeedback = async (timeoutMs = 3e4) => {
+      const deadline = performance2.now() + timeoutMs;
+      for (; ; ) {
+        const remaining = deadline - performance2.now();
+        if (remaining <= 0) return;
+        const started = performance2.now();
+        await store.waitForFeedback(Math.ceil(remaining));
+        if (performance2.now() >= deadline) return;
+        for (const peek of peekLanes) if ((await peek()).length > 0) return;
+        if (performance2.now() - started < 50) await new Promise((r) => setTimeout(r, 100));
+      }
+    };
+  }
+  if (filter) {
+    const own = (read, artifactOf) => async () => {
+      const rows = await read() ?? [];
+      const owner = await ownership();
+      return rows.filter((x) => owner(artifactOf(x)) === null);
+    };
+    overrides.getArtifacts = own(() => allArtifacts(), (a) => a.id);
+    overrides.getPendingDecisions = own(() => store.getPendingDecisions(), (d) => d.artifactId);
+    overrides.getPendingPlanReviews = own(() => store.getPendingPlanReviews(), (p) => p.artifactId);
+    overrides.getFullState = async () => {
+      const full = await store.getFullState();
+      const owner = await ownership();
+      return {
+        ...full,
+        artifacts: (full.artifacts ?? []).filter((a) => owner(a.id) === null),
+        comments: (full.comments ?? []).filter((c) => owner(c.target.artifactId) === null),
+        // Human requests are addressed to the session, not to one presenter.
+        requests: []
+      };
+    };
+  }
+  const view = new Proxy(store, {
+    get(target, prop2, _receiver) {
+      if (typeof prop2 === "string" && Object.prototype.hasOwnProperty.call(overrides, prop2)) {
+        return overrides[prop2];
+      }
+      const v2 = Reflect.get(target, prop2, target);
+      return typeof v2 === "function" ? v2.bind(target) : v2;
+    }
+  });
+  return {
+    store: view,
+    held,
+    release() {
+      for (const key of mine.splice(0)) {
+        if (claimTable.get(key) === token) claimTable.delete(key);
+      }
+    }
+  };
+}
+function describeHeld(t) {
+  const parts = [];
+  const add = (n, one, many) => {
+    if (n > 0) parts.push(`${n} ${n === 1 ? one : many}`);
+  };
+  add(t.decisions.size, "decision", "decisions");
+  add(t.comments.size, "comment", "comments");
+  add(t.statusChanges.size, "status change", "status changes");
+  add(t.renderFailures.size, "render failure", "render failures");
+  const total = t.decisions.size + t.comments.size + t.statusChanges.size + t.renderFailures.size;
+  return { total, text: parts.join(", ") };
 }
 
 // src/mcp/tools/check-feedback.ts
@@ -34527,6 +34780,109 @@ function scopeHasSignal(scope, signals) {
   }
 }
 async function handleCheckFeedback(ctx, args) {
+  const filter = parseFeedbackFilter(args);
+  const consumer = filter ? beginConsumer(ctx.state, filter) : null;
+  const reservations = filter ? [] : liveReservations(ctx.state);
+  const pending = new PendingAcks();
+  const view = feedbackStoreView(ctx.store, { filter, reservations, pending });
+  let state = ctx.state;
+  if (filter) {
+    ctx.state.feedbackConsumers ??= {};
+    state = ctx.state.feedbackConsumers[consumer] ??= {
+      checkFeedbackPollCount: 0,
+      reportedRejectedVerdicts: /* @__PURE__ */ new Set(),
+      reportedPlanVerdicts: /* @__PURE__ */ new Set()
+    };
+  }
+  const rejectedBefore = new Set(state.reportedRejectedVerdicts);
+  const plansBefore = new Set(state.reportedPlanVerdicts);
+  const rollback = () => {
+    state.reportedRejectedVerdicts.clear();
+    for (const id of rejectedBefore) state.reportedRejectedVerdicts.add(id);
+    state.reportedPlanVerdicts.clear();
+    for (const id of plansBefore) state.reportedPlanVerdicts.add(id);
+  };
+  try {
+    let result;
+    try {
+      result = await assembleCheckFeedback({ ...ctx, store: view.store, state }, args);
+    } catch (err) {
+      rollback();
+      throw err;
+    }
+    if (ctx.signal?.aborted) {
+      rollback();
+      return result;
+    }
+    const ackErrors = await pending.flush(ctx.store);
+    return annotateResult(result, { filter, reservations, held: view.held, ackErrors });
+  } finally {
+    view.release();
+    if (consumer) endConsumer(ctx.state, consumer);
+  }
+}
+function annotateResult(result, o) {
+  const { filter, reservations, held, ackErrors } = o;
+  const heldLines = [];
+  const heldStructured = [];
+  for (const [label, tally] of Object.entries(held)) {
+    const { total, text: text2 } = describeHeld(tally);
+    if (total === 0) continue;
+    const r = reservations.find((x) => x.label === label);
+    const releaseInSec = r?.releaseInMs == null ? null : Math.max(1, Math.ceil(r.releaseInMs / 1e3));
+    const when = releaseInSec === null ? `while its check_feedback is open, then ${LIVE_POLL_GRACE_MS / 1e3}s` : `released to you in ${releaseInSec}s if it doesn't poll again`;
+    heldLines.push(`${text2} held for "${label}" (${when})`);
+    heldStructured.push({
+      label,
+      count: total,
+      decisions: tally.decisions.size,
+      comments: tally.comments.size,
+      ...releaseInSec !== null ? { releaseInSec } : { inFlight: true }
+    });
+  }
+  const notes = [];
+  if (filter) {
+    notes.push(
+      `
+
+(Filtered to ${filter.presentedBy ? `presentedBy "${filter.presentedBy}"` : ""}${filter.presentedBy && filter.artifactIds ? " + " : ""}${filter.artifactIds ? `artifacts ${filter.artifactIds.join(", ")}` : ""} \u2014 only your own artifacts' feedback is shown and consumed; session directives, requests and other agents' feedback stay for their owner / the coordinator.)`
+    );
+  }
+  if (heldLines.length > 0) {
+    notes.push(
+      `
+
+\u23F8 HELD for a live subagent \u2014 not lost, not yours to act on yet: ${heldLines.join("; ")}. Its owner is polling for it; if the owner stops polling, it falls through to this unfiltered poll.`
+    );
+  }
+  if (ackErrors.length > 0) {
+    notes.push(
+      `
+
+\u26A0\uFE0F Acknowledging this delivery failed (${errorMessage(ackErrors[0])}) \u2014 some items above may be delivered AGAIN on the next check_feedback with the same ids. Skip any id you already acted on.`
+    );
+  }
+  if (notes.length === 0) return result;
+  let text = result.content[0]?.text ?? "";
+  let sc = result.structuredContent;
+  if (heldStructured.length > 0 && sc) {
+    const heldAction = `Something is held for a live subagent (${heldLines.join("; ")}) \u2014 don't treat this as clear; call check_feedback again.`;
+    if (sc.status === "proceed") {
+      text = text.replace("Suggested action: You may proceed with implementation.", `Suggested action: ${heldAction}`);
+      sc = { ...sc, status: "held", suggestedAction: heldAction };
+    }
+    sc = { ...sc, heldBackFor: heldStructured.map((h) => h.label), held: heldStructured };
+  }
+  if (sc && filter) sc = { ...sc, filter };
+  if (sc && ackErrors.length > 0) sc = { ...sc, ackFailed: true };
+  const [, ...rest] = result.content;
+  return {
+    ...result,
+    content: [{ type: "text", text: `${text}${notes.join("")}` }, ...rest],
+    ...sc ? { structuredContent: sc } : {}
+  };
+}
+async function assembleCheckFeedback(ctx, args) {
   const { store, server, broadcast, port } = ctx;
   let companionUrl = Number.isFinite(port) && port > 0 ? `http://localhost:${port}` : void 0;
   const portRecoveryNote = () => {
@@ -35520,7 +35876,10 @@ async function handleReviseArtifact(ctx, args) {
       // #206 (I1) — carry the feature tag onto v2 so a superseded artifact's
       // successor stays in the same feature group by its OWN tag, not only via
       // the parentId chain. The store re-normalizes (idempotent on a slug).
-      ...old.featureId ? { feature: old.featureId } : {}
+      ...old.featureId ? { feature: old.featureId } : {},
+      // #533 — the successor keeps its presenter, so a subagent filtering
+      // check_feedback by presentedBy still owns the feedback on v2.
+      ...old.presentedBy ? { presentedBy: old.presentedBy } : {}
     });
     await store.updateArtifactStatus(old.id, "superseded", "agent_supersede");
     await maybeUpdateTaskStatus(server, old.id, store);
@@ -36518,7 +36877,9 @@ async function handlePresentSpec(ctx, args) {
       type: "spec",
       title,
       content,
-      feature: args?.feature
+      feature: args?.feature,
+      // #533 — the presenting agent's label (check_feedback ownership filter).
+      presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : void 0
     });
   } catch (e) {
     dedup.abort?.();
@@ -36580,7 +36941,9 @@ async function handlePresentPlan(ctx, args) {
       title,
       content,
       relatedArtifactIds: args?.relatedFindings,
-      feature: args?.feature
+      feature: args?.feature,
+      // #533 — the presenting agent's label (check_feedback ownership filter).
+      presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : void 0
     });
   } catch (e) {
     dedup.abort?.();
@@ -36676,7 +37039,9 @@ async function handlePresentCodeChange(ctx, args) {
       content,
       agentReasoning: reasoning,
       relatedArtifactIds: args?.relatedFindings,
-      feature: args?.feature
+      feature: args?.feature,
+      // #533 — the presenting agent's label (check_feedback ownership filter).
+      presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : void 0
     });
   } catch (e) {
     dedup.abort?.();
@@ -36765,7 +37130,9 @@ async function handlePresentChangeset(ctx, args) {
       title,
       content,
       relatedArtifactIds: args?.relatedFindings,
-      feature: args?.feature
+      feature: args?.feature,
+      // #533 — the presenting agent's label (check_feedback ownership filter).
+      presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : void 0
     });
   } catch (e) {
     dedup.abort?.();
@@ -36833,7 +37200,9 @@ async function handlePresentDebrief(ctx, args) {
       title,
       content,
       relatedArtifactIds: args?.relatedFindings,
-      feature: args?.feature
+      feature: args?.feature,
+      // #533 — the presenting agent's label (check_feedback ownership filter).
+      presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : void 0
     });
   } catch (e) {
     dedup.abort?.();
@@ -36912,7 +37281,9 @@ async function handlePresentExplainer(ctx, args) {
       title,
       content,
       relatedArtifactIds,
-      feature: args?.feature
+      feature: args?.feature,
+      // #533 — the presenting agent's label (check_feedback ownership filter).
+      presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : void 0
     });
   } catch (e) {
     dedup.abort?.();
@@ -37295,7 +37666,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "check_feedback",
         annotations: { title: "Check feedback", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-        description: "Poll for the human's response to artifacts you've presented. The human responds in the companion UI; this tool waits up to 30s and returns status + any comments / decisions / plan verdicts.\n\n`waitFor` scopes which artifact-STATUS signal wakes the long-poll: 'decision' wakes on a resolved present_options, 'plan_review' on a plan status transition, 'artifact_status' on any artifact status change, 'comments'/'any' (default) on any feedback. A narrow scope ignores unrelated status transitions while you wait for the one you presented \u2014 but a human COMMENT (or question) ALWAYS wakes the poll and is ALWAYS returned regardless of scope: human input is never swallowed. So after present_options with waitFor='decision', a human who comments instead of picking is surfaced immediately (with the decision still flagged pending), not left polling forever.",
+        description: "Poll for the human's response to artifacts you've presented. The human responds in the companion UI; this tool waits up to 30s and returns status + any comments / decisions / plan verdicts.\n\n`waitFor` scopes which artifact-STATUS signal wakes the long-poll: 'decision' wakes on a resolved present_options, 'plan_review' on a plan status transition, 'artifact_status' on any artifact status change, 'comments'/'any' (default) on any feedback. A narrow scope ignores unrelated status transitions while you wait for the one you presented \u2014 but a human COMMENT (or question) ALWAYS wakes the poll and is ALWAYS returned regardless of scope: human input is never swallowed. So after present_options with waitFor='decision', a human who comments instead of picking is surfaced immediately (with the decision still flagged pending), not left polling forever.\n\nSubagents share this session: pass `presentedBy` (the same label you gave your present_* calls) and/or `artifactIds` to receive and consume ONLY the feedback on your own artifacts; everything else stays for its owner or the coordinator's unfiltered poll. While a filtered poller is live (polling, or polled in the last 60s) the unfiltered poll leaves its feedback alone and says so (`heldBackFor`, status 'held' instead of 'proceed'); once it stops polling, that feedback reaches the unfiltered poll. Delivery is at-least-once: every item carries a stable id (comment `id`, `decisionId`), and an item from a poll that errored or was cancelled comes back on the next poll with the same id \u2014 skip any id you already acted on.",
         inputSchema: {
           type: "object",
           properties: {
@@ -37303,6 +37674,15 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
               type: "string",
               enum: ["any", "comments", "decision", "plan_review", "artifact_status"],
               description: "Scope the poll to a specific feedback type. Default 'any'."
+            },
+            presentedBy: {
+              type: "string",
+              description: "Only feedback on artifacts presented with this presentedBy label (yours). Omit for the coordinator's unfiltered poll."
+            },
+            artifactIds: {
+              type: "array",
+              items: { type: "string" },
+              description: "Only feedback on these artifacts (and their revisions)."
             }
           }
         },
@@ -37314,8 +37694,8 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
           properties: {
             status: {
               type: "string",
-              enum: ["feedback", "waiting", "proceed"],
-              description: "feedback = something to act on below; waiting = reviews still pending; proceed = clear."
+              enum: ["feedback", "waiting", "proceed", "held"],
+              description: "feedback = something to act on below; waiting = reviews still pending; proceed = clear; held = (#533) nothing else owed, but feedback is held for a live subagent's own filtered poll (see heldBackFor/held) \u2014 not clear, poll again."
             },
             suggestedAction: {
               type: "string",
@@ -37324,6 +37704,10 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
             companionUrl: { type: "string", description: "I7 \u2014 the LIVE companion UI URL (daemon's real bound port). Give the human THIS exact URL; never guess a default like Vite's 5173." },
             serverVersion: { type: "string", description: "V-fix \u2014 the running deepPairing server version (same constant as MCP serverInfo). Read it to tell at a glance whether you're on stale code." },
             waitFor: { type: "string", description: "Present on a scoped still-waiting response." },
+            filter: { type: "object", description: "#533 \u2014 echo of the presentedBy/artifactIds filter on a filtered poll." },
+            heldBackFor: { type: "array", items: { type: "string" }, description: "#533 \u2014 live presenter labels whose feedback this unfiltered poll left for them." },
+            held: { type: "array", items: { type: "object" }, description: "#533 \u2014 per held-back consumer: label, counts, and releaseInSec (or inFlight)." },
+            ackFailed: { type: "boolean", description: "#533 \u2014 acknowledging this delivery failed; items may be re-delivered with the same ids." },
             summary: {
               type: "object",
               properties: {
@@ -37906,7 +38290,6 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
     }
     throw new Error(`Unknown prompt: ${name}`);
   });
-  const getPassiveFeedback2 = (excludeIds) => getPassiveFeedback(store, excludeIds);
   const presentIdempotency = new PresentIdempotencyRegistry();
   let firstToolCall = true;
   const HINT_EXCLUDED_TOOLS = /* @__PURE__ */ new Set([
@@ -37917,7 +38300,9 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
   let checkFeedbackPollCount = 0;
   const reportedRejectedVerdicts = /* @__PURE__ */ new Set();
   const reportedPlanVerdicts = /* @__PURE__ */ new Set();
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const liveConsumers = {};
+  const feedbackConsumers = {};
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const { name, arguments: rawArgs } = request.params;
     const args = rawArgs ?? {};
     let firstCallHint = "";
@@ -37928,6 +38313,19 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
     const tryElicit2 = (message) => tryElicit(server, message);
     const preflightRejectedApproaches2 = (toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], opts = {}) => preflightRejectedApproaches(store, broadcast, toolName, proposalStrings, proposalPaths, proposalConcepts, opts);
     const autoNameSession = (title) => sessionNameLatch.maybeName(title);
+    const passiveFilter = name.startsWith("present_") ? parseFeedbackFilter({ presentedBy: args?.presentedBy }) : null;
+    const scopedPassiveFeedback = async (excludeIds) => {
+      const view = feedbackStoreView(store, {
+        filter: passiveFilter,
+        reservations: passiveFilter ? [] : liveReservations({ liveConsumers }),
+        pending: null
+      });
+      try {
+        return await getPassiveFeedback(view.store, excludeIds);
+      } finally {
+        view.release();
+      }
+    };
     const ctx = {
       server,
       store,
@@ -37937,7 +38335,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
         tryElicit: tryElicit2,
         preflightRejectedApproaches: preflightRejectedApproaches2,
         autoNameSession,
-        getPassiveFeedback: getPassiveFeedback2,
+        getPassiveFeedback: scopedPassiveFeedback,
         beginPresentIdempotency: (toolName, contentHash) => presentIdempotency.begin(store, toolName, contentHash)
       },
       state: {
@@ -37948,10 +38346,13 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
           checkFeedbackPollCount = v2;
         },
         reportedRejectedVerdicts,
-        reportedPlanVerdicts
+        reportedPlanVerdicts,
+        liveConsumers,
+        feedbackConsumers
       },
       // B3 — per-request progress token for check_feedback's heartbeats.
-      progressToken: request.params._meta?.progressToken
+      progressToken: request.params._meta?.progressToken,
+      signal: extra?.signal
     };
     let result;
     try {

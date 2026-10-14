@@ -15362,6 +15362,17 @@ var ArtifactSchema = external_exports.object({
    */
   featureId: external_exports.string().trim().max(80).optional(),
   /**
+   * #533 — WHO presented this artifact: a short agent label or role
+   * ("coordinator", "builder:auth-fix", "reviewer"), from the optional
+   * `presentedBy` param on the present_* tools (revise_artifact carries it onto
+   * the successor). Subagents share the parent's MCP connection and therefore
+   * the session bucket; this label is what lets `check_feedback({presentedBy})`
+   * return (and acknowledge) ONLY the feedback on that agent's own artifacts.
+   * Optional for backward compatibility; absent → the artifact is unowned and
+   * its feedback flows to any unfiltered poll, exactly as before.
+   */
+  presentedBy: external_exports.string().trim().min(1).max(80).optional(),
+  /**
    * #470 — the operation stamp of an artifact admitted once under a human's
    * stance allowance. Non-authorizing metadata (see stance-exception.ts).
    * Optional for backward compatibility; absent on every ordinary artifact.
