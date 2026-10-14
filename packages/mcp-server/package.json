@@ -38,6 +38,7 @@
     "start": "tsx src/standalone.ts",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "test:e2e:attention-selection": "node scripts/check-attention-smoke-selection.mjs",
     "test:e2e:install": "playwright install chromium",
     "typecheck": "tsc --noEmit && tsc -p web/tsconfig.json --noEmit",
     "prepublishOnly": "node -e \"require('node:fs').copyFileSync('../../README.md', 'README.md')\" && pnpm build",
