@@ -1,163 +1,147 @@
 # Coordinator experiment run record (blank)
 
-Use with the [protocol](coordinator-experiment-protocol.md). Every field here is
-blank, not evidence that the experiment has run. Copy it to the agreed evidence
-location; keep sensitive configuration, transcripts and credentials out of the
-repository, GitHub and Agora. Publish only a reviewed, sanitized report. Mark
-every observation real-runtime / human-observed / human-reported / inferred /
-source-audit / simulated, as applicable; missing values stay unknown.
+Use with the [protocol](coordinator-experiment-protocol.md). Blank fields are
+not observations. The lead maintains this record; the human supplies/confirms
+the baseline, end observations and required decisions through the existing UI.
+Link frozen setup/evidence once instead of repeating it at every handoff.
+Measure bookkeeping effort separately; this is not another review card.
 
-The lead maintains this record and links immutable evidence once rather than
-requesting repeated human entries. The human fills or confirms only the baseline
-and human-observation section plus required decisions through the existing UI.
-Record the extra bookkeeping effort; the template is not an extra review card.
+Keep credentials, raw transcripts and sensitive configuration in the agreed
+restricted evidence location. Publish only a reviewed, sanitized report.
+Label evidence real-runtime / human-observed / human-reported / inferred /
+source-audit / simulated; unknown values stay unknown.
 
-## Setup agreement and bounds
+## One-time setup reference
 
-- Record owner; evidence location/access; single handoff-record writer:
-- Real issue/repository; issue owner consent/coordination reference:
-- Selection status (pending / agreed); why two scopes are naturally independent:
-- Full repository base SHA; protocol commit; product/plugin/source SHA:
-- Existing flags/autonomy and any explicitly agreed changes:
-- Root/Opus configuration agreement references and date:
-- Authorization source (human instruction / applicable delegated policy), exact
-  scope, limits and reference; any unresolved authority question:
-- Exact harness versions; model IDs/reasoning settings; sanitized launch config:
-- Finite elapsed window; maximum worker attempts; allowed tests; usage/spending
-  ceiling and how unknown pricing/usage will be handled:
-- Planned revision, worker-failure and handoff-interruption exercises; owned
-  targets; no real service/unrelated process/uncertain external-write exercise:
-- Required asks; decide-alone boundary; maximum interruption burden agreed
-  before the run; who can approve changed scope and current-head merge:
-- Human observer/reporting method; publication scope; cleanup owner/scope:
-- Actual launch authorization reference and time (blank until applicable):
+- Record owner, single writer and approved evidence/access location:
+- Frozen setup agreement reference and date, containing the protocol commit,
+  selected real issue/owner consent, repository/full base and product/plugin
+  SHAs, exact harness/model versions and sanitized launch/tool configuration:
+- Applicable human instruction/delegated policy; exact scope and reference:
+- Agreed finite time/attempt/test/usage limits, required asks, interruption
+  burden, owned failure-exercise targets, observer and cleanup scope:
+- Trial launch authorized? Source/time (blank until applicable):
+- Selection status: pending / agreed; #531 is not this trial:
+- Related-fix decision reference: owner, issue/PR, reviewed SHA and
+  needed / not needed / blocked rationale for #532/#533/#534/#535/#538:
+- Any configuration/version break or changed setup agreement:
 
-## Readiness and dependency record
+The setup reference holds the detailed fields from the protocol's freeze
+section. Do not silently omit them or copy token values here.
 
-| Check | Pass / fail / unknown | Evidence type/reference; checked SHA/time; owner |
+## Readiness receipt
+
+| Required check | Pass / fail / unknown | Evidence reference; actual SHA/time |
 | --- | --- | --- |
-| Real issue selected with owner; configuration and limits agreed | | |
-| Relevant #532/#533/#534/#535/#538 outcomes coordinated | | |
-| Lead MCP inventory and actual session/root routing observed | | |
-| Worker A excludes DeepPairing tools/MCP and credentials | | |
-| Worker B excludes DeepPairing tools/MCP and credentials | | |
-| Reviewer excludes DeepPairing tools/MCP and credentials | | |
-| Actual MCP inheritance/session behavior checked on approved harnesses | | |
-| Worktree/hook/policy coverage checked on trial SHA | | |
-| Scope/checkout ownership disjoint; no duplicate authoritative backlog | | |
-| Outside-drain record saved/re-readable; one writer; no secrets | | |
-| Reviewer independence and exact-head access confirmed | | |
-| Existing UI/artifact flow and human observation method ready | | |
+| Issue selected with owner; setup/limits/authority agreed | | |
+| Lead DeepPairing inventory and actual project/session routing | | |
+| Worker A DeepPairing tool/MCP/credential exclusion verified | | |
+| Worker B DeepPairing tool/MCP/credential exclusion verified | | |
+| Reviewer DeepPairing tool/MCP/credential exclusion verified | | |
+| Disjoint writers, worktree/hook/policy coverage and dependencies | | |
+| Saved outside-drain record; independent reviewer; observation method | | |
 
-For each related fix: record owner, issue/PR, reviewed commit, needed / not
-needed / blocked and reason. Do not mark a source audit or simulation as a
-runtime inheritance check; required unknowns block dispatch.
+- Optional MCP inheritance/attribution probe: not applicable / separately in
+  scope. Exclusion evidence or agreed real-runtime probe/result:
+- Any hook `agent_id` used, separately from MCP caller/connection identity:
+- Missing evidence/blocker and stop/reconciliation decision:
 
-## Observed identity and scope map
+Required unknowns block dispatch. Worker/reviewer MCP identity is not required
+when their connections are excluded. A source audit or simulation does not
+verify runtime parity or override a failed exclusion check.
 
-| Role | Actual harness/task/session ID (or unavailable) | Model/version | Task / attempt | Owned checkout/project root | Scope / forbidden writes |
-| --- | --- | --- | --- | --- | --- |
-| Lead | | | | | |
-| Worker A | | | | | |
-| Worker B | | | | | |
-| Independent reviewer | | | | | |
+## Identity and brief reference
 
-- Lead DeepPairing project root/session ID and split/fallback evidence:
-- Which IDs are harness-issued versus manual record labels:
-- Observed hook `agent_id`, separately from observed MCP caller/connection/
-  session identity; any shared-connection assumption still unverified:
-- Tool/MCP allowlist evidence; exclusions; credential handling (no token values):
-- Reviewer non-authorship/independence evidence:
-- Effective worker worktree/hook/project-policy limitations:
+| Role | Observed harness handle / task / attempt | Owned checkout and scoped handoff reference |
+| --- | --- | --- |
+| Lead | | |
+| Worker A | | |
+| Worker B | | |
+| Independent reviewer | | |
 
-Do not manufacture a provider-neutral runtime identity or set a fake
-`CLAUDE_CODE_SESSION_ID` for a different client. Each retry gets its own observed
-attempt/handle; do not erase the failed attempt or transfer a live writer.
+- Lead's observed DeepPairing project root/session and split/fallback evidence:
+- Which labels are manual record labels versus real harness-issued IDs:
+- Reviewer non-authorship evidence; effective worktree/policy limitations:
+- Spec artifact ID/version/title; authoritative status and source:
+- Requirements/acceptance; will-ask/decide-alone reference; `confidence` omitted:
 
-## Brief, asks and authority
+No spoofed Claude session ID or invented provider-neutral runtime identity.
+Retain each failed attempt; do not transfer a live writer to a new label.
 
-- Spec artifact ID/version/title, authoritative status and evidence:
-- Agreed requirements/acceptance; will-ask/decide-alone list:
-- Required decision inventory frozen before launch; later scope additions:
-- Human/delegated policy source and exact action/head it authorizes:
-- Artifact `confidence` omitted; no automatic approval claimed:
+## Handoff receipt (append one short block per attempt)
 
-| Decision/directive | Feedback/comment/decision IDs; artifact ID/version | Authoritative source/status | Received? Saved? | Required ask surfaced? | Human/policy authority and scope |
-| --- | --- | --- | --- | --- | --- |
-| | | | | | |
+- Task/attempt/target observed handle; scope/handoff text; full base SHA:
+- Known feedback/comment/decision IDs and artifact IDs/versions; authoritative
+  current state and authority reference:
+- Prepared/saved evidence and time; sent evidence and time; harness receipt
+  evidence and time (three distinct facts):
+- State: prepared / sent-unconfirmed / receipt-confirmed / completed /
+  cancelled / unknown; output commit/evidence if available:
+- Interruption/reconciliation: actual worker/checkout status, source records
+  inspected, current-state reconstruction versus unavailable delivery history:
+- Missing/ambiguous directive or authority reconfirmed by human? Reference:
+- Resume/cancel authority; duplicate-writer avoidance; uncertain external write
+  and existing recovery path, with no automatic retry:
 
-A status/comment acknowledgment is not a dispatch receipt. Record uncertainty
-when a response was never received/saved; artifact-question carryover does not
-prove that an ordinary directive was delivered.
+ACK is not a handoff receipt. Saving after `check_feedback` returns cannot
+repair an event never received/saved. Artifact-question carryover does not
+prove an ordinary directive's delivery; preserve unknown history.
 
-## Outside-drain handoff record (single writer)
+## Output and review receipt (one block per reviewed head)
 
-| Entry/order | Task/attempt; target actual handle | Full base/output SHA; scoped handoff/evidence reference | Known feedback IDs + artifact versions | Prepared/saved evidence | Sent + harness receipt evidence | Current state / uncertainty |
-| --- | --- | --- | --- | --- | --- | --- |
-| | | | | | | |
+- Worker task/attempt and exact output SHA; integrated PR/current head SHA:
+- Tests: commands/results and evidence; checks not run and reason:
+- Independent reviewer, exact reviewed SHA, verdict and receipt:
+- Findings/revision/new SHA; old-head authority invalidated; current-head
+  human/delegated authorization source, action and scope:
+- Merge readiness/blockers; actual merge/result (not inferred from approval):
 
-- Handoff text saved before dispatch where possible; persistence method/check:
-- Save failure, sent-unconfirmed task or unknown delivery (preserve as unknown):
-- Post-interruption authoritative records inspected; actual worker/checkout state:
-- Reconstructed current decisions versus unavailable delivery history:
-- Explicit human reconfirmation for missing/ambiguous directives or authority:
-- Resume/cancel decision and authority; how duplicate writers were avoided:
-- Uncertain external write and existing recovery route; no automatic retry:
+Keep worker completion, tests, independent agent review, human/delegated
+authority, merge readiness and actual merge distinct. A changed head needs
+re-evaluation and current-head authority; old CI or agent APPROVE is insufficient.
 
-## Exact output, review and merge map
+## Bounded exercise receipts
 
-| Task/attempt | Exact worker output SHA | Integrated PR/head SHA | Test commands/results/evidence | Independent reviewer + exact reviewed SHA/receipt | Findings/revision/new SHA | Human/delegated merge authority for current head | Merge ready? Actual merge/result |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| | | | | | | | |
+For each case, link its agreed owned target, actual event/evidence classification,
+recovery/remaining unknowns and stop/resume authority:
 
-Record these separately: worker completion; tests passed; independent agent
-approval; human authorization/applicable delegated policy; merge readiness;
-actual merge. A head change invalidates old-head merge authorization. Re-review
-and recheck according to the recorded policy; do not infer permission from an
-agent APPROVE, successful test, old CI run or artifact acknowledgment.
+- Revision after independent review:
+- Worker failure:
+- Interruption between feedback receipt and worker handoff:
 
-## Failure exercises and evidence classification
+Mark real-runtime / simulated / not run explicitly. No fixture, preparation
+PR or retrospective #531 history completes the real trial. Do not deliberately
+create an uncertain external write; record a naturally encountered one
+separately and stop automatic retry.
 
-| Case | Agreed owned target/bound | Real runtime / simulated / not run | Event and authoritative evidence | Recovery + remaining unknowns | Stop/resume authority |
-| --- | --- | --- | --- | --- | --- |
-| Revision after independent review | | | | | |
-| Worker failure | | | | | |
-| Interruption between feedback receipt and handoff | | | | | |
+## Baseline and end observations (human supplies/confirms)
 
-No fixture, agent-only simulation, this preparation, or retrospective #531
-history counts as the real trial. Do not deliberately create an uncertain
-external write to fill a case. Record any naturally encountered uncertain write
-separately and stop its automatic retry.
+- Normal reconciliation workflow/comparable real task; baseline availability,
+  evidence type and comparability limits:
+- Human before/after explanation of decisions, ownership and comprehension;
+  relevant diff read or not; unresolved confusion:
+- Required decisions surfaced/omitted/unresolved; missed/remaining blockers:
+- Human reconciliation actions/minutes; approvals/screens/interruptions
+  (required/nuisance); assistance and measurement method:
+- Elapsed/active/wait/recovery/bookkeeping time; estimates versus observations;
+  unknown/missing values:
+- Provider usage/cost source, coverage and unknown items (unknown is not zero):
+- Counterexamples, deviations and configuration/version breaks:
 
-## Baseline and human observations (human fills/confirms)
+Do not fill this section on the human's behalf or claim causal time savings.
 
-- Normal reconciliation workflow; comparable real task; evidence/source:
-- Baseline availability/comparability limits; observed timing versus estimates:
-- Human before-state: what decisions/ownership/comprehension were difficult:
-- Human after-state: what they understood, decided or still could not reconcile:
-- Whether the human read the relevant diff; evidence type and confirmation:
-- Required decisions surfaced / omitted / unresolved; blockers missed/remaining:
-- Human reconciliation actions/minutes and measurement method:
-- Approvals, screens, interruptions (required/nuisance), assistance and method:
-- Elapsed, active work, waits and recovery effort; unknown/missing values:
-- Provider usage/cost, actual source and coverage; unavailable items marked
-  unknown, not zero; no invented subscription-to-API cost equivalence:
-- Counterexamples, protocol deviations and configuration/version breaks:
+## Reviewed report
 
-## Reviewed report and next decision
-
-- Real run status: not run / attempted / completed; configuration/protocol SHA:
-- Existing changeset/debrief artifact IDs/versions; done-when outcomes:
-- Each criterion's evidence, missingness and predeclared interpretation:
-- Outcome: not run / go / narrow / stop / inconclusive; rationale:
-- Human-observed/reported evidence distinguished from source audit/simulation:
+- Real run status: not run / attempted / completed; exact configuration SHA:
+- Existing changeset/debrief IDs/versions and done-when outcomes:
+- Criteria/evidence/missingness; outcome not run / go / narrow / stop /
+  inconclusive, using the protocol's predeclared order:
 - Independent adversarial review receipt/head and resolved findings:
-- Publication and any merge authority; exact current head; actual result:
-- Bounded follow-up agreed, or stop; no automatic experiment expansion:
-- Owned-record/process/worktree cleanup completed or deferred safely:
-- #540 closure decision reference (blank until real trial/required observations
-  or an authorized real-trial stop report; preparation merge does not close it):
+- Sanitized publication and any merge authority; actual result:
+- Bounded follow-up or stop; owned cleanup completed/deferred:
+- #540 closure reference (blank until a real trial/required observations or
+  authorized real-trial stop report; preparation merge leaves it open):
 - #430/#434/delegate-first S0/PMF/screen-reader gates remain separate:
 
-Do not fill human observations on the human's behalf or turn missing costs,
-missed decisions, failed attempts or unanswered questions into successes.
+Missing costs, decisions, failed attempts and unanswered questions are not
+successes. A synthetic record is labeled synthetic and excluded from trial results.

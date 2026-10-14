@@ -107,14 +107,16 @@ pass before dispatch. Unknown is a blocker, not a silent default.
    when the agreed harness test is permitted. A prompt saying “don't poll” alone
    does not establish exclusion. If inheritance cannot be controlled or verified,
    stop; a separate harness with the verified configuration is a scope decision.
-4. Check actual MCP inheritance/session behavior on the approved harnesses
-   before attributing subagent output or claiming cross-harness parity. A source
-   audit, fixture or simulated check is labeled as such and cannot replace a
-   real runtime inventory. Whether a subagent shares a parent's MCP connection
-   or has a distinct MCP-visible identity is unverified until observed; a hook
-   payload's `agent_id` is not proof of the MCP caller's identity. These runtime
-   checks are themselves launches and
-   therefore wait for the setup agreement above.
+4. The lead-only trial requires verified lead routing and worker/reviewer tool
+   exclusion, not observation of nonexistent worker MCP connections. Mark the
+   worker MCP inheritance/attribution probe **not applicable** with exclusion
+   evidence when those connections are excluded. Require a real runtime probe
+   only if inherited MCP connections or cross-harness attribution are separately
+   agreed in scope; do not add them just to complete a checklist. In that case,
+   shared-parent versus distinct MCP-visible identity remains unverified until
+   observed, and a hook payload's `agent_id` does not prove MCP caller identity.
+   Source audits/fixtures are labeled and cannot establish runtime parity. All
+   runtime checks that require a launch wait for the setup agreement above.
 5. Verify each owned worktree's effective project/hook identity and relevant
    policy coverage, using read-only diagnostics on the chosen trial SHA. Do not
    redirect all workers into the lead's writable checkout to make UI grouping
