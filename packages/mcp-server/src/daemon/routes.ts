@@ -72,6 +72,8 @@ const CreateArtifactBody = z
     // normalizes it to a slug on arrival). .passthrough() would carry it
     // anyway, but declaring it keeps the internal contract honest.
     feature: z.string().optional(),
+    // #533 — the presenting agent's label (normalized by the store).
+    presentedBy: z.string().optional(),
   })
   .passthrough();
 const AddCommentBody = z

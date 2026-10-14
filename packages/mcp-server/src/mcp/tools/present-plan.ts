@@ -36,6 +36,8 @@ export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<To
       content,
       relatedArtifactIds: args?.relatedFindings,
       feature: args?.feature,
+      // #533 — the presenting agent's label (check_feedback ownership filter).
+      presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : undefined,
     });
   } catch (e) {
     dedup.abort?.();

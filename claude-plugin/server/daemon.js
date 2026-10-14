@@ -19707,6 +19707,17 @@ var ArtifactSchema = external_exports.object({
    */
   featureId: external_exports.string().trim().max(80).optional(),
   /**
+   * #533 — WHO presented this artifact: a short agent label or role
+   * ("coordinator", "builder:auth-fix", "reviewer"), from the optional
+   * `presentedBy` param on the present_* tools (revise_artifact carries it onto
+   * the successor). Subagents share the parent's MCP connection and therefore
+   * the session bucket; this label is what lets `check_feedback({presentedBy})`
+   * return (and acknowledge) ONLY the feedback on that agent's own artifacts.
+   * Optional for backward compatibility; absent → the artifact is unowned and
+   * its feedback flows to any unfiltered poll, exactly as before.
+   */
+  presentedBy: external_exports.string().trim().min(1).max(80).optional(),
+  /**
    * #470 — the operation stamp of an artifact admitted once under a human's
    * stance allowance. Non-authorizing metadata (see stance-exception.ts).
    * Optional for backward compatibility; absent on every ordinary artifact.
@@ -27450,6 +27461,7 @@ var FileStore = class _FileStore {
     this.assertAuthorizationReadable();
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const featureId = normalizeFeatureId(params.feature)?.slug;
+    const presentedBy = typeof params.presentedBy === "string" && params.presentedBy.trim() ? params.presentedBy.trim().slice(0, 80) : void 0;
     const secretWarnings = scanContentForSecrets(params.content);
     const artifact = {
       id: params.id,
@@ -27467,6 +27479,8 @@ var FileStore = class _FileStore {
       ...secretWarnings.length > 0 ? { secretWarnings } : {},
       // #206 (I1) — same omit-when-empty discipline for the feature tag.
       ...featureId ? { featureId } : {},
+      // #533 — the presenter label, same omit-when-empty discipline.
+      ...presentedBy ? { presentedBy } : {},
       createdAt: now,
       updatedAt: now
     };
@@ -34589,7 +34603,9 @@ var CreateArtifactBody = external_exports.object({
   // #206 (I1) — the raw feature tag rides the wire explicitly (the store
   // normalizes it to a slug on arrival). .passthrough() would carry it
   // anyway, but declaring it keeps the internal contract honest.
-  feature: external_exports.string().optional()
+  feature: external_exports.string().optional(),
+  // #533 — the presenting agent's label (normalized by the store).
+  presentedBy: external_exports.string().optional()
 }).passthrough();
 var AddCommentBody = external_exports.object({
   id: external_exports.string().min(1),

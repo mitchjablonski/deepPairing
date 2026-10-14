@@ -50,6 +50,8 @@ export async function handlePresentFindings(ctx: ToolContext, args: any): Promis
       content,
       // #206 (I1) — the feature tag; the store normalizes it to a stable slug.
       feature: args?.feature,
+      // #533 — the presenting agent's label (check_feedback ownership filter).
+      presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : undefined,
     });
   } catch (e) {
     dedup.abort?.();

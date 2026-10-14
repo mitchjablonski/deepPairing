@@ -1,5 +1,6 @@
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { IStore } from "../../store/store-interface.js";
+import type { LiveConsumer } from "./feedback-ownership.js";
 import type { PreflightHelperResult, PreflightOpts, PresentIdempotencyBegin } from "../tool-helpers.js";
 
 /**
@@ -115,6 +116,20 @@ export interface ToolState {
    *  the machine-readable status must DECAY to 'proceed' once reported, or a
    *  session with one reviewed plan reads status='feedback' forever. */
   reportedPlanVerdicts: Set<string>;
+  /** #533 — filtered check_feedback consumers (keyed by consumerKey) with
+   *  their in-flight count + last poll time. A live one has its feedback
+   *  reserved from unfiltered polls. Optional: absent = no filters in use. */
+  liveConsumers?: Record<string, LiveConsumer>;
+  /** #533 — per-filter report-once state, so a filtered consumer's verdicts
+   *  and poll counter are its own (keyed by consumerKey). */
+  feedbackConsumers?: Record<string, FeedbackConsumerState>;
+}
+
+/** #533 — the report-once state a FILTERED check_feedback consumer owns. */
+export interface FeedbackConsumerState {
+  checkFeedbackPollCount: number;
+  reportedRejectedVerdicts: Set<string>;
+  reportedPlanVerdicts: Set<string>;
 }
 
 export interface ToolContext {
@@ -126,4 +141,7 @@ export interface ToolContext {
   state: ToolState;
   /** B3 — per-request MCP progress token (check_feedback heartbeats). */
   progressToken?: string | number;
+  /** #533 — the request's cancellation signal. check_feedback acknowledges
+   *  nothing when the call was cancelled (its result never reaches the model). */
+  signal?: AbortSignal;
 }

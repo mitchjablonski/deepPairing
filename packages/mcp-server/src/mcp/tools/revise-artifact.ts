@@ -186,6 +186,9 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       // successor stays in the same feature group by its OWN tag, not only via
       // the parentId chain. The store re-normalizes (idempotent on a slug).
       ...(old.featureId ? { feature: old.featureId } : {}),
+      // #533 — the successor keeps its presenter, so a subagent filtering
+      // check_feedback by presentedBy still owns the feedback on v2.
+      ...(old.presentedBy ? { presentedBy: old.presentedBy } : {}),
     });
     await store.updateArtifactStatus(old.id, "superseded", "agent_supersede");
     await maybeUpdateTaskStatus(server, old.id, store);
