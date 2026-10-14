@@ -7,8 +7,8 @@ var __export = (target, all) => {
 };
 
 // src/cli/doctor.ts
-import fs12 from "node:fs";
-import path10 from "node:path";
+import fs13 from "node:fs";
+import path11 from "node:path";
 import readline from "node:readline";
 
 // src/daemon/lifecycle.ts
@@ -111,6 +111,9 @@ function inspect(p) {
   } catch {
     return { worktree: null };
   }
+}
+function findLinkedWorktree(p) {
+  return inspect(p).worktree;
 }
 function mapInto(abs, worktree) {
   const rel = path.relative(worktree.worktreeTop, abs);
@@ -1043,10 +1046,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path11) {
-  if (!path11)
+function getElementAtPath(obj, path12) {
+  if (!path12)
     return obj;
-  return path11.reduce((acc, key) => acc?.[key], obj);
+  return path12.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1455,11 +1458,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path11, issues) {
+function prefixIssues(path12, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path11);
+    iss.path.unshift(path12);
     return iss;
   });
 }
@@ -1606,16 +1609,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path11 = []) => {
+  const processError = (error52, path12 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path11, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path12, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path12, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path12, ...issue2.path]);
       } else {
-        const fullpath = [...path11, ...issue2.path];
+        const fullpath = [...path12, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -1642,17 +1645,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path11 = []) => {
+  const processError = (error52, path12 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path11, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path12, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path12, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path12, ...issue2.path]);
       } else {
-        const fullpath = [...path11, ...issue2.path];
+        const fullpath = [...path12, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -1684,8 +1687,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path11 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path11) {
+  const path12 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path12) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -14377,13 +14380,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path11 = ref.slice(1).split("/").filter(Boolean);
-  if (path11.length === 0) {
+  const path12 = ref.slice(1).split("/").filter(Boolean);
+  if (path12.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path11[0] === defsKey) {
-    const key = path11[1];
+  if (path12[0] === defsKey) {
+    const key = path12[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -17381,6 +17384,10 @@ async function checkClock(opts = {}) {
   return { ok: false, maxBackStepMs: maxBack, driftMs, wsl, messageLines: lines };
 }
 
+// src/worktree-hooks.ts
+import fs12 from "node:fs";
+import path10 from "node:path";
+
 // src/hooks/stance-allow-ask.ts
 var STANCE_ALLOW_ASK_REASON = "The agent is trying to grant a stance allowance from the shell. Only allow this if you asked for it.";
 var STANCE_ALLOW_ASK_REL_PATH = ".deeppairing/hooks/stance-allow-ask.sh";
@@ -18022,6 +18029,34 @@ function isPluginManaged() {
   }
 }
 
+// src/worktree-hooks.ts
+function hasInitHookRows(dir) {
+  for (const file2 of ["settings.local.json", "settings.json"]) {
+    let settings;
+    try {
+      settings = JSON.parse(fs12.readFileSync(path10.join(dir, ".claude", file2), "utf-8"));
+    } catch {
+      continue;
+    }
+    if (countDpEntries(settings, "Stop", HOOK_MARKERS.Stop) > 0 || countDpEntries(settings, "PostToolUse", HOOK_MARKERS.PostToolUse) > 0 || countDpEntries(settings, "PreToolUse", HOOK_MARKERS.PreToolUse) > 0) return true;
+  }
+  return false;
+}
+function detectWorktreeMissingHooks(workspaceDir) {
+  try {
+    const wt = findLinkedWorktree(workspaceDir);
+    if (!wt) return null;
+    if (!hasInitHookRows(wt.mainTop) || hasInitHookRows(wt.worktreeTop)) return null;
+    return { mainTop: wt.mainTop, worktreeTop: wt.worktreeTop };
+  } catch {
+    return null;
+  }
+}
+function worktreeMissingHooksMessage(d, conditional = false) {
+  const base = `This is a git worktree of ${d.mainTop}. deepPairing's hooks are installed in the main checkout but not here, so the rejection gate and guardrails won't run in this worktree.`;
+  return conditional ? `${base} If the deepPairing plugin is enabled for this project its hooks apply here; if not, run \`deeppairing init\` here, or use the plugin install.` : `${base} Run \`deeppairing init\` here, or use the plugin install.`;
+}
+
 // src/cli/doctor.ts
 function green(text) {
   return `\x1B[32m${text}\x1B[0m`;
@@ -18040,14 +18075,14 @@ function bold(text) {
 }
 async function doctor(cwd, opts = {}) {
   console.log(bold("\n  deepPairing doctor\n"));
-  const dpDir = path10.join(cwd, ".deeppairing");
-  const infoFile = path10.join(dpDir, "daemon.json");
-  const logFile = path10.join(dpDir, "daemon.log");
+  const dpDir = path11.join(cwd, ".deeppairing");
+  const infoFile = path11.join(dpDir, "daemon.json");
+  const logFile = path11.join(dpDir, "daemon.log");
   const fixes = [];
   let info = null;
-  if (fs12.existsSync(infoFile)) {
+  if (fs13.existsSync(infoFile)) {
     try {
-      info = JSON.parse(fs12.readFileSync(infoFile, "utf-8"));
+      info = JSON.parse(fs13.readFileSync(infoFile, "utf-8"));
       console.log(`  ${green("\u2713")} .deeppairing/daemon.json present`);
       console.log(`    ${dim("pid:")}       ${info?.pid ?? "?"}`);
       console.log(`    ${dim("port:")}      ${info?.port ?? "?"}`);
@@ -18058,7 +18093,7 @@ async function doctor(cwd, opts = {}) {
         label: "Delete malformed .deeppairing/daemon.json",
         apply: () => {
           try {
-            fs12.unlinkSync(infoFile);
+            fs13.unlinkSync(infoFile);
             return { ok: true, message: "Deleted" };
           } catch (e) {
             return { ok: false, message: errorMessage(e) };
@@ -18082,7 +18117,7 @@ async function doctor(cwd, opts = {}) {
         label: `Remove stale daemon.json (PID ${info.pid} is dead)`,
         apply: () => {
           try {
-            fs12.unlinkSync(infoFile);
+            fs13.unlinkSync(infoFile);
             return { ok: true, message: "Removed" };
           } catch (e) {
             return { ok: false, message: errorMessage(e) };
@@ -18255,9 +18290,9 @@ async function doctor(cwd, opts = {}) {
     }
   }
   let daemonFatalHint = null;
-  if (fs12.existsSync(logFile)) {
+  if (fs13.existsSync(logFile)) {
     try {
-      const content = fs12.readFileSync(logFile, "utf-8");
+      const content = fs13.readFileSync(logFile, "utf-8");
       const allLines = content.trim().split("\n");
       const lines = allLines.slice(-10);
       console.log(`
@@ -18285,9 +18320,9 @@ async function doctor(cwd, opts = {}) {
       for (const l of rest) console.log(`    ${dim(l)}`);
     }
   }
-  const gitignorePath = path10.join(cwd, ".gitignore");
-  if (fs12.existsSync(gitignorePath)) {
-    const content = fs12.readFileSync(gitignorePath, "utf-8");
+  const gitignorePath = path11.join(cwd, ".gitignore");
+  if (fs13.existsSync(gitignorePath)) {
+    const content = fs13.readFileSync(gitignorePath, "utf-8");
     if (content.includes(".deeppairing/") || content.includes(".deeppairing")) {
       console.log(`  ${green("\u2713")} .gitignore lists .deeppairing/`);
     } else {
@@ -18303,7 +18338,7 @@ async function doctor(cwd, opts = {}) {
   } else {
     console.log(`  ${dim("\xB7")} No .gitignore in this directory (skipping that check)`);
   }
-  const hookLocalPath = path10.join(cwd, ".claude", "settings.local.json");
+  const hookLocalPath = path11.join(cwd, ".claude", "settings.local.json");
   const pluginManaged = opts.pluginManaged ?? isPluginManaged();
   const pluginHookSource = opts.protectSharedScopes ? "declared by the installed plugin (activation not verified)" : "provided by the plugin";
   if (pluginManaged && opts.protectSharedScopes) {
@@ -18421,6 +18456,12 @@ async function doctor(cwd, opts = {}) {
         });
     }
   }
+  if (!pluginManaged || opts.protectSharedScopes) {
+    const wtMissing = detectWorktreeMissingHooks(opts.workspaceDir ?? cwd);
+    if (wtMissing) {
+      console.log(`  ${yellow("!")} ${worktreeMissingHooksMessage(wtMissing, pluginManaged)}`);
+    }
+  }
   const crossScopeStop = detectCrossScopeDpEntries(cwd, "Stop", HOOK_MARKERS.Stop).filter((s) => s.scope !== "project-local" && s.count > 0);
   const crossScopeCheckpoint = detectCrossScopeDpEntries(cwd, "PostToolUse", HOOK_MARKERS.PostToolUse).filter((s) => s.scope !== "project-local" && s.count > 0);
   if (crossScopeStop.length > 0) {
@@ -18496,7 +18537,7 @@ async function doctor(cwd, opts = {}) {
     console.log(`  ${dim(`\xB7 Could not check philosophy ledger health: ${err}`)}`);
   }
   try {
-    const globalDir = path10.dirname(getGlobalStore().getLedgerPath());
+    const globalDir = path11.dirname(getGlobalStore().getLedgerPath());
     const roots = [dpDir, globalDir];
     const rank = { clear: 0, doctor: 1, recover: 2, break: 3, lock: 4 };
     const locks = inspectLocks(roots).sort((a, b) => rank[a.kind] - rank[b.kind]);
@@ -18514,7 +18555,7 @@ async function doctor(cwd, opts = {}) {
         } else if (lock.state === "dead") {
           fixes.push({
             label: `Remove dead-owner ${what.toLowerCase()} ${lock.path}`,
-            requiresExplicitConfirmation: opts.protectSharedScopes && (lock.path === globalDir || lock.path.startsWith(globalDir + path10.sep)),
+            requiresExplicitConfirmation: opts.protectSharedScopes && (lock.path === globalDir || lock.path.startsWith(globalDir + path11.sep)),
             apply: () => {
               try {
                 const r = clearDeadLockFile(lock.path);
@@ -18633,7 +18674,8 @@ ${help}`);
     fix: argv.includes("--fix"),
     yes: argv.includes("--yes") || argv.includes("-y"),
     protectSharedScopes: true,
-    pluginManaged: true
+    pluginManaged: true,
+    workspaceDir: resolved.worktree?.workspaceRoot
   }).catch((err) => {
     console.error(`doctor failed: ${err instanceof Error ? err.message : String(err)}`);
     process.exitCode = 1;

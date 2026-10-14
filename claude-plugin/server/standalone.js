@@ -3227,8 +3227,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path14) {
-      let input = path14;
+    function removeDotSegments(path16) {
+      let input = path16;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3427,8 +3427,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path14, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path14 && path14 !== "/" ? path14 : void 0;
+        const [path16, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path16 && path16 !== "/" ? path16 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -6790,12 +6790,12 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list2, fs13, exportName) {
+    function addFormats(ajv, list2, fs15, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list2)
-        ajv.addFormat(f, fs13[f]);
+        ajv.addFormat(f, fs15[f]);
     }
     module.exports = exports = formatsPlugin;
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -7326,10 +7326,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj2, path14) {
-  if (!path14)
+function getElementAtPath(obj2, path16) {
+  if (!path16)
     return obj2;
-  return path14.reduce((acc, key) => acc?.[key], obj2);
+  return path16.reduce((acc, key) => acc?.[key], obj2);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -7738,11 +7738,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path14, issues) {
+function prefixIssues(path16, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path14);
+    iss.path.unshift(path16);
     return iss;
   });
 }
@@ -7889,16 +7889,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path14 = []) => {
+  const processError = (error52, path16 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path14, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path16, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path14, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path16, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path14, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path16, ...issue2.path]);
       } else {
-        const fullpath = [...path14, ...issue2.path];
+        const fullpath = [...path16, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -7925,17 +7925,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path14 = []) => {
+  const processError = (error52, path16 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path14, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path16, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path14, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path16, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path14, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path16, ...issue2.path]);
       } else {
-        const fullpath = [...path14, ...issue2.path];
+        const fullpath = [...path16, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -7967,8 +7967,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path14 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path14) {
+  const path16 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path16) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -20966,13 +20966,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path14 = ref.slice(1).split("/").filter(Boolean);
-  if (path14.length === 0) {
+  const path16 = ref.slice(1).split("/").filter(Boolean);
+  if (path16.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path14[0] === defsKey) {
-    const key = path14[1];
+  if (path16[0] === defsKey) {
+    const key = path16[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -29163,6 +29163,319 @@ function formatCliInvocation(args) {
   return `node packages/mcp-server/dist/cli/init.js${suffix}`;
 }
 
+// src/project-root.ts
+import path5 from "node:path";
+import fs6 from "node:fs";
+import crypto from "node:crypto";
+
+// src/git-worktree.ts
+import fs5 from "node:fs";
+import path4 from "node:path";
+function samePath(a, b) {
+  try {
+    return fs5.realpathSync.native(a) === fs5.realpathSync.native(b);
+  } catch {
+    return path4.resolve(a) === path4.resolve(b);
+  }
+}
+function isGitDir(dir) {
+  try {
+    return fs5.statSync(path4.join(dir, "HEAD")).isFile() && fs5.statSync(path4.join(dir, "objects")).isDirectory() && fs5.statSync(path4.join(dir, "refs")).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function readGitdirPointer(top, dotGitFile) {
+  const raw = fs5.readFileSync(dotGitFile, "utf8");
+  const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(raw);
+  return m ? path4.resolve(top, m[1]) : null;
+}
+function inspectDotGitFile(top, dotGitFile) {
+  try {
+    const gitdir = readGitdirPointer(top, dotGitFile);
+    if (!gitdir) return { worktree: null, rejected: `${dotGitFile} has no "gitdir:" line` };
+    let common;
+    try {
+      common = fs5.readFileSync(path4.join(gitdir, "commondir"), "utf8").trim();
+    } catch {
+      return { worktree: null };
+    }
+    if (!common) return { worktree: null, rejected: `${gitdir}/commondir is empty` };
+    const commonDir = path4.resolve(gitdir, common);
+    if (path4.basename(commonDir) !== ".git") return { worktree: null };
+    if (!isGitDir(commonDir)) return { worktree: null, rejected: `${commonDir} is not a git directory` };
+    try {
+      const config2 = fs5.readFileSync(path4.join(commonDir, "config"), "utf8");
+      if (/^[ \t]*bare[ \t]*=[ \t]*true[ \t]*$/im.test(config2)) return { worktree: null };
+    } catch {
+      return { worktree: null, rejected: `${commonDir} has no config` };
+    }
+    let back;
+    try {
+      back = fs5.readFileSync(path4.join(gitdir, "gitdir"), "utf8").trim();
+    } catch {
+      return { worktree: null, rejected: `${gitdir} has no gitdir back-reference` };
+    }
+    if (!back || !samePath(path4.resolve(gitdir, back), dotGitFile)) {
+      return { worktree: null, rejected: `${gitdir}/gitdir does not point back at ${dotGitFile}` };
+    }
+    if (!samePath(path4.dirname(gitdir), path4.join(commonDir, "worktrees"))) {
+      return { worktree: null, rejected: `${gitdir} is not under ${commonDir}/worktrees` };
+    }
+    const mainTop = path4.dirname(commonDir);
+    const mainDotGit = path4.join(mainTop, ".git");
+    if (!fs5.statSync(mainDotGit).isDirectory() || !samePath(mainDotGit, commonDir)) {
+      return { worktree: null, rejected: `${mainDotGit} is not the common dir ${commonDir}` };
+    }
+    if (samePath(mainTop, top)) return { worktree: null };
+    return { worktree: { worktreeTop: top, mainTop } };
+  } catch (err) {
+    return { worktree: null, rejected: `${dotGitFile} unreadable: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+function inspect(p) {
+  try {
+    let cur = path4.resolve(p);
+    for (let i = 0; i < 256; i++) {
+      const dotGit = path4.join(cur, ".git");
+      let st;
+      try {
+        st = fs5.statSync(dotGit);
+      } catch {
+        st = void 0;
+      }
+      if (st) return st.isFile() ? inspectDotGitFile(cur, dotGit) : { worktree: null };
+      const parent = path4.dirname(cur);
+      if (parent === cur) return { worktree: null };
+      cur = parent;
+    }
+    return { worktree: null };
+  } catch {
+    return { worktree: null };
+  }
+}
+function findLinkedWorktree(p) {
+  return inspect(p).worktree;
+}
+function mapInto(abs, worktree) {
+  const rel = path4.relative(worktree.worktreeTop, abs);
+  return { path: rel ? path4.join(worktree.mainTop, rel) : worktree.mainTop, worktree };
+}
+function canonicalProjectDir(dir) {
+  const abs = path4.resolve(dir);
+  const found = inspect(abs);
+  if (!found.worktree) return found.rejected ? { projectRoot: abs, worktree: null, rejected: found.rejected } : { projectRoot: abs, worktree: null };
+  const mapped = mapInto(abs, found.worktree);
+  let projectRoot2 = mapped.path;
+  try {
+    if (!fs5.statSync(projectRoot2).isDirectory()) projectRoot2 = mapped.worktree.mainTop;
+  } catch {
+    projectRoot2 = mapped.worktree.mainTop;
+  }
+  return { projectRoot: projectRoot2, worktree: mapped.worktree };
+}
+
+// src/project-root.ts
+function projectHashOf(projectRoot2) {
+  return crypto.createHash("sha256").update(projectRoot2).digest("hex").slice(0, 8);
+}
+var DEFAULT_BASE_PORT = 3847;
+var DEFAULT_PORT_SPAN = 128;
+function resolvePortWindow(env = process.env, warn = (msg) => {
+  try {
+    process.stderr.write(`${msg}
+`);
+  } catch {
+  }
+}) {
+  const readInt = (name, fallback, min, max) => {
+    const raw = env[name];
+    if (raw === void 0 || raw.trim() === "") return fallback;
+    const n = Number(raw.trim());
+    if (!Number.isInteger(n) || n < min || n > max) {
+      warn(`[deepPairing] ignoring ${name}="${raw}" \u2014 expected an integer in ${min}..${max}; using default ${fallback}.`);
+      return fallback;
+    }
+    return n;
+  };
+  const base = readInt("DEEPPAIRING_PORT_BASE", DEFAULT_BASE_PORT, 1024, 65e3);
+  let span = readInt("DEEPPAIRING_PORT_SPAN", DEFAULT_PORT_SPAN, 1, 4096);
+  if (base + span - 1 > 65535) {
+    const clamped = 65535 - base + 1;
+    warn(`[deepPairing] DEEPPAIRING_PORT_BASE=${base} + DEEPPAIRING_PORT_SPAN=${span} runs past port 65535 \u2014 clamping span to ${clamped}.`);
+    span = clamped;
+  }
+  return { base, span };
+}
+var portWindow = resolvePortWindow();
+var BASE_PORT = portWindow.base;
+var PORT_SPAN = portWindow.span;
+function preferredPortFor(projectRoot2) {
+  return BASE_PORT + parseInt(projectHashOf(projectRoot2), 16) % PORT_SPAN;
+}
+function canonical(root, source) {
+  const { projectRoot: projectRoot2, worktree, rejected } = canonicalProjectDir(root);
+  if (!worktree) return rejected ? { projectRoot: root, source, worktreeRejected: rejected } : { projectRoot: root, source };
+  return { projectRoot: projectRoot2, source, worktree: { ...worktree, workspaceRoot: root } };
+}
+function resolveProjectRoot(opts = {}) {
+  const env = opts.env ?? process.env;
+  const cwd = opts.cwd ?? (() => process.cwd());
+  const candidates = [
+    { value: env.CLAUDE_PROJECT_DIR, source: "CLAUDE_PROJECT_DIR" },
+    { value: env.DEEPPAIRING_PROJECT_ROOT, source: "DEEPPAIRING_PROJECT_ROOT" }
+  ];
+  for (const c of candidates) {
+    const v2 = c.value?.trim();
+    if (!v2) continue;
+    if (!path5.isAbsolute(v2)) continue;
+    try {
+      if (!fs6.statSync(v2).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    if (c.source === "DEEPPAIRING_PROJECT_ROOT") return { projectRoot: path5.resolve(v2), source: c.source };
+    return canonical(path5.resolve(v2), c.source);
+  }
+  return canonical(path5.resolve(cwd()), "cwd");
+}
+
+// src/hooks/stance-allow-ask.ts
+var STANCE_ALLOW_ASK_REASON = "The agent is trying to grant a stance allowance from the shell. Only allow this if you asked for it.";
+var STANCE_ALLOW_ASK_REL_PATH = ".deeppairing/hooks/stance-allow-ask.sh";
+var STANCE_ALLOW_ASK_COMMAND = `sh "$CLAUDE_PROJECT_DIR/${STANCE_ALLOW_ASK_REL_PATH}"`;
+var ASK_JSON = JSON.stringify({
+  hookSpecificOutput: {
+    hookEventName: "PreToolUse",
+    permissionDecision: "ask",
+    permissionDecisionReason: STANCE_ALLOW_ASK_REASON
+  }
+});
+var STANCE_ALLOW_ASK_SCRIPT = `#!/bin/sh
+# deepPairing \u2014 narrow Bash check for \`stance allow\` (#470). GENERATED, do not
+# edit: source is packages/mcp-server/src/hooks/stance-allow-ask.ts.
+# If the agent's Bash command contains "stance allow" (case-insensitive, any
+# whitespace between, after decoding JSON escapes), ask the human first.
+# Every other command: no output, exit 0. A substring check, not a parser.
+LC_ALL=C awk -v sq="'" '
+function hexval(h,   i, c, v) {
+  v = 0; h = tolower(h)
+  for (i = 1; i <= length(h); i++) {
+    c = index("0123456789abcdef", substr(h, i, 1))
+    if (c == 0) return -1
+    v = v * 16 + c - 1
+  }
+  return v
+}
+function decode(s, start,   out, i, n, ch, nx, v) {
+  out = ""; n = length(s)
+  for (i = start; i <= n; i++) {
+    ch = substr(s, i, 1)
+    if (ch == "\\"") return out
+    if (ch == "\\\\") {
+      i++; nx = substr(s, i, 1)
+      if (nx == "n") out = out "\\n"
+      else if (nx == "t") out = out "\\t"
+      else if (nx == "r") out = out "\\r"
+      else if (nx == "b" || nx == "f") out = out " "
+      else if (nx == "u") {
+        v = hexval(substr(s, i + 1, 4)); i += 4
+        if (v == 9 || v == 10 || v == 11 || v == 12 || v == 13 || v == 32 || v == 133 || v == 160) out = out " "
+        else if (v > 32 && v < 127) out = out sprintf("%c", v)
+        else out = out "?"
+      }
+      else out = out nx
+    } else out = out ch
+  }
+  return out
+}
+{ buf = buf $0 "\\n" }
+END {
+  rest = buf
+  while (match(rest, /"command"[ \\t\\r\\n]*:[ \\t\\r\\n]*"/)) {
+    cmd = tolower(decode(rest, RSTART + RLENGTH))
+    # Normalise what the shell would: a backslash-newline continuation and
+    # $IFS / \${IFS} are whitespace; quotes and backslashes only group or
+    # escape, so drop them (quoted words, al""low, \\allow).
+    gsub(/\\\\\\n/, " ", cmd)
+    gsub(/\\$\\{ifs\\}|\\$ifs/, " ", cmd)
+    gsub(sq, "", cmd); gsub(/"/, "", cmd); gsub(/\\\\/, "", cmd)
+    if (cmd ~ /(^|[^a-z0-9_])stance[ \\t\\r\\n\\v\\f]+allow([^a-z0-9_]|$)/ || cmd ~ /preflight-blocks\\/[^ \\t\\r\\n]*\\/exception/) { print ${JSON.stringify(ASK_JSON)}; exit 0 }
+    rest = substr(rest, RSTART + RLENGTH)
+  }
+}'
+exit 0
+`;
+
+// src/cli/setup-tasks.ts
+import fs7 from "node:fs";
+import path6 from "node:path";
+import { fileURLToPath as fileURLToPath2, pathToFileURL } from "node:url";
+function countDpEntries(settings, hookKey, marker) {
+  const entries = settings?.hooks?.[hookKey];
+  if (!Array.isArray(entries)) return 0;
+  let n = 0;
+  for (const e of entries) {
+    if (typeof e?.command === "string" && marker(e.command)) {
+      n++;
+      continue;
+    }
+    if (Array.isArray(e?.hooks) && e.hooks.some((h) => typeof h?.command === "string" && marker(h.command))) {
+      n++;
+      continue;
+    }
+  }
+  return n;
+}
+var HOOK_MARKERS = {
+  Stop: (cmd) => cmd.includes("deepPairing") || cmd.includes(".deeppairing/hooks/stop.mjs"),
+  PostToolUse: (cmd) => cmd.includes(".deeppairing/hooks/checkpoint.mjs"),
+  PreToolUse: (cmd) => cmd.includes(".deeppairing/hooks/preflight.mjs"),
+  /** #470 — the narrow Bash `ask` row. VERIFIED invocation, not a mention:
+   *  only `sh <path>/.deeppairing/hooks/stance-allow-ask.sh` (quoted or not,
+   *  `$CLAUDE_PROJECT_DIR`-anchored or relative) is ours (#503 review). */
+  StanceAllowAsk: (cmd) => /^sh\s+("?)(\$CLAUDE_PROJECT_DIR\/|\.\/)?\.deeppairing\/hooks\/stance-allow-ask\.sh\1$/.test(cmd.trim())
+};
+var STOP_SCRIPT_REL_PATH = ".deeppairing/hooks/stop.mjs";
+var STOP_HOOK_COMMAND = `node "$CLAUDE_PROJECT_DIR/${STOP_SCRIPT_REL_PATH}"`;
+var PREFLIGHT_SCRIPT_REL_PATH = ".deeppairing/hooks/preflight.mjs";
+var PREFLIGHT_HOOK_COMMAND = `node "$CLAUDE_PROJECT_DIR/${PREFLIGHT_SCRIPT_REL_PATH}"`;
+function isPluginManaged() {
+  if (process.env.CLAUDE_PLUGIN_ROOT) return true;
+  try {
+    const here = path6.dirname(fileURLToPath2(import.meta.url));
+    return fs7.existsSync(path6.join(here, "..", ".claude-plugin", "plugin.json"));
+  } catch {
+    return false;
+  }
+}
+
+// src/worktree-hooks.ts
+import fs8 from "node:fs";
+import path7 from "node:path";
+function hasInitHookRows(dir) {
+  for (const file2 of ["settings.local.json", "settings.json"]) {
+    let settings;
+    try {
+      settings = JSON.parse(fs8.readFileSync(path7.join(dir, ".claude", file2), "utf-8"));
+    } catch {
+      continue;
+    }
+    if (countDpEntries(settings, "Stop", HOOK_MARKERS.Stop) > 0 || countDpEntries(settings, "PostToolUse", HOOK_MARKERS.PostToolUse) > 0 || countDpEntries(settings, "PreToolUse", HOOK_MARKERS.PreToolUse) > 0) return true;
+  }
+  return false;
+}
+function detectWorktreeMissingHooks(workspaceDir) {
+  try {
+    const wt = findLinkedWorktree(workspaceDir);
+    if (!wt) return null;
+    if (!hasInitHookRows(wt.mainTop) || hasInitHookRows(wt.worktreeTop)) return null;
+    return { mainTop: wt.mainTop, worktreeTop: wt.worktreeTop };
+  } catch {
+    return null;
+  }
+}
+
 // src/mcp/first-call-hint.ts
 function staleDraftAgeMs(drafts) {
   const now = Date.now();
@@ -29258,7 +29571,7 @@ var AUTONOMY_HINT_AUTONOMOUS = [
 function autonomyHintFor(level) {
   return level === "balanced" ? AUTONOMY_HINT_BALANCED : level === "autonomous" ? AUTONOMY_HINT_AUTONOMOUS : AUTONOMY_HINT_SUPERVISED;
 }
-async function buildFirstCallHint(store, port, answeredCommentIds = []) {
+async function buildFirstCallHint(store, port, answeredCommentIds = [], env = {}) {
   const answeringCommentIds = new Set(answeredCommentIds.filter((id) => typeof id === "string" && id.length > 0));
   const obligationsParts = [];
   const policyParts = [];
@@ -29558,11 +29871,11 @@ Each is a continuation of an existing thread (parentCommentId points at one of y
   } catch {
   }
   try {
-    const fs13 = await import("node:fs");
-    const path14 = await import("node:path");
-    const claudeMd = path14.join(process.cwd(), "CLAUDE.md");
-    if (fs13.existsSync(claudeMd)) {
-      const content = fs13.readFileSync(claudeMd, "utf-8");
+    const fs15 = await import("node:fs");
+    const path16 = await import("node:path");
+    const claudeMd = path16.join(process.cwd(), "CLAUDE.md");
+    if (fs15.existsSync(claudeMd)) {
+      const content = fs15.readFileSync(claudeMd, "utf-8");
       if (!content.includes("<!-- deepPairing -->")) {
         contextualParts.push(
           "\n\u{1F4A1} Tip: run `" + cliInvocation("init") + "` to add the deepPairing protocol to CLAUDE.md so the agent follows it on every session (optional \u2014 the plugin's pairing-protocol skill covers most of this already)."
@@ -29581,6 +29894,16 @@ Each is a continuation of an existing thread (parentCommentId points at one of y
     const persona = await store.getPersona?.() ?? "auto";
     const guidance = personaHintFor(persona);
     if (guidance) obligationsParts.push(guidance);
+  } catch {
+  }
+  try {
+    const workspaceDir = env.workspaceDir ?? resolveProjectRoot().worktree?.workspaceRoot;
+    if (workspaceDir && !(env.pluginManaged ?? isPluginManaged())) {
+      const missing = detectWorktreeMissingHooks(workspaceDir);
+      if (missing) {
+        obligationsParts.push(`\u26A0 Tell the human: this is a git worktree of ${missing.mainTop} and deepPairing's hooks are installed only there, so the rejection gate and guardrails won't run here. They should run \`deeppairing init\` in this worktree or use the plugin install.`);
+      }
+    }
   } catch {
   }
   try {
@@ -30406,7 +30729,7 @@ function formatStyleWarnings(type, content) {
   located.sort((a, b) => bySeverity(a.v, b.v));
   const { shown } = topDistinctStyleLines(located, MAX_STYLE_LINES);
   const rest = located.length - shown.length;
-  const lines = shown.map(({ path: path14, v: v2 }) => `- ${path14}: ${v2.message}`);
+  const lines = shown.map(({ path: path16, v: v2 }) => `- ${path16}: ${v2.message}`);
   return styleBlock(result.score, lines, rest);
 }
 function formatProseStyleWarnings(label, text, mode = "strict") {
@@ -30420,7 +30743,7 @@ function formatProseStyleWarnings(label, text, mode = "strict") {
   const located = [...result.violations].sort(bySeverity).map((v2) => ({ path: label, v: v2 }));
   const { shown } = topDistinctStyleLines(located, MAX_STYLE_LINES);
   const rest = located.length - shown.length;
-  return styleBlock(result.score, shown.map(({ path: path14, v: v2 }) => `- ${path14}: ${v2.message}`), rest);
+  return styleBlock(result.score, shown.map(({ path: path16, v: v2 }) => `- ${path16}: ${v2.message}`), rest);
 }
 function styleBlock(score, lines, rest) {
   const tail = rest > 0 ? ` (+${rest} more)` : "";
@@ -30551,7 +30874,7 @@ async function revisionNudge(store, type, title, excludeId) {
 }
 
 // ../../node_modules/.pnpm/nanoid@5.1.7/node_modules/nanoid/index.js
-import { webcrypto as crypto } from "node:crypto";
+import { webcrypto as crypto2 } from "node:crypto";
 
 // ../../node_modules/.pnpm/nanoid@5.1.7/node_modules/nanoid/url-alphabet/index.js
 var urlAlphabet = "useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict";
@@ -30563,10 +30886,10 @@ var poolOffset;
 function fillPool(bytes) {
   if (!pool || pool.length < bytes) {
     pool = Buffer.allocUnsafe(bytes * POOL_SIZE_MULTIPLIER);
-    crypto.getRandomValues(pool);
+    crypto2.getRandomValues(pool);
     poolOffset = 0;
   } else if (poolOffset + bytes > pool.length) {
-    crypto.getRandomValues(pool);
+    crypto2.getRandomValues(pool);
     poolOffset = 0;
   }
   poolOffset += bytes;
@@ -30754,9 +31077,9 @@ function scalarTypeTag(i) {
 function isScalarBoundIssue(i) {
   return i.code === "too_big" || i.code === "too_small";
 }
-function receivedSize(input, path14) {
+function receivedSize(input, path16) {
   let cur = input;
-  for (const seg of path14) {
+  for (const seg of path16) {
     if (cur == null || typeof cur !== "object") return void 0;
     cur = cur[seg];
   }
@@ -30779,8 +31102,8 @@ function scalarIssueClause(i, input) {
   }
   return `${field2} (${scalarTypeTag(i)})`;
 }
-function collapsePath(path14) {
-  return path14.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
+function collapsePath(path16) {
+  return path16.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
 }
 function formatValidationError(toolName, err, example, input) {
   const raw = err.issues;
@@ -30806,9 +31129,9 @@ function formatValidationError(toolName, err, example, input) {
   }
   const groupArr = [...groups.values()];
   const issues = groupArr.slice(0, 5).map((g) => {
-    const path14 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
+    const path16 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
     const suffix = g.count > 1 ? ` (${g.count}\xD7)` : "";
-    return `  \u2022 ${path14}: ${g.first.message}${suffix}`;
+    return `  \u2022 ${path16}: ${g.first.message}${suffix}`;
   });
   const more = groupArr.length > 5 ? `
   \u2022 \u2026and ${groupArr.length - 5} more` : "";
@@ -31508,7 +31831,7 @@ async function handleLogReasoning(ctx, args) {
 }
 
 // src/mcp/tools/export-session.ts
-import path7 from "node:path";
+import path9 from "node:path";
 
 // src/replay/timeline.ts
 function buildTimeline(state) {
@@ -31982,7 +32305,7 @@ ${SIZE_CLIPPED_NOTE}` : "";
   return `${head}<pre class="code"${langAttr}><code>${fitted.text}${trunc}${sizeTrunc}</code></pre>`;
 }
 function diffBlock(file2, includeCode, projectRoot2) {
-  const path14 = sanitizePath(file2.path, projectRoot2);
+  const path16 = sanitizePath(file2.path, projectRoot2);
   const changeType = esc2(file2.changeType ?? "modified");
   const hunks = Array.isArray(file2.hunks) ? file2.hunks : [];
   const stats = file2.stats;
@@ -31999,7 +32322,7 @@ function diffBlock(file2, includeCode, projectRoot2) {
   const additions = stats?.additions ?? derived.additions;
   const deletions = stats?.deletions ?? derived.deletions;
   const statLine = `<span class="diffstat"><span class="add">+${additions}</span> <span class="del">\u2212${deletions}</span></span>`;
-  const header = `<div class="file-head"><code class="path">${esc2(path14)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
+  const header = `<div class="file-head"><code class="path">${esc2(path16)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
   if (!includeCode) {
     return `<div class="file">${header}<p class="redacted">Diff omitted from this export.</p></div>`;
   }
@@ -32118,9 +32441,9 @@ function evidenceBlock(evidence, includeCode, projectRoot2) {
     }
     if (!ev || typeof ev !== "object") continue;
     const e = ev;
-    const path14 = sanitizePath(e.filePath, projectRoot2);
+    const path16 = sanitizePath(e.filePath, projectRoot2);
     const range = e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null && e.lineEnd !== e.lineStart ? `-${e.lineEnd}` : ""}` : "";
-    let anchor = path14 ? `<p class="anchor"><code>${esc2(path14 + range)}</code></p>` : "";
+    let anchor = path16 ? `<p class="anchor"><code>${esc2(path16 + range)}</code></p>` : "";
     if (!anchor && e.locator && typeof e.locator.value === "string" && e.locator.value.length > 0) {
       const loc = e.locator;
       const label = loc.kind === "url" ? loc.href && loc.href.length > 0 ? `${loc.value} (${loc.href})` : loc.value : loc.kind === "charRange" ? `chars ${loc.value}` : loc.kind === "quote" ? `\u201C${loc.value}\u201D` : loc.value;
@@ -32277,9 +32600,9 @@ function decisionBody(a, ctx) {
 }
 function codeChangeBody(a, ctx) {
   const content = coerceCodeChangeContent(a.content);
-  const path14 = sanitizePath(content.filePath, ctx.projectRoot);
+  const path16 = sanitizePath(content.filePath, ctx.projectRoot);
   const parts = [
-    `<div class="file-head"><code class="path">${esc2(path14)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
+    `<div class="file-head"><code class="path">${esc2(path16)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
   ];
   if (content.reasoning) parts.push(`<p class="why">Why: ${renderInline(content.reasoning)}</p>`);
   if (content.concept?.name) {
@@ -33820,9 +34143,9 @@ function formatLearnings(state) {
 }
 
 // src/export/html-export.ts
-import crypto2 from "node:crypto";
-import fs5 from "node:fs";
-import path4 from "node:path";
+import crypto3 from "node:crypto";
+import fs9 from "node:fs";
+import path8 from "node:path";
 var MAX_TRACE_LOOKUPS = 200;
 async function gatherPreflightTraces(store, artifacts) {
   if (!store?.getPreflightTrace) return [];
@@ -33841,8 +34164,8 @@ async function gatherPreflightTraces(store, artifacts) {
 function readGuardrailFires(projectRoot2) {
   if (!projectRoot2) return [];
   try {
-    const p = path4.join(projectRoot2, ".deeppairing", "hooks-state.json");
-    const parsed = JSON.parse(fs5.readFileSync(p, "utf-8"));
+    const p = path8.join(projectRoot2, ".deeppairing", "hooks-state.json");
+    const parsed = JSON.parse(fs9.readFileSync(p, "utf-8"));
     const fires = Array.isArray(parsed?.fires) ? parsed.fires : [];
     const out = [];
     for (const raw of fires) {
@@ -33917,194 +34240,20 @@ async function assembleSessionHtml(state, options = {}) {
     ...renderOptions,
     secretLabels,
     secretCount,
-    projectName: renderOptions.projectName ?? (projectRoot2 ? path4.basename(projectRoot2) : void 0)
+    projectName: renderOptions.projectName ?? (projectRoot2 ? path8.basename(projectRoot2) : void 0)
   });
 }
 function htmlExportFileName(sessionId, generatedAt = (/* @__PURE__ */ new Date()).toISOString()) {
-  const token = crypto2.createHash("sha1").update(String(sessionId)).digest("hex").slice(0, 8);
+  const token = crypto3.createHash("sha1").update(String(sessionId)).digest("hex").slice(0, 8);
   const day = generatedAt.slice(0, 10);
   return `deeppairing-session-${day}-${token}.html`;
 }
 function writeSessionHtml(projectRoot2, sessionId, html, generatedAt) {
-  const dir = path4.join(projectRoot2, ".deeppairing", "exports");
-  fs5.mkdirSync(dir, { recursive: true });
-  const file2 = path4.join(dir, htmlExportFileName(sessionId, generatedAt));
-  fs5.writeFileSync(file2, html, "utf-8");
+  const dir = path8.join(projectRoot2, ".deeppairing", "exports");
+  fs9.mkdirSync(dir, { recursive: true });
+  const file2 = path8.join(dir, htmlExportFileName(sessionId, generatedAt));
+  fs9.writeFileSync(file2, html, "utf-8");
   return file2;
-}
-
-// src/project-root.ts
-import path6 from "node:path";
-import fs7 from "node:fs";
-import crypto3 from "node:crypto";
-
-// src/git-worktree.ts
-import fs6 from "node:fs";
-import path5 from "node:path";
-function samePath(a, b) {
-  try {
-    return fs6.realpathSync.native(a) === fs6.realpathSync.native(b);
-  } catch {
-    return path5.resolve(a) === path5.resolve(b);
-  }
-}
-function isGitDir(dir) {
-  try {
-    return fs6.statSync(path5.join(dir, "HEAD")).isFile() && fs6.statSync(path5.join(dir, "objects")).isDirectory() && fs6.statSync(path5.join(dir, "refs")).isDirectory();
-  } catch {
-    return false;
-  }
-}
-function readGitdirPointer(top, dotGitFile) {
-  const raw = fs6.readFileSync(dotGitFile, "utf8");
-  const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(raw);
-  return m ? path5.resolve(top, m[1]) : null;
-}
-function inspectDotGitFile(top, dotGitFile) {
-  try {
-    const gitdir = readGitdirPointer(top, dotGitFile);
-    if (!gitdir) return { worktree: null, rejected: `${dotGitFile} has no "gitdir:" line` };
-    let common;
-    try {
-      common = fs6.readFileSync(path5.join(gitdir, "commondir"), "utf8").trim();
-    } catch {
-      return { worktree: null };
-    }
-    if (!common) return { worktree: null, rejected: `${gitdir}/commondir is empty` };
-    const commonDir = path5.resolve(gitdir, common);
-    if (path5.basename(commonDir) !== ".git") return { worktree: null };
-    if (!isGitDir(commonDir)) return { worktree: null, rejected: `${commonDir} is not a git directory` };
-    try {
-      const config2 = fs6.readFileSync(path5.join(commonDir, "config"), "utf8");
-      if (/^[ \t]*bare[ \t]*=[ \t]*true[ \t]*$/im.test(config2)) return { worktree: null };
-    } catch {
-      return { worktree: null, rejected: `${commonDir} has no config` };
-    }
-    let back;
-    try {
-      back = fs6.readFileSync(path5.join(gitdir, "gitdir"), "utf8").trim();
-    } catch {
-      return { worktree: null, rejected: `${gitdir} has no gitdir back-reference` };
-    }
-    if (!back || !samePath(path5.resolve(gitdir, back), dotGitFile)) {
-      return { worktree: null, rejected: `${gitdir}/gitdir does not point back at ${dotGitFile}` };
-    }
-    if (!samePath(path5.dirname(gitdir), path5.join(commonDir, "worktrees"))) {
-      return { worktree: null, rejected: `${gitdir} is not under ${commonDir}/worktrees` };
-    }
-    const mainTop = path5.dirname(commonDir);
-    const mainDotGit = path5.join(mainTop, ".git");
-    if (!fs6.statSync(mainDotGit).isDirectory() || !samePath(mainDotGit, commonDir)) {
-      return { worktree: null, rejected: `${mainDotGit} is not the common dir ${commonDir}` };
-    }
-    if (samePath(mainTop, top)) return { worktree: null };
-    return { worktree: { worktreeTop: top, mainTop } };
-  } catch (err) {
-    return { worktree: null, rejected: `${dotGitFile} unreadable: ${err instanceof Error ? err.message : String(err)}` };
-  }
-}
-function inspect(p) {
-  try {
-    let cur = path5.resolve(p);
-    for (let i = 0; i < 256; i++) {
-      const dotGit = path5.join(cur, ".git");
-      let st;
-      try {
-        st = fs6.statSync(dotGit);
-      } catch {
-        st = void 0;
-      }
-      if (st) return st.isFile() ? inspectDotGitFile(cur, dotGit) : { worktree: null };
-      const parent = path5.dirname(cur);
-      if (parent === cur) return { worktree: null };
-      cur = parent;
-    }
-    return { worktree: null };
-  } catch {
-    return { worktree: null };
-  }
-}
-function mapInto(abs, worktree) {
-  const rel = path5.relative(worktree.worktreeTop, abs);
-  return { path: rel ? path5.join(worktree.mainTop, rel) : worktree.mainTop, worktree };
-}
-function canonicalProjectDir(dir) {
-  const abs = path5.resolve(dir);
-  const found = inspect(abs);
-  if (!found.worktree) return found.rejected ? { projectRoot: abs, worktree: null, rejected: found.rejected } : { projectRoot: abs, worktree: null };
-  const mapped = mapInto(abs, found.worktree);
-  let projectRoot2 = mapped.path;
-  try {
-    if (!fs6.statSync(projectRoot2).isDirectory()) projectRoot2 = mapped.worktree.mainTop;
-  } catch {
-    projectRoot2 = mapped.worktree.mainTop;
-  }
-  return { projectRoot: projectRoot2, worktree: mapped.worktree };
-}
-
-// src/project-root.ts
-function projectHashOf(projectRoot2) {
-  return crypto3.createHash("sha256").update(projectRoot2).digest("hex").slice(0, 8);
-}
-var DEFAULT_BASE_PORT = 3847;
-var DEFAULT_PORT_SPAN = 128;
-function resolvePortWindow(env = process.env, warn = (msg) => {
-  try {
-    process.stderr.write(`${msg}
-`);
-  } catch {
-  }
-}) {
-  const readInt = (name, fallback, min, max) => {
-    const raw = env[name];
-    if (raw === void 0 || raw.trim() === "") return fallback;
-    const n = Number(raw.trim());
-    if (!Number.isInteger(n) || n < min || n > max) {
-      warn(`[deepPairing] ignoring ${name}="${raw}" \u2014 expected an integer in ${min}..${max}; using default ${fallback}.`);
-      return fallback;
-    }
-    return n;
-  };
-  const base = readInt("DEEPPAIRING_PORT_BASE", DEFAULT_BASE_PORT, 1024, 65e3);
-  let span = readInt("DEEPPAIRING_PORT_SPAN", DEFAULT_PORT_SPAN, 1, 4096);
-  if (base + span - 1 > 65535) {
-    const clamped = 65535 - base + 1;
-    warn(`[deepPairing] DEEPPAIRING_PORT_BASE=${base} + DEEPPAIRING_PORT_SPAN=${span} runs past port 65535 \u2014 clamping span to ${clamped}.`);
-    span = clamped;
-  }
-  return { base, span };
-}
-var portWindow = resolvePortWindow();
-var BASE_PORT = portWindow.base;
-var PORT_SPAN = portWindow.span;
-function preferredPortFor(projectRoot2) {
-  return BASE_PORT + parseInt(projectHashOf(projectRoot2), 16) % PORT_SPAN;
-}
-function canonical(root, source) {
-  const { projectRoot: projectRoot2, worktree, rejected } = canonicalProjectDir(root);
-  if (!worktree) return rejected ? { projectRoot: root, source, worktreeRejected: rejected } : { projectRoot: root, source };
-  return { projectRoot: projectRoot2, source, worktree: { ...worktree, workspaceRoot: root } };
-}
-function resolveProjectRoot(opts = {}) {
-  const env = opts.env ?? process.env;
-  const cwd = opts.cwd ?? (() => process.cwd());
-  const candidates = [
-    { value: env.CLAUDE_PROJECT_DIR, source: "CLAUDE_PROJECT_DIR" },
-    { value: env.DEEPPAIRING_PROJECT_ROOT, source: "DEEPPAIRING_PROJECT_ROOT" }
-  ];
-  for (const c of candidates) {
-    const v2 = c.value?.trim();
-    if (!v2) continue;
-    if (!path6.isAbsolute(v2)) continue;
-    try {
-      if (!fs7.statSync(v2).isDirectory()) continue;
-    } catch {
-      continue;
-    }
-    if (c.source === "DEEPPAIRING_PROJECT_ROOT") return { projectRoot: path6.resolve(v2), source: c.source };
-    return canonical(path6.resolve(v2), c.source);
-  }
-  return canonical(path6.resolve(cwd()), "cwd");
 }
 
 // src/version.ts
@@ -34160,7 +34309,7 @@ async function handleExportSession(ctx, args) {
       secretCount: secretCountOf(secretMatches)
     });
     const file2 = writeSessionHtml(projectRoot2, state.sessionId, html, generatedAt);
-    const relative = path7.relative(projectRoot2, file2) || path7.basename(file2);
+    const relative = path9.relative(projectRoot2, file2) || path9.basename(file2);
     const kb = Math.max(1, Math.round(Buffer.byteLength(html, "utf-8") / 1024));
     const narrativeNote = narrative ? "Your narrative leads the page." : "No narrative was supplied, so the page opens with an auto-generated summary \u2014 compose one and re-export for a page a stranger can actually follow (see /deeppairing:share).";
     const secretWarning = secretMatches.length ? secretWarningFor(state, { narrative }) : null;
@@ -37613,22 +37762,22 @@ Read a full session via resource deeppairing://session/{id} or an artifact via d
 }
 
 // src/daemon/status.ts
-import fs8 from "node:fs";
-import path8 from "node:path";
+import fs10 from "node:fs";
+import path10 from "node:path";
 function findDaemonJson(startDir) {
-  let dir = path8.resolve(startDir);
+  let dir = path10.resolve(startDir);
   for (; ; ) {
-    const candidate = path8.join(dir, ".deeppairing", "daemon.json");
-    if (fs8.existsSync(candidate)) {
+    const candidate = path10.join(dir, ".deeppairing", "daemon.json");
+    if (fs10.existsSync(candidate)) {
       try {
-        const parsed = JSON.parse(fs8.readFileSync(candidate, "utf-8"));
+        const parsed = JSON.parse(fs10.readFileSync(candidate, "utf-8"));
         const info = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
         return { dir, info };
       } catch {
         return { dir, info: {} };
       }
     }
-    const parent = path8.dirname(dir);
+    const parent = path10.dirname(dir);
     if (parent === dir) return null;
     dir = parent;
   }
@@ -38545,40 +38694,40 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
 
 // src/daemon/lifecycle.ts
 import { spawn as spawn2, execFileSync } from "node:child_process";
-import fs10 from "node:fs";
+import fs12 from "node:fs";
 import net from "node:net";
-import path10 from "node:path";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
+import path12 from "node:path";
+import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // src/daemon/token.ts
-import fs9 from "node:fs";
+import fs11 from "node:fs";
 import os3 from "node:os";
-import path9 from "node:path";
+import path11 from "node:path";
 function runtimeBaseDir() {
   const xdg = process.env.XDG_RUNTIME_DIR?.trim();
-  if (xdg && path9.isAbsolute(xdg)) {
+  if (xdg && path11.isAbsolute(xdg)) {
     try {
-      if (fs9.statSync(xdg).isDirectory()) return path9.join(xdg, "deeppairing");
+      if (fs11.statSync(xdg).isDirectory()) return path11.join(xdg, "deeppairing");
     } catch {
     }
   }
-  return path9.join(os3.tmpdir(), "deeppairing");
+  return path11.join(os3.tmpdir(), "deeppairing");
 }
 function tokenSidecarPath(projectRoot2) {
-  return path9.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
+  return path11.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
 }
 function readTokenSidecar(projectRoot2) {
   try {
     const file2 = tokenSidecarPath(projectRoot2);
-    if (!fs9.existsSync(file2)) return null;
-    return JSON.parse(fs9.readFileSync(file2, "utf-8"));
+    if (!fs11.existsSync(file2)) return null;
+    return JSON.parse(fs11.readFileSync(file2, "utf-8"));
   } catch {
     return null;
   }
 }
 
 // src/daemon/lifecycle.ts
-var __thisDir2 = path10.dirname(fileURLToPath2(import.meta.url));
+var __thisDir2 = path12.dirname(fileURLToPath3(import.meta.url));
 var DAEMON_FILE = "daemon.json";
 var MAX_PORT_ATTEMPTS = 10;
 function logStale(msg) {
@@ -38589,13 +38738,13 @@ function logStale(msg) {
   }
 }
 function daemonInfoPath(projectRoot2) {
-  return path10.join(projectRoot2, ".deeppairing", DAEMON_FILE);
+  return path12.join(projectRoot2, ".deeppairing", DAEMON_FILE);
 }
 function readDaemonInfo(projectRoot2) {
   const infoPath = daemonInfoPath(projectRoot2);
   try {
-    if (!fs10.existsSync(infoPath)) return null;
-    const info = JSON.parse(fs10.readFileSync(infoPath, "utf-8"));
+    if (!fs12.existsSync(infoPath)) return null;
+    const info = JSON.parse(fs12.readFileSync(infoPath, "utf-8"));
     if (!info.authToken) {
       const sidecar = readTokenSidecar(projectRoot2);
       if (sidecar?.authToken && (sidecar.pid === void 0 || sidecar.pid === info.pid)) {
@@ -38679,7 +38828,7 @@ async function isDaemonRunning(projectRoot2, range = { start: preferredPortFor(p
   }
   if (info) {
     try {
-      fs10.unlinkSync(daemonInfoPath(projectRoot2));
+      fs12.unlinkSync(daemonInfoPath(projectRoot2));
     } catch {
     }
   }
@@ -38743,8 +38892,8 @@ function buildReadinessTimeoutMessage(args) {
     `deepPairing daemon did not become ready within ${timeoutMs}ms (probed this project's ports ${first}\u2013${last}).`,
     hint
   ];
-  const logPath = path10.join(projectRoot2, ".deeppairing", "daemon.log");
-  if (fs10.existsSync(logPath)) {
+  const logPath = path12.join(projectRoot2, ".deeppairing", "daemon.log");
+  if (fs12.existsSync(logPath)) {
     lines.push(`See ${logPath} for the daemon's own startup log.`);
   }
   lines.push(`To diagnose: ${cliInvocation("doctor")}`);
@@ -38786,8 +38935,8 @@ async function describePortHolders(projectRoot2) {
   return parts.join("\n");
 }
 function spawnDaemon(projectRoot2) {
-  const daemonScript = path10.join(__thisDir2, "../../dist/daemon/index.js");
-  const scriptPath = fs10.existsSync(daemonScript) ? daemonScript : path10.join(__thisDir2, "daemon.js");
+  const daemonScript = path12.join(__thisDir2, "../../dist/daemon/index.js");
+  const scriptPath = fs12.existsSync(daemonScript) ? daemonScript : path12.join(__thisDir2, "daemon.js");
   const child = spawn2("node", [scriptPath], {
     cwd: projectRoot2,
     detached: true,
@@ -38879,7 +39028,7 @@ function pidIsGone(pid) {
 function readProcessStartTime(pid) {
   try {
     if (process.platform === "linux") {
-      const stat = fs10.readFileSync(`/proc/${pid}/stat`, "utf-8");
+      const stat = fs12.readFileSync(`/proc/${pid}/stat`, "utf-8");
       const rparen = stat.lastIndexOf(")");
       if (rparen === -1) return null;
       const rest = stat.slice(rparen + 1).trim().split(/\s+/);
@@ -39162,11 +39311,11 @@ var DaemonClient = class {
   async refreshAuthTokenFromDaemonInfo() {
     if (!this.projectRoot) return false;
     try {
-      const fs13 = await import("node:fs");
-      const path14 = await import("node:path");
-      const infoPath = path14.join(this.projectRoot, ".deeppairing", "daemon.json");
-      if (!fs13.existsSync(infoPath)) return false;
-      const raw = fs13.readFileSync(infoPath, "utf-8");
+      const fs15 = await import("node:fs");
+      const path16 = await import("node:path");
+      const infoPath = path16.join(this.projectRoot, ".deeppairing", "daemon.json");
+      if (!fs15.existsSync(infoPath)) return false;
+      const raw = fs15.readFileSync(infoPath, "utf-8");
       const info = JSON.parse(raw);
       if (typeof info.authToken !== "string" || !info.authToken) return false;
       if (info.authToken === this.authToken) return false;
@@ -39220,7 +39369,7 @@ var DaemonClient = class {
    * with the stored meta and retry the original call. Other non-2xx
    * statuses throw with a structured error so caller bugs surface.
    */
-  async request(path14, init, isRetry = false) {
+  async request(path16, init, isRetry = false) {
     const extraHeaders = {};
     if (this.projectHash) extraHeaders["X-Project-Hash"] = this.projectHash;
     if (this.authToken) extraHeaders["Authorization"] = `Bearer ${this.authToken}`;
@@ -39231,12 +39380,12 @@ var DaemonClient = class {
     };
     let res;
     try {
-      res = await fetch(`${this.baseUrl}${path14}`, initWithHash);
+      res = await fetch(`${this.baseUrl}${path16}`, initWithHash);
     } catch (err2) {
       if (errorName(err2) === "AbortError" || errorName(err2) === "TimeoutError") throw err2;
       if (!isRetry) {
         const recovered = await this.recoverDaemonConnection();
-        if (recovered) return this.request(path14, init, true);
+        if (recovered) return this.request(path16, init, true);
       }
       throw new Error(
         `[deepPairing] daemon connection lost (likely after host sleep). Reconnect failed \u2014 run \`${cliInvocation("doctor")}\` to diagnose, or restart Claude Code.`
@@ -39251,7 +39400,7 @@ var DaemonClient = class {
     if (res.status === 401 && body?.code === "daemon_auth_required" && !isRetry) {
       const rotated = await this.refreshAuthTokenFromDaemonInfo();
       if (rotated) {
-        return this.request(path14, init, true);
+        return this.request(path16, init, true);
       }
     }
     if (res.status === 404 && body?.code === "session_not_registered" && !isRetry) {
@@ -39262,7 +39411,7 @@ var DaemonClient = class {
       }
       await this.register(this.lastRegisterMeta);
       void this.notifyRecovered();
-      return this.request(path14, init, true);
+      return this.request(path16, init, true);
     }
     const msg = body?.error ?? `request failed (${res.status})`;
     const err = new Error(`[deepPairing] ${msg}`);
@@ -39283,15 +39432,15 @@ var DaemonClient = class {
       );
     }
   }
-  async post(path14, body) {
-    return this.request(path14, {
+  async post(path16, body) {
+    return this.request(path16, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: body != null ? JSON.stringify(body) : void 0
     });
   }
-  async get(path14) {
-    return this.request(path14, {});
+  async get(path16) {
+    return this.request(path16, {});
   }
   // --- Session lifecycle ---
   /**
@@ -39691,9 +39840,9 @@ var DaemonClient = class {
    * 5xx from the daemon used to flow back as `data.results === undefined`
    * and the caller fell back to `[]` silently. Now non-2xx throws.
    */
-  async requestPublic(path14) {
+  async requestPublic(path16) {
     const init = this.projectHash ? { headers: { "X-Project-Hash": this.projectHash } } : {};
-    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path14}`, init);
+    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path16}`, init);
     if (res.ok) return res.json();
     let body = {};
     try {
@@ -39738,12 +39887,12 @@ var DaemonClient = class {
 };
 
 // src/store/project-registry.ts
-import fs11 from "node:fs";
+import fs13 from "node:fs";
 import os4 from "node:os";
-import path11 from "node:path";
+import path13 from "node:path";
 var REGISTRY_VERSION = 1;
 function realHomeRegistryPath() {
-  return path11.join(os4.homedir(), ".deeppairing", "projects.json");
+  return path13.join(os4.homedir(), ".deeppairing", "projects.json");
 }
 var testPathOverride = null;
 function projectRegistryPath() {
@@ -39767,8 +39916,8 @@ function readFile() {
   }
   let raw;
   try {
-    if (!fs11.existsSync(filePath)) return emptyFile();
-    raw = JSON.parse(fs11.readFileSync(filePath, "utf-8"));
+    if (!fs13.existsSync(filePath)) return emptyFile();
+    raw = JSON.parse(fs13.readFileSync(filePath, "utf-8"));
   } catch (err) {
     salvageLog("projects.json", `unreadable/unparseable \u2014 starting from empty (${String(err)})`);
     return emptyFile();
@@ -39792,7 +39941,7 @@ function readFile() {
     }
     projects[key] = {
       projectRoot: v2.projectRoot,
-      name: typeof v2.name === "string" && v2.name ? v2.name : path11.basename(v2.projectRoot),
+      name: typeof v2.name === "string" && v2.name ? v2.name : path13.basename(v2.projectRoot),
       lastSeen: typeof v2.lastSeen === "string" ? v2.lastSeen : (/* @__PURE__ */ new Date(0)).toISOString()
     };
   }
@@ -39803,13 +39952,13 @@ function upsertProject(projectRoot2, now = /* @__PURE__ */ new Date()) {
   try {
     const filePath = projectRegistryPath();
     const file2 = readFile();
-    const key = path11.resolve(projectRoot2);
+    const key = path13.resolve(projectRoot2);
     file2.projects[key] = {
       projectRoot: key,
-      name: path11.basename(key) || key,
+      name: path13.basename(key) || key,
       lastSeen: now.toISOString()
     };
-    fs11.mkdirSync(path11.dirname(filePath), { recursive: true });
+    fs13.mkdirSync(path13.dirname(filePath), { recursive: true });
     writeJsonAtomic(filePath, file2);
     return true;
   } catch (err) {
@@ -39821,9 +39970,9 @@ function upsertProject(projectRoot2, now = /* @__PURE__ */ new Date()) {
 
 // src/session-id.ts
 import crypto4 from "node:crypto";
-import path12 from "node:path";
+import path14 from "node:path";
 function deriveSessionId(projectRoot2, claudeSessionIdRaw) {
-  const projectName = path12.basename(projectRoot2);
+  const projectName = path14.basename(projectRoot2);
   const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
   const projectHash = crypto4.createHash("sha256").update(projectRoot2).digest("hex").slice(0, 8);
   const base = `session_${safeProjectName}_${projectHash}`;
@@ -39835,17 +39984,17 @@ function deriveSessionId(projectRoot2, claudeSessionIdRaw) {
 }
 
 // src/standalone.ts
-import fs12 from "node:fs";
-import path13 from "node:path";
+import fs14 from "node:fs";
+import path15 from "node:path";
 var { projectRoot, source: projectRootSource, worktree: projectWorktree, worktreeRejected } = resolveProjectRoot();
-var dpDir = path13.join(projectRoot, ".deeppairing");
-var logFile = path13.join(dpDir, "server.log");
+var dpDir = path15.join(projectRoot, ".deeppairing");
+var logFile = path15.join(dpDir, "server.log");
 function log(msg) {
   const line = `[${(/* @__PURE__ */ new Date()).toISOString()}] [mcp] ${msg}
 `;
   try {
-    fs12.mkdirSync(path13.dirname(logFile), { recursive: true });
-    fs12.appendFileSync(logFile, line);
+    fs14.mkdirSync(path15.dirname(logFile), { recursive: true });
+    fs14.appendFileSync(logFile, line);
   } catch {
   }
 }
@@ -39867,7 +40016,7 @@ async function main() {
     log(`WARN: daemon at port ${port} did not advertise authToken \u2014 internal calls will 401. Run \`${cliInvocation("doctor")}\` to refresh daemon.json.`);
   }
   log(`Daemon ready on port ${port}`);
-  const projectName = path13.basename(projectRoot);
+  const projectName = path15.basename(projectRoot);
   const claudeSessionIdEnv = process.env.CLAUDE_CODE_SESSION_ID;
   const derived = deriveSessionId(projectRoot, claudeSessionIdEnv);
   const sessionId = derived.sessionId;

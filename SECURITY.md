@@ -215,6 +215,9 @@ deepPairing installs three Claude Code hooks, all local-only, network-free, and 
     unguarded. Spurious prompts are the failure mode that gets a gate like this
     switched off, and this is a protocol backstop rather than a security
     boundary, so the exclusion is scoped for quiet rather than for coverage.
+    **Coverage note:** with an `init` install the hook rows are gitignored, so
+    a fresh git worktree has none until it is initialised too (the plugin
+    install is unaffected); `deeppairing doctor` warns about this.
     It asks at most once per guardrail class per 30 minutes (per file for
     migrations and secrets). If the session store is missing, unreadable, or
     every session store present is unparseable, it stays silent (fail-open) —

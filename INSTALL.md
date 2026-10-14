@@ -140,6 +140,17 @@ block to your repo's **`CLAUDE.md`** — so the collaboration protocol survives
 even outside the plugin's skill context (e.g. a teammate on the same repo who
 hasn't installed the plugin).
 
+### Git worktrees
+
+`init` hooks live in the gitignored `.claude/settings.local.json` and
+`.deeppairing/hooks/`, so a fresh `git worktree` (including `isolation: worktree`
+subagents) starts with **no** deepPairing hooks: the rejection gate and
+guardrails don't run there until you initialise that worktree too. Worktrees
+share the main checkout's ledger and daemon (since #536), but not its hook
+rows. `deeppairing doctor` and the agent's first-call preamble warn when they
+see this (report-only; nothing is installed for you). The plugin install is
+unaffected, since its hooks ship with the plugin.
+
 ### If you run *both* `init` and the plugin
 
 The daemon detects plugin mode and skips writing the Stop/preflight hooks to

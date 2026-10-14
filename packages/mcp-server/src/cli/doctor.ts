@@ -9,6 +9,7 @@ import { buildLedgerHealthReport, shQuote } from "../store/ledger-health.js";
 import { cliInvocation } from "../cli-invocation.js";
 import { errorMessage } from "@deeppairing/shared";
 import { checkClock } from "./clock-check.js";
+import { detectWorktreeMissingHooks, worktreeMissingHooksMessage } from "../worktree-hooks.js";
 import { ensureGitignoreEntry, ensureStopHook, ensureCheckpointHook, ensurePreflightHook, ensureStanceAllowAskHook, HOOK_MARKERS, detectCrossScopeDpEntries, cleanDpEntriesFromScope, isPluginManaged, diagnoseLocalHooks, diagnoseStanceAllowAskHook, removeStanceAllowAskHook } from "./setup-tasks.js";
 import { inspectLocks, clearDeadLockFile } from "../store/file-lock.js";
 
@@ -34,7 +35,7 @@ function bold(text: string): string {
  * state, /api/state response, and a log tail. With --fix, collects a list
  * of healing actions and (after confirmation, unless --yes) applies them.
  */
-export async function doctor(cwd: string, opts: { fix?: boolean; yes?: boolean; protectSharedScopes?: boolean; pluginManaged?: boolean } = {}) {
+export async function doctor(cwd: string, opts: { fix?: boolean; yes?: boolean; protectSharedScopes?: boolean; pluginManaged?: boolean; workspaceDir?: string } = {}) {
   console.log(bold("\n  deepPairing doctor\n"));
 
   const dpDir = path.join(cwd, ".deeppairing");
@@ -508,6 +509,17 @@ export async function doctor(cwd: string, opts: { fix?: boolean; yes?: boolean; 
           label: "Add the Bash `stance allow` ask hook to .claude/settings.local.json",
           apply: () => { const r = ensureStanceAllowAskHook(cwd, { backup: true }); return { ok: r.ok, message: r.message }; },
         });
+    }
+  }
+
+  // #538 — report-only: a linked worktree of an initialised checkout has no
+  // hook rows of its own (they are gitignored). Never a fix; --fix writes nothing.
+  // Plugin-managed + verified-by-the-caller stays silent; plugin declared but
+  // activation unverified (protectSharedScopes) warns conditionally.
+  if (!pluginManaged || opts.protectSharedScopes) {
+    const wtMissing = detectWorktreeMissingHooks(opts.workspaceDir ?? cwd);
+    if (wtMissing) {
+      console.log(`  ${yellow("!")} ${worktreeMissingHooksMessage(wtMissing, pluginManaged)}`);
     }
   }
 

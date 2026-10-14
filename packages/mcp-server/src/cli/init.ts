@@ -1463,7 +1463,7 @@ ${helpInvocations}
 } else if (cmd === "doctor") {
   const fix = args.includes("--fix");
   const yes = args.includes("--yes") || args.includes("-y");
-  doctor(cwd, { fix, yes }).catch((err) => {
+  doctor(cwd, { fix, yes, workspaceDir: resolveProjectRoot().worktree?.workspaceRoot }).catch((err) => {
     console.error(`  ${red("✗")} doctor failed: ${err}`);
     process.exit(1);
   });
