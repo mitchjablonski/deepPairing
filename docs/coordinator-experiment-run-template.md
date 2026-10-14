@@ -16,7 +16,13 @@ source-audit / simulated; unknown values stay unknown.
 - Record owner, single writer and approved evidence/access location:
 - Frozen setup agreement reference and date, containing the protocol commit,
   selected cohesive work package/child-issue owner consent, repository/full base and product/plugin
-  SHAs, exact harness/model versions and sanitized launch/tool configuration:
+  SHAs, installed plugin path/bundle hash, exact harness/model versions and
+  sanitized launch/tool configuration; effective harness permission modes
+  separately from DeepPairing autonomy; source versus installed build verified:
+- Claude selected definition loading paths/names, exact byte hashes, precedence
+  and real inventory receipts for worker A/B/reviewer; deny-pattern/server-name
+  match and built-in allowlist verified. Codex reviewer, if used: actual separate
+  exclusion mechanism/inventory and limitations, not a claimed Claude deny:
 - Applicable human instruction/delegated policy; exact scope and reference:
 - Agreed finite time/attempt/test/usage limits, required asks, interruption
   burden, owned failure-exercise targets, observer and cleanup scope:
@@ -45,11 +51,14 @@ section. Do not silently omit them or copy token values here.
 | Worker B DeepPairing tool/MCP/credential exclusion verified | | |
 | Reviewer DeepPairing tool/MCP/credential exclusion verified | | |
 | Disjoint writers, worktree/hook/policy coverage and dependencies | | |
+| Effective permission modes; installed plugin pin; failure evidence retention | | |
 | Saved outside-drain record; independent reviewer; observation method | | |
 
 - Optional MCP inheritance/attribution probe: not applicable / separately in
   scope. Exclusion evidence or agreed real-runtime probe/result:
 - Any hook `agent_id` used, separately from MCP caller/connection identity:
+- Actual runtime cwd/`CLAUDE_PROJECT_DIR` (or unset), raw worktree root versus
+  canonical shared ledger root, branch/full HEAD and active-hook evidence:
 - Missing evidence/blocker and stop/reconciliation decision:
 
 Required unknowns block dispatch. Worker/reviewer MCP identity is not required
@@ -77,8 +86,11 @@ Retain each failed attempt; do not transfer a live writer to a new label.
 ## Handoff receipt (append one short block per attempt)
 
 - Task/attempt/target observed handle; scope/handoff text; full base SHA:
+- Actual worker path/branch/HEAD verified against handoff; retention location:
 - Known feedback/comment/decision IDs and artifact IDs/versions; authoritative
   current state and authority reference:
+- Sole lead unfiltered poll receipt; surfaced held labels/counts/filter or ACK
+  warning (not invented internal claim/held IDs); duplicate-ID reconciliation:
 - Prepared/saved evidence and time; sent evidence and time; harness receipt
   evidence and time (three distinct facts):
 - State: prepared / sent-unconfirmed / receipt-confirmed / completed /
@@ -89,13 +101,18 @@ Retain each failed attempt; do not transfer a live writer to a new label.
 - Resume/cancel authority; duplicate-writer avoidance; uncertain external write
   and existing recovery path, with no automatic retry:
 
-ACK is not a handoff receipt. Saving after `check_feedback` returns cannot
-repair an event never received/saved. Artifact-question carryover does not
+ACK is not a handoff receipt. Poll response-build failures/cancellation now
+discard buffered ACKs, but saving after return cannot repair an event lost
+after ACK and before wire delivery; passive drains still ACK directly.
+Artifact-question carryover does not
 prove an ordinary directive's delivery; preserve unknown history.
 
 ## Output and review receipt (one block per reviewed head)
 
 - Worker task/attempt and exact output SHA; integrated PR/current head SHA:
+- Before-cleanup retained path/branch/HEAD, dirty/untracked/partial/failure
+  evidence and usable commit/patch/log location; sanitization/publication authority
+  if published (no mandatory push of sensitive or unreviewed evidence):
 - Tests: commands/results and evidence; checks not run and reason:
 - Independent reviewer, exact reviewed SHA, verdict and receipt:
 - Findings/revision/new SHA; old-head authority invalidated; current-head
@@ -129,6 +146,8 @@ separately and stop automatic retry.
 - Required decisions surfaced/omitted/unresolved; missed/remaining blockers:
 - Human reconciliation actions/minutes; approvals/screens/interruptions
   (required/nuisance); assistance and measurement method:
+- Hook asks/lead "Needs input" or permission interruptions, observed hook
+  `agent_id` or unknown and evidence; no inferred MCP caller identity:
 - Elapsed/active/wait/recovery/bookkeeping time; estimates versus observations;
   unknown/missing values:
 - Provider usage/cost source, coverage and unknown items (unknown is not zero):
