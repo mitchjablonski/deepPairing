@@ -591,8 +591,10 @@ export function deeppairingStateReason(match: StateMatch): string {
         ? "It holds your team's committed rules: an edit here changes them for everyone."
         : match.kind === "hooks"
           ? "It's one of the hook scripts that make these prompts: an edit here can switch a prompt off."
-          : "It's a Claude Code settings file that registers deepPairing's hooks: an edit here can remove these prompts.";
-  const whose = match.kind === "claude-settings" ? "It guards deepPairing's prompts." : "It's deepPairing's own state.";
+          : match.kind === "worktree-link"
+            ? "It's this git worktree's link to its main checkout, which decides whose stances apply here: an edit can point the worktree at an empty ledger."
+            : "It's a Claude Code settings file that registers deepPairing's hooks: an edit here can remove these prompts.";
+  const whose = match.kind === "claude-settings" || match.kind === "worktree-link" ? "It guards deepPairing's prompts." : "It's deepPairing's own state.";
   return (
     `Allow this edit to ${match.path}? ${whose} ${what} ` +
     `deepPairing always asks about this file, whatever else is going on.\n` +

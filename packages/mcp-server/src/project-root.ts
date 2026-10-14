@@ -132,6 +132,10 @@ export interface ResolvedProjectRoot {
    *  root was redirected to its main checkout (see git-worktree.ts).
    *  `workspaceRoot` is the un-redirected directory the signal named. */
   worktree?: LinkedWorktree & { workspaceRoot: string };
+  /** #536 review — a `.git` file that LOOKED like a linked worktree but failed
+   *  validation (forged/broken back-pointer, garbage). The root was NOT
+   *  redirected; this says why, for the wrapper log and doctor. */
+  worktreeRejected?: string;
 }
 
 export interface ResolveProjectRootOptions {
@@ -151,8 +155,8 @@ export interface ResolveProjectRootOptions {
  * worktrees are unchanged.
  */
 function canonical(root: string, source: ProjectRootSource): ResolvedProjectRoot {
-  const { projectRoot, worktree } = canonicalProjectDir(root);
-  if (!worktree) return { projectRoot: root, source };
+  const { projectRoot, worktree, rejected } = canonicalProjectDir(root);
+  if (!worktree) return rejected ? { projectRoot: root, source, worktreeRejected: rejected } : { projectRoot: root, source };
   return { projectRoot, source, worktree: { ...worktree, workspaceRoot: root } };
 }
 

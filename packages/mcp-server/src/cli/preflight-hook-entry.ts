@@ -62,7 +62,10 @@ process.stdin.on("end", () => {
     // CLAUDE_PROJECT_DIR > DEEPPAIRING_PROJECT_ROOT > the event's cwd > ours.
     // #532 — canonicalised to the main checkout inside a git linked worktree,
     // so a worktree agent is gated by the SAME ledger (not an empty one).
-    const projectRoot = resolveHookRoots(ev.cwd).projectRoot;
+    const roots = resolveHookRoots(ev.cwd);
+    const projectRoot = roots.projectRoot;
+    // #536 review — a worktree link that failed validation is NOT followed; say so.
+    if (roots.rejected) process.stderr.write("[deepPairing] git worktree link not honoured: " + roots.rejected + "\n");
     // #470 slice 4 — NotebookEdit is matched too, for the deeppairing-state class only.
     if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit" && toolName !== "NotebookEdit") {
       process.exit(0);

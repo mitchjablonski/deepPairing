@@ -510,7 +510,7 @@ describe("R1 riders — the documented project-root env chain", () => {
     // #532 — the plugin entry goes through resolveHookRoots (same chain, plus
     // the worktree canonicalisation); the generated script keeps the inline
     // chain and upgrades it through the rule leaf's resolveHookRoots.
-    expect(entry).toContain("resolveHookRoots(ev.cwd).projectRoot");
+    expect(entry).toContain("const roots = resolveHookRoots(ev.cwd);");
     expect(generated).toContain(CHAIN);
     expect(generated).toContain("resolveHookRoots(ev.cwd).projectRoot");
   });

@@ -33925,44 +33925,69 @@ import crypto3 from "node:crypto";
 // src/git-worktree.ts
 import fs6 from "node:fs";
 import path5 from "node:path";
-function sameDir(a, b) {
+function samePath(a, b) {
   try {
     return fs6.realpathSync.native(a) === fs6.realpathSync.native(b);
   } catch {
     return path5.resolve(a) === path5.resolve(b);
   }
 }
-function parseLinkedWorktree(top, dotGitFile) {
+function isGitDir(dir) {
   try {
-    const raw = fs6.readFileSync(dotGitFile, "utf8");
-    const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(raw);
-    if (!m) return null;
-    const gitdir = path5.resolve(top, m[1]);
+    return fs6.statSync(path5.join(dir, "HEAD")).isFile() && fs6.statSync(path5.join(dir, "objects")).isDirectory() && fs6.statSync(path5.join(dir, "refs")).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function readGitdirPointer(top, dotGitFile) {
+  const raw = fs6.readFileSync(dotGitFile, "utf8");
+  const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(raw);
+  return m ? path5.resolve(top, m[1]) : null;
+}
+function inspectDotGitFile(top, dotGitFile) {
+  try {
+    const gitdir = readGitdirPointer(top, dotGitFile);
+    if (!gitdir) return { worktree: null, rejected: `${dotGitFile} has no "gitdir:" line` };
     let common;
     try {
       common = fs6.readFileSync(path5.join(gitdir, "commondir"), "utf8").trim();
     } catch {
-      return null;
+      return { worktree: null };
     }
-    if (!common) return null;
+    if (!common) return { worktree: null, rejected: `${gitdir}/commondir is empty` };
     const commonDir = path5.resolve(gitdir, common);
-    if (path5.basename(commonDir) !== ".git") return null;
+    if (path5.basename(commonDir) !== ".git") return { worktree: null };
+    if (!isGitDir(commonDir)) return { worktree: null, rejected: `${commonDir} is not a git directory` };
     try {
       const config2 = fs6.readFileSync(path5.join(commonDir, "config"), "utf8");
-      if (/^[ \t]*bare[ \t]*=[ \t]*true[ \t]*$/im.test(config2)) return null;
+      if (/^[ \t]*bare[ \t]*=[ \t]*true[ \t]*$/im.test(config2)) return { worktree: null };
     } catch {
-      return null;
+      return { worktree: null, rejected: `${commonDir} has no config` };
+    }
+    let back;
+    try {
+      back = fs6.readFileSync(path5.join(gitdir, "gitdir"), "utf8").trim();
+    } catch {
+      return { worktree: null, rejected: `${gitdir} has no gitdir back-reference` };
+    }
+    if (!back || !samePath(path5.resolve(gitdir, back), dotGitFile)) {
+      return { worktree: null, rejected: `${gitdir}/gitdir does not point back at ${dotGitFile}` };
+    }
+    if (!samePath(path5.dirname(gitdir), path5.join(commonDir, "worktrees"))) {
+      return { worktree: null, rejected: `${gitdir} is not under ${commonDir}/worktrees` };
     }
     const mainTop = path5.dirname(commonDir);
     const mainDotGit = path5.join(mainTop, ".git");
-    if (!fs6.statSync(mainDotGit).isDirectory() || !sameDir(mainDotGit, commonDir)) return null;
-    if (sameDir(mainTop, top)) return null;
-    return { worktreeTop: top, mainTop };
-  } catch {
-    return null;
+    if (!fs6.statSync(mainDotGit).isDirectory() || !samePath(mainDotGit, commonDir)) {
+      return { worktree: null, rejected: `${mainDotGit} is not the common dir ${commonDir}` };
+    }
+    if (samePath(mainTop, top)) return { worktree: null };
+    return { worktree: { worktreeTop: top, mainTop } };
+  } catch (err) {
+    return { worktree: null, rejected: `${dotGitFile} unreadable: ${err instanceof Error ? err.message : String(err)}` };
   }
 }
-function findLinkedWorktree(p) {
+function inspect(p) {
   try {
     let cur = path5.resolve(p);
     for (let i = 0; i < 256; i++) {
@@ -33973,27 +33998,25 @@ function findLinkedWorktree(p) {
       } catch {
         st = void 0;
       }
-      if (st) return st.isFile() ? parseLinkedWorktree(cur, dotGit) : null;
+      if (st) return st.isFile() ? inspectDotGitFile(cur, dotGit) : { worktree: null };
       const parent = path5.dirname(cur);
-      if (parent === cur) return null;
+      if (parent === cur) return { worktree: null };
       cur = parent;
     }
-    return null;
+    return { worktree: null };
   } catch {
-    return null;
+    return { worktree: null };
   }
 }
-function canonicalizeWorktreePath(p) {
-  const abs = path5.resolve(p);
-  const worktree = findLinkedWorktree(abs);
-  if (!worktree) return { path: abs, worktree: null };
+function mapInto(abs, worktree) {
   const rel = path5.relative(worktree.worktreeTop, abs);
   return { path: rel ? path5.join(worktree.mainTop, rel) : worktree.mainTop, worktree };
 }
 function canonicalProjectDir(dir) {
   const abs = path5.resolve(dir);
-  const mapped = canonicalizeWorktreePath(abs);
-  if (!mapped.worktree) return { projectRoot: abs, worktree: null };
+  const found = inspect(abs);
+  if (!found.worktree) return found.rejected ? { projectRoot: abs, worktree: null, rejected: found.rejected } : { projectRoot: abs, worktree: null };
+  const mapped = mapInto(abs, found.worktree);
   let projectRoot2 = mapped.path;
   try {
     if (!fs6.statSync(projectRoot2).isDirectory()) projectRoot2 = mapped.worktree.mainTop;
@@ -34042,8 +34065,8 @@ function preferredPortFor(projectRoot2) {
   return BASE_PORT + parseInt(projectHashOf(projectRoot2), 16) % PORT_SPAN;
 }
 function canonical(root, source) {
-  const { projectRoot: projectRoot2, worktree } = canonicalProjectDir(root);
-  if (!worktree) return { projectRoot: root, source };
+  const { projectRoot: projectRoot2, worktree, rejected } = canonicalProjectDir(root);
+  if (!worktree) return rejected ? { projectRoot: root, source, worktreeRejected: rejected } : { projectRoot: root, source };
   return { projectRoot: projectRoot2, source, worktree: { ...worktree, workspaceRoot: root } };
 }
 function resolveProjectRoot(opts = {}) {
@@ -39413,7 +39436,7 @@ function deriveSessionId(projectRoot2, claudeSessionIdRaw) {
 // src/standalone.ts
 import fs12 from "node:fs";
 import path13 from "node:path";
-var { projectRoot, source: projectRootSource, worktree: projectWorktree } = resolveProjectRoot();
+var { projectRoot, source: projectRootSource, worktree: projectWorktree, worktreeRejected } = resolveProjectRoot();
 var dpDir = path13.join(projectRoot, ".deeppairing");
 var logFile = path13.join(dpDir, "server.log");
 function log(msg) {
@@ -39431,6 +39454,7 @@ async function main() {
   if (projectWorktree) {
     log(`Project root redirected from git worktree ${projectWorktree.workspaceRoot} to its main checkout ${projectRoot}`);
   }
+  if (worktreeRejected) log(`Git worktree link NOT honoured (root left unredirected): ${worktreeRejected}`);
   try {
     upsertProject(projectRoot);
   } catch (err) {

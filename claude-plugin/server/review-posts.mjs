@@ -17,44 +17,69 @@ import fs2 from "node:fs";
 // src/git-worktree.ts
 import fs from "node:fs";
 import path from "node:path";
-function sameDir(a, b) {
+function samePath(a, b) {
   try {
     return fs.realpathSync.native(a) === fs.realpathSync.native(b);
   } catch {
     return path.resolve(a) === path.resolve(b);
   }
 }
-function parseLinkedWorktree(top, dotGitFile) {
+function isGitDir(dir) {
   try {
-    const raw = fs.readFileSync(dotGitFile, "utf8");
-    const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(raw);
-    if (!m) return null;
-    const gitdir = path.resolve(top, m[1]);
+    return fs.statSync(path.join(dir, "HEAD")).isFile() && fs.statSync(path.join(dir, "objects")).isDirectory() && fs.statSync(path.join(dir, "refs")).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function readGitdirPointer(top, dotGitFile) {
+  const raw = fs.readFileSync(dotGitFile, "utf8");
+  const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(raw);
+  return m ? path.resolve(top, m[1]) : null;
+}
+function inspectDotGitFile(top, dotGitFile) {
+  try {
+    const gitdir = readGitdirPointer(top, dotGitFile);
+    if (!gitdir) return { worktree: null, rejected: `${dotGitFile} has no "gitdir:" line` };
     let common;
     try {
       common = fs.readFileSync(path.join(gitdir, "commondir"), "utf8").trim();
     } catch {
-      return null;
+      return { worktree: null };
     }
-    if (!common) return null;
+    if (!common) return { worktree: null, rejected: `${gitdir}/commondir is empty` };
     const commonDir = path.resolve(gitdir, common);
-    if (path.basename(commonDir) !== ".git") return null;
+    if (path.basename(commonDir) !== ".git") return { worktree: null };
+    if (!isGitDir(commonDir)) return { worktree: null, rejected: `${commonDir} is not a git directory` };
     try {
       const config2 = fs.readFileSync(path.join(commonDir, "config"), "utf8");
-      if (/^[ \t]*bare[ \t]*=[ \t]*true[ \t]*$/im.test(config2)) return null;
+      if (/^[ \t]*bare[ \t]*=[ \t]*true[ \t]*$/im.test(config2)) return { worktree: null };
     } catch {
-      return null;
+      return { worktree: null, rejected: `${commonDir} has no config` };
+    }
+    let back;
+    try {
+      back = fs.readFileSync(path.join(gitdir, "gitdir"), "utf8").trim();
+    } catch {
+      return { worktree: null, rejected: `${gitdir} has no gitdir back-reference` };
+    }
+    if (!back || !samePath(path.resolve(gitdir, back), dotGitFile)) {
+      return { worktree: null, rejected: `${gitdir}/gitdir does not point back at ${dotGitFile}` };
+    }
+    if (!samePath(path.dirname(gitdir), path.join(commonDir, "worktrees"))) {
+      return { worktree: null, rejected: `${gitdir} is not under ${commonDir}/worktrees` };
     }
     const mainTop = path.dirname(commonDir);
     const mainDotGit = path.join(mainTop, ".git");
-    if (!fs.statSync(mainDotGit).isDirectory() || !sameDir(mainDotGit, commonDir)) return null;
-    if (sameDir(mainTop, top)) return null;
-    return { worktreeTop: top, mainTop };
-  } catch {
-    return null;
+    if (!fs.statSync(mainDotGit).isDirectory() || !samePath(mainDotGit, commonDir)) {
+      return { worktree: null, rejected: `${mainDotGit} is not the common dir ${commonDir}` };
+    }
+    if (samePath(mainTop, top)) return { worktree: null };
+    return { worktree: { worktreeTop: top, mainTop } };
+  } catch (err) {
+    return { worktree: null, rejected: `${dotGitFile} unreadable: ${err instanceof Error ? err.message : String(err)}` };
   }
 }
-function findLinkedWorktree(p) {
+function inspect(p) {
   try {
     let cur = path.resolve(p);
     for (let i = 0; i < 256; i++) {
@@ -65,27 +90,25 @@ function findLinkedWorktree(p) {
       } catch {
         st = void 0;
       }
-      if (st) return st.isFile() ? parseLinkedWorktree(cur, dotGit) : null;
+      if (st) return st.isFile() ? inspectDotGitFile(cur, dotGit) : { worktree: null };
       const parent = path.dirname(cur);
-      if (parent === cur) return null;
+      if (parent === cur) return { worktree: null };
       cur = parent;
     }
-    return null;
+    return { worktree: null };
   } catch {
-    return null;
+    return { worktree: null };
   }
 }
-function canonicalizeWorktreePath(p) {
-  const abs = path.resolve(p);
-  const worktree = findLinkedWorktree(abs);
-  if (!worktree) return { path: abs, worktree: null };
+function mapInto(abs, worktree) {
   const rel = path.relative(worktree.worktreeTop, abs);
   return { path: rel ? path.join(worktree.mainTop, rel) : worktree.mainTop, worktree };
 }
 function canonicalProjectDir(dir) {
   const abs = path.resolve(dir);
-  const mapped = canonicalizeWorktreePath(abs);
-  if (!mapped.worktree) return { projectRoot: abs, worktree: null };
+  const found = inspect(abs);
+  if (!found.worktree) return found.rejected ? { projectRoot: abs, worktree: null, rejected: found.rejected } : { projectRoot: abs, worktree: null };
+  const mapped = mapInto(abs, found.worktree);
   let projectRoot = mapped.path;
   try {
     if (!fs.statSync(projectRoot).isDirectory()) projectRoot = mapped.worktree.mainTop;
@@ -128,8 +151,8 @@ var portWindow = resolvePortWindow();
 var BASE_PORT = portWindow.base;
 var PORT_SPAN = portWindow.span;
 function canonical(root, source) {
-  const { projectRoot, worktree } = canonicalProjectDir(root);
-  if (!worktree) return { projectRoot: root, source };
+  const { projectRoot, worktree, rejected } = canonicalProjectDir(root);
+  if (!worktree) return rejected ? { projectRoot: root, source, worktreeRejected: rejected } : { projectRoot: root, source };
   return { projectRoot, source, worktree: { ...worktree, workspaceRoot: root } };
 }
 function resolveProjectRoot(opts = {}) {

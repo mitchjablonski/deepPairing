@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { canonicalizeWorktreePath } from "./git-worktree.js";
+import { canonicalizeWorktreePath, isLinkedWorktreeGitFile } from "./git-worktree.js";
 
 // #532 — re-exported so the init-generated hook (which imports THIS leaf by
 // URL) resolves the project root through the same worktree canonicalisation.
@@ -311,7 +311,7 @@ export interface StateMatch {
   category: typeof DEEPPAIRING_STATE_CATEGORY;
   /** What the human sees named: project-relative when inside it, else absolute. */
   path: string;
-  kind: "preferences" | "team" | "hooks" | "claude-settings";
+  kind: "preferences" | "team" | "hooks" | "claude-settings" | "worktree-link";
 }
 
 /** One spelling → the comparable form: `/` separators, no Windows trailing
@@ -434,7 +434,17 @@ export function matchDeeppairingStatePath(projectRoot: string, raw: unknown): St
     ordered.push(...candidates);
     for (const c of ordered) {
       const m = STATE_PATTERN.exec(canonicalForm(c));
-      if (!m) continue;
+      if (!m) {
+        // #536 review (P3) — a git LINKED WORKTREE's `.git` file decides which
+        // project (and ledger) the worktree resolves to (git-worktree.ts), so
+        // rewriting it could point the gate at an empty ledger. Only a `.git`
+        // FILE with a `gitdir:` line into a worktree gitdir matches — never a
+        // `.git` directory or a submodule's `.git` file.
+        if (path.isAbsolute(c) && canonicalForm(c).split("/").pop() === ".git" && isLinkedWorktreeGitFile(c)) {
+          return { category: DEEPPAIRING_STATE_CATEGORY, path: displayPath(projectRoot, c), kind: "worktree-link" };
+        }
+        continue;
+      }
       const file = m[2] ?? "";
       const kind: StateMatch["kind"] = m[3] ? "claude-settings" : file.startsWith("hooks/") ? "hooks" : file === "team.json" ? "team" : "preferences";
       return { category: DEEPPAIRING_STATE_CATEGORY, path: displayPath(projectRoot, c), kind };

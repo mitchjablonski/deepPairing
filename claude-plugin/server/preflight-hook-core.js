@@ -416,44 +416,69 @@ import path2 from "node:path";
 // src/git-worktree.ts
 import fs from "node:fs";
 import path from "node:path";
-function sameDir(a, b) {
+function samePath(a, b) {
   try {
     return fs.realpathSync.native(a) === fs.realpathSync.native(b);
   } catch {
     return path.resolve(a) === path.resolve(b);
   }
 }
-function parseLinkedWorktree(top, dotGitFile) {
+function isGitDir(dir) {
   try {
-    const raw = fs.readFileSync(dotGitFile, "utf8");
-    const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(raw);
-    if (!m) return null;
-    const gitdir = path.resolve(top, m[1]);
+    return fs.statSync(path.join(dir, "HEAD")).isFile() && fs.statSync(path.join(dir, "objects")).isDirectory() && fs.statSync(path.join(dir, "refs")).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function readGitdirPointer(top, dotGitFile) {
+  const raw = fs.readFileSync(dotGitFile, "utf8");
+  const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(raw);
+  return m ? path.resolve(top, m[1]) : null;
+}
+function inspectDotGitFile(top, dotGitFile) {
+  try {
+    const gitdir = readGitdirPointer(top, dotGitFile);
+    if (!gitdir) return { worktree: null, rejected: `${dotGitFile} has no "gitdir:" line` };
     let common;
     try {
       common = fs.readFileSync(path.join(gitdir, "commondir"), "utf8").trim();
     } catch {
-      return null;
+      return { worktree: null };
     }
-    if (!common) return null;
+    if (!common) return { worktree: null, rejected: `${gitdir}/commondir is empty` };
     const commonDir = path.resolve(gitdir, common);
-    if (path.basename(commonDir) !== ".git") return null;
+    if (path.basename(commonDir) !== ".git") return { worktree: null };
+    if (!isGitDir(commonDir)) return { worktree: null, rejected: `${commonDir} is not a git directory` };
     try {
       const config = fs.readFileSync(path.join(commonDir, "config"), "utf8");
-      if (/^[ \t]*bare[ \t]*=[ \t]*true[ \t]*$/im.test(config)) return null;
+      if (/^[ \t]*bare[ \t]*=[ \t]*true[ \t]*$/im.test(config)) return { worktree: null };
     } catch {
-      return null;
+      return { worktree: null, rejected: `${commonDir} has no config` };
+    }
+    let back;
+    try {
+      back = fs.readFileSync(path.join(gitdir, "gitdir"), "utf8").trim();
+    } catch {
+      return { worktree: null, rejected: `${gitdir} has no gitdir back-reference` };
+    }
+    if (!back || !samePath(path.resolve(gitdir, back), dotGitFile)) {
+      return { worktree: null, rejected: `${gitdir}/gitdir does not point back at ${dotGitFile}` };
+    }
+    if (!samePath(path.dirname(gitdir), path.join(commonDir, "worktrees"))) {
+      return { worktree: null, rejected: `${gitdir} is not under ${commonDir}/worktrees` };
     }
     const mainTop = path.dirname(commonDir);
     const mainDotGit = path.join(mainTop, ".git");
-    if (!fs.statSync(mainDotGit).isDirectory() || !sameDir(mainDotGit, commonDir)) return null;
-    if (sameDir(mainTop, top)) return null;
-    return { worktreeTop: top, mainTop };
-  } catch {
-    return null;
+    if (!fs.statSync(mainDotGit).isDirectory() || !samePath(mainDotGit, commonDir)) {
+      return { worktree: null, rejected: `${mainDotGit} is not the common dir ${commonDir}` };
+    }
+    if (samePath(mainTop, top)) return { worktree: null };
+    return { worktree: { worktreeTop: top, mainTop } };
+  } catch (err) {
+    return { worktree: null, rejected: `${dotGitFile} unreadable: ${err instanceof Error ? err.message : String(err)}` };
   }
 }
-function findLinkedWorktree(p) {
+function inspect(p) {
   try {
     let cur = path.resolve(p);
     for (let i = 0; i < 256; i++) {
@@ -464,20 +489,35 @@ function findLinkedWorktree(p) {
       } catch {
         st = void 0;
       }
-      if (st) return st.isFile() ? parseLinkedWorktree(cur, dotGit) : null;
+      if (st) return st.isFile() ? inspectDotGitFile(cur, dotGit) : { worktree: null };
       const parent = path.dirname(cur);
-      if (parent === cur) return null;
+      if (parent === cur) return { worktree: null };
       cur = parent;
     }
-    return null;
+    return { worktree: null };
   } catch {
-    return null;
+    return { worktree: null };
   }
+}
+function isLinkedWorktreeGitFile(abs) {
+  try {
+    if (!fs.lstatSync(abs).isFile()) return false;
+    const gitdir = readGitdirPointer(path.dirname(abs), abs);
+    return !!gitdir && fs.statSync(path.join(gitdir, "commondir")).isFile();
+  } catch {
+    return false;
+  }
+}
+function findLinkedWorktree(p) {
+  return inspect(p).worktree;
 }
 function canonicalizeWorktreePath(p) {
   const abs = path.resolve(p);
   const worktree = findLinkedWorktree(abs);
   if (!worktree) return { path: abs, worktree: null };
+  return mapInto(abs, worktree);
+}
+function mapInto(abs, worktree) {
   const rel = path.relative(worktree.worktreeTop, abs);
   return { path: rel ? path.join(worktree.mainTop, rel) : worktree.mainTop, worktree };
 }
@@ -767,7 +807,12 @@ function matchDeeppairingStatePath(projectRoot, raw) {
     ordered.push(...candidates);
     for (const c of ordered) {
       const m = STATE_PATTERN.exec(canonicalForm(c));
-      if (!m) continue;
+      if (!m) {
+        if (path3.isAbsolute(c) && canonicalForm(c).split("/").pop() === ".git" && isLinkedWorktreeGitFile(c)) {
+          return { category: DEEPPAIRING_STATE_CATEGORY, path: displayPath(projectRoot, c), kind: "worktree-link" };
+        }
+        continue;
+      }
       const file = m[2] ?? "";
       const kind = m[3] ? "claude-settings" : file.startsWith("hooks/") ? "hooks" : file === "team.json" ? "team" : "preferences";
       return { category: DEEPPAIRING_STATE_CATEGORY, path: displayPath(projectRoot, c), kind };
@@ -983,8 +1028,8 @@ function evaluateGuardrailBackstop(args) {
   }
 }
 function deeppairingStateReason(match) {
-  const what = match.kind === "preferences" ? "It's where your stances live: an edit here can quietly retire one." : match.kind === "team" ? "It holds your team's committed rules: an edit here changes them for everyone." : match.kind === "hooks" ? "It's one of the hook scripts that make these prompts: an edit here can switch a prompt off." : "It's a Claude Code settings file that registers deepPairing's hooks: an edit here can remove these prompts.";
-  const whose = match.kind === "claude-settings" ? "It guards deepPairing's prompts." : "It's deepPairing's own state.";
+  const what = match.kind === "preferences" ? "It's where your stances live: an edit here can quietly retire one." : match.kind === "team" ? "It holds your team's committed rules: an edit here changes them for everyone." : match.kind === "hooks" ? "It's one of the hook scripts that make these prompts: an edit here can switch a prompt off." : match.kind === "worktree-link" ? "It's this git worktree's link to its main checkout, which decides whose stances apply here: an edit can point the worktree at an empty ledger." : "It's a Claude Code settings file that registers deepPairing's hooks: an edit here can remove these prompts.";
+  const whose = match.kind === "claude-settings" || match.kind === "worktree-link" ? "It guards deepPairing's prompts." : "It's deepPairing's own state.";
   return `Allow this edit to ${match.path}? ${whose} ${what} deepPairing always asks about this file, whatever else is going on.
 [DEEPPAIRING_STATE \u2014 agent: don't edit deepPairing's state files to change a stance, rule or hook. On a decline, ask your pair to make the change themselves.]`;
 }

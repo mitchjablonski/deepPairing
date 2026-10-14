@@ -233,4 +233,59 @@ describe.skipIf(!hasGit)("#532 — a git worktree shares its main checkout's pro
     expect(resolveProjectRoot({ env: { CLAUDE_PROJECT_DIR: plain } })).toEqual({ projectRoot: plain, source: "CLAUDE_PROJECT_DIR" });
     expect(resolveHookRoots(plain, {}).projectRoot).toBe(plain);
   });
+
+  it("#536 P3 — a forged gitdir pointer (a crafted empty repo with worktrees/x/commondir) is NOT followed", () => {
+    const victim = path.join(base, "wt-forged");
+    git(main, "worktree", "add", "-q", victim, "-b", "forged");
+    expect(resolveProjectRoot({ env: { CLAUDE_PROJECT_DIR: victim } }).projectRoot).toBe(main);
+    // An agent rewrites the worktree's .git to point at a crafted, empty repo.
+    const crafted = path.join(base, "crafted");
+    fs.mkdirSync(crafted);
+    git(crafted, "init", "-q");
+    const fake = path.join(crafted, ".git", "worktrees", "x");
+    fs.mkdirSync(fake, { recursive: true });
+    fs.writeFileSync(path.join(fake, "commondir"), "../..\n");
+    fs.writeFileSync(path.join(victim, ".git"), `gitdir: ${fake}\n`);
+    const resolved = resolveProjectRoot({ env: { CLAUDE_PROJECT_DIR: victim } });
+    expect(resolved.projectRoot).toBe(victim); // not the crafted repo
+    expect(resolved.worktree).toBeUndefined();
+    expect(resolved.worktreeRejected).toMatch(/does not point back|back-reference/);
+    expect(resolveHookRoots(undefined, { CLAUDE_PROJECT_DIR: victim }).projectRoot).toBe(victim);
+    // A back-pointer to ANOTHER worktree's .git is rejected too.
+    fs.writeFileSync(path.join(fake, "gitdir"), path.join(wt, ".git") + "\n");
+    expect(resolveProjectRoot({ env: { CLAUDE_PROJECT_DIR: victim } }).projectRoot).toBe(victim);
+    // And a common dir that isn't a git dir.
+    const notGit = path.join(base, "not-git", ".git", "worktrees", "y");
+    fs.mkdirSync(notGit, { recursive: true });
+    fs.writeFileSync(path.join(notGit, "commondir"), "../..\n");
+    fs.writeFileSync(path.join(notGit, "gitdir"), path.join(victim, ".git") + "\n");
+    fs.writeFileSync(path.join(base, "not-git", ".git", "config"), "[core]\n");
+    fs.writeFileSync(path.join(victim, ".git"), `gitdir: ${notGit}\n`);
+    expect(resolveProjectRoot({ env: { CLAUDE_PROJECT_DIR: victim } })).toMatchObject({
+      projectRoot: victim, worktreeRejected: expect.stringContaining("not a git directory"),
+    });
+  });
+
+  it("#536 P3 — a garbage .git file gives no redirect, and says why", () => {
+    const victim = path.join(base, "wt-garbage");
+    git(main, "worktree", "add", "-q", victim, "-b", "garbage");
+    fs.writeFileSync(path.join(victim, ".git"), "not a git link\n");
+    const resolved = resolveProjectRoot({ env: { CLAUDE_PROJECT_DIR: victim } });
+    expect(resolved).toMatchObject({ projectRoot: victim, worktreeRejected: expect.stringContaining('no "gitdir:" line') });
+    expect(findLinkedWorktree(victim)).toBeNull();
+  });
+
+  it("#536 P3 — an agent Write to a linked worktree's .git FILE always asks (not a .git directory)", () => {
+    for (const env of [{ CLAUDE_PROJECT_DIR: wt }, { CLAUDE_PROJECT_DIR: main }]) {
+      for (const target of [path.join(wt, ".git"), path.join(wt, "src", "..", ".git")]) {
+        const r = runHook(preflightBundle, { tool_name: "Write", tool_input: { file_path: target, content: "gitdir: /tmp/elsewhere" } }, env);
+        expect(decisionOf(r.stdout), target).toMatchObject({
+          permissionDecision: "ask", permissionDecisionReason: expect.stringContaining("DEEPPAIRING_STATE"),
+        });
+      }
+    }
+    // The main checkout's .git DIRECTORY is not this class.
+    const dir = runHook(preflightBundle, { tool_name: "Write", tool_input: { file_path: path.join(main, ".git"), content: "x" } }, { CLAUDE_PROJECT_DIR: main });
+    expect(decisionOf(dir.stdout).permissionDecisionReason ?? "").not.toContain("DEEPPAIRING_STATE");
+  });
 });
