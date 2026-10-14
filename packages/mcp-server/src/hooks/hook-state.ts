@@ -24,6 +24,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { resolveHookRoots } from "../git-worktree.js";
 
 /** Cap on the retained fire log — the UI shows a recent tail, not history. */
 export const FIRE_LOG_CAP = 50;
@@ -91,12 +92,10 @@ export function hookErrorMessage(err: unknown): string {
  * order everywhere, matching project-root.ts's documented precedence.
  */
 export function resolveHookProjectRoot(eventCwd?: unknown): string {
-  return (
-    process.env.CLAUDE_PROJECT_DIR ||
-    process.env.DEEPPAIRING_PROJECT_ROOT ||
-    (typeof eventCwd === "string" && eventCwd ? eventCwd : "") ||
-    process.cwd()
-  );
+  // #532 — the same chain, canonicalised to the main checkout when the winner
+  // is a git linked worktree (an explicit DEEPPAIRING_PROJECT_ROOT excepted),
+  // so a worktree agent's hooks read the SAME ledger and sessions.
+  return resolveHookRoots(eventCwd).projectRoot;
 }
 
 /** Synchronous sleep — the hook lane has no async seam to yield through. */

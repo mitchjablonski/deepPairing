@@ -9,6 +9,19 @@ import { composeOptionRejectReason, recordRejectedOption } from "../../store/rej
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
 import { sessionOwesDebrief } from "../../debrief-gate.js";
 import { cliInvocation } from "../../cli-invocation.js";
+import {
+  LIVE_POLL_GRACE_MS,
+  PendingAcks,
+  beginConsumer,
+  describeHeld,
+  endConsumer,
+  feedbackStoreView,
+  liveReservations,
+  parseFeedbackFilter,
+  type FeedbackFilter,
+  type HeldTally,
+  type Reservation,
+} from "./feedback-ownership.js";
 
 /**
  * H2-1 — surface a FROZEN cross-project philosophy ledger. v0.1.6 makes the
@@ -192,6 +205,138 @@ function scopeHasSignal(
  *     via `_meta` codes.
  */
 export async function handleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolResult> {
+  // #533 — ownership filter, reservations, claims and the crash-safe
+  // hand-off. The design and its rationale live in feedback-ownership.ts; in
+  // short:
+  //   - `{presentedBy?, artifactIds?}` scopes what this poll reads AND acks to
+  //     the caller's own artifacts; no filter → the legacy poll, except that a
+  //     LIVE filtered consumer's feedback is held back for it (status "held").
+  //   - items this poll selects are claimed, so a concurrent poll can't
+  //     deliver them too; claims drop when the poll ends, however it ends.
+  //   - every acknowledge* the assembly makes is BUFFERED and flushed only
+  //     after the full response exists and the call wasn't cancelled. A throw
+  //     or cancel anywhere before that leaves the items unacknowledged, so the
+  //     next poll re-delivers them with the same ids (at-least-once).
+  const filter = parseFeedbackFilter(args);
+  const consumer = filter ? beginConsumer(ctx.state, filter) : null;
+  const reservations = filter ? [] : liveReservations(ctx.state);
+  const pending = new PendingAcks();
+  const view = feedbackStoreView(ctx.store, { filter, reservations, pending });
+
+  // A filtered consumer keeps its OWN report-once sets + poll counter, so a
+  // subagent's rejection/plan verdict is reported to it even if the
+  // coordinator already saw it (a verdict is state, not a consumable).
+  let state = ctx.state;
+  if (filter) {
+    ctx.state.feedbackConsumers ??= {};
+    state = ctx.state.feedbackConsumers[consumer!] ??= {
+      checkFeedbackPollCount: 0,
+      reportedRejectedVerdicts: new Set<string>(),
+      reportedPlanVerdicts: new Set<string>(),
+    };
+  }
+  const rejectedBefore = new Set(state.reportedRejectedVerdicts);
+  const plansBefore = new Set(state.reportedPlanVerdicts);
+  const rollback = () => {
+    state.reportedRejectedVerdicts.clear();
+    for (const id of rejectedBefore) state.reportedRejectedVerdicts.add(id);
+    state.reportedPlanVerdicts.clear();
+    for (const id of plansBefore) state.reportedPlanVerdicts.add(id);
+  };
+
+  try {
+    let result: ToolResult;
+    try {
+      result = await assembleCheckFeedback({ ...ctx, store: view.store, state }, args);
+    } catch (err) {
+      // Nothing was acknowledged (the acks are still in the buffer), so this
+      // poll's items come back next time with the same ids.
+      rollback();
+      throw err;
+    }
+    if (ctx.signal?.aborted) {
+      // The client cancelled (e.g. Esc during the long-poll): this result will
+      // never reach the model, so acknowledge nothing — re-deliver next poll.
+      rollback();
+      return result;
+    }
+    const ackErrors = await pending.flush(ctx.store);
+    return annotateResult(result, { filter, reservations, held: view.held, ackErrors });
+  } finally {
+    view.release();
+    if (consumer) endConsumer(ctx.state, consumer);
+  }
+}
+
+/** #533 — the filter echo, the held-back report and the ack-failure note.
+ *  Adds nothing to a legacy poll that held nothing back and acked cleanly. */
+function annotateResult(
+  result: ToolResult,
+  o: { filter: FeedbackFilter | null; reservations: Reservation[]; held: HeldTally; ackErrors: unknown[] },
+): ToolResult {
+  const { filter, reservations, held, ackErrors } = o;
+  const heldLines: string[] = [];
+  const heldStructured: Array<Record<string, unknown>> = [];
+  for (const [label, tally] of Object.entries(held)) {
+    const { total, text } = describeHeld(tally);
+    if (total === 0) continue;
+    const r = reservations.find((x) => x.label === label);
+    const releaseInSec = r?.releaseInMs == null ? null : Math.max(1, Math.ceil(r.releaseInMs / 1000));
+    const when =
+      releaseInSec === null
+        ? `while its check_feedback is open, then ${LIVE_POLL_GRACE_MS / 1000}s`
+        : `released to you in ${releaseInSec}s if it doesn't poll again`;
+    heldLines.push(`${text} held for "${label}" (${when})`);
+    heldStructured.push({
+      label,
+      count: total,
+      decisions: tally.decisions.size,
+      comments: tally.comments.size,
+      ...(releaseInSec !== null ? { releaseInSec } : { inFlight: true }),
+    });
+  }
+
+  const notes: string[] = [];
+  if (filter) {
+    notes.push(
+      `\n\n(Filtered to ${filter.presentedBy ? `presentedBy "${filter.presentedBy}"` : ""}${filter.presentedBy && filter.artifactIds ? " + " : ""}${filter.artifactIds ? `artifacts ${filter.artifactIds.join(", ")}` : ""} — only your own artifacts' feedback is shown and consumed; session directives, requests and other agents' feedback stay for their owner / the coordinator.)`,
+    );
+  }
+  if (heldLines.length > 0) {
+    notes.push(
+      `\n\n⏸ HELD for a live subagent — not lost, not yours to act on yet: ${heldLines.join("; ")}. Its owner is polling for it; if the owner stops polling, it falls through to this unfiltered poll.`,
+    );
+  }
+  if (ackErrors.length > 0) {
+    notes.push(
+      `\n\n⚠️ Acknowledging this delivery failed (${errorMessage(ackErrors[0])}) — some items above may be delivered AGAIN on the next check_feedback with the same ids. Skip any id you already acted on.`,
+    );
+  }
+  if (notes.length === 0) return result;
+
+  let text = result.content[0]?.text ?? "";
+  let sc = result.structuredContent;
+  if (heldStructured.length > 0 && sc) {
+    // Never "proceed" while something is held: the coordinator must know a
+    // human answer exists that it hasn't seen.
+    const heldAction = `Something is held for a live subagent (${heldLines.join("; ")}) — don't treat this as clear; call check_feedback again.`;
+    if (sc.status === "proceed") {
+      text = text.replace("Suggested action: You may proceed with implementation.", `Suggested action: ${heldAction}`);
+      sc = { ...sc, status: "held", suggestedAction: heldAction };
+    }
+    sc = { ...sc, heldBackFor: heldStructured.map((h) => h.label), held: heldStructured };
+  }
+  if (sc && filter) sc = { ...sc, filter };
+  if (sc && ackErrors.length > 0) sc = { ...sc, ackFailed: true };
+  const [, ...rest] = result.content;
+  return {
+    ...result,
+    content: [{ type: "text", text: `${text}${notes.join("")}` }, ...rest],
+    ...(sc ? { structuredContent: sc } : {}),
+  };
+}
+
+async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolResult> {
   const { store, server, broadcast, port } = ctx;
 
   // I7 — the LIVE companion UI URL, from the daemon's real bound port. This is

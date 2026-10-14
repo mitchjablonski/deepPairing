@@ -3227,8 +3227,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path13) {
-      let input = path13;
+    function removeDotSegments(path14) {
+      let input = path14;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3427,8 +3427,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path13, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path13 && path13 !== "/" ? path13 : void 0;
+        const [path14, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path14 && path14 !== "/" ? path14 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -6790,12 +6790,12 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list2, fs12, exportName) {
+    function addFormats(ajv, list2, fs13, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list2)
-        ajv.addFormat(f, fs12[f]);
+        ajv.addFormat(f, fs13[f]);
     }
     module.exports = exports = formatsPlugin;
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -7326,10 +7326,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj2, path13) {
-  if (!path13)
+function getElementAtPath(obj2, path14) {
+  if (!path14)
     return obj2;
-  return path13.reduce((acc, key) => acc?.[key], obj2);
+  return path14.reduce((acc, key) => acc?.[key], obj2);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -7738,11 +7738,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path13, issues) {
+function prefixIssues(path14, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path13);
+    iss.path.unshift(path14);
     return iss;
   });
 }
@@ -7889,16 +7889,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path13 = []) => {
+  const processError = (error52, path14 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path13, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path14, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path13, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path14, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path13, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path14, ...issue2.path]);
       } else {
-        const fullpath = [...path13, ...issue2.path];
+        const fullpath = [...path14, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -7925,17 +7925,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path13 = []) => {
+  const processError = (error52, path14 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path13, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path14, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path13, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path14, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path13, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path14, ...issue2.path]);
       } else {
-        const fullpath = [...path13, ...issue2.path];
+        const fullpath = [...path14, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -7967,8 +7967,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path13 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path13) {
+  const path14 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path14) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -20966,13 +20966,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path13 = ref.slice(1).split("/").filter(Boolean);
-  if (path13.length === 0) {
+  const path14 = ref.slice(1).split("/").filter(Boolean);
+  if (path14.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path13[0] === defsKey) {
-    const key = path13[1];
+  if (path14[0] === defsKey) {
+    const key = path14[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -25656,6 +25656,17 @@ var ArtifactSchema = external_exports.object({
    */
   featureId: external_exports.string().trim().max(80).optional(),
   /**
+   * #533 — WHO presented this artifact: a short agent label or role
+   * ("coordinator", "builder:auth-fix", "reviewer"), from the optional
+   * `presentedBy` param on the present_* tools (revise_artifact carries it onto
+   * the successor). Subagents share the parent's MCP connection and therefore
+   * the session bucket; this label is what lets `check_feedback({presentedBy})`
+   * return (and acknowledge) ONLY the feedback on that agent's own artifacts.
+   * Optional for backward compatibility; absent → the artifact is unowned and
+   * its feedback flows to any unfiltered poll, exactly as before.
+   */
+  presentedBy: external_exports.string().trim().min(1).max(80).optional(),
+  /**
    * #470 — the operation stamp of an artifact admitted once under a human's
    * stance allowance. Non-authorizing metadata (see stance-exception.ts).
    * Optional for backward compatibility; absent on every ordinary artifact.
@@ -29547,11 +29558,11 @@ Each is a continuation of an existing thread (parentCommentId points at one of y
   } catch {
   }
   try {
-    const fs12 = await import("node:fs");
-    const path13 = await import("node:path");
-    const claudeMd = path13.join(process.cwd(), "CLAUDE.md");
-    if (fs12.existsSync(claudeMd)) {
-      const content = fs12.readFileSync(claudeMd, "utf-8");
+    const fs13 = await import("node:fs");
+    const path14 = await import("node:path");
+    const claudeMd = path14.join(process.cwd(), "CLAUDE.md");
+    if (fs13.existsSync(claudeMd)) {
+      const content = fs13.readFileSync(claudeMd, "utf-8");
       if (!content.includes("<!-- deepPairing -->")) {
         contextualParts.push(
           "\n\u{1F4A1} Tip: run `" + cliInvocation("init") + "` to add the deepPairing protocol to CLAUDE.md so the agent follows it on every session (optional \u2014 the plugin's pairing-protocol skill covers most of this already)."
@@ -30395,7 +30406,7 @@ function formatStyleWarnings(type, content) {
   located.sort((a, b) => bySeverity(a.v, b.v));
   const { shown } = topDistinctStyleLines(located, MAX_STYLE_LINES);
   const rest = located.length - shown.length;
-  const lines = shown.map(({ path: path13, v: v2 }) => `- ${path13}: ${v2.message}`);
+  const lines = shown.map(({ path: path14, v: v2 }) => `- ${path14}: ${v2.message}`);
   return styleBlock(result.score, lines, rest);
 }
 function formatProseStyleWarnings(label, text, mode = "strict") {
@@ -30409,7 +30420,7 @@ function formatProseStyleWarnings(label, text, mode = "strict") {
   const located = [...result.violations].sort(bySeverity).map((v2) => ({ path: label, v: v2 }));
   const { shown } = topDistinctStyleLines(located, MAX_STYLE_LINES);
   const rest = located.length - shown.length;
-  return styleBlock(result.score, shown.map(({ path: path13, v: v2 }) => `- ${path13}: ${v2.message}`), rest);
+  return styleBlock(result.score, shown.map(({ path: path14, v: v2 }) => `- ${path14}: ${v2.message}`), rest);
 }
 function styleBlock(score, lines, rest) {
   const tail = rest > 0 ? ` (+${rest} more)` : "";
@@ -30743,9 +30754,9 @@ function scalarTypeTag(i) {
 function isScalarBoundIssue(i) {
   return i.code === "too_big" || i.code === "too_small";
 }
-function receivedSize(input, path13) {
+function receivedSize(input, path14) {
   let cur = input;
-  for (const seg of path13) {
+  for (const seg of path14) {
     if (cur == null || typeof cur !== "object") return void 0;
     cur = cur[seg];
   }
@@ -30768,8 +30779,8 @@ function scalarIssueClause(i, input) {
   }
   return `${field2} (${scalarTypeTag(i)})`;
 }
-function collapsePath(path13) {
-  return path13.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
+function collapsePath(path14) {
+  return path14.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
 }
 function formatValidationError(toolName, err, example, input) {
   const raw = err.issues;
@@ -30795,9 +30806,9 @@ function formatValidationError(toolName, err, example, input) {
   }
   const groupArr = [...groups.values()];
   const issues = groupArr.slice(0, 5).map((g) => {
-    const path13 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
+    const path14 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
     const suffix = g.count > 1 ? ` (${g.count}\xD7)` : "";
-    return `  \u2022 ${path13}: ${g.first.message}${suffix}`;
+    return `  \u2022 ${path14}: ${g.first.message}${suffix}`;
   });
   const more = groupArr.length > 5 ? `
   \u2022 \u2026and ${groupArr.length - 5} more` : "";
@@ -31308,6 +31319,7 @@ function validateLogReasoningInput(args) {
 var ARTIFACT_TITLE = external_exports.string().min(1).describe("Descriptive title for this artifact (e.g. 'Authentication System Analysis')");
 var SERVED_REQUEST_ID = external_exports.string().optional().describe("If this artifact serves a human request (from check_feedback's 'Human requests' block), the request id (e.g. 'req_ab12cd34ef') \u2014 links it so the request clears");
 var FEATURE_TAG = external_exports.string().optional().describe("A short, STABLE tag for the feature/milestone this work belongs to (e.g. 'milestone-7', 'auth-rework'). Keep it IDENTICAL across every artifact of the same feature so they group together in the Features view \u2014 match the human's milestone naming if one exists; don't invent a new tag per run.");
+var PRESENTED_BY = external_exports.string().optional().describe("Optional label for WHO is presenting (e.g. 'coordinator', 'builder:auth-fix', 'reviewer'). Subagents: set it, then call check_feedback({presentedBy}) with the same label so you receive (and consume) only the feedback on your own artifacts.");
 var TOOL_INPUT_SCHEMAS = {
   // #206 (I1) — `feature` is advertised on EVERY artifact-creating tool (the
   // whole point of slice 2: tag at the source so grouping recall stops leaking).
@@ -31316,18 +31328,21 @@ var TOOL_INPUT_SCHEMAS = {
   // and threads it to createArtifact, which normalizes + persists featureId.
   present_findings: ResearchContentSchema.extend({
     title: ARTIFACT_TITLE.optional(),
-    feature: FEATURE_TAG
+    feature: FEATURE_TAG,
+    presentedBy: PRESENTED_BY
   }),
   present_options: PresentOptionsInputSchema.extend({
     relatedFindings: external_exports.array(external_exports.string()).optional().describe("Artifact IDs of findings that motivated this decision"),
-    feature: FEATURE_TAG
+    feature: FEATURE_TAG,
+    presentedBy: PRESENTED_BY
   }),
-  present_spec: SpecContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG }),
+  present_spec: SpecContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG, presentedBy: PRESENTED_BY }),
   present_plan: PlanContentSchema.extend({
     title: ARTIFACT_TITLE,
     relatedFindings: external_exports.array(external_exports.string()).optional().describe("Artifact IDs of findings that motivated this plan"),
     servedRequestId: SERVED_REQUEST_ID,
-    feature: FEATURE_TAG
+    feature: FEATURE_TAG,
+    presentedBy: PRESENTED_BY
   }),
   present_code_change: CodeChangeContentSchema.extend({
     before: external_exports.string().optional().describe("Code before the change \u2014 omit for created files (server defaults to empty)"),
@@ -31336,22 +31351,23 @@ var TOOL_INPUT_SCHEMAS = {
     // derived schema stopped advertising it: finding→code-change links died
     // of undiscoverability.
     relatedFindings: external_exports.array(external_exports.string()).optional().describe("Artifact IDs of findings that motivated this change"),
-    feature: FEATURE_TAG
+    feature: FEATURE_TAG,
+    presentedBy: PRESENTED_BY
   }),
   log_reasoning: ReasoningContentSchema,
   // #171/#175 — multi-file changeset. `reviewState` and `reviewReasons` are
   // HUMAN-driven (set via the review route), so they're omitted from the
   // advertised input — the agent never sends them.
-  present_changeset: ChangesetContentSchema.omit({ reviewState: true, reviewReasons: true }).extend({ title: ARTIFACT_TITLE, feature: FEATURE_TAG }),
+  present_changeset: ChangesetContentSchema.omit({ reviewState: true, reviewReasons: true }).extend({ title: ARTIFACT_TITLE, feature: FEATURE_TAG, presentedBy: PRESENTED_BY }),
   // #190 — the end-of-feature debrief. `summary` is the only required content
   // field (all others optional-tolerant); title is artifact-level.
-  present_debrief: DebriefContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG }),
+  present_debrief: DebriefContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG, presentedBy: PRESENTED_BY }),
   // #190 A2 — the read-only explainer walk-through. `title`, `overview`, and a
   // non-empty `sections[]` are the required core; `title` lives IN the content
   // schema (it doubles as the artifact title). G1 (#198b) adds the optional
   // servedRequestId linkage (the validator ignores it — it builds its own
   // content object from named fields — so it stays advertisement-only).
-  present_explainer: ExplainerContentSchema.extend({ servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG })
+  present_explainer: ExplainerContentSchema.extend({ servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG, presentedBy: PRESENTED_BY })
 };
 function toMcpInputSchema(schema) {
   const js = external_exports.toJSONSchema(schema, { io: "input" });
@@ -31492,7 +31508,7 @@ async function handleLogReasoning(ctx, args) {
 }
 
 // src/mcp/tools/export-session.ts
-import path6 from "node:path";
+import path7 from "node:path";
 
 // src/replay/timeline.ts
 function buildTimeline(state) {
@@ -31966,7 +31982,7 @@ ${SIZE_CLIPPED_NOTE}` : "";
   return `${head}<pre class="code"${langAttr}><code>${fitted.text}${trunc}${sizeTrunc}</code></pre>`;
 }
 function diffBlock(file2, includeCode, projectRoot2) {
-  const path13 = sanitizePath(file2.path, projectRoot2);
+  const path14 = sanitizePath(file2.path, projectRoot2);
   const changeType = esc2(file2.changeType ?? "modified");
   const hunks = Array.isArray(file2.hunks) ? file2.hunks : [];
   const stats = file2.stats;
@@ -31983,7 +31999,7 @@ function diffBlock(file2, includeCode, projectRoot2) {
   const additions = stats?.additions ?? derived.additions;
   const deletions = stats?.deletions ?? derived.deletions;
   const statLine = `<span class="diffstat"><span class="add">+${additions}</span> <span class="del">\u2212${deletions}</span></span>`;
-  const header = `<div class="file-head"><code class="path">${esc2(path13)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
+  const header = `<div class="file-head"><code class="path">${esc2(path14)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
   if (!includeCode) {
     return `<div class="file">${header}<p class="redacted">Diff omitted from this export.</p></div>`;
   }
@@ -32102,9 +32118,9 @@ function evidenceBlock(evidence, includeCode, projectRoot2) {
     }
     if (!ev || typeof ev !== "object") continue;
     const e = ev;
-    const path13 = sanitizePath(e.filePath, projectRoot2);
+    const path14 = sanitizePath(e.filePath, projectRoot2);
     const range = e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null && e.lineEnd !== e.lineStart ? `-${e.lineEnd}` : ""}` : "";
-    let anchor = path13 ? `<p class="anchor"><code>${esc2(path13 + range)}</code></p>` : "";
+    let anchor = path14 ? `<p class="anchor"><code>${esc2(path14 + range)}</code></p>` : "";
     if (!anchor && e.locator && typeof e.locator.value === "string" && e.locator.value.length > 0) {
       const loc = e.locator;
       const label = loc.kind === "url" ? loc.href && loc.href.length > 0 ? `${loc.value} (${loc.href})` : loc.value : loc.kind === "charRange" ? `chars ${loc.value}` : loc.kind === "quote" ? `\u201C${loc.value}\u201D` : loc.value;
@@ -32261,9 +32277,9 @@ function decisionBody(a, ctx) {
 }
 function codeChangeBody(a, ctx) {
   const content = coerceCodeChangeContent(a.content);
-  const path13 = sanitizePath(content.filePath, ctx.projectRoot);
+  const path14 = sanitizePath(content.filePath, ctx.projectRoot);
   const parts = [
-    `<div class="file-head"><code class="path">${esc2(path13)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
+    `<div class="file-head"><code class="path">${esc2(path14)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
   ];
   if (content.reasoning) parts.push(`<p class="why">Why: ${renderInline(content.reasoning)}</p>`);
   if (content.concept?.name) {
@@ -33918,9 +33934,115 @@ function writeSessionHtml(projectRoot2, sessionId, html, generatedAt) {
 }
 
 // src/project-root.ts
-import path5 from "node:path";
-import fs6 from "node:fs";
+import path6 from "node:path";
+import fs7 from "node:fs";
 import crypto3 from "node:crypto";
+
+// src/git-worktree.ts
+import fs6 from "node:fs";
+import path5 from "node:path";
+function samePath(a, b) {
+  try {
+    return fs6.realpathSync.native(a) === fs6.realpathSync.native(b);
+  } catch {
+    return path5.resolve(a) === path5.resolve(b);
+  }
+}
+function isGitDir(dir) {
+  try {
+    return fs6.statSync(path5.join(dir, "HEAD")).isFile() && fs6.statSync(path5.join(dir, "objects")).isDirectory() && fs6.statSync(path5.join(dir, "refs")).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function readGitdirPointer(top, dotGitFile) {
+  const raw = fs6.readFileSync(dotGitFile, "utf8");
+  const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(raw);
+  return m ? path5.resolve(top, m[1]) : null;
+}
+function inspectDotGitFile(top, dotGitFile) {
+  try {
+    const gitdir = readGitdirPointer(top, dotGitFile);
+    if (!gitdir) return { worktree: null, rejected: `${dotGitFile} has no "gitdir:" line` };
+    let common;
+    try {
+      common = fs6.readFileSync(path5.join(gitdir, "commondir"), "utf8").trim();
+    } catch {
+      return { worktree: null };
+    }
+    if (!common) return { worktree: null, rejected: `${gitdir}/commondir is empty` };
+    const commonDir = path5.resolve(gitdir, common);
+    if (path5.basename(commonDir) !== ".git") return { worktree: null };
+    if (!isGitDir(commonDir)) return { worktree: null, rejected: `${commonDir} is not a git directory` };
+    try {
+      const config2 = fs6.readFileSync(path5.join(commonDir, "config"), "utf8");
+      if (/^[ \t]*bare[ \t]*=[ \t]*true[ \t]*$/im.test(config2)) return { worktree: null };
+    } catch {
+      return { worktree: null, rejected: `${commonDir} has no config` };
+    }
+    let back;
+    try {
+      back = fs6.readFileSync(path5.join(gitdir, "gitdir"), "utf8").trim();
+    } catch {
+      return { worktree: null, rejected: `${gitdir} has no gitdir back-reference` };
+    }
+    if (!back || !samePath(path5.resolve(gitdir, back), dotGitFile)) {
+      return { worktree: null, rejected: `${gitdir}/gitdir does not point back at ${dotGitFile}` };
+    }
+    if (!samePath(path5.dirname(gitdir), path5.join(commonDir, "worktrees"))) {
+      return { worktree: null, rejected: `${gitdir} is not under ${commonDir}/worktrees` };
+    }
+    const mainTop = path5.dirname(commonDir);
+    const mainDotGit = path5.join(mainTop, ".git");
+    if (!fs6.statSync(mainDotGit).isDirectory() || !samePath(mainDotGit, commonDir)) {
+      return { worktree: null, rejected: `${mainDotGit} is not the common dir ${commonDir}` };
+    }
+    if (samePath(mainTop, top)) return { worktree: null };
+    return { worktree: { worktreeTop: top, mainTop } };
+  } catch (err) {
+    return { worktree: null, rejected: `${dotGitFile} unreadable: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+function inspect(p) {
+  try {
+    let cur = path5.resolve(p);
+    for (let i = 0; i < 256; i++) {
+      const dotGit = path5.join(cur, ".git");
+      let st;
+      try {
+        st = fs6.statSync(dotGit);
+      } catch {
+        st = void 0;
+      }
+      if (st) return st.isFile() ? inspectDotGitFile(cur, dotGit) : { worktree: null };
+      const parent = path5.dirname(cur);
+      if (parent === cur) return { worktree: null };
+      cur = parent;
+    }
+    return { worktree: null };
+  } catch {
+    return { worktree: null };
+  }
+}
+function mapInto(abs, worktree) {
+  const rel = path5.relative(worktree.worktreeTop, abs);
+  return { path: rel ? path5.join(worktree.mainTop, rel) : worktree.mainTop, worktree };
+}
+function canonicalProjectDir(dir) {
+  const abs = path5.resolve(dir);
+  const found = inspect(abs);
+  if (!found.worktree) return found.rejected ? { projectRoot: abs, worktree: null, rejected: found.rejected } : { projectRoot: abs, worktree: null };
+  const mapped = mapInto(abs, found.worktree);
+  let projectRoot2 = mapped.path;
+  try {
+    if (!fs6.statSync(projectRoot2).isDirectory()) projectRoot2 = mapped.worktree.mainTop;
+  } catch {
+    projectRoot2 = mapped.worktree.mainTop;
+  }
+  return { projectRoot: projectRoot2, worktree: mapped.worktree };
+}
+
+// src/project-root.ts
 function projectHashOf(projectRoot2) {
   return crypto3.createHash("sha256").update(projectRoot2).digest("hex").slice(0, 8);
 }
@@ -33958,6 +34080,11 @@ var PORT_SPAN = portWindow.span;
 function preferredPortFor(projectRoot2) {
   return BASE_PORT + parseInt(projectHashOf(projectRoot2), 16) % PORT_SPAN;
 }
+function canonical(root, source) {
+  const { projectRoot: projectRoot2, worktree, rejected } = canonicalProjectDir(root);
+  if (!worktree) return rejected ? { projectRoot: root, source, worktreeRejected: rejected } : { projectRoot: root, source };
+  return { projectRoot: projectRoot2, source, worktree: { ...worktree, workspaceRoot: root } };
+}
 function resolveProjectRoot(opts = {}) {
   const env = opts.env ?? process.env;
   const cwd = opts.cwd ?? (() => process.cwd());
@@ -33968,15 +34095,16 @@ function resolveProjectRoot(opts = {}) {
   for (const c of candidates) {
     const v2 = c.value?.trim();
     if (!v2) continue;
-    if (!path5.isAbsolute(v2)) continue;
+    if (!path6.isAbsolute(v2)) continue;
     try {
-      if (!fs6.statSync(v2).isDirectory()) continue;
+      if (!fs7.statSync(v2).isDirectory()) continue;
     } catch {
       continue;
     }
-    return { projectRoot: path5.resolve(v2), source: c.source };
+    if (c.source === "DEEPPAIRING_PROJECT_ROOT") return { projectRoot: path6.resolve(v2), source: c.source };
+    return canonical(path6.resolve(v2), c.source);
   }
-  return { projectRoot: path5.resolve(cwd()), source: "cwd" };
+  return canonical(path6.resolve(cwd()), "cwd");
 }
 
 // src/version.ts
@@ -34032,7 +34160,7 @@ async function handleExportSession(ctx, args) {
       secretCount: secretCountOf(secretMatches)
     });
     const file2 = writeSessionHtml(projectRoot2, state.sessionId, html, generatedAt);
-    const relative = path6.relative(projectRoot2, file2) || path6.basename(file2);
+    const relative = path7.relative(projectRoot2, file2) || path7.basename(file2);
     const kb = Math.max(1, Math.round(Buffer.byteLength(html, "utf-8") / 1024));
     const narrativeNote = narrative ? "Your narrative leads the page." : "No narrative was supplied, so the page opens with an auto-generated summary \u2014 compose one and re-export for a page a stranger can actually follow (see /deeppairing:share).";
     const secretWarning = secretMatches.length ? secretWarningFor(state, { narrative }) : null;
@@ -34148,7 +34276,9 @@ async function handlePresentFindings(ctx, args) {
       title: args?.title ?? "Research Findings",
       content,
       // #206 (I1) — the feature tag; the store normalizes it to a stable slug.
-      feature: args?.feature
+      feature: args?.feature,
+      // #533 — the presenting agent's label (check_feedback ownership filter).
+      presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : void 0
     });
   } catch (e) {
     dedup.abort?.();
@@ -34357,7 +34487,9 @@ async function handlePresentOptions(ctx, args) {
       title: artifactTitle,
       content,
       relatedArtifactIds: args?.relatedFindings,
-      feature: args?.feature
+      feature: args?.feature,
+      // #533 — the presenting agent's label (check_feedback ownership filter).
+      presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : void 0
     });
   } catch (e) {
     dedup.abort?.();
@@ -34441,6 +34573,239 @@ function sessionOwesDebrief(artifacts, isRecent = () => true) {
   const hasCeremony = artifacts.some((a) => CEREMONY_TYPES.includes(a?.type ?? "")) || artifacts.some((a) => a?.type === "debrief");
   const trivial = changesets === 0 && codeChanges === 1 && !hasCeremony;
   return !trivial;
+}
+
+// src/mcp/tools/feedback-ownership.ts
+import { performance as performance2 } from "node:perf_hooks";
+var LIVE_POLL_GRACE_MS = 60 * 1e3;
+function parseFeedbackFilter(args) {
+  const a = args ?? {};
+  const filter = {};
+  if (typeof a.presentedBy === "string" && a.presentedBy.trim()) {
+    filter.presentedBy = a.presentedBy.trim().slice(0, 80);
+  }
+  if (Array.isArray(a.artifactIds)) {
+    const ids = a.artifactIds.filter((x) => typeof x === "string" && x.length > 0);
+    if (ids.length > 0) filter.artifactIds = ids;
+  }
+  return filter.presentedBy || filter.artifactIds ? filter : null;
+}
+function consumerKey(filter) {
+  if (filter.presentedBy && !filter.artifactIds) return `by:${filter.presentedBy}`;
+  return JSON.stringify({ by: filter.presentedBy ?? null, ids: [...filter.artifactIds ?? []].sort() });
+}
+function consumerLabel(filter) {
+  if (filter.presentedBy) return filter.presentedBy;
+  return `artifacts ${(filter.artifactIds ?? []).join(", ")}`;
+}
+function beginConsumer(state, filter, now = Date.now()) {
+  const key = consumerKey(filter);
+  state.liveConsumers ??= {};
+  const c = state.liveConsumers[key] ??= { filter, inflight: 0, lastAt: now };
+  c.inflight++;
+  c.lastAt = now;
+  return key;
+}
+function endConsumer(state, key, now = Date.now()) {
+  const c = state.liveConsumers?.[key];
+  if (!c) return;
+  c.inflight = Math.max(0, c.inflight - 1);
+  c.lastAt = now;
+}
+function liveReservations(state, now = Date.now()) {
+  const out = [];
+  for (const c of Object.values(state.liveConsumers ?? {})) {
+    const since = now - c.lastAt;
+    if (c.inflight > 0) out.push({ label: consumerLabel(c.filter), filter: c.filter, releaseInMs: null });
+    else if (since <= LIVE_POLL_GRACE_MS) {
+      out.push({ label: consumerLabel(c.filter), filter: c.filter, releaseInMs: LIVE_POLL_GRACE_MS - since });
+    }
+  }
+  return out;
+}
+var PendingAcks = class {
+  comments = [];
+  decisions = [];
+  statusChanges = [];
+  renderFailures = [];
+  /** Flush every lane; a failing lane does not stop the others. Returns the
+   *  errors (an un-flushed lane simply re-delivers next poll). */
+  async flush(store) {
+    const errors = [];
+    const run2 = async (fn) => {
+      try {
+        await fn();
+      } catch (err) {
+        errors.push(err);
+      }
+    };
+    if (this.comments.length > 0) await run2(() => store.acknowledgeComments(this.comments));
+    if (this.decisions.length > 0) await run2(() => store.acknowledgeDecisions(this.decisions));
+    if (this.statusChanges.length > 0) await run2(() => store.acknowledgeStatusChanges(this.statusChanges));
+    if (this.renderFailures.length > 0) await run2(() => store.acknowledgeRenderFailures?.(this.renderFailures));
+    return errors;
+  }
+};
+function matchesFilter(a, byId, filter) {
+  if (filter.presentedBy && a.presentedBy !== filter.presentedBy) return false;
+  if (filter.artifactIds) {
+    const wanted = new Set(filter.artifactIds);
+    let cur = a;
+    const seen = /* @__PURE__ */ new Set();
+    while (cur && !seen.has(cur.id)) {
+      if (wanted.has(cur.id)) return true;
+      seen.add(cur.id);
+      cur = cur.parentId ? byId[cur.parentId] : void 0;
+    }
+    return false;
+  }
+  return true;
+}
+var claimsByStore = /* @__PURE__ */ new WeakMap();
+function feedbackStoreView(store, opts) {
+  const { filter, reservations, pending } = opts;
+  const scoping = filter !== null || reservations.length > 0;
+  const token = /* @__PURE__ */ Symbol("check_feedback poll");
+  let claims = claimsByStore.get(store);
+  if (!claims) {
+    claims = /* @__PURE__ */ new Map();
+    claimsByStore.set(store, claims);
+  }
+  const claimTable = claims;
+  const mine = [];
+  const held = {};
+  const allArtifacts = async () => await store.getArtifacts() ?? [];
+  const ownership = async () => {
+    const arts = await allArtifacts();
+    const byId = {};
+    for (const a of arts) byId[a.id] = a;
+    return (artifactId) => {
+      const a = artifactId ? byId[artifactId] : void 0;
+      if (filter) return a !== void 0 && matchesFilter(a, byId, filter) ? null : "";
+      if (!a) return null;
+      for (const r of reservations) if (matchesFilter(a, byId, r.filter)) return r.label;
+      return null;
+    };
+  };
+  const consumable = (lane, read, artifactOf, idOf, claim2) => async () => {
+    const rows = await read() ?? [];
+    const owner = scoping ? await ownership() : null;
+    const out = [];
+    for (const x of rows) {
+      if (owner) {
+        const heldBy = owner(artifactOf(x));
+        if (heldBy !== null) {
+          if (heldBy) {
+            const t = held[heldBy] ??= { comments: /* @__PURE__ */ new Set(), decisions: /* @__PURE__ */ new Set(), statusChanges: /* @__PURE__ */ new Set(), renderFailures: /* @__PURE__ */ new Set() };
+            t[lane].add(idOf(x));
+          }
+          continue;
+        }
+      }
+      const key = `${lane}:${idOf(x)}`;
+      const by = claimTable.get(key);
+      if (by && by !== token) continue;
+      if (claim2 && !by) {
+        claimTable.set(key, token);
+        mine.push(key);
+      }
+      out.push(x);
+    }
+    return out;
+  };
+  const commentsLane = (claim2) => consumable("comments", () => store.getUnacknowledgedComments(), (c) => c.target.artifactId, (c) => c.id, claim2);
+  const decisionsLane = (claim2) => consumable("decisions", () => store.getResolvedDecisions(), (d) => d.artifactId, (d) => d.decisionId, claim2);
+  const statusLane = (claim2) => consumable("statusChanges", () => store.getUnacknowledgedStatusChanges(), (a) => a.id, (a) => a.id, claim2);
+  const renderLane = (claim2) => consumable(
+    "renderFailures",
+    () => store.getUnacknowledgedRenderFailures?.(),
+    (f) => f.artifactId,
+    (f) => `${f.artifactId}/${f.visualId}`,
+    claim2
+  );
+  const overrides = {
+    getUnacknowledgedComments: commentsLane(true),
+    getResolvedDecisions: decisionsLane(true),
+    getUnacknowledgedStatusChanges: statusLane(true)
+  };
+  if (typeof store.getUnacknowledgedRenderFailures === "function") {
+    overrides.getUnacknowledgedRenderFailures = renderLane(true);
+  }
+  if (pending) {
+    overrides.acknowledgeComments = (ids) => void pending.comments.push(...ids);
+    overrides.acknowledgeDecisions = (ids) => void pending.decisions.push(...ids);
+    overrides.acknowledgeStatusChanges = (ids) => void pending.statusChanges.push(...ids);
+    if (typeof store.acknowledgeRenderFailures === "function") {
+      overrides.acknowledgeRenderFailures = (refs) => void pending.renderFailures.push(...refs);
+    }
+  }
+  if (scoping) {
+    const peekLanes = [commentsLane(false), decisionsLane(false), statusLane(false)];
+    if (typeof store.getUnacknowledgedRenderFailures === "function") peekLanes.push(renderLane(false));
+    overrides.waitForFeedback = async (timeoutMs = 3e4) => {
+      const deadline = performance2.now() + timeoutMs;
+      for (; ; ) {
+        const remaining = deadline - performance2.now();
+        if (remaining <= 0) return;
+        const started = performance2.now();
+        await store.waitForFeedback(Math.ceil(remaining));
+        if (performance2.now() >= deadline) return;
+        for (const peek of peekLanes) if ((await peek()).length > 0) return;
+        if (performance2.now() - started < 50) await new Promise((r) => setTimeout(r, 100));
+      }
+    };
+  }
+  if (filter) {
+    const own = (read, artifactOf) => async () => {
+      const rows = await read() ?? [];
+      const owner = await ownership();
+      return rows.filter((x) => owner(artifactOf(x)) === null);
+    };
+    overrides.getArtifacts = own(() => allArtifacts(), (a) => a.id);
+    overrides.getPendingDecisions = own(() => store.getPendingDecisions(), (d) => d.artifactId);
+    overrides.getPendingPlanReviews = own(() => store.getPendingPlanReviews(), (p) => p.artifactId);
+    overrides.getFullState = async () => {
+      const full = await store.getFullState();
+      const owner = await ownership();
+      return {
+        ...full,
+        artifacts: (full.artifacts ?? []).filter((a) => owner(a.id) === null),
+        comments: (full.comments ?? []).filter((c) => owner(c.target.artifactId) === null),
+        // Human requests are addressed to the session, not to one presenter.
+        requests: []
+      };
+    };
+  }
+  const view = new Proxy(store, {
+    get(target, prop2, _receiver) {
+      if (typeof prop2 === "string" && Object.prototype.hasOwnProperty.call(overrides, prop2)) {
+        return overrides[prop2];
+      }
+      const v2 = Reflect.get(target, prop2, target);
+      return typeof v2 === "function" ? v2.bind(target) : v2;
+    }
+  });
+  return {
+    store: view,
+    held,
+    release() {
+      for (const key of mine.splice(0)) {
+        if (claimTable.get(key) === token) claimTable.delete(key);
+      }
+    }
+  };
+}
+function describeHeld(t) {
+  const parts = [];
+  const add = (n, one, many) => {
+    if (n > 0) parts.push(`${n} ${n === 1 ? one : many}`);
+  };
+  add(t.decisions.size, "decision", "decisions");
+  add(t.comments.size, "comment", "comments");
+  add(t.statusChanges.size, "status change", "status changes");
+  add(t.renderFailures.size, "render failure", "render failures");
+  const total = t.decisions.size + t.comments.size + t.statusChanges.size + t.renderFailures.size;
+  return { total, text: parts.join(", ") };
 }
 
 // src/mcp/tools/check-feedback.ts
@@ -34527,6 +34892,109 @@ function scopeHasSignal(scope, signals) {
   }
 }
 async function handleCheckFeedback(ctx, args) {
+  const filter = parseFeedbackFilter(args);
+  const consumer = filter ? beginConsumer(ctx.state, filter) : null;
+  const reservations = filter ? [] : liveReservations(ctx.state);
+  const pending = new PendingAcks();
+  const view = feedbackStoreView(ctx.store, { filter, reservations, pending });
+  let state = ctx.state;
+  if (filter) {
+    ctx.state.feedbackConsumers ??= {};
+    state = ctx.state.feedbackConsumers[consumer] ??= {
+      checkFeedbackPollCount: 0,
+      reportedRejectedVerdicts: /* @__PURE__ */ new Set(),
+      reportedPlanVerdicts: /* @__PURE__ */ new Set()
+    };
+  }
+  const rejectedBefore = new Set(state.reportedRejectedVerdicts);
+  const plansBefore = new Set(state.reportedPlanVerdicts);
+  const rollback = () => {
+    state.reportedRejectedVerdicts.clear();
+    for (const id of rejectedBefore) state.reportedRejectedVerdicts.add(id);
+    state.reportedPlanVerdicts.clear();
+    for (const id of plansBefore) state.reportedPlanVerdicts.add(id);
+  };
+  try {
+    let result;
+    try {
+      result = await assembleCheckFeedback({ ...ctx, store: view.store, state }, args);
+    } catch (err) {
+      rollback();
+      throw err;
+    }
+    if (ctx.signal?.aborted) {
+      rollback();
+      return result;
+    }
+    const ackErrors = await pending.flush(ctx.store);
+    return annotateResult(result, { filter, reservations, held: view.held, ackErrors });
+  } finally {
+    view.release();
+    if (consumer) endConsumer(ctx.state, consumer);
+  }
+}
+function annotateResult(result, o) {
+  const { filter, reservations, held, ackErrors } = o;
+  const heldLines = [];
+  const heldStructured = [];
+  for (const [label, tally] of Object.entries(held)) {
+    const { total, text: text2 } = describeHeld(tally);
+    if (total === 0) continue;
+    const r = reservations.find((x) => x.label === label);
+    const releaseInSec = r?.releaseInMs == null ? null : Math.max(1, Math.ceil(r.releaseInMs / 1e3));
+    const when = releaseInSec === null ? `while its check_feedback is open, then ${LIVE_POLL_GRACE_MS / 1e3}s` : `released to you in ${releaseInSec}s if it doesn't poll again`;
+    heldLines.push(`${text2} held for "${label}" (${when})`);
+    heldStructured.push({
+      label,
+      count: total,
+      decisions: tally.decisions.size,
+      comments: tally.comments.size,
+      ...releaseInSec !== null ? { releaseInSec } : { inFlight: true }
+    });
+  }
+  const notes = [];
+  if (filter) {
+    notes.push(
+      `
+
+(Filtered to ${filter.presentedBy ? `presentedBy "${filter.presentedBy}"` : ""}${filter.presentedBy && filter.artifactIds ? " + " : ""}${filter.artifactIds ? `artifacts ${filter.artifactIds.join(", ")}` : ""} \u2014 only your own artifacts' feedback is shown and consumed; session directives, requests and other agents' feedback stay for their owner / the coordinator.)`
+    );
+  }
+  if (heldLines.length > 0) {
+    notes.push(
+      `
+
+\u23F8 HELD for a live subagent \u2014 not lost, not yours to act on yet: ${heldLines.join("; ")}. Its owner is polling for it; if the owner stops polling, it falls through to this unfiltered poll.`
+    );
+  }
+  if (ackErrors.length > 0) {
+    notes.push(
+      `
+
+\u26A0\uFE0F Acknowledging this delivery failed (${errorMessage(ackErrors[0])}) \u2014 some items above may be delivered AGAIN on the next check_feedback with the same ids. Skip any id you already acted on.`
+    );
+  }
+  if (notes.length === 0) return result;
+  let text = result.content[0]?.text ?? "";
+  let sc = result.structuredContent;
+  if (heldStructured.length > 0 && sc) {
+    const heldAction = `Something is held for a live subagent (${heldLines.join("; ")}) \u2014 don't treat this as clear; call check_feedback again.`;
+    if (sc.status === "proceed") {
+      text = text.replace("Suggested action: You may proceed with implementation.", `Suggested action: ${heldAction}`);
+      sc = { ...sc, status: "held", suggestedAction: heldAction };
+    }
+    sc = { ...sc, heldBackFor: heldStructured.map((h) => h.label), held: heldStructured };
+  }
+  if (sc && filter) sc = { ...sc, filter };
+  if (sc && ackErrors.length > 0) sc = { ...sc, ackFailed: true };
+  const [, ...rest] = result.content;
+  return {
+    ...result,
+    content: [{ type: "text", text: `${text}${notes.join("")}` }, ...rest],
+    ...sc ? { structuredContent: sc } : {}
+  };
+}
+async function assembleCheckFeedback(ctx, args) {
   const { store, server, broadcast, port } = ctx;
   let companionUrl = Number.isFinite(port) && port > 0 ? `http://localhost:${port}` : void 0;
   const portRecoveryNote = () => {
@@ -35520,7 +35988,10 @@ async function handleReviseArtifact(ctx, args) {
       // #206 (I1) — carry the feature tag onto v2 so a superseded artifact's
       // successor stays in the same feature group by its OWN tag, not only via
       // the parentId chain. The store re-normalizes (idempotent on a slug).
-      ...old.featureId ? { feature: old.featureId } : {}
+      ...old.featureId ? { feature: old.featureId } : {},
+      // #533 — the successor keeps its presenter, so a subagent filtering
+      // check_feedback by presentedBy still owns the feedback on v2.
+      ...old.presentedBy ? { presentedBy: old.presentedBy } : {}
     });
     await store.updateArtifactStatus(old.id, "superseded", "agent_supersede");
     await maybeUpdateTaskStatus(server, old.id, store);
@@ -35708,8 +36179,8 @@ function requireCanonicalTarget(target) {
   if (!parsed.owner || !parsed.repo) {
     throw new Error("A prepared review target must be a full canonical github.com pull-request URL.");
   }
-  const canonical = `https://github.com/${parsed.owner}/${parsed.repo}/pull/${parsed.number}`;
-  if (target.trim().toLowerCase() !== canonical.toLowerCase()) {
+  const canonical2 = `https://github.com/${parsed.owner}/${parsed.repo}/pull/${parsed.number}`;
+  if (target.trim().toLowerCase() !== canonical2.toLowerCase()) {
     throw new Error("A prepared review target must not contain a tab, query, fragment, or non-canonical suffix.");
   }
   return { owner: parsed.owner, repo: parsed.repo, number: parsed.number };
@@ -36518,7 +36989,9 @@ async function handlePresentSpec(ctx, args) {
       type: "spec",
       title,
       content,
-      feature: args?.feature
+      feature: args?.feature,
+      // #533 — the presenting agent's label (check_feedback ownership filter).
+      presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : void 0
     });
   } catch (e) {
     dedup.abort?.();
@@ -36580,7 +37053,9 @@ async function handlePresentPlan(ctx, args) {
       title,
       content,
       relatedArtifactIds: args?.relatedFindings,
-      feature: args?.feature
+      feature: args?.feature,
+      // #533 — the presenting agent's label (check_feedback ownership filter).
+      presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : void 0
     });
   } catch (e) {
     dedup.abort?.();
@@ -36676,7 +37151,9 @@ async function handlePresentCodeChange(ctx, args) {
       content,
       agentReasoning: reasoning,
       relatedArtifactIds: args?.relatedFindings,
-      feature: args?.feature
+      feature: args?.feature,
+      // #533 — the presenting agent's label (check_feedback ownership filter).
+      presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : void 0
     });
   } catch (e) {
     dedup.abort?.();
@@ -36765,7 +37242,9 @@ async function handlePresentChangeset(ctx, args) {
       title,
       content,
       relatedArtifactIds: args?.relatedFindings,
-      feature: args?.feature
+      feature: args?.feature,
+      // #533 — the presenting agent's label (check_feedback ownership filter).
+      presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : void 0
     });
   } catch (e) {
     dedup.abort?.();
@@ -36833,7 +37312,9 @@ async function handlePresentDebrief(ctx, args) {
       title,
       content,
       relatedArtifactIds: args?.relatedFindings,
-      feature: args?.feature
+      feature: args?.feature,
+      // #533 — the presenting agent's label (check_feedback ownership filter).
+      presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : void 0
     });
   } catch (e) {
     dedup.abort?.();
@@ -36912,7 +37393,9 @@ async function handlePresentExplainer(ctx, args) {
       title,
       content,
       relatedArtifactIds,
-      feature: args?.feature
+      feature: args?.feature,
+      // #533 — the presenting agent's label (check_feedback ownership filter).
+      presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : void 0
     });
   } catch (e) {
     dedup.abort?.();
@@ -37130,22 +37613,22 @@ Read a full session via resource deeppairing://session/{id} or an artifact via d
 }
 
 // src/daemon/status.ts
-import fs7 from "node:fs";
-import path7 from "node:path";
+import fs8 from "node:fs";
+import path8 from "node:path";
 function findDaemonJson(startDir) {
-  let dir = path7.resolve(startDir);
+  let dir = path8.resolve(startDir);
   for (; ; ) {
-    const candidate = path7.join(dir, ".deeppairing", "daemon.json");
-    if (fs7.existsSync(candidate)) {
+    const candidate = path8.join(dir, ".deeppairing", "daemon.json");
+    if (fs8.existsSync(candidate)) {
       try {
-        const parsed = JSON.parse(fs7.readFileSync(candidate, "utf-8"));
+        const parsed = JSON.parse(fs8.readFileSync(candidate, "utf-8"));
         const info = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
         return { dir, info };
       } catch {
         return { dir, info: {} };
       }
     }
-    const parent = path7.dirname(dir);
+    const parent = path8.dirname(dir);
     if (parent === dir) return null;
     dir = parent;
   }
@@ -37295,7 +37778,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "check_feedback",
         annotations: { title: "Check feedback", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-        description: "Poll for the human's response to artifacts you've presented. The human responds in the companion UI; this tool waits up to 30s and returns status + any comments / decisions / plan verdicts.\n\n`waitFor` scopes which artifact-STATUS signal wakes the long-poll: 'decision' wakes on a resolved present_options, 'plan_review' on a plan status transition, 'artifact_status' on any artifact status change, 'comments'/'any' (default) on any feedback. A narrow scope ignores unrelated status transitions while you wait for the one you presented \u2014 but a human COMMENT (or question) ALWAYS wakes the poll and is ALWAYS returned regardless of scope: human input is never swallowed. So after present_options with waitFor='decision', a human who comments instead of picking is surfaced immediately (with the decision still flagged pending), not left polling forever.",
+        description: "Poll for the human's response to artifacts you've presented. The human responds in the companion UI; this tool waits up to 30s and returns status + any comments / decisions / plan verdicts.\n\n`waitFor` scopes which artifact-STATUS signal wakes the long-poll: 'decision' wakes on a resolved present_options, 'plan_review' on a plan status transition, 'artifact_status' on any artifact status change, 'comments'/'any' (default) on any feedback. A narrow scope ignores unrelated status transitions while you wait for the one you presented \u2014 but a human COMMENT (or question) ALWAYS wakes the poll and is ALWAYS returned regardless of scope: human input is never swallowed. So after present_options with waitFor='decision', a human who comments instead of picking is surfaced immediately (with the decision still flagged pending), not left polling forever.\n\nSubagents share this session: pass `presentedBy` (the same label you gave your present_* calls) and/or `artifactIds` to receive and consume ONLY the feedback on your own artifacts; everything else stays for its owner or the coordinator's unfiltered poll. While a filtered poller is live (polling, or polled in the last 60s) the unfiltered poll leaves its feedback alone and says so (`heldBackFor`, status 'held' instead of 'proceed'); once it stops polling, that feedback reaches the unfiltered poll. Delivery is at-least-once: every item carries a stable id (comment `id`, `decisionId`), and an item from a poll that errored or was cancelled comes back on the next poll with the same id \u2014 skip any id you already acted on.",
         inputSchema: {
           type: "object",
           properties: {
@@ -37303,6 +37786,15 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
               type: "string",
               enum: ["any", "comments", "decision", "plan_review", "artifact_status"],
               description: "Scope the poll to a specific feedback type. Default 'any'."
+            },
+            presentedBy: {
+              type: "string",
+              description: "Only feedback on artifacts presented with this presentedBy label (yours). Omit for the coordinator's unfiltered poll."
+            },
+            artifactIds: {
+              type: "array",
+              items: { type: "string" },
+              description: "Only feedback on these artifacts (and their revisions)."
             }
           }
         },
@@ -37314,8 +37806,8 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
           properties: {
             status: {
               type: "string",
-              enum: ["feedback", "waiting", "proceed"],
-              description: "feedback = something to act on below; waiting = reviews still pending; proceed = clear."
+              enum: ["feedback", "waiting", "proceed", "held"],
+              description: "feedback = something to act on below; waiting = reviews still pending; proceed = clear; held = (#533) nothing else owed, but feedback is held for a live subagent's own filtered poll (see heldBackFor/held) \u2014 not clear, poll again."
             },
             suggestedAction: {
               type: "string",
@@ -37324,6 +37816,10 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
             companionUrl: { type: "string", description: "I7 \u2014 the LIVE companion UI URL (daemon's real bound port). Give the human THIS exact URL; never guess a default like Vite's 5173." },
             serverVersion: { type: "string", description: "V-fix \u2014 the running deepPairing server version (same constant as MCP serverInfo). Read it to tell at a glance whether you're on stale code." },
             waitFor: { type: "string", description: "Present on a scoped still-waiting response." },
+            filter: { type: "object", description: "#533 \u2014 echo of the presentedBy/artifactIds filter on a filtered poll." },
+            heldBackFor: { type: "array", items: { type: "string" }, description: "#533 \u2014 live presenter labels whose feedback this unfiltered poll left for them." },
+            held: { type: "array", items: { type: "object" }, description: "#533 \u2014 per held-back consumer: label, counts, and releaseInSec (or inFlight)." },
+            ackFailed: { type: "boolean", description: "#533 \u2014 acknowledging this delivery failed; items may be re-delivered with the same ids." },
             summary: {
               type: "object",
               properties: {
@@ -37906,7 +38402,6 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
     }
     throw new Error(`Unknown prompt: ${name}`);
   });
-  const getPassiveFeedback2 = (excludeIds) => getPassiveFeedback(store, excludeIds);
   const presentIdempotency = new PresentIdempotencyRegistry();
   let firstToolCall = true;
   const HINT_EXCLUDED_TOOLS = /* @__PURE__ */ new Set([
@@ -37917,7 +38412,9 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
   let checkFeedbackPollCount = 0;
   const reportedRejectedVerdicts = /* @__PURE__ */ new Set();
   const reportedPlanVerdicts = /* @__PURE__ */ new Set();
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const liveConsumers = {};
+  const feedbackConsumers = {};
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const { name, arguments: rawArgs } = request.params;
     const args = rawArgs ?? {};
     let firstCallHint = "";
@@ -37928,6 +38425,19 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
     const tryElicit2 = (message) => tryElicit(server, message);
     const preflightRejectedApproaches2 = (toolName, proposalStrings, proposalPaths = [], proposalConcepts = [], opts = {}) => preflightRejectedApproaches(store, broadcast, toolName, proposalStrings, proposalPaths, proposalConcepts, opts);
     const autoNameSession = (title) => sessionNameLatch.maybeName(title);
+    const passiveFilter = name.startsWith("present_") ? parseFeedbackFilter({ presentedBy: args?.presentedBy }) : null;
+    const scopedPassiveFeedback = async (excludeIds) => {
+      const view = feedbackStoreView(store, {
+        filter: passiveFilter,
+        reservations: passiveFilter ? [] : liveReservations({ liveConsumers }),
+        pending: null
+      });
+      try {
+        return await getPassiveFeedback(view.store, excludeIds);
+      } finally {
+        view.release();
+      }
+    };
     const ctx = {
       server,
       store,
@@ -37937,7 +38447,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
         tryElicit: tryElicit2,
         preflightRejectedApproaches: preflightRejectedApproaches2,
         autoNameSession,
-        getPassiveFeedback: getPassiveFeedback2,
+        getPassiveFeedback: scopedPassiveFeedback,
         beginPresentIdempotency: (toolName, contentHash) => presentIdempotency.begin(store, toolName, contentHash)
       },
       state: {
@@ -37948,10 +38458,13 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
           checkFeedbackPollCount = v2;
         },
         reportedRejectedVerdicts,
-        reportedPlanVerdicts
+        reportedPlanVerdicts,
+        liveConsumers,
+        feedbackConsumers
       },
       // B3 — per-request progress token for check_feedback's heartbeats.
-      progressToken: request.params._meta?.progressToken
+      progressToken: request.params._meta?.progressToken,
+      signal: extra?.signal
     };
     let result;
     try {
@@ -38032,40 +38545,40 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
 
 // src/daemon/lifecycle.ts
 import { spawn as spawn2, execFileSync } from "node:child_process";
-import fs9 from "node:fs";
+import fs10 from "node:fs";
 import net from "node:net";
-import path9 from "node:path";
+import path10 from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // src/daemon/token.ts
-import fs8 from "node:fs";
+import fs9 from "node:fs";
 import os3 from "node:os";
-import path8 from "node:path";
+import path9 from "node:path";
 function runtimeBaseDir() {
   const xdg = process.env.XDG_RUNTIME_DIR?.trim();
-  if (xdg && path8.isAbsolute(xdg)) {
+  if (xdg && path9.isAbsolute(xdg)) {
     try {
-      if (fs8.statSync(xdg).isDirectory()) return path8.join(xdg, "deeppairing");
+      if (fs9.statSync(xdg).isDirectory()) return path9.join(xdg, "deeppairing");
     } catch {
     }
   }
-  return path8.join(os3.tmpdir(), "deeppairing");
+  return path9.join(os3.tmpdir(), "deeppairing");
 }
 function tokenSidecarPath(projectRoot2) {
-  return path8.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
+  return path9.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
 }
 function readTokenSidecar(projectRoot2) {
   try {
     const file2 = tokenSidecarPath(projectRoot2);
-    if (!fs8.existsSync(file2)) return null;
-    return JSON.parse(fs8.readFileSync(file2, "utf-8"));
+    if (!fs9.existsSync(file2)) return null;
+    return JSON.parse(fs9.readFileSync(file2, "utf-8"));
   } catch {
     return null;
   }
 }
 
 // src/daemon/lifecycle.ts
-var __thisDir2 = path9.dirname(fileURLToPath2(import.meta.url));
+var __thisDir2 = path10.dirname(fileURLToPath2(import.meta.url));
 var DAEMON_FILE = "daemon.json";
 var MAX_PORT_ATTEMPTS = 10;
 function logStale(msg) {
@@ -38076,13 +38589,13 @@ function logStale(msg) {
   }
 }
 function daemonInfoPath(projectRoot2) {
-  return path9.join(projectRoot2, ".deeppairing", DAEMON_FILE);
+  return path10.join(projectRoot2, ".deeppairing", DAEMON_FILE);
 }
 function readDaemonInfo(projectRoot2) {
   const infoPath = daemonInfoPath(projectRoot2);
   try {
-    if (!fs9.existsSync(infoPath)) return null;
-    const info = JSON.parse(fs9.readFileSync(infoPath, "utf-8"));
+    if (!fs10.existsSync(infoPath)) return null;
+    const info = JSON.parse(fs10.readFileSync(infoPath, "utf-8"));
     if (!info.authToken) {
       const sidecar = readTokenSidecar(projectRoot2);
       if (sidecar?.authToken && (sidecar.pid === void 0 || sidecar.pid === info.pid)) {
@@ -38166,7 +38679,7 @@ async function isDaemonRunning(projectRoot2, range = { start: preferredPortFor(p
   }
   if (info) {
     try {
-      fs9.unlinkSync(daemonInfoPath(projectRoot2));
+      fs10.unlinkSync(daemonInfoPath(projectRoot2));
     } catch {
     }
   }
@@ -38230,8 +38743,8 @@ function buildReadinessTimeoutMessage(args) {
     `deepPairing daemon did not become ready within ${timeoutMs}ms (probed this project's ports ${first}\u2013${last}).`,
     hint
   ];
-  const logPath = path9.join(projectRoot2, ".deeppairing", "daemon.log");
-  if (fs9.existsSync(logPath)) {
+  const logPath = path10.join(projectRoot2, ".deeppairing", "daemon.log");
+  if (fs10.existsSync(logPath)) {
     lines.push(`See ${logPath} for the daemon's own startup log.`);
   }
   lines.push(`To diagnose: ${cliInvocation("doctor")}`);
@@ -38273,8 +38786,8 @@ async function describePortHolders(projectRoot2) {
   return parts.join("\n");
 }
 function spawnDaemon(projectRoot2) {
-  const daemonScript = path9.join(__thisDir2, "../../dist/daemon/index.js");
-  const scriptPath = fs9.existsSync(daemonScript) ? daemonScript : path9.join(__thisDir2, "daemon.js");
+  const daemonScript = path10.join(__thisDir2, "../../dist/daemon/index.js");
+  const scriptPath = fs10.existsSync(daemonScript) ? daemonScript : path10.join(__thisDir2, "daemon.js");
   const child = spawn2("node", [scriptPath], {
     cwd: projectRoot2,
     detached: true,
@@ -38366,7 +38879,7 @@ function pidIsGone(pid) {
 function readProcessStartTime(pid) {
   try {
     if (process.platform === "linux") {
-      const stat = fs9.readFileSync(`/proc/${pid}/stat`, "utf-8");
+      const stat = fs10.readFileSync(`/proc/${pid}/stat`, "utf-8");
       const rparen = stat.lastIndexOf(")");
       if (rparen === -1) return null;
       const rest = stat.slice(rparen + 1).trim().split(/\s+/);
@@ -38649,11 +39162,11 @@ var DaemonClient = class {
   async refreshAuthTokenFromDaemonInfo() {
     if (!this.projectRoot) return false;
     try {
-      const fs12 = await import("node:fs");
-      const path13 = await import("node:path");
-      const infoPath = path13.join(this.projectRoot, ".deeppairing", "daemon.json");
-      if (!fs12.existsSync(infoPath)) return false;
-      const raw = fs12.readFileSync(infoPath, "utf-8");
+      const fs13 = await import("node:fs");
+      const path14 = await import("node:path");
+      const infoPath = path14.join(this.projectRoot, ".deeppairing", "daemon.json");
+      if (!fs13.existsSync(infoPath)) return false;
+      const raw = fs13.readFileSync(infoPath, "utf-8");
       const info = JSON.parse(raw);
       if (typeof info.authToken !== "string" || !info.authToken) return false;
       if (info.authToken === this.authToken) return false;
@@ -38707,7 +39220,7 @@ var DaemonClient = class {
    * with the stored meta and retry the original call. Other non-2xx
    * statuses throw with a structured error so caller bugs surface.
    */
-  async request(path13, init, isRetry = false) {
+  async request(path14, init, isRetry = false) {
     const extraHeaders = {};
     if (this.projectHash) extraHeaders["X-Project-Hash"] = this.projectHash;
     if (this.authToken) extraHeaders["Authorization"] = `Bearer ${this.authToken}`;
@@ -38718,12 +39231,12 @@ var DaemonClient = class {
     };
     let res;
     try {
-      res = await fetch(`${this.baseUrl}${path13}`, initWithHash);
+      res = await fetch(`${this.baseUrl}${path14}`, initWithHash);
     } catch (err2) {
       if (errorName(err2) === "AbortError" || errorName(err2) === "TimeoutError") throw err2;
       if (!isRetry) {
         const recovered = await this.recoverDaemonConnection();
-        if (recovered) return this.request(path13, init, true);
+        if (recovered) return this.request(path14, init, true);
       }
       throw new Error(
         `[deepPairing] daemon connection lost (likely after host sleep). Reconnect failed \u2014 run \`${cliInvocation("doctor")}\` to diagnose, or restart Claude Code.`
@@ -38738,7 +39251,7 @@ var DaemonClient = class {
     if (res.status === 401 && body?.code === "daemon_auth_required" && !isRetry) {
       const rotated = await this.refreshAuthTokenFromDaemonInfo();
       if (rotated) {
-        return this.request(path13, init, true);
+        return this.request(path14, init, true);
       }
     }
     if (res.status === 404 && body?.code === "session_not_registered" && !isRetry) {
@@ -38749,7 +39262,7 @@ var DaemonClient = class {
       }
       await this.register(this.lastRegisterMeta);
       void this.notifyRecovered();
-      return this.request(path13, init, true);
+      return this.request(path14, init, true);
     }
     const msg = body?.error ?? `request failed (${res.status})`;
     const err = new Error(`[deepPairing] ${msg}`);
@@ -38770,15 +39283,15 @@ var DaemonClient = class {
       );
     }
   }
-  async post(path13, body) {
-    return this.request(path13, {
+  async post(path14, body) {
+    return this.request(path14, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: body != null ? JSON.stringify(body) : void 0
     });
   }
-  async get(path13) {
-    return this.request(path13, {});
+  async get(path14) {
+    return this.request(path14, {});
   }
   // --- Session lifecycle ---
   /**
@@ -39178,9 +39691,9 @@ var DaemonClient = class {
    * 5xx from the daemon used to flow back as `data.results === undefined`
    * and the caller fell back to `[]` silently. Now non-2xx throws.
    */
-  async requestPublic(path13) {
+  async requestPublic(path14) {
     const init = this.projectHash ? { headers: { "X-Project-Hash": this.projectHash } } : {};
-    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path13}`, init);
+    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path14}`, init);
     if (res.ok) return res.json();
     let body = {};
     try {
@@ -39225,12 +39738,12 @@ var DaemonClient = class {
 };
 
 // src/store/project-registry.ts
-import fs10 from "node:fs";
+import fs11 from "node:fs";
 import os4 from "node:os";
-import path10 from "node:path";
+import path11 from "node:path";
 var REGISTRY_VERSION = 1;
 function realHomeRegistryPath() {
-  return path10.join(os4.homedir(), ".deeppairing", "projects.json");
+  return path11.join(os4.homedir(), ".deeppairing", "projects.json");
 }
 var testPathOverride = null;
 function projectRegistryPath() {
@@ -39254,8 +39767,8 @@ function readFile() {
   }
   let raw;
   try {
-    if (!fs10.existsSync(filePath)) return emptyFile();
-    raw = JSON.parse(fs10.readFileSync(filePath, "utf-8"));
+    if (!fs11.existsSync(filePath)) return emptyFile();
+    raw = JSON.parse(fs11.readFileSync(filePath, "utf-8"));
   } catch (err) {
     salvageLog("projects.json", `unreadable/unparseable \u2014 starting from empty (${String(err)})`);
     return emptyFile();
@@ -39279,7 +39792,7 @@ function readFile() {
     }
     projects[key] = {
       projectRoot: v2.projectRoot,
-      name: typeof v2.name === "string" && v2.name ? v2.name : path10.basename(v2.projectRoot),
+      name: typeof v2.name === "string" && v2.name ? v2.name : path11.basename(v2.projectRoot),
       lastSeen: typeof v2.lastSeen === "string" ? v2.lastSeen : (/* @__PURE__ */ new Date(0)).toISOString()
     };
   }
@@ -39290,13 +39803,13 @@ function upsertProject(projectRoot2, now = /* @__PURE__ */ new Date()) {
   try {
     const filePath = projectRegistryPath();
     const file2 = readFile();
-    const key = path10.resolve(projectRoot2);
+    const key = path11.resolve(projectRoot2);
     file2.projects[key] = {
       projectRoot: key,
-      name: path10.basename(key) || key,
+      name: path11.basename(key) || key,
       lastSeen: now.toISOString()
     };
-    fs10.mkdirSync(path10.dirname(filePath), { recursive: true });
+    fs11.mkdirSync(path11.dirname(filePath), { recursive: true });
     writeJsonAtomic(filePath, file2);
     return true;
   } catch (err) {
@@ -39308,9 +39821,9 @@ function upsertProject(projectRoot2, now = /* @__PURE__ */ new Date()) {
 
 // src/session-id.ts
 import crypto4 from "node:crypto";
-import path11 from "node:path";
+import path12 from "node:path";
 function deriveSessionId(projectRoot2, claudeSessionIdRaw) {
-  const projectName = path11.basename(projectRoot2);
+  const projectName = path12.basename(projectRoot2);
   const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
   const projectHash = crypto4.createHash("sha256").update(projectRoot2).digest("hex").slice(0, 8);
   const base = `session_${safeProjectName}_${projectHash}`;
@@ -39322,23 +39835,27 @@ function deriveSessionId(projectRoot2, claudeSessionIdRaw) {
 }
 
 // src/standalone.ts
-import fs11 from "node:fs";
-import path12 from "node:path";
-var { projectRoot, source: projectRootSource } = resolveProjectRoot();
-var dpDir = path12.join(projectRoot, ".deeppairing");
-var logFile = path12.join(dpDir, "server.log");
+import fs12 from "node:fs";
+import path13 from "node:path";
+var { projectRoot, source: projectRootSource, worktree: projectWorktree, worktreeRejected } = resolveProjectRoot();
+var dpDir = path13.join(projectRoot, ".deeppairing");
+var logFile = path13.join(dpDir, "server.log");
 function log(msg) {
   const line = `[${(/* @__PURE__ */ new Date()).toISOString()}] [mcp] ${msg}
 `;
   try {
-    fs11.mkdirSync(path12.dirname(logFile), { recursive: true });
-    fs11.appendFileSync(logFile, line);
+    fs12.mkdirSync(path13.dirname(logFile), { recursive: true });
+    fs12.appendFileSync(logFile, line);
   } catch {
   }
 }
 async function main() {
   log("MCP wrapper starting");
   log(`Project root: ${projectRoot} (resolved via ${projectRootSource})`);
+  if (projectWorktree) {
+    log(`Project root redirected from git worktree ${projectWorktree.workspaceRoot} to its main checkout ${projectRoot}`);
+  }
+  if (worktreeRejected) log(`Git worktree link NOT honoured (root left unredirected): ${worktreeRejected}`);
   try {
     upsertProject(projectRoot);
   } catch (err) {
@@ -39350,7 +39867,7 @@ async function main() {
     log(`WARN: daemon at port ${port} did not advertise authToken \u2014 internal calls will 401. Run \`${cliInvocation("doctor")}\` to refresh daemon.json.`);
   }
   log(`Daemon ready on port ${port}`);
-  const projectName = path12.basename(projectRoot);
+  const projectName = path13.basename(projectRoot);
   const claudeSessionIdEnv = process.env.CLAUDE_CODE_SESSION_ID;
   const derived = deriveSessionId(projectRoot, claudeSessionIdEnv);
   const sessionId = derived.sessionId;

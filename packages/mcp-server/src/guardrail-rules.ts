@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { canonicalizeWorktreePath, isLinkedWorktreeGitFile } from "./git-worktree.js";
+
+// #532 — re-exported so the init-generated hook (which imports THIS leaf by
+// URL) resolves the project root through the same worktree canonicalisation.
+export { resolveHookRoots } from "./git-worktree.js";
 
 /**
  * Q1 (round-12) — THE ONE GUARDRAIL RULE TABLE.
@@ -216,8 +221,17 @@ export function matchGuardrailPath(projectRoot: string, paths: string[]): Guardr
     for (const raw of paths) {
       if (typeof raw !== "string" || !raw) continue;
       const abs = path.resolve(projectRoot, raw);
-      const rel = path.relative(projectRoot, abs).replace(/\\/g, "/");
-      if (!rel || rel === ".." || rel.startsWith("../")) continue; // outside the project
+      let rel = path.relative(projectRoot, abs).replace(/\\/g, "/");
+      if (!rel || rel === ".." || rel.startsWith("../") || path.isAbsolute(rel)) {
+        // #532 — outside the root, but maybe inside a git linked worktree of
+        // it: the root is canonicalised to the main checkout, and an absolute
+        // edit in `<worktree>/migrations/…` must still be the guardrail path
+        // it is. Map it to the same repo-relative path in the main checkout.
+        const mapped = canonicalizeWorktreePath(abs);
+        if (!mapped.worktree) continue; // outside the project
+        rel = path.relative(projectRoot, mapped.path).replace(/\\/g, "/");
+        if (!rel || rel === ".." || rel.startsWith("../") || path.isAbsolute(rel)) continue;
+      }
       const rule = ruleForRelPath(rel);
       if (rule) return { category: rule.category, path: rel, rationale: rule.rationale, note: rule.note };
     }
@@ -297,7 +311,7 @@ export interface StateMatch {
   category: typeof DEEPPAIRING_STATE_CATEGORY;
   /** What the human sees named: project-relative when inside it, else absolute. */
   path: string;
-  kind: "preferences" | "team" | "hooks" | "claude-settings";
+  kind: "preferences" | "team" | "hooks" | "claude-settings" | "worktree-link";
 }
 
 /** One spelling → the comparable form: `/` separators, no Windows trailing
@@ -420,7 +434,17 @@ export function matchDeeppairingStatePath(projectRoot: string, raw: unknown): St
     ordered.push(...candidates);
     for (const c of ordered) {
       const m = STATE_PATTERN.exec(canonicalForm(c));
-      if (!m) continue;
+      if (!m) {
+        // #536 review (P3) — a git LINKED WORKTREE's `.git` file decides which
+        // project (and ledger) the worktree resolves to (git-worktree.ts), so
+        // rewriting it could point the gate at an empty ledger. Only a `.git`
+        // FILE with a `gitdir:` line into a worktree gitdir matches — never a
+        // `.git` directory or a submodule's `.git` file.
+        if (path.isAbsolute(c) && canonicalForm(c).split("/").pop() === ".git" && isLinkedWorktreeGitFile(c)) {
+          return { category: DEEPPAIRING_STATE_CATEGORY, path: displayPath(projectRoot, c), kind: "worktree-link" };
+        }
+        continue;
+      }
       const file = m[2] ?? "";
       const kind: StateMatch["kind"] = m[3] ? "claude-settings" : file.startsWith("hooks/") ? "hooks" : file === "team.json" ? "team" : "preferences";
       return { category: DEEPPAIRING_STATE_CATEGORY, path: displayPath(projectRoot, c), kind };

@@ -27,7 +27,7 @@ import path from "node:path";
 // Claude Code signal for "the workspace") then DEEPPAIRING_PROJECT_ROOT
 // (escape hatch) before falling back to cwd. Pre-Z2 every plugin user's
 // projects collapsed to one shared session under the plugin dir.
-const { projectRoot, source: projectRootSource } = resolveProjectRoot();
+const { projectRoot, source: projectRootSource, worktree: projectWorktree, worktreeRejected } = resolveProjectRoot();
 const dpDir = path.join(projectRoot, ".deeppairing");
 const logFile = path.join(dpDir, "server.log");
 
@@ -42,6 +42,12 @@ function log(msg: string): void {
 async function main() {
   log("MCP wrapper starting");
   log(`Project root: ${projectRoot} (resolved via ${projectRootSource})`);
+  // #532 — a git linked worktree shares its main checkout's project (ledger,
+  // daemon, sessions). Logged once so a "why is this the main repo?" is legible.
+  if (projectWorktree) {
+    log(`Project root redirected from git worktree ${projectWorktree.workspaceRoot} to its main checkout ${projectRoot}`);
+  }
+  if (worktreeRejected) log(`Git worktree link NOT honoured (root left unredirected): ${worktreeRejected}`);
 
   // Context bank — record this project in ~/.deeppairing/projects.json.
   // daemon/index.ts does the same on ITS startup, but that only fires when this

@@ -27,6 +27,7 @@ import { isCrossTerminalVerdictFlip } from "./verdict-guard.js";
 import { readPostedReviews, appendPostedReview, type PostedReviewRecord } from "./posted-reviews.js";
 import { ReviewPostJournal } from "./review-post-journal.js";
 import type { IStore, DecisionRecord, PlanReviewRecord, RejectedApproach, RenderFailureRecord, StatusTransitionReason , RecordDecisionParams } from "./store-interface.js";
+import { canonicalizeWorktreePath } from "../git-worktree.js";
 
 export type { DecisionRecord, PlanReviewRecord };
 // Re-exported so existing `import { ProjectGuardrail } from "./file-store.js"`
@@ -570,6 +571,7 @@ export class FileStore implements IStore {
     parentId?: string | null;
     version?: number;
     feature?: string | null;
+    presentedBy?: string | null;
   }): Artifact {
     // #338 (F1) — a frozen writer refuses BEFORE any side effect. Pre-this a
     // createArtifact on a conflicted store pushed the record into memory,
@@ -585,6 +587,10 @@ export class FileStore implements IStore {
     // unsluggable tag yields undefined → the field is OMITTED from the stored
     // artifact, keeping clean JSON byte-identical to pre-#206.
     const featureId = normalizeFeatureId(params.feature)?.slug;
+    const presentedBy =
+      typeof params.presentedBy === "string" && params.presentedBy.trim()
+        ? params.presentedBy.trim().slice(0, 80)
+        : undefined;
     // #162 — the store scans AUTHORITATIVELY, mirroring addComment. Pre-#162
     // the tool handlers pre-scanned and passed `secretWarnings` in, and this
     // method trusted the param — so a bearer-authed caller POSTing straight to
@@ -613,6 +619,8 @@ export class FileStore implements IStore {
       ...(secretWarnings.length > 0 ? { secretWarnings } : {}),
       // #206 (I1) — same omit-when-empty discipline for the feature tag.
       ...(featureId ? { featureId } : {}),
+      // #533 — the presenter label, same omit-when-empty discipline.
+      ...(presentedBy ? { presentedBy } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -684,7 +692,9 @@ export class FileStore implements IStore {
     const files = artifact.type === "code_change" ? [content.filePath]
       : artifact.type === "changeset" && Array.isArray(content.files) ? content.files.map(f => f?.path) : [];
     return [...new Set(files.filter((f): f is string => typeof f === "string" && f.trim().length > 0)
-      .map(f => path.resolve(this.projectRoot, f)))];
+      // #532 — canonical across git worktrees: a worktree path keys on the same
+      // repo-relative path in the main checkout, matching the checkpoint hook.
+      .map(f => canonicalizeWorktreePath(path.resolve(this.projectRoot, f)).path))];
   }
 
   private codeCheckpointPath(filePath: string): string {

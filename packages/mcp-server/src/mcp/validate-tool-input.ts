@@ -1185,6 +1185,11 @@ const SERVED_REQUEST_ID = z.string().optional()
 const FEATURE_TAG = z.string().optional()
   .describe("A short, STABLE tag for the feature/milestone this work belongs to (e.g. 'milestone-7', 'auth-rework'). Keep it IDENTICAL across every artifact of the same feature so they group together in the Features view — match the human's milestone naming if one exists; don't invent a new tag per run.");
 
+// #533 — advertisement-only like FEATURE_TAG: the handler threads
+// args.presentedBy to createArtifact, which normalizes + persists it.
+const PRESENTED_BY = z.string().optional()
+  .describe("Optional label for WHO is presenting (e.g. 'coordinator', 'builder:auth-fix', 'reviewer'). Subagents: set it, then call check_feedback({presentedBy}) with the same label so you receive (and consume) only the feedback on your own artifacts.");
+
 // `satisfies` (not a Record annotation) keeps the literal keys, so property
 // access stays exact under noUncheckedIndexedAccess.
 export const TOOL_INPUT_SCHEMAS = {
@@ -1195,20 +1200,20 @@ export const TOOL_INPUT_SCHEMAS = {
   // and threads it to createArtifact, which normalizes + persists featureId.
   present_findings: ResearchContentSchema.extend({
     title: ARTIFACT_TITLE.optional(),
-    feature: FEATURE_TAG,
+    feature: FEATURE_TAG, presentedBy: PRESENTED_BY,
   }),
   present_options: PresentOptionsInputSchema.extend({
     relatedFindings: z.array(z.string()).optional()
       .describe("Artifact IDs of findings that motivated this decision"),
-    feature: FEATURE_TAG,
+    feature: FEATURE_TAG, presentedBy: PRESENTED_BY,
   }),
-  present_spec: SpecContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG }),
+  present_spec: SpecContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG, presentedBy: PRESENTED_BY }),
   present_plan: PlanContentSchema.extend({
     title: ARTIFACT_TITLE,
     relatedFindings: z.array(z.string()).optional()
       .describe("Artifact IDs of findings that motivated this plan"),
     servedRequestId: SERVED_REQUEST_ID,
-    feature: FEATURE_TAG,
+    feature: FEATURE_TAG, presentedBy: PRESENTED_BY,
   }),
   present_code_change: CodeChangeContentSchema.extend({
     before: z.string().optional()
@@ -1219,22 +1224,22 @@ export const TOOL_INPUT_SCHEMAS = {
     // of undiscoverability.
     relatedFindings: z.array(z.string()).optional()
       .describe("Artifact IDs of findings that motivated this change"),
-    feature: FEATURE_TAG,
+    feature: FEATURE_TAG, presentedBy: PRESENTED_BY,
   }),
   log_reasoning: ReasoningContentSchema,
   // #171/#175 — multi-file changeset. `reviewState` and `reviewReasons` are
   // HUMAN-driven (set via the review route), so they're omitted from the
   // advertised input — the agent never sends them.
-  present_changeset: ChangesetContentSchema.omit({ reviewState: true, reviewReasons: true }).extend({ title: ARTIFACT_TITLE, feature: FEATURE_TAG }),
+  present_changeset: ChangesetContentSchema.omit({ reviewState: true, reviewReasons: true }).extend({ title: ARTIFACT_TITLE, feature: FEATURE_TAG, presentedBy: PRESENTED_BY }),
   // #190 — the end-of-feature debrief. `summary` is the only required content
   // field (all others optional-tolerant); title is artifact-level.
-  present_debrief: DebriefContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG }),
+  present_debrief: DebriefContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG, presentedBy: PRESENTED_BY }),
   // #190 A2 — the read-only explainer walk-through. `title`, `overview`, and a
   // non-empty `sections[]` are the required core; `title` lives IN the content
   // schema (it doubles as the artifact title). G1 (#198b) adds the optional
   // servedRequestId linkage (the validator ignores it — it builds its own
   // content object from named fields — so it stays advertisement-only).
-  present_explainer: ExplainerContentSchema.extend({ servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG }),
+  present_explainer: ExplainerContentSchema.extend({ servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG, presentedBy: PRESENTED_BY }),
 } satisfies Record<string, z.ZodType>;
 
 /** JSON-Schema form of a tool input for ListTools (typed for the SDK's
