@@ -1138,12 +1138,16 @@ process.stdin.on("end", () => {
     const decision = evaluatePreflightHook({ toolName, toolInput, projectRoot });
     if (decision && decision.fire) {
       recordHookFire(projectRoot, decision);
+      const reason = decision.reason || "This change matches a previously-rejected approach.";
       process.stdout.write(
         JSON.stringify({
+          // #544 — some Claude Code dialogs omit the ask reason; also surface
+          // the same resolved text through the documented user warning field.
+          systemMessage: reason,
           hookSpecificOutput: {
             hookEventName: "PreToolUse",
             permissionDecision: "ask",
-            permissionDecisionReason: decision.reason || "This change matches a previously-rejected approach."
+            permissionDecisionReason: reason
           }
         })
       );

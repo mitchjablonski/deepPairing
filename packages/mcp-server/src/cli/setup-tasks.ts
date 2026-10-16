@@ -734,11 +734,14 @@ process.stdin.on("end", async () => {
     const decision = mod.evaluatePreflightHook({ toolName, toolInput, projectRoot });
     if (decision && decision.fire) {
       mod.recordHookFire(projectRoot, decision);
+      const reason = decision.reason || "This change matches a previously-rejected approach.";
       process.stdout.write(JSON.stringify({
+        // #544 — mirror the ask reason in Claude Code's user warning field.
+        systemMessage: reason,
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
           permissionDecision: "ask",
-          permissionDecisionReason: decision.reason || "This change matches a previously-rejected approach.",
+          permissionDecisionReason: reason,
         },
       }));
     }

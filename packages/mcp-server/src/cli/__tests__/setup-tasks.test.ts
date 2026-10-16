@@ -909,6 +909,7 @@ describe("ensurePreflightHook (WP5 — platform-level rejected-approach gate)", 
     expect(parsed.hookSpecificOutput.hookEventName).toBe("PreToolUse");
     expect(parsed.hookSpecificOutput.permissionDecision).toBe("ask");
     expect(parsed.hookSpecificOutput.permissionDecisionReason).toMatch(/REJECTED_APPROACH_BLOCKED/);
+    expect(parsed.systemMessage).toBe(parsed.hookSpecificOutput.permissionDecisionReason);
   });
 
   it.skipIf(!builtCoreExists)("e2e — the generated hook ALLOWS (empty stdout) an unrelated edit", () => {
