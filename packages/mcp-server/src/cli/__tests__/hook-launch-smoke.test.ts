@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { canonicalProjectDir } from "../../git-worktree.js";
 import {
   ensureCheckpointHook,
   ensurePreflightHook,
@@ -22,12 +23,14 @@ describe("installed hook launch contract", () => {
   it("launches every generated hook through a POSIX shell and native Node", () => {
     // Keep a space in the project path: the quotes around $CLAUDE_PROJECT_DIR
     // are part of the supported launcher contract, not decoration.
-    const scratchBase = path.join(process.cwd(), "node_modules", ".cache");
-    fs.mkdirSync(scratchBase, { recursive: true });
-    const parent = fs.mkdtempSync(path.join(scratchBase, "dp-hook-smoke-"));
+    // Stay outside the checkout: a fixture inside a linked worktree resolves
+    // through its .git entry to the real project's ledger (#532).
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "dp-hook-smoke-"));
     scratchRoots.push(parent);
     const projectRoot = path.join(parent, "project with spaces");
     fs.mkdirSync(projectRoot);
+    // Fail before launching any hook if a future fixture move redirects it.
+    expect(path.resolve(canonicalProjectDir(projectRoot).projectRoot)).toBe(path.resolve(projectRoot));
     vi.spyOn(os, "homedir").mockReturnValue(parent);
 
     expect(ensureStopHook(projectRoot).ok).toBe(true);
@@ -91,7 +94,11 @@ describe("installed hook launch contract", () => {
     let preflightOutput: unknown;
     for (const [index, command] of commands.entries()) {
       const result = runInstalledHook(command, payloads[index]!);
-      if (index === 2) preflightOutput = JSON.parse(result.stdout);
+      if (index === 2) {
+        const parsed = JSON.parse(result.stdout);
+        expect(parsed.systemMessage).toBe(parsed.hookSpecificOutput.permissionDecisionReason);
+        preflightOutput = parsed;
+      }
     }
 
     expect(preflightOutput).toEqual(expect.objectContaining({
@@ -121,13 +128,15 @@ describe("installed hook launch contract", () => {
     const ledger = runInstalledHook(commands[2]!, JSON.stringify({
       tool_name: "Edit", tool_input: { file_path: "src/config.ts", new_string: "global mutable state for config" },
     }));
-    expect(JSON.parse(ledger.stdout)).toEqual(expect.objectContaining({
+    const ledgerOutput = JSON.parse(ledger.stdout);
+    expect(ledgerOutput).toEqual(expect.objectContaining({
       hookSpecificOutput: expect.objectContaining({
         hookEventName: "PreToolUse",
         permissionDecision: "ask",
         permissionDecisionReason: expect.stringContaining("REJECTED_APPROACH_BLOCKED"),
       }),
     }));
+    expect(ledgerOutput.systemMessage).toBe(ledgerOutput.hookSpecificOutput.permissionDecisionReason);
 
     const hookState = JSON.parse(
       fs.readFileSync(path.join(projectRoot, ".deeppairing", "hooks-state.json"), "utf8"),

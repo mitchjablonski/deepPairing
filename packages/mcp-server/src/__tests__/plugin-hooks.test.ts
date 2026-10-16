@@ -80,6 +80,7 @@ describe("plugin hook bundles (smoke)", () => {
     expect(parsed.hookSpecificOutput.hookEventName).toBe("PreToolUse");
     expect(parsed.hookSpecificOutput.permissionDecision).toBe("ask");
     expect(parsed.hookSpecificOutput.permissionDecisionReason).toMatch(/REJECTED_APPROACH_BLOCKED/);
+    expect(parsed.systemMessage).toBe(parsed.hookSpecificOutput.permissionDecisionReason);
   });
 
   it.skipIf(!bundlesBuilt)("preflight allows (empty stdout) an unrelated edit", () => {
@@ -117,6 +118,7 @@ describe("plugin hook bundles (smoke)", () => {
     const parsed = JSON.parse(out);
     expect(parsed.hookSpecificOutput.permissionDecision).toBe("ask"); // never "deny"
     const reason = parsed.hookSpecificOutput.permissionDecisionReason;
+    expect(parsed.systemMessage).toBe(reason);
     // Q1 item 6 — the machine token is still greppable, but it now rides the
     // FINAL bracketed line rather than screaming from the front of the human's
     // dialog. Order is the pin: human sentence first, token last.
@@ -146,6 +148,10 @@ describe("plugin hook bundles (smoke)", () => {
       }),
     );
     expect(out.trim()).toBe("");
+  });
+
+  it.skipIf(!bundlesBuilt)("preflight fails open with empty stdout on malformed input", () => {
+    expect(runHook(preflightBundle, "{ not json")).toBe("");
   });
 
   it.skipIf(!bundlesBuilt)("stop nags when an unreviewed draft is present", () => {
