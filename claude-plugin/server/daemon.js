@@ -34268,7 +34268,12 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
     if (!fs20.existsSync(statePath)) return c.json({ version: 1, fires: [] });
     try {
       const raw2 = JSON.parse(fs20.readFileSync(statePath, "utf-8"));
-      const fires = Array.isArray(raw2?.fires) ? raw2.fires.slice(-25) : [];
+      const fires = Array.isArray(raw2?.fires) ? raw2.fires.slice(-25).map((f) => {
+        if (!f || typeof f !== "object") return f;
+        const { gate: _gate, ...summary } = f;
+        void _gate;
+        return summary;
+      }) : [];
       return c.json({ version: 1, fires });
     } catch {
       return c.json({ version: 1, fires: [] });
@@ -36633,7 +36638,9 @@ function createDaemon(deps) {
           const t = new Date(f.at).getTime();
           if (!Number.isFinite(t) || t <= lastFireSeen) continue;
           lastFireSeen = t;
-          broadcastAll({ type: "hook_fired", fire: f });
+          const { gate: _gate, ...summary } = f ?? {};
+          void _gate;
+          broadcastAll({ type: "hook_fired", fire: summary });
         }
       } catch {
       }
@@ -36717,13 +36724,13 @@ function createDaemon(deps) {
     return void 0;
   }
   function sendHookGate(sessionId, event) {
-    const own = sessionId !== "hook" ? wsClients.get(sessionId) : void 0;
-    if (!own) {
+    if (sessionId === "hook") {
       broadcastAll(event);
       return;
     }
     const data = JSON.stringify({ ...event, sessionId });
-    for (const ws of own) {
+    const own = wsClients.get(sessionId);
+    for (const ws of own ?? []) {
       try {
         ws.send(data);
       } catch {
