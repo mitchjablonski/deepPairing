@@ -6,9 +6,11 @@
  * naming the fork, and the stored ARTIFACT title started using it — but two
  * surfaces kept echoing the whole `context` PARAGRAPH:
  *   (a) present_options' own success text (`Decision "<paragraph>" presented…`),
- *   (b) the ledger keys check_feedback mints when the human picks — the
- *       approved pattern and every unchosen option's rejection — both keyed
+ *   (b) the ledger keys minted for a decision — the approved pattern
+ *       check_feedback records on a pick, and (#549) the rejection the explicit
+ *       per-option "Never suggest this" records — both keyed
  *       `${context}: ${option.title}`, which is what export-learnings renders.
+ *       (Pre-#549 every unchosen option was rejected on a pick; no longer.)
  *
  * THE BACKWARD-COMPAT INVARIANT (the reason this test exists): the rejection
  * `description` is ALSO the session-ledger key the preflight rejected-approach
@@ -42,6 +44,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import type { FileStore } from "../../store/file-store.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
 import { findRejectedApproachMatch } from "../preflight-validator.js";
+import { createHttpRoutes } from "../../http/routes.js";
+import { withHash } from "../../http/__tests__/routes.harness.js";
 
 const ctx = setupServerTest();
 const callTool = makeCallTool(ctx);
@@ -100,8 +104,14 @@ describe("P3 — present_options success text names the fork, not the paragraph"
   });
 });
 
+const neverSuggest = (decisionId: string, optionId: string) =>
+  withHash(createHttpRoutes(store, ctx.tmpDir, () => {}), ctx.tmpDir).request(
+    `/api/decisions/${decisionId}/options/${optionId}/never-suggest`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+  );
+
 describe("P3 — the pick records the short label in BOTH ledger keys", () => {
-  it("approved pattern + unchosen rejection key on the title, not the paragraph", async () => {
+  it("approved pattern + an explicitly rejected option key on the title, not the paragraph", async () => {
     await callTool("present_options", { context: CONTEXT, title: TITLE, options: OPTIONS });
     const dec = store.getPendingDecisions()[0]!;
     // The record carries the M1.1 title (present_options passes it through).
@@ -113,7 +123,10 @@ describe("P3 — the pick records the short label in BOTH ledger keys", () => {
     expect(res.text).toContain(`- Decision "${TITLE}": selected "Redis"`);
     expect(res.text).not.toContain(CONTEXT);
 
-    // Session ledger: the UNCHOSEN option's key is short.
+    // #549 — the pick alone rejects nothing.
+    expect(store.getSessionMemory().rejectedApproaches).toHaveLength(0);
+    // Session ledger: an explicitly rejected option's key is short.
+    expect((await neverSuggest(dec.decisionId, "b")).status).toBe(200);
     const memory = store.getSessionMemory();
     expect(memory.rejectedApproaches.map((r) => r.description)).toContain(`${TITLE}: In-process LRU`);
     expect(memory.rejectedApproaches.every((r) => !r.description.includes(CONTEXT))).toBe(true);
@@ -129,6 +142,8 @@ describe("P3 — the pick records the short label in BOTH ledger keys", () => {
     const dec = store.getPendingDecisions()[0]!;
     store.resolveDecision(dec.decisionId, "a");
     await callTool("check_feedback");
+    expect(store.getSessionMemory().rejectedApproaches).toHaveLength(0);
+    expect((await neverSuggest(dec.decisionId, "b")).status).toBe(200);
     const memory = store.getSessionMemory();
     expect(memory.rejectedApproaches.map((r) => r.description)).toContain("Which cache?: In-process LRU");
     expect(memory.approvedPatterns).toContain("Which cache?: Redis");

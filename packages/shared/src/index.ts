@@ -103,6 +103,7 @@ export {
 export {
   CommentBodySchema,
   DecisionResolveBodySchema,
+  DecisionOptionNeverSuggestBodySchema,
   DecisionCloseOutBodySchema,
   StatusUpdateBodySchema,
   RenameBodySchema,
@@ -123,6 +124,7 @@ export {
   type SuggestionResolveBody,
   type SuggestionUpdateBody,
   type DecisionResolveBody,
+  type DecisionOptionNeverSuggestBody,
   type DecisionCloseOutBody,
   type StatusUpdateBody,
   type RenameBody,

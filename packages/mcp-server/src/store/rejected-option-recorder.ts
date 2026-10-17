@@ -5,8 +5,11 @@ import type { IStore } from "./store-interface.js";
  * #169 — single-source the "record a rejected decision option into the ledger"
  * shape so the TWO paths that do it can't drift:
  *
- *   1. the UNCHOSEN-options path — check_feedback, when the human PICKS one
- *      option, records the losers (check-feedback.ts).
+ *   1. the explicit per-option "Never suggest this" path — the HTTP
+ *      never-suggest route records the ONE option the human named
+ *      (review-routes.ts). #549 — before that, check_feedback recorded every
+ *      UNCHOSEN option here whenever the human picked one; picking no longer
+ *      rejects the others.
  *   2. the WHOLE-CARD rejection path — the HTTP status route, when the human
  *      rejects the entire decision framing ("none of these") with a reason
  *      (routes.ts).
@@ -37,9 +40,8 @@ const MAX_REASON_LEN = 240;
 
 /**
  * Compose + bound the per-option rejection reason. Prefer the option's OWN cons
- * (its specific "why it's the worse fit"), appending `contextSuffix` (the pick
- * context on the unchosen path, or the whole-card reject framing on the HTTP
- * path). Fall back to `fallbackReason` when the option lists no cons.
+ * (its specific "why it's the worse fit"), appending `contextSuffix` (empty on
+ * the per-option never-suggest path). Fall back to `fallbackReason` when the option lists no cons.
  */
 export function composeOptionRejectReason(
   option: Pick<DecisionOption, "cons">,
@@ -108,9 +110,9 @@ export function optionConceptKey(option: DecisionOption): string | undefined {
  * Keying on the concept ("redis for caching") instead blocks re-proposing THAT
  * option (the option's own title/description/concept still appears in the retry)
  * while the shared question — and a genuinely different option set — sails
- * through. The context-prefixed recordRejectedOption stays on the
- * unchosen-losers path (check_feedback), where an explicit PICK resolved the
- * question so a same-question re-proposal isn't expected.
+ * through. The context-prefixed recordRejectedOption stays on the explicit
+ * per-option "Never suggest this" path (#549), where the human named ONE
+ * option, so a same-question re-proposal of the others is unaffected.
  */
 export async function recordRejectedOptionConcept(
   store: Pick<IStore, "recordRejectedApproach">,

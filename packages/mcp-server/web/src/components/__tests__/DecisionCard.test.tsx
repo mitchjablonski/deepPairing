@@ -320,7 +320,7 @@ describe("DecisionCard — resolved state (initialResolved)", () => {
     expect(banner).toHaveTextContent("Fits existing infra");
   });
 
-  it("lists rejected options", () => {
+  it("lists unchosen options as NOT CHOSEN, not rejected (#549)", () => {
     render(
       <DecisionCard
         event={event}
@@ -328,7 +328,8 @@ describe("DecisionCard — resolved state (initialResolved)", () => {
         sessionId="session_abc"
       />,
     );
-    expect(screen.getByText(/Rejected:/)).toBeInTheDocument();
+    expect(screen.getByText(/Not chosen:/)).toBeInTheDocument();
+    expect(screen.queryByText(/Rejected:/)).not.toBeInTheDocument();
     expect(screen.getByText(/CDN edge cache/)).toBeInTheDocument();
   });
 

@@ -2,8 +2,9 @@
  * #408 review — check_feedback must never ack a decision whose ledger writes
  * failed. Pre-fix it acked every resolved decision FIRST, then recorded; a
  * busy preferences lock (ELOCKED) failed the tool after the ack, so the pick
- * vanished from every later check_feedback and the unchosen options'
- * rejections were never written.
+ * vanished from every later check_feedback and its ledger writes were never
+ * made. (#549 — a pick now writes only the approval; unchosen options are not
+ * rejected.)
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
@@ -52,6 +53,6 @@ describe("check_feedback under a busy preferences lock", () => {
     expect(store.getResolvedDecisions()).toEqual([]);
     const memory = store.getSessionMemory();
     expect(memory.approvedPatterns).toEqual(["Cache backend: Redis"]);
-    expect(memory.rejectedApproaches.map((r) => r.description)).toEqual(["Cache backend: In-process LRU"]);
+    expect(memory.rejectedApproaches).toEqual([]); // #549 — the pick rejects nothing
   });
 });

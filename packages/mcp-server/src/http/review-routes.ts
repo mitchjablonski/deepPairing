@@ -1,8 +1,9 @@
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
-import type { Artifact } from "@deeppairing/shared";
+import type { Artifact, DecisionOption } from "@deeppairing/shared";
 import {
   ChangesetReviewBodySchema,
+  DecisionOptionNeverSuggestBodySchema,
   DecisionResolveBodySchema,
   StatusUpdateBodySchema,
   formatZodIssues,
@@ -15,6 +16,7 @@ import { stripLeadingPathToken } from "../store/concept-hygiene.js";
 import { isCrossTerminalVerdictFlip } from "../store/verdict-guard.js";
 import { staleResolveBody, closedResolveBody, classifyClosedDecision, withDecisionResolveLock } from "../store/decision-resolve-guard.js";
 import { getSessionId, NO_SESSION_RESPONSE, readJsonValue } from "./route-helpers.js";
+import { composeOptionRejectReason, recordRejectedOption } from "../store/rejected-option-recorder.js";
 
 /** The persistence surface required by current-session review mutations. */
 export type ReviewStore = Pick<
@@ -263,6 +265,73 @@ export function createReviewRoutes({
     });
   });
 
+  // #549 — the explicit per-option "Never suggest this". Resolving a decision
+  // no longer records the unchosen options as rejected stances (check_feedback
+  // writes only the approval); the human opts ONE option into the ledger here.
+  // Records through the same recordRejectedOption helper the old implicit path
+  // used, so an explicitly rejected option is keyed — and gated — exactly as an
+  // auto-recorded one was: session key `${label}: ${title}`, cross-project key
+  // the option's concept. Idempotent: recordRejectedApproach dedupes on the
+  // description, so a retried click adds no second row.
+  app.post("/api/decisions/:decisionId/options/:optionId/never-suggest", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const decisionId = c.req.param("decisionId");
+    const optionId = c.req.param("optionId");
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = DecisionOptionNeverSuggestBodySchema.safeParse(bodyVal.value ?? {});
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+
+    const artifact = (await store.getArtifacts()).find(
+      (a) =>
+        a.type === "decision" &&
+        ((a.content as { decisionId?: string } | null)?.decisionId === decisionId || a.id === decisionId),
+    );
+    if (!artifact) {
+      return c.json(
+        { error: "decision_not_in_session", code: ERROR_CODES.decision_not_in_session,
+          message: "This decision belongs to a different session than the one this tab is bound to." },
+        404,
+      );
+    }
+    const content = artifact.content as { context?: string; title?: string; options?: DecisionOption[] } | null;
+    const options = Array.isArray(content?.options) ? content.options : [];
+    const option = options.find((o) => o.id === optionId);
+    if (!option) {
+      return c.json(
+        { error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error },
+        400,
+      );
+    }
+    // The option the human CHOSE can't also be a "never suggest" stance — that
+    // would hard-block the very approach they just approved.
+    const record = await store.getDecision(decisionId);
+    if (record?.response?.optionId === optionId) {
+      return c.json(
+        { error: "You chose this option — it can't also be remembered as rejected.", code: ERROR_CODES.validation_error },
+        400,
+      );
+    }
+    // Same label check_feedback keys the approval on (P3): the short title,
+    // else the context, else the artifact title.
+    const label = content?.title?.trim() || content?.context?.trim() || artifact.title;
+    const humanReason = parsed.data.reason?.trim();
+    const reason = humanReason || composeOptionRejectReason(option, "");
+    const description = `${label}: ${option.title}`;
+    const alreadyRecorded = (await store.getSessionMemory()).rejectedApproaches
+      .some((r) => r.description === description);
+    await recordRejectedOption(store, (event) => broadcast(event, sid), {
+      context: label,
+      option,
+      reason,
+      sourceArtifactId: artifact.id,
+    });
+    log(`[decision] never-suggest ${decisionId}/${optionId}${alreadyRecorded ? " (already recorded)" : ""}`);
+    return c.json({ status: "recorded", description, alreadyRecorded });
+  });
+
   // Approve/revise/reject a plan from the web UI
   app.post("/api/artifacts/:artifactId/status", async (c) => {
     const sid = getSessionId(c);
@@ -428,7 +497,7 @@ export function createReviewRoutes({
         // everywhere. Keying on the QUESTION instead means the concept lane
         // catches a re-proposal of the same framing ("cache backend") while an
         // unrelated Redis edit sails through. The per-option-with-a-pick signal
-        // still lives on the unchosen-losers path (check_feedback) and the
+        // lives on the explicit per-option "Never suggest this" (#549) and the
         // "none of these fit" send-back — both of which name specific options.
         //
         // Concept key priority mirrors the non-decision path: (1) the
