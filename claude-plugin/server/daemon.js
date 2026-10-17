@@ -32022,6 +32022,58 @@ function updatePreflightBlocks(projectRoot2, mutate) {
     return false;
   }
 }
+var HOOK_ID = /^[A-Za-z0-9_-]{1,64}$/;
+function hookGateEntryFromFire(fire) {
+  if (!fire || fire.hook !== "preflight" || !fire.gate || typeof fire.gate !== "object") return null;
+  if (typeof fire.id !== "string" || !HOOK_ID.test(fire.id)) return null;
+  const g = fire.gate;
+  const str2 = (v, max) => typeof v === "string" && v.trim() ? v.trim().slice(0, max) : void 0;
+  const concept = str2(g.concept, 200);
+  if (!concept) return null;
+  const at = typeof fire.at === "string" && Number.isFinite(Date.parse(fire.at)) ? fire.at : (/* @__PURE__ */ new Date()).toISOString();
+  const via = typeof g.via === "string" && VALID_VIA.has(g.via) ? g.via : "surface";
+  const guardrail = str2(g.guardrail, 60);
+  const entry = {
+    id: `blk_${fire.id}`,
+    at,
+    sessionId: "hook",
+    source: g.source === "team" ? "team" : "session",
+    concept,
+    via,
+    lane: "hook",
+    decision: g.decision === "deny" ? "deny" : "ask",
+    eligible: false,
+    ineligibleReason: g.decision === "deny" ? "hook_deny" : "hook_ask"
+  };
+  const toolName = str2(g.tool, 40);
+  const targetPath = str2(g.target, 400);
+  const reason = str2(g.reason, 500);
+  const description = str2(g.description, 200);
+  const addedBy = str2(g.addedBy, 80);
+  if (toolName) entry.toolName = toolName;
+  if (targetPath) entry.targetPath = targetPath;
+  if (reason) entry.reason = reason;
+  if (description) entry.description = description;
+  if (addedBy) entry.addedBy = addedBy;
+  if (guardrail && g.source === "guardrail") entry.guardrail = guardrail;
+  return entry;
+}
+function recordHookGateBlock(projectRoot2, fire) {
+  if (!projectRoot2) return null;
+  const entry = hookGateEntryFromFire(fire);
+  if (!entry) return null;
+  try {
+    const existing = readPreflightBlocks(projectRoot2);
+    if (existing.some((b) => b.id === entry.id)) return null;
+    const blocks = [entry, ...existing].slice(0, MAX_BLOCKS);
+    const file2 = logPath(projectRoot2);
+    fs19.mkdirSync(path18.dirname(file2), { recursive: true });
+    writeJsonAtomic(file2, { version: VERSION3, blocks });
+    return entry;
+  } catch {
+    return null;
+  }
+}
 
 // src/daemon/stance-exceptions.ts
 import { randomBytes as randomBytes3 } from "node:crypto";
@@ -36554,6 +36606,7 @@ function createDaemon(deps) {
   let hooksWatcher = null;
   function startHooksWatcher() {
     let lastFireSeen = 0;
+    const gateFiresSeen = /* @__PURE__ */ new Set();
     const hooksStatePath = path23.join(projectRoot2, ".deeppairing", "hooks-state.json");
     const broadcastNewFires = () => {
       try {
@@ -36561,6 +36614,10 @@ function createDaemon(deps) {
         const raw2 = JSON.parse(fs23.readFileSync(hooksStatePath, "utf-8"));
         const fires = Array.isArray(raw2?.fires) ? raw2.fires : [];
         for (const f of fires) {
+          if (f?.gate && typeof f.id === "string" && !gateFiresSeen.has(f.id)) {
+            gateFiresSeen.add(f.id);
+            broadcastHookGate(f);
+          }
           const t = new Date(f.at).getTime();
           if (!Number.isFinite(t) || t <= lastFireSeen) continue;
           lastFireSeen = t;
@@ -36569,11 +36626,39 @@ function createDaemon(deps) {
       } catch {
       }
     };
+    const broadcastHookGate = (f) => {
+      try {
+        const entry = recordHookGateBlock(projectRoot2, f);
+        if (!entry) return;
+        broadcastAll({
+          type: "preflight_blocked",
+          lane: "hook",
+          decision: entry.decision,
+          toolName: entry.toolName,
+          targetPath: entry.targetPath,
+          guardrail: entry.guardrail,
+          source: entry.source,
+          blockId: entry.id,
+          at: entry.at,
+          eligible: false,
+          ineligibleReason: entry.ineligibleReason,
+          match: {
+            concept: entry.concept,
+            description: entry.description,
+            reason: entry.reason,
+            via: entry.via,
+            addedBy: entry.addedBy
+          }
+        });
+      } catch {
+      }
+    };
     try {
       if (fs23.existsSync(hooksStatePath)) {
         const raw2 = JSON.parse(fs23.readFileSync(hooksStatePath, "utf-8"));
         const fires = Array.isArray(raw2?.fires) ? raw2.fires : [];
         for (const f of fires) {
+          if (f?.gate && typeof f.id === "string") gateFiresSeen.add(f.id);
           const t = new Date(f.at).getTime();
           if (Number.isFinite(t) && t > lastFireSeen) lastFireSeen = t;
         }

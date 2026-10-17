@@ -1049,6 +1049,7 @@ function stampGuardrailAsk(state, match, now) {
   state.guardrailAsks = asks;
 }
 function recordHookFire(projectRoot, decision, now = Date.now(), mode = "ask") {
+  const gate = hookGateRecord(decision, mode);
   appendHookFire(
     hookStatePath(projectRoot),
     {
@@ -1056,7 +1057,8 @@ function recordHookFire(projectRoot, decision, now = Date.now(), mode = "ask") {
       hook: "preflight",
       kind: mode === "strict-stop" ? "deny" : "ask",
       ...mode === "strict-stop" ? { mode } : {},
-      reason: decision.guardrail ? `guardrail:${decision.guardrail.category}` : decision.source || "blocked"
+      reason: decision.guardrail ? `guardrail:${decision.guardrail.category}` : decision.source || "blocked",
+      ...gate ? { id: `hf_${now.toString(36)}_${Math.random().toString(36).slice(2, 10)}`, gate } : {}
     },
     (state) => {
       if (mode === "ask" && decision.guardrail && decision.guardrail.category !== DEEPPAIRING_STATE_CATEGORY) {
@@ -1118,6 +1120,22 @@ function evaluateDeeppairingState(args) {
   }
 }
 function evaluatePreflightHook(args) {
+  const decision = evaluateHookGates(args);
+  if (!decision.fire) return decision;
+  const target = decision.guardrail?.path ?? displayTarget(args.projectRoot, toolInputTargetPath(args.toolInput));
+  return { ...decision, toolName: args.toolName, ...target ? { target } : {} };
+}
+function displayTarget(projectRoot, target) {
+  if (typeof target !== "string" || !target) return void 0;
+  try {
+    if (!path4.isAbsolute(target)) return target;
+    const rel = path4.relative(projectRoot, target);
+    return rel && !rel.startsWith("..") && !path4.isAbsolute(rel) ? rel : target;
+  } catch {
+    return target;
+  }
+}
+function evaluateHookGates(args) {
   const { toolName, toolInput, projectRoot } = args;
   const state = evaluateDeeppairingState({ toolInput, projectRoot, mode: args.mode });
   if (toolName === "NotebookEdit") return state ?? { fire: false };
@@ -1132,12 +1150,60 @@ function evaluatePreflightHook(args) {
   });
   if (result.blocked) {
     const reason = args.mode === "strict-stop" ? strictRejectionReason(result.block) : toHookReason(result.block.message);
+    const stance = stanceOf(result.block);
     return state ? { ...state, reason: `${reason}
 
-${state.reason}`, source: result.block.source } : { fire: true, reason, source: result.block.source };
+${state.reason}`, source: result.block.source, ...stance ? { stance } : {} } : { fire: true, reason, source: result.block.source, ...stance ? { stance } : {} };
   }
   if (state) return state;
   return evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env, mode: args.mode }) ?? { fire: false };
+}
+function stanceOf(block) {
+  const m = block.broadcastEvent.match;
+  const str = (v) => typeof v === "string" && v ? v : void 0;
+  const concept = str(m.concept) ?? str(m.description);
+  if (!concept) return void 0;
+  return {
+    concept,
+    ...str(m.description) ? { description: str(m.description) } : {},
+    ...str(m.reason) ? { reason: str(m.reason) } : {},
+    ...str(m.via) ? { via: str(m.via) } : {},
+    ...str(m.addedBy) ? { addedBy: str(m.addedBy) } : {}
+  };
+}
+function gateText(value, limit) {
+  if (typeof value !== "string") return void 0;
+  const text = sanitizeStrictReason(value);
+  if (!text) return void 0;
+  return text.length > limit ? text.slice(0, limit - 1).replace(/[\ud800-\udbff]$/, "") + "\u2026" : text;
+}
+function hookGateRecord(decision, mode = "ask") {
+  try {
+    if (!decision.fire) return void 0;
+    const stance = decision.stance;
+    const g = decision.guardrail;
+    const concept = gateText(stance?.concept ?? g?.note, 200);
+    if (!concept) return void 0;
+    const source = stance ? decision.source === "team" ? "team" : "session" : "guardrail";
+    const out = { decision: mode === "strict-stop" ? "deny" : "ask", source, concept };
+    const description = gateText(stance?.description, 200);
+    const reason = gateText(stance ? stance.reason : g?.rationale, 500);
+    const via = gateText(stance?.via, 20);
+    const addedBy = gateText(stance?.addedBy, 80);
+    const category = gateText(g?.category, 60);
+    const tool = gateText(decision.toolName, 40);
+    const target = gateText(decision.target, 400);
+    if (description && description !== concept) out.description = description;
+    if (reason) out.reason = reason;
+    if (via) out.via = via;
+    if (addedBy) out.addedBy = addedBy;
+    if (category) out.guardrail = category;
+    if (tool) out.tool = tool;
+    if (target) out.target = target;
+    return out;
+  } catch {
+    return void 0;
+  }
 }
 
 // src/cli/preflight-hook-entry.ts
