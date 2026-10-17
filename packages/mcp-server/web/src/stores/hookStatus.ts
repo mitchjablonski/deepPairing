@@ -36,7 +36,9 @@ export interface HookFire {
    * doesn't stamp it) carry no `kind`, and must keep their pre-Q2 rendering
    * exactly — inferring "pass" from silence is what caused the bug.
    */
-  kind?: "ask" | "pass" | string;
+  kind?: "ask" | "deny" | "pass" | string;
+  /** Absent on legacy/default records, which retain ask behavior. */
+  mode?: "ask" | "strict-stop";
 }
 
 interface HookStatusState {

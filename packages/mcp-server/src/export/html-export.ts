@@ -85,10 +85,10 @@ export function readGuardrailFires(projectRoot: string | undefined): HtmlGuardra
       if (typeof f.reason !== "string" || !/^guardrail:.+/.test(f.reason)) continue;
       // Q1 stamps `kind: "ask"` on the preflight lane's fires. Accept an absent
       // kind (older state files, the generated hook copies) but never a kind we
-      // don't recognise — a future `kind: "block"` must not silently inherit
-      // the ask wording.
-      if (f.kind !== undefined && f.kind !== "ask") continue;
-      out.push({ at: f.at, hook: f.hook, reason: f.reason });
+      // don't recognise. The explicit strict `deny` kind gets its own stop
+      // wording; a future kind must not silently inherit ask wording.
+      if (f.kind !== undefined && f.kind !== "ask" && f.kind !== "deny") continue;
+      out.push({ at: f.at, hook: f.hook, reason: f.reason, ...(f.kind === "deny" ? { kind: "deny" as const } : {}) });
     }
     return out;
   } catch {

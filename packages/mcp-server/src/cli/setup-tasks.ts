@@ -619,7 +619,8 @@ function preflightHookScript(coreUrl: string, rulesUrl: string): string {
 // applied. "ask" keeps the human in the loop (pairing) and is recoverable.
 // P1 — it ALSO runs the guardrail backstop: a write to a guardrail path
 // (migrations, .github/workflows, infra, .env) with no live pre-work ceremony in
-// the session asks the human too. Same "ask", never "deny", still fail-open.
+// the session asks the human too. Explicit strict-stop instead denies and stops
+// continuation; matcher/read/import errors still fail open in either mode.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -731,19 +732,11 @@ process.stdin.on("end", async () => {
       process.exit(0); // nothing to match against — skip the matcher import
     }
     const mod = await import(CORE_URL);
-    const decision = mod.evaluatePreflightHook({ toolName, toolInput, projectRoot });
+    const config = mod.resolvePreflightMode(process.env.DEEPPAIRING_PREFLIGHT_MODE);
+    const decision = mod.evaluatePreflightHook({ toolName, toolInput, projectRoot, mode: config.mode });
     if (decision && decision.fire) {
-      mod.recordHookFire(projectRoot, decision);
-      const reason = decision.reason || "This change matches a previously-rejected approach.";
-      process.stdout.write(JSON.stringify({
-        // #544 — mirror the ask reason in Claude Code's user warning field.
-        systemMessage: reason,
-        hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "ask",
-          permissionDecisionReason: reason,
-        },
-      }));
+      mod.recordHookFire(projectRoot, decision, undefined, config.mode);
+      process.stdout.write(JSON.stringify(mod.preflightHookOutput(decision, config)));
     }
     // no match = exit 0 with no decision JSON (tool proceeds)
     process.exit(0);

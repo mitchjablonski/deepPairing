@@ -393,6 +393,16 @@ describe("formatSessionHtml — honesty", () => {
     expect((html.match(/Guardrail ask/g) ?? []).length).toBe(1);
   });
 
+  it("renders strict guardrail denials as stops without inventing human approval", () => {
+    const state = richState();
+    state.guardrailFires = [{ at: T(6), hook: "preflight", kind: "deny", reason: "guardrail:migrations" }];
+    const html = formatSessionHtml(state, OPTS);
+    expect(html).toContain("Guardrail stop");
+    expect(html).toContain("does not mean a human approved it");
+    expect(html).not.toContain("Guardrail ask");
+    expect(html).not.toContain("the human had to confirm");
+  });
+
   it("renders nothing for an unknown fire shape rather than guessing", () => {
     const state = richState();
     state.guardrailFires = [

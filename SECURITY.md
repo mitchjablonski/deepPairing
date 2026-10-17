@@ -153,8 +153,12 @@ deepPairing installs three Claude Code hooks, all local-only, network-free, and 
 
 - **PreToolUse (`server/preflight.mjs`)** runs before Edit/Write/MultiEdit/NotebookEdit and
   can raise a prompt for **three** distinct reasons. All three return
-  `permissionDecision: "ask"` — a prompt you can approve or decline. Neither
-  ever emits `deny` or silently blocks. Any error, a missing ledger, or a
+  `permissionDecision: "ask"` by default — a prompt you can approve or decline.
+  Explicit `DEEPPAIRING_PREFLIGHT_MODE=strict-stop` instead denies a matching
+  call and stops continuation with a visible reason. Invalid nonempty mode
+  values conservatively use strict-stop on a match with a fixed warning.
+  See [mode semantics, recovery, and limits](docs/preflight-modes.md).
+  Errors, a missing ledger, or a
   non-matching edit exits 0 (allow), so a hook fault can never stop your work.
   - **Rejected approach.** The proposed change matches an approach you
     previously rejected in this project.
@@ -218,8 +222,9 @@ deepPairing installs three Claude Code hooks, all local-only, network-free, and 
     **Coverage note:** with an `init` install the hook rows are gitignored, so
     a fresh git worktree has none until it is initialised too (the plugin
     install is unaffected); `deeppairing doctor` warns about this.
-    It asks at most once per guardrail class per 30 minutes (per file for
-    migrations and secrets). If the session store is missing, unreadable, or
+    By default it asks at most once per guardrail class per 30 minutes (per file
+    for migrations and secrets). Strict stops ignore and never write ask dedup
+    stamps, so repeated matching calls remain denied. If the session store is missing, unreadable, or
     every session store present is unparseable, it stays silent (fail-open) —
     a single corrupt session alongside a readable one is skipped, and the
     readable one still decides. It can be switched off entirely with the
@@ -228,7 +233,7 @@ deepPairing installs three Claude Code hooks, all local-only, network-free, and 
     prompt untouched. It is a protocol backstop, **not a security boundary** —
     it cannot stop a determined agent or a direct shell write.
 
-    **Declining is not remembered.** A `PreToolUse` hook is never told how you
+    **In default ask mode, declining is not remembered.** A `PreToolUse` hook is never told how you
     answered — allow and decline both come back to it as silence — so the
     30-minute dedup stamp is written when the prompt is *raised*, not when it is
     resolved. If you decline, tell the agent why in the same breath: the hook

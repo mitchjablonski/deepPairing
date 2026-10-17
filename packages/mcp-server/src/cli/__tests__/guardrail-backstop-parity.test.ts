@@ -442,10 +442,11 @@ describe("the two hand-maintained hook copies agree on the guardrail matrix", ()
     expect(fs.existsSync(path.join(repoRoot, "claude-plugin", "server", "preflight-hook-core.js"))).toBe(true);
   });
 
-  it.skipIf(!bundleBuilt)("NEITHER copy can ever emit permissionDecision 'deny' (SECURITY.md ask-never-deny)", () => {
+  it.skipIf(!bundleBuilt)("the bundle retains ask and explicitly supports opt-in strict-stop", () => {
     const bundleSrc = fs.readFileSync(committedBundle, "utf-8");
-    expect(bundleSrc).not.toMatch(/permissionDecision["']?\s*:\s*["']deny["']/);
-    expect(bundleSrc).toMatch(/permissionDecision["']?\s*:\s*["']ask["']/);
+    expect(bundleSrc).toContain('"strict-stop"');
+    expect(bundleSrc).toContain('"deny"');
+    expect(bundleSrc).toContain('"ask"');
   });
 
   it.skipIf(!bundleBuilt)("F3 dedup on the wire: class-level for workflows, per-FILE for migrations", () => {
