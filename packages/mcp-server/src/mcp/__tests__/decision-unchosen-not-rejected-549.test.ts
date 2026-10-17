@@ -15,7 +15,10 @@ import path from "node:path";
 import { FileStore } from "../../store/file-store.js";
 import { createHttpRoutes } from "../../http/routes.js";
 import { withHash } from "../../http/__tests__/routes.harness.js";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
+import { ensurePreflightHook } from "../../cli/setup-tasks.js";
 
 const ctx = setupServerTest();
 const callTool = makeCallTool(ctx);
@@ -331,5 +334,43 @@ describe("#549 — existing ledgers load unchanged", () => {
     expect(r.status).toBe(200);
     expect(reloaded.getSessionMemory().rejectedApproaches.map((x) => x.description))
       .toEqual(["Deploy target: Fly.io", "Legacy string row: Heroku"]);
+  });
+});
+
+describe("#549 × #547 — strict-stop preflight mode", () => {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../..");
+  const pluginHook = path.join(repoRoot, "claude-plugin/server/preflight.mjs");
+  const runHook = (script: string, mode: string | undefined, content: string) => {
+    const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_PROJECT_DIR: ctx.tmpDir, DEEPPAIRING_GUARDRAIL_BACKSTOP: "" };
+    delete env.DEEPPAIRING_PREFLIGHT_MODE;
+    if (mode !== undefined) env.DEEPPAIRING_PREFLIGHT_MODE = mode;
+    const r = spawnSync(process.execPath, [script], {
+      input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: path.join(ctx.tmpDir, "src/deploy.ts"), content } }),
+      env, encoding: "utf8", timeout: 10_000,
+    });
+    expect(r.status, r.stderr).toBe(0);
+    return r.stdout ? JSON.parse(r.stdout) : null;
+  };
+
+  it.each(["init", "plugin"] as const)("%s hook: a never-suggested option is a strict-stop deny; an unchosen one is silent", async (copy) => {
+    expect(ensurePreflightHook(ctx.tmpDir).ok).toBe(true);
+    const script = copy === "init" ? path.join(ctx.tmpDir, ".deeppairing/hooks/preflight.mjs") : pluginHook;
+    const { decisionId } = await presentDeploy();
+    await resolve(decisionId, "a");
+    const fb = await callTool("check_feedback", {});
+    expect(fb.text).toContain("This is context only, not a rejection");
+
+    // Unchosen, not rejected: silent in both modes.
+    expect(runHook(script, "strict-stop", "deploy with Fly.io pay-per-request hosting")).toBeNull();
+    expect(runHook(script, undefined, "deploy with Fly.io pay-per-request hosting")).toBeNull();
+
+    expect((await neverSuggest(decisionId, "b", { reason: "cold starts" })).status).toBe(200);
+    const strict = runHook(script, "strict-stop", "deploy with Fly.io pay-per-request hosting");
+    expect(strict.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(strict.continue).toBe(false);
+    expect(strict.stopReason).toContain("REJECTED_APPROACH_BLOCKED");
+    // Default mode still asks; the other unchosen option (C) stays silent.
+    expect(runHook(script, undefined, "deploy with Fly.io pay-per-request hosting").hookSpecificOutput.permissionDecision).toBe("ask");
+    expect(runHook(script, "strict-stop", "run it on Bare EC2 hand-managed VMs")).toBeNull();
   });
 });

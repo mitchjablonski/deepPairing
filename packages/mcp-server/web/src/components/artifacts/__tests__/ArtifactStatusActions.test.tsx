@@ -5,6 +5,7 @@ import type { Artifact } from "@deeppairing/shared";
 import { ArtifactStatusActions } from "../ArtifactStatusActions";
 import { useArtifactStore } from "../../../stores/artifact";
 import { useConnectionStore } from "../../../stores/connection";
+import { useConnectionGraceStore } from "../../../lib/connectionGrace";
 
 function artifact(overrides: Partial<Artifact> = {}): Artifact {
   return {
@@ -84,10 +85,65 @@ describe("ArtifactStatusActions — draft interactions", () => {
     expect(screen.getByRole("button", { name: /^Reject$/ })).toBeInTheDocument();
   });
 
-  it("Reject + Request Revision are disabled without a comment", () => {
+  it("#543 — Reject + Request changes are visibly enabled on an untouched draft", () => {
+    render(<ArtifactStatusActions artifact={artifact()} />);
+    for (const name of [/Request changes/i, /^Reject$/]) {
+      const b = screen.getByRole("button", { name });
+      expect(b).toBeEnabled();
+      expect(b).not.toHaveAttribute("aria-disabled");
+      expect(b.className).not.toMatch(/opacity-30/);
+    }
+  });
+
+  it.each([
+    ["Reject", /^Reject$/, /Add a short reason to reject/],
+    ["Request changes", /Request changes/i, /Add a short reason to request changes/],
+  ])("#543 — %s with an empty reason focuses the field, prompts, and does not submit", async (_n, name, prompt) => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ArtifactStatusActions artifact={artifact()} />);
+    await userEvent.click(screen.getByRole("button", { name }));
+    expect(screen.getByRole("textbox")).toHaveFocus();
+    expect(screen.getByRole("status")).toHaveTextContent(prompt);
+    expect(screen.getByRole("textbox")).toHaveAttribute("aria-invalid", "true");
+    // exactly ONE announcement: a polite status, no assertive alert, and no
+    // describedby echo on the (already focused) field
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(screen.getByRole("textbox")).not.toHaveAttribute("aria-describedby");
+    expect(screen.queryByLabelText(/What pattern are you rejecting/)).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    // the reason is still required, and the prompt clears once one exists
+    await userEvent.type(screen.getByRole("textbox"), "wrong approach");
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("#543 — keyboard path: Tab to Reject, Enter lands focus in the reason field", async () => {
+    render(<ArtifactStatusActions artifact={artifact()} />);
+    const reject = screen.getByRole("button", { name: /^Reject$/ });
+    reject.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(screen.getByRole("textbox")).toHaveFocus();
+    expect(screen.getByRole("status")).toBeInTheDocument();
+  });
+
+  it("#543 — with a reason, Reject still opens the pattern step and Request changes submits", async () => {
+    render(<ArtifactStatusActions artifact={artifact()} />);
+    await userEvent.type(screen.getByRole("textbox"), "nope");
+    await userEvent.click(screen.getByRole("button", { name: /^Reject$/ }));
+    expect(screen.getByLabelText(/What pattern are you rejecting/)).toBeInTheDocument();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("#543 — offline still gates Reject and Request changes", () => {
+    useConnectionStore.setState({ connected: true, hydrated: true, sessionId: "s1", staleDaemon: false } as any);
+    useConnectionGraceStore.setState({ everConnected: true, graceOver: false, hydrationStalled: false });
+    act(() => useConnectionStore.setState({ connected: false, disconnectedSince: Date.now() } as any));
     render(<ArtifactStatusActions artifact={artifact()} />);
     expect(screen.getByRole("button", { name: /Request changes/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^Reject$/ })).toBeDisabled();
+    act(() => useConnectionStore.setState({ connected: true, disconnectedSince: null } as any));
+    useConnectionGraceStore.setState({ everConnected: false, graceOver: false, hydrationStalled: false });
   });
 
   it("typing a comment enables Reject and Request Revision", async () => {

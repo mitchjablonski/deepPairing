@@ -237,3 +237,14 @@ test("#189 — capture 'after' screenshots for the PR (header, sidebar, verb car
     await page.screenshot({ path: path.join(SHOTS, file) });
   }
 });
+
+test("#543 — Reject is visible and enabled on an untouched draft", async ({ page }) => {
+  await gotoSession(page);
+  // The footer floats COMPACT mid-artifact; its one button names Reject and opens the full panel.
+  await page.getByRole("button", { name: /Respond \/ Request changes \/ Reject/i }).first().click();
+  // Poll rather than hold a locator: the pane re-renders as the session hydrates.
+  await expect.poll(async () => {
+    const b = page.getByRole("button", { name: /^Reject$/ }).first();
+    return (await b.isVisible().catch(() => false)) && (await b.isEnabled().catch(() => false));
+  }, { timeout: 10000 }).toBe(true);
+});
