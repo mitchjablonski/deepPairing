@@ -26719,6 +26719,9 @@ var DecisionResolveBodySchema = external_exports.object({
   optionId: external_exports.string().min(1),
   reasoning: external_exports.string().optional()
 });
+var DecisionOptionNeverSuggestBodySchema = external_exports.object({
+  reason: external_exports.string().max(2e3).optional()
+});
 var StatusUpdateBodySchema = external_exports.object({
   status: external_exports.enum(["approved", "revised", "rejected", "obsolete"]),
   feedback: external_exports.string().optional(),
@@ -30954,6 +30957,9 @@ var ERROR_CODES = {
   /** #492 — a resolve on a decision whose backing artifact is closed
    *  (superseded / retracted / obsolete): nothing is written. */
   decision_closed: "decision_closed",
+  /** #549 — "Never suggest this" on a decision with no recorded pick: the
+   *  control is for an UNCHOSEN option, and nothing is unchosen yet. */
+  decision_not_resolved: "decision_not_resolved",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
   comment_not_in_session: "comment_not_in_session",
   /** #172 — take-counter/insist targeted a suggestion the agent hasn't countered. */
@@ -34691,21 +34697,6 @@ async function handlePresentOptions(ctx, args) {
   };
 }
 
-// src/store/rejected-option-recorder.ts
-var MAX_REASON_LEN = 240;
-function composeOptionRejectReason(option, contextSuffix, fallbackReason) {
-  const optionCons = Array.isArray(option.cons) ? option.cons.filter((x) => typeof x === "string" && x.trim().length > 0) : [];
-  const composed = optionCons.length > 0 ? `${optionCons.join("; ")}${contextSuffix}` : fallbackReason;
-  return composed && composed.length > MAX_REASON_LEN ? `${composed.slice(0, MAX_REASON_LEN - 3)}\u2026` : composed;
-}
-async function recordRejectedOption(store, broadcast, params) {
-  const { context, option, reason, sourceArtifactId } = params;
-  const description = `${context}: ${option.title}`;
-  const concept = option.concept?.name ?? option.description ?? void 0;
-  await store.recordRejectedApproach({ description, reason, sourceArtifactId, concept });
-  broadcast({ type: "ledger_write", kind: "rejected", description, concept, reason, sourceArtifactId });
-}
-
 // src/debrief-gate.ts
 var CODE_CLOSED_STATUSES = ["superseded", "retracted", "obsolete"];
 var DEBRIEF_DEAD_STATUSES = ["superseded", "retracted", "obsolete", "rejected"];
@@ -35447,7 +35438,10 @@ ${lines.join("\n")}`
       recordedIds.push(d.decisionId);
       const option = d.options.find((o) => o.id === d.response?.optionId);
       const decisionLabel = d.title?.trim() || d.context;
-      formattedDecisions.push(`- Decision "${decisionLabel}": selected "${option?.title ?? d.response?.optionId}"${d.response?.reasoning ? ` (reasoning: ${d.response.reasoning})` : ""}`);
+      const notChosen = d.options.filter((o) => o.id !== d.response?.optionId).map((o) => `"${o.title}"`);
+      const notChosenNote = option && notChosen.length > 0 ? `
+    Not picked this time: ${notChosen.join(", ")}. This is context only, not a rejection \u2014 no stance was recorded and they stay open to propose later.` : "";
+      formattedDecisions.push(`- Decision "${decisionLabel}": selected "${option?.title ?? d.response?.optionId}"${d.response?.reasoning ? ` (reasoning: ${d.response.reasoning})` : ""}${notChosenNote}`);
       structuredDecisions.push({
         decisionId: d.decisionId,
         artifactId: d.artifactId,
@@ -35480,17 +35474,6 @@ ${deferred.join("\n")}`);
         concept: approvedConcept,
         sourceArtifactId: d.artifactId
       });
-      const rejected = d.options.filter((o) => o.id !== d.response?.optionId);
-      for (const rej of rejected) {
-        const pickContext = d.response?.reasoning ? ` \u2014 picked "${option.title}": ${d.response.reasoning}` : "";
-        const rejectReason = composeOptionRejectReason(rej, pickContext, d.response?.reasoning);
-        await recordRejectedOption(store, broadcast, {
-          context: decisionLabel,
-          option: rej,
-          reason: rejectReason,
-          sourceArtifactId: d.artifactId
-        });
-      }
     }
   }
   const pendingPlans = await store.getPendingPlanReviews();

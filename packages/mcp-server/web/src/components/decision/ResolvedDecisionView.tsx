@@ -8,6 +8,7 @@ import { SimpleMarkdown } from "../SimpleMarkdown";
 import { ConceptBadge } from "../ConceptBadge";
 import { badgeColors } from "./types";
 import { useConnectionStore } from "../../stores/connection";
+import { NeverSuggestControl, isOptionRemembered, useRememberedRejections } from "./NeverSuggestControl";
 
 interface ResolvedDecisionViewProps {
   event: DecisionRequestEvent;
@@ -19,6 +20,10 @@ interface ResolvedDecisionViewProps {
   agentPickedUp: boolean;
   /** For the Re-pair button: which session this decision was recorded in. */
   sessionId?: string;
+  /** #549 — the decision id the per-option "Never suggest this" posts against. */
+  decisionId?: string;
+  /** #549 — a retracted/replayed card offers no "Never suggest this". */
+  writeLocked?: boolean;
   /** Artifact id — gates the Q3 horizon-check trigger block. */
   artifactId?: string;
   stakes?: "low" | "medium" | "high";
@@ -36,6 +41,8 @@ export function ResolvedDecisionView({
   reasoning,
   agentPickedUp,
   sessionId,
+  decisionId,
+  writeLocked = false,
   artifactId,
   stakes,
   showOptions,
@@ -49,7 +56,13 @@ export function ResolvedDecisionView({
     (st) => st.activeSessions.find((x) => x.sessionId === sessionId)?.live !== false,
   );
   const chosen = event.options.find((o) => o.id === selectedId);
-  const rejected = event.options.filter((o) => o.id !== selectedId);
+  // #549 — NOT CHOSEN is not REJECTED: picking one option records nothing
+  // against the others. Each one offers an explicit "Never suggest this".
+  const unchosen = event.options.filter((o) => o.id !== selectedId);
+  const neverSuggestId = decisionId ?? event.decisionId;
+  // The remembered state comes from the ledger, so it survives a reload.
+  const rememberedRows = useRememberedRejections(sessionId);
+  const ledgerLabel = event.title?.trim() || event.context;
 
   return (
     <m.div
@@ -88,11 +101,31 @@ export function ResolvedDecisionView({
           </span>
         )}
       </p>
-      {rejected.length > 0 && (
-        <div className="mt-2 pt-2 border-t border-accent-green/15">
-          <span className="text-xs text-text-muted">
-            Rejected: {rejected.map((o) => o.title).join(", ")}
+      {unchosen.length > 0 && (
+        <div className="mt-2 pt-2 border-t border-accent-green/15" data-testid="decision-unchosen">
+          <span
+            className="text-xs text-text-muted"
+            title="Not choosing an option doesn't reject it — Claude may still suggest it. Use “Never suggest this” to rule one out."
+          >
+            Not chosen:
           </span>
+          <ul className="mt-1 space-y-1">
+            {unchosen.map((o) => (
+              <li key={o.id} className="flex items-center gap-2 flex-wrap text-xs text-text-secondary">
+                <span>{o.title}</span>
+                {neverSuggestId && !writeLocked && (
+                  <NeverSuggestControl
+                    decisionId={neverSuggestId}
+                    optionId={o.id}
+                    optionTitle={o.title}
+                    ledgerConcept={o.concept?.name ?? o.description ?? o.title}
+                    sessionId={sessionId}
+                    remembered={isOptionRemembered(rememberedRows, { label: ledgerLabel, option: o, artifactId })}
+                  />
+                )}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

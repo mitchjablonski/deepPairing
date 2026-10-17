@@ -20746,6 +20746,9 @@ var DecisionResolveBodySchema = external_exports.object({
   optionId: external_exports.string().min(1),
   reasoning: external_exports.string().optional()
 });
+var DecisionOptionNeverSuggestBodySchema = external_exports.object({
+  reason: external_exports.string().max(2e3).optional()
+});
 var StatusUpdateBodySchema = external_exports.object({
   status: external_exports.enum(["approved", "revised", "rejected", "obsolete"]),
   feedback: external_exports.string().optional(),
@@ -24327,6 +24330,9 @@ var ERROR_CODES = {
   /** #492 — a resolve on a decision whose backing artifact is closed
    *  (superseded / retracted / obsolete): nothing is written. */
   decision_closed: "decision_closed",
+  /** #549 — "Never suggest this" on a decision with no recorded pick: the
+   *  control is for an UNCHOSEN option, and nothing is unchosen yet. */
+  decision_not_resolved: "decision_not_resolved",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
   comment_not_in_session: "comment_not_in_session",
   /** #172 — take-counter/insist targeted a suggestion the agent hasn't countered. */
@@ -31903,6 +31909,19 @@ function htmlExportFileName(sessionId, generatedAt = (/* @__PURE__ */ new Date()
 var SERVER_VERSION = "0.1.67";
 
 // src/store/rejected-option-recorder.ts
+var MAX_REASON_LEN = 240;
+function composeOptionRejectReason(option, contextSuffix, fallbackReason) {
+  const optionCons = Array.isArray(option.cons) ? option.cons.filter((x) => typeof x === "string" && x.trim().length > 0) : [];
+  const composed = optionCons.length > 0 ? `${optionCons.join("; ")}${contextSuffix}` : fallbackReason;
+  return composed && composed.length > MAX_REASON_LEN ? `${composed.slice(0, MAX_REASON_LEN - 3)}\u2026` : composed;
+}
+async function recordRejectedOption(store, broadcast, params) {
+  const { context, option, reason, sourceArtifactId } = params;
+  const description = `${context}: ${option.title}`;
+  const concept = option.concept?.name ?? option.description ?? void 0;
+  await store.recordRejectedApproach({ description, reason, sourceArtifactId, concept });
+  broadcast({ type: "ledger_write", kind: "rejected", description, concept, reason, sourceArtifactId });
+}
 function optionConceptKey(option) {
   for (const c of [option.concept?.name, option.description, option.title]) {
     if (typeof c === "string" && c.trim()) return c.trim();
@@ -33050,6 +33069,82 @@ function createReviewRoutes({
       } finally {
         if (outcome.kind === "resolved") await store.settleResolution(decisionId, committed);
       }
+    });
+  });
+  app.post("/api/decisions/:decisionId/options/:optionId/never-suggest", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const requestedId = c.req.param("decisionId");
+    const optionId = c.req.param("optionId");
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = DecisionOptionNeverSuggestBodySchema.safeParse(bodyVal.value ?? {});
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    return withDecisionResolveLock(store, async () => {
+      const artifacts = await store.getArtifacts();
+      const artifact = artifacts.find(
+        (a) => a.type === "decision" && (a.content?.decisionId === requestedId || a.id === requestedId)
+      );
+      if (!artifact) {
+        return c.json(
+          {
+            error: "decision_not_in_session",
+            code: ERROR_CODES.decision_not_in_session,
+            message: "This decision belongs to a different session than the one this tab is bound to."
+          },
+          404
+        );
+      }
+      const content = artifact.content;
+      const decisionId = typeof content?.decisionId === "string" && content.decisionId ? content.decisionId : artifact.id;
+      const options = Array.isArray(content?.options) ? content.options : [];
+      const option = options.find((o) => o.id === optionId);
+      if (!option) {
+        return c.json(
+          { error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error },
+          400
+        );
+      }
+      const closed = classifyClosedDecision(artifact, artifacts);
+      if (closed) return c.json(closedResolveBody(closed, decisionId), 409);
+      const chosenId = (await store.getDecision(decisionId))?.response?.optionId;
+      if (!chosenId) {
+        return c.json(
+          {
+            error: "decision_not_resolved",
+            code: ERROR_CODES.decision_not_resolved,
+            decisionId,
+            message: "Pick an option first \u2014 \u201CNever suggest this\u201D is for the options you didn't choose."
+          },
+          409
+        );
+      }
+      if (chosenId === optionId) {
+        return c.json(
+          { error: "You chose this option \u2014 it can't also be remembered as rejected.", code: ERROR_CODES.validation_error },
+          400
+        );
+      }
+      const label = content?.title?.trim() || content?.context?.trim() || artifact.title;
+      const humanReason = parsed.data.reason?.trim();
+      const reason = humanReason || composeOptionRejectReason(option, "");
+      const description = `${label}: ${option.title}`;
+      const alreadyRecorded = (await store.getSessionMemory()).rejectedApproaches.some((r) => r.description === description);
+      await recordRejectedOption(store, (event) => broadcast(event, sid), {
+        context: label,
+        option,
+        reason,
+        sourceArtifactId: artifact.id
+      });
+      const stored = (await store.getSessionMemory()).rejectedApproaches.find((r) => r.description === description);
+      log2(`[decision] never-suggest ${decisionId}/${optionId}${alreadyRecorded ? " (already recorded)" : ""}`);
+      return c.json({
+        status: "recorded",
+        description,
+        alreadyRecorded,
+        ...stored?.reason ? { reason: stored.reason } : {}
+      });
     });
   });
   app.post("/api/artifacts/:artifactId/status", async (c) => {

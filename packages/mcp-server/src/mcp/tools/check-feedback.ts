@@ -5,7 +5,6 @@ import { deliverComment, commentSecretNote, requestSecretNote, requestScopeNote,
 import { SERVER_VERSION } from "../../version.js";
 import { collectUnansweredQuestions, describeRequestIntent, isClosedArtifactStatus, coerceChangesetContent, errorMessage } from "@deeppairing/shared";
 import { getGlobalStore } from "../../store/global-store.js";
-import { composeOptionRejectReason, recordRejectedOption } from "../../store/rejected-option-recorder.js";
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
 import { sessionOwesDebrief } from "../../debrief-gate.js";
 import { cliInvocation } from "../../cli-invocation.js";
@@ -843,12 +842,12 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
   const resolved = newResolved;
   if (resolved.length > 0) {
     // #408 review — RECORD, THEN ACK. Acking first meant a busy preferences
-    // lock (ELOCKED from recordApprovedPattern / recordRejectedOption) failed
-    // the whole tool AFTER the decision was acked: the next check_feedback
-    // never mentioned the pick and the unchosen options' rejections were never
-    // written. Now each decision is acked only once its ledger writes succeed;
-    // a failed one stays un-acked and is re-delivered (and re-recorded — both
-    // writes dedupe on description) by the next call.
+    // lock (ELOCKED from recordApprovedPattern) failed the whole tool AFTER
+    // the decision was acked: the next check_feedback never mentioned the pick
+    // and its approval was never written. Now each decision is acked only once
+    // its ledger write succeeds; a failed one stays un-acked and is
+    // re-delivered (and re-recorded — the write dedupes on description) by the
+    // next call. (#549 — the pick writes only the approval now.)
     const formattedDecisions: string[] = [];
     const recordedIds: string[] = [];
     const deferred: string[] = [];
@@ -862,7 +861,14 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
       recordedIds.push(d.decisionId);
       const option = d.options.find((o) => o.id === d.response?.optionId);
       const decisionLabel = d.title?.trim() || d.context;
-      formattedDecisions.push(`- Decision "${decisionLabel}": selected "${option?.title ?? d.response?.optionId}"${d.response?.reasoning ? ` (reasoning: ${d.response.reasoning})` : ""}`);
+      // #549 — the unchosen options as NON-ENFORCING context: the human didn't
+      // pick them this time, and that is all it says. No stance is recorded and
+      // the gate won't block them; worded so it can't read as a rejection.
+      const notChosen = d.options.filter((o) => o.id !== d.response?.optionId).map((o) => `"${o.title}"`);
+      const notChosenNote = option && notChosen.length > 0
+        ? `\n    Not picked this time: ${notChosen.join(", ")}. This is context only, not a rejection — no stance was recorded and they stay open to propose later.`
+        : "";
+      formattedDecisions.push(`- Decision "${decisionLabel}": selected "${option?.title ?? d.response?.optionId}"${d.response?.reasoning ? ` (reasoning: ${d.response.reasoning})` : ""}${notChosenNote}`);
       structuredDecisions.push({
         decisionId: d.decisionId,
         artifactId: d.artifactId,
@@ -926,32 +932,17 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
         concept: approvedConcept,
         sourceArtifactId: d.artifactId,
       });
-      const rejected = d.options.filter((o) => o.id !== d.response?.optionId);
-      for (const rej of rejected) {
-        // SP2 — per-option rejection reason. Pre-SP2 every rejected
-        // option was stamped with the human's single overall
-        // pick-reasoning ("why I chose the winner"), so B and C — often
-        // rejected for DIFFERENT reasons — compounded the same blurred
-        // signal in the ledger. Prefer THIS option's own cons (its
-        // specific "why it's the worse fit"); keep the winner + the
-        // human's reasoning as shared context when present.
-        //
-        // #169 — the compose + concept-key + record/broadcast is now shared
-        // with the WHOLE-CARD rejection path (rejected-option-recorder.ts):
-        // recordRejectedOption keys the session ledger on
-        // `${context}: ${option.title}` and the cross-project ledger on the
-        // REJECTED option's own concept, so the two paths can't drift.
-        const pickContext = d.response?.reasoning
-          ? ` — picked "${option.title}": ${d.response.reasoning}`
-          : "";
-        const rejectReason = composeOptionRejectReason(rej, pickContext, d.response?.reasoning);
-        await recordRejectedOption(store, broadcast, {
-          context: decisionLabel,
-          option: rej,
-          reason: rejectReason,
-          sourceArtifactId: d.artifactId,
-        });
-      }
+      // #549 — PICKING ONE OPTION IS NOT REJECTING THE OTHERS. This block used
+      // to record every unchosen option as a rejected stance, so choosing A
+      // made a later proposal of B hard-block at the pre-flight gate even
+      // though the human never rejected B (#540 trial). The human's rule: only
+      // if they say so. Unchosen options now add NO ledger rows; an option the
+      // human explicitly wants gone goes through the per-option "Never suggest
+      // this" control (POST /api/decisions/:id/options/:optionId/never-suggest),
+      // which records exactly that one option via recordRejectedOption.
+      // Whole-card "Reject & remember" and the "None of these fit" send-back are
+      // unchanged. Rows an older build auto-recorded here carry no origin
+      // marker, so they are left in place; retire them from the Ledger.
     }
   }
 

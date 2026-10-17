@@ -89,6 +89,14 @@ export const DecisionResolveBodySchema = z.object({
 });
 export type DecisionResolveBody = z.infer<typeof DecisionResolveBodySchema>;
 
+// #549 — POST /api/decisions/:decisionId/options/:optionId/never-suggest.
+// The explicit per-option "Never suggest this": records THAT one option as a
+// rejected stance. Picking a different option no longer does this implicitly.
+export const DecisionOptionNeverSuggestBodySchema = z.object({
+  reason: z.string().max(2000).optional(),
+});
+export type DecisionOptionNeverSuggestBody = z.infer<typeof DecisionOptionNeverSuggestBodySchema>;
+
 // POST /api/artifacts/:artifactId/status — approve / revise / reject / obsolete
 // ("obsolete" = dismissed as overcome by new information).
 export const StatusUpdateBodySchema = z.object({
