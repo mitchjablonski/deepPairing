@@ -284,6 +284,10 @@ So you never have to make the same call twice:
   If your Claude Code permission UI omits the reason, opt into
   `DEEPPAIRING_PREFLIGHT_MODE=strict-stop` to deny matching edits and stop for
   review. See [compatibility modes and recovery](docs/preflight-modes.md).
+  A stopped worker does not stop its parent. Its automatic background completion
+  notification may omit the warning. Delegated strict-stop work requires the
+  [bounded, supervised handoff check](docs/preflight-modes.md#supervised-worker-handoff),
+  not an assumption that a completion notification means approval.
 - **The ledger underneath.** Reject something with a reason and the stance is
   remembered. It's remembered **in this project** always; it reaches your
   *other* projects — `~/.deeppairing/philosophy/v1.json` — only once you enable
