@@ -190,6 +190,9 @@ export interface HookGateRecord {
   guardrail?: string;
   tool?: string;
   target?: string;
+  /** The hook event's Claude Code `session_id`, so the daemon can route the
+   *  toast to that session's tabs. Same sanitizing as deriveSessionId. */
+  session?: string;
 }
 
 export type PreflightMode = "ask" | "strict-stop";
@@ -589,7 +592,14 @@ export {
  * `kind` declaration in this file to point at; the field is written here and
  * typed where the fire log is read. Strict stops never stamp an ask receipt.
  */
-export function recordHookFire(projectRoot: string, decision: HookDecision, now: number = Date.now(), mode: PreflightMode = "ask"): void {
+export function recordHookFire(
+  projectRoot: string,
+  decision: HookDecision,
+  now: number = Date.now(),
+  mode: PreflightMode = "ask",
+  /** #544 — the hook event's `session_id` (optional; older callers omit it). */
+  claudeSessionId?: unknown,
+): void {
   // appendHookFire owns the mkdir, the lock, the capped append and the atomic
   // write, and never throws. The guardrail dedup stamp rides in the SAME
   // read-modify-write via `mutate` — a second lock/RMW pair would reintroduce
@@ -597,6 +607,8 @@ export function recordHookFire(projectRoot: string, decision: HookDecision, now:
   // #544 — the gate record rides the SAME append (no network from the hook):
   // the daemon's hooks-state watcher turns it into a gate-log entry + toast.
   const gate = hookGateRecord(decision, mode);
+  const session = typeof claudeSessionId === "string" ? claudeSessionId.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 64) : "";
+  if (gate && session) gate.session = session;
   appendHookFire(
     hookStatePath(projectRoot),
     {

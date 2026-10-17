@@ -49,9 +49,13 @@ unchanged; this adds a second place to see why.
   onto the `fires` entry it already appends to `.deeppairing/hooks-state.json`.
   It makes **no network call**, so a daemon that is down or slow can't delay
   or change the hook's decision.
-- The daemon's existing hooks-state watcher turns each new record into a
+- The daemon's existing hooks-state watcher, backed by a stat-only poll
+  (every 750 ms, for filesystems where `fs.watch` misses events, such as WSL
+  `/mnt/c`), turns each new record into a
   `.deeppairing/preflight-blocks.json` entry (`lane: "hook"`) and a
-  `preflight_blocked` broadcast to every open tab: a hero toast ("Claude Code
+  `preflight_blocked` broadcast to the tabs of the Claude session that made
+  the edit (from the hook's `session_id`; every tab when there is no match):
+  a hero toast ("Claude Code
   is asking to write `src/config.ts`. This matches your stance …") and a gate
   log entry. With the next-up bar on, its announcer speaks the moment and the
   toast stays quiet; otherwise the toast is the alert.
@@ -59,7 +63,9 @@ unchanged; this adds a second place to see why.
   **before** the hook process exits, about 35-45 ms after the hook starts.
 - The terminal's Allow is the one-time allowance for a raw edit, so the hook
   toast has no "Allow once" button. A firing that happens while no daemon is
-  running is kept in `hooks-state.json` but not replayed later as a toast.
+  running is kept in `hooks-state.json` but not replayed later as a toast,
+  and a burst of more than 50 firings between two reads can push the oldest
+  out of the capped fire log before the daemon sees them.
 
 ## Recovery and limits
 

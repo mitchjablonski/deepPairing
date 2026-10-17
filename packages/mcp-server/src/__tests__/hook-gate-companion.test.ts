@@ -117,6 +117,9 @@ beforeAll(async () => {
 }, 30_000);
 
 afterAll(() => {
+  // The bounds are asserted in each test; set DP_544_LATENCY_FILE to keep the numbers.
+  const rounded = Object.fromEntries(Object.entries(latencies).map(([k, v]) => [k, Math.round(v * 10) / 10]));
+  if (process.env.DP_544_LATENCY_FILE) fs.appendFileSync(process.env.DP_544_LATENCY_FILE, JSON.stringify(rounded) + "\n");
   try { ws?.close(); } catch { /* closed */ }
   daemon?.dispose();
   try { server?.close(); } catch { /* closed */ }
@@ -224,10 +227,134 @@ describe("#544 daemon down", () => {
     expect(fire.id).toMatch(/^hf_/);
   });
 
-  it("prints the measured latencies", () => {
-    // The bounds are asserted above; set DP_544_LATENCY_FILE to keep the numbers.
-    const rounded = Object.fromEntries(Object.entries(latencies).map(([k, v]) => [k, Math.round(v * 10) / 10]));
-    if (process.env.DP_544_LATENCY_FILE) fs.appendFileSync(process.env.DP_544_LATENCY_FILE, JSON.stringify(rounded) + "\n");
-    expect(Object.keys(latencies).length).toBeGreaterThan(0);
+});
+
+/** A second, independent daemon on its own project (and ephemeral port). */
+async function bootDaemon(root: string, deps: Partial<Parameters<typeof createDaemon>[0]> = {}) {
+  const d = createDaemon({
+    projectRoot: root,
+    authToken: "hook-gate-token",
+    log: () => {},
+    exitProcess: () => {},
+    releaseListenSocket: () => {},
+    env: { DEEPPAIRING_NO_OPEN: "1", BROWSER: "none" },
+    ...deps,
+  });
+  const srv = serve({ fetch: d.app.fetch, port: 0, hostname: "127.0.0.1" });
+  await new Promise<void>((resolve) => {
+    const s = srv as unknown as { address(): AddressInfo | null; once(ev: string, cb: () => void): void };
+    if (s.address()) return resolve();
+    s.once("listening", () => resolve());
+  });
+  const p = (srv as unknown as { address(): AddressInfo }).address().port;
+  expect(p < 3847 || p > 3974).toBe(true);
+  d.attachUpgradeHandler(srv as unknown as Parameters<Daemon["attachUpgradeHandler"]>[0]);
+  d.startHooksWatcher();
+  const sockets: WebSocket[] = [];
+  async function connect(sessionId?: string) {
+    const msgs: Array<{ at: number; data: Record<string, unknown> }> = [];
+    const q = `projectHash=${projectHashOf(root)}${sessionId ? `&sessionId=${encodeURIComponent(sessionId)}` : ""}`;
+    const sock = new WebSocket(`ws://127.0.0.1:${p}/ws?${q}`);
+    sockets.push(sock);
+    await new Promise<void>((resolve, reject) => {
+      sock.once("error", reject);
+      sock.on("message", (raw) => {
+        const data = JSON.parse(String(raw)) as Record<string, unknown>;
+        msgs.push({ at: performance.now(), data });
+        if (data.type === "connected") resolve();
+      });
+    });
+    return msgs;
+  }
+  function close() {
+    for (const s of sockets) { try { s.close(); } catch { /* closed */ } }
+    d.dispose();
+    try { srv.close(); } catch { /* closed */ }
+  }
+  return { daemon: d, connect, close };
+}
+
+async function waitIn(msgs: Array<{ at: number; data: Record<string, unknown> }>, pred: (d: Record<string, unknown>) => boolean, ms = 5000) {
+  const deadline = performance.now() + ms;
+  for (;;) {
+    const hit = msgs.find((m) => pred(m.data));
+    if (hit) return hit;
+    if (performance.now() > deadline) return undefined;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
+function sessionPayload(root: string, file: string, sessionId: string) {
+  return JSON.stringify({ ...JSON.parse(writePayload(root, file)), session_id: sessionId });
+}
+
+describe("#544 review LOWs", () => {
+  it("a watcher that never delivers (or errors) still surfaces the toast through the stat poll", async () => {
+    const proj = makeProject("dp-hook-gate-poll-");
+    roots.push(proj.root);
+    // Fake watcher: a real EventEmitter that never reports a change — the
+    // WSL /mnt/c class. It then errors, so guardWatcher closes it outright.
+    const { EventEmitter } = await import("node:events");
+    let fake: (InstanceType<typeof EventEmitter> & { close(): void }) | undefined;
+    const world = await bootDaemon(proj.root, {
+      watch: () => {
+        fake = Object.assign(new EventEmitter(), { close() {} });
+        return fake;
+      },
+    });
+    try {
+      fake!.emit("error", Object.assign(new Error("inotify unavailable"), { code: "ENOSYS" }));
+      const msgs = await world.connect();
+      const run = await runHook(PLUGIN_HOOK, proj.root, writePayload(proj.root, "src/polled.ts"));
+      expect(JSON.parse(run.stdout).hookSpecificOutput.permissionDecision).toBe("ask");
+      const hit = await waitIn(msgs, (d) => d.type === "preflight_blocked" && d.targetPath === "src/polled.ts", 3000);
+      expect(hit, "the poll must deliver what the watcher missed").toBeDefined();
+      latencies["poll fallback: hook exit → WS"] = hit!.at - run.exitedAt;
+      expect(hit!.at - run.exitedAt).toBeLessThan(1500);
+      // Exactly once, even as the poll keeps ticking.
+      await new Promise((r) => setTimeout(r, 1700));
+      expect(msgs.filter((m) => m.data.type === "preflight_blocked" && m.data.targetPath === "src/polled.ts")).toHaveLength(1);
+    } finally {
+      world.close();
+    }
+  });
+
+  it("routes a hook ask to the matching session's tabs only, and to every tab without a session id", async () => {
+    const proj = makeProject("dp-hook-gate-sessions-");
+    roots.push(proj.root);
+    const world = await bootDaemon(proj.root);
+    try {
+      const sidA = "session_proj_abcd1234_claude-aaa";
+      const sidB = "session_proj_abcd1234_claude-bbb";
+      world.daemon.createSession(sidA);
+      world.daemon.createSession(sidB);
+      const tabA = await world.connect(sidA);
+      const tabB = await world.connect(sidB);
+      const isAsk = (file: string) => (d: Record<string, unknown>) => d.type === "preflight_blocked" && d.targetPath === file;
+
+      // Two concurrent hooks, one per Claude session.
+      await Promise.all([
+        runHook(PLUGIN_HOOK, proj.root, sessionPayload(proj.root, "src/a.ts", "claude-aaa")),
+        runHook(proj.initHook, proj.root, sessionPayload(proj.root, "src/b.ts", "claude-bbb")),
+      ]);
+      const a = await waitIn(tabA, isAsk("src/a.ts"));
+      const b = await waitIn(tabB, isAsk("src/b.ts"));
+      expect(a?.data.sessionId).toBe(sidA);
+      expect(b?.data.sessionId).toBe(sidB);
+      await new Promise((r) => setTimeout(r, 300));
+      expect(tabA.some((m) => isAsk("src/b.ts")(m.data))).toBe(false);
+      expect(tabB.some((m) => isAsk("src/a.ts")(m.data))).toBe(false);
+
+      const blocks = JSON.parse(fs.readFileSync(path.join(proj.root, ".deeppairing/preflight-blocks.json"), "utf8")).blocks as Array<Record<string, unknown>>;
+      expect(blocks.find((x) => x.targetPath === "src/a.ts")?.sessionId).toBe(sidA);
+      expect(blocks.find((x) => x.targetPath === "src/b.ts")?.sessionId).toBe(sidB);
+
+      // No session id (or no matching session): every tab sees it.
+      await runHook(PLUGIN_HOOK, proj.root, writePayload(proj.root, "src/c.ts"));
+      expect(await waitIn(tabA, isAsk("src/c.ts"))).toBeDefined();
+      expect(await waitIn(tabB, isAsk("src/c.ts"))).toBeDefined();
+    } finally {
+      world.close();
+    }
   });
 });

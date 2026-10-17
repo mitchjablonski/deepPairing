@@ -314,13 +314,21 @@ export interface HookGateFireLike {
   gate?: {
     decision?: unknown; source?: unknown; concept?: unknown; description?: unknown; reason?: unknown;
     via?: unknown; addedBy?: unknown; guardrail?: unknown; tool?: unknown; target?: unknown;
+    /** The hook event's Claude Code `session_id` (sanitized by the hook). */
+    session?: unknown;
   };
 }
+
+const CLAUDE_SESSION = /^[A-Za-z0-9-]{1,64}$/;
 
 const HOOK_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 /** The log entry for a hook firing, or null when the fire carries no gate. Pure. */
-export function hookGateEntryFromFire(fire: HookGateFireLike): PreflightBlockEntry | null {
+export function hookGateEntryFromFire(
+  fire: HookGateFireLike,
+  /** Maps the hook's Claude session id to a deepPairing session id, if one is live. */
+  resolveSession: (claudeSessionId: string) => string | undefined = () => undefined,
+): PreflightBlockEntry | null {
   if (!fire || fire.hook !== "preflight" || !fire.gate || typeof fire.gate !== "object") return null;
   if (typeof fire.id !== "string" || !HOOK_ID.test(fire.id)) return null;
   const g = fire.gate;
@@ -333,7 +341,7 @@ export function hookGateEntryFromFire(fire: HookGateFireLike): PreflightBlockEnt
   const entry: PreflightBlockEntry = {
     id: `blk_${fire.id}`,
     at,
-    sessionId: "hook",
+    sessionId: (typeof g.session === "string" && CLAUDE_SESSION.test(g.session) && resolveSession(g.session)) || "hook",
     source: g.source === "team" ? "team" : "session",
     concept,
     via,
@@ -363,9 +371,13 @@ export function hookGateEntryFromFire(fire: HookGateFireLike): PreflightBlockEnt
  * this id (a re-read of the same hooks-state) is not written twice. Returns
  * the entry when it was newly written, else null. Fail-soft.
  */
-export function recordHookGateBlock(projectRoot: string, fire: HookGateFireLike): PreflightBlockEntry | null {
+export function recordHookGateBlock(
+  projectRoot: string,
+  fire: HookGateFireLike,
+  resolveSession?: (claudeSessionId: string) => string | undefined,
+): PreflightBlockEntry | null {
   if (!projectRoot) return null;
-  const entry = hookGateEntryFromFire(fire);
+  const entry = hookGateEntryFromFire(fire, resolveSession);
   if (!entry) return null;
   try {
     const existing = readPreflightBlocks(projectRoot);

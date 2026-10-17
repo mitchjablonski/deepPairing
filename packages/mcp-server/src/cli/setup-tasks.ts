@@ -735,7 +735,7 @@ process.stdin.on("end", async () => {
     const config = mod.resolvePreflightMode(process.env.DEEPPAIRING_PREFLIGHT_MODE);
     const decision = mod.evaluatePreflightHook({ toolName, toolInput, projectRoot, mode: config.mode });
     if (decision && decision.fire) {
-      mod.recordHookFire(projectRoot, decision, undefined, config.mode);
+      mod.recordHookFire(projectRoot, decision, undefined, config.mode, ev.session_id);
       process.stdout.write(JSON.stringify(mod.preflightHookOutput(decision, config)));
     }
     // no match = exit 0 with no decision JSON (tool proceeds)

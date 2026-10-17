@@ -160,6 +160,9 @@ export interface CreateDaemonDeps {
   ) => ErrorEmittingWatcher;
   /** A2 heartbeat cadence — 30s in production; tests shrink it. */
   heartbeatIntervalMs?: number;
+  /** #544 — hooks-state stat-poll cadence (the fallback for a watcher that
+   *  misses events, e.g. WSL /mnt/c); 0 disables it. 750ms in production. */
+  hooksPollIntervalMs?: number;
   /** #470 — clock for allowance ceilings (tests inject one). */
   stanceExceptionClock?: () => number;
   /** #470 — monotonic clock for the 72 h cap (tests inject one). */
@@ -220,6 +223,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     openBrowser = defaultOpenBrowser,
     watch = (dir, listener) => fs.watch(dir, listener),
     heartbeatIntervalMs = 30_000,
+    hooksPollIntervalMs = 750,
     stanceExceptionClock,
     stanceExceptionMonotonic,
     stanceExceptionFault,
@@ -1294,6 +1298,9 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
   }
 
   let hooksWatcher: ErrorEmittingWatcher | null = null;
+  let hooksPollTimer: ReturnType<typeof setInterval> | null = null;
+  /** #544 — enough for the 50-fire log plus slack; oldest ids leave first. */
+  const GATE_SEEN_CAP = 64;
 
   function startHooksWatcher(): void {
     // X7 — watch .deeppairing/hooks-state.json for new hook fires; broadcast
@@ -1305,7 +1312,18 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     // not by the timestamp watermark: the preflight and checkpoint hooks run
     // side by side on the same Write, so a gate fire stamped a millisecond
     // BEFORE a sibling's can land after it, and the watermark would skip it.
+    // Bounded: the file keeps at most 50 fires, so an id evicted after 64
+    // newer ones is no longer in it (and recordHookGateBlock dedupes by id in
+    // the durable log as a second guard).
     const gateFiresSeen = new Set<string>();
+    const noteGateSeen = (id: string) => {
+      gateFiresSeen.add(id);
+      while (gateFiresSeen.size > GATE_SEEN_CAP) {
+        const oldest = gateFiresSeen.values().next().value;
+        if (oldest === undefined) break;
+        gateFiresSeen.delete(oldest);
+      }
+    };
     const hooksStatePath = path.join(projectRoot, ".deeppairing", "hooks-state.json");
     const broadcastNewFires = () => {
       try {
@@ -1314,7 +1332,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
         const fires = Array.isArray(raw?.fires) ? raw.fires : [];
         for (const f of fires) {
           if (f?.gate && typeof f.id === "string" && !gateFiresSeen.has(f.id)) {
-            gateFiresSeen.add(f.id);
+            noteGateSeen(f.id);
             broadcastHookGate(f);
           }
           const t = new Date(f.at).getTime();
@@ -1334,9 +1352,9 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     // every client. Never resurrected for a fire older than the daemon.
     const broadcastHookGate = (f: Record<string, unknown>) => {
       try {
-        const entry = recordHookGateBlock(projectRoot, f);
+        const entry = recordHookGateBlock(projectRoot, f, (claude) => matchClaudeSession(claude));
         if (!entry) return;
-        broadcastAll({
+        sendHookGate(entry.sessionId, {
           type: "preflight_blocked",
           lane: "hook",
           decision: entry.decision,
@@ -1364,7 +1382,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
         const raw = JSON.parse(fs.readFileSync(hooksStatePath, "utf-8"));
         const fires = Array.isArray(raw?.fires) ? raw.fires : [];
         for (const f of fires) {
-          if (f?.gate && typeof f.id === "string") gateFiresSeen.add(f.id);
+          if (f?.gate && typeof f.id === "string") noteGateSeen(f.id);
           const t = new Date(f.at).getTime();
           if (Number.isFinite(t) && t > lastFireSeen) lastFireSeen = t;
         }
@@ -1389,6 +1407,54 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
       hooksWatcher = watcher;
     } catch (err) {
       log(`Hook-state watcher failed to start: ${err}`);
+    }
+    // #544 — the stat-only poll beside the watcher. fs.watch misses events on
+    // some filesystems (WSL /mnt/c over 9P) and guardWatcher closes a watcher
+    // that errors; either way a gate toast must still arrive within ~1s. One
+    // stat per tick; the file is read only when its mtime or size moved, and
+    // ids already handled are skipped by the seen set.
+    if (hooksPollIntervalMs > 0 && !hooksPollTimer) {
+      let lastStat = "";
+      try {
+        const st = fs.statSync(hooksStatePath);
+        lastStat = `${st.mtimeMs}:${st.size}`;
+      } catch { /* not there yet */ }
+      hooksPollTimer = setInterval(() => {
+        try {
+          const st = fs.statSync(hooksStatePath);
+          const sig = `${st.mtimeMs}:${st.size}`;
+          if (sig === lastStat) return;
+          lastStat = sig;
+          broadcastNewFires();
+        } catch { /* missing file: nothing to do */ }
+      }, hooksPollIntervalMs);
+      hooksPollTimer.unref?.();
+    }
+  }
+
+  /** #544 — the deepPairing session a hook's Claude session id belongs to:
+   *  split-mode ids end in `_<claude session id>` (see session-id.ts). */
+  function matchClaudeSession(claude: string): string | undefined {
+    const suffix = `_${claude}`;
+    for (const id of sessions.keys()) if (id.endsWith(suffix)) return id;
+    for (const id of wsClients.keys()) if (id.endsWith(suffix)) return id;
+    return undefined;
+  }
+
+  /** #544 — a hook gate goes to its own session's tabs (plus all-sessions
+   *  tabs); with no matching session, to every tab. Never re-persisted here. */
+  function sendHookGate(sessionId: string, event: Record<string, unknown>): void {
+    const own = sessionId !== "hook" ? wsClients.get(sessionId) : undefined;
+    if (!own) {
+      broadcastAll(event);
+      return;
+    }
+    const data = JSON.stringify({ ...event, sessionId });
+    for (const ws of own) {
+      try { ws.send(data); } catch { own.delete(ws); }
+    }
+    for (const ws of globalClients) {
+      try { ws.send(data); } catch { globalClients.delete(ws); }
     }
   }
 
@@ -1468,6 +1534,7 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     if (evictTimer) { clearTimeout(evictTimer); evictTimer = null; }
     try { hooksWatcher?.close?.(); } catch {}
     hooksWatcher = null;
+    if (hooksPollTimer) { clearInterval(hooksPollTimer); hooksPollTimer = null; }
     try { wss.close(); } catch {}
   }
 
