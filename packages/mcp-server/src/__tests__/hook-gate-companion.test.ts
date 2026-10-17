@@ -266,12 +266,18 @@ async function bootDaemon(root: string, deps: Partial<Parameters<typeof createDa
     });
     return msgs;
   }
+  /** Close the most recently opened tab and wait for the daemon to see it. */
+  async function closeLast() {
+    const sock = sockets.pop();
+    if (!sock) return;
+    await new Promise<void>((resolve) => { sock.once("close", () => resolve()); sock.close(); });
+  }
   function close() {
     for (const s of sockets) { try { s.close(); } catch { /* closed */ } }
     d.dispose();
     try { srv.close(); } catch { /* closed */ }
   }
-  return { daemon: d, connect, close };
+  return { daemon: d, connect, close, closeLast };
 }
 
 async function waitIn(msgs: Array<{ at: number; data: Record<string, unknown> }>, pred: (d: Record<string, unknown>) => boolean, ms = 5000) {
@@ -342,8 +348,12 @@ describe("#544 review LOWs", () => {
       expect(a?.data.sessionId).toBe(sidA);
       expect(b?.data.sessionId).toBe(sidB);
       await new Promise((r) => setTimeout(r, 300));
-      expect(tabA.some((m) => isAsk("src/b.ts")(m.data))).toBe(false);
-      expect(tabB.some((m) => isAsk("src/a.ts")(m.data))).toBe(false);
+      // Sol P2 — inspect EVERY frame, not just preflight_blocked: the other
+      // session's target/reason must not ride any event (hook_fired included).
+      expect(tabA.some((m) => JSON.stringify(m.data).includes("src/b.ts"))).toBe(false);
+      expect(tabB.some((m) => JSON.stringify(m.data).includes("src/a.ts"))).toBe(false);
+      expect(tabA.some((m) => m.data.type === "hook_fired")).toBe(true);
+      expect(tabA.filter((m) => m.data.type === "hook_fired").every((m) => !("gate" in (m.data.fire as object)))).toBe(true);
 
       const blocks = JSON.parse(fs.readFileSync(path.join(proj.root, ".deeppairing/preflight-blocks.json"), "utf8")).blocks as Array<Record<string, unknown>>;
       expect(blocks.find((x) => x.targetPath === "src/a.ts")?.sessionId).toBe(sidA);
@@ -356,5 +366,67 @@ describe("#544 review LOWs", () => {
     } finally {
       world.close();
     }
+  });
+});
+
+describe("#552 review (Sol P2) — a known session with no open tab", () => {
+  it("never reaches another session's tab; the all-sessions tab gets it with the owner's identity", async () => {
+    const proj = makeProject("dp-hook-gate-notab-");
+    roots.push(proj.root);
+    const world = await bootDaemon(proj.root);
+    try {
+      const sidA = "session_proj_abcd1234_claude-aaa";
+      const sidB = "session_proj_abcd1234_claude-bbb";
+      world.daemon.createSession(sidA);
+      world.daemon.createSession(sidB);
+      const tabB = await world.connect(sidB);
+      const allTab = await world.connect();
+      const leaks = (msgs: typeof tabB, file: string) => msgs.some((m) => JSON.stringify(m.data).includes(file));
+
+      // A has no tab at all.
+      await runHook(PLUGIN_HOOK, proj.root, sessionPayload(proj.root, "src/session-a.ts", "claude-aaa"));
+      const seen = await waitIn(allTab, (d) => d.type === "preflight_blocked" && d.targetPath === "src/session-a.ts");
+      expect(seen?.data.sessionId).toBe(sidA);
+      await new Promise((r) => setTimeout(r, 300));
+      expect(leaks(tabB, "src/session-a.ts")).toBe(false);
+
+      // A had a tab and closed it before the edit.
+      await world.connect(sidA);
+      await world.closeLast();
+      await new Promise((r) => setTimeout(r, 100));
+      await runHook(proj.initHook, proj.root, sessionPayload(proj.root, "src/session-a2.ts", "claude-aaa"));
+      expect((await waitIn(allTab, (d) => d.type === "preflight_blocked" && d.targetPath === "src/session-a2.ts"))?.data.sessionId).toBe(sidA);
+      await new Promise((r) => setTimeout(r, 300));
+      expect(leaks(tabB, "src/session-a2.ts")).toBe(false);
+
+      const blocks = JSON.parse(fs.readFileSync(path.join(proj.root, ".deeppairing/preflight-blocks.json"), "utf8")).blocks as Array<Record<string, unknown>>;
+      expect(blocks.filter((x) => String(x.targetPath).startsWith("src/session-a")).map((x) => x.sessionId)).toEqual([sidA, sidA]);
+    } finally {
+      world.close();
+    }
+  });
+
+  it("the project-wide /api/hook-state summary carries no gate detail", async () => {
+    const res = await fetch(`http://127.0.0.1:${port}/api/hook-state`, { headers: { Authorization: "Bearer hook-gate-token", "X-Project-Hash": projectHashOf(project.root) } });
+    const body = (await res.json()) as { fires: Array<Record<string, unknown>> };
+    expect(body.fires.length).toBeGreaterThan(0);
+    expect(body.fires.some((f) => "gate" in f)).toBe(false);
+  });
+});
+
+describe("#547 strict-stop with the daemon down", () => {
+  it.each(["init", "plugin"] as const)("%s: a deny is recorded as a deny, output unchanged", async (copy) => {
+    const down = makeProject("dp-hook-gate-strict-down-");
+    roots.push(down.root);
+    const script = copy === "init" ? down.initHook : PLUGIN_HOOK;
+    const run = await runHook(script, down.root, writePayload(down.root), "strict-stop");
+    const out = JSON.parse(run.stdout);
+    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(out.continue).toBe(false);
+    expect(out.stopReason).toBe(out.systemMessage);
+    const upRun = await runHook(copy === "init" ? project.initHook : PLUGIN_HOOK, project.root, writePayload(project.root), "strict-stop");
+    expect(run.stdout.split(down.root).join("<root>")).toBe(upRun.stdout.split(project.root).join("<root>"));
+    const fire = JSON.parse(fs.readFileSync(path.join(down.root, ".deeppairing/hooks-state.json"), "utf8")).fires.at(-1);
+    expect(fire).toMatchObject({ kind: "deny", mode: "strict-stop", gate: { decision: "deny", concept: STANCE.description, reason: STANCE.reason } });
   });
 });

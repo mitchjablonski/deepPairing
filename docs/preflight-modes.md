@@ -53,8 +53,10 @@ unchanged; this adds a second place to see why.
   (every 750 ms, for filesystems where `fs.watch` misses events, such as WSL
   `/mnt/c`), turns each new record into a
   `.deeppairing/preflight-blocks.json` entry (`lane: "hook"`) and a
-  `preflight_blocked` broadcast to the tabs of the Claude session that made
-  the edit (from the hook's `session_id`; every tab when there is no match):
+  `preflight_blocked` sent to the tabs of the deepPairing session that made
+  the edit (from the hook's `session_id`) plus the all-sessions view, never to
+  another session's tabs. Only a firing with no resolvable session goes to
+  every tab. The project-wide hook-status summary carries no gate detail:
   a hero toast ("Claude Code
   is asking to write `src/config.ts`. This matches your stance …") and a gate
   log entry. With the next-up bar on, its announcer speaks the moment and the

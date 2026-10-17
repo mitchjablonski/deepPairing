@@ -1680,7 +1680,16 @@ export function createHttpRoutes(
     try {
       const raw = JSON.parse(fs.readFileSync(statePath, "utf-8"));
       // Cap response to last 25 fires — UI only shows ~5 at a time.
-      const fires = Array.isArray(raw?.fires) ? raw.fires.slice(-25) : [];
+      // #544 review — the status summary only; a fire's gate detail (stance,
+      // reason, target, Claude session) stays out of this project-wide read.
+      const fires = Array.isArray(raw?.fires)
+        ? raw.fires.slice(-25).map((f: unknown) => {
+            if (!f || typeof f !== "object") return f;
+            const { gate: _gate, ...summary } = f as Record<string, unknown>;
+            void _gate;
+            return summary;
+          })
+        : [];
       return c.json({ version: 1, fires });
     } catch {
       return c.json({ version: 1, fires: [] });

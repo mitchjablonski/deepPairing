@@ -1342,7 +1342,12 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
           // every session client + every global client exactly once (the old
           // per-session broadcast() loop handed global tabs N_sessions + 1
           // copies and multi-counted the metric).
-          broadcastAll({ type: "hook_fired", fire: f });
+          // #544 review (Sol P2) — the project-wide status pill gets the
+          // summary only: the gate detail (stance, reason, target, Claude
+          // session) is routed to its own session's tabs by sendHookGate.
+          const { gate: _gate, ...summary } = (f ?? {}) as Record<string, unknown>;
+          void _gate;
+          broadcastAll({ type: "hook_fired", fire: summary });
         }
       } catch { /* swallow — observability isn't load-bearing */ }
     };
@@ -1441,17 +1446,21 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     return undefined;
   }
 
-  /** #544 — a hook gate goes to its own session's tabs (plus all-sessions
-   *  tabs); with no matching session, to every tab. Never re-persisted here. */
+  /** #544 — a hook gate whose Claude session resolved to a deepPairing
+   *  session goes ONLY to that session's tabs (if any are open) and the
+   *  all-sessions tabs, stamped with that session — never to another
+   *  session's tabs because its own has none open (#552 review, Sol P2). A
+   *  gate with no resolvable session ("hook": no session_id, or no
+   *  deepPairing session for it yet) goes to every tab. Never re-persisted. */
   function sendHookGate(sessionId: string, event: Record<string, unknown>): void {
-    const own = sessionId !== "hook" ? wsClients.get(sessionId) : undefined;
-    if (!own) {
+    if (sessionId === "hook") {
       broadcastAll(event);
       return;
     }
     const data = JSON.stringify({ ...event, sessionId });
-    for (const ws of own) {
-      try { ws.send(data); } catch { own.delete(ws); }
+    const own = wsClients.get(sessionId);
+    for (const ws of own ?? []) {
+      try { ws.send(data); } catch { own!.delete(ws); }
     }
     for (const ws of globalClients) {
       try { ws.send(data); } catch { globalClients.delete(ws); }
