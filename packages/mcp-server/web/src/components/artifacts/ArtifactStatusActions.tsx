@@ -222,6 +222,11 @@ export function ArtifactStatusActions({
   const openSugRef = useRef(openSug);
   openSugRef.current = openSug;
   const [approveConfirm, setApproveConfirm] = useState(false);
+  // #543 — Reject / Request changes stay ENABLED on an untouched draft (a
+  // disabled-and-faint button hid the verb). Clicking one with no reason
+  // records which verb asked, focuses the field and shows the inline prompt;
+  // the prompt clears itself as soon as a reason exists.
+  const [reasonAsk, setReasonAsk] = useState<null | "reject" | "revise">(null);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -258,6 +263,11 @@ export function ArtifactStatusActions({
       commentRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
     }
   }, [forceExpanded]);
+  const askForReason = (verb: "reject" | "revise") => {
+    if (offline) return;
+    setReasonAsk(verb);
+    expandAndFocus();
+  };
   const expandAndFocus = () => {
     wantFocusRef.current = true;
     dispatch({ type: "expand" });
@@ -851,9 +861,19 @@ export function ArtifactStatusActions({
           }
         }}
         rows={2}
+        aria-invalid={reasonAsk !== null && !comment.trim() ? true : undefined}
+        aria-describedby={reasonAsk !== null && !comment.trim() ? "reason-ask" : undefined}
         className="w-full px-3 py-2 bg-surface-secondary border border-border-default rounded text-xs text-text-primary resize-none
                    placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-violet"
       />
+
+      {reasonAsk !== null && !comment.trim() && (
+        <div id="reason-ask" role="alert" data-testid="reason-ask" className="text-2xs text-accent-amber">
+          {reasonAsk === "reject"
+            ? "Add a short reason to reject — it's what the agent learns from."
+            : "Add a short reason to request changes — it's what the agent redrafts from."}
+        </div>
+      )}
 
       {/* Primary action: Respond (pair programming default) */}
       <div className="flex items-center gap-2">
@@ -884,22 +904,22 @@ export function ArtifactStatusActions({
             </button>
           )}
           <button
-            onClick={() => handleAction("revised")}
-            disabled={(submitting || !comment.trim()) || !!offline}
+            onClick={() => (comment.trim() ? handleAction("revised") : askForReason("revise"))}
+            disabled={submitting || !!offline}
             className="px-2.5 py-1 text-2xs font-medium text-accent-amber rounded border border-accent-amber/30
-                       hover:bg-accent-amber-dim disabled:opacity-30 transition-all duration-[180ms] ease-out press-scale"
-            title={offline ?? (comment.trim() ? "Request changes — agent will redraft" : "Add a reason first")}
+                       hover:bg-accent-amber-dim disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-[180ms] ease-out press-scale"
+            title={offline ?? (comment.trim() ? "Request changes — agent will redraft" : "Request changes — you'll add a short reason first")}
           >
             Request changes
           </button>
           <button
-            onClick={beginReject}
-            disabled={(submitting || !comment.trim() || rejecting) || !!offline}
+            onClick={() => (comment.trim() ? beginReject() : askForReason("reject"))}
+            disabled={(submitting || rejecting) || !!offline}
             className="px-2.5 py-1 text-2xs font-medium text-accent-red rounded border border-accent-red/30
-                       hover:bg-accent-red-dim disabled:opacity-30 transition-all duration-[180ms] ease-out press-scale"
+                       hover:bg-accent-red-dim disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-[180ms] ease-out press-scale"
             title={offline ?? (
               !comment.trim()
-                ? "Add a reason first"
+                ? "Reject — you'll add a short reason first"
                 : suppressRejectConcept
                   // #193 E2 — a debrief reject is "redo this write-up", not a
                   // remembered rule: no cross-project stance is recorded.
