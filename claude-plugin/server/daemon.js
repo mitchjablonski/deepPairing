@@ -24330,6 +24330,9 @@ var ERROR_CODES = {
   /** #492 — a resolve on a decision whose backing artifact is closed
    *  (superseded / retracted / obsolete): nothing is written. */
   decision_closed: "decision_closed",
+  /** #549 — "Never suggest this" on a decision with no recorded pick: the
+   *  control is for an UNCHOSEN option, and nothing is unchosen yet. */
+  decision_not_resolved: "decision_not_resolved",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
   comment_not_in_session: "comment_not_in_session",
   /** #172 — take-counter/insist targeted a suggestion the agent hasn't countered. */
@@ -33072,54 +33075,77 @@ function createReviewRoutes({
     const sid = getSessionId(c);
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-    const decisionId = c.req.param("decisionId");
+    const requestedId = c.req.param("decisionId");
     const optionId = c.req.param("optionId");
     const bodyVal = await readJsonValue(c);
     if (!bodyVal.ok) return bodyVal.res;
     const parsed = DecisionOptionNeverSuggestBodySchema.safeParse(bodyVal.value ?? {});
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
-    const artifact = (await store.getArtifacts()).find(
-      (a) => a.type === "decision" && (a.content?.decisionId === decisionId || a.id === decisionId)
-    );
-    if (!artifact) {
-      return c.json(
-        {
-          error: "decision_not_in_session",
-          code: ERROR_CODES.decision_not_in_session,
-          message: "This decision belongs to a different session than the one this tab is bound to."
-        },
-        404
+    return withDecisionResolveLock(store, async () => {
+      const artifacts = await store.getArtifacts();
+      const artifact = artifacts.find(
+        (a) => a.type === "decision" && (a.content?.decisionId === requestedId || a.id === requestedId)
       );
-    }
-    const content = artifact.content;
-    const options = Array.isArray(content?.options) ? content.options : [];
-    const option = options.find((o) => o.id === optionId);
-    if (!option) {
-      return c.json(
-        { error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error },
-        400
-      );
-    }
-    const record2 = await store.getDecision(decisionId);
-    if (record2?.response?.optionId === optionId) {
-      return c.json(
-        { error: "You chose this option \u2014 it can't also be remembered as rejected.", code: ERROR_CODES.validation_error },
-        400
-      );
-    }
-    const label = content?.title?.trim() || content?.context?.trim() || artifact.title;
-    const humanReason = parsed.data.reason?.trim();
-    const reason = humanReason || composeOptionRejectReason(option, "");
-    const description = `${label}: ${option.title}`;
-    const alreadyRecorded = (await store.getSessionMemory()).rejectedApproaches.some((r) => r.description === description);
-    await recordRejectedOption(store, (event) => broadcast(event, sid), {
-      context: label,
-      option,
-      reason,
-      sourceArtifactId: artifact.id
+      if (!artifact) {
+        return c.json(
+          {
+            error: "decision_not_in_session",
+            code: ERROR_CODES.decision_not_in_session,
+            message: "This decision belongs to a different session than the one this tab is bound to."
+          },
+          404
+        );
+      }
+      const content = artifact.content;
+      const decisionId = typeof content?.decisionId === "string" && content.decisionId ? content.decisionId : artifact.id;
+      const options = Array.isArray(content?.options) ? content.options : [];
+      const option = options.find((o) => o.id === optionId);
+      if (!option) {
+        return c.json(
+          { error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error },
+          400
+        );
+      }
+      const closed = classifyClosedDecision(artifact, artifacts);
+      if (closed) return c.json(closedResolveBody(closed, decisionId), 409);
+      const chosenId = (await store.getDecision(decisionId))?.response?.optionId;
+      if (!chosenId) {
+        return c.json(
+          {
+            error: "decision_not_resolved",
+            code: ERROR_CODES.decision_not_resolved,
+            decisionId,
+            message: "Pick an option first \u2014 \u201CNever suggest this\u201D is for the options you didn't choose."
+          },
+          409
+        );
+      }
+      if (chosenId === optionId) {
+        return c.json(
+          { error: "You chose this option \u2014 it can't also be remembered as rejected.", code: ERROR_CODES.validation_error },
+          400
+        );
+      }
+      const label = content?.title?.trim() || content?.context?.trim() || artifact.title;
+      const humanReason = parsed.data.reason?.trim();
+      const reason = humanReason || composeOptionRejectReason(option, "");
+      const description = `${label}: ${option.title}`;
+      const alreadyRecorded = (await store.getSessionMemory()).rejectedApproaches.some((r) => r.description === description);
+      await recordRejectedOption(store, (event) => broadcast(event, sid), {
+        context: label,
+        option,
+        reason,
+        sourceArtifactId: artifact.id
+      });
+      const stored = (await store.getSessionMemory()).rejectedApproaches.find((r) => r.description === description);
+      log2(`[decision] never-suggest ${decisionId}/${optionId}${alreadyRecorded ? " (already recorded)" : ""}`);
+      return c.json({
+        status: "recorded",
+        description,
+        alreadyRecorded,
+        ...stored?.reason ? { reason: stored.reason } : {}
+      });
     });
-    log2(`[decision] never-suggest ${decisionId}/${optionId}${alreadyRecorded ? " (already recorded)" : ""}`);
-    return c.json({ status: "recorded", description, alreadyRecorded });
   });
   app.post("/api/artifacts/:artifactId/status", async (c) => {
     const sid = getSessionId(c);

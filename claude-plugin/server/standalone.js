@@ -30957,6 +30957,9 @@ var ERROR_CODES = {
   /** #492 — a resolve on a decision whose backing artifact is closed
    *  (superseded / retracted / obsolete): nothing is written. */
   decision_closed: "decision_closed",
+  /** #549 — "Never suggest this" on a decision with no recorded pick: the
+   *  control is for an UNCHOSEN option, and nothing is unchosen yet. */
+  decision_not_resolved: "decision_not_resolved",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
   comment_not_in_session: "comment_not_in_session",
   /** #172 — take-counter/insist targeted a suggestion the agent hasn't countered. */
@@ -35435,7 +35438,10 @@ ${lines.join("\n")}`
       recordedIds.push(d.decisionId);
       const option = d.options.find((o) => o.id === d.response?.optionId);
       const decisionLabel = d.title?.trim() || d.context;
-      formattedDecisions.push(`- Decision "${decisionLabel}": selected "${option?.title ?? d.response?.optionId}"${d.response?.reasoning ? ` (reasoning: ${d.response.reasoning})` : ""}`);
+      const notChosen = d.options.filter((o) => o.id !== d.response?.optionId).map((o) => `"${o.title}"`);
+      const notChosenNote = option && notChosen.length > 0 ? `
+    Not picked this time: ${notChosen.join(", ")}. This is context only, not a rejection \u2014 no stance was recorded and they stay open to propose later.` : "";
+      formattedDecisions.push(`- Decision "${decisionLabel}": selected "${option?.title ?? d.response?.optionId}"${d.response?.reasoning ? ` (reasoning: ${d.response.reasoning})` : ""}${notChosenNote}`);
       structuredDecisions.push({
         decisionId: d.decisionId,
         artifactId: d.artifactId,
