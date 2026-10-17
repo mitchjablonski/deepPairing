@@ -20,6 +20,8 @@
  *   - a match surfaces to the HUMAN as permissionDecision "ask" (recoverable
  *     pairing) rather than a hard deny — raw file content is noisier than the
  *     agent's prose, and an already-approved change must not be auto-blocked;
+ *   - explicit DEEPPAIRING_PREFLIGHT_MODE=strict-stop instead denies a match
+ *     and stops continuation with a visible reason (#544 compatibility mode);
  *   - FAIL OPEN on any error so a broken hook can never block the user's edits.
  */
 import fs from "node:fs";
@@ -29,7 +31,7 @@ import path from "node:path";
 // read-modify-write, in the core, so the two hand-maintained hook copies can't
 // drift on the write shape. (This entry's own recordFire is gone.)
 import { resolveHookRoots } from "../git-worktree.js";
-import { evaluatePreflightHook, recordHookFire, toolInputTargetsDeeppairingState, toolInputTargetsGuardrail } from "./preflight-hook-core.js";
+import { evaluatePreflightHook, preflightHookOutput, recordHookFire, resolvePreflightMode, toolInputTargetsDeeppairingState, toolInputTargetsGuardrail } from "./preflight-hook-core.js";
 
 /** PP1 — cheap pre-check so the common case (no rejections, no team.json) skips
  *  the matcher entirely. Reading the small preferences.json is ms. */
@@ -85,22 +87,11 @@ process.stdin.on("end", () => {
     ) {
       process.exit(0); // nothing to match against — skip the matcher
     }
-    const decision = evaluatePreflightHook({ toolName, toolInput, projectRoot });
+    const config = resolvePreflightMode(process.env.DEEPPAIRING_PREFLIGHT_MODE);
+    const decision = evaluatePreflightHook({ toolName, toolInput, projectRoot, mode: config.mode });
     if (decision && decision.fire) {
-      recordHookFire(projectRoot, decision);
-      const reason = decision.reason || "This change matches a previously-rejected approach.";
-      process.stdout.write(
-        JSON.stringify({
-          // #544 — some Claude Code dialogs omit the ask reason; also surface
-          // the same resolved text through the documented user warning field.
-          systemMessage: reason,
-          hookSpecificOutput: {
-            hookEventName: "PreToolUse",
-            permissionDecision: "ask",
-            permissionDecisionReason: reason,
-          },
-        }),
-      );
+      recordHookFire(projectRoot, decision, undefined, config.mode);
+      process.stdout.write(JSON.stringify(preflightHookOutput(decision, config)));
     }
     // no match = exit 0 with no decision JSON (tool proceeds)
     process.exit(0);

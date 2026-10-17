@@ -290,13 +290,16 @@ describe("readGuardrailFires", () => {
           { at: "2026-08-19T10:00:00.000Z", hook: "preflight", kind: "ask", reason: "guardrail:secrets" },
           { at: "2026-08-19T10:01:00.000Z", hook: "preflight", reason: "guardrail:workflows" },
           { at: "2026-08-19T10:02:00.000Z", hook: "preflight", kind: "block", reason: "guardrail:migrations" },
+          { at: "2026-08-19T10:03:00.000Z", hook: "preflight", kind: "deny", mode: "strict-stop", reason: "guardrail:infrastructure" },
         ],
       }),
     );
     expect(readGuardrailFires(tmpDir).map((f) => f.reason)).toEqual([
       "guardrail:secrets",
       "guardrail:workflows",
+      "guardrail:infrastructure",
     ]);
+    expect(readGuardrailFires(tmpDir).at(-1)?.kind).toBe("deny");
   });
 
   it("drops entries with no timestamp (they can't be placed honestly)", () => {

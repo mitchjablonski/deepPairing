@@ -279,8 +279,11 @@ So you never have to make the same call twice:
   and other secret files. If the agent starts writing to one of them without
   having presented *any* findings, options, spec, or plan first, you get a
   prompt naming the path and the class before the edit lands. Do the pairing and
-  it never fires; it never hard-blocks, it fails open, and
+  it never fires; by default it asks rather than hard-blocking, it fails open, and
   `DEEPPAIRING_GUARDRAIL_BACKSTOP=off` turns it off.
+  If your Claude Code permission UI omits the reason, opt into
+  `DEEPPAIRING_PREFLIGHT_MODE=strict-stop` to deny matching edits and stop for
+  review. See [compatibility modes and recovery](docs/preflight-modes.md).
 - **The ledger underneath.** Reject something with a reason and the stance is
   remembered. It's remembered **in this project** always; it reaches your
   *other* projects — `~/.deeppairing/philosophy/v1.json` — only once you enable

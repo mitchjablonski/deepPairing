@@ -152,6 +152,12 @@ no longer skips the gate. The hook fails open (a broken hook never blocks
 an edit) and short-circuits cheaply — no I/O beyond the small ledger read —
 when there are no rejections seeded and the path is not a guardrail path.
 
+Default hooks ask; explicit `DEEPPAIRING_PREFLIGHT_MODE=strict-stop` instead
+denies matching calls and stops continuation. Both emitters share mode parsing
+and output formatting. Strict stops bypass ask dedup and record `kind: deny`
+with their mode, so status/export readers do not label them as asks or passes.
+See [compatibility modes](preflight-modes.md) for recovery and runtime limits.
+
 That last clause is the hook's **second** prompt class, the *guardrail
 backstop*. There is ONE definition of the guardrail path set —
 `src/guardrail-rules.ts`, a leaf module that imports nothing but `node:path` —

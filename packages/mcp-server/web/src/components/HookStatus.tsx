@@ -48,6 +48,7 @@ function formatRelative(at: string): string {
  * this: only an explicit "ask" changes the outcome.
  */
 export function fireKindLabel(fire: HookFire): { label: string; tone: "nag" | "pass" } {
+  if (fire.kind === "deny") return { label: "stopped", tone: "nag" };
   if (fire.kind === "ask") return { label: "asked", tone: "nag" };
   if (fire.exitCode === 2) return { label: "nag", tone: "nag" };
   return { label: "pass", tone: "pass" };

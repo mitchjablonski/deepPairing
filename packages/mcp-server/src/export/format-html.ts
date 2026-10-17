@@ -92,6 +92,7 @@ export interface HtmlGuardrailFire {
   at?: string;
   hook?: string;
   reason?: string;
+  kind?: "ask" | "deny";
 }
 
 export interface HtmlSessionState {
@@ -1707,11 +1708,11 @@ function traceBeat(t: HtmlPreflightTrace, seq: number): Beat | null {
   );
 }
 
-/** A guardrail hook ask (`hooks-state.json`). Project-scoped and path-free by
+/** A guardrail hook ask or explicit strict stop (`hooks-state.json`). Project-scoped and path-free by
  *  design — the record carries only `at`, `hook`, `reason` — so the beat says
  *  exactly that much and no more. */
 function guardrailBeat(f: HtmlGuardrailFire, seq: number): Beat | null {
-  // F3 — a guardrail ASK is the only fire this beat can honestly describe, and
+  // F3 — a guardrail ask/strict stop is the only fire this beat describes, and
   // readGuardrailFires already keeps nothing else. The old else-branch rendered
   // ANY fire as "the hook stopped the run... the human had to confirm" — which
   // turned the stop-hook's fail-open `{hook:"stop", reason:"owes debrief in
@@ -1723,6 +1724,15 @@ function guardrailBeat(f: HtmlGuardrailFire, seq: number): Beat | null {
   if (f.hook !== "preflight" || !reason.startsWith("guardrail:")) return null;
   const category = reason.slice("guardrail:".length);
   if (!category) return null;
+  if (f.kind === "deny") {
+    return beat(
+      f.at ?? "", seq,
+      `<li class="beat beat--guardrail"><time>${esc(fmtTimestamp(f.at))}</time>` +
+      `<h3>${SHIELD_MARK}Guardrail stop</h3>` +
+      `<p>The hook denied an edit to <strong>${esc(category)}</strong> work and stopped continuation ` +
+      `in strict-stop mode. This record does not mean a human approved it.</p></li>`,
+    );
+  }
   return beat(
     f.at ?? "",
     seq,

@@ -32864,6 +32864,13 @@ function guardrailBeat(f, seq) {
   if (f.hook !== "preflight" || !reason.startsWith("guardrail:")) return null;
   const category = reason.slice("guardrail:".length);
   if (!category) return null;
+  if (f.kind === "deny") {
+    return beat(
+      f.at ?? "",
+      seq,
+      `<li class="beat beat--guardrail"><time>${esc2(fmtTimestamp(f.at))}</time><h3>${SHIELD_MARK}Guardrail stop</h3><p>The hook denied an edit to <strong>${esc2(category)}</strong> work and stopped continuation in strict-stop mode. This record does not mean a human approved it.</p></li>`
+    );
+  }
   return beat(
     f.at ?? "",
     seq,
@@ -34173,8 +34180,8 @@ function readGuardrailFires(projectRoot2) {
       const f = raw;
       if (typeof f.at !== "string" || f.hook !== "preflight") continue;
       if (typeof f.reason !== "string" || !/^guardrail:.+/.test(f.reason)) continue;
-      if (f.kind !== void 0 && f.kind !== "ask") continue;
-      out.push({ at: f.at, hook: f.hook, reason: f.reason });
+      if (f.kind !== void 0 && f.kind !== "ask" && f.kind !== "deny") continue;
+      out.push({ at: f.at, hook: f.hook, reason: f.reason, ...f.kind === "deny" ? { kind: "deny" } : {} });
     }
     return out;
   } catch {

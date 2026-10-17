@@ -929,6 +929,38 @@ function buildProposals(_toolName, toolInput) {
   }
   return { strings: strings.filter(Boolean), paths: paths.filter(Boolean) };
 }
+function resolvePreflightMode(value) {
+  if (value === void 0 || value === "" || value === "ask") return { mode: "ask", invalid: false };
+  return { mode: "strict-stop", invalid: value !== "strict-stop" };
+}
+var PREFLIGHT_MODE_WARNING = "Invalid DEEPPAIRING_PREFLIGHT_MODE; using strict-stop for this matching edit.";
+function sanitizeStrictReason(reason) {
+  const clean = reason.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\x00-\x1f\x7f-\x9f]/g, " ").replace(/\s+/g, " ").trim();
+  return clean.length > 1800 ? clean.slice(0, 1799).replace(/[\ud800-\udbff]$/, "") + "\u2026" : clean;
+}
+function strictExcerpt(value, limit) {
+  const text = typeof value === "string" ? sanitizeStrictReason(value) : "";
+  return text.length > limit ? text.slice(0, limit - 1).replace(/[\ud800-\udbff]$/, "") + "\u2026" : text;
+}
+function strictRejectionReason(block) {
+  const match = block.broadcastEvent.match;
+  const whose = block.source === "session" ? "Prior stance" : "Team rule";
+  const recovery = block.source === "session" ? "If the personal stance is no longer intended, the human can explicitly retire it in the companion UI before a revised attempt." : "Any intended team-policy change requires an explicit authorized change to the committed team rule.";
+  return `REJECTED_APPROACH_BLOCKED: This edit stopped before execution (strict-stop mode). ${whose}: "${strictExcerpt(match.description, 220)}". Rationale: "${strictExcerpt(match.reason, 260) || "No rationale recorded"}". ` + (match.concept ? `Matched concept: "${strictExcerpt(match.concept, 120)}". ` : "") + `Cancel or revise the proposal; do not retry the same edit. ${recovery}`;
+}
+function preflightHookOutput(decision, config) {
+  const rawReason = (config.invalid ? PREFLIGHT_MODE_WARNING + "\n\n" : "") + (decision.reason || "This change matches a previously-rejected approach.");
+  const reason = config.mode === "strict-stop" ? sanitizeStrictReason(rawReason) : rawReason;
+  return {
+    ...config.mode === "strict-stop" ? { continue: false, stopReason: reason } : {},
+    systemMessage: reason,
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: config.mode === "strict-stop" ? "deny" : "ask",
+      permissionDecisionReason: reason
+    }
+  };
+}
 function stripArtifactClause(message) {
   return message.replace(/\s*The artifact was NOT created\.\s*$/, "").trimEnd();
 }
@@ -1016,17 +1048,18 @@ function stampGuardrailAsk(state, match, now) {
   }
   state.guardrailAsks = asks;
 }
-function recordHookFire(projectRoot, decision, now = Date.now()) {
+function recordHookFire(projectRoot, decision, now = Date.now(), mode = "ask") {
   appendHookFire(
     hookStatePath(projectRoot),
     {
       at: new Date(now).toISOString(),
       hook: "preflight",
-      kind: "ask",
+      kind: mode === "strict-stop" ? "deny" : "ask",
+      ...mode === "strict-stop" ? { mode } : {},
       reason: decision.guardrail ? `guardrail:${decision.guardrail.category}` : decision.source || "blocked"
     },
     (state) => {
-      if (decision.guardrail && decision.guardrail.category !== DEEPPAIRING_STATE_CATEGORY) {
+      if (mode === "ask" && decision.guardrail && decision.guardrail.category !== DEEPPAIRING_STATE_CATEGORY) {
         stampGuardrailAsk(state, decision.guardrail, now);
       }
     }
@@ -1046,18 +1079,22 @@ function evaluateGuardrailBackstop(args) {
     if (typeof fp !== "string" || !fp) return null;
     const match = matchGuardrailPath(projectRoot, [fp]);
     if (!match) return null;
-    if (guardrailAskSuppressed(projectRoot, match.category, match.path, now)) return null;
+    if (args.mode !== "strict-stop" && guardrailAskSuppressed(projectRoot, match.category, match.path, now)) return null;
     const ceremony = readSessionCeremony(projectRoot, now);
     if (!ceremony.reachable) return null;
     if (ceremony.hasLiveCeremony) return null;
-    return { fire: true, reason: guardrailReason(match), source: "guardrail", guardrail: match };
+    const reason = args.mode === "strict-stop" ? `Edit to ${strictExcerpt(match.path, 200)} stopped before execution (strict-stop mode). It's a guardrail path (${match.category} \u2014 ${strictExcerpt(match.note, 160)}), and no findings, options, spec, or plan is live in this project's recent sessions. Cancel or revise the proposal, or present the required pre-work for review before continuing. [GUARDRAIL_ESCALATION]` : guardrailReason(match);
+    return { fire: true, reason, source: "guardrail", guardrail: match };
   } catch {
     return null;
   }
 }
-function deeppairingStateReason(match) {
+function deeppairingStateReason(match, mode = "ask") {
   const what = match.kind === "preferences" ? "It's where your stances live: an edit here can quietly retire one." : match.kind === "team" ? "It holds your team's committed rules: an edit here changes them for everyone." : match.kind === "hooks" ? "It's one of the hook scripts that make these prompts: an edit here can switch a prompt off." : match.kind === "worktree-link" ? "It's this git worktree's link to its main checkout, which decides whose stances apply here: an edit can point the worktree at an empty ledger." : "It's a Claude Code settings file that registers deepPairing's hooks: an edit here can remove these prompts.";
   const whose = match.kind === "claude-settings" || match.kind === "worktree-link" ? "It guards deepPairing's prompts." : "It's deepPairing's own state.";
+  if (mode === "strict-stop") {
+    return `Edit to ${strictExcerpt(match.path, 200)} stopped before execution (strict-stop mode). ${whose} ${what} Cancel or revise the proposal. An authorized human must make any intended state, rule, hook, settings or worktree-link change themselves. [DEEPPAIRING_STATE]`;
+  }
   return `Allow this edit to ${match.path}? ${whose} ${what} deepPairing always asks about this file, whatever else is going on.
 [DEEPPAIRING_STATE \u2014 agent: don't edit deepPairing's state files to change a stance, rule or hook. On a decline, ask your pair to make the change themselves.]`;
 }
@@ -1067,7 +1104,7 @@ function evaluateDeeppairingState(args) {
     if (!match) return null;
     return {
       fire: true,
-      reason: deeppairingStateReason(match),
+      reason: deeppairingStateReason(match, args.mode),
       source: "guardrail",
       guardrail: {
         category: DEEPPAIRING_STATE_CATEGORY,
@@ -1082,7 +1119,7 @@ function evaluateDeeppairingState(args) {
 }
 function evaluatePreflightHook(args) {
   const { toolName, toolInput, projectRoot } = args;
-  const state = evaluateDeeppairingState({ toolInput, projectRoot });
+  const state = evaluateDeeppairingState({ toolInput, projectRoot, mode: args.mode });
   if (toolName === "NotebookEdit") return state ?? { fire: false };
   const { strings, paths } = buildProposals(toolName, toolInput);
   if (strings.length === 0) return state ?? { fire: false };
@@ -1094,13 +1131,13 @@ function evaluatePreflightHook(args) {
     teamPreferences: readTeamPreferences(projectRoot)
   });
   if (result.blocked) {
-    const reason = toHookReason(result.block.message);
+    const reason = args.mode === "strict-stop" ? strictRejectionReason(result.block) : toHookReason(result.block.message);
     return state ? { ...state, reason: `${reason}
 
 ${state.reason}`, source: result.block.source } : { fire: true, reason, source: result.block.source };
   }
   if (state) return state;
-  return evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env }) ?? { fire: false };
+  return evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env, mode: args.mode }) ?? { fire: false };
 }
 
 // src/cli/preflight-hook-entry.ts
@@ -1135,22 +1172,11 @@ process.stdin.on("end", () => {
     if (!ledgersPresent(projectRoot) && !toolInputTargetsGuardrail(projectRoot, toolInput) && !toolInputTargetsDeeppairingState(projectRoot, toolInput)) {
       process.exit(0);
     }
-    const decision = evaluatePreflightHook({ toolName, toolInput, projectRoot });
+    const config = resolvePreflightMode(process.env.DEEPPAIRING_PREFLIGHT_MODE);
+    const decision = evaluatePreflightHook({ toolName, toolInput, projectRoot, mode: config.mode });
     if (decision && decision.fire) {
-      recordHookFire(projectRoot, decision);
-      const reason = decision.reason || "This change matches a previously-rejected approach.";
-      process.stdout.write(
-        JSON.stringify({
-          // #544 — some Claude Code dialogs omit the ask reason; also surface
-          // the same resolved text through the documented user warning field.
-          systemMessage: reason,
-          hookSpecificOutput: {
-            hookEventName: "PreToolUse",
-            permissionDecision: "ask",
-            permissionDecisionReason: reason
-          }
-        })
-      );
+      recordHookFire(projectRoot, decision, void 0, config.mode);
+      process.stdout.write(JSON.stringify(preflightHookOutput(decision, config)));
     }
     process.exit(0);
   } catch (err) {

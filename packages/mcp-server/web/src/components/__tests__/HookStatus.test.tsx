@@ -139,6 +139,15 @@ describe("HookStatus", () => {
  * from silence is what caused the bug, so absence is never widened.
  */
 describe("Q2 — hook fires render honestly (kind: 'ask' | 'pass')", () => {
+  it("strict deny renders as stopped, never asked or pass", async () => {
+    const user = userEvent.setup();
+    useHookStatusStore.getState().pushFire(fire({ hook: "preflight", kind: "deny", mode: "strict-stop", reason: "guardrail:migrations" }));
+    render(<HookStatus />);
+    await user.click(screen.getByRole("button", { name: /show recent hook fires/i }));
+    expect(screen.getByText("stopped")).toHaveClass("text-accent-amber");
+    expect(screen.queryByText("asked")).not.toBeInTheDocument();
+    expect(screen.queryByText("pass")).not.toBeInTheDocument();
+  });
   it("kind:'ask' renders as amber 'asked', NOT green 'pass' — even with exitCode 0", async () => {
     const user = userEvent.setup();
     useHookStatusStore.getState().pushFire(

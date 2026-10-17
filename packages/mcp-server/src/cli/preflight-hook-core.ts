@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { runPreflight } from "../mcp/preflight-validator.js";
+import { runPreflight, type PreflightBlock } from "../mcp/preflight-validator.js";
 import { sessionHasLivePreWorkCeremony } from "../debrief-gate.js";
 import { appendHookFire, hookStatePath } from "../hooks/hook-state.js";
 // Q1 — the ONE guardrail rule table, in a Node-builtins-only leaf module that
@@ -39,7 +39,8 @@ import type { TeamPreference } from "@deeppairing/shared";
  *   1. the rejected-approach / team-preference matcher (WP5, original);
  *   2. P1's GUARDRAIL BACKSTOP (bottom half of this file) — a guardrail-path
  *      write with no live pre-work ceremony asks the human.
- * Both surface as permissionDecision "ask"; neither ever denies.
+ * Both ask by default. Opt-in strict-stop denies a matching call and stops
+ * continuation for harnesses whose permission UI omits the reason (#544).
  *
  * Why a hook at all: the MCP-side preflight only fires when the agent
  * voluntarily announces intent through a present_* tool. A model that just
@@ -147,16 +148,79 @@ export function buildProposals(
 }
 
 export interface HookDecision {
-  /** F14 — the gate FIRED. Named `fire`, not `deny`: every fire on this surface
-   *  renders as permissionDecision "ask" (SECURITY.md's ask-never-deny
-   *  contract), and a field called `deny` invited exactly the misreading that a
-   *  hook here can block an edit. It cannot. */
+  /** The matcher fired. The caller's explicit mode determines ask vs stop. */
   fire: boolean;
   reason?: string;
   source?: "session" | "team" | "guardrail";
   /** Present only on a guardrail-backstop fire — what the caller stamps for
    *  dedup and names in the fire log. */
   guardrail?: GuardrailMatch;
+}
+
+export type PreflightMode = "ask" | "strict-stop";
+export interface PreflightModeConfig {
+  mode: PreflightMode;
+  invalid: boolean;
+}
+
+/** #544 — exact opt-in, shared by both emitters. Invalid nonempty values
+ * conservatively stop existing matches; they never create a new match. */
+export function resolvePreflightMode(value: string | undefined): PreflightModeConfig {
+  if (value === undefined || value === "" || value === "ask") return { mode: "ask", invalid: false };
+  return { mode: "strict-stop", invalid: value !== "strict-stop" };
+}
+
+/** No arbitrary environment value is echoed into a warning or telemetry. */
+export const PREFLIGHT_MODE_WARNING = "Invalid DEEPPAIRING_PREFLIGHT_MODE; using strict-stop for this matching edit.";
+
+/** Strict text reaches the ordinary UI. Remove terminal escapes and controls
+ * and stay below the harness's smallest reason-field limit. Default asks keep
+ * their existing text byte-for-byte. */
+export function sanitizeStrictReason(reason: string): string {
+  const clean = reason
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/[\x00-\x1f\x7f-\x9f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return clean.length > 1800 ? clean.slice(0, 1799).replace(/[\ud800-\udbff]$/, "") + "…" : clean;
+}
+
+function strictExcerpt(value: unknown, limit: number): string {
+  const text = typeof value === "string" ? sanitizeStrictReason(value) : "";
+  return text.length > limit ? text.slice(0, limit - 1).replace(/[\ud800-\udbff]$/, "") + "…" : text;
+}
+
+/** Read the structured match, never split agent/model-controlled formatted
+ * prose. Bound each excerpt independently to reserve the rationale/recovery. */
+function strictRejectionReason(block: PreflightBlock): string {
+  const match = block.broadcastEvent.match;
+  const whose = block.source === "session" ? "Prior stance" : "Team rule";
+  const recovery = block.source === "session"
+    ? "If the personal stance is no longer intended, the human can explicitly retire it in the companion UI before a revised attempt."
+    : "Any intended team-policy change requires an explicit authorized change to the committed team rule.";
+  return `REJECTED_APPROACH_BLOCKED: This edit stopped before execution (strict-stop mode). ` +
+    `${whose}: "${strictExcerpt(match.description, 220)}". ` +
+    `Rationale: "${strictExcerpt(match.reason, 260) || "No rationale recorded"}". ` +
+    (match.concept ? `Matched concept: "${strictExcerpt(match.concept, 120)}". ` : "") +
+    `Cancel or revise the proposal; do not retry the same edit. ${recovery}`;
+}
+
+/** Keep the default wire shape unchanged; a strict stop blocks the current
+ * call as well as stopping continuation (continue:false alone is insufficient). */
+export function preflightHookOutput(decision: HookDecision, config: PreflightModeConfig) {
+  const rawReason = (config.invalid ? PREFLIGHT_MODE_WARNING + "\n\n" : "") +
+    (decision.reason || "This change matches a previously-rejected approach.");
+  const reason = config.mode === "strict-stop" ? sanitizeStrictReason(rawReason) : rawReason;
+  return {
+    ...(config.mode === "strict-stop" ? { continue: false, stopReason: reason } : {}),
+    systemMessage: reason,
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: config.mode === "strict-stop" ? "deny" : "ask",
+      permissionDecisionReason: reason,
+    },
+  };
 }
 
 /**
@@ -206,7 +270,7 @@ export function toHookReason(message: string): string {
 //   this project's recent sessions.
 //   → permissionDecision "ask", naming the class + the matched path.
 //
-//   NEVER "deny" (SECURITY.md's ask-never-deny contract), always local-only
+//   Default ask; explicit strict-stop denies and stops continuation. Local-only
 //   (project .deeppairing/ reads + one small state write), and FAIL OPEN on any
 //   error, unreadable store, or unreachable session store.
 //
@@ -481,16 +545,16 @@ export {
  * `exitCode` nor any other outcome marker, while the Stop/checkpoint hooks write
  * `exitCode`; HookStatus keys on `exitCode === 2`, so EVERY guardrail ask and
  * every rejected-approach block rendered as a green "pass" — the UI said the
- * opposite of what happened. Every fire on this lane surfaces as
- * permissionDecision "ask", so this lane always writes `"ask"`. The contract
- * with the UI side (landed separately) is `kind?: "ask" | "pass"` — OPTIONAL,
+ * opposite of what happened. Default fires write `ask`; explicit strict-stop
+ * fires write `deny` plus their mode, never an ask or a pass. The contract
+ * with the UI side is optional for backward compatibility,
  * so a record written by an older build, or by the Stop/checkpoint hooks (which
  * deliberately keep writing `exitCode` instead: a stderr nag that exits 0 is
  * honestly neither), keeps rendering exactly as it does today. There is no
  * `kind` declaration in this file to point at; the field is written here and
- * typed where the fire log is read.
+ * typed where the fire log is read. Strict stops never stamp an ask receipt.
  */
-export function recordHookFire(projectRoot: string, decision: HookDecision, now: number = Date.now()): void {
+export function recordHookFire(projectRoot: string, decision: HookDecision, now: number = Date.now(), mode: PreflightMode = "ask"): void {
   // appendHookFire owns the mkdir, the lock, the capped append and the atomic
   // write, and never throws. The guardrail dedup stamp rides in the SAME
   // read-modify-write via `mutate` — a second lock/RMW pair would reintroduce
@@ -500,12 +564,13 @@ export function recordHookFire(projectRoot: string, decision: HookDecision, now:
     {
       at: new Date(now).toISOString(),
       hook: "preflight",
-      kind: "ask" as const,
+      kind: mode === "strict-stop" ? "deny" : "ask",
+      ...(mode === "strict-stop" ? { mode } : {}),
       reason: decision.guardrail ? `guardrail:${decision.guardrail.category}` : decision.source || "blocked",
     },
     (state) => {
       // #470 slice 4 — the deeppairing-state class never dedups, so it never stamps.
-      if (decision.guardrail && decision.guardrail.category !== DEEPPAIRING_STATE_CATEGORY) {
+      if (mode === "ask" && decision.guardrail && decision.guardrail.category !== DEEPPAIRING_STATE_CATEGORY) {
         stampGuardrailAsk(state, decision.guardrail, now);
       }
     },
@@ -558,6 +623,7 @@ export function evaluateGuardrailBackstop(args: {
   projectRoot: string;
   now?: number;
   env?: Record<string, string | undefined>;
+  mode?: PreflightMode;
 }): HookDecision | null {
   const { projectRoot } = args;
   const now = args.now ?? Date.now();
@@ -570,11 +636,17 @@ export function evaluateGuardrailBackstop(args: {
     if (!match) return null; // (c) non-guardrail edit → pass, zero behaviour change
     // F10 — the cheap check first: one small JSON read beats scanning every
     // session dir, and inside a confirmed arc this is the common path.
-    if (guardrailAskSuppressed(projectRoot, match.category, match.path, now)) return null;
+    if (args.mode !== "strict-stop" && guardrailAskSuppressed(projectRoot, match.category, match.path, now)) return null;
     const ceremony = readSessionCeremony(projectRoot, now);
     if (!ceremony.reachable) return null; // (d) store unreachable → FAIL OPEN
     if (ceremony.hasLiveCeremony) return null; // (b) the escalated arc is in flight → pass silently
-    return { fire: true, reason: guardrailReason(match), source: "guardrail", guardrail: match }; // (a)
+    const reason = args.mode === "strict-stop"
+      ? `Edit to ${strictExcerpt(match.path, 200)} stopped before execution (strict-stop mode). ` +
+        `It's a guardrail path (${match.category} — ${strictExcerpt(match.note, 160)}), and no findings, options, spec, or plan ` +
+        `is live in this project's recent sessions. Cancel or revise the proposal, or present the required pre-work for review before continuing. ` +
+        `[GUARDRAIL_ESCALATION]`
+      : guardrailReason(match);
+    return { fire: true, reason, source: "guardrail", guardrail: match }; // (a)
   } catch {
     return null; // FAIL OPEN
   }
@@ -583,7 +655,7 @@ export function evaluateGuardrailBackstop(args: {
 /** #470 slice 4 — the human-facing ask for a deepPairing state file. Written
  *  for the prompt first, with the agent instruction on a bracketed last line
  *  (the same sequencing as guardrailReason). */
-export function deeppairingStateReason(match: StateMatch): string {
+export function deeppairingStateReason(match: StateMatch, mode: PreflightMode = "ask"): string {
   const what =
     match.kind === "preferences"
       ? "It's where your stances live: an edit here can quietly retire one."
@@ -595,6 +667,11 @@ export function deeppairingStateReason(match: StateMatch): string {
             ? "It's this git worktree's link to its main checkout, which decides whose stances apply here: an edit can point the worktree at an empty ledger."
             : "It's a Claude Code settings file that registers deepPairing's hooks: an edit here can remove these prompts.";
   const whose = match.kind === "claude-settings" || match.kind === "worktree-link" ? "It guards deepPairing's prompts." : "It's deepPairing's own state.";
+  if (mode === "strict-stop") {
+    return `Edit to ${strictExcerpt(match.path, 200)} stopped before execution (strict-stop mode). ${whose} ${what} ` +
+      `Cancel or revise the proposal. An authorized human must make any intended state, rule, hook, settings or worktree-link change themselves. ` +
+      `[DEEPPAIRING_STATE]`;
+  }
   return (
     `Allow this edit to ${match.path}? ${whose} ${what} ` +
     `deepPairing always asks about this file, whatever else is going on.\n` +
@@ -606,13 +683,13 @@ export function deeppairingStateReason(match: StateMatch): string {
 /** #470 slice 4 — the `deeppairing-state` guardrail class. Always asks: no
  *  ceremony skip, no dedup, and the backstop opt-out doesn't reach it. Pure;
  *  any fault is "no decision" (the other gates still run). */
-export function evaluateDeeppairingState(args: { toolInput: unknown; projectRoot: string }): HookDecision | null {
+export function evaluateDeeppairingState(args: { toolInput: unknown; projectRoot: string; mode?: PreflightMode }): HookDecision | null {
   try {
     const match = matchDeeppairingStatePath(args.projectRoot, toolInputTargetPath(args.toolInput));
     if (!match) return null;
     return {
       fire: true,
-      reason: deeppairingStateReason(match),
+      reason: deeppairingStateReason(match, args.mode),
       source: "guardrail",
       guardrail: {
         category: DEEPPAIRING_STATE_CATEGORY,
@@ -641,13 +718,14 @@ export function evaluatePreflightHook(args: {
   projectRoot: string;
   now?: number;
   env?: Record<string, string | undefined>;
+  mode?: PreflightMode;
 }): HookDecision {
   const { toolName, toolInput, projectRoot } = args;
   // #470 slice 4 — decided first and independently of everything below, so
   // no ceremony, dedup window or opt-out can silence it. One prompt per call:
   // when the rejected-approach gate also fires, its message leads (pinned
   // verbatim) and the state note is appended to the SAME ask.
-  const state = evaluateDeeppairingState({ toolInput, projectRoot });
+  const state = evaluateDeeppairingState({ toolInput, projectRoot, mode: args.mode });
   // NotebookEdit is matched only for this class; the other gates are unchanged.
   if (toolName === "NotebookEdit") return state ?? { fire: false };
   const { strings, paths } = buildProposals(toolName, toolInput);
@@ -665,11 +743,13 @@ export function evaluatePreflightHook(args: {
     // created" tail AND reword "refused" → "paused for your review" (the gate
     // asks the human, it doesn't hard-refuse). The REJECTED_APPROACH_BLOCKED
     // prefix + the rationale/concept/reason are preserved.
-    const reason = toHookReason(result.block.message);
+    const reason = args.mode === "strict-stop"
+      ? strictRejectionReason(result.block)
+      : toHookReason(result.block.message);
     return state
       ? { ...state, reason: `${reason}\n\n${state.reason}`, source: result.block.source }
       : { fire: true, reason, source: result.block.source };
   }
   if (state) return state;
-  return evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env }) ?? { fire: false };
+  return evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env, mode: args.mode }) ?? { fire: false };
 }
