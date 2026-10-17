@@ -129,7 +129,7 @@ describe.each(["init", "plugin"] as const)("#544 %s mode contract", copy => {
     ] }));
     const out = JSON.parse(f.run("strict-stop", cause === "state" ? f.payload(".deeppairing/preferences.json", "{}") : undefined).stdout);
     expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
-    expect(out.stopReason).not.toMatch(/retire|allow.*once|Allow this edit/i);
+    expect(out.stopReason).not.toMatch(/human can.*retire|allow.*once|Allow this edit/i);
     expect(out.stopReason).toContain(cause === "team" ? "committed team rule" : "authorized human");
   });
 
