@@ -861,7 +861,14 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
       recordedIds.push(d.decisionId);
       const option = d.options.find((o) => o.id === d.response?.optionId);
       const decisionLabel = d.title?.trim() || d.context;
-      formattedDecisions.push(`- Decision "${decisionLabel}": selected "${option?.title ?? d.response?.optionId}"${d.response?.reasoning ? ` (reasoning: ${d.response.reasoning})` : ""}`);
+      // #549 — the unchosen options as NON-ENFORCING context: the human didn't
+      // pick them this time, and that is all it says. No stance is recorded and
+      // the gate won't block them; worded so it can't read as a rejection.
+      const notChosen = d.options.filter((o) => o.id !== d.response?.optionId).map((o) => `"${o.title}"`);
+      const notChosenNote = option && notChosen.length > 0
+        ? `\n    Not picked this time: ${notChosen.join(", ")}. This is context only, not a rejection — no stance was recorded and they stay open to propose later.`
+        : "";
+      formattedDecisions.push(`- Decision "${decisionLabel}": selected "${option?.title ?? d.response?.optionId}"${d.response?.reasoning ? ` (reasoning: ${d.response.reasoning})` : ""}${notChosenNote}`);
       structuredDecisions.push({
         decisionId: d.decisionId,
         artifactId: d.artifactId,

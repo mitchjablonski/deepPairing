@@ -154,6 +154,7 @@ describe("#549 — the explicit per-option 'Never suggest this'", () => {
     });
     const q = store.getArtifacts().find((a) => a.type === "decision" && a.title.includes("Queue"))!;
     const qId = (q.content as { decisionId: string }).decisionId;
+    await resolve(qId, "q1");
     expect((await neverSuggest(qId, "q2")).status).toBe(200);
     const row = store.getSessionMemory().rejectedApproaches.find((r) => r.description === "Queue: Redis Streams");
     expect(row?.reason).toBeUndefined();
@@ -189,10 +190,89 @@ describe("#549 — the explicit per-option 'Never suggest this'", () => {
     expect(store.getSessionMemory().rejectedApproaches).toHaveLength(0);
   });
 
-  it("works before the card is resolved too (marking an option while still deciding)", async () => {
+  it("REFUSES a pending card (409 decision_not_resolved) — so resolving to that option can't be approved AND rejected", async () => {
     const { decisionId } = await presentDeploy();
-    expect((await neverSuggest(decisionId, "c", { reason: "no VMs" })).status).toBe(200);
-    expect(store.getSessionMemory().rejectedApproaches.map((r) => r.description)).toEqual(["Deploy target: Bare EC2"]);
+    const res = await neverSuggest(decisionId, "b", { reason: "no edge" });
+    expect(res.status).toBe(409);
+    expect((await res.json() as { code: string }).code).toBe("decision_not_resolved");
+    expect(store.getSessionMemory().rejectedApproaches).toHaveLength(0);
+
+    // The human then picks B: it is approved and NOT rejected, and the gate
+    // admits a re-proposal of their chosen approach.
+    await resolve(decisionId, "b");
+    await callTool("check_feedback", {});
+    const memory = store.getSessionMemory();
+    expect(memory.approvedPatterns).toContain("Deploy target: Fly.io");
+    expect(memory.rejectedApproaches).toHaveLength(0);
+    const again = await callTool("present_options", {
+      title: "Preview environments", context: "Where should preview builds run?",
+      options: [
+        { id: "x", title: "Fly.io", description: "pay-per-request hosting on the edge", pros: [], cons: [], effort: "low", risk: "low", recommendation: true, concept: { name: "pay-per-request hosting" } },
+        { id: "y", title: "Render", description: "managed PaaS", pros: [], cons: [], effort: "low", risk: "low", recommendation: false },
+      ],
+    });
+    expect(again.text).not.toContain("REJECTED_APPROACH_BLOCKED");
+  });
+
+  it("a never-suggest racing the resolve of THAT option never records it (serialized under the resolve lock)", async () => {
+    const { decisionId } = await presentDeploy();
+    const [r1, r2] = await Promise.all([resolve(decisionId, "b"), neverSuggest(decisionId, "b")]);
+    expect(r1.status).toBe(200);
+    expect([400, 409]).toContain(r2.status);
+    expect(store.getSessionMemory().rejectedApproaches).toHaveLength(0);
+  });
+
+  it("addressing the card by its ARTIFACT id still runs the chosen-option check", async () => {
+    const { decisionId, artifactId } = await presentDeploy();
+    expect(artifactId).not.toBe(decisionId);
+    await resolve(decisionId, "a");
+    const chosen = await neverSuggest(artifactId, "a");
+    expect(chosen.status).toBe(400);
+    expect(store.getSessionMemory().rejectedApproaches).toHaveLength(0);
+    // An unchosen option via the artifact id records under the real key.
+    expect((await neverSuggest(artifactId, "b")).status).toBe(200);
+    expect(store.getSessionMemory().rejectedApproaches.map((r) => r.description)).toEqual(["Deploy target: Fly.io"]);
+  });
+
+  it.each([
+    ["retracted", "agent_withdraw"],
+    ["obsolete", "ui_dismiss_obsolete"],
+  ] as const)("refuses a %s card with 409 decision_closed", async (status, why) => {
+    const { decisionId, artifactId } = await presentDeploy();
+    await resolve(decisionId, "a");
+    store.updateArtifactStatus(artifactId, status, why);
+    expect(store.getArtifacts().find((a) => a.id === artifactId)?.status).toBe(status);
+    const res = await neverSuggest(decisionId, "b");
+    expect(res.status).toBe(409);
+    expect((await res.json() as { code: string }).code).toBe("decision_closed");
+    expect(store.getSessionMemory().rejectedApproaches).toHaveLength(0);
+  });
+
+  it("refuses a superseded card (a newer version exists) with 409 decision_closed", async () => {
+    const { decisionId, artifactId } = await presentDeploy();
+    await resolve(decisionId, "a");
+    store.createArtifact({ id: "art_v2", type: "decision", title: "Deploy target v2", parentId: artifactId, content: { decisionId: "dec_v2", context: "x", options: DEPLOY_OPTIONS } } as any);
+    const res = await neverSuggest(decisionId, "b");
+    expect(res.status).toBe(409);
+    expect((await res.json() as { code: string }).code).toBe("decision_closed");
+    expect(store.getSessionMemory().rejectedApproaches).toHaveLength(0);
+  });
+
+  it("a repeat with a different reason KEEPS the first reason and returns it", async () => {
+    const { decisionId } = await presentDeploy();
+    await resolve(decisionId, "a");
+    await neverSuggest(decisionId, "b", { reason: "first" });
+    const res = await neverSuggest(decisionId, "b", { reason: "second" });
+    expect(await res.json()).toMatchObject({ alreadyRecorded: true, reason: "first" });
+    expect(store.getSessionMemory().rejectedApproaches.map((r) => r.reason)).toEqual(["first"]);
+  });
+
+  it("check_feedback names the unchosen options as context only, never as a rejection", async () => {
+    const { decisionId } = await presentDeploy();
+    await resolve(decisionId, "a");
+    const fb = await callTool("check_feedback", {});
+    expect(fb.text).toContain('Not picked this time: "Fly.io", "Bare EC2". This is context only, not a rejection');
+    expect(fb.text).not.toContain("❌ REJECTED");
   });
 });
 

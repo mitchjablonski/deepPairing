@@ -267,69 +267,105 @@ export function createReviewRoutes({
 
   // #549 — the explicit per-option "Never suggest this". Resolving a decision
   // no longer records the unchosen options as rejected stances (check_feedback
-  // writes only the approval); the human opts ONE option into the ledger here.
-  // Records through the same recordRejectedOption helper the old implicit path
-  // used, so an explicitly rejected option is keyed — and gated — exactly as an
-  // auto-recorded one was: session key `${label}: ${title}`, cross-project key
-  // the option's concept. Idempotent: recordRejectedApproach dedupes on the
-  // description, so a retried click adds no second row.
+  // writes only the approval); the human opts ONE unchosen option into the
+  // ledger here. Records through the same recordRejectedOption helper the old
+  // implicit path used, so an explicitly rejected option is keyed — and gated —
+  // exactly as an auto-recorded one was: session key `${label}: ${title}`,
+  // cross-project key the option's concept.
+  //
+  // Guards (all fail-closed, nothing written):
+  //   - the decision must be RESOLVED, with a recorded pick (409
+  //     decision_not_resolved). Marking an option on a pending card would let
+  //     a later pick of that same option be approved AND rejected — the gate
+  //     would then block the approach the human chose. The check and the write
+  //     run under withDecisionResolveLock (the #464/#484 resolve serialization)
+  //     so a resolve can't land between them.
+  //   - the route accepts the decisionId OR the backing artifact id, but always
+  //     resolves the REAL decisionId first, so the chosen-option check can't be
+  //     skipped by addressing the card by its artifact id.
+  //   - the chosen option is refused (400).
+  //   - a closed card — superseded (incl. the revise window), retracted, or
+  //     obsolete — is refused with #492's 409 decision_closed.
+  // Idempotent: recordRejectedApproach dedupes on the description. A repeat
+  // KEEPS the first recorded reason (the store only fills a blank one); the
+  // response returns the stored reason so the caller can see what was kept.
   app.post("/api/decisions/:decisionId/options/:optionId/never-suggest", async (c) => {
     const sid = getSessionId(c);
     const store = getStore(sid);
     if (!store) return c.json(NO_SESSION_RESPONSE, 409);
-    const decisionId = c.req.param("decisionId");
+    const requestedId = c.req.param("decisionId");
     const optionId = c.req.param("optionId");
     const bodyVal = await readJsonValue(c);
     if (!bodyVal.ok) return bodyVal.res;
     const parsed = DecisionOptionNeverSuggestBodySchema.safeParse(bodyVal.value ?? {});
     if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
 
-    const artifact = (await store.getArtifacts()).find(
-      (a) =>
-        a.type === "decision" &&
-        ((a.content as { decisionId?: string } | null)?.decisionId === decisionId || a.id === decisionId),
-    );
-    if (!artifact) {
-      return c.json(
-        { error: "decision_not_in_session", code: ERROR_CODES.decision_not_in_session,
-          message: "This decision belongs to a different session than the one this tab is bound to." },
-        404,
+    return withDecisionResolveLock(store, async () => {
+      const artifacts = await store.getArtifacts();
+      const artifact = artifacts.find(
+        (a) =>
+          a.type === "decision" &&
+          ((a.content as { decisionId?: string } | null)?.decisionId === requestedId || a.id === requestedId),
       );
-    }
-    const content = artifact.content as { context?: string; title?: string; options?: DecisionOption[] } | null;
-    const options = Array.isArray(content?.options) ? content.options : [];
-    const option = options.find((o) => o.id === optionId);
-    if (!option) {
-      return c.json(
-        { error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error },
-        400,
-      );
-    }
-    // The option the human CHOSE can't also be a "never suggest" stance — that
-    // would hard-block the very approach they just approved.
-    const record = await store.getDecision(decisionId);
-    if (record?.response?.optionId === optionId) {
-      return c.json(
-        { error: "You chose this option — it can't also be remembered as rejected.", code: ERROR_CODES.validation_error },
-        400,
-      );
-    }
-    // Same label check_feedback keys the approval on (P3): the short title,
-    // else the context, else the artifact title.
-    const label = content?.title?.trim() || content?.context?.trim() || artifact.title;
-    const humanReason = parsed.data.reason?.trim();
-    const reason = humanReason || composeOptionRejectReason(option, "");
-    const description = `${label}: ${option.title}`;
-    const alreadyRecorded = (await store.getSessionMemory()).rejectedApproaches
-      .some((r) => r.description === description);
-    await recordRejectedOption(store, (event) => broadcast(event, sid), {
-      context: label,
-      option,
-      reason,
-      sourceArtifactId: artifact.id,
+      if (!artifact) {
+        return c.json(
+          { error: "decision_not_in_session", code: ERROR_CODES.decision_not_in_session,
+            message: "This decision belongs to a different session than the one this tab is bound to." },
+          404,
+        );
+      }
+      const content = artifact.content as { decisionId?: string; context?: string; title?: string; options?: DecisionOption[] } | null;
+      // The REAL decision id — never the artifact id the caller may have sent.
+      const decisionId = typeof content?.decisionId === "string" && content.decisionId ? content.decisionId : artifact.id;
+      const options = Array.isArray(content?.options) ? content.options : [];
+      const option = options.find((o) => o.id === optionId);
+      if (!option) {
+        return c.json(
+          { error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error },
+          400,
+        );
+      }
+      const closed = classifyClosedDecision(artifact, artifacts);
+      if (closed) return c.json(closedResolveBody(closed, decisionId), 409);
+      const chosenId = (await store.getDecision(decisionId))?.response?.optionId;
+      if (!chosenId) {
+        return c.json(
+          { error: "decision_not_resolved", code: ERROR_CODES.decision_not_resolved, decisionId,
+            message: "Pick an option first — “Never suggest this” is for the options you didn't choose." },
+          409,
+        );
+      }
+      // The option the human CHOSE can't also be a "never suggest" stance — that
+      // would hard-block the very approach they just approved.
+      if (chosenId === optionId) {
+        return c.json(
+          { error: "You chose this option — it can't also be remembered as rejected.", code: ERROR_CODES.validation_error },
+          400,
+        );
+      }
+      // Same label check_feedback keys the approval on (P3): the short title,
+      // else the context, else the artifact title.
+      const label = content?.title?.trim() || content?.context?.trim() || artifact.title;
+      const humanReason = parsed.data.reason?.trim();
+      const reason = humanReason || composeOptionRejectReason(option, "");
+      const description = `${label}: ${option.title}`;
+      const alreadyRecorded = (await store.getSessionMemory()).rejectedApproaches
+        .some((r) => r.description === description);
+      await recordRejectedOption(store, (event) => broadcast(event, sid), {
+        context: label,
+        option,
+        reason,
+        sourceArtifactId: artifact.id,
+      });
+      const stored = (await store.getSessionMemory()).rejectedApproaches.find((r) => r.description === description);
+      log(`[decision] never-suggest ${decisionId}/${optionId}${alreadyRecorded ? " (already recorded)" : ""}`);
+      return c.json({
+        status: "recorded",
+        description,
+        alreadyRecorded,
+        ...(stored?.reason ? { reason: stored.reason } : {}),
+      });
     });
-    log(`[decision] never-suggest ${decisionId}/${optionId}${alreadyRecorded ? " (already recorded)" : ""}`);
-    return c.json({ status: "recorded", description, alreadyRecorded });
   });
 
   // Approve/revise/reject a plan from the web UI

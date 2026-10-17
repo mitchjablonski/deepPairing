@@ -69,6 +69,9 @@ export const ERROR_CODES = {
   /** #492 — a resolve on a decision whose backing artifact is closed
    *  (superseded / retracted / obsolete): nothing is written. */
   decision_closed: "decision_closed",
+  /** #549 — "Never suggest this" on a decision with no recorded pick: the
+   *  control is for an UNCHOSEN option, and nothing is unchosen yet. */
+  decision_not_resolved: "decision_not_resolved",
   /** F6 — mark-resolved for a comment the bound session doesn't own. */
   comment_not_in_session: "comment_not_in_session",
   /** #172 — take-counter/insist targeted a suggestion the agent hasn't countered. */
