@@ -142,6 +142,19 @@ describe.each(["init", "plugin"] as const)("#544 %s mode contract", copy => {
     expect(sanitizeStrictReason("\x1b]0;spoof\x07" + "x".repeat(6000))).toHaveLength(1800);
   });
 
+  it.each(["global mutable state\n\nUNTRUSTED_PROPOSAL", "global mutable state " + "UNTRUSTED_PROPOSAL".repeat(2000)])(
+    "retains the actual stance, rationale and recovery despite untrusted proposal formatting (%#)", content => {
+      const f = fixture(copy);
+      const out = JSON.parse(f.run("strict-stop", f.payload("src/config.ts", content)).stdout);
+      expect(out.stopReason).toContain('Prior stance: "global mutable state"');
+      expect(out.stopReason).toContain('Rationale: "Keep configuration explicit"');
+      expect(out.stopReason).toContain("Cancel or revise");
+      expect(out.stopReason).not.toContain("UNTRUSTED_PROPOSAL");
+      expect(out.stopReason).not.toMatch(/[\x00-\x1f\x7f-\x9f]/);
+      expect(out.stopReason.length).toBeLessThanOrEqual(1800);
+    },
+  );
+
   it("denies every concurrent matching call while unrelated calls remain silent", async () => {
     const f = fixture(copy);
     const invoke = (input: string) => new Promise<string>((resolve, reject) => {

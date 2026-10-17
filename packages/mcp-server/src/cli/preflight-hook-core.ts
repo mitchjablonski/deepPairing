@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { runPreflight } from "../mcp/preflight-validator.js";
+import { runPreflight, type PreflightBlock } from "../mcp/preflight-validator.js";
 import { sessionHasLivePreWorkCeremony } from "../debrief-gate.js";
 import { appendHookFire, hookStatePath } from "../hooks/hook-state.js";
 // Q1 — the ONE guardrail rule table, in a Node-builtins-only leaf module that
@@ -184,6 +184,26 @@ export function sanitizeStrictReason(reason: string): string {
     .replace(/\s+/g, " ")
     .trim();
   return clean.length > 1800 ? clean.slice(0, 1799).replace(/[\ud800-\udbff]$/, "") + "…" : clean;
+}
+
+function strictExcerpt(value: unknown, limit: number): string {
+  const text = typeof value === "string" ? sanitizeStrictReason(value) : "";
+  return text.length > limit ? text.slice(0, limit - 1).replace(/[\ud800-\udbff]$/, "") + "…" : text;
+}
+
+/** Read the structured match, never split agent/model-controlled formatted
+ * prose. Bound each excerpt independently to reserve the rationale/recovery. */
+function strictRejectionReason(block: PreflightBlock): string {
+  const match = block.broadcastEvent.match;
+  const whose = block.source === "session" ? "Prior stance" : "Team rule";
+  const recovery = block.source === "session"
+    ? "If the personal stance is no longer intended, the human can explicitly retire it in the companion UI before a revised attempt."
+    : "Any intended team-policy change requires an explicit authorized change to the committed team rule.";
+  return `REJECTED_APPROACH_BLOCKED: This edit stopped before execution (strict-stop mode). ` +
+    `${whose}: "${strictExcerpt(match.description, 220)}". ` +
+    `Rationale: "${strictExcerpt(match.reason, 260) || "No rationale recorded"}". ` +
+    (match.concept ? `Matched concept: "${strictExcerpt(match.concept, 120)}". ` : "") +
+    `Cancel or revise the proposal; do not retry the same edit. ${recovery}`;
 }
 
 /** Keep the default wire shape unchanged; a strict stop blocks the current
@@ -621,8 +641,8 @@ export function evaluateGuardrailBackstop(args: {
     if (!ceremony.reachable) return null; // (d) store unreachable → FAIL OPEN
     if (ceremony.hasLiveCeremony) return null; // (b) the escalated arc is in flight → pass silently
     const reason = args.mode === "strict-stop"
-      ? `Edit to ${match.path} stopped before execution (strict-stop mode). ` +
-        `It's a guardrail path (${match.category} — ${match.note}), and no findings, options, spec, or plan ` +
+      ? `Edit to ${strictExcerpt(match.path, 200)} stopped before execution (strict-stop mode). ` +
+        `It's a guardrail path (${match.category} — ${strictExcerpt(match.note, 160)}), and no findings, options, spec, or plan ` +
         `is live in this project's recent sessions. Cancel or revise the proposal, or present the required pre-work for review before continuing. ` +
         `[GUARDRAIL_ESCALATION]`
       : guardrailReason(match);
@@ -648,7 +668,7 @@ export function deeppairingStateReason(match: StateMatch, mode: PreflightMode = 
             : "It's a Claude Code settings file that registers deepPairing's hooks: an edit here can remove these prompts.";
   const whose = match.kind === "claude-settings" || match.kind === "worktree-link" ? "It guards deepPairing's prompts." : "It's deepPairing's own state.";
   if (mode === "strict-stop") {
-    return `Edit to ${match.path} stopped before execution (strict-stop mode). ${whose} ${what} ` +
+    return `Edit to ${strictExcerpt(match.path, 200)} stopped before execution (strict-stop mode). ${whose} ${what} ` +
       `Cancel or revise the proposal. An authorized human must make any intended state, rule, hook, settings or worktree-link change themselves. ` +
       `[DEEPPAIRING_STATE]`;
   }
@@ -724,11 +744,7 @@ export function evaluatePreflightHook(args: {
     // asks the human, it doesn't hard-refuse). The REJECTED_APPROACH_BLOCKED
     // prefix + the rationale/concept/reason are preserved.
     const reason = args.mode === "strict-stop"
-      ? stripArtifactClause(result.block.message).split("\n\n")[0]!.replace(" refused — ", " stopped before execution — ") +
-        "\n\nCancel or revise the proposal; do not retry the same edit. " +
-        (result.block.source === "session"
-          ? "If the personal stance is no longer intended, the human can explicitly retire it in the companion UI before a revised attempt."
-          : "Any intended team-policy change requires an explicit authorized change to the committed team rule.")
+      ? strictRejectionReason(result.block)
       : toHookReason(result.block.message);
     return state
       ? { ...state, reason: `${reason}\n\n${state.reason}`, source: result.block.source }
