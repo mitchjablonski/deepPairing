@@ -104,13 +104,18 @@ describe("ArtifactStatusActions — draft interactions", () => {
     render(<ArtifactStatusActions artifact={artifact()} />);
     await userEvent.click(screen.getByRole("button", { name }));
     expect(screen.getByRole("textbox")).toHaveFocus();
-    expect(screen.getByRole("alert")).toHaveTextContent(prompt);
+    expect(screen.getByRole("status")).toHaveTextContent(prompt);
     expect(screen.getByRole("textbox")).toHaveAttribute("aria-invalid", "true");
+    // exactly ONE announcement: a polite status, no assertive alert, and no
+    // describedby echo on the (already focused) field
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(screen.getByRole("textbox")).not.toHaveAttribute("aria-describedby");
     expect(screen.queryByLabelText(/What pattern are you rejecting/)).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
     // the reason is still required, and the prompt clears once one exists
     await userEvent.type(screen.getByRole("textbox"), "wrong approach");
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("#543 — keyboard path: Tab to Reject, Enter lands focus in the reason field", async () => {
@@ -119,7 +124,7 @@ describe("ArtifactStatusActions — draft interactions", () => {
     reject.focus();
     await userEvent.keyboard("{Enter}");
     expect(screen.getByRole("textbox")).toHaveFocus();
-    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toBeInTheDocument();
   });
 
   it("#543 — with a reason, Reject still opens the pattern step and Request changes submits", async () => {
@@ -127,7 +132,7 @@ describe("ArtifactStatusActions — draft interactions", () => {
     await userEvent.type(screen.getByRole("textbox"), "nope");
     await userEvent.click(screen.getByRole("button", { name: /^Reject$/ }));
     expect(screen.getByLabelText(/What pattern are you rejecting/)).toBeInTheDocument();
-    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("#543 — offline still gates Reject and Request changes", () => {

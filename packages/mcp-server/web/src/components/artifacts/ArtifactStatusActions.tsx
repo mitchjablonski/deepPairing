@@ -862,13 +862,12 @@ export function ArtifactStatusActions({
         }}
         rows={2}
         aria-invalid={reasonAsk !== null && !comment.trim() ? true : undefined}
-        aria-describedby={reasonAsk !== null && !comment.trim() ? "reason-ask" : undefined}
         className="w-full px-3 py-2 bg-surface-secondary border border-border-default rounded text-xs text-text-primary resize-none
                    placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent-violet"
       />
 
       {reasonAsk !== null && !comment.trim() && (
-        <div id="reason-ask" role="alert" data-testid="reason-ask" className="text-2xs text-accent-amber">
+        <div role="status" data-testid="reason-ask" className="text-2xs text-accent-amber">
           {reasonAsk === "reject"
             ? "Add a short reason to reject — it's what the agent learns from."
             : "Add a short reason to request changes — it's what the agent redrafts from."}
