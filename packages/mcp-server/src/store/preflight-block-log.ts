@@ -79,6 +79,17 @@ export interface PreflightBlockEntry {
   supersedesAllowanceId?: string;
   /** Set when the human acted on this block (a grant), so Held drops it. */
   seenAt?: string;
+  // #544 — a PreToolUse hook firing (a raw Edit/Write), not a present_* call.
+  /** Where the firing came from. Absent = the present_* gate. */
+  lane?: "hook";
+  /** What the hook told Claude Code: ask the human, or deny (strict-stop). */
+  decision?: "ask" | "deny";
+  /** The file the edit targeted, project-relative when inside the project. */
+  targetPath?: string;
+  /** The guardrail class, when a guardrail rule fired and no stance did. */
+  guardrail?: string;
+  /** The exact stance row (Retire's identity), when it differs from `concept`. */
+  description?: string;
 }
 
 export interface PreflightBlockLogFile {
@@ -284,5 +295,87 @@ export function clearPreflightBlocks(projectRoot: string): void {
     if (fs.existsSync(file)) writeJsonAtomic(file, emptyLog());
   } catch {
     // ignore
+  }
+}
+
+/**
+ * #544 — a PreToolUse hook firing, read off its hooks-state `fires` entry.
+ *
+ * The hook runs in Claude Code's process tree, not ours, and must never wait
+ * on the daemon. So it reports nothing over the network: it writes its gate
+ * record onto the fire it already appends to hooks-state.json, and the
+ * daemon's watcher calls this. Loose on input (the file is hand-editable),
+ * strict on output.
+ */
+export interface HookGateFireLike {
+  id?: unknown;
+  at?: unknown;
+  hook?: unknown;
+  gate?: {
+    decision?: unknown; source?: unknown; concept?: unknown; description?: unknown; reason?: unknown;
+    via?: unknown; addedBy?: unknown; guardrail?: unknown; tool?: unknown; target?: unknown;
+  };
+}
+
+const HOOK_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** The log entry for a hook firing, or null when the fire carries no gate. Pure. */
+export function hookGateEntryFromFire(fire: HookGateFireLike): PreflightBlockEntry | null {
+  if (!fire || fire.hook !== "preflight" || !fire.gate || typeof fire.gate !== "object") return null;
+  if (typeof fire.id !== "string" || !HOOK_ID.test(fire.id)) return null;
+  const g = fire.gate;
+  const str = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : undefined);
+  const concept = str(g.concept, 200);
+  if (!concept) return null;
+  const at = typeof fire.at === "string" && Number.isFinite(Date.parse(fire.at)) ? fire.at : new Date().toISOString();
+  const via = typeof g.via === "string" && VALID_VIA.has(g.via) ? (g.via as PreflightBlockEntry["via"]) : "surface";
+  const guardrail = str(g.guardrail, 60);
+  const entry: PreflightBlockEntry = {
+    id: `blk_${fire.id}`,
+    at,
+    sessionId: "hook",
+    source: g.source === "team" ? "team" : "session",
+    concept,
+    via,
+    lane: "hook",
+    decision: g.decision === "deny" ? "deny" : "ask",
+    eligible: false,
+    ineligibleReason: g.decision === "deny" ? "hook_deny" : "hook_ask",
+  };
+  const toolName = str(g.tool, 40);
+  const targetPath = str(g.target, 400);
+  const reason = str(g.reason, 500);
+  const description = str(g.description, 200);
+  const addedBy = str(g.addedBy, 80);
+  if (toolName) entry.toolName = toolName;
+  if (targetPath) entry.targetPath = targetPath;
+  if (reason) entry.reason = reason;
+  if (description) entry.description = description;
+  if (addedBy) entry.addedBy = addedBy;
+  // Only a guardrail-ONLY firing names its class: when a stance also matched,
+  // the stance leads (it is what the human can act on) and this stays absent.
+  if (guardrail && g.source === "guardrail") entry.guardrail = guardrail;
+  return entry;
+}
+
+/**
+ * Append a hook firing to the project log, once: an entry already holding
+ * this id (a re-read of the same hooks-state) is not written twice. Returns
+ * the entry when it was newly written, else null. Fail-soft.
+ */
+export function recordHookGateBlock(projectRoot: string, fire: HookGateFireLike): PreflightBlockEntry | null {
+  if (!projectRoot) return null;
+  const entry = hookGateEntryFromFire(fire);
+  if (!entry) return null;
+  try {
+    const existing = readPreflightBlocks(projectRoot);
+    if (existing.some((b) => b.id === entry.id)) return null;
+    const blocks = [entry, ...existing].slice(0, MAX_BLOCKS);
+    const file = logPath(projectRoot);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    writeJsonAtomic(file, { version: VERSION, blocks } satisfies PreflightBlockLogFile);
+    return entry;
+  } catch {
+    return null;
   }
 }

@@ -37,6 +37,30 @@ Strict guardrail stops neither consult nor write the 30-minute ask dedup stamp,
 including stamps left by an earlier default session. Every matching retry must
 stop. Switching back to ask retains its existing dedup behavior.
 
+## The companion shows the reason (both modes)
+
+Because the native dialog can omit the reason
+([anthropics/claude-code#102892](https://github.com/anthropics/claude-code/issues/102892)),
+every firing also reaches the companion UI, live. The default `ask` is
+unchanged; this adds a second place to see why.
+
+- The hook writes a gate record (`id` plus `gate`: decision, tool, target,
+  matched stance concept, your original reason, or the guarded-file class)
+  onto the `fires` entry it already appends to `.deeppairing/hooks-state.json`.
+  It makes **no network call**, so a daemon that is down or slow can't delay
+  or change the hook's decision.
+- The daemon's existing hooks-state watcher turns each new record into a
+  `.deeppairing/preflight-blocks.json` entry (`lane: "hook"`) and a
+  `preflight_blocked` broadcast to every open tab: a hero toast ("Claude Code
+  is asking to write `src/config.ts`. This matches your stance …") and a gate
+  log entry. With the next-up bar on, its announcer speaks the moment and the
+  toast stays quiet; otherwise the toast is the alert.
+- Measured on a native filesystem, the tab receives the event about 3-4 ms
+  **before** the hook process exits, about 35-45 ms after the hook starts.
+- The terminal's Allow is the one-time allowance for a raw edit, so the hook
+  toast has no "Allow once" button. A firing that happens while no daemon is
+  running is kept in `hooks-state.json` but not replayed later as a toast.
+
 ## Recovery and limits
 
 Cancel or revise the proposal before continuing. A human may explicitly retire

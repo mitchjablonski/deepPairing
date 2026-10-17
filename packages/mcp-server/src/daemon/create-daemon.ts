@@ -43,7 +43,7 @@ import { applyTopLevelGuards } from "../http/guards.js";
 import { runDemoScript } from "../demo-script.js";
 import { recordMetricEvent } from "../store/metrics-store.js";
 import { recordBroadcastMetric } from "../store/metrics-tap.js";
-import { recordPreflightBlock } from "../store/preflight-block-log.js";
+import { recordHookGateBlock, recordPreflightBlock } from "../store/preflight-block-log.js";
 import { buildPingPayload, decidePing, sendPing } from "../ping.js";
 import { collectUnansweredQuestions, errorMessage } from "@deeppairing/shared";
 import { SERVER_VERSION } from "../version.js";
@@ -1301,6 +1301,11 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
     // live. The hook scripts append to that file on every fire (pass or
     // nag); we read the latest entry on each change.
     let lastFireSeen = 0;
+    // #544 — gate firings (a fire carrying `id` + `gate`) are tracked by id,
+    // not by the timestamp watermark: the preflight and checkpoint hooks run
+    // side by side on the same Write, so a gate fire stamped a millisecond
+    // BEFORE a sibling's can land after it, and the watermark would skip it.
+    const gateFiresSeen = new Set<string>();
     const hooksStatePath = path.join(projectRoot, ".deeppairing", "hooks-state.json");
     const broadcastNewFires = () => {
       try {
@@ -1308,6 +1313,10 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
         const raw = JSON.parse(fs.readFileSync(hooksStatePath, "utf-8"));
         const fires = Array.isArray(raw?.fires) ? raw.fires : [];
         for (const f of fires) {
+          if (f?.gate && typeof f.id === "string" && !gateFiresSeen.has(f.id)) {
+            gateFiresSeen.add(f.id);
+            broadcastHookGate(f);
+          }
           const t = new Date(f.at).getTime();
           if (!Number.isFinite(t) || t <= lastFireSeen) continue;
           lastFireSeen = t;
@@ -1319,12 +1328,43 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
         }
       } catch { /* swallow — observability isn't load-bearing */ }
     };
+    // #544 — the gate-log entry + live toast for one hook firing. Persist
+    // first so the durable id rides the wire (the Q2 rule for present_*
+    // blocks); a Write's ask belongs to whichever tab is open, so it goes to
+    // every client. Never resurrected for a fire older than the daemon.
+    const broadcastHookGate = (f: Record<string, unknown>) => {
+      try {
+        const entry = recordHookGateBlock(projectRoot, f);
+        if (!entry) return;
+        broadcastAll({
+          type: "preflight_blocked",
+          lane: "hook",
+          decision: entry.decision,
+          toolName: entry.toolName,
+          targetPath: entry.targetPath,
+          guardrail: entry.guardrail,
+          source: entry.source,
+          blockId: entry.id,
+          at: entry.at,
+          eligible: false,
+          ineligibleReason: entry.ineligibleReason,
+          match: {
+            concept: entry.concept,
+            description: entry.description,
+            reason: entry.reason,
+            via: entry.via,
+            addedBy: entry.addedBy,
+          },
+        });
+      } catch { /* the hook's decision never depends on this */ }
+    };
     // Seed lastFireSeen from current state so we don't replay every old fire.
     try {
       if (fs.existsSync(hooksStatePath)) {
         const raw = JSON.parse(fs.readFileSync(hooksStatePath, "utf-8"));
         const fires = Array.isArray(raw?.fires) ? raw.fires : [];
         for (const f of fires) {
+          if (f?.gate && typeof f.id === "string") gateFiresSeen.add(f.id);
           const t = new Date(f.at).getTime();
           if (Number.isFinite(t) && t > lastFireSeen) lastFireSeen = t;
         }
