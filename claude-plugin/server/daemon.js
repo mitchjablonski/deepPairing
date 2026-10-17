@@ -20746,6 +20746,9 @@ var DecisionResolveBodySchema = external_exports.object({
   optionId: external_exports.string().min(1),
   reasoning: external_exports.string().optional()
 });
+var DecisionOptionNeverSuggestBodySchema = external_exports.object({
+  reason: external_exports.string().max(2e3).optional()
+});
 var StatusUpdateBodySchema = external_exports.object({
   status: external_exports.enum(["approved", "revised", "rejected", "obsolete"]),
   feedback: external_exports.string().optional(),
@@ -31903,6 +31906,19 @@ function htmlExportFileName(sessionId, generatedAt = (/* @__PURE__ */ new Date()
 var SERVER_VERSION = "0.1.67";
 
 // src/store/rejected-option-recorder.ts
+var MAX_REASON_LEN = 240;
+function composeOptionRejectReason(option, contextSuffix, fallbackReason) {
+  const optionCons = Array.isArray(option.cons) ? option.cons.filter((x) => typeof x === "string" && x.trim().length > 0) : [];
+  const composed = optionCons.length > 0 ? `${optionCons.join("; ")}${contextSuffix}` : fallbackReason;
+  return composed && composed.length > MAX_REASON_LEN ? `${composed.slice(0, MAX_REASON_LEN - 3)}\u2026` : composed;
+}
+async function recordRejectedOption(store, broadcast, params) {
+  const { context, option, reason, sourceArtifactId } = params;
+  const description = `${context}: ${option.title}`;
+  const concept = option.concept?.name ?? option.description ?? void 0;
+  await store.recordRejectedApproach({ description, reason, sourceArtifactId, concept });
+  broadcast({ type: "ledger_write", kind: "rejected", description, concept, reason, sourceArtifactId });
+}
 function optionConceptKey(option) {
   for (const c of [option.concept?.name, option.description, option.title]) {
     if (typeof c === "string" && c.trim()) return c.trim();
@@ -33051,6 +33067,59 @@ function createReviewRoutes({
         if (outcome.kind === "resolved") await store.settleResolution(decisionId, committed);
       }
     });
+  });
+  app.post("/api/decisions/:decisionId/options/:optionId/never-suggest", async (c) => {
+    const sid = getSessionId(c);
+    const store = getStore(sid);
+    if (!store) return c.json(NO_SESSION_RESPONSE, 409);
+    const decisionId = c.req.param("decisionId");
+    const optionId = c.req.param("optionId");
+    const bodyVal = await readJsonValue(c);
+    if (!bodyVal.ok) return bodyVal.res;
+    const parsed = DecisionOptionNeverSuggestBodySchema.safeParse(bodyVal.value ?? {});
+    if (!parsed.success) return c.json(formatZodIssues(parsed.error), 400);
+    const artifact = (await store.getArtifacts()).find(
+      (a) => a.type === "decision" && (a.content?.decisionId === decisionId || a.id === decisionId)
+    );
+    if (!artifact) {
+      return c.json(
+        {
+          error: "decision_not_in_session",
+          code: ERROR_CODES.decision_not_in_session,
+          message: "This decision belongs to a different session than the one this tab is bound to."
+        },
+        404
+      );
+    }
+    const content = artifact.content;
+    const options = Array.isArray(content?.options) ? content.options : [];
+    const option = options.find((o) => o.id === optionId);
+    if (!option) {
+      return c.json(
+        { error: `optionId "${optionId}" is not an option of decision ${decisionId}`, code: ERROR_CODES.validation_error },
+        400
+      );
+    }
+    const record2 = await store.getDecision(decisionId);
+    if (record2?.response?.optionId === optionId) {
+      return c.json(
+        { error: "You chose this option \u2014 it can't also be remembered as rejected.", code: ERROR_CODES.validation_error },
+        400
+      );
+    }
+    const label = content?.title?.trim() || content?.context?.trim() || artifact.title;
+    const humanReason = parsed.data.reason?.trim();
+    const reason = humanReason || composeOptionRejectReason(option, "");
+    const description = `${label}: ${option.title}`;
+    const alreadyRecorded = (await store.getSessionMemory()).rejectedApproaches.some((r) => r.description === description);
+    await recordRejectedOption(store, (event) => broadcast(event, sid), {
+      context: label,
+      option,
+      reason,
+      sourceArtifactId: artifact.id
+    });
+    log2(`[decision] never-suggest ${decisionId}/${optionId}${alreadyRecorded ? " (already recorded)" : ""}`);
+    return c.json({ status: "recorded", description, alreadyRecorded });
   });
   app.post("/api/artifacts/:artifactId/status", async (c) => {
     const sid = getSessionId(c);

@@ -26719,6 +26719,9 @@ var DecisionResolveBodySchema = external_exports.object({
   optionId: external_exports.string().min(1),
   reasoning: external_exports.string().optional()
 });
+var DecisionOptionNeverSuggestBodySchema = external_exports.object({
+  reason: external_exports.string().max(2e3).optional()
+});
 var StatusUpdateBodySchema = external_exports.object({
   status: external_exports.enum(["approved", "revised", "rejected", "obsolete"]),
   feedback: external_exports.string().optional(),
@@ -34691,21 +34694,6 @@ async function handlePresentOptions(ctx, args) {
   };
 }
 
-// src/store/rejected-option-recorder.ts
-var MAX_REASON_LEN = 240;
-function composeOptionRejectReason(option, contextSuffix, fallbackReason) {
-  const optionCons = Array.isArray(option.cons) ? option.cons.filter((x) => typeof x === "string" && x.trim().length > 0) : [];
-  const composed = optionCons.length > 0 ? `${optionCons.join("; ")}${contextSuffix}` : fallbackReason;
-  return composed && composed.length > MAX_REASON_LEN ? `${composed.slice(0, MAX_REASON_LEN - 3)}\u2026` : composed;
-}
-async function recordRejectedOption(store, broadcast, params) {
-  const { context, option, reason, sourceArtifactId } = params;
-  const description = `${context}: ${option.title}`;
-  const concept = option.concept?.name ?? option.description ?? void 0;
-  await store.recordRejectedApproach({ description, reason, sourceArtifactId, concept });
-  broadcast({ type: "ledger_write", kind: "rejected", description, concept, reason, sourceArtifactId });
-}
-
 // src/debrief-gate.ts
 var CODE_CLOSED_STATUSES = ["superseded", "retracted", "obsolete"];
 var DEBRIEF_DEAD_STATUSES = ["superseded", "retracted", "obsolete", "rejected"];
@@ -35480,17 +35468,6 @@ ${deferred.join("\n")}`);
         concept: approvedConcept,
         sourceArtifactId: d.artifactId
       });
-      const rejected = d.options.filter((o) => o.id !== d.response?.optionId);
-      for (const rej of rejected) {
-        const pickContext = d.response?.reasoning ? ` \u2014 picked "${option.title}": ${d.response.reasoning}` : "";
-        const rejectReason = composeOptionRejectReason(rej, pickContext, d.response?.reasoning);
-        await recordRejectedOption(store, broadcast, {
-          context: decisionLabel,
-          option: rej,
-          reason: rejectReason,
-          sourceArtifactId: d.artifactId
-        });
-      }
     }
   }
   const pendingPlans = await store.getPendingPlanReviews();
