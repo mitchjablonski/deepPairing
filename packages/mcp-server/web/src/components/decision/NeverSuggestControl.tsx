@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { DecisionOption } from "@deeppairing/shared";
 import { apiBase, safeFetch, sessionHeaders } from "../../lib/api";
 import { useOfflineReason } from "../../hooks/useOfflineReason";
 import { useUnsavedText } from "../../lib/unsavedText";
@@ -19,17 +20,85 @@ import { useUnsavedText } from "../../lib/unsavedText";
  * editable and registers with useUnsavedText so a Reload asks before
  * discarding it.
  */
+/** A session-ledger rejection row, as GET /api/memory returns it. */
+export interface RememberedRejection {
+  description: string;
+  concept?: string;
+  sourceArtifactId?: string;
+}
+
+/**
+ * #549 (Fable LOW) — the remembered state survives a reload: read the session
+ * ledger the daemon already serves (GET /api/memory, no new endpoint) so an
+ * option that already has a rejection row renders "Remembered as rejected"
+ * instead of offering the control again. Fail-soft: an unreachable or odd
+ * response just means nothing is pre-marked.
+ */
+export function useRememberedRejections(sessionId?: string): RememberedRejection[] {
+  const [rows, setRows] = useState<RememberedRejection[]>([]);
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const res = await fetch(`${apiBase()}/api/memory`, { headers: sessionHeaders(sessionId) });
+        if (!res?.ok) return;
+        const body = (await res.json()) as { rejectedApproaches?: unknown } | null;
+        const list = Array.isArray(body?.rejectedApproaches) ? body.rejectedApproaches : [];
+        const parsed = list.filter(
+          (r): r is RememberedRejection => !!r && typeof (r as RememberedRejection).description === "string",
+        );
+        if (live) setRows(parsed);
+      } catch {
+        /* fail-soft — nothing pre-marked */
+      }
+    })();
+    return () => { live = false; };
+  }, [sessionId]);
+  return rows;
+}
+
+/** Does the ledger already hold a rejection for this option of this decision?
+ *  Matches the exact key the never-suggest route writes (`${label}: ${title}`,
+ *  label = the card's short title else its context), or — scoped to this card's
+ *  artifact — the option's concept key. A row an older build auto-recorded has
+ *  the same key, and it DOES gate, so showing it as remembered is the truth. */
+export function isOptionRemembered(
+  rows: RememberedRejection[],
+  params: { label: string; option: Pick<DecisionOption, "title" | "description" | "concept">; artifactId?: string },
+): boolean {
+  const key = `${params.label.trim()}: ${params.option.title}`;
+  const concept = params.option.concept?.name ?? params.option.description;
+  return rows.some(
+    (r) =>
+      r.description === key ||
+      (!!params.artifactId && r.sourceArtifactId === params.artifactId && !!concept && r.concept === concept),
+  );
+}
+
+/** Opens the Ledger (the place a stance is retired), focused on this one. */
+function openLedgerFor(concept: string) {
+  window.dispatchEvent(
+    new CustomEvent("dp:open-your-taste", { detail: { initialTab: "ledger", highlightConcept: concept } }),
+  );
+}
+
 export function NeverSuggestControl({
   decisionId,
   optionId,
   optionTitle,
+  ledgerConcept,
   sessionId,
+  remembered = false,
 }: {
   decisionId: string;
   optionId: string;
   optionTitle: string;
+  /** The ledger key the "Retire it in the Ledger" link highlights. */
+  ledgerConcept?: string;
   /** The session that OWNS the decision (F6 routing on merged views). */
   sessionId?: string;
+  /** Already in the ledger (derived from GET /api/memory) — render the result state. */
+  remembered?: boolean;
 }) {
   const offline = useOfflineReason();
   const [open, setOpen] = useState(false);
@@ -81,10 +150,17 @@ export function NeverSuggestControl({
     }
   };
 
-  if (done) {
+  if (done || remembered) {
     return (
-      <span className="text-2xs text-accent-red" role="status">
-        ✓ Remembered as rejected
+      <span className="inline-flex items-center gap-1.5 text-2xs" role="status">
+        <span className="text-accent-red">✓ Remembered as rejected</span>
+        <button
+          type="button"
+          onClick={() => openLedgerFor(ledgerConcept ?? optionTitle)}
+          className="text-text-muted underline underline-offset-2 hover:text-text-primary cursor-pointer"
+        >
+          Retire it in the Ledger
+        </button>
       </span>
     );
   }
@@ -97,7 +173,7 @@ export function NeverSuggestControl({
         onClick={() => setOpen(true)}
         aria-label={`Never suggest ${optionTitle}`}
         title="Remember this option as a rejected approach, so Claude doesn't propose it again in this project"
-        className="px-1.5 py-0.5 rounded text-2xs text-text-muted hover:text-accent-red hover:bg-accent-red-dim/40 transition-colors"
+        className="px-1.5 py-0.5 rounded text-2xs text-text-muted hover:text-accent-red hover:bg-accent-red-dim/40 transition-colors cursor-pointer"
       >
         Never suggest this
       </button>
@@ -112,7 +188,7 @@ export function NeverSuggestControl({
       className="mt-1.5 w-full p-2 bg-surface-elevated border border-border-default rounded-lg"
     >
       <label htmlFor={reasonId} className="block text-2xs text-text-muted mb-1.5">
-        Remember “{optionTitle}” as rejected? Claude won't propose it again in this project. Why? (optional)
+        Remember “{optionTitle}” as rejected? Claude won't propose it again in this project (you can retire it later in the Ledger). Why? (optional)
       </label>
       <textarea
         id={reasonId}
@@ -142,7 +218,7 @@ export function NeverSuggestControl({
         <button
           type="button"
           onClick={cancel}
-          className="px-2 py-1 text-2xs text-text-muted hover:text-text-secondary"
+          className="px-2 py-1 text-2xs text-text-muted hover:text-text-secondary cursor-pointer"
         >
           Cancel
         </button>
@@ -151,7 +227,7 @@ export function NeverSuggestControl({
           title={offline ?? undefined}
           onClick={() => void confirm()}
           disabled={submitting || !!offline}
-          className="px-2 py-1 text-2xs text-text-inverse bg-accent-red hover:bg-accent-red/80 rounded press-scale disabled:opacity-50 disabled:cursor-not-allowed"
+          className="px-2 py-1 text-2xs text-text-inverse bg-accent-red hover:bg-accent-red/80 rounded press-scale cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Remember as rejected
         </button>

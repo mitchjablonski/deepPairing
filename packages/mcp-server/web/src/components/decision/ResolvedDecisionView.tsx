@@ -8,7 +8,7 @@ import { SimpleMarkdown } from "../SimpleMarkdown";
 import { ConceptBadge } from "../ConceptBadge";
 import { badgeColors } from "./types";
 import { useConnectionStore } from "../../stores/connection";
-import { NeverSuggestControl } from "./NeverSuggestControl";
+import { NeverSuggestControl, isOptionRemembered, useRememberedRejections } from "./NeverSuggestControl";
 
 interface ResolvedDecisionViewProps {
   event: DecisionRequestEvent;
@@ -60,6 +60,9 @@ export function ResolvedDecisionView({
   // against the others. Each one offers an explicit "Never suggest this".
   const unchosen = event.options.filter((o) => o.id !== selectedId);
   const neverSuggestId = decisionId ?? event.decisionId;
+  // The remembered state comes from the ledger, so it survives a reload.
+  const rememberedRows = useRememberedRejections(sessionId);
+  const ledgerLabel = event.title?.trim() || event.context;
 
   return (
     <m.div
@@ -115,7 +118,9 @@ export function ResolvedDecisionView({
                     decisionId={neverSuggestId}
                     optionId={o.id}
                     optionTitle={o.title}
+                    ledgerConcept={o.concept?.name ?? o.description ?? o.title}
                     sessionId={sessionId}
+                    remembered={isOptionRemembered(rememberedRows, { label: ledgerLabel, option: o, artifactId })}
                   />
                 )}
               </li>

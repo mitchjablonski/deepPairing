@@ -27,12 +27,18 @@ const event = {
 /** A fake daemon: records every request and answers the never-suggest route. */
 let calls: Array<{ url: string; body: unknown }>;
 let failNext = false;
+/** The fake daemon's session ledger, served at GET /api/memory. */
+let ledger: Array<{ description: string; concept?: string; sourceArtifactId?: string; reason?: string }>;
 beforeEach(() => {
   calls = [];
   failNext = false;
+  ledger = [];
   useArtifactStore.getState().reset();
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     calls.push({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    if (String(url).endsWith("/api/memory")) {
+      return new Response(JSON.stringify({ rejectedApproaches: ledger, approvedPatterns: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
     if (failNext) {
       failNext = false;
       return new Response(JSON.stringify({ error: "lock_busy", code: "lock_busy", message: "Busy — try again." }), { status: 503, headers: { "Content-Type": "application/json" } });
@@ -134,5 +140,48 @@ describe("#549 — Never suggest this", () => {
     renderResolved({ writeLocked: true });
     expect(screen.getByText(/Not chosen:/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Never suggest/ })).not.toBeInTheDocument();
+  });
+
+  it("derives the remembered state from the ledger, so it survives a reload (remount with a seeded ledger)", async () => {
+    // The row the never-suggest route writes for o2: `${context}: ${title}`.
+    ledger = [{ description: "Which cache?: CDN edge cache", concept: "Just the edge", sourceArtifactId: "art1", reason: "invalidation pain" }];
+    const first = renderResolved();
+    expect(await screen.findByText("✓ Remembered as rejected")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Never suggest CDN edge cache" })).not.toBeInTheDocument();
+    // The other unchosen option still offers the control.
+    expect(screen.getByRole("button", { name: "Never suggest No cache" })).toBeInTheDocument();
+    first.unmount();
+    renderResolved();
+    expect(await screen.findByText("✓ Remembered as rejected")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Never suggest CDN edge cache" })).not.toBeInTheDocument();
+  });
+
+  it("a concept-keyed row only counts for THIS card's artifact", async () => {
+    ledger = [{ description: "Some other card: Edge", concept: "Just the edge", sourceArtifactId: "art_other" }];
+    renderResolved();
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith("/api/memory"))).toBe(true));
+    expect(screen.getByRole("button", { name: "Never suggest CDN edge cache" })).toBeInTheDocument();
+    expect(screen.queryByText("✓ Remembered as rejected")).not.toBeInTheDocument();
+  });
+
+  it("the result state links to the Ledger to retire it, and the confirm panel says so", async () => {
+    renderResolved();
+    await userEvent.click(screen.getByRole("button", { name: "Never suggest CDN edge cache" }));
+    expect(screen.getByLabelText(/retire it later in the Ledger/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Remember as rejected" }));
+    const opened: Array<Record<string, unknown>> = [];
+    const onOpen = (e: Event) => opened.push((e as CustomEvent).detail);
+    window.addEventListener("dp:open-your-taste", onOpen);
+    try {
+      await userEvent.click(await screen.findByRole("button", { name: "Retire it in the Ledger" }));
+    } finally {
+      window.removeEventListener("dp:open-your-taste", onOpen);
+    }
+    expect(opened).toEqual([{ initialTab: "ledger", highlightConcept: "Just the edge" }]);
+  });
+
+  it("wears an honest pointer cursor", () => {
+    renderResolved();
+    expect(screen.getByRole("button", { name: "Never suggest CDN edge cache" }).className).toContain("cursor-pointer");
   });
 });
