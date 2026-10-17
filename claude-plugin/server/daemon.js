@@ -21480,7 +21480,7 @@ process.stdin.on("end", async () => {
     const config = mod.resolvePreflightMode(process.env.DEEPPAIRING_PREFLIGHT_MODE);
     const decision = mod.evaluatePreflightHook({ toolName, toolInput, projectRoot, mode: config.mode });
     if (decision && decision.fire) {
-      mod.recordHookFire(projectRoot, decision, undefined, config.mode);
+      mod.recordHookFire(projectRoot, decision, undefined, config.mode, ev.session_id);
       process.stdout.write(JSON.stringify(mod.preflightHookOutput(decision, config)));
     }
     // no match = exit 0 with no decision JSON (tool proceeds)
@@ -32022,8 +32022,9 @@ function updatePreflightBlocks(projectRoot2, mutate) {
     return false;
   }
 }
+var CLAUDE_SESSION = /^[A-Za-z0-9-]{1,64}$/;
 var HOOK_ID = /^[A-Za-z0-9_-]{1,64}$/;
-function hookGateEntryFromFire(fire) {
+function hookGateEntryFromFire(fire, resolveSession = () => void 0) {
   if (!fire || fire.hook !== "preflight" || !fire.gate || typeof fire.gate !== "object") return null;
   if (typeof fire.id !== "string" || !HOOK_ID.test(fire.id)) return null;
   const g = fire.gate;
@@ -32036,7 +32037,7 @@ function hookGateEntryFromFire(fire) {
   const entry = {
     id: `blk_${fire.id}`,
     at,
-    sessionId: "hook",
+    sessionId: typeof g.session === "string" && CLAUDE_SESSION.test(g.session) && resolveSession(g.session) || "hook",
     source: g.source === "team" ? "team" : "session",
     concept,
     via,
@@ -32058,9 +32059,9 @@ function hookGateEntryFromFire(fire) {
   if (guardrail && g.source === "guardrail") entry.guardrail = guardrail;
   return entry;
 }
-function recordHookGateBlock(projectRoot2, fire) {
+function recordHookGateBlock(projectRoot2, fire, resolveSession) {
   if (!projectRoot2) return null;
-  const entry = hookGateEntryFromFire(fire);
+  const entry = hookGateEntryFromFire(fire, resolveSession);
   if (!entry) return null;
   try {
     const existing = readPreflightBlocks(projectRoot2);
@@ -35964,6 +35965,7 @@ function createDaemon(deps) {
     openBrowser = defaultOpenBrowser,
     watch = (dir, listener) => fs23.watch(dir, listener),
     heartbeatIntervalMs = 3e4,
+    hooksPollIntervalMs = 750,
     stanceExceptionClock,
     stanceExceptionMonotonic,
     stanceExceptionFault
@@ -36604,9 +36606,19 @@ function createDaemon(deps) {
     return heartbeat;
   }
   let hooksWatcher = null;
+  let hooksPollTimer = null;
+  const GATE_SEEN_CAP = 64;
   function startHooksWatcher() {
     let lastFireSeen = 0;
     const gateFiresSeen = /* @__PURE__ */ new Set();
+    const noteGateSeen = (id) => {
+      gateFiresSeen.add(id);
+      while (gateFiresSeen.size > GATE_SEEN_CAP) {
+        const oldest = gateFiresSeen.values().next().value;
+        if (oldest === void 0) break;
+        gateFiresSeen.delete(oldest);
+      }
+    };
     const hooksStatePath = path23.join(projectRoot2, ".deeppairing", "hooks-state.json");
     const broadcastNewFires = () => {
       try {
@@ -36615,7 +36627,7 @@ function createDaemon(deps) {
         const fires = Array.isArray(raw2?.fires) ? raw2.fires : [];
         for (const f of fires) {
           if (f?.gate && typeof f.id === "string" && !gateFiresSeen.has(f.id)) {
-            gateFiresSeen.add(f.id);
+            noteGateSeen(f.id);
             broadcastHookGate(f);
           }
           const t = new Date(f.at).getTime();
@@ -36628,9 +36640,9 @@ function createDaemon(deps) {
     };
     const broadcastHookGate = (f) => {
       try {
-        const entry = recordHookGateBlock(projectRoot2, f);
+        const entry = recordHookGateBlock(projectRoot2, f, (claude) => matchClaudeSession(claude));
         if (!entry) return;
-        broadcastAll({
+        sendHookGate(entry.sessionId, {
           type: "preflight_blocked",
           lane: "hook",
           decision: entry.decision,
@@ -36658,7 +36670,7 @@ function createDaemon(deps) {
         const raw2 = JSON.parse(fs23.readFileSync(hooksStatePath, "utf-8"));
         const fires = Array.isArray(raw2?.fires) ? raw2.fires : [];
         for (const f of fires) {
-          if (f?.gate && typeof f.id === "string") gateFiresSeen.add(f.id);
+          if (f?.gate && typeof f.id === "string") noteGateSeen(f.id);
           const t = new Date(f.at).getTime();
           if (Number.isFinite(t) && t > lastFireSeen) lastFireSeen = t;
         }
@@ -36677,6 +36689,53 @@ function createDaemon(deps) {
       hooksWatcher = watcher;
     } catch (err) {
       log2(`Hook-state watcher failed to start: ${err}`);
+    }
+    if (hooksPollIntervalMs > 0 && !hooksPollTimer) {
+      let lastStat = "";
+      try {
+        const st = fs23.statSync(hooksStatePath);
+        lastStat = `${st.mtimeMs}:${st.size}`;
+      } catch {
+      }
+      hooksPollTimer = setInterval(() => {
+        try {
+          const st = fs23.statSync(hooksStatePath);
+          const sig = `${st.mtimeMs}:${st.size}`;
+          if (sig === lastStat) return;
+          lastStat = sig;
+          broadcastNewFires();
+        } catch {
+        }
+      }, hooksPollIntervalMs);
+      hooksPollTimer.unref?.();
+    }
+  }
+  function matchClaudeSession(claude) {
+    const suffix = `_${claude}`;
+    for (const id of sessions.keys()) if (id.endsWith(suffix)) return id;
+    for (const id of wsClients.keys()) if (id.endsWith(suffix)) return id;
+    return void 0;
+  }
+  function sendHookGate(sessionId, event) {
+    const own = sessionId !== "hook" ? wsClients.get(sessionId) : void 0;
+    if (!own) {
+      broadcastAll(event);
+      return;
+    }
+    const data = JSON.stringify({ ...event, sessionId });
+    for (const ws of own) {
+      try {
+        ws.send(data);
+      } catch {
+        own.delete(ws);
+      }
+    }
+    for (const ws of globalClients) {
+      try {
+        ws.send(data);
+      } catch {
+        globalClients.delete(ws);
+      }
     }
   }
   function maybeAutoOpenBrowser(port) {
@@ -36756,6 +36815,10 @@ function createDaemon(deps) {
     } catch {
     }
     hooksWatcher = null;
+    if (hooksPollTimer) {
+      clearInterval(hooksPollTimer);
+      hooksPollTimer = null;
+    }
     try {
       wss.close();
     } catch {

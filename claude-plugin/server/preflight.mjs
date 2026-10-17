@@ -1048,8 +1048,10 @@ function stampGuardrailAsk(state, match, now) {
   }
   state.guardrailAsks = asks;
 }
-function recordHookFire(projectRoot, decision, now = Date.now(), mode = "ask") {
+function recordHookFire(projectRoot, decision, now = Date.now(), mode = "ask", claudeSessionId) {
   const gate = hookGateRecord(decision, mode);
+  const session = typeof claudeSessionId === "string" ? claudeSessionId.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 64) : "";
+  if (gate && session) gate.session = session;
   appendHookFire(
     hookStatePath(projectRoot),
     {
@@ -1241,7 +1243,7 @@ process.stdin.on("end", () => {
     const config = resolvePreflightMode(process.env.DEEPPAIRING_PREFLIGHT_MODE);
     const decision = evaluatePreflightHook({ toolName, toolInput, projectRoot, mode: config.mode });
     if (decision && decision.fire) {
-      recordHookFire(projectRoot, decision, void 0, config.mode);
+      recordHookFire(projectRoot, decision, void 0, config.mode, ev.session_id);
       process.stdout.write(JSON.stringify(preflightHookOutput(decision, config)));
     }
     process.exit(0);
