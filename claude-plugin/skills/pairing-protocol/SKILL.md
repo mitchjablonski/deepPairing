@@ -186,8 +186,8 @@ flexes.
   decision, or a genuine architectural fork. The full arc: findings → options →
   spec/plan → changeset → debrief. Use your judgment on borderline cases — and
   the preflight hook is the backstop underneath that judgment: a `Write`/`Edit`
-  to a guardrail path with NO findings, options, spec, or plan live in this
-  project's recent sessions pauses for your pair to confirm (see **Guardrails**
+  to a guardrail path without applicable approved findings, options, spec, or
+  plan pauses for your pair to confirm (see **Guardrails**
   below for exactly when it fires and when it stays quiet).
 
 **The floor is absolute at every class:** code is presented for review before it
@@ -239,7 +239,7 @@ a `high` draft arms the auto-approve countdown.
   whether a call is yours or how risky it is, a gate block you cannot route around,
   done being unreachable as written. **Uncertainty escalates.** Batch only what you
   are sure is your own.
-- **Reclassification boundary.** A low-risk brief silences the guardrail hook, so
+- **Reclassification boundary.** An approved low-risk brief silences the guardrail hook only for its covered files, so
   you are the check. A guardrail path, a file outside the brief's `file_map` visual in
   another package, a new dependency, or a schema or CI change means stop,
   supersede the brief with `revise_artifact` and new `content` whose `context`
@@ -725,22 +725,29 @@ pair change it.
 call. The following prompt and dedup rules describe default ask mode, not the
 opt-in [strict-stop compatibility mode](../../../docs/preflight-modes.md):
 
-- **When it fires.** A `Write`/`Edit`/`MultiEdit` whose target path is under one
-  of those four classes, at a moment when NO `research` (findings), `decision`
-  (options), `spec`, or `plan` artifact is live in this project's recent
-  sessions. It returns `permissionDecision: "ask"` — a prompt naming the class
-  and the path, which your pair can confirm or decline. (Liveness is scoped to
-  the PROJECT, not to one session: a hook gets no session id, and guessing one
-  would interrupt two agents working the same project. A ceremony artifact older
-  than ~8 hours no longer counts as live.)
-- **When it stays quiet.** If the escalated arc is already in flight — a live
-  findings, options, spec, or plan — the write passes silently. Doing the
-  ceremony is exactly how you avoid the prompt, and **a spec you just presented
-  counts immediately**: the backstop catches the SKIP, not the un-reviewed
-  landing, so you never have to sit and wait for review before touching the
-  path. It also asks at most **once per guardrail class per 30 minutes** — **per
-  file** for migrations and secrets, where each file is a separately
-  irreversible act — so a long arc isn't interrupted repeatedly, and it never
+- **When it fires.** A `Write`/`Edit`/`MultiEdit` targets one of those four
+  classes without applicable approved, recent, non-demo `research` (findings),
+  `decision` (options), `spec`, or `plan`. It returns `permissionDecision: "ask"`,
+  naming the class and path. A ceremony artifact older
+  than ~8 hours no longer counts as live.
+- **When it stays quiet.** Approved exact file coverage makes the write pass
+  silently across sessions and agents. Coverage comes only from
+  `content.visuals[kind=file_map].files[].path` and plan `steps[].files` or
+  `steps[].branches[].files` (strings or `FileChange.filePath`), normalized to
+  literal repository-relative equality through the worktree boundary. No prose,
+  title, Mermaid, glob or directory-prefix inference supplies coverage. Empty,
+  malformed or out-of-root entries make the artifact's declaration unusable;
+  any invalid entry invalidates the whole artifact's coverage. Otherwise an
+  eligible same-session declaration blocks older scopeless siblings from
+  bypassing scope. Without such a declaration, approved scopeless ceremony
+  covers only the same usable event session (and the same existing agent when
+  both sides provide usable IDs; stored artifacts currently have no agent
+  attribution). Unrelated declarations do not veto this fallback. Draft, stale
+  and demo artifacts neither authorize nor veto. **A just-presented draft does
+  not count.** It asks at most **once per guardrail class per 30 minutes** — **per
+  file** for migrations and secrets — scoped to `session_id` plus the existing
+  `agent_id` when provided. Unknown or malformed identity never dedups; scoped
+  keys ignore legacy project-wide stamps. Strict-stop never dedups. It never
   fires for a non-guardrail path.
 - **What it is not.** It never `deny`s, it never blocks the edit outright, and
   any error — including a missing, unreadable, or unparseable session store —

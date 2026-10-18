@@ -777,7 +777,7 @@ process.stdin.on("end", async () => {
     mod = await import(CORE_URL);
     const config = mod.resolvePreflightMode(process.env.DEEPPAIRING_PREFLIGHT_MODE);
     stage = "evaluate";
-    const decision = mod.evaluatePreflightHook({ toolName, toolInput, projectRoot, mode: config.mode, failures });
+    const decision = mod.evaluatePreflightHook({ toolName, toolInput, projectRoot, mode: config.mode, failures, sessionId: ev.session_id, agentId: ev.agent_id });
     stage = "output";
     if (decision && decision.fire) {
       mod.recordHookFire(projectRoot, decision, undefined, config.mode, ev.session_id, { agent_id: ev.agent_id, agent_type: ev.agent_type });

@@ -201,9 +201,18 @@ deepPairing installs three Claude Code hooks, all local-only, network-free, and 
     `.circleci/`), infrastructure (`Dockerfile*`, compose files, `terraform/`,
     `k8s/`, `*.tfvars`), or a secret file (`.env*` other than checked-in
     templates such as `.env.example`/`.env.sample`, `config/secrets*`,
-    `config/credentials*`, `config/master.key`) — at a moment when the agent has
-    presented no findings, options, spec, or plan in this project's recent
-    sessions. Those paths match at **any depth**, not only at the repository
+    `config/credentials*`, `config/master.key`) — when no approved, recent,
+    non-demo findings, options, spec, or plan covers the edit. Exact normalized
+    file paths in `content.visuals[kind=file_map].files[].path` or plan
+    `steps[].files` / `steps[].branches[].files` (strings or `FileChange.filePath`)
+    authorize across sessions. No prose, glob or directory-prefix inference is
+    used. Any invalid entry makes that artifact's declared coverage unusable.
+    Eligible declared coverage in the event's session prevents an older
+    scopeless sibling from bypassing it. Otherwise approved scopeless ceremony
+    can authorize only that same usable session; unrelated declarations do not
+    veto it. Draft, stale and demo artifacts neither authorize nor veto fallback.
+    No producer agent identity is invented when artifacts carry none.
+    Those paths match at **any depth**, not only at the repository
     root, so `packages/api/migrations/002_drop_users.sql` in a
     monorepo is guarded like a root-level one; a file whose name merely
     contains a guardrail directory's name (`src/migrations.js`,
@@ -223,7 +232,9 @@ deepPairing installs three Claude Code hooks, all local-only, network-free, and 
     a fresh git worktree has none until it is initialised too (the plugin
     install is unaffected); `deeppairing doctor` warns about this.
     By default it asks at most once per guardrail class per 30 minutes (per file
-    for migrations and secrets). Strict stops ignore and never write ask dedup
+    for migrations and secrets), scoped to the usable event `session_id` and
+    existing `agent_id` when provided. Unknown or malformed identity never
+    dedups; scoped keys ignore legacy project-wide stamps. Strict stops ignore and never write ask dedup
     stamps, so repeated matching calls remain denied. If the session store is missing, unreadable, or
     every session store present is unparseable, it stays silent (fail-open) —
     a single corrupt session alongside a readable one is skipped, and the

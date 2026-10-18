@@ -186,7 +186,7 @@ describe("always asks: ceremony, dedup and the opt-out don't reach it", () => {
   it("asks with a LIVE ceremony in the project", () => {
     const sd = path.join(dir, ".deeppairing", "sessions", "s1");
     fs.mkdirSync(sd, { recursive: true });
-    fs.writeFileSync(path.join(sd, "artifacts.json"), JSON.stringify([{ id: "spec-1", type: "spec", status: "approved", createdAt: recent }]));
+    fs.writeFileSync(path.join(sd, "artifacts.json"), JSON.stringify([{ id: "spec-1", type: "spec", status: "approved", createdAt: recent, content: { visuals: [{ kind: "file_map", files: [{ path: ".github/workflows/ci.yml" }] }] } }]));
     // Control: the same ceremony silences an ordinary guardrail path.
     expect(decide("Write", { file_path: path.join(dir, ".github/workflows/ci.yml"), content: "x" })).toEqual({ fire: false });
     expect(decide("Edit", target())).toMatchObject({ fire: true });

@@ -167,14 +167,23 @@ their early exit. (Round-12 found the earlier arrangement — two frank copies
 plus a hand-written "loose superset" regex — had drifted in exactly the
 generated place, silently disabling the backstop on six real path shapes in
 ledger-free projects; the regex was deleted rather than re-derived.) The gate
-asks when a write lands on a guardrail path, at any depth, while no
-`research`/`decision`/`spec`/`plan` artifact is live in the project's
-recent sessions — i.e. only when the agent skipped the pre-work ceremony
-entirely. A live ceremony, a missing/unreadable/unparseable session store, or
-`DEEPPAIRING_GUARDRAIL_BACKSTOP=off` all leave it silent. Liveness is
-project-scoped rather than session-scoped on purpose: a PreToolUse hook is
-handed no deepPairing session id, and guessing one would interrupt two
-agents working the same repo.
+asks when a write lands on a guardrail path, at any depth, without applicable
+approved, recent, non-demo `research`/`decision`/`spec`/`plan` coverage.
+Typed `file_map` paths and plan step/branch `files` match normalized exact
+repository-relative files, including worktree canonicalization; no prose,
+globs or directory-prefix inference supplies scope. A single invalid path
+makes the artifact's declared coverage unusable. Matching eligible coverage
+authorizes across sessions. Otherwise eligible declarations in the current
+event's session prevent older scopeless siblings from bypassing scope;
+without such declarations, approved scopeless ceremony authorizes only that
+same usable session. Ineligible artifacts neither authorize nor veto, and
+unrelated-session declarations cannot veto same-session fallback. Existing
+hook-input `session_id`/`agent_id` are forwarded without environment substitutes;
+no artifact producer attribution is invented. Ask dedup uses session plus
+agent when provided, retaining class/file grain, and ignores legacy global
+stamps. Unknown or malformed identities and strict-stop never dedup.
+A missing/unreadable/unparseable session store or
+`DEEPPAIRING_GUARDRAIL_BACKSTOP=off` leaves the backstop silent.
 
 ## Persistence layout
 

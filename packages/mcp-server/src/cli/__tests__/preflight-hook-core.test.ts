@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { deriveSessionId } from "../../session-id.js";
 import {
   buildProposals,
   readRejectedApproaches,
@@ -27,6 +28,17 @@ beforeEach(() => {
 });
 afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+describe("#534 optional hook identities", () => {
+  it.each([undefined, null, "", " ", "../event-1", "event/1", "event_1", 1, {}, "x".repeat(65)])("does not repair %j or substitute an environment identity for same-session fallback", sessionId => {
+    const sd = path.join(dp(), "sessions", deriveSessionId(dir, "event-1").sessionId);
+    fs.mkdirSync(sd, { recursive: true });
+    fs.writeFileSync(path.join(sd, "artifacts.json"), JSON.stringify([{ type: "spec", status: "approved", createdAt: new Date().toISOString() }]));
+    const args = { toolName: "Edit", toolInput: { file_path: "migrations/1.sql", new_string: "x" }, projectRoot: dir, env: { CLAUDE_CODE_SESSION_ID: "event-1" } };
+    expect(evaluatePreflightHook({ ...args, sessionId }).fire).toBe(true);
+    expect(evaluatePreflightHook({ ...args, sessionId: "event-1", agentId: "worker-1" }).fire).toBe(false);
+  });
 });
 
 describe("buildProposals — pulls matchable text from a PreToolUse tool_input", () => {

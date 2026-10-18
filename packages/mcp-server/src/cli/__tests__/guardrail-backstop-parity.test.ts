@@ -33,6 +33,7 @@ import { fileURLToPath } from "node:url";
 import { GUARDRAIL_RULES, matchGuardrailPath, toolInputTargetsGuardrail } from "../preflight-hook-core.js";
 import { senseProjectGuardrails } from "../../store/project-signals.js";
 import { ensurePreflightHook } from "../setup-tasks.js";
+import { deriveSessionId } from "../../session-id.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // __tests__ → cli → src → mcp-server → packages → repo root
@@ -214,7 +215,7 @@ describe("GUARDRAIL_RULES mirrors senseProjectGuardrails (the 🛡 set the hint 
 
 const NOW = Date.now();
 const recent = new Date(NOW - 60 * 1000).toISOString();
-type Art = { id: string; type: string; status: string; createdAt: string };
+type Art = { id: string; type: string; status: string; createdAt: string; content?: unknown };
 const art = (id: string, type: string, status = "approved", createdAt = recent): Art => ({ id, type, status, createdAt });
 
 interface Case {
@@ -229,6 +230,10 @@ interface Case {
   expectAsk: string | null;
   /** seed a rejected-approach ledger + matching content (positive control). */
   rejected?: { concept: string; content: string };
+  sessionId?: unknown;
+  agentId?: unknown;
+  sourceSession?: string;
+  siblings?: Art[];
 }
 
 const MATRIX: Case[] = [
@@ -265,12 +270,12 @@ const MATRIX: Case[] = [
     artifacts: [],
     toolName: "Edit",
     file: "Jenkinsfile",
-    expectAsk: "is live in this project's recent sessions",
+    expectAsk: "has recent approval covering this file",
   },
   { name: "(b) guardrail Edit + live spec → pass", artifacts: [art("sp1", "spec")], toolName: "Edit", file: "migrations/1.sql", expectAsk: null },
-  { name: "(b2) guardrail Edit + live findings → pass", artifacts: [art("r1", "research", "draft")], toolName: "Edit", file: ".env", expectAsk: null },
+  { name: "(b2) guardrail Edit + approved findings → pass", artifacts: [art("r1", "research")], toolName: "Edit", file: ".env", expectAsk: null },
   { name: "(b3) guardrail Edit + live options → pass", artifacts: [art("d1", "decision")], toolName: "Edit", file: "Dockerfile", expectAsk: null },
-  { name: "(b4) F2: a DRAFT spec counts immediately → pass", artifacts: [art("sp1", "spec", "draft")], toolName: "Edit", file: "terraform/main.tf", expectAsk: null },
+  { name: "(b4) a DRAFT spec never licenses an edit", artifacts: [art("sp1", "spec", "draft")], toolName: "Edit", file: "terraform/main.tf", expectAsk: "GUARDRAIL_ESCALATION" },
   { name: "(b5) guardrail Edit + REJECTED spec → ask (the ceremony isn't standing)", artifacts: [art("sp1", "spec", "rejected")], toolName: "Edit", file: "terraform/main.tf", expectAsk: "Allow this edit to terraform/main.tf?" },
   { name: "(c) non-guardrail Edit → pass (zero behaviour change)", artifacts: [], toolName: "Edit", file: "src/index.ts", expectAsk: null },
   {
@@ -334,17 +339,35 @@ const MATRIX: Case[] = [
   },
 ];
 
+const scopedArt = (file: unknown, status = "approved"): Art => ({ ...art("scope", "spec", status), content: { visuals: [{ kind: "file_map", files: [{ path: file }] }] } });
+MATRIX.push(
+  { name: "cross-session exact approved path coverage", artifacts: [scopedArt("migrations/1.sql")], sourceSession: "other", agentId: "worker-1", toolName: "Edit", file: "migrations/1.sql", expectAsk: null },
+  { name: "same-session explicit exclusion vetoes older scopeless sibling", artifacts: [art("old", "spec"), scopedArt("src/a.ts")], toolName: "Edit", file: "migrations/1.sql", expectAsk: "GUARDRAIL_ESCALATION" },
+  { name: "same-session malformed scope vetoes older scopeless sibling", artifacts: [art("old", "spec"), scopedArt(null)], toolName: "Edit", file: "migrations/1.sql", expectAsk: "GUARDRAIL_ESCALATION" },
+  { name: "unrelated scope cannot veto same-session fallback", artifacts: [scopedArt("src/a.ts")], sourceSession: "other", siblings: [art("own", "spec")], toolName: "Edit", file: "migrations/1.sql", expectAsk: null },
+  { name: "draft scope cannot veto approved fallback", artifacts: [art("old", "spec"), scopedArt("src/a.ts", "draft")], toolName: "Edit", file: "migrations/1.sql", expectAsk: null },
+  { name: "matching sibling wins over same-session exclusion", artifacts: [scopedArt("src/a.ts"), scopedArt("migrations/1.sql")], toolName: "Edit", file: "migrations/1.sql", expectAsk: null },
+  { name: "unrelated scopeless approval cannot authorize", artifacts: [art("old", "spec")], sourceSession: "other", toolName: "Edit", file: "migrations/1.sql", expectAsk: "GUARDRAIL_ESCALATION" },
+  { name: "missing event identity cannot use fallback", artifacts: [art("old", "spec")], sessionId: null, toolName: "Edit", file: "migrations/1.sql", expectAsk: "GUARDRAIL_ESCALATION" },
+  { name: "plan branch FileChange covers exact file across sessions", artifacts: [{ ...art("plan", "plan"), content: { steps: [{ branches: [{ files: [{ filePath: "migrations/1.sql" }] }] }] } }], sourceSession: "other", toolName: "Edit", file: "migrations/1.sql", expectAsk: null },
+);
+
 /** Run one hook script over one case; returns the parsed hookSpecificOutput or null. */
 function runCase(script: string, c: Case): { decision: string | null; reason: string | null } {
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-gr-hook-"));
   try {
     if (c.artifacts !== null) {
-      const sd = path.join(projectDir, ".deeppairing", "sessions", "s1");
+      const sd = path.join(projectDir, ".deeppairing", "sessions", deriveSessionId(projectDir, c.sourceSession ?? "s1").sessionId);
       fs.mkdirSync(sd, { recursive: true });
       fs.writeFileSync(
         path.join(sd, "artifacts.json"),
         c.artifacts === "corrupt" ? "{ not json" : JSON.stringify(c.artifacts),
       );
+    }
+    if (c.siblings) {
+      const sd = path.join(projectDir, ".deeppairing", "sessions", deriveSessionId(projectDir, "s1").sessionId);
+      fs.mkdirSync(sd, { recursive: true });
+      fs.writeFileSync(path.join(sd, "artifacts.json"), JSON.stringify(c.siblings));
     }
     if (c.rejected) {
       fs.mkdirSync(path.join(projectDir, ".deeppairing"), { recursive: true });
@@ -359,7 +382,7 @@ function runCase(script: string, c: Case): { decision: string | null; reason: st
         ? { file_path: file, content: c.rejected?.content ?? "DROP TABLE users;" }
         : { file_path: file, new_string: c.rejected?.content ?? "some change" };
     const out = execFileSync("node", [script], {
-      input: JSON.stringify({ tool_name: c.toolName, tool_input: toolInput }),
+      input: JSON.stringify({ tool_name: c.toolName, tool_input: toolInput, session_id: Object.hasOwn(c, "sessionId") ? c.sessionId : "s1", agent_id: c.agentId }),
       encoding: "utf-8",
       // The backstop honours DEEPPAIRING_GUARDRAIL_BACKSTOP=off (F7); make sure
       // a developer's own opt-out can't silently pass this suite.
@@ -405,6 +428,32 @@ describe("the two hand-maintained hook copies agree on the guardrail matrix", ()
       expect(initResult.decision).toBe(bundleResult.decision);
       expect(initResult.reason).toBe(bundleResult.reason);
       if (c.expectAsk !== null) expect(initResult.reason).toContain(c.expectAsk);
+    });
+  }
+
+  for (const copy of ["plugin", "init"] as const) {
+    it.skipIf(!bundleBuilt || !initCoreBuilt)(`#534 ${copy} forwards scoped session/agent identity and never dedups unknown identity`, () => {
+      const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-scope-wire-"));
+      try {
+        const sd = path.join(projectDir, ".deeppairing/sessions", deriveSessionId(projectDir, "s1").sessionId);
+        fs.mkdirSync(sd, { recursive: true });
+        fs.writeFileSync(path.join(sd, "artifacts.json"), "[]");
+        const script = copy === "plugin" ? committedBundle : initScript!;
+        const fire = (session_id?: unknown, agent_id?: unknown) => execFileSync("node", [script], {
+          input: JSON.stringify({ tool_name: "Edit", session_id, agent_id, tool_input: { file_path: ".github/workflows/ci.yml", new_string: "x" } }),
+          encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir, DEEPPAIRING_GUARDRAIL_BACKSTOP: "", DEEPPAIRING_PREFLIGHT_MODE: "" },
+        }).trim();
+        expect(fire("s1", "a1")).toContain("GUARDRAIL_ESCALATION");
+        expect(fire("s1", "a1")).toBe("");
+        expect(fire("s1", "a2")).toContain("GUARDRAIL_ESCALATION");
+        expect(fire("s2", "a1")).toContain("GUARDRAIL_ESCALATION");
+        for (const session of [undefined, null, "", "../s1"]) {
+          expect(fire(session)).toContain("GUARDRAIL_ESCALATION");
+          expect(fire(session)).toContain("GUARDRAIL_ESCALATION");
+        }
+      } finally {
+        fs.rmSync(projectDir, { recursive: true, force: true });
+      }
     });
   }
 
@@ -457,7 +506,7 @@ describe("the two hand-maintained hook copies agree on the guardrail matrix", ()
       fs.writeFileSync(path.join(sd, "artifacts.json"), "[]");
       const fire = (rel: string) =>
         execFileSync("node", [committedBundle], {
-          input: JSON.stringify({ tool_name: "Edit", tool_input: { file_path: path.join(projectDir, rel), new_string: "x" } }),
+          input: JSON.stringify({ tool_name: "Edit", session_id: "s1", tool_input: { file_path: path.join(projectDir, rel), new_string: "x" } }),
           encoding: "utf-8",
           env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir, DEEPPAIRING_GUARDRAIL_BACKSTOP: "" },
         }).trim();
@@ -471,8 +520,8 @@ describe("the two hand-maintained hook copies agree on the guardrail matrix", ()
       expect(fire("migrations/1_add_index.sql")).toBe("");
       // The dedup record rides in the file the UI already reads, beside `fires`.
       const state = JSON.parse(fs.readFileSync(path.join(projectDir, ".deeppairing", "hooks-state.json"), "utf-8"));
-      expect(typeof state.guardrailAsks.workflows).toBe("string"); // class-level
-      expect(Object.keys(state.guardrailAsks.migrations).sort()).toEqual([
+      expect(typeof state.guardrailAsks["scope:s1::workflows"]).toBe("string"); // class-level
+      expect(Object.keys(state.guardrailAsks["scope:s1::migrations"]).sort()).toEqual([
         "migrations/1_add_index.sql",
         "migrations/2_drop_users.sql",
       ]); // per-path
@@ -523,6 +572,7 @@ describe("the two hand-maintained hook copies agree on the guardrail matrix", ()
             child.stdin.end(
               JSON.stringify({
                 tool_name: "Edit",
+                session_id: "s1",
                 tool_input: { file_path: path.join(projectDir, rel), new_string: "x" },
               }),
             );
@@ -539,7 +589,7 @@ describe("the two hand-maintained hook copies agree on the guardrail matrix", ()
       // …and every ask left a record. This is the assertion that fails without
       // the lock (atomic rename alone drops roughly half).
       expect(state.fires, "fire records were lost to a concurrent write").toHaveLength(N);
-      expect(Object.keys(state.guardrailAsks.migrations).sort(), "dedup stamps were lost").toEqual([...rels].sort());
+      expect(Object.keys(state.guardrailAsks["scope:s1::migrations"]).sort(), "dedup stamps were lost").toEqual([...rels].sort());
       // No lock or temp file survives a clean run.
       expect(fs.readdirSync(path.join(projectDir, ".deeppairing")).filter((f) => f.includes(".lock") || f.includes(".tmp."))).toEqual([]);
     } finally {

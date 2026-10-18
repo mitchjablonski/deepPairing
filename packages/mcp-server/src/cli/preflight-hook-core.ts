@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { runPreflight, runPreflightGuarded, type PreflightBlock } from "../mcp/preflight-validator.js";
-import { sessionHasLivePreWorkCeremony } from "../debrief-gate.js";
+import { PRE_WORK_CEREMONY_TYPES } from "../debrief-gate.js";
+import { deriveSessionId } from "../session-id.js";
+import { canonicalizeWorktreePath } from "../git-worktree.js";
 import { appendHookFire, hookStatePath } from "../hooks/hook-state.js";
 // #546 — the failure taxonomy + its bounded, redacted hooks-state record. Both
 // hook entries flush through recordPreflightFailures (re-exported below so the
@@ -340,8 +342,8 @@ export function toHookReason(message: string): string {
 //
 //   TRIGGER — a write-class tool (Edit/Write/MultiEdit) whose target path falls
 //   under one of the guardrail classes senseProjectGuardrails detects
-//   (migrations, CI, infra, secrets), AND no live pre-work ceremony exists in
-//   this project's recent sessions.
+//   (migrations, CI, infra, secrets), AND no eligible approved pre-work covers
+//   this file through exact coverage or the scoped fallback below.
 //   → permissionDecision "ask", naming the class + the matched path.
 //
 //   Default ask; explicit strict-stop denies and stops continuation. Local-only
@@ -350,10 +352,9 @@ export function toHookReason(message: string): string {
 //
 // The hard design question was how NOT to nag legitimately-escalated work. The
 // backstop fires ONLY in the exact skip case: if the agent already did the
-// ceremony — a LIVE findings/options/spec/plan — the guardrail edit passes
-// SILENTLY. Liveness is defined once, next to the debrief gate's
-// (debrief-gate.ts sessionHasLivePreWorkCeremony), and counts LIVE artifacts
-// only.
+// ceremony — approved findings/options/spec/plan with applicable scope — the
+// guardrail edit passes SILENTLY. #534's approval and coverage rules live here;
+// the shared debrief gate keeps its separate opening/closing predicates.
 //
 // A non-guardrail edit is completely untouched: one regex test against the file
 // path, no extra I/O, no output. Zero behaviour change for the low-risk class —
@@ -435,23 +436,106 @@ export interface CeremonyReadout {
   hasLiveCeremony: boolean;
 }
 
+/** Existing hook-event identities only. Invalid values are never repaired into
+ * another identity. Stored artifacts currently carry no agent attribution. */
+export interface PreflightIdentity {
+  sessionId?: unknown;
+  agentId?: unknown;
+}
+
+function usableSessionId(value: unknown): string | undefined {
+  return typeof value === "string" && /^[a-zA-Z0-9-]{1,64}$/.test(value) ? value : undefined;
+}
+
+function guardrailScopeKey(category: string, identity: PreflightIdentity): string | undefined {
+  const session = usableSessionId(identity.sessionId);
+  if (!session) return undefined;
+  const agent = identity.agentId;
+  if (agent !== undefined && (typeof agent !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(agent))) return undefined;
+  // Colons cannot occur in either validated ID; legacy category-only keys are
+  // deliberately outside this namespace. No new hooks-state schema is needed.
+  return `scope:${session}:${agent ?? ""}:${category}`;
+}
+
+type Coverage = { declared: boolean; paths: string[] | null };
+function object(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Only typed file_map paths and plan step/branch files are coverage. Any bad
+ * entry invalidates the whole declaration, never just the offending path. */
+function artifactCoverage(projectRoot: string, artifact: Record<string, unknown>): Coverage {
+  const content = artifact.content;
+  if (!object(content)) return { declared: false, paths: null };
+  let declared = false;
+  let invalid = false;
+  const paths: string[] = [];
+  const add = (raw: unknown) => {
+    // Use the target's authoritative boundary + worktree canonicalization.
+    // A coverage entry must identify a literal file, not a directory or glob.
+    if (typeof raw !== "string" || !raw.trim() || /[\x00-\x1f\x7f*?\[\]{}]/.test(raw) || /[\\/]$/.test(raw)) {
+      invalid = true;
+      return;
+    }
+    const normalized = raw.replace(/\\/g, path.sep);
+    const match = matchGuardrailPath(projectRoot, [normalized]);
+    if (match) {
+      paths.push(match.path);
+      return;
+    }
+    // Non-guardrail files still form usable (non-matching) scope. An outside
+    // path cannot be salvaged by ignoring it alongside a matching entry.
+    const abs = path.resolve(projectRoot, normalized);
+    const mapped = canonicalizeWorktreePath(abs);
+    const rel = path.relative(projectRoot, mapped.worktree ? mapped.path : abs);
+    if (!rel || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) invalid = true;
+    else paths.push(rel.replace(/\\/g, "/"));
+  };
+  const files = (value: unknown, visual = false) => {
+    declared = true;
+    if (!Array.isArray(value) || value.length === 0) { invalid = true; return; }
+    for (const entry of value) add(visual ? (object(entry) ? entry.path : undefined) : typeof entry === "string" ? entry : object(entry) ? entry.filePath : undefined);
+  };
+  const malformed = () => { declared = true; invalid = true; };
+  if (Array.isArray(content.visuals)) {
+    for (const visual of content.visuals) if (object(visual) && visual.kind === "file_map") files(visual.files, true);
+  } else if (Object.hasOwn(content, "visuals")) {
+    malformed();
+  }
+  if (artifact.type === "plan" && Array.isArray(content.steps)) {
+    for (const step of content.steps) {
+      if (!object(step)) { malformed(); continue; }
+      if (Object.hasOwn(step, "files")) files(step.files);
+      if (Array.isArray(step.branches)) {
+        for (const branch of step.branches) {
+          if (!object(branch)) malformed();
+          else if (Object.hasOwn(branch, "files")) files(branch.files);
+        }
+      } else if (Object.hasOwn(step, "branches")) {
+        malformed();
+      }
+    }
+  } else if (artifact.type === "plan" && Object.hasOwn(content, "steps")) {
+    malformed();
+  }
+  return { declared, paths: declared && !invalid && paths.length > 0 ? paths : null };
+}
+
 /**
  * Read the project's session store and answer "is the escalated arc in flight?"
  *
- * SCOPE IS THE PROJECT, NOT ONE SESSION — deliberate (F1). A PreToolUse hook is
- * handed no deepPairing session id, and narrowing to a guessed "current"
- * session (newest mtime, say) would false-ask whenever two agents interleave in
- * one project — the cardinal sin for a gate whose whole design goal is not to
- * nag legitimate work. So a live spec in ANY recent session of this project
- * licenses the edit, and every surface that describes the mechanism says
- * "this project's recent sessions", never "this session".
+ * #534 — scan all sessions for approved exact file coverage. Without matching
+ * coverage, eligible same-session declarations veto older scopeless siblings;
+ * genuinely absent coverage permits only the same usable event session.
+ * Draft, stale and demo artifacts never authorize or veto. No env identity,
+ * transcript inference or artifact producer attribution participates.
  *
  * Three-way on purpose:
  *   - store UNREACHABLE (no .deeppairing/sessions, an unreadable dir, or —
  *     Q1 item 3 — a dir whose every artifacts.json is present but unparseable)
  *     → reachable:false → the caller FAILS OPEN and never asks. We cannot tell
  *     whether the ceremony happened, and a hook must not block on ignorance.
- *   - reachable, a LIVE research/decision/spec/plan within CEREMONY_MAX_AGE_MS
+ *   - reachable, applicable approved research/decision/spec/plan within CEREMONY_MAX_AGE_MS
  *     → hasLiveCeremony:true → pass silently.
  *   - reachable, nothing live → the exact skip case → ask.
  *
@@ -463,7 +547,7 @@ export interface CeremonyReadout {
  * UNREACHABLE. Pre-Q1 the loop fell through to reachable:true and ASKED, i.e.
  * the code did the opposite of what the doc promised.
  */
-export function readSessionCeremony(projectRoot: string, now: number = Date.now(), failures?: PreflightFailureSink): CeremonyReadout {
+export function readSessionCeremony(projectRoot: string, now: number = Date.now(), failures?: PreflightFailureSink, scope: PreflightIdentity & { targetPath?: string } = {}): CeremonyReadout {
   const sessionsDir = path.join(projectRoot, ".deeppairing", "sessions");
   let ids: string[];
   try {
@@ -484,6 +568,10 @@ export function readSessionCeremony(projectRoot: string, now: number = Date.now(
   // reports UNREACHABLE rather than "reachable, no ceremony" (see the header).
   let storesSeen = 0;
   let storesParsed = 0;
+  const session = usableSessionId(scope.sessionId);
+  const currentSession = session ? deriveSessionId(projectRoot, session).sessionId : undefined;
+  let sameSessionDeclaration = false;
+  let sameSessionFallback = false;
   for (const id of ids) {
     if (id.startsWith("demo_")) continue; // Demo fiction cannot authorize real work.
     let arr: unknown;
@@ -498,8 +586,17 @@ export function readSessionCeremony(projectRoot: string, now: number = Date.now(
     }
     storesParsed++;
     try {
-      if (sessionHasLivePreWorkCeremony(arr as never[], isRecent)) {
-        return { reachable: true, hasLiveCeremony: true };
+      for (const artifact of arr as unknown[]) {
+        // Eligibility governs EVERY precedence step, including vetoing an
+        // older scopeless sibling. Draft/stale/demo artifacts do neither.
+        if (!object(artifact) || artifact.status !== "approved" ||
+          !(PRE_WORK_CEREMONY_TYPES as readonly unknown[]).includes(artifact.type) ||
+          !isRecent({ createdAt: typeof artifact.createdAt === "string" ? artifact.createdAt : undefined })) continue;
+        const coverage = artifactCoverage(projectRoot, artifact);
+        if (scope.targetPath && coverage.paths?.includes(scope.targetPath)) return { reachable: true, hasLiveCeremony: true };
+        if (id !== currentSession) continue;
+        if (coverage.declared) sameSessionDeclaration = true;
+        else sameSessionFallback = true;
       }
     } catch {
       continue;
@@ -513,7 +610,7 @@ export function readSessionCeremony(projectRoot: string, now: number = Date.now(
     pushFailure(failures, { cls: "session_store_unreadable", source: "sessions", tag: "corrupt" });
     return { reachable: false, hasLiveCeremony: false };
   }
-  return { reachable: true, hasLiveCeremony: false };
+  return { reachable: true, hasLiveCeremony: sameSessionFallback && !sameSessionDeclaration };
 }
 
 /**
@@ -534,19 +631,23 @@ export function readSessionCeremony(projectRoot: string, now: number = Date.now(
  * State rides in .deeppairing/hooks-state.json — the file the hooks already
  * write and the companion UI already reads — under a `guardrailAsks` map beside
  * `fires`: a class maps either to an ISO string (class-level) or to a
- * {path: ISO} object (per-path). Unreadable state → NOT suppressed (ask), the
- * conservative side.
+ * {path: ISO} object (per-path). Keys include the validated event session and
+ * agent when provided; absent/malformed identity never suppresses. Legacy
+ * category-only stamps are ignored. Unreadable state → NOT suppressed (ask).
  */
 export function guardrailAskSuppressed(
   projectRoot: string,
   category: string,
   matchedPath: string,
   now: number = Date.now(),
+  identity: PreflightIdentity = {},
 ): boolean {
+  const key = guardrailScopeKey(category, identity);
+  if (!key) return false;
   try {
     const sp = path.join(projectRoot, ".deeppairing", "hooks-state.json");
     const state = JSON.parse(fs.readFileSync(sp, "utf-8"));
-    const entry = state?.guardrailAsks?.[category];
+    const entry = state?.guardrailAsks?.[key];
     const at = PER_PATH_DEDUP_CLASSES.has(category)
       ? (entry && typeof entry === "object" ? entry[matchedPath] : undefined)
       : entry;
@@ -561,13 +662,15 @@ export function guardrailAskSuppressed(
 /** Apply a fired guardrail ask to an in-memory hooks-state object. Split out so
  *  the stamp and the `fires` append are ONE read-modify-write (F11). Prunes
  *  per-path entries older than the window so the map can't grow unbounded. */
-function stampGuardrailAsk(state: Record<string, unknown>, match: GuardrailMatch, now: number): void {
+function stampGuardrailAsk(state: Record<string, unknown>, match: GuardrailMatch, now: number, identity: PreflightIdentity): void {
+  const key = guardrailScopeKey(match.category, identity);
+  if (!key) return;
   const asks = (state.guardrailAsks && typeof state.guardrailAsks === "object"
     ? state.guardrailAsks
     : {}) as Record<string, unknown>;
   const iso = new Date(now).toISOString();
   if (PER_PATH_DEDUP_CLASSES.has(match.category)) {
-    const prev = asks[match.category];
+    const prev = asks[key];
     const byPath: Record<string, string> = {};
     if (prev && typeof prev === "object") {
       for (const [p, at] of Object.entries(prev as Record<string, unknown>)) {
@@ -578,9 +681,9 @@ function stampGuardrailAsk(state: Record<string, unknown>, match: GuardrailMatch
       }
     }
     byPath[match.path] = iso;
-    asks[match.category] = byPath;
+    asks[key] = byPath;
   } else {
-    asks[match.category] = iso;
+    asks[key] = iso;
   }
   state.guardrailAsks = asks;
 }
@@ -666,7 +769,7 @@ export function recordHookFire(
     (state) => {
       // #470 slice 4 — the deeppairing-state class never dedups, so it never stamps.
       if (mode === "ask" && decision.guardrail && decision.guardrail.category !== DEEPPAIRING_STATE_CATEGORY) {
-        stampGuardrailAsk(state, decision.guardrail, now);
+        stampGuardrailAsk(state, decision.guardrail, now, { sessionId: claudeSessionId, agentId: agent?.agent_id });
       }
     },
   );
@@ -697,8 +800,8 @@ export function guardrailReason(match: GuardrailMatch): string {
   return (
     `Allow this edit to ${match.path}? ` +
     `It's a guardrail path (${match.category} — ${match.note}), and no findings, options, spec, or plan ` +
-    `is live in this project's recent sessions. Decline to have it presented for review first — ` +
-    `presenting findings, options, a spec, or a plan is what makes this prompt stop.\n` +
+    `has recent approval covering this file. Decline to have it presented for review first — ` +
+    `approved exact file coverage (or approved scopeless pre-work in this session) is what makes this prompt stop.\n` +
     `[GUARDRAIL_ESCALATION — agent: this is ESCALATED work. On a decline, present findings/options/a spec ` +
     `or plan before landing it.]`
   );
@@ -720,7 +823,7 @@ export function evaluateGuardrailBackstop(args: {
   env?: Record<string, string | undefined>;
   mode?: PreflightMode;
   failures?: PreflightFailureSink;
-}): HookDecision | null {
+} & PreflightIdentity): HookDecision | null {
   const { projectRoot } = args;
   const now = args.now ?? Date.now();
   try {
@@ -732,14 +835,14 @@ export function evaluateGuardrailBackstop(args: {
     if (!match) return null; // (c) non-guardrail edit → pass, zero behaviour change
     // F10 — the cheap check first: one small JSON read beats scanning every
     // session dir, and inside a confirmed arc this is the common path.
-    if (args.mode !== "strict-stop" && guardrailAskSuppressed(projectRoot, match.category, match.path, now)) return null;
-    const ceremony = readSessionCeremony(projectRoot, now, args.failures);
+    if (args.mode !== "strict-stop" && guardrailAskSuppressed(projectRoot, match.category, match.path, now, args)) return null;
+    const ceremony = readSessionCeremony(projectRoot, now, args.failures, { sessionId: args.sessionId, agentId: args.agentId, targetPath: match.path });
     if (!ceremony.reachable) return null; // (d) store unreachable → FAIL OPEN
     if (ceremony.hasLiveCeremony) return null; // (b) the escalated arc is in flight → pass silently
     const reason = args.mode === "strict-stop"
       ? `Edit to ${strictExcerpt(match.path, 200)} stopped before execution (strict-stop mode). ` +
         `It's a guardrail path (${match.category} — ${strictExcerpt(match.note, 160)}), and no findings, options, spec, or plan ` +
-        `is live in this project's recent sessions. Cancel or revise the proposal, or present the required pre-work for review before continuing. ` +
+        `has recent approval covering this file. Cancel or revise the proposal, or present the required pre-work for review before continuing. ` +
         `[GUARDRAIL_ESCALATION]`
       : guardrailReason(match);
     return { fire: true, reason, source: "guardrail", guardrail: match }; // (a)
@@ -855,7 +958,7 @@ export function evaluatePreflightHook(args: {
   mode?: PreflightMode;
   /** #546 — optional collector for faults that fail open. Never changes the decision. */
   failures?: PreflightFailureSink;
-}): HookDecision {
+} & PreflightIdentity): HookDecision {
   const decision = evaluateHookGates(args);
   if (!decision.fire) return decision;
   // #544 — name the tool and its target on every firing, for the companion.
@@ -883,7 +986,7 @@ function evaluateHookGates(args: {
   env?: Record<string, string | undefined>;
   mode?: PreflightMode;
   failures?: PreflightFailureSink;
-}): HookDecision {
+} & PreflightIdentity): HookDecision {
   const { toolName, toolInput, projectRoot, failures } = args;
   // #470 slice 4 — decided first and independently of everything below, so
   // no ceremony, dedup window or opt-out can silence it. One prompt per call:
@@ -917,7 +1020,7 @@ function evaluateHookGates(args: {
       : { fire: true, reason, source: result.block.source, ...(stance ? { stance } : {}) };
   }
   if (state) return state;
-  return evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env, mode: args.mode, failures }) ?? { fire: false };
+  return evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env, mode: args.mode, failures, sessionId: args.sessionId, agentId: args.agentId }) ?? { fire: false };
 }
 
 /** #544 — the structured match, read from the block's broadcast payload (the

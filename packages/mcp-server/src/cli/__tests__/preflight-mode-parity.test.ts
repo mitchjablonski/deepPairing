@@ -104,7 +104,7 @@ describe.each(["init", "plugin"] as const)("#544 %s mode contract", copy => {
 
   it("strict guardrails ignore old ask stamps and never stamp their own", () => {
     const f = fixture(copy);
-    const input = f.payload(".github/workflows/ci.yml", "name: ci");
+    const input = JSON.stringify({ ...JSON.parse(f.payload(".github/workflows/ci.yml", "name: ci")), session_id: "s1" });
     expect(JSON.parse(f.run(undefined, input).stdout).hookSpecificOutput.permissionDecision).toBe("ask");
     const stamps = f.state().guardrailAsks;
     for (let n = 0; n < 2; n++) {
