@@ -7,6 +7,7 @@ import { useConnectionStore } from "../../stores/connection";
 import { useConnectionGraceStore } from "../../lib/connectionGrace";
 import { OFFLINE_ACT_REASON } from "../../hooks/useOfflineReason";
 import { hasUnsavedText } from "../../lib/unsavedText";
+import { resetLedgerStoreForTests, useLedgerStore } from "../../stores/ledger";
 
 /**
  * #549 — picking one option no longer rejects the others; each unchosen option
@@ -29,20 +30,28 @@ let calls: Array<{ url: string; body: unknown }>;
 let failNext = false;
 /** The fake daemon's session ledger, served at GET /api/memory. */
 let ledger: Array<{ description: string; concept?: string; sourceArtifactId?: string; reason?: string }>;
+let memoryReply: (() => Response | Promise<Response>) | undefined;
 beforeEach(() => {
   calls = [];
   failNext = false;
   ledger = [];
+  memoryReply = undefined;
+  resetLedgerStoreForTests();
   useArtifactStore.getState().reset();
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     calls.push({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined });
     if (String(url).endsWith("/api/memory")) {
+      if (memoryReply) return memoryReply();
       return new Response(JSON.stringify({ rejectedApproaches: ledger, approvedPatterns: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (String(url).endsWith("/api/ledger/digest")) {
+      return new Response(JSON.stringify({ shapedThisProject: 0, nearMissesThisProject: 0, blockedThisProject: 0, sessionsTouched: 0, topCitedStances: [], globalLedger: { concepts: 0, projects: 0, multiProjectConcepts: 0 } }), { status: 200, headers: { "Content-Type": "application/json" } });
     }
     if (failNext) {
       failNext = false;
       return new Response(JSON.stringify({ error: "lock_busy", code: "lock_busy", message: "Busy — try again." }), { status: 503, headers: { "Content-Type": "application/json" } });
     }
+    if (String(url).endsWith("/api/philosophy/override")) ledger = [];
     return new Response(JSON.stringify({ status: "recorded" }), { status: 200, headers: { "Content-Type": "application/json" } });
   }));
   useConnectionStore.setState({ connected: true, hydrated: true, sessionId: "s1", activeSessions: [{ sessionId: "s1", live: true }], disconnectedSince: null } as any);
@@ -162,6 +171,52 @@ describe("#549 — Never suggest this", () => {
     await waitFor(() => expect(calls.some((c) => c.url.endsWith("/api/memory"))).toBe(true));
     expect(screen.getByRole("button", { name: "Never suggest CDN edge cache" })).toBeInTheDocument();
     expect(screen.queryByText("✓ Remembered as rejected")).not.toBeInTheDocument();
+  });
+
+  it.each(["loaded", "just recorded"])("a %s rejection can be retired and explicitly recorded again without remounting", async (origin) => {
+    if (origin === "loaded") ledger = [{ description: "Which cache?: CDN edge cache", concept: "Just the edge", sourceArtifactId: "art1" }];
+    renderResolved();
+    if (origin === "just recorded") {
+      await userEvent.click(screen.getByRole("button", { name: "Never suggest CDN edge cache" }));
+      await userEvent.click(screen.getByRole("button", { name: "Remember as rejected" }));
+    }
+    expect(await screen.findByText("✓ Remembered as rejected")).toBeInTheDocument();
+    const writesBeforeRetirement = neverSuggestPosts().length;
+    // The existing Ledger refresh signal follows a successful local retirement.
+    // Merely refreshing must never write a new rejection.
+    await act(async () => { await useLedgerStore.getState().overrideStance({ source: "session", concept: "Just the edge" }); });
+    const opener = await screen.findByRole("button", { name: "Never suggest CDN edge cache" });
+    expect(neverSuggestPosts()).toHaveLength(writesBeforeRetirement);
+    await userEvent.click(opener);
+    expect(neverSuggestPosts()).toHaveLength(writesBeforeRetirement);
+    await userEvent.click(screen.getByRole("button", { name: "Remember as rejected" }));
+    expect(await screen.findByText("✓ Remembered as rejected")).toBeInTheDocument();
+    expect(neverSuggestPosts()).toHaveLength(writesBeforeRetirement + 1);
+  });
+
+  it("keeps the remembered state when a memory refresh fails", async () => {
+    ledger = [{ description: "Which cache?: CDN edge cache" }];
+    renderResolved();
+    expect(await screen.findByText("✓ Remembered as rejected")).toBeInTheDocument();
+    const reads = calls.filter((c) => c.url.endsWith("/api/memory")).length;
+    memoryReply = () => new Response("unavailable", { status: 503 });
+    act(() => { useLedgerStore.setState((s) => ({ version: s.version + 1 })); });
+    await waitFor(() => expect(calls.filter((c) => c.url.endsWith("/api/memory"))).toHaveLength(reads + 1));
+    expect(screen.getByText("✓ Remembered as rejected")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Never suggest CDN edge cache" })).not.toBeInTheDocument();
+    expect(neverSuggestPosts()).toHaveLength(0);
+  });
+
+  it("an older memory read cannot erase a confirmed rejection", async () => {
+    let finishRead!: (response: Response) => void;
+    memoryReply = () => new Promise<Response>((resolve) => { finishRead = resolve; });
+    renderResolved();
+    await userEvent.click(screen.getByRole("button", { name: "Never suggest CDN edge cache" }));
+    await userEvent.click(screen.getByRole("button", { name: "Remember as rejected" }));
+    expect(await screen.findByText("✓ Remembered as rejected")).toBeInTheDocument();
+    await act(async () => { finishRead(new Response(JSON.stringify({ rejectedApproaches: [] }), { status: 200 })); });
+    expect(screen.getByText("✓ Remembered as rejected")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Never suggest CDN edge cache" })).not.toBeInTheDocument();
   });
 
   it("the result state links to the Ledger to retire it, and the confirm panel says so", async () => {

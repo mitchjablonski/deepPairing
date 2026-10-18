@@ -3,6 +3,7 @@ import type { DecisionOption } from "@deeppairing/shared";
 import { apiBase, safeFetch, sessionHeaders } from "../../lib/api";
 import { useOfflineReason } from "../../hooks/useOfflineReason";
 import { useUnsavedText } from "../../lib/unsavedText";
+import { useLedgerStore } from "../../stores/ledger";
 
 /**
  * #549 — the explicit per-option "Never suggest this".
@@ -34,27 +35,38 @@ export interface RememberedRejection {
  * instead of offering the control again. Fail-soft: an unreachable or odd
  * response just means nothing is pre-marked.
  */
-export function useRememberedRejections(sessionId?: string): RememberedRejection[] {
+export function useRememberedRejections(sessionId?: string) {
   const [rows, setRows] = useState<RememberedRejection[]>([]);
+  const ledgerVersion = useLedgerStore((s) => s.version);
+  const generation = useRef(0);
   useEffect(() => {
-    let live = true;
+    const ac = new AbortController();
+    const requestGeneration = ++generation.current;
     (async () => {
       try {
-        const res = await fetch(`${apiBase()}/api/memory`, { headers: sessionHeaders(sessionId) });
+        const res = await fetch(`${apiBase()}/api/memory`, { headers: sessionHeaders(sessionId), signal: ac.signal });
         if (!res?.ok) return;
         const body = (await res.json()) as { rejectedApproaches?: unknown } | null;
-        const list = Array.isArray(body?.rejectedApproaches) ? body.rejectedApproaches : [];
+        if (!Array.isArray(body?.rejectedApproaches)) return;
+        const list = body.rejectedApproaches;
         const parsed = list.filter(
           (r): r is RememberedRejection => !!r && typeof (r as RememberedRejection).description === "string",
         );
-        if (live) setRows(parsed);
+        if (!ac.signal.aborted && requestGeneration === generation.current) setRows(parsed);
       } catch {
         /* fail-soft — nothing pre-marked */
       }
     })();
-    return () => { live = false; };
-  }, [sessionId]);
-  return rows;
+    return () => { ac.abort(); };
+  }, [sessionId, ledgerVersion]);
+  // A confirmed write shares the same state as a memory read. Invalidate any
+  // older in-flight read so it cannot erase the just-recorded rejection; the
+  // next existing Ledger refresh can then reflect a later local retirement.
+  const remember = (row: RememberedRejection) => {
+    generation.current++;
+    setRows((current) => [...current.filter((r) => r.description !== row.description), row]);
+  };
+  return { rows, remember };
 }
 
 /** Does the ledger already hold a rejection for this option of this decision?
@@ -89,6 +101,7 @@ export function NeverSuggestControl({
   ledgerConcept,
   sessionId,
   remembered = false,
+  onRecorded,
 }: {
   decisionId: string;
   optionId: string;
@@ -99,13 +112,14 @@ export function NeverSuggestControl({
   sessionId?: string;
   /** Already in the ledger (derived from GET /api/memory) — render the result state. */
   remembered?: boolean;
+  /** The parent keeps confirmed writes and refreshed memory in one state. */
+  onRecorded: () => void;
 }) {
   const offline = useOfflineReason();
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");
   useUnsavedText(`never-suggest:${decisionId}:${optionId}`, reason);
   const [submitting, setSubmitting] = useState(false);
-  const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Return focus to the opener when the panel closes without a write, so a
@@ -139,7 +153,7 @@ export function NeverSuggestControl({
           body: JSON.stringify(reason.trim() ? { reason: reason.trim() } : {}),
         },
       );
-      setDone(true);
+      onRecorded();
       setOpen(false);
       setReason("");
     } catch (err) {
@@ -150,7 +164,7 @@ export function NeverSuggestControl({
     }
   };
 
-  if (done || remembered) {
+  if (remembered) {
     return (
       <span className="inline-flex items-center gap-1.5 text-2xs" role="status">
         <span className="text-accent-red">✓ Remembered as rejected</span>
