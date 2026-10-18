@@ -3,6 +3,18 @@ import path from "node:path";
 import { runPreflight, type PreflightBlock } from "../mcp/preflight-validator.js";
 import { sessionHasLivePreWorkCeremony } from "../debrief-gate.js";
 import { appendHookFire, hookStatePath } from "../hooks/hook-state.js";
+// #546 — the failure taxonomy + its bounded, redacted hooks-state record. Both
+// hook entries flush through recordPreflightFailures (re-exported below so the
+// init-generated hook reaches it through the core it already imported).
+import { noteFailure, pushFailure, type PreflightFailureSink } from "../hooks/preflight-diagnostics.js";
+export {
+  PREFLIGHT_FAILURE_CLASSES,
+  noteFailure,
+  pushFailure,
+  readPreflightFailures,
+  recordPreflightFailures,
+} from "../hooks/preflight-diagnostics.js";
+export type { PreflightFailureClass, PreflightFailureNote, PreflightFailureSink } from "../hooks/preflight-diagnostics.js";
 // Q1 — the ONE guardrail rule table, in a Node-builtins-only leaf module that
 // store/project-signals.ts, setup-tasks.ts and both hook entries also import.
 // F14's hand-written "loose superset" prefilter is GONE: the hook entries call
@@ -61,12 +73,17 @@ import type { TeamPreference } from "@deeppairing/shared";
  *  direct Edit/Write. Cross-project awareness reaches the agent advisorily via
  *  the first-call-hint preamble + the present_* preflight trace's cross-project
  *  near-misses, NOT here. So this reads ONLY this project's ledger. */
-export function readRejectedApproaches(projectRoot: string): RejectedApproach[] {
+export function readRejectedApproaches(projectRoot: string, failures?: PreflightFailureSink): RejectedApproach[] {
   const p = path.join(projectRoot, ".deeppairing", "preferences.json");
   try {
     if (!fs.existsSync(p)) return [];
     const raw = JSON.parse(fs.readFileSync(p, "utf-8"));
     const list = raw?.rejectedApproaches;
+    // #546 — the return value is unchanged ([]); only the fault is noted. A
+    // preferences file with no rejectedApproaches key is ordinary, not a fault.
+    if (!raw || typeof raw !== "object" || Array.isArray(raw) || (list !== undefined && !Array.isArray(list))) {
+      pushFailure(failures, noteFailure("schema", "preferences"));
+    }
     if (!Array.isArray(list)) return [];
     return list
       .map((e: any): RejectedApproach =>
@@ -81,7 +98,8 @@ export function readRejectedApproaches(projectRoot: string): RejectedApproach[] 
             },
       )
       .filter((r) => r.description);
-  } catch {
+  } catch (err) {
+    pushFailure(failures, noteFailure("ledger", "preferences", err));
     return [];
   }
 }
@@ -90,7 +108,7 @@ export function readRejectedApproaches(projectRoot: string): RejectedApproach[] 
  *  stripped). Lightweight runtime guard rather than the zod schema so the built
  *  hook stays free of @deeppairing/shared at runtime. runPreflight only reads
  *  kind / concept / rationale / scope. */
-export function readTeamPreferences(projectRoot: string): TeamPreference[] {
+export function readTeamPreferences(projectRoot: string, failures?: PreflightFailureSink): TeamPreference[] {
   const p = path.join(projectRoot, ".deeppairing", "team.json");
   try {
     if (!fs.existsSync(p)) return [];
@@ -100,7 +118,10 @@ export function readTeamPreferences(projectRoot: string): TeamPreference[] {
       .map((l) => (/^\s*\/\//.test(l) ? "" : l))
       .join("\n");
     const raw = JSON.parse(stripped);
-    if (!raw || raw.version !== 1 || !Array.isArray(raw.preferences)) return [];
+    if (!raw || raw.version !== 1 || !Array.isArray(raw.preferences)) {
+      pushFailure(failures, noteFailure("schema", "team")); // #546 — still [], now visible
+      return [];
+    }
     // ALL-OR-NOTHING, mirroring the canonical parseTeamPreferencesFile (zod
     // safeParse of the whole file): if ANY entry is malformed the MCP loader
     // returns [] and does NOT enforce, so the hook must do the same — otherwise
@@ -116,8 +137,10 @@ export function readTeamPreferences(projectRoot: string): TeamPreference[] {
         typeof x.rationale === "string" &&
         KINDS.has(x.kind),
     );
+    if (!valid) pushFailure(failures, noteFailure("schema", "team"));
     return valid ? (raw.preferences as TeamPreference[]) : [];
-  } catch {
+  } catch (err) {
+    pushFailure(failures, noteFailure("ledger", "team", err));
     return [];
   }
 }
@@ -389,13 +412,14 @@ export interface CeremonyReadout {
  * UNREACHABLE. Pre-Q1 the loop fell through to reachable:true and ASKED, i.e.
  * the code did the opposite of what the doc promised.
  */
-export function readSessionCeremony(projectRoot: string, now: number = Date.now()): CeremonyReadout {
+export function readSessionCeremony(projectRoot: string, now: number = Date.now(), failures?: PreflightFailureSink): CeremonyReadout {
   const sessionsDir = path.join(projectRoot, ".deeppairing", "sessions");
   let ids: string[];
   try {
     if (!fs.existsSync(sessionsDir)) return { reachable: false, hasLiveCeremony: false };
     ids = fs.readdirSync(sessionsDir);
-  } catch {
+  } catch (err) {
+    pushFailure(failures, noteFailure("store", "sessions", err));
     return { reachable: false, hasLiveCeremony: false };
   }
   // F9 — an artifact with a missing or unparseable createdAt is NOT treated as
@@ -433,7 +457,11 @@ export function readSessionCeremony(projectRoot: string, now: number = Date.now(
   // Every artifacts.json present was unreadable → we cannot tell whether the
   // ceremony happened. SECURITY.md's contract is "missing OR unreadable store →
   // stays silent", so this is the fail-open case, not the ask case.
-  if (storesSeen > 0 && storesParsed === 0) return { reachable: false, hasLiveCeremony: false };
+  if (storesSeen > 0 && storesParsed === 0) {
+    // #546 — the same fail-open answer, now noted (no path, no content).
+    pushFailure(failures, { cls: "session_store_unreadable", source: "sessions", tag: "corrupt" });
+    return { reachable: false, hasLiveCeremony: false };
+  }
   return { reachable: true, hasLiveCeremony: false };
 }
 
@@ -624,6 +652,7 @@ export function evaluateGuardrailBackstop(args: {
   now?: number;
   env?: Record<string, string | undefined>;
   mode?: PreflightMode;
+  failures?: PreflightFailureSink;
 }): HookDecision | null {
   const { projectRoot } = args;
   const now = args.now ?? Date.now();
@@ -637,7 +666,7 @@ export function evaluateGuardrailBackstop(args: {
     // F10 — the cheap check first: one small JSON read beats scanning every
     // session dir, and inside a confirmed arc this is the common path.
     if (args.mode !== "strict-stop" && guardrailAskSuppressed(projectRoot, match.category, match.path, now)) return null;
-    const ceremony = readSessionCeremony(projectRoot, now);
+    const ceremony = readSessionCeremony(projectRoot, now, args.failures);
     if (!ceremony.reachable) return null; // (d) store unreachable → FAIL OPEN
     if (ceremony.hasLiveCeremony) return null; // (b) the escalated arc is in flight → pass silently
     const reason = args.mode === "strict-stop"
@@ -647,7 +676,8 @@ export function evaluateGuardrailBackstop(args: {
         `[GUARDRAIL_ESCALATION]`
       : guardrailReason(match);
     return { fire: true, reason, source: "guardrail", guardrail: match }; // (a)
-  } catch {
+  } catch (err) {
+    pushFailure(args.failures, noteFailure("evaluate", "backstop", err));
     return null; // FAIL OPEN
   }
 }
@@ -683,7 +713,7 @@ export function deeppairingStateReason(match: StateMatch, mode: PreflightMode = 
 /** #470 slice 4 — the `deeppairing-state` guardrail class. Always asks: no
  *  ceremony skip, no dedup, and the backstop opt-out doesn't reach it. Pure;
  *  any fault is "no decision" (the other gates still run). */
-export function evaluateDeeppairingState(args: { toolInput: unknown; projectRoot: string; mode?: PreflightMode }): HookDecision | null {
+export function evaluateDeeppairingState(args: { toolInput: unknown; projectRoot: string; mode?: PreflightMode; failures?: PreflightFailureSink }): HookDecision | null {
   try {
     const match = matchDeeppairingStatePath(args.projectRoot, toolInputTargetPath(args.toolInput));
     if (!match) return null;
@@ -698,7 +728,8 @@ export function evaluateDeeppairingState(args: { toolInput: unknown; projectRoot
         note: "deepPairing's own state",
       },
     };
-  } catch {
+  } catch (err) {
+    pushFailure(args.failures, noteFailure("evaluate", "state", err));
     return null;
   }
 }
@@ -719,13 +750,15 @@ export function evaluatePreflightHook(args: {
   now?: number;
   env?: Record<string, string | undefined>;
   mode?: PreflightMode;
+  /** #546 — optional collector for faults that fail open. Never changes the decision. */
+  failures?: PreflightFailureSink;
 }): HookDecision {
-  const { toolName, toolInput, projectRoot } = args;
+  const { toolName, toolInput, projectRoot, failures } = args;
   // #470 slice 4 — decided first and independently of everything below, so
   // no ceremony, dedup window or opt-out can silence it. One prompt per call:
   // when the rejected-approach gate also fires, its message leads (pinned
   // verbatim) and the state note is appended to the SAME ask.
-  const state = evaluateDeeppairingState({ toolInput, projectRoot, mode: args.mode });
+  const state = evaluateDeeppairingState({ toolInput, projectRoot, mode: args.mode, failures });
   // NotebookEdit is matched only for this class; the other gates are unchanged.
   if (toolName === "NotebookEdit") return state ?? { fire: false };
   const { strings, paths } = buildProposals(toolName, toolInput);
@@ -735,8 +768,8 @@ export function evaluatePreflightHook(args: {
     toolName,
     proposalStrings: strings,
     proposalPaths: paths,
-    rejectedApproaches: readRejectedApproaches(projectRoot),
-    teamPreferences: readTeamPreferences(projectRoot),
+    rejectedApproaches: readRejectedApproaches(projectRoot, failures),
+    teamPreferences: readTeamPreferences(projectRoot, failures),
   });
   if (result.blocked) {
     // #169 + F6 — hook-facing reason: drop the agent-only "artifact was NOT
@@ -751,5 +784,5 @@ export function evaluatePreflightHook(args: {
       : { fire: true, reason, source: result.block.source };
   }
   if (state) return state;
-  return evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env, mode: args.mode }) ?? { fire: false };
+  return evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env, mode: args.mode, failures }) ?? { fire: false };
 }

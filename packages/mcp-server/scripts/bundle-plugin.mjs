@@ -97,6 +97,15 @@ await build({
   entryPoints: [resolve(pkgRoot, "src/guardrail-rules.ts")],
   outfile: resolve(pluginDir, "guardrail-rules.js"),
 });
+// #546 — the init-generated hook records a failure that failed open through
+// this Node-builtins-only leaf, including when the matcher core above could
+// not be imported. setup-tasks stamps its URL beside the entry, like the two
+// above; it is imported only on a failure path.
+await build({
+  ...shared,
+  entryPoints: [resolve(pkgRoot, "src/hooks/preflight-diagnostics.ts")],
+  outfile: resolve(pluginDir, "preflight-diagnostics.js"),
+});
 
 // I6 — the plugin's hooks/hooks.json declares the Stop + PreToolUse preflight
 // hooks natively (`node "${CLAUDE_PLUGIN_ROOT}/server/{stop,preflight}.mjs"`),

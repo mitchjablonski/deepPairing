@@ -239,17 +239,40 @@ export function appendHookFire(
   fire: Record<string, unknown>,
   mutate?: (state: Record<string, unknown>) => void,
 ): void {
+  mutateHookState(statePath, (state) => {
+    const fires = Array.isArray(state.fires) ? (state.fires as unknown[]) : [];
+    fires.push(fire);
+    state.fires = fires.slice(-FIRE_LOG_CAP);
+    mutate?.(state);
+  });
+}
+
+/**
+ * One locked read-modify-write of hooks-state.json — the primitive under
+ * appendHookFire, also used by the #546 preflight failure diagnostics, which
+ * update their own top-level field without appending a fire.
+ *
+ * `createDir: false` refuses to create `.deeppairing/` — a diagnostic about a
+ * hook that ran in a directory deepPairing never initialised must not plant a
+ * state directory there. Never throws.
+ */
+export function mutateHookState(
+  statePath: string,
+  mutate: (state: Record<string, unknown>) => void,
+  opts: { createDir?: boolean } = {},
+): void {
   try {
-    // Before the lock — O_EXCL needs the directory to exist.
-    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    if (opts.createDir === false) {
+      if (!fs.statSync(path.dirname(statePath)).isDirectory()) return;
+    } else {
+      // Before the lock — O_EXCL needs the directory to exist.
+      fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    }
     const lock = acquireHookStateLock(statePath);
     try {
       const state = readHookState(statePath);
       state.version = 1;
-      const fires = Array.isArray(state.fires) ? (state.fires as unknown[]) : [];
-      fires.push(fire);
-      state.fires = fires.slice(-FIRE_LOG_CAP);
-      mutate?.(state);
+      mutate(state);
       writeHookStateAtomic(statePath, state);
     } finally {
       releaseHookStateLock(lock);

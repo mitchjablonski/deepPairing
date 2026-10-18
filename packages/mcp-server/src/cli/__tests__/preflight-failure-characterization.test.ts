@@ -11,6 +11,10 @@
  * Each case pins what the hook does today: its stdout (the decision), its
  * stderr and its exit status. These pins are the "default enforcement does not
  * change" half of #546 — a fault that is a no-fire today stays a no-fire.
+ *
+ * #546 step 2 adds one thing per case: the bounded diagnostic it now leaves in
+ * hooks-state's `preflightFailures` field (`diag`). The decision pins above it
+ * are untouched from the step-1 commit, and every control records nothing.
  */
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -107,6 +111,8 @@ interface Case {
   initOnly?: boolean;
   /** Edits the generated script after install (init copy only). */
   patchScript?: (src: string, root: string) => string;
+  /** #546 — the [class, detail] the fault now records, or null for none. */
+  diag: [string, string] | null;
 }
 
 /**
@@ -117,17 +123,17 @@ const CASES: Case[] = [
   {
     name: "C1 stdin is not JSON",
     setup: () => "{ not json",
-    stdout: "", stderr: "error",
+    stdout: "", stderr: "error", diag: ["input_malformed", "stdin:SyntaxError"],
   },
   {
     name: "C2 stdin is JSON null (not an event object)",
     setup: () => "null",
-    stdout: "", stderr: "error",
+    stdout: "", stderr: "error", diag: ["input_malformed", "stdin:TypeError"],
   },
   {
     name: "C3 stdin is a JSON string (not an event object)",
     setup: () => JSON.stringify("Write"),
-    stdout: "", stderr: "",
+    stdout: "", stderr: "", diag: ["input_malformed", "stdin:shape"],
   },
   {
     name: "C4 preferences.json unparseable, no team file: fast path exits",
@@ -135,7 +141,7 @@ const CASES: Case[] = [
       fs.writeFileSync(path.join(root, ".deeppairing", "preferences.json"), "{ \"rejectedApproaches\": [ trailing");
       return write(root);
     },
-    stdout: "", stderr: "",
+    stdout: "", stderr: "", diag: ["ledger_corrupt", "preferences:SyntaxError"],
   },
   {
     name: "C5 preferences.json unparseable beside a valid team file: matcher sees []",
@@ -146,7 +152,7 @@ const CASES: Case[] = [
       ] }));
       return write(root);
     },
-    stdout: "", stderr: "",
+    stdout: "", stderr: "", diag: ["ledger_corrupt", "preferences:SyntaxError"],
   },
   {
     name: "C6 preferences.json unreadable (a directory, EISDIR)",
@@ -155,7 +161,7 @@ const CASES: Case[] = [
       fs.mkdirSync(path.join(root, ".deeppairing", "preferences.json"));
       return write(root);
     },
-    stdout: "", stderr: "",
+    stdout: "", stderr: "", diag: ["ledger_unreadable", "preferences:EISDIR"],
   },
   {
     name: "C7 preferences.json rejectedApproaches is not an array",
@@ -163,7 +169,7 @@ const CASES: Case[] = [
       fs.writeFileSync(path.join(root, ".deeppairing", "preferences.json"), JSON.stringify({ rejectedApproaches: { description: REJECTED } }));
       return write(root);
     },
-    stdout: "", stderr: "",
+    stdout: "", stderr: "", diag: ["ledger_corrupt", "preferences:schema"],
   },
   {
     name: "C8 team.json unparseable (a block comment), team-only rule",
@@ -173,7 +179,7 @@ const CASES: Case[] = [
         `/* team rules */\n${JSON.stringify({ version: 1, preferences: [{ id: "t1", kind: "avoid", concept: REJECTED, rationale: "x" }] })}`);
       return write(root);
     },
-    stdout: "", stderr: "",
+    stdout: "", stderr: "", diag: ["ledger_corrupt", "team:SyntaxError"],
   },
   {
     name: "C9 team.json fails the all-or-nothing schema (one bad entry)",
@@ -185,7 +191,7 @@ const CASES: Case[] = [
       ] }));
       return write(root);
     },
-    stdout: "", stderr: "",
+    stdout: "", stderr: "", diag: ["ledger_corrupt", "team:schema"],
   },
   {
     name: "C10 team.json unreadable (a directory, EISDIR)",
@@ -194,7 +200,7 @@ const CASES: Case[] = [
       fs.mkdirSync(path.join(root, ".deeppairing", "team.json"));
       return write(root);
     },
-    stdout: "", stderr: "",
+    stdout: "", stderr: "", diag: ["ledger_unreadable", "team:EISDIR"],
   },
   {
     name: "C11 a parseable ledger entry with a non-string concept makes the evaluator throw",
@@ -205,7 +211,7 @@ const CASES: Case[] = [
       ] }));
       return write(root);
     },
-    stdout: "", stderr: "error",
+    stdout: "", stderr: "error", diag: ["evaluator_threw", "matcher:TypeError"],
   },
   {
     name: "C12 guardrail path, every session store unparseable: backstop fails open",
@@ -214,14 +220,14 @@ const CASES: Case[] = [
       fs.writeFileSync(path.join(root, ".deeppairing", "sessions", "s1", "artifacts.json"), "[ torn");
       return write(root, ".github/workflows/ci.yml", "name: ci");
     },
-    stdout: "", stderr: "",
+    stdout: "", stderr: "", diag: ["session_store_unreadable", "sessions:corrupt"],
   },
   {
     name: "C13 init: the stamped matcher core cannot be imported",
     initOnly: true,
     setup: (root) => write(root),
     patchScript: (src, root) => src.replace(/const CORE_URL = "[^"]+";/, `const CORE_URL = ${JSON.stringify("file://" + path.join(root, "missing-core.js"))};`),
-    stdout: "", stderr: "error",
+    stdout: "", stderr: "error", diag: ["matcher_import_failed", "core:ERR_MODULE_NOT_FOUND"],
   },
   {
     name: "C14 init: the guardrail rule leaf cannot be imported (fail safe: the core still decides)",
@@ -231,24 +237,24 @@ const CASES: Case[] = [
       return write(root, ".github/workflows/ci.yml", "name: ci");
     },
     patchScript: (src, root) => src.replace(/const RULES_URL = "[^"]+";/, `const RULES_URL = ${JSON.stringify("file://" + path.join(root, "missing-rules.js"))};`),
-    stdout: "ask", stderr: "",
+    stdout: "ask", stderr: "", diag: ["matcher_import_failed", "rules:ERR_MODULE_NOT_FOUND"],
   },
 ];
 
 /** Controls — expected non-matches and absent inputs, which are NOT faults. */
 const CONTROLS: Case[] = [
-  { name: "K1 valid ledger, unrelated edit", setup: (root) => write(root, "src/safe.ts", "const n = 1"), stdout: "", stderr: "" },
+  { name: "K1 valid ledger, unrelated edit", setup: (root) => write(root, "src/safe.ts", "const n = 1"), stdout: "", stderr: "", diag: null },
   {
     name: "K2 no preferences.json or team.json at all",
     setup: (root) => {
       fs.rmSync(path.join(root, ".deeppairing", "preferences.json"));
       return write(root);
     },
-    stdout: "", stderr: "",
+    stdout: "", stderr: "", diag: null,
   },
-  { name: "K3 a non-write tool", setup: () => JSON.stringify({ tool_name: "Read", tool_input: { file_path: "/x" } }), stdout: "", stderr: "" },
-  { name: "K4 empty stdin", setup: () => "", stdout: "", stderr: "" },
-  { name: "K5 a genuine match", setup: (root) => write(root), stdout: "ask", stderr: "" },
+  { name: "K3 a non-write tool", setup: () => JSON.stringify({ tool_name: "Read", tool_input: { file_path: "/x" } }), stdout: "", stderr: "", diag: null },
+  { name: "K4 empty stdin", setup: () => "", stdout: "", stderr: "", diag: null },
+  { name: "K5 a genuine match", setup: (root) => write(root), stdout: "ask", stderr: "", diag: null },
 ];
 
 function arrange(copy: "init" | "plugin", c: Case) {
@@ -257,6 +263,16 @@ function arrange(copy: "init" | "plugin", c: Case) {
   if (c.patchScript) fs.writeFileSync(script, c.patchScript(fs.readFileSync(script, "utf8"), root));
   const input = c.setup(root);
   return { root, script, input };
+}
+
+function expectDiag(root: string, diag: [string, string] | null) {
+  const field = (readState(root) ?? {}).preflightFailures as Record<string, Record<string, unknown>> | undefined;
+  if (diag === null) {
+    expect(field).toBeUndefined();
+    return;
+  }
+  expect(Object.keys(field ?? {})).toEqual([diag[0]]);
+  expect(field![diag[0]]).toEqual({ count: 1, firstAt: expect.any(String), lastAt: expect.any(String), detail: diag[1] });
 }
 
 function assertPinned(c: Case, r: { stdout: string; stderr: string; status: number | null }) {
@@ -272,15 +288,18 @@ describe.skipIf(!distBuilt).each(["init", "plugin"] as const)("#546 characteriza
     const { root, script, input } = arrange(copy, c);
     const r = run(script, root, input);
     assertPinned(c, r);
-    // Today the fault leaves no trace in hooks-state: nothing records it.
-    const state = readState(root);
-    if (c.stdout === "") expect(state).toBeNull();
-    else expect(Object.keys(state ?? {}).sort()).toEqual(["fires", "guardrailAsks", "version"]);
+    // Step 1 pinned "no trace". Step 2: the decision is unchanged (no fire is
+    // recorded for a no-fire), and the fault now leaves exactly one entry.
+    const state = readState(root) ?? {};
+    if (c.stdout === "") expect(state.fires).toBeUndefined();
+    else expect(Object.keys(state).sort()).toEqual(["fires", "guardrailAsks", "preflightFailures", "version"]);
+    expectDiag(root, c.diag);
   });
 
   it.each(CONTROLS)("$name", (c) => {
     const { root, script, input } = arrange(copy, c);
     assertPinned(c, run(script, root, input));
+    expectDiag(root, null); // an expected non-match or absent input is not a fault
   });
 
   it("C15 a hook killed before stdin ends (a harness timeout) emits nothing and records nothing", async () => {
@@ -328,5 +347,45 @@ describe.skipIf(!distBuilt || !hasGit)("#546 characterization: init copy inside 
     expect(broken.status).toBe(0);
     expect(broken.stdout).toBe("");
     expect(broken.stderr).toBe("");
+    expectDiag(wt, ["matcher_import_failed", "rules:ERR_MODULE_NOT_FOUND"]);
+  });
+});
+
+/**
+ * #546 — the SIDE-BY-SIDE proof: every case above, in three modes, through a
+ * baseline build (main's committed plugin bundle and main's generated init
+ * hook) and through this tree, on the same project, compared byte for byte on
+ * stdout, stderr and exit status. Opt-in because it needs a baseline build on
+ * disk: DP_PREFLIGHT_BASELINE_DIR=<dir> containing `plugin/preflight.mjs` (with
+ * its sibling preflight-hook-core.js + guardrail-rules.js) and
+ * `init-preflight.mjs` (main's generated hook, stamped at those siblings).
+ */
+const BASELINE = process.env.DP_PREFLIGHT_BASELINE_DIR;
+describe.skipIf(!distBuilt || !BASELINE).each(["init", "plugin"] as const)("#546 byte-identical vs baseline (%s copy)", (copy) => {
+  const modes: Array<string | undefined> = [undefined, "strict-stop", "bogus-mode"];
+  const rows = [...CASES, ...CONTROLS]
+    .filter((c) => copy === "init" || !c.initOnly)
+    .flatMap((c) => modes.map((mode) => ({ c, mode, label: `${c.name} [mode=${mode ?? "unset"}]` })));
+  it.each(rows)("$label", ({ c, mode }) => {
+    const root = makeProject();
+    const current = scriptFor(copy, root);
+    const patch = (src: string) => (c.patchScript ? c.patchScript(src, root) : src);
+    // The init copy runs from ONE path (its own filename appears in Node's
+    // import errors): the baseline text goes there first, then this tree's.
+    const currentText = copy === "init" ? patch(fs.readFileSync(current, "utf8")) : "";
+    const baseline = copy === "init" ? current : path.join(BASELINE!, "plugin", "preflight.mjs");
+    if (copy === "init") fs.writeFileSync(current, patch(fs.readFileSync(path.join(BASELINE!, "init-preflight.mjs"), "utf8")));
+    const input = c.setup(root);
+    const extra: Record<string, string> = mode === undefined ? {} : { DEEPPAIRING_PREFLIGHT_MODE: mode };
+    const clear = () => {
+      for (const f of fs.readdirSync(path.join(root, ".deeppairing"))) {
+        if (f.startsWith("hooks-state.json")) fs.rmSync(path.join(root, ".deeppairing", f), { force: true });
+      }
+    };
+    const before = run(baseline, root, input, extra);
+    clear();
+    if (copy === "init") fs.writeFileSync(current, currentText);
+    const after = run(current, root, input, extra);
+    expect(after).toEqual(before);
   });
 });

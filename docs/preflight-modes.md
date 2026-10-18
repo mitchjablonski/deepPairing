@@ -49,17 +49,47 @@ companion UI allowance is not a promise that the raw-file hook consumes it.
 
 This is a protocol backstop, not a security boundary. Existing stdin parsing,
 module import, ledger/session reads, and matcher/evaluation exceptions can still
-fail open, with exit 0 and no decision. Strict mode does not add comprehensive
-error telemetry or change those boundaries. Doctor/configuration diagnostics
-are not part of this compatibility mode; an invalid-value warning appears on
-the next matching edit. Broader error/mode observability is tracked in
-[#546](https://github.com/mitchjablonski/deepPairing/issues/546).
+fail open, with exit 0 and no decision, in either mode. Strict mode is not
+fail-closed protection and does not change those boundaries. An invalid-value
+warning appears on the next matching edit; the failures and the mode are also
+reported by `doctor` (below).
 
 Concurrent matching hook invocations each deny independently. Stopping a turn
 does not roll back or guarantee cancellation of unrelated sibling tools that
 already started. A subagent's stop must not be assumed to stop its parent or
 make the warning visible to the lead. Actual lead/worker visibility remains a
 separate runtime acceptance requirement.
+
+## Failure diagnostics and doctor
+
+When a fault fails open, both hook copies note it in `.deeppairing/hooks-state.json`
+under a separate `preflightFailures` field ([#546](https://github.com/mitchjablonski/deepPairing/issues/546)).
+Recording it changes nothing else: the decision, stderr and exit status stay
+byte-identical, and a fault that was a no-fire stays a no-fire.
+
+| Class | Meaning |
+| --- | --- |
+| `input_malformed` | The hook event was not JSON, or not an object |
+| `ledger_unreadable` | `preferences.json` or `team.json` exists but could not be read |
+| `ledger_corrupt` | One of those files is not JSON, or has the wrong shape (for `team.json`, any bad entry) |
+| `matcher_import_failed` | The init-generated hook could not import the matcher core or the rule leaf |
+| `evaluator_threw` | The matcher threw (for example, an ill-typed ledger entry), so the check was skipped |
+| `session_store_unreadable` | No session store could be read, so the guardrail backstop stayed silent |
+
+An expected non-match is not a fault and is never recorded. Neither is a
+missing ledger, a project with no team file, or a non-write tool. Each class
+keeps a count, a first and last timestamp, and a `<source>:<code>` detail such
+as `preferences:SyntaxError`. A record never holds error messages, file content,
+tool input, paths, session ids or environment values. The record is project-scoped,
+written under the same lock as the fire log, and never creates `.deeppairing/`.
+A hook killed by the harness (a timeout) cannot record its own death.
+
+`deeppairing doctor` reports recorded failures by class and count. It also
+reports `DEEPPAIRING_PREFLIGHT_MODE` as it appears in each source doctor can
+read, labelled: the `env` block of the user, project and local settings files,
+and doctor's own shell. It flags an invalid value without echoing it. Claude
+Code merges its launch environment with those settings, and doctor is a
+separate process, so it can't know the value a hook received.
 
 ## Supervised worker handoff
 

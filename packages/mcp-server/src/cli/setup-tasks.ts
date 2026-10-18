@@ -606,7 +606,24 @@ function resolveGuardrailRulesUrl(): string {
   return pathToFileURL(found ?? distCandidate).href;
 }
 
-function preflightHookScript(coreUrl: string, rulesUrl: string): string {
+/** #546 — absolute file URL of the failure-diagnostics leaf (Node builtins
+ *  only). The generated hook imports it ONLY on a failure path, and only when
+ *  the matcher core is not already loaded — chiefly when the core's own import
+ *  failed. Same stamping discipline as the two URLs above. */
+function resolvePreflightDiagnosticsUrl(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const besideEntry = path.join(here, "preflight-diagnostics.js"); // plugin bundle
+  const distCandidate = path.join(here, "..", "hooks", "preflight-diagnostics.js"); // dist/cli → dist/hooks
+  const candidates = [
+    besideEntry,
+    distCandidate,
+    path.join(here, "../../dist/hooks/preflight-diagnostics.js"), // src/cli via tsx, after a build
+  ];
+  const found = candidates.find((c) => fs.existsSync(c));
+  return pathToFileURL(found ?? distCandidate).href;
+}
+
+function preflightHookScript(coreUrl: string, rulesUrl: string, diagUrl: string): string {
   return `#!/usr/bin/env node
 // deepPairing PreToolUse preflight hook — installed by ensurePreflightHook.
 // GENERATED, do not edit. ESM (.mjs): use import, not require.
@@ -621,6 +638,9 @@ function preflightHookScript(coreUrl: string, rulesUrl: string): string {
 // (migrations, .github/workflows, infra, .env) with no live pre-work ceremony in
 // the session asks the human too. Explicit strict-stop instead denies and stops
 // continuation; matcher/read/import errors still fail open in either mode.
+// #546 — a fault that fails open is NOTED (a class, a fixed source label and an
+// error code; never a message, path or content) into hooks-state's
+// preflightFailures field. The decision, stderr and exit status are unchanged.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -629,6 +649,10 @@ const CORE_URL = ${JSON.stringify(coreUrl)};
 // Q1 — the guardrail RULE TABLE's leaf module (node:path only), stamped the
 // same way. See the guardrail note below the ledger pre-check.
 const RULES_URL = ${JSON.stringify(rulesUrl)};
+// #546 — the failure-diagnostics leaf, imported only on a failure path.
+const DIAG_URL = ${JSON.stringify(diagUrl)};
+// [kind, source, error] triples; classified by the leaf at flush time.
+const failed = [];
 
 // F11 — the fire log + the guardrail dedup stamp are ONE read-modify-write, and
 // they live in the matcher core (mod.recordHookFire) so this generated copy and
@@ -643,7 +667,8 @@ function ledgersPresent(projectRoot) {
   try {
     const prefs = JSON.parse(fs.readFileSync(path.join(projectRoot, ".deeppairing", "preferences.json"), "utf-8"));
     if (Array.isArray(prefs && prefs.rejectedApproaches) && prefs.rejectedApproaches.length > 0) return true;
-  } catch {}
+    if (!prefs || typeof prefs !== "object" || Array.isArray(prefs) || (prefs.rejectedApproaches !== undefined && !Array.isArray(prefs.rejectedApproaches))) failed.push(["schema", "preferences"]);
+  } catch (err) { failed.push(["ledger", "preferences", err]); }
   try {
     if (fs.existsSync(path.join(projectRoot, ".deeppairing", "team.json"))) return true;
   } catch {}
@@ -698,7 +723,8 @@ async function targetsGuardrailPath(projectRoot, toolInput) {
     const rules = await import(RULES_URL);
     // #470 slice 4 — a deepPairing state file is the third reason to keep going.
     return rules.matchGuardrailPath(projectRoot, [fp]) !== null || rules.toolInputTargetsDeeppairingState(projectRoot, toolInput);
-  } catch {
+  } catch (err) {
+    failed.push(["import", "rules", err]);
     // FAIL SAFE, not fail-silent: if the rule module can't be loaded (an
     // unbuilt tree, a moved install), keep going and let the matcher core —
     // which carries the same table — decide. A load error must never be the
@@ -711,39 +737,59 @@ async function targetsGuardrailPath(projectRoot, toolInput) {
 let input = "";
 process.stdin.setEncoding("utf-8");
 process.stdin.on("data", (d) => { input += d; });
+let mod = null;
+let projectRoot = process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || process.cwd();
+const failures = [];
+// #546 — flush once, then exit. Free when nothing failed (no import, no I/O).
+async function finish() {
+  try {
+    if (failed.length > 0 || failures.length > 0) {
+      const diag = mod && typeof mod.recordPreflightFailures === "function" ? mod : await import(DIAG_URL);
+      diag.recordPreflightFailures(projectRoot, [...failed.map((f) => diag.noteFailure(f[0], f[1], f[2])), ...failures]);
+    }
+  } catch {}
+  process.exit(0);
+}
 process.stdin.on("end", async () => {
+  let stage = "input";
   try {
     const ev = JSON.parse(input || "{}");
+    if (input && (!ev || typeof ev !== "object" || Array.isArray(ev))) failed.push(["input", "stdin"]);
     const toolName = ev.tool_name || "";
     const toolInput = ev.tool_input || ev.input || {};
     // R1 (#279) — one documented precedence in every hook lane:
     // CLAUDE_PROJECT_DIR > DEEPPAIRING_PROJECT_ROOT > the event's cwd > ours.
-    let projectRoot = process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || ev.cwd || process.cwd();
+    projectRoot = process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || ev.cwd || process.cwd();
+    stage = "route";
     // #532 — inside a git LINKED WORKTREE the project is the main checkout (the
     // shared ledger), via the rule leaf's resolveHookRoots. Only paid when the
     // nearest .git is a FILE; a main checkout or non-git dir skips the import.
     if (nearestDotGitIsFile(projectRoot)) {
-      try { projectRoot = (await import(RULES_URL)).resolveHookRoots(ev.cwd).projectRoot; } catch {}
+      try { projectRoot = (await import(RULES_URL)).resolveHookRoots(ev.cwd).projectRoot; } catch (err) { failed.push(["import", "rules", err]); }
     }
     if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit" && toolName !== "NotebookEdit") {
-      process.exit(0);
+      return await finish();
     }
     if (!ledgersPresent(projectRoot) && !(await targetsGuardrailPath(projectRoot, toolInput))) {
-      process.exit(0); // nothing to match against — skip the matcher import
+      return await finish(); // nothing to match against — skip the matcher import
     }
-    const mod = await import(CORE_URL);
+    stage = "import";
+    mod = await import(CORE_URL);
     const config = mod.resolvePreflightMode(process.env.DEEPPAIRING_PREFLIGHT_MODE);
-    const decision = mod.evaluatePreflightHook({ toolName, toolInput, projectRoot, mode: config.mode });
+    stage = "evaluate";
+    const decision = mod.evaluatePreflightHook({ toolName, toolInput, projectRoot, mode: config.mode, failures });
+    stage = "output";
     if (decision && decision.fire) {
       mod.recordHookFire(projectRoot, decision, undefined, config.mode);
       process.stdout.write(JSON.stringify(mod.preflightHookOutput(decision, config)));
     }
     // no match = exit 0 with no decision JSON (tool proceeds)
-    process.exit(0);
+    return await finish();
   } catch (err) {
     // FAIL OPEN — a broken hook must never block the user's edits.
     try { process.stderr.write("[deepPairing] preflight hook error: " + String((err && err.message) || err) + "\\n"); } catch {}
-    process.exit(0);
+    failed.push(stage === "input" ? ["input", "stdin", err] : stage === "import" ? ["import", "core", err] : ["evaluate", stage === "evaluate" ? "matcher" : "hook", err]);
+    return await finish();
   }
 });
 `;
@@ -760,7 +806,7 @@ export function ensurePreflightHook(projectRoot: string, opts: SettingsRepairOpt
   try {
     const core = resolvePreflightCoreUrl();
     fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
-    fs.writeFileSync(scriptPath, preflightHookScript(core.url, resolveGuardrailRulesUrl()));
+    fs.writeFileSync(scriptPath, preflightHookScript(core.url, resolveGuardrailRulesUrl(), resolvePreflightDiagnosticsUrl()));
     fs.chmodSync(scriptPath, 0o755);
     // Honest signal — if the matcher core isn't built, the hook installs but
     // fails open (gate inactive) until a build + re-stamp on next startup.
