@@ -399,6 +399,43 @@ Team rationale: "${pref.rationale}"${attribution}.${scope}
     }
   };
 }
+function coerceStanceConcept(concept) {
+  if (concept === void 0 || concept === null || typeof concept === "string") return { concept, changed: false };
+  if (typeof concept === "object" && !Array.isArray(concept)) {
+    const name = concept.name;
+    if (typeof name === "string" && name.trim()) return { concept: name, changed: true };
+  }
+  return { concept: void 0, changed: true };
+}
+function runPreflightGuarded(input, indexOf = (i) => i) {
+  const coerced = [];
+  const skipped = [];
+  let entries = input.rejectedApproaches.map((entry, i) => {
+    const c = coerceStanceConcept(entry.concept);
+    if (!c.changed) return { entry, i };
+    coerced.push(indexOf(i));
+    return { entry: { ...entry, concept: c.concept ?? void 0 }, i };
+  });
+  const run = (list, team = input.teamPreferences) => runPreflight({ ...input, rejectedApproaches: list.map((e) => e.entry), teamPreferences: team });
+  let result;
+  try {
+    result = run(entries);
+  } catch (err) {
+    const survivors = entries.filter((e) => {
+      try {
+        runPreflight({ toolName: input.toolName, proposalStrings: input.proposalStrings, proposalPaths: input.proposalPaths, proposalConcepts: input.proposalConcepts, rejectedApproaches: [e.entry], teamPreferences: [] });
+        return true;
+      } catch {
+        skipped.push(indexOf(e.i));
+        return false;
+      }
+    });
+    if (survivors.length === entries.length) throw err;
+    entries = survivors;
+    result = run(entries);
+  }
+  return { result, coerced: coerced.sort((a, b) => a - b), skipped: skipped.sort((a, b) => a - b) };
+}
 
 // src/debrief-gate.ts
 var PRE_WORK_CEREMONY_TYPES = ["research", "decision", "spec", "plan"];
@@ -639,8 +676,9 @@ var PREFLIGHT_FAILURE_CLASSES = [
   "input_malformed",
   "ledger_unreadable",
   "ledger_corrupt",
-  // #557 — one ledger entry the matcher can't read, skipped so the rest enforce.
-  "ledger_entry_skipped",
+  // #557 — a ledger entry the matcher can't fully read: its concept ignored or
+  // coerced, or (if the matcher still throws) the entry skipped; the rest enforce.
+  "ledger_entry_invalid",
   "matcher_import_failed",
   "evaluator_threw",
   "session_store_unreadable"
@@ -1247,38 +1285,20 @@ function evaluateDeeppairingState(args) {
     return null;
   }
 }
-function entryConceptUsable(entry) {
-  const c = entry.concept;
-  return c === void 0 || c === null || typeof c === "string";
-}
 function runPreflightSkippingBadEntries(args) {
-  const { toolName, proposalStrings, proposalPaths, teamPreferences } = args;
-  const run = (list, team = teamPreferences) => runPreflight({ toolName, proposalStrings, proposalPaths, rejectedApproaches: list.map((e) => e.entry), teamPreferences: team });
-  const skipped = [];
-  let usable = args.entries.filter((e) => {
-    if (entryConceptUsable(e.entry)) return true;
-    skipped.push(e.index);
-    return false;
-  });
-  let result;
-  try {
-    result = run(usable);
-  } catch (err) {
-    const survivors = usable.filter((e) => {
-      try {
-        run([e], []);
-        return true;
-      } catch {
-        skipped.push(e.index);
-        return false;
-      }
-    });
-    if (survivors.length === usable.length) throw err;
-    usable = survivors;
-    result = run(usable);
-  }
-  if (skipped.length > 0) {
-    pushFailure(args.failures, { cls: "ledger_entry_skipped", source: "preferences", tag: "entry", indices: skipped.sort((a, b) => a - b) });
+  const { result, coerced, skipped } = runPreflightGuarded(
+    {
+      toolName: args.toolName,
+      proposalStrings: args.proposalStrings,
+      proposalPaths: args.proposalPaths,
+      rejectedApproaches: args.entries.map((e) => e.entry),
+      teamPreferences: args.teamPreferences
+    },
+    (i) => args.entries[i].index
+  );
+  const indices = [.../* @__PURE__ */ new Set([...coerced, ...skipped])].sort((a, b) => a - b);
+  if (indices.length > 0) {
+    pushFailure(args.failures, { cls: "ledger_entry_invalid", source: "preferences", tag: skipped.length > 0 ? "skipped" : "concept", indices });
   }
   return result;
 }

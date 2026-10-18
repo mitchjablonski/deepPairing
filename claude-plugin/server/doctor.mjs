@@ -18115,8 +18115,9 @@ var PREFLIGHT_FAILURE_CLASSES = [
   "input_malformed",
   "ledger_unreadable",
   "ledger_corrupt",
-  // #557 — one ledger entry the matcher can't read, skipped so the rest enforce.
-  "ledger_entry_skipped",
+  // #557 — a ledger entry the matcher can't fully read: its concept ignored or
+  // coerced, or (if the matcher still throws) the entry skipped; the rest enforce.
+  "ledger_entry_invalid",
   "matcher_import_failed",
   "evaluator_threw",
   "session_store_unreadable"
@@ -18224,7 +18225,7 @@ var PREFLIGHT_FAILURE_MEANING = {
   input_malformed: "Claude Code sent an event the hook could not read, so no check ran for it.",
   ledger_unreadable: "a ledger file (.deeppairing/preferences.json or team.json) exists but could not be read, so its rules were not checked.",
   ledger_corrupt: "a ledger file (.deeppairing/preferences.json or team.json) is not valid JSON or has the wrong shape, so its rules were not checked.",
-  ledger_entry_skipped: "a .deeppairing/preferences.json entry the matcher can't read (for example a non-string concept) was skipped; every other stance still enforced.",
+  ledger_entry_invalid: "a .deeppairing/preferences.json entry has a concept the matcher can't read (for example a number); it was ignored, so the entry matched on its description, or the entry was skipped if nothing usable remained. Every other stance still enforced.",
   matcher_import_failed: "the init-installed hook could not load part of the matcher; rebuild deepPairing, then start a session so the hook is re-stamped.",
   evaluator_threw: "the matcher threw while checking an edit, for a reason no single ledger entry explains, so the whole check was skipped.",
   session_store_unreadable: "no session store could be read, so the guardrail backstop stayed silent."

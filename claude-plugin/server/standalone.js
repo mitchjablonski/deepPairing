@@ -30369,6 +30369,43 @@ Team rationale: "${pref.rationale}"${attribution}.${scope}
     }
   };
 }
+function coerceStanceConcept(concept) {
+  if (concept === void 0 || concept === null || typeof concept === "string") return { concept, changed: false };
+  if (typeof concept === "object" && !Array.isArray(concept)) {
+    const name = concept.name;
+    if (typeof name === "string" && name.trim()) return { concept: name, changed: true };
+  }
+  return { concept: void 0, changed: true };
+}
+function runPreflightGuarded(input, indexOf = (i) => i) {
+  const coerced = [];
+  const skipped = [];
+  let entries = input.rejectedApproaches.map((entry, i) => {
+    const c = coerceStanceConcept(entry.concept);
+    if (!c.changed) return { entry, i };
+    coerced.push(indexOf(i));
+    return { entry: { ...entry, concept: c.concept ?? void 0 }, i };
+  });
+  const run2 = (list2, team = input.teamPreferences) => runPreflight({ ...input, rejectedApproaches: list2.map((e) => e.entry), teamPreferences: team });
+  let result;
+  try {
+    result = run2(entries);
+  } catch (err) {
+    const survivors = entries.filter((e) => {
+      try {
+        runPreflight({ toolName: input.toolName, proposalStrings: input.proposalStrings, proposalPaths: input.proposalPaths, proposalConcepts: input.proposalConcepts, rejectedApproaches: [e.entry], teamPreferences: [] });
+        return true;
+      } catch {
+        skipped.push(indexOf(e.i));
+        return false;
+      }
+    });
+    if (survivors.length === entries.length) throw err;
+    entries = survivors;
+    result = run2(entries);
+  }
+  return { result, coerced: coerced.sort((a, b) => a - b), skipped: skipped.sort((a, b) => a - b) };
+}
 
 // src/mcp/advisory-recall.ts
 function tokenSetKey(s) {
@@ -30573,7 +30610,7 @@ async function preflightRejectedApproaches(store, broadcast, toolName, proposalS
   const teamPrefs = await store.getTeamPreferences?.() ?? [];
   const localKeys = /* @__PURE__ */ new Set();
   for (const r of memory.rejectedApproaches) {
-    const k = tokenSetKey(r.concept ?? r.description);
+    const k = tokenSetKey(coerceStanceConcept(r.concept).concept ?? r.description);
     if (k) localKeys.add(k);
   }
   for (const a of memory.approvedPatterns) {
@@ -30581,7 +30618,7 @@ async function preflightRejectedApproaches(store, broadcast, toolName, proposalS
     if (k) localKeys.add(k);
   }
   const globalAdvisoryConcepts = ADVISORY_EXEMPT_TOOLS.has(toolName) ? [] : getAdvisoryRecall().conceptsFor({ localConceptKeys: localKeys });
-  const result = runPreflight({
+  const guarded = runPreflightGuarded({
     toolName,
     proposalStrings,
     proposalPaths,
@@ -30590,6 +30627,15 @@ async function preflightRejectedApproaches(store, broadcast, toolName, proposalS
     teamPreferences: teamPrefs,
     globalAdvisoryConcepts
   });
+  const result = guarded.result;
+  if (guarded.coerced.length > 0 || guarded.skipped.length > 0) {
+    const bad = (/* @__PURE__ */ new Set([...guarded.coerced, ...guarded.skipped])).size;
+    try {
+      process.stderr.write(`[deepPairing] preferences.json: ${bad} rejected-approach entr${bad === 1 ? "y has" : "ies have"} an unreadable concept; matched on what remained${guarded.skipped.length > 0 ? ` (${guarded.skipped.length} skipped)` : ""}. Check .deeppairing/preferences.json.
+`);
+    } catch {
+    }
+  }
   if (!result.blocked) {
     for (const nm of opts.excludeStances?.length ? [] : result.trace.nearMisses) {
       if (nm.source === "session" || nm.source === "team") {

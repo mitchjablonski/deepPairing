@@ -110,8 +110,9 @@ var PREFLIGHT_FAILURE_CLASSES = [
   "input_malformed",
   "ledger_unreadable",
   "ledger_corrupt",
-  // #557 — one ledger entry the matcher can't read, skipped so the rest enforce.
-  "ledger_entry_skipped",
+  // #557 — a ledger entry the matcher can't fully read: its concept ignored or
+  // coerced, or (if the matcher still throws) the entry skipped; the rest enforce.
+  "ledger_entry_invalid",
   "matcher_import_failed",
   "evaluator_threw",
   "session_store_unreadable"
