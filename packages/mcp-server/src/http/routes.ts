@@ -1434,7 +1434,15 @@ export function createHttpRoutes(
     // plugin install with a bad cwd) should render "no blocks yet", not break
     // the page load. Same posture as /api/ledger/digest.
     if (!projectRoot) return c.json({ blocks: [] });
-    const blocks = readPreflightBlocks(projectRoot);
+    // #553 — a hook firing that resolved to a deepPairing session (a main
+    // agent's or a worker subagent's: both carry the parent's session_id) is
+    // that session's, the same routing the live WS event follows (#552). A tab
+    // bound to ANOTHER session doesn't get it here either; the all-sessions
+    // view (no X-Session-Id) and unattributed "hook" firings stay project-wide.
+    const viewer = getSessionId(c);
+    const blocks = readPreflightBlocks(projectRoot).filter(
+      (b) => !viewer || b.lane !== "hook" || b.sessionId === "hook" || b.sessionId === viewer,
+    );
     return c.json({ blocks: stanceExceptions ? blocks.map((b) => stanceExceptions.deriveReceipt(b)) : blocks });
   });
 

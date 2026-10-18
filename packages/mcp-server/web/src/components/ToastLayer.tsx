@@ -96,6 +96,7 @@ function HookGateHeroCard({ hero, onDismiss, action, quiet }: {
       data-testid="hero-toast"
       data-lane="hook"
       data-decision={hero.decision ?? "ask"}
+      data-subagent={copy.subagent ? "true" : undefined}
     >
       <div className="flex items-start gap-2">
         <span className={`flex items-center text-base shrink-0 ${style.accent}`} aria-hidden="true">{style.icon}</span>
@@ -111,6 +112,7 @@ function HookGateHeroCard({ hero, onDismiss, action, quiet }: {
         </button>
       </div>
       <div className="text-2xs text-text-secondary leading-relaxed space-y-1 pl-6 break-words">
+        {copy.subagent && <div className="font-semibold text-text-primary" data-testid="hook-gate-subagent">{copy.subagent}</div>}
         <div className={`font-semibold ${style.accent}`} data-testid="hook-gate-match">{copy.match}</div>
         {copy.said && <div className="italic" data-testid="hook-gate-said">{copy.said}</div>}
         <div className="text-text-primary" data-testid="hook-gate-next">{copy.next}</div>

@@ -289,11 +289,15 @@ function GateBlockEntry({ block, blocks }: { block: PreflightBlockRecord; blocks
           {formatRelative(block.at)}
         </span>
       </div>
-      {block.lane === "hook" && (
-        <div className="mt-0.5 text-text-secondary break-words" data-testid="gate-hook-line">
-          {hookGateCopy({ ...block, decision: block.decision }).title}
-        </div>
-      )}
+      {block.lane === "hook" && (() => {
+        const copy = hookGateCopy({ ...block, decision: block.decision });
+        return (
+          <div className="mt-0.5 text-text-secondary break-words" data-testid="gate-hook-line">
+            {copy.subagent && <span className="font-semibold text-text-primary" data-testid="gate-hook-subagent">{copy.subagent} · </span>}
+            {copy.title}
+          </div>
+        );
+      })()}
       {block.proposal && block.proposal !== block.concept && (
         <div className="mt-0.5 text-text-muted break-words">
           {/* R2 (contrast) — the label reads stronger than its value. */}

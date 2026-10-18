@@ -116,7 +116,7 @@ process.stdin.on("end", () => {
     const decision = evaluatePreflightHook({ toolName, toolInput, projectRoot, mode: config.mode, failures });
     stage = "output";
     if (decision && decision.fire) {
-      recordHookFire(projectRoot, decision, undefined, config.mode, ev.session_id);
+      recordHookFire(projectRoot, decision, undefined, config.mode, ev.session_id, { agent_id: ev.agent_id, agent_type: ev.agent_type });
       process.stdout.write(JSON.stringify(preflightHookOutput(decision, config)));
     }
     // no match = exit 0 with no decision JSON (tool proceeds)

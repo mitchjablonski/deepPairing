@@ -725,6 +725,9 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
                 toolName: typeof data.toolName === "string" ? data.toolName : undefined,
                 targetPath: typeof data.targetPath === "string" ? data.targetPath : undefined,
                 guardrail: typeof data.guardrail === "string" ? data.guardrail : undefined,
+                // #553 — a worker subagent's firing (absent on older daemons).
+                agentId: typeof data.agentId === "string" ? data.agentId : undefined,
+                agentType: typeof data.agentType === "string" ? data.agentType : undefined,
               }
             : undefined;
           // Only a hook firing loads the copy/announcer modules; a present_*

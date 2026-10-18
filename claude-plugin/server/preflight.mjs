@@ -1235,10 +1235,11 @@ function stampGuardrailAsk(state, match, now) {
   }
   state.guardrailAsks = asks;
 }
-function recordHookFire(projectRoot, decision, now = Date.now(), mode = "ask", claudeSessionId) {
+function recordHookFire(projectRoot, decision, now = Date.now(), mode = "ask", claudeSessionId, agent) {
   const gate = hookGateRecord(decision, mode);
   const session = typeof claudeSessionId === "string" ? claudeSessionId.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 64) : "";
   if (gate && session) gate.session = session;
+  if (gate) Object.assign(gate, hookAgentFields(agent));
   appendHookFire(
     hookStatePath(projectRoot),
     {
@@ -1386,6 +1387,19 @@ function gateText(value, limit) {
   if (!text) return void 0;
   return text.length > limit ? text.slice(0, limit - 1).replace(/[\ud800-\udbff]$/, "") + "\u2026" : text;
 }
+function hookAgentFields(agent) {
+  try {
+    if (!agent || typeof agent !== "object") return {};
+    const out = {};
+    const id = typeof agent.agent_id === "string" ? agent.agent_id.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64) : "";
+    const type = gateText(agent.agent_type, 80);
+    if (id) out.agentId = id;
+    if (type) out.agentType = type;
+    return out;
+  } catch {
+    return {};
+  }
+}
 function hookGateRecord(decision, mode = "ask") {
   try {
     if (!decision.fire) return void 0;
@@ -1468,7 +1482,7 @@ process.stdin.on("end", () => {
     const decision = evaluatePreflightHook({ toolName, toolInput, projectRoot, mode: config.mode, failures });
     stage = "output";
     if (decision && decision.fire) {
-      recordHookFire(projectRoot, decision, void 0, config.mode, ev.session_id);
+      recordHookFire(projectRoot, decision, void 0, config.mode, ev.session_id, { agent_id: ev.agent_id, agent_type: ev.agent_type });
       process.stdout.write(JSON.stringify(preflightHookOutput(decision, config)));
     }
     finish();

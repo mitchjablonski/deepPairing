@@ -469,6 +469,28 @@ describe("connection store — handleMessage dispatch", () => {
       expect(useAnnounceStore.getState().seq).toBe(0);
     });
 
+    it("#553 — a worker subagent's strict-stop deny carries its agent type to the toast and the gate log", async () => {
+      const { useToastStore } = await import("../toast");
+      const { usePreflightBlockStore } = await import("../preflightBlocks");
+      const { usePreferencesStore } = await import("../preferences");
+      useToastStore.getState().dismissAll();
+      usePreflightBlockStore.getState().clear();
+      usePreferencesStore.setState({ nextUpBar: false });
+      useConnectionStore.getState().connect();
+      activeAdapter.emit({
+        type: "preflight_blocked", lane: "hook", decision: "deny", toolName: "Write", targetPath: "src/worker.ts",
+        source: "session", blockId: "blk_hf_sub1", at: "2026-10-17T12:00:00.000Z", eligible: false, ineligibleReason: "hook_deny",
+        agentId: "agent-7f3a", agentType: "general-purpose",
+        match: { concept: "global mutable state", reason: "Keep configuration explicit", via: "surface" },
+      });
+      await vi.waitFor(() => expect(useToastStore.getState().toasts.length).toBeGreaterThan(0));
+      await flush();
+      const toast = useToastStore.getState().toasts.find((t) => t.kind === "preflight-block")!;
+      expect(toast.title).toBe("Claude Code stopped a write to `src/worker.ts` by the general-purpose subagent");
+      expect(toast.hero).toMatchObject({ lane: "hook", decision: "deny", agentId: "agent-7f3a", agentType: "general-purpose" });
+      expect(usePreflightBlockStore.getState().blocks[0]).toMatchObject({ serverId: "blk_hf_sub1", agentId: "agent-7f3a", agentType: "general-purpose" });
+    });
+
     it("#544 — with the next-up bar on, the one announcer speaks the ask and the toast stays quiet", async () => {
       const { useToastStore } = await import("../toast");
       const { usePreferencesStore } = await import("../preferences");

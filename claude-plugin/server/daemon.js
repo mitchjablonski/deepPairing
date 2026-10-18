@@ -21524,7 +21524,7 @@ process.stdin.on("end", async () => {
     const decision = mod.evaluatePreflightHook({ toolName, toolInput, projectRoot, mode: config.mode, failures });
     stage = "output";
     if (decision && decision.fire) {
-      mod.recordHookFire(projectRoot, decision, undefined, config.mode, ev.session_id);
+      mod.recordHookFire(projectRoot, decision, undefined, config.mode, ev.session_id, { agent_id: ev.agent_id, agent_type: ev.agent_type });
       process.stdout.write(JSON.stringify(mod.preflightHookOutput(decision, config)));
     }
     // no match = exit 0 with no decision JSON (tool proceeds)
@@ -32117,6 +32117,10 @@ function hookGateEntryFromFire(fire, resolveSession = () => void 0) {
   if (reason) entry.reason = reason;
   if (description) entry.description = description;
   if (addedBy) entry.addedBy = addedBy;
+  const agentId = typeof g.agentId === "string" && HOOK_ID.test(g.agentId) ? g.agentId : void 0;
+  const agentType = str2(g.agentType, 80);
+  if (agentId) entry.agentId = agentId;
+  if (agentType) entry.agentType = agentType;
   if (guardrail && g.source === "guardrail") entry.guardrail = guardrail;
   return entry;
 }
@@ -34252,7 +34256,10 @@ function createHttpRoutes(storeOrGetter, projectRoot2, broadcastFn, logFn, authT
   });
   app.get("/api/preflight-blocks", (c) => {
     if (!projectRoot2) return c.json({ blocks: [] });
-    const blocks = readPreflightBlocks(projectRoot2);
+    const viewer = getSessionId(c);
+    const blocks = readPreflightBlocks(projectRoot2).filter(
+      (b) => !viewer || b.lane !== "hook" || b.sessionId === "hook" || b.sessionId === viewer
+    );
     return c.json({ blocks: stanceExceptions ? blocks.map((b) => stanceExceptions.deriveReceipt(b)) : blocks });
   });
   if (stanceExceptions) registerStanceExceptionRoutes(app, stanceExceptions);
@@ -36793,6 +36800,10 @@ function createDaemon(deps) {
           toolName: entry.toolName,
           targetPath: entry.targetPath,
           guardrail: entry.guardrail,
+          // #553 — a worker subagent's firing names its agent type; it routes
+          // like any other (its session_id is the parent's).
+          agentId: entry.agentId,
+          agentType: entry.agentType,
           source: entry.source,
           blockId: entry.id,
           at: entry.at,
