@@ -212,7 +212,14 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
       holds: blocks
         // #470 (§4a) — a block you allowed is seen (daemon-written seenAt).
         .filter((b) => !b.seenAt && (!lastSeenAt || b.at > lastSeenAt))
-        .map((b) => ({ id: b.id, title: b.proposal ? `"${b.concept}" stopped: ${b.proposal}` : `"${b.concept}"`, at: b.at })),
+        .map((b) => ({
+          id: b.id,
+          // #544 — a hook firing names the file Claude Code asked about.
+          title: b.lane === "hook" && b.targetPath
+            ? `"${b.concept}": Claude Code ${b.decision === "deny" ? "stopped" : "asked about"} ${b.targetPath}`
+            : b.proposal ? `"${b.concept}" stopped: ${b.proposal}` : `"${b.concept}"`,
+          at: b.at,
+        })),
     },
   }), [artifacts, comments, requests, sessionLabels, boundSessionId, tabOffline, staleDaemon, snapshotUnavailable, sessionConflict, replayActive, blocks, lastSeenAt]);
 

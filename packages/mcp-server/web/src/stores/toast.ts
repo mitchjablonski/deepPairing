@@ -35,6 +35,14 @@ export interface PreflightBlockHero {
   /** #470 — whether the daemon says this block can be allowed once. */
   eligible?: boolean;
   ineligibleReason?: string;
+  /** #544 — a PreToolUse hook firing (a raw Edit/Write), not a present_* call. */
+  lane?: "hook";
+  /** #544 — what the hook told Claude Code: ask you, or deny (strict-stop). */
+  decision?: "ask" | "deny";
+  toolName?: string;
+  targetPath?: string;
+  /** #544 — set only when a guarded file fired and no stance did. */
+  guardrail?: string;
 }
 
 export interface Toast {
