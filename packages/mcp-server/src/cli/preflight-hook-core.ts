@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { runPreflight, type PreflightBlock } from "../mcp/preflight-validator.js";
+import { runPreflight, runPreflightGuarded, type PreflightBlock } from "../mcp/preflight-validator.js";
 import { sessionHasLivePreWorkCeremony } from "../debrief-gate.js";
 import { appendHookFire, hookStatePath } from "../hooks/hook-state.js";
 // #546 — the failure taxonomy + its bounded, redacted hooks-state record. Both
@@ -74,6 +74,13 @@ import type { TeamPreference } from "@deeppairing/shared";
  *  the first-call-hint preamble + the present_* preflight trace's cross-project
  *  near-misses, NOT here. So this reads ONLY this project's ledger. */
 export function readRejectedApproaches(projectRoot: string, failures?: PreflightFailureSink): RejectedApproach[] {
+  return readRejectedApproachEntries(projectRoot, failures).map((e) => e.entry);
+}
+
+/** #557 — the same read, keeping each entry's index in the file's
+ *  `rejectedApproaches` array so a skipped entry can be named without its
+ *  content. */
+export function readRejectedApproachEntries(projectRoot: string, failures?: PreflightFailureSink): Array<{ entry: RejectedApproach; index: number }> {
   const p = path.join(projectRoot, ".deeppairing", "preferences.json");
   try {
     if (!fs.existsSync(p)) return [];
@@ -86,8 +93,9 @@ export function readRejectedApproaches(projectRoot: string, failures?: Preflight
     }
     if (!Array.isArray(list)) return [];
     return list
-      .map((e: any): RejectedApproach =>
-        typeof e === "string"
+      .map((e: any, index: number) => ({
+        index,
+        entry: (typeof e === "string"
           ? { description: e }
           : {
               description: String(e?.description ?? ""),
@@ -95,9 +103,9 @@ export function readRejectedApproaches(projectRoot: string, failures?: Preflight
               rejectedAt: e?.rejectedAt,
               sourceArtifactId: e?.sourceArtifactId,
               concept: e?.concept,
-            },
-      )
-      .filter((r) => r.description);
+            }) as RejectedApproach,
+      }))
+      .filter((r) => r.entry.description);
   } catch (err) {
     pushFailure(failures, noteFailure("ledger", "preferences", err));
     return [];
@@ -785,6 +793,42 @@ export function evaluateDeeppairingState(args: { toolInput: unknown; projectRoot
   }
 }
 
+/**
+ * #557 — the hook's view of runPreflightGuarded (preflight-validator.ts, shared
+ * with the MCP-side gate): a non-string concept is ignored (or, for the
+ * `{ name }` option shape, coerced) so the entry still matches on what it has;
+ * an entry the matcher still throws on is dropped; every other stance enforces.
+ * A fully valid ledger takes the original single call, unchanged.
+ *
+ * Either outcome is recorded by INDEX and class only (ledger_entry_invalid,
+ * detail `preferences:skipped` when anything was dropped, else
+ * `preferences:concept`), through #546's preflightFailures; no content.
+ */
+export function runPreflightSkippingBadEntries(args: {
+  toolName: string;
+  proposalStrings: string[];
+  proposalPaths: string[];
+  entries: Array<{ entry: RejectedApproach; index: number }>;
+  teamPreferences: TeamPreference[];
+  failures?: PreflightFailureSink;
+}): ReturnType<typeof runPreflight> {
+  const { result, coerced, skipped } = runPreflightGuarded(
+    {
+      toolName: args.toolName,
+      proposalStrings: args.proposalStrings,
+      proposalPaths: args.proposalPaths,
+      rejectedApproaches: args.entries.map((e) => e.entry),
+      teamPreferences: args.teamPreferences,
+    },
+    (i) => args.entries[i]!.index,
+  );
+  const indices = [...new Set([...coerced, ...skipped])].sort((a, b) => a - b);
+  if (indices.length > 0) {
+    pushFailure(args.failures, { cls: "ledger_entry_invalid", source: "preferences", tag: skipped.length > 0 ? "skipped" : "concept", indices });
+  }
+  return result;
+}
+
 /** Evaluate a PreToolUse Edit/Write/MultiEdit against the project's rejected
  *  approaches + team prefs, then (P1) against the guardrail backstop. Returns
  *  `fire` + the reason to surface, or {fire:false}.
@@ -843,12 +887,13 @@ function evaluateHookGates(args: {
   const { strings, paths } = buildProposals(toolName, toolInput);
   if (strings.length === 0) return state ?? { fire: false };
 
-  const result = runPreflight({
+  const result = runPreflightSkippingBadEntries({
     toolName,
     proposalStrings: strings,
     proposalPaths: paths,
-    rejectedApproaches: readRejectedApproaches(projectRoot, failures),
+    entries: readRejectedApproachEntries(projectRoot, failures),
     teamPreferences: readTeamPreferences(projectRoot, failures),
+    failures,
   });
   if (result.blocked) {
     // #169 + F6 — hook-facing reason: drop the agent-only "artifact was NOT

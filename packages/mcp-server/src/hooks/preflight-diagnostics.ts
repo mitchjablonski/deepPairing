@@ -32,6 +32,9 @@ export const PREFLIGHT_FAILURE_CLASSES = [
   "input_malformed",
   "ledger_unreadable",
   "ledger_corrupt",
+  // #557 — a ledger entry the matcher can't fully read: its concept ignored or
+  // coerced, or (if the matcher still throws) the entry skipped; the rest enforce.
+  "ledger_entry_invalid",
   "matcher_import_failed",
   "evaluator_threw",
   "session_store_unreadable",
@@ -58,6 +61,8 @@ export interface PreflightFailureNote {
   source: PreflightFailureSource;
   /** An errno code (`EACCES`), an error constructor name (`SyntaxError`), or "schema"/"corrupt"/"shape". */
   tag: string;
+  /** #557 — for ledger_entry_invalid: the affected entries' array indices. */
+  indices?: number[];
 }
 
 /** A per-invocation collector. Readers push; the entry flushes once. */
@@ -69,12 +74,22 @@ export interface PreflightFailureEntry {
   lastAt: string;
   /** `<source>:<code>` of the most recent occurrence, e.g. `preferences:SyntaxError`. */
   detail: string;
+  /** #557 — ledger_entry_invalid only: the most recent run's affected indices (≤ 8). */
+  indices?: number[];
 }
 
 export const PREFLIGHT_FAILURES_FIELD = "preflightFailures";
 /** Counts saturate here rather than grow without bound. */
 export const PREFLIGHT_FAILURE_COUNT_CAP = 1_000_000;
 const DETAIL_MAX = 64;
+/** At most this many skipped-entry indices are kept. */
+export const PREFLIGHT_FAILURE_INDICES_CAP = 8;
+
+function boundedIndices(v: unknown): number[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out = v.filter((i): i is number => Number.isInteger(i) && i >= 0 && i < 1_000_000).slice(0, PREFLIGHT_FAILURE_INDICES_CAP);
+  return out.length > 0 ? out : undefined;
+}
 
 const CLASS_SET: ReadonlySet<string> = new Set(PREFLIGHT_FAILURE_CLASSES);
 const SOURCE_SET: ReadonlySet<string> = new Set(PREFLIGHT_FAILURE_SOURCES);
@@ -163,7 +178,8 @@ export function readPreflightFailures(state: unknown): Partial<Record<PreflightF
     const count = typeof e.count === "number" && Number.isFinite(e.count) ? Math.max(0, Math.min(Math.floor(e.count), PREFLIGHT_FAILURE_COUNT_CAP)) : 0;
     if (count === 0 || !validIso(e.firstAt) || !validIso(e.lastAt)) continue;
     const detail = typeof e.detail === "string" && /^[a-z]+:[A-Za-z0-9_]{1,40}$/.test(e.detail) ? e.detail : "hook:Error";
-    out[cls] = { count, firstAt: e.firstAt, lastAt: e.lastAt, detail };
+    const indices = boundedIndices(e.indices);
+    out[cls] = { count, firstAt: e.firstAt, lastAt: e.lastAt, detail, ...(indices ? { indices } : {}) };
   }
   return out;
 }
@@ -180,11 +196,13 @@ export function applyPreflightFailures(state: Record<string, unknown>, notes: re
   }
   for (const [cls, note] of seen) {
     const prev = current[cls];
+    const indices = boundedIndices(note.indices);
     current[cls] = {
       count: Math.min((prev?.count ?? 0) + 1, PREFLIGHT_FAILURE_COUNT_CAP),
       firstAt: prev?.firstAt ?? iso,
       lastAt: iso,
       detail: sanitizeDetail(note),
+      ...(indices ? { indices } : {}),
     };
   }
   state[PREFLIGHT_FAILURES_FIELD] = current;

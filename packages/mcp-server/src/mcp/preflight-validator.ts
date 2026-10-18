@@ -866,3 +866,79 @@ export function runPreflight(input: PreflightInput): PreflightResult {
     },
   };
 }
+
+// ===========================================================================
+// #557 — one malformed ledger entry must not disable every stance.
+// ===========================================================================
+
+/**
+ * The concept a stored entry can actually be matched on. A string is kept as
+ * is; `null`/`undefined` stay as they are (the matcher already falls back to
+ * the description); the option-schema shape `{ name: "…" }` yields its name.
+ * Anything else (a number, an array, a boolean, another object) is treated as
+ * ABSENT, so the entry still matches on its description. `changed` says the
+ * stored value was not usable as written.
+ */
+export function coerceStanceConcept(concept: unknown): { concept: string | null | undefined; changed: boolean } {
+  if (concept === undefined || concept === null || typeof concept === "string") return { concept, changed: false };
+  if (typeof concept === "object" && !Array.isArray(concept)) {
+    const name = (concept as { name?: unknown }).name;
+    if (typeof name === "string" && name.trim()) return { concept: name, changed: true };
+  }
+  return { concept: undefined, changed: true };
+}
+
+export interface GuardedPreflightResult {
+  result: PreflightResult;
+  /** Entries whose concept was unusable and was ignored or coerced (the entry still matched). */
+  coerced: number[];
+  /** Entries dropped because the matcher still threw on them. */
+  skipped: number[];
+}
+
+/**
+ * runPreflight, hardened per entry. Shared by the PreToolUse hook core (both
+ * emitters) and the MCP-side present_* gate.
+ *
+ *   1. each entry's concept is made matchable (coerceStanceConcept); a fully
+ *      valid ledger passes through untouched, as the very same objects;
+ *   2. the matcher runs ONCE over the whole ledger — for a fully valid ledger
+ *      this is exactly the call it always was, so its output is unchanged;
+ *   3. only if that call throws is each entry probed alone (try/catch per
+ *      entry); entries that still throw are dropped and the matcher runs once
+ *      more over the survivors. If no single entry is to blame, the original
+ *      error propagates unchanged.
+ *
+ * `indexOf` maps a position in `rejectedApproaches` to the index the caller
+ * wants to report (the hook reports the file's array index).
+ */
+export function runPreflightGuarded(input: PreflightInput, indexOf: (i: number) => number = (i) => i): GuardedPreflightResult {
+  const coerced: number[] = [];
+  const skipped: number[] = [];
+  let entries = input.rejectedApproaches.map((entry, i) => {
+    const c = coerceStanceConcept((entry as { concept?: unknown }).concept);
+    if (!c.changed) return { entry, i };
+    coerced.push(indexOf(i));
+    return { entry: { ...entry, concept: c.concept ?? undefined } as RejectedApproach, i };
+  });
+  const run = (list: typeof entries, team = input.teamPreferences) =>
+    runPreflight({ ...input, rejectedApproaches: list.map((e) => e.entry), teamPreferences: team });
+  let result: PreflightResult;
+  try {
+    result = run(entries);
+  } catch (err) {
+    const survivors = entries.filter((e) => {
+      try {
+        runPreflight({ toolName: input.toolName, proposalStrings: input.proposalStrings, proposalPaths: input.proposalPaths, proposalConcepts: input.proposalConcepts, rejectedApproaches: [e.entry], teamPreferences: [] });
+        return true;
+      } catch {
+        skipped.push(indexOf(e.i));
+        return false;
+      }
+    });
+    if (survivors.length === entries.length) throw err; // not an entry fault: unchanged
+    entries = survivors;
+    result = run(entries);
+  }
+  return { result, coerced: coerced.sort((a, b) => a - b), skipped: skipped.sort((a, b) => a - b) };
+}

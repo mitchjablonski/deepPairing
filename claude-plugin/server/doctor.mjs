@@ -18115,6 +18115,9 @@ var PREFLIGHT_FAILURE_CLASSES = [
   "input_malformed",
   "ledger_unreadable",
   "ledger_corrupt",
+  // #557 — a ledger entry the matcher can't fully read: its concept ignored or
+  // coerced, or (if the matcher still throws) the entry skipped; the rest enforce.
+  "ledger_entry_invalid",
   "matcher_import_failed",
   "evaluator_threw",
   "session_store_unreadable"
@@ -18133,6 +18136,12 @@ var PREFLIGHT_FAILURE_SOURCES = [
 ];
 var PREFLIGHT_FAILURES_FIELD = "preflightFailures";
 var PREFLIGHT_FAILURE_COUNT_CAP = 1e6;
+var PREFLIGHT_FAILURE_INDICES_CAP = 8;
+function boundedIndices(v) {
+  if (!Array.isArray(v)) return void 0;
+  const out = v.filter((i) => Number.isInteger(i) && i >= 0 && i < 1e6).slice(0, PREFLIGHT_FAILURE_INDICES_CAP);
+  return out.length > 0 ? out : void 0;
+}
 var CLASS_SET = new Set(PREFLIGHT_FAILURE_CLASSES);
 var SOURCE_SET = new Set(PREFLIGHT_FAILURE_SOURCES);
 function validIso(v) {
@@ -18148,7 +18157,8 @@ function readPreflightFailures(state) {
     const count2 = typeof e.count === "number" && Number.isFinite(e.count) ? Math.max(0, Math.min(Math.floor(e.count), PREFLIGHT_FAILURE_COUNT_CAP)) : 0;
     if (count2 === 0 || !validIso(e.firstAt) || !validIso(e.lastAt)) continue;
     const detail = typeof e.detail === "string" && /^[a-z]+:[A-Za-z0-9_]{1,40}$/.test(e.detail) ? e.detail : "hook:Error";
-    out[cls] = { count: count2, firstAt: e.firstAt, lastAt: e.lastAt, detail };
+    const indices = boundedIndices(e.indices);
+    out[cls] = { count: count2, firstAt: e.firstAt, lastAt: e.lastAt, detail, ...indices ? { indices } : {} };
   }
   return out;
 }
@@ -18215,8 +18225,9 @@ var PREFLIGHT_FAILURE_MEANING = {
   input_malformed: "Claude Code sent an event the hook could not read, so no check ran for it.",
   ledger_unreadable: "a ledger file (.deeppairing/preferences.json or team.json) exists but could not be read, so its rules were not checked.",
   ledger_corrupt: "a ledger file (.deeppairing/preferences.json or team.json) is not valid JSON or has the wrong shape, so its rules were not checked.",
+  ledger_entry_invalid: "a .deeppairing/preferences.json entry has a concept the matcher can't read (for example a number); it was ignored, so the entry matched on its description, or the entry was skipped if nothing usable remained. Every other stance still enforced.",
   matcher_import_failed: "the init-installed hook could not load part of the matcher; rebuild deepPairing, then start a session so the hook is re-stamped.",
-  evaluator_threw: "the matcher threw while checking an edit (often one ill-typed ledger entry), so the whole check was skipped.",
+  evaluator_threw: "the matcher threw while checking an edit, for a reason no single ledger entry explains, so the whole check was skipped.",
   session_store_unreadable: "no session store could be read, so the guardrail backstop stayed silent."
 };
 function missingPreflightStamps(cwd) {
@@ -18265,7 +18276,7 @@ function preflightDoctorLines(report) {
       mark: "warn",
       text: "Preflight failures recorded. Each one failed open: the edit went ahead without that part of the check, exactly as before.",
       details: report.failures.flatMap(({ cls, entry: entry2 }) => [
-        `${cls} \xD7${entry2.count} (${entry2.detail}; first ${entry2.firstAt}, last ${entry2.lastAt})`,
+        `${cls} \xD7${entry2.count} (${entry2.detail}${entry2.indices ? `, entries ${entry2.indices.join(", ")}` : ""}; first ${entry2.firstAt}, last ${entry2.lastAt})`,
         `  ${PREFLIGHT_FAILURE_MEANING[cls]}`
       ])
     });

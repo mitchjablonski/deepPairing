@@ -538,6 +538,43 @@ Team rationale: "${pref.rationale}"${attribution}.${scope}
     }
   };
 }
+function coerceStanceConcept(concept) {
+  if (concept === void 0 || concept === null || typeof concept === "string") return { concept, changed: false };
+  if (typeof concept === "object" && !Array.isArray(concept)) {
+    const name = concept.name;
+    if (typeof name === "string" && name.trim()) return { concept: name, changed: true };
+  }
+  return { concept: void 0, changed: true };
+}
+function runPreflightGuarded(input2, indexOf = (i) => i) {
+  const coerced = [];
+  const skipped = [];
+  let entries = input2.rejectedApproaches.map((entry, i) => {
+    const c = coerceStanceConcept(entry.concept);
+    if (!c.changed) return { entry, i };
+    coerced.push(indexOf(i));
+    return { entry: { ...entry, concept: c.concept ?? void 0 }, i };
+  });
+  const run = (list, team = input2.teamPreferences) => runPreflight({ ...input2, rejectedApproaches: list.map((e) => e.entry), teamPreferences: team });
+  let result;
+  try {
+    result = run(entries);
+  } catch (err) {
+    const survivors = entries.filter((e) => {
+      try {
+        runPreflight({ toolName: input2.toolName, proposalStrings: input2.proposalStrings, proposalPaths: input2.proposalPaths, proposalConcepts: input2.proposalConcepts, rejectedApproaches: [e.entry], teamPreferences: [] });
+        return true;
+      } catch {
+        skipped.push(indexOf(e.i));
+        return false;
+      }
+    });
+    if (survivors.length === entries.length) throw err;
+    entries = survivors;
+    result = run(entries);
+  }
+  return { result, coerced: coerced.sort((a, b) => a - b), skipped: skipped.sort((a, b) => a - b) };
+}
 
 // src/debrief-gate.ts
 var PRE_WORK_CEREMONY_TYPES = ["research", "decision", "spec", "plan"];
@@ -667,6 +704,9 @@ var PREFLIGHT_FAILURE_CLASSES = [
   "input_malformed",
   "ledger_unreadable",
   "ledger_corrupt",
+  // #557 — a ledger entry the matcher can't fully read: its concept ignored or
+  // coerced, or (if the matcher still throws) the entry skipped; the rest enforce.
+  "ledger_entry_invalid",
   "matcher_import_failed",
   "evaluator_threw",
   "session_store_unreadable"
@@ -686,6 +726,12 @@ var PREFLIGHT_FAILURE_SOURCES = [
 var PREFLIGHT_FAILURES_FIELD = "preflightFailures";
 var PREFLIGHT_FAILURE_COUNT_CAP = 1e6;
 var DETAIL_MAX = 64;
+var PREFLIGHT_FAILURE_INDICES_CAP = 8;
+function boundedIndices(v) {
+  if (!Array.isArray(v)) return void 0;
+  const out = v.filter((i) => Number.isInteger(i) && i >= 0 && i < 1e6).slice(0, PREFLIGHT_FAILURE_INDICES_CAP);
+  return out.length > 0 ? out : void 0;
+}
 var CLASS_SET = new Set(PREFLIGHT_FAILURE_CLASSES);
 var SOURCE_SET = new Set(PREFLIGHT_FAILURE_SOURCES);
 var CODE_RE = /^[A-Za-z][A-Za-z0-9_]{0,39}$/;
@@ -746,7 +792,8 @@ function readPreflightFailures(state) {
     const count = typeof e.count === "number" && Number.isFinite(e.count) ? Math.max(0, Math.min(Math.floor(e.count), PREFLIGHT_FAILURE_COUNT_CAP)) : 0;
     if (count === 0 || !validIso(e.firstAt) || !validIso(e.lastAt)) continue;
     const detail = typeof e.detail === "string" && /^[a-z]+:[A-Za-z0-9_]{1,40}$/.test(e.detail) ? e.detail : "hook:Error";
-    out[cls] = { count, firstAt: e.firstAt, lastAt: e.lastAt, detail };
+    const indices = boundedIndices(e.indices);
+    out[cls] = { count, firstAt: e.firstAt, lastAt: e.lastAt, detail, ...indices ? { indices } : {} };
   }
   return out;
 }
@@ -759,11 +806,13 @@ function applyPreflightFailures(state, notes, now) {
   }
   for (const [cls, note] of seen) {
     const prev = current[cls];
+    const indices = boundedIndices(note.indices);
     current[cls] = {
       count: Math.min((prev?.count ?? 0) + 1, PREFLIGHT_FAILURE_COUNT_CAP),
       firstAt: prev?.firstAt ?? iso,
       lastAt: iso,
-      detail: sanitizeDetail(note)
+      detail: sanitizeDetail(note),
+      ...indices ? { indices } : {}
     };
   }
   state[PREFLIGHT_FAILURES_FIELD] = current;
@@ -1000,7 +1049,7 @@ function toolInputTargetsDeeppairingState(projectRoot, toolInput) {
 }
 
 // src/cli/preflight-hook-core.ts
-function readRejectedApproaches(projectRoot, failures) {
+function readRejectedApproachEntries(projectRoot, failures) {
   const p = path4.join(projectRoot, ".deeppairing", "preferences.json");
   try {
     if (!fs4.existsSync(p)) return [];
@@ -1010,15 +1059,16 @@ function readRejectedApproaches(projectRoot, failures) {
       pushFailure(failures, noteFailure("schema", "preferences"));
     }
     if (!Array.isArray(list)) return [];
-    return list.map(
-      (e) => typeof e === "string" ? { description: e } : {
+    return list.map((e, index) => ({
+      index,
+      entry: typeof e === "string" ? { description: e } : {
         description: String(e?.description ?? ""),
         reason: e?.reason,
         rejectedAt: e?.rejectedAt,
         sourceArtifactId: e?.sourceArtifactId,
         concept: e?.concept
       }
-    ).filter((r) => r.description);
+    })).filter((r) => r.entry.description);
   } catch (err) {
     pushFailure(failures, noteFailure("ledger", "preferences", err));
     return [];
@@ -1260,6 +1310,23 @@ function evaluateDeeppairingState(args) {
     return null;
   }
 }
+function runPreflightSkippingBadEntries(args) {
+  const { result, coerced, skipped } = runPreflightGuarded(
+    {
+      toolName: args.toolName,
+      proposalStrings: args.proposalStrings,
+      proposalPaths: args.proposalPaths,
+      rejectedApproaches: args.entries.map((e) => e.entry),
+      teamPreferences: args.teamPreferences
+    },
+    (i) => args.entries[i].index
+  );
+  const indices = [.../* @__PURE__ */ new Set([...coerced, ...skipped])].sort((a, b) => a - b);
+  if (indices.length > 0) {
+    pushFailure(args.failures, { cls: "ledger_entry_invalid", source: "preferences", tag: skipped.length > 0 ? "skipped" : "concept", indices });
+  }
+  return result;
+}
 function evaluatePreflightHook(args) {
   const decision = evaluateHookGates(args);
   if (!decision.fire) return decision;
@@ -1282,12 +1349,13 @@ function evaluateHookGates(args) {
   if (toolName === "NotebookEdit") return state ?? { fire: false };
   const { strings, paths } = buildProposals(toolName, toolInput);
   if (strings.length === 0) return state ?? { fire: false };
-  const result = runPreflight({
+  const result = runPreflightSkippingBadEntries({
     toolName,
     proposalStrings: strings,
     proposalPaths: paths,
-    rejectedApproaches: readRejectedApproaches(projectRoot, failures),
-    teamPreferences: readTeamPreferences(projectRoot, failures)
+    entries: readRejectedApproachEntries(projectRoot, failures),
+    teamPreferences: readTeamPreferences(projectRoot, failures),
+    failures
   });
   if (result.blocked) {
     const reason = args.mode === "strict-stop" ? strictRejectionReason(result.block) : toHookReason(result.block.message);
