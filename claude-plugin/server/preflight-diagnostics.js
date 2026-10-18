@@ -110,6 +110,8 @@ var PREFLIGHT_FAILURE_CLASSES = [
   "input_malformed",
   "ledger_unreadable",
   "ledger_corrupt",
+  // #557 — one ledger entry the matcher can't read, skipped so the rest enforce.
+  "ledger_entry_skipped",
   "matcher_import_failed",
   "evaluator_threw",
   "session_store_unreadable"
@@ -129,6 +131,12 @@ var PREFLIGHT_FAILURE_SOURCES = [
 var PREFLIGHT_FAILURES_FIELD = "preflightFailures";
 var PREFLIGHT_FAILURE_COUNT_CAP = 1e6;
 var DETAIL_MAX = 64;
+var PREFLIGHT_FAILURE_INDICES_CAP = 8;
+function boundedIndices(v) {
+  if (!Array.isArray(v)) return void 0;
+  const out = v.filter((i) => Number.isInteger(i) && i >= 0 && i < 1e6).slice(0, PREFLIGHT_FAILURE_INDICES_CAP);
+  return out.length > 0 ? out : void 0;
+}
 var CLASS_SET = new Set(PREFLIGHT_FAILURE_CLASSES);
 var SOURCE_SET = new Set(PREFLIGHT_FAILURE_SOURCES);
 var CODE_RE = /^[A-Za-z][A-Za-z0-9_]{0,39}$/;
@@ -189,7 +197,8 @@ function readPreflightFailures(state) {
     const count = typeof e.count === "number" && Number.isFinite(e.count) ? Math.max(0, Math.min(Math.floor(e.count), PREFLIGHT_FAILURE_COUNT_CAP)) : 0;
     if (count === 0 || !validIso(e.firstAt) || !validIso(e.lastAt)) continue;
     const detail = typeof e.detail === "string" && /^[a-z]+:[A-Za-z0-9_]{1,40}$/.test(e.detail) ? e.detail : "hook:Error";
-    out[cls] = { count, firstAt: e.firstAt, lastAt: e.lastAt, detail };
+    const indices = boundedIndices(e.indices);
+    out[cls] = { count, firstAt: e.firstAt, lastAt: e.lastAt, detail, ...indices ? { indices } : {} };
   }
   return out;
 }
@@ -202,11 +211,13 @@ function applyPreflightFailures(state, notes, now) {
   }
   for (const [cls, note] of seen) {
     const prev = current[cls];
+    const indices = boundedIndices(note.indices);
     current[cls] = {
       count: Math.min((prev?.count ?? 0) + 1, PREFLIGHT_FAILURE_COUNT_CAP),
       firstAt: prev?.firstAt ?? iso,
       lastAt: iso,
-      detail: sanitizeDetail(note)
+      detail: sanitizeDetail(note),
+      ...indices ? { indices } : {}
     };
   }
   state[PREFLIGHT_FAILURES_FIELD] = current;
@@ -223,6 +234,7 @@ export {
   PREFLIGHT_FAILURES_FIELD,
   PREFLIGHT_FAILURE_CLASSES,
   PREFLIGHT_FAILURE_COUNT_CAP,
+  PREFLIGHT_FAILURE_INDICES_CAP,
   PREFLIGHT_FAILURE_SOURCES,
   applyPreflightFailures,
   failureCode,
