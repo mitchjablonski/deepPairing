@@ -1,0 +1,1 @@
+import{t as e}from"./react-8WGa6fCp.js";var t=e(e=>({message:``,seq:0,announce:t=>e(e=>({message:t,seq:e.seq+1}))}));function n(e){t.getState().announce(e)}export{t as n,n as t};

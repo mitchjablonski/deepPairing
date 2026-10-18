@@ -84,7 +84,11 @@ describe.each(["init", "plugin"] as const)("#544 %s mode contract", copy => {
       expect(result.stdout).toBe(JSON.stringify({ systemMessage: decision.reason, hookSpecificOutput: {
         hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: decision.reason,
       } }));
-      expect(fire).toEqual({ at: expect.any(String), hook: "preflight", kind: "ask", reason: "session" });
+      // #544 — plus the companion's gate record (stance, reason, tool, target).
+      expect(fire).toEqual({
+        at: expect.any(String), hook: "preflight", kind: "ask", reason: "session", id: expect.stringMatching(/^hf_/),
+        gate: { decision: "ask", source: "session", concept: "global mutable state", reason: "Keep configuration explicit", via: "surface", tool: "Write", target: "src/config.ts" },
+      });
     }
   });
 
