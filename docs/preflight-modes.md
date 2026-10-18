@@ -104,7 +104,7 @@ byte-identical, and a fault that was a no-fire stays a no-fire.
 | `input_malformed` | The hook event was not JSON, or not an object |
 | `ledger_unreadable` | `preferences.json` or `team.json` exists but could not be read |
 | `ledger_corrupt` | One of those files is not JSON, or has the wrong shape (for `team.json`, any bad entry) |
-| `ledger_entry_skipped` | A `preferences.json` entry the matcher can't read (for example, a non-string `concept`) was skipped, recorded by index; every other stance still enforced ([#557](https://github.com/mitchjablonski/deepPairing/issues/557)) |
+| `ledger_entry_invalid` | A `preferences.json` entry has a concept the matcher can't read (for example, a number). The concept is ignored, so the entry still matches on its description, and `{ name }` is read as its name. An entry the matcher still throws on is skipped. Recorded by index; every other stance still enforces ([#557](https://github.com/mitchjablonski/deepPairing/issues/557)). The `present_*` gate uses the same guard |
 | `matcher_import_failed` | The init-generated hook could not import the matcher core or the rule leaf |
 | `evaluator_threw` | The matcher threw for a reason no single ledger entry explains, so the check was skipped |
 | `session_store_unreadable` | No session store could be read, so the guardrail backstop stayed silent |

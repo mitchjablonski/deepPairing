@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { runPreflight, type PreflightBlock } from "../mcp/preflight-validator.js";
+import { runPreflight, runPreflightGuarded, type PreflightBlock } from "../mcp/preflight-validator.js";
 import { sessionHasLivePreWorkCeremony } from "../debrief-gate.js";
 import { appendHookFire, hookStatePath } from "../hooks/hook-state.js";
 // #546 — the failure taxonomy + its bounded, redacted hooks-state record. Both
@@ -793,27 +793,16 @@ export function evaluateDeeppairingState(args: { toolInput: unknown; projectRoot
   }
 }
 
-/** #557 — a stored concept the matcher can read: absent, or a string. (null
- *  is "absent": runPreflight falls back to the description via `??`.) */
-function entryConceptUsable(entry: RejectedApproach): boolean {
-  const c = (entry as { concept?: unknown }).concept;
-  return c === undefined || c === null || typeof c === "string";
-}
-
 /**
- * #557 — one malformed ledger entry used to make runPreflight throw, and the
- * hook's fail-open turned that into a no-fire for EVERY stance. Now:
+ * #557 — the hook's view of runPreflightGuarded (preflight-validator.ts, shared
+ * with the MCP-side gate): a non-string concept is ignored (or, for the
+ * `{ name }` option shape, coerced) so the entry still matches on what it has;
+ * an entry the matcher still throws on is dropped; every other stance enforces.
+ * A fully valid ledger takes the original single call, unchanged.
  *
- *   1. an entry whose concept is not a string is skipped up front;
- *   2. the matcher runs once over everything else — for a fully valid ledger
- *      this is exactly the call it always was, so its output is unchanged;
- *   3. only if that call still throws is each remaining entry probed alone
- *      (try/catch per entry); the ones that throw are skipped and the matcher
- *      runs once more over the survivors. If no single entry is to blame, the
- *      original error propagates, exactly as before.
- *
- * Skipped entries are recorded by INDEX and class only (ledger_entry_skipped),
- * through #546's preflightFailures; their content never leaves the file.
+ * Either outcome is recorded by INDEX and class only (ledger_entry_invalid,
+ * detail `preferences:skipped` when anything was dropped, else
+ * `preferences:concept`), through #546's preflightFailures; no content.
  */
 export function runPreflightSkippingBadEntries(args: {
   toolName: string;
@@ -823,34 +812,19 @@ export function runPreflightSkippingBadEntries(args: {
   teamPreferences: TeamPreference[];
   failures?: PreflightFailureSink;
 }): ReturnType<typeof runPreflight> {
-  const { toolName, proposalStrings, proposalPaths, teamPreferences } = args;
-  const run = (list: Array<{ entry: RejectedApproach }>, team: TeamPreference[] = teamPreferences) =>
-    runPreflight({ toolName, proposalStrings, proposalPaths, rejectedApproaches: list.map((e) => e.entry), teamPreferences: team });
-  const skipped: number[] = [];
-  let usable = args.entries.filter((e) => {
-    if (entryConceptUsable(e.entry)) return true;
-    skipped.push(e.index);
-    return false;
-  });
-  let result: ReturnType<typeof runPreflight>;
-  try {
-    result = run(usable);
-  } catch (err) {
-    const survivors = usable.filter((e) => {
-      try {
-        run([e], []);
-        return true;
-      } catch {
-        skipped.push(e.index);
-        return false;
-      }
-    });
-    if (survivors.length === usable.length) throw err; // not an entry fault: unchanged
-    usable = survivors;
-    result = run(usable);
-  }
-  if (skipped.length > 0) {
-    pushFailure(args.failures, { cls: "ledger_entry_skipped", source: "preferences", tag: "entry", indices: skipped.sort((a, b) => a - b) });
+  const { result, coerced, skipped } = runPreflightGuarded(
+    {
+      toolName: args.toolName,
+      proposalStrings: args.proposalStrings,
+      proposalPaths: args.proposalPaths,
+      rejectedApproaches: args.entries.map((e) => e.entry),
+      teamPreferences: args.teamPreferences,
+    },
+    (i) => args.entries[i]!.index,
+  );
+  const indices = [...new Set([...coerced, ...skipped])].sort((a, b) => a - b);
+  if (indices.length > 0) {
+    pushFailure(args.failures, { cls: "ledger_entry_invalid", source: "preferences", tag: skipped.length > 0 ? "skipped" : "concept", indices });
   }
   return result;
 }

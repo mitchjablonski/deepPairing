@@ -96,7 +96,7 @@ function failures(root: string): Record<string, { count: number; detail: string 
 describe("#546 taxonomy", () => {
   it("is a small fixed set with no nonmatch class", () => {
     expect([...PREFLIGHT_FAILURE_CLASSES]).toEqual([
-      "input_malformed", "ledger_unreadable", "ledger_corrupt", "ledger_entry_skipped", "matcher_import_failed", "evaluator_threw", "session_store_unreadable",
+      "input_malformed", "ledger_unreadable", "ledger_corrupt", "ledger_entry_invalid", "matcher_import_failed", "evaluator_threw", "session_store_unreadable",
     ]);
   });
 
@@ -309,11 +309,11 @@ describe("#546 doctor: failures and mode provenance", () => {
     const report = buildPreflightDoctorReport(root, { homeDir: home, env: {} });
     expect(report.failures.map((f) => [f.cls, f.entry.count, f.entry.detail])).toEqual([
       ["input_malformed", 1, "stdin:SyntaxError"],
-      ["ledger_entry_skipped", 2, "preferences:entry"],
+      ["ledger_entry_invalid", 2, "preferences:concept"],
     ]);
     const [first] = preflightDoctorLines(report);
     expect(first.mark).toBe("warn");
-    expect(first.details.join("\n")).toContain("ledger_entry_skipped ×2 (preferences:entry, entries 0;");
+    expect(first.details.join("\n")).toContain("ledger_entry_invalid ×2 (preferences:concept, entries 0;");
   });
 
   it("is read-only, even over a corrupt hooks-state", () => {

@@ -205,7 +205,7 @@ const CASES: Case[] = [
     stdout: "", stderr: "", diag: ["ledger_unreadable", "team:EISDIR"],
   },
   {
-    name: "C11 a parseable ledger entry with a non-string concept (#557: now skipped, the valid stance asks)",
+    name: "C11 a parseable ledger entry with a non-string concept (#557: concept ignored, the valid stance asks)",
     setup: (root) => {
       fs.writeFileSync(path.join(root, ".deeppairing", "preferences.json"), JSON.stringify({ rejectedApproaches: [
         { description: REJECTED, reason: "Keep configuration explicit" },
@@ -213,9 +213,9 @@ const CASES: Case[] = [
       ] }));
       return write(root);
     },
-    // #557 — was: stdout "", stderr error line, evaluator_threw. The bad entry
-    // (index 1) is skipped and the valid stance at index 0 now asks.
-    stdout: "ask", stderr: "", diag: ["ledger_entry_skipped", "preferences:entry"], changedBy557: true,
+    // #557 — was: stdout "", stderr error line, evaluator_threw. The bad
+    // concept (index 1) is ignored and the valid stance at index 0 now asks.
+    stdout: "ask", stderr: "", diag: ["ledger_entry_invalid", "preferences:concept"], changedBy557: true,
   },
   {
     name: "C12 guardrail path, every session store unparseable: backstop fails open",

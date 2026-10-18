@@ -8,7 +8,7 @@ import {
   ELICIT_APPROVE_SCHEMA,
   decideElicitResponse,
 } from "./elicit.js";
-import { runPreflight, type PreflightTracePartial } from "./preflight-validator.js";
+import { coerceStanceConcept, runPreflightGuarded, type PreflightTracePartial } from "./preflight-validator.js";
 import { getAdvisoryRecall, tokenSetKey } from "./advisory-recall.js";
 import { stableStringify, sameStance } from "./proposal-resolution.js";
 
@@ -197,7 +197,9 @@ export async function preflightRejectedApproaches(
   // keyed on tokenSetKey (the matcher's own basis; see advisory-recall.ts).
   const localKeys = new Set<string>();
   for (const r of memory.rejectedApproaches) {
-    const k = tokenSetKey(r.concept ?? r.description);
+    // #557 — a stored concept that isn't a string is matched as absent (or as
+    // its `{ name }`), never fed to the tokenizer raw.
+    const k = tokenSetKey(coerceStanceConcept(r.concept).concept ?? r.description);
     if (k) localKeys.add(k);
   }
   for (const a of memory.approvedPatterns) {
@@ -218,7 +220,10 @@ export async function preflightRejectedApproaches(
     ? []
     : getAdvisoryRecall().conceptsFor({ localConceptKeys: localKeys });
 
-  const result = runPreflight({
+  // #557 — hardened per entry, the same guard the PreToolUse hook uses: one
+  // malformed ledger row must not throw the whole present_* call (it used to:
+  // "s.toLowerCase is not a function") and so silence every stance.
+  const guarded = runPreflightGuarded({
     toolName,
     proposalStrings,
     proposalPaths,
@@ -227,6 +232,17 @@ export async function preflightRejectedApproaches(
     teamPreferences: teamPrefs,
     globalAdvisoryConcepts,
   });
+  const result = guarded.result;
+  if (guarded.coerced.length > 0 || guarded.skipped.length > 0) {
+    // A count only — never the entry's content.
+    const bad = new Set([...guarded.coerced, ...guarded.skipped]).size;
+    try {
+      process.stderr.write(`[deepPairing] preferences.json: ${bad} rejected-approach entr${bad === 1 ? "y has" : "ies have"} an unreadable concept; ` +
+        `matched on what remained${guarded.skipped.length > 0 ? ` (${guarded.skipped.length} skipped)` : ""}. Check .deeppairing/preferences.json.\n`);
+    } catch {
+      /* never */
+    }
+  }
 
   if (!result.blocked) {
     // Phase-1 (D) — instrument the residual. A LOCAL near-miss that was ADMITTED

@@ -32,8 +32,9 @@ export const PREFLIGHT_FAILURE_CLASSES = [
   "input_malformed",
   "ledger_unreadable",
   "ledger_corrupt",
-  // #557 — one ledger entry the matcher can't read, skipped so the rest enforce.
-  "ledger_entry_skipped",
+  // #557 — a ledger entry the matcher can't fully read: its concept ignored or
+  // coerced, or (if the matcher still throws) the entry skipped; the rest enforce.
+  "ledger_entry_invalid",
   "matcher_import_failed",
   "evaluator_threw",
   "session_store_unreadable",
@@ -60,7 +61,7 @@ export interface PreflightFailureNote {
   source: PreflightFailureSource;
   /** An errno code (`EACCES`), an error constructor name (`SyntaxError`), or "schema"/"corrupt"/"shape". */
   tag: string;
-  /** #557 — for ledger_entry_skipped: the skipped entries' array indices. */
+  /** #557 — for ledger_entry_invalid: the affected entries' array indices. */
   indices?: number[];
 }
 
@@ -73,7 +74,7 @@ export interface PreflightFailureEntry {
   lastAt: string;
   /** `<source>:<code>` of the most recent occurrence, e.g. `preferences:SyntaxError`. */
   detail: string;
-  /** #557 — ledger_entry_skipped only: the most recent run's skipped indices (≤ 8). */
+  /** #557 — ledger_entry_invalid only: the most recent run's affected indices (≤ 8). */
   indices?: number[];
 }
 

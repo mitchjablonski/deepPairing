@@ -3,7 +3,9 @@
  *
  * Before: a single `preferences.json` entry with a non-string `concept` made
  * runPreflight throw, the hook failed open, and NO stance enforced. Now the
- * entry is skipped (recorded by index + class, no content) and every valid
+ * unusable concept is ignored (or, for `{ name }`, coerced), so the entry still
+ * matches on its description; an entry the matcher still throws on is skipped.
+ * Either way it is recorded by index + class (no content) and every valid
  * stance still asks — or, in strict-stop, denies. Both emitters, real
  * processes, real files; no mocks.
  */
@@ -69,7 +71,7 @@ function setup(copy: "init" | "plugin", entries: unknown[]) {
     return r.stdout ? JSON.parse(r.stdout) : null;
   };
   const stateText = () => fs.readFileSync(path.join(root, ".deeppairing", "hooks-state.json"), "utf8");
-  const skipped = () => JSON.parse(stateText()).preflightFailures?.ledger_entry_skipped;
+  const skipped = () => JSON.parse(stateText()).preflightFailures?.ledger_entry_invalid;
   return { root, run, stateText, skipped };
 }
 
@@ -83,12 +85,30 @@ describe.skipIf(!distBuilt).each(["init", "plugin"] as const)("#557 (%s copy)", 
     expect(out.hookSpecificOutput.permissionDecision).toBe(decision);
     expect(out.hookSpecificOutput.permissionDecisionReason).toContain("REJECTED_APPROACH_BLOCKED");
     expect(out.hookSpecificOutput.permissionDecisionReason).not.toContain(SECRET);
-    expect(f.skipped()).toMatchObject({ count: 1, detail: "preferences:entry", indices: [0] });
+    expect(f.skipped()).toMatchObject({ count: 1, detail: "preferences:concept", indices: [0] });
     expect(f.stateText()).not.toContain(SECRET);
     expect(JSON.parse(f.stateText()).preflightFailures.evaluator_threw).toBeUndefined();
   });
 
-  it("several bad entries are skipped; each valid stance still enforces", () => {
+  it.each([
+    { mode: undefined, decision: "ask" },
+    { mode: "strict-stop", decision: "deny" },
+  ])("a bad concept is ignored, not the entry: it still enforces on its description (mode=$mode)", ({ mode, decision }) => {
+    const f = setup(copy, [{ description: "global mutable state", concept: 42, reason: "explicit" }]);
+    expect(f.run("global mutable state", mode).hookSpecificOutput.permissionDecision).toBe(decision);
+    expect(f.run("const n = 1", mode)).toBeNull();
+    expect(f.skipped()).toMatchObject({ count: 2, detail: "preferences:concept", indices: [0] });
+  });
+
+  it("the option-schema shape { name } is coerced to its name and matched", () => {
+    const f = setup(copy, [{ description: "an unrelated description", concept: { name: "global mutable state", rationale: "x" } }]);
+    const out = f.run("global mutable state");
+    expect(out.hookSpecificOutput.permissionDecision).toBe("ask");
+    expect(out.hookSpecificOutput.permissionDecisionReason).toContain("global mutable state");
+    expect(f.skipped()).toMatchObject({ detail: "preferences:concept", indices: [0] });
+  });
+
+  it("several bad entries are made matchable; each valid stance still enforces", () => {
     const f = setup(copy, [BAD(0), { description: "redis cache layer", reason: "heavy" }, BAD(1), VALID, BAD(2), BAD(3)]);
     expect(f.run("global mutable state").hookSpecificOutput.permissionDecision).toBe("ask");
     expect(f.run("add a redis cache layer here").hookSpecificOutput.permissionDecision).toBe("ask");
@@ -96,7 +116,7 @@ describe.skipIf(!distBuilt).each(["init", "plugin"] as const)("#557 (%s copy)", 
     expect(f.skipped()).toMatchObject({ count: 3, indices: [0, 2, 4, 5] });
   });
 
-  it("an all-bad ledger skips everything and stays silent, recording the skip", () => {
+  it("an all-bad ledger whose descriptions match nothing stays silent, recording the entries", () => {
     const f = setup(copy, [BAD(0), BAD(1)]);
     expect(f.run("global mutable state")).toBeNull();
     expect(f.skipped()).toMatchObject({ count: 1, indices: [0, 1] });
@@ -125,9 +145,9 @@ describe("#557 per-entry guard (an entry that passes the type check but still th
 
   it("probes entries one by one, skips the thrower, and still matches the rest", () => {
     const failures: PreflightFailureSink = [];
-    const r = runPreflightSkippingBadEntries({ ...base, entries: [{ entry: hostile, index: 0 }, { entry: VALID, index: 1 }], failures });
+    const r = runPreflightSkippingBadEntries({ ...base, entries: [{ entry: hostile, index: 3 }, { entry: VALID, index: 7 }], failures });
     expect(r.blocked).toBe(true);
-    expect(failures).toEqual([{ cls: "ledger_entry_skipped", source: "preferences", tag: "entry", indices: [0] }]);
+    expect(failures).toEqual([{ cls: "ledger_entry_invalid", source: "preferences", tag: "skipped", indices: [3] }]);
   });
 
   it("an all-valid ledger takes the single original call and notes nothing", () => {
