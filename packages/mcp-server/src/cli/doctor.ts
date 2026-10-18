@@ -12,6 +12,7 @@ import { checkClock } from "./clock-check.js";
 import { detectWorktreeMissingHooks, worktreeMissingHooksMessage } from "../worktree-hooks.js";
 import { ensureGitignoreEntry, ensureStopHook, ensureCheckpointHook, ensurePreflightHook, ensureStanceAllowAskHook, HOOK_MARKERS, detectCrossScopeDpEntries, cleanDpEntriesFromScope, isPluginManaged, diagnoseLocalHooks, diagnoseStanceAllowAskHook, removeStanceAllowAskHook } from "./setup-tasks.js";
 import { inspectLocks, clearDeadLockFile } from "../store/file-lock.js";
+import { buildPreflightDoctorReport, preflightDoctorLines } from "./preflight-doctor.js";
 
 function green(text: string): string {
   return `\x1b[32m${text}\x1b[0m`;
@@ -510,6 +511,18 @@ export async function doctor(cwd: string, opts: { fix?: boolean; yes?: boolean; 
           apply: () => { const r = ensureStanceAllowAskHook(cwd, { backup: true }); return { ok: r.ok, message: r.message }; },
         });
     }
+  }
+
+  // #546 — report-only: recorded preflight failures (each one failed open) and
+  // the preflight mode as far as THIS process can see it, each source labelled.
+  try {
+    for (const line of preflightDoctorLines(buildPreflightDoctorReport(cwd))) {
+      const mark = line.mark === "ok" ? green("✓") : line.mark === "warn" ? yellow("!") : dim("·");
+      console.log(`  ${mark} ${line.text}`);
+      for (const d of line.details) console.log(`    ${dim(d)}`);
+    }
+  } catch (err) {
+    console.log(`  ${dim(`· Could not check preflight diagnostics: ${err}`)}`);
   }
 
   // #538 — report-only: a linked worktree of an initialised checkout has no

@@ -604,16 +604,25 @@ function writeHookStateAtomic(statePath, state) {
   }
 }
 function appendHookFire(statePath, fire, mutate) {
+  mutateHookState(statePath, (state) => {
+    const fires = Array.isArray(state.fires) ? state.fires : [];
+    fires.push(fire);
+    state.fires = fires.slice(-FIRE_LOG_CAP);
+    mutate?.(state);
+  });
+}
+function mutateHookState(statePath, mutate, opts = {}) {
   try {
-    fs2.mkdirSync(path2.dirname(statePath), { recursive: true });
+    if (opts.createDir === false) {
+      if (!fs2.statSync(path2.dirname(statePath)).isDirectory()) return;
+    } else {
+      fs2.mkdirSync(path2.dirname(statePath), { recursive: true });
+    }
     const lock = acquireHookStateLock(statePath);
     try {
       const state = readHookState(statePath);
       state.version = 1;
-      const fires = Array.isArray(state.fires) ? state.fires : [];
-      fires.push(fire);
-      state.fires = fires.slice(-FIRE_LOG_CAP);
-      mutate?.(state);
+      mutate(state);
       writeHookStateAtomic(statePath, state);
     } finally {
       releaseHookStateLock(lock);
@@ -623,6 +632,121 @@ function appendHookFire(statePath, fire, mutate) {
 }
 function hookStatePath(projectRoot) {
   return path2.join(projectRoot, ".deeppairing", "hooks-state.json");
+}
+
+// src/hooks/preflight-diagnostics.ts
+var PREFLIGHT_FAILURE_CLASSES = [
+  "input_malformed",
+  "ledger_unreadable",
+  "ledger_corrupt",
+  "matcher_import_failed",
+  "evaluator_threw",
+  "session_store_unreadable"
+];
+var PREFLIGHT_FAILURE_SOURCES = [
+  "stdin",
+  "preferences",
+  "team",
+  "sessions",
+  "core",
+  "rules",
+  "matcher",
+  "backstop",
+  "state",
+  "hook"
+];
+var PREFLIGHT_FAILURES_FIELD = "preflightFailures";
+var PREFLIGHT_FAILURE_COUNT_CAP = 1e6;
+var DETAIL_MAX = 64;
+var CLASS_SET = new Set(PREFLIGHT_FAILURE_CLASSES);
+var SOURCE_SET = new Set(PREFLIGHT_FAILURE_SOURCES);
+var CODE_RE = /^[A-Za-z][A-Za-z0-9_]{0,39}$/;
+function failureCode(err) {
+  if (typeof err === "object" && err !== null) {
+    const code = err.code;
+    if (typeof code === "string" && CODE_RE.test(code)) return code;
+    const name = err.name;
+    if (typeof name === "string" && CODE_RE.test(name)) return name;
+  }
+  return "Error";
+}
+function hasErrno(err) {
+  const code = typeof err === "object" && err !== null ? err.code : void 0;
+  return typeof code === "string" && /^E[A-Z0-9]+$/.test(code);
+}
+function noteFailure(kind, source, err) {
+  switch (kind) {
+    case "ledger":
+    case "store": {
+      const code = failureCode(err);
+      if (code === "ENOENT" || code === "ENOTDIR") return null;
+      const unreadable = hasErrno(err);
+      if (kind === "store") return { cls: "session_store_unreadable", source, tag: unreadable ? failureCode(err) : "corrupt" };
+      return { cls: unreadable ? "ledger_unreadable" : "ledger_corrupt", source, tag: code };
+    }
+    case "schema":
+      return { cls: "ledger_corrupt", source, tag: "schema" };
+    case "import":
+      return { cls: "matcher_import_failed", source, tag: failureCode(err) };
+    case "evaluate":
+      return { cls: "evaluator_threw", source, tag: failureCode(err) };
+    case "input":
+      return { cls: "input_malformed", source, tag: err === void 0 ? "shape" : failureCode(err) };
+  }
+}
+function pushFailure(sink, note) {
+  try {
+    if (sink && note) sink.push(note);
+  } catch {
+  }
+}
+function sanitizeDetail(note) {
+  const source = SOURCE_SET.has(note.source) ? note.source : "hook";
+  const tag = typeof note.tag === "string" && CODE_RE.test(note.tag) ? note.tag : "Error";
+  return `${source}:${tag}`.slice(0, DETAIL_MAX);
+}
+function validIso(v) {
+  return typeof v === "string" && v.length <= 40 && Number.isFinite(Date.parse(v));
+}
+function readPreflightFailures(state) {
+  const out = {};
+  const field = state && typeof state === "object" ? state[PREFLIGHT_FAILURES_FIELD] : void 0;
+  if (!field || typeof field !== "object" || Array.isArray(field)) return out;
+  for (const cls of PREFLIGHT_FAILURE_CLASSES) {
+    const e = field[cls];
+    if (!e || typeof e !== "object") continue;
+    const count = typeof e.count === "number" && Number.isFinite(e.count) ? Math.max(0, Math.min(Math.floor(e.count), PREFLIGHT_FAILURE_COUNT_CAP)) : 0;
+    if (count === 0 || !validIso(e.firstAt) || !validIso(e.lastAt)) continue;
+    const detail = typeof e.detail === "string" && /^[a-z]+:[A-Za-z0-9_]{1,40}$/.test(e.detail) ? e.detail : "hook:Error";
+    out[cls] = { count, firstAt: e.firstAt, lastAt: e.lastAt, detail };
+  }
+  return out;
+}
+function applyPreflightFailures(state, notes, now) {
+  const current = readPreflightFailures(state);
+  const iso = new Date(now).toISOString();
+  const seen = /* @__PURE__ */ new Map();
+  for (const note of notes) {
+    if (note && CLASS_SET.has(note.cls)) seen.set(note.cls, note);
+  }
+  for (const [cls, note] of seen) {
+    const prev = current[cls];
+    current[cls] = {
+      count: Math.min((prev?.count ?? 0) + 1, PREFLIGHT_FAILURE_COUNT_CAP),
+      firstAt: prev?.firstAt ?? iso,
+      lastAt: iso,
+      detail: sanitizeDetail(note)
+    };
+  }
+  state[PREFLIGHT_FAILURES_FIELD] = current;
+}
+function recordPreflightFailures(projectRoot, notes, now = Date.now()) {
+  try {
+    const real = notes.filter((n) => !!n);
+    if (real.length === 0 || typeof projectRoot !== "string" || !projectRoot) return;
+    mutateHookState(hookStatePath(projectRoot), (state) => applyPreflightFailures(state, real, now), { createDir: false });
+  } catch {
+  }
 }
 
 // src/guardrail-rules.ts
@@ -848,12 +972,15 @@ function toolInputTargetsDeeppairingState(projectRoot, toolInput) {
 }
 
 // src/cli/preflight-hook-core.ts
-function readRejectedApproaches(projectRoot) {
+function readRejectedApproaches(projectRoot, failures) {
   const p = path4.join(projectRoot, ".deeppairing", "preferences.json");
   try {
     if (!fs4.existsSync(p)) return [];
     const raw = JSON.parse(fs4.readFileSync(p, "utf-8"));
     const list = raw?.rejectedApproaches;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw) || list !== void 0 && !Array.isArray(list)) {
+      pushFailure(failures, noteFailure("schema", "preferences"));
+    }
     if (!Array.isArray(list)) return [];
     return list.map(
       (e) => typeof e === "string" ? { description: e } : {
@@ -864,23 +991,29 @@ function readRejectedApproaches(projectRoot) {
         concept: e?.concept
       }
     ).filter((r) => r.description);
-  } catch {
+  } catch (err) {
+    pushFailure(failures, noteFailure("ledger", "preferences", err));
     return [];
   }
 }
-function readTeamPreferences(projectRoot) {
+function readTeamPreferences(projectRoot, failures) {
   const p = path4.join(projectRoot, ".deeppairing", "team.json");
   try {
     if (!fs4.existsSync(p)) return [];
     const stripped = fs4.readFileSync(p, "utf-8").split("\n").map((l) => /^\s*\/\//.test(l) ? "" : l).join("\n");
     const raw = JSON.parse(stripped);
-    if (!raw || raw.version !== 1 || !Array.isArray(raw.preferences)) return [];
+    if (!raw || raw.version !== 1 || !Array.isArray(raw.preferences)) {
+      pushFailure(failures, noteFailure("schema", "team"));
+      return [];
+    }
     const KINDS = /* @__PURE__ */ new Set(["require", "prefer", "avoid"]);
     const valid = raw.preferences.every(
       (x) => x && typeof x.id === "string" && typeof x.concept === "string" && x.concept.length > 0 && typeof x.rationale === "string" && KINDS.has(x.kind)
     );
+    if (!valid) pushFailure(failures, noteFailure("schema", "team"));
     return valid ? raw.preferences : [];
-  } catch {
+  } catch (err) {
+    pushFailure(failures, noteFailure("ledger", "team", err));
     return [];
   }
 }
@@ -953,13 +1086,14 @@ function withinWindow(t, now, maxAgeMs) {
   return age <= maxAgeMs && age >= -CLOCK_SKEW_TOLERANCE_MS;
 }
 var PER_PATH_DEDUP_CLASSES = /* @__PURE__ */ new Set(["migrations", "secrets"]);
-function readSessionCeremony(projectRoot, now = Date.now()) {
+function readSessionCeremony(projectRoot, now = Date.now(), failures) {
   const sessionsDir = path4.join(projectRoot, ".deeppairing", "sessions");
   let ids;
   try {
     if (!fs4.existsSync(sessionsDir)) return { reachable: false, hasLiveCeremony: false };
     ids = fs4.readdirSync(sessionsDir);
-  } catch {
+  } catch (err) {
+    pushFailure(failures, noteFailure("store", "sessions", err));
     return { reachable: false, hasLiveCeremony: false };
   }
   const isRecent = (a) => withinWindow(Date.parse(a?.createdAt ?? ""), now, CEREMONY_MAX_AGE_MS);
@@ -986,7 +1120,10 @@ function readSessionCeremony(projectRoot, now = Date.now()) {
       continue;
     }
   }
-  if (storesSeen > 0 && storesParsed === 0) return { reachable: false, hasLiveCeremony: false };
+  if (storesSeen > 0 && storesParsed === 0) {
+    pushFailure(failures, { cls: "session_store_unreadable", source: "sessions", tag: "corrupt" });
+    return { reachable: false, hasLiveCeremony: false };
+  }
   return { reachable: true, hasLiveCeremony: false };
 }
 function guardrailAskSuppressed(projectRoot, category, matchedPath, now = Date.now()) {
@@ -1056,12 +1193,13 @@ function evaluateGuardrailBackstop(args) {
     const match = matchGuardrailPath(projectRoot, [fp]);
     if (!match) return null;
     if (args.mode !== "strict-stop" && guardrailAskSuppressed(projectRoot, match.category, match.path, now)) return null;
-    const ceremony = readSessionCeremony(projectRoot, now);
+    const ceremony = readSessionCeremony(projectRoot, now, args.failures);
     if (!ceremony.reachable) return null;
     if (ceremony.hasLiveCeremony) return null;
     const reason = args.mode === "strict-stop" ? `Edit to ${strictExcerpt(match.path, 200)} stopped before execution (strict-stop mode). It's a guardrail path (${match.category} \u2014 ${strictExcerpt(match.note, 160)}), and no findings, options, spec, or plan is live in this project's recent sessions. Cancel or revise the proposal, or present the required pre-work for review before continuing. [GUARDRAIL_ESCALATION]` : guardrailReason(match);
     return { fire: true, reason, source: "guardrail", guardrail: match };
-  } catch {
+  } catch (err) {
+    pushFailure(args.failures, noteFailure("evaluate", "backstop", err));
     return null;
   }
 }
@@ -1089,7 +1227,8 @@ function evaluateDeeppairingState(args) {
         note: "deepPairing's own state"
       }
     };
-  } catch {
+  } catch (err) {
+    pushFailure(args.failures, noteFailure("evaluate", "state", err));
     return null;
   }
 }
@@ -1110,8 +1249,8 @@ function displayTarget(projectRoot, target) {
   }
 }
 function evaluateHookGates(args) {
-  const { toolName, toolInput, projectRoot } = args;
-  const state = evaluateDeeppairingState({ toolInput, projectRoot, mode: args.mode });
+  const { toolName, toolInput, projectRoot, failures } = args;
+  const state = evaluateDeeppairingState({ toolInput, projectRoot, mode: args.mode, failures });
   if (toolName === "NotebookEdit") return state ?? { fire: false };
   const { strings, paths } = buildProposals(toolName, toolInput);
   if (strings.length === 0) return state ?? { fire: false };
@@ -1119,8 +1258,8 @@ function evaluateHookGates(args) {
     toolName,
     proposalStrings: strings,
     proposalPaths: paths,
-    rejectedApproaches: readRejectedApproaches(projectRoot),
-    teamPreferences: readTeamPreferences(projectRoot)
+    rejectedApproaches: readRejectedApproaches(projectRoot, failures),
+    teamPreferences: readTeamPreferences(projectRoot, failures)
   });
   if (result.blocked) {
     const reason = args.mode === "strict-stop" ? strictRejectionReason(result.block) : toHookReason(result.block.message);
@@ -1130,7 +1269,7 @@ function evaluateHookGates(args) {
 ${state.reason}`, source: result.block.source, ...stance ? { stance } : {} } : { fire: true, reason, source: result.block.source, ...stance ? { stance } : {} };
   }
   if (state) return state;
-  return evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env, mode: args.mode }) ?? { fire: false };
+  return evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env, mode: args.mode, failures }) ?? { fire: false };
 }
 function stanceOf(block) {
   const m = block.broadcastEvent.match;
@@ -1187,6 +1326,7 @@ export {
   GUARDRAIL_BACKSTOP_ENV,
   GUARDRAIL_RULES,
   PER_PATH_DEDUP_CLASSES,
+  PREFLIGHT_FAILURE_CLASSES,
   PREFLIGHT_MODE_WARNING,
   acquireHookStateLock,
   buildProposals,
@@ -1200,12 +1340,16 @@ export {
   hookGateRecord,
   matchDeeppairingStatePath,
   matchGuardrailPath,
+  noteFailure,
   preflightHookOutput,
+  pushFailure,
   readHookState,
+  readPreflightFailures,
   readRejectedApproaches,
   readSessionCeremony,
   readTeamPreferences,
   recordHookFire,
+  recordPreflightFailures,
   releaseHookStateLock,
   resolvePreflightMode,
   sanitizeStrictReason,
