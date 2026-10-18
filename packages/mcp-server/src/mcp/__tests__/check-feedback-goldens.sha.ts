@@ -87,7 +87,10 @@ export const CHECK_FEEDBACK_GOLDENS: Record<string, CheckFeedbackGolden> = {
   // already did (it flipped the artifact to approved after resolveDecision);
   // the old golden under-modeled that end-to-end path by seeding via the
   // store's resolve alone, which pre-J1 left the artifact stranded in draft.
-  resolved_decision_verdict: { prose: "922d5c8e1ca6cce2c0b9c5d984b6e4be72fbc8c7fc6901824c5e5d630151ebfe", struct: "1435cfa7ecaf585b68c45f060180611b71d5665132449945dfee01e2c0790b0a" },
+  // #549 — DELIBERATE re-pin, PROSE only. The selection line now names the
+  // unchosen options as non-enforcing context ("Not picked this time: … context
+  // only, not a rejection"), since a pick no longer records them as stances.
+  resolved_decision_verdict: { prose: "cad8946b68f644c4709f193e5f8c3b63687f7ea8ad74b7da096b26466ee22742", struct: "1435cfa7ecaf585b68c45f060180611b71d5665132449945dfee01e2c0790b0a" },
   // Q3 — DELIBERATE re-pin, STRUCT only. The plan verdict lane gained its
   // structuredContent mirror (`planVerdicts`), closing the N1 prose-only gap;
   // the "Plan reviews:" prose is byte-identical, and the verdict here is

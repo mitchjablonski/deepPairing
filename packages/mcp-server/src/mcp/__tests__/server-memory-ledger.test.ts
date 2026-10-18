@@ -5,6 +5,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import type { FileStore } from "../../store/file-store.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
+import { createHttpRoutes } from "../../http/routes.js";
+import { withHash } from "../../http/__tests__/routes.harness.js";
 
 const ctx = setupServerTest();
 const callTool = makeCallTool(ctx);
@@ -14,6 +16,14 @@ beforeEach(() => {
   store = ctx.store;
   broadcasts = ctx.broadcasts;
 });
+
+/** #549 — the explicit per-option "Never suggest this" (a pick no longer
+ *  rejects the unchosen options; the human names the one to remember). */
+const neverSuggest = (decisionId: string, optionId: string, reason?: string) =>
+  withHash(createHttpRoutes(store, ctx.tmpDir, () => {}), ctx.tmpDir).request(
+    `/api/decisions/${decisionId}/options/${optionId}/never-suggest`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(reason ? { reason } : {}) },
+  );
 
 describe("MCP Tool Handlers — memory + ledger", () => {
   describe("pre-flight rejected-approach validation", () => {
@@ -183,8 +193,8 @@ describe("MCP Tool Handlers — memory + ledger", () => {
     // approval paths.
 
     it("rejected option's concept.name lands in the session ledger as `concept`", async () => {
-      // Present options with explicit concept.name on both. User picks A;
-      // B's concept should land in the rejected list.
+      // Present options with explicit concept.name on both. User picks A,
+      // then explicitly says never suggest B (#549); B's concept lands.
       await callTool("present_options", {
         context: "Pick a deploy target",
         options: [
@@ -210,6 +220,8 @@ describe("MCP Tool Handlers — memory + ledger", () => {
       // so the resolve-handler post-processing fires.
       store.resolveDecision(dec, "a", "fits our existing infra");
       await callTool("check_feedback", {});
+      expect(store.getSessionMemory().rejectedApproaches).toHaveLength(0);
+      expect((await neverSuggest(dec, "b")).status).toBe(200);
 
       const memory = store.getSessionMemory();
       const rejected = memory.rejectedApproaches.find(
@@ -220,7 +232,7 @@ describe("MCP Tool Handlers — memory + ledger", () => {
       expect(rejected?.concept).toBe("pay-per-request hosting");
     });
 
-    it("SP2 — each rejected option records its OWN cons, not the human's single pick-reasoning", async () => {
+    it("SP2 — each explicitly rejected option records its OWN cons, not one blurred reason", async () => {
       await callTool("present_options", {
         context: "Pick a cache",
         options: [
@@ -232,6 +244,8 @@ describe("MCP Tool Handlers — memory + ledger", () => {
       const dec = (store.getArtifacts()[0].content as any).decisionId;
       store.resolveDecision(dec, "a", "Redis is already in our stack");
       await callTool("check_feedback", {});
+      await neverSuggest(dec, "b");
+      await neverSuggest(dec, "c");
 
       const rejected = store.getSessionMemory().rejectedApproaches;
       const b = rejected.find((r) => r.description.includes("In-process LRU"));
@@ -240,25 +254,23 @@ describe("MCP Tool Handlers — memory + ledger", () => {
       expect(b?.reason).toContain("drifts across instances");
       expect(c?.reason).toContain("one more thing to run");
       expect(b?.reason).not.toBe(c?.reason);
-      // ...with the human's pick-reasoning + winner as shared context.
-      expect(b?.reason).toContain("Redis is already in our stack");
     });
 
-    it("SP2 — a rejected option with NO cons falls back to the human's pick-reasoning", async () => {
+    it("SP2 — the human's own reason wins over the option's cons", async () => {
       await callTool("present_options", {
         context: "Pick a queue",
         options: [
           { id: "a", title: "SQS", description: "managed", pros: ["managed"], cons: [], effort: "low", risk: "low", recommendation: true },
-          { id: "b", title: "Roll our own", description: "in-house", pros: ["control"], cons: [], effort: "high", risk: "high", recommendation: false },
+          { id: "b", title: "Roll our own", description: "in-house", pros: ["control"], cons: ["slow to build"], effort: "high", risk: "high", recommendation: false },
         ],
       });
       const dec = (store.getArtifacts()[0].content as any).decisionId;
       store.resolveDecision(dec, "a", "not worth building queueing ourselves");
       await callTool("check_feedback", {});
+      await neverSuggest(dec, "b", "we never build infra we can rent");
 
       const b = store.getSessionMemory().rejectedApproaches.find((r) => r.description.includes("Roll our own"));
-      // no cons → the overall reasoning is the only signal we have.
-      expect(b?.reason).toBe("not worth building queueing ourselves");
+      expect(b?.reason).toBe("we never build infra we can rent");
     });
 
     it("approved option's concept.name flows through too (symmetric with rejection)", async () => {
@@ -316,6 +328,7 @@ describe("MCP Tool Handlers — memory + ledger", () => {
       const dec = (artifact.content as any).decisionId;
       store.resolveDecision(dec, "a", "we already use AWS");
       await callTool("check_feedback", {});
+      await neverSuggest(dec, "b");
 
       const memory = store.getSessionMemory();
       const rejected = memory.rejectedApproaches.find(

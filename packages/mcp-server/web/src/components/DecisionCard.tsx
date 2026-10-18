@@ -514,6 +514,8 @@ export function DecisionCard({ event, decisionId, artifactId, stakes, initialRes
           reasoning={reasoning}
           agentPickedUp={agentPickedUp}
           sessionId={sessionId}
+          decisionId={effectiveDecisionId}
+          writeLocked={writeLocked}
           artifactId={artifactId}
           stakes={stakes}
           showOptions={showOptions}

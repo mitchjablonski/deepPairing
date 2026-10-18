@@ -15984,6 +15984,9 @@ var DecisionResolveBodySchema = external_exports.object({
   optionId: external_exports.string().min(1),
   reasoning: external_exports.string().optional()
 });
+var DecisionOptionNeverSuggestBodySchema = external_exports.object({
+  reason: external_exports.string().max(2e3).optional()
+});
 var StatusUpdateBodySchema = external_exports.object({
   status: external_exports.enum(["approved", "revised", "rejected", "obsolete"]),
   feedback: external_exports.string().optional(),
