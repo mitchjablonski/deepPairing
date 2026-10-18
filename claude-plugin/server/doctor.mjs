@@ -7,8 +7,8 @@ var __export = (target, all) => {
 };
 
 // src/cli/doctor.ts
-import fs13 from "node:fs";
-import path11 from "node:path";
+import fs14 from "node:fs";
+import path13 from "node:path";
 import readline from "node:readline";
 
 // src/daemon/lifecycle.ts
@@ -1046,10 +1046,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path12) {
-  if (!path12)
+function getElementAtPath(obj, path14) {
+  if (!path14)
     return obj;
-  return path12.reduce((acc, key) => acc?.[key], obj);
+  return path14.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1458,11 +1458,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path12, issues) {
+function prefixIssues(path14, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path12);
+    iss.path.unshift(path14);
     return iss;
   });
 }
@@ -1609,16 +1609,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path12 = []) => {
+  const processError = (error52, path14 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path12, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path14, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path12, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path14, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path12, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path14, ...issue2.path]);
       } else {
-        const fullpath = [...path12, ...issue2.path];
+        const fullpath = [...path14, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -1645,17 +1645,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path12 = []) => {
+  const processError = (error52, path14 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path12, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path14, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path12, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path14, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path12, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path14, ...issue2.path]);
       } else {
-        const fullpath = [...path12, ...issue2.path];
+        const fullpath = [...path14, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -1687,8 +1687,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path12 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path12) {
+  const path14 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path14) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -14380,13 +14380,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path12 = ref.slice(1).split("/").filter(Boolean);
-  if (path12.length === 0) {
+  const path14 = ref.slice(1).split("/").filter(Boolean);
+  if (path14.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path12[0] === defsKey) {
-    const key = path12[1];
+  if (path14[0] === defsKey) {
+    const key = path14[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -17467,8 +17467,8 @@ import path9 from "node:path";
 import { fileURLToPath as fileURLToPath3, pathToFileURL } from "node:url";
 
 // src/cli/hook-scripts.generated.ts
-var STOP_HOOK_SCRIPT = '#!/usr/bin/env node\n// deepPairing Stop hook \u2014 installed by ensureStopHook (X7 / X9).\n// GENERATED \u2014 do not edit. Source: packages/mcp-server/src/cli/stop-hook-entry.ts\n// Regenerate: pnpm --filter @deeppairing/mcp-server gen:hooks\n// src/hooks/stop-hook.ts\nimport fs3 from "node:fs";\nimport path3 from "node:path";\n\n// src/debrief-gate.ts\nvar CODE_CLOSED_STATUSES = ["superseded", "retracted", "obsolete"];\nvar DEBRIEF_DEAD_STATUSES = ["superseded", "retracted", "obsolete", "rejected"];\nvar CEREMONY_TYPES = ["decision", "spec", "plan"];\nfunction isExternalReview(a) {\n  if (a?.type !== "changeset") return false;\n  const content = a?.content;\n  return !!content && typeof content === "object" && content.reviewIntent === "external";\n}\nfunction sessionOwesDebrief(artifacts, isRecent = () => true) {\n  const hasLiveDebrief = artifacts.some(\n    (a) => a?.type === "debrief" && !DEBRIEF_DEAD_STATUSES.includes(a?.status ?? "")\n  );\n  if (hasLiveDebrief) return false;\n  const recentCode = artifacts.filter(\n    (a) => (a?.type === "code_change" || a?.type === "changeset") && !isExternalReview(a) && !CODE_CLOSED_STATUSES.includes(a?.status ?? "") && isRecent(a)\n  );\n  if (recentCode.length === 0) return false;\n  const changesets = recentCode.filter((a) => a?.type === "changeset").length;\n  const codeChanges = recentCode.filter((a) => a?.type === "code_change").length;\n  const hasCeremony = artifacts.some((a) => CEREMONY_TYPES.includes(a?.type ?? "")) || artifacts.some((a) => a?.type === "debrief");\n  const trivial = changesets === 0 && codeChanges === 1 && !hasCeremony;\n  return !trivial;\n}\n\n// src/hooks/hook-state.ts\nimport fs2 from "node:fs";\nimport path2 from "node:path";\n\n// src/git-worktree.ts\nimport fs from "node:fs";\nimport path from "node:path";\nfunction samePath(a, b) {\n  try {\n    return fs.realpathSync.native(a) === fs.realpathSync.native(b);\n  } catch {\n    return path.resolve(a) === path.resolve(b);\n  }\n}\nfunction isGitDir(dir) {\n  try {\n    return fs.statSync(path.join(dir, "HEAD")).isFile() && fs.statSync(path.join(dir, "objects")).isDirectory() && fs.statSync(path.join(dir, "refs")).isDirectory();\n  } catch {\n    return false;\n  }\n}\nfunction readGitdirPointer(top, dotGitFile) {\n  const raw = fs.readFileSync(dotGitFile, "utf8");\n  const m = /^gitdir:[ \\t]*(.+?)[ \\t]*$/m.exec(raw);\n  return m ? path.resolve(top, m[1]) : null;\n}\nfunction inspectDotGitFile(top, dotGitFile) {\n  try {\n    const gitdir = readGitdirPointer(top, dotGitFile);\n    if (!gitdir) return { worktree: null, rejected: `${dotGitFile} has no "gitdir:" line` };\n    let common;\n    try {\n      common = fs.readFileSync(path.join(gitdir, "commondir"), "utf8").trim();\n    } catch {\n      return { worktree: null };\n    }\n    if (!common) return { worktree: null, rejected: `${gitdir}/commondir is empty` };\n    const commonDir = path.resolve(gitdir, common);\n    if (path.basename(commonDir) !== ".git") return { worktree: null };\n    if (!isGitDir(commonDir)) return { worktree: null, rejected: `${commonDir} is not a git directory` };\n    try {\n      const config = fs.readFileSync(path.join(commonDir, "config"), "utf8");\n      if (/^[ \\t]*bare[ \\t]*=[ \\t]*true[ \\t]*$/im.test(config)) return { worktree: null };\n    } catch {\n      return { worktree: null, rejected: `${commonDir} has no config` };\n    }\n    let back;\n    try {\n      back = fs.readFileSync(path.join(gitdir, "gitdir"), "utf8").trim();\n    } catch {\n      return { worktree: null, rejected: `${gitdir} has no gitdir back-reference` };\n    }\n    if (!back || !samePath(path.resolve(gitdir, back), dotGitFile)) {\n      return { worktree: null, rejected: `${gitdir}/gitdir does not point back at ${dotGitFile}` };\n    }\n    if (!samePath(path.dirname(gitdir), path.join(commonDir, "worktrees"))) {\n      return { worktree: null, rejected: `${gitdir} is not under ${commonDir}/worktrees` };\n    }\n    const mainTop = path.dirname(commonDir);\n    const mainDotGit = path.join(mainTop, ".git");\n    if (!fs.statSync(mainDotGit).isDirectory() || !samePath(mainDotGit, commonDir)) {\n      return { worktree: null, rejected: `${mainDotGit} is not the common dir ${commonDir}` };\n    }\n    if (samePath(mainTop, top)) return { worktree: null };\n    return { worktree: { worktreeTop: top, mainTop } };\n  } catch (err) {\n    return { worktree: null, rejected: `${dotGitFile} unreadable: ${err instanceof Error ? err.message : String(err)}` };\n  }\n}\nfunction inspect(p) {\n  try {\n    let cur = path.resolve(p);\n    for (let i = 0; i < 256; i++) {\n      const dotGit = path.join(cur, ".git");\n      let st;\n      try {\n        st = fs.statSync(dotGit);\n      } catch {\n        st = void 0;\n      }\n      if (st) return st.isFile() ? inspectDotGitFile(cur, dotGit) : { worktree: null };\n      const parent = path.dirname(cur);\n      if (parent === cur) return { worktree: null };\n      cur = parent;\n    }\n    return { worktree: null };\n  } catch {\n    return { worktree: null };\n  }\n}\nfunction mapInto(abs, worktree) {\n  const rel = path.relative(worktree.worktreeTop, abs);\n  return { path: rel ? path.join(worktree.mainTop, rel) : worktree.mainTop, worktree };\n}\nfunction canonicalProjectDir(dir) {\n  const abs = path.resolve(dir);\n  const found = inspect(abs);\n  if (!found.worktree) return found.rejected ? { projectRoot: abs, worktree: null, rejected: found.rejected } : { projectRoot: abs, worktree: null };\n  const mapped = mapInto(abs, found.worktree);\n  let projectRoot = mapped.path;\n  try {\n    if (!fs.statSync(projectRoot).isDirectory()) projectRoot = mapped.worktree.mainTop;\n  } catch {\n    projectRoot = mapped.worktree.mainTop;\n  }\n  return { projectRoot, worktree: mapped.worktree };\n}\nfunction resolveHookRoots(eventCwd, env = process.env, cwd = () => process.cwd()) {\n  const claude = env.CLAUDE_PROJECT_DIR;\n  const explicit = env.DEEPPAIRING_PROJECT_ROOT;\n  if (!claude && explicit) return { projectRoot: explicit, workspaceRoot: explicit, worktree: null };\n  const raw = claude || (typeof eventCwd === "string" && eventCwd ? eventCwd : "") || cwd();\n  try {\n    const { projectRoot, worktree, rejected } = canonicalProjectDir(raw);\n    if (worktree) return { projectRoot, workspaceRoot: raw, worktree };\n    return rejected ? { projectRoot: raw, workspaceRoot: raw, worktree: null, rejected } : { projectRoot: raw, workspaceRoot: raw, worktree: null };\n  } catch {\n    return { projectRoot: raw, workspaceRoot: raw, worktree: null };\n  }\n}\n\n// src/hooks/hook-state.ts\nvar FIRE_LOG_CAP = 50;\nvar LOCK_STALE_MS = 5e3;\nvar LOCK_SPIN_MS = 2;\nvar LOCK_MAX_WAIT_MS = 500;\nfunction errnoCode(err) {\n  if (typeof err === "object" && err !== null && "code" in err) {\n    const code = err.code;\n    if (typeof code === "string") return code;\n  }\n  return void 0;\n}\nfunction hookErrorMessage(err) {\n  if (typeof err === "object" && err !== null && "message" in err) {\n    const message = err.message;\n    if (typeof message === "string") return message;\n  }\n  return String(err);\n}\nfunction resolveHookProjectRoot(eventCwd) {\n  return resolveHookRoots(eventCwd).projectRoot;\n}\nfunction sleepSync(ms) {\n  try {\n    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);\n  } catch {\n  }\n}\nfunction acquireHookStateLock(statePath, _now = Date.now()) {\n  const lock = `${statePath}.lock`;\n  const deadline = process.hrtime.bigint() + BigInt(LOCK_MAX_WAIT_MS) * 1000000n;\n  let brokeStale = false;\n  for (; ; ) {\n    try {\n      fs2.closeSync(fs2.openSync(lock, fs2.constants.O_CREAT | fs2.constants.O_EXCL | fs2.constants.O_WRONLY));\n      return lock;\n    } catch (error) {\n      if (errnoCode(error) !== "EEXIST") return null;\n      try {\n        if (!brokeStale && Date.now() - fs2.statSync(lock).mtimeMs > LOCK_STALE_MS) {\n          brokeStale = true;\n          fs2.unlinkSync(lock);\n          continue;\n        }\n      } catch (staleErr) {\n        if (errnoCode(staleErr) !== "ENOENT") return null;\n      }\n      if (process.hrtime.bigint() >= deadline) return null;\n      sleepSync(LOCK_SPIN_MS);\n    }\n  }\n}\nfunction releaseHookStateLock(lock) {\n  if (!lock) return;\n  try {\n    fs2.unlinkSync(lock);\n  } catch {\n  }\n}\nfunction readHookState(statePath) {\n  let raw;\n  try {\n    raw = fs2.readFileSync(statePath, "utf-8");\n  } catch {\n    return { version: 1 };\n  }\n  try {\n    const parsed = JSON.parse(raw);\n    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;\n  } catch {\n  }\n  try {\n    const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");\n    fs2.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);\n  } catch {\n  }\n  return { version: 1 };\n}\nfunction writeHookStateAtomic(statePath, state) {\n  const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 10)}`;\n  try {\n    fs2.writeFileSync(tmp, JSON.stringify(state));\n    fs2.renameSync(tmp, statePath);\n  } catch (err) {\n    try {\n      fs2.unlinkSync(tmp);\n    } catch {\n    }\n    throw err;\n  }\n}\nfunction appendHookFire(statePath, fire, mutate) {\n  try {\n    fs2.mkdirSync(path2.dirname(statePath), { recursive: true });\n    const lock = acquireHookStateLock(statePath);\n    try {\n      const state = readHookState(statePath);\n      state.version = 1;\n      const fires = Array.isArray(state.fires) ? state.fires : [];\n      fires.push(fire);\n      state.fires = fires.slice(-FIRE_LOG_CAP);\n      mutate?.(state);\n      writeHookStateAtomic(statePath, state);\n    } finally {\n      releaseHookStateLock(lock);\n    }\n  } catch {\n  }\n}\nfunction hookStatePath(projectRoot) {\n  return path2.join(projectRoot, ".deeppairing", "hooks-state.json");\n}\n\n// src/hooks/stop-hook.ts\nvar HOOK_NAME = "stop";\nvar MAX_AGE_MS = 30 * 60 * 1e3;\nvar BLOCKING_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset"];\nfunction runStopHook(now = Date.now()) {\n  const projectRoot = resolveHookProjectRoot();\n  function exit(code, reason) {\n    appendHookFire(hookStatePath(projectRoot), {\n      at: (/* @__PURE__ */ new Date()).toISOString(),\n      hook: HOOK_NAME,\n      exitCode: code,\n      reason\n    });\n    process.exit(code);\n  }\n  try {\n    const sessionsDir = path3.join(projectRoot, ".deeppairing", "sessions");\n    if (!fs3.existsSync(sessionsDir)) exit(0, "no sessions dir");\n    let owesDebriefSession = null;\n    for (const id of fs3.readdirSync(sessionsDir)) {\n      const af = path3.join(sessionsDir, id, "artifacts.json");\n      if (!fs3.existsSync(af)) continue;\n      let arr;\n      try {\n        arr = JSON.parse(fs3.readFileSync(af, "utf-8"));\n      } catch {\n        continue;\n      }\n      if (!Array.isArray(arr)) continue;\n      const artifacts = arr;\n      const blocking = artifacts.some((x) => {\n        if (x?.status !== "draft") return false;\n        if (!x?.type || !BLOCKING_TYPES.includes(x.type)) return false;\n        const t = x?.createdAt ? new Date(x.createdAt).getTime() : 0;\n        if (t && now - t > MAX_AGE_MS) return false;\n        return true;\n      });\n      if (blocking) {\n        process.stderr.write("deepPairing: pending artifacts need review \\u2014 call check_feedback\\n");\n        exit(0, "pending artifacts in " + id);\n      }\n      if (owesDebriefSession === null) {\n        const owes = sessionOwesDebrief(artifacts, (x) => {\n          const t = x?.createdAt ? new Date(x.createdAt).getTime() : 0;\n          return !t || now - t <= MAX_AGE_MS;\n        });\n        if (owes) owesDebriefSession = id;\n      }\n    }\n    if (owesDebriefSession !== null) {\n      process.stderr.write(\n        "deepPairing: code was presented but no present_debrief yet \\u2014 end the run with one so your pair gets the walk-through\\n"\n      );\n      exit(0, "owes debrief in " + owesDebriefSession);\n    }\n    exit(0, "pass: no blocking drafts");\n  } catch (err) {\n    exit(0, "error: " + hookErrorMessage(err));\n  }\n}\n\n// src/cli/stop-hook-entry.ts\nrunStopHook();\n';
-var CHECKPOINT_HOOK_SCRIPT = '#!/usr/bin/env node\n// deepPairing checkpoint hook (V2) \u2014 installed by ensureCheckpointHook.\n// GENERATED \u2014 do not edit. Source: packages/mcp-server/src/cli/checkpoint-hook-entry.ts\n// Regenerate: pnpm --filter @deeppairing/mcp-server gen:hooks\n// src/hooks/checkpoint-hook.ts\nimport fs3 from "node:fs";\nimport path4 from "node:path";\nimport crypto2 from "node:crypto";\n\n// src/session-id.ts\nimport crypto from "node:crypto";\nimport path from "node:path";\nfunction deriveSessionId(projectRoot, claudeSessionIdRaw) {\n  const projectName = path.basename(projectRoot);\n  const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);\n  const projectHash = crypto.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);\n  const base = `session_${safeProjectName}_${projectHash}`;\n  const sanitized = (claudeSessionIdRaw ?? "").replace(/[^a-zA-Z0-9-]/g, "").slice(0, 64);\n  if (sanitized.length === 0) {\n    return { sessionId: base, mode: "fallback" };\n  }\n  return { sessionId: `${base}_${sanitized}`, mode: "split", claudeSessionId: sanitized };\n}\n\n// src/git-worktree.ts\nimport fs from "node:fs";\nimport path2 from "node:path";\nfunction samePath(a, b) {\n  try {\n    return fs.realpathSync.native(a) === fs.realpathSync.native(b);\n  } catch {\n    return path2.resolve(a) === path2.resolve(b);\n  }\n}\nfunction isGitDir(dir) {\n  try {\n    return fs.statSync(path2.join(dir, "HEAD")).isFile() && fs.statSync(path2.join(dir, "objects")).isDirectory() && fs.statSync(path2.join(dir, "refs")).isDirectory();\n  } catch {\n    return false;\n  }\n}\nfunction readGitdirPointer(top, dotGitFile) {\n  const raw = fs.readFileSync(dotGitFile, "utf8");\n  const m = /^gitdir:[ \\t]*(.+?)[ \\t]*$/m.exec(raw);\n  return m ? path2.resolve(top, m[1]) : null;\n}\nfunction inspectDotGitFile(top, dotGitFile) {\n  try {\n    const gitdir = readGitdirPointer(top, dotGitFile);\n    if (!gitdir) return { worktree: null, rejected: `${dotGitFile} has no "gitdir:" line` };\n    let common;\n    try {\n      common = fs.readFileSync(path2.join(gitdir, "commondir"), "utf8").trim();\n    } catch {\n      return { worktree: null };\n    }\n    if (!common) return { worktree: null, rejected: `${gitdir}/commondir is empty` };\n    const commonDir = path2.resolve(gitdir, common);\n    if (path2.basename(commonDir) !== ".git") return { worktree: null };\n    if (!isGitDir(commonDir)) return { worktree: null, rejected: `${commonDir} is not a git directory` };\n    try {\n      const config = fs.readFileSync(path2.join(commonDir, "config"), "utf8");\n      if (/^[ \\t]*bare[ \\t]*=[ \\t]*true[ \\t]*$/im.test(config)) return { worktree: null };\n    } catch {\n      return { worktree: null, rejected: `${commonDir} has no config` };\n    }\n    let back;\n    try {\n      back = fs.readFileSync(path2.join(gitdir, "gitdir"), "utf8").trim();\n    } catch {\n      return { worktree: null, rejected: `${gitdir} has no gitdir back-reference` };\n    }\n    if (!back || !samePath(path2.resolve(gitdir, back), dotGitFile)) {\n      return { worktree: null, rejected: `${gitdir}/gitdir does not point back at ${dotGitFile}` };\n    }\n    if (!samePath(path2.dirname(gitdir), path2.join(commonDir, "worktrees"))) {\n      return { worktree: null, rejected: `${gitdir} is not under ${commonDir}/worktrees` };\n    }\n    const mainTop = path2.dirname(commonDir);\n    const mainDotGit = path2.join(mainTop, ".git");\n    if (!fs.statSync(mainDotGit).isDirectory() || !samePath(mainDotGit, commonDir)) {\n      return { worktree: null, rejected: `${mainDotGit} is not the common dir ${commonDir}` };\n    }\n    if (samePath(mainTop, top)) return { worktree: null };\n    return { worktree: { worktreeTop: top, mainTop } };\n  } catch (err) {\n    return { worktree: null, rejected: `${dotGitFile} unreadable: ${err instanceof Error ? err.message : String(err)}` };\n  }\n}\nfunction inspect(p) {\n  try {\n    let cur = path2.resolve(p);\n    for (let i = 0; i < 256; i++) {\n      const dotGit = path2.join(cur, ".git");\n      let st;\n      try {\n        st = fs.statSync(dotGit);\n      } catch {\n        st = void 0;\n      }\n      if (st) return st.isFile() ? inspectDotGitFile(cur, dotGit) : { worktree: null };\n      const parent = path2.dirname(cur);\n      if (parent === cur) return { worktree: null };\n      cur = parent;\n    }\n    return { worktree: null };\n  } catch {\n    return { worktree: null };\n  }\n}\nfunction findLinkedWorktree(p) {\n  return inspect(p).worktree;\n}\nfunction canonicalizeWorktreePath(p) {\n  const abs = path2.resolve(p);\n  const worktree = findLinkedWorktree(abs);\n  if (!worktree) return { path: abs, worktree: null };\n  return mapInto(abs, worktree);\n}\nfunction mapInto(abs, worktree) {\n  const rel = path2.relative(worktree.worktreeTop, abs);\n  return { path: rel ? path2.join(worktree.mainTop, rel) : worktree.mainTop, worktree };\n}\nfunction canonicalProjectDir(dir) {\n  const abs = path2.resolve(dir);\n  const found = inspect(abs);\n  if (!found.worktree) return found.rejected ? { projectRoot: abs, worktree: null, rejected: found.rejected } : { projectRoot: abs, worktree: null };\n  const mapped = mapInto(abs, found.worktree);\n  let projectRoot = mapped.path;\n  try {\n    if (!fs.statSync(projectRoot).isDirectory()) projectRoot = mapped.worktree.mainTop;\n  } catch {\n    projectRoot = mapped.worktree.mainTop;\n  }\n  return { projectRoot, worktree: mapped.worktree };\n}\nfunction resolveHookRoots(eventCwd, env = process.env, cwd = () => process.cwd()) {\n  const claude = env.CLAUDE_PROJECT_DIR;\n  const explicit = env.DEEPPAIRING_PROJECT_ROOT;\n  if (!claude && explicit) return { projectRoot: explicit, workspaceRoot: explicit, worktree: null };\n  const raw = claude || (typeof eventCwd === "string" && eventCwd ? eventCwd : "") || cwd();\n  try {\n    const { projectRoot, worktree, rejected } = canonicalProjectDir(raw);\n    if (worktree) return { projectRoot, workspaceRoot: raw, worktree };\n    return rejected ? { projectRoot: raw, workspaceRoot: raw, worktree: null, rejected } : { projectRoot: raw, workspaceRoot: raw, worktree: null };\n  } catch {\n    return { projectRoot: raw, workspaceRoot: raw, worktree: null };\n  }\n}\n\n// src/hooks/hook-state.ts\nimport fs2 from "node:fs";\nimport path3 from "node:path";\nvar FIRE_LOG_CAP = 50;\nvar LOCK_STALE_MS = 5e3;\nvar LOCK_SPIN_MS = 2;\nvar LOCK_MAX_WAIT_MS = 500;\nfunction errnoCode(err) {\n  if (typeof err === "object" && err !== null && "code" in err) {\n    const code = err.code;\n    if (typeof code === "string") return code;\n  }\n  return void 0;\n}\nfunction hookErrorMessage(err) {\n  if (typeof err === "object" && err !== null && "message" in err) {\n    const message = err.message;\n    if (typeof message === "string") return message;\n  }\n  return String(err);\n}\nfunction resolveHookProjectRoot(eventCwd) {\n  return resolveHookRoots(eventCwd).projectRoot;\n}\nfunction sleepSync(ms) {\n  try {\n    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);\n  } catch {\n  }\n}\nfunction acquireHookStateLock(statePath, _now = Date.now()) {\n  const lock = `${statePath}.lock`;\n  const deadline = process.hrtime.bigint() + BigInt(LOCK_MAX_WAIT_MS) * 1000000n;\n  let brokeStale = false;\n  for (; ; ) {\n    try {\n      fs2.closeSync(fs2.openSync(lock, fs2.constants.O_CREAT | fs2.constants.O_EXCL | fs2.constants.O_WRONLY));\n      return lock;\n    } catch (error) {\n      if (errnoCode(error) !== "EEXIST") return null;\n      try {\n        if (!brokeStale && Date.now() - fs2.statSync(lock).mtimeMs > LOCK_STALE_MS) {\n          brokeStale = true;\n          fs2.unlinkSync(lock);\n          continue;\n        }\n      } catch (staleErr) {\n        if (errnoCode(staleErr) !== "ENOENT") return null;\n      }\n      if (process.hrtime.bigint() >= deadline) return null;\n      sleepSync(LOCK_SPIN_MS);\n    }\n  }\n}\nfunction releaseHookStateLock(lock) {\n  if (!lock) return;\n  try {\n    fs2.unlinkSync(lock);\n  } catch {\n  }\n}\nfunction readHookState(statePath) {\n  let raw;\n  try {\n    raw = fs2.readFileSync(statePath, "utf-8");\n  } catch {\n    return { version: 1 };\n  }\n  try {\n    const parsed = JSON.parse(raw);\n    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;\n  } catch {\n  }\n  try {\n    const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");\n    fs2.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);\n  } catch {\n  }\n  return { version: 1 };\n}\nfunction writeHookStateAtomic(statePath, state) {\n  const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 10)}`;\n  try {\n    fs2.writeFileSync(tmp, JSON.stringify(state));\n    fs2.renameSync(tmp, statePath);\n  } catch (err) {\n    try {\n      fs2.unlinkSync(tmp);\n    } catch {\n    }\n    throw err;\n  }\n}\nfunction appendHookFire(statePath, fire, mutate) {\n  try {\n    fs2.mkdirSync(path3.dirname(statePath), { recursive: true });\n    const lock = acquireHookStateLock(statePath);\n    try {\n      const state = readHookState(statePath);\n      state.version = 1;\n      const fires = Array.isArray(state.fires) ? state.fires : [];\n      fires.push(fire);\n      state.fires = fires.slice(-FIRE_LOG_CAP);\n      mutate?.(state);\n      writeHookStateAtomic(statePath, state);\n    } finally {\n      releaseHookStateLock(lock);\n    }\n  } catch {\n  }\n}\nfunction hookStatePath(projectRoot) {\n  return path3.join(projectRoot, ".deeppairing", "hooks-state.json");\n}\n\n// src/hooks/checkpoint-hook.ts\nvar HOOK_NAME = "checkpoint";\nvar EDIT_TOOLS = ["Write", "Edit", "MultiEdit"];\nvar RECEIPT_TTL_MS = 60 * 1e3;\nvar SKIP_BASENAMES = /* @__PURE__ */ new Set([\n  // Lockfiles only \u2014 manifest files (package.json, Cargo.toml, etc.) are\n  // policy and should still nag.\n  "package-lock.json",\n  "pnpm-lock.yaml",\n  "yarn.lock",\n  "bun.lockb",\n  "uv.lock",\n  "poetry.lock",\n  "Cargo.lock",\n  "Gemfile.lock",\n  "go.sum",\n  "composer.lock"\n]);\nvar SKIP_PATH_PREFIXES = [\n  // Generated / vendored output \u2014 not human-authored source.\n  "dist/",\n  "build/",\n  "node_modules/",\n  ".deeppairing/",\n  ".next/",\n  ".turbo/",\n  ".cache/",\n  "coverage/",\n  ".nyc_output/",\n  // IDE-local config \u2014 workspace settings, not project decisions.\n  ".vscode/",\n  ".idea/"\n];\nfunction isTrivialFile(filePath) {\n  if (!filePath || filePath === "(unknown)") return false;\n  const norm = filePath.replace(/\\\\/g, "/");\n  const base = norm.split("/").pop() || "";\n  if (SKIP_BASENAMES.has(base)) return true;\n  for (const prefix of SKIP_PATH_PREFIXES) {\n    if (norm.includes("/" + prefix) || norm.startsWith(prefix)) return true;\n  }\n  return false;\n}\nvar NAG = "deepPairing: {TOOL} on {FILE} with no present_code_change for it. Present EVERY code change BEFORE the Write/Edit \\u2014 including small follow-on edits, new files (tests, configs), and each file of a multi-file change, not just the \'main\' one. A write straight to disk never reaches the human\'s review surface; they can\'t see or comment on it. If you skipped this for prior edits this session, backfill them now with present_code_change. (Per-Edit Checkpoint rule. Lockfiles and generated paths are auto-skipped.)\\n";\nfunction claimReceipt(dpDir, sessionId, absolutePath, now) {\n  const key = crypto2.createHash("sha256").update(absolutePath).digest("hex");\n  const markerPath = path4.join(dpDir, "sessions", sessionId, "code-checkpoints", key + ".json");\n  const claimPath = markerPath + ".claim." + process.pid + "." + crypto2.randomBytes(8).toString("hex");\n  fs3.renameSync(markerPath, claimPath);\n  try {\n    const m = JSON.parse(fs3.readFileSync(claimPath, "utf8"));\n    if (!m || typeof m !== "object") return false;\n    const r = m;\n    const at = typeof r.at === "string" ? Date.parse(r.at) : NaN;\n    const expiresAt = r.expiresAt === void 0 ? at + RECEIPT_TTL_MS : typeof r.expiresAt === "string" ? Date.parse(r.expiresAt) : NaN;\n    return r.version === 1 && r.sessionId === sessionId && r.filePath === absolutePath && typeof r.artifactId === "string" && r.artifactId.length > 0 && Number.isFinite(at) && Number.isFinite(expiresAt) && expiresAt >= at && now >= at && // a future-dated receipt is a clock fault, not coverage\n    now <= expiresAt;\n  } finally {\n    try {\n      fs3.unlinkSync(claimPath);\n    } catch {\n    }\n  }\n}\nfunction runCheckpointHook(stdin2, now = Date.now()) {\n  let statePath = hookStatePath(resolveHookProjectRoot());\n  let resolvedCandidateIds = [];\n  function exit(code, reason) {\n    appendHookFire(statePath, { at: (/* @__PURE__ */ new Date()).toISOString(), hook: HOOK_NAME, exitCode: code, reason, resolvedCandidateIds });\n    process.exit(code);\n  }\n  try {\n    const ev = stdin2 ? JSON.parse(stdin2) : {};\n    const projectRoot = path4.resolve(resolveHookProjectRoot(ev.cwd));\n    statePath = hookStatePath(projectRoot);\n    const tool = typeof ev.tool_name === "string" && ev.tool_name || typeof ev.toolName === "string" && ev.toolName || "";\n    if (!EDIT_TOOLS.includes(tool)) exit(0, "skip: tool=" + (tool || "(unknown)"));\n    const rawFilePath = (ev.tool_input && (ev.tool_input.file_path ?? ev.tool_input.filePath)) ?? (ev.input && ev.input.file_path);\n    const filePath = typeof rawFilePath === "string" && rawFilePath ? rawFilePath : "(unknown)";\n    if (isTrivialFile(filePath)) exit(0, "skip: trivial file " + filePath);\n    const dpDir = path4.join(projectRoot, ".deeppairing");\n    if (!fs3.existsSync(path4.join(dpDir, "sessions"))) exit(0, "skip: no sessions dir");\n    const eventHasIdentity = Object.prototype.hasOwnProperty.call(ev, "session_id");\n    const malformedEventIdentity = eventHasIdentity && ev.session_id !== "" && typeof ev.session_id !== "string";\n    const rawCandidates = [ev.session_id, process.env.CLAUDE_CODE_SESSION_ID];\n    const anyNonemptyIdentity = rawCandidates.some((value) => typeof value === "string" && value.length > 0);\n    for (const raw of rawCandidates) {\n      if (typeof raw !== "string" || !raw) continue;\n      const derived = deriveSessionId(projectRoot, raw);\n      if (derived.mode !== "split") continue;\n      if (!resolvedCandidateIds.includes(derived.sessionId)) resolvedCandidateIds.push(derived.sessionId);\n    }\n    if (resolvedCandidateIds.length === 0 && !anyNonemptyIdentity && !malformedEventIdentity) {\n      resolvedCandidateIds = [deriveSessionId(projectRoot, "").sessionId];\n    }\n    let covered = false;\n    if (filePath !== "(unknown)" && filePath.trim()) {\n      for (const sessionId of resolvedCandidateIds) {\n        try {\n          covered = claimReceipt(dpDir, sessionId, canonicalizeWorktreePath(path4.resolve(projectRoot, filePath)).path, now);\n        } catch {\n        }\n        if (covered) break;\n      }\n    }\n    if (!covered) {\n      process.stderr.write(NAG.replace("{TOOL}", tool).replace("{FILE}", filePath));\n      exit(0, "nag: " + tool + " on " + filePath);\n    }\n    exit(0, "pass: fresh checkpoint covers " + filePath);\n  } catch (err) {\n    exit(0, "error: " + hookErrorMessage(err));\n  }\n}\n\n// src/cli/checkpoint-hook-entry.ts\nvar stdin = "";\nprocess.stdin.setEncoding("utf-8");\nprocess.stdin.on("data", (c) => {\n  stdin += c;\n});\nprocess.stdin.on("end", () => {\n  runCheckpointHook(stdin);\n});\n';
+var STOP_HOOK_SCRIPT = '#!/usr/bin/env node\n// deepPairing Stop hook \u2014 installed by ensureStopHook (X7 / X9).\n// GENERATED \u2014 do not edit. Source: packages/mcp-server/src/cli/stop-hook-entry.ts\n// Regenerate: pnpm --filter @deeppairing/mcp-server gen:hooks\n// src/hooks/stop-hook.ts\nimport fs3 from "node:fs";\nimport path3 from "node:path";\n\n// src/debrief-gate.ts\nvar CODE_CLOSED_STATUSES = ["superseded", "retracted", "obsolete"];\nvar DEBRIEF_DEAD_STATUSES = ["superseded", "retracted", "obsolete", "rejected"];\nvar CEREMONY_TYPES = ["decision", "spec", "plan"];\nfunction isExternalReview(a) {\n  if (a?.type !== "changeset") return false;\n  const content = a?.content;\n  return !!content && typeof content === "object" && content.reviewIntent === "external";\n}\nfunction sessionOwesDebrief(artifacts, isRecent = () => true) {\n  const hasLiveDebrief = artifacts.some(\n    (a) => a?.type === "debrief" && !DEBRIEF_DEAD_STATUSES.includes(a?.status ?? "")\n  );\n  if (hasLiveDebrief) return false;\n  const recentCode = artifacts.filter(\n    (a) => (a?.type === "code_change" || a?.type === "changeset") && !isExternalReview(a) && !CODE_CLOSED_STATUSES.includes(a?.status ?? "") && isRecent(a)\n  );\n  if (recentCode.length === 0) return false;\n  const changesets = recentCode.filter((a) => a?.type === "changeset").length;\n  const codeChanges = recentCode.filter((a) => a?.type === "code_change").length;\n  const hasCeremony = artifacts.some((a) => CEREMONY_TYPES.includes(a?.type ?? "")) || artifacts.some((a) => a?.type === "debrief");\n  const trivial = changesets === 0 && codeChanges === 1 && !hasCeremony;\n  return !trivial;\n}\n\n// src/hooks/hook-state.ts\nimport fs2 from "node:fs";\nimport path2 from "node:path";\n\n// src/git-worktree.ts\nimport fs from "node:fs";\nimport path from "node:path";\nfunction samePath(a, b) {\n  try {\n    return fs.realpathSync.native(a) === fs.realpathSync.native(b);\n  } catch {\n    return path.resolve(a) === path.resolve(b);\n  }\n}\nfunction isGitDir(dir) {\n  try {\n    return fs.statSync(path.join(dir, "HEAD")).isFile() && fs.statSync(path.join(dir, "objects")).isDirectory() && fs.statSync(path.join(dir, "refs")).isDirectory();\n  } catch {\n    return false;\n  }\n}\nfunction readGitdirPointer(top, dotGitFile) {\n  const raw = fs.readFileSync(dotGitFile, "utf8");\n  const m = /^gitdir:[ \\t]*(.+?)[ \\t]*$/m.exec(raw);\n  return m ? path.resolve(top, m[1]) : null;\n}\nfunction inspectDotGitFile(top, dotGitFile) {\n  try {\n    const gitdir = readGitdirPointer(top, dotGitFile);\n    if (!gitdir) return { worktree: null, rejected: `${dotGitFile} has no "gitdir:" line` };\n    let common;\n    try {\n      common = fs.readFileSync(path.join(gitdir, "commondir"), "utf8").trim();\n    } catch {\n      return { worktree: null };\n    }\n    if (!common) return { worktree: null, rejected: `${gitdir}/commondir is empty` };\n    const commonDir = path.resolve(gitdir, common);\n    if (path.basename(commonDir) !== ".git") return { worktree: null };\n    if (!isGitDir(commonDir)) return { worktree: null, rejected: `${commonDir} is not a git directory` };\n    try {\n      const config = fs.readFileSync(path.join(commonDir, "config"), "utf8");\n      if (/^[ \\t]*bare[ \\t]*=[ \\t]*true[ \\t]*$/im.test(config)) return { worktree: null };\n    } catch {\n      return { worktree: null, rejected: `${commonDir} has no config` };\n    }\n    let back;\n    try {\n      back = fs.readFileSync(path.join(gitdir, "gitdir"), "utf8").trim();\n    } catch {\n      return { worktree: null, rejected: `${gitdir} has no gitdir back-reference` };\n    }\n    if (!back || !samePath(path.resolve(gitdir, back), dotGitFile)) {\n      return { worktree: null, rejected: `${gitdir}/gitdir does not point back at ${dotGitFile}` };\n    }\n    if (!samePath(path.dirname(gitdir), path.join(commonDir, "worktrees"))) {\n      return { worktree: null, rejected: `${gitdir} is not under ${commonDir}/worktrees` };\n    }\n    const mainTop = path.dirname(commonDir);\n    const mainDotGit = path.join(mainTop, ".git");\n    if (!fs.statSync(mainDotGit).isDirectory() || !samePath(mainDotGit, commonDir)) {\n      return { worktree: null, rejected: `${mainDotGit} is not the common dir ${commonDir}` };\n    }\n    if (samePath(mainTop, top)) return { worktree: null };\n    return { worktree: { worktreeTop: top, mainTop } };\n  } catch (err) {\n    return { worktree: null, rejected: `${dotGitFile} unreadable: ${err instanceof Error ? err.message : String(err)}` };\n  }\n}\nfunction inspect(p) {\n  try {\n    let cur = path.resolve(p);\n    for (let i = 0; i < 256; i++) {\n      const dotGit = path.join(cur, ".git");\n      let st;\n      try {\n        st = fs.statSync(dotGit);\n      } catch {\n        st = void 0;\n      }\n      if (st) return st.isFile() ? inspectDotGitFile(cur, dotGit) : { worktree: null };\n      const parent = path.dirname(cur);\n      if (parent === cur) return { worktree: null };\n      cur = parent;\n    }\n    return { worktree: null };\n  } catch {\n    return { worktree: null };\n  }\n}\nfunction mapInto(abs, worktree) {\n  const rel = path.relative(worktree.worktreeTop, abs);\n  return { path: rel ? path.join(worktree.mainTop, rel) : worktree.mainTop, worktree };\n}\nfunction canonicalProjectDir(dir) {\n  const abs = path.resolve(dir);\n  const found = inspect(abs);\n  if (!found.worktree) return found.rejected ? { projectRoot: abs, worktree: null, rejected: found.rejected } : { projectRoot: abs, worktree: null };\n  const mapped = mapInto(abs, found.worktree);\n  let projectRoot = mapped.path;\n  try {\n    if (!fs.statSync(projectRoot).isDirectory()) projectRoot = mapped.worktree.mainTop;\n  } catch {\n    projectRoot = mapped.worktree.mainTop;\n  }\n  return { projectRoot, worktree: mapped.worktree };\n}\nfunction resolveHookRoots(eventCwd, env = process.env, cwd = () => process.cwd()) {\n  const claude = env.CLAUDE_PROJECT_DIR;\n  const explicit = env.DEEPPAIRING_PROJECT_ROOT;\n  if (!claude && explicit) return { projectRoot: explicit, workspaceRoot: explicit, worktree: null };\n  const raw = claude || (typeof eventCwd === "string" && eventCwd ? eventCwd : "") || cwd();\n  try {\n    const { projectRoot, worktree, rejected } = canonicalProjectDir(raw);\n    if (worktree) return { projectRoot, workspaceRoot: raw, worktree };\n    return rejected ? { projectRoot: raw, workspaceRoot: raw, worktree: null, rejected } : { projectRoot: raw, workspaceRoot: raw, worktree: null };\n  } catch {\n    return { projectRoot: raw, workspaceRoot: raw, worktree: null };\n  }\n}\n\n// src/hooks/hook-state.ts\nvar FIRE_LOG_CAP = 50;\nvar LOCK_STALE_MS = 5e3;\nvar LOCK_SPIN_MS = 2;\nvar LOCK_MAX_WAIT_MS = 500;\nfunction errnoCode(err) {\n  if (typeof err === "object" && err !== null && "code" in err) {\n    const code = err.code;\n    if (typeof code === "string") return code;\n  }\n  return void 0;\n}\nfunction hookErrorMessage(err) {\n  if (typeof err === "object" && err !== null && "message" in err) {\n    const message = err.message;\n    if (typeof message === "string") return message;\n  }\n  return String(err);\n}\nfunction resolveHookProjectRoot(eventCwd) {\n  return resolveHookRoots(eventCwd).projectRoot;\n}\nfunction sleepSync(ms) {\n  try {\n    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);\n  } catch {\n  }\n}\nfunction acquireHookStateLock(statePath, _now = Date.now()) {\n  const lock = `${statePath}.lock`;\n  const deadline = process.hrtime.bigint() + BigInt(LOCK_MAX_WAIT_MS) * 1000000n;\n  let brokeStale = false;\n  for (; ; ) {\n    try {\n      fs2.closeSync(fs2.openSync(lock, fs2.constants.O_CREAT | fs2.constants.O_EXCL | fs2.constants.O_WRONLY));\n      return lock;\n    } catch (error) {\n      if (errnoCode(error) !== "EEXIST") return null;\n      try {\n        if (!brokeStale && Date.now() - fs2.statSync(lock).mtimeMs > LOCK_STALE_MS) {\n          brokeStale = true;\n          fs2.unlinkSync(lock);\n          continue;\n        }\n      } catch (staleErr) {\n        if (errnoCode(staleErr) !== "ENOENT") return null;\n      }\n      if (process.hrtime.bigint() >= deadline) return null;\n      sleepSync(LOCK_SPIN_MS);\n    }\n  }\n}\nfunction releaseHookStateLock(lock) {\n  if (!lock) return;\n  try {\n    fs2.unlinkSync(lock);\n  } catch {\n  }\n}\nfunction readHookState(statePath) {\n  let raw;\n  try {\n    raw = fs2.readFileSync(statePath, "utf-8");\n  } catch {\n    return { version: 1 };\n  }\n  try {\n    const parsed = JSON.parse(raw);\n    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;\n  } catch {\n  }\n  try {\n    const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");\n    fs2.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);\n  } catch {\n  }\n  return { version: 1 };\n}\nfunction writeHookStateAtomic(statePath, state) {\n  const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 10)}`;\n  try {\n    fs2.writeFileSync(tmp, JSON.stringify(state));\n    fs2.renameSync(tmp, statePath);\n  } catch (err) {\n    try {\n      fs2.unlinkSync(tmp);\n    } catch {\n    }\n    throw err;\n  }\n}\nfunction appendHookFire(statePath, fire, mutate) {\n  mutateHookState(statePath, (state) => {\n    const fires = Array.isArray(state.fires) ? state.fires : [];\n    fires.push(fire);\n    state.fires = fires.slice(-FIRE_LOG_CAP);\n    mutate?.(state);\n  });\n}\nfunction mutateHookState(statePath, mutate, opts = {}) {\n  try {\n    if (opts.createDir === false) {\n      if (!fs2.statSync(path2.dirname(statePath)).isDirectory()) return;\n    } else {\n      fs2.mkdirSync(path2.dirname(statePath), { recursive: true });\n    }\n    const lock = acquireHookStateLock(statePath);\n    try {\n      const state = readHookState(statePath);\n      state.version = 1;\n      mutate(state);\n      writeHookStateAtomic(statePath, state);\n    } finally {\n      releaseHookStateLock(lock);\n    }\n  } catch {\n  }\n}\nfunction hookStatePath(projectRoot) {\n  return path2.join(projectRoot, ".deeppairing", "hooks-state.json");\n}\n\n// src/hooks/stop-hook.ts\nvar HOOK_NAME = "stop";\nvar MAX_AGE_MS = 30 * 60 * 1e3;\nvar BLOCKING_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset"];\nfunction runStopHook(now = Date.now()) {\n  const projectRoot = resolveHookProjectRoot();\n  function exit(code, reason) {\n    appendHookFire(hookStatePath(projectRoot), {\n      at: (/* @__PURE__ */ new Date()).toISOString(),\n      hook: HOOK_NAME,\n      exitCode: code,\n      reason\n    });\n    process.exit(code);\n  }\n  try {\n    const sessionsDir = path3.join(projectRoot, ".deeppairing", "sessions");\n    if (!fs3.existsSync(sessionsDir)) exit(0, "no sessions dir");\n    let owesDebriefSession = null;\n    for (const id of fs3.readdirSync(sessionsDir)) {\n      const af = path3.join(sessionsDir, id, "artifacts.json");\n      if (!fs3.existsSync(af)) continue;\n      let arr;\n      try {\n        arr = JSON.parse(fs3.readFileSync(af, "utf-8"));\n      } catch {\n        continue;\n      }\n      if (!Array.isArray(arr)) continue;\n      const artifacts = arr;\n      const blocking = artifacts.some((x) => {\n        if (x?.status !== "draft") return false;\n        if (!x?.type || !BLOCKING_TYPES.includes(x.type)) return false;\n        const t = x?.createdAt ? new Date(x.createdAt).getTime() : 0;\n        if (t && now - t > MAX_AGE_MS) return false;\n        return true;\n      });\n      if (blocking) {\n        process.stderr.write("deepPairing: pending artifacts need review \\u2014 call check_feedback\\n");\n        exit(0, "pending artifacts in " + id);\n      }\n      if (owesDebriefSession === null) {\n        const owes = sessionOwesDebrief(artifacts, (x) => {\n          const t = x?.createdAt ? new Date(x.createdAt).getTime() : 0;\n          return !t || now - t <= MAX_AGE_MS;\n        });\n        if (owes) owesDebriefSession = id;\n      }\n    }\n    if (owesDebriefSession !== null) {\n      process.stderr.write(\n        "deepPairing: code was presented but no present_debrief yet \\u2014 end the run with one so your pair gets the walk-through\\n"\n      );\n      exit(0, "owes debrief in " + owesDebriefSession);\n    }\n    exit(0, "pass: no blocking drafts");\n  } catch (err) {\n    exit(0, "error: " + hookErrorMessage(err));\n  }\n}\n\n// src/cli/stop-hook-entry.ts\nrunStopHook();\n';
+var CHECKPOINT_HOOK_SCRIPT = '#!/usr/bin/env node\n// deepPairing checkpoint hook (V2) \u2014 installed by ensureCheckpointHook.\n// GENERATED \u2014 do not edit. Source: packages/mcp-server/src/cli/checkpoint-hook-entry.ts\n// Regenerate: pnpm --filter @deeppairing/mcp-server gen:hooks\n// src/hooks/checkpoint-hook.ts\nimport fs3 from "node:fs";\nimport path4 from "node:path";\nimport crypto2 from "node:crypto";\n\n// src/session-id.ts\nimport crypto from "node:crypto";\nimport path from "node:path";\nfunction deriveSessionId(projectRoot, claudeSessionIdRaw) {\n  const projectName = path.basename(projectRoot);\n  const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);\n  const projectHash = crypto.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);\n  const base = `session_${safeProjectName}_${projectHash}`;\n  const sanitized = (claudeSessionIdRaw ?? "").replace(/[^a-zA-Z0-9-]/g, "").slice(0, 64);\n  if (sanitized.length === 0) {\n    return { sessionId: base, mode: "fallback" };\n  }\n  return { sessionId: `${base}_${sanitized}`, mode: "split", claudeSessionId: sanitized };\n}\n\n// src/git-worktree.ts\nimport fs from "node:fs";\nimport path2 from "node:path";\nfunction samePath(a, b) {\n  try {\n    return fs.realpathSync.native(a) === fs.realpathSync.native(b);\n  } catch {\n    return path2.resolve(a) === path2.resolve(b);\n  }\n}\nfunction isGitDir(dir) {\n  try {\n    return fs.statSync(path2.join(dir, "HEAD")).isFile() && fs.statSync(path2.join(dir, "objects")).isDirectory() && fs.statSync(path2.join(dir, "refs")).isDirectory();\n  } catch {\n    return false;\n  }\n}\nfunction readGitdirPointer(top, dotGitFile) {\n  const raw = fs.readFileSync(dotGitFile, "utf8");\n  const m = /^gitdir:[ \\t]*(.+?)[ \\t]*$/m.exec(raw);\n  return m ? path2.resolve(top, m[1]) : null;\n}\nfunction inspectDotGitFile(top, dotGitFile) {\n  try {\n    const gitdir = readGitdirPointer(top, dotGitFile);\n    if (!gitdir) return { worktree: null, rejected: `${dotGitFile} has no "gitdir:" line` };\n    let common;\n    try {\n      common = fs.readFileSync(path2.join(gitdir, "commondir"), "utf8").trim();\n    } catch {\n      return { worktree: null };\n    }\n    if (!common) return { worktree: null, rejected: `${gitdir}/commondir is empty` };\n    const commonDir = path2.resolve(gitdir, common);\n    if (path2.basename(commonDir) !== ".git") return { worktree: null };\n    if (!isGitDir(commonDir)) return { worktree: null, rejected: `${commonDir} is not a git directory` };\n    try {\n      const config = fs.readFileSync(path2.join(commonDir, "config"), "utf8");\n      if (/^[ \\t]*bare[ \\t]*=[ \\t]*true[ \\t]*$/im.test(config)) return { worktree: null };\n    } catch {\n      return { worktree: null, rejected: `${commonDir} has no config` };\n    }\n    let back;\n    try {\n      back = fs.readFileSync(path2.join(gitdir, "gitdir"), "utf8").trim();\n    } catch {\n      return { worktree: null, rejected: `${gitdir} has no gitdir back-reference` };\n    }\n    if (!back || !samePath(path2.resolve(gitdir, back), dotGitFile)) {\n      return { worktree: null, rejected: `${gitdir}/gitdir does not point back at ${dotGitFile}` };\n    }\n    if (!samePath(path2.dirname(gitdir), path2.join(commonDir, "worktrees"))) {\n      return { worktree: null, rejected: `${gitdir} is not under ${commonDir}/worktrees` };\n    }\n    const mainTop = path2.dirname(commonDir);\n    const mainDotGit = path2.join(mainTop, ".git");\n    if (!fs.statSync(mainDotGit).isDirectory() || !samePath(mainDotGit, commonDir)) {\n      return { worktree: null, rejected: `${mainDotGit} is not the common dir ${commonDir}` };\n    }\n    if (samePath(mainTop, top)) return { worktree: null };\n    return { worktree: { worktreeTop: top, mainTop } };\n  } catch (err) {\n    return { worktree: null, rejected: `${dotGitFile} unreadable: ${err instanceof Error ? err.message : String(err)}` };\n  }\n}\nfunction inspect(p) {\n  try {\n    let cur = path2.resolve(p);\n    for (let i = 0; i < 256; i++) {\n      const dotGit = path2.join(cur, ".git");\n      let st;\n      try {\n        st = fs.statSync(dotGit);\n      } catch {\n        st = void 0;\n      }\n      if (st) return st.isFile() ? inspectDotGitFile(cur, dotGit) : { worktree: null };\n      const parent = path2.dirname(cur);\n      if (parent === cur) return { worktree: null };\n      cur = parent;\n    }\n    return { worktree: null };\n  } catch {\n    return { worktree: null };\n  }\n}\nfunction findLinkedWorktree(p) {\n  return inspect(p).worktree;\n}\nfunction canonicalizeWorktreePath(p) {\n  const abs = path2.resolve(p);\n  const worktree = findLinkedWorktree(abs);\n  if (!worktree) return { path: abs, worktree: null };\n  return mapInto(abs, worktree);\n}\nfunction mapInto(abs, worktree) {\n  const rel = path2.relative(worktree.worktreeTop, abs);\n  return { path: rel ? path2.join(worktree.mainTop, rel) : worktree.mainTop, worktree };\n}\nfunction canonicalProjectDir(dir) {\n  const abs = path2.resolve(dir);\n  const found = inspect(abs);\n  if (!found.worktree) return found.rejected ? { projectRoot: abs, worktree: null, rejected: found.rejected } : { projectRoot: abs, worktree: null };\n  const mapped = mapInto(abs, found.worktree);\n  let projectRoot = mapped.path;\n  try {\n    if (!fs.statSync(projectRoot).isDirectory()) projectRoot = mapped.worktree.mainTop;\n  } catch {\n    projectRoot = mapped.worktree.mainTop;\n  }\n  return { projectRoot, worktree: mapped.worktree };\n}\nfunction resolveHookRoots(eventCwd, env = process.env, cwd = () => process.cwd()) {\n  const claude = env.CLAUDE_PROJECT_DIR;\n  const explicit = env.DEEPPAIRING_PROJECT_ROOT;\n  if (!claude && explicit) return { projectRoot: explicit, workspaceRoot: explicit, worktree: null };\n  const raw = claude || (typeof eventCwd === "string" && eventCwd ? eventCwd : "") || cwd();\n  try {\n    const { projectRoot, worktree, rejected } = canonicalProjectDir(raw);\n    if (worktree) return { projectRoot, workspaceRoot: raw, worktree };\n    return rejected ? { projectRoot: raw, workspaceRoot: raw, worktree: null, rejected } : { projectRoot: raw, workspaceRoot: raw, worktree: null };\n  } catch {\n    return { projectRoot: raw, workspaceRoot: raw, worktree: null };\n  }\n}\n\n// src/hooks/hook-state.ts\nimport fs2 from "node:fs";\nimport path3 from "node:path";\nvar FIRE_LOG_CAP = 50;\nvar LOCK_STALE_MS = 5e3;\nvar LOCK_SPIN_MS = 2;\nvar LOCK_MAX_WAIT_MS = 500;\nfunction errnoCode(err) {\n  if (typeof err === "object" && err !== null && "code" in err) {\n    const code = err.code;\n    if (typeof code === "string") return code;\n  }\n  return void 0;\n}\nfunction hookErrorMessage(err) {\n  if (typeof err === "object" && err !== null && "message" in err) {\n    const message = err.message;\n    if (typeof message === "string") return message;\n  }\n  return String(err);\n}\nfunction resolveHookProjectRoot(eventCwd) {\n  return resolveHookRoots(eventCwd).projectRoot;\n}\nfunction sleepSync(ms) {\n  try {\n    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);\n  } catch {\n  }\n}\nfunction acquireHookStateLock(statePath, _now = Date.now()) {\n  const lock = `${statePath}.lock`;\n  const deadline = process.hrtime.bigint() + BigInt(LOCK_MAX_WAIT_MS) * 1000000n;\n  let brokeStale = false;\n  for (; ; ) {\n    try {\n      fs2.closeSync(fs2.openSync(lock, fs2.constants.O_CREAT | fs2.constants.O_EXCL | fs2.constants.O_WRONLY));\n      return lock;\n    } catch (error) {\n      if (errnoCode(error) !== "EEXIST") return null;\n      try {\n        if (!brokeStale && Date.now() - fs2.statSync(lock).mtimeMs > LOCK_STALE_MS) {\n          brokeStale = true;\n          fs2.unlinkSync(lock);\n          continue;\n        }\n      } catch (staleErr) {\n        if (errnoCode(staleErr) !== "ENOENT") return null;\n      }\n      if (process.hrtime.bigint() >= deadline) return null;\n      sleepSync(LOCK_SPIN_MS);\n    }\n  }\n}\nfunction releaseHookStateLock(lock) {\n  if (!lock) return;\n  try {\n    fs2.unlinkSync(lock);\n  } catch {\n  }\n}\nfunction readHookState(statePath) {\n  let raw;\n  try {\n    raw = fs2.readFileSync(statePath, "utf-8");\n  } catch {\n    return { version: 1 };\n  }\n  try {\n    const parsed = JSON.parse(raw);\n    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;\n  } catch {\n  }\n  try {\n    const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");\n    fs2.writeFileSync(`${statePath}.corrupt-${stamp}`, raw);\n  } catch {\n  }\n  return { version: 1 };\n}\nfunction writeHookStateAtomic(statePath, state) {\n  const tmp = `${statePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 10)}`;\n  try {\n    fs2.writeFileSync(tmp, JSON.stringify(state));\n    fs2.renameSync(tmp, statePath);\n  } catch (err) {\n    try {\n      fs2.unlinkSync(tmp);\n    } catch {\n    }\n    throw err;\n  }\n}\nfunction appendHookFire(statePath, fire, mutate) {\n  mutateHookState(statePath, (state) => {\n    const fires = Array.isArray(state.fires) ? state.fires : [];\n    fires.push(fire);\n    state.fires = fires.slice(-FIRE_LOG_CAP);\n    mutate?.(state);\n  });\n}\nfunction mutateHookState(statePath, mutate, opts = {}) {\n  try {\n    if (opts.createDir === false) {\n      if (!fs2.statSync(path3.dirname(statePath)).isDirectory()) return;\n    } else {\n      fs2.mkdirSync(path3.dirname(statePath), { recursive: true });\n    }\n    const lock = acquireHookStateLock(statePath);\n    try {\n      const state = readHookState(statePath);\n      state.version = 1;\n      mutate(state);\n      writeHookStateAtomic(statePath, state);\n    } finally {\n      releaseHookStateLock(lock);\n    }\n  } catch {\n  }\n}\nfunction hookStatePath(projectRoot) {\n  return path3.join(projectRoot, ".deeppairing", "hooks-state.json");\n}\n\n// src/hooks/checkpoint-hook.ts\nvar HOOK_NAME = "checkpoint";\nvar EDIT_TOOLS = ["Write", "Edit", "MultiEdit"];\nvar RECEIPT_TTL_MS = 60 * 1e3;\nvar SKIP_BASENAMES = /* @__PURE__ */ new Set([\n  // Lockfiles only \u2014 manifest files (package.json, Cargo.toml, etc.) are\n  // policy and should still nag.\n  "package-lock.json",\n  "pnpm-lock.yaml",\n  "yarn.lock",\n  "bun.lockb",\n  "uv.lock",\n  "poetry.lock",\n  "Cargo.lock",\n  "Gemfile.lock",\n  "go.sum",\n  "composer.lock"\n]);\nvar SKIP_PATH_PREFIXES = [\n  // Generated / vendored output \u2014 not human-authored source.\n  "dist/",\n  "build/",\n  "node_modules/",\n  ".deeppairing/",\n  ".next/",\n  ".turbo/",\n  ".cache/",\n  "coverage/",\n  ".nyc_output/",\n  // IDE-local config \u2014 workspace settings, not project decisions.\n  ".vscode/",\n  ".idea/"\n];\nfunction isTrivialFile(filePath) {\n  if (!filePath || filePath === "(unknown)") return false;\n  const norm = filePath.replace(/\\\\/g, "/");\n  const base = norm.split("/").pop() || "";\n  if (SKIP_BASENAMES.has(base)) return true;\n  for (const prefix of SKIP_PATH_PREFIXES) {\n    if (norm.includes("/" + prefix) || norm.startsWith(prefix)) return true;\n  }\n  return false;\n}\nvar NAG = "deepPairing: {TOOL} on {FILE} with no present_code_change for it. Present EVERY code change BEFORE the Write/Edit \\u2014 including small follow-on edits, new files (tests, configs), and each file of a multi-file change, not just the \'main\' one. A write straight to disk never reaches the human\'s review surface; they can\'t see or comment on it. If you skipped this for prior edits this session, backfill them now with present_code_change. (Per-Edit Checkpoint rule. Lockfiles and generated paths are auto-skipped.)\\n";\nfunction claimReceipt(dpDir, sessionId, absolutePath, now) {\n  const key = crypto2.createHash("sha256").update(absolutePath).digest("hex");\n  const markerPath = path4.join(dpDir, "sessions", sessionId, "code-checkpoints", key + ".json");\n  const claimPath = markerPath + ".claim." + process.pid + "." + crypto2.randomBytes(8).toString("hex");\n  fs3.renameSync(markerPath, claimPath);\n  try {\n    const m = JSON.parse(fs3.readFileSync(claimPath, "utf8"));\n    if (!m || typeof m !== "object") return false;\n    const r = m;\n    const at = typeof r.at === "string" ? Date.parse(r.at) : NaN;\n    const expiresAt = r.expiresAt === void 0 ? at + RECEIPT_TTL_MS : typeof r.expiresAt === "string" ? Date.parse(r.expiresAt) : NaN;\n    return r.version === 1 && r.sessionId === sessionId && r.filePath === absolutePath && typeof r.artifactId === "string" && r.artifactId.length > 0 && Number.isFinite(at) && Number.isFinite(expiresAt) && expiresAt >= at && now >= at && // a future-dated receipt is a clock fault, not coverage\n    now <= expiresAt;\n  } finally {\n    try {\n      fs3.unlinkSync(claimPath);\n    } catch {\n    }\n  }\n}\nfunction runCheckpointHook(stdin2, now = Date.now()) {\n  let statePath = hookStatePath(resolveHookProjectRoot());\n  let resolvedCandidateIds = [];\n  function exit(code, reason) {\n    appendHookFire(statePath, { at: (/* @__PURE__ */ new Date()).toISOString(), hook: HOOK_NAME, exitCode: code, reason, resolvedCandidateIds });\n    process.exit(code);\n  }\n  try {\n    const ev = stdin2 ? JSON.parse(stdin2) : {};\n    const projectRoot = path4.resolve(resolveHookProjectRoot(ev.cwd));\n    statePath = hookStatePath(projectRoot);\n    const tool = typeof ev.tool_name === "string" && ev.tool_name || typeof ev.toolName === "string" && ev.toolName || "";\n    if (!EDIT_TOOLS.includes(tool)) exit(0, "skip: tool=" + (tool || "(unknown)"));\n    const rawFilePath = (ev.tool_input && (ev.tool_input.file_path ?? ev.tool_input.filePath)) ?? (ev.input && ev.input.file_path);\n    const filePath = typeof rawFilePath === "string" && rawFilePath ? rawFilePath : "(unknown)";\n    if (isTrivialFile(filePath)) exit(0, "skip: trivial file " + filePath);\n    const dpDir = path4.join(projectRoot, ".deeppairing");\n    if (!fs3.existsSync(path4.join(dpDir, "sessions"))) exit(0, "skip: no sessions dir");\n    const eventHasIdentity = Object.prototype.hasOwnProperty.call(ev, "session_id");\n    const malformedEventIdentity = eventHasIdentity && ev.session_id !== "" && typeof ev.session_id !== "string";\n    const rawCandidates = [ev.session_id, process.env.CLAUDE_CODE_SESSION_ID];\n    const anyNonemptyIdentity = rawCandidates.some((value) => typeof value === "string" && value.length > 0);\n    for (const raw of rawCandidates) {\n      if (typeof raw !== "string" || !raw) continue;\n      const derived = deriveSessionId(projectRoot, raw);\n      if (derived.mode !== "split") continue;\n      if (!resolvedCandidateIds.includes(derived.sessionId)) resolvedCandidateIds.push(derived.sessionId);\n    }\n    if (resolvedCandidateIds.length === 0 && !anyNonemptyIdentity && !malformedEventIdentity) {\n      resolvedCandidateIds = [deriveSessionId(projectRoot, "").sessionId];\n    }\n    let covered = false;\n    if (filePath !== "(unknown)" && filePath.trim()) {\n      for (const sessionId of resolvedCandidateIds) {\n        try {\n          covered = claimReceipt(dpDir, sessionId, canonicalizeWorktreePath(path4.resolve(projectRoot, filePath)).path, now);\n        } catch {\n        }\n        if (covered) break;\n      }\n    }\n    if (!covered) {\n      process.stderr.write(NAG.replace("{TOOL}", tool).replace("{FILE}", filePath));\n      exit(0, "nag: " + tool + " on " + filePath);\n    }\n    exit(0, "pass: fresh checkpoint covers " + filePath);\n  } catch (err) {\n    exit(0, "error: " + hookErrorMessage(err));\n  }\n}\n\n// src/cli/checkpoint-hook-entry.ts\nvar stdin = "";\nprocess.stdin.setEncoding("utf-8");\nprocess.stdin.on("data", (c) => {\n  stdin += c;\n});\nprocess.stdin.on("end", () => {\n  runCheckpointHook(stdin);\n});\n';
 
 // src/cli/setup-tasks.ts
 function writeHookSettings(settingsPath, settings, opts) {
@@ -17757,7 +17757,20 @@ function resolveGuardrailRulesUrl() {
   const found = candidates.find((c) => fs11.existsSync(c));
   return pathToFileURL(found ?? distCandidate).href;
 }
-function preflightHookScript(coreUrl, rulesUrl) {
+function resolvePreflightDiagnosticsUrl() {
+  const here = path9.dirname(fileURLToPath3(import.meta.url));
+  const besideEntry = path9.join(here, "preflight-diagnostics.js");
+  const distCandidate = path9.join(here, "..", "hooks", "preflight-diagnostics.js");
+  const candidates = [
+    besideEntry,
+    distCandidate,
+    path9.join(here, "../../dist/hooks/preflight-diagnostics.js")
+    // src/cli via tsx, after a build
+  ];
+  const found = candidates.find((c) => fs11.existsSync(c));
+  return pathToFileURL(found ?? distCandidate).href;
+}
+function preflightHookScript(coreUrl, rulesUrl, diagUrl) {
   return `#!/usr/bin/env node
 // deepPairing PreToolUse preflight hook \u2014 installed by ensurePreflightHook.
 // GENERATED, do not edit. ESM (.mjs): use import, not require.
@@ -17772,6 +17785,9 @@ function preflightHookScript(coreUrl, rulesUrl) {
 // (migrations, .github/workflows, infra, .env) with no live pre-work ceremony in
 // the session asks the human too. Explicit strict-stop instead denies and stops
 // continuation; matcher/read/import errors still fail open in either mode.
+// #546 \u2014 a fault that fails open is NOTED (a class, a fixed source label and an
+// error code; never a message, path or content) into hooks-state's
+// preflightFailures field. The decision, stderr and exit status are unchanged.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -17780,6 +17796,10 @@ const CORE_URL = ${JSON.stringify(coreUrl)};
 // Q1 \u2014 the guardrail RULE TABLE's leaf module (node:path only), stamped the
 // same way. See the guardrail note below the ledger pre-check.
 const RULES_URL = ${JSON.stringify(rulesUrl)};
+// #546 \u2014 the failure-diagnostics leaf, imported only on a failure path.
+const DIAG_URL = ${JSON.stringify(diagUrl)};
+// [kind, source, error] triples; classified by the leaf at flush time.
+const failed = [];
 
 // F11 \u2014 the fire log + the guardrail dedup stamp are ONE read-modify-write, and
 // they live in the matcher core (mod.recordHookFire) so this generated copy and
@@ -17794,7 +17814,8 @@ function ledgersPresent(projectRoot) {
   try {
     const prefs = JSON.parse(fs.readFileSync(path.join(projectRoot, ".deeppairing", "preferences.json"), "utf-8"));
     if (Array.isArray(prefs && prefs.rejectedApproaches) && prefs.rejectedApproaches.length > 0) return true;
-  } catch {}
+    if (!prefs || typeof prefs !== "object" || Array.isArray(prefs) || (prefs.rejectedApproaches !== undefined && !Array.isArray(prefs.rejectedApproaches))) failed.push(["schema", "preferences"]);
+  } catch (err) { failed.push(["ledger", "preferences", err]); }
   try {
     if (fs.existsSync(path.join(projectRoot, ".deeppairing", "team.json"))) return true;
   } catch {}
@@ -17849,7 +17870,8 @@ async function targetsGuardrailPath(projectRoot, toolInput) {
     const rules = await import(RULES_URL);
     // #470 slice 4 \u2014 a deepPairing state file is the third reason to keep going.
     return rules.matchGuardrailPath(projectRoot, [fp]) !== null || rules.toolInputTargetsDeeppairingState(projectRoot, toolInput);
-  } catch {
+  } catch (err) {
+    failed.push(["import", "rules", err]);
     // FAIL SAFE, not fail-silent: if the rule module can't be loaded (an
     // unbuilt tree, a moved install), keep going and let the matcher core \u2014
     // which carries the same table \u2014 decide. A load error must never be the
@@ -17862,39 +17884,59 @@ async function targetsGuardrailPath(projectRoot, toolInput) {
 let input = "";
 process.stdin.setEncoding("utf-8");
 process.stdin.on("data", (d) => { input += d; });
+let mod = null;
+let projectRoot = process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || process.cwd();
+const failures = [];
+// #546 \u2014 flush once, then exit. Free when nothing failed (no import, no I/O).
+async function finish() {
+  try {
+    if (failed.length > 0 || failures.length > 0) {
+      const diag = mod && typeof mod.recordPreflightFailures === "function" ? mod : await import(DIAG_URL);
+      diag.recordPreflightFailures(projectRoot, [...failed.map((f) => diag.noteFailure(f[0], f[1], f[2])), ...failures]);
+    }
+  } catch {}
+  process.exit(0);
+}
 process.stdin.on("end", async () => {
+  let stage = "input";
   try {
     const ev = JSON.parse(input || "{}");
+    if (input && (!ev || typeof ev !== "object" || Array.isArray(ev))) failed.push(["input", "stdin"]);
     const toolName = ev.tool_name || "";
     const toolInput = ev.tool_input || ev.input || {};
     // R1 (#279) \u2014 one documented precedence in every hook lane:
     // CLAUDE_PROJECT_DIR > DEEPPAIRING_PROJECT_ROOT > the event's cwd > ours.
-    let projectRoot = process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || ev.cwd || process.cwd();
+    projectRoot = process.env.CLAUDE_PROJECT_DIR || process.env.DEEPPAIRING_PROJECT_ROOT || ev.cwd || process.cwd();
+    stage = "route";
     // #532 \u2014 inside a git LINKED WORKTREE the project is the main checkout (the
     // shared ledger), via the rule leaf's resolveHookRoots. Only paid when the
     // nearest .git is a FILE; a main checkout or non-git dir skips the import.
     if (nearestDotGitIsFile(projectRoot)) {
-      try { projectRoot = (await import(RULES_URL)).resolveHookRoots(ev.cwd).projectRoot; } catch {}
+      try { projectRoot = (await import(RULES_URL)).resolveHookRoots(ev.cwd).projectRoot; } catch (err) { failed.push(["import", "rules", err]); }
     }
     if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit" && toolName !== "NotebookEdit") {
-      process.exit(0);
+      return await finish();
     }
     if (!ledgersPresent(projectRoot) && !(await targetsGuardrailPath(projectRoot, toolInput))) {
-      process.exit(0); // nothing to match against \u2014 skip the matcher import
+      return await finish(); // nothing to match against \u2014 skip the matcher import
     }
-    const mod = await import(CORE_URL);
+    stage = "import";
+    mod = await import(CORE_URL);
     const config = mod.resolvePreflightMode(process.env.DEEPPAIRING_PREFLIGHT_MODE);
-    const decision = mod.evaluatePreflightHook({ toolName, toolInput, projectRoot, mode: config.mode });
+    stage = "evaluate";
+    const decision = mod.evaluatePreflightHook({ toolName, toolInput, projectRoot, mode: config.mode, failures });
+    stage = "output";
     if (decision && decision.fire) {
       mod.recordHookFire(projectRoot, decision, undefined, config.mode);
       process.stdout.write(JSON.stringify(mod.preflightHookOutput(decision, config)));
     }
     // no match = exit 0 with no decision JSON (tool proceeds)
-    process.exit(0);
+    return await finish();
   } catch (err) {
     // FAIL OPEN \u2014 a broken hook must never block the user's edits.
     try { process.stderr.write("[deepPairing] preflight hook error: " + String((err && err.message) || err) + "\\n"); } catch {}
-    process.exit(0);
+    failed.push(stage === "input" ? ["input", "stdin", err] : stage === "import" ? ["import", "core", err] : ["evaluate", stage === "evaluate" ? "matcher" : "hook", err]);
+    return await finish();
   }
 });
 `;
@@ -17906,7 +17948,7 @@ function ensurePreflightHook(projectRoot, opts = {}) {
   try {
     const core = resolvePreflightCoreUrl();
     fs11.mkdirSync(path9.dirname(scriptPath), { recursive: true });
-    fs11.writeFileSync(scriptPath, preflightHookScript(core.url, resolveGuardrailRulesUrl()));
+    fs11.writeFileSync(scriptPath, preflightHookScript(core.url, resolveGuardrailRulesUrl(), resolvePreflightDiagnosticsUrl()));
     fs11.chmodSync(scriptPath, 493);
     const inactiveNote = core.exists ? "" : " (matcher core not built yet \u2014 gate inactive until next build)";
     const read = readAskSettings(settingsPath);
@@ -18056,6 +18098,196 @@ function worktreeMissingHooksMessage(d, conditional = false) {
   return conditional ? `${base} If the deepPairing plugin is enabled for this project its hooks apply here; if not, run \`deeppairing init\` here, or use the plugin install.` : `${base} Run \`deeppairing init\` here, or use the plugin install.`;
 }
 
+// src/cli/preflight-doctor.ts
+import fs13 from "node:fs";
+import os5 from "node:os";
+import path12 from "node:path";
+import { fileURLToPath as fileURLToPath4 } from "node:url";
+
+// src/hooks/hook-state.ts
+import path11 from "node:path";
+function hookStatePath(projectRoot) {
+  return path11.join(projectRoot, ".deeppairing", "hooks-state.json");
+}
+
+// src/hooks/preflight-diagnostics.ts
+var PREFLIGHT_FAILURE_CLASSES = [
+  "input_malformed",
+  "ledger_unreadable",
+  "ledger_corrupt",
+  "matcher_import_failed",
+  "evaluator_threw",
+  "session_store_unreadable"
+];
+var PREFLIGHT_FAILURE_SOURCES = [
+  "stdin",
+  "preferences",
+  "team",
+  "sessions",
+  "core",
+  "rules",
+  "matcher",
+  "backstop",
+  "state",
+  "hook"
+];
+var PREFLIGHT_FAILURES_FIELD = "preflightFailures";
+var PREFLIGHT_FAILURE_COUNT_CAP = 1e6;
+var CLASS_SET = new Set(PREFLIGHT_FAILURE_CLASSES);
+var SOURCE_SET = new Set(PREFLIGHT_FAILURE_SOURCES);
+function validIso(v) {
+  return typeof v === "string" && v.length <= 40 && Number.isFinite(Date.parse(v));
+}
+function readPreflightFailures(state) {
+  const out = {};
+  const field = state && typeof state === "object" ? state[PREFLIGHT_FAILURES_FIELD] : void 0;
+  if (!field || typeof field !== "object" || Array.isArray(field)) return out;
+  for (const cls of PREFLIGHT_FAILURE_CLASSES) {
+    const e = field[cls];
+    if (!e || typeof e !== "object") continue;
+    const count2 = typeof e.count === "number" && Number.isFinite(e.count) ? Math.max(0, Math.min(Math.floor(e.count), PREFLIGHT_FAILURE_COUNT_CAP)) : 0;
+    if (count2 === 0 || !validIso(e.firstAt) || !validIso(e.lastAt)) continue;
+    const detail = typeof e.detail === "string" && /^[a-z]+:[A-Za-z0-9_]{1,40}$/.test(e.detail) ? e.detail : "hook:Error";
+    out[cls] = { count: count2, firstAt: e.firstAt, lastAt: e.lastAt, detail };
+  }
+  return out;
+}
+
+// src/cli/preflight-doctor.ts
+var PREFLIGHT_MODE_ENV = "DEEPPAIRING_PREFLIGHT_MODE";
+function classifyModeValue(value) {
+  if (value === void 0) return { kind: "unset" };
+  if (value === "" || value === "ask") return { kind: "ask" };
+  if (value === "strict-stop") return { kind: "strict-stop" };
+  return { kind: "invalid" };
+}
+function readSettingsMode(file2) {
+  let raw;
+  try {
+    raw = fs13.readFileSync(file2, "utf-8");
+  } catch (err) {
+    const code = err?.code;
+    return code === "ENOENT" || code === "ENOTDIR" ? { kind: "no-file" } : { kind: "unreadable" };
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    const env = parsed && typeof parsed === "object" ? parsed.env : void 0;
+    if (env === void 0) return { kind: "unset" };
+    if (!env || typeof env !== "object" || Array.isArray(env)) return { kind: "unreadable" };
+    const has = Object.prototype.hasOwnProperty.call(env, PREFLIGHT_MODE_ENV);
+    return has ? classifyModeValue(env[PREFLIGHT_MODE_ENV]) : { kind: "unset" };
+  } catch {
+    return { kind: "unreadable" };
+  }
+}
+function preflightModeSources(cwd, opts = {}) {
+  const home = opts.homeDir ?? os5.homedir();
+  const env = opts.env ?? process.env;
+  const files = [
+    ["settings env, user", path12.join(home, ".claude", "settings.json")],
+    ["settings env, project", path12.join(cwd, ".claude", "settings.json")],
+    ["settings env, local", path12.join(cwd, ".claude", "settings.local.json")]
+  ];
+  const out = files.map(([label, p]) => ({ label, path: p, reading: readSettingsMode(p) }));
+  out.push({
+    label: "doctor's own shell",
+    reading: Object.prototype.hasOwnProperty.call(env, PREFLIGHT_MODE_ENV) ? classifyModeValue(env[PREFLIGHT_MODE_ENV]) : { kind: "unset" }
+  });
+  return out;
+}
+function describeModeReading(r) {
+  switch (r.kind) {
+    case "no-file":
+      return "no settings file";
+    case "unreadable":
+      return "settings file unreadable or not JSON (not inspected)";
+    case "unset":
+      return "not set (default ask)";
+    case "ask":
+      return "ask";
+    case "strict-stop":
+      return "strict-stop";
+    case "invalid":
+      return "INVALID value (not shown); the hook treats a matching edit as strict-stop and warns";
+  }
+}
+var PREFLIGHT_FAILURE_MEANING = {
+  input_malformed: "Claude Code sent an event the hook could not read, so no check ran for it.",
+  ledger_unreadable: "a ledger file (.deeppairing/preferences.json or team.json) exists but could not be read, so its rules were not checked.",
+  ledger_corrupt: "a ledger file (.deeppairing/preferences.json or team.json) is not valid JSON or has the wrong shape, so its rules were not checked.",
+  matcher_import_failed: "the init-installed hook could not load part of the matcher; rebuild deepPairing, then start a session so the hook is re-stamped.",
+  evaluator_threw: "the matcher threw while checking an edit (often one ill-typed ledger entry), so the whole check was skipped.",
+  session_store_unreadable: "no session store could be read, so the guardrail backstop stayed silent."
+};
+function missingPreflightStamps(cwd) {
+  let src;
+  try {
+    src = fs13.readFileSync(path12.join(cwd, ".deeppairing", "hooks", "preflight.mjs"), "utf-8");
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const name of ["CORE_URL", "RULES_URL", "DIAG_URL"]) {
+    const m = new RegExp(`const ${name} = ("[^"\\n]*");`).exec(src);
+    if (!m) continue;
+    try {
+      const p = fileURLToPath4(JSON.parse(m[1]));
+      if (!fs13.existsSync(p)) out.push({ name, path: p });
+    } catch {
+      out.push({ name, path: "(unparseable URL)" });
+    }
+  }
+  return out;
+}
+function buildPreflightDoctorReport(cwd, opts = {}) {
+  let state = null;
+  try {
+    state = JSON.parse(fs13.readFileSync(hookStatePath(cwd), "utf-8"));
+  } catch {
+    state = null;
+  }
+  const recorded = readPreflightFailures(state);
+  const failures = PREFLIGHT_FAILURE_CLASSES.filter((cls) => recorded[cls]).map((cls) => ({ cls, entry: recorded[cls] }));
+  const modes = preflightModeSources(cwd, opts);
+  return {
+    failures,
+    modes,
+    anyInvalidMode: modes.some((m) => m.reading.kind === "invalid"),
+    missingStamps: missingPreflightStamps(cwd)
+  };
+}
+function preflightDoctorLines(report) {
+  const lines = [];
+  if (report.failures.length === 0) {
+    lines.push({ mark: "ok", text: "No preflight failures recorded", details: [] });
+  } else {
+    lines.push({
+      mark: "warn",
+      text: "Preflight failures recorded. Each one failed open: the edit went ahead without that part of the check, exactly as before.",
+      details: report.failures.flatMap(({ cls, entry: entry2 }) => [
+        `${cls} \xD7${entry2.count} (${entry2.detail}; first ${entry2.firstAt}, last ${entry2.lastAt})`,
+        `  ${PREFLIGHT_FAILURE_MEANING[cls]}`
+      ])
+    });
+  }
+  for (const s of report.missingStamps) {
+    lines.push({
+      mark: "warn",
+      text: `The installed preflight hook points ${s.name} at a missing file, so that part fails open`,
+      details: [s.path, "Rebuild deepPairing, then start a session so the daemon re-stamps the hook."]
+    });
+  }
+  lines.push({
+    mark: report.anyInvalidMode ? "warn" : "info",
+    text: `Preflight mode (${PREFLIGHT_MODE_ENV}) as visible to doctor${report.anyInvalidMode ? ": an INVALID value is set" : ""}`,
+    details: [
+      ...report.modes.map((m) => `${m.label}${m.path ? ` (${m.path})` : ""}: ${describeModeReading(m.reading)}`),
+      "Claude Code merges its launch environment with these settings env blocks; doctor is a separate process and cannot see the hook's effective value."
+    ]
+  });
+  return lines;
+}
+
 // src/cli/doctor.ts
 function green(text) {
   return `\x1B[32m${text}\x1B[0m`;
@@ -18074,14 +18306,14 @@ function bold(text) {
 }
 async function doctor(cwd, opts = {}) {
   console.log(bold("\n  deepPairing doctor\n"));
-  const dpDir = path11.join(cwd, ".deeppairing");
-  const infoFile = path11.join(dpDir, "daemon.json");
-  const logFile = path11.join(dpDir, "daemon.log");
+  const dpDir = path13.join(cwd, ".deeppairing");
+  const infoFile = path13.join(dpDir, "daemon.json");
+  const logFile = path13.join(dpDir, "daemon.log");
   const fixes = [];
   let info = null;
-  if (fs13.existsSync(infoFile)) {
+  if (fs14.existsSync(infoFile)) {
     try {
-      info = JSON.parse(fs13.readFileSync(infoFile, "utf-8"));
+      info = JSON.parse(fs14.readFileSync(infoFile, "utf-8"));
       console.log(`  ${green("\u2713")} .deeppairing/daemon.json present`);
       console.log(`    ${dim("pid:")}       ${info?.pid ?? "?"}`);
       console.log(`    ${dim("port:")}      ${info?.port ?? "?"}`);
@@ -18092,7 +18324,7 @@ async function doctor(cwd, opts = {}) {
         label: "Delete malformed .deeppairing/daemon.json",
         apply: () => {
           try {
-            fs13.unlinkSync(infoFile);
+            fs14.unlinkSync(infoFile);
             return { ok: true, message: "Deleted" };
           } catch (e) {
             return { ok: false, message: errorMessage(e) };
@@ -18116,7 +18348,7 @@ async function doctor(cwd, opts = {}) {
         label: `Remove stale daemon.json (PID ${info.pid} is dead)`,
         apply: () => {
           try {
-            fs13.unlinkSync(infoFile);
+            fs14.unlinkSync(infoFile);
             return { ok: true, message: "Removed" };
           } catch (e) {
             return { ok: false, message: errorMessage(e) };
@@ -18289,9 +18521,9 @@ async function doctor(cwd, opts = {}) {
     }
   }
   let daemonFatalHint = null;
-  if (fs13.existsSync(logFile)) {
+  if (fs14.existsSync(logFile)) {
     try {
-      const content = fs13.readFileSync(logFile, "utf-8");
+      const content = fs14.readFileSync(logFile, "utf-8");
       const allLines = content.trim().split("\n");
       const lines = allLines.slice(-10);
       console.log(`
@@ -18319,9 +18551,9 @@ async function doctor(cwd, opts = {}) {
       for (const l of rest) console.log(`    ${dim(l)}`);
     }
   }
-  const gitignorePath = path11.join(cwd, ".gitignore");
-  if (fs13.existsSync(gitignorePath)) {
-    const content = fs13.readFileSync(gitignorePath, "utf-8");
+  const gitignorePath = path13.join(cwd, ".gitignore");
+  if (fs14.existsSync(gitignorePath)) {
+    const content = fs14.readFileSync(gitignorePath, "utf-8");
     if (content.includes(".deeppairing/") || content.includes(".deeppairing")) {
       console.log(`  ${green("\u2713")} .gitignore lists .deeppairing/`);
     } else {
@@ -18337,7 +18569,7 @@ async function doctor(cwd, opts = {}) {
   } else {
     console.log(`  ${dim("\xB7")} No .gitignore in this directory (skipping that check)`);
   }
-  const hookLocalPath = path11.join(cwd, ".claude", "settings.local.json");
+  const hookLocalPath = path13.join(cwd, ".claude", "settings.local.json");
   const pluginManaged = opts.pluginManaged ?? isPluginManaged();
   const pluginHookSource = opts.protectSharedScopes ? "declared by the installed plugin (activation not verified)" : "provided by the plugin";
   if (pluginManaged && opts.protectSharedScopes) {
@@ -18455,6 +18687,15 @@ async function doctor(cwd, opts = {}) {
         });
     }
   }
+  try {
+    for (const line of preflightDoctorLines(buildPreflightDoctorReport(cwd))) {
+      const mark = line.mark === "ok" ? green("\u2713") : line.mark === "warn" ? yellow("!") : dim("\xB7");
+      console.log(`  ${mark} ${line.text}`);
+      for (const d of line.details) console.log(`    ${dim(d)}`);
+    }
+  } catch (err) {
+    console.log(`  ${dim(`\xB7 Could not check preflight diagnostics: ${err}`)}`);
+  }
   if (!pluginManaged || opts.protectSharedScopes) {
     const wtMissing = detectWorktreeMissingHooks(opts.workspaceDir ?? cwd);
     if (wtMissing) {
@@ -18536,7 +18777,7 @@ async function doctor(cwd, opts = {}) {
     console.log(`  ${dim(`\xB7 Could not check philosophy ledger health: ${err}`)}`);
   }
   try {
-    const globalDir = path11.dirname(getGlobalStore().getLedgerPath());
+    const globalDir = path13.dirname(getGlobalStore().getLedgerPath());
     const roots = [dpDir, globalDir];
     const rank = { clear: 0, doctor: 1, recover: 2, break: 3, lock: 4 };
     const locks = inspectLocks(roots).sort((a, b) => rank[a.kind] - rank[b.kind]);
@@ -18554,7 +18795,7 @@ async function doctor(cwd, opts = {}) {
         } else if (lock.state === "dead") {
           fixes.push({
             label: `Remove dead-owner ${what.toLowerCase()} ${lock.path}`,
-            requiresExplicitConfirmation: opts.protectSharedScopes && (lock.path === globalDir || lock.path.startsWith(globalDir + path11.sep)),
+            requiresExplicitConfirmation: opts.protectSharedScopes && (lock.path === globalDir || lock.path.startsWith(globalDir + path13.sep)),
             apply: () => {
               try {
                 const r = clearDeadLockFile(lock.path);
@@ -18639,9 +18880,9 @@ function confirmPrompt(question, defaultYes = false) {
 }
 
 // src/cli/doctor-entry.ts
-import { fileURLToPath as fileURLToPath4 } from "node:url";
+import { fileURLToPath as fileURLToPath5 } from "node:url";
 var argv = process.argv.slice(2);
-var entry = fileURLToPath4(import.meta.url);
+var entry = fileURLToPath5(import.meta.url);
 var help = `deepPairing doctor
 
 Usage: node "${entry}" [--fix] [--yes | -y]

@@ -242,16 +242,25 @@ function writeHookStateAtomic(statePath, state) {
   }
 }
 function appendHookFire(statePath, fire, mutate) {
+  mutateHookState(statePath, (state) => {
+    const fires = Array.isArray(state.fires) ? state.fires : [];
+    fires.push(fire);
+    state.fires = fires.slice(-FIRE_LOG_CAP);
+    mutate?.(state);
+  });
+}
+function mutateHookState(statePath, mutate, opts = {}) {
   try {
-    fs2.mkdirSync(path2.dirname(statePath), { recursive: true });
+    if (opts.createDir === false) {
+      if (!fs2.statSync(path2.dirname(statePath)).isDirectory()) return;
+    } else {
+      fs2.mkdirSync(path2.dirname(statePath), { recursive: true });
+    }
     const lock = acquireHookStateLock(statePath);
     try {
       const state = readHookState(statePath);
       state.version = 1;
-      const fires = Array.isArray(state.fires) ? state.fires : [];
-      fires.push(fire);
-      state.fires = fires.slice(-FIRE_LOG_CAP);
-      mutate?.(state);
+      mutate(state);
       writeHookStateAtomic(statePath, state);
     } finally {
       releaseHookStateLock(lock);
