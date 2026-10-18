@@ -132,13 +132,13 @@ describe("plugin hook bundles (smoke)", () => {
     // The clause dogfood singled out — it says what makes the prompt stop.
     expect(reason).toContain("is what makes this prompt stop");
     // F1 — the mechanism is PROJECT-scoped and the wording says so.
-    expect(reason).toContain("is live in this project's recent sessions");
+    expect(reason).toContain("has recent approval covering this file");
   });
 
   it.skipIf(!bundlesBuilt)("P1 (round-11) — preflight is SILENT on the same write once the escalated arc is in flight", () => {
     fs.writeFileSync(
       path.join(scratch, ".deeppairing", "sessions", "s1", "artifacts.json"),
-      JSON.stringify([{ id: "sp1", type: "spec", status: "approved", createdAt: new Date().toISOString() }]),
+      JSON.stringify([{ id: "sp1", type: "spec", status: "approved", createdAt: new Date().toISOString(), content: { visuals: [{ kind: "file_map", files: [{ path: "migrations/003_drop.sql" }] }] } }]),
     );
     const out = runHook(
       preflightBundle,

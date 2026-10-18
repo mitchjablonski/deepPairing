@@ -39,6 +39,7 @@ import {
 } from "../preflight-hook-core.js";
 import { sessionHasLivePreWorkCeremony } from "../../debrief-gate.js";
 import { GUARDRAIL_EXCLUDED_SEGMENTS } from "../../guardrail-rules.js";
+import { deriveSessionId } from "../../session-id.js";
 
 let dir: string;
 const NOW = Date.UTC(2026, 7, 15, 12, 0, 0);
@@ -48,12 +49,12 @@ const recent = iso(NOW - 60 * 1000);
  *  explicit empty env so a developer's own opt-out can't hide these tests. */
 const ON = {} as Record<string, string | undefined>;
 
-type Art = { id: string; type: string; status: string; createdAt: string };
+type Art = { id: string; type: string; status: string; createdAt: string; content?: unknown };
 const art = (type: string, status = "approved", createdAt: string = recent): Art =>
   ({ id: `${type}-${Math.random().toString(36).slice(2, 8)}`, type, status, createdAt }) as Art;
 
 function seedSession(artifacts: Art[], sessionId = "s1"): void {
-  const sd = path.join(dir, ".deeppairing", "sessions", sessionId);
+  const sd = path.join(dir, ".deeppairing", "sessions", sessionId.startsWith("demo_") ? sessionId : deriveSessionId(dir, sessionId).sessionId);
   fs.mkdirSync(sd, { recursive: true });
   fs.writeFileSync(path.join(sd, "artifacts.json"), JSON.stringify(artifacts));
 }
@@ -61,10 +62,11 @@ function seedSession(artifacts: Art[], sessionId = "s1"): void {
 const edit = (rel: string) => ({ file_path: path.join(dir, rel), new_string: "whatever" });
 /** Evaluate + apply the caller's stamp, i.e. what the hook entries actually do. */
 const evalAndRecord = (rel: string, now = NOW) => {
-  const d = evaluateGuardrailBackstop({ toolInput: edit(rel), projectRoot: dir, now, env: ON });
-  if (d) recordHookFire(dir, d, now);
+  const d = evaluateGuardrailBackstop({ toolInput: edit(rel), projectRoot: dir, now, env: ON, sessionId: "s1" });
+  if (d) recordHookFire(dir, d, now, "ask", "s1");
   return d;
 };
+const readCeremony = () => readSessionCeremony(dir, NOW, undefined, { sessionId: "s1", targetPath: "migrations/1.sql" });
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "dp-guardrail-"));
@@ -386,21 +388,21 @@ describe("sessionHasLivePreWorkCeremony — the ceremony-present predicate", () 
 
 describe("readSessionCeremony — three-way store readout", () => {
   it("reports UNREACHABLE when there is no session store at all", () => {
-    expect(readSessionCeremony(dir, NOW)).toEqual({ reachable: false, hasLiveCeremony: false });
+    expect(readCeremony()).toEqual({ reachable: false, hasLiveCeremony: false });
   });
 
   it("reports reachable + no ceremony for an empty session", () => {
     seedSession([]);
-    expect(readSessionCeremony(dir, NOW)).toEqual({ reachable: true, hasLiveCeremony: false });
+    expect(readCeremony()).toEqual({ reachable: true, hasLiveCeremony: false });
   });
 
-  it("F1 — scope is the PROJECT: a live spec in ANY recent session licenses the edit (and a corrupt sibling doesn't break it)", () => {
+  it("unrelated scopeless ceremony cannot license the edit (and a corrupt sibling doesn't break it)", () => {
     seedSession([], "s1");
     const bad = path.join(dir, ".deeppairing", "sessions", "s2");
     fs.mkdirSync(bad, { recursive: true });
     fs.writeFileSync(path.join(bad, "artifacts.json"), "{ not json");
     seedSession([art("spec")], "s3");
-    expect(readSessionCeremony(dir, NOW)).toEqual({ reachable: true, hasLiveCeremony: true });
+    expect(readCeremony()).toEqual({ reachable: true, hasLiveCeremony: false });
   });
 
   it("Q1 item 3 — a store whose sessions are ALL corrupt reports UNREACHABLE (silent, as SECURITY.md promises)", () => {
@@ -412,7 +414,7 @@ describe("readSessionCeremony — three-way store readout", () => {
     const sd2 = path.join(dir, ".deeppairing", "sessions", "s2");
     fs.mkdirSync(sd2, { recursive: true });
     fs.writeFileSync(path.join(sd2, "artifacts.json"), '{"artifacts":[]}'); // present, not an array
-    expect(readSessionCeremony(dir, NOW)).toEqual({ reachable: false, hasLiveCeremony: false });
+    expect(readCeremony()).toEqual({ reachable: false, hasLiveCeremony: false });
     // …and end to end: the guardrail write passes silently.
     expect(evaluateGuardrailBackstop({ toolInput: edit("migrations/1.sql"), projectRoot: dir, now: NOW, env: ON })).toBeNull();
   });
@@ -422,7 +424,7 @@ describe("readSessionCeremony — three-way store readout", () => {
     const bad = path.join(dir, ".deeppairing", "sessions", "s2");
     fs.mkdirSync(bad, { recursive: true });
     fs.writeFileSync(path.join(bad, "artifacts.json"), "{ not json");
-    expect(readSessionCeremony(dir, NOW)).toEqual({ reachable: true, hasLiveCeremony: false });
+    expect(readCeremony()).toEqual({ reachable: true, hasLiveCeremony: false });
     expect(evaluateGuardrailBackstop({ toolInput: edit("migrations/1.sql"), projectRoot: dir, now: NOW, env: ON })?.fire).toBe(true);
   });
 
@@ -430,27 +432,27 @@ describe("readSessionCeremony — three-way store readout", () => {
     // `now - t <= MAX` with no lower bound made a 2030 spec license every
     // guardrail edit in the project, forever.
     seedSession([art("spec", "approved", iso(NOW + 4 * 365 * 24 * 60 * 60 * 1000))]);
-    expect(readSessionCeremony(dir, NOW).hasLiveCeremony).toBe(false);
+    expect(readCeremony().hasLiveCeremony).toBe(false);
   });
 
   it("Q1 item 2 — small clock skew is still tolerated (a slightly-ahead stamp stays live)", () => {
     seedSession([art("spec", "approved", iso(NOW + CLOCK_SKEW_TOLERANCE_MS - 1000))]);
-    expect(readSessionCeremony(dir, NOW).hasLiveCeremony).toBe(true);
+    expect(readCeremony().hasLiveCeremony).toBe(true);
   });
 
   it("ages ceremony out after one working arc", () => {
     seedSession([art("spec", "approved", iso(NOW - CEREMONY_MAX_AGE_MS - 1000))]);
-    expect(readSessionCeremony(dir, NOW).hasLiveCeremony).toBe(false);
+    expect(readCeremony().hasLiveCeremony).toBe(false);
   });
 
   it("F9 — a missing or unparseable createdAt is NOT eternally recent", () => {
     // Written as literals (not via art()) so the ABSENT key really is absent —
     // passing `undefined` to a defaulted parameter would silently restore it.
     seedSession([{ id: "sp1", type: "spec", status: "approved" } as unknown as Art]);
-    expect(readSessionCeremony(dir, NOW).hasLiveCeremony).toBe(false);
+    expect(readCeremony().hasLiveCeremony).toBe(false);
     fs.rmSync(path.join(dir, ".deeppairing"), { recursive: true, force: true });
     seedSession([{ id: "sp1", type: "spec", status: "approved", createdAt: "not-a-date" }]);
-    expect(readSessionCeremony(dir, NOW).hasLiveCeremony).toBe(false);
+    expect(readCeremony().hasLiveCeremony).toBe(false);
   });
 });
 
@@ -473,13 +475,11 @@ describe("evaluateGuardrailBackstop — the five pinned cases", () => {
     expect(d!.reason).toContain("It's a guardrail path (workflows — it affects every future deploy)");
     expect(d!.reason).toContain("Decline to have it presented for review first");
     // The clause dogfood praised: what would make this stop.
-    expect(d!.reason).toContain("presenting findings, options, a spec, or a plan is what makes this prompt stop");
+    expect(d!.reason).toContain("approved exact file coverage (or approved scopeless pre-work in this session) is what makes this prompt stop");
     // "your pair" read ambiguous when the pair was also reading the string.
     expect(d!.reason).not.toMatch(/your pair/);
     expect(d!.reason).not.toMatch(/\(Agent:/);
-    // F1 — project scope, never "this session".
-    expect(d!.reason).toContain("is live in this project's recent sessions");
-    expect(d!.reason).not.toMatch(/live in this session/);
+    expect(d!.reason).toContain("has recent approval covering this file");
     // The greppable token survives, on the LAST line, with the agent instruction
     // (Claude Code feeds this reason back to the model on a decline).
     const lines = d!.reason!.split("\n");
@@ -606,8 +606,8 @@ describe("dedup (F3) — per class, and per FILE for the irreversible classes", 
   it("re-opens after the window", () => {
     seedSession([]);
     evalAndRecord(".github/workflows/ci.yml");
-    expect(guardrailAskSuppressed(dir, "workflows", ".github/workflows/ci.yml", NOW + GUARDRAIL_ASK_TTL_MS - 1)).toBe(true);
-    expect(guardrailAskSuppressed(dir, "workflows", ".github/workflows/ci.yml", NOW + GUARDRAIL_ASK_TTL_MS + 1)).toBe(false);
+    expect(guardrailAskSuppressed(dir, "workflows", ".github/workflows/ci.yml", NOW + GUARDRAIL_ASK_TTL_MS - 1, { sessionId: "s1" })).toBe(true);
+    expect(guardrailAskSuppressed(dir, "workflows", ".github/workflows/ci.yml", NOW + GUARDRAIL_ASK_TTL_MS + 1, { sessionId: "s1" })).toBe(false);
     expect(evalAndRecord(".github/workflows/ci.yml", NOW + GUARDRAIL_ASK_TTL_MS + 1)).not.toBeNull();
   });
 
@@ -622,7 +622,7 @@ describe("dedup (F3) — per class, and per FILE for the irreversible classes", 
     expect(state.fires).toHaveLength(2);
     // F12 — the fire names the CLASS, for HookStatus legibility.
     expect(state.fires.at(-1).reason).toBe("guardrail:migrations");
-    expect(state.guardrailAsks.migrations["migrations/1.sql"]).toBe(new Date(NOW).toISOString());
+    expect(state.guardrailAsks["scope:s1::migrations"]["migrations/1.sql"]).toBe(new Date(NOW).toISOString());
   });
 
   it("per-path entries older than the window are pruned on write (the map can't grow unbounded)", () => {
@@ -630,7 +630,7 @@ describe("dedup (F3) — per class, and per FILE for the irreversible classes", 
     evalAndRecord("migrations/1.sql");
     evalAndRecord("migrations/2.sql", NOW + GUARDRAIL_ASK_TTL_MS + 5000);
     const state = JSON.parse(fs.readFileSync(path.join(dir, ".deeppairing", "hooks-state.json"), "utf-8"));
-    expect(Object.keys(state.guardrailAsks.migrations)).toEqual(["migrations/2.sql"]);
+    expect(Object.keys(state.guardrailAsks["scope:s1::migrations"])).toEqual(["migrations/2.sql"]);
   });
 
   it("an unreadable dedup file is NOT treated as suppression (conservative side)", () => {
@@ -648,16 +648,16 @@ describe("dedup (F3) — per class, and per FILE for the irreversible classes", 
       JSON.stringify({
         version: 1,
         guardrailAsks: {
-          workflows: iso(NOW + 4 * 365 * 24 * 60 * 60 * 1000),
-          migrations: { "migrations/1.sql": iso(NOW + 4 * 365 * 24 * 60 * 60 * 1000) },
+          "scope:s1::workflows": iso(NOW + 4 * 365 * 24 * 60 * 60 * 1000),
+          "scope:s1::migrations": { "migrations/1.sql": iso(NOW + 4 * 365 * 24 * 60 * 60 * 1000) },
         },
       }),
     );
-    expect(guardrailAskSuppressed(dir, "workflows", "x", NOW)).toBe(false);
-    expect(guardrailAskSuppressed(dir, "migrations", "migrations/1.sql", NOW)).toBe(false);
+    expect(guardrailAskSuppressed(dir, "workflows", "x", NOW, { sessionId: "s1" })).toBe(false);
+    expect(guardrailAskSuppressed(dir, "migrations", "migrations/1.sql", NOW, { sessionId: "s1" })).toBe(false);
     // …and small skew still suppresses.
-    fs.writeFileSync(sp, JSON.stringify({ version: 1, guardrailAsks: { workflows: iso(NOW + 1000) } }));
-    expect(guardrailAskSuppressed(dir, "workflows", "x", NOW)).toBe(true);
+    fs.writeFileSync(sp, JSON.stringify({ version: 1, guardrailAsks: { "scope:s1::workflows": iso(NOW + 1000) } }));
+    expect(guardrailAskSuppressed(dir, "workflows", "x", NOW, { sessionId: "s1" })).toBe(true);
   });
 
   it("Q1 item 2 — a FUTURE-dated per-path stamp is PRUNED on the next write (it never expired)", () => {
@@ -667,13 +667,13 @@ describe("dedup (F3) — per class, and per FILE for the irreversible classes", 
       sp,
       JSON.stringify({
         version: 1,
-        guardrailAsks: { migrations: { "migrations/ancient.sql": iso(NOW + 4 * 365 * 24 * 60 * 60 * 1000) } },
+        guardrailAsks: { "scope:s1::migrations": { "migrations/ancient.sql": iso(NOW + 4 * 365 * 24 * 60 * 60 * 1000) } },
       }),
     );
     seedSession([]);
     evalAndRecord("migrations/1.sql");
     const state = JSON.parse(fs.readFileSync(sp, "utf-8"));
-    expect(Object.keys(state.guardrailAsks.migrations)).toEqual(["migrations/1.sql"]);
+    expect(Object.keys(state.guardrailAsks["scope:s1::migrations"])).toEqual(["migrations/1.sql"]);
   });
 });
 
@@ -737,6 +737,206 @@ describe("hooks-state.json — durable, and honest about what happened", () => {
 // ---------------------------------------------------------------------------
 // composition
 // ---------------------------------------------------------------------------
+
+describe("#534 approved typed scope and artifact precedence", () => {
+  const covered = (files: unknown, type = "spec"): Art => ({
+    ...art(type), content: { visuals: [{ kind: "file_map", files }] },
+  });
+  const fileMap = (file: string) => covered([{ path: file }]);
+  const live = (sessionId: unknown = "s1", agentId?: unknown) => evaluatePreflightHook({
+    toolName: "Edit", toolInput: edit("migrations/1.sql"), projectRoot: dir, now: NOW, env: ON, sessionId, agentId,
+  }).fire === false;
+
+  it("approved exact coverage crosses session and agent boundaries; absence does not", () => {
+    seedSession([fileMap("./migrations/../migrations/1.sql")], "other");
+    expect(live("s1", "worker-1")).toBe(true);
+    seedSession([art("spec")], "other");
+    expect(live()).toBe(false);
+    seedSession([art("spec")]);
+    expect(live("s1", "worker-1")).toBe(true); // no stored agent attribution
+    expect(live(null)).toBe(false);
+    expect(live("unknown")).toBe(false);
+  });
+
+  it.each(["draft", "reviewing", "revised", "rejected", "superseded", "retracted", "obsolete"])("%s never authorizes matching coverage or vetoes an eligible fallback", status => {
+    seedSession([{ ...fileMap("migrations/1.sql"), status }]);
+    expect(live()).toBe(false);
+    seedSession([art("spec"), { ...fileMap("elsewhere.ts"), status }]);
+    expect(live()).toBe(true);
+  });
+
+  it("stale, future and demo declarations neither authorize nor veto", () => {
+    for (const createdAt of [iso(NOW - CEREMONY_MAX_AGE_MS - 1), iso(NOW + CLOCK_SKEW_TOLERANCE_MS + 1)]) {
+      seedSession([{ ...fileMap("migrations/1.sql"), createdAt }]);
+      expect(live()).toBe(false);
+      seedSession([art("spec"), { ...fileMap("elsewhere.ts"), createdAt }]);
+      expect(live()).toBe(true);
+    }
+    seedSession([fileMap("migrations/1.sql")], "demo_run");
+    seedSession([]);
+    expect(live()).toBe(false);
+    seedSession([art("spec")]);
+    expect(live()).toBe(true);
+  });
+
+  it.each([[], null, "migrations/1.sql", [{ path: "" }], [{ path: "../outside.ts" }], [{ path: "migrations/1.sql" }, { path: 4 }]])("declared unusable coverage %j blocks older same-session fallback", files => {
+    seedSession([art("spec"), covered(files)]);
+    expect(live()).toBe(false);
+    seedSession([covered(files), art("spec")]);
+    expect(live()).toBe(false);
+  });
+
+  it.each([null, [], ["migrations/1.sql"], "", "migrations/1.sql", true, 42])("present malformed content %j cannot authorize or bypass historical scope", content => {
+    const invalid = { ...art("spec"), content };
+    const historical = art("spec", "approved", iso(NOW - 120_000));
+    seedSession([invalid]);
+    expect(live()).toBe(false);
+    seedSession([historical, invalid]);
+    expect(live()).toBe(false);
+    seedSession([invalid, historical]);
+    expect(live()).toBe(false);
+    // The declaration still has only its own session's veto authority.
+    seedSession([invalid], "other");
+    seedSession([historical]);
+    expect(live()).toBe(true);
+    // Exact eligible coverage retains first precedence over an unusable one.
+    seedSession([fileMap("migrations/1.sql")], "other");
+    seedSession([invalid, historical]);
+    expect(live()).toBe(true);
+  });
+
+  it("genuinely absent historical content retains approved same-session fallback", () => {
+    const historical = art("spec", "approved", iso(NOW - 120_000));
+    expect(Object.hasOwn(historical, "content")).toBe(false);
+    seedSession([historical]);
+    expect(live()).toBe(true);
+    expect(live("other")).toBe(false);
+  });
+
+  it("every entry must be valid even beside an exact match", () => {
+    seedSession([art("spec"), covered([{ path: "migrations/1.sql" }, { path: "../outside.ts" }])]);
+    expect(live()).toBe(false);
+    seedSession([art("spec"), covered([{ path: "migrations/1.sql" }, { path: "..\\outside.ts" }])]);
+    expect(live()).toBe(false);
+  });
+
+  it.each([
+    { visuals: { kind: "file_map", files: [{ path: "migrations/1.sql" }] } },
+    { visuals: null },
+    { steps: null },
+    { steps: [null] },
+    { steps: [{ branches: null }] },
+    { steps: [{ files: ["migrations/1.sql"], branches: [null] }] },
+  ])("malformed coverage containers remain declared and unusable: %j", content => {
+    seedSession([art("spec"), { ...art("plan"), content }]);
+    expect(live()).toBe(false);
+  });
+
+  it("coverage and targets share the validated worktree canonical boundary", () => {
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), "dp-coverage-worktree-"));
+    try {
+      const common = path.join(dir, ".git");
+      const privateDir = path.join(common, "worktrees", "worker");
+      fs.mkdirSync(path.join(common, "objects"), { recursive: true });
+      fs.mkdirSync(path.join(common, "refs"));
+      fs.mkdirSync(privateDir, { recursive: true });
+      fs.writeFileSync(path.join(common, "HEAD"), "ref: refs/heads/main\n");
+      fs.writeFileSync(path.join(common, "config"), "[core]\n bare = false\n");
+      fs.writeFileSync(path.join(wt, ".git"), `gitdir: ${privateDir}\n`);
+      fs.writeFileSync(path.join(privateDir, "commondir"), "../..\n");
+      fs.writeFileSync(path.join(privateDir, "gitdir"), path.join(wt, ".git") + "\n");
+      seedSession([fileMap(path.join(wt, "migrations/1.sql"))], "other");
+      expect(live()).toBe(true);
+      seedSession([fileMap("migrations/1.sql")], "other");
+      expect(evaluatePreflightHook({ toolName: "Edit", toolInput: { file_path: path.join(wt, "migrations/1.sql"), new_string: "x" }, projectRoot: dir, now: NOW, env: ON, sessionId: "s1" }).fire).toBe(false);
+    } finally {
+      fs.rmSync(wt, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["migrations/", "migrations", "migrations/*", "migrations/1.sql.bak", "elsewhere.ts"])("literal %s does not infer file coverage", file => {
+    seedSession([art("spec"), fileMap(file)]);
+    expect(live()).toBe(false);
+  });
+
+  it("ignores prose, Mermaid, titles and non-file-map visuals", () => {
+    seedSession([{ ...art("spec"), content: { title: "migrations/1.sql", context: "migrations/1.sql", visuals: [{ kind: "diagram", source: "migrations/1.sql", files: [{ path: "migrations/1.sql" }] }] } }], "other");
+    expect(live()).toBe(false);
+  });
+
+  it("plan step strings, FileChange and branch files are typed coverage", () => {
+    for (const step of [
+      { files: ["migrations/1.sql"] },
+      { files: [{ filePath: "migrations/1.sql", changeType: "modify" }] },
+      { branches: [{ files: ["migrations/1.sql"] }] },
+      { branches: [{ files: [{ filePath: "migrations/1.sql" }] }] },
+    ]) {
+      seedSession([{ ...art("plan"), content: { steps: [step] } }], "other");
+      expect(live(), JSON.stringify(step)).toBe(true);
+    }
+    seedSession([{ ...art("plan"), content: { steps: [{ files: ["migrations/1.sql"], branches: [{ files: [] }] }] } }], "other");
+    expect(live()).toBe(false);
+  });
+
+  it("matching eligible coverage wins across artifacts and sessions in either order", () => {
+    for (const artifacts of [[art("spec"), fileMap("elsewhere.ts"), fileMap("migrations/1.sql")], [fileMap("migrations/1.sql"), fileMap("elsewhere.ts"), art("spec")]]) {
+      seedSession(artifacts);
+      expect(live()).toBe(true);
+    }
+    seedSession([art("spec"), fileMap("elsewhere.ts")]);
+    seedSession([fileMap("migrations/1.sql")], "other");
+    expect(live()).toBe(true);
+  });
+
+  it("an unrelated declaration cannot veto same-session scopeless fallback", () => {
+    seedSession([art("spec")]);
+    seedSession([fileMap("elsewhere.ts"), covered([])], "other");
+    expect(live()).toBe(true);
+    seedSession([art("spec"), fileMap("elsewhere.ts")]);
+    expect(live()).toBe(false);
+  });
+
+  it.each([null, "", " ", "../s1", "s/1", 2, {}, "a".repeat(65)])("invalid event session %j cannot use fallback or collide with a usable ID", sessionId => {
+    seedSession([art("spec")]);
+    expect(live(sessionId)).toBe(false);
+  });
+});
+
+describe("#534 scoped dedup", () => {
+  const fire = (sessionId?: unknown, agentId?: unknown, mode: "ask" | "strict-stop" = "ask") => {
+    const decision = evaluateGuardrailBackstop({ toolInput: edit(".github/workflows/ci.yml"), projectRoot: dir, now: NOW, env: ON, sessionId, agentId, mode });
+    if (decision) recordHookFire(dir, decision, NOW, mode, sessionId, { agent_id: agentId });
+    return decision;
+  };
+  it("each session and each agent gets its own first prompt", () => {
+    seedSession([]);
+    expect(fire("s1", "worker-1")).not.toBeNull();
+    expect(fire("s1", "worker-1")).toBeNull();
+    expect(fire("s1", "worker-2")).not.toBeNull();
+    expect(fire("s2", "worker-1")).not.toBeNull();
+    expect(fire("s1")).not.toBeNull();
+    expect(fire("s1")).toBeNull();
+  });
+  it.each([undefined, null, "", " ", "a/b", "../s1", 8, {}, "a".repeat(65)])("unknown or malformed session %j never dedups", sessionId => {
+    seedSession([]);
+    expect(fire(sessionId)).not.toBeNull();
+    expect(fire(sessionId)).not.toBeNull();
+    expect(readHookState(path.join(dir, ".deeppairing/hooks-state.json")).guardrailAsks).toBeUndefined();
+  });
+  it.each([null, "", "a/b", 4, "a".repeat(65)])("malformed provided agent %j never dedups", agentId => {
+    seedSession([]);
+    expect(fire("s1", agentId)).not.toBeNull();
+    expect(fire("s1", agentId)).not.toBeNull();
+  });
+  it("legacy global stamps cannot suppress a scoped ask, and strict stops never dedup", () => {
+    seedSession([]);
+    fs.writeFileSync(path.join(dir, ".deeppairing/hooks-state.json"), JSON.stringify({ guardrailAsks: { workflows: iso(NOW) } }));
+    expect(fire("s1")).not.toBeNull();
+    expect(fire("s1")).toBeNull();
+    expect(fire("s1", undefined, "strict-stop")).not.toBeNull();
+    expect(fire("s1", undefined, "strict-stop")).not.toBeNull();
+  });
+});
 
 describe("evaluatePreflightHook — composition with the rejected-approach gate", () => {
   it("(e) POSITIVE CONTROL: the rejected-approach ask is unchanged and still wins", () => {

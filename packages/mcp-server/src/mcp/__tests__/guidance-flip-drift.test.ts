@@ -187,25 +187,25 @@ describe("#190 — default-mode flip: guidance wording is consistent (drift guar
     expect(skill).toMatch(/never `deny`s, it never blocks the edit outright/);
     expect(hint).toMatch(/pauses the edit and asks your pair to confirm/);
     expect(hint).toMatch(/never blocks the edit outright/);
-    // 2. the TRIGGER: a guardrail-path write with no live pre-work ceremony.
-    //    F1 — liveness is PROJECT-scoped (readSessionCeremony iterates every
-    //    session dir). Both surfaces must say so; "in the session" is the
-    //    over-narrow claim the review caught and is a STALE_PHRASE below.
-    expect(skill).toMatch(/is live in this project's recent\s*\n?\s*sessions/);
-    expect(hint).toMatch(/while NO findings, options, spec, or plan is live in this project's recent sessions/);
-    // 3. the SILENCE condition — the escalated arc in flight passes, and F2: a
-    //    DRAFT counts immediately (the backstop catches the SKIP, not the
-    //    un-reviewed landing), so the reader can't infer review is required.
-    expect(skill).toMatch(/the write passes silently/);
-    expect(skill).toMatch(/a spec you just presented\s*\n?\s*counts immediately/);
-    expect(skill).toMatch(/catches the SKIP, not the un-reviewed/);
-    expect(hint).toMatch(/stays SILENT once that pre-work arc is in flight/);
-    expect(hint).toMatch(/a spec you JUST presented counts immediately/);
+    // #534 — approval plus exact coverage, with scoped fallback and eligible
+    // precedence; presenting a draft alone never authorizes an edit.
+    expect(skill).toMatch(/approved, recent, non-demo/);
+    expect(hint).toMatch(/approved, recent, non-demo/);
+    expect(skill).toMatch(/Approved exact file coverage makes the write pass\s+silently across sessions and agents/);
+    expect(skill).toMatch(/eligible same-session declaration blocks older scopeless siblings/);
+    expect(hint).toMatch(/Eligible same-session declared coverage blocks older scopeless fallback/);
+    expect(skill).toMatch(/Draft, stale\s+and demo artifacts neither authorize nor veto/);
+    expect(hint).toMatch(/Draft\/demo artifacts and those outside the recency window neither authorize nor veto/);
+    expect(skill).toMatch(/just-presented draft does\s+not count/);
+    expect(skill).toMatch(/Unknown or malformed identity never dedups/);
+    expect(hint).toMatch(/unknown\/malformed identity never dedups/);
+    expect(skill).toMatch(/Strict-stop never dedups/);
+    expect(hint).toMatch(/Strict-stop never dedups/);
     // 4. the dedup grain (F3: per class, per FILE for the irreversible classes)
     //    + fail-open + the F7 opt-out.
     expect(skill).toMatch(/once per guardrail class per 30 minutes/);
     expect(skill).toMatch(/\*\*per\n  file\*\* for migrations and secrets/);
-    expect(hint).toMatch(/at most once per guardrail class per 30 minutes \(per FILE for migrations and secrets/);
+    expect(hint).toMatch(/Ask once per guardrail class per 30 minutes \(per FILE for migrations and secrets/);
     expect(skill).toMatch(/fail-open/);
     expect(hint).toMatch(/fails open/);
     expect(skill).toMatch(/DEEPPAIRING_GUARDRAIL_BACKSTOP=off/);
@@ -232,12 +232,12 @@ describe("#190 — default-mode flip: guidance wording is consistent (drift guar
 
     // Claim 1: "matched at ANY depth, so packages/api/migrations/ counts".
     expect(skill).toMatch(/matches these at \*\*any depth\*\*/);
-    expect(hint).toMatch(/matched at ANY depth, so packages\/api\/migrations\/ in a monorepo counts/);
+    expect(hint).toMatch(/at ANY depth \(packages\/api\/migrations\/ counts/);
     expect(fires("packages/api/migrations/002_drop_users.sql"), "the depth claim is false").toBe(true);
     expect(fires("services/web/Dockerfile"), "the depth claim is false for file rules").toBe(true);
 
     // Claim 2: "a file merely NAMED like one ... does not".
-    expect(hint).toMatch(/while a file merely NAMED like one, e\.g\. src\/migrations\.js, does not/);
+    expect(hint).toMatch(/src\/migrations\.js does not/);
     expect(skill).toMatch(/`src\/migrations\.js`, `docs\/migrations\.md`/);
     for (const rel of ["src/migrations.js", "docs/migrations.md", "lib/helm.ts"]) {
       expect(fires(rel), `the named-after claim is false for ${rel}`).toBe(false);
@@ -245,7 +245,7 @@ describe("#190 — default-mode flip: guidance wording is consistent (drift guar
 
     // Claim 3 (H1): vendored / generated / fixture / example trees are excluded.
     expect(skill).toMatch(/\*\*Excluded trees\.\*\*/);
-    expect(hint).toMatch(/vendored\/generated\/fixture\/example trees such as node_modules\/, dist\/, coverage\/, fixtures\/ and examples\/ are excluded entirely/);
+    expect(hint).toMatch(/Exclude vendored\/generated\/fixture\/example trees: node_modules\/, dist\/, coverage\/, fixtures\/, examples\//);
     for (const rel of [
       "node_modules/somepkg/migrations/x.js",
       "dist/migrations/bundle.js",

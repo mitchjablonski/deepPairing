@@ -2,7 +2,7 @@
  * D2 — split from the 3,009-line server.test.ts along tool-surface seams.
  * Test bodies are verbatim from the monolith; only the harness wiring is new.
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { FileStore } from "../../store/file-store.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
@@ -11,6 +11,13 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+// These policy-hint fixtures must not spend their context allowance on the
+// actual checkout's missing-hook warning. Dedicated #538 tests cover it.
+vi.mock("../../worktree-hooks.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../worktree-hooks.js")>(),
+  detectWorktreeMissingHooks: () => null,
+}));
 
 const ctx = setupServerTest();
 const callTool = makeCallTool(ctx);

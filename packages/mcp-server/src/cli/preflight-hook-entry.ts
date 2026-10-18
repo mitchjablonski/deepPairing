@@ -113,7 +113,7 @@ process.stdin.on("end", () => {
     }
     const config = resolvePreflightMode(process.env.DEEPPAIRING_PREFLIGHT_MODE);
     stage = "evaluate";
-    const decision = evaluatePreflightHook({ toolName, toolInput, projectRoot, mode: config.mode, failures });
+    const decision = evaluatePreflightHook({ toolName, toolInput, projectRoot, mode: config.mode, failures, sessionId: ev.session_id, agentId: ev.agent_id });
     stage = "output";
     if (decision && decision.fire) {
       recordHookFire(projectRoot, decision, undefined, config.mode, ev.session_id, { agent_id: ev.agent_id, agent_type: ev.agent_type });

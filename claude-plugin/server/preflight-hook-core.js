@@ -2,7 +2,7 @@ import { createRequire as __cr } from 'node:module'; const require = __cr(import
 
 // src/cli/preflight-hook-core.ts
 import fs4 from "node:fs";
-import path4 from "node:path";
+import path5 from "node:path";
 
 // src/mcp/preflight-validator.ts
 function normalizeConceptKey(name) {
@@ -439,30 +439,35 @@ function runPreflightGuarded(input, indexOf = (i) => i) {
 
 // src/debrief-gate.ts
 var PRE_WORK_CEREMONY_TYPES = ["research", "decision", "spec", "plan"];
-var CEREMONY_DEAD_STATUSES = ["superseded", "retracted", "obsolete", "rejected"];
-function sessionHasLivePreWorkCeremony(artifacts, isRecent = () => true) {
-  return artifacts.some(
-    (a) => PRE_WORK_CEREMONY_TYPES.includes(a?.type ?? "") && !CEREMONY_DEAD_STATUSES.includes(a?.status ?? "") && isRecent(a)
-  );
-}
 
-// src/hooks/hook-state.ts
-import fs2 from "node:fs";
-import path2 from "node:path";
+// src/session-id.ts
+import crypto from "node:crypto";
+import path from "node:path";
+function deriveSessionId(projectRoot, claudeSessionIdRaw) {
+  const projectName = path.basename(projectRoot);
+  const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
+  const projectHash = crypto.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);
+  const base = `session_${safeProjectName}_${projectHash}`;
+  const sanitized = (claudeSessionIdRaw ?? "").replace(/[^a-zA-Z0-9-]/g, "").slice(0, 64);
+  if (sanitized.length === 0) {
+    return { sessionId: base, mode: "fallback" };
+  }
+  return { sessionId: `${base}_${sanitized}`, mode: "split", claudeSessionId: sanitized };
+}
 
 // src/git-worktree.ts
 import fs from "node:fs";
-import path from "node:path";
+import path2 from "node:path";
 function samePath(a, b) {
   try {
     return fs.realpathSync.native(a) === fs.realpathSync.native(b);
   } catch {
-    return path.resolve(a) === path.resolve(b);
+    return path2.resolve(a) === path2.resolve(b);
   }
 }
 function isGitDir(dir) {
   try {
-    return fs.statSync(path.join(dir, "HEAD")).isFile() && fs.statSync(path.join(dir, "objects")).isDirectory() && fs.statSync(path.join(dir, "refs")).isDirectory();
+    return fs.statSync(path2.join(dir, "HEAD")).isFile() && fs.statSync(path2.join(dir, "objects")).isDirectory() && fs.statSync(path2.join(dir, "refs")).isDirectory();
   } catch {
     return false;
   }
@@ -470,7 +475,7 @@ function isGitDir(dir) {
 function readGitdirPointer(top, dotGitFile) {
   const raw = fs.readFileSync(dotGitFile, "utf8");
   const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(raw);
-  return m ? path.resolve(top, m[1]) : null;
+  return m ? path2.resolve(top, m[1]) : null;
 }
 function inspectDotGitFile(top, dotGitFile) {
   try {
@@ -478,34 +483,34 @@ function inspectDotGitFile(top, dotGitFile) {
     if (!gitdir) return { worktree: null, rejected: `${dotGitFile} has no "gitdir:" line` };
     let common;
     try {
-      common = fs.readFileSync(path.join(gitdir, "commondir"), "utf8").trim();
+      common = fs.readFileSync(path2.join(gitdir, "commondir"), "utf8").trim();
     } catch {
       return { worktree: null };
     }
     if (!common) return { worktree: null, rejected: `${gitdir}/commondir is empty` };
-    const commonDir = path.resolve(gitdir, common);
-    if (path.basename(commonDir) !== ".git") return { worktree: null };
+    const commonDir = path2.resolve(gitdir, common);
+    if (path2.basename(commonDir) !== ".git") return { worktree: null };
     if (!isGitDir(commonDir)) return { worktree: null, rejected: `${commonDir} is not a git directory` };
     try {
-      const config = fs.readFileSync(path.join(commonDir, "config"), "utf8");
+      const config = fs.readFileSync(path2.join(commonDir, "config"), "utf8");
       if (/^[ \t]*bare[ \t]*=[ \t]*true[ \t]*$/im.test(config)) return { worktree: null };
     } catch {
       return { worktree: null, rejected: `${commonDir} has no config` };
     }
     let back;
     try {
-      back = fs.readFileSync(path.join(gitdir, "gitdir"), "utf8").trim();
+      back = fs.readFileSync(path2.join(gitdir, "gitdir"), "utf8").trim();
     } catch {
       return { worktree: null, rejected: `${gitdir} has no gitdir back-reference` };
     }
-    if (!back || !samePath(path.resolve(gitdir, back), dotGitFile)) {
+    if (!back || !samePath(path2.resolve(gitdir, back), dotGitFile)) {
       return { worktree: null, rejected: `${gitdir}/gitdir does not point back at ${dotGitFile}` };
     }
-    if (!samePath(path.dirname(gitdir), path.join(commonDir, "worktrees"))) {
+    if (!samePath(path2.dirname(gitdir), path2.join(commonDir, "worktrees"))) {
       return { worktree: null, rejected: `${gitdir} is not under ${commonDir}/worktrees` };
     }
-    const mainTop = path.dirname(commonDir);
-    const mainDotGit = path.join(mainTop, ".git");
+    const mainTop = path2.dirname(commonDir);
+    const mainDotGit = path2.join(mainTop, ".git");
     if (!fs.statSync(mainDotGit).isDirectory() || !samePath(mainDotGit, commonDir)) {
       return { worktree: null, rejected: `${mainDotGit} is not the common dir ${commonDir}` };
     }
@@ -517,9 +522,9 @@ function inspectDotGitFile(top, dotGitFile) {
 }
 function inspect(p) {
   try {
-    let cur = path.resolve(p);
+    let cur = path2.resolve(p);
     for (let i = 0; i < 256; i++) {
-      const dotGit = path.join(cur, ".git");
+      const dotGit = path2.join(cur, ".git");
       let st;
       try {
         st = fs.statSync(dotGit);
@@ -527,7 +532,7 @@ function inspect(p) {
         st = void 0;
       }
       if (st) return st.isFile() ? inspectDotGitFile(cur, dotGit) : { worktree: null };
-      const parent = path.dirname(cur);
+      const parent = path2.dirname(cur);
       if (parent === cur) return { worktree: null };
       cur = parent;
     }
@@ -539,8 +544,8 @@ function inspect(p) {
 function isLinkedWorktreeGitFile(abs) {
   try {
     if (!fs.lstatSync(abs).isFile()) return false;
-    const gitdir = readGitdirPointer(path.dirname(abs), abs);
-    return !!gitdir && fs.statSync(path.join(gitdir, "commondir")).isFile();
+    const gitdir = readGitdirPointer(path2.dirname(abs), abs);
+    return !!gitdir && fs.statSync(path2.join(gitdir, "commondir")).isFile();
   } catch {
     return false;
   }
@@ -549,17 +554,19 @@ function findLinkedWorktree(p) {
   return inspect(p).worktree;
 }
 function canonicalizeWorktreePath(p) {
-  const abs = path.resolve(p);
+  const abs = path2.resolve(p);
   const worktree = findLinkedWorktree(abs);
   if (!worktree) return { path: abs, worktree: null };
   return mapInto(abs, worktree);
 }
 function mapInto(abs, worktree) {
-  const rel = path.relative(worktree.worktreeTop, abs);
-  return { path: rel ? path.join(worktree.mainTop, rel) : worktree.mainTop, worktree };
+  const rel = path2.relative(worktree.worktreeTop, abs);
+  return { path: rel ? path2.join(worktree.mainTop, rel) : worktree.mainTop, worktree };
 }
 
 // src/hooks/hook-state.ts
+import fs2 from "node:fs";
+import path3 from "node:path";
 var FIRE_LOG_CAP = 50;
 var LOCK_STALE_MS = 5e3;
 var LOCK_SPIN_MS = 2;
@@ -651,9 +658,9 @@ function appendHookFire(statePath, fire, mutate) {
 function mutateHookState(statePath, mutate, opts = {}) {
   try {
     if (opts.createDir === false) {
-      if (!fs2.statSync(path2.dirname(statePath)).isDirectory()) return;
+      if (!fs2.statSync(path3.dirname(statePath)).isDirectory()) return;
     } else {
-      fs2.mkdirSync(path2.dirname(statePath), { recursive: true });
+      fs2.mkdirSync(path3.dirname(statePath), { recursive: true });
     }
     const lock = acquireHookStateLock(statePath);
     try {
@@ -668,7 +675,7 @@ function mutateHookState(statePath, mutate, opts = {}) {
   }
 }
 function hookStatePath(projectRoot) {
-  return path2.join(projectRoot, ".deeppairing", "hooks-state.json");
+  return path3.join(projectRoot, ".deeppairing", "hooks-state.json");
 }
 
 // src/hooks/preflight-diagnostics.ts
@@ -801,7 +808,7 @@ function recordPreflightFailures(projectRoot, notes, now = Date.now()) {
 // src/guardrail-rules.ts
 import fs3 from "node:fs";
 import os from "node:os";
-import path3 from "node:path";
+import path4 from "node:path";
 var GUARDRAIL_RULES = [
   {
     category: "migrations",
@@ -865,13 +872,13 @@ function matchGuardrailPath(projectRoot, paths) {
   try {
     for (const raw of paths) {
       if (typeof raw !== "string" || !raw) continue;
-      const abs = path3.resolve(projectRoot, raw);
-      let rel = path3.relative(projectRoot, abs).replace(/\\/g, "/");
-      if (!rel || rel === ".." || rel.startsWith("../") || path3.isAbsolute(rel)) {
+      const abs = path4.resolve(projectRoot, raw);
+      let rel = path4.relative(projectRoot, abs).replace(/\\/g, "/");
+      if (!rel || rel === ".." || rel.startsWith("../") || path4.isAbsolute(rel)) {
         const mapped = canonicalizeWorktreePath(abs);
         if (!mapped.worktree) continue;
-        rel = path3.relative(projectRoot, mapped.path).replace(/\\/g, "/");
-        if (!rel || rel === ".." || rel.startsWith("../") || path3.isAbsolute(rel)) continue;
+        rel = path4.relative(projectRoot, mapped.path).replace(/\\/g, "/");
+        if (!rel || rel === ".." || rel.startsWith("../") || path4.isAbsolute(rel)) continue;
       }
       const rule = ruleForRelPath(rel);
       if (rule) return { category: rule.category, path: rel, rationale: rule.rationale, note: rule.note };
@@ -904,19 +911,19 @@ function realpathish(abs, hops = 0) {
   if (hops < 8) {
     try {
       const target = fs3.readlinkSync(abs);
-      return realpathish(path3.resolve(path3.dirname(abs), target), hops + 1);
+      return realpathish(path4.resolve(path4.dirname(abs), target), hops + 1);
     } catch {
     }
   }
   const rest = [];
   let cur = abs;
   for (let i = 0; i < 64; i++) {
-    const parent = path3.dirname(cur);
+    const parent = path4.dirname(cur);
     if (parent === cur) return null;
-    rest.unshift(path3.basename(cur));
+    rest.unshift(path4.basename(cur));
     cur = parent;
     try {
-      return path3.join(fs3.realpathSync.native(cur), ...rest);
+      return path4.join(fs3.realpathSync.native(cur), ...rest);
     } catch {
     }
   }
@@ -924,8 +931,8 @@ function realpathish(abs, hops = 0) {
 }
 function physicalResolve(base, spelling) {
   try {
-    const absolute = path3.isAbsolute(spelling);
-    const root = absolute ? path3.parse(spelling).root : "";
+    const absolute = path4.isAbsolute(spelling);
+    const root = absolute ? path4.parse(spelling).root : "";
     let cur = absolute ? root : base;
     try {
       cur = fs3.realpathSync.native(cur);
@@ -936,10 +943,10 @@ function physicalResolve(base, spelling) {
       const seg = segs[i];
       if (seg === "" || seg === ".") continue;
       if (seg === "..") {
-        cur = path3.dirname(cur);
+        cur = path4.dirname(cur);
         continue;
       }
-      cur = path3.join(cur, seg);
+      cur = path4.join(cur, seg);
       try {
         cur = fs3.realpathSync.native(cur);
       } catch {
@@ -965,14 +972,14 @@ function matchDeeppairingStatePath(projectRoot, raw) {
     const cleaned = slashed.split("/").map((seg) => seg === "." || seg === ".." || /^[A-Za-z]:$/.test(seg) ? seg : seg.replace(/:.*$/, "").replace(/[. ]+$/, "") || seg).join("/");
     const candidates = /* @__PURE__ */ new Set([slashed, cleaned]);
     const spellings = [slashed, cleaned];
-    if (/^~\//.test(cleaned)) spellings.push(path3.join(os.homedir(), cleaned.slice(2)));
+    if (/^~\//.test(cleaned)) spellings.push(path4.join(os.homedir(), cleaned.slice(2)));
     const ordered = [];
     for (const c of spellings) {
       const physical = physicalResolve(projectRoot, c);
       if (physical) ordered.push(physical);
     }
     for (const c of spellings) {
-      const abs = path3.resolve(projectRoot, c);
+      const abs = path4.resolve(projectRoot, c);
       ordered.push(abs);
       const real = realpathish(abs);
       if (real) ordered.push(real);
@@ -981,7 +988,7 @@ function matchDeeppairingStatePath(projectRoot, raw) {
     for (const c of ordered) {
       const m = STATE_PATTERN.exec(canonicalForm(c));
       if (!m) {
-        if (path3.isAbsolute(c) && canonicalForm(c).split("/").pop() === ".git" && isLinkedWorktreeGitFile(c)) {
+        if (path4.isAbsolute(c) && canonicalForm(c).split("/").pop() === ".git" && isLinkedWorktreeGitFile(c)) {
           return { category: DEEPPAIRING_STATE_CATEGORY, path: displayPath(projectRoot, c), kind: "worktree-link" };
         }
         continue;
@@ -1001,10 +1008,10 @@ function displayPath(projectRoot, candidate) {
     roots.push(fs3.realpathSync.native(projectRoot));
   } catch {
   }
-  const abs = path3.isAbsolute(candidate) ? candidate : path3.resolve(projectRoot, candidate);
+  const abs = path4.isAbsolute(candidate) ? candidate : path4.resolve(projectRoot, candidate);
   for (const root of roots) {
-    const rel = path3.relative(root, abs).replace(/\\/g, "/");
-    if (rel && rel !== ".." && !rel.startsWith("../") && !path3.isAbsolute(rel)) return rel;
+    const rel = path4.relative(root, abs).replace(/\\/g, "/");
+    if (rel && rel !== ".." && !rel.startsWith("../") && !path4.isAbsolute(rel)) return rel;
   }
   return abs.replace(/\\/g, "/");
 }
@@ -1025,7 +1032,7 @@ function readRejectedApproaches(projectRoot, failures) {
   return readRejectedApproachEntries(projectRoot, failures).map((e) => e.entry);
 }
 function readRejectedApproachEntries(projectRoot, failures) {
-  const p = path4.join(projectRoot, ".deeppairing", "preferences.json");
+  const p = path5.join(projectRoot, ".deeppairing", "preferences.json");
   try {
     if (!fs4.existsSync(p)) return [];
     const raw = JSON.parse(fs4.readFileSync(p, "utf-8"));
@@ -1050,7 +1057,7 @@ function readRejectedApproachEntries(projectRoot, failures) {
   }
 }
 function readTeamPreferences(projectRoot, failures) {
-  const p = path4.join(projectRoot, ".deeppairing", "team.json");
+  const p = path5.join(projectRoot, ".deeppairing", "team.json");
   try {
     if (!fs4.existsSync(p)) return [];
     const stripped = fs4.readFileSync(p, "utf-8").split("\n").map((l) => /^\s*\/\//.test(l) ? "" : l).join("\n");
@@ -1139,8 +1146,83 @@ function withinWindow(t, now, maxAgeMs) {
   return age <= maxAgeMs && age >= -CLOCK_SKEW_TOLERANCE_MS;
 }
 var PER_PATH_DEDUP_CLASSES = /* @__PURE__ */ new Set(["migrations", "secrets"]);
-function readSessionCeremony(projectRoot, now = Date.now(), failures) {
-  const sessionsDir = path4.join(projectRoot, ".deeppairing", "sessions");
+function usableSessionId(value) {
+  return typeof value === "string" && /^[a-zA-Z0-9-]{1,64}$/.test(value) ? value : void 0;
+}
+function guardrailScopeKey(category, identity) {
+  const session = usableSessionId(identity.sessionId);
+  if (!session) return void 0;
+  const agent = identity.agentId;
+  if (agent !== void 0 && (typeof agent !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(agent))) return void 0;
+  return `scope:${session}:${agent ?? ""}:${category}`;
+}
+function object(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function artifactCoverage(projectRoot, artifact) {
+  if (!Object.hasOwn(artifact, "content")) return { declared: false, paths: null };
+  const content = artifact.content;
+  if (!object(content)) return { declared: true, paths: null };
+  let declared = false;
+  let invalid = false;
+  const paths = [];
+  const add = (raw) => {
+    if (typeof raw !== "string" || !raw.trim() || /[\x00-\x1f\x7f*?\[\]{}]/.test(raw) || /[\\/]$/.test(raw)) {
+      invalid = true;
+      return;
+    }
+    const normalized = raw.replace(/\\/g, path5.sep);
+    const match = matchGuardrailPath(projectRoot, [normalized]);
+    if (match) {
+      paths.push(match.path);
+      return;
+    }
+    const abs = path5.resolve(projectRoot, normalized);
+    const mapped = canonicalizeWorktreePath(abs);
+    const rel = path5.relative(projectRoot, mapped.worktree ? mapped.path : abs);
+    if (!rel || rel === ".." || rel.startsWith(`..${path5.sep}`) || path5.isAbsolute(rel)) invalid = true;
+    else paths.push(rel.replace(/\\/g, "/"));
+  };
+  const files = (value, visual = false) => {
+    declared = true;
+    if (!Array.isArray(value) || value.length === 0) {
+      invalid = true;
+      return;
+    }
+    for (const entry of value) add(visual ? object(entry) ? entry.path : void 0 : typeof entry === "string" ? entry : object(entry) ? entry.filePath : void 0);
+  };
+  const malformed = () => {
+    declared = true;
+    invalid = true;
+  };
+  if (Array.isArray(content.visuals)) {
+    for (const visual of content.visuals) if (object(visual) && visual.kind === "file_map") files(visual.files, true);
+  } else if (Object.hasOwn(content, "visuals")) {
+    malformed();
+  }
+  if (artifact.type === "plan" && Array.isArray(content.steps)) {
+    for (const step of content.steps) {
+      if (!object(step)) {
+        malformed();
+        continue;
+      }
+      if (Object.hasOwn(step, "files")) files(step.files);
+      if (Array.isArray(step.branches)) {
+        for (const branch of step.branches) {
+          if (!object(branch)) malformed();
+          else if (Object.hasOwn(branch, "files")) files(branch.files);
+        }
+      } else if (Object.hasOwn(step, "branches")) {
+        malformed();
+      }
+    }
+  } else if (artifact.type === "plan" && Object.hasOwn(content, "steps")) {
+    malformed();
+  }
+  return { declared, paths: declared && !invalid && paths.length > 0 ? paths : null };
+}
+function readSessionCeremony(projectRoot, now = Date.now(), failures, scope = {}) {
+  const sessionsDir = path5.join(projectRoot, ".deeppairing", "sessions");
   let ids;
   try {
     if (!fs4.existsSync(sessionsDir)) return { reachable: false, hasLiveCeremony: false };
@@ -1152,11 +1234,15 @@ function readSessionCeremony(projectRoot, now = Date.now(), failures) {
   const isRecent = (a) => withinWindow(Date.parse(a?.createdAt ?? ""), now, CEREMONY_MAX_AGE_MS);
   let storesSeen = 0;
   let storesParsed = 0;
+  const session = usableSessionId(scope.sessionId);
+  const currentSession = session ? deriveSessionId(projectRoot, session).sessionId : void 0;
+  let sameSessionDeclaration = false;
+  let sameSessionFallback = false;
   for (const id of ids) {
     if (id.startsWith("demo_")) continue;
     let arr;
     try {
-      const af = path4.join(sessionsDir, id, "artifacts.json");
+      const af = path5.join(sessionsDir, id, "artifacts.json");
       if (!fs4.existsSync(af)) continue;
       storesSeen++;
       arr = JSON.parse(fs4.readFileSync(af, "utf-8"));
@@ -1166,8 +1252,13 @@ function readSessionCeremony(projectRoot, now = Date.now(), failures) {
     }
     storesParsed++;
     try {
-      if (sessionHasLivePreWorkCeremony(arr, isRecent)) {
-        return { reachable: true, hasLiveCeremony: true };
+      for (const artifact of arr) {
+        if (!object(artifact) || artifact.status !== "approved" || !PRE_WORK_CEREMONY_TYPES.includes(artifact.type) || !isRecent({ createdAt: typeof artifact.createdAt === "string" ? artifact.createdAt : void 0 })) continue;
+        const coverage = artifactCoverage(projectRoot, artifact);
+        if (scope.targetPath && coverage.paths?.includes(scope.targetPath)) return { reachable: true, hasLiveCeremony: true };
+        if (id !== currentSession) continue;
+        if (coverage.declared) sameSessionDeclaration = true;
+        else sameSessionFallback = true;
       }
     } catch {
       continue;
@@ -1177,13 +1268,15 @@ function readSessionCeremony(projectRoot, now = Date.now(), failures) {
     pushFailure(failures, { cls: "session_store_unreadable", source: "sessions", tag: "corrupt" });
     return { reachable: false, hasLiveCeremony: false };
   }
-  return { reachable: true, hasLiveCeremony: false };
+  return { reachable: true, hasLiveCeremony: sameSessionFallback && !sameSessionDeclaration };
 }
-function guardrailAskSuppressed(projectRoot, category, matchedPath, now = Date.now()) {
+function guardrailAskSuppressed(projectRoot, category, matchedPath, now = Date.now(), identity = {}) {
+  const key = guardrailScopeKey(category, identity);
+  if (!key) return false;
   try {
-    const sp = path4.join(projectRoot, ".deeppairing", "hooks-state.json");
+    const sp = path5.join(projectRoot, ".deeppairing", "hooks-state.json");
     const state = JSON.parse(fs4.readFileSync(sp, "utf-8"));
-    const entry = state?.guardrailAsks?.[category];
+    const entry = state?.guardrailAsks?.[key];
     const at = PER_PATH_DEDUP_CLASSES.has(category) ? entry && typeof entry === "object" ? entry[matchedPath] : void 0 : entry;
     if (typeof at !== "string") return false;
     return withinWindow(Date.parse(at), now, GUARDRAIL_ASK_TTL_MS - 1);
@@ -1191,11 +1284,13 @@ function guardrailAskSuppressed(projectRoot, category, matchedPath, now = Date.n
     return false;
   }
 }
-function stampGuardrailAsk(state, match, now) {
+function stampGuardrailAsk(state, match, now, identity) {
+  const key = guardrailScopeKey(match.category, identity);
+  if (!key) return;
   const asks = state.guardrailAsks && typeof state.guardrailAsks === "object" ? state.guardrailAsks : {};
   const iso = new Date(now).toISOString();
   if (PER_PATH_DEDUP_CLASSES.has(match.category)) {
-    const prev = asks[match.category];
+    const prev = asks[key];
     const byPath = {};
     if (prev && typeof prev === "object") {
       for (const [p, at] of Object.entries(prev)) {
@@ -1204,9 +1299,9 @@ function stampGuardrailAsk(state, match, now) {
       }
     }
     byPath[match.path] = iso;
-    asks[match.category] = byPath;
+    asks[key] = byPath;
   } else {
-    asks[match.category] = iso;
+    asks[key] = iso;
   }
   state.guardrailAsks = asks;
 }
@@ -1227,13 +1322,13 @@ function recordHookFire(projectRoot, decision, now = Date.now(), mode = "ask", c
     },
     (state) => {
       if (mode === "ask" && decision.guardrail && decision.guardrail.category !== DEEPPAIRING_STATE_CATEGORY) {
-        stampGuardrailAsk(state, decision.guardrail, now);
+        stampGuardrailAsk(state, decision.guardrail, now, { sessionId: claudeSessionId, agentId: agent?.agent_id });
       }
     }
   );
 }
 function guardrailReason(match) {
-  return `Allow this edit to ${match.path}? It's a guardrail path (${match.category} \u2014 ${match.note}), and no findings, options, spec, or plan is live in this project's recent sessions. Decline to have it presented for review first \u2014 presenting findings, options, a spec, or a plan is what makes this prompt stop.
+  return `Allow this edit to ${match.path}? It's a guardrail path (${match.category} \u2014 ${match.note}), and no findings, options, spec, or plan has recent approval covering this file. Decline to have it presented for review first \u2014 approved exact file coverage (or approved scopeless pre-work in this session) is what makes this prompt stop.
 [GUARDRAIL_ESCALATION \u2014 agent: this is ESCALATED work. On a decline, present findings/options/a spec or plan before landing it.]`;
 }
 function evaluateGuardrailBackstop(args) {
@@ -1246,11 +1341,11 @@ function evaluateGuardrailBackstop(args) {
     if (typeof fp !== "string" || !fp) return null;
     const match = matchGuardrailPath(projectRoot, [fp]);
     if (!match) return null;
-    if (args.mode !== "strict-stop" && guardrailAskSuppressed(projectRoot, match.category, match.path, now)) return null;
-    const ceremony = readSessionCeremony(projectRoot, now, args.failures);
+    if (args.mode !== "strict-stop" && guardrailAskSuppressed(projectRoot, match.category, match.path, now, args)) return null;
+    const ceremony = readSessionCeremony(projectRoot, now, args.failures, { sessionId: args.sessionId, agentId: args.agentId, targetPath: match.path });
     if (!ceremony.reachable) return null;
     if (ceremony.hasLiveCeremony) return null;
-    const reason = args.mode === "strict-stop" ? `Edit to ${strictExcerpt(match.path, 200)} stopped before execution (strict-stop mode). It's a guardrail path (${match.category} \u2014 ${strictExcerpt(match.note, 160)}), and no findings, options, spec, or plan is live in this project's recent sessions. Cancel or revise the proposal, or present the required pre-work for review before continuing. [GUARDRAIL_ESCALATION]` : guardrailReason(match);
+    const reason = args.mode === "strict-stop" ? `Edit to ${strictExcerpt(match.path, 200)} stopped before execution (strict-stop mode). It's a guardrail path (${match.category} \u2014 ${strictExcerpt(match.note, 160)}), and no findings, options, spec, or plan has recent approval covering this file. Cancel or revise the proposal, or present the required pre-work for review before continuing. [GUARDRAIL_ESCALATION]` : guardrailReason(match);
     return { fire: true, reason, source: "guardrail", guardrail: match };
   } catch (err) {
     pushFailure(args.failures, noteFailure("evaluate", "backstop", err));
@@ -1312,9 +1407,9 @@ function evaluatePreflightHook(args) {
 function displayTarget(projectRoot, target) {
   if (typeof target !== "string" || !target) return void 0;
   try {
-    if (!path4.isAbsolute(target)) return target;
-    const rel = path4.relative(projectRoot, target);
-    return rel && !rel.startsWith("..") && !path4.isAbsolute(rel) ? rel : target;
+    if (!path5.isAbsolute(target)) return target;
+    const rel = path5.relative(projectRoot, target);
+    return rel && !rel.startsWith("..") && !path5.isAbsolute(rel) ? rel : target;
   } catch {
     return target;
   }
@@ -1341,7 +1436,7 @@ function evaluateHookGates(args) {
 ${state.reason}`, source: result.block.source, ...stance ? { stance } : {} } : { fire: true, reason, source: result.block.source, ...stance ? { stance } : {} };
   }
   if (state) return state;
-  return evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env, mode: args.mode, failures }) ?? { fire: false };
+  return evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env, mode: args.mode, failures, sessionId: args.sessionId, agentId: args.agentId }) ?? { fire: false };
 }
 function stanceOf(block) {
   const m = block.broadcastEvent.match;
