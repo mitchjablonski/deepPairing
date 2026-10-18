@@ -4,6 +4,7 @@ import { ToastLayer } from "../ToastLayer";
 import { useToastStore, MAX_BLOCK_TOASTS, type PreflightBlockHero } from "../../stores/toast";
 import { usePreflightBlockStore } from "../../stores/preflightBlocks";
 import { hookGateCopy } from "../../lib/hookGate";
+import { PreflightBlockLog } from "../PreflightBlockLog";
 
 /**
  * #544 — Claude Code's ask dialog doesn't show the hook's reason, so the
@@ -106,5 +107,71 @@ describe("#544 hookGateCopy", () => {
     expect(c.announcement).toBe(
       "Claude Code is asking to write src/config.ts. This matches your stance 'global mutable state'. You said: 'Keep configuration explicit'. The terminal prompt won't show this.",
     );
+  });
+});
+
+/**
+ * #553 — a worker subagent's tool call fires the same PreToolUse gate. Its
+ * hook input carries agent_id/agent_type; the companion names the subagent so
+ * you can tell a worker's ask/stop from the lead's (the lead isn't told).
+ */
+describe("#553 subagent gate firings", () => {
+  it("an ask from a subagent shows the subagent label and names it in the title", () => {
+    push(hookHero({ agentId: "agent-7f3a", agentType: "general-purpose" }));
+    render(<ToastLayer />);
+    const card = screen.getByRole("alert");
+    expect(card).toHaveAttribute("data-subagent", "true");
+    expect(within(card).getByTestId("hook-gate-subagent")).toHaveTextContent("Subagent: general-purpose");
+    expect(within(card).getByTestId("hook-gate-title")).toHaveTextContent(
+      "Claude Code is asking whether the general-purpose subagent may write `src/config.ts`",
+    );
+    expect(within(card).getByTestId("hook-gate-match")).toHaveTextContent("This matches your stance 'global mutable state'.");
+  });
+
+  it("a strict-stop deny from a subagent says the lead isn't told", () => {
+    push(hookHero({ decision: "deny", toolName: "Edit", ineligibleReason: "hook_deny", agentId: "agent-7f3a", agentType: "Explore" }));
+    render(<ToastLayer />);
+    const card = screen.getByRole("alert");
+    expect(within(card).getByTestId("hook-gate-title")).toHaveTextContent("Claude Code stopped an edit to `src/config.ts` by the Explore subagent");
+    expect(within(card).getByTestId("hook-gate-subagent")).toHaveTextContent("Subagent: Explore");
+    expect(within(card).getByTestId("hook-gate-next")).toHaveTextContent("the lead agent isn't told it was stopped");
+  });
+
+  it("an agent id without a type still reads as a subagent", () => {
+    const c = hookGateCopy({ source: "session", concept: "x", decision: "deny", toolName: "Write", targetPath: "a.ts", agentId: "agent-1" });
+    expect(c.title).toBe("Claude Code stopped a write to `a.ts` by a subagent");
+    expect(c.subagent).toBe("Subagent: unnamed");
+  });
+
+  it("a legacy record (no agent fields) renders exactly as before, with no subagent label", () => {
+    push(hookHero({ decision: "deny", toolName: "Edit" }));
+    render(<ToastLayer />);
+    const card = screen.getByRole("alert");
+    expect(card).not.toHaveAttribute("data-subagent");
+    expect(within(card).queryByTestId("hook-gate-subagent")).toBeNull();
+    expect(within(card).getByTestId("hook-gate-title")).toHaveTextContent(/^Claude Code stopped an edit to `src\/config.ts`$/);
+    expect(within(card).getByTestId("hook-gate-next")).toHaveTextContent(/^Nothing was written\. Claude was told to cancel or revise\.$/);
+  });
+
+  it("the gate log labels a subagent's entry and leaves a main-agent entry unlabelled", () => {
+    act(() => {
+      usePreflightBlockStore.setState({
+        loaded: true,
+        lastSeenAt: null,
+        blocks: [
+          { id: "b1", serverId: "blk_hf_sub", at: "2026-10-17T10:00:00.000Z", source: "session", concept: "global mutable state", via: "surface", lane: "hook", decision: "deny", toolName: "Write", targetPath: "src/w.ts", agentId: "agent-7f3a", agentType: "general-purpose" },
+          { id: "b2", serverId: "blk_hf_main", at: "2026-10-17T09:00:00.000Z", source: "session", concept: "global mutable state", via: "surface", lane: "hook", decision: "ask", toolName: "Write", targetPath: "src/m.ts" },
+        ],
+      });
+      usePreflightBlockStore.getState().requestFocus();
+    });
+    render(<PreflightBlockLog />);
+    const lines = screen.getAllByTestId("gate-hook-line");
+    expect(lines).toHaveLength(2);
+    const sub = lines.find((l) => l.textContent?.includes("src/w.ts"))!;
+    const main = lines.find((l) => l.textContent?.includes("src/m.ts"))!;
+    expect(within(sub).getByTestId("gate-hook-subagent")).toHaveTextContent("Subagent: general-purpose");
+    expect(sub).toHaveTextContent("by the general-purpose subagent");
+    expect(within(main).queryByTestId("gate-hook-subagent")).toBeNull();
   });
 });

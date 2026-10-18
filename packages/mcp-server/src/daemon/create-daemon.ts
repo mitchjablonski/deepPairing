@@ -1366,6 +1366,10 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
           toolName: entry.toolName,
           targetPath: entry.targetPath,
           guardrail: entry.guardrail,
+          // #553 — a worker subagent's firing names its agent type; it routes
+          // like any other (its session_id is the parent's).
+          agentId: entry.agentId,
+          agentType: entry.agentType,
           source: entry.source,
           blockId: entry.id,
           at: entry.at,

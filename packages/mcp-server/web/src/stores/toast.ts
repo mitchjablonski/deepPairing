@@ -43,6 +43,9 @@ export interface PreflightBlockHero {
   targetPath?: string;
   /** #544 — set only when a guarded file fired and no stance did. */
   guardrail?: string;
+  /** #553 — a worker subagent made the call (absent for the main agent). */
+  agentId?: string;
+  agentType?: string;
 }
 
 export interface Toast {

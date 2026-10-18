@@ -19,10 +19,15 @@ export interface HookGateFacts {
   concept: string;
   reason?: string;
   addedBy?: string;
+  /** #553 — set when a worker subagent made the call, not the main agent. */
+  agentId?: string;
+  agentType?: string;
 }
 
 export interface HookGateCopy {
   title: string;
+  /** #553 — "Subagent: <type>" when a worker subagent made the call. */
+  subagent?: string;
   match: string;
   said?: string;
   next: string;
@@ -34,12 +39,23 @@ function verb(toolName: string | undefined): string {
   return toolName === "Write" ? "write" : "edit";
 }
 
+/** #553 — how a worker subagent is named: its agent type when Claude Code
+ *  sent one, else just "a subagent". Undefined for the main agent. */
+function subagentName(f: HookGateFacts): string | undefined {
+  if (f.agentType) return `the ${f.agentType} subagent`;
+  return f.agentId ? "a subagent" : undefined;
+}
+
 export function hookGateCopy(f: HookGateFacts): HookGateCopy {
   const target = f.targetPath ? `\`${f.targetPath}\`` : "a file";
   const deny = f.decision === "deny";
+  const worker = subagentName(f);
+  const change = f.toolName === "Write" ? "a write" : "an edit";
   const title = deny
-    ? `Claude Code stopped ${f.toolName === "Write" ? "a write" : "an edit"} to ${target}`
-    : `Claude Code is asking to ${verb(f.toolName)} ${target}`;
+    ? `Claude Code stopped ${change} to ${target}${worker ? ` by ${worker}` : ""}`
+    : worker
+      ? `Claude Code is asking whether ${worker} may ${verb(f.toolName)} ${target}`
+      : `Claude Code is asking to ${verb(f.toolName)} ${target}`;
   // `guardrail` is set only when a guarded file fired and no stance did.
   const isGuard = !!f.guardrail;
   const match = isGuard
@@ -55,12 +71,15 @@ export function hookGateCopy(f: HookGateFacts): HookGateCopy {
         : `You said: '${f.reason}'`
     : undefined;
   const next = deny
-    ? "Nothing was written. Claude was told to cancel or revise."
+    ? worker
+      ? "Nothing was written. The subagent was told to cancel or revise, and the lead agent isn't told it was stopped: if its work depends on this file, tell the lead."
+      : "Nothing was written. Claude was told to cancel or revise."
     : `The terminal prompt won't show this. Allow it there to let this one change through, or deny it to ${isGuard ? "leave the file alone" : f.source === "team" ? "keep the team rule" : "keep your stance"}.`;
   const sentence = (t: string) => (/[.!?]$/.test(t) ? t : `${t}.`);
   const announcement = [title, match, said, deny ? "Nothing was written." : "The terminal prompt won't show this."]
     .filter((t): t is string => !!t)
     .map((t) => sentence(t.replace(/`/g, "")))
     .join(" ");
-  return { title, match, ...(said ? { said } : {}), next, announcement };
+  const subagent = worker ? `Subagent: ${f.agentType ?? "unnamed"}` : undefined;
+  return { title, ...(subagent ? { subagent } : {}), match, ...(said ? { said } : {}), next, announcement };
 }

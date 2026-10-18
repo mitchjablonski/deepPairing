@@ -224,6 +224,11 @@ export interface HookGateRecord {
   /** The hook event's Claude Code `session_id`, so the daemon can route the
    *  toast to that session's tabs. Same sanitizing as deriveSessionId. */
   session?: string;
+  /** #553 — set when a worker SUBAGENT made the call: Claude Code's hook input
+   *  then carries `agent_id`/`agent_type` (the `session_id` stays the parent's,
+   *  so routing is unchanged). Optional; a main-agent fire has neither. */
+  agentId?: string;
+  agentType?: string;
 }
 
 export type PreflightMode = "ask" | "strict-stop";
@@ -635,6 +640,8 @@ export function recordHookFire(
   mode: PreflightMode = "ask",
   /** #544 — the hook event's `session_id` (optional; older callers omit it). */
   claudeSessionId?: unknown,
+  /** #553 — the hook event's subagent identity (optional; older callers omit it). */
+  agent?: { agent_id?: unknown; agent_type?: unknown },
 ): void {
   // appendHookFire owns the mkdir, the lock, the capped append and the atomic
   // write, and never throws. The guardrail dedup stamp rides in the SAME
@@ -645,6 +652,7 @@ export function recordHookFire(
   const gate = hookGateRecord(decision, mode);
   const session = typeof claudeSessionId === "string" ? claudeSessionId.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 64) : "";
   if (gate && session) gate.session = session;
+  if (gate) Object.assign(gate, hookAgentFields(agent));
   appendHookFire(
     hookStatePath(projectRoot),
     {
@@ -933,6 +941,23 @@ function gateText(value: unknown, limit: number): string | undefined {
   const text = sanitizeStrictReason(value);
   if (!text) return undefined;
   return text.length > limit ? text.slice(0, limit - 1).replace(/[\ud800-\udbff]$/, "") + "…" : text;
+}
+
+/** #553 — the subagent identity off a hook event: an opaque id (same charset
+ *  as a session id) and the agent type's name, bounded and control-stripped.
+ *  Empty for a main-agent call. Never throws. */
+export function hookAgentFields(agent: { agent_id?: unknown; agent_type?: unknown } | undefined): Pick<HookGateRecord, "agentId" | "agentType"> {
+  try {
+    if (!agent || typeof agent !== "object") return {};
+    const out: Pick<HookGateRecord, "agentId" | "agentType"> = {};
+    const id = typeof agent.agent_id === "string" ? agent.agent_id.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64) : "";
+    const type = gateText(agent.agent_type, 80);
+    if (id) out.agentId = id;
+    if (type) out.agentType = type;
+    return out;
+  } catch {
+    return {};
+  }
 }
 
 /** #544 — the companion record for one firing, or undefined when the decision

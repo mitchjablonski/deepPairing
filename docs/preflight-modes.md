@@ -69,6 +69,43 @@ unchanged; this adds a second place to see why.
   and a burst of more than 50 firings between two reads can push the oldest
   out of the capped fire log before the daemon sees them.
 
+### Worker subagents (#553)
+
+Claude Code runs the PreToolUse hook inside a worker subagent's tool calls
+too. The hook input then carries the **parent's** `session_id` plus
+`agent_id` and `agent_type`. Both hook copies (init-generated and plugin) add
+those two fields to the gate record (`agentId`: same character set as a
+session id, at most 64; `agentType`: control-stripped, at most 80), and the
+gate-log entry and `preflight_blocked` event carry them too. Nothing else from
+the hook input is recorded: no tool input or file content.
+
+- **Routing is unchanged.** A worker's firing goes to its parent session's
+  tabs and the all-sessions view, never to another session's.
+  `/api/preflight-blocks` follows the same rule for hook firings: a tab bound
+  to another session doesn't get them (the all-sessions view, and firings with
+  no resolvable session, stay project-wide).
+- **The companion labels it.** The toast shows "Subagent: general-purpose" and
+  says "Claude Code stopped a write to `src/x.ts` by the general-purpose
+  subagent", and a deny adds that the lead agent isn't told. The gate log and
+  the next-up bar name the subagent too.
+- **Records written before this change** have neither field and render exactly
+  as before.
+- **The lead is not notified by the hook.** Claude Code's documented hook
+  outputs don't reach the parent model: `systemMessage` is shown to the user,
+  and `permissionDecisionReason`, `stopReason` and `continue: false` go to the
+  subagent that made the call. A `SubagentStop` hook's `decision: "block"`
+  keeps the *subagent* running; it doesn't write to the parent either. On
+  2.1.301 the background completion also omitted the warning (see
+  [Supervised worker handoff](#supervised-worker-handoff)). So the companion
+  is where you learn a worker was stopped, and you tell the lead. A lead-side
+  signal (for example, the lead's next `check_feedback` reporting "a worker
+  was stopped by your stance X") would need deepPairing's own channel and is
+  not built here.
+- **Re-verify on each Claude Code update.** The field names and the
+  "subagent hooks carry the parent's `session_id`" behaviour come from Claude
+  Code's hook input, and the tests simulate them. Like the supervised handoff
+  below, check them against a real worker after changing the pinned version.
+
 ## Recovery and limits
 
 Cancel or revise the proposal before continuing. A human may explicitly retire
@@ -89,8 +126,9 @@ reported by `doctor` (below).
 Concurrent matching hook invocations each deny independently. Stopping a turn
 does not roll back or guarantee cancellation of unrelated sibling tools that
 already started. A subagent's stop must not be assumed to stop its parent or
-make the warning visible to the lead. Actual lead/worker visibility remains a
-separate runtime acceptance requirement.
+make the warning visible to the lead. The companion shows the worker's stop
+(see [Worker subagents](#worker-subagents-553)); visibility to the lead agent
+itself remains a separate runtime acceptance requirement.
 
 ## Failure diagnostics and doctor
 

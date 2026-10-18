@@ -90,6 +90,10 @@ export interface PreflightBlockEntry {
   guardrail?: string;
   /** The exact stance row (Retire's identity), when it differs from `concept`. */
   description?: string;
+  /** #553 — a worker SUBAGENT made the call (its hook input's `agent_id` /
+   *  `agent_type`). Absent for the main agent and for older records. */
+  agentId?: string;
+  agentType?: string;
 }
 
 export interface PreflightBlockLogFile {
@@ -316,6 +320,9 @@ export interface HookGateFireLike {
     via?: unknown; addedBy?: unknown; guardrail?: unknown; tool?: unknown; target?: unknown;
     /** The hook event's Claude Code `session_id` (sanitized by the hook). */
     session?: unknown;
+    /** #553 — the subagent that made the call (absent for the main agent). */
+    agentId?: unknown;
+    agentType?: unknown;
   };
 }
 
@@ -360,6 +367,10 @@ export function hookGateEntryFromFire(
   if (reason) entry.reason = reason;
   if (description) entry.description = description;
   if (addedBy) entry.addedBy = addedBy;
+  const agentId = typeof g.agentId === "string" && HOOK_ID.test(g.agentId) ? g.agentId : undefined;
+  const agentType = str(g.agentType, 80);
+  if (agentId) entry.agentId = agentId;
+  if (agentType) entry.agentType = agentType;
   // Only a guardrail-ONLY firing names its class: when a stance also matched,
   // the stance leads (it is what the human can act on) and this stays absent.
   if (guardrail && g.source === "guardrail") entry.guardrail = guardrail;

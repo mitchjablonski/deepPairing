@@ -216,7 +216,7 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
           id: b.id,
           // #544 — a hook firing names the file Claude Code asked about.
           title: b.lane === "hook" && b.targetPath
-            ? `"${b.concept}": Claude Code ${b.decision === "deny" ? "stopped" : "asked about"} ${b.targetPath}`
+            ? `"${b.concept}": Claude Code ${b.decision === "deny" ? "stopped" : "asked about"} ${b.targetPath}${b.agentType ? ` (${b.agentType} subagent)` : b.agentId ? " (subagent)" : ""}`
             : b.proposal ? `"${b.concept}" stopped: ${b.proposal}` : `"${b.concept}"`,
           at: b.at,
         })),
