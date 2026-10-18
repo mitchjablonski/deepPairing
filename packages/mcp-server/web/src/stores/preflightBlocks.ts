@@ -23,12 +23,13 @@ import { apiBase, apiGet } from "../lib/api";
  * session (not just demo). Live events still arrive via the WS broadcast and
  * merge on top, deduped against the hydrated set.
  *
- * F7 — this log captures MCP-lane blocks ONLY: a present_* preflight block
- * broadcasts a `preflight_blocked` WS event, which is what feeds this store.
- * The PreToolUse HOOK lane (a raw Edit/Write refused at the platform level)
- * has no daemon in the loop and emits no WS event — it records its fire to
- * .deeppairing/hooks-state.json instead, surfaced by HookStatus. Same split as
- * HookStatus vs this log: two lanes, two surfaces, deliberately.
+ * F7 — a present_* preflight block broadcasts a `preflight_blocked` WS event,
+ * which is what feeds this store. #544 — the PreToolUse HOOK lane (a raw
+ * Edit/Write that matched a stance or a guarded file) now feeds it too:
+ * Claude Code's own prompt doesn't show the hook's reason, so this log and its
+ * toast are where you see it. The hook still never talks to the daemon; it
+ * writes its gate record onto its .deeppairing/hooks-state.json fire, and the
+ * daemon's watcher turns that into a `preflight_blocked` with `lane: "hook"`.
  */
 
 export interface PreflightBlockRecord {
@@ -74,6 +75,12 @@ export interface PreflightBlockRecord {
   preconditions?: ProposalPrecondition[];
   /** The exact stance row (identity for Retire). */
   description?: string;
+  // #544 — a PreToolUse hook firing (a raw Edit/Write). All daemon-set.
+  lane?: "hook";
+  decision?: "ask" | "deny";
+  targetPath?: string;
+  /** Set only when a guarded file fired and no stance did. */
+  guardrail?: string;
 }
 
 interface PreflightBlockState {

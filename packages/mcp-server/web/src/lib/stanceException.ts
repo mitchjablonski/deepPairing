@@ -52,6 +52,9 @@ export function ineligibleText(reason: string | undefined): string {
     case "session_ended": return "That Claude session has ended, so there's nothing left to allow.";
     case "demo_session": return "Demo blocks can't be allowed.";
     case "stance_retired": return "That stance is no longer on file.";
+    // #544 — a raw Edit/Write the hook asked about: the terminal answers it.
+    case "hook_ask": return "You answer this one in the terminal: allowing it there lets this one change through.";
+    case "hook_deny": return "This edit was stopped before it ran. Nothing was written.";
     default: return "This block can't be allowed once.";
   }
 }

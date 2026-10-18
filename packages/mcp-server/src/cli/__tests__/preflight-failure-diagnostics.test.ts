@@ -226,13 +226,20 @@ describe("#546 concurrency", () => {
     const root = project();
     fs.writeFileSync(path.join(root, ".deeppairing", "team.json"), "{ corrupt team");
     const N = 12;
-    const results = await Promise.all(Array.from({ length: N }, () => runAsync(root, event(root))));
+    const results = await Promise.all(Array.from({ length: N }, (_, i) => runAsync(root, event(root, { session_id: `claude-session-${i % 2}` }))));
     for (const r of results) {
       expect(r.status).toBe(0);
       expect(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision).toBe("ask");
     }
     const state = JSON.parse(stateText(root)); // valid JSON
     expect(state.fires).toHaveLength(N);
+    // #552's companion-gate record and session attribution ride every fire,
+    // beside #546's separate failure field.
+    for (const fire of state.fires) {
+      expect(fire).toMatchObject({ hook: "preflight", kind: "ask", id: expect.any(String), gate: expect.objectContaining({ decision: "ask" }) });
+      expect(["claude-session-0", "claude-session-1"]).toContain(fire.gate.session);
+    }
+    expect(new Set(state.fires.map((f: { id: string }) => f.id)).size).toBe(N);
     expect(state.preflightFailures).toEqual({
       ledger_corrupt: { count: N, firstAt: expect.any(String), lastAt: expect.any(String), detail: "team:SyntaxError" },
     });

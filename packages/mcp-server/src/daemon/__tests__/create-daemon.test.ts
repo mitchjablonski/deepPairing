@@ -411,7 +411,8 @@ describe("dispose() — the test-teardown seam actually clears every factory han
     daemon.startHooksWatcher(); // fs watcher
     daemon.scheduleInstallHealthPing(); // 60s ping timeout
     daemon.checkAutoShutdown(); // no sessions/clients → arms the 60s idle timer
-    expect(vi.getTimerCount()).toBe(3);
+    // heartbeat + ping + idle, plus #544's hooks-state stat poll.
+    expect(vi.getTimerCount()).toBe(4);
     expect(fake).toBeDefined();
 
     let wssClosed = false;

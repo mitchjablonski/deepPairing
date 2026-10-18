@@ -9,6 +9,7 @@ import { ineligibleText, openGateLogEntry } from "../lib/stanceException";
 import { useCrossProjectStore } from "../stores/crossProject";
 import { ShieldIcon, CompassIcon } from "./icons/ArtifactIcons";
 import { useOfflineReason } from "../hooks/useOfflineReason";
+import { hookGateCopy } from "../lib/hookGate";
 
 /**
  * R2 — the SVG marks a toast can name via `Toast.icon`, so a store that can't
@@ -69,6 +70,70 @@ function humanizeAge(iso?: string): string | null {
   if (days < 60) return "1 month ago";
   if (days < 365) return `${Math.round(days / 30)} months ago`;
   return `${Math.round(days / 365)} years ago`;
+}
+
+/**
+ * #544 — the hero for a PreToolUse hook firing. Claude Code is waiting on you
+ * in the terminal and its prompt doesn't say why; this card does: what Claude
+ * wants to change, which stance it matches, what you said, and where to
+ * answer. The terminal's Allow/Deny IS the one-time allowance here, so there is
+ * no "Allow once" button to duplicate it.
+ */
+function HookGateHeroCard({ hero, onDismiss, action, quiet }: {
+  hero: PreflightBlockHero;
+  onDismiss: () => void;
+  action?: { label: string; onClick: () => void };
+  quiet?: boolean;
+}) {
+  const style = kindStyles["preflight-block"];
+  const copy = hookGateCopy(hero);
+  return (
+    <div
+      className={`flex flex-col gap-2 px-4 py-3 rounded-lg border-2 shadow-xl backdrop-blur-sm animate-fade-in ${style.bg} ${style.border}`}
+      // With the next-up bar on, its announcer already spoke this moment.
+      role={quiet ? undefined : "alert"}
+      aria-live={quiet ? undefined : "assertive"}
+      data-testid="hero-toast"
+      data-lane="hook"
+      data-decision={hero.decision ?? "ask"}
+    >
+      <div className="flex items-start gap-2">
+        <span className={`flex items-center text-base shrink-0 ${style.accent}`} aria-hidden="true">{style.icon}</span>
+        <div className="flex-1 min-w-0 text-xs font-bold text-text-primary break-words" data-testid="hook-gate-title">
+          {copy.title}
+        </div>
+        <button
+          onClick={onDismiss}
+          aria-label="Dismiss"
+          className="text-text-muted hover:text-text-primary text-xs px-1 shrink-0"
+        >
+          ✕
+        </button>
+      </div>
+      <div className="text-2xs text-text-secondary leading-relaxed space-y-1 pl-6 break-words">
+        <div className={`font-semibold ${style.accent}`} data-testid="hook-gate-match">{copy.match}</div>
+        {copy.said && <div className="italic" data-testid="hook-gate-said">{copy.said}</div>}
+        <div className="text-text-primary" data-testid="hook-gate-next">{copy.next}</div>
+      </div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1 border-t border-border-default/40 pl-6">
+        <button
+          type="button"
+          onClick={() => openGateLogEntry(hero.blockId)}
+          className="text-2xs font-medium text-text-muted cursor-pointer hover:text-text-secondary hover:underline"
+        >
+          Open the gate log
+        </button>
+        {action && !hero.guardrail && (
+          <button
+            onClick={action.onClick}
+            className={`text-2xs font-medium hover:underline ${style.accent}`}
+          >
+            {action.label}
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function PreflightBlockHeroCard({ hero, onDismiss, action, toastId }: {
@@ -306,12 +371,16 @@ export function ToastLayer() {
           // wrapper only restores pointer events (parent is pointer-events-none).
           return (
             <div key={t.id} className="pointer-events-auto outline-none" tabIndex={-1} data-toast-id={t.id} {...holdHandlers(t.id)}>
-              <PreflightBlockHeroCard
-                hero={t.hero}
-                onDismiss={() => dismiss(t.id)}
-                action={t.action}
-                toastId={t.id}
-              />
+              {t.hero.lane === "hook" ? (
+                <HookGateHeroCard hero={t.hero} onDismiss={() => dismiss(t.id)} action={t.action} quiet={t.quiet} />
+              ) : (
+                <PreflightBlockHeroCard
+                  hero={t.hero}
+                  onDismiss={() => dismiss(t.id)}
+                  action={t.action}
+                  toastId={t.id}
+                />
+              )}
             </div>
           );
         }

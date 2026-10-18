@@ -178,6 +178,44 @@ export interface HookDecision {
   /** Present only on a guardrail-backstop fire — what the caller stamps for
    *  dedup and names in the fire log. */
   guardrail?: GuardrailMatch;
+  /** #544 — the structured stance a rejected-approach fire matched, so the
+   *  companion can show it (the native ask dialog doesn't render the reason). */
+  stance?: HookStanceMatch;
+  /** #544 — the tool and the file it targeted, for the same companion entry. */
+  toolName?: string;
+  target?: string;
+}
+
+export interface HookStanceMatch {
+  concept: string;
+  description?: string;
+  reason?: string;
+  via?: string;
+  addedBy?: string;
+}
+
+/**
+ * #544 — what one firing tells the companion, written onto its `fires` entry
+ * (the daemon already watches hooks-state.json and turns this into a gate-log
+ * entry plus a live toast). Nothing here travels over the network from the
+ * hook, so it adds no latency and a daemon that is down changes nothing.
+ * Every string is control-stripped and bounded.
+ */
+export interface HookGateRecord {
+  decision: "ask" | "deny";
+  source: "session" | "team" | "guardrail";
+  concept: string;
+  description?: string;
+  reason?: string;
+  via?: string;
+  addedBy?: string;
+  /** The guardrail class, when a guardrail rule fired (alone or alongside a stance). */
+  guardrail?: string;
+  tool?: string;
+  target?: string;
+  /** The hook event's Claude Code `session_id`, so the daemon can route the
+   *  toast to that session's tabs. Same sanitizing as deriveSessionId. */
+  session?: string;
 }
 
 export type PreflightMode = "ask" | "strict-stop";
@@ -582,11 +620,23 @@ export {
  * `kind` declaration in this file to point at; the field is written here and
  * typed where the fire log is read. Strict stops never stamp an ask receipt.
  */
-export function recordHookFire(projectRoot: string, decision: HookDecision, now: number = Date.now(), mode: PreflightMode = "ask"): void {
+export function recordHookFire(
+  projectRoot: string,
+  decision: HookDecision,
+  now: number = Date.now(),
+  mode: PreflightMode = "ask",
+  /** #544 — the hook event's `session_id` (optional; older callers omit it). */
+  claudeSessionId?: unknown,
+): void {
   // appendHookFire owns the mkdir, the lock, the capped append and the atomic
   // write, and never throws. The guardrail dedup stamp rides in the SAME
   // read-modify-write via `mutate` — a second lock/RMW pair would reintroduce
   // exactly the lost-update the lock exists to prevent.
+  // #544 — the gate record rides the SAME append (no network from the hook):
+  // the daemon's hooks-state watcher turns it into a gate-log entry + toast.
+  const gate = hookGateRecord(decision, mode);
+  const session = typeof claudeSessionId === "string" ? claudeSessionId.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 64) : "";
+  if (gate && session) gate.session = session;
   appendHookFire(
     hookStatePath(projectRoot),
     {
@@ -595,6 +645,7 @@ export function recordHookFire(projectRoot: string, decision: HookDecision, now:
       kind: mode === "strict-stop" ? "deny" : "ask",
       ...(mode === "strict-stop" ? { mode } : {}),
       reason: decision.guardrail ? `guardrail:${decision.guardrail.category}` : decision.source || "blocked",
+      ...(gate ? { id: `hf_${now.toString(36)}_${Math.random().toString(36).slice(2, 10)}`, gate } : {}),
     },
     (state) => {
       // #470 slice 4 — the deeppairing-state class never dedups, so it never stamps.
@@ -753,6 +804,34 @@ export function evaluatePreflightHook(args: {
   /** #546 — optional collector for faults that fail open. Never changes the decision. */
   failures?: PreflightFailureSink;
 }): HookDecision {
+  const decision = evaluateHookGates(args);
+  if (!decision.fire) return decision;
+  // #544 — name the tool and its target on every firing, for the companion.
+  const target = decision.guardrail?.path ?? displayTarget(args.projectRoot, toolInputTargetPath(args.toolInput));
+  return { ...decision, toolName: args.toolName, ...(target ? { target } : {}) };
+}
+
+/** Project-relative when the target sits inside the project, else as written. */
+function displayTarget(projectRoot: string, target: unknown): string | undefined {
+  if (typeof target !== "string" || !target) return undefined;
+  try {
+    if (!path.isAbsolute(target)) return target;
+    const rel = path.relative(projectRoot, target);
+    return rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? rel : target;
+  } catch {
+    return target;
+  }
+}
+
+function evaluateHookGates(args: {
+  toolName: string;
+  toolInput: unknown;
+  projectRoot: string;
+  now?: number;
+  env?: Record<string, string | undefined>;
+  mode?: PreflightMode;
+  failures?: PreflightFailureSink;
+}): HookDecision {
   const { toolName, toolInput, projectRoot, failures } = args;
   // #470 slice 4 — decided first and independently of everything below, so
   // no ceremony, dedup window or opt-out can silence it. One prompt per call:
@@ -779,10 +858,65 @@ export function evaluatePreflightHook(args: {
     const reason = args.mode === "strict-stop"
       ? strictRejectionReason(result.block)
       : toHookReason(result.block.message);
+    const stance = stanceOf(result.block);
     return state
-      ? { ...state, reason: `${reason}\n\n${state.reason}`, source: result.block.source }
-      : { fire: true, reason, source: result.block.source };
+      ? { ...state, reason: `${reason}\n\n${state.reason}`, source: result.block.source, ...(stance ? { stance } : {}) }
+      : { fire: true, reason, source: result.block.source, ...(stance ? { stance } : {}) };
   }
   if (state) return state;
   return evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env, mode: args.mode, failures }) ?? { fire: false };
+}
+
+/** #544 — the structured match, read from the block's broadcast payload (the
+ *  same fields the present_* gate puts on its companion event). */
+function stanceOf(block: PreflightBlock): HookStanceMatch | undefined {
+  const m = block.broadcastEvent.match as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
+  const concept = str(m.concept) ?? str(m.description);
+  if (!concept) return undefined;
+  return {
+    concept,
+    ...(str(m.description) ? { description: str(m.description) } : {}),
+    ...(str(m.reason) ? { reason: str(m.reason) } : {}),
+    ...(str(m.via) ? { via: str(m.via) } : {}),
+    ...(str(m.addedBy) ? { addedBy: str(m.addedBy) } : {}),
+  };
+}
+
+function gateText(value: unknown, limit: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = sanitizeStrictReason(value);
+  if (!text) return undefined;
+  return text.length > limit ? text.slice(0, limit - 1).replace(/[\ud800-\udbff]$/, "") + "…" : text;
+}
+
+/** #544 — the companion record for one firing, or undefined when the decision
+ *  names nothing a human could read (never throws). */
+export function hookGateRecord(decision: HookDecision, mode: PreflightMode = "ask"): HookGateRecord | undefined {
+  try {
+    if (!decision.fire) return undefined;
+    const stance = decision.stance;
+    const g = decision.guardrail;
+    const concept = gateText(stance?.concept ?? g?.note, 200);
+    if (!concept) return undefined;
+    const source = stance ? (decision.source === "team" ? "team" : "session") : "guardrail";
+    const out: HookGateRecord = { decision: mode === "strict-stop" ? "deny" : "ask", source, concept };
+    const description = gateText(stance?.description, 200);
+    const reason = gateText(stance ? stance.reason : g?.rationale, 500);
+    const via = gateText(stance?.via, 20);
+    const addedBy = gateText(stance?.addedBy, 80);
+    const category = gateText(g?.category, 60);
+    const tool = gateText(decision.toolName, 40);
+    const target = gateText(decision.target, 400);
+    if (description && description !== concept) out.description = description;
+    if (reason) out.reason = reason;
+    if (via) out.via = via;
+    if (addedBy) out.addedBy = addedBy;
+    if (category) out.guardrail = category;
+    if (tool) out.tool = tool;
+    if (target) out.target = target;
+    return out;
+  } catch {
+    return undefined;
+  }
 }

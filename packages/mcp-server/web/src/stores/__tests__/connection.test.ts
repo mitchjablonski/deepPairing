@@ -433,6 +433,64 @@ describe("connection store — handleMessage dispatch", () => {
       expect(toasts[0]!.hero?.addedBy).toBe("alex");
     });
 
+    it("#544 — a hook ask lands as a hook hero toast and a gate-log entry naming the stance, reason, tool and target", async () => {
+      const { useToastStore } = await import("../toast");
+      const { usePreflightBlockStore } = await import("../preflightBlocks");
+      const { usePreferencesStore } = await import("../preferences");
+      const { useAnnounceStore } = await import("../announce");
+      useToastStore.getState().dismissAll();
+      usePreflightBlockStore.getState().clear();
+      usePreferencesStore.setState({ nextUpBar: false });
+      useConnectionStore.getState().connect();
+      const event = {
+        type: "preflight_blocked", lane: "hook", decision: "ask", toolName: "Write", targetPath: "src/config.ts",
+        source: "session", blockId: "blk_hf_1", at: "2026-10-16T12:00:00.000Z", eligible: false, ineligibleReason: "hook_ask",
+        match: { concept: "global mutable state", reason: "Keep configuration explicit", via: "surface" },
+      };
+      activeAdapter.emit(event);
+      activeAdapter.emit({ ...event }); // a watcher re-read is one moment
+      // The hook path loads its copy/announcer modules on first use.
+      await vi.waitFor(() => expect(useToastStore.getState().toasts.length).toBeGreaterThan(0));
+      await flush();
+      const toasts = useToastStore.getState().toasts.filter((t) => t.kind === "preflight-block");
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0]!.title).toBe("Claude Code is asking to write `src/config.ts`");
+      expect(toasts[0]!.quiet).toBeUndefined(); // bar off: the toast's own alert speaks
+      expect(toasts[0]!.ttl).toBe(30000);
+      expect(toasts[0]!.hero).toMatchObject({
+        lane: "hook", decision: "ask", toolName: "Write", targetPath: "src/config.ts",
+        concept: "global mutable state", reason: "Keep configuration explicit", blockId: "blk_hf_1", eligible: false,
+      });
+      expect(usePreflightBlockStore.getState().blocks).toHaveLength(1);
+      expect(usePreflightBlockStore.getState().blocks[0]).toMatchObject({
+        serverId: "blk_hf_1", lane: "hook", decision: "ask", toolName: "Write", targetPath: "src/config.ts",
+        concept: "global mutable state", reason: "Keep configuration explicit",
+      });
+      expect(useAnnounceStore.getState().seq).toBe(0);
+    });
+
+    it("#544 — with the next-up bar on, the one announcer speaks the ask and the toast stays quiet", async () => {
+      const { useToastStore } = await import("../toast");
+      const { usePreferencesStore } = await import("../preferences");
+      const { useAnnounceStore } = await import("../announce");
+      useToastStore.getState().dismissAll();
+      usePreferencesStore.setState({ nextUpBar: true });
+      useConnectionStore.getState().connect();
+      activeAdapter.emit({
+        type: "preflight_blocked", lane: "hook", decision: "ask", toolName: "Edit", targetPath: ".claude/settings.json",
+        source: "session", guardrail: "deeppairing-state", blockId: "blk_hf_2",
+        match: { concept: "deepPairing's own state", reason: "It guards deepPairing's prompts.", via: "surface" },
+      });
+      await vi.waitFor(() => expect(useToastStore.getState().toasts.length).toBeGreaterThan(0));
+      const toast = useToastStore.getState().toasts.find((t) => t.kind === "preflight-block")!;
+      expect(toast.quiet).toBe(true);
+      expect(toast.hero?.guardrail).toBe("deeppairing-state");
+      expect(useAnnounceStore.getState().message).toBe(
+        "Claude Code is asking to edit .claude/settings.json. This file is on deepPairing's guarded list: deepPairing's own state. It guards deepPairing's prompts. The terminal prompt won't show this.",
+      );
+      usePreferencesStore.setState({ nextUpBar: false });
+    });
+
     it("#168 — dedupes the hero toast: a replayed/re-delivered block does NOT re-fire it", async () => {
       const { useToastStore } = await import("../toast");
       useToastStore.getState().dismissAll();

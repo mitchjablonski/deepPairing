@@ -61,7 +61,7 @@ export function ResolvedDecisionView({
   const unchosen = event.options.filter((o) => o.id !== selectedId);
   const neverSuggestId = decisionId ?? event.decisionId;
   // The remembered state comes from the ledger, so it survives a reload.
-  const rememberedRows = useRememberedRejections(sessionId);
+  const { rows: rememberedRows, remember } = useRememberedRejections(sessionId);
   const ledgerLabel = event.title?.trim() || event.context;
 
   return (
@@ -121,6 +121,11 @@ export function ResolvedDecisionView({
                     ledgerConcept={o.concept?.name ?? o.description ?? o.title}
                     sessionId={sessionId}
                     remembered={isOptionRemembered(rememberedRows, { label: ledgerLabel, option: o, artifactId })}
+                    onRecorded={() => remember({
+                      description: `${ledgerLabel.trim()}: ${o.title}`,
+                      concept: o.concept?.name ?? o.description,
+                      sourceArtifactId: artifactId,
+                    })}
                   />
                 )}
               </li>

@@ -716,17 +716,44 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
           const source: "session" | "team" = data.source === "team" ? "team" : "session";
           const concept = match.concept ?? match.description ?? "this approach";
           const via = match.via ?? "surface";
-          import("./toast").then(({ useToastStore }) => {
+          // #544 — a PreToolUse hook firing: Claude Code's terminal prompt is
+          // waiting on you and doesn't show why, so this toast is the why.
+          const hookLane = data.lane === "hook"
+            ? {
+                lane: "hook" as const,
+                decision: data.decision === "deny" ? ("deny" as const) : ("ask" as const),
+                toolName: typeof data.toolName === "string" ? data.toolName : undefined,
+                targetPath: typeof data.targetPath === "string" ? data.targetPath : undefined,
+                guardrail: typeof data.guardrail === "string" ? data.guardrail : undefined,
+              }
+            : undefined;
+          // Only a hook firing loads the copy/announcer modules; a present_*
+          // block's toast path is unchanged.
+          const hookModules = hookLane
+            ? Promise.all([import("../lib/hookGate"), import("./preferences"), import("./announce")])
+            : Promise.resolve(null);
+          void Promise.all([import("./toast"), hookModules]).then(([{ useToastStore }, mods]) => {
             if (!isCurrent(messageConnection, messageSession)) {
               seenPreflightBlockKeys.delete(blockKey);
               return;
             }
-            const title = source === "team"
-              ? "Blocked by team policy"
-              : "Blocked by your taste";
+            const [hookGateMod, prefsMod, announceMod] = mods ?? [];
+            const hookCopy = hookLane && hookGateMod
+              ? hookGateMod.hookGateCopy({ ...hookLane, source, concept, reason: match.reason, addedBy: match.addedBy })
+              : undefined;
+            // One announcement per moment: with the next-up bar on, its single
+            // announcer speaks and the toast stays quiet (the #470 rule).
+            const barOn = !!hookCopy && !!prefsMod?.usePreferencesStore.getState().nextUpBar;
+            if (hookCopy && barOn) announceMod?.announce(hookCopy.announcement);
+            const title = hookCopy
+              ? hookCopy.title
+              : source === "team"
+                ? "Blocked by team policy"
+                : "Blocked by your taste";
             useToastStore.getState().push({
               kind: "preflight-block",
               title,
+              ...(barOn ? { quiet: true } : {}),
               // body not used for preflight-block; render from hero
               hero: {
                 source,
@@ -743,8 +770,10 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
                 blockId: typeof data.blockId === "string" ? data.blockId : undefined,
                 eligible: typeof data.eligible === "boolean" ? data.eligible : undefined,
                 ineligibleReason: typeof data.ineligibleReason === "string" ? data.ineligibleReason : undefined,
+                ...(hookLane ?? {}),
               },
-              ttl: 12000,
+              // #544 — an ask waits on your answer in the terminal: give it time.
+              ttl: hookLane?.decision === "ask" ? 30000 : 12000,
               action: {
                 label: "Open the Ledger",
                 onClick: () => window.dispatchEvent(new CustomEvent("dp:open-your-taste")),
@@ -779,6 +808,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
               supersedesAllowanceId: data.supersedesAllowanceId,
               preconditions: Array.isArray(data.preconditions) ? data.preconditions : undefined,
               description: match.description,
+              ...(hookLane ?? {}),
             });
           });
           break;

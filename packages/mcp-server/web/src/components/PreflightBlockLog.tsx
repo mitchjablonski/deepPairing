@@ -15,6 +15,7 @@ import {
   postRevoke,
   receiptLabel,
 } from "../lib/stanceException";
+import { hookGateCopy } from "../lib/hookGate";
 
 /**
  * #169 — header chip + popover surfacing recent pre-flight GATE BLOCKS.
@@ -288,6 +289,11 @@ function GateBlockEntry({ block, blocks }: { block: PreflightBlockRecord; blocks
           {formatRelative(block.at)}
         </span>
       </div>
+      {block.lane === "hook" && (
+        <div className="mt-0.5 text-text-secondary break-words" data-testid="gate-hook-line">
+          {hookGateCopy({ ...block, decision: block.decision }).title}
+        </div>
+      )}
       {block.proposal && block.proposal !== block.concept && (
         <div className="mt-0.5 text-text-muted break-words">
           {/* R2 (contrast) — the label reads stronger than its value. */}
@@ -300,7 +306,7 @@ function GateBlockEntry({ block, blocks }: { block: PreflightBlockRecord; blocks
         </div>
       )}
       <div className="mt-1 text-[10px] text-text-muted">
-        {sourceLabel(block)} · {matchDetail(block.via)}
+        {block.guardrail ? "Guarded file" : <>{sourceLabel(block)} · {matchDetail(block.via)}</>}
       </div>
 
       {block.supersedesAllowanceId && (
@@ -335,7 +341,7 @@ function GateBlockEntry({ block, blocks }: { block: PreflightBlockRecord; blocks
         </div>
       )}
 
-      {block.source === "session" && (
+      {block.source === "session" && !block.guardrail && (
         <div className="mt-2 flex flex-wrap items-center gap-2">
           {block.eligible && !receipt && (
             <button
