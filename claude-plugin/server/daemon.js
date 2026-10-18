@@ -31948,7 +31948,7 @@ function htmlExportFileName(sessionId, generatedAt = (/* @__PURE__ */ new Date()
 }
 
 // src/version.ts
-var SERVER_VERSION = "0.1.68";
+var SERVER_VERSION = "0.1.69";
 
 // src/store/rejected-option-recorder.ts
 var MAX_REASON_LEN = 240;
