@@ -465,8 +465,11 @@ function object(value: unknown): value is Record<string, unknown> {
 /** Only typed file_map paths and plan step/branch files are coverage. Any bad
  * entry invalidates the whole declaration, never just the offending path. */
 function artifactCoverage(projectRoot: string, artifact: Record<string, unknown>): Coverage {
+  // Historical artifacts may genuinely omit content. A PRESENT malformed
+  // container cannot establish absent coverage or license scopeless fallback.
+  if (!Object.hasOwn(artifact, "content")) return { declared: false, paths: null };
   const content = artifact.content;
-  if (!object(content)) return { declared: false, paths: null };
+  if (!object(content)) return { declared: true, paths: null };
   let declared = false;
   let invalid = false;
   const paths: string[] = [];

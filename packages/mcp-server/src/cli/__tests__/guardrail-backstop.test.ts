@@ -786,6 +786,33 @@ describe("#534 approved typed scope and artifact precedence", () => {
     expect(live()).toBe(false);
   });
 
+  it.each([null, [], ["migrations/1.sql"], "", "migrations/1.sql", true, 42])("present malformed content %j cannot authorize or bypass historical scope", content => {
+    const invalid = { ...art("spec"), content };
+    const historical = art("spec", "approved", iso(NOW - 120_000));
+    seedSession([invalid]);
+    expect(live()).toBe(false);
+    seedSession([historical, invalid]);
+    expect(live()).toBe(false);
+    seedSession([invalid, historical]);
+    expect(live()).toBe(false);
+    // The declaration still has only its own session's veto authority.
+    seedSession([invalid], "other");
+    seedSession([historical]);
+    expect(live()).toBe(true);
+    // Exact eligible coverage retains first precedence over an unusable one.
+    seedSession([fileMap("migrations/1.sql")], "other");
+    seedSession([invalid, historical]);
+    expect(live()).toBe(true);
+  });
+
+  it("genuinely absent historical content retains approved same-session fallback", () => {
+    const historical = art("spec", "approved", iso(NOW - 120_000));
+    expect(Object.hasOwn(historical, "content")).toBe(false);
+    seedSession([historical]);
+    expect(live()).toBe(true);
+    expect(live("other")).toBe(false);
+  });
+
   it("every entry must be valid even beside an exact match", () => {
     seedSession([art("spec"), covered([{ path: "migrations/1.sql" }, { path: "../outside.ts" }])]);
     expect(live()).toBe(false);

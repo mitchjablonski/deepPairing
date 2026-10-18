@@ -351,6 +351,14 @@ MATRIX.push(
   { name: "missing event identity cannot use fallback", artifacts: [art("old", "spec")], sessionId: null, toolName: "Edit", file: "migrations/1.sql", expectAsk: "GUARDRAIL_ESCALATION" },
   { name: "plan branch FileChange covers exact file across sessions", artifacts: [{ ...art("plan", "plan"), content: { steps: [{ branches: [{ files: [{ filePath: "migrations/1.sql" }] }] }] } }], sourceSession: "other", toolName: "Edit", file: "migrations/1.sql", expectAsk: null },
 );
+for (const content of [null, [], "migrations/1.sql"]) {
+  const invalid = { ...art("malformed", "spec"), content };
+  const historical = art("historical", "spec", "approved", new Date(NOW - 120_000).toISOString());
+  MATRIX.push(
+    { name: `present malformed content ${JSON.stringify(content)} cannot authorize`, artifacts: [invalid], toolName: "Edit", file: "migrations/1.sql", expectAsk: "GUARDRAIL_ESCALATION" },
+    { name: `present malformed content ${JSON.stringify(content)} vetoes historical sibling`, artifacts: [historical, invalid], toolName: "Edit", file: "migrations/1.sql", expectAsk: "GUARDRAIL_ESCALATION" },
+  );
+}
 
 /** Run one hook script over one case; returns the parsed hookSpecificOutput or null. */
 function runCase(script: string, c: Case): { decision: string | null; reason: string | null } {

@@ -1187,8 +1187,9 @@ function object(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function artifactCoverage(projectRoot, artifact) {
+  if (!Object.hasOwn(artifact, "content")) return { declared: false, paths: null };
   const content = artifact.content;
-  if (!object(content)) return { declared: false, paths: null };
+  if (!object(content)) return { declared: true, paths: null };
   let declared = false;
   let invalid = false;
   const paths = [];

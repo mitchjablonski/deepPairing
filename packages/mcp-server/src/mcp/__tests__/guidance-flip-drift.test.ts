@@ -195,7 +195,7 @@ describe("#190 — default-mode flip: guidance wording is consistent (drift guar
     expect(skill).toMatch(/eligible same-session declaration blocks older scopeless siblings/);
     expect(hint).toMatch(/Eligible same-session declared coverage blocks older scopeless fallback/);
     expect(skill).toMatch(/Draft, stale\s+and demo artifacts neither authorize nor veto/);
-    expect(hint).toMatch(/Draft\/stale\/demo artifacts neither authorize nor veto/);
+    expect(hint).toMatch(/Draft\/demo artifacts and those outside the recency window neither authorize nor veto/);
     expect(skill).toMatch(/just-presented draft does\s+not count/);
     expect(skill).toMatch(/Unknown or malformed identity never dedups/);
     expect(hint).toMatch(/unknown\/malformed identity never dedups/);
