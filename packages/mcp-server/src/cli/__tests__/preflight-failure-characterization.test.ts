@@ -113,6 +113,8 @@ interface Case {
   patchScript?: (src: string, root: string) => string;
   /** #546 — the [class, detail] the fault now records, or null for none. */
   diag: [string, string] | null;
+  /** #557 — deliberately differs from the pre-#557 baseline (skipped in the side-by-side). */
+  changedBy557?: boolean;
 }
 
 /**
@@ -203,7 +205,7 @@ const CASES: Case[] = [
     stdout: "", stderr: "", diag: ["ledger_unreadable", "team:EISDIR"],
   },
   {
-    name: "C11 a parseable ledger entry with a non-string concept makes the evaluator throw",
+    name: "C11 a parseable ledger entry with a non-string concept (#557: now skipped, the valid stance asks)",
     setup: (root) => {
       fs.writeFileSync(path.join(root, ".deeppairing", "preferences.json"), JSON.stringify({ rejectedApproaches: [
         { description: REJECTED, reason: "Keep configuration explicit" },
@@ -211,7 +213,9 @@ const CASES: Case[] = [
       ] }));
       return write(root);
     },
-    stdout: "", stderr: "error", diag: ["evaluator_threw", "matcher:TypeError"],
+    // #557 — was: stdout "", stderr error line, evaluator_threw. The bad entry
+    // (index 1) is skipped and the valid stance at index 0 now asks.
+    stdout: "ask", stderr: "", diag: ["ledger_entry_skipped", "preferences:entry"], changedBy557: true,
   },
   {
     name: "C12 guardrail path, every session store unparseable: backstop fails open",
@@ -255,6 +259,19 @@ const CONTROLS: Case[] = [
   { name: "K3 a non-write tool", setup: () => JSON.stringify({ tool_name: "Read", tool_input: { file_path: "/x" } }), stdout: "", stderr: "", diag: null },
   { name: "K4 empty stdin", setup: () => "", stdout: "", stderr: "", diag: null },
   { name: "K5 a genuine match", setup: (root) => write(root), stdout: "ask", stderr: "", diag: null },
+  {
+    name: "K6 an all-valid multi-entry ledger (strings, nulls, concepts) with a match",
+    setup: (root) => {
+      fs.writeFileSync(path.join(root, ".deeppairing", "preferences.json"), JSON.stringify({ rejectedApproaches: [
+        "legacy bare string stance",
+        { description: "unrelated vendor lockin", concept: null, reason: 5 },
+        { description: "another one", concept: "redis cache layer", reason: "too heavy" },
+        { description: REJECTED, reason: "Keep configuration explicit", concept: REJECTED },
+      ] }));
+      return write(root);
+    },
+    stdout: "ask", stderr: "", diag: null,
+  },
 ];
 
 function arrange(copy: "init" | "plugin", c: Case) {
@@ -272,7 +289,8 @@ function expectDiag(root: string, diag: [string, string] | null) {
     return;
   }
   expect(Object.keys(field ?? {})).toEqual([diag[0]]);
-  expect(field![diag[0]]).toEqual({ count: 1, firstAt: expect.any(String), lastAt: expect.any(String), detail: diag[1] });
+  expect(field![diag[0]]).toMatchObject({ count: 1, firstAt: expect.any(String), lastAt: expect.any(String), detail: diag[1] });
+  expect(Object.keys(field![diag[0]]!).filter((k) => !["count", "firstAt", "lastAt", "detail", "indices"].includes(k))).toEqual([]);
 }
 
 function assertPinned(c: Case, r: { stdout: string; stderr: string; status: number | null }) {
@@ -292,7 +310,7 @@ describe.skipIf(!distBuilt).each(["init", "plugin"] as const)("#546 characteriza
     // recorded for a no-fire), and the fault now leaves exactly one entry.
     const state = readState(root) ?? {};
     if (c.stdout === "") expect(state.fires).toBeUndefined();
-    else expect(Object.keys(state).sort()).toEqual(["fires", "guardrailAsks", "preflightFailures", "version"]);
+    else expect((state.fires as unknown[]).length).toBe(1);
     expectDiag(root, c.diag);
   });
 
@@ -364,7 +382,7 @@ const BASELINE = process.env.DP_PREFLIGHT_BASELINE_DIR;
 describe.skipIf(!distBuilt || !BASELINE).each(["init", "plugin"] as const)("#546 byte-identical vs baseline (%s copy)", (copy) => {
   const modes: Array<string | undefined> = [undefined, "strict-stop", "bogus-mode"];
   const rows = [...CASES, ...CONTROLS]
-    .filter((c) => copy === "init" || !c.initOnly)
+    .filter((c) => (copy === "init" || !c.initOnly) && !c.changedBy557)
     .flatMap((c) => modes.map((mode) => ({ c, mode, label: `${c.name} [mode=${mode ?? "unset"}]` })));
   it.each(rows)("$label", ({ c, mode }) => {
     const root = makeProject();

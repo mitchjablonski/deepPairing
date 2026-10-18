@@ -101,8 +101,9 @@ export const PREFLIGHT_FAILURE_MEANING: Record<PreflightFailureClass, string> = 
   input_malformed: "Claude Code sent an event the hook could not read, so no check ran for it.",
   ledger_unreadable: "a ledger file (.deeppairing/preferences.json or team.json) exists but could not be read, so its rules were not checked.",
   ledger_corrupt: "a ledger file (.deeppairing/preferences.json or team.json) is not valid JSON or has the wrong shape, so its rules were not checked.",
+  ledger_entry_skipped: "a .deeppairing/preferences.json entry the matcher can't read (for example a non-string concept) was skipped; every other stance still enforced.",
   matcher_import_failed: "the init-installed hook could not load part of the matcher; rebuild deepPairing, then start a session so the hook is re-stamped.",
-  evaluator_threw: "the matcher threw while checking an edit (often one ill-typed ledger entry), so the whole check was skipped.",
+  evaluator_threw: "the matcher threw while checking an edit, for a reason no single ledger entry explains, so the whole check was skipped.",
   session_store_unreadable: "no session store could be read, so the guardrail backstop stayed silent.",
 };
 
@@ -171,7 +172,7 @@ export function preflightDoctorLines(report: PreflightDoctorReport): Array<{ mar
       mark: "warn",
       text: "Preflight failures recorded. Each one failed open: the edit went ahead without that part of the check, exactly as before.",
       details: report.failures.flatMap(({ cls, entry }) => [
-        `${cls} ×${entry.count} (${entry.detail}; first ${entry.firstAt}, last ${entry.lastAt})`,
+        `${cls} ×${entry.count} (${entry.detail}${entry.indices ? `, entries ${entry.indices.join(", ")}` : ""}; first ${entry.firstAt}, last ${entry.lastAt})`,
         `  ${PREFLIGHT_FAILURE_MEANING[cls]}`,
       ]),
     });
