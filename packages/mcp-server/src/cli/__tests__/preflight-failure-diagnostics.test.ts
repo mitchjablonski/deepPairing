@@ -316,6 +316,32 @@ describe("#546 doctor: failures and mode provenance", () => {
     expect(first.details.join("\n")).toContain("ledger_entry_invalid ×2 (preferences:concept, entries 0;");
   });
 
+  it("describes an invalid entry's limited effect without claiming the check failed open", () => {
+    const { root, home } = doctorProject();
+    fs.writeFileSync(path.join(root, ".deeppairing", "preferences.json"), JSON.stringify({ rejectedApproaches: [{ description: "x y z", concept: 42 }] }));
+    runSync(root, event(root, {}, "unrelated change"));
+    const [first] = preflightDoctorLines(buildPreflightDoctorReport(root, { homeDir: home, env: {} }));
+    expect(first.text).toBe("Preflight issues recorded. See each class below for its effect on the check.");
+    expect(first.text).not.toContain("failed open");
+    expect(first.details.join("\n")).toContain("ledger_entry_invalid ×1");
+    expect(first.details.join("\n")).toContain("it was ignored, so the entry matched on its description, or the entry was skipped if nothing usable remained. Every other stance still enforced.");
+  });
+
+  it("keeps aggregate copy neutral when recorded issues have different effects", () => {
+    const { root, home } = doctorProject();
+    fs.writeFileSync(path.join(root, ".deeppairing", "preferences.json"), JSON.stringify({ rejectedApproaches: [{ description: "x y z", concept: 42 }] }));
+    runSync(root, event(root, {}, "unrelated change"));
+    runSync(root, "not json");
+    const [first] = preflightDoctorLines(buildPreflightDoctorReport(root, { homeDir: home, env: {} }));
+    const details = first.details.join("\n");
+    expect(first.text).toBe("Preflight issues recorded. See each class below for its effect on the check.");
+    expect(first.text).not.toContain("failed open");
+    expect(details).toContain("ledger_entry_invalid ×1");
+    expect(details).toContain("Every other stance still enforced.");
+    expect(details).toContain("input_malformed ×1");
+    expect(details).toContain("so no check ran for it.");
+  });
+
   it("is read-only, even over a corrupt hooks-state", () => {
     const { root, home } = doctorProject();
     fs.writeFileSync(hookStatePath(root), "{ torn");
