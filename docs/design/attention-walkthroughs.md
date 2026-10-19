@@ -555,14 +555,28 @@ not a new walkthrough result: the screenshots and verdicts above remain
 evidence from the older revisions and must not be read as verification of the
 post-#467 UI.
 
-Before PR 6:
+Current reconciliation (2026-10-18 EDT): the historical results above remain tied to
+their recorded revisions. PR [#502](https://github.com/mitchjablonski/deepPairing/pull/502)
+subsequently added the checked-in synthetic runner; its
+[reproduction instructions](../../packages/mcp-server/e2e/attention-walkthroughs.README.md)
+describe the 48-row OFF/ON matrix, two infrastructure fault guards and later
+focused keyboard/theme coverage. PR [#530](https://github.com/mitchjablonski/deepPairing/pull/530)
+then repaired the concrete keyboard defects; the
+[keyboard validation record](attention-keyboard-validation.md) separates its
+baseline, earlier-head and final-head evidence and limitations. The
+[final validation receipt](https://github.com/mitchjablonski/deepPairing/issues/430#issuecomment-6136038098)
+records five targeted browser cases and the final-head web suite. These are
+existing engineering results, not a new run against the latest main or human
+validation; the old screenshots are not relabeled.
 
-1. Rerun the five before/after task walkthroughs against current `main` and
-   refresh the screenshots and findings at 1280×800 and 1920×1080. The existing
-   walkthroughs used v0.1.61 and selectively reran S2/S4/S5 plus D6 on
-   `9f3059bc`; the document describes the Playwright method but does not include
-   a checked-in runner or command. Accessibility-tree and live-region logs are
-   still proxies, not real screen-reader evidence.
+Before PR 6, the remaining acceptance work is:
+
+1. Run all five before/after task walkthroughs (OFF/ON) against the exact
+   current rollout candidate, at both 1280×800 and 1920×1080, and refresh the
+   screenshots and findings. Use the checked-in runner rather than recreating
+   it. The linked #502/#530 results do not establish a fresh full matrix for
+   that candidate. Accessibility-tree and live-region logs remain proxies,
+   not real screen-reader evidence.
 2. Complete the consent-gated external pilot tracked in #434, including real
    participants and a real screen reader, then feed back the anonymized findings
    and limitations. Protocol preparation merged as #435 on 2026-10-08; #434

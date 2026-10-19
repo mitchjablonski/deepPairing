@@ -1,10 +1,16 @@
 # Supervised coordinator experiment: preparation protocol
 
-Status: **preparation only; no real trial has started**. Tracks
-[#540](https://github.com/mitchjablonski/deepPairing/issues/540). This first slice
-may merge independently; #540 remains open for the real trial and human
-observations. Neither this document nor a filled synthetic record authorizes a
-live trial model call, a trial harness launch, or a merge.
+Current status (2026-10-18 EDT): **Run 3 stopped; partial delivery, recovery
+inconclusive**. The [sanitized Run 3 report](coordinator-experiment-run3-report.md)
+links the actual dispatch, failed attempts, closeout and later ordinary backlog
+delivery. [#540](https://github.com/mitchjablonski/deepPairing/issues/540) remains
+open for missing recovery evidence and human observations. This notice does not
+authorize a trial restart, retry, live model call or merge.
+
+The preparation contract below is retained as historical setup, including its
+then-pending readiness and dispatch statements; those statements are not a new
+assessment of current readiness. Neither this document nor a filled synthetic
+record authorizes execution.
 
 Use the [blank run record](coordinator-experiment-run-template.md). GitHub is
 authoritative for issue ownership, PR heads, reviews and merge state. Agora is

@@ -226,7 +226,8 @@ that agent input never leaves the machine.
 
 Explain the local deepPairing files participants may see: per project,
 `.deeppairing/sessions/*` contains session records and
-`.deeppairing/daemon.log` contains daemon logs; across projects,
+`.deeppairing/daemon.log` contains daemon logs; generated HTML pages are stored
+under `.deeppairing/exports/`; across projects,
 `~/.deeppairing/philosophy/v1.json` is the local ledger and
 `~/.deeppairing/projects.json` is the project registry. These stay on the
 participant's machine unless they choose to send or export them; the pilot
@@ -235,10 +236,13 @@ self-contained HTML page that includes code diffs by default, and
 `/deeppairing:post-pr` posts a GitHub review using the participant's own GitHub
 identity. During the pilot, participants should not use either on employer
 code unless that is already their normal, permitted practice. For an HTML
-export, request `includeCode: false` (the `--redact-code` option for
-`dp export html`) to omit code from the generated page; still inspect the
-result before sharing. Never use employer/customer code without the required
-permission.
+export, explicitly ask `/deeppairing:share` to omit code so its `export_session`
+call uses `includeCode: false`. The marketplace workflow does not require a
+separately installed `dp export html` CLI. This omits code diffs, not all
+potentially identifying narrative or metadata: still inspect the generated
+page before sharing. The study's no-export default remains unchanged; creating
+or collecting an export for the study needs the approved amendment and specific
+consent described above. Never use employer/customer code without permission.
 
 Before the pilot, inventory which of these paths already exist and record
 whether the plugin is already installed and its relevant preferences. Before
@@ -257,7 +261,10 @@ require uninstalling that pre-existing workflow: restore its pre-pilot
 state/preferences or leave it installed at the participant's choice. Once
 each affected store is quiescent, remove only pilot-created records: delete
 pilot session files, remove only the pilot's daemon-log entries, and surgically
-remove pilot-created ledger/registry entries. If restoring a pre-pilot backup
+remove pilot-created ledger/registry entries. Include only pilot-created HTML
+files under `.deeppairing/exports/` in that inventory and cleanup, after the same
+writer/quiescence checks; preserve pre-existing or unrelated exports and never
+delete the entire exports directory. If restoring a pre-pilot backup
 is safer, first confirm it will not discard unrelated later data. Never
 instruct participants to delete a whole pre-existing global file or
 directory. The custodian records completion and any records that could not be
