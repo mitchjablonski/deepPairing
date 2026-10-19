@@ -23,20 +23,26 @@ placeholders, not observations or claims that the pilot has started.
 - Purpose, duration, requested fields, and voluntary participation explained:
 - Existing model-provider data flow explained:
 - Local files explained: project `.deeppairing/sessions/*` and
-  `.deeppairing/daemon.log`; global `~/.deeppairing/philosophy/v1.json` and
+  `.deeppairing/daemon.log`, generated HTML in `.deeppairing/exports/`;
+  global `~/.deeppairing/philosophy/v1.json` and
   `~/.deeppairing/projects.json`:
 - Local files stay on participant's machine unless they choose to send/export;
   pilot does not collect them; stricter no-local-export default vs #434 explained:
 - `/deeppairing:share` creates HTML with diffs by default; HTML export
-  `includeCode: false` / CLI `--redact-code` disclosed; `/deeppairing:post-pr`
-  uses participant's GitHub identity:
+  explicitly requests code omission via `export_session` with
+  `includeCode: false`, without requiring a separate CLI; remaining narrative/
+  metadata inspected before sharing; study exports still require an approved
+  amendment and specific consent; `/deeppairing:post-pr` uses participant's
+  GitHub identity:
 - Employer-code restriction and not using share/post-pr on employer code unless
   normally permitted explained:
 - Withdrawal/end cleanup confirms each affected store has no active writers
   before backup/restore/edit/delete, including a pre-existing shared daemon;
   only pilot-owned processes may be stopped; if a shared writer cannot be
   safely and voluntarily stopped, defer that store's cleanup and record the
-  exception; remove only pilot-created records; preserve pre-existing global
+  exception; inventory/remove only pilot-created records and HTML exports,
+  preserving unrelated/pre-existing exports and the exports directory;
+  preserve pre-existing global
   files; keep a pre-existing plugin install at participant's choice or restore
   its pre-pilot state/preferences:
 - No raw code/transcripts/recordings requested; storage/access explained:
