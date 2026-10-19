@@ -2,7 +2,7 @@ import { createRequire as __cr } from 'node:module'; const require = __cr(import
 
 // src/hooks/stop-hook.ts
 import fs3 from "node:fs";
-import path3 from "node:path";
+import path4 from "node:path";
 
 // src/debrief-gate.ts
 var CODE_CLOSED_STATUSES = ["superseded", "retracted", "obsolete"];
@@ -29,23 +29,38 @@ function sessionOwesDebrief(artifacts, isRecent = () => true) {
   return !trivial;
 }
 
+// src/session-id.ts
+import crypto from "node:crypto";
+import path from "node:path";
+function deriveSessionId(projectRoot, claudeSessionIdRaw) {
+  const projectName = path.basename(projectRoot);
+  const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
+  const projectHash = crypto.createHash("sha256").update(projectRoot).digest("hex").slice(0, 8);
+  const base = `session_${safeProjectName}_${projectHash}`;
+  const sanitized = (claudeSessionIdRaw ?? "").replace(/[^a-zA-Z0-9-]/g, "").slice(0, 64);
+  if (sanitized.length === 0) {
+    return { sessionId: base, mode: "fallback" };
+  }
+  return { sessionId: `${base}_${sanitized}`, mode: "split", claudeSessionId: sanitized };
+}
+
 // src/hooks/hook-state.ts
 import fs2 from "node:fs";
-import path2 from "node:path";
+import path3 from "node:path";
 
 // src/git-worktree.ts
 import fs from "node:fs";
-import path from "node:path";
+import path2 from "node:path";
 function samePath(a, b) {
   try {
     return fs.realpathSync.native(a) === fs.realpathSync.native(b);
   } catch {
-    return path.resolve(a) === path.resolve(b);
+    return path2.resolve(a) === path2.resolve(b);
   }
 }
 function isGitDir(dir) {
   try {
-    return fs.statSync(path.join(dir, "HEAD")).isFile() && fs.statSync(path.join(dir, "objects")).isDirectory() && fs.statSync(path.join(dir, "refs")).isDirectory();
+    return fs.statSync(path2.join(dir, "HEAD")).isFile() && fs.statSync(path2.join(dir, "objects")).isDirectory() && fs.statSync(path2.join(dir, "refs")).isDirectory();
   } catch {
     return false;
   }
@@ -53,7 +68,7 @@ function isGitDir(dir) {
 function readGitdirPointer(top, dotGitFile) {
   const raw = fs.readFileSync(dotGitFile, "utf8");
   const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(raw);
-  return m ? path.resolve(top, m[1]) : null;
+  return m ? path2.resolve(top, m[1]) : null;
 }
 function inspectDotGitFile(top, dotGitFile) {
   try {
@@ -61,34 +76,34 @@ function inspectDotGitFile(top, dotGitFile) {
     if (!gitdir) return { worktree: null, rejected: `${dotGitFile} has no "gitdir:" line` };
     let common;
     try {
-      common = fs.readFileSync(path.join(gitdir, "commondir"), "utf8").trim();
+      common = fs.readFileSync(path2.join(gitdir, "commondir"), "utf8").trim();
     } catch {
       return { worktree: null };
     }
     if (!common) return { worktree: null, rejected: `${gitdir}/commondir is empty` };
-    const commonDir = path.resolve(gitdir, common);
-    if (path.basename(commonDir) !== ".git") return { worktree: null };
+    const commonDir = path2.resolve(gitdir, common);
+    if (path2.basename(commonDir) !== ".git") return { worktree: null };
     if (!isGitDir(commonDir)) return { worktree: null, rejected: `${commonDir} is not a git directory` };
     try {
-      const config = fs.readFileSync(path.join(commonDir, "config"), "utf8");
+      const config = fs.readFileSync(path2.join(commonDir, "config"), "utf8");
       if (/^[ \t]*bare[ \t]*=[ \t]*true[ \t]*$/im.test(config)) return { worktree: null };
     } catch {
       return { worktree: null, rejected: `${commonDir} has no config` };
     }
     let back;
     try {
-      back = fs.readFileSync(path.join(gitdir, "gitdir"), "utf8").trim();
+      back = fs.readFileSync(path2.join(gitdir, "gitdir"), "utf8").trim();
     } catch {
       return { worktree: null, rejected: `${gitdir} has no gitdir back-reference` };
     }
-    if (!back || !samePath(path.resolve(gitdir, back), dotGitFile)) {
+    if (!back || !samePath(path2.resolve(gitdir, back), dotGitFile)) {
       return { worktree: null, rejected: `${gitdir}/gitdir does not point back at ${dotGitFile}` };
     }
-    if (!samePath(path.dirname(gitdir), path.join(commonDir, "worktrees"))) {
+    if (!samePath(path2.dirname(gitdir), path2.join(commonDir, "worktrees"))) {
       return { worktree: null, rejected: `${gitdir} is not under ${commonDir}/worktrees` };
     }
-    const mainTop = path.dirname(commonDir);
-    const mainDotGit = path.join(mainTop, ".git");
+    const mainTop = path2.dirname(commonDir);
+    const mainDotGit = path2.join(mainTop, ".git");
     if (!fs.statSync(mainDotGit).isDirectory() || !samePath(mainDotGit, commonDir)) {
       return { worktree: null, rejected: `${mainDotGit} is not the common dir ${commonDir}` };
     }
@@ -100,9 +115,9 @@ function inspectDotGitFile(top, dotGitFile) {
 }
 function inspect(p) {
   try {
-    let cur = path.resolve(p);
+    let cur = path2.resolve(p);
     for (let i = 0; i < 256; i++) {
-      const dotGit = path.join(cur, ".git");
+      const dotGit = path2.join(cur, ".git");
       let st;
       try {
         st = fs.statSync(dotGit);
@@ -110,7 +125,7 @@ function inspect(p) {
         st = void 0;
       }
       if (st) return st.isFile() ? inspectDotGitFile(cur, dotGit) : { worktree: null };
-      const parent = path.dirname(cur);
+      const parent = path2.dirname(cur);
       if (parent === cur) return { worktree: null };
       cur = parent;
     }
@@ -120,11 +135,11 @@ function inspect(p) {
   }
 }
 function mapInto(abs, worktree) {
-  const rel = path.relative(worktree.worktreeTop, abs);
-  return { path: rel ? path.join(worktree.mainTop, rel) : worktree.mainTop, worktree };
+  const rel = path2.relative(worktree.worktreeTop, abs);
+  return { path: rel ? path2.join(worktree.mainTop, rel) : worktree.mainTop, worktree };
 }
 function canonicalProjectDir(dir) {
-  const abs = path.resolve(dir);
+  const abs = path2.resolve(dir);
   const found = inspect(abs);
   if (!found.worktree) return found.rejected ? { projectRoot: abs, worktree: null, rejected: found.rejected } : { projectRoot: abs, worktree: null };
   const mapped = mapInto(abs, found.worktree);
@@ -252,9 +267,9 @@ function appendHookFire(statePath, fire, mutate) {
 function mutateHookState(statePath, mutate, opts = {}) {
   try {
     if (opts.createDir === false) {
-      if (!fs2.statSync(path2.dirname(statePath)).isDirectory()) return;
+      if (!fs2.statSync(path3.dirname(statePath)).isDirectory()) return;
     } else {
-      fs2.mkdirSync(path2.dirname(statePath), { recursive: true });
+      fs2.mkdirSync(path3.dirname(statePath), { recursive: true });
     }
     const lock = acquireHookStateLock(statePath);
     try {
@@ -269,14 +284,14 @@ function mutateHookState(statePath, mutate, opts = {}) {
   }
 }
 function hookStatePath(projectRoot) {
-  return path2.join(projectRoot, ".deeppairing", "hooks-state.json");
+  return path3.join(projectRoot, ".deeppairing", "hooks-state.json");
 }
 
 // src/hooks/stop-hook.ts
 var HOOK_NAME = "stop";
 var MAX_AGE_MS = 30 * 60 * 1e3;
 var BLOCKING_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset"];
-function runStopHook(now = Date.now()) {
+function runStopHook(stdin2 = "", now = Date.now()) {
   const projectRoot = resolveHookProjectRoot();
   function exit(code, reason) {
     appendHookFire(hookStatePath(projectRoot), {
@@ -288,11 +303,28 @@ function runStopHook(now = Date.now()) {
     process.exit(code);
   }
   try {
-    const sessionsDir = path3.join(projectRoot, ".deeppairing", "sessions");
+    let event;
+    try {
+      event = JSON.parse(stdin2 || "{}");
+    } catch {
+      exit(0, "skip: invalid stop input");
+    }
+    if (!event || typeof event !== "object" || Array.isArray(event)) {
+      exit(0, "skip: invalid stop input");
+    }
+    let scopedSessionId;
+    if (Object.prototype.hasOwnProperty.call(event, "session_id")) {
+      const raw = event.session_id;
+      if (typeof raw !== "string" || raw.length < 1 || raw.length > 64 || /[^a-zA-Z0-9-]/.test(raw)) {
+        exit(0, "skip: invalid stop session identity");
+      }
+      scopedSessionId = deriveSessionId(projectRoot, raw).sessionId;
+    }
+    const sessionsDir = path4.join(projectRoot, ".deeppairing", "sessions");
     if (!fs3.existsSync(sessionsDir)) exit(0, "no sessions dir");
     let owesDebriefSession = null;
-    for (const id of fs3.readdirSync(sessionsDir)) {
-      const af = path3.join(sessionsDir, id, "artifacts.json");
+    for (const id of scopedSessionId === void 0 ? fs3.readdirSync(sessionsDir) : [scopedSessionId]) {
+      const af = path4.join(sessionsDir, id, "artifacts.json");
       if (!fs3.existsSync(af)) continue;
       let arr;
       try {
@@ -334,4 +366,11 @@ function runStopHook(now = Date.now()) {
 }
 
 // src/cli/stop-hook-entry.ts
-runStopHook();
+var stdin = "";
+process.stdin.setEncoding("utf-8");
+process.stdin.on("data", (chunk) => {
+  stdin += chunk;
+});
+process.stdin.on("end", () => {
+  runStopHook(stdin);
+});

@@ -53,6 +53,7 @@ import { buildSync } from "esbuild";
 import { ensureStopHook, ensureCheckpointHook } from "../../cli/setup-tasks.js";
 import { beginHookSpawn, hookSpawnDiagnostic, observeHookChild } from "../../__tests__/hook-spawn-diagnostics.js";
 import { HOOK_LOCK_FIXTURE_EPOCH_MS, prepareHookLockObserver } from "../../__tests__/hook-lock-diagnostics.js";
+import { deriveSessionId } from "../../session-id.js";
 
 const TIMEOUT = 10_000;
 
@@ -313,6 +314,82 @@ describe.each(HOOK_LANES)("%s — malformed input", (lane) => {
       expectOneCleanFire(lane, makeRoot(), { input });
     },
   );
+});
+
+describe.each(STOP_LANES)("%s — stopping session scope (#535)", (lane) => {
+  const draft = [{ type: "plan", status: "draft", createdAt: new Date().toISOString() }];
+  const code = [{ type: "changeset", status: "approved", createdAt: new Date().toISOString() }];
+  function seed(root: string, id: string, artifacts: unknown): void {
+    const dir = path.join(root, ".deeppairing/sessions", id);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "artifacts.json"), JSON.stringify(artifacts));
+  }
+
+  it.each([draft, code])("ignores another session's obligation %j", (artifacts) => {
+    const root = makeRoot();
+    seed(root, deriveSessionId(root, "other").sessionId, artifacts);
+    const result = run(lane, root, { input: '{"session_id":"own"}' });
+    expect(result.stderr, result.diagnostic).toBe("");
+    expect(expectOneCleanFire(lane, root, { input: '{"session_id":"own"}' })).toBe("pass: no blocking drafts");
+  });
+
+  it.each([[draft, "pending artifacts"], [code, "owes debrief"]] as const)("retains own %s obligation", (artifacts, reason) => {
+    const root = makeRoot();
+    seed(root, deriveSessionId(root, "own").sessionId, artifacts);
+    seed(root, deriveSessionId(root, "other").sessionId, draft);
+    expect(expectOneCleanFire(lane, root, { input: '{"session_id":"own"}' })).toContain(reason);
+    expect(run(lane, root, { input: '{"session_id":"own"}' }).stderr).toContain("deepPairing:");
+  });
+
+  it("does not let another session's debrief satisfy this session", () => {
+    const root = makeRoot();
+    seed(root, deriveSessionId(root, "own").sessionId, code);
+    seed(root, deriveSessionId(root, "other").sessionId, [{ type: "debrief", status: "approved" }]);
+    expect(expectOneCleanFire(lane, root, { input: '{"session_id":"own"}' })).toContain("owes debrief");
+  });
+
+  it.each(["", "{}"])("retains absent-ID legacy scanning for %j", (input) => {
+    const root = makeRoot();
+    seed(root, "legacy", draft);
+    expect(expectOneCleanFire(lane, root, { input })).toContain("pending artifacts in legacy");
+  });
+
+  it.each([null, "", " ", 1, false, {}, [], "../x", "a/b", "a\\b", "own_", "own!", "own\n", "x".repeat(65)])(
+    "rejects present invalid identity %j before any scan or derivation", (session_id) => {
+      const root = makeRoot();
+      // Seed both the old fallback and the namespace sanitization would select.
+      seed(root, deriveSessionId(root).sessionId, draft);
+      seed(root, deriveSessionId(root, String(session_id)).sessionId, draft);
+      const opts = {
+        input: JSON.stringify({ session_id }),
+        env: { CLAUDE_CODE_SESSION_ID: "other" },
+        preload: `import fs from 'node:fs'; fs.readdirSync = () => { throw new Error('scanned all'); };`,
+      };
+      expect(expectOneCleanFire(lane, root, opts)).toBe("skip: invalid stop session identity");
+      expect(run(lane, root, opts).stderr).toBe("");
+    },
+  );
+
+  it.each(["null", "[]", "42", '"secret-rejected-id"', '{"session_id":"secret-rejected-id"', "   "])(
+    "fails open without scanning or leaking invalid input %j", (input) => {
+      const root = makeRoot();
+      seed(root, "legacy", draft);
+      expect(expectOneCleanFire(lane, root, { input })).toBe("skip: invalid stop input");
+      expect(JSON.stringify(fires(root))).not.toContain("secret-rejected-id");
+      expect(run(lane, root, { input }).stderr).toBe("");
+    },
+  );
+
+  it("unknown ID ignores fallback and environment namespaces without scanning all", () => {
+    const root = makeRoot();
+    seed(root, deriveSessionId(root).sessionId, draft);
+    seed(root, deriveSessionId(root, "other").sessionId, code);
+    expect(expectOneCleanFire(lane, root, {
+      input: '{"session_id":"unknown"}',
+      env: { CLAUDE_CODE_SESSION_ID: "other" },
+      preload: `import fs from 'node:fs'; fs.readdirSync = () => { throw new Error('scanned all'); };`,
+    })).toBe("pass: no blocking drafts");
+  });
 });
 
 describe.each(STOP_LANES)("%s — malformed session data", (lane) => {
