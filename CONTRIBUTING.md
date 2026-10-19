@@ -11,6 +11,32 @@ Thanks for your interest in contributing. deepPairing is a collaborative human-A
 
 ## Development setup
 
+### Maintainer agent execution
+
+For Mitch's workstation agents, resource-intensive installs, generation, full
+builds, full test suites, E2E runs, and benchmarks use the configured remote
+execution environment; local WSL counts as local. Local editing, lightweight
+Git operations, static inspection, and browser review are fine. External
+contributors may follow the local development instructions below.
+
+Maintainer agents use the private operations handoff only through the necessary
+private operational transport and follow its current shared-server admission
+rules. Never read or echo private key contents, or publish or commit private
+connection details or credential material. Before a remote job, verify the
+actual host, runtime, commit, and tool versions (including the package manager
+pin), and use an isolated checkout, HOME, TEMP, caches, and logs. Bound runtime,
+clean up only job-owned processes after they drain, and record the true exit
+status. Ordinary jobs require owned ACTIVE status with start time and maximum
+runtime, no exclusive job, and deferral if reboot is announced; work above 4
+cores or 16 GB requires the heavy LOCK. Exclusive jobs must follow the
+handoff's timing and drain procedure. Never remove another operator's markers.
+
+Use required CI gates and completed evidence for the exact commit when
+available; do not rerun heavy work solely to change its execution location.
+Do not present prior local WSL evidence as remote evidence. If remote execution
+is unavailable or unqualified, stop the heavy operation and report it; do not
+fall back locally or change global security settings.
+
 ```bash
 # Clone and install
 git clone https://github.com/mitchjablonski/deepPairing.git
