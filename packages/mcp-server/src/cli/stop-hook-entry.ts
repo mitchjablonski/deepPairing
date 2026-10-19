@@ -18,4 +18,11 @@
  */
 import { runStopHook } from "../hooks/stop-hook.js";
 
-runStopHook();
+let stdin = "";
+process.stdin.setEncoding("utf-8");
+process.stdin.on("data", (chunk) => {
+  stdin += chunk;
+});
+process.stdin.on("end", () => {
+  runStopHook(stdin);
+});

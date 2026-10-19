@@ -228,6 +228,14 @@ nor unit-testable.
 
 ## Compatibility and migration
 
+Stop events with a usable `session_id` scan only the namespace derived from
+that event ID and the resolved project root (#535). Only an absent field
+retains the legacy scan of all sessions (including empty stdin). Present IDs
+must be 1–64 ASCII letters, digits or hyphens before derivation; invalid or
+unknown IDs never fall back to another session or an environment identity.
+Non-object or invalid JSON input fails open without scanning. Rejected input
+is recorded with a generic reason in the existing fire-log shape.
+
 * **Emitted behaviour is intended to be equivalent, not byte-identical.**
   esbuild output differs textually from the hand-written templates; the contract
   suite is the equivalence proof, not a snapshot.
