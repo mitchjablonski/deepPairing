@@ -170,7 +170,7 @@ export function preflightDoctorLines(report: PreflightDoctorReport): Array<{ mar
   } else {
     lines.push({
       mark: "warn",
-      text: "Preflight failures recorded. Each one failed open: the edit went ahead without that part of the check, exactly as before.",
+      text: "Preflight issues recorded. See each class below for its effect on the check.",
       details: report.failures.flatMap(({ cls, entry }) => [
         `${cls} ×${entry.count} (${entry.detail}${entry.indices ? `, entries ${entry.indices.join(", ")}` : ""}; first ${entry.firstAt}, last ${entry.lastAt})`,
         `  ${PREFLIGHT_FAILURE_MEANING[cls]}`,
