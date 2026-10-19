@@ -36,8 +36,9 @@ documents the failed validation and exact bounded amendment. The
 records #562's reviewed head `6bc8fc987f4bca3dcd515073e5bf26b6e254e49a`,
 normal merge `d3a895d9b86b9629bab8cdc050f20f5e23c9800f` at 03:54:12 UTC,
 independent adversarial finding/fix/re-review, all eight green CI checks and
-actual normal companion verdict pickup. Its final native Node 22 verification
-reports focused 533, shared 321 and server 6,233 passed/108 skipped, with
+actual normal companion verdict pickup. Its historical local-WSL Node 22 checks
+(not a new run or dedicated-server qualification)
+report focused 533, shared 321 and server 6,233 passed/108 skipped, with
 typecheck/lint and repeated generation/cold-build drift checks passing. These
 are engineering receipts, not human-value observations.
 
