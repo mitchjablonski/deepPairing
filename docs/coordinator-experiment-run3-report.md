@@ -1,6 +1,6 @@
 # Coordinator experiment Run 3: stopped, recovery inconclusive
 
-Status as of 2026-10-19: **partial delivery; stopped/inconclusive**, not a
+Status as of 2026-10-18 EDT: **partial delivery; stopped/inconclusive**, not a
 successful recovery or a usability result. [#540](https://github.com/mitchjablonski/deepPairing/issues/540)
 remains open. This report reconciles public receipts; it does not authorize
 another attempt, resume the trial or replace missing observations.

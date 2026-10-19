@@ -555,7 +555,7 @@ not a new walkthrough result: the screenshots and verdicts above remain
 evidence from the older revisions and must not be read as verification of the
 post-#467 UI.
 
-Current reconciliation (2026-10-19): the historical results above remain tied to
+Current reconciliation (2026-10-18 EDT): the historical results above remain tied to
 their recorded revisions. PR [#502](https://github.com/mitchjablonski/deepPairing/pull/502)
 subsequently added the checked-in synthetic runner; its
 [reproduction instructions](../../packages/mcp-server/e2e/attention-walkthroughs.README.md)
@@ -571,11 +571,12 @@ validation; the old screenshots are not relabeled.
 
 Before PR 6, the remaining acceptance work is:
 
-1. Reconcile the exact rollout candidate with the linked synthetic evidence;
-   rerun affected walkthroughs and refresh screenshots/findings at 1280×800 and
-   1920×1080 when changes or unresolved acceptance gaps require it. Reuse the
-   checked-in runner rather than recreating it. Accessibility-tree and
-   live-region logs remain proxies, not real screen-reader evidence.
+1. Run all five before/after task walkthroughs (OFF/ON) against the exact
+   current rollout candidate, at both 1280×800 and 1920×1080, and refresh the
+   screenshots and findings. Use the checked-in runner rather than recreating
+   it. The linked #502/#530 results do not establish a fresh full matrix for
+   that candidate. Accessibility-tree and live-region logs remain proxies,
+   not real screen-reader evidence.
 2. Complete the consent-gated external pilot tracked in #434, including real
    participants and a real screen reader, then feed back the anonymized findings
    and limitations. Protocol preparation merged as #435 on 2026-10-08; #434

@@ -1,6 +1,6 @@
 # Supervised coordinator experiment: preparation protocol
 
-Current status (2026-10-19): **Run 3 stopped; partial delivery, recovery
+Current status (2026-10-18 EDT): **Run 3 stopped; partial delivery, recovery
 inconclusive**. The [sanitized Run 3 report](coordinator-experiment-run3-report.md)
 links the actual dispatch, failed attempts, closeout and later ordinary backlog
 delivery. [#540](https://github.com/mitchjablonski/deepPairing/issues/540) remains
