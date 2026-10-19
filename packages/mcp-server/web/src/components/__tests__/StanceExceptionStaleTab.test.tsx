@@ -5,7 +5,7 @@
  * terminal state and offers no Allow; nothing claims a fresh grant; the
  * daemon's state stays revoked (nothing re-armed).
  */
-import { afterEach, expect, it } from "vitest";
+import { afterEach, beforeAll, expect, it } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { AllowOnceDialogHost } from "../AllowOnceDialog";
 import { useAllowOnceStore } from "../../stores/allowOnce";
@@ -31,7 +31,26 @@ type World = {
   allowances: () => Promise<Array<Record<string, unknown>>>;
   dispose: () => Promise<void>;
 };
+type RuntimeImports = {
+  StanceWorld: new (prefix: string) => unknown;
+  holdStance: (store: unknown, concept: string) => void;
+  TOKEN: string;
+  projectHashOf: (root: string) => string;
+};
+let runtime: RuntimeImports | undefined;
 let world: World | undefined;
+
+beforeAll(async () => {
+  const { StanceWorld, holdStance, TOKEN } = await import(/* @vite-ignore */ HARNESS);
+  const { projectHashOf } = await import(/* @vite-ignore */ PROJECT_ROOT);
+  runtime = {
+    StanceWorld: StanceWorld as RuntimeImports["StanceWorld"],
+    holdStance: holdStance as RuntimeImports["holdStance"],
+    TOKEN: TOKEN as string,
+    projectHashOf: projectHashOf as RuntimeImports["projectHashOf"],
+  };
+}, 10_000);
+
 afterEach(async () => {
   cleanup();
   useAllowOnceStore.setState({ request: null });
@@ -43,8 +62,7 @@ afterEach(async () => {
 });
 
 it("the dialog shows the revoked state instead of offering Allow, and no 'Allowed once' appears", async () => {
-  const { StanceWorld, holdStance, TOKEN } = await import(/* @vite-ignore */ HARNESS);
-  const { projectHashOf } = await import(/* @vite-ignore */ PROJECT_ROOT);
+  const { StanceWorld, holdStance, TOKEN, projectHashOf } = runtime!;
   world = new StanceWorld("dp-sx-stale-") as World;
   const w = await world.wrapper();
   holdStance(world.store(w.sessionId), "global mutable state");
