@@ -23,6 +23,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { sessionOwesDebrief } from "../debrief-gate.js";
+import { deriveSessionId } from "../session-id.js";
 import { appendHookFire, hookErrorMessage, hookStatePath, resolveHookProjectRoot } from "./hook-state.js";
 
 const HOOK_NAME = "stop";
@@ -34,7 +35,7 @@ const BLOCKING_TYPES = ["research", "spec", "plan", "decision", "code_change", "
 type StopArtifact = { status?: string; type?: string; createdAt?: string };
 
 /** Runs the hook and exits the process. Never returns, never throws. */
-export function runStopHook(now: number = Date.now()): never {
+export function runStopHook(stdin: string = "", now: number = Date.now()): never {
   const projectRoot = resolveHookProjectRoot();
   function exit(code: number, reason: string): never {
     appendHookFire(hookStatePath(projectRoot), {
@@ -47,6 +48,26 @@ export function runStopHook(now: number = Date.now()): never {
   }
 
   try {
+    let event: unknown;
+    try {
+      event = JSON.parse(stdin || "{}");
+    } catch {
+      // Parser diagnostics can contain rejected input. Keep telemetry generic.
+      exit(0, "skip: invalid stop input");
+    }
+    if (!event || typeof event !== "object" || Array.isArray(event)) {
+      exit(0, "skip: invalid stop input");
+    }
+    let scopedSessionId: string | undefined;
+    if (Object.prototype.hasOwnProperty.call(event, "session_id")) {
+      const raw = (event as Record<string, unknown>).session_id;
+      // Validate before derivation: its legacy sanitization must never turn a
+      // rejected identity into another session's namespace.
+      if (typeof raw !== "string" || raw.length < 1 || raw.length > 64 || /[^a-zA-Z0-9-]/.test(raw)) {
+        exit(0, "skip: invalid stop session identity");
+      }
+      scopedSessionId = deriveSessionId(projectRoot, raw).sessionId;
+    }
     const sessionsDir = path.join(projectRoot, ".deeppairing", "sessions");
     if (!fs.existsSync(sessionsDir)) exit(0, "no sessions dir");
 
@@ -54,7 +75,7 @@ export function runStopHook(now: number = Date.now()): never {
     // work, no debrief). Only surfaced if NO blocking draft fired: blocking
     // takes priority, it's a harder obligation.
     let owesDebriefSession: string | null = null;
-    for (const id of fs.readdirSync(sessionsDir)) {
+    for (const id of scopedSessionId === undefined ? fs.readdirSync(sessionsDir) : [scopedSessionId]) {
       const af = path.join(sessionsDir, id, "artifacts.json");
       if (!fs.existsSync(af)) continue;
       let arr: unknown;
