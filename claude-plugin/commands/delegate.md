@@ -47,8 +47,8 @@ the issue isn't found, say so plainly and stop. Don't brief from a guess.
     the card where I review the shape, not the lines, so make the boundaries and
     data flow the point. I may comment on regions of it.
 
-If my approval or comments set `Review: line-by-line`, present the full
-changeset for hunk review in move 4 and don't lead with the summary.
+If my approval or comments set `Review: line-by-line`, lead the move-4
+packet with the changeset's hunks and skip the summary-first framing.
 
 Poll `check_feedback` until I approve it. Do nothing else meanwhile. Everything
 I add to your will-ask list gets a card too. **Trivial work skips the card:**
