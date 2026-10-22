@@ -129,7 +129,10 @@ jobs:
         run: pnpm --filter @deeppairing/mcp-server exec vitest run src/__tests__/plugin-bundle-boot.test.ts src/__tests__/plugin-doctor-entry.test.ts
 
   e2e:
-    runs-on: ubuntu-latest
+    # ubuntu-latest moved to 26.04, where Playwright 1.60 has no Chromium
+    # build ("does not support chromium on ubuntu26.04-x64"). Pinned until
+    # Playwright supports it.
+    runs-on: ubuntu-24.04
     # #494 — a hung step must fail red, not sit pending for hours (normal ~5-6m).
     timeout-minutes: 25
     steps:
