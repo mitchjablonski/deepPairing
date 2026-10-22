@@ -32,11 +32,23 @@ the issue isn't found, say so plainly and stop. Don't brief from a guess.
 
 - `objective` — one sentence.
 - `requirements[]` — each with `acceptanceCriteria` I could run.
-- `context` — four headed lines: `Decide alone:` (calls you'll make without me),
+- `context` — five headed lines: `Decide alone:` (calls you'll make without me),
   `Will ask:` (calls you'll bring to me, a promise), `Risk class:` (trivial,
-  low-risk or escalated), `Why:` (the reason for that class).
+  low-risk or escalated), `Why:` (the reason for that class), and `Review:`
+  (`packet` by default, or `line-by-line` if you think I should read every hunk;
+  I can flip it when I approve).
+- `design` — one short paragraph on the shape: the pieces, the boundaries between
+  them, and the interface each side sees. Name the alternative shape you rejected.
 - `tasks[]` — your intended steps.
-- `visuals[]` with one entry of `kind: "file_map"` — its `files` are the paths you declare you'll touch.
+- `visuals[]` with two entries:
+  - one of `kind: "file_map"` — its `files` are the paths you declare you'll touch;
+  - one of `kind: "diagram"` — the proposed architecture **before** you build:
+    modules or components, how they connect, and where the change sits. This is
+    the card where I review the shape, not the lines, so make the boundaries and
+    data flow the point. I may comment on regions of it.
+
+If my approval or comments set `Review: line-by-line`, present the full
+changeset for hunk review in move 4 and don't lead with the summary.
 
 Poll `check_feedback` until I approve it. Do nothing else meanwhile. Everything
 I add to your will-ask list gets a card too. **Trivial work skips the card:**
