@@ -34748,6 +34748,7 @@ var MAX_BLOCKS = 50;
 
 // src/store/worker-stop-notices.ts
 var MAX_SEEN_WORKER_STOPS = Math.max(100, MAX_BLOCKS);
+var WORKER_STOP_CLAUSE = "A worker was stopped. Re-plan the dependent work or ask the human before continuing.";
 function formatWorkerStops(stops) {
   if (stops.length === 0) return "";
   const line = (s) => `a \`${s.agentType ?? "worker"}\` subagent was stopped or held for your approval at \`${s.targetPath ?? "(unknown path)"}\` by stance \`${s.concept}\` (\`${s.decision}\`).`;
@@ -35777,6 +35778,9 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
   if (pendingRequests.length > 0) {
     advisoryClauses.push(`The human sent ${pendingRequests.length} request${pendingRequests.length === 1 ? "" : "s"} \u2014 serve ${pendingRequests.length === 1 ? "it" : "them"} (see "Human requests" below) with the matching present_* artifact.`);
   }
+  if (workerStops.length > 0) {
+    leadingClauses.push(WORKER_STOP_CLAUSE);
+  }
   if (structuredCarryover.length > 0) {
     leadingClauses.push(
       `Answer the ${structuredCarryover.length} question${structuredCarryover.length === 1 ? "" : "s"} carried over from earlier (answer_question with the commentId in the "\u21A9\uFE0F carried over" block below) before new work.`
@@ -35814,7 +35818,8 @@ Suggested action: ${suggestedAction}`);
   const hasActionableFeedback = hasNewFeedback || freshlyRejected.length > 0 || freshPlanVerdicts > 0 || changed.length > 0 || // #176 — a broken diagram the human is staring at is actionable: the agent
   // should fix + re-present, not sit in 'waiting'.
   renderFailures.length > 0 || // G1 (#198b) — a pending human request is something to act on (serve it).
-  pendingRequests.length > 0;
+  pendingRequests.length > 0 || // #569 pilot task A — a worker was stopped: never "proceed" beside it.
+  workerStops.length > 0;
   const status = hasActionableFeedback ? "feedback" : hasBlocking || pendingCount > 0 ? "waiting" : "proceed";
   const portNote = portRecoveryNote();
   const structuredContent = {
