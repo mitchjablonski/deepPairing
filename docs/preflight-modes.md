@@ -100,15 +100,32 @@ the hook input is recorded: no tool input or file content.
   [Supervised worker handoff](#supervised-worker-handoff)). So deepPairing
   uses its own channel: the lead's **next `check_feedback`** adds a
   "⛔ Worker stopped (N)" block and `structuredContent.workerStops[]` (`id`,
-  `agentType`, `targetPath`, `concept`, `decision`, `at`). Both deny and ask
-  are reported.
+  `agentType`, `targetPath`, `concept`, `decision`, `at`), and the poll's
+  status is `feedback`, never `proceed`.
+  - **Deny and ask read differently.** A deny says the worker was stopped and
+    the edit didn't happen. An ask says Claude Code asked the human, so the
+    edit may or may not have gone through and the lead should check the file.
+  - **Every poll shape hears it.** A new stop counts as immediate feedback,
+    wakes a parked long-poll, and gets past a `waitFor`-scoped poll, the same
+    way a human comment does.
   - **Session-scoped.** Only gate-log entries with an `agentId` whose session
     resolved to the lead's own deepPairing session. A firing that resolved to
     no session (`"hook"`) is delivered to no lead; it stays in the companion.
     A filtered (`presentedBy`/`artifactIds`) poll never gets them.
+  - **Shared (non-split) sessions get nothing.** A firing resolves to a
+    session only when Claude Code's `session_id` maps to a per-session
+    (split) deepPairing session. In shared mode every firing resolves to
+    `"hook"`, so this feature is inert there and the companion is the only
+    place to see a worker stop.
   - **Delivered once.** Delivered ids are kept in the session's
     `worker-stops-delivered.json` (capped at 100, atomic, survives a restart).
-    A poll with nothing new is byte-identical to before.
+    If that file is corrupt it is copied aside to `.corrupt-<time>`, the stops
+    now in the log are marked seen rather than re-sent, and a one-time note
+    says so. A poll with nothing new is byte-identical to before.
+  - **Worker-controlled text is flattened.** The target path, agent type and
+    stance are shown with control characters and line breaks turned into
+    spaces, backticks replaced, and a length bound, so a crafted path can't
+    forge a line in the result.
   - **Never authorising.** It's a notice: it grants, retires and resumes
     nothing, and it tells the lead not to retry the same edit.
   - **Limit.** The daemon's watcher writes the gate log. A stop that fires

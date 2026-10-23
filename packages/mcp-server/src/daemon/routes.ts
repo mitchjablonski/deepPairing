@@ -630,7 +630,7 @@ export function createDaemonRoutes(
   app.get("/api/internal/sessions/:sessionId/worker-stops", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    return c.json({ stops: r.store.getUndeliveredWorkerStops?.() ?? [] });
+    return c.json(r.store.getUndeliveredWorkerStops?.() ?? { stops: [] });
   });
 
   app.post("/api/internal/sessions/:sessionId/worker-stops/delivered", async (c) => {

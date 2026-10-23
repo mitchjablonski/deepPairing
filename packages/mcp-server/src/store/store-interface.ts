@@ -3,7 +3,7 @@ import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion
 import type { PostedReviewRecord } from "./posted-reviews.js";
 import type { DecisionResolveOutcome, ResolutionAnnouncement } from "./decision-resolve-guard.js";
 import type { DurableReviewPostStore } from "../github/durable-review-post.js";
-import type { WorkerStop } from "./worker-stop-notices.js";
+import type { WorkerStopBatch } from "./worker-stop-notices.js";
 
 /** Allows both sync (FileStore) and async (DaemonClient) implementations */
 type MaybePromise<T> = T | Promise<T>;
@@ -673,7 +673,7 @@ export interface IStore {
    * mark. Both OPTIONAL: test fakes and read-only stores skip the lane;
    * FileStore backs it and DaemonClient proxies it.
    */
-  getUndeliveredWorkerStops?(): MaybePromise<WorkerStop[]>;
+  getUndeliveredWorkerStops?(): MaybePromise<WorkerStopBatch>;
   markWorkerStopsDelivered?(ids: string[]): MaybePromise<void>;
 
   /**

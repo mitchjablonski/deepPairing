@@ -9,7 +9,7 @@ import { getGlobalStore } from "./global-store.js";
 import { capConceptLength } from "./concept-hygiene.js";
 import { writeJsonAtomic, writeStringAtomic } from "./atomic-write.js";
 import { readPreflightBlocks } from "./preflight-block-log.js";
-import { workerStopsFor, readDeliveredWorkerStops, markWorkerStopsDelivered as markWorkerStopsDeliveredFile, type WorkerStop } from "./worker-stop-notices.js";
+import { workerStopsFor, loadDeliveredWorkerStops, markWorkerStopsDelivered as markWorkerStopsDeliveredFile, type WorkerStopBatch } from "./worker-stop-notices.js";
 import { withFileLock, isFileLockError } from "./file-lock.js";
 import {
   mergeArtifactRecords,
@@ -1306,13 +1306,22 @@ export class FileStore implements IStore {
    * the daemon's hooks-state watcher) plus this session's delivered-ids file;
    * never touches either on read. Demo sessions have no real workers: [].
    */
-  getUndeliveredWorkerStops(): WorkerStop[] {
-    if (this.isDemoSession) return [];
-    return workerStopsFor(
-      readPreflightBlocks(this.projectRoot),
-      this.sessionId,
-      readDeliveredWorkerStops(this.sessionDir()),
+  getUndeliveredWorkerStops(): WorkerStopBatch {
+    if (this.isDemoSession) return { stops: [] };
+    const entries = readPreflightBlocks(this.projectRoot);
+    // A corrupt delivered-ids file is backed up and rebuilt as "seen = every
+    // stop of this session in the log now" (no burst of old re-deliveries).
+    const seen = loadDeliveredWorkerStops(this.sessionDir(), () =>
+      workerStopsFor(entries, this.sessionId, []).map((s) => s.id),
     );
+    const stops = workerStopsFor(entries, this.sessionId, seen.ids);
+    return seen.notice ? { stops, notice: seen.notice } : { stops };
+  }
+
+  /** #569 pilot task A — wake a parked check_feedback long-poll: the daemon's
+   *  hooks-state watcher just logged a worker stop for this session. */
+  notifyWorkerStop(): void {
+    this.notifyFeedbackWaiters();
   }
 
   /** Remember these stops as delivered (atomic, capped; survives restart).

@@ -321,23 +321,24 @@ export function feedbackStoreView(store: IStore, opts: FeedbackViewOptions): Fee
   // #569 pilot task A — worker stops are addressed to the session's LEAD (the
   // unfiltered poll), never to a filtered subagent consumer. Claimed like the
   // other lanes so two concurrent unfiltered polls can't both deliver one.
-  if (typeof store.getUndeliveredWorkerStops === "function") {
-    overrides.getUndeliveredWorkerStops = async () => {
-      if (filter) return [];
-      const rows = ((await store.getUndeliveredWorkerStops!()) ?? []) as Array<{ id: string }>;
-      const out: Array<{ id: string }> = [];
-      for (const x of rows) {
-        const key = `workerStops:${x.id}`;
-        const by = claimTable.get(key);
-        if (by && by !== token) continue;
-        if (!by) {
-          claimTable.set(key, token);
-          mine.push(key);
-        }
-        out.push(x);
+  const workerStopsLane = (claim: boolean) => async (): Promise<{ stops: Array<{ id: string }>; notice?: string }> => {
+    if (filter) return { stops: [] };
+    const batch = (await store.getUndeliveredWorkerStops!()) ?? { stops: [] };
+    const out: Array<{ id: string }> = [];
+    for (const x of batch.stops ?? []) {
+      const key = `workerStops:${x.id}`;
+      const by = claimTable.get(key);
+      if (by && by !== token) continue;
+      if (claim && !by) {
+        claimTable.set(key, token);
+        mine.push(key);
       }
-      return out;
-    };
+      out.push(x);
+    }
+    return batch.notice ? { stops: out, notice: batch.notice } : { stops: out };
+  };
+  if (typeof store.getUndeliveredWorkerStops === "function") {
+    overrides.getUndeliveredWorkerStops = workerStopsLane(true);
   }
   if (pending) {
     if (typeof store.markWorkerStopsDelivered === "function") {
@@ -358,6 +359,11 @@ export function feedbackStoreView(store: IStore, opts: FeedbackViewOptions): Fee
     // test freezes the wall clock.
     const peekLanes: Array<() => Promise<unknown[]>> = [commentsLane(false), decisionsLane(false), statusLane(false)];
     if (typeof store.getUnacknowledgedRenderFailures === "function") peekLanes.push(renderLane(false));
+    // #569 pilot task A — a worker stop wakes the lead's scoped wait too.
+    if (!filter && typeof store.getUndeliveredWorkerStops === "function") {
+      const peekStops = workerStopsLane(false);
+      peekLanes.push(async () => (await peekStops()).stops);
+    }
     overrides.waitForFeedback = async (timeoutMs = 30000) => {
       const deadline = performance.now() + timeoutMs;
       for (;;) {
