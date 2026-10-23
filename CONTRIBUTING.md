@@ -76,7 +76,7 @@ git add claude-plugin/server
 
 Never regenerate the bundle with a warm `pnpm build`, and never with `pnpm --filter @deeppairing/mcp-server build` alone (that does **not** rebuild `@deeppairing/shared`; the root turbo build orders shared → mcp-server). `build:clean` is the only path guaranteed to match CI.
 
-**No local build? Commit CI's cold build instead.** When the staleness gate fails, CI uploads the bundle it just built as an artifact named `plugin-bundle-<sha>` (`<sha>` = the pushed head commit; kept 3 days). Download the `plugin-bundle-<sha>` artifact (`gh run download <run> -n plugin-bundle-<sha> -D <dir>`), replace `claude-plugin/server/` with `<dir>`'s contents, and commit. The gate builds the PR merged with `main`, so rebase a branch that is behind `main` first.
+**No local build? Commit CI's cold build instead.** When the staleness gate fails, CI uploads the bundle it just built as an artifact named `plugin-bundle-<sha>` (`<sha>` = the pushed head commit; kept 3 days). Download the `plugin-bundle-<sha>` artifact (`gh run download <run> -n plugin-bundle-<sha> -D <dir>`), first confirm `<sha>` equals your branch head (`git rev-parse HEAD`), then replace `claude-plugin/server/` with `<dir>`'s contents and commit. The gate builds the PR merged with `main`, so rebase a branch that is behind `main` first.
 
 ### WSL: clock drift
 
