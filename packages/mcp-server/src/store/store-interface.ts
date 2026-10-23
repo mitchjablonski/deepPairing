@@ -3,6 +3,7 @@ import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion
 import type { PostedReviewRecord } from "./posted-reviews.js";
 import type { DecisionResolveOutcome, ResolutionAnnouncement } from "./decision-resolve-guard.js";
 import type { DurableReviewPostStore } from "../github/durable-review-post.js";
+import type { WorkerStop } from "./worker-stop-notices.js";
 
 /** Allows both sync (FileStore) and async (DaemonClient) implementations */
 type MaybePromise<T> = T | Promise<T>;
@@ -664,6 +665,16 @@ export interface IStore {
   acknowledgeRenderFailures?(
     keys: Array<{ artifactId: string; visualId: string }>,
   ): MaybePromise<void>;
+
+  /**
+   * #569 pilot task A (#553/#572) — worker-subagent gate stops for THIS
+   * session's lead, not yet delivered (see store/worker-stop-notices.ts).
+   * `markWorkerStopsDelivered` is the check_feedback drain: report once, then
+   * mark. Both OPTIONAL: test fakes and read-only stores skip the lane;
+   * FileStore backs it and DaemonClient proxies it.
+   */
+  getUndeliveredWorkerStops?(): MaybePromise<WorkerStop[]>;
+  markWorkerStopsDelivered?(ids: string[]): MaybePromise<void>;
 
   /**
    * G1 (#198b) — human-initiated REQUESTS (the request composer). `addRequest`

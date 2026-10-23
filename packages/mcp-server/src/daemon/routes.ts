@@ -623,6 +623,29 @@ export function createDaemonRoutes(
     return c.json({ status: "acknowledged" });
   });
 
+  // #569 pilot task A (#553/#572) — the worker-stop drain. check_feedback reads
+  // this session's undelivered worker-subagent gate stops, then marks them
+  // delivered, so the lead hears each one exactly once. A notice, never a
+  // grant: nothing here changes a stance or an allowance.
+  app.get("/api/internal/sessions/:sessionId/worker-stops", (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    return c.json({ stops: r.store.getUndeliveredWorkerStops?.() ?? [] });
+  });
+
+  app.post("/api/internal/sessions/:sessionId/worker-stops/delivered", async (c) => {
+    const r = requireStore(c, c.req.param("sessionId"));
+    if (!r.ok) return r.response;
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body !== "object") {
+      return c.json({ error: "Expected a JSON body with { ids: string[] }", code: ERROR_CODES.validation_error }, 400);
+    }
+    const { ids } = body as { ids?: unknown };
+    const clean = Array.isArray(ids) ? ids.filter((x): x is string => typeof x === "string").slice(0, 200) : [];
+    r.store.markWorkerStopsDelivered?.(clean);
+    return c.json({ status: "delivered" });
+  });
+
   app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/status", async (c) => {
     const sessionId = c.req.param("sessionId");
     const artifactId = c.req.param("artifactId");

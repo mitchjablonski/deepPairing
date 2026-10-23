@@ -19,6 +19,7 @@ import { projectHashOf, BASE_PORT } from "../project-root.js";
 import { cliInvocation } from "../cli-invocation.js";
 import { errorName } from "@deeppairing/shared";
 import type { DurableReviewPostStore } from "../github/durable-review-post.js";
+import type { WorkerStop } from "../store/worker-stop-notices.js";
 // Static on purpose (was a dynamic import): a dynamic import made esbuild wrap
 // lifecycle.ts and its whole dependency graph (including zod) in lazy __esm
 // initialisers, and the MCP SDK's top-level zod calls then ran before zod was
@@ -500,6 +501,17 @@ export class DaemonClient implements IStore {
 
   async acknowledgeRenderFailures(keys: Array<{ artifactId: string; visualId: string }>): Promise<void> {
     await this.post("/render-failures/acknowledge", { keys });
+  }
+
+  // #569 pilot task A (#553/#572) — proxy the worker-stop drain to the daemon's
+  // FileStore, so the lead's check_feedback hears that a worker was stopped.
+  async getUndeliveredWorkerStops(): Promise<WorkerStop[]> {
+    const data = await this.get<{ stops?: WorkerStop[] }>("/worker-stops");
+    return Array.isArray(data?.stops) ? data.stops : [];
+  }
+
+  async markWorkerStopsDelivered(ids: string[]): Promise<void> {
+    await this.post("/worker-stops/delivered", { ids });
   }
 
   // --- Comments ---

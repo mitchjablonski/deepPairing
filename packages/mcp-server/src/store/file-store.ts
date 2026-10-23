@@ -8,6 +8,8 @@ import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { capConceptLength } from "./concept-hygiene.js";
 import { writeJsonAtomic, writeStringAtomic } from "./atomic-write.js";
+import { readPreflightBlocks } from "./preflight-block-log.js";
+import { workerStopsFor, readDeliveredWorkerStops, markWorkerStopsDelivered as markWorkerStopsDeliveredFile, type WorkerStop } from "./worker-stop-notices.js";
 import { withFileLock, isFileLockError } from "./file-lock.js";
 import {
   mergeArtifactRecords,
@@ -1296,6 +1298,28 @@ export class FileStore implements IStore {
       }
     }
     this.scheduleFlush();
+  }
+
+  /**
+   * #569 pilot task A (#553/#572) — this session's worker-subagent gate stops
+   * not yet delivered to the lead. Reads the project block log (written by
+   * the daemon's hooks-state watcher) plus this session's delivered-ids file;
+   * never touches either on read. Demo sessions have no real workers: [].
+   */
+  getUndeliveredWorkerStops(): WorkerStop[] {
+    if (this.isDemoSession) return [];
+    return workerStopsFor(
+      readPreflightBlocks(this.projectRoot),
+      this.sessionId,
+      readDeliveredWorkerStops(this.sessionDir()),
+    );
+  }
+
+  /** Remember these stops as delivered (atomic, capped; survives restart).
+   *  Its own file, outside the debounced flush, like annotations.json. */
+  markWorkerStopsDelivered(ids: string[]): void {
+    if (this.isDemoSession) return;
+    markWorkerStopsDeliveredFile(this.sessionDir(), Array.isArray(ids) ? ids : []);
   }
 
   // --- G1 (#198b) — human-initiated requests ------------------------------

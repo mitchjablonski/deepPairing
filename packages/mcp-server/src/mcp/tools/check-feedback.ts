@@ -6,6 +6,7 @@ import { SERVER_VERSION } from "../../version.js";
 import { collectUnansweredQuestions, describeRequestIntent, isClosedArtifactStatus, coerceChangesetContent, errorMessage } from "@deeppairing/shared";
 import { getGlobalStore } from "../../store/global-store.js";
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
+import { formatWorkerStops } from "../../store/worker-stop-notices.js";
 import { sessionOwesDebrief } from "../../debrief-gate.js";
 import { cliInvocation } from "../../cli-invocation.js";
 import {
@@ -1087,6 +1088,19 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     );
   }
 
+  // #569 pilot task A (#553/#572) — a WORKER SUBAGENT this session's lead
+  // spawned was stopped (strict-stop deny) or held (ask) by a stance. Claude
+  // Code doesn't relay that to the lead, so say it here: session-scoped (an
+  // unresolved "hook" firing goes to no one), delivered once, and never
+  // authorising. Spread only when non-empty, so a poll with nothing new stays
+  // byte-identical. Marked delivered through the buffered ack, i.e. only after
+  // this whole result is built and the call wasn't cancelled.
+  const workerStops = (await store.getUndeliveredWorkerStops?.()) ?? [];
+  if (workerStops.length > 0) {
+    parts.push(formatWorkerStops(workerStops));
+    await store.markWorkerStopsDelivered?.(workerStops.map((w) => w.id));
+  }
+
   // Check for draft artifacts still awaiting human review
   // O3 — reuse the post-wake artifact snapshot (was a redundant getArtifacts).
   const draftArtifacts = postWakeArtifacts.filter(
@@ -1621,6 +1635,20 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     // poll payload's top-level key set stays byte-for-byte (contract lock in
     // check-feedback-ledger-health.test.ts). Never carries source or a secret.
     ...(structuredRenderFailures.length > 0 ? { renderFailures: structuredRenderFailures } : {}),
+    // #569 pilot task A — spread `workerStops` ONLY when a worker was newly
+    // stopped, so the healthy payload's key set stays byte-for-byte.
+    ...(workerStops.length > 0
+      ? {
+          workerStops: workerStops.map((w) => ({
+            id: w.id,
+            ...(w.agentType ? { agentType: w.agentType } : {}),
+            ...(w.targetPath ? { targetPath: w.targetPath } : {}),
+            concept: w.concept,
+            decision: w.decision,
+            at: w.at,
+          })),
+        }
+      : {}),
     // Q3 — the three PROSE-ONLY lanes get their structured mirrors (the N1 class:
     // a client that branches on structuredContent instead of prose-parsing was
     // blind to all three). Same only-when-present spread discipline as every key

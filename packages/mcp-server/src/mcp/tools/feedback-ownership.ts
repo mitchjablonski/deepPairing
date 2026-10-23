@@ -153,6 +153,8 @@ export class PendingAcks {
   decisions: string[] = [];
   statusChanges: string[] = [];
   renderFailures: Array<{ artifactId: string; visualId: string }> = [];
+  /** #569 pilot task A — worker-stop ids to mark delivered. */
+  workerStops: string[] = [];
 
   /** Flush every lane; a failing lane does not stop the others. Returns the
    *  errors (an un-flushed lane simply re-delivers next poll). */
@@ -169,6 +171,7 @@ export class PendingAcks {
     if (this.decisions.length > 0) await run(() => store.acknowledgeDecisions(this.decisions));
     if (this.statusChanges.length > 0) await run(() => store.acknowledgeStatusChanges(this.statusChanges));
     if (this.renderFailures.length > 0) await run(() => store.acknowledgeRenderFailures?.(this.renderFailures));
+    if (this.workerStops.length > 0) await run(() => store.markWorkerStopsDelivered?.(this.workerStops));
     return errors;
   }
 }
@@ -315,7 +318,31 @@ export function feedbackStoreView(store: IStore, opts: FeedbackViewOptions): Fee
   if (typeof store.getUnacknowledgedRenderFailures === "function") {
     overrides.getUnacknowledgedRenderFailures = renderLane(true);
   }
+  // #569 pilot task A — worker stops are addressed to the session's LEAD (the
+  // unfiltered poll), never to a filtered subagent consumer. Claimed like the
+  // other lanes so two concurrent unfiltered polls can't both deliver one.
+  if (typeof store.getUndeliveredWorkerStops === "function") {
+    overrides.getUndeliveredWorkerStops = async () => {
+      if (filter) return [];
+      const rows = ((await store.getUndeliveredWorkerStops!()) ?? []) as Array<{ id: string }>;
+      const out: Array<{ id: string }> = [];
+      for (const x of rows) {
+        const key = `workerStops:${x.id}`;
+        const by = claimTable.get(key);
+        if (by && by !== token) continue;
+        if (!by) {
+          claimTable.set(key, token);
+          mine.push(key);
+        }
+        out.push(x);
+      }
+      return out;
+    };
+  }
   if (pending) {
+    if (typeof store.markWorkerStopsDelivered === "function") {
+      overrides.markWorkerStopsDelivered = (ids: string[]) => void pending.workerStops.push(...ids);
+    }
     overrides.acknowledgeComments = (ids: string[]) => void pending.comments.push(...ids);
     overrides.acknowledgeDecisions = (ids: string[]) => void pending.decisions.push(...ids);
     overrides.acknowledgeStatusChanges = (ids: string[]) => void pending.statusChanges.push(...ids);
