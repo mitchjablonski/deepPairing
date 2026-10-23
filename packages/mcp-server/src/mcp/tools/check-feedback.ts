@@ -6,6 +6,7 @@ import { SERVER_VERSION } from "../../version.js";
 import { collectUnansweredQuestions, describeRequestIntent, isClosedArtifactStatus, coerceChangesetContent, errorMessage } from "@deeppairing/shared";
 import { getGlobalStore } from "../../store/global-store.js";
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
+import { formatWorkerStops, workerStopClause, type WorkerStopBatch } from "../../store/worker-stop-notices.js";
 import { sessionOwesDebrief } from "../../debrief-gate.js";
 import { cliInvocation } from "../../cli-invocation.js";
 import {
@@ -387,6 +388,12 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
   // gate exactly like a human comment — otherwise check_feedback would sit in
   // the 30s long-poll while a fix is already owed. Optional method → [].
   const pendingRenderFailuresAtGate = (await store.getUnacknowledgedRenderFailures?.()) ?? [];
+  // #569 pilot task A — a new worker stop is actionable for the lead in every
+  // poll shape (like a human comment): it satisfies the entry gate, so the
+  // poll doesn't sit in the 30s wait first. A one-time salvage notice (corrupt
+  // delivered-ids file) can come back from either read; keep whichever did.
+  const workerStopsAtGate: WorkerStopBatch = (await store.getUndeliveredWorkerStops?.()) ?? { stops: [] };
+  let workerStopsNotice = workerStopsAtGate.notice;
   const allArtsForScope = await store.getArtifacts();
   const decidedPlans = allArtsForScope.filter(
     (a) => a.type === "plan" && (a.status === "approved" || a.status === "revised" || a.status === "rejected"),
@@ -405,7 +412,7 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
       decisions: resolvedDecs.length,
       decidedPlans: decidedPlans.length,
       decidedAny: decidedAny.length,
-    }) || pendingRenderFailuresAtGate.length > 0;
+    }) || pendingRenderFailuresAtGate.length > 0 || workerStopsAtGate.stops.length > 0;
 
   if (!hasImmediate) {
     // Check if there are draft artifacts — if so, wait for human action
@@ -461,6 +468,8 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
   const newResolved = await store.getResolvedDecisions();
   const postWakeArtifacts = await store.getArtifacts();
   const postWakeRenderFailures = (await store.getUnacknowledgedRenderFailures?.()) ?? [];
+  const postWakeWorkerStops: WorkerStopBatch = (await store.getUndeliveredWorkerStops?.()) ?? { stops: [] };
+  workerStopsNotice ??= postWakeWorkerStops.notice;
   const hasNewFeedback = newComments.length > 0 || newResolved.length > 0;
   if (hasNewFeedback) {
     ctx.state.checkFeedbackPollCount = 0;
@@ -506,7 +515,8 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     // NEVER early-return (and strand human input with a comments:[] payload)
     // while unacknowledged comments (or render failures) exist. Fall through to
     // the reporting path.
-    if (!scopeSatisfied && newComments.length === 0 && newRenderFailures.length === 0) {
+    // #569 pilot task A — nor while a worker stop is waiting for the lead.
+    if (!scopeSatisfied && newComments.length === 0 && newRenderFailures.length === 0 && postWakeWorkerStops.stops.length === 0) {
       const portNote = portRecoveryNote();
       return {
         content: [{
@@ -1087,6 +1097,21 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     );
   }
 
+  // #569 pilot task A (#553/#572) — a WORKER SUBAGENT this session's lead
+  // spawned was stopped (strict-stop deny) or held (ask) by a stance. Claude
+  // Code doesn't relay that to the lead, so say it here: session-scoped (an
+  // unresolved "hook" firing goes to no one), delivered once, and never
+  // authorising. Spread only when non-empty, so a poll with nothing new stays
+  // byte-identical. Marked delivered through the buffered ack, i.e. only after
+  // this whole result is built and the call wasn't cancelled.
+  // The post-wake snapshot; nothing between there and here marks stops.
+  const workerStops = postWakeWorkerStops.stops;
+  if (workerStops.length > 0) {
+    parts.push(formatWorkerStops(workerStops));
+    await store.markWorkerStopsDelivered?.(workerStops.map((w) => w.id));
+  }
+  if (workerStopsNotice) parts.push(workerStopsNotice);
+
   // Check for draft artifacts still awaiting human review
   // O3 — reuse the post-wake artifact snapshot (was a redundant getArtifacts).
   const draftArtifacts = postWakeArtifacts.filter(
@@ -1449,6 +1474,14 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     advisoryClauses.push(`The human sent ${pendingRequests.length} request${pendingRequests.length === 1 ? "" : "s"} — serve ${pendingRequests.length === 1 ? "it" : "them"} (see "Human requests" below) with the matching present_* artifact.`);
   }
 
+  // #569 pilot task A — a worker subagent was gate-stopped (deny) or held
+  // (ask). BLOCKING and ranked with the leading clauses (only the directive
+  // and fresh questions go ahead of it), so the cap can't drop it and
+  // "You may proceed" can't print beside "Don't advance work that depends on
+  // it". One-poll, like the render-failure clause: the notice is delivered once.
+  const workerClause = workerStopClause(workerStops);
+  if (workerClause) leadingClauses.push(workerClause);
+
   // #192 / Q3 — questions carried over from an EARLIER run are the same
   // answer_question obligation as a fresh one, and the body already tells the
   // agent to "answer each … before new work". The selector never saw them: this
@@ -1546,7 +1579,9 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     // should fix + re-present, not sit in 'waiting'.
     renderFailures.length > 0 ||
     // G1 (#198b) — a pending human request is something to act on (serve it).
-    pendingRequests.length > 0;
+    pendingRequests.length > 0 ||
+    // #569 pilot task A — a worker was stopped: never "proceed" beside it.
+    workerStops.length > 0;
   // Q3 review (Q3-3) — `status` is part of the audit, not outside it. It derived
   // from the narrow `hasActionableFeedback` alone (which knows nothing about
   // carried-over questions, still-open decision records, durable send-backs or
@@ -1621,6 +1656,20 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     // poll payload's top-level key set stays byte-for-byte (contract lock in
     // check-feedback-ledger-health.test.ts). Never carries source or a secret.
     ...(structuredRenderFailures.length > 0 ? { renderFailures: structuredRenderFailures } : {}),
+    // #569 pilot task A — spread `workerStops` ONLY when a worker was newly
+    // stopped, so the healthy payload's key set stays byte-for-byte.
+    ...(workerStops.length > 0
+      ? {
+          workerStops: workerStops.map((w) => ({
+            id: w.id,
+            ...(w.agentType ? { agentType: w.agentType } : {}),
+            ...(w.targetPath ? { targetPath: w.targetPath } : {}),
+            concept: w.concept,
+            decision: w.decision,
+            at: w.at,
+          })),
+        }
+      : {}),
     // Q3 — the three PROSE-ONLY lanes get their structured mirrors (the N1 class:
     // a client that branches on structuredContent instead of prose-parsing was
     // blind to all three). Same only-when-present spread discipline as every key

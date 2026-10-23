@@ -1359,6 +1359,9 @@ export function createDaemon(deps: CreateDaemonDeps): Daemon {
       try {
         const entry = recordHookGateBlock(projectRoot, f, (claude) => matchClaudeSession(claude));
         if (!entry) return;
+        // #569 pilot task A — a WORKER stop for a resolved session wakes that
+        // session's parked check_feedback, so the lead hears it promptly.
+        if (entry.agentId && entry.sessionId !== "hook") sessions.get(entry.sessionId)?.notifyWorkerStop();
         sendHookGate(entry.sessionId, {
           type: "preflight_blocked",
           lane: "hook",

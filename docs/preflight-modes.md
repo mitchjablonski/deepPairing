@@ -86,21 +86,52 @@ the hook input is recorded: no tool input or file content.
   no resolvable session, stay project-wide).
 - **The companion labels it.** The toast shows "Subagent: general-purpose" and
   says "Claude Code stopped a write to `src/x.ts` by the general-purpose
-  subagent", and a deny adds that the lead agent isn't told. The gate log and
+  subagent", and a deny adds that the lead learns on its next `check_feedback`
+  unless no daemon was running. The gate log and
   the next-up bar name the subagent too.
 - **Records written before this change** have neither field and render exactly
   as before.
-- **The lead is not notified by the hook.** Claude Code's documented hook
-  outputs don't reach the parent model: `systemMessage` is shown to the user,
-  and `permissionDecisionReason`, `stopReason` and `continue: false` go to the
-  subagent that made the call. A `SubagentStop` hook's `decision: "block"`
-  keeps the *subagent* running; it doesn't write to the parent either. On
-  2.1.301 the background completion also omitted the warning (see
-  [Supervised worker handoff](#supervised-worker-handoff)). So the companion
-  is where you learn a worker was stopped, and you tell the lead. A lead-side
-  signal (for example, the lead's next `check_feedback` reporting "a worker
-  was stopped by your stance X") would need deepPairing's own channel and is
-  not built here.
+- **The hook still can't tell the lead; `check_feedback` does (#569).**
+  Claude Code's documented hook outputs don't reach the parent model:
+  `systemMessage` is shown to the user, and `permissionDecisionReason`,
+  `stopReason` and `continue: false` go to the subagent that made the call. A
+  `SubagentStop` hook's `decision: "block"` keeps the *subagent* running. The
+  background completion also omits the warning (2.1.301 and 2.1.309; see
+  [Supervised worker handoff](#supervised-worker-handoff)). So deepPairing
+  uses its own channel: the lead's **next `check_feedback`** adds a
+  "⛔ Worker stopped (N)" block and `structuredContent.workerStops[]` (`id`,
+  `agentType`, `targetPath`, `concept`, `decision`, `at`), and the poll's
+  status is `feedback`, never `proceed`.
+  - **Deny and ask read differently.** A deny says the worker was stopped and
+    the edit didn't happen. An ask says Claude Code asked the human, so the
+    edit may or may not have gone through and the lead should check the file.
+  - **Every poll shape hears it.** A new stop counts as immediate feedback,
+    wakes a parked long-poll, and gets past a `waitFor`-scoped poll, the same
+    way a human comment does.
+  - **Session-scoped.** Only gate-log entries with an `agentId` whose session
+    resolved to the lead's own deepPairing session. A firing that resolved to
+    no session (`"hook"`) is delivered to no lead; it stays in the companion.
+    A filtered (`presentedBy`/`artifactIds`) poll never gets them.
+  - **Shared (non-split) sessions get nothing.** A firing resolves to a
+    session only when Claude Code's `session_id` maps to a per-session
+    (split) deepPairing session. In shared mode every firing resolves to
+    `"hook"`, so this feature is inert there and the companion is the only
+    place to see a worker stop.
+  - **Delivered once.** Delivered ids are kept in the session's
+    `worker-stops-delivered.json` (capped at 100, atomic, survives a restart).
+    If that file is corrupt it is copied aside to `.corrupt-<time>`, the stops
+    now in the log are marked seen rather than re-sent, and a one-time note
+    says so. A poll with nothing new is byte-identical to before.
+  - **Worker-controlled text is flattened.** The target path, agent type and
+    stance are shown with control characters and line breaks turned into
+    spaces, backticks replaced, and a length bound, so a crafted path can't
+    forge a line in the result.
+  - **Never authorising.** It's a notice: it grants, retires and resumes
+    nothing, and it tells the lead not to retry the same edit.
+  - **Limit.** The daemon's watcher writes the gate log. A stop that fires
+    while no daemon is running is never logged, so it's never delivered. The
+    companion is still the human's view, and you may still need to tell the
+    lead.
 - **Re-verify on each Claude Code update.** The field names and the
   "subagent hooks carry the parent's `session_id`" behaviour come from Claude
   Code's hook input, and the tests simulate them. Like the supervised handoff

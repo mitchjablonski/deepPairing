@@ -34743,6 +34743,39 @@ async function handlePresentOptions(ctx, args) {
   };
 }
 
+// src/store/preflight-block-log.ts
+var MAX_BLOCKS = 50;
+
+// src/store/worker-stop-notices.ts
+var MAX_SEEN_WORKER_STOPS = Math.max(100, MAX_BLOCKS);
+var WORKER_STOP_CLAUSE = "A worker was stopped. Re-plan the dependent work or ask the human before continuing.";
+var WORKER_ASK_CLAUSE = "A worker's edit was put to the human by a stance. Check whether it went through before relying on it.";
+function workerStopClause(stops) {
+  if (stops.length === 0) return null;
+  return stops.some((s) => s.decision === "deny") ? WORKER_STOP_CLAUSE : WORKER_ASK_CLAUSE;
+}
+function proseSafe(value, max) {
+  const flat = value.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ").replace(/`/g, "'").replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}\u2026` : flat;
+}
+function stopSentence(s) {
+  const type = proseSafe(s.agentType ?? "worker", 60) || "worker";
+  const target = proseSafe(s.targetPath ?? "(unknown path)", 200) || "(unknown path)";
+  const concept = proseSafe(s.concept, 120);
+  if (s.decision === "deny") {
+    return `a \`${type}\` subagent was **stopped** at \`${target}\` by stance \`${concept}\`. That edit did not happen. Don't advance work that depends on it; re-plan or ask the human. Don't retry the same edit.`;
+  }
+  return `a \`${type}\` subagent's edit to \`${target}\` matched stance \`${concept}\`, and Claude Code **asked the human**. It may or may not have gone through, so check the file before relying on it. Don't retry it if it was refused.`;
+}
+function formatWorkerStops(stops) {
+  if (stops.length === 0) return "";
+  const denies = stops.filter((s) => s.decision === "deny").length;
+  const label = denies === stops.length ? "Worker stopped" : denies === 0 ? "Worker asked the human" : "Worker stopped or asked the human";
+  if (stops.length === 1) return `\u26D4 ${label} (1): ${stopSentence(stops[0])}`;
+  return `\u26D4 ${label} (${stops.length}):
+${stops.map((s) => `- ${stopSentence(s)}`).join("\n")}`;
+}
+
 // src/debrief-gate.ts
 var CODE_CLOSED_STATUSES = ["superseded", "retracted", "obsolete"];
 var DEBRIEF_DEAD_STATUSES = ["superseded", "retracted", "obsolete", "rejected"];
@@ -34821,6 +34854,8 @@ var PendingAcks = class {
   decisions = [];
   statusChanges = [];
   renderFailures = [];
+  /** #569 pilot task A — worker-stop ids to mark delivered. */
+  workerStops = [];
   /** Flush every lane; a failing lane does not stop the others. Returns the
    *  errors (an un-flushed lane simply re-delivers next poll). */
   async flush(store) {
@@ -34836,6 +34871,7 @@ var PendingAcks = class {
     if (this.decisions.length > 0) await run2(() => store.acknowledgeDecisions(this.decisions));
     if (this.statusChanges.length > 0) await run2(() => store.acknowledgeStatusChanges(this.statusChanges));
     if (this.renderFailures.length > 0) await run2(() => store.acknowledgeRenderFailures?.(this.renderFailures));
+    if (this.workerStops.length > 0) await run2(() => store.markWorkerStopsDelivered?.(this.workerStops));
     return errors;
   }
 };
@@ -34924,7 +34960,29 @@ function feedbackStoreView(store, opts) {
   if (typeof store.getUnacknowledgedRenderFailures === "function") {
     overrides.getUnacknowledgedRenderFailures = renderLane(true);
   }
+  const workerStopsLane = (claim2) => async () => {
+    if (filter) return { stops: [] };
+    const batch = await store.getUndeliveredWorkerStops() ?? { stops: [] };
+    const out = [];
+    for (const x of batch.stops ?? []) {
+      const key = `workerStops:${x.id}`;
+      const by = claimTable.get(key);
+      if (by && by !== token) continue;
+      if (claim2 && !by) {
+        claimTable.set(key, token);
+        mine.push(key);
+      }
+      out.push(x);
+    }
+    return batch.notice ? { stops: out, notice: batch.notice } : { stops: out };
+  };
+  if (typeof store.getUndeliveredWorkerStops === "function") {
+    overrides.getUndeliveredWorkerStops = workerStopsLane(true);
+  }
   if (pending) {
+    if (typeof store.markWorkerStopsDelivered === "function") {
+      overrides.markWorkerStopsDelivered = (ids) => void pending.workerStops.push(...ids);
+    }
     overrides.acknowledgeComments = (ids) => void pending.comments.push(...ids);
     overrides.acknowledgeDecisions = (ids) => void pending.decisions.push(...ids);
     overrides.acknowledgeStatusChanges = (ids) => void pending.statusChanges.push(...ids);
@@ -34935,6 +34993,10 @@ function feedbackStoreView(store, opts) {
   if (scoping) {
     const peekLanes = [commentsLane(false), decisionsLane(false), statusLane(false)];
     if (typeof store.getUnacknowledgedRenderFailures === "function") peekLanes.push(renderLane(false));
+    if (!filter && typeof store.getUndeliveredWorkerStops === "function") {
+      const peekStops = workerStopsLane(false);
+      peekLanes.push(async () => (await peekStops()).stops);
+    }
     overrides.waitForFeedback = async (timeoutMs = 3e4) => {
       const deadline = performance2.now() + timeoutMs;
       for (; ; ) {
@@ -35208,6 +35270,8 @@ async function assembleCheckFeedback(ctx, args) {
   const unackComments = await store.getUnacknowledgedComments();
   const resolvedDecs = await store.getResolvedDecisions();
   const pendingRenderFailuresAtGate = await store.getUnacknowledgedRenderFailures?.() ?? [];
+  const workerStopsAtGate = await store.getUndeliveredWorkerStops?.() ?? { stops: [] };
+  let workerStopsNotice = workerStopsAtGate.notice;
   const allArtsForScope = await store.getArtifacts();
   const decidedPlans = allArtsForScope.filter(
     (a) => a.type === "plan" && (a.status === "approved" || a.status === "revised" || a.status === "rejected")
@@ -35220,7 +35284,7 @@ async function assembleCheckFeedback(ctx, args) {
     decisions: resolvedDecs.length,
     decidedPlans: decidedPlans.length,
     decidedAny: decidedAny.length
-  }) || pendingRenderFailuresAtGate.length > 0;
+  }) || pendingRenderFailuresAtGate.length > 0 || workerStopsAtGate.stops.length > 0;
   if (!hasImmediate) {
     const allArts = allArtsForScope;
     const hasDrafts = allArts.some(
@@ -35251,6 +35315,8 @@ async function assembleCheckFeedback(ctx, args) {
   const newResolved = await store.getResolvedDecisions();
   const postWakeArtifacts = await store.getArtifacts();
   const postWakeRenderFailures = await store.getUnacknowledgedRenderFailures?.() ?? [];
+  const postWakeWorkerStops = await store.getUndeliveredWorkerStops?.() ?? { stops: [] };
+  workerStopsNotice ??= postWakeWorkerStops.notice;
   const hasNewFeedback = newComments.length > 0 || newResolved.length > 0;
   if (hasNewFeedback) {
     ctx.state.checkFeedbackPollCount = 0;
@@ -35271,7 +35337,7 @@ async function assembleCheckFeedback(ctx, args) {
       decidedAny: decidedAnyPostWake.length
     });
     const newRenderFailures = postWakeRenderFailures;
-    if (!scopeSatisfied && newComments.length === 0 && newRenderFailures.length === 0) {
+    if (!scopeSatisfied && newComments.length === 0 && newRenderFailures.length === 0 && postWakeWorkerStops.stops.length === 0) {
       const portNote2 = portRecoveryNote();
       return {
         content: [{
@@ -35594,6 +35660,12 @@ ${lines.join("\n")}
 Fix the Mermaid source and re-present the affected visual (revise_artifact).`
     );
   }
+  const workerStops = postWakeWorkerStops.stops;
+  if (workerStops.length > 0) {
+    parts.push(formatWorkerStops(workerStops));
+    await store.markWorkerStopsDelivered?.(workerStops.map((w) => w.id));
+  }
+  if (workerStopsNotice) parts.push(workerStopsNotice);
   const draftArtifacts = postWakeArtifacts.filter(
     (a) => a.status === "draft" && WAITING_DRAFT_TYPES.includes(a.type)
   );
@@ -35733,6 +35805,8 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
   if (pendingRequests.length > 0) {
     advisoryClauses.push(`The human sent ${pendingRequests.length} request${pendingRequests.length === 1 ? "" : "s"} \u2014 serve ${pendingRequests.length === 1 ? "it" : "them"} (see "Human requests" below) with the matching present_* artifact.`);
   }
+  const workerClause = workerStopClause(workerStops);
+  if (workerClause) leadingClauses.push(workerClause);
   if (structuredCarryover.length > 0) {
     leadingClauses.push(
       `Answer the ${structuredCarryover.length} question${structuredCarryover.length === 1 ? "" : "s"} carried over from earlier (answer_question with the commentId in the "\u21A9\uFE0F carried over" block below) before new work.`
@@ -35770,7 +35844,8 @@ Suggested action: ${suggestedAction}`);
   const hasActionableFeedback = hasNewFeedback || freshlyRejected.length > 0 || freshPlanVerdicts > 0 || changed.length > 0 || // #176 — a broken diagram the human is staring at is actionable: the agent
   // should fix + re-present, not sit in 'waiting'.
   renderFailures.length > 0 || // G1 (#198b) — a pending human request is something to act on (serve it).
-  pendingRequests.length > 0;
+  pendingRequests.length > 0 || // #569 pilot task A — a worker was stopped: never "proceed" beside it.
+  workerStops.length > 0;
   const status = hasActionableFeedback ? "feedback" : hasBlocking || pendingCount > 0 ? "waiting" : "proceed";
   const portNote = portRecoveryNote();
   const structuredContent = {
@@ -35830,6 +35905,18 @@ Suggested action: ${suggestedAction}`);
     // poll payload's top-level key set stays byte-for-byte (contract lock in
     // check-feedback-ledger-health.test.ts). Never carries source or a secret.
     ...structuredRenderFailures.length > 0 ? { renderFailures: structuredRenderFailures } : {},
+    // #569 pilot task A — spread `workerStops` ONLY when a worker was newly
+    // stopped, so the healthy payload's key set stays byte-for-byte.
+    ...workerStops.length > 0 ? {
+      workerStops: workerStops.map((w) => ({
+        id: w.id,
+        ...w.agentType ? { agentType: w.agentType } : {},
+        ...w.targetPath ? { targetPath: w.targetPath } : {},
+        concept: w.concept,
+        decision: w.decision,
+        at: w.at
+      }))
+    } : {},
     // Q3 — the three PROSE-ONLY lanes get their structured mirrors (the N1 class:
     // a client that branches on structuredContent instead of prose-parsing was
     // blind to all three). Same only-when-present spread discipline as every key
@@ -39570,6 +39657,16 @@ var DaemonClient = class {
   }
   async acknowledgeRenderFailures(keys) {
     await this.post("/render-failures/acknowledge", { keys });
+  }
+  // #569 pilot task A (#553/#572) — proxy the worker-stop drain to the daemon's
+  // FileStore, so the lead's check_feedback hears that a worker was stopped.
+  async getUndeliveredWorkerStops() {
+    const data = await this.get("/worker-stops");
+    const stops = Array.isArray(data?.stops) ? data.stops : [];
+    return typeof data?.notice === "string" ? { stops, notice: data.notice } : { stops };
+  }
+  async markWorkerStopsDelivered(ids) {
+    await this.post("/worker-stops/delivered", { ids });
   }
   // --- Comments ---
   async addComment(params) {
