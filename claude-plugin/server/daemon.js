@@ -19248,7 +19248,15 @@ var SpecTaskSchema = external_exports.object({
   description: external_exports.string(),
   /** Which requirement ids this task implements — the traceability link. */
   linkedRequirementIds: external_exports.array(external_exports.string()).optional(),
-  estimate: external_exports.enum(["xs", "s", "m", "l", "xl"]).optional()
+  estimate: external_exports.enum(["xs", "s", "m", "l", "xl"]).optional(),
+  /**
+   * #507 S1 / #569 — execution tracking for a spec's tasks, the same shape as
+   * PlanStep.status: the agent marks tasks via update_plan_progress (stepIndex
+   * = task index) and the companion renders the live checklist. Optional for
+   * back-compat (absent = execution not tracked).
+   */
+  status: external_exports.enum(["pending", "in_progress", "done", "skipped"]).optional().describe("Execution status, updated by the agent via update_plan_progress"),
+  statusNote: external_exports.string().optional().describe("One-line note shown beside the task (e.g. why it was skipped)")
 });
 var SpecContentSchema = external_exports.object({
   objective: external_exports.string().describe("One-sentence objective the spec is chasing"),
@@ -20328,6 +20336,11 @@ function coerceTask(v) {
   const estimate = optOneOf(t.estimate, ["xs", "s", "m", "l", "xl"]);
   if (estimate)
     out.estimate = estimate;
+  if (t.status === "pending" || t.status === "in_progress" || t.status === "done" || t.status === "skipped") {
+    out.status = t.status;
+  }
+  if (typeof t.statusNote === "string")
+    out.statusNote = t.statusNote;
   return out;
 }
 function coerceSpecContent(raw2) {
@@ -27946,12 +27959,13 @@ var FileStore = class _FileStore {
   updatePlanProgress(artifactId, updates) {
     this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
-    if (!art || art.type !== "plan") return null;
+    if (!art || art.type !== "plan" && art.type !== "spec") return null;
     const content = art.content;
-    if (!Array.isArray(content.steps)) return null;
+    const items = art.type === "plan" ? content.steps : content.tasks;
+    if (!Array.isArray(items)) return null;
     let touched = false;
     for (const u of updates) {
-      const step = content.steps[u.stepIndex];
+      const step = items[u.stepIndex];
       if (!step) continue;
       step.status = u.status;
       if (u.statusNote !== void 0) step.statusNote = u.statusNote;

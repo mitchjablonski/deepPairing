@@ -15048,7 +15048,15 @@ var SpecTaskSchema = external_exports.object({
   description: external_exports.string(),
   /** Which requirement ids this task implements — the traceability link. */
   linkedRequirementIds: external_exports.array(external_exports.string()).optional(),
-  estimate: external_exports.enum(["xs", "s", "m", "l", "xl"]).optional()
+  estimate: external_exports.enum(["xs", "s", "m", "l", "xl"]).optional(),
+  /**
+   * #507 S1 / #569 — execution tracking for a spec's tasks, the same shape as
+   * PlanStep.status: the agent marks tasks via update_plan_progress (stepIndex
+   * = task index) and the companion renders the live checklist. Optional for
+   * back-compat (absent = execution not tracked).
+   */
+  status: external_exports.enum(["pending", "in_progress", "done", "skipped"]).optional().describe("Execution status, updated by the agent via update_plan_progress"),
+  statusNote: external_exports.string().optional().describe("One-line note shown beside the task (e.g. why it was skipped)")
 });
 var SpecContentSchema = external_exports.object({
   objective: external_exports.string().describe("One-sentence objective the spec is chasing"),
