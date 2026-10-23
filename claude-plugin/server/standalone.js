@@ -34743,6 +34743,21 @@ async function handlePresentOptions(ctx, args) {
   };
 }
 
+// src/store/preflight-block-log.ts
+var MAX_BLOCKS = 50;
+
+// src/store/worker-stop-notices.ts
+var MAX_SEEN_WORKER_STOPS = Math.max(100, MAX_BLOCKS);
+function formatWorkerStops(stops) {
+  if (stops.length === 0) return "";
+  const line = (s) => `a \`${s.agentType ?? "worker"}\` subagent was stopped or held for your approval at \`${s.targetPath ?? "(unknown path)"}\` by stance \`${s.concept}\` (\`${s.decision}\`).`;
+  if (stops.length === 1) {
+    return `\u26D4 Worker stopped (1): ${line(stops[0])} That edit did **not** happen through the worker. Don't advance work that depends on it; re-plan, or ask the human. Don't retry the same edit.`;
+  }
+  return `\u26D4 Worker stopped (${stops.length}):
+` + stops.map((s) => `- ${line(s)}`).join("\n") + "\nThose edits did **not** happen through the workers. Don't advance work that depends on them; re-plan, or ask the human. Don't retry the same edits.";
+}
+
 // src/debrief-gate.ts
 var CODE_CLOSED_STATUSES = ["superseded", "retracted", "obsolete"];
 var DEBRIEF_DEAD_STATUSES = ["superseded", "retracted", "obsolete", "rejected"];
@@ -34821,6 +34836,8 @@ var PendingAcks = class {
   decisions = [];
   statusChanges = [];
   renderFailures = [];
+  /** #569 pilot task A — worker-stop ids to mark delivered. */
+  workerStops = [];
   /** Flush every lane; a failing lane does not stop the others. Returns the
    *  errors (an un-flushed lane simply re-delivers next poll). */
   async flush(store) {
@@ -34836,6 +34853,7 @@ var PendingAcks = class {
     if (this.decisions.length > 0) await run2(() => store.acknowledgeDecisions(this.decisions));
     if (this.statusChanges.length > 0) await run2(() => store.acknowledgeStatusChanges(this.statusChanges));
     if (this.renderFailures.length > 0) await run2(() => store.acknowledgeRenderFailures?.(this.renderFailures));
+    if (this.workerStops.length > 0) await run2(() => store.markWorkerStopsDelivered?.(this.workerStops));
     return errors;
   }
 };
@@ -34924,7 +34942,28 @@ function feedbackStoreView(store, opts) {
   if (typeof store.getUnacknowledgedRenderFailures === "function") {
     overrides.getUnacknowledgedRenderFailures = renderLane(true);
   }
+  if (typeof store.getUndeliveredWorkerStops === "function") {
+    overrides.getUndeliveredWorkerStops = async () => {
+      if (filter) return [];
+      const rows = await store.getUndeliveredWorkerStops() ?? [];
+      const out = [];
+      for (const x of rows) {
+        const key = `workerStops:${x.id}`;
+        const by = claimTable.get(key);
+        if (by && by !== token) continue;
+        if (!by) {
+          claimTable.set(key, token);
+          mine.push(key);
+        }
+        out.push(x);
+      }
+      return out;
+    };
+  }
   if (pending) {
+    if (typeof store.markWorkerStopsDelivered === "function") {
+      overrides.markWorkerStopsDelivered = (ids) => void pending.workerStops.push(...ids);
+    }
     overrides.acknowledgeComments = (ids) => void pending.comments.push(...ids);
     overrides.acknowledgeDecisions = (ids) => void pending.decisions.push(...ids);
     overrides.acknowledgeStatusChanges = (ids) => void pending.statusChanges.push(...ids);
@@ -35594,6 +35633,11 @@ ${lines.join("\n")}
 Fix the Mermaid source and re-present the affected visual (revise_artifact).`
     );
   }
+  const workerStops = await store.getUndeliveredWorkerStops?.() ?? [];
+  if (workerStops.length > 0) {
+    parts.push(formatWorkerStops(workerStops));
+    await store.markWorkerStopsDelivered?.(workerStops.map((w) => w.id));
+  }
   const draftArtifacts = postWakeArtifacts.filter(
     (a) => a.status === "draft" && WAITING_DRAFT_TYPES.includes(a.type)
   );
@@ -35830,6 +35874,18 @@ Suggested action: ${suggestedAction}`);
     // poll payload's top-level key set stays byte-for-byte (contract lock in
     // check-feedback-ledger-health.test.ts). Never carries source or a secret.
     ...structuredRenderFailures.length > 0 ? { renderFailures: structuredRenderFailures } : {},
+    // #569 pilot task A — spread `workerStops` ONLY when a worker was newly
+    // stopped, so the healthy payload's key set stays byte-for-byte.
+    ...workerStops.length > 0 ? {
+      workerStops: workerStops.map((w) => ({
+        id: w.id,
+        ...w.agentType ? { agentType: w.agentType } : {},
+        ...w.targetPath ? { targetPath: w.targetPath } : {},
+        concept: w.concept,
+        decision: w.decision,
+        at: w.at
+      }))
+    } : {},
     // Q3 — the three PROSE-ONLY lanes get their structured mirrors (the N1 class:
     // a client that branches on structuredContent instead of prose-parsing was
     // blind to all three). Same only-when-present spread discipline as every key
@@ -39570,6 +39626,15 @@ var DaemonClient = class {
   }
   async acknowledgeRenderFailures(keys) {
     await this.post("/render-failures/acknowledge", { keys });
+  }
+  // #569 pilot task A (#553/#572) — proxy the worker-stop drain to the daemon's
+  // FileStore, so the lead's check_feedback hears that a worker was stopped.
+  async getUndeliveredWorkerStops() {
+    const data = await this.get("/worker-stops");
+    return Array.isArray(data?.stops) ? data.stops : [];
+  }
+  async markWorkerStopsDelivered(ids) {
+    await this.post("/worker-stops/delivered", { ids });
   }
   // --- Comments ---
   async addComment(params) {
