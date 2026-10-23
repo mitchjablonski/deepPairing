@@ -25648,21 +25648,61 @@ function workerStopsFor(entries, sessionId, seenIds) {
 function seenPath(sessionDir) {
   return path9.join(sessionDir, FILE);
 }
-function readDeliveredWorkerStops(sessionDir) {
+function readSeen(sessionDir) {
+  const file2 = seenPath(sessionDir);
+  let raw2;
   try {
-    const file2 = seenPath(sessionDir);
-    if (!fs10.existsSync(file2)) return [];
-    const parsed = JSON.parse(fs10.readFileSync(file2, "utf-8"));
-    if (parsed?.version !== VERSION3 || !Array.isArray(parsed.ids)) return [];
-    return parsed.ids.filter((x) => typeof x === "string").slice(-MAX_SEEN_WORKER_STOPS);
+    if (!fs10.existsSync(file2)) return { kind: "missing" };
+    raw2 = fs10.readFileSync(file2, "utf-8");
   } catch {
-    return [];
+    return { kind: "missing" };
   }
+  if (raw2.trim().length === 0) return { kind: "missing" };
+  try {
+    const parsed = JSON.parse(raw2);
+    if (parsed?.version === VERSION3 && Array.isArray(parsed.ids)) {
+      return { kind: "ok", ids: parsed.ids.filter((x) => typeof x === "string").slice(-MAX_SEEN_WORKER_STOPS) };
+    }
+  } catch {
+  }
+  return { kind: "corrupt", raw: raw2 };
+}
+function backUpCorrupt(sessionDir, raw2) {
+  try {
+    const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
+    const backup = `${seenPath(sessionDir)}.corrupt-${stamp}`;
+    fs10.writeFileSync(backup, raw2);
+    return path9.basename(backup);
+  } catch {
+    return void 0;
+  }
+}
+function writeSeen(sessionDir, ids) {
+  fs10.mkdirSync(sessionDir, { recursive: true });
+  writeJsonAtomic(seenPath(sessionDir), { version: VERSION3, ids: ids.slice(-MAX_SEEN_WORKER_STOPS) });
+}
+function loadDeliveredWorkerStops(sessionDir, currentIds) {
+  const r = readSeen(sessionDir);
+  if (r.kind === "ok") return { ids: r.ids };
+  if (r.kind === "missing") return { ids: [] };
+  const backup = backUpCorrupt(sessionDir, r.raw);
+  const ids = [...currentIds()];
+  try {
+    writeSeen(sessionDir, ids);
+  } catch {
+  }
+  const n = ids.length;
+  return {
+    ids,
+    notice: `\u26A0\uFE0F This session's worker-stop delivery record was unreadable${backup ? ` (backed up to ${backup})` : ""}. ${n === 0 ? "No" : n} earlier worker stop${n === 1 ? " was" : "s were"} marked as seen without being re-sent; the companion's gate log still lists every stop.`
+  };
 }
 function markWorkerStopsDelivered(sessionDir, ids) {
   const fresh = ids.filter((x) => typeof x === "string" && x.length > 0);
   if (fresh.length === 0) return;
-  const existing = readDeliveredWorkerStops(sessionDir);
+  const r = readSeen(sessionDir);
+  if (r.kind === "corrupt") backUpCorrupt(sessionDir, r.raw);
+  const existing = r.kind === "ok" ? r.ids : [];
   const have = new Set(existing);
   const next = [...existing];
   for (const id of fresh) {
@@ -25670,8 +25710,7 @@ function markWorkerStopsDelivered(sessionDir, ids) {
     have.add(id);
     next.push(id);
   }
-  fs10.mkdirSync(sessionDir, { recursive: true });
-  writeJsonAtomic(seenPath(sessionDir), { version: VERSION3, ids: next.slice(-MAX_SEEN_WORKER_STOPS) });
+  writeSeen(sessionDir, next);
 }
 
 // src/store/session-records.ts
@@ -28245,12 +28284,19 @@ var FileStore = class _FileStore {
    * never touches either on read. Demo sessions have no real workers: [].
    */
   getUndeliveredWorkerStops() {
-    if (this.isDemoSession) return [];
-    return workerStopsFor(
-      readPreflightBlocks(this.projectRoot),
-      this.sessionId,
-      readDeliveredWorkerStops(this.sessionDir())
+    if (this.isDemoSession) return { stops: [] };
+    const entries = readPreflightBlocks(this.projectRoot);
+    const seen = loadDeliveredWorkerStops(
+      this.sessionDir(),
+      () => workerStopsFor(entries, this.sessionId, []).map((s) => s.id)
     );
+    const stops = workerStopsFor(entries, this.sessionId, seen.ids);
+    return seen.notice ? { stops, notice: seen.notice } : { stops };
+  }
+  /** #569 pilot task A — wake a parked check_feedback long-poll: the daemon's
+   *  hooks-state watcher just logged a worker stop for this session. */
+  notifyWorkerStop() {
+    this.notifyFeedbackWaiters();
   }
   /** Remember these stops as delivered (atomic, capped; survives restart).
    *  Its own file, outside the debounced flush, like annotations.json. */
@@ -35186,7 +35232,7 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
   app.get("/api/internal/sessions/:sessionId/worker-stops", (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
     if (!r.ok) return r.response;
-    return c.json({ stops: r.store.getUndeliveredWorkerStops?.() ?? [] });
+    return c.json(r.store.getUndeliveredWorkerStops?.() ?? { stops: [] });
   });
   app.post("/api/internal/sessions/:sessionId/worker-stops/delivered", async (c) => {
     const r = requireStore(c, c.req.param("sessionId"));
@@ -36886,6 +36932,7 @@ function createDaemon(deps) {
       try {
         const entry = recordHookGateBlock(projectRoot2, f, (claude) => matchClaudeSession(claude));
         if (!entry) return;
+        if (entry.agentId && entry.sessionId !== "hook") sessions.get(entry.sessionId)?.notifyWorkerStop();
         sendHookGate(entry.sessionId, {
           type: "preflight_blocked",
           lane: "hook",

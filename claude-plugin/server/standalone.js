@@ -34749,14 +34749,31 @@ var MAX_BLOCKS = 50;
 // src/store/worker-stop-notices.ts
 var MAX_SEEN_WORKER_STOPS = Math.max(100, MAX_BLOCKS);
 var WORKER_STOP_CLAUSE = "A worker was stopped. Re-plan the dependent work or ask the human before continuing.";
+var WORKER_ASK_CLAUSE = "A worker's edit was put to the human by a stance. Check whether it went through before relying on it.";
+function workerStopClause(stops) {
+  if (stops.length === 0) return null;
+  return stops.some((s) => s.decision === "deny") ? WORKER_STOP_CLAUSE : WORKER_ASK_CLAUSE;
+}
+function proseSafe(value, max) {
+  const flat = value.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ").replace(/`/g, "'").replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}\u2026` : flat;
+}
+function stopSentence(s) {
+  const type = proseSafe(s.agentType ?? "worker", 60) || "worker";
+  const target = proseSafe(s.targetPath ?? "(unknown path)", 200) || "(unknown path)";
+  const concept = proseSafe(s.concept, 120);
+  if (s.decision === "deny") {
+    return `a \`${type}\` subagent was **stopped** at \`${target}\` by stance \`${concept}\`. That edit did not happen. Don't advance work that depends on it; re-plan or ask the human. Don't retry the same edit.`;
+  }
+  return `a \`${type}\` subagent's edit to \`${target}\` matched stance \`${concept}\`, and Claude Code **asked the human**. It may or may not have gone through, so check the file before relying on it. Don't retry it if it was refused.`;
+}
 function formatWorkerStops(stops) {
   if (stops.length === 0) return "";
-  const line = (s) => `a \`${s.agentType ?? "worker"}\` subagent was stopped or held for your approval at \`${s.targetPath ?? "(unknown path)"}\` by stance \`${s.concept}\` (\`${s.decision}\`).`;
-  if (stops.length === 1) {
-    return `\u26D4 Worker stopped (1): ${line(stops[0])} That edit did **not** happen through the worker. Don't advance work that depends on it; re-plan, or ask the human. Don't retry the same edit.`;
-  }
-  return `\u26D4 Worker stopped (${stops.length}):
-` + stops.map((s) => `- ${line(s)}`).join("\n") + "\nThose edits did **not** happen through the workers. Don't advance work that depends on them; re-plan, or ask the human. Don't retry the same edits.";
+  const denies = stops.filter((s) => s.decision === "deny").length;
+  const label = denies === stops.length ? "Worker stopped" : denies === 0 ? "Worker asked the human" : "Worker stopped or asked the human";
+  if (stops.length === 1) return `\u26D4 ${label} (1): ${stopSentence(stops[0])}`;
+  return `\u26D4 ${label} (${stops.length}):
+${stops.map((s) => `- ${stopSentence(s)}`).join("\n")}`;
 }
 
 // src/debrief-gate.ts
@@ -34943,23 +34960,24 @@ function feedbackStoreView(store, opts) {
   if (typeof store.getUnacknowledgedRenderFailures === "function") {
     overrides.getUnacknowledgedRenderFailures = renderLane(true);
   }
-  if (typeof store.getUndeliveredWorkerStops === "function") {
-    overrides.getUndeliveredWorkerStops = async () => {
-      if (filter) return [];
-      const rows = await store.getUndeliveredWorkerStops() ?? [];
-      const out = [];
-      for (const x of rows) {
-        const key = `workerStops:${x.id}`;
-        const by = claimTable.get(key);
-        if (by && by !== token) continue;
-        if (!by) {
-          claimTable.set(key, token);
-          mine.push(key);
-        }
-        out.push(x);
+  const workerStopsLane = (claim2) => async () => {
+    if (filter) return { stops: [] };
+    const batch = await store.getUndeliveredWorkerStops() ?? { stops: [] };
+    const out = [];
+    for (const x of batch.stops ?? []) {
+      const key = `workerStops:${x.id}`;
+      const by = claimTable.get(key);
+      if (by && by !== token) continue;
+      if (claim2 && !by) {
+        claimTable.set(key, token);
+        mine.push(key);
       }
-      return out;
-    };
+      out.push(x);
+    }
+    return batch.notice ? { stops: out, notice: batch.notice } : { stops: out };
+  };
+  if (typeof store.getUndeliveredWorkerStops === "function") {
+    overrides.getUndeliveredWorkerStops = workerStopsLane(true);
   }
   if (pending) {
     if (typeof store.markWorkerStopsDelivered === "function") {
@@ -34975,6 +34993,10 @@ function feedbackStoreView(store, opts) {
   if (scoping) {
     const peekLanes = [commentsLane(false), decisionsLane(false), statusLane(false)];
     if (typeof store.getUnacknowledgedRenderFailures === "function") peekLanes.push(renderLane(false));
+    if (!filter && typeof store.getUndeliveredWorkerStops === "function") {
+      const peekStops = workerStopsLane(false);
+      peekLanes.push(async () => (await peekStops()).stops);
+    }
     overrides.waitForFeedback = async (timeoutMs = 3e4) => {
       const deadline = performance2.now() + timeoutMs;
       for (; ; ) {
@@ -35248,6 +35270,8 @@ async function assembleCheckFeedback(ctx, args) {
   const unackComments = await store.getUnacknowledgedComments();
   const resolvedDecs = await store.getResolvedDecisions();
   const pendingRenderFailuresAtGate = await store.getUnacknowledgedRenderFailures?.() ?? [];
+  const workerStopsAtGate = await store.getUndeliveredWorkerStops?.() ?? { stops: [] };
+  let workerStopsNotice = workerStopsAtGate.notice;
   const allArtsForScope = await store.getArtifacts();
   const decidedPlans = allArtsForScope.filter(
     (a) => a.type === "plan" && (a.status === "approved" || a.status === "revised" || a.status === "rejected")
@@ -35260,7 +35284,7 @@ async function assembleCheckFeedback(ctx, args) {
     decisions: resolvedDecs.length,
     decidedPlans: decidedPlans.length,
     decidedAny: decidedAny.length
-  }) || pendingRenderFailuresAtGate.length > 0;
+  }) || pendingRenderFailuresAtGate.length > 0 || workerStopsAtGate.stops.length > 0;
   if (!hasImmediate) {
     const allArts = allArtsForScope;
     const hasDrafts = allArts.some(
@@ -35291,6 +35315,8 @@ async function assembleCheckFeedback(ctx, args) {
   const newResolved = await store.getResolvedDecisions();
   const postWakeArtifacts = await store.getArtifacts();
   const postWakeRenderFailures = await store.getUnacknowledgedRenderFailures?.() ?? [];
+  const postWakeWorkerStops = await store.getUndeliveredWorkerStops?.() ?? { stops: [] };
+  workerStopsNotice ??= postWakeWorkerStops.notice;
   const hasNewFeedback = newComments.length > 0 || newResolved.length > 0;
   if (hasNewFeedback) {
     ctx.state.checkFeedbackPollCount = 0;
@@ -35311,7 +35337,7 @@ async function assembleCheckFeedback(ctx, args) {
       decidedAny: decidedAnyPostWake.length
     });
     const newRenderFailures = postWakeRenderFailures;
-    if (!scopeSatisfied && newComments.length === 0 && newRenderFailures.length === 0) {
+    if (!scopeSatisfied && newComments.length === 0 && newRenderFailures.length === 0 && postWakeWorkerStops.stops.length === 0) {
       const portNote2 = portRecoveryNote();
       return {
         content: [{
@@ -35634,11 +35660,12 @@ ${lines.join("\n")}
 Fix the Mermaid source and re-present the affected visual (revise_artifact).`
     );
   }
-  const workerStops = await store.getUndeliveredWorkerStops?.() ?? [];
+  const workerStops = postWakeWorkerStops.stops;
   if (workerStops.length > 0) {
     parts.push(formatWorkerStops(workerStops));
     await store.markWorkerStopsDelivered?.(workerStops.map((w) => w.id));
   }
+  if (workerStopsNotice) parts.push(workerStopsNotice);
   const draftArtifacts = postWakeArtifacts.filter(
     (a) => a.status === "draft" && WAITING_DRAFT_TYPES.includes(a.type)
   );
@@ -35778,9 +35805,8 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
   if (pendingRequests.length > 0) {
     advisoryClauses.push(`The human sent ${pendingRequests.length} request${pendingRequests.length === 1 ? "" : "s"} \u2014 serve ${pendingRequests.length === 1 ? "it" : "them"} (see "Human requests" below) with the matching present_* artifact.`);
   }
-  if (workerStops.length > 0) {
-    leadingClauses.push(WORKER_STOP_CLAUSE);
-  }
+  const workerClause = workerStopClause(workerStops);
+  if (workerClause) leadingClauses.push(workerClause);
   if (structuredCarryover.length > 0) {
     leadingClauses.push(
       `Answer the ${structuredCarryover.length} question${structuredCarryover.length === 1 ? "" : "s"} carried over from earlier (answer_question with the commentId in the "\u21A9\uFE0F carried over" block below) before new work.`
@@ -39636,7 +39662,8 @@ var DaemonClient = class {
   // FileStore, so the lead's check_feedback hears that a worker was stopped.
   async getUndeliveredWorkerStops() {
     const data = await this.get("/worker-stops");
-    return Array.isArray(data?.stops) ? data.stops : [];
+    const stops = Array.isArray(data?.stops) ? data.stops : [];
+    return typeof data?.notice === "string" ? { stops, notice: data.notice } : { stops };
   }
   async markWorkerStopsDelivered(ids) {
     await this.post("/worker-stops/delivered", { ids });
