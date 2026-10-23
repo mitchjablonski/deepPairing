@@ -669,7 +669,8 @@ export function createDaemonRoutes(
     return c.json({ status: "updated" });
   });
 
-  // D10 (H2) — agent marks plan step execution; UI renders the live strip.
+  // D10 (H2) — agent marks plan step (or, #569, spec task) execution; UI
+  // renders the live strip.
   app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/plan-progress", async (c) => {
     const sessionId = c.req.param("sessionId");
     const artifactId = c.req.param("artifactId");

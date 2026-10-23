@@ -5,6 +5,7 @@ import { CommentTrigger, AskTrigger } from "../CommentThread";
 import { OpenQuestionSection } from "./OpenQuestionSection";
 import { ArtifactVisuals } from "../ArtifactVisuals";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
+import { ExecutionStrip, StepStatusMarker, NON_EXECUTABLE_STATUSES } from "./ExecutionProgress";
 import { useChainComments } from "../../hooks/useChainComments";
 import { useWriteLock } from "../../hooks/useWriteLock";
 
@@ -112,9 +113,18 @@ export function SpecArtifact({ artifact }: Props) {
           <h3 className="text-2xs font-semibold text-text-muted uppercase tracking-wide mb-1.5">
             Tasks ({spec.tasks.length})
           </h3>
+          {/* #569 (#507 S1) — the same joint checklist plans get: the agent
+              marks tasks via update_plan_progress. Only once ANY task carries
+              a status (old specs stay untracked and render as before). */}
+          {!NON_EXECUTABLE_STATUSES.includes(artifact.status) &&
+            spec.tasks.some((t) => t.status) && (
+            <div className="mb-1.5">
+              <ExecutionStrip items={spec.tasks} sessionId={artifact.sessionId} noun="task" />
+            </div>
+          )}
           <div className="space-y-1.5">
             {spec.tasks.map((t, i) => (
-              <TaskRow key={i} task={t} />
+              <TaskRow key={i} task={t} index={i} tracked={spec.tasks!.some((x) => x.status)} />
             ))}
           </div>
         </div>
@@ -224,12 +234,21 @@ function RequirementRow({
   );
 }
 
-function TaskRow({ task }: { task: SpecTask }) {
+function TaskRow({ task, index, tracked }: { task: SpecTask; index: number; tracked: boolean }) {
   return (
     <div className="flex items-start gap-2 px-2.5 py-1.5 bg-surface-elevated rounded">
-      <span className="text-text-muted shrink-0 mt-0.5">→</span>
+      {/* #569 — once execution is tracked, the arrow becomes the plan's
+          per-step status marker (✓ done, pulsing in progress, struck skipped). */}
+      {tracked ? (
+        <StepStatusMarker index={index} status={task.status} noun="task" />
+      ) : (
+        <span className="text-text-muted shrink-0 mt-0.5">→</span>
+      )}
       <div className="min-w-0 flex-1">
         <div className="text-xs text-text-secondary">{task.description}</div>
+        {task.statusNote && (
+          <p className="text-2xs text-accent-amber mt-0.5">{task.statusNote}</p>
+        )}
         <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
           {task.linkedRequirementIds?.map((id) => (
             <span key={id} className="text-[9px] font-mono bg-surface-secondary text-text-muted px-1 py-0.5 rounded">

@@ -530,20 +530,20 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
       },
       {
         name: "update_plan_progress",
-        annotations: { title: "Update plan progress", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+        annotations: { title: "Update plan or spec progress", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         description:
-          "Mark plan steps as in_progress/done/skipped while EXECUTING an approved plan. Call it as you finish each step — the companion UI renders a live joint checklist, so your pair watches the build land instead of staring at a spinner. Not for changing the plan itself (use revise_artifact).",
+          "Mark plan steps or spec tasks as in_progress/done/skipped while EXECUTING an approved plan or spec. Call it as you finish each step or task — the companion UI renders a live joint checklist, so your pair watches the build land instead of staring at a spinner. Not for changing the plan or spec itself (use revise_artifact).",
         inputSchema: {
           type: "object" as const,
           properties: {
-            artifactId: { type: "string", description: "The plan artifact id (art_...)" },
+            artifactId: { type: "string", description: "The plan or spec artifact id (art_...)" },
             updates: {
               type: "array",
-              description: "Step status changes; indexes are 0-based positions in the plan's steps array",
+              description: "Status changes; indexes are 0-based positions in the plan's steps array or the spec's tasks array",
               items: {
                 type: "object",
                 properties: {
-                  stepIndex: { type: "number", description: "0-based index into steps[]" },
+                  stepIndex: { type: "number", description: "0-based index into a plan's steps[] or a spec's tasks[]" },
                   status: { type: "string", enum: ["pending", "in_progress", "done", "skipped"] },
                   statusNote: { type: "string", description: "Optional one-liner shown beside the step (e.g. why skipped)" },
                 },

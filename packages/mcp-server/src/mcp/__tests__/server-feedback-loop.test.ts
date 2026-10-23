@@ -714,6 +714,85 @@ describe("MCP Tool Handlers — feedback loop", () => {
       const outOfRange = await callTool("update_plan_progress", { artifactId: plan.id, updates: [{ stepIndex: 99, status: "done" }] });
       expect(outOfRange.isError).toBe(true);
     });
+
+    // #569 (#507 S1, pilot task B) — a spec's tasks[] are a checklist too.
+    const presentSpecWithTasks = async () => {
+      await callTool("present_spec", {
+        title: "Brief",
+        objective: "Throttle logins",
+        requirements: [{ id: "REQ-1", statement: "limit failures", rationale: "brute force", acceptanceCriteria: ["5/10min"], priority: "must" }],
+        tasks: [
+          { description: "add the counter", linkedRequirementIds: ["REQ-1"] },
+          { description: "wire the 429" },
+          { description: "docs" },
+        ],
+      });
+      return store.getArtifacts().find((a) => a.type === "spec")!;
+    };
+
+    it("#569 — marks an APPROVED spec's tasks, persists into content, reports task progress with no warning", async () => {
+      const spec = await presentSpecWithTasks();
+      store.updateArtifactStatus(spec.id, "approved", "ui_approve_button");
+      const res = await callTool("update_plan_progress", {
+        artifactId: spec.id,
+        updates: [
+          { stepIndex: 0, status: "done" },
+          { stepIndex: 1, status: "in_progress", statusNote: "writing the handler" },
+        ],
+      });
+      expect(res.isError).toBeFalsy();
+      expect(res.text).toContain("Spec progress recorded: 1/3 tasks complete");
+      expect(res.text).not.toContain("WARNING");
+      const tasks = (store.getArtifacts().find((a) => a.id === spec.id)!.content as any).tasks;
+      expect(tasks[0].status).toBe("done");
+      expect(tasks[1]).toMatchObject({ status: "in_progress", statusNote: "writing the handler" });
+      expect(tasks[2].status).toBeUndefined();
+    });
+
+    it("#569 — a DRAFT spec records progress but warns loudly, with the plan's wording", async () => {
+      const spec = await presentSpecWithTasks();
+      expect(spec.status).toBe("draft");
+      const res = await callTool("update_plan_progress", { artifactId: spec.id, updates: [{ stepIndex: 0, status: "in_progress" }] });
+      expect(res.isError).toBeFalsy();
+      expect(res.text).toContain("WARNING: this spec is still AWAITING REVIEW");
+      expect((store.getArtifacts().find((a) => a.id === spec.id)!.content as any).tasks[0].status).toBe("in_progress");
+    });
+
+    it("#569 — a REJECTED spec warns not to execute it", async () => {
+      const spec = await presentSpecWithTasks();
+      store.updateArtifactStatus(spec.id, "rejected", "ui_reject_button");
+      const res = await callTool("update_plan_progress", { artifactId: spec.id, updates: [{ stepIndex: 0, status: "done" }] });
+      expect(res.isError).toBeFalsy();
+      expect(res.text).toContain("WARNING: this spec is REJECTED");
+      expect(res.text).toContain("present a new spec");
+    });
+
+    it("#569 — an out-of-range task index (or a task-less spec) is an error that says plan or spec", async () => {
+      const spec = await presentSpecWithTasks();
+      const res = await callTool("update_plan_progress", { artifactId: spec.id, updates: [{ stepIndex: 3, status: "done" }] });
+      expect(res.isError).toBe(true);
+      expect(res.text).toContain("plan or spec");
+      const tasks = (store.getArtifacts().find((a) => a.id === spec.id)!.content as any).tasks;
+      expect(tasks.every((t: any) => t.status === undefined)).toBe(true);
+    });
+
+    it("#569 — plan behaviour is unchanged: plan wording, step counts, plan warnings", async () => {
+      await callTool("present_plan", { title: "P", objective: "o", steps: [{ description: "s", reasoning: "r" }, { description: "s2", reasoning: "r" }], estimatedChanges: 2 });
+      const plan = store.getArtifacts().find((a) => a.type === "plan")!;
+      const res = await callTool("update_plan_progress", { artifactId: plan.id, updates: [{ stepIndex: 0, status: "done" }] });
+      expect(res.text).toContain("Plan progress recorded: 1/2 steps complete");
+      expect(res.text).toContain("WARNING: this plan is still AWAITING REVIEW");
+      store.updateArtifactStatus(plan.id, "rejected", "ui_reject_button");
+      const rej = await callTool("update_plan_progress", { artifactId: plan.id, updates: [{ stepIndex: 1, status: "done" }] });
+      expect(rej.text).toContain("present a new plan");
+    });
+
+    it("#569 — the tool description names both plans and specs", async () => {
+      const { tools } = await client.listTools();
+      const tool = tools.find((t) => t.name === "update_plan_progress")!;
+      expect(tool.description).toContain("plan steps or spec tasks");
+      expect((tool.inputSchema as any).properties.artifactId.description).toContain("plan or spec");
+    });
   });
 
   // V-fix — a HUMAN approval/rejection of a specific artifact must be

@@ -350,3 +350,58 @@ describe("D8 — spec open questions are answerable (H1) and requirement counts 
     expect(screen.getByText("1")).toBeInTheDocument();
   });
 });
+
+describe("#569 — spec task execution status renders like plan step status", () => {
+  beforeEach(() => useArtifactStore.getState().reset());
+
+  const tasks = [
+    { description: "add the counter", status: "done" },
+    { description: "wire the 429", status: "in_progress", statusNote: "writing the handler" },
+    { description: "write docs", status: "skipped" },
+    { description: "ship it" },
+  ];
+  const specWith = (t: any[], status = "approved") =>
+    mk("spec", { objective: "obj", requirements: [{ id: "R1", statement: "s", rationale: "r", acceptanceCriteria: [] }], tasks: t }, { status });
+
+  it("an approved, tracked spec shows the live strip, per-task markers and the statusNote", () => {
+    render(<SpecArtifact artifact={specWith(tasks)} />);
+    expect(screen.getByRole("group", { name: "Spec execution: 2 of 4 tasks complete" })).toBeInTheDocument();
+    expect(screen.getByText("Executing task 2 of 4")).toBeInTheDocument();
+    expect(screen.getByLabelText("Task 1: done")).toBeInTheDocument();
+    expect(screen.getByLabelText("Task 2: in progress")).toBeInTheDocument();
+    expect(screen.getByLabelText("Task 3: skipped")).toBeInTheDocument();
+    expect(screen.getByText("writing the handler")).toBeInTheDocument();
+  });
+
+  it("a fully finished spec reads 'Spec complete'", () => {
+    render(<SpecArtifact artifact={specWith([{ description: "a", status: "done" }, { description: "b", status: "skipped" }])} />);
+    expect(screen.getByText("Spec complete")).toBeInTheDocument();
+  });
+
+  it("a DRAFT or REJECTED spec never shows the live strip (not executable), markers still render", () => {
+    const { unmount } = render(<SpecArtifact artifact={specWith(tasks, "draft")} />);
+    expect(screen.queryByRole("group", { name: /Spec execution/ })).toBeNull();
+    expect(screen.getByLabelText("Task 1: done")).toBeInTheDocument();
+    unmount();
+    render(<SpecArtifact artifact={specWith(tasks, "rejected")} />);
+    expect(screen.queryByRole("group", { name: /Spec execution/ })).toBeNull();
+  });
+
+  it("back-compat: an untracked spec renders its tasks as before — no strip, no markers", () => {
+    render(<SpecArtifact artifact={specWith([{ description: "old task one" }, { description: "old task two" }])} />);
+    expect(screen.getByText("old task one")).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: /execution/ })).toBeNull();
+    expect(screen.queryByLabelText(/Task 1:/)).toBeNull();
+    expect(screen.getAllByText("→").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("plans keep their wording through the shared strip", () => {
+    render(<PlanArtifact artifact={mk("plan", { estimatedChanges: 2, steps: [
+      { description: "step one", reasoning: "r", status: "done" },
+      { description: "step two", reasoning: "r", status: "in_progress" },
+    ] }, { status: "approved" })} />);
+    expect(screen.getByRole("group", { name: "Plan execution: 1 of 2 steps complete" })).toBeInTheDocument();
+    expect(screen.getByText("Executing step 2 of 2")).toBeInTheDocument();
+    expect(screen.getByLabelText("Step 1: done")).toBeInTheDocument();
+  });
+});

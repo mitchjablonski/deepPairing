@@ -11,6 +11,7 @@ import {
   coerceExplainerContent,
   coerceArtifactContent,
 } from "../coerce-content.js";
+import { SpecContentSchema, SpecTaskSchema } from "../content-types.js";
 
 /**
  * The coercers guarantee a fully-shaped content object from raw/partial/
@@ -521,5 +522,44 @@ describe("D10 — plan step execution status survives coercion", () => {
     expect(out.steps[1]!.status).toBe("in_progress");
     expect(out.steps[1]!.statusNote).toBe("waiting on CI");
     expect(out.steps[2]!.status).toBeUndefined();
+  });
+});
+
+describe("#569 — spec task execution status (pilot task B)", () => {
+  it("schema back-compat: a spec whose tasks carry no status still parses", () => {
+    const old = {
+      objective: "o",
+      requirements: [{ id: "R1", statement: "do", rationale: "why", acceptanceCriteria: ["it works"] }],
+      tasks: [{ description: "t1", linkedRequirementIds: ["R1"], estimate: "s" }, { description: "t2" }],
+    };
+    const parsed = SpecContentSchema.safeParse(old);
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.tasks?.[0]?.status).toBeUndefined();
+  });
+
+  it("schema accepts the plan-step status enum + statusNote on tasks, rejects junk", () => {
+    expect(SpecTaskSchema.safeParse({ description: "t", status: "in_progress", statusNote: "on it" }).success).toBe(true);
+    for (const status of ["pending", "in_progress", "done", "skipped"]) {
+      expect(SpecTaskSchema.safeParse({ description: "t", status }).success).toBe(true);
+    }
+    expect(SpecTaskSchema.safeParse({ description: "t", status: "finished" }).success).toBe(false);
+  });
+
+  it("coerceTask passes status + statusNote through; junk statuses drop; old tasks unchanged", () => {
+    const out = coerceSpecContent({
+      objective: "o",
+      requirements: [],
+      tasks: [
+        { description: "a", status: "done" },
+        { description: "b", status: "skipped", statusNote: "covered by a" },
+        { description: "c", status: "finished" },
+        { description: "d", estimate: "m" },
+      ],
+    });
+    expect(out.tasks![0]!.status).toBe("done");
+    expect(out.tasks![1]!.status).toBe("skipped");
+    expect(out.tasks![1]!.statusNote).toBe("covered by a");
+    expect(out.tasks![2]!.status).toBeUndefined();
+    expect(out.tasks![3]).toEqual({ description: "d", estimate: "m" });
   });
 });

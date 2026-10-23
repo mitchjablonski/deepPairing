@@ -374,9 +374,11 @@ export interface IStore {
 
   /**
    * D10 (H2) — joint execution tracking: patch step statuses on an existing
-   * PLAN artifact in place (no supersede — execution progress is not a new
+   * PLAN artifact (or, #569, a SPEC's `tasks[]` — stepIndex is the task
+   * index) in place (no supersede — execution progress is not a new
    * version). Returns the updated artifact for broadcasting, or null when
-   * the artifact is missing or not a plan.
+   * the artifact is missing, not a plan or spec, or no update touched an
+   * existing step/task.
    */
   updatePlanProgress(
     artifactId: string,

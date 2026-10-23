@@ -850,12 +850,15 @@ export class FileStore implements IStore {
   ): Artifact | null {
     this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
-    if (!art || art.type !== "plan") return null;
-    const content = art.content as { steps?: Array<Record<string, unknown>> };
-    if (!Array.isArray(content.steps)) return null;
+    if (!art || (art.type !== "plan" && art.type !== "spec")) return null;
+    // #569 (#507 S1) — a spec's `tasks[]` track execution exactly like a
+    // plan's `steps[]`; stepIndex is the task index.
+    const content = art.content as { steps?: Array<Record<string, unknown>>; tasks?: Array<Record<string, unknown>> };
+    const items = art.type === "plan" ? content.steps : content.tasks;
+    if (!Array.isArray(items)) return null;
     let touched = false;
     for (const u of updates) {
-      const step = content.steps[u.stepIndex];
+      const step = items[u.stepIndex];
       if (!step) continue; // out-of-range indexes are the caller's bug, not a crash
       step.status = u.status;
       if (u.statusNote !== undefined) step.statusNote = u.statusNote;

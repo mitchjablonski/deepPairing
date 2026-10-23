@@ -155,6 +155,35 @@ function deferredResponse() {
 }
 
 describe("connection store — handleMessage dispatch", () => {
+  it("#569 — plan_progress_updated replaces a SPEC in place, so task statuses land", async () => {
+    useConnectionStore.getState().connect();
+    const spec = {
+      id: "spec_1", sessionId: "sess_569", type: "spec", version: 1, parentId: null,
+      title: "Brief", status: "approved", agentReasoning: null,
+      createdAt: "2026-10-23T10:00:00.000Z", updatedAt: "2026-10-23T10:00:00.000Z",
+      content: { objective: "o", requirements: [], tasks: [{ description: "t0" }, { description: "t1" }] },
+    };
+    activeAdapter.emit({
+      type: "connected", projectRoot: "/p",
+      state: { sessionId: "sess_569", artifacts: [spec], comments: [], requests: [], decisions: [] },
+    });
+    await flush();
+    activeAdapter.emit({
+      type: "plan_progress_updated",
+      artifact: {
+        ...spec,
+        updatedAt: "2026-10-23T10:05:00.000Z",
+        content: { ...spec.content, tasks: [{ description: "t0", status: "done" }, { description: "t1", status: "in_progress", statusNote: "half" }] },
+      },
+    });
+    await flush();
+    const arts = useArtifactStore.getState().artifacts;
+    expect(arts).toHaveLength(1);
+    const tasks = (arts[0]!.content as any).tasks;
+    expect(tasks[0].status).toBe("done");
+    expect(tasks[1]).toMatchObject({ status: "in_progress", statusNote: "half" });
+  });
+
   it("C5 — hydrated flips true on the first `connected` payload", async () => {
     expect(useConnectionStore.getState().hydrated).toBe(false);
     useConnectionStore.getState().connect();

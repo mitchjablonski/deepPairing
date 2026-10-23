@@ -7,6 +7,10 @@ const VALID_STATUSES = new Set(["pending", "in_progress", "done", "skipped"]);
  * phase was the session's longest dead-air stretch: the agent worked silently
  * until a code_change appeared. Calling this after each step keeps the plan a
  * JOINT checklist — the companion UI renders a live "Step 3 of 7" strip.
+ *
+ * #569 (#507 S1) — also accepts a SPEC: its `tasks[]` track execution the same
+ * way (stepIndex = task index), so a delegated brief's tasks become a live
+ * checklist instead of one log_reasoning per finished task.
  */
 export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Promise<ToolResult> {
   const { store, broadcast } = ctx;
@@ -39,7 +43,7 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
   const artifact = await store.updatePlanProgress(artifactId, updates);
   if (!artifact) {
     return {
-      content: [{ type: "text", text: `update_plan_progress: ${artifactId} is not a known plan artifact (or no update touched an existing step).` }],
+      content: [{ type: "text", text: `update_plan_progress: ${artifactId} is not a known plan or spec artifact (or no update touched an existing plan step or spec task).` }],
       isError: true,
     };
   }
@@ -48,24 +52,29 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
   // broadcast); harmless double-fire in embedded/test mode.
   broadcast({ type: "plan_progress_updated", artifact });
 
-  const steps = (artifact.content as { steps?: Array<{ status?: string }> }).steps ?? [];
-  const done = steps.filter((st) => st.status === "done" || st.status === "skipped").length;
-  // D10 review (F2-class) — executing an unapproved/rejected plan violates
-  // the protocol. Record the progress (the store already did) but tell the
-  // agent loudly; the honor-rejection precedent says this must not be silent.
+  const isSpec = artifact.type === "spec";
+  const kind = isSpec ? "spec" : "plan";
+  const unit = isSpec ? "tasks" : "steps";
+  const c = artifact.content as { steps?: Array<{ status?: string }>; tasks?: Array<{ status?: string }> };
+  const items = (isSpec ? c.tasks : c.steps) ?? [];
+  const done = items.filter((st) => st.status === "done" || st.status === "skipped").length;
+  // D10 review (F2-class) — executing an unapproved/rejected plan (or spec,
+  // #569) violates the protocol. Record the progress (the store already did)
+  // but tell the agent loudly; the honor-rejection precedent says this must
+  // not be silent.
   const NOT_EXECUTABLE: Record<string, string> = {
     draft: "still AWAITING REVIEW — get your pair's approval before executing",
-    rejected: "REJECTED — do not execute it; address the feedback or present a new plan",
+    rejected: `REJECTED — do not execute it; address the feedback or present a new ${kind}`,
     retracted: "retracted",
     obsolete: "obsolete",
   };
   const warning = NOT_EXECUTABLE[artifact.status]
-    ? `\n⚠ WARNING: this plan is ${NOT_EXECUTABLE[artifact.status]}.`
+    ? `\n⚠ WARNING: this ${kind} is ${NOT_EXECUTABLE[artifact.status]}.`
     : "";
   return {
     content: [{
       type: "text",
-      text: `Plan progress recorded: ${done}/${steps.length} steps complete. The companion UI checklist is live — keep marking steps as you finish them.${warning}`,
+      text: `${isSpec ? "Spec" : "Plan"} progress recorded: ${done}/${items.length} ${unit} complete. The companion UI checklist is live — keep marking ${unit} as you finish them.${warning}`,
     }],
   };
 }
