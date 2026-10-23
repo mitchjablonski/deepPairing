@@ -69,6 +69,7 @@ jobs:
       # ships the git repo). A stale bundle means marketplace users run old
       # code; fail loudly instead.
       - name: Plugin bundle staleness gate
+        id: bundle_gate
         # -c core.filemode=false: esbuild marks shebanged outputs executable;
         # contributor filesystems (WSL /mnt/c) can't represent that faithfully.
         # Content staleness is what we gate, not mode bits.
@@ -76,6 +77,22 @@ jobs:
         # generated file the author forgot to `git add` would pass silently);
         # porcelain catches both modified and untracked.
         run: test -z "$(git -c core.filemode=false status --porcelain -- claude-plugin/server)" || (git -c core.filemode=false status --porcelain -- claude-plugin/server && echo "::error::claude-plugin/server is stale — run 'pnpm build:clean' (NOT a warm 'pnpm build', which can serve a cached bundle CI can't reproduce) and commit the result" && exit 1)
+
+      # #567/#569 — when the gate fails, publish CI's own cold build so a
+      # maintainer can commit it instead of building locally. The gate still
+      # fails the job; this only runs after it. Named by the PR HEAD sha (not
+      # the synthetic merge sha) so the download matches the pushed source.
+      # Caveat: on a pull_request run CI builds the merge with main, so a
+      # branch behind main should be rebased before committing this bundle.
+      - name: Upload cold-built plugin bundle (staleness gate failed)
+        if: failure() && steps.bundle_gate.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-bundle-${{ github.event.pull_request.head.sha || github.sha }}
+          path: claude-plugin/server/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3
 
   # #409 — continuously enforce the documented source-install Node floor
   # (INSTALL.md), rather than letting it drift back into a one-off local
