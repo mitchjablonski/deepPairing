@@ -125,6 +125,10 @@ export function markWorkerStopsDelivered(sessionDir: string, ids: readonly strin
   writeJsonAtomic(seenPath(sessionDir), { version: VERSION, ids: next.slice(-MAX_SEEN_WORKER_STOPS) } satisfies SeenFile);
 }
 
+/** The check_feedback suggested-action clause when any stop was delivered. */
+export const WORKER_STOP_CLAUSE =
+  "A worker was stopped. Re-plan the dependent work or ask the human before continuing.";
+
 /** One prose block for the stops, or "" when there are none. */
 export function formatWorkerStops(stops: readonly WorkerStop[]): string {
   if (stops.length === 0) return "";

@@ -6,7 +6,7 @@ import { SERVER_VERSION } from "../../version.js";
 import { collectUnansweredQuestions, describeRequestIntent, isClosedArtifactStatus, coerceChangesetContent, errorMessage } from "@deeppairing/shared";
 import { getGlobalStore } from "../../store/global-store.js";
 import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
-import { formatWorkerStops } from "../../store/worker-stop-notices.js";
+import { formatWorkerStops, WORKER_STOP_CLAUSE } from "../../store/worker-stop-notices.js";
 import { sessionOwesDebrief } from "../../debrief-gate.js";
 import { cliInvocation } from "../../cli-invocation.js";
 import {
@@ -1463,6 +1463,15 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     advisoryClauses.push(`The human sent ${pendingRequests.length} request${pendingRequests.length === 1 ? "" : "s"} — serve ${pendingRequests.length === 1 ? "it" : "them"} (see "Human requests" below) with the matching present_* artifact.`);
   }
 
+  // #569 pilot task A — a worker subagent was gate-stopped (deny) or held
+  // (ask). BLOCKING and ranked with the leading clauses (only the directive
+  // and fresh questions go ahead of it), so the cap can't drop it and
+  // "You may proceed" can't print beside "Don't advance work that depends on
+  // it". One-poll, like the render-failure clause: the notice is delivered once.
+  if (workerStops.length > 0) {
+    leadingClauses.push(WORKER_STOP_CLAUSE);
+  }
+
   // #192 / Q3 — questions carried over from an EARLIER run are the same
   // answer_question obligation as a fresh one, and the body already tells the
   // agent to "answer each … before new work". The selector never saw them: this
@@ -1560,7 +1569,9 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     // should fix + re-present, not sit in 'waiting'.
     renderFailures.length > 0 ||
     // G1 (#198b) — a pending human request is something to act on (serve it).
-    pendingRequests.length > 0;
+    pendingRequests.length > 0 ||
+    // #569 pilot task A — a worker was stopped: never "proceed" beside it.
+    workerStops.length > 0;
   // Q3 review (Q3-3) — `status` is part of the audit, not outside it. It derived
   // from the narrow `hasActionableFeedback` alone (which knows nothing about
   // carried-over questions, still-open decision records, durable send-backs or

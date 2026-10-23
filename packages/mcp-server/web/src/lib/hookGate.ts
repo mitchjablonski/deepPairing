@@ -72,7 +72,7 @@ export function hookGateCopy(f: HookGateFacts): HookGateCopy {
     : undefined;
   const next = deny
     ? worker
-      ? "Nothing was written. The subagent was told to cancel or revise, and the lead agent isn't told it was stopped: if its work depends on this file, tell the lead."
+      ? "Nothing was written. The subagent was told to cancel or revise. The lead agent learns it was stopped on its next check_feedback, unless this happened while no deepPairing daemon was running: then, if its work depends on this file, tell the lead."
       : "Nothing was written. Claude was told to cancel or revise."
     : `The terminal prompt won't show this. Allow it there to let this one change through, or deny it to ${isGuard ? "leave the file alone" : f.source === "team" ? "keep the team rule" : "keep your stance"}.`;
   const sentence = (t: string) => (/[.!?]$/.test(t) ? t : `${t}.`);

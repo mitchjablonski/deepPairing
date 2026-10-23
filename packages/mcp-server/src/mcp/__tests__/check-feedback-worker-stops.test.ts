@@ -104,6 +104,26 @@ describe("check_feedback worker stops (#569 pilot task A)", () => {
     ]);
   });
 
+  it("REQ-4 — a stop-only poll never says proceed; the suggested action is to re-plan or ask", async () => {
+    const store = fx.track(new FileStore(root, "s_a"));
+    seed(fire(1));
+    const res = await handleCheckFeedback(makeCtx(store), {});
+    const text = res.content[0]!.text;
+    const sc = res.structuredContent as Record<string, unknown>;
+    expect(sc.status).toBe("feedback");
+    expect(text).not.toMatch(/proceed/i);
+    expect(JSON.stringify(sc)).not.toMatch(/proceed/i);
+    expect(text).toContain(
+      "Suggested action: A worker was stopped. Re-plan the dependent work or ask the human before continuing.",
+    );
+    // Busy poll (M3): suggestedAction rides the prose preamble, not sc.
+    expect(sc).not.toHaveProperty("suggestedAction");
+
+    // Once delivered, the next poll is back to the healthy proceed payload.
+    const next = await handleCheckFeedback(makeCtx(store), {});
+    expect((next.structuredContent as Record<string, unknown>).status).toBe("proceed");
+  });
+
   it("REQ-2 — delivered once: the next poll is silent, and a restart doesn't repeat it", async () => {
     const store = fx.track(new FileStore(root, "s_a"));
     seed(fire(1));

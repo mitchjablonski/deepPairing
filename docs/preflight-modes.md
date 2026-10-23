@@ -86,7 +86,8 @@ the hook input is recorded: no tool input or file content.
   no resolvable session, stay project-wide).
 - **The companion labels it.** The toast shows "Subagent: general-purpose" and
   says "Claude Code stopped a write to `src/x.ts` by the general-purpose
-  subagent", and a deny adds that the lead agent isn't told. The gate log and
+  subagent", and a deny adds that the lead learns on its next `check_feedback`
+  unless no daemon was running. The gate log and
   the next-up bar name the subagent too.
 - **Records written before this change** have neither field and render exactly
   as before.

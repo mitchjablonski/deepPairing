@@ -113,7 +113,7 @@ describe("#544 hookGateCopy", () => {
 /**
  * #553 — a worker subagent's tool call fires the same PreToolUse gate. Its
  * hook input carries agent_id/agent_type; the companion names the subagent so
- * you can tell a worker's ask/stop from the lead's (the lead isn't told).
+ * you can tell a worker's ask/stop from the lead's (the lead hears on its next check_feedback).
  */
 describe("#553 subagent gate firings", () => {
   it("an ask from a subagent shows the subagent label and names it in the title", () => {
@@ -128,13 +128,13 @@ describe("#553 subagent gate firings", () => {
     expect(within(card).getByTestId("hook-gate-match")).toHaveTextContent("This matches your stance 'global mutable state'.");
   });
 
-  it("a strict-stop deny from a subagent says the lead isn't told", () => {
+  it("a strict-stop deny from a subagent says the lead learns on its next check_feedback", () => {
     push(hookHero({ decision: "deny", toolName: "Edit", ineligibleReason: "hook_deny", agentId: "agent-7f3a", agentType: "Explore" }));
     render(<ToastLayer />);
     const card = screen.getByRole("alert");
     expect(within(card).getByTestId("hook-gate-title")).toHaveTextContent("Claude Code stopped an edit to `src/config.ts` by the Explore subagent");
     expect(within(card).getByTestId("hook-gate-subagent")).toHaveTextContent("Subagent: Explore");
-    expect(within(card).getByTestId("hook-gate-next")).toHaveTextContent("the lead agent isn't told it was stopped");
+    expect(within(card).getByTestId("hook-gate-next")).toHaveTextContent("The lead agent learns it was stopped on its next check_feedback, unless this happened while no deepPairing daemon was running");
   });
 
   it("an agent id without a type still reads as a subagent", () => {
