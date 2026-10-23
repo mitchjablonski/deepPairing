@@ -438,6 +438,15 @@ describe("S0 — delegate.md carries the five moves and the run rules", () => {
     expect(para).toContain("Risk class: escalated");
   });
 
+  it("#569: the brief carries the architecture beat before any code", () => {
+    const brief = text.slice(text.indexOf("(2) Brief"), text.indexOf("(3) Run"));
+    expect(brief).toContain('`kind: "diagram"`');
+    expect(brief).toContain("**before** you build");
+    expect(brief).toContain("`design`");
+    expect(brief).toContain("`Review:`");
+    expect(brief).toContain("`line-by-line`");
+  });
+
   it("the SKILL carries a Delegated work paragraph in the Cadence section", () => {
     const sk = flat(skill());
     const at = sk.indexOf("Delegated work");
