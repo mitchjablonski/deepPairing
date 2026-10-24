@@ -12,7 +12,9 @@ import { selectGoverningBrief } from "../lib/governingBrief";
  * Read-only navigation. It derives everything from the store (so the live WS
  * paths it rides — plan_progress_updated, artifact_created/updated on a
  * supersede — need no new wiring), adds no attention lane, badge or gate, and
- * its one action only selects the brief. It sits above the sidebar/detail row,
+ * its one action only selects the brief. It pins only a delegate brief (a
+ * headed `Review:` line) that is not finished, and only in a single-session
+ * view (ArtifactPanel withholds it under "All" agents). It sits above the sidebar/detail row,
  * clear of the composer; at narrow widths it wraps rather than scrolls.
  */
 export function GoverningBriefStrip({ artifacts }: { artifacts: Artifact[] }) {
@@ -74,6 +76,7 @@ export function GoverningBriefStrip({ artifacts }: { artifacts: Artifact[] }) {
           <span
             className="min-w-0 flex-1 basis-40 truncate text-xs text-text-secondary"
             data-testid="governing-brief-objective"
+            title={brief.objective}
           >
             {brief.objective}
           </span>
@@ -85,9 +88,7 @@ export function GoverningBriefStrip({ artifacts }: { artifacts: Artifact[] }) {
               {brief.edgePathCount} edge path{brief.edgePathCount === 1 ? "" : "s"}
             </span>
           )}
-          {brief.reviewMode && (
-            <span data-testid="governing-brief-review">Review: {brief.reviewMode}</span>
-          )}
+          <span data-testid="governing-brief-review">Review: {brief.reviewMode}</span>
         </span>
       </button>
     </section>

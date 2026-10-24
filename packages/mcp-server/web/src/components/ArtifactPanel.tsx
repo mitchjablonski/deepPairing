@@ -1493,8 +1493,12 @@ export function ArtifactPanel() {
 
       {/* #571 slice 2 — the pinned governing brief (approved spec, latest
           version): read-only navigation above the sidebar/detail row, clear
-          of the composer. Renders nothing without a qualifying brief. */}
-      <GoverningBriefStrip artifacts={visibleArtifacts} />
+          of the composer. Renders nothing without a qualifying brief, and is
+          withheld in the all-agents view so another session's brief is never
+          pinned unlabelled. */}
+      {(sessionIds.length <= 1 || sessionFilter !== "all") && (
+        <GoverningBriefStrip artifacts={visibleArtifacts} />
+      )}
 
       <div className="flex flex-1 min-h-0">
       {/* Left sidebar */}

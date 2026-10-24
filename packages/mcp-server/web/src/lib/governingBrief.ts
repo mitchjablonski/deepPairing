@@ -8,15 +8,19 @@ import type { Artifact } from "@deeppairing/shared";
  * is navigation only. Content is read defensively (no Zod coercion) so this
  * stays out of the lazy renderer chunks and tolerates legacy specs.
  *
- * A spec qualifies when it is the LATEST version of its lineage (no successor
- * has it as `parentId`, and it is not superseded) and either:
- *   - it is `approved`, or
- *   - it is `draft`/`reviewing` and its execution is tracked (a task carries a
- *     `status`, #578), or
- *   - it is `draft`/`reviewing` and an earlier version of its lineage was
- *     approved: a `revise_artifact` supersede re-points the strip to the new
- *     version, which shows as awaiting re-approval (changed scope never
- *     silently inherits the old approval).
+ * A spec qualifies only while it governs a DELEGATED run that is still going:
+ *   - it carries the delegate-brief marker, a headed `Review: packet` or
+ *     `Review: line-by-line` line in `context` (delegate.md move 2);
+ *   - it is the LATEST version of its lineage (no successor has it as
+ *     `parentId`, and it is not superseded);
+ *   - it is not finished: when it has tasks, at least one is not yet
+ *     `done`/`skipped` (no time-based rule);
+ *   - and either it is `approved`, or it is `draft`/`reviewing` and either
+ *     execution has started (a task has a non-`pending` status, #578) or an
+ *     earlier version of its lineage was approved. That last case is a
+ *     `revise_artifact` supersede: the strip re-points to the new version and
+ *     shows it as awaiting re-approval (changed scope never silently inherits
+ *     the old approval).
  * With several, the most recently approved wins.
  */
 export interface GoverningBrief {
@@ -28,25 +32,21 @@ export interface GoverningBrief {
   awaitingApproval: boolean;
   objective: string | undefined;
   /** Present only when the spec has tasks. */
-  tasks: { total: number; done: number; skipped: number; tracked: boolean } | undefined;
+  tasks: { total: number; done: number; skipped: number; tracked: boolean; started: boolean } | undefined;
   /** Present only when the spec declares `edgePaths` with at least one entry. */
   edgePathCount: number | undefined;
-  /** The `Review:` line's value from `context`, when one parses. */
-  reviewMode: string | undefined;
+  /** The `Review:` line's value from `context` (always present on a brief). */
+  reviewMode: string;
 }
 
 const OPEN_STATUSES = new Set<string>(["draft", "reviewing"]);
-const REVIEW_MODE_MAX = 40;
-
-/** The `Review: …` line of a brief's `context` (delegate.md move 2). Tolerates
- *  list bullets, quotes and bold markers; anything else parses to undefined. */
-export function parseReviewMode(context: unknown): string | undefined {
+/** The headed `Review:` line of a brief's `context` (delegate.md move 2): a
+ *  WHOLE line, `Review: packet` or `Review: line-by-line` (case-insensitive),
+ *  so prose that merely mentions review can't match. Anything else → undefined. */
+export function parseReviewMode(context: unknown): "packet" | "line-by-line" | undefined {
   if (typeof context !== "string" || context.length === 0) return undefined;
-  const match = /^[ \t>*_-]*Review[*_]*[ \t]*:[ \t]*(.*)$/im.exec(context);
-  if (!match) return undefined;
-  const value = (match[1] ?? "").replace(/[`*_]/g, "").trim();
-  if (!value) return undefined;
-  return value.length > REVIEW_MODE_MAX ? `${value.slice(0, REVIEW_MODE_MAX - 1)}…` : value;
+  const match = /^Review:[ \t]*(packet|line-by-line)[ \t]*\r?$/im.exec(context);
+  return match?.[1] ? (match[1].toLowerCase() as "packet" | "line-by-line") : undefined;
 }
 
 function lastApprovedAt(a: Artifact): string | undefined {
@@ -82,13 +82,15 @@ function readTasks(content: Record<string, unknown>): GoverningBrief["tasks"] {
   let done = 0;
   let skipped = 0;
   let tracked = false;
+  let started = false;
   for (const t of raw) {
     const status = t && typeof t === "object" ? (t as { status?: unknown }).status : undefined;
     if (typeof status === "string") tracked = true;
+    if (typeof status === "string" && status !== "pending") started = true;
     if (status === "done") done++;
     else if (status === "skipped") skipped++;
   }
-  return { total: raw.length, done, skipped, tracked };
+  return { total: raw.length, done, skipped, tracked, started };
 }
 
 /**
@@ -101,11 +103,13 @@ export function selectGoverningBrief(candidates: Artifact[], all: Artifact[] = c
     if (a.type !== "spec" || a.status === "superseded") continue;
     if (all.some((x) => x.parentId === a.id && x.id !== a.id)) continue; // not the latest version
     const content = (a.content ?? {}) as Record<string, unknown>;
+    if (!parseReviewMode(content.context)) continue; // not a delegate brief
     const tasks = readTasks(content);
+    if (tasks && tasks.done + tasks.skipped >= tasks.total) continue; // finished
     const lineage = ancestors(all, a);
     let qualifies = a.status === "approved";
     if (!qualifies && OPEN_STATUSES.has(a.status)) {
-      qualifies = Boolean(tasks?.tracked) || lineage.some(wasApproved);
+      qualifies = Boolean(tasks?.started) || lineage.some(wasApproved);
     }
     if (!qualifies) continue;
     // Most recently approved: this version's approval, else the lineage's,
@@ -132,6 +136,6 @@ export function selectGoverningBrief(candidates: Artifact[], all: Artifact[] = c
     objective,
     tasks: readTasks(content),
     edgePathCount: Array.isArray(edgePaths) && edgePaths.length > 0 ? edgePaths.length : undefined,
-    reviewMode: parseReviewMode(content.context),
+    reviewMode: parseReviewMode(content.context) ?? "packet", // always parses: the loop required it
   };
 }

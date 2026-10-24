@@ -192,7 +192,7 @@ describe("connection store — handleMessage dispatch", () => {
       title: "Brief", status: "approved", agentReasoning: null,
       statusHistory: [{ status: "approved", at: "2026-10-23T10:01:00.000Z" }],
       createdAt: "2026-10-23T10:00:00.000Z", updatedAt: "2026-10-23T10:01:00.000Z",
-      content: { objective: "o", requirements: [], edgePaths: [{ id: "wake", path: "p", risk: "r" }],
+      content: { objective: "o", context: "Risk class: low-risk\nReview: packet", requirements: [], edgePaths: [{ id: "wake", path: "p", risk: "r" }],
         tasks: [{ description: "t0", status: "pending" }, { description: "t1", status: "pending" }] },
     };
     activeAdapter.emit({
