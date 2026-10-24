@@ -100,15 +100,15 @@ describe("#192 (usability H1) — 'Your turn' never dangles for changeset/debrie
     seedArtifact({ id: "ex", type: "explainer", status: "draft" });
     render(<TurnIndicator />);
     const pill = screen.getByRole("button", { name: /your turn/i });
-    expect(pill).toHaveTextContent("Your turn — 1 changeset, 1 debrief");
-    expect(pill.textContent ?? "").not.toMatch(/explainer/i);
+    expect(pill).toHaveTextContent("Your turn — 1 changeset");
+    expect(pill.textContent ?? "").not.toMatch(/debrief|explainer/i);
     // Guard against the exact regression: the visible summary must not end at the dash.
     expect(pill.textContent ?? "").not.toMatch(/Your turn\s*—\s*$/);
   });
 
-  it("P3 — an explainer-ONLY session is not 'your turn' at all", () => {
+  it.each(["explainer", "debrief"])("an informational %s-only session is not 'your turn' at all", (type) => {
     seedConnected();
-    seedArtifact({ id: "ex", type: "explainer", status: "draft" });
+    seedArtifact({ id: "info", type, status: "draft" });
     render(<TurnIndicator />);
     // No "Your turn" pill: the human owes a READ, not a verdict, and the
     // check_feedback payload says so too ("TO READ", 0 pending).

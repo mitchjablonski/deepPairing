@@ -20,24 +20,26 @@
  * "press to comment" — its approval takes the comment box's text with it,
  * whereas the footer's typing CANCELS the countdown, so the footer passes none.
  */
-export function ApproveCountdown({ countdown, countdownMax, onHold, hint }: {
+export function ApproveCountdown({ countdown, countdownMax, onHold, hint, informationalReport = false }: {
   countdown: number;
   countdownMax: number;
   onHold: () => void;
   hint?: string;
+  /** Human-armed report receipt; presentation only, timer ownership stays with the host. */
+  informationalReport?: boolean;
 }) {
   return (
     <div className="space-y-1.5" data-testid="approve-countdown">
       <div className="flex items-center justify-between">
         <span className="text-2xs text-accent-green">
-          Will auto-approve in {countdown}s{hint ? ` · ${hint}` : ""} · Esc to hold
+          {informationalReport ? "Will acknowledge in " : "Will auto-approve in "}{countdown}s{hint ? ` · ${hint}` : ""} · Esc to hold
         </span>
         <button
           type="button"
           onClick={onHold}
           className="text-2xs text-text-muted hover:text-text-secondary press-scale"
           data-testid="hold-approve"
-          title="Hold — stop the auto-approve; it won't re-arm on its own"
+          title={informationalReport ? "Hold — stop this acknowledgement; it won't re-arm on its own" : "Hold — stop the auto-approve; it won't re-arm on its own"}
         >
           Hold
         </button>

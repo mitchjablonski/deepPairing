@@ -56,12 +56,9 @@
  *
  * Shared by check-feedback.ts (the poll-time nag), stop-hook-entry.ts (the
  * plugin-bundled Stop hook — esbuild inlines this import), and
- * present-code-change.ts (the success-text trivial-close note). The
- * init-generated Stop script (setup-tasks.ts STOP_HOOK_SCRIPT) is a
- * self-contained .mjs and CANNOT import — it carries a hand-maintained inline
- * TWIN of this exact logic, kept in lock-step by the fixture-matrix parity test
- * (stop-hook-debrief-parity.test.ts) that runs BOTH scripts over a shared case
- * matrix.
+ * present-code-change.ts (the success-text trivial-close note).
+ * #342 bundles that same implementation into both plugin and generated Stop
+ * lanes; there is no longer a hand-maintained inline twin.
  */
 
 /** Code artifact types that (absent a live debrief) put a run in debrief-owed territory. */

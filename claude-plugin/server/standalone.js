@@ -28885,9 +28885,9 @@ var AUTONOMY_POLICY_LINE = {
 };
 
 // src/mcp/tools/types.ts
-var PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset", "debrief"];
+var PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset"];
 var WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change", "changeset", "debrief", "explainer"];
-var ACKNOWLEDGE_ONLY_DRAFT_TYPES = ["explainer"];
+var ACKNOWLEDGE_ONLY_DRAFT_TYPES = ["explainer", "debrief"];
 
 // src/mcp/tools/check-feedback-delivery.ts
 var ARTIFACT_TYPE_NOUN = {
@@ -35769,8 +35769,6 @@ Mention in your response: "Please open http://localhost:${port} to review the ar
     baseClause = "Wait for spec approval before planning implementation.";
   } else if (pendingArts.some((a) => a.type === "research")) {
     baseClause = "Wait for findings review before proposing solutions.";
-  } else if (pendingArts.some((a) => a.type === "debrief")) {
-    baseClause = "The debrief is presented \u2014 the human is reading it. Answer any questions they raise, then continue polling.";
   }
   if (structuredSuggestions.length > 0) {
     blockingClauses.push(

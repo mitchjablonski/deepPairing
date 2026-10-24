@@ -30,7 +30,7 @@ import { SpeechIcon } from "../icons/ArtifactIcons";
  *     exact Evidence + CommentableCode + FileViewer wiring).
  *   - the ask-anything + per-block grain composers → CommentThread (Comment +
  *     Ask intents), the same component the decision workbench threads.
- *   - the unified verb triad → ArtifactStatusActions (Approve / Request changes
+ *   - the shared report actions → ArtifactStatusActions (Got it / Request changes
  *     / Reject), dropped in like every other renderer.
  *
  * Grain commenting: every block is commentable at a sectionId grain the server
@@ -553,17 +553,17 @@ export function DebriefArtifact({ artifact }: DebriefArtifactProps) {
         />
       </div>
 
-      {/* Verdict bar — Approve / Request changes / Reject. #193 E2 (coverage M2)
+      {/* Optional receipt — Got it / Request changes / Reject. #193 E2 (coverage M2)
           — a rejected debrief means "redo this digest", NOT "never do it this
           way again": it's an account of finished work, not a proposed approach.
           So `suppressRejectConcept` de-fangs Reject — no "name the pattern"
           cross-project ledger capture (the server guards this authoritatively
-          too). Approve / Request-changes stay fully meaningful. */}
+          too). Reading is informational; correction remains available. */}
       {/* #470 — system section from the artifacts' own stamps; the agent's
           debrief content can't suppress it. */}
       <AllowedOnceSection sessionId={artifact.sessionId} />
 
-      <ArtifactStatusActions artifact={artifact} suppressRejectConcept />
+      <ArtifactStatusActions artifact={artifact} suppressRejectConcept informationalReport />
     </div>
   );
 }

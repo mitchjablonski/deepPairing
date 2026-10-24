@@ -286,7 +286,7 @@ describe("#430 PR 5 — PR 4 review nits", () => {
 });
 
 describe("#455 review — the bar never hides the demo CTA or the recap", () => {
-  it("REAL demo-script fixture (bar ON): its draft debrief holds Decide, so a pinned 'Next step ⌄' token opens the CTA", async () => {
+  it("REAL demo-script fixture (bar ON): informational debrief leaves the CTA inline; a genuine decision keeps its pinned fallback", async () => {
     // Run the daemon's own scripted demo (src/demo-script.ts) against a fake
     // store + broadcast sink, and seed the web store with what it broadcasts.
     const scriptPath = "../../../../src/demo-script.ts";
@@ -320,7 +320,14 @@ describe("#455 review — the bar never hides the demo CTA or the recap", () => 
     setConn({ sessionId: "demo_1", activeSessions: [{ sessionId: "demo_1", live: true, artifactCount: artifacts.length }] });
     useArtifactStore.setState({ artifacts } as any);
     render(<App />);
-    expect(bar().getAttribute("data-line")).toMatch(/^● Debrief/); // Decide holds the line
+    expect(bar().getAttribute("data-line")).toContain("Nothing needs you");
+    expect(bar().getAttribute("data-line")).toContain("Read 2"); // explainer + debrief
+    expect(within(bar()).getByTestId("demo-next-step")).toHaveTextContent("✓ Demo fired.");
+    expect(screen.queryByTestId("next-up-next-step")).not.toBeInTheDocument();
+    // Keep the real demo CTA fallback covered when actual review, rather than
+    // optional debrief reading, holds Decide.
+    act(() => useArtifactStore.setState({ artifacts: [...artifacts, art("required_plan", "Review the plan", { type: "plan", status: "draft", content: { steps: [] } })] }));
+    expect(bar().getAttribute("data-line")).toMatch(/^● Review the plan/);
     expect(screen.queryByTestId("demo-next-step")).not.toBeInTheDocument();
     const token = within(bar()).getByTestId("next-up-next-step");
     expect(token).toHaveTextContent("Next step ⌄");

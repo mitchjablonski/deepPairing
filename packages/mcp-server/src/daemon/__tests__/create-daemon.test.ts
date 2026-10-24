@@ -159,7 +159,7 @@ describe("#190 — 'waiting on you' set parity (daemon badge + web banner == PEN
     const store = daemon.createSession("s_attention");
     let i = 0;
     // A draft of every type the server knows, plus the two read-only kinds…
-    for (const type of [...PENDING_DRAFT_TYPES, "explainer", "reasoning"]) {
+    for (const type of [...PENDING_DRAFT_TYPES, "explainer", "debrief", "reasoning"]) {
       store.createArtifact({ id: `att_${i++}`, type, title: `${type} draft`, content: {} });
     }
     // …and every reviewable type again, moved OFF draft (must count in neither).
@@ -213,11 +213,11 @@ describe("#190 — 'waiting on you' set parity (daemon badge + web banner == PEN
       });
   });
 
-  it("P3 — a draft EXPLAINER does NOT lift the badge (acknowledge-only, no verdict owed)", async () => {
+  it.each(["explainer", "debrief"] as const)("informational %s drafts do not lift the badge", async (type) => {
     const { tmpDir, daemon } = makeDaemon();
     const store = daemon.createSession("s_ex");
     store.createArtifact({
-      id: "ex1", type: "explainer", title: "How auth works here",
+      id: "ex1", type, title: "How auth works here",
       content: { title: "How auth works here", overview: "the walk", sections: [{ heading: "1. edge", body: "the cookie is read" }] },
     });
     const res = await daemon.app.request("/api/daemon-info", {
@@ -230,7 +230,7 @@ describe("#190 — 'waiting on you' set parity (daemon badge + web banner == PEN
     // its "TO READ" line.
     expect((await res.json()).pendingCount).toBe(0);
     // …while a genuine verdict surface in the SAME session still lifts it.
-    store.createArtifact({ id: "db1", type: "debrief", title: "Debrief", content: {} });
+    store.createArtifact({ id: "cs1", type: "changeset", title: "Changeset", content: {} });
     const res2 = await daemon.app.request("/api/daemon-info", {
       headers: { "X-Project-Hash": projectHashOf(tmpDir) },
     });

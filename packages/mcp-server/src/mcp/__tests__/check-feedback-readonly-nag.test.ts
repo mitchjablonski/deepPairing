@@ -10,9 +10,8 @@
  * obligation (round-11 LOW).
  *
  * Treatment: explainers move to a distinct "📖 TO READ" line that says outright
- * that nothing awaits a verdict. Everything else stays put — the DEBRIEF and
- * RESEARCH surfaces keep the full verdict triad (the debrief only suppresses
- * the reject-CONCEPT ledger write), so they are NOT acknowledge-only.
+ * that nothing awaits a verdict. #570 extends that nonblocking reporting lane
+ * to debriefs, while keeping their account-correction actions available.
  *
  * …and the line has to be TRUE, which the first cut of it wasn't: the same
  * payload still reported status "waiting" with the explainer in `pending`, and
@@ -56,9 +55,8 @@ describe("P3 — the acknowledge-only set", () => {
       // …but it is not work owed, so it never counts as pending / holds a poll.
       expect(PENDING_DRAFT_TYPES as readonly string[]).not.toContain(t);
     }
-    // EXPLAINER only — adding a type here means its UI footer dropped the
-    // verdict triad. Debrief/research keep it, so they must NOT be listed.
-    expect([...ACKNOWLEDGE_ONLY_DRAFT_TYPES]).toEqual(["explainer"]);
+    // Debrief correction actions do not make reading a pending decision.
+    expect([...ACKNOWLEDGE_ONLY_DRAFT_TYPES]).toEqual(["explainer", "debrief"]);
   });
 });
 
@@ -96,6 +94,7 @@ describe("P3 — a draft explainer is 'to read', not 'under review'", () => {
 
   it("keeps a verdict-bearing draft in ⏳ WAITING while the explainer sits in TO READ", async () => {
     await presentExplainer();
+    await callTool("present_debrief", { title: "Informational account", summary: "The completed work is available to read." });
     await callTool("present_plan", {
       title: "Rollout plan",
       objective: "ship the cache",
@@ -108,23 +107,28 @@ describe("P3 — a draft explainer is 'to read', not 'under review'", () => {
     const waitingLine = res.text.split("\n").find((l) => l.includes("artifact(s) still under review"))!;
     expect(waitingLine).toContain("Rollout plan");
     expect(waitingLine).not.toContain("How session auth works here");
+    expect(waitingLine).not.toContain("Informational account");
     const toReadLine = res.text.split("\n").find((l) => l.includes("📖 TO READ"))!;
     expect(toReadLine).toContain("How session auth works here");
+    expect(toReadLine).toContain("Informational account");
     expect(toReadLine).not.toContain("Rollout plan");
   });
 
-  it("a DEBRIEF still counts as awaiting a verdict (it keeps the triad)", async () => {
+  it("a DEBRIEF is TO READ without a verdict wait or long-poll", async () => {
     await callTool("present_debrief", {
       title: "Debrief — the cache work",
       summary: "We put a cache in front of the session read so the p95 stops tracking Postgres.",
       sections: [{ title: "The cache", body: "requireSession reads through the cache now." }],
     });
-    stirTheQueue();
-
+    const t0 = Date.now();
     const res = await callTool("check_feedback");
+    expect(Date.now() - t0).toBeLessThan(1000);
     const waitingLine = res.text.split("\n").find((l) => l.includes("artifact(s) still under review"));
-    expect(waitingLine).toBeDefined();
-    expect(waitingLine!).toContain("Debrief — the cache work");
-    expect(res.text).not.toContain("📖 TO READ");
+    expect(waitingLine).toBeUndefined();
+    expect(res.text).toContain("📖 TO READ");
+    expect(res.text).toContain("Debrief — the cache work");
+    expect(res.text).not.toContain("continue polling");
+    expect(res.structuredContent).toMatchObject({ pendingArtifacts: [] });
+    expect(res.structuredContent?.status).not.toBe("waiting");
   });
 });

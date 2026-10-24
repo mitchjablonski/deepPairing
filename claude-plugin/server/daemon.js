@@ -33415,7 +33415,7 @@ function createReviewRoutes({
     if (autoReason === "auto_confidence") {
       const level = await store.getAutonomyLevel();
       const confidence = target.content?.confidence;
-      if (status !== "approved" || level === "supervised" || confidence !== "high" || target.status !== "draft") {
+      if (status !== "approved" || target.type === "debrief" || level === "supervised" || confidence !== "high" || target.status !== "draft") {
         log2(`[status] REFUSED auto-approve on ${artifactId}: level=${level} confidence=${confidence ?? "(none)"} status=${target.status}`);
         return c.json(
           {
@@ -36473,7 +36473,7 @@ function createDaemon(deps) {
     stanceExceptions
   );
   app.route("/", publicRoutes);
-  const PENDING_REVIEWABLE = /* @__PURE__ */ new Set(["research", "spec", "plan", "decision", "code_change", "changeset", "debrief"]);
+  const PENDING_REVIEWABLE = /* @__PURE__ */ new Set(["research", "spec", "plan", "decision", "code_change", "changeset"]);
   function computeDaemonPendingCount() {
     let n = 0;
     for (const store of sessions.values()) {

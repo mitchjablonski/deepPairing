@@ -25,10 +25,23 @@ function question(id: string, artifactId: string, over: Partial<Comment> = {}): 
   } as Comment;
 }
 
-const TYPES = [...REVIEWABLE_TYPES, "explainer", "reasoning"];
+const TYPES = [...REVIEWABLE_TYPES, "explainer", "debrief", "reasoning"];
 const STATUSES = ["draft", "reviewing", "approved", "revised", "rejected", "superseded", "retracted", "obsolete"];
 
 describe("parity with today's counters (no counting rule changes in PR 1a)", () => {
+  it("informational debriefs remain Read across snapshot/offline projection while questions remain Waiting", () => {
+    const report = art("debrief", "draft", { id: "report" });
+    const comments = { report: [question("report_q", "report")] };
+    for (const system of [{}, { disconnected: true }, { replay: true }]) {
+      const snapshot = JSON.parse(JSON.stringify({ artifacts: [report], comments, system }));
+      const attention = computeAttention(snapshot);
+      expect(attention.lanes.decide).toEqual([]);
+      expect(attention.lanes.read.map((a) => a.id)).toContain("report");
+      expect(attention.lanes.waiting.some((a) => a.kind === "question")).toBe(true);
+    }
+    expect(report.status).toBe("draft");
+  });
+
   it("Decide == computePending's drafts for every type × status", () => {
     seq = 0;
     const artifacts = TYPES.flatMap((t) => STATUSES.map((s) => art(t, s)));
