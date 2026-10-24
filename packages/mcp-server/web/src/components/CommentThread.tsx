@@ -463,15 +463,27 @@ export function AskTrigger({
   const matching = artifactComments.filter((c) => {
     if (c.intent !== "question") return false;
     if (target.findingIndex != null && c.target.findingIndex !== target.findingIndex) return false;
-    if (target.stepIndex != null && c.target.stepIndex !== target.stepIndex) return false;
+    // A requirement's stable ID wins over its historical array position. Old
+    // requirement targets without an ID (and plan/task targets) stay positional.
+    if (target.requirementId != null) {
+      if (c.target.requirementId != null && c.target.requirementId !== target.requirementId) return false;
+      if (c.target.requirementId == null && target.stepIndex != null && c.target.stepIndex !== target.stepIndex) return false;
+    } else if (target.stepIndex != null && c.target.stepIndex !== target.stepIndex) {
+      return false;
+    }
     // D8 review — without these arms all open questions share
     // sectionId="open-question", so one asked question pulsed on EVERY row.
     if (target.questionIndex != null && c.target.questionIndex !== target.questionIndex) return false;
-    if (target.requirementId != null && c.target.requirementId !== target.requirementId) return false;
     if (target.evidenceIndex != null && c.target.evidenceIndex !== target.evidenceIndex) return false;
     if (target.alternativeIndex != null && c.target.alternativeIndex !== target.alternativeIndex) return false;
     if (target.optionId != null && c.target.optionId !== target.optionId) return false;
-    if (target.sectionId != null && c.target.sectionId !== target.sectionId) return false;
+    if (target.sectionId != null && c.target.sectionId !== target.sectionId) {
+      const legacyRequirementSection =
+        target.requirementId != null && c.target.requirementId == null &&
+        target.sectionId === "requirement" &&
+        (c.target.sectionId == null || c.target.sectionId === "requirement");
+      if (!legacyRequirementSection) return false;
+    }
     if (target.visualId != null && c.target.visualId !== target.visualId) return false;
     if (target.lineNumber != null && c.target.lineNumber !== target.lineNumber) return false;
     return true;
