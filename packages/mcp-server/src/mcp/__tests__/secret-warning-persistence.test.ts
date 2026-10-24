@@ -309,6 +309,23 @@ describe("#160 — present_spec persists secretWarnings", () => {
     ]);
   });
 
+  it("#571 — flags a secret pasted into an edge path's handling (the scan walks the whole content)", async () => {
+    await callTool("present_spec", {
+      title: "Auth spec",
+      objective: "ship login",
+      requirements: [
+        { id: "REQ-1", statement: "users log in", rationale: "core", acceptanceCriteria: ["works"] },
+      ],
+      edgePaths: [
+        { path: "token refresh", risk: "stale token", handling: `retry with\ntoken: ghp_abcdefghijklmnopqrst1234` },
+      ],
+    });
+    const [artifact] = await ctx.store.getArtifacts();
+    expect(artifact?.secretWarnings).toEqual([
+      { pattern: "ghp_", label: "GitHub personal access token", field: "edgePaths[0].handling", line: 2 },
+    ]);
+  });
+
   it("stores NO secretWarnings on a clean spec", async () => {
     await callTool("present_spec", {
       title: "Docs spec",

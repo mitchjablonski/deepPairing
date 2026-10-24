@@ -664,6 +664,12 @@ export function CommentTrigger({
     if (target.requirementId != null) return c.target.requirementId === target.requirementId;
     if (target.stepIndex != null) return c.target.stepIndex === target.stepIndex;
     if (target.visualId != null) return c.target.visualId === target.visualId;
+    // #571 — a bare section grain (a spec edge path, `spec:edge-path:<i>`).
+    // Last, so every richer anchor above keeps precedence; optionId must agree
+    // so a decision-part sectionId can never borrow another option's thread.
+    if (target.sectionId != null) {
+      return c.target.sectionId === target.sectionId && c.target.optionId === target.optionId;
+    }
     return false;
   });
 

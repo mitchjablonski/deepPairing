@@ -1199,6 +1199,9 @@ export const PROSE_FIELD_MAP: Readonly<Record<string, readonly ProseFieldSpec[]>
     { path: "tasks[].description", mode: "strict" },
     { path: "openQuestions[]", mode: "strict" },
     { path: "visuals[].caption", mode: "flavored", exclude: CAPTION_EXEMPT },
+    // #571 — `path` is a name (often an identifier), so only the prose halves lint.
+    { path: "edgePaths[].risk", mode: "flavored" },
+    { path: "edgePaths[].handling", mode: "flavored" },
   ],
   decision: [
     { path: "context", mode: "flavored" },
