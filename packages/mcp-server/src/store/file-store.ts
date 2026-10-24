@@ -406,7 +406,7 @@ export class FileStore implements IStore {
   // a readable disk+local snapshot can be reconciled without dropping records.
   private retirementFeedbackBlocked = false;
   /** An uncertain attempt must announce its truth once a retry confirms persistence. */
-  private unannouncedRetirements = new Set<string>();
+  private unannouncedRetirements = new Map<string, string | undefined>();
 
   private validateRetirementComments(raw: unknown): Comment[] {
     if (!Array.isArray(raw) || raw.some((c: unknown) => !CommentSchema.safeParse(c).success) ||
@@ -426,10 +426,21 @@ export class FileStore implements IStore {
     const baseline = this.recordBaselines[file] ?? "[]";
     if (file === "comments.json" && this.retirementFeedbackBlocked) {
       const filePath = path.join(this.sessionDir(), file);
-      const disk = this.validateRetirementComments(JSON.parse(fs.readFileSync(filePath, "utf8")));
+      const diskBytes = fs.readFileSync(filePath, "utf8");
+      const disk = this.validateRetirementComments(JSON.parse(diskBytes));
       const pending = this.validateRetirementComments(local);
-      this.validateRetirementComments(mergeSessionRecords(JSON.parse(baseline) as Comment[], pending, disk, (c) => c.id));
+      const merged = this.validateRetirementComments(mergeSessionRecords(JSON.parse(baseline) as Comment[], pending, disk, (c) => c.id));
+      const bytes = JSON.stringify(merged, null, 2);
+      if (diskBytes !== bytes) writeStringAtomic(filePath, bytes);
+      // Install recovered external input even when the old local array was clean.
+      // Baselines advance only after the merged snapshot is durably present.
+      this.comments = merged;
+      this.recordBaselines[file] = JSON.stringify(merged);
+      this.observedRecordFiles.add(file);
+      delete this.backedUpCorruption[filePath];
       this.retirementFeedbackBlocked = false;
+      // The runtime file discriminator above establishes the Comment collection.
+      return merged as unknown as T[];
     }
     const serialized = JSON.stringify(local);
     const dirty = serialized !== baseline;
@@ -853,6 +864,7 @@ export class FileStore implements IStore {
       this.feedbackNotifyHolds++;
       const priorNotify = this.feedbackNotifyPending;
       let committed = false;
+      let pendingMarkerId: string | undefined;
       try {
         if (!replay) {
           this.setRetractReason(artifact.id, input.reason);
@@ -869,7 +881,8 @@ export class FileStore implements IStore {
           const markerId = `cmt_retire_${crypto.createHash("sha256").update(JSON.stringify([this.sessionId, artifact.id, artifact.version, input.door, input.mode, at, input.reason])).digest("hex").slice(0, 32)}`;
           marker = this.comments.find((c) => c.id === markerId);
           if (!marker) marker = this.addComment({ id: markerId, artifactId: artifact.id, author: "agent", content: input.door === "withdraw" ? "Withdrawn." : `${disarmed ? "Un-armed" : input.mode === "obsolete" ? "Overcome by new information" : "Retracted"}: ${input.reason}` });
-          markerAdded = !persistedCommentIds.has(marker.id);
+          markerAdded = !persistedCommentIds.has(marker.id) || this.unannouncedRetirements.get(transitionKey) === marker.id;
+          if (markerAdded) pendingMarkerId = marker.id;
           // Root only: no parentCommentId, so a lifecycle marker never answers a question.
           this.comments = this.flushRecords("comments.json", this.comments, (c) => c.id,
             (raw) => FileStore.salvageArray<Comment>("retirement comments", raw, "id"));
@@ -882,7 +895,7 @@ export class FileStore implements IStore {
         // Applied delta stays pending, exactly like existing status/flush semantics.
         // Never re-arm an artifact because a later comments write failed.
         if (error instanceof SessionReviewConflictError) this.reviewConflict = error;
-        this.unannouncedRetirements.add(transitionKey);
+        this.unannouncedRetirements.set(transitionKey, pendingMarkerId);
         this.scheduleFlush();
         return { kind: "persist_uncertain", message: "Retirement was applied in memory, but persistence is uncertain. Retry this exact request; do not assume it was undone or post the finding." };
       } finally {

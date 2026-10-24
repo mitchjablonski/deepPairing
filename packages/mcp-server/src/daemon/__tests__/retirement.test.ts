@@ -139,7 +139,7 @@ it.each([
   expect(mutations()).toContainEqual(expect.objectContaining({ type: "artifact_updated", artifactId: "a", status, reason }));
 });
 
-it("returns persistence uncertainty without success broadcasts and retries without duplicate history", async () => {
+it.each([false, true])("returns persistence uncertainty and recovers artifact plus unannounced marker once (background flush: %s)", async (backgroundFlush) => {
   const rename = fs.renameSync;
   const spy = vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
     if (String(to) === collection("comments.json")) throw Object.assign(new Error("injected EIO"), { code: "EIO" });
@@ -150,6 +150,10 @@ it("returns persistence uncertainty without success broadcasts and retries witho
   const history = structuredClone(artifact().statusHistory);
   expect(mutations()).toEqual([]);
   spy.mockRestore();
+  if (backgroundFlush) {
+    local.forceFlush();
+    expect(mutations()).toEqual([]);
+  }
   expect((await client.retireArtifact(input)).kind).toBe("already_retired");
   expect(artifact().statusHistory).toEqual(history);
   expect(local.getCommentsForArtifact("a").filter(c => c.author === "agent")).toHaveLength(1);

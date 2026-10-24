@@ -28,6 +28,20 @@ beforeEach(() => { fx = withGlobalStore("dp-retirement-"); });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); fx.dispose(); });
 
 describe("feedback-safe FileStore retirement", () => {
+  it("installs repaired disk questions when recovery starts with no pending local comments", () => {
+    const store = seed();
+    fs.writeFileSync(file("comments.json"), JSON.stringify({ unknown: "feedback" }));
+    expect(store.retireArtifact(request()).kind).toBe("feedback_unknown");
+    const repaired = { id: "recovered_q", sessionId: session, target: { artifactId: "a" }, parentCommentId: null,
+      author: "human", content: "Which boundary was checked?", intent: "question", acknowledged: false,
+      answeredByCommentId: null, createdAt: "2026-10-24T01:00:00.000Z" };
+    fs.writeFileSync(file("comments.json"), JSON.stringify([repaired]));
+    store.forceFlush();
+    expect(store.getUnacknowledgedComments().map((c) => c.id)).toContain("recovered_q");
+    expect(collectUnansweredQuestions(store.getCommentsForArtifact("a")).map((q) => q.question.id)).toEqual(["recovered_q"]);
+    expect(store.retireArtifact(request())).toMatchObject({ kind: "blocked_feedback", unansweredQuestions: 1 });
+  });
+
   it.each([
     { broken: { fragment: "unknown human feedback" } },
     { broken: [{ author: "human", content: "unread fragment without id" }] },
