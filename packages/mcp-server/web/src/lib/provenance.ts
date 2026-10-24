@@ -11,7 +11,8 @@ import { useReplayStore } from "../stores/replay";
  * example?" — real cards looked identical to demo cards. This answers the
  * question from EXISTING signals only (no new schema field, no git call):
  *   - "sample": the client-side "try the demo session" fixture is loaded
- *     (artifact store `sampleContent`, set only by SessionBrowser.loadDemo);
+ *     (artifact store `sampleContent`, set only by SessionBrowser.loadDemo)
+ *     AND the session is one of the fixture's own — a real session id wins;
  *   - "demo":   the session id is a demo/sample id (`isDemoSessionId` — the
  *     `demo_` prefix only POST /api/demo/run mints, plus the repo's own
  *     checked-in sample ids; the same rule Threads uses for `fixtureLike`);
@@ -41,10 +42,16 @@ export function projectNameFromRoot(root: string | null | undefined): string | n
 export function classifyProvenance(input: {
   sessionId: string | null | undefined;
   sampleContent?: boolean;
+  /** The sample fixture's own session ids — the only ids the flag labels. */
+  sampleSessionIds?: readonly string[];
   projectName?: string | null;
   history?: boolean;
 }): Provenance | null {
-  if (input.sampleContent) return { kind: "sample", projectName: null, history: false };
+  // The session id wins: the sample flag labels only the fixture's own
+  // sessions (or the session-less offline preview), never a real session.
+  if (input.sampleContent && (!input.sessionId || (input.sampleSessionIds ?? []).includes(input.sessionId))) {
+    return { kind: "sample", projectName: null, history: false };
+  }
   if (!input.sessionId) return null;
   if (isDemoSessionId(input.sessionId)) return { kind: "demo", projectName: null, history: !!input.history };
   return { kind: "live", projectName: input.projectName ?? null, history: !!input.history };
@@ -58,6 +65,7 @@ export function classifyProvenance(input: {
  */
 export function useProvenance(sessionIdOverride?: string | null): Provenance | null {
   const sampleContent = useArtifactStore((s) => s.sampleContent);
+  const sampleSessionIds = useArtifactStore((s) => s.sampleSessionIds);
   const boundSessionId = useConnectionStore((s) => s.sessionId);
   const projectRoot = useConnectionStore((s) => s.projectRoot);
   const activeSessions = useConnectionStore((s) => s.activeSessions);
@@ -68,6 +76,7 @@ export function useProvenance(sessionIdOverride?: string | null): Provenance | n
   return classifyProvenance({
     sessionId,
     sampleContent,
+    sampleSessionIds,
     projectName: fromSession || projectNameFromRoot(projectRoot),
     history: replayActive,
   });

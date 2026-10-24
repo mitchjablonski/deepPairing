@@ -7,7 +7,7 @@ import { apiGet, apiBase } from "../lib/api";
 import type { Artifact, Comment } from "@deeppairing/shared";
 import { isDemoSessionId } from "@deeppairing/shared";
 import { useProvenance } from "../lib/provenance";
-import { DemoContentBanner, DemoTag } from "./ProvenanceMarker";
+import { DemoContentBanner, DemoTag, ProvenanceChip } from "./ProvenanceMarker";
 import { useArtifactStore, resolveToLiveId, artifactStoreGeneration, markBackfilled, isBackfilled, REFRESH_SESSION_EVENT } from "../stores/artifact";
 import { useSiblingSyncStore } from "../lib/siblingSync";
 import { useOfflineReason } from "../hooks/useOfflineReason";
@@ -323,6 +323,10 @@ function ArtifactSkeleton() {
 // Exported for tests (#158 — the secret-warning banner renders here).
 export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
   const headerGlyph = laneMarkFor(artifact)?.glyph ?? statusGlyph[artifact.status];
+  // #569 review — every card names its own provenance in its header, keyed on
+  // the artifact's OWN session: "● Live · <project>" on real work, "Demo" on
+  // demo/sample content. Labelling only.
+  const provenance = useProvenance(artifact.sessionId);
   const contentWidth = usePreferencesStore((s) => s.contentWidth);
   // #204 (UX L2) — the artifact-level comment thread's WRITE AXIS, derived through
   // the shared reviewLifecycle helper. A retracted/terminal ("closed") or replayed
@@ -382,6 +386,7 @@ export function ArtifactDetail({ artifact }: { artifact: Artifact }) {
           {artifact.version > 1 && (
             <span className="text-2xs text-text-muted">v{artifact.version}</span>
           )}
+          <ProvenanceChip provenance={provenance} />
           {/* House prose check. Computed client-side from the same shared
               linter the server uses for its STYLE warnings; null when clean. */}
           <Suspense fallback={null}>
@@ -1445,7 +1450,7 @@ export function ArtifactPanel() {
 
   return (
     <div
-      className={`flex flex-col h-full ${demoView ? "border-l-4 border-dashed border-accent-violet/60" : ""}`}
+      className={`flex flex-col h-full ${demoView ? "border-l-4 border-dashed border-accent-violet" : ""}`}
       data-provenance={provenance?.kind ?? "none"}
       data-testid="artifact-panel"
     >

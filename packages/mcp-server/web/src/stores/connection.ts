@@ -8,6 +8,7 @@ import { reloadIfChunkFailedOffline } from "../lib/chunk-error";
 import { noAgentLive } from "../lib/liveness";
 import { AGENT_ACTIVE_WINDOW_MS } from "../lib/agentActivity";
 import type { Artifact, Comment, Request } from "@deeppairing/shared";
+import { isDemoSessionId } from "@deeppairing/shared";
 import { useReplayStore } from "./replay";
 import { useArtifactStore } from "./artifact";
 import {
@@ -1374,3 +1375,13 @@ export function isSessionLive(sessionId: string | undefined): boolean {
     false
   );
 }
+
+// #569 review — a REAL session becoming active ends the client-side sample
+// (SessionBrowser.loadDemo), not only reset(): the "Demo" label must never
+// outlive the fixture onto real work. Labelling state only.
+useConnectionStore.subscribe((state, prev) => {
+  const sid = state.sessionId;
+  if (!sid || sid === prev.sessionId || isDemoSessionId(sid)) return;
+  const artifacts = useArtifactStore.getState();
+  if (artifacts.sampleContent && !artifacts.sampleSessionIds.includes(sid)) artifacts.setSampleContent(false);
+});

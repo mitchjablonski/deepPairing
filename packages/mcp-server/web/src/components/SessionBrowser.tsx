@@ -55,7 +55,7 @@ export function SessionBrowser({ onPicked }: { onPicked?: () => void } = {}) {
     // #569 proposal 1 — these fixtures carry no `demo_` session id, so flag
     // the store: every surface then labels them "Demo — sample content".
     // reset() clears it, so loading any real session drops the label.
-    setSampleContent(true);
+    setSampleContent(true, [...new Set(demoArtifacts.map((a) => a.sessionId))]);
     for (const artifact of demoArtifacts) {
       addArtifact(artifact);
     }

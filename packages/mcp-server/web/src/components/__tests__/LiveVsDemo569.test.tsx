@@ -96,6 +96,35 @@ describe("#569 P1 — a live session shows the live marker", () => {
     expect(screen.getByTestId("artifact-panel")).toHaveAttribute("data-provenance", "live");
   });
 
+  it("a live SPEC (brief) carries its own '● Live · <project>' chip in the artifact panel header", () => {
+    setConn({
+      projectRoot: "/home/u/work/my-app",
+      activeSessions: [{ sessionId: "s1", live: true, artifactCount: 1, project: "my-app" }],
+    });
+    useArtifactStore.setState({
+      artifacts: [art("brief", "Worker-stop signal brief", {
+        type: "spec", status: "draft",
+        content: { objective: "o", requirements: [{ id: "REQ-1", text: "r", rationale: "why", acceptanceCriteria: ["a"] }], tasks: [] },
+      })],
+      selectedArtifactId: "brief",
+    } as any);
+    render(<ArtifactPanel />);
+    const detail = document.querySelector('[data-artifact-id="brief"]') as HTMLElement;
+    const chip = within(detail).getByTestId("provenance-live");
+    expect(chip).toHaveTextContent("Live");
+    expect(chip).toHaveTextContent("my-app");
+    expect(within(detail).queryByTestId("provenance-demo")).not.toBeInTheDocument();
+  });
+
+  it("a demo card's header says Demo, not Live", () => {
+    setConn({ sessionId: "demo_1", activeSessions: [{ sessionId: "demo_1", live: true, artifactCount: 1 }] });
+    useArtifactStore.setState({ artifacts: [art("d", "Scripted", { sessionId: "demo_1" })], selectedArtifactId: "d" } as any);
+    render(<ArtifactPanel />);
+    const detail = document.querySelector('[data-artifact-id="d"]') as HTMLElement;
+    expect(within(detail).getByTestId("provenance-demo")).toHaveTextContent("Demo");
+    expect(within(detail).queryByTestId("provenance-live")).not.toBeInTheDocument();
+  });
+
   it("a LEGACY session with no metadata (plain id, no project) defaults to live", () => {
     setConn({ sessionId: "sess_legacy", activeSessions: [{ sessionId: "sess_legacy", artifactCount: 1 }] });
     useArtifactStore.setState({ artifacts: [art("a1", "Old work", { sessionId: "sess_legacy" })] } as any);
@@ -163,6 +192,34 @@ describe("#569 P1 — a demo session shows the demo treatment everywhere it appe
     expect(banner).toHaveTextContent("not your project");
 
     act(() => { useArtifactStore.getState().reset(); });
+    expect(useArtifactStore.getState().sampleContent).toBe(false);
+  });
+
+  it("session id wins: a real-session artifact arriving after the sample loads is labelled live", async () => {
+    setConn({ connected: false, sessionId: null, activeSessions: [] });
+    const { unmount } = render(<SessionBrowser />);
+    fireEvent.click(await screen.findByRole("button", { name: "Or try the demo session" }));
+    unmount();
+    expect(classifyProvenance({ sessionId: "sess_real", sampleContent: true, sampleSessionIds: ["sess_1"] })?.kind).toBe("live");
+
+    act(() => {
+      useArtifactStore.getState().addArtifact(art("real_brief", "Real brief", { sessionId: "sess_real" }));
+      useArtifactStore.getState().selectArtifact("real_brief");
+    });
+    expect(useArtifactStore.getState().sampleContent).toBe(false);
+    render(<ArtifactPanel />);
+    const detail = document.querySelector('[data-artifact-id="real_brief"]') as HTMLElement;
+    expect(within(detail).getByTestId("provenance-live")).toHaveTextContent("Live");
+    expect(screen.queryByTestId("demo-banner")).not.toBeInTheDocument();
+  });
+
+  it("a real session becoming active clears the sample flag", async () => {
+    setConn({ connected: false, sessionId: null, activeSessions: [] });
+    const { unmount } = render(<SessionBrowser />);
+    fireEvent.click(await screen.findByRole("button", { name: "Or try the demo session" }));
+    unmount();
+    expect(useArtifactStore.getState().sampleContent).toBe(true);
+    act(() => { useConnectionStore.setState({ sessionId: "sess_real" } as any); });
     expect(useArtifactStore.getState().sampleContent).toBe(false);
   });
 });
