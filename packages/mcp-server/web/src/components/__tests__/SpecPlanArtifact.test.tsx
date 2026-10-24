@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import { useArtifactStore } from "../../stores/artifact";
 import { SpecArtifact } from "../artifacts/SpecArtifact";
 import { PlanArtifact } from "../artifacts/PlanArtifact";
@@ -395,22 +395,45 @@ describe("#569 — spec task execution status renders like plan step status", ()
     expect(screen.getAllByText("→").length).toBeGreaterThanOrEqual(2);
   });
 
-  it("#579 — a superseded or revised spec swaps the live strip for a see-latest cue", () => {
-    for (const status of ["superseded", "revised"]) {
-      const { unmount } = render(<SpecArtifact artifact={specWith(tasks, status)} />);
-      expect(screen.queryByRole("group", { name: /Spec execution/ })).toBeNull();
-      expect(screen.getByRole("note", { name: "Superseded spec progress" })).toHaveTextContent("see the latest version");
-      unmount();
-    }
+  it("#579 — a superseded spec shows the latest-version cue and hides the live strip", () => {
+    render(<SpecArtifact artifact={specWith(tasks, "superseded")} />);
+    expect(screen.queryByRole("group", { name: /Spec execution/ })).toBeNull();
+    expect(screen.getByRole("note", { name: "Superseded spec progress" })).toHaveTextContent("see the latest version");
   });
 
-  it("#579 — a superseded or revised plan swaps the live strip for a see-latest cue", () => {
-    for (const status of ["superseded", "revised"]) {
-      const { unmount } = render(<PlanArtifact artifact={mk("plan", { estimatedChanges: 1, steps: [{ description: "a", reasoning: "r", status: "done" }] }, { status })} />);
-      expect(screen.queryByRole("group", { name: /Plan execution/ })).toBeNull();
-      expect(screen.getByRole("note", { name: "Superseded plan progress" })).toBeInTheDocument();
-      unmount();
-    }
+  it("#579 — a revised spec says a revision is requested, not that a successor exists", () => {
+    render(<SpecArtifact artifact={specWith(tasks, "revised")} />);
+    expect(screen.queryByRole("group", { name: /Spec execution/ })).toBeNull();
+    expect(screen.getByRole("note", { name: "Revision requested spec progress" })).toHaveTextContent("awaiting an updated brief");
+    expect(screen.queryByText(/see the latest version/i)).not.toBeInTheDocument();
+  });
+
+  it("#579 — a superseded plan shows the latest-version cue and hides the live strip", () => {
+    render(<PlanArtifact artifact={mk("plan", { estimatedChanges: 1, steps: [{ description: "a", reasoning: "r", status: "done" }] }, { status: "superseded" })} />);
+    expect(screen.queryByRole("group", { name: /Plan execution/ })).toBeNull();
+    expect(screen.getByRole("note", { name: "Superseded plan progress" })).toHaveTextContent("see the latest version");
+  });
+
+  it("#579 — Request changes leaves progress awaiting a brief before a successor exists", async () => {
+    const artifact = mk("plan", {
+      estimatedChanges: 1,
+      steps: [{ description: "a", reasoning: "r", status: "done" }],
+    }, { id: "plan_revision", status: "draft" });
+    const statusUpdate = vi.spyOn(useArtifactStore.getState(), "updateArtifactStatus").mockResolvedValue(undefined);
+    const commentSubmit = vi.spyOn(useArtifactStore.getState(), "submitComment").mockResolvedValue(undefined as any);
+    const { rerender } = render(<PlanArtifact artifact={artifact} />);
+
+    fireEvent.change(screen.getByPlaceholderText(/respond to the agent/i), { target: { value: "Please revise this plan." } });
+    fireEvent.click(screen.getByRole("button", { name: /request changes/i }));
+    await waitFor(() => {
+      expect(statusUpdate).toHaveBeenCalledWith("plan_revision", "revised", "Please revise this plan.", undefined);
+    });
+    rerender(<PlanArtifact artifact={{ ...artifact, status: "revised" }} />);
+    expect(screen.queryByRole("group", { name: /Plan execution/ })).toBeNull();
+    expect(screen.getByRole("note", { name: "Revision requested plan progress" })).toHaveTextContent("awaiting an updated brief");
+    expect(screen.queryByText(/see the latest version/i)).not.toBeInTheDocument();
+    commentSubmit.mockRestore();
+    statusUpdate.mockRestore();
   });
 
   it("#579 — the unmarked pending marker has an aria-label (spec and plan)", () => {

@@ -36165,7 +36165,7 @@ async function handleUpdatePlanProgress(ctx, args) {
     retracted: "retracted",
     obsolete: "obsolete",
     superseded: `superseded \u2014 progress belongs on the latest version of this ${kind}; use its id`,
-    revised: `revised \u2014 progress belongs on the latest version of this ${kind}; use its id`
+    revised: "revised \u2014 revision requested; awaiting an updated brief; do not execute this version"
   };
   const warning = NOT_EXECUTABLE[artifact.status] ? `
 \u26A0 WARNING: this ${kind} is ${NOT_EXECUTABLE[artifact.status]}.` : "";

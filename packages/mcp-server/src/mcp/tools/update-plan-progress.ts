@@ -68,7 +68,7 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
     retracted: "retracted",
     obsolete: "obsolete",
     superseded: `superseded — progress belongs on the latest version of this ${kind}; use its id`,
-    revised: `revised — progress belongs on the latest version of this ${kind}; use its id`,
+    revised: "revised — revision requested; awaiting an updated brief; do not execute this version",
   };
   const warning = NOT_EXECUTABLE[artifact.status]
     ? `\n⚠ WARNING: this ${kind} is ${NOT_EXECUTABLE[artifact.status]}.`
