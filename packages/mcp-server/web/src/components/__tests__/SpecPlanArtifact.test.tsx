@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, act, waitFor, within } from "@testing-library/react";
+import type { Comment } from "@deeppairing/shared";
 import { useArtifactStore } from "../../stores/artifact";
 import { SpecArtifact, isDelegateBrief } from "../artifacts/SpecArtifact";
 import { PlanArtifact } from "../artifacts/PlanArtifact";
@@ -333,13 +334,23 @@ describe("D8 — spec open questions are answerable (H1) and requirement counts 
         { id: "REQ-2", statement: "Second", priority: "must" },
       ],
     }, { id: "spec-v1", version: 1 });
-    const comment = (id: string, extra: any = {}) => ({
-      id, artifactId: old.id, author: "human", content: id, createdAt: new Date().toISOString(),
-      target: { artifactId: old.id, requirementId: "REQ-1", stepIndex: 0, sectionId: "requirement", ...extra },
-    } as any);
+    const comment = (
+      id: string,
+      fields: Partial<Pick<Comment, "intent">> = {},
+      targetFields: Partial<Comment["target"]> = {},
+    ): Comment => ({
+      id,
+      sessionId: "session",
+      author: "human",
+      content: id,
+      acknowledged: false,
+      parentCommentId: null,
+      createdAt: new Date().toISOString(),
+      target: { artifactId: old.id, requirementId: "REQ-1", stepIndex: 0, sectionId: "requirement", ...targetFields },
+      ...fields,
+    });
     const comments = [comment("plain"), comment("question", { intent: "question" })];
-    comments.push(comment("unknown-question", {
-      intent: "question",
+    comments.push(comment("unknown-question", { intent: "question" }, {
       requirementId: "REQ-MISSING",
       stepIndex: 1,
     }));
@@ -354,9 +365,9 @@ describe("D8 — spec open questions are answerable (H1) and requirement counts 
       const req1 = within(requirementRow("REQ-1"));
       const req2 = within(requirementRow("REQ-2"));
       expect(req1.getByRole("button", { name: /ask the agent — 1 unanswered question/i })).toBeInTheDocument();
-      expect(req1.getByRole("button", { name: /add a comment/i })).toHaveTextContent("1");
+      expect(req1.getByRole("button", { name: /add a comment/i })).toHaveTextContent("2");
       expect(req2.getByRole("button", { name: /ask the agent about this/i })).toBeInTheDocument();
-      expect(req2.getByRole("button", { name: /add a comment/i })).not.toHaveTextContent("1");
+      expect(req2.queryByText(/^\d+$/)).not.toBeInTheDocument();
     };
 
     const reordered = current([
@@ -373,7 +384,7 @@ describe("D8 — spec open questions are answerable (H1) and requirement counts 
     ]);
     const req0 = within(requirementRow("REQ-0"));
     expect(req0.getByRole("button", { name: /ask the agent about this/i })).toBeInTheDocument();
-    expect(req0.getByRole("button", { name: /add a comment/i })).not.toHaveTextContent("1");
+    expect(req0.queryByText(/^\d+$/)).not.toBeInTheDocument();
     expect(within(requirementRow("REQ-1")).getByRole("button", { name: /ask the agent — 1 unanswered question/i })).toBeInTheDocument();
     inserted.view.unmount();
   });
@@ -405,12 +416,23 @@ describe("D8 — spec open questions are answerable (H1) and requirement counts 
             createdAt: new Date().toISOString(),
             target: { artifactId: artifact.id, requirementId: "REQ-MISSING", stepIndex: 1, sectionId: "requirement" },
           } as any,
+          {
+            id: "blank-id", artifactId: artifact.id, author: "human", content: "blank stable id", intent: "question",
+            createdAt: new Date().toISOString(),
+            target: { artifactId: artifact.id, requirementId: "", stepIndex: 0, sectionId: "requirement" },
+          } as any,
+          {
+            id: "other-section", artifactId: artifact.id, author: "human", content: "not a requirement question", intent: "question",
+            createdAt: new Date().toISOString(),
+            target: { artifactId: artifact.id, stepIndex: 0, sectionId: "plan" },
+          } as any,
         ],
       },
     });
     render(<SpecArtifact artifact={artifact} />);
     expect(within(requirementRow("REQ-1")).getByRole("button", { name: /add a comment/i })).toHaveTextContent("1");
     expect(within(requirementRow("REQ-2")).getByRole("button", { name: /add a comment/i })).toHaveTextContent("1");
+    expect(within(requirementRow("REQ-1")).getByRole("button", { name: /ask the agent about this/i })).toBeInTheDocument();
     expect(within(requirementRow("REQ-2")).getByRole("button", { name: /ask the agent — 1 unanswered question/i })).toBeInTheDocument();
   });
 });

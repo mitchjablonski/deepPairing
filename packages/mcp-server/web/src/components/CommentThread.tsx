@@ -477,7 +477,13 @@ export function AskTrigger({
     if (target.evidenceIndex != null && c.target.evidenceIndex !== target.evidenceIndex) return false;
     if (target.alternativeIndex != null && c.target.alternativeIndex !== target.alternativeIndex) return false;
     if (target.optionId != null && c.target.optionId !== target.optionId) return false;
-    if (target.sectionId != null && c.target.sectionId !== target.sectionId) return false;
+    if (target.sectionId != null && c.target.sectionId !== target.sectionId) {
+      const legacyRequirementSection =
+        target.requirementId != null && c.target.requirementId == null &&
+        target.sectionId === "requirement" &&
+        (c.target.sectionId == null || c.target.sectionId === "requirement");
+      if (!legacyRequirementSection) return false;
+    }
     if (target.visualId != null && c.target.visualId !== target.visualId) return false;
     if (target.lineNumber != null && c.target.lineNumber !== target.lineNumber) return false;
     return true;
