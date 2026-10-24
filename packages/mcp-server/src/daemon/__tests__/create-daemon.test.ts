@@ -345,6 +345,68 @@ describe("H1-2 — the hooks watcher is wired through guardWatcher", () => {
   });
 });
 
+describe("#569 — a worker stop wakes the resolved session's parked check_feedback", () => {
+  // Real FileStore + real waiter; only the fs.watch seam is faked so the test
+  // can fire the hooks-state listener deterministically.
+  function setup() {
+    let listener: ((event: string, filename: string | null) => void) | undefined;
+    const h = makeDaemon({
+      watch: ((_dir: string, cb: (event: string, filename: string | null) => void) => {
+        listener = cb;
+        const w = new EventEmitter() as EventEmitter & { close(): void };
+        w.close = () => {};
+        return w;
+      }) as unknown as CreateDaemonDeps["watch"],
+    });
+    const store = h.fx.track(new FileStore(h.tmpDir, "session_alpha_claude-aaa"));
+    h.daemon.sessions.set("session_alpha_claude-aaa", store);
+    h.daemon.startHooksWatcher();
+    expect(listener).toBeDefined();
+    const fire = (id: string, gate: Record<string, unknown>) => {
+      const sp = path.join(h.tmpDir, ".deeppairing", "hooks-state.json");
+      const prior = fs.existsSync(sp) ? JSON.parse(fs.readFileSync(sp, "utf-8")) : {};
+      const rec = {
+        at: new Date().toISOString(), hook: "preflight", kind: "ask", id,
+        gate: { decision: "ask", source: "session", concept: "wake test concept", tool: "Write", target: "src/x.ts", ...gate },
+      };
+      fs.writeFileSync(sp, JSON.stringify({ ...prior, fires: [...(prior.fires ?? []), rec] }));
+      listener!("change", "hooks-state.json");
+    };
+    // Park a waiter; report whether it was woken (vs timing out).
+    const park = () => {
+      const t0 = Date.now();
+      let wokeEarly: boolean | undefined;
+      void store.waitForFeedback(400).then(() => { wokeEarly = Date.now() - t0 < 300; });
+      return () => wokeEarly;
+    };
+    return { store, fire, park };
+  }
+
+  it("a worker stop (agentId, resolved session) wakes that session's waiter", async () => {
+    const { fire, park } = setup();
+    const woke = park();
+    fire("hf_wake_worker", { session: "claude-aaa", agentId: "agent-1", agentType: "Explore" });
+    await sleep(50);
+    expect(woke()).toBe(true);
+  });
+
+  it("no wake for a main-agent entry (no agentId) on a resolved session", async () => {
+    const { fire, park } = setup();
+    const woke = park();
+    fire("hf_wake_main", { session: "claude-aaa" });
+    await sleep(100);
+    expect(woke()).toBeUndefined();
+  });
+
+  it("no wake for a \"hook\"-session entry (unresolvable Claude session) even with an agentId", async () => {
+    const { fire, park } = setup();
+    const woke = park();
+    fire("hf_wake_hook", { session: "claude-unknown", agentId: "agent-2" });
+    await sleep(100);
+    expect(woke()).toBeUndefined();
+  });
+});
+
 describe("H1-3 — the heartbeat runs through safeHeartbeatTick", () => {
   it("a failing periodic writeDaemonInfo is logged and does NOT propagate out of the tick", async () => {
     const { tmpDir, daemon, logs } = makeDaemon({ heartbeatIntervalMs: 15 });
