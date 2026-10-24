@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { collectUnansweredQuestions } from "@deeppairing/shared";
 import { FileStore } from "../file-store.js";
+import { SessionReviewConflictError } from "../session-records.js";
 import { withGlobalStore, type GlobalStoreFixture } from "../../__tests__/global-store-fixture.js";
 
 let fx: GlobalStoreFixture;
@@ -307,12 +308,20 @@ describe("feedback-safe FileStore retirement", () => {
     changed.version = 2;
     writer.renameArtifact("a", changed.title);
     frozen.updateArtifactStatus("a", "approved", "ui_approve_button");
+    const frozenArtifact = artifact(frozen)!;
+    const before = structuredClone(frozenArtifact);
     writer.forceFlush();
-    expect(() => frozen.forceFlush()).toThrow();
-    const before = structuredClone(artifact(frozen));
-    expect(() => frozen.retireArtifact({ ...request(), expectedStatus: "approved" })).toThrow();
-    expect(artifact(frozen)).toEqual(before);
+    const persistedArtifacts = read("artifacts.json");
+    const persistedComments = read("comments.json");
+    // Establish that the frozen writer is already blocked by the concurrent
+    // content change and its pending human verdict before exercising retirement.
+    expect(() => frozen.forceFlush()).toThrow(SessionReviewConflictError);
+    expect(() => frozen.getArtifacts()).toThrow(SessionReviewConflictError);
+    expect(() => frozen.retireArtifact({ ...request(), expectedStatus: "approved" })).toThrow(SessionReviewConflictError);
+    expect(frozenArtifact).toEqual(before);
     expect(frozen.getCommentsForArtifact("a")).toHaveLength(0);
+    expect(read("artifacts.json")).toBe(persistedArtifacts);
+    expect(read("comments.json")).toBe(persistedComments);
   });
 
   for (const failedFile of ["artifacts.json", "comments.json"]) {
