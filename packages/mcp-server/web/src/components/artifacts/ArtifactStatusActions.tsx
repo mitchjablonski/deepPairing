@@ -28,6 +28,8 @@ interface ArtifactStatusActionsProps {
    *  NO Reject, NO Request-changes — nothing here proposes an approach, so there
    *  is no taste stance to capture and no redraft to demand. */
   acknowledgeMode?: boolean;
+  /** Optional report receipt using existing approval status, with correction actions retained. */
+  informationalReport?: boolean;
   /** #193 E2 — called when the human clicks "Ask more" in acknowledge mode; the
    *  parent focuses its ask-anything composer. */
   onAskMore?: () => void;
@@ -168,6 +170,7 @@ export function ArtifactStatusActions({
   artifact,
   hideApprove = false,
   acknowledgeMode = false,
+  informationalReport = false,
   onAskMore,
   suppressRejectConcept = false,
 }: ArtifactStatusActionsProps) {
@@ -297,7 +300,7 @@ export function ArtifactStatusActions({
   const shouldAutoApprove =
     // F12 review — without this the countdown armed INVISIBLY during replay
     // (the chip hides the bar) and phantom-toasted a refusal ~10s later.
-    !replayActive &&
+    !replayActive && !informationalReport &&
     artifact.status === "draft" &&
     confidence === "high" &&
     autonomyLevel !== "supervised" &&
@@ -314,12 +317,12 @@ export function ArtifactStatusActions({
   // #521 — eligibility is re-read from CURRENT state at commit time (props via
   // refs, autonomy level straight from the store) so a revocation between the
   // last render and the tick can't slip through.
-  const eligibilityRef = useRef({ status: artifact.status, confidence, hideApprove, replayActive });
-  eligibilityRef.current = { status: artifact.status, confidence, hideApprove, replayActive };
+  const eligibilityRef = useRef({ status: artifact.status, confidence, hideApprove, replayActive, informationalReport });
+  eligibilityRef.current = { status: artifact.status, confidence, hideApprove, replayActive, informationalReport };
   const autoEligibleNow = () => {
     const e = eligibilityRef.current;
     return (
-      !e.replayActive &&
+      !e.replayActive && !e.informationalReport &&
       e.status === "draft" &&
       e.confidence === "high" &&
       useConnectionStore.getState().autonomyLevel !== "supervised" &&
@@ -771,9 +774,9 @@ export function ArtifactStatusActions({
               // whole defence here.
               className="px-2.5 py-1 text-2xs font-medium text-text-inverse bg-accent-amber rounded
                          hover:bg-accent-amber/85 disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
-              title={offline ?? "Approve even though your suggestions are still open"}
+              title={offline ?? (informationalReport ? "Acknowledge even though your suggestions are still open" : "Approve even though your suggestions are still open")}
             >
-              Approve anyway
+              {informationalReport ? "Got it anyway" : "Approve anyway"}
             </button>
             <button
               onClick={() => setApproveConfirm(false)}
@@ -795,9 +798,9 @@ export function ArtifactStatusActions({
               disabled={submitting || !!offline}
               className="px-2.5 py-1 text-2xs font-medium text-accent-green rounded border border-accent-green/30
                          hover:bg-accent-green-dim disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
-              title={offline ?? "Approve as-is"}
+              title={offline ?? (informationalReport ? "Acknowledge this report" : "Approve as-is")}
             >
-              Approve
+              {informationalReport ? "Got it" : "Approve"}
             </button>
           )}
           <button
@@ -820,7 +823,7 @@ export function ArtifactStatusActions({
       <>
       {/* Auto-proceed countdown bar — #430 PR 5: the shared ApproveCountdown. */}
       {countdown !== null && countdown > 0 && !countdownPaused && (
-        <ApproveCountdown countdown={countdown} countdownMax={countdownMax} onHold={cancelCountdown} />
+        <ApproveCountdown countdown={countdown} countdownMax={countdownMax} onHold={cancelCountdown} informationalReport={informationalReport} />
       )}
 
       {/* Comment/response textarea. Submitting it as a "Respond" (the primary
@@ -897,9 +900,9 @@ export function ArtifactStatusActions({
               disabled={submitting || !!offline}
               className="px-2.5 py-1 text-2xs font-medium text-accent-green rounded border border-accent-green/30
                          hover:bg-accent-green-dim disabled:opacity-50 transition-all duration-[180ms] ease-out press-scale"
-              title={offline ?? (comment.trim() ? "Approve and send this comment" : "Approve as-is")}
+              title={offline ?? (informationalReport ? "Acknowledge this report and send any note" : comment.trim() ? "Approve and send this comment" : "Approve as-is")}
             >
-              {comment.trim() ? "Approve with note" : "Approve"}
+              {informationalReport ? (comment.trim() ? "Got it with note" : "Got it") : comment.trim() ? "Approve with note" : "Approve"}
             </button>
           )}
           <button
@@ -940,7 +943,7 @@ export function ArtifactStatusActions({
             type="button"
             onClick={() => dispatch({ type: "minimize" })}
             className="ml-auto text-2xs text-text-muted hover:text-text-secondary transition-colors shrink-0"
-            title="Collapse to the slim bar (Approve stays one click; reaching the end re-opens)"
+            title={`Collapse to the slim bar (${informationalReport ? "Got it" : "Approve"} stays one click; reaching the end re-opens)`}
           >
             Minimize ▾
           </button>
@@ -1019,6 +1022,8 @@ export function ArtifactStatusActions({
               now says what the keystroke actually does. */}
           {rejecting
             ? "Reject needs a reason — ⌘⏎ won't approve while a reject is armed"
+            : informationalReport
+              ? "⌘⏎ on empty input acknowledges · Reject / Request changes need a reason (redo the digest)"
             : suppressRejectConcept
               ? "⌘⏎ on empty input approves · Reject / Request changes need a reason (redo the digest)"
               : "⌘⏎ on empty input approves · Reject / Revise need a reason (remembered across sessions)"}

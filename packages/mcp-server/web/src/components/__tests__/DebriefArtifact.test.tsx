@@ -72,10 +72,10 @@ describe("DebriefArtifact — renders every block", () => {
     expect(screen.getByText(/survive a server restart/i)).toBeInTheDocument();
   });
 
-  it("shows the unified verb triad (Approve / Request changes / Reject)", () => {
+  it("offers optional Got it while preserving Request changes / Reject", () => {
     render(<DebriefArtifact artifact={debriefArtifact} />);
     // Pre-fix (no ArtifactStatusActions dropped in) these would be absent.
-    expect(screen.getByRole("button", { name: /^approve$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^got it$/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /request changes/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^reject$/i })).toBeInTheDocument();
   });

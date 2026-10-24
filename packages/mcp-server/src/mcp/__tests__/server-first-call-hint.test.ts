@@ -2,31 +2,56 @@
  * D2 — split from the 3,009-line server.test.ts along tool-surface seams.
  * Test bodies are verbatim from the monolith; only the harness wiring is new.
  */
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { FileStore } from "../../store/file-store.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
 import { createMcpServer } from "../server.js";
+import { buildFirstCallHint } from "../first-call-hint.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
-// These policy-hint fixtures must not spend their context allowance on the
-// actual checkout's missing-hook warning. Dedicated #538 tests cover it.
-vi.mock("../../worktree-hooks.js", async (importOriginal) => ({
-  ...await importOriginal<typeof import("../../worktree-hooks.js")>(),
-  detectWorktreeMissingHooks: () => null,
-}));
 
 const ctx = setupServerTest();
 const callTool = makeCallTool(ctx);
 let store: FileStore;
 beforeEach(() => {
   store = ctx.store;
+  // Resolve this fixture's plain scratch directory, not the checkout running
+  // Vitest. A module mock here leaks through cached first-call imports when
+  // server suites share a worker (isolate:false), silencing the real #538
+  // detector in later suites. Keep production detection intact instead.
+  vi.stubEnv("CLAUDE_PROJECT_DIR", "");
+  vi.stubEnv("DEEPPAIRING_PROJECT_ROOT", ctx.tmpDir);
 });
+afterEach(() => { vi.unstubAllEnvs(); });
 
 describe("MCP Tool Handlers — firstCallHint", () => {
+  it("keeps the real worktree detector in the cached first-call module", async () => {
+    // A validated linked-worktree layout, in this file's shared worker. This
+    // fails if a future policy fixture replaces the detector with () => null.
+    // The dedicated #538 suite additionally exercises real git worktree add.
+    const main = path.join(ctx.tmpDir, "main");
+    const workspace = path.join(ctx.tmpDir, "workspace");
+    const common = path.join(main, ".git");
+    const gitdir = path.join(common, "worktrees", "workspace");
+    for (const dir of [workspace, gitdir, path.join(common, "objects"), path.join(common, "refs"), path.join(main, ".claude")]) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(path.join(common, "HEAD"), "ref: refs/heads/main\n");
+    fs.writeFileSync(path.join(common, "config"), "[core]\n\tbare = false\n");
+    fs.writeFileSync(path.join(gitdir, "commondir"), "../..\n");
+    fs.writeFileSync(path.join(gitdir, "gitdir"), path.join(workspace, ".git") + "\n");
+    fs.writeFileSync(path.join(workspace, ".git"), `gitdir: ${gitdir}\n`);
+    fs.writeFileSync(path.join(main, ".claude", "settings.local.json"), JSON.stringify({
+      hooks: { Stop: [{ hooks: [{ type: "command", command: "node .deeppairing/hooks/stop.mjs" }] }] },
+    }));
+    const hint = await buildFirstCallHint(store, 4000, [], { workspaceDir: workspace, pluginManaged: false });
+    expect(hint).toContain(`git worktree of ${main}`);
+    expect(hint).toContain("Tell the human");
+  });
+
   describe("firstCallHint — team conventions (N6.3)", () => {
     it("is absent from the hint when team.json is missing", async () => {
       // Outer beforeEach already created `store` without a team.json.

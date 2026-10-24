@@ -428,7 +428,7 @@ export function createReviewRoutes({
     if (autoReason === "auto_confidence") {
       const level = await store.getAutonomyLevel();
       const confidence = (target.content as { confidence?: string } | null)?.confidence;
-      if (status !== "approved" || level === "supervised" || confidence !== "high" || target.status !== "draft") {
+      if (status !== "approved" || target.type === "debrief" || level === "supervised" || confidence !== "high" || target.status !== "draft") {
         log(`[status] REFUSED auto-approve on ${artifactId}: level=${level} confidence=${confidence ?? "(none)"} status=${target.status}`);
         return c.json(
           {

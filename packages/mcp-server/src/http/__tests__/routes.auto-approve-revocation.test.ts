@@ -27,6 +27,30 @@ const post = (body: Record<string, unknown>) =>
 const statusNow = async () => (await store.getArtifacts()).find((a) => a.id === "art_1")?.status;
 
 describe("#521 — auto-approve commit re-check", () => {
+  it.each(["balanced", "autonomous"] as const)("refuses high-confidence debrief auto acknowledgement at %s without side effects", async (level) => {
+    store.setAutonomyLevel(level);
+    store.createArtifact({ id: "report", type: "debrief", title: "Report", content: { summary: "Done", confidence: "high" } });
+    const before = await store.getCommentsForArtifact("report");
+    const res = await app.request("/api/artifacts/report/status", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "approved", reason: "auto_confidence", feedback: "must not be recorded" }),
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: "auto_approve_not_permitted" });
+    expect(store.getArtifacts().find((a) => a.id === "report")?.status).toBe("draft");
+    expect(await store.getCommentsForArtifact("report")).toEqual(before);
+  });
+
+  it.each(["supervised", "balanced", "autonomous"] as const)("explicit human debrief acknowledgement still works at %s", async (level) => {
+    store.setAutonomyLevel(level);
+    store.createArtifact({ id: "report", type: "debrief", title: "Report", content: { summary: "Done", confidence: "high" } });
+    const res = await app.request("/api/artifacts/report/status", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "approved" }),
+    });
+    expect(res.status).toBe(200);
+    expect(store.getArtifacts().find((a) => a.id === "report")?.status).toBe("approved");
+  });
+
   it("refuses an auto approval after the level dropped to supervised (409, no state change)", async () => {
     store.setAutonomyLevel("balanced");
     // The level is lowered between the request being dispatched and the commit.

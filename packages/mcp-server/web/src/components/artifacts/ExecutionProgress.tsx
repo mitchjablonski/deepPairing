@@ -98,10 +98,10 @@ export function StepStatusMarker({
 /** The statuses that never show the live strip — the run is not executable. */
 export const NON_EXECUTABLE_STATUSES = ["draft", "rejected", "retracted", "obsolete", "superseded", "revised"];
 
-/** #579 — closed-with-successor: progress on these belongs on the latest version. */
-export const isClosedWithSuccessor = (status?: string) => status === "superseded" || status === "revised";
+/** #579 — a successor exists only after the artifact is actually superseded. */
+export const isClosedWithSuccessor = (status?: string) => status === "superseded";
 
-/** #579 — replaces the live strip on a superseded/revised plan or spec. */
+/** #579 — replaces the live strip after a successor has replaced this artifact. */
 export function SupersededProgressCue({ noun = "step" }: { noun?: Noun }) {
   const kind = noun === "task" ? "spec" : "plan";
   return (
@@ -111,6 +111,20 @@ export function SupersededProgressCue({ noun = "step" }: { noun?: Noun }) {
       className="px-3 py-2 bg-surface-secondary border border-white/[0.06] rounded-lg text-2xs text-text-muted opacity-60"
     >
       Superseded — see the latest version of this {kind}. Progress below is a historical snapshot, not live.
+    </div>
+  );
+}
+
+/** A human requested a revision; a successor may not exist yet. */
+export function RevisionRequestedProgressCue({ noun = "step" }: { noun?: Noun }) {
+  const kind = noun === "task" ? "spec" : "plan";
+  return (
+    <div
+      role="note"
+      aria-label={`Revision requested ${kind} progress`}
+      className="px-3 py-2 bg-surface-secondary border border-white/[0.06] rounded-lg text-2xs text-text-muted opacity-60"
+    >
+      Revision requested — awaiting an updated brief for this {kind}. Progress below is a historical snapshot, not live.
     </div>
   );
 }
