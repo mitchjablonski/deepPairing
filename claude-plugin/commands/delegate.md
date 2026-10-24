@@ -40,6 +40,11 @@ the issue isn't found, say so plainly and stop. Don't brief from a guess.
   I can flip it when I approve).
 - `design` — one short paragraph on the shape: the pieces, the boundaries between
   them, and the interface each side sees. Name the alternative shape you rejected.
+- `edgePaths[]` — each `{path, risk, handling}`. List every state and transition
+  the change must handle, every call path that must see it (early returns, wake
+  and long-poll shapes, filtered views), every input you don't control, and any
+  mode where the change is inert or behaves differently. A reviewer finds these
+  after the code; I'd rather catch them here.
 - `tasks[]` — your intended steps.
 - `visuals[]` with two entries:
   - one of `kind: "file_map"` — its `files` are the paths you declare you'll touch;

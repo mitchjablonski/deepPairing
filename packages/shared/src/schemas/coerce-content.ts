@@ -13,6 +13,7 @@ import type {
   SpecContent,
   SpecRequirement,
   SpecTask,
+  SpecEdgePath,
   ReasoningContent,
   ChangesetContent,
   ChangesetFile,
@@ -328,6 +329,17 @@ function coerceTask(v: unknown): SpecTask {
   return out;
 }
 
+/** #571 — an edge path keeps `path` + `risk` (strings, defaulted) and an
+ *  optional `handling`. Entries are mapped, never filtered: a comment anchors
+ *  to an edge path by its INDEX (`spec:edge-path:<i>`), so dropping a junk
+ *  entry would re-point every later thread at the wrong row. */
+function coerceEdgePath(v: unknown): SpecEdgePath {
+  const e = obj(v);
+  const out: SpecEdgePath = { path: str(e.path), risk: str(e.risk) };
+  if (typeof e.handling === "string") out.handling = e.handling;
+  return out;
+}
+
 export function coerceSpecContent(raw: unknown): SpecContent {
   const c = obj(raw);
   const out: SpecContent = {
@@ -339,6 +351,7 @@ export function coerceSpecContent(raw: unknown): SpecContent {
   if (Array.isArray(c.tasks)) out.tasks = c.tasks.map(coerceTask);
   if (Array.isArray(c.openQuestions)) out.openQuestions = strArr(c.openQuestions);
   if (Array.isArray(c.visuals)) out.visuals = c.visuals.map((v, i) => coerceVisual(v, `visual_${i}`));
+  if (Array.isArray(c.edgePaths)) out.edgePaths = c.edgePaths.map(coerceEdgePath);
   return out;
 }
 

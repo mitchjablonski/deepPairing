@@ -488,6 +488,71 @@ describe("MCP Tool Handlers — tool CRUD surface", () => {
       expect(text).toContain("REJECTED_APPROACH_BLOCKED");
       expect(store.getArtifacts().filter((a) => a.type === "spec")).toHaveLength(0);
     });
+
+    // #571 slice 1 — edge paths & interaction risks ride through to the artifact.
+    const briefArgs = {
+      title: "Worker stop signal",
+      objective: "Tell the lead when a worker stops",
+      requirements: [
+        { id: "REQ-1", statement: "The lead sees the stop", rationale: "it waits otherwise", acceptanceCriteria: ["a stop surfaces within one poll"] },
+      ],
+    };
+
+    it("#571 — passes edgePaths through to the stored spec content", async () => {
+      const edgePaths = [
+        { path: "check_feedback long-poll wake", risk: "the wake returns before the stop is recorded", handling: "re-read after wake" },
+        { path: "shared mode", risk: "the signal is inert" },
+      ];
+      const { isError } = await callTool("present_spec", { ...briefArgs, edgePaths });
+      expect(isError).toBeFalsy();
+      const spec = store.getArtifacts().find((a) => a.type === "spec")!;
+      expect((spec.content as any).edgePaths).toEqual(edgePaths);
+    });
+
+    it("#571 back-compat — a spec without edgePaths stores no edgePaths key", async () => {
+      const { isError } = await callTool("present_spec", briefArgs);
+      expect(isError).toBeFalsy();
+      const spec = store.getArtifacts().find((a) => a.type === "spec")!;
+      expect("edgePaths" in (spec.content as object)).toBe(false);
+    });
+
+    it("#571 — an edge path missing its risk is INPUT_VALIDATION_FAILED, nothing stored", async () => {
+      const { isError, text } = await callTool("present_spec", { ...briefArgs, edgePaths: [{ path: "poll wake" }] });
+      expect(isError).toBe(true);
+      expect(text).toContain("INPUT_VALIDATION_FAILED");
+      expect(store.getArtifacts().filter((a) => a.type === "spec")).toHaveLength(0);
+    });
+
+    it("#571 — the advertised input schema carries edgePaths with path + risk required", async () => {
+      const { tools } = await client.listTools();
+      const spec = tools.find((t) => t.name === "present_spec")!;
+      const ep = (spec.inputSchema as any).properties.edgePaths;
+      expect(ep.type).toBe("array");
+      expect(ep.items.required).toEqual(expect.arrayContaining(["path", "risk"]));
+      expect(ep.items.required).not.toContain("handling");
+      expect(spec.description).toContain("edgePaths");
+    });
+
+    it("#571 — check_feedback names the edge path a comment anchors to", async () => {
+      await callTool("present_spec", {
+        ...briefArgs,
+        edgePaths: [
+          { path: "scoped early return", risk: "the filtered view never sees it" },
+          { path: "worker-controlled path text", risk: "reads as an instruction" },
+        ],
+      });
+      const id = store.getArtifacts().find((a) => a.type === "spec")!.id;
+      await store.addComment({
+        id: "cmt_edge",
+        artifactId: id,
+        content: "quote it, never interpolate",
+        author: "human",
+        target: { artifactId: id, sectionId: "spec:edge-path:1" },
+      } as any);
+      const res = await callTool("check_feedback");
+      expect(res.text).toContain("edge path #2: worker-controlled path text");
+      expect((res.structuredContent as any).comments.map((c: any) => c.id)).toContain("cmt_edge");
+    });
   });
 
   describe("unknown tool", () => {

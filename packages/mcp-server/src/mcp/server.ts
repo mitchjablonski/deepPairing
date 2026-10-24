@@ -131,8 +131,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
         name: "present_spec",
         annotations: { title: "Present spec", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
         description:
-          "Present a feature spec — objective, requirements (each with rationale + acceptance criteria), optional design notes and tasks. For non-trivial work that'd otherwise skip straight to code without agreement on what's being built." +
-          "\n\nSchema note: `requirements` is a non-empty array of objects with `id`, `statement`, `rationale`, `acceptanceCriteria`. VISUALS (encouraged): attach `visuals[]` — each a stable `id`, a `kind` (diagram/file_map/doc_map/prototype/annotated_code; see inputSchema), and `title`. INPUT_VALIDATION_FAILED on mismatch." +
+          "Present a feature spec — objective, requirements (each with rationale + acceptance criteria), optional design, tasks and edge paths. For non-trivial work that needs agreement before code." +
+          "\n\nSchema note: `requirements` is a non-empty array of `{id, statement, rationale, acceptanceCriteria}`. VISUALS (encouraged): `visuals[]` — each a stable `id`, a `kind` and `title` (see inputSchema). EDGE PATHS: `edgePaths[]`, each `{path, risk, handling?}`: states, call paths, untrusted inputs, inert modes. INPUT_VALIDATION_FAILED on mismatch." +
           "\n\nWorkflow: SINGLE REVIEW SURFACE — the companion UI is where the human reviews requirements. Don't re-paste in chat. Call check_feedback for the verdict.",
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.

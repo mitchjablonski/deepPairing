@@ -215,6 +215,20 @@ function describeExplainerSection(sectionId: string): string {
 }
 
 /**
+ * #571 slice 1 — a spec EDGE-PATH grain (`spec:edge-path:<i>`) reads back
+ * 1-based with the edge path's own `path` text when the artifact carries it.
+ */
+function describeSpecEdgePath(sectionId: string, art?: Artifact): string {
+  const i = Number(sectionId.slice("spec:edge-path:".length));
+  if (!Number.isInteger(i) || i < 0) return "edge path";
+  const edgePaths = (art?.content as { edgePaths?: Array<{ path?: unknown }> } | null | undefined)?.edgePaths;
+  const p = Array.isArray(edgePaths) ? edgePaths[i]?.path : undefined;
+  return typeof p === "string" && p.trim().length > 0
+    ? `edge path #${i + 1}: ${p.trim()}`
+    : `edge path #${i + 1}`;
+}
+
+/**
  * #173 — the structured delivery of a region comment, split by artifact kind.
  *
  * A DECISION region comment (target.optionId set — the focused-view region
@@ -427,6 +441,13 @@ export function deliverComment(c: Comment, artsForTargets: Artifact[]): CommentD
   // can't collide with the decision or debrief grain blocks.
   if (c.target.sectionId && c.target.sectionId.startsWith("explainer:")) {
     loc += ` — ${describeExplainerSection(c.target.sectionId)}`;
+  }
+  // #571 — a spec edge-path comment names the edge path it anchors to, by its
+  // own text (the grain is index-only), so a terse "what about retries?" is
+  // placeable. Own namespace (`spec:edge-path:*`), no collision with the above.
+  if (c.target.sectionId && c.target.sectionId.startsWith("spec:edge-path:")) {
+    const art = artsForTargets.find((a) => a.id === c.target.artifactId);
+    loc += ` — ${describeSpecEdgePath(c.target.sectionId, art)}`;
   }
   // #140 — a region comment names the diagram nodes it covers TEXTUALLY so
   // the agent can find them in the Mermaid source it authored (no image).

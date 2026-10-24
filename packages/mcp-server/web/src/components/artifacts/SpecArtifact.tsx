@@ -1,4 +1,4 @@
-import type { Artifact, SpecRequirement, SpecTask } from "@deeppairing/shared";
+import type { Artifact, SpecEdgePath, SpecRequirement, SpecTask } from "@deeppairing/shared";
 import { coerceSpecContent } from "@deeppairing/shared";
 import { SimpleMarkdown } from "../SimpleMarkdown";
 import { CommentTrigger, AskTrigger } from "../CommentThread";
@@ -36,8 +36,10 @@ const estimateStyles: Record<string, string> = {
  *   3. Requirements list — each with rationale + acceptance criteria, plus
  *      Ask/Comment triggers so the human can challenge each one
  *   4. Design notes (optional)
- *   5. Tasks with requirement traceability
- *   6. Open questions — things the agent wants the human to decide
+ *   5. Edge paths & interaction risks (#571, optional) — above the tasks so
+ *      the brief's one human touch sees them before any code
+ *   6. Tasks with requirement traceability
+ *   7. Open questions — things the agent wants the human to decide
  */
 export function SpecArtifact({ artifact }: Props) {
   // Coercion boundary: a fully-shaped SpecContent (requirements always an
@@ -107,6 +109,13 @@ export function SpecArtifact({ artifact }: Props) {
           <SimpleMarkdown text={spec.design} className="prose-field text-xs text-text-secondary space-y-1" />
         </div>
       )}
+
+      <EdgePathsSection
+        artifact={artifact}
+        edgePaths={spec.edgePaths}
+        isBrief={isDelegateBrief(spec.context)}
+        writeLocked={writeLocked}
+      />
 
       {spec.tasks && spec.tasks.length > 0 && (
         <div>
@@ -231,6 +240,90 @@ function RequirementRow({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * #571 slice 1 — a delegate brief (`/deeppairing:delegate` move 2) is a spec
+ * whose `context` carries the headed `Decide alone:` and `Risk class:` lines.
+ * Cheap and content-only: no new field marks a brief. Used solely to decide
+ * whether an ABSENT edge-path list earns the gentle "none declared" hint;
+ * an ordinary spec without edge paths renders exactly as before.
+ */
+export function isDelegateBrief(context: string | undefined): boolean {
+  if (!context) return false;
+  return /\bDecide alone:/i.test(context) && /\bRisk class:/i.test(context);
+}
+
+/** The comment grain for one edge path. Index-anchored (edge paths carry no
+ *  id); check_feedback resolves the index back to the path's own text. */
+export const edgePathSectionId = (index: number) => `spec:edge-path:${index}`;
+
+/**
+ * #571 slice 1 — "Edge paths & interaction risks": the states, call paths,
+ * untrusted inputs and inert modes the change must handle. In the #569 pilot
+ * an approved brief named none of these, and an independent reviewer later
+ * found five defects on exactly such paths. One compact row per path (path,
+ * risk, handling), each commentable at its own `sectionId` grain.
+ */
+function EdgePathsSection({
+  artifact,
+  edgePaths,
+  isBrief,
+  writeLocked,
+}: {
+  artifact: Artifact;
+  edgePaths: SpecEdgePath[] | undefined;
+  isBrief: boolean;
+  writeLocked: boolean;
+}) {
+  const comments = useChainComments(artifact.id);
+  if (!edgePaths || edgePaths.length === 0) {
+    if (!isBrief) return null;
+    return (
+      <p className="text-2xs text-text-muted italic" data-testid="spec-edge-paths-none">
+        No edge paths declared. Which states, call paths, inputs or modes could this change miss?
+      </p>
+    );
+  }
+  return (
+    <section aria-label="Edge paths and interaction risks" data-testid="spec-edge-paths">
+      <h3 className="text-2xs font-semibold text-accent-amber uppercase tracking-wide mb-1.5">
+        Edge paths &amp; interaction risks ({edgePaths.length})
+      </h3>
+      <ul className="space-y-1.5">
+        {edgePaths.map((e, i) => {
+          const sectionId = edgePathSectionId(i);
+          const count = comments.filter((c) => c.target.sectionId === sectionId).length;
+          return (
+            <li
+              key={i}
+              data-comment-anchor={sectionId}
+              className="px-3 py-2 bg-surface-secondary border border-accent-amber/20 rounded-lg"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0 flex-1 space-y-0.5">
+                  <div className="text-xs font-medium text-text-primary">{e.path}</div>
+                  <div className="text-2xs text-text-secondary">
+                    <span className="font-semibold">Risk:</span> {e.risk}
+                  </div>
+                  <div className="text-2xs text-text-secondary">
+                    <span className="font-semibold">Handled:</span>{" "}
+                    {e.handling ? e.handling : <span className="italic text-text-muted">not stated</span>}
+                  </div>
+                </div>
+                {!writeLocked && (
+                  <div className="flex items-center gap-1 shrink-0">
+                    <AskTrigger artifactId={artifact.id} target={{ sectionId }} />
+                    <CommentTrigger artifactId={artifact.id} target={{ sectionId }} existingCount={count} />
+                  </div>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 

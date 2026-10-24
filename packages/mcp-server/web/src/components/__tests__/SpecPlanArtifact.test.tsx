@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { useArtifactStore } from "../../stores/artifact";
-import { SpecArtifact } from "../artifacts/SpecArtifact";
+import { SpecArtifact, isDelegateBrief } from "../artifacts/SpecArtifact";
 import { PlanArtifact } from "../artifacts/PlanArtifact";
 import { ArtifactStatusActions } from "../artifacts/ArtifactStatusActions";
 
@@ -403,5 +403,94 @@ describe("#569 — spec task execution status renders like plan step status", ()
     expect(screen.getByRole("group", { name: "Plan execution: 1 of 2 steps complete" })).toBeInTheDocument();
     expect(screen.getByText("Executing step 2 of 2")).toBeInTheDocument();
     expect(screen.getByLabelText("Step 1: done")).toBeInTheDocument();
+  });
+});
+
+describe("#571 slice 1 — spec edge paths & interaction risks", () => {
+  beforeEach(() => useArtifactStore.getState().reset());
+
+  const base = {
+    objective: "obj",
+    requirements: [{ id: "R1", statement: "do the thing", rationale: "because", acceptanceCriteria: ["works"] }],
+    design: "the shape",
+    tasks: [{ description: "first task" }],
+  };
+  const edgePaths = [
+    { path: "check_feedback long-poll wake", risk: "the waiter wakes before the signal lands", handling: "re-read after wake" },
+    { path: "worker-controlled path text", risk: "a crafted path reads as an instruction" },
+  ];
+
+  it("renders each edge path (path, risk, handling) between the design and the tasks", () => {
+    const art = mk("spec", { ...base, edgePaths }, { id: "spec_e" });
+    useArtifactStore.getState().addArtifact(art);
+    render(<SpecArtifact artifact={art} />);
+    const section = screen.getByTestId("spec-edge-paths");
+    expect(screen.getByText("Edge paths & interaction risks (2)")).toBeInTheDocument();
+    expect(screen.getByText("check_feedback long-poll wake")).toBeInTheDocument();
+    expect(screen.getByText("the waiter wakes before the signal lands")).toBeInTheDocument();
+    expect(screen.getByText("re-read after wake")).toBeInTheDocument();
+    // A missing `handling` says so rather than rendering a blank.
+    expect(screen.getByText("not stated")).toBeInTheDocument();
+    // Prominent placement: after the design, before the tasks.
+    const design = screen.getByText("the shape");
+    const task = screen.getByText("first task");
+    expect(design.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(section.compareDocumentPosition(task) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Each row is commentable at its own grain.
+    expect(section.querySelector('[data-comment-anchor="spec:edge-path:0"]')).not.toBeNull();
+    expect(section.querySelector('[data-comment-anchor="spec:edge-path:1"]')).not.toBeNull();
+  });
+
+  it("counts a comment on its edge path's sectionId grain, not on a requirement", () => {
+    const art = mk("spec", { ...base, edgePaths }, { id: "spec_c" });
+    useArtifactStore.setState({
+      artifacts: [art],
+      comments: {
+        [art.id]: [
+          {
+            id: "c_e", artifactId: art.id, author: "human", content: "what about a second wake?",
+            createdAt: new Date().toISOString(),
+            target: { artifactId: art.id, sectionId: "spec:edge-path:1" },
+          } as any,
+        ],
+      },
+    });
+    render(<SpecArtifact artifact={art} />);
+    const rows = screen.getByTestId("spec-edge-paths").querySelectorAll("li");
+    expect(rows[1]!.textContent).toContain("1");
+    expect(rows[0]!.textContent).not.toMatch(/\b1\b/);
+    // The popover thread shows it too (CommentTrigger's bare-sectionId arm):
+    // without that arm the badge said "1" over an EMPTY thread.
+    const trigger = rows[1]!.querySelector('button[aria-label="Add a comment"]') as HTMLButtonElement;
+    fireEvent.click(trigger);
+    expect(screen.getByText("what about a second wake?")).toBeInTheDocument();
+  });
+
+  it("withholds the edge-path composers on a retracted spec, content stays readable", () => {
+    const art = mk("spec", { objective: "obj", edgePaths }, { id: "spec_x", status: "retracted" });
+    useArtifactStore.getState().addArtifact(art);
+    render(<SpecArtifact artifact={art} />);
+    expect(screen.getByText("check_feedback long-poll wake")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Ask the agent/i })).not.toBeInTheDocument();
+  });
+
+  it("back-compat: an ordinary spec without edgePaths renders no section and no hint", () => {
+    render(<SpecArtifact artifact={mk("spec", base)} />);
+    expect(screen.queryByTestId("spec-edge-paths")).toBeNull();
+    expect(screen.queryByTestId("spec-edge-paths-none")).toBeNull();
+    expect(screen.queryByText(/Edge paths/)).toBeNull();
+    expect(screen.getByText("first task")).toBeInTheDocument();
+  });
+
+  it("a delegate brief without edgePaths gets the gentle 'none declared' hint", () => {
+    const context = "Decide alone: naming\nWill ask: schema\nRisk class: low-risk\nWhy: small\nReview: packet";
+    render(<SpecArtifact artifact={mk("spec", { ...base, context })} />);
+    expect(screen.getByTestId("spec-edge-paths-none")).toHaveTextContent("No edge paths declared");
+  });
+
+  it("isDelegateBrief keys off the brief's headed context lines only", () => {
+    expect(isDelegateBrief(undefined)).toBe(false);
+    expect(isDelegateBrief("Background on the login flow.")).toBe(false);
+    expect(isDelegateBrief("**Decide alone:** x\n**Risk class:** trivial")).toBe(true);
   });
 });

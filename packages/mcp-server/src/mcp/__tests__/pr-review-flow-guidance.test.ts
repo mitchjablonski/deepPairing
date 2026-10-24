@@ -447,6 +447,17 @@ describe("S0 — delegate.md carries the five moves and the run rules", () => {
     expect(brief).toContain("`line-by-line`");
   });
 
+  it("#571 slice 1: the brief names its edge paths and interaction risks", () => {
+    const brief = text.slice(text.indexOf("(2) Brief"), text.indexOf("(3) Run"));
+    expect(brief).toContain("`edgePaths[]`");
+    expect(brief).toContain("`{path, risk, handling}`");
+    for (const shape of ["state and transition", "early returns", "long-poll", "filtered views", "input you don't control", "inert"]) {
+      expect(brief, shape).toContain(shape);
+    }
+    // Asked for before the tasks, the way the companion renders it.
+    expect(brief.indexOf("`edgePaths[]`")).toBeLessThan(brief.indexOf("`tasks[]`"));
+  });
+
   it("#569 pilot B: move 3 tracks the brief's tasks with update_plan_progress, not log_reasoning per task", () => {
     const run = text.slice(text.indexOf("(3) Run"), text.indexOf("(4) Packet"));
     expect(run).toContain("`update_plan_progress`");

@@ -320,6 +320,22 @@ export const SpecTaskSchema = z.object({
 
 export type SpecTask = z.infer<typeof SpecTaskSchema>;
 
+/**
+ * #571 slice 1 — one edge path or interaction risk the change must handle.
+ * The #569 pilot approved a brief's architecture diagram with no comments, and
+ * the independent reviewer then found five defects, all on paths the brief
+ * never named (a wake/long-poll shape, a scoped early return, worker-controlled
+ * text, a mode where the feature is inert, a hidden client hop). Naming them in
+ * the brief puts them in front of the one human touch, before any code.
+ */
+export const SpecEdgePathSchema = z.object({
+  path: z.string().describe("The state, transition, call path, input or mode, e.g. 'check_feedback long-poll wake'"),
+  risk: z.string().describe("What goes wrong on that path if the change misses it"),
+  handling: z.string().optional().describe("How the change handles it (or 'open' if undecided)"),
+});
+
+export type SpecEdgePath = z.infer<typeof SpecEdgePathSchema>;
+
 export const SpecContentSchema = z.object({
   objective: z.string().describe("One-sentence objective the spec is chasing"),
   context: z.string().optional().describe("Background / constraints / existing system notes"),
@@ -335,6 +351,11 @@ export const SpecContentSchema = z.object({
   /** Visuals (diagrams / file maps / prototypes) that frame the spec — same
    *  block as plans. Optional for back-compat. */
   visuals: z.array(PlanVisualSchema).optional(),
+  /** #571 slice 1 — edge paths and interaction risks: the states, call paths,
+   *  untrusted inputs and inert modes the change must handle. Optional for
+   *  back-compat (absent = none declared; old specs render unchanged). */
+  edgePaths: z.array(SpecEdgePathSchema).optional()
+    .describe("Edge paths & interaction risks: every state/transition, call path (early returns, wake/long-poll, filtered views), input you don't control, and mode where the change is inert"),
 });
 
 export type SpecContent = z.infer<typeof SpecContentSchema>;
