@@ -223,7 +223,7 @@ function readTokenSidecar(projectRoot) {
 }
 
 // src/version.ts
-var SERVER_VERSION = "0.1.69";
+var SERVER_VERSION = "0.1.70";
 function parseSemver(v) {
   const m = /^\s*(\d+)\.(\d+)\.(\d+)/.exec(v);
   if (!m) return null;
