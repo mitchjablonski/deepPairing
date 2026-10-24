@@ -15058,11 +15058,6 @@ var SpecTaskSchema = external_exports.object({
   status: external_exports.enum(["pending", "in_progress", "done", "skipped"]).optional().describe("Execution status, updated by the agent via update_plan_progress"),
   statusNote: external_exports.string().optional().describe("One-line note shown beside the task (e.g. why it was skipped)")
 });
-var SpecEdgePathSchema = external_exports.object({
-  path: external_exports.string().describe("The state, transition, call path, input or mode, e.g. 'check_feedback long-poll wake'"),
-  risk: external_exports.string().describe("What goes wrong on that path if the change misses it"),
-  handling: external_exports.string().optional().describe("How the change handles it (or 'open' if undecided)")
-});
 var SpecContentSchema = external_exports.object({
   objective: external_exports.string().describe("One-sentence objective the spec is chasing"),
   context: external_exports.string().optional().describe("Background / constraints / existing system notes"),
@@ -15077,11 +15072,7 @@ var SpecContentSchema = external_exports.object({
   openQuestions: external_exports.array(external_exports.string()).optional(),
   /** Visuals (diagrams / file maps / prototypes) that frame the spec — same
    *  block as plans. Optional for back-compat. */
-  visuals: external_exports.array(PlanVisualSchema).optional(),
-  /** #571 slice 1 — edge paths and interaction risks: the states, call paths,
-   *  untrusted inputs and inert modes the change must handle. Optional for
-   *  back-compat (absent = none declared; old specs render unchanged). */
-  edgePaths: external_exports.array(SpecEdgePathSchema).optional().describe("Edge paths & interaction risks: every state/transition, call path (early returns, wake/long-poll, filtered views), input you don't control, and mode where the change is inert")
+  visuals: external_exports.array(PlanVisualSchema).optional()
 });
 var ReasoningConceptSchema = external_exports.object({
   name: external_exports.string().describe("The concept name (e.g. 'dependency inversion', 'optimistic UI', 'debounce vs throttle')"),

@@ -10,7 +10,7 @@ import { useReplayStore } from "../../stores/replay";
 import { useWriteLock } from "../../hooks/useWriteLock";
 import { useShallow } from "zustand/react/shallow";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
-import { ExecutionStrip, StepStatusMarker, NON_EXECUTABLE_STATUSES } from "./ExecutionProgress";
+import { ExecutionStrip, StepStatusMarker, NON_EXECUTABLE_STATUSES, SupersededProgressCue, isClosedWithSuccessor } from "./ExecutionProgress";
 import { computeLineDiff } from "../../lib/diff";
 import { useEffect, useMemo, useState } from "react";
 import { useOfflineReason } from "../../hooks/useOfflineReason";
@@ -256,6 +256,9 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
               phase was pure dead air; the agent now marks steps via
               update_plan_progress and this renders live. Only shows once
               ANY step carries a status (old plans stay untracked). */}
+          {isClosedWithSuccessor(artifact.status) && steps.some((st) => st.status) && (
+            <SupersededProgressCue noun="step" />
+          )}
           {!NON_EXECUTABLE_STATUSES.includes(artifact.status) &&
             steps.some((st) => st.status) && (
             <ExecutionStrip items={steps} sessionId={artifact.sessionId} noun="step" />

@@ -25210,11 +25210,6 @@ var SpecTaskSchema = external_exports.object({
   status: external_exports.enum(["pending", "in_progress", "done", "skipped"]).optional().describe("Execution status, updated by the agent via update_plan_progress"),
   statusNote: external_exports.string().optional().describe("One-line note shown beside the task (e.g. why it was skipped)")
 });
-var SpecEdgePathSchema = external_exports.object({
-  path: external_exports.string().describe("The state, transition, call path, input or mode, e.g. 'check_feedback long-poll wake'"),
-  risk: external_exports.string().describe("What goes wrong on that path if the change misses it"),
-  handling: external_exports.string().optional().describe("How the change handles it (or 'open' if undecided)")
-});
 var SpecContentSchema = external_exports.object({
   objective: external_exports.string().describe("One-sentence objective the spec is chasing"),
   context: external_exports.string().optional().describe("Background / constraints / existing system notes"),
@@ -25229,11 +25224,7 @@ var SpecContentSchema = external_exports.object({
   openQuestions: external_exports.array(external_exports.string()).optional(),
   /** Visuals (diagrams / file maps / prototypes) that frame the spec — same
    *  block as plans. Optional for back-compat. */
-  visuals: external_exports.array(PlanVisualSchema).optional(),
-  /** #571 slice 1 — edge paths and interaction risks: the states, call paths,
-   *  untrusted inputs and inert modes the change must handle. Optional for
-   *  back-compat (absent = none declared; old specs render unchanged). */
-  edgePaths: external_exports.array(SpecEdgePathSchema).optional().describe("Edge paths & interaction risks: every state/transition, call path (early returns, wake/long-poll, filtered views), input you don't control, and mode where the change is inert")
+  visuals: external_exports.array(PlanVisualSchema).optional()
 });
 var ReasoningConceptSchema = external_exports.object({
   name: external_exports.string().describe("The concept name (e.g. 'dependency inversion', 'optimistic UI', 'debounce vs throttle')"),
@@ -26287,13 +26278,6 @@ function coerceTask(v2) {
     out.statusNote = t.statusNote;
   return out;
 }
-function coerceEdgePath(v2) {
-  const e = obj(v2);
-  const out = { path: str(e.path), risk: str(e.risk) };
-  if (typeof e.handling === "string")
-    out.handling = e.handling;
-  return out;
-}
 function coerceSpecContent(raw) {
   const c = obj(raw);
   const out = {
@@ -26310,8 +26294,6 @@ function coerceSpecContent(raw) {
     out.openQuestions = strArr(c.openQuestions);
   if (Array.isArray(c.visuals))
     out.visuals = c.visuals.map((v2, i) => coerceVisual(v2, `visual_${i}`));
-  if (Array.isArray(c.edgePaths))
-    out.edgePaths = c.edgePaths.map(coerceEdgePath);
   return out;
 }
 function coerceOption(v2) {
@@ -28167,10 +28149,7 @@ var PROSE_FIELD_MAP = {
     { path: "requirements[].acceptanceCriteria[]", mode: "strict" },
     { path: "tasks[].description", mode: "strict" },
     { path: "openQuestions[]", mode: "strict" },
-    { path: "visuals[].caption", mode: "flavored", exclude: CAPTION_EXEMPT },
-    // #571 — `path` is a name (often an identifier), so only the prose halves lint.
-    { path: "edgePaths[].risk", mode: "flavored" },
-    { path: "edgePaths[].handling", mode: "flavored" }
+    { path: "visuals[].caption", mode: "flavored", exclude: CAPTION_EXEMPT }
   ],
   decision: [
     { path: "context", mode: "flavored" },
@@ -28994,13 +28973,6 @@ function describeExplainerSection(sectionId) {
   if (m) return `section #${Number(m[1]) + 1}`;
   return key.replace(/-/g, " ");
 }
-function describeSpecEdgePath(sectionId, art) {
-  const i = Number(sectionId.slice("spec:edge-path:".length));
-  if (!Number.isInteger(i) || i < 0) return "edge path";
-  const edgePaths = art?.content?.edgePaths;
-  const p = Array.isArray(edgePaths) ? edgePaths[i]?.path : void 0;
-  return typeof p === "string" && p.trim().length > 0 ? `edge path #${i + 1}: ${p.trim()}` : `edge path #${i + 1}`;
-}
 function structuredRegionFields(t) {
   const region = t.region;
   if (!region) return {};
@@ -29129,10 +29101,6 @@ ${s.replacementText}${note ? `
   }
   if (c.target.sectionId && c.target.sectionId.startsWith("explainer:")) {
     loc += ` \u2014 ${describeExplainerSection(c.target.sectionId)}`;
-  }
-  if (c.target.sectionId && c.target.sectionId.startsWith("spec:edge-path:")) {
-    const art = artsForTargets.find((a) => a.id === c.target.artifactId);
-    loc += ` \u2014 ${describeSpecEdgePath(c.target.sectionId, art)}`;
   }
   const regionRef = describeRegionRef(c.target.region);
   if (regionRef) loc += ` \u2014 on region ${regionRef}`;
@@ -31610,8 +31578,7 @@ function validatePresentSpecInput(args) {
     design: args?.design,
     tasks: args?.tasks,
     openQuestions: args?.openQuestions,
-    visuals: args?.visuals,
-    edgePaths: args?.edgePaths
+    visuals: args?.visuals
   });
   if (!contentParse.success) {
     return { ok: false, error: formatValidationError("present_spec", contentParse.error, EXAMPLE_SPEC, args) };
@@ -36196,7 +36163,9 @@ async function handleUpdatePlanProgress(ctx, args) {
     draft: "still AWAITING REVIEW \u2014 get your pair's approval before executing",
     rejected: `REJECTED \u2014 do not execute it; address the feedback or present a new ${kind}`,
     retracted: "retracted",
-    obsolete: "obsolete"
+    obsolete: "obsolete",
+    superseded: `superseded \u2014 progress belongs on the latest version of this ${kind}; use its id`,
+    revised: `revised \u2014 progress belongs on the latest version of this ${kind}; use its id`
   };
   const warning = NOT_EXECUTABLE[artifact.status] ? `
 \u26A0 WARNING: this ${kind} is ${NOT_EXECUTABLE[artifact.status]}.` : "";
@@ -37286,7 +37255,7 @@ async function handlePostPrReview(ctx, args) {
 async function handlePresentSpec(ctx, args) {
   const validated = validatePresentSpecInput(args);
   if (!validated.ok) return validated.error;
-  const { title, objective, context, requirements, design, tasks, openQuestions, visuals, edgePaths } = validated.data;
+  const { title, objective, context, requirements, design, tasks, openQuestions, visuals } = validated.data;
   const requirementsArr = requirements;
   const tasksArr = tasks ?? [];
   const pre = await preflightArtifact(ctx, "present_spec", "spec", title, validated.data);
@@ -37302,10 +37271,7 @@ async function handlePresentSpec(ctx, args) {
     design,
     tasks: tasksArr,
     openQuestions: openQuestions ?? [],
-    ...visuals ? { visuals } : {},
-    // #571 slice 1 — passthrough, absent when the agent declared none (old
-    // specs' stored shape is unchanged).
-    ...edgePaths ? { edgePaths } : {}
+    ...visuals ? { visuals } : {}
   };
   let artifact;
   try {
@@ -38079,7 +38045,7 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       {
         name: "present_spec",
         annotations: { title: "Present spec", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-        description: "Present a feature spec \u2014 objective, requirements (each with rationale + acceptance criteria), optional design, tasks and edge paths. For non-trivial work that needs agreement before code.\n\nSchema note: `requirements` is a non-empty array of `{id, statement, rationale, acceptanceCriteria}`. VISUALS (encouraged): `visuals[]` \u2014 each a stable `id`, a `kind` and `title` (see inputSchema). EDGE PATHS: `edgePaths[]`, each `{path, risk, handling?}`: states, call paths, untrusted inputs, inert modes. INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: SINGLE REVIEW SURFACE \u2014 the companion UI is where the human reviews requirements. Don't re-paste in chat. Call check_feedback for the verdict.",
+        description: "Present a feature spec \u2014 objective, requirements (each with rationale + acceptance criteria), optional design notes and tasks. For non-trivial work that'd otherwise skip straight to code without agreement on what's being built.\n\nSchema note: `requirements` is a non-empty array of objects with `id`, `statement`, `rationale`, `acceptanceCriteria`. VISUALS (encouraged): attach `visuals[]` \u2014 each a stable `id`, a `kind` (diagram/file_map/doc_map/prototype/annotated_code; see inputSchema), and `title`. INPUT_VALIDATION_FAILED on mismatch.\n\nWorkflow: SINGLE REVIEW SURFACE \u2014 the companion UI is where the human reviews requirements. Don't re-paste in chat. Call check_feedback for the verdict.",
         // D4 — derived from the validator's zod shape (validate-tool-input.ts);
         // advertisement and validation can no longer drift.
         inputSchema: toMcpInputSchema(TOOL_INPUT_SCHEMAS.present_spec)

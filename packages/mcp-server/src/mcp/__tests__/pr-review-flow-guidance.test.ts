@@ -463,6 +463,7 @@ describe("S0 — delegate.md carries the five moves and the run rules", () => {
     expect(run).toContain("`update_plan_progress`");
     expect(run).toContain("`stepIndex`");
     expect(run).toContain("`tasks[]`");
+    expect(run).toContain("send `update_plan_progress` to the **new** brief's id");
     expect(text).not.toContain("Until spec tasks carry a status");
     expect(text).not.toMatch(/one `log_reasoning` per \*?completed task/);
     const sk = flat(skill());

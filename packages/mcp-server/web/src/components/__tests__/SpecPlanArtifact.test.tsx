@@ -395,6 +395,34 @@ describe("#569 — spec task execution status renders like plan step status", ()
     expect(screen.getAllByText("→").length).toBeGreaterThanOrEqual(2);
   });
 
+  it("#579 — a superseded or revised spec swaps the live strip for a see-latest cue", () => {
+    for (const status of ["superseded", "revised"]) {
+      const { unmount } = render(<SpecArtifact artifact={specWith(tasks, status)} />);
+      expect(screen.queryByRole("group", { name: /Spec execution/ })).toBeNull();
+      expect(screen.getByRole("note", { name: "Superseded spec progress" })).toHaveTextContent("see the latest version");
+      unmount();
+    }
+  });
+
+  it("#579 — a superseded or revised plan swaps the live strip for a see-latest cue", () => {
+    for (const status of ["superseded", "revised"]) {
+      const { unmount } = render(<PlanArtifact artifact={mk("plan", { estimatedChanges: 1, steps: [{ description: "a", reasoning: "r", status: "done" }] }, { status })} />);
+      expect(screen.queryByRole("group", { name: /Plan execution/ })).toBeNull();
+      expect(screen.getByRole("note", { name: "Superseded plan progress" })).toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it("#579 — the unmarked pending marker has an aria-label (spec and plan)", () => {
+    render(<SpecArtifact artifact={specWith(tasks)} />);
+    expect(screen.getByLabelText("Task 4: pending")).toBeInTheDocument();
+    render(<PlanArtifact artifact={mk("plan", { estimatedChanges: 2, steps: [
+      { description: "one", reasoning: "r", status: "done" },
+      { description: "two", reasoning: "r" },
+    ] }, { status: "approved" })} />);
+    expect(screen.getByLabelText("Step 2: pending")).toBeInTheDocument();
+  });
+
   it("plans keep their wording through the shared strip", () => {
     render(<PlanArtifact artifact={mk("plan", { estimatedChanges: 2, steps: [
       { description: "step one", reasoning: "r", status: "done" },

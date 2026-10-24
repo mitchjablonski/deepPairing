@@ -81,7 +81,9 @@ thing that stops you. Track progress on the approved brief itself:
 `update_plan_progress` with the brief's id and `stepIndex` set to the task's
 0-based index in `tasks[]` — mark a task `in_progress` when you start it and
 `done` (or `skipped`, with a `statusNote` saying why) when you finish. I watch
-the brief's checklist fill in; no `log_reasoning` per task.
+the brief's checklist fill in; no `log_reasoning` per task. After an escalation
+supersede (`revise_artifact` mode supersede), send `update_plan_progress` to the
+**new** brief's id; the old one is closed and warns.
 
 **(4) Packet.** `present_changeset` with `summary`, `risks[]` and a `visuals[]`
 entry of `kind: "diagram"` showing the changed files and their neighbours. Then **one** `present_debrief` with the
