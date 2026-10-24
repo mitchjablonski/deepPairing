@@ -523,6 +523,94 @@ describe("MCP Tool Handlers — tool CRUD surface", () => {
       expect(store.getArtifacts().filter((a) => a.type === "spec")).toHaveLength(0);
     });
 
+    describe("#589 — id uniqueness", () => {
+      const req = (id: string) => ({ id, statement: `s ${id}`, rationale: "r", acceptanceCriteria: ["a"] });
+      const storedSpec = () => store.getArtifacts().find((a) => a.type === "spec")!.content as any;
+
+      it("de-duplicates requirement ids with -2/-3 and warns", async () => {
+        const r = await callTool("present_spec", { ...briefArgs, requirements: [req("REQ-1"), req("REQ-1"), req("REQ-1")] });
+        expect(r.isError).toBeFalsy();
+        expect(storedSpec().requirements.map((x: any) => x.id)).toEqual(["REQ-1", "REQ-1-2", "REQ-1-3"]);
+        expect(r.text).toContain('requirement #2 id "REQ-1" is a duplicate — renamed "REQ-1-2"');
+      });
+
+      it("de-duplicates edge-path ids and warns", async () => {
+        const r = await callTool("present_spec", {
+          ...briefArgs,
+          edgePaths: [
+            { id: "wake", path: "a", risk: "x" },
+            { id: "wake", path: "b", risk: "y" },
+          ],
+        });
+        expect(storedSpec().edgePaths.map((x: any) => x.id)).toEqual(["wake", "wake-2"]);
+        expect(r.text).toContain('edge path #2 id "wake" is a duplicate — renamed "wake-2"');
+      });
+
+      it("a generated suffix never steals a later explicit id", async () => {
+        await callTool("present_spec", {
+          ...briefArgs,
+          edgePaths: [
+            { id: "a", path: "1", risk: "x" },
+            { id: "a", path: "2", risk: "x" },
+            { id: "a-2", path: "3", risk: "x" },
+          ],
+        });
+        expect(storedSpec().edgePaths.map((x: any) => x.id)).toEqual(["a", "a-3", "a-2"]);
+      });
+
+      it("a numeric edge-path id is prefixed so it cannot collide with the index fallback", async () => {
+        const r = await callTool("present_spec", {
+          ...briefArgs,
+          edgePaths: [
+            { id: "2", path: "numeric", risk: "x" },
+            { path: "id-less 1", risk: "x" },
+            { path: "id-less 2", risk: "x" },
+          ],
+        });
+        expect(storedSpec().edgePaths.map((x: any) => x.id)).toEqual(["ep-2", undefined, undefined]);
+        expect(r.text).toContain('edge path #1 id "2" is purely numeric');
+      });
+
+      it("a legacy index anchor still resolves onto an id-less row", async () => {
+        await callTool("present_spec", {
+          ...briefArgs,
+          edgePaths: [
+            { id: "2", path: "numeric", risk: "x" },
+            { path: "id-less 1", risk: "x" },
+            { path: "id-less 2", risk: "x" },
+          ],
+        });
+        const id = store.getArtifacts().find((a) => a.type === "spec")!.id;
+        await store.addComment({
+          id: "cmt_legacy",
+          artifactId: id,
+          content: "legacy anchor",
+          author: "human",
+          target: { artifactId: id, sectionId: "spec:edge-path:2" },
+        } as any);
+        const res = await callTool("check_feedback");
+        expect(res.text).toContain("edge path #3: id-less 2");
+      });
+
+      it("bounds ids to 64 chars and warns on truncation", async () => {
+        const long = "R".repeat(100);
+        const r = await callTool("present_spec", { ...briefArgs, requirements: [req(long)] });
+        expect(storedSpec().requirements[0].id).toBe("R".repeat(64));
+        expect(r.text).toContain("id truncated to 64 chars");
+      });
+
+      it("unique ids leave the response free of any id warning", async () => {
+        const r = await callTool("present_spec", {
+          ...briefArgs,
+          edgePaths: [{ id: "wake", path: "a", risk: "x" }, { path: "b", risk: "y" }],
+        });
+        expect(r.text).not.toContain("spec ids adjusted");
+        expect(storedSpec().requirements[0].id).toBe("REQ-1");
+        expect(storedSpec().edgePaths[0].id).toBe("wake");
+        expect("id" in storedSpec().edgePaths[1]).toBe(false);
+      });
+    });
+
     it("#571 — the advertised input schema carries edgePaths with path + risk required", async () => {
       const { tools } = await client.listTools();
       const spec = tools.find((t) => t.name === "present_spec")!;
