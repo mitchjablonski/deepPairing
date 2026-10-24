@@ -767,24 +767,37 @@ describe("MCP Tool Handlers — feedback loop", () => {
       expect(res.text).toContain("present a new spec");
     });
 
-    it("#579 — a SUPERSEDED or REVISED spec warns and points at the latest version", async () => {
-      for (const status of ["superseded", "revised"] as const) {
-        const spec = await presentSpecWithTasks();
-        store.updateArtifactStatus(spec.id, status, "ui_approve_button");
-        const res = await callTool("update_plan_progress", { artifactId: spec.id, updates: [{ stepIndex: 0, status: "done" }] });
-        expect(res.isError).toBeFalsy();
-        expect(res.text).toContain(`WARNING: this spec is ${status} — progress belongs on the latest version of this spec; use its id`);
-      }
+    it("#579 — a SUPERSEDED spec warns that progress belongs on the latest version", async () => {
+      const spec = await presentSpecWithTasks();
+      store.updateArtifactStatus(spec.id, "superseded", "ui_approve_button");
+      const res = await callTool("update_plan_progress", { artifactId: spec.id, updates: [{ stepIndex: 0, status: "done" }] });
+      expect(res.isError).toBeFalsy();
+      expect(res.text).toContain("WARNING: this spec is superseded — progress belongs on the latest version of this spec; use its id");
     });
 
-    it("#579 — a SUPERSEDED or REVISED plan warns and points at the latest version", async () => {
-      for (const status of ["superseded", "revised"] as const) {
-        await callTool("present_plan", { title: "P", objective: "o", steps: [{ description: "s", reasoning: "r" }], estimatedChanges: 1 });
-        const plan = store.getArtifacts().filter((a) => a.type === "plan").pop()!;
-        store.updateArtifactStatus(plan.id, status, "ui_approve_button");
-        const res = await callTool("update_plan_progress", { artifactId: plan.id, updates: [{ stepIndex: 0, status: "done" }] });
-        expect(res.text).toContain(`WARNING: this plan is ${status} — progress belongs on the latest version of this plan; use its id`);
-      }
+    it("#579 — a REVISED spec warns that an updated brief is awaited", async () => {
+      const spec = await presentSpecWithTasks();
+      store.updateArtifactStatus(spec.id, "revised", "ui_revise_button");
+      const res = await callTool("update_plan_progress", { artifactId: spec.id, updates: [{ stepIndex: 0, status: "done" }] });
+      expect(res.isError).toBeFalsy();
+      expect(res.text).toContain("WARNING: this spec is revised — revision requested; awaiting an updated brief; do not execute this version");
+      expect(store.getArtifacts().find((artifact) => artifact.id === spec.id)?.content).toMatchObject({ tasks: [{ status: "done" }] });
+    });
+
+    it("#579 — a SUPERSEDED plan warns that progress belongs on the latest version", async () => {
+      await callTool("present_plan", { title: "P", objective: "o", steps: [{ description: "s", reasoning: "r" }], estimatedChanges: 1 });
+      const plan = store.getArtifacts().filter((a) => a.type === "plan").pop()!;
+      store.updateArtifactStatus(plan.id, "superseded", "agent_supersede");
+      const res = await callTool("update_plan_progress", { artifactId: plan.id, updates: [{ stepIndex: 0, status: "done" }] });
+      expect(res.text).toContain("WARNING: this plan is superseded — progress belongs on the latest version of this plan; use its id");
+    });
+
+    it("#579 — a REVISED plan warns that an updated brief is awaited", async () => {
+      await callTool("present_plan", { title: "P", objective: "o", steps: [{ description: "s", reasoning: "r" }], estimatedChanges: 1 });
+      const plan = store.getArtifacts().filter((a) => a.type === "plan").pop()!;
+      store.updateArtifactStatus(plan.id, "revised", "ui_revise_button");
+      const res = await callTool("update_plan_progress", { artifactId: plan.id, updates: [{ stepIndex: 0, status: "done" }] });
+      expect(res.text).toContain("WARNING: this plan is revised — revision requested; awaiting an updated brief; do not execute this version");
     });
 
     it("#569 — an out-of-range task index (or a task-less spec) is an error that says plan or spec", async () => {
