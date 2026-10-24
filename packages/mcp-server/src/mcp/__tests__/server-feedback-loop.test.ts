@@ -781,7 +781,9 @@ describe("MCP Tool Handlers — feedback loop", () => {
       const res = await callTool("update_plan_progress", { artifactId: spec.id, updates: [{ stepIndex: 0, status: "done" }] });
       expect(res.isError).toBeFalsy();
       expect(res.text).toContain("WARNING: this spec is revised — revision requested; awaiting an updated brief; do not execute this version");
-      expect(store.getArtifacts().find((artifact) => artifact.id === spec.id)?.content).toMatchObject({ tasks: [{ status: "done" }] });
+      const tasks = (store.getArtifacts().find((artifact) => artifact.id === spec.id)!.content as { tasks: Array<{ status?: string }> }).tasks;
+      expect(tasks).toHaveLength(3);
+      expect(tasks[0].status).toBe("done");
     });
 
     it("#579 — a SUPERSEDED plan warns that progress belongs on the latest version", async () => {
