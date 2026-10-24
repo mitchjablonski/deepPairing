@@ -978,3 +978,52 @@ describe("evaluatePreflightHook — composition with the rejected-approach gate"
     expect(d).toEqual({ fire: false });
   });
 });
+
+// ---------------------------------------------------------------------------
+// #569 proposal 2 — the QUIET delegate start (no brief card)
+// ---------------------------------------------------------------------------
+
+/**
+ * `/deeppairing:delegate` now posts its `present_spec` brief only for a real
+ * decision. A trivial or low-risk run states its five answers in chat and
+ * builds with NO pre-work artifact at all — exactly the session shape a trivial
+ * run has always had. This pins what the backstop does to that shape, through
+ * the shared core both hook emitters (plugin bundle + init-generated script)
+ * run: ordinary edits are untouched (no nag), a guardrail edit still asks (or
+ * stops under strict-stop), and the escalated brief the guidance then requires
+ * silences it only once approved and only for the files its file_map lists.
+ */
+describe("#569 quiet delegate start: no brief, no nag, guardrail paths still guarded", () => {
+  // Mid-run quiet session: the agent has presented code, but no brief exists.
+  const quietRun = (): Art[] => [art("changeset", "draft"), art("code_change", "approved")];
+  const run = (rel: string, mode?: "ask" | "strict-stop") => evaluatePreflightHook({
+    toolName: "Edit", toolInput: edit(rel), projectRoot: dir, now: NOW, env: ON, sessionId: "s1", mode,
+  });
+
+  it("ordinary edits in a quiet run never fire", () => {
+    seedSession(quietRun());
+    for (const rel of ["src/a.ts", "packages/web/src/App.tsx", "docs/notes.md", "src/migrations.js"]) {
+      expect(run(rel), rel).toEqual({ fire: false });
+    }
+  });
+
+  it("a guardrail edit in a quiet run still asks, and strict-stop still stops", () => {
+    seedSession(quietRun());
+    const ask = run(".github/workflows/ci.yml");
+    expect(ask.fire).toBe(true);
+    expect(ask.source).toBe("guardrail");
+    expect(ask.reason).toContain("GUARDRAIL_ESCALATION");
+    const stop = run("migrations/1.sql", "strict-stop");
+    expect(stop.fire).toBe(true);
+    expect(stop.reason).toContain("strict-stop");
+  });
+
+  it("the escalated brief silences the ask only once approved, and only for its file_map", () => {
+    const brief = (status: string): Art => ({ ...art("spec", status), content: { visuals: [{ kind: "file_map", files: [{ path: "migrations/1.sql" }] }] } });
+    seedSession([...quietRun(), brief("draft")]);
+    expect(run("migrations/1.sql").fire).toBe(true); // a draft brief licenses nothing
+    seedSession([...quietRun(), brief("approved")]);
+    expect(run("migrations/1.sql").fire).toBe(false);
+    expect(run("migrations/2_drop.sql").fire).toBe(true); // outside the declared files
+  });
+});

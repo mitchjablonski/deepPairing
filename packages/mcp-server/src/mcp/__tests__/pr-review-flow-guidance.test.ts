@@ -473,6 +473,58 @@ describe("S0 — delegate.md carries the five moves and the run rules", () => {
     expect(para).not.toContain("until tasks have a status");
   });
 
+  it("#569 proposal 2: the brief card is conditional on a real decision", () => {
+    const brief = text.slice(text.indexOf("(2) Brief"), text.indexOf("(3) Run"));
+    // The unconditional "don't skip the brief" rule is gone; the brief is still
+    // the only card before building WHEN it is posted.
+    expect(text).not.toContain("Don't skip the brief");
+    expect(text).toContain("When you do post one, it is the only card before you build.");
+    // The three conditions that call for a brief.
+    expect(brief).toContain("only for a real decision");
+    expect(brief).toContain("the risk class is `escalated`");
+    expect(brief).toContain("your will-ask list is non-empty");
+    expect(brief).toContain("genuine architectural or hard-to-reverse fork");
+    // The quiet start: the five answers in chat, and no approval wait.
+    expect(brief).toContain("a quiet start");
+    expect(brief).toContain("`Will ask: none`");
+    expect(brief).toContain("Don't wait for an approval.");
+    expect(brief).toMatch(/don't poll `check_feedback` before you build/);
+    // Risk 1: the backstop still guards guardrail paths without a brief, and the
+    // guidance says so instead of promising silence.
+    expect(brief).toContain("The guardrail hook still guards.");
+    expect(brief).toContain("strict-stop");
+    expect(brief).toContain("Ordinary edits never touch it.");
+    expect(brief).toContain("Skip `update_plan_progress`");
+    // The content requirements still apply when the brief IS posted.
+    expect(brief.indexOf("When you post the brief")).toBeLessThan(brief.indexOf("`edgePaths[]`"));
+    // Mid-run escalation from a quiet start.
+    const run = text.slice(text.indexOf("(3) Run"), text.indexOf("(4) Packet"));
+    expect(run).toContain("After a quiet start, post the brief now");
+    expect(run).toContain("wait for my approval before the edit");
+    expect(run).toMatch(/A new will-ask item or fork mid-run escalates/);
+    expect(run).not.toContain("A low-risk brief silences the guardrail hook");
+    // The packet still closes a quiet run (the Stop hook's debrief obligation).
+    const packet = text.slice(text.indexOf("(4) Packet"), text.indexOf("(5) Wait"));
+    expect(packet).toContain("`Brief: none (quiet start)`");
+    // Supervised keeps the brief unconditionally.
+    expect(text).toMatch(/`supervised`, always post the brief/);
+  });
+
+  it("#569 proposal 2: the run ends with a short terminal summary; the packet is the record", () => {
+    const close = text.slice(text.indexOf("(5) Wait"), text.indexOf("The per-run record"));
+    expect(close).toContain("short terminal summary");
+    for (const part of ["what landed", "what to check first", "anything deferred"]) expect(close, part).toContain(part);
+    expect(close).toContain("The summary is the default touchpoint; the packet is the record");
+    expect(close).toContain("don't loop waiting for me to read it");
+    const sk = flat(skill());
+    const para = sk.slice(sk.indexOf("Delegated work"), sk.indexOf("## When to use which tool"));
+    expect(para).toContain("ONLY when there's a real decision");
+    expect(para).toContain("The brief is conditional.");
+    expect(para).toContain("terminal summary");
+    expect(para).toContain("the guardrail backstop still prompts on a guardrail path");
+    expect(para).toContain("Under `supervised`, always post the brief.");
+  });
+
   it("the SKILL carries a Delegated work paragraph in the Cadence section", () => {
     const sk = flat(skill());
     const at = sk.indexOf("Delegated work");
