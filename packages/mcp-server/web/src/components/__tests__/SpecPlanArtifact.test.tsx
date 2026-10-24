@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, act, waitFor, within } from "@testing-library/react";
 import { useArtifactStore } from "../../stores/artifact";
 import { SpecArtifact, isDelegateBrief } from "../artifacts/SpecArtifact";
 import { PlanArtifact } from "../artifacts/PlanArtifact";
@@ -323,31 +323,95 @@ describe("D8 — spec open questions are answerable (H1) and requirement counts 
     expect(screen.getByText(/answered/i)).toBeInTheDocument();
   });
 
-  it("M6 — requirement comment counts increment for comments carrying requirementId", () => {
+  const requirementRow = (id: string) => screen.getByText(id).closest(".rounded-lg") as HTMLElement;
+
+  it("stable requirement targets keep comment and Ask markers on the same row after reorder and insertion", () => {
+    const old = mk("spec", {
+      objective: "obj",
+      requirements: [
+        { id: "REQ-1", statement: "First", priority: "must" },
+        { id: "REQ-2", statement: "Second", priority: "must" },
+      ],
+    }, { id: "spec-v1", version: 1 });
+    const comment = (id: string, extra: any = {}) => ({
+      id, artifactId: old.id, author: "human", content: id, createdAt: new Date().toISOString(),
+      target: { artifactId: old.id, requirementId: "REQ-1", stepIndex: 0, sectionId: "requirement", ...extra },
+    } as any);
+    const comments = [comment("plain"), comment("question", { intent: "question" })];
+    comments.push(comment("unknown-question", {
+      intent: "question",
+      requirementId: "REQ-MISSING",
+      stepIndex: 1,
+    }));
+
+    const current = (requirements: any[]) => {
+      const artifact = mk("spec", { objective: "obj", requirements }, { id: "spec-v2", version: 2, parentId: old.id });
+      useArtifactStore.setState({ artifacts: [old, artifact], comments: { [old.id]: comments, [artifact.id]: [] } });
+      const view = render(<SpecArtifact artifact={artifact} />);
+      return { artifact, view };
+    };
+    const assertOnlyReq1 = () => {
+      const req1 = within(requirementRow("REQ-1"));
+      const req2 = within(requirementRow("REQ-2"));
+      expect(req1.getByRole("button", { name: /ask the agent — 1 unanswered question/i })).toBeInTheDocument();
+      expect(req1.getByRole("button", { name: /add a comment/i })).toHaveTextContent("1");
+      expect(req2.getByRole("button", { name: /ask the agent about this/i })).toBeInTheDocument();
+      expect(req2.getByRole("button", { name: /add a comment/i })).not.toHaveTextContent("1");
+    };
+
+    const reordered = current([
+      { id: "REQ-2", statement: "Second", priority: "must" },
+      { id: "REQ-1", statement: "First", priority: "must" },
+    ]);
+    assertOnlyReq1();
+    reordered.view.unmount();
+
+    const inserted = current([
+      { id: "REQ-0", statement: "Inserted", priority: "must" },
+      { id: "REQ-1", statement: "First", priority: "must" },
+      { id: "REQ-2", statement: "Second", priority: "must" },
+    ]);
+    const req0 = within(requirementRow("REQ-0"));
+    expect(req0.getByRole("button", { name: /ask the agent about this/i })).toBeInTheDocument();
+    expect(req0.getByRole("button", { name: /add a comment/i })).not.toHaveTextContent("1");
+    expect(within(requirementRow("REQ-1")).getByRole("button", { name: /ask the agent — 1 unanswered question/i })).toBeInTheDocument();
+    inserted.view.unmount();
+  });
+
+  it("uses legacy index-only requirement targets but does not fall back for an unknown stable ID", () => {
     const artifact = mk("spec", {
       objective: "obj",
-      requirements: [{ id: "REQ-1", statement: "Must work", priority: "must" }],
+      requirements: [
+        { id: "REQ-1", statement: "Must work", priority: "must" },
+        { id: "REQ-2", statement: "Also work", priority: "must" },
+      ],
     });
     useArtifactStore.setState({
       artifacts: [artifact],
       comments: {
         [artifact.id]: [
           {
-            id: "c2", artifactId: artifact.id, author: "human", text: "clarify",
+            id: "legacy", artifactId: artifact.id, author: "human", content: "clarify",
             createdAt: new Date().toISOString(),
-            // Legacy trigger shape — exactly what main's CommentTrigger sent
-            // (no sectionId), which main's filter could NEVER count. This
-            // test fails on main; the requirementId shape is covered by the
-            // new-trigger path implicitly.
             target: { artifactId: artifact.id, stepIndex: 0 },
+          } as any,
+          {
+            id: "legacy-question", artifactId: artifact.id, author: "human", content: "why?", intent: "question",
+            createdAt: new Date().toISOString(),
+            target: { artifactId: artifact.id, stepIndex: 1 },
+          } as any,
+          {
+            id: "unknown", artifactId: artifact.id, author: "human", content: "stale identity",
+            createdAt: new Date().toISOString(),
+            target: { artifactId: artifact.id, requirementId: "REQ-MISSING", stepIndex: 1, sectionId: "requirement" },
           } as any,
         ],
       },
     });
     render(<SpecArtifact artifact={artifact} />);
-    // The CommentTrigger badge shows the count — the old filter could never
-    // reach 1 for trigger-created comments (sectionId was never sent).
-    expect(screen.getByText("1")).toBeInTheDocument();
+    expect(within(requirementRow("REQ-1")).getByRole("button", { name: /add a comment/i })).toHaveTextContent("1");
+    expect(within(requirementRow("REQ-2")).getByRole("button", { name: /add a comment/i })).toHaveTextContent("1");
+    expect(within(requirementRow("REQ-2")).getByRole("button", { name: /ask the agent — 1 unanswered question/i })).toBeInTheDocument();
   });
 });
 

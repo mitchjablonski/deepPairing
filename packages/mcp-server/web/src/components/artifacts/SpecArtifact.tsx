@@ -190,9 +190,10 @@ function RequirementRow({
   // comment counts on requirements could never increment (verified bug).
   const reqComments = comments.filter(
     (c) =>
-      c.target.requirementId === requirement.id ||
-      (c.target.stepIndex === index &&
-        (c.target.sectionId === "requirement" || c.target.sectionId == null)),
+      c.target.requirementId != null
+        ? c.target.requirementId === requirement.id
+        : c.target.stepIndex === index &&
+          (c.target.sectionId === "requirement" || c.target.sectionId == null),
   );
 
   return (
