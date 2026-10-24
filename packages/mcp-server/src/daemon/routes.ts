@@ -18,6 +18,13 @@ import { ReviewPostJournalError, reviewPostIdentitySchema, reviewPostLeaseSchema
 import { isSessionReviewConflictError } from "../store/session-records.js";
 import { REGISTRATION_HEADER, type StanceExceptionRegistry } from "./stance-exceptions.js";
 import { ProposalPreconditionSchema, ProposalSnapshotSchema } from "@deeppairing/shared";
+import type { RetirementInput } from "../store/retirement.js";
+
+const RetirementBody = z.object({
+  artifactId: z.string().min(1), expectedVersion: z.number().int().positive(),
+  expectedStatus: z.enum(["draft", "reviewing", "approved", "rejected", "revised", "superseded", "retracted", "obsolete"]),
+  door: z.enum(["withdraw", "revise"]), mode: z.enum(["retract", "obsolete"]), reason: z.string().trim().min(1),
+}).strict();
 
 const ReviewPostOperationBody = z.discriminatedUnion("action", [
   z.object({ action: z.literal("reserve"), identity: reviewPostIdentitySchema, repost: z.boolean() }).strict(),
@@ -646,6 +653,22 @@ export function createDaemonRoutes(
     return c.json({ status: "delivered" });
   });
 
+  app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/retire", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const r = requireStore(c, sessionId);
+    if (!r.ok) return r.response;
+    const parsed = await parseJsonBody(c, RetirementBody);
+    if (!parsed.ok) return parsed.res;
+    if (parsed.data.artifactId !== c.req.param("artifactId")) return c.json({ error: "artifactId mismatch", code: ERROR_CODES.validation_error }, 400);
+    const result = r.store.retireArtifact(parsed.data as RetirementInput);
+    if (result.kind === "committed" || (result.kind === "already_retired" && result.repaired)) {
+      broadcast(sessionId, { type: "artifact_content_updated", artifact: result.artifact });
+      broadcast(sessionId, { type: "artifact_updated", artifactId: result.artifact.id, status: result.artifact.status });
+      if (result.marker && result.markerAdded) broadcast(sessionId, { type: "comment_added", comment: result.marker });
+    }
+    return c.json(result);
+  });
+
   app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/status", async (c) => {
     const sessionId = c.req.param("sessionId");
     const artifactId = c.req.param("artifactId");
@@ -657,6 +680,9 @@ export function createDaemonRoutes(
       status: Parameters<typeof r.store.updateArtifactStatus>[1];
       reason?: Parameters<typeof r.store.updateArtifactStatus>[2];
     };
+    if (reason === "agent_retract" || reason === "agent_obsolete" || reason === "agent_withdraw") {
+      return c.json({ error: "Use the guarded retirement operation", code: ERROR_CODES.validation_error }, 400);
+    }
     const target = r.store.getArtifacts().find((a) => a.id === artifactId);
     log(
       `[status:internal] sid=${sessionId} artifactId=${artifactId} ` +

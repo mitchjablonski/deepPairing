@@ -1,4 +1,5 @@
 import { nanoid } from "nanoid";
+import { retirementFailure } from "../../store/retirement.js";
 import type { DecisionOption } from "@deeppairing/shared";
 import type { ToolContext, ToolResult } from "./types.js";
 import { notifyResourcesListChanged, formatStyleWarnings, persistPreflightTrace } from "../tool-helpers.js";
@@ -289,40 +290,24 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
   // It is not a status-machine change: `agent_retract` is already a non-human
   // reason, so the cross-terminal verdict guard was never going to fire on it,
   // and every other terminal status still refuses.
-  const isDisarm =
-    mode === "retract" && artifact.status === "approved" && artifact.type === "research" &&
-    artifacts.some((a) => a.type === "changeset" && (a.content as { reviewIntent?: string } | null)?.reviewIntent === "external");
-  if (artifact.status !== "draft" && artifact.status !== "reviewing" && !isDisarm) {
-    return {
-      content: [{
-        type: "text",
-        text: `revise_artifact: ${artifactId} is ${artifact.status}, too late to ${mode}. Use check_feedback instead.` +
-          (artifact.status === "approved" && artifact.type === "research"
-            ? ` (An approved findings artifact can be retracted — "un-armed", so it can no longer be posted — only in an external PR-review session. This one has no external changeset, so approval here doesn't arm anything outbound.)`
-            : ""),
-      }],
-      isError: true,
-    };
-  }
+  if (!store.retireArtifact) return { content: [{ type: "text", text: "revise_artifact: guarded retirement unavailable; nothing changed." }], isError: true };
+  const outcome = await store.retireArtifact({ artifactId, expectedVersion: artifact.version, expectedStatus: artifact.status, door: "revise", mode, reason });
+  if (outcome.kind !== "committed" && outcome.kind !== "already_retired") return { content: [{ type: "text", text: `revise_artifact: ${retirementFailure(outcome)}` }], isError: true };
+  const isDisarm = outcome.disarmed;
   const isObsolete = mode === "obsolete";
   const newStatus = isObsolete ? "obsolete" : "retracted";
-  await store.updateArtifactStatus(artifactId, newStatus, isObsolete ? "agent_obsolete" : "agent_retract");
-  await maybeUpdateTaskStatus(server, artifactId, store);
-  await store.addComment({
-    id: `cmt_${nanoid(10)}`,
-    artifactId,
-    content: `${isObsolete ? "Overcome by new information" : isDisarm ? "Un-armed (retracted after approval, so it can no longer be posted)" : "Retracted"}: ${reason}`,
-    author: "agent",
-  });
-  broadcast({ type: "artifact_updated", artifactId, status: newStatus });
+  let taskWarning = "";
+  try { await maybeUpdateTaskStatus(server, artifactId, store); }
+  catch { taskWarning = " Retirement persisted, but the task summary could not be refreshed."; }
+  if (outcome.kind === "committed" || outcome.repaired) broadcast({ type: "artifact_updated", artifactId, status: newStatus });
   return {
     content: [{
       type: "text",
       text: `${isObsolete
         ? `Marked ${artifactId} obsolete (overcome by new information) — it's off the human's review queue`
         : isDisarm
-          ? `Un-armed ${artifactId}: it was approved, it is now retracted, and post_pr_review will exclude it. Tell your pair it will not be posted`
-          : `Retracted ${artifactId}`}. Continue your workflow — call check_feedback or present a revised artifact.${await ctx.helpers.getPassiveFeedback()}`,
+          ? `Un-armed ${artifactId}: newly authorized outbound reviews exclude it; an already-sending review cannot be recalled`
+          : `Retracted ${artifactId}`}. Call check_feedback for feedback still owed; retirement did not acknowledge or answer it.${outcome.warning ? ` ${outcome.warning}` : ""}${taskWarning}`,
     }],
   };
 }

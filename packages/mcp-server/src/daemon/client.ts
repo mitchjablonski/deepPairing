@@ -20,6 +20,7 @@ import { cliInvocation } from "../cli-invocation.js";
 import { errorName } from "@deeppairing/shared";
 import type { DurableReviewPostStore } from "../github/durable-review-post.js";
 import type { WorkerStop, WorkerStopBatch } from "../store/worker-stop-notices.js";
+import type { RetirementInput, RetirementOutcome } from "../store/retirement.js";
 // Static on purpose (was a dynamic import): a dynamic import made esbuild wrap
 // lifecycle.ts and its whole dependency graph (including zod) in lazy __esm
 // initialisers, and the MCP SDK's top-level zod calls then ran before zod was
@@ -455,6 +456,10 @@ export class DaemonClient implements IStore {
   // G1 (#198c) — proxy the withdraw reason stamp to the daemon's FileStore.
   async setRetractReason(artifactId: string, reason: string): Promise<void> {
     await this.post(`/artifacts/${artifactId}/retract-reason`, { reason });
+  }
+
+  async retireArtifact(input: RetirementInput): Promise<RetirementOutcome> {
+    return this.post<RetirementOutcome>(`/artifacts/${input.artifactId}/retire`, input);
   }
 
   async updateArtifactStatus(

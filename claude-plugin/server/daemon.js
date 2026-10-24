@@ -24517,6 +24517,25 @@ var TOOL_ERROR_RETRYABLE = {
 // src/store/file-store.ts
 import fs17 from "node:fs";
 
+// src/store/retirement.ts
+function retirementFeedback(comments, artifactId) {
+  const questions = collectUnansweredQuestions(comments).filter((q) => q.artifactId === artifactId || q.question.target?.artifactId === artifactId);
+  const counted = new Set(questions.map((q) => q.question.id));
+  const target = comments.filter((c) => c.target?.artifactId === artifactId);
+  const suggestions = target.filter((c) => {
+    const s = c.suggestion;
+    const unappliedInsist = s?.state === "insisted" && !(Number.isInteger(s.appliedInVersion) && Number(s.appliedInVersion) > 0);
+    return c.author === "human" && (s?.state === "pending" || s?.state === "countered" || unappliedInsist) && !counted.has(c.id);
+  });
+  for (const c of suggestions) counted.add(c.id);
+  return {
+    kind: "blocked_feedback",
+    unansweredQuestions: questions.length,
+    openSuggestions: suggestions.length,
+    undrainedComments: target.filter((c) => c.author === "human" && !c.acknowledged && !counted.has(c.id)).length
+  };
+}
+
 // src/store/verdict-guard.ts
 var HUMAN_VERDICT_REASONS = /* @__PURE__ */ new Set([
   "ui_approve_button",
@@ -27368,6 +27387,19 @@ var ReviewPostJournal = class {
 
 // src/store/file-store.ts
 var PREFERENCES_LOCK_TIMEOUT_MS = 1e3;
+var RetirementCommentFields = external_exports.object({
+  id: external_exports.string().min(1),
+  sessionId: external_exports.string(),
+  target: external_exports.object({ artifactId: external_exports.string().min(1) }).passthrough(),
+  parentCommentId: external_exports.string().nullable().optional(),
+  author: external_exports.enum(["human", "agent"]),
+  intent: external_exports.enum(["comment", "question", "suggestion"]).optional(),
+  createdAt: external_exports.string().datetime(),
+  acknowledged: external_exports.boolean(),
+  answeredByCommentId: external_exports.string().nullable().optional(),
+  humanResolvedAt: external_exports.string().datetime().nullable().optional(),
+  suggestion: external_exports.object({ state: external_exports.enum(["pending", "countered", "applied", "insisted"]) }).passthrough().optional()
+}).passthrough();
 var MIRROR_QUEUE_MAX = 200;
 var MIRROR_QUEUE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
 var LEDGER_EXEMPT_REJECT_TYPES = /* @__PURE__ */ new Set([
@@ -27629,8 +27661,35 @@ var FileStore = class _FileStore {
     };
     for (const [file2, values] of Object.entries(records)) this.recordBaselines[file2] = JSON.stringify(values);
   }
+  // #583 — discovering unknown feedback forbids later timer flushes from
+  // laundering it through generic salvage. Pending input stays in memory until
+  // a readable disk+local snapshot can be reconciled without dropping records.
+  retirementFeedbackBlocked = false;
+  /** An uncertain attempt must announce its truth once a retry confirms persistence. */
+  unannouncedRetirements = /* @__PURE__ */ new Map();
+  validateRetirementComments(raw2) {
+    if (!Array.isArray(raw2) || raw2.some((c) => !RetirementCommentFields.safeParse(c).success) || new Set(raw2.map((c) => c.id)).size !== raw2.length || raw2.some((c) => c.sessionId !== this.sessionId)) {
+      throw Object.assign(new Error("Retirement feedback remains unreadable; original comments were not overwritten."), { code: "ERETIREMENTFEEDBACKUNKNOWN" });
+    }
+    return raw2;
+  }
   flushRecords(file2, local, key, salvage, optional2 = false, merge2 = mergeSessionRecords) {
     const baseline = this.recordBaselines[file2] ?? "[]";
+    if (file2 === "comments.json" && this.retirementFeedbackBlocked) {
+      const filePath2 = path16.join(this.sessionDir(), file2);
+      const diskBytes2 = fs17.readFileSync(filePath2, "utf8");
+      const disk = this.validateRetirementComments(JSON.parse(diskBytes2));
+      const pending = this.validateRetirementComments(local);
+      const merged2 = this.validateRetirementComments(mergeSessionRecords(JSON.parse(baseline), pending, disk, (c) => c.id));
+      const bytes = JSON.stringify(merged2, null, 2);
+      if (diskBytes2 !== bytes) writeStringAtomic(filePath2, bytes);
+      this.comments = merged2;
+      this.recordBaselines[file2] = JSON.stringify(merged2);
+      this.observedRecordFiles.add(file2);
+      delete this.backedUpCorruption[filePath2];
+      this.retirementFeedbackBlocked = false;
+      return merged2;
+    }
     const serialized = JSON.stringify(local);
     const dirty = serialized !== baseline;
     if (!dirty) return local;
@@ -27933,6 +27992,121 @@ var FileStore = class _FileStore {
       art.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
       this.scheduleFlush();
     }
+  }
+  /** #583 — locked disk+pending predicate, then one synchronous retirement.
+   * Atomic files are independent: a failed write retains the delta for retry. */
+  retireArtifact(input) {
+    this.assertAuthorizationReadable();
+    if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
+    if (!input.artifactId || !Number.isInteger(input.expectedVersion) || input.expectedVersion < 1 || !input.reason.trim() || !["withdraw", "revise"].includes(input.door) || !["retract", "obsolete"].includes(input.mode) || input.door === "withdraw" && input.mode !== "retract") {
+      return { kind: "ineligible", message: "Invalid retirement request." };
+    }
+    return withSessionFlushLock(path16.join(this.sessionDir(), ".flush.lock"), () => {
+      const read = (file2) => {
+        const filePath = path16.join(this.sessionDir(), file2);
+        let raw2;
+        try {
+          raw2 = JSON.parse(fs17.readFileSync(filePath, "utf8"));
+        } catch (error51) {
+          if (errorCode(error51) === "ENOENT" && !this.observedRecordFiles.has(file2)) return [];
+          throw error51;
+        }
+        if (!Array.isArray(raw2) || raw2.some((r) => !r || typeof r !== "object" || typeof r.id !== "string")) {
+          throw new Error(`Unreadable retirement collection: ${file2}`);
+        }
+        this.observedRecordFiles.add(file2);
+        return raw2;
+      };
+      let persistedArtifact;
+      try {
+        const disk = read("artifacts.json");
+        if (disk.some((a) => !ArtifactSchema.safeParse(a).success) || new Set(disk.map((a) => a.id)).size !== disk.length) throw new Error("Unreadable retirement artifact authority");
+        persistedArtifact = disk.find((a) => a.id === input.artifactId);
+        this.artifacts = mergeArtifactRecords(JSON.parse(this.recordBaselines["artifacts.json"] ?? "[]"), this.artifacts, disk, (a) => a.id);
+      } catch (error51) {
+        if (error51 instanceof SessionReviewConflictError) this.reviewConflict = error51;
+        throw error51;
+      }
+      const artifact = this.artifacts.find((a) => a.id === input.artifactId && a.sessionId === this.sessionId);
+      if (!artifact) return { kind: "not_found", message: `No artifact with id ${input.artifactId} in this session.` };
+      if (artifact.version !== input.expectedVersion) return { kind: "stale", message: "Artifact version changed; check_feedback before retrying." };
+      const reason = input.door === "withdraw" ? "agent_withdraw" : input.mode === "obsolete" ? "agent_obsolete" : "agent_retract";
+      const status = input.mode === "obsolete" ? "obsolete" : "retracted";
+      const transitionKey = JSON.stringify([artifact.id, artifact.version, reason, input.reason]);
+      const history = artifact.statusHistory ?? [];
+      const last = history.at(-1);
+      const content = artifact.content;
+      const replay = artifact.status === status && last?.status === status && last.reason === reason && content?.retractReason === input.reason;
+      if (!replay && artifact.status !== input.expectedStatus) return { kind: "stale", message: "Artifact status changed; check_feedback before retrying." };
+      const disarmed = input.door === "revise" && input.mode === "retract" && artifact.type === "research" && (artifact.status === "approved" || replay && history.at(-2)?.status === "approved") && this.artifacts.some((a) => a.sessionId === this.sessionId && a.type === "changeset" && a.content?.reviewIntent === "external");
+      if (!replay && !(input.door === "withdraw" ? artifact.status === "draft" : artifact.status === "draft" || artifact.status === "reviewing" || disarmed)) {
+        return { kind: "ineligible", message: input.door === "withdraw" ? `${artifact.id} is ${artifact.status}, not a draft \u2014 withdrawal only applies to your own draft.` : `${artifact.id} is ${artifact.status}, too late to ${input.mode}. Approved findings can be un-armed only in an external PR-review session.` };
+      }
+      let warning;
+      let persistedCommentIds = /* @__PURE__ */ new Set();
+      try {
+        const disk = this.validateRetirementComments(read("comments.json"));
+        persistedCommentIds = new Set(disk.map((c) => c.id));
+        this.validateRetirementComments(this.comments);
+        this.comments = this.validateRetirementComments(mergeSessionRecords(JSON.parse(this.recordBaselines["comments.json"] ?? "[]"), this.comments, disk, (c) => c.id));
+        this.retirementFeedbackBlocked = false;
+      } catch {
+        this.retirementFeedbackBlocked = true;
+        if (!disarmed && !replay) return { kind: "feedback_unknown", message: "Feedback could not be read safely; retirement refused. Nothing was acknowledged." };
+        warning = "Feedback could not be read safely; the root history marker was not written. Feedback remains owed.";
+      }
+      if (!disarmed && !replay) {
+        const debt = retirementFeedback(this.comments, artifact.id);
+        if (debt.unansweredQuestions || debt.openSuggestions || debt.undrainedComments) return debt;
+      }
+      this.feedbackNotifyHolds++;
+      const priorNotify = this.feedbackNotifyPending;
+      let committed = false;
+      let pendingMarkerId;
+      try {
+        if (!replay) {
+          this.setRetractReason(artifact.id, input.reason);
+          this.updateArtifactStatus(artifact.id, status, reason);
+        }
+        this.artifacts = this.flushRecords(
+          "artifacts.json",
+          this.artifacts,
+          (a) => a.id,
+          (raw2) => _FileStore.salvageArray("retirement artifacts", raw2, "id"),
+          false,
+          mergeArtifactRecords
+        );
+        let marker;
+        let markerAdded = false;
+        if (!warning) {
+          const at = (artifact.statusHistory ?? []).at(-1)?.at;
+          const markerId = `cmt_retire_${crypto4.createHash("sha256").update(JSON.stringify([this.sessionId, artifact.id, artifact.version, input.door, input.mode, at, input.reason])).digest("hex").slice(0, 32)}`;
+          marker = this.comments.find((c) => c.id === markerId);
+          if (!marker) marker = this.addComment({ id: markerId, artifactId: artifact.id, author: "agent", content: input.door === "withdraw" ? "Withdrawn." : `${disarmed ? "Un-armed" : input.mode === "obsolete" ? "Overcome by new information" : "Retracted"}: ${input.reason}` });
+          markerAdded = !persistedCommentIds.has(marker.id) || this.unannouncedRetirements.get(transitionKey) === marker.id;
+          if (markerAdded) pendingMarkerId = marker.id;
+          this.comments = this.flushRecords(
+            "comments.json",
+            this.comments,
+            (c) => c.id,
+            (raw2) => _FileStore.salvageArray("retirement comments", raw2, "id")
+          );
+        }
+        const repaired = replay && (persistedArtifact?.status !== status || markerAdded || this.unannouncedRetirements.has(transitionKey));
+        this.unannouncedRetirements.delete(transitionKey);
+        committed = true;
+        return { kind: replay ? "already_retired" : "committed", artifact: this.artifacts.find((a) => a.id === artifact.id), marker, disarmed, warning, repaired, markerAdded };
+      } catch (error51) {
+        if (error51 instanceof SessionReviewConflictError) this.reviewConflict = error51;
+        this.unannouncedRetirements.set(transitionKey, pendingMarkerId);
+        this.scheduleFlush();
+        return { kind: "persist_uncertain", message: "Retirement was applied in memory, but persistence is uncertain. Retry this exact request; do not assume it was undone or post the finding." };
+      } finally {
+        this.feedbackNotifyPending = priorNotify;
+        this.feedbackNotifyHolds--;
+        if (committed) this.notifyFeedbackWaiters();
+      }
+    });
   }
   updateArtifactStatus(artifactId, status, reason = "unspecified") {
     this.assertAuthorizationReadable();
@@ -34939,6 +35113,14 @@ function applyTopLevelGuards(app, opts) {
 }
 
 // src/daemon/routes.ts
+var RetirementBody = external_exports.object({
+  artifactId: external_exports.string().min(1),
+  expectedVersion: external_exports.number().int().positive(),
+  expectedStatus: external_exports.enum(["draft", "reviewing", "approved", "rejected", "revised", "superseded", "retracted", "obsolete"]),
+  door: external_exports.enum(["withdraw", "revise"]),
+  mode: external_exports.enum(["retract", "obsolete"]),
+  reason: external_exports.string().trim().min(1)
+}).strict();
 var ReviewPostOperationBody = external_exports.discriminatedUnion("action", [
   external_exports.object({ action: external_exports.literal("reserve"), identity: reviewPostIdentitySchema, repost: external_exports.boolean() }).strict(),
   external_exports.object({ action: external_exports.literal("sending"), lease: reviewPostLeaseSchema, identity: reviewPostIdentitySchema }).strict(),
@@ -35284,6 +35466,21 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     r.store.markWorkerStopsDelivered?.(clean);
     return c.json({ status: "delivered" });
   });
+  app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/retire", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const r = requireStore(c, sessionId);
+    if (!r.ok) return r.response;
+    const parsed = await parseJsonBody(c, RetirementBody);
+    if (!parsed.ok) return parsed.res;
+    if (parsed.data.artifactId !== c.req.param("artifactId")) return c.json({ error: "artifactId mismatch", code: ERROR_CODES.validation_error }, 400);
+    const result = r.store.retireArtifact(parsed.data);
+    if (result.kind === "committed" || result.kind === "already_retired" && result.repaired) {
+      broadcast(sessionId, { type: "artifact_content_updated", artifact: result.artifact });
+      broadcast(sessionId, { type: "artifact_updated", artifactId: result.artifact.id, status: result.artifact.status });
+      if (result.marker && result.markerAdded) broadcast(sessionId, { type: "comment_added", comment: result.marker });
+    }
+    return c.json(result);
+  });
   app.post("/api/internal/sessions/:sessionId/artifacts/:artifactId/status", async (c) => {
     const sessionId = c.req.param("sessionId");
     const artifactId = c.req.param("artifactId");
@@ -35292,6 +35489,9 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     const bodyR = await readJsonObject(c);
     if (!bodyR.ok) return bodyR.res;
     const { status, reason } = bodyR.body;
+    if (reason === "agent_retract" || reason === "agent_obsolete" || reason === "agent_withdraw") {
+      return c.json({ error: "Use the guarded retirement operation", code: ERROR_CODES.validation_error }, 400);
+    }
     const target = r.store.getArtifacts().find((a) => a.id === artifactId);
     log2(
       `[status:internal] sid=${sessionId} artifactId=${artifactId} targetFound=${!!target} fromStatus=${target?.status ?? "(missing)"} toStatus=${status} reason=${reason ?? "unspecified"}`

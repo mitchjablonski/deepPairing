@@ -36229,6 +36229,13 @@ async function handleUpdatePlanProgress(ctx, args) {
   };
 }
 
+// src/store/retirement.ts
+function retirementFailure(outcome) {
+  if (outcome.kind !== "blocked_feedback") return outcome.message;
+  const counts = [outcome.unansweredQuestions ? `${outcome.unansweredQuestions} unanswered question(s)` : "", outcome.openSuggestions ? `${outcome.openSuggestions} open suggestion(s)` : "", outcome.undrainedComments ? `${outcome.undrainedComments} unread comment(s)` : ""].filter(Boolean);
+  return `REFUSED \u2014 ${counts.join(" and ")}. Call check_feedback and address the feedback first; retirement must never dodge review.`;
+}
+
 // src/mcp/tools/revise-artifact.ts
 var SUPERSEDE_VALIDATORS = {
   research: validatePresentFindingsInput,
@@ -36296,17 +36303,17 @@ async function handleReviseArtifact(ctx, args) {
     const pre = await preflightArtifact(ctx, "revise_artifact", old.type, String(args?.title ?? old.title), content, { deferRecord: true });
     if (pre && !pre.ok) {
       const snapshot = reviseSnapshot(old, String(args?.title ?? old.title), reason, finalizeReviseContent(old, structuredClone(content)));
-      const outcome = await admitBlockedProposal(ctx, {
+      const outcome2 = await admitBlockedProposal(ctx, {
         toolName: "revise_artifact",
         handle: op.handle,
         pre,
         resolved: { snapshot, preconditions: [reviseTargetPrecondition(old)] },
         regate: (exclude) => preflightArtifact(ctx, "revise_artifact", old.type, String(args?.title ?? old.title), content, { deferRecord: true, excludeStances: exclude })
       });
-      if ("response" in outcome) return outcome.response;
+      if ("response" in outcome2) return outcome2.response;
       await maybeUpdateTaskStatus(server, old.id, store);
       notifyResourcesListChanged(server);
-      return admittedResult(outcome.admitted, ` Superseded ${artifactId} (v${old.version + 1} is the draft awaiting review). Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback.`);
+      return admittedResult(outcome2.admitted, ` Superseded ${artifactId} (v${old.version + 1} is the draft awaiting review). Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback.`);
     }
     finalizeReviseContent(old, content);
     const title = String(args?.title ?? old.title);
@@ -36376,31 +36383,23 @@ async function handleReviseArtifact(ctx, args) {
       isError: true
     };
   }
-  const isDisarm = mode === "retract" && artifact.status === "approved" && artifact.type === "research" && artifacts.some((a) => a.type === "changeset" && a.content?.reviewIntent === "external");
-  if (artifact.status !== "draft" && artifact.status !== "reviewing" && !isDisarm) {
-    return {
-      content: [{
-        type: "text",
-        text: `revise_artifact: ${artifactId} is ${artifact.status}, too late to ${mode}. Use check_feedback instead.` + (artifact.status === "approved" && artifact.type === "research" ? ` (An approved findings artifact can be retracted \u2014 "un-armed", so it can no longer be posted \u2014 only in an external PR-review session. This one has no external changeset, so approval here doesn't arm anything outbound.)` : "")
-      }],
-      isError: true
-    };
-  }
+  if (!store.retireArtifact) return { content: [{ type: "text", text: "revise_artifact: guarded retirement unavailable; nothing changed." }], isError: true };
+  const outcome = await store.retireArtifact({ artifactId, expectedVersion: artifact.version, expectedStatus: artifact.status, door: "revise", mode, reason });
+  if (outcome.kind !== "committed" && outcome.kind !== "already_retired") return { content: [{ type: "text", text: `revise_artifact: ${retirementFailure(outcome)}` }], isError: true };
+  const isDisarm = outcome.disarmed;
   const isObsolete = mode === "obsolete";
   const newStatus = isObsolete ? "obsolete" : "retracted";
-  await store.updateArtifactStatus(artifactId, newStatus, isObsolete ? "agent_obsolete" : "agent_retract");
-  await maybeUpdateTaskStatus(server, artifactId, store);
-  await store.addComment({
-    id: `cmt_${nanoid3(10)}`,
-    artifactId,
-    content: `${isObsolete ? "Overcome by new information" : isDisarm ? "Un-armed (retracted after approval, so it can no longer be posted)" : "Retracted"}: ${reason}`,
-    author: "agent"
-  });
-  broadcast({ type: "artifact_updated", artifactId, status: newStatus });
+  let taskWarning = "";
+  try {
+    await maybeUpdateTaskStatus(server, artifactId, store);
+  } catch {
+    taskWarning = " Retirement persisted, but the task summary could not be refreshed.";
+  }
+  if (outcome.kind === "committed" || outcome.repaired) broadcast({ type: "artifact_updated", artifactId, status: newStatus });
   return {
     content: [{
       type: "text",
-      text: `${isObsolete ? `Marked ${artifactId} obsolete (overcome by new information) \u2014 it's off the human's review queue` : isDisarm ? `Un-armed ${artifactId}: it was approved, it is now retracted, and post_pr_review will exclude it. Tell your pair it will not be posted` : `Retracted ${artifactId}`}. Continue your workflow \u2014 call check_feedback or present a revised artifact.${await ctx.helpers.getPassiveFeedback()}`
+      text: `${isObsolete ? `Marked ${artifactId} obsolete (overcome by new information) \u2014 it's off the human's review queue` : isDisarm ? `Un-armed ${artifactId}: newly authorized outbound reviews exclude it; an already-sending review cannot be recalled` : `Retracted ${artifactId}`}. Call check_feedback for feedback still owed; retirement did not acknowledge or answer it.${outcome.warning ? ` ${outcome.warning}` : ""}${taskWarning}`
     }]
   };
 }
@@ -36430,48 +36429,20 @@ async function handleWithdrawArtifact(ctx, args) {
       isError: true
     };
   }
-  if (artifact.status !== "draft") {
-    return {
-      content: [{ type: "text", text: `withdraw_artifact: ${artifactId} is ${artifact.status}, not a draft \u2014 withdrawal only applies to a draft you haven't heard back on. Use revise_artifact (supersede) to version it, or check_feedback to read its verdict.` }],
-      isError: true
-    };
+  if (!store.retireArtifact) return { content: [{ type: "text", text: "withdraw_artifact: guarded retirement unavailable; nothing changed." }], isError: true };
+  const outcome = await store.retireArtifact({ artifactId, expectedVersion: artifact.version, expectedStatus: artifact.status, door: "withdraw", mode: "retract", reason });
+  if (outcome.kind !== "committed" && outcome.kind !== "already_retired") return { content: [{ type: "text", text: `withdraw_artifact: ${retirementFailure(outcome)}` }], isError: true };
+  let taskWarning = "";
+  try {
+    await maybeUpdateTaskStatus(server, artifactId, store);
+  } catch {
+    taskWarning = " Retirement persisted, but the task summary could not be refreshed.";
   }
-  const comments = await store.getCommentsForArtifact(artifactId);
-  const unanswered = collectUnansweredQuestions(comments).filter(
-    (q) => q.artifactId === artifactId || q.question.target?.artifactId === artifactId
-  );
-  const unansweredIds = new Set(unanswered.map((q) => q.question.id));
-  const undrainedComments = comments.filter(
-    (c) => c.author === "human" && !c.acknowledged && !unansweredIds.has(c.id)
-  );
-  if (unanswered.length > 0 || undrainedComments.length > 0) {
-    const bits = [];
-    if (unanswered.length > 0) bits.push(`${unanswered.length} unanswered question${unanswered.length === 1 ? "" : "s"}`);
-    if (undrainedComments.length > 0) bits.push(`${undrainedComments.length} unread comment${undrainedComments.length === 1 ? "" : "s"}`);
-    return {
-      content: [{
-        type: "text",
-        text: `withdraw_artifact: REFUSED \u2014 ${artifactId} has ${bits.join(" and ")} from the human. Withdrawing must never dodge review. Call check_feedback and answer_question to address the feedback first; then withdraw (or revise) with a clear conscience.`
-      }],
-      isError: true
-    };
-  }
-  await store.setRetractReason?.(artifactId, reason);
-  await store.updateArtifactStatus(artifactId, "retracted", "agent_withdraw");
-  await maybeUpdateTaskStatus(server, artifactId, store);
-  await store.addComment({
-    id: `cmt_${nanoid3(10)}`,
-    artifactId,
-    content: `Withdrawn.`,
-    author: "agent"
-  });
-  broadcast({ type: "artifact_updated", artifactId, status: "retracted" });
-  const passive = await ctx.helpers.getPassiveFeedback();
-  const carriedNote = passive ? ` Heads up: unread comment(s) carried from an earlier version of this thread were surfaced below \u2014 read them (they were plain comments; an open question or suggested edit would have stayed for check_feedback, and feedback on ${artifactId} itself would have blocked this withdrawal).` : "";
+  if (outcome.kind === "committed" || outcome.repaired) broadcast({ type: "artifact_updated", artifactId, status: "retracted" });
   return {
     content: [{
       type: "text",
-      text: `Withdrew ${artifactId} \u2014 "${reason}". It's off the human's review queue and recorded as retracted (not built). Nothing was written to the ledger. Continue your workflow, or present a corrected artifact when ready.${carriedNote}${passive}`
+      text: `Withdrew ${artifactId} \u2014 "${reason}". It's off the human's review queue and recorded as retracted (not built). Nothing was written to the ledger. Call check_feedback for feedback still owed; withdrawal did not acknowledge or answer it.${outcome.warning ? ` ${outcome.warning}` : ""}${taskWarning}`
     }]
   };
 }
@@ -39699,6 +39670,9 @@ var DaemonClient = class {
   // G1 (#198c) — proxy the withdraw reason stamp to the daemon's FileStore.
   async setRetractReason(artifactId, reason) {
     await this.post(`/artifacts/${artifactId}/retract-reason`, { reason });
+  }
+  async retireArtifact(input) {
+    return this.post(`/artifacts/${input.artifactId}/retire`, input);
   }
   async updateArtifactStatus(artifactId, status, reason) {
     await this.post(`/artifacts/${artifactId}/status`, { status, reason });
