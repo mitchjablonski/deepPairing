@@ -312,7 +312,8 @@ describe("feedback-safe FileStore retirement", () => {
     const before = structuredClone(frozenArtifact);
     writer.forceFlush();
     const persistedArtifacts = read("artifacts.json");
-    const persistedComments = read("comments.json");
+    const commentsPath = file("comments.json");
+    const persistedComments = fs.existsSync(commentsPath) ? read("comments.json") : undefined;
     // Establish that the frozen writer is already blocked by the concurrent
     // content change and its pending human verdict before exercising retirement.
     expect(() => frozen.forceFlush()).toThrow(SessionReviewConflictError);
@@ -321,7 +322,8 @@ describe("feedback-safe FileStore retirement", () => {
     expect(frozenArtifact).toEqual(before);
     expect(frozen.getCommentsForArtifact("a")).toHaveLength(0);
     expect(read("artifacts.json")).toBe(persistedArtifacts);
-    expect(read("comments.json")).toBe(persistedComments);
+    expect(fs.existsSync(commentsPath)).toBe(persistedComments !== undefined);
+    if (persistedComments !== undefined) expect(read("comments.json")).toBe(persistedComments);
   });
 
   for (const failedFile of ["artifacts.json", "comments.json"]) {
