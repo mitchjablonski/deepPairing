@@ -814,3 +814,78 @@ describe("MCP Tool Handlers — revise_artifact", () => {
     });
   });
 });
+
+describe("#589 — revise_artifact normalizes spec ids", () => {
+  const req = (id: string) => ({ id, statement: `s ${id}`, rationale: "r", acceptanceCriteria: ["a"] });
+  const base = { title: "Worker stop signal", objective: "Tell the lead when a worker stops" };
+  const latestSpec = () => store.getArtifacts().filter((a) => a.type === "spec").at(-1)!;
+
+  async function presentV1() {
+    await callTool("present_spec", {
+      ...base,
+      requirements: [req("REQ-1")],
+      edgePaths: [{ id: "wake", path: "long-poll wake", risk: "races the stop" }, { id: "inert", path: "shared mode", risk: "inert" }],
+    });
+    return store.getArtifacts().find((a) => a.type === "spec")!;
+  }
+
+  it("a revision with duplicate ids is normalized and warned", async () => {
+    const v1 = await presentV1();
+    const r = await callTool("revise_artifact", {
+      artifactId: v1.id,
+      mode: "supersede",
+      reason: "tighten",
+      content: {
+        ...base,
+        requirements: [req("REQ-1"), req("REQ-1")],
+        edgePaths: [{ id: "wake", path: "a", risk: "x" }, { id: "wake", path: "b", risk: "y" }],
+      },
+    });
+    expect(r.isError).toBeFalsy();
+    const c = latestSpec().content as any;
+    expect(c.requirements.map((x: any) => x.id)).toEqual(["REQ-1", "REQ-1-2"]);
+    expect(c.edgePaths.map((x: any) => x.id)).toEqual(["wake", "wake-2"]);
+    expect(r.text).toContain('requirement #2 id "REQ-1" is a duplicate — renamed "REQ-1-2"');
+    expect(r.text).toContain('edge path #2 id "wake" is a duplicate — renamed "wake-2"');
+  });
+
+  it("a revision with a numeric edge-path id gets it prefixed", async () => {
+    const v1 = await presentV1();
+    const r = await callTool("revise_artifact", {
+      artifactId: v1.id,
+      mode: "supersede",
+      reason: "tighten",
+      content: { ...base, requirements: [req("REQ-1")], edgePaths: [{ id: "3", path: "a", risk: "x" }, { path: "b", risk: "y" }] },
+    });
+    expect((latestSpec().content as any).edgePaths.map((x: any) => x.id)).toEqual(["ep-3", undefined]);
+    expect(r.text).toContain('edge path #1 id "3" is purely numeric');
+  });
+
+  it("a revision keeping v1's unique ids is unchanged, warning-free, and threads on `wake` carry over", async () => {
+    const v1 = await presentV1();
+    await store.addComment({
+      id: "cmt_wake",
+      artifactId: v1.id,
+      content: "re-read after the wake",
+      author: "human",
+      target: { artifactId: v1.id, sectionId: "spec:edge-path:wake" },
+    } as any);
+    const r = await callTool("revise_artifact", {
+      artifactId: v1.id,
+      mode: "supersede",
+      reason: "tighten",
+      content: {
+        ...base,
+        requirements: [req("REQ-1")],
+        edgePaths: [{ id: "inert", path: "shared mode", risk: "inert" }, { id: "wake", path: "long-poll wake", risk: "races the stop" }],
+      },
+    });
+    expect(r.isError).toBeFalsy();
+    expect(r.text).not.toContain("spec ids adjusted");
+    const c = latestSpec().content as any;
+    expect(c.edgePaths.map((x: any) => x.id)).toEqual(["inert", "wake"]);
+    expect(c.requirements[0].id).toBe("REQ-1");
+    const fb = await callTool("check_feedback");
+    expect(fb.text).toContain("edge path #2: long-poll wake");
+  });
+});
