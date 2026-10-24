@@ -29,6 +29,23 @@ beforeEach(() => { fx = withGlobalStore("dp-retirement-"); });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); fx.dispose(); });
 
 describe("feedback-safe FileStore retirement", () => {
+  it.each([false, true])("ancillary evidence on another artifact cannot poison retirement or later human persistence (disarm: %s)", (disarm) => {
+    const store = seed();
+    store.addComment({ id: "other_answer", artifactId: "other", author: "agent", content: "Existing evidence", codeReferences: [{ filePath: "x.ts", lineStart: 0, lineEnd: Number.NaN }] });
+    store.forceFlush();
+    const preserved = open().getComment("other_answer");
+    if (disarm) {
+      store.createArtifact({ id: "external", type: "changeset", title: "PR", content: { files: [], reviewIntent: "external" } });
+      store.updateArtifactStatus("a", "approved", "ui_approve_button");
+    }
+    expect(store.retireArtifact(disarm ? { ...request(), expectedStatus: "approved" } : request()).kind).toBe("committed");
+    human(store, "later_human");
+    store.forceFlush();
+    const fresh = open();
+    expect(fresh.getComment("later_human")?.acknowledged).toBe(false);
+    expect(fresh.getComment("other_answer")).toEqual(preserved);
+  });
+
   it("installs repaired disk questions when recovery starts with no pending local comments", () => {
     const store = seed();
     fs.writeFileSync(file("comments.json"), JSON.stringify({ unknown: "feedback" }));
@@ -143,10 +160,10 @@ describe("feedback-safe FileStore retirement", () => {
       expect(markers[0].parentCommentId).toBeFalsy();
     });
 
-    for (const kind of ["plain", "question", "delivered-question", "answered-undrained", "pending", "countered"] as const) {
+    for (const kind of ["plain", "question", "delivered-question", "answered-undrained", "pending", "countered", "insisted"] as const) {
       it(`${door} refuses ${kind} without changing lifecycle or feedback bytes`, () => {
         const store = seed();
-        if (kind === "pending" || kind === "countered") {
+        if (kind === "pending" || kind === "countered" || kind === "insisted") {
           store.addComment({ id: "s", artifactId: "a", content: "Replace this", author: "human", intent: "suggestion",
             suggestion: { originalText: "old", replacementText: "new", lineStart: 1, lineEnd: 1, state: kind } });
           store.acknowledgeComments(["s"]);
@@ -164,6 +181,28 @@ describe("feedback-safe FileStore retirement", () => {
         expect(artifact(store)?.status).toBe("draft");
       });
     }
+
+    it.each([undefined, null, 0, -1, 1.5, "2"])(`${door} treats invalid insisted application stamp %s as unapplied, not unreadable feedback`, (stamp) => {
+      const store = seed();
+      const suggestion = store.addComment({ id: "insisted", artifactId: "a", author: "human", content: "Apply this exactly", intent: "suggestion",
+        suggestion: { originalText: "old", replacementText: "new", lineStart: 1, lineEnd: 1, state: "insisted" } });
+      Object.assign(suggestion.suggestion!, { appliedInVersion: stamp });
+      store.acknowledgeComments([suggestion.id]);
+      store.forceFlush();
+      expect(store.retireArtifact(request(door))).toMatchObject({ kind: "blocked_feedback", openSuggestions: 1 });
+      expect(artifact(store)?.status).toBe("draft");
+      human(store, "still_persistable");
+      store.forceFlush();
+      expect(open().getComment("still_persistable")).toBeDefined();
+    });
+
+    it(`${door} permits a delivered insisted edit stamped with a valid applied version`, () => {
+      const store = seed();
+      store.addComment({ id: "applied_insist", artifactId: "a", author: "human", content: "Apply exactly", intent: "suggestion",
+        suggestion: { originalText: "old", replacementText: "new", lineStart: 1, lineEnd: 1, state: "insisted", appliedInVersion: 2 } });
+      store.acknowledgeComments(["applied_insist"]);
+      expect(store.retireArtifact(request(door)).kind).toBe("committed");
+    });
 
     it(`${door} permits answered or human-resolved questions after actual delivery`, () => {
       const store = seed();
@@ -250,6 +289,9 @@ describe("feedback-safe FileStore retirement", () => {
     store.updateArtifactStatus("a", "approved", "ui_approve_button");
     human(store, "question", "question");
     human(store, "plain");
+    store.addComment({ id: "unapplied_insist", artifactId: "a", author: "human", content: "Apply this exactly", intent: "suggestion",
+      suggestion: { originalText: "old", replacementText: "new", lineStart: 1, lineEnd: 1, state: "insisted" } });
+    store.acknowledgeComments(["unapplied_insist"]);
     const before = structuredClone(store.getCommentsForArtifact("a"));
     const input = { ...request(), expectedStatus: "approved" as const };
     expect(store.retireArtifact({ ...input, mode: "obsolete" }).kind).toBe("ineligible");

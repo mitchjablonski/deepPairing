@@ -3,7 +3,7 @@
  * Test bodies are verbatim from the monolith; only the harness wiring is new.
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import type { FileStore } from "../../store/file-store.js";
+import { FileStore } from "../../store/file-store.js";
 import { authorizeReviewPost } from "../../github/review-authorization.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
 
@@ -15,6 +15,25 @@ beforeEach(() => {
 });
 
 describe("MCP Tool Handlers — revise_artifact", () => {
+  it.each(["withdraw_artifact", "revise_artifact"])("%s accepts existing answer evidence and later human feedback remains durable", async (tool) => {
+    await callTool("present_findings", { summary: "Finding", findings: [{ category: "other", detail: "x", significance: "low" }] });
+    const artifact = store.getArtifacts()[0];
+    store.addComment({ id: "evidence_question", artifactId: artifact.id, author: "human", content: "What is the evidence?", intent: "question" });
+    const answer = await callTool("answer_question", { commentId: "evidence_question", answer: "Here is the evidence", evidence: [{ filePath: "x.ts", lineStart: 0 }, { filePath: "y.ts", lineStart: "not-a-number" }] });
+    expect(answer.isError).toBeFalsy();
+    store.forceFlush();
+    const prior = ctx.fx.track(new FileStore(ctx.tmpDir, "test_session"));
+    const answerComment = prior.getCommentsForArtifact(artifact.id).find((c) => c.author === "agent" && c.parentCommentId === "evidence_question")!;
+    expect(answerComment.codeReferences?.map((r) => r.lineStart)).toEqual([0, null]);
+    const result = await callTool(tool, { artifactId: artifact.id, mode: "retract", reason: "The account is superseded by new evidence" });
+    expect(result.isError).toBeFalsy();
+    store.addComment({ id: "later_human", artifactId: artifact.id, author: "human", content: "Keep this feedback after retirement" });
+    store.forceFlush();
+    const fresh = ctx.fx.track(new FileStore(ctx.tmpDir, "test_session"));
+    expect(fresh.getComment("later_human")?.content).toBe("Keep this feedback after retirement");
+    expect(fresh.getComment(answerComment.id)).toEqual(answerComment);
+  });
+
   it.each(["retract", "obsolete"])("%s refuses acknowledged but still-open suggestions without draining other feedback", async (mode) => {
     await callTool("present_findings", { summary: "Finding", findings: [{ category: "other", detail: "x", significance: "low" }] });
     const artifact = store.getArtifacts()[0];

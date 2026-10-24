@@ -1,10 +1,11 @@
 import fs from "node:fs";
+import { z } from "zod";
 import { retirementFeedback, type RetirementInput, type RetirementOutcome } from "./retirement.js";
 import { classifyStaleResolve, classifyClosedDecision, type DecisionResolveOutcome, type ResolutionAnnouncement } from "./decision-resolve-guard.js";
 import path from "node:path";
 import crypto from "node:crypto";
 import type { Artifact, ArtifactAdmission, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
-import { ArtifactSchema, CommentSchema, suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode } from "@deeppairing/shared";
+import { ArtifactSchema, suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { capConceptLength } from "./concept-hygiene.js";
@@ -40,6 +41,20 @@ export type { ProjectGuardrail };
 /** #408 — bounded wait for the project preferences.json transaction lock (one
  *  small JSON read + atomic replace). Past this, fail closed with ELOCKED. */
 const PREFERENCES_LOCK_TIMEOUT_MS = 1000;
+
+// #583 — validate only fields consulted by thread/debt projection. Existing
+// writers permit ancillary evidence that does not satisfy full CommentSchema.
+// safeParse is validation only; original rows (including unknown fields) survive.
+const RetirementCommentFields = z.object({
+  id: z.string().min(1), sessionId: z.string(),
+  target: z.object({ artifactId: z.string().min(1) }).passthrough(),
+  parentCommentId: z.string().nullable().optional(),
+  author: z.enum(["human", "agent"]), intent: z.enum(["comment", "question", "suggestion"]).optional(),
+  createdAt: z.string().datetime(), acknowledged: z.boolean(),
+  answeredByCommentId: z.string().nullable().optional(),
+  humanResolvedAt: z.string().datetime().nullable().optional(),
+  suggestion: z.object({ state: z.enum(["pending", "countered", "applied", "insisted"]) }).passthrough().optional(),
+}).passthrough();
 
 /** #486 — one cross-project mirror refused by a busy ledger lock, queued in
  *  `.deeppairing/ledger-mirror-pending.json` for replay. */
@@ -409,7 +424,7 @@ export class FileStore implements IStore {
   private unannouncedRetirements = new Map<string, string | undefined>();
 
   private validateRetirementComments(raw: unknown): Comment[] {
-    if (!Array.isArray(raw) || raw.some((c: unknown) => !CommentSchema.safeParse(c).success) ||
+    if (!Array.isArray(raw) || raw.some((c: unknown) => !RetirementCommentFields.safeParse(c).success) ||
       new Set(raw.map((c: Comment) => c.id)).size !== raw.length ||
       raw.some((c: Comment) => c.sessionId !== this.sessionId)) {
       throw Object.assign(new Error("Retirement feedback remains unreadable; original comments were not overwritten."), { code: "ERETIREMENTFEEDBACKUNKNOWN" });

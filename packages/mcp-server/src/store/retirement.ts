@@ -21,7 +21,11 @@ export function retirementFeedback(comments: Comment[], artifactId: string) {
   const questions = collectUnansweredQuestions(comments).filter((q) => q.artifactId === artifactId || q.question.target?.artifactId === artifactId);
   const counted = new Set(questions.map((q) => q.question.id));
   const target = comments.filter((c) => c.target?.artifactId === artifactId);
-  const suggestions = target.filter((c) => c.author === "human" && (c.suggestion?.state === "pending" || c.suggestion?.state === "countered") && !counted.has(c.id));
+  const suggestions = target.filter((c) => {
+    const s = c.suggestion;
+    const unappliedInsist = s?.state === "insisted" && !(Number.isInteger(s.appliedInVersion) && Number(s.appliedInVersion) > 0);
+    return c.author === "human" && (s?.state === "pending" || s?.state === "countered" || unappliedInsist) && !counted.has(c.id);
+  });
   for (const c of suggestions) counted.add(c.id);
   return {
     kind: "blocked_feedback" as const,
