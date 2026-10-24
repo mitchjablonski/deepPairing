@@ -1046,3 +1046,58 @@ describe("F11 (G6) — salvage-log suppression keys are session-scoped", () => {
     });
   });
 });
+
+describe("#569 — updatePlanProgress tracks spec tasks (pilot task B)", () => {
+  const specContent = () => ({
+    objective: "o",
+    requirements: [{ id: "R1", statement: "s", rationale: "r", acceptanceCriteria: ["a"] }],
+    tasks: [{ description: "t0" }, { description: "t1" }, { description: "t2" }],
+  });
+
+  it("patches a spec's tasks[stepIndex] in place, with statusNote", () => {
+    const store = createStore("spec_progress");
+    store.createArtifact({ id: "spec_1", type: "spec", title: "brief", content: specContent() });
+    const updated = store.updatePlanProgress("spec_1", [
+      { stepIndex: 0, status: "done" },
+      { stepIndex: 2, status: "skipped", statusNote: "covered by t0" },
+    ]);
+    expect(updated?.id).toBe("spec_1");
+    const tasks = (store.getArtifacts().find((a) => a.id === "spec_1")!.content as any).tasks;
+    expect(tasks[0]).toEqual({ description: "t0", status: "done" });
+    expect(tasks[1].status).toBeUndefined();
+    expect(tasks[2]).toEqual({ description: "t2", status: "skipped", statusNote: "covered by t0" });
+  });
+
+  it("task statuses survive a flush + reload", () => {
+    const store = createStore("spec_progress_reload");
+    store.createArtifact({ id: "spec_r", type: "spec", title: "brief", content: specContent() });
+    store.updatePlanProgress("spec_r", [{ stepIndex: 1, status: "in_progress", statusNote: "half way" }]);
+    store.forceFlush();
+    const again = createStore("spec_progress_reload");
+    const tasks = (again.getArtifacts().find((a) => a.id === "spec_r")!.content as any).tasks;
+    expect(tasks[1]).toMatchObject({ status: "in_progress", statusNote: "half way" });
+  });
+
+  it("out-of-range-only updates and a spec with no tasks return null", () => {
+    const store = createStore("spec_progress_oob");
+    store.createArtifact({ id: "spec_o", type: "spec", title: "brief", content: specContent() });
+    expect(store.updatePlanProgress("spec_o", [{ stepIndex: 3, status: "done" }])).toBeNull();
+    store.createArtifact({
+      id: "spec_none", type: "spec", title: "no tasks",
+      content: { objective: "o", requirements: [{ id: "R1", statement: "s", rationale: "r", acceptanceCriteria: [] }] },
+    });
+    expect(store.updatePlanProgress("spec_none", [{ stepIndex: 0, status: "done" }])).toBeNull();
+  });
+
+  it("plans are unchanged: steps still patch, and other types are still refused", () => {
+    const store = createStore("plan_progress_unchanged");
+    store.createArtifact({
+      id: "plan_1", type: "plan", title: "p",
+      content: { objective: "o", steps: [{ description: "s0", reasoning: "r" }], estimatedChanges: 1 },
+    });
+    expect(store.updatePlanProgress("plan_1", [{ stepIndex: 0, status: "done" }])).not.toBeNull();
+    expect((store.getArtifacts().find((a) => a.id === "plan_1")!.content as any).steps[0].status).toBe("done");
+    store.createArtifact({ id: "res_1", type: "research", title: "r", content: { summary: "s", findings: [] } });
+    expect(store.updatePlanProgress("res_1", [{ stepIndex: 0, status: "done" }])).toBeNull();
+  });
+});

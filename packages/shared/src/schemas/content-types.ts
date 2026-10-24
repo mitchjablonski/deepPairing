@@ -306,6 +306,16 @@ export const SpecTaskSchema = z.object({
   /** Which requirement ids this task implements — the traceability link. */
   linkedRequirementIds: z.array(z.string()).optional(),
   estimate: z.enum(["xs", "s", "m", "l", "xl"]).optional(),
+  /**
+   * #507 S1 / #569 — execution tracking for a spec's tasks, the same shape as
+   * PlanStep.status: the agent marks tasks via update_plan_progress (stepIndex
+   * = task index) and the companion renders the live checklist. Optional for
+   * back-compat (absent = execution not tracked).
+   */
+  status: z.enum(["pending", "in_progress", "done", "skipped"]).optional()
+    .describe("Execution status, updated by the agent via update_plan_progress"),
+  statusNote: z.string().optional()
+    .describe("One-line note shown beside the task (e.g. why it was skipped)"),
 });
 
 export type SpecTask = z.infer<typeof SpecTaskSchema>;

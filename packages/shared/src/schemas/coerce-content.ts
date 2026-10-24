@@ -318,6 +318,13 @@ function coerceTask(v: unknown): SpecTask {
   if (Array.isArray(t.linkedRequirementIds)) out.linkedRequirementIds = strArr(t.linkedRequirementIds);
   const estimate = optOneOf(t.estimate, ["xs", "s", "m", "l", "xl"] as const);
   if (estimate) out.estimate = estimate;
+  // #569 — execution tracking, the same passthrough coercePlanStep has: the
+  // coercer builds `out` field-by-field, so without this it would strip the
+  // statuses update_plan_progress just wrote.
+  if (t.status === "pending" || t.status === "in_progress" || t.status === "done" || t.status === "skipped") {
+    out.status = t.status;
+  }
+  if (typeof t.statusNote === "string") out.statusNote = t.statusNote;
   return out;
 }
 

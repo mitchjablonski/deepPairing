@@ -6,11 +6,11 @@ import { CommentableCode } from "../CommentableCode";
 import { OpenInEditorLink } from "../OpenInEditor";
 import { useArtifactStore } from "../../stores/artifact";
 import { useChainComments } from "../../hooks/useChainComments";
-import { useConnectionStore } from "../../stores/connection";
 import { useReplayStore } from "../../stores/replay";
 import { useWriteLock } from "../../hooks/useWriteLock";
 import { useShallow } from "zustand/react/shallow";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
+import { ExecutionStrip, StepStatusMarker, NON_EXECUTABLE_STATUSES } from "./ExecutionProgress";
 import { computeLineDiff } from "../../lib/diff";
 import { useEffect, useMemo, useState } from "react";
 import { useOfflineReason } from "../../hooks/useOfflineReason";
@@ -256,9 +256,9 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
               phase was pure dead air; the agent now marks steps via
               update_plan_progress and this renders live. Only shows once
               ANY step carries a status (old plans stay untracked). */}
-          {!["draft", "rejected", "retracted", "obsolete"].includes(artifact.status) &&
+          {!NON_EXECUTABLE_STATUSES.includes(artifact.status) &&
             steps.some((st) => st.status) && (
-            <PlanExecutionStrip steps={steps} sessionId={artifact.sessionId} />
+            <ExecutionStrip items={steps} sessionId={artifact.sessionId} noun="step" />
           )}
 
           {steps.map((step, i) => {
@@ -437,69 +437,3 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
   );
 }
 
-/** D10 (H2) — live "Step 3 of 7" strip; mirrors TriageProgressStrip's shape. */
-function PlanExecutionStrip({ steps, sessionId }: { steps: PlanStep[]; sessionId?: string }) {
-  const done = steps.filter((s) => s.status === "done" || s.status === "skipped").length;
-  const active = steps.findIndex((s) => s.status === "in_progress");
-  const pct = steps.length === 0 ? 0 : Math.round((done / steps.length) * 100);
-  // F8 (M2) — "Executing" is a claim about a LIVE agent; on a dead session
-  // it contradicted the SessionWrapCard rendered right above it. The dead
-  // wrapper narrates honestly instead.
-  const sessionLive = useConnectionStore(
-    (s) => s.activeSessions.find((x) => x.sessionId === sessionId)?.live !== false,
-  );
-  return (
-    <div
-      role="group"
-      aria-label={`Plan execution: ${done} of ${steps.length} steps complete`}
-      className="px-3 py-2 bg-surface-secondary border border-white/[0.06] rounded-lg flex items-center gap-3"
-    >
-      <span className="text-2xs font-semibold text-text-secondary uppercase tracking-wide shrink-0">
-        {done === steps.length
-          ? "Plan complete"
-          : !sessionLive
-            ? `Paused at step ${(active >= 0 ? active : done) + 1} of ${steps.length} — agent exited`
-            : active >= 0
-              ? `Executing step ${active + 1} of ${steps.length}`
-              : `${done} of ${steps.length} done`}
-      </span>
-      <div className="flex-1 h-1.5 rounded-full bg-surface-elevated overflow-hidden">
-        <div
-          className="h-full rounded-full bg-accent-green transition-all duration-300"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <span className="text-2xs text-text-muted shrink-0">{pct}%</span>
-    </div>
-  );
-}
-
-/** D10 — per-step execution marker (replaces the plain number once tracked). */
-function StepStatusMarker({ index, status }: { index: number; status?: PlanStep["status"] }) {
-  if (status === "done") {
-    return (
-      <span className="shrink-0 w-5 h-5 rounded-full bg-accent-green-dim text-accent-green text-xs flex items-center justify-center mt-0.5" title="Done" aria-label={`Step ${index + 1}: done`}>
-        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 5l2.5 2.5L8 3" /></svg>
-      </span>
-    );
-  }
-  if (status === "in_progress") {
-    return (
-      <span className="shrink-0 w-5 h-5 rounded-full bg-accent-blue-dim text-accent-blue text-xs font-bold flex items-center justify-center mt-0.5 animate-pulse" title="In progress" aria-label={`Step ${index + 1}: in progress`}>
-        {index + 1}
-      </span>
-    );
-  }
-  if (status === "skipped") {
-    return (
-      <span className="shrink-0 w-5 h-5 rounded-full bg-surface-elevated text-text-muted text-xs flex items-center justify-center mt-0.5 line-through" title="Skipped" aria-label={`Step ${index + 1}: skipped`}>
-        {index + 1}
-      </span>
-    );
-  }
-  return (
-    <span className="shrink-0 w-5 h-5 rounded-full bg-accent-blue-dim text-accent-blue text-xs font-bold flex items-center justify-center mt-0.5">
-      {index + 1}
-    </span>
-  );
-}

@@ -25200,7 +25200,15 @@ var SpecTaskSchema = external_exports.object({
   description: external_exports.string(),
   /** Which requirement ids this task implements — the traceability link. */
   linkedRequirementIds: external_exports.array(external_exports.string()).optional(),
-  estimate: external_exports.enum(["xs", "s", "m", "l", "xl"]).optional()
+  estimate: external_exports.enum(["xs", "s", "m", "l", "xl"]).optional(),
+  /**
+   * #507 S1 / #569 — execution tracking for a spec's tasks, the same shape as
+   * PlanStep.status: the agent marks tasks via update_plan_progress (stepIndex
+   * = task index) and the companion renders the live checklist. Optional for
+   * back-compat (absent = execution not tracked).
+   */
+  status: external_exports.enum(["pending", "in_progress", "done", "skipped"]).optional().describe("Execution status, updated by the agent via update_plan_progress"),
+  statusNote: external_exports.string().optional().describe("One-line note shown beside the task (e.g. why it was skipped)")
 });
 var SpecContentSchema = external_exports.object({
   objective: external_exports.string().describe("One-sentence objective the spec is chasing"),
@@ -26263,6 +26271,11 @@ function coerceTask(v2) {
   const estimate = optOneOf(t.estimate, ["xs", "s", "m", "l", "xl"]);
   if (estimate)
     out.estimate = estimate;
+  if (t.status === "pending" || t.status === "in_progress" || t.status === "done" || t.status === "skipped") {
+    out.status = t.status;
+  }
+  if (typeof t.statusNote === "string")
+    out.statusNote = t.statusNote;
   return out;
 }
 function coerceSpecContent(raw) {
@@ -36135,25 +36148,29 @@ async function handleUpdatePlanProgress(ctx, args) {
   const artifact = await store.updatePlanProgress(artifactId, updates);
   if (!artifact) {
     return {
-      content: [{ type: "text", text: `update_plan_progress: ${artifactId} is not a known plan artifact (or no update touched an existing step).` }],
+      content: [{ type: "text", text: `update_plan_progress: ${artifactId} is not a known plan or spec artifact (or no update touched an existing plan step or spec task).` }],
       isError: true
     };
   }
   broadcast({ type: "plan_progress_updated", artifact });
-  const steps = artifact.content.steps ?? [];
-  const done = steps.filter((st) => st.status === "done" || st.status === "skipped").length;
+  const isSpec = artifact.type === "spec";
+  const kind = isSpec ? "spec" : "plan";
+  const unit = isSpec ? "tasks" : "steps";
+  const c = artifact.content;
+  const items = (isSpec ? c.tasks : c.steps) ?? [];
+  const done = items.filter((st) => st.status === "done" || st.status === "skipped").length;
   const NOT_EXECUTABLE = {
     draft: "still AWAITING REVIEW \u2014 get your pair's approval before executing",
-    rejected: "REJECTED \u2014 do not execute it; address the feedback or present a new plan",
+    rejected: `REJECTED \u2014 do not execute it; address the feedback or present a new ${kind}`,
     retracted: "retracted",
     obsolete: "obsolete"
   };
   const warning = NOT_EXECUTABLE[artifact.status] ? `
-\u26A0 WARNING: this plan is ${NOT_EXECUTABLE[artifact.status]}.` : "";
+\u26A0 WARNING: this ${kind} is ${NOT_EXECUTABLE[artifact.status]}.` : "";
   return {
     content: [{
       type: "text",
-      text: `Plan progress recorded: ${done}/${steps.length} steps complete. The companion UI checklist is live \u2014 keep marking steps as you finish them.${warning}`
+      text: `${isSpec ? "Spec" : "Plan"} progress recorded: ${done}/${items.length} ${unit} complete. The companion UI checklist is live \u2014 keep marking ${unit} as you finish them.${warning}`
     }]
   };
 }
@@ -38384,19 +38401,19 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
       },
       {
         name: "update_plan_progress",
-        annotations: { title: "Update plan progress", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-        description: "Mark plan steps as in_progress/done/skipped while EXECUTING an approved plan. Call it as you finish each step \u2014 the companion UI renders a live joint checklist, so your pair watches the build land instead of staring at a spinner. Not for changing the plan itself (use revise_artifact).",
+        annotations: { title: "Update plan or spec progress", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+        description: "Mark plan steps or spec tasks as in_progress/done/skipped while EXECUTING an approved plan or spec. Call it as you finish each step or task \u2014 the companion UI renders a live joint checklist, so your pair watches the build land instead of staring at a spinner. Not for changing the plan or spec itself (use revise_artifact).",
         inputSchema: {
           type: "object",
           properties: {
-            artifactId: { type: "string", description: "The plan artifact id (art_...)" },
+            artifactId: { type: "string", description: "The plan or spec artifact id (art_...)" },
             updates: {
               type: "array",
-              description: "Step status changes; indexes are 0-based positions in the plan's steps array",
+              description: "Status changes; indexes are 0-based positions in the plan's steps array or the spec's tasks array",
               items: {
                 type: "object",
                 properties: {
-                  stepIndex: { type: "number", description: "0-based index into steps[]" },
+                  stepIndex: { type: "number", description: "0-based index into a plan's steps[] or a spec's tasks[]" },
                   status: { type: "string", enum: ["pending", "in_progress", "done", "skipped"] },
                   statusNote: { type: "string", description: "Optional one-liner shown beside the step (e.g. why skipped)" }
                 },

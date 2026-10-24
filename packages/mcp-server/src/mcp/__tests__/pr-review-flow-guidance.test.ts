@@ -447,6 +447,19 @@ describe("S0 — delegate.md carries the five moves and the run rules", () => {
     expect(brief).toContain("`line-by-line`");
   });
 
+  it("#569 pilot B: move 3 tracks the brief's tasks with update_plan_progress, not log_reasoning per task", () => {
+    const run = text.slice(text.indexOf("(3) Run"), text.indexOf("(4) Packet"));
+    expect(run).toContain("`update_plan_progress`");
+    expect(run).toContain("`stepIndex`");
+    expect(run).toContain("`tasks[]`");
+    expect(text).not.toContain("Until spec tasks carry a status");
+    expect(text).not.toMatch(/one `log_reasoning` per \*?completed task/);
+    const sk = flat(skill());
+    const para = sk.slice(sk.indexOf("Delegated work"), sk.indexOf("## When to use which tool"));
+    expect(para).toContain("`update_plan_progress`");
+    expect(para).not.toContain("until tasks have a status");
+  });
+
   it("the SKILL carries a Delegated work paragraph in the Cadence section", () => {
     const sk = flat(skill());
     const at = sk.indexOf("Delegated work");

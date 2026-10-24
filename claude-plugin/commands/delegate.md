@@ -16,8 +16,9 @@ Five moves, in order. Don't skip the brief: it is the only card before you build
   `confidence: "high"` arms the auto-approve countdown, and I'd lose the
   approval the brief exists to get.
 - **Post nothing during the run except the required-decision list in move 3.**
-  No findings, no per-step `log_reasoning` beyond what move 3 allows, no
-  `present_code_change` per edit, no explainer I didn't ask for.
+  No findings, no per-step `log_reasoning` (move 3's `update_plan_progress`
+  is the progress signal), no `present_code_change` per edit, no explainer I
+  didn't ask for.
 
 If my autonomy level is `supervised`, still post the brief and the packet, since I
 asked for them. But nothing is quieted: every fork is presented the way it is
@@ -71,8 +72,11 @@ dependency, or change a schema or CI. supersede the brief:
 `revise_artifact` with `mode: "supersede"`, a `reason`, and new `content` whose
 `context` has the line `Risk class: escalated` and whose `file_map` visual lists
 the newly declared files. Then wait for my approval. A low-risk brief silences the guardrail hook, so this rule is the only
-thing that stops you. Until spec tasks carry a status, post one `log_reasoning`
-per *completed task*, with the task as `action`.
+thing that stops you. Track progress on the approved brief itself:
+`update_plan_progress` with the brief's id and `stepIndex` set to the task's
+0-based index in `tasks[]` — mark a task `in_progress` when you start it and
+`done` (or `skipped`, with a `statusNote` saying why) when you finish. I watch
+the brief's checklist fill in; no `log_reasoning` per task.
 
 **(4) Packet.** `present_changeset` with `summary`, `risks[]` and a `visuals[]`
 entry of `kind: "diagram"` showing the changed files and their neighbours. Then **one** `present_debrief` with the

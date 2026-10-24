@@ -248,9 +248,9 @@ a `high` draft arms the auto-approve countdown.
 - **Packet caps.** `needsYourEyes` is three at most, ranked, with lines. Proof is
   what you ran; `not-run` is valid with a reason. One debrief, superseded, never
   duplicated.
-- **Must not:** `log_reasoning` per step (once per completed task, until tasks have
-  a status), `present_code_change` per edit, an unprompted explainer, a second
-  debrief, or any run against a draft brief.
+- **Must not:** `log_reasoning` per step (mark the brief's tasks with
+  `update_plan_progress` instead), `present_code_change` per edit, an unprompted
+  explainer, a second debrief, or any run against a draft brief.
 
 Words to the agent:
 
