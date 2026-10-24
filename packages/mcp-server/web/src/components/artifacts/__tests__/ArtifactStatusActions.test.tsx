@@ -78,6 +78,45 @@ describe("ArtifactStatusActions — status branches", () => {
 });
 
 describe("ArtifactStatusActions — draft interactions", () => {
+  it("report Got it explicitly approves using the existing handler", async () => {
+    render(<ArtifactStatusActions artifact={artifact({ type: "debrief" })} informationalReport suppressRejectConcept />);
+    expect(screen.getByRole("button", { name: /Request changes/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^Reject$/ })).toBeEnabled();
+    await act(async () => { screen.getByRole("button", { name: /^Got it$/ }).click(); });
+    const calls = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([url]) => String(url).includes("/status"));
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(calls[0]![1].body)).toMatchObject({ status: "approved" });
+    expect(JSON.parse(calls[0]![1].body).reason).toBeUndefined();
+  });
+
+  it.each([[/Request changes/i, "revised"], [/^Reject$/, "rejected"]] as const)(
+    "report correction %s keeps its reason and existing status", async (name, status) => {
+      render(<ArtifactStatusActions artifact={artifact({ type: "debrief" })} informationalReport suppressRejectConcept />);
+      await act(async () => { screen.getByRole("button", { name }).click(); });
+      expect(screen.getByText(/Add a short reason/)).toBeInTheDocument();
+      fireEvent.change(screen.getByRole("textbox"), { target: { value: "The account missed the expiry boundary" } });
+      await act(async () => { screen.getByRole("button", { name }).click(); });
+      const calls = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([url]) => String(url).includes("/status"));
+      expect(calls).toHaveLength(1);
+      expect(JSON.parse(calls[0]![1].body)).toMatchObject({ status, feedback: "The account missed the expiry boundary" });
+      expect(JSON.parse(calls[0]![1].body).concept).toBeUndefined();
+    },
+  );
+
+  it("historically approved reports stay Approved rather than a synthetic Read", () => {
+    render(<ArtifactStatusActions artifact={artifact({ type: "debrief", status: "approved" })} informationalReport />);
+    expect(screen.getByText("Approved")).toBeInTheDocument();
+    expect(screen.queryByText("Read")).not.toBeInTheDocument();
+  });
+
+  it("Got it with note retains the existing feedback payload", async () => {
+    render(<ArtifactStatusActions artifact={artifact({ type: "debrief" })} informationalReport suppressRejectConcept />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Thanks; keep this evidence for the next task" } });
+    await act(async () => { screen.getByRole("button", { name: /^Got it with note$/ }).click(); });
+    const calls = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([url]) => String(url).includes("/status"));
+    expect(JSON.parse(calls[0]![1].body)).toMatchObject({ status: "approved", feedback: "Thanks; keep this evidence for the next task" });
+  });
+
   it("shows all three action buttons", () => {
     render(<ArtifactStatusActions artifact={artifact()} />);
     expect(screen.getByRole("button", { name: /^Approve$/ })).toBeInTheDocument();

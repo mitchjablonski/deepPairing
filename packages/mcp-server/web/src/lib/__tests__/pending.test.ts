@@ -7,7 +7,7 @@ const com = (over: any) =>
   ({ id: "c", sessionId: "s", target: { artifactId: "a" }, parentCommentId: null, author: "human", content: "x", acknowledged: false, createdAt: "2026-01-01T00:00:00.000Z", ...over }) as any;
 
 describe("computePending — single source of truth for 'waiting on human'", () => {
-  it("counts every draft reviewable artifact (incl. #190 debrief) but not reasoning or an explainer", () => {
+  it("counts reviewable drafts but not informational debriefs, explainers or reasoning", () => {
     const artifacts = [
       art({ id: "r", type: "research", status: "draft" }),
       art({ id: "p", type: "plan", status: "draft" }),
@@ -20,22 +20,16 @@ describe("computePending — single source of truth for 'waiting on human'", () 
       art({ id: "reason", type: "reasoning", status: "draft" }), // excluded (agent narration)
     ];
     const { drafts, total } = computePending(artifacts, {});
-    expect(drafts.map((a) => a.id).sort()).toEqual(["cc", "cs", "d", "db", "p", "r", "spec"]);
-    expect(total).toBe(7);
+    expect(drafts.map((a) => a.id).sort()).toEqual(["cc", "cs", "d", "p", "r", "spec"]);
+    expect(total).toBe(6);
   });
 
-  // #190 — a draft debrief renders the full Approve/Request-changes/Reject triad
-  // and counts server-side; pre-fix REVIEWABLE_TYPES omitted it, so the in-app
-  // PendingBanner never lit for it (same class as the #175 changeset omission).
-  // P3 — the EXPLAINER is the counterpart correction: it is acknowledge-only
-  // ("Got it" / "Ask more" — no verdict), so a "waiting on you" badge lit on it
-  // overstated the obligation. It is delivered to the agent under check_feedback's
-  // "TO READ" line instead of being counted pending anywhere.
-  it("treats a draft debrief as awaiting review (#190) but NOT a draft explainer (P3)", () => {
-    expect(isDraftAwaitingReview(art({ type: "debrief", status: "draft" }))).toBe(true);
+  // #570 — optional reading is not a human decision, even with correction actions.
+  it("excludes draft debriefs and explainers from human-turn review", () => {
+    expect(isDraftAwaitingReview(art({ type: "debrief", status: "draft" }))).toBe(false);
     expect(isDraftAwaitingReview(art({ type: "explainer", status: "draft" }))).toBe(false);
     // Parity self-check within the web boundary.
-    expect(REVIEWABLE_TYPES.has("debrief")).toBe(true);
+    expect(REVIEWABLE_TYPES.has("debrief")).toBe(false);
     expect(REVIEWABLE_TYPES.has("explainer")).toBe(false);
     // reasoning stays excluded (agent narration, no review cycle).
     expect(REVIEWABLE_TYPES.has("reasoning")).toBe(false);
@@ -129,7 +123,7 @@ describe("#192 — summarizeTurnParts (every reviewable type produces a non-empt
     }
   });
 
-  it("counts changeset + debrief (the omitted two) rather than dropping them, and never an explainer", () => {
+  it("counts a changeset but excludes informational debriefs and explainers", () => {
     const parts = summarizeTurnParts([
       art({ id: "cs", type: "changeset", status: "draft" }),
       art({ id: "db", type: "debrief", status: "draft" }),
@@ -137,7 +131,7 @@ describe("#192 — summarizeTurnParts (every reviewable type produces a non-empt
       // summary (and must not resurrect the dangling-dash bug on its own).
       art({ id: "ex", type: "explainer", status: "draft" }),
     ]);
-    expect(parts).toEqual(["1 changeset", "1 debrief"]);
+    expect(parts).toEqual(["1 changeset"]);
   });
 
   it("pluralizes and groups research+spec into 'findings'", () => {

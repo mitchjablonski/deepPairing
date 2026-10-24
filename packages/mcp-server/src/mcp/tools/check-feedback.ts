@@ -1117,15 +1117,8 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
   const draftArtifacts = postWakeArtifacts.filter(
     (a) => a.status === "draft" && (WAITING_DRAFT_TYPES as readonly string[]).includes(a.type),
   );
-  // P3 — split the nag by WHAT THE HUMAN OWES. An EXPLAINER is read-only: its
-  // footer is an ACKNOWLEDGE bar ("Got it" / "Ask more" — see
-  // ArtifactStatusActions' acknowledgeMode), there is no Reject and no
-  // Request-changes, so nothing about it is "awaiting your verdict". Listing it
-  // under ⏳ WAITING made the agent (and the human reading the transcript)
-  // treat a walk-through it was ASKED for as a blocking review obligation.
-  // Explainer is the ONLY acknowledge-only type today: debrief and research
-  // keep the full verdict triad (the debrief only suppresses the reject-concept
-  // LEDGER write, not the verdict), so they stay in the WAITING line.
+  // #570 — explainer/debrief reading is informational, not a pending verdict.
+  // Debriefs retain correction actions; questions flow independently of this set.
   const verdictDrafts = draftArtifacts.filter(
     (a) => !(ACKNOWLEDGE_ONLY_DRAFT_TYPES as readonly string[]).includes(a.type),
   );
@@ -1348,11 +1341,6 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
     baseClause = "Wait for spec approval before planning implementation.";
   } else if (pendingArts.some((a) => a.type === "research")) {
     baseClause = "Wait for findings review before proposing solutions.";
-  } else if (pendingArts.some((a) => a.type === "debrief")) {
-    // #190 — a debrief is the end-of-run comprehension surface; the human reads
-    // it and may ask questions. Answer any questions (answer_question) and keep
-    // polling until they close it out.
-    baseClause = "The debrief is presented — the human is reading it. Answer any questions they raise, then continue polling.";
   }
   // Q3 review (LOW 7) — there was an `explainer` branch here. It has been dead
   // since P3 pulled `explainer` out of PENDING_DRAFT_TYPES: `pendingArts` filters

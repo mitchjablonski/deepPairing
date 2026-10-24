@@ -189,6 +189,32 @@ describe("check_feedback — rejected debrief (#190)", () => {
 });
 
 describe("check_feedback — debrief comment delivery (#190)", () => {
+  it.each(["draft", "approved"] as const)("questions on %s informational reports remain actionable after answering and a new follow-up", async (status) => {
+    const id = await presentDebrief();
+    if (status === "approved") await store.updateArtifactStatus(id, "approved");
+    await store.addComment({ id: "report_q", artifactId: id, author: "human", intent: "question", content: "Does the window persist?", target: { artifactId: id } } as any);
+    const first = await callTool("check_feedback");
+    expect((first.structuredContent as any).questions.map((q: any) => q.commentId)).toContain("report_q");
+    await callTool("answer_question", { commentId: "report_q", answer: "It is persisted in the database." });
+    await store.addComment({ id: "report_reopened", artifactId: id, author: "human", intent: "question", parentCommentId: "report_q", content: "What if the write fails?", target: { artifactId: id } } as any);
+    const reopened = await callTool("check_feedback");
+    expect((reopened.structuredContent as any).questions.map((q: any) => q.commentId)).toContain("report_reopened");
+    expect(reopened.text).toContain("What if the write fails?");
+    expect(store.getArtifacts().find((a) => a.id === id)?.status).toBe(status);
+  });
+
+  it("superseding an informational report retains unanswered predecessor questions", async () => {
+    const id = await presentDebrief();
+    await store.addComment({ id: "old_report_q", artifactId: id, author: "human", intent: "question", content: "Which failure path was checked?", target: { artifactId: id } } as any);
+    const revised = await callTool("revise_artifact", { artifactId: id, mode: "supersede", reason: "Clarify the evidence", content: { summary: "The expiry failure path was checked." } });
+    expect(revised.isError).toBeFalsy();
+    const feedback = await callTool("check_feedback");
+    expect((feedback.structuredContent as any).questions.map((q: any) => q.commentId)).toContain("old_report_q");
+    const successor = store.getArtifacts().find((a) => a.parentId === id);
+    expect(successor?.status).toBe("draft");
+    expect(store.getArtifacts().find((a) => a.id === id)?.status).toBe("superseded");
+  });
+
   it("names a debrief grain comment's section and routes an ask-anything question to the question lane", async () => {
     const id = await presentDebrief();
     // Grain comment on the first section.

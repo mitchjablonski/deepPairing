@@ -44,28 +44,24 @@ export type ToolResult = {
  * "📖 TO READ" line (WAITING_DRAFT_TYPES) is now its ONLY mention — and its
  * comments/questions still flow back normally.
  */
-export const PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset", "debrief"] as const;
+export const PENDING_DRAFT_TYPES = ["research", "spec", "plan", "decision", "code_change", "changeset"] as const;
 /** Draft types listed in the WAITING block (decisions get their own line).
  *  Deliberately a SUPERSET of PENDING_DRAFT_TYPES on the acknowledge-only types:
  *  an explainer is reported (under "📖 TO READ") without being counted pending. */
 export const WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change", "changeset", "debrief", "explainer"] as const;
 /**
- * P3 — the ACKNOWLEDGE-ONLY draft types: read-only artifacts whose companion-UI
- * footer is an acknowledge bar ("Got it" / "Ask more" — ArtifactStatusActions'
- * `acknowledgeMode`), with NO Reject and NO Request-changes. Nothing here
- * proposes an approach, so nothing here awaits a VERDICT: check_feedback lists
+ * Informational drafts: optional acknowledgement does not make reading a
+ * pending decision. Debriefs retain Request changes / Reject to correct an
+ * inaccurate account; explainers use their lighter acknowledgeMode footer.
+ * check_feedback lists
  * these under a distinct "📖 TO READ" line instead of the "⏳ WAITING … under
  * review" nag, they do NOT count toward pending, and they never hold the
  * long-poll open.
  *
- * EXPLAINER ONLY, deliberately: the debrief and research surfaces keep the full
- * verdict triad (the debrief merely suppresses the reject-CONCEPT ledger write,
- * which is a ledger concern, not a verdict one). Add a type here only when its
- * UI footer actually drops the verdict triad — and when you do, drop it from
- * PENDING_DRAFT_TYPES + the daemon/web mirrors in the same commit. Pinned in
+ * Keep PENDING_DRAFT_TYPES + the daemon/web mirrors in sync. Pinned in
  * check-feedback-readonly-nag.test.ts.
  */
-export const ACKNOWLEDGE_ONLY_DRAFT_TYPES = ["explainer"] as const;
+export const ACKNOWLEDGE_ONLY_DRAFT_TYPES = ["explainer", "debrief"] as const;
 
 export interface ToolHelpers {
   /** MCP elicitation with graceful fallback. */

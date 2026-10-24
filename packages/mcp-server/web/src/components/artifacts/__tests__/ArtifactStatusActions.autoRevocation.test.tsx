@@ -45,6 +45,41 @@ afterEach(() => {
 });
 
 describe("#521 — auto-approve countdown revocation", () => {
+  it("a human report shortcut honestly acknowledges after its existing confirmation window without an auto reason", () => {
+    useConnectionStore.setState({ autonomyLevel: "balanced" });
+    render(<ArtifactStatusActions artifact={artifact({ type: "debrief" })} informationalReport />);
+    act(() => {
+      window.dispatchEvent(new CustomEvent("dp:artifact-shortcut", { detail: { artifactId: "art_x", action: "approve" } }));
+    });
+    expect(screen.getByText(/Will acknowledge in 3s/)).toBeInTheDocument();
+    expect(screen.queryByText(/auto-approve in/i)).toBeNull();
+    expect(screen.getByTestId("hold-approve")).toHaveAttribute("title", expect.stringContaining("stop this acknowledgement"));
+    expect(statusCalls()).toHaveLength(0);
+    tick(4);
+    expect(statusCalls()).toHaveLength(1);
+    const body = JSON.parse(statusCalls()[0]![1].body);
+    expect(body.status).toBe("approved");
+    expect(body.reason).toBeUndefined();
+  });
+
+  it("informational reports never arm confidence acknowledgement", () => {
+    useConnectionStore.setState({ autonomyLevel: "autonomous" });
+    render(<ArtifactStatusActions artifact={artifact({ type: "debrief" })} informationalReport />);
+    expect(screen.queryByText(/auto-approve in/i)).toBeNull();
+    tick(15);
+    expect(statusCalls()).toHaveLength(0);
+  });
+
+  it("report presentation revokes an already armed confidence countdown", () => {
+    useConnectionStore.setState({ autonomyLevel: "balanced" });
+    const { rerender } = render(<ArtifactStatusActions artifact={artifact()} />);
+    tick(9);
+    rerender(<ArtifactStatusActions artifact={artifact()} informationalReport />);
+    expect(screen.queryByText(/auto-approve in/i)).toBeNull();
+    tick(3);
+    expect(statusCalls()).toHaveLength(0);
+  });
+
   it("control: a countdown that stays eligible still auto-approves", () => {
     useConnectionStore.setState({ autonomyLevel: "balanced" });
     render(<ArtifactStatusActions artifact={artifact()} />);
