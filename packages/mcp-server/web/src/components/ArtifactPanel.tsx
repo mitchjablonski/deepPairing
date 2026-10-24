@@ -53,6 +53,7 @@ import { AllowedOnceBadge } from "./AllowedOnce";
 import { WAITING_TONE } from "../lib/waitingTone";
 import { computeAttention } from "../lib/attention";
 import { laneMarksFrom, laneMarkFor, type LaneMark } from "../lib/laneMarks";
+import { GoverningBriefStrip } from "./GoverningBriefStrip";
 
 const statusDots: Record<string, string> = {
   // B1 — draft is the one status that NEEDS the human, yet it was styled as the
@@ -1489,6 +1490,11 @@ export function ArtifactPanel() {
           })}
         </div>
       )}
+
+      {/* #571 slice 2 — the pinned governing brief (approved spec, latest
+          version): read-only navigation above the sidebar/detail row, clear
+          of the composer. Renders nothing without a qualifying brief. */}
+      <GoverningBriefStrip artifacts={visibleArtifacts} />
 
       <div className="flex flex-1 min-h-0">
       {/* Left sidebar */}
