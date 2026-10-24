@@ -9,8 +9,10 @@ export interface RetirementInput {
   reason: string;
 }
 
+interface RetirementSuccess { artifact: Artifact; marker?: Comment; disarmed: boolean; warning?: string; repaired?: boolean; markerAdded?: boolean }
 export type RetirementOutcome =
-  | { kind: "committed" | "already_retired"; artifact: Artifact; marker?: Comment; disarmed: boolean; warning?: string }
+  | ({ kind: "committed" } & RetirementSuccess)
+  | ({ kind: "already_retired" } & RetirementSuccess)
   | { kind: "blocked_feedback"; unansweredQuestions: number; openSuggestions: number; undrainedComments: number }
   | { kind: "not_found" | "stale" | "ineligible" | "feedback_unknown" | "persist_uncertain"; message: string };
 

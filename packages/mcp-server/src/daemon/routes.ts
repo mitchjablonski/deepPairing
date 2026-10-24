@@ -661,10 +661,10 @@ export function createDaemonRoutes(
     if (!parsed.ok) return parsed.res;
     if (parsed.data.artifactId !== c.req.param("artifactId")) return c.json({ error: "artifactId mismatch", code: ERROR_CODES.validation_error }, 400);
     const result = r.store.retireArtifact(parsed.data as RetirementInput);
-    if (result.kind === "committed") {
+    if (result.kind === "committed" || (result.kind === "already_retired" && result.repaired)) {
       broadcast(sessionId, { type: "artifact_content_updated", artifact: result.artifact });
       broadcast(sessionId, { type: "artifact_updated", artifactId: result.artifact.id, status: result.artifact.status });
-      if (result.marker) broadcast(sessionId, { type: "comment_added", comment: result.marker });
+      if (result.marker && result.markerAdded) broadcast(sessionId, { type: "comment_added", comment: result.marker });
     }
     return c.json(result);
   });

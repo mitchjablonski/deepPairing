@@ -25,9 +25,63 @@ function human(store: FileStore, id: string, intent: "comment" | "question" = "c
   return store.addComment({ id, artifactId: "a", content: id, author: "human", intent, parentCommentId });
 }
 beforeEach(() => { fx = withGlobalStore("dp-retirement-"); });
-afterEach(() => { vi.restoreAllMocks(); fx.dispose(); });
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); fx.dispose(); });
 
 describe("feedback-safe FileStore retirement", () => {
+  it.each([
+    { broken: { fragment: "unknown human feedback" } },
+    { broken: [{ author: "human", content: "unread fragment without id" }] },
+    { broken: [{ id: "malformed", author: "human", content: "unread with invalid shape" }] },
+  ])("preserves unknown feedback through queued disarm flush and explicit flush, then recovers losslessly: %j", async ({ broken }) => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const store = seed();
+    store.createArtifact({ id: "external", type: "changeset", title: "PR", content: { files: [], reviewIntent: "external" } });
+    store.updateArtifactStatus("a", "approved", "ui_approve_button");
+    store.forceFlush();
+    human(store, "pending_local"); // Already queued before retirement discovers bad disk.
+    const bytes = JSON.stringify(broken);
+    fs.writeFileSync(file("comments.json"), bytes);
+    expect(store.retireArtifact({ ...request(), expectedStatus: "approved" })).toMatchObject({ kind: "committed", disarmed: true, warning: expect.any(String) });
+    await vi.advanceTimersByTimeAsync(101);
+    expect(read("comments.json")).toBe(bytes);
+    expect(() => store.forceFlush()).toThrow();
+    expect(read("comments.json")).toBe(bytes);
+    expect(store.getComment("pending_local")?.acknowledged).toBe(false);
+    // A valid repaired disk collection can now merge the still-pending human input.
+    const repaired = { ...store.getComment("pending_local")!, id: "repaired_disk", content: "Recovered original human input" };
+    fs.writeFileSync(file("comments.json"), JSON.stringify([repaired]));
+    store.forceFlush();
+    const fresh = open();
+    expect(fresh.getCommentsForArtifact("a").map((c) => c.id).sort()).toEqual(["pending_local", "repaired_disk"]);
+    expect(artifact(fresh)?.status).toBe("retracted");
+  });
+
+  it.each(["humanResolvedAt", "createdAt", "duplicate"])("refuses malformed effective canonical feedback %s without normalizing bytes", (field) => {
+    const store = seed();
+    human(store, "q", "question");
+    store.acknowledgeComments(["q"]);
+    store.forceFlush();
+    const q = structuredClone(store.getComment("q")!);
+    const broken = field === "humanResolvedAt" ? [{ ...q, humanResolvedAt: 42 }] : field === "createdAt" ? [{ ...q, createdAt: "not-a-date" }] : [q, q];
+    const bytes = JSON.stringify(broken);
+    fs.writeFileSync(file("comments.json"), bytes);
+    expect(store.retireArtifact(request()).kind).toBe("feedback_unknown");
+    expect(artifact(store)?.status).toBe("draft");
+    expect(read("comments.json")).toBe(bytes);
+    expect(() => store.forceFlush()).toThrow();
+    expect(read("comments.json")).toBe(bytes);
+  });
+
+  it("validates pending local canonical question fields as well as disk", () => {
+    const store = seed();
+    const q = human(store, "pending_question", "question");
+    Object.assign(q, { humanResolvedAt: 42, acknowledged: true });
+    expect(store.retireArtifact(request()).kind).toBe("feedback_unknown");
+    expect(artifact(store)?.status).toBe("draft");
+    expect(store.getComment("pending_question")).toEqual(q);
+  });
+
   it("refuses malformed feedback instead of laundering it through salvage", () => {
     const store = seed();
     const bytes = JSON.stringify([{ id: "broken", author: "human", content: "unread", target: { artifactId: "a" } }]);

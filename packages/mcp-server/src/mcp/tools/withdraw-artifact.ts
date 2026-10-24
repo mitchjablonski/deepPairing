@@ -60,7 +60,7 @@ export async function handleWithdrawArtifact(ctx: ToolContext, args: any): Promi
   let taskWarning = "";
   try { await maybeUpdateTaskStatus(server, artifactId, store); }
   catch { taskWarning = " Retirement persisted, but the task summary could not be refreshed."; }
-  if (outcome.kind === "committed") broadcast({ type: "artifact_updated", artifactId, status: "retracted" });
+  if (outcome.kind === "committed" || outcome.repaired) broadcast({ type: "artifact_updated", artifactId, status: "retracted" });
   // Retirement never drains session-wide feedback as a side effect.
   return {
     content: [{

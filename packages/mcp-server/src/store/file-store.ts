@@ -4,7 +4,7 @@ import { classifyStaleResolve, classifyClosedDecision, type DecisionResolveOutco
 import path from "node:path";
 import crypto from "node:crypto";
 import type { Artifact, ArtifactAdmission, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
-import { ArtifactSchema, suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode } from "@deeppairing/shared";
+import { ArtifactSchema, CommentSchema, suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { capConceptLength } from "./concept-hygiene.js";
@@ -401,12 +401,36 @@ export class FileStore implements IStore {
     for (const [file, values] of Object.entries(records)) this.recordBaselines[file] = JSON.stringify(values);
   }
 
+  // #583 — discovering unknown feedback forbids later timer flushes from
+  // laundering it through generic salvage. Pending input stays in memory until
+  // a readable disk+local snapshot can be reconciled without dropping records.
+  private retirementFeedbackBlocked = false;
+  /** An uncertain attempt must announce its truth once a retry confirms persistence. */
+  private unannouncedRetirements = new Set<string>();
+
+  private validateRetirementComments(raw: unknown): Comment[] {
+    if (!Array.isArray(raw) || raw.some((c: unknown) => !CommentSchema.safeParse(c).success) ||
+      new Set(raw.map((c: Comment) => c.id)).size !== raw.length ||
+      raw.some((c: Comment) => c.sessionId !== this.sessionId)) {
+      throw Object.assign(new Error("Retirement feedback remains unreadable; original comments were not overwritten."), { code: "ERETIREMENTFEEDBACKUNKNOWN" });
+    }
+    // Validation only: preserve original records/unknown fields, never normalize.
+    return raw as Comment[];
+  }
+
   private flushRecords<T>(
     file: string, local: T[], key: (value: T) => string, salvage: (raw: unknown) => T[],
     optional = false,
     merge: (baseline: T[], local: T[], disk: T[], key: (value: T) => string) => T[] = mergeSessionRecords,
   ): T[] {
     const baseline = this.recordBaselines[file] ?? "[]";
+    if (file === "comments.json" && this.retirementFeedbackBlocked) {
+      const filePath = path.join(this.sessionDir(), file);
+      const disk = this.validateRetirementComments(JSON.parse(fs.readFileSync(filePath, "utf8")));
+      const pending = this.validateRetirementComments(local);
+      this.validateRetirementComments(mergeSessionRecords(JSON.parse(baseline) as Comment[], pending, disk, (c) => c.id));
+      this.retirementFeedbackBlocked = false;
+    }
     const serialized = JSON.stringify(local);
     const dirty = serialized !== baseline;
     if (!dirty) return local;
@@ -781,9 +805,11 @@ export class FileStore implements IStore {
         this.observedRecordFiles.add(file);
         return raw as T[];
       };
+      let persistedArtifact: Artifact | undefined;
       try {
         const disk = read<Artifact>("artifacts.json");
-        if (disk.some((a) => !ArtifactSchema.safeParse(a).success)) throw new Error("Unreadable retirement artifact authority");
+        if (disk.some((a) => !ArtifactSchema.safeParse(a).success) || new Set(disk.map((a) => a.id)).size !== disk.length) throw new Error("Unreadable retirement artifact authority");
+        persistedArtifact = disk.find((a) => a.id === input.artifactId);
         this.artifacts = mergeArtifactRecords(JSON.parse(this.recordBaselines["artifacts.json"] ?? "[]") as Artifact[], this.artifacts, disk, (a) => a.id);
       } catch (error) {
         if (error instanceof SessionReviewConflictError) this.reviewConflict = error;
@@ -794,6 +820,7 @@ export class FileStore implements IStore {
       if (artifact.version !== input.expectedVersion) return { kind: "stale", message: "Artifact version changed; check_feedback before retrying." };
       const reason = input.door === "withdraw" ? "agent_withdraw" : input.mode === "obsolete" ? "agent_obsolete" : "agent_retract";
       const status = input.mode === "obsolete" ? "obsolete" : "retracted";
+      const transitionKey = JSON.stringify([artifact.id, artifact.version, reason, input.reason]);
       const history = (artifact as { statusHistory?: Array<{ status: string; at: string; reason?: string }> }).statusHistory ?? [];
       const last = history.at(-1);
       const content = artifact.content as Record<string, unknown> | null;
@@ -807,16 +834,15 @@ export class FileStore implements IStore {
         return { kind: "ineligible", message: input.door === "withdraw" ? `${artifact.id} is ${artifact.status}, not a draft — withdrawal only applies to your own draft.` : `${artifact.id} is ${artifact.status}, too late to ${input.mode}. Approved findings can be un-armed only in an external PR-review session.` };
       }
       let warning: string | undefined;
+      let persistedCommentIds = new Set<string>();
       try {
-        const disk = read<Comment>("comments.json");
-        if (disk.some((c) => (c.author !== "human" && c.author !== "agent") || !c.target || typeof c.target.artifactId !== "string" || typeof c.content !== "string" ||
-          typeof c.acknowledged !== "boolean" || typeof c.createdAt !== "string" ||
-          (c.parentCommentId !== null && c.parentCommentId !== undefined && typeof c.parentCommentId !== "string") ||
-          (c.intent !== undefined && !["comment", "question", "suggestion"].includes(c.intent)) ||
-          (c.answeredByCommentId !== null && c.answeredByCommentId !== undefined && typeof c.answeredByCommentId !== "string") ||
-          (c.suggestion && !["pending", "countered", "applied", "insisted"].includes(c.suggestion.state)))) throw new Error("Unreadable feedback structure");
-        this.comments = mergeSessionRecords(JSON.parse(this.recordBaselines["comments.json"] ?? "[]") as Comment[], this.comments, disk, (c) => c.id);
+        const disk = this.validateRetirementComments(read<Comment>("comments.json"));
+        persistedCommentIds = new Set(disk.map((c) => c.id));
+        this.validateRetirementComments(this.comments);
+        this.comments = this.validateRetirementComments(mergeSessionRecords(JSON.parse(this.recordBaselines["comments.json"] ?? "[]") as Comment[], this.comments, disk, (c) => c.id));
+        this.retirementFeedbackBlocked = false;
       } catch {
+        this.retirementFeedbackBlocked = true;
         if (!disarmed && !replay) return { kind: "feedback_unknown", message: "Feedback could not be read safely; retirement refused. Nothing was acknowledged." };
         warning = "Feedback could not be read safely; the root history marker was not written. Feedback remains owed.";
       }
@@ -837,21 +863,26 @@ export class FileStore implements IStore {
         this.artifacts = this.flushRecords("artifacts.json", this.artifacts, (a) => a.id,
           (raw) => FileStore.salvageArray<Artifact>("retirement artifacts", raw, "id"), false, mergeArtifactRecords);
         let marker: Comment | undefined;
+        let markerAdded = false;
         if (!warning) {
           const at = (artifact.statusHistory ?? []).at(-1)?.at;
           const markerId = `cmt_retire_${crypto.createHash("sha256").update(JSON.stringify([this.sessionId, artifact.id, artifact.version, input.door, input.mode, at, input.reason])).digest("hex").slice(0, 32)}`;
           marker = this.comments.find((c) => c.id === markerId);
           if (!marker) marker = this.addComment({ id: markerId, artifactId: artifact.id, author: "agent", content: input.door === "withdraw" ? "Withdrawn." : `${disarmed ? "Un-armed" : input.mode === "obsolete" ? "Overcome by new information" : "Retracted"}: ${input.reason}` });
+          markerAdded = !persistedCommentIds.has(marker.id);
           // Root only: no parentCommentId, so a lifecycle marker never answers a question.
           this.comments = this.flushRecords("comments.json", this.comments, (c) => c.id,
             (raw) => FileStore.salvageArray<Comment>("retirement comments", raw, "id"));
         }
+        const repaired = replay && (persistedArtifact?.status !== status || markerAdded || this.unannouncedRetirements.has(transitionKey));
+        this.unannouncedRetirements.delete(transitionKey);
         committed = true;
-        return { kind: replay ? "already_retired" : "committed", artifact: this.artifacts.find((a) => a.id === artifact.id)!, marker, disarmed, warning };
+        return { kind: replay ? "already_retired" : "committed", artifact: this.artifacts.find((a) => a.id === artifact.id)!, marker, disarmed, warning, repaired, markerAdded };
       } catch (error) {
         // Applied delta stays pending, exactly like existing status/flush semantics.
         // Never re-arm an artifact because a later comments write failed.
         if (error instanceof SessionReviewConflictError) this.reviewConflict = error;
+        this.unannouncedRetirements.add(transitionKey);
         this.scheduleFlush();
         return { kind: "persist_uncertain", message: "Retirement was applied in memory, but persistence is uncertain. Retry this exact request; do not assume it was undone or post the finding." };
       } finally {

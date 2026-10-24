@@ -299,7 +299,7 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
   let taskWarning = "";
   try { await maybeUpdateTaskStatus(server, artifactId, store); }
   catch { taskWarning = " Retirement persisted, but the task summary could not be refreshed."; }
-  if (outcome.kind === "committed") broadcast({ type: "artifact_updated", artifactId, status: newStatus });
+  if (outcome.kind === "committed" || outcome.repaired) broadcast({ type: "artifact_updated", artifactId, status: newStatus });
   return {
     content: [{
       type: "text",

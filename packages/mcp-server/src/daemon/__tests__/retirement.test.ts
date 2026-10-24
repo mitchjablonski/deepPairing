@@ -153,4 +153,9 @@ it("returns persistence uncertainty without success broadcasts and retries witho
   expect((await client.retireArtifact(input)).kind).toBe("already_retired");
   expect(artifact().statusHistory).toEqual(history);
   expect(local.getCommentsForArtifact("a").filter(c => c.author === "agent")).toHaveLength(1);
+  expect(mutations()).toContainEqual(expect.objectContaining({ type: "artifact_updated", artifactId: "a", status: "retracted" }));
+  expect(mutations()).toContainEqual(expect.objectContaining({ type: "comment_added", comment: expect.objectContaining({ author: "agent", parentCommentId: null }) }));
+  const repairedEvents = structuredClone(mutations());
+  expect((await client.retireArtifact(input)).kind).toBe("already_retired");
+  expect(mutations()).toEqual(repairedEvents);
 });
