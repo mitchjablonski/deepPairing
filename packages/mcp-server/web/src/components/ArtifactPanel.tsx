@@ -5,6 +5,9 @@ import { useMemo, useState, useEffect, useRef, lazy, Suspense, type ReactNode } 
 import { m, AnimatePresence } from "motion/react";
 import { apiGet, apiBase } from "../lib/api";
 import type { Artifact, Comment } from "@deeppairing/shared";
+import { isDemoSessionId } from "@deeppairing/shared";
+import { useProvenance } from "../lib/provenance";
+import { DemoContentBanner, DemoTag } from "./ProvenanceMarker";
 import { useArtifactStore, resolveToLiveId, artifactStoreGeneration, markBackfilled, isBackfilled, REFRESH_SESSION_EVENT } from "../stores/artifact";
 import { useSiblingSyncStore } from "../lib/siblingSync";
 import { useOfflineReason } from "../hooks/useOfflineReason";
@@ -1407,7 +1410,7 @@ export function ArtifactPanel() {
       >
         <option value="all">All ({liveCount("all")})</option>
         {sessionIds.map((sid, i) => (
-          <option key={sid} value={sid} title={sid}>Agent {i + 1} ({liveCount(sid)})</option>
+          <option key={sid} value={sid} title={sid}>Agent {i + 1}{isDemoSessionId(sid) ? " · Demo" : ""} ({liveCount(sid)})</option>
         ))}
       </select>
     </label>
@@ -1430,13 +1433,24 @@ export function ArtifactPanel() {
   }, [visibleArtifacts]);
 
   const selectedArtifact = artifacts.find((a) => a.id === selectedArtifactId);
+  // #569 proposal 1 — label demo/sample content where the cards are. Keyed on
+  // the SELECTED artifact's own session (MultiAgentSync can merge a demo beside
+  // real work); falls back to the bound/replayed session. Labelling only.
+  const provenance = useProvenance(selectedArtifact?.sessionId ?? (sessionIds.length === 1 ? sessionIds[0] : null));
+  const demoView = provenance != null && provenance.kind !== "live";
 
   if (visibleArtifacts.length === 0) {
     return <FirstRunWalkthrough />;
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div
+      className={`flex flex-col h-full ${demoView ? "border-l-4 border-dashed border-accent-violet/60" : ""}`}
+      data-provenance={provenance?.kind ?? "none"}
+      data-testid="artifact-panel"
+    >
+      <DemoContentBanner provenance={provenance} />
+
       {/* #457 D6 — MultiAgentSync (other sessions' artifacts) is mounted by
           App now, so it runs even while the bound session is empty. */}
 
@@ -1484,7 +1498,10 @@ export function ArtifactPanel() {
                 }`}
                 title={sid}
               >
-                Agent {i + 1} ({count})
+                <span className="inline-flex items-center gap-1">
+                  Agent {i + 1} ({count})
+                  {isDemoSessionId(sid) && <DemoTag />}
+                </span>
               </button>
             );
           })}

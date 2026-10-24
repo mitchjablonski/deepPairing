@@ -17,6 +17,7 @@ import {
   type BankSession,
 } from "../lib/bank";
 import { useOfflineReason } from "../hooks/useOfflineReason";
+import { DemoTag } from "./ProvenanceMarker";
 
 /**
  * THE CONTEXT BANK SURFACE — "where did I leave off?", across every project.
@@ -368,6 +369,9 @@ function BankRowItem({ row, lane, currentProjectRoot, onClose }: RowProps) {
           <span className="text-2xs font-semibold text-text-secondary shrink-0 max-w-[30%] truncate">
             {project.name}
           </span>
+          {/* #569 proposal 1 — a demo thread names itself, row by row, not
+              only via the section it is grouped under. */}
+          {session.fixtureLike && <DemoTag />}
           <span className="flex-1 min-w-0 text-xs text-text-primary truncate">
             {session.oneLiner || <span className="italic text-text-muted">no description recorded</span>}
           </span>

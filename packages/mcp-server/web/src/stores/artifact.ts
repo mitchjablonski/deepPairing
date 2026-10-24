@@ -431,6 +431,12 @@ export interface ArtifactState {
    *  no-Map/Set store convention. Cleared in reset(). */
   resolvedDecisions: Record<string, ResolvedDecisionInfo>;
   recordResolvedDecision: (decisionId: string, info: ResolvedDecisionInfo) => void;
+  /** #569 proposal 1 — true while the store holds the client-side "try the
+   *  demo session" fixture (SessionBrowser.loadDemo), whose artifacts carry
+   *  no `demo_` session id. Labelling only: nothing gates, counts or routes
+   *  on it. Cleared by reset(), so any real session load drops it. */
+  sampleContent: boolean;
+  setSampleContent: (on: boolean) => void;
 
   addArtifact: (artifact: Artifact) => void;
   updateArtifact: (id: string, status: ArtifactStatus, version?: number) => void;
@@ -698,6 +704,8 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   acknowledgedDecisions: {},
   resolvedDecisions: {},
   requests: [],
+  sampleContent: false,
+  setSampleContent: (on) => set({ sampleContent: on }),
 
   // U0.1 — upsert by id. Field bug: a single comment posted to an artifact
   // visibly increased its count over time while the user just sat on the
@@ -1403,7 +1411,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     storeGeneration++;
     backfilledIds.clear(); // #458 review — the merged history went with the store
     rollbackChains = {}; // #422 — nothing from before the boundary may roll back into it
-    set({ artifacts: [], comments: {}, selectedArtifactId: null, unreadIds: [], acknowledgedDecisions: {}, resolvedDecisions: {}, requests: [] });
+    set({ artifacts: [], comments: {}, selectedArtifactId: null, unreadIds: [], acknowledgedDecisions: {}, resolvedDecisions: {}, requests: [], sampleContent: false });
   },
 
   markDecisionsAcknowledged: (decisionIds) =>

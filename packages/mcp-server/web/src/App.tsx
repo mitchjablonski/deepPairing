@@ -53,11 +53,16 @@ import { useOverlayStore } from "./stores/overlay";
 import { usePollingWhenVisible } from "./hooks/usePollingWhenVisible";
 import { useDocumentTitleBadge } from "./hooks/useDocumentTitleBadge";
 import { WAITING_TONE } from "./lib/waitingTone";
+import { isDemoSessionId } from "@deeppairing/shared";
+import { useProvenance } from "./lib/provenance";
+import { ProvenanceChip, DemoTag } from "./components/ProvenanceMarker";
 
 function App() {
   const connected = useConnectionStore((s) => s.connected);
   const connect = useConnectionStore((s) => s.connect);
   const sessionId = useConnectionStore((s) => s.sessionId);
+  // #569 proposal 1 — live work vs demo/sample, labelled in the session bar.
+  const provenance = useProvenance();
   const projectRoot = useConnectionStore((s) => s.projectRoot);
   const activeSessions = useConnectionStore((s) => s.activeSessions);
   const switchSession = useConnectionStore((s) => s.switchSession);
@@ -851,6 +856,8 @@ function App() {
                   className={`w-1.5 h-1.5 rounded-full shrink-0 ${s.live === false ? "bg-text-muted/50" : isActive ? `bg-accent-blue-strong${agentWorking ? " animate-pulse" : ""}` : "bg-accent-green"}`}
                 />
                 <span className="truncate max-w-40">{label}</span>
+                {/* #569 proposal 1 — a demo session says so by name, in text. */}
+                {isDemoSessionId(s.sessionId) && <DemoTag />}
                 {s.artifactCount > 0 && (
                   /* R2 (contrast) — `opacity-70` on 9px text: 4.77:1 dark /
                      3.91:1 light on the inactive row, and 3.45 / 3.10 on the
@@ -864,6 +871,10 @@ function App() {
             );
           })
         )}
+        {/* #569 proposal 1 — what you are looking at: "● Live · <project>" for
+            real work, "Demo" for demo/sample content. Right-aligned, in the
+            always-present session bar, far from the composer. */}
+        <ProvenanceChip provenance={provenance} className="ml-auto" />
       </nav>
 
       {/* #457 D6 — merge the OTHER live sessions' artifacts at App level. It
