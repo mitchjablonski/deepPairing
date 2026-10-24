@@ -814,3 +814,105 @@ describe("MCP Tool Handlers — revise_artifact", () => {
     });
   });
 });
+
+describe("#589 — revise_artifact refuses bad spec ids (never rewrites them)", () => {
+  const req = (id: string) => ({ id, statement: `s ${id}`, rationale: "r", acceptanceCriteria: ["a"] });
+  const base = { title: "Worker stop signal", objective: "Tell the lead when a worker stops" };
+  const specs = () => store.getArtifacts().filter((a) => a.type === "spec");
+
+  async function presentV1() {
+    const r = await callTool("present_spec", {
+      ...base,
+      requirements: [req("REQ-1")],
+      edgePaths: [{ id: "wake", path: "long-poll wake", risk: "races the stop" }, { id: "inert", path: "shared mode", risk: "inert" }],
+    });
+    expect(r.isError).toBeFalsy();
+    return specs()[0]!;
+  }
+  const revise = (artifactId: string, content: Record<string, unknown>) =>
+    callTool("revise_artifact", { artifactId, mode: "supersede", reason: "tighten", content: { ...base, ...content } });
+
+  const BAD: Array<[string, Record<string, unknown>, string]> = [
+    ["duplicate requirement ids", { requirements: [req("REQ-1"), req("REQ-1")] }, 'requirements[1].id "REQ-1" duplicates requirements[0].id'],
+    ["duplicate edge-path ids", { requirements: [req("REQ-1")], edgePaths: [{ id: "wake", path: "a", risk: "x" }, { id: "wake", path: "b", risk: "y" }] }, 'edgePaths[1].id "wake" duplicates edgePaths[0].id'],
+    ["a blank requirement id", { requirements: [req(" ")] }, "requirements[0].id is blank"],
+    ["a blank edge-path id", { requirements: [req("REQ-1")], edgePaths: [{ id: " ", path: "a", risk: "x" }] }, "edgePaths[0].id is blank"],
+    ["an oversized requirement id", { requirements: [req("R".repeat(65))] }, "is 65 chars — shorten it to 64 or fewer"],
+    ["an oversized edge-path id", { requirements: [req("REQ-1")], edgePaths: [{ id: "9".repeat(70), path: "a", risk: "x" }] }, "is 70 chars — shorten it to 64 or fewer"],
+    ["a numeric edge-path id", { requirements: [req("REQ-1")], edgePaths: [{ id: "3", path: "a", risk: "x" }] }, 'edgePaths[0].id "3" is purely numeric'],
+    ["a dangling task link", { requirements: [req("REQ-1")], tasks: [{ description: "t", linkedRequirementIds: ["REQ-2"] }] }, 'tasks[0].linkedRequirementIds[0] "REQ-2" names no requirement in this spec'],
+  ];
+
+  it.each(BAD)("ordinary revise: %s is refused atomically", async (_label, content, needle) => {
+    const v1 = await presentV1();
+    const before = structuredClone(v1);
+    const r = await revise(v1.id, content);
+    expect(r.isError).toBe(true);
+    expect(r._meta).toMatchObject({ code: "INPUT_VALIDATION_FAILED" });
+    expect(r.text).toContain("INPUT_VALIDATION_FAILED: spec ids refused");
+    expect(r.text).toContain(needle);
+    expect(specs()).toHaveLength(1);
+    expect(specs()[0]).toEqual(before);
+  });
+
+  it.each(BAD)("gate-blocked (admission) revise: %s is refused BEFORE preflight, snapshot or admission", async (_label, content, needle) => {
+    const v1 = await presentV1();
+    store.recordRejectedApproach({ description: "global mutable state for config", concept: "global mutable state for config", reason: "Hard to test" });
+    const blocked = { objective: "Use global mutable state for config" };
+    // Control: the same revision with valid ids reaches the gate and is blocked.
+    const control = await revise(v1.id, { ...blocked, requirements: [req("REQ-1")] });
+    expect(control.isError).toBe(true);
+    expect(control.text).toContain("REJECTED_APPROACH_BLOCKED");
+    const r = await revise(v1.id, { ...content, ...blocked });
+    expect(r.isError).toBe(true);
+    expect(r._meta).toMatchObject({ code: "INPUT_VALIDATION_FAILED" });
+    expect(r.text).toContain(needle);
+    expect(r.text).not.toContain("REJECTED_APPROACH_BLOCKED");
+    expect(specs()).toHaveLength(1);
+    expect(specs()[0]!.status).toBe("draft");
+  });
+
+  it("a revision keeping v1's valid ids is stored as written, and threads on `wake` and REQ-1 carry over", async () => {
+    const v1 = await presentV1();
+    await store.addComment({ id: "cmt_wake", artifactId: v1.id, content: "re-read after the wake", author: "human", target: { artifactId: v1.id, sectionId: "spec:edge-path:wake" } } as any);
+    await store.addComment({ id: "cmt_req", artifactId: v1.id, content: "tighten the poll bound", author: "human", target: { artifactId: v1.id, requirementId: "REQ-1" } } as any);
+    const requirements = [req("REQ-1"), req("REQ-2")];
+    const edgePaths = [{ id: "inert", path: "shared mode", risk: "inert" }, { id: "wake", path: "long-poll wake", risk: "races the stop" }];
+    const r = await revise(v1.id, { requirements, edgePaths, tasks: [{ description: "t", linkedRequirementIds: ["REQ-2"] }] });
+    expect(r.isError).toBeFalsy();
+    expect(r.text).not.toContain("spec ids");
+    const v2 = specs().find((a) => a.parentId === v1.id)!;
+    const c = v2.content as any;
+    expect(c.requirements).toEqual(requirements);
+    expect(c.edgePaths).toEqual(edgePaths);
+    const fb = await callTool("check_feedback");
+    expect(fb.text).toContain("long-poll wake] re-read after the wake");
+    expect(fb.text).toContain("(requirement REQ-1)");
+  });
+
+  it("a v1 stored with now-invalid ids: repeating them is refused; the fixed revision lands and the unchanged valid id keeps its thread", async () => {
+    const legacy = {
+      objective: "legacy",
+      requirements: [req("REQ-1"), req("DUP"), req("DUP")],
+      edgePaths: [{ id: "5", path: "numeric legacy", risk: "x" }, { id: "wake", path: "long-poll wake", risk: "y" }],
+    };
+    store.createArtifact({ id: "art_legacy_v1", type: "spec", title: base.title, content: structuredClone(legacy) } as any);
+    await store.addComment({ id: "cmt_legacy_wake", artifactId: "art_legacy_v1", content: "keep this", author: "human", target: { artifactId: "art_legacy_v1", sectionId: "spec:edge-path:wake" } } as any);
+    // Stored content is never re-validated or rewritten on read.
+    expect(store.getArtifacts().find((a) => a.id === "art_legacy_v1")!.content).toEqual(legacy);
+    const asIs = await revise("art_legacy_v1", { requirements: legacy.requirements, edgePaths: legacy.edgePaths });
+    expect(asIs.isError).toBe(true);
+    expect(asIs.text).toContain('requirements[2].id "DUP" duplicates requirements[1].id');
+    expect(asIs.text).toContain('edgePaths[0].id "5" is purely numeric');
+    expect(specs()).toHaveLength(1);
+    const fixed = await revise("art_legacy_v1", {
+      requirements: [req("REQ-1"), req("DUP-A"), req("DUP-B")],
+      edgePaths: [{ id: "numeric-legacy", path: "numeric legacy", risk: "x" }, { id: "wake", path: "long-poll wake", risk: "y" }],
+    });
+    expect(fixed.isError).toBeFalsy();
+    const v2 = specs().find((a) => a.parentId === "art_legacy_v1")!;
+    expect((v2.content as any).edgePaths[1].id).toBe("wake");
+    const fb = await callTool("check_feedback");
+    expect(fb.text).toContain("long-poll wake] keep this");
+  });
+});

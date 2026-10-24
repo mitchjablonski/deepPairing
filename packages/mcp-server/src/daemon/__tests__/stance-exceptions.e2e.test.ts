@@ -268,6 +268,27 @@ describe("#470 binding (§2) — adversarial 2 and 3", () => {
     expect(await world.newestBlock()).toMatchObject({ eligible: false, ineligibleReason: "unsupported_tool" });
   });
 
+  it("#589 — a spec revision with bad ids is refused before the gate: no block, no snapshot, nothing to admit", async () => {
+    world = new StanceWorld();
+    const w = await world.wrapper();
+    const R = (id: string) => ({ id, statement: "works", rationale: "core", acceptanceCriteria: ["ok"] });
+    await w.call("present_spec", { title: "Spec", objective: "ship", requirements: [R("R1")] });
+    holdStance(world.store(w.sessionId), STANCE);
+    const spec = artifactsOf(w.sessionId).find((a) => a.type === "spec")!;
+    const content = (requirements: unknown[], edgePaths?: unknown[]) => ({ title: "Spec", objective: "remove global mutable state", requirements, ...(edgePaths ? { edgePaths } : {}) });
+    const blocksBefore = (await world.blocks()).length;
+    for (const bad of [content([R("R1"), R("R1")]), content([R("R1")], [{ id: "4", path: "p", risk: "r" }])]) {
+      const res = await w.call("revise_artifact", { artifactId: spec.id, mode: "supersede", reason: "r", content: bad });
+      expect(res.isError).toBe(true);
+      expect(res.text).toContain("INPUT_VALIDATION_FAILED: spec ids refused");
+    }
+    expect((await world.blocks()).length).toBe(blocksBefore);
+    // Control: the same revision with valid ids reaches the gate and records a block.
+    expect((await w.call("revise_artifact", { artifactId: spec.id, mode: "supersede", reason: "r", content: content([R("R1")]) })).isError).toBe(true);
+    expect((await world.blocks()).length).toBe(blocksBefore + 1);
+    expect(artifactsOf(w.sessionId).filter((a) => a.type === "spec")).toHaveLength(1);
+  });
+
   it("paraphrase: a one-character change, a reworded clause, a trailing clause and a different tool are each blocked; P stays active", async () => {
     world = new StanceWorld();
     const { w, allowanceId } = await blockedThenAllowed();

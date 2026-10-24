@@ -116,6 +116,13 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       const v = supersedeValidator({ title: args?.title ?? old.title, ...(content as Record<string, unknown>) });
       if (!v.ok) return v.error;
     }
+    // #589 — for a spec, the validator above also refuses duplicate, blank,
+    // oversized or ambiguous ids and dangling task links, BEFORE preflight,
+    // the admission snapshot and create, so the ordinary and stance-admitted
+    // branches see the same verdict. A replay (op.replay, above) writes
+    // nothing new: it returns an operation an earlier, validated call made.
+    // A revision must be valid as written even when v1 holds a legacy id;
+    // unchanged valid ids keep their threads.
     // A replacement proposes new work just like its original presentation.
     // Refuse before creating v2 or changing v1 so a blocked revision is atomic.
     const pre = await preflightArtifact(ctx, "revise_artifact", old.type, String(args?.title ?? old.title), content, { deferRecord: true });

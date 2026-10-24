@@ -31174,6 +31174,69 @@ var TOOL_ERROR_RETRYABLE = {
   [TOOL_ERROR_CODES.TOOL_EXECUTION_FAILED]: true
 };
 
+// src/mcp/spec-ids.ts
+var MAX_SPEC_ID_LENGTH = 64;
+var MAX_LISTED_PROBLEMS = 20;
+function show(id) {
+  return JSON.stringify(id.length > 40 ? `${id.slice(0, 40)}\u2026` : id);
+}
+function checkIds(ids, label, field2, numericIsAmbiguous, problems) {
+  const firstAt = /* @__PURE__ */ new Map();
+  ids.forEach((id, i) => {
+    if (id === void 0) return;
+    const at = `${field2}[${i}].id`;
+    if (id.trim().length === 0) {
+      problems.push(`${at} is blank \u2014 give the ${label} a short, unique id`);
+      return;
+    }
+    if (id.length > MAX_SPEC_ID_LENGTH) {
+      problems.push(`${at} ${show(id)} is ${id.length} chars \u2014 shorten it to ${MAX_SPEC_ID_LENGTH} or fewer`);
+    }
+    if (numericIsAmbiguous && /^\d+$/.test(id)) {
+      problems.push(`${at} ${show(id)} is purely numeric, which collides with the position-based anchor \u2014 use a word id such as "wake" or "ep-${id.slice(0, 8)}"`);
+    }
+    const prev = firstAt.get(id);
+    if (prev !== void 0) {
+      problems.push(`${at} ${show(id)} duplicates ${field2}[${prev}].id \u2014 every ${label} needs its own id`);
+    } else {
+      firstAt.set(id, i);
+    }
+  });
+}
+function specIdProblems(content) {
+  const problems = [];
+  checkIds(content.requirements.map((r) => r.id), "requirement", "requirements", false, problems);
+  if (content.edgePaths) {
+    checkIds(content.edgePaths.map((e) => e.id), "edge path", "edgePaths", true, problems);
+  }
+  const declared = new Set(content.requirements.map((r) => r.id));
+  (content.tasks ?? []).forEach((t, i) => {
+    (t.linkedRequirementIds ?? []).forEach((ref, j) => {
+      if (!declared.has(ref)) {
+        problems.push(`tasks[${i}].linkedRequirementIds[${j}] ${show(ref)} names no requirement in this spec \u2014 link an existing requirements[].id or drop it`);
+      }
+    });
+  });
+  return problems;
+}
+function specIdError(content) {
+  const problems = specIdProblems(content);
+  if (problems.length === 0) return null;
+  const listed = problems.slice(0, MAX_LISTED_PROBLEMS);
+  const more = problems.length > listed.length ? `
+- \u2026and ${problems.length - listed.length} more` : "";
+  return {
+    content: [{
+      type: "text",
+      text: `INPUT_VALIDATION_FAILED: spec ids refused \u2014 comment threads anchor to these ids, so each must be unique, non-blank, at most ${MAX_SPEC_ID_LENGTH} chars, and (for edge paths) not purely numeric; task links must name a requirement in this spec:
+${listed.map((p) => `- ${p}`).join("\n")}${more}
+Fix the ids and send the spec again (present_spec, or revise_artifact for a revision). Keep an id that already existed unchanged so its threads carry over. The artifact was NOT created.`
+    }],
+    isError: true,
+    _meta: { code: "INPUT_VALIDATION_FAILED", retryable: true }
+  };
+}
+
 // src/mcp/validate-tool-input.ts
 function isArrayLevelIssue(i) {
   if ((i.code === "too_small" || i.code === "too_big") && i.origin === "array") return true;
@@ -31637,6 +31700,8 @@ function validatePresentSpecInput(args) {
   if (!contentParse.success) {
     return { ok: false, error: formatValidationError("present_spec", contentParse.error, EXAMPLE_SPEC, args) };
   }
+  const idError = specIdError(contentParse.data);
+  if (idError) return { ok: false, error: idError };
   return admit("present_spec", { title: titleParse.data.title, ...contentParse.data });
 }
 function validatePresentPlanInput(args) {

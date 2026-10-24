@@ -523,6 +523,110 @@ describe("MCP Tool Handlers — tool CRUD surface", () => {
       expect(store.getArtifacts().filter((a) => a.type === "spec")).toHaveLength(0);
     });
 
+    describe("#589 — spec ids are refused, never rewritten", () => {
+      const req = (id: string) => ({ id, statement: `s ${id}`, rationale: "r", acceptanceCriteria: ["a"] });
+      const specs = () => store.getArtifacts().filter((a) => a.type === "spec");
+      const refused = (r: Awaited<ReturnType<typeof callTool>>) => {
+        expect(r.isError).toBe(true);
+        expect(r.text).toContain("INPUT_VALIDATION_FAILED: spec ids refused");
+        expect(r.text).toContain("The artifact was NOT created.");
+        expect(specs()).toHaveLength(0);
+      };
+
+      it("duplicate requirement ids name both positions", async () => {
+        const r = await callTool("present_spec", { ...briefArgs, requirements: [req("REQ-1"), req("REQ-2"), req("REQ-1")] });
+        refused(r);
+        expect(r.text).toContain('requirements[2].id "REQ-1" duplicates requirements[0].id');
+      });
+
+      it("duplicate edge-path ids", async () => {
+        const r = await callTool("present_spec", {
+          ...briefArgs,
+          edgePaths: [{ id: "wake", path: "a", risk: "x" }, { id: "wake", path: "b", risk: "y" }],
+        });
+        refused(r);
+        expect(r.text).toContain('edgePaths[1].id "wake" duplicates edgePaths[0].id');
+      });
+
+      it("blank requirement ids (empty and whitespace) and a whitespace edge-path id", async () => {
+        const r = await callTool("present_spec", {
+          ...briefArgs,
+          requirements: [req(""), req("   ")],
+          edgePaths: [{ id: "  ", path: "a", risk: "x" }],
+        });
+        refused(r);
+        expect(r.text).toContain("requirements[0].id is blank");
+        expect(r.text).toContain("requirements[1].id is blank");
+        expect(r.text).toContain("edgePaths[0].id is blank");
+      });
+
+      it("ids over 64 chars (both kinds); exactly 64 is accepted", async () => {
+        const r = await callTool("present_spec", {
+          ...briefArgs,
+          requirements: [req("R".repeat(65))],
+          edgePaths: [{ id: "e".repeat(65), path: "a", risk: "x" }],
+        });
+        refused(r);
+        expect(r.text).toContain("requirements[0].id");
+        expect(r.text).toContain("is 65 chars — shorten it to 64 or fewer");
+        expect(r.text).toContain("edgePaths[0].id");
+        const ok = await callTool("present_spec", { ...briefArgs, requirements: [req("R".repeat(64))] });
+        expect(ok.isError).toBeFalsy();
+        expect((specs()[0]!.content as any).requirements[0].id).toBe("R".repeat(64));
+      });
+
+      it("a purely numeric edge-path id (it would shadow the index fallback)", async () => {
+        const r = await callTool("present_spec", {
+          ...briefArgs,
+          edgePaths: [{ id: "2", path: "numeric", risk: "x" }, { path: "id-less", risk: "x" }],
+        });
+        refused(r);
+        expect(r.text).toContain('edgePaths[0].id "2" is purely numeric');
+      });
+
+      it("a task linking a requirement id the spec doesn't declare", async () => {
+        const r = await callTool("present_spec", {
+          ...briefArgs,
+          tasks: [{ description: "wire it", linkedRequirementIds: ["REQ-1", "REQ-9"] }],
+        });
+        refused(r);
+        expect(r.text).toContain('tasks[0].linkedRequirementIds[1] "REQ-9" names no requirement in this spec');
+        expect(r.text).not.toContain("linkedRequirementIds[0]");
+      });
+
+      it("valid ids are stored byte-identical, with no id error or warning", async () => {
+        const requirements = [req("REQ-1"), req("REQ-2")];
+        const edgePaths = [{ id: "wake", path: "a", risk: "x" }, { path: "id-less", risk: "y" }];
+        const tasks = [{ description: "wire it", linkedRequirementIds: ["REQ-2", "REQ-1"] }];
+        const r = await callTool("present_spec", { ...briefArgs, requirements, edgePaths, tasks });
+        expect(r.isError).toBeFalsy();
+        expect(r.text).not.toContain("spec ids");
+        const c = specs()[0]!.content as any;
+        expect(c.requirements).toEqual(requirements);
+        expect(c.edgePaths).toEqual(edgePaths);
+        expect("id" in c.edgePaths[1]).toBe(false);
+        expect(c.tasks[0].linkedRequirementIds).toEqual(["REQ-2", "REQ-1"]);
+      });
+
+      it("a legacy stored spec with now-invalid ids is never rewritten, and its anchors still resolve", async () => {
+        const content = {
+          objective: "legacy",
+          requirements: [req("REQ-1"), req("REQ-1")],
+          edgePaths: [{ id: "7", path: "numeric legacy", risk: "x" }, { path: "id-less 1", risk: "x" }, { path: "id-less 2", risk: "x" }],
+        };
+        store.createArtifact({ id: "art_legacy_spec", type: "spec", title: "Legacy", content: structuredClone(content) } as any);
+        store.addComment({ id: "cmt_idx", artifactId: "art_legacy_spec", author: "human", content: "index anchor", target: { artifactId: "art_legacy_spec", sectionId: "spec:edge-path:2" } } as any);
+        store.addComment({ id: "cmt_num", artifactId: "art_legacy_spec", author: "human", content: "numeric id anchor", target: { artifactId: "art_legacy_spec", sectionId: "spec:edge-path:7" } } as any);
+        store.addComment({ id: "cmt_req", artifactId: "art_legacy_spec", author: "human", content: "req anchor", target: { artifactId: "art_legacy_spec", requirementId: "REQ-1" } } as any);
+        const fb = await callTool("check_feedback");
+        expect(fb.isError).toBeFalsy();
+        expect(fb.text).toContain("edge path #3: id-less 2");
+        expect(fb.text).toContain("edge path #1: numeric legacy");
+        expect(fb.text).toContain("(requirement REQ-1)");
+        expect(store.getArtifacts().find((a) => a.id === "art_legacy_spec")!.content).toEqual(content);
+      });
+    });
+
     it("#571 — the advertised input schema carries edgePaths with path + risk required", async () => {
       const { tools } = await client.listTools();
       const spec = tools.find((t) => t.name === "present_spec")!;

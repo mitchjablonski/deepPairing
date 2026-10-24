@@ -35,6 +35,7 @@ import {
   PlanVisualSchema,
   DecisionOptionBaseSchema,
 } from "@deeppairing/shared";
+import { specIdError } from "./spec-ids.js";
 
 export type ToolErrorResponse = {
   content: Array<{ type: "text"; text: string }>;
@@ -1001,6 +1002,13 @@ export function validatePresentSpecInput(args: any): ValidationResult<z.infer<ty
   if (!contentParse.success) {
     return { ok: false, error: formatValidationError("present_spec", contentParse.error, EXAMPLE_SPEC, args) };
   }
+  // #589 — refuse (never rewrite) duplicate, blank, oversized or ambiguous
+  // anchor ids and dangling task links. This validator is the shared boundary
+  // for every write of NEW spec content (present_spec and revise_artifact
+  // supersede, before preflight/snapshot/admission); stored specs are never
+  // re-validated on read.
+  const idError = specIdError(contentParse.data);
+  if (idError) return { ok: false, error: idError };
   return admit("present_spec", { title: titleParse.data.title, ...contentParse.data });
 }
 
