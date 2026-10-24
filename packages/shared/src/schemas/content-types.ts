@@ -329,6 +329,10 @@ export type SpecTask = z.infer<typeof SpecTaskSchema>;
  * the brief puts them in front of the one human touch, before any code.
  */
 export const SpecEdgePathSchema = z.object({
+  /** Stable id (like a requirement's REQ-id): comment threads anchor to it, so
+   *  an insert or reorder in a revision can't re-point them. Optional — legacy
+   *  entries without one anchor by index. */
+  id: z.string().min(1).optional().describe("Stable id within this spec, e.g. 'wake' — threads anchor to it; KEEP IT ACROSS REVISIONS"),
   path: z.string().describe("The state, transition, call path, input or mode, e.g. 'check_feedback long-poll wake'"),
   risk: z.string().describe("What goes wrong on that path if the change misses it"),
   handling: z.string().optional().describe("How the change handles it (or 'open' if undecided)"),

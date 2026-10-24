@@ -329,15 +329,44 @@ function coerceTask(v: unknown): SpecTask {
   return out;
 }
 
-/** #571 — an edge path keeps `path` + `risk` (strings, defaulted) and an
- *  optional `handling`. Entries are mapped, never filtered: a comment anchors
- *  to an edge path by its INDEX (`spec:edge-path:<i>`), so dropping a junk
- *  entry would re-point every later thread at the wrong row. */
+/** #571 — an edge path keeps `path` + `risk` (strings, defaulted) and the
+ *  optional `id` / `handling`. Entries are mapped, never filtered: a legacy
+ *  (id-less) entry's comment anchors by INDEX, so dropping a junk entry would
+ *  re-point every later thread at the wrong row. */
 function coerceEdgePath(v: unknown): SpecEdgePath {
   const e = obj(v);
   const out: SpecEdgePath = { path: str(e.path), risk: str(e.risk) };
+  if (typeof e.id === "string" && e.id.length > 0) out.id = e.id;
   if (typeof e.handling === "string") out.handling = e.handling;
   return out;
+}
+
+/** #571 — the comment grain (`sectionId`) for one spec edge path:
+ *  `spec:edge-path:<id>` when the entry has a stable id (survives revisions
+ *  that insert or reorder), else `spec:edge-path:<index>` (legacy). */
+export function specEdgePathSectionId(edgePath: { id?: unknown }, index: number): string {
+  return typeof edgePath.id === "string" && edgePath.id.length > 0
+    ? `spec:edge-path:${edgePath.id}`
+    : `spec:edge-path:${index}`;
+}
+
+/** #571 — resolve an edge-path grain back to its entry: an id match first,
+ *  then a legacy index (only onto an id-less entry, so a numeric key can't
+ *  capture a row that anchors by id). */
+export function findSpecEdgePath<T extends { id?: unknown }>(
+  edgePaths: readonly T[] | undefined,
+  sectionId: string,
+): { edgePath: T; index: number } | undefined {
+  if (!Array.isArray(edgePaths) || !sectionId.startsWith("spec:edge-path:")) return undefined;
+  const key = sectionId.slice("spec:edge-path:".length);
+  const byId = edgePaths.findIndex((e) => e && typeof e === "object" && e.id === key);
+  if (byId >= 0) return { edgePath: edgePaths[byId]!, index: byId };
+  if (/^\d+$/.test(key)) {
+    const i = Number(key);
+    const e = edgePaths[i];
+    if (e && typeof e === "object" && !(typeof e.id === "string" && e.id.length > 0)) return { edgePath: e, index: i };
+  }
+  return undefined;
 }
 
 export function coerceSpecContent(raw: unknown): SpecContent {

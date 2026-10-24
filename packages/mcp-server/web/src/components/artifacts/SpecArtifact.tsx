@@ -1,5 +1,5 @@
 import type { Artifact, SpecEdgePath, SpecRequirement, SpecTask } from "@deeppairing/shared";
-import { coerceSpecContent } from "@deeppairing/shared";
+import { coerceSpecContent, specEdgePathSectionId } from "@deeppairing/shared";
 import { SimpleMarkdown } from "../SimpleMarkdown";
 import { CommentTrigger, AskTrigger } from "../CommentThread";
 import { OpenQuestionSection } from "./OpenQuestionSection";
@@ -258,10 +258,6 @@ export function isDelegateBrief(context: string | undefined): boolean {
   return /\bDecide alone:/i.test(context) && /\bRisk class:/i.test(context);
 }
 
-/** The comment grain for one edge path. Index-anchored (edge paths carry no
- *  id); check_feedback resolves the index back to the path's own text. */
-export const edgePathSectionId = (index: number) => `spec:edge-path:${index}`;
-
 /**
  * #571 slice 1 — "Edge paths & interaction risks": the states, call paths,
  * untrusted inputs and inert modes the change must handle. In the #569 pilot
@@ -296,11 +292,14 @@ function EdgePathsSection({
       </h3>
       <ul className="space-y-1.5">
         {edgePaths.map((e, i) => {
-          const sectionId = edgePathSectionId(i);
+          // Anchored by the stable `id` when present (survives a revision that
+          // inserts or reorders; useChainComments carries v1 threads onto v2),
+          // else by index for legacy entries.
+          const sectionId = specEdgePathSectionId(e, i);
           const count = comments.filter((c) => c.target.sectionId === sectionId).length;
           return (
             <li
-              key={i}
+              key={sectionId}
               data-comment-anchor={sectionId}
               className="px-3 py-2 bg-surface-secondary border border-accent-amber/20 rounded-lg"
             >

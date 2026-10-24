@@ -10,6 +10,8 @@ import {
   coerceDebriefContent,
   coerceExplainerContent,
   coerceArtifactContent,
+  specEdgePathSectionId,
+  findSpecEdgePath,
 } from "../coerce-content.js";
 import { SpecContentSchema, SpecTaskSchema, SpecEdgePathSchema } from "../content-types.js";
 
@@ -614,5 +616,30 @@ describe("#571 slice 1 — spec edge paths", () => {
     ]);
     // A non-array edgePaths is absent, not an empty list.
     expect("edgePaths" in coerceSpecContent({ ...old, edgePaths: "nope" })).toBe(false);
+  });
+});
+
+describe("#571 review — edge-path stable ids", () => {
+  it("schema + coercion keep an optional stable id; an empty id is rejected / dropped", () => {
+    expect(SpecEdgePathSchema.safeParse({ id: "wake", path: "p", risk: "r" }).success).toBe(true);
+    expect(SpecEdgePathSchema.safeParse({ id: "", path: "p", risk: "r" }).success).toBe(false);
+    const out = coerceSpecContent({ objective: "o", requirements: [], edgePaths: [{ id: "wake", path: "p", risk: "r" }, { id: "", path: "q", risk: "r" }] });
+    expect(out.edgePaths).toEqual([{ id: "wake", path: "p", risk: "r" }, { path: "q", risk: "r" }]);
+  });
+
+  it("specEdgePathSectionId anchors by id, else by index", () => {
+    expect(specEdgePathSectionId({ id: "wake" }, 3)).toBe("spec:edge-path:wake");
+    expect(specEdgePathSectionId({}, 3)).toBe("spec:edge-path:3");
+  });
+
+  it("findSpecEdgePath resolves by id across an insert, and by index only onto id-less entries", () => {
+    const v2 = [{ id: "inert", path: "a" }, { id: "wake", path: "b" }, { path: "legacy" }];
+    expect(findSpecEdgePath(v2, "spec:edge-path:wake")).toEqual({ edgePath: v2[1], index: 1 });
+    expect(findSpecEdgePath(v2, "spec:edge-path:2")).toEqual({ edgePath: v2[2], index: 2 });
+    // index 0 is an id-anchored row: a legacy numeric key must not capture it.
+    expect(findSpecEdgePath(v2, "spec:edge-path:0")).toBeUndefined();
+    expect(findSpecEdgePath(v2, "spec:edge-path:gone")).toBeUndefined();
+    expect(findSpecEdgePath(v2, "debrief:0")).toBeUndefined();
+    expect(findSpecEdgePath(undefined, "spec:edge-path:0")).toBeUndefined();
   });
 });

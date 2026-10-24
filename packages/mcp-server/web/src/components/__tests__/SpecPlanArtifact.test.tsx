@@ -522,3 +522,55 @@ describe("#571 slice 1 — spec edge paths & interaction risks", () => {
     expect(isDelegateBrief("**Decide alone:** x\n**Risk class:** trivial")).toBe(true);
   });
 });
+
+describe("#571 review — edge-path threads survive a revision (stable id anchors)", () => {
+  beforeEach(() => useArtifactStore.getState().reset());
+
+  const cmt = (artifactId: string, sectionId: string, content: string) => ({
+    id: `c_${sectionId}`, artifactId, author: "human", content,
+    createdAt: "2026-10-23T00:00:00.000Z",
+    target: { artifactId, sectionId },
+  }) as any;
+  const rowFor = (path: string) => screen.getByText(path).closest("li")!;
+
+  it("a v1 comment on edge path id 'wake' stays on 'wake' after v2 inserts a path before it", () => {
+    const v1 = mk("spec", {
+      objective: "obj",
+      edgePaths: [{ id: "wake", path: "long-poll wake", risk: "missed stop" }],
+    }, { id: "spec_v1", version: 1, status: "superseded" });
+    const v2 = mk("spec", {
+      objective: "obj",
+      edgePaths: [
+        { id: "inert", path: "shared mode", risk: "signal is inert" },
+        { id: "wake", path: "long-poll wake", risk: "missed stop" },
+      ],
+    }, { id: "spec_v2", version: 2, parentId: "spec_v1" });
+    useArtifactStore.setState({
+      artifacts: [v1, v2],
+      comments: { spec_v1: [cmt("spec_v1", "spec:edge-path:wake", "re-read after the wake")] },
+    });
+    render(<SpecArtifact artifact={v2} />);
+    expect(rowFor("long-poll wake").getAttribute("data-comment-anchor")).toBe("spec:edge-path:wake");
+    expect(rowFor("long-poll wake").textContent).toContain("1");
+    // The inserted row at index 0 does not inherit the thread.
+    expect(rowFor("shared mode").textContent).not.toMatch(/\b1\b/);
+    fireEvent.click(rowFor("long-poll wake").querySelector('button[aria-label="Add a comment"]') as HTMLButtonElement);
+    expect(screen.getByText("re-read after the wake")).toBeInTheDocument();
+  });
+
+  it("legacy id-less edge paths fall back to index anchors", () => {
+    const art = mk("spec", {
+      objective: "obj",
+      edgePaths: [{ path: "first legacy", risk: "r" }, { path: "second legacy", risk: "r" }],
+    }, { id: "spec_l" });
+    useArtifactStore.setState({
+      artifacts: [art],
+      comments: { spec_l: [cmt("spec_l", "spec:edge-path:1", "legacy thread")] },
+    });
+    render(<SpecArtifact artifact={art} />);
+    expect(rowFor("first legacy").getAttribute("data-comment-anchor")).toBe("spec:edge-path:0");
+    expect(rowFor("second legacy").getAttribute("data-comment-anchor")).toBe("spec:edge-path:1");
+    expect(rowFor("second legacy").textContent).toContain("1");
+    expect(rowFor("first legacy").textContent).not.toMatch(/\b1\b/);
+  });
+});

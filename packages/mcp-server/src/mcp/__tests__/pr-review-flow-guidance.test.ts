@@ -450,7 +450,8 @@ describe("S0 — delegate.md carries the five moves and the run rules", () => {
   it("#571 slice 1: the brief names its edge paths and interaction risks", () => {
     const brief = text.slice(text.indexOf("(2) Brief"), text.indexOf("(3) Run"));
     expect(brief).toContain("`edgePaths[]`");
-    expect(brief).toContain("`{path, risk, handling}`");
+    expect(brief).toContain("`{id, path, risk, handling}`");
+    expect(brief).toContain("stable `id` and keep it across revisions");
     for (const shape of ["state and transition", "early returns", "long-poll", "filtered views", "input you don't control", "inert"]) {
       expect(brief, shape).toContain(shape);
     }

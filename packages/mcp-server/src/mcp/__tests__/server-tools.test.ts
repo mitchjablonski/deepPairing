@@ -500,7 +500,7 @@ describe("MCP Tool Handlers — tool CRUD surface", () => {
 
     it("#571 — passes edgePaths through to the stored spec content", async () => {
       const edgePaths = [
-        { path: "check_feedback long-poll wake", risk: "the wake returns before the stop is recorded", handling: "re-read after wake" },
+        { id: "wake", path: "check_feedback long-poll wake", risk: "the wake returns before the stop is recorded", handling: "re-read after wake" },
         { path: "shared mode", risk: "the signal is inert" },
       ];
       const { isError } = await callTool("present_spec", { ...briefArgs, edgePaths });
@@ -530,6 +530,7 @@ describe("MCP Tool Handlers — tool CRUD surface", () => {
       expect(ep.type).toBe("array");
       expect(ep.items.required).toEqual(expect.arrayContaining(["path", "risk"]));
       expect(ep.items.required).not.toContain("handling");
+      expect(ep.items.required).not.toContain("id");
       expect(spec.description).toContain("edgePaths");
     });
 
@@ -552,6 +553,26 @@ describe("MCP Tool Handlers — tool CRUD surface", () => {
       const res = await callTool("check_feedback");
       expect(res.text).toContain("edge path #2: worker-controlled path text");
       expect((res.structuredContent as any).comments.map((c: any) => c.id)).toContain("cmt_edge");
+    });
+
+    it("#571 review — check_feedback resolves an id-anchored edge-path grain to its row", async () => {
+      await callTool("present_spec", {
+        ...briefArgs,
+        edgePaths: [
+          { id: "inert", path: "shared mode", risk: "the signal is inert" },
+          { id: "wake", path: "long-poll wake", risk: "the wake races the stop" },
+        ],
+      });
+      const id = store.getArtifacts().find((a) => a.type === "spec")!.id;
+      await store.addComment({
+        id: "cmt_wake",
+        artifactId: id,
+        content: "re-read after the wake",
+        author: "human",
+        target: { artifactId: id, sectionId: "spec:edge-path:wake" },
+      } as any);
+      const res = await callTool("check_feedback");
+      expect(res.text).toContain("edge path #2: long-poll wake");
     });
   });
 

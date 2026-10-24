@@ -92,6 +92,8 @@ export {
   coerceResearchContent,
   coercePlanContent,
   coerceSpecContent,
+  specEdgePathSectionId,
+  findSpecEdgePath,
   coerceDecisionContent,
   coerceCodeChangeContent,
   coerceReasoningContent,
