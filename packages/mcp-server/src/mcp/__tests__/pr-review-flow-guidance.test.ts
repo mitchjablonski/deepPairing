@@ -494,6 +494,9 @@ describe("S0 — delegate.md carries the five moves and the run rules", () => {
     expect(brief).toContain("The guardrail hook still guards.");
     expect(brief).toContain("strict-stop");
     expect(brief).toContain("Ordinary edits never touch it.");
+    expect(brief).toContain("A scopeless options or findings card covers nothing.");
+    expect(brief).not.toContain("No approved brief means no approved file coverage");
+    expect(text).not.toContain("the scope you stated in chat");
     expect(brief).toContain("Skip `update_plan_progress`");
     // The content requirements still apply when the brief IS posted.
     expect(brief.indexOf("When you post the brief")).toBeLessThan(brief.indexOf("`edgePaths[]`"));

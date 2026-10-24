@@ -48,10 +48,11 @@ building. Three things follow from having no brief:
 - **Don't wait for an approval.** There's nothing to approve, so don't poll
   `check_feedback` before you build. With no draft pending it returns at once
   anyway; looping on it just burns turns.
-- **The guardrail hook still guards.** No approved brief means no approved file
-  coverage, so an edit to a guardrail path (migrations, CI workflows,
-  infrastructure, secrets: the SKILL's Guardrails section) prompts me, or stops in
-  strict-stop mode. That prompt is correct, not a nag: such an edit makes the run
+- **The guardrail hook still guards.** Without a brief, a guardrail path
+  (migrations, CI workflows, infrastructure, secrets: the SKILL's Guardrails
+  section) is covered only if an approved artifact from the last ~8 hours lists
+  that exact file in its `file_map`. A scopeless options or findings card covers
+  nothing. So an edit there prompts me, or stops in strict-stop mode. That prompt is correct, not a nag: such an edit makes the run
   escalated, so brief before you make it (move 3). Ordinary edits never touch it.
 - **No checklist.** Skip `update_plan_progress`; there's no brief to mark.
 
@@ -97,9 +98,10 @@ these:
 - done being unreachable as written. Name the scope fork; never redefine done.
 
 **Stop and brief** if you're about to edit a guardrail path, a file outside
-your declared files (the brief's `file_map` visual, or the scope you stated in
-chat) in a different top-level package or directory, add a dependency, or change
-a schema or CI. With a brief posted, supersede it: `revise_artifact` with
+your declared `file_map` visual in a different top-level package or directory
+(after a quiet start, where nothing is declared: any file outside the top-level
+package or directory the task names), add a dependency, or change a schema or
+CI. With a brief posted, supersede it: `revise_artifact` with
 `mode: "supersede"`, a `reason`, and new `content` whose `context` has the line
 `Risk class: escalated` and whose `file_map` visual lists the newly declared
 files. After a quiet start, post the brief now: a `present_spec` built as in

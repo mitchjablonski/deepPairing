@@ -238,9 +238,10 @@ every artifact in the run: at `balanced` a `high` draft arms the auto-approve co
   will-ask list is non-empty, or there's a genuine architectural or hard-to-reverse
   fork. Otherwise state the five answers (objective, acceptance, decide alone,
   will ask: none, risk class) in chat and start: no card, no `check_feedback` wait
-  for an approval that can't come. Without a brief there's no approved file
-  coverage, so the guardrail backstop still prompts on a guardrail path; brief
-  (escalated) before that edit. Under `supervised`, always post the brief.
+  for an approval that can't come. Without a brief, a guardrail path is covered
+  only if an approved artifact from the last ~8 hours lists that exact file, so
+  the guardrail backstop still prompts on a guardrail path; brief (escalated)
+  before that edit. Under `supervised`, always post the brief.
 - **End with a terminal summary:** what landed, what to check first, anything
   deferred. That's the default touchpoint; the packet is the record.
 - **Required decisions are never capped or batched:** a will-ask item (yours or
@@ -250,8 +251,8 @@ every artifact in the run: at `balanced` a `high` draft arms the auto-approve co
   are sure is your own.
 - **Reclassification boundary.** An approved low-risk brief silences the guardrail hook only for its covered files, so
   you are the check. A guardrail path, a file outside the brief's `file_map` visual
-  (or the scope stated in chat) in another package, a new dependency, or a schema or
-  CI change means stop and brief: supersede the brief with `revise_artifact` and new
+  in another package (after a quiet start: any file in another package than the
+  task names), a new dependency, or a schema or CI change means stop and brief: supersede the brief with `revise_artifact` and new
   `content` whose `context` says `Risk class: escalated` and whose `file_map` visual
   lists the new files, or after a quiet start post that brief now. Then wait for
   approval.
@@ -750,10 +751,12 @@ opt-in [strict-stop compatibility mode](../../../docs/preflight-modes.md):
   malformed or out-of-root entries make the artifact's declaration unusable;
   any invalid entry invalidates the whole artifact's coverage. Otherwise an
   eligible same-session declaration blocks older scopeless siblings from
-  bypassing scope. Without such a declaration, approved scopeless ceremony
-  covers only the same usable event session (and the same existing agent when
+  bypassing scope. Without such a declaration, an approved scopeless **spec or
+  plan** (the run-scoping types) covers only the same usable event session (and the same existing agent when
   both sides provide usable IDs; stored artifacts currently have no agent
-  attribution). Unrelated declarations do not veto this fallback. Draft, stale
+  attribution). A scopeless findings or options card never arms this fallback
+  (#569): list the guardrail file in its `file_map` visual to cover it.
+  Unrelated declarations do not veto this fallback. Draft, stale
   and demo artifacts neither authorize nor veto. **A just-presented draft does
   not count.** It asks at most **once per guardrail class per 30 minutes** — **per
   file** for migrations and secrets — scoped to `session_id` plus the existing

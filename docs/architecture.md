@@ -175,8 +175,8 @@ globs or directory-prefix inference supplies scope. A single invalid path
 makes the artifact's declared coverage unusable. Matching eligible coverage
 authorizes across sessions. Otherwise eligible declarations in the current
 event's session prevent older scopeless siblings from bypassing scope;
-without such declarations, approved scopeless ceremony authorizes only that
-same usable session. Ineligible artifacts neither authorize nor veto, and
+without such declarations, an approved scopeless spec or plan (not findings or
+options, #569) authorizes only that same usable session. Ineligible artifacts neither authorize nor veto, and
 unrelated-session declarations cannot veto same-session fallback. Existing
 hook-input `session_id`/`agent_id` are forwarded without environment substitutes;
 no artifact producer attribution is invented. Ask dedup uses session plus

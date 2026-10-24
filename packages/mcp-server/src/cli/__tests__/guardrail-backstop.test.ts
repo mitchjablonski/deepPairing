@@ -502,11 +502,22 @@ describe("evaluateGuardrailBackstop — the five pinned cases", () => {
     expect(d?.reason).toContain("(migrations — hard to reverse)");
   });
 
-  it("(b) guardrail edit WITH a live spec/options/findings/plan → PASS silently (no nagging the escalated arc)", () => {
-    for (const type of ["research", "decision", "spec", "plan"]) {
+  it("(b) guardrail edit WITH an approved scopeless spec/plan in the session → PASS silently (no nagging the escalated arc)", () => {
+    for (const type of ["spec", "plan"]) {
       fs.rmSync(path.join(dir, ".deeppairing"), { recursive: true, force: true });
       seedSession([art(type)]);
       expect(evalAndRecord("migrations/1.sql"), `a live ${type} should license the guardrail edit`).toBeNull();
+    }
+  });
+
+  it("(b') #569 — scopeless approved findings/options do NOT license guardrail edits; listing the file does", () => {
+    for (const type of ["research", "decision"]) {
+      fs.rmSync(path.join(dir, ".deeppairing"), { recursive: true, force: true });
+      seedSession([art(type)]);
+      expect(evalAndRecord("migrations/1.sql"), `a scopeless ${type} must not license the edit`).not.toBeNull();
+      fs.rmSync(path.join(dir, ".deeppairing"), { recursive: true, force: true });
+      seedSession([{ ...art(type), content: { visuals: [{ kind: "file_map", files: [{ path: "migrations/1.sql" }] }] } }]);
+      expect(evalAndRecord("migrations/1.sql"), `a ${type} listing the file covers it`).toBeNull();
     }
   });
 
@@ -1016,6 +1027,22 @@ describe("#569 quiet delegate start: no brief, no nag, guardrail paths still gua
     const stop = run("migrations/1.sql", "strict-stop");
     expect(stop.fire).toBe(true);
     expect(stop.reason).toContain("strict-stop");
+  });
+
+  it("an approved scopeless fork card mid-run does NOT silence the backstop (ask, or stop under strict-stop)", () => {
+    // The hole the quiet start opened pre-fix: no brief to veto the scopeless
+    // same-session fallback, so the first approved present_options card
+    // silenced every guardrail class for 8h.
+    seedSession([...quietRun(), art("decision")]);
+    expect(run(".github/workflows/ci.yml").fire).toBe(true);
+    expect(run("migrations/1.sql", "strict-stop").fire).toBe(true);
+    expect(run("src/a.ts")).toEqual({ fire: false });
+  });
+
+  it("an approved scopeless decision or findings earlier in the session still asks", () => {
+    seedSession([art("research", "approved", iso(NOW - 2 * 60 * 60 * 1000)), art("decision", "approved", iso(NOW - 60 * 60 * 1000)), ...quietRun()]);
+    expect(run("Dockerfile").fire).toBe(true);
+    expect(run(".env", "strict-stop").fire).toBe(true);
   });
 
   it("the escalated brief silences the ask only once approved, and only for its file_map", () => {
