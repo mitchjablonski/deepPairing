@@ -5,7 +5,7 @@ import { CommentTrigger, AskTrigger } from "../CommentThread";
 import { OpenQuestionSection } from "./OpenQuestionSection";
 import { ArtifactVisuals } from "../ArtifactVisuals";
 import { ArtifactStatusActions } from "./ArtifactStatusActions";
-import { ExecutionStrip, StepStatusMarker, NON_EXECUTABLE_STATUSES } from "./ExecutionProgress";
+import { ExecutionStrip, StepStatusMarker, NON_EXECUTABLE_STATUSES, SupersededProgressCue, isClosedWithSuccessor } from "./ExecutionProgress";
 import { useChainComments } from "../../hooks/useChainComments";
 import { useWriteLock } from "../../hooks/useWriteLock";
 
@@ -116,6 +116,9 @@ export function SpecArtifact({ artifact }: Props) {
           {/* #569 (#507 S1) — the same joint checklist plans get: the agent
               marks tasks via update_plan_progress. Only once ANY task carries
               a status (old specs stay untracked and render as before). */}
+          {isClosedWithSuccessor(artifact.status) && spec.tasks.some((t) => t.status) && (
+            <SupersededProgressCue noun="task" />
+          )}
           {!NON_EXECUTABLE_STATUSES.includes(artifact.status) &&
             spec.tasks.some((t) => t.status) && (
             <div className="mb-1.5">
