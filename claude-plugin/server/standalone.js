@@ -36236,6 +36236,47 @@ function retirementFailure(outcome) {
   return `REFUSED \u2014 ${counts.join(" and ")}. Call check_feedback and address the feedback first; retirement must never dodge review.`;
 }
 
+// src/mcp/spec-ids.ts
+var MAX_SPEC_ID_LENGTH = 64;
+function normalizeIds(rows, label, prefixNumeric, notes) {
+  const reserved = /* @__PURE__ */ new Set();
+  for (const r of rows) if (typeof r.id === "string" && r.id.length > 0) reserved.add(r.id);
+  const used = /* @__PURE__ */ new Set();
+  return rows.map((row, i) => {
+    if (typeof row.id !== "string" || row.id.length === 0) return row;
+    const original = row.id;
+    let id = original;
+    if (id.length > MAX_SPEC_ID_LENGTH) {
+      id = id.slice(0, MAX_SPEC_ID_LENGTH);
+      notes.push(`${label} #${i + 1} id truncated to ${MAX_SPEC_ID_LENGTH} chars ("${id}")`);
+    }
+    if (prefixNumeric && /^\d+$/.test(id)) {
+      const prefixed = `ep-${id}`;
+      notes.push(`${label} #${i + 1} id "${id}" is purely numeric (collides with the index fallback) \u2014 renamed "${prefixed}"`);
+      id = prefixed;
+    }
+    if (used.has(id)) {
+      let n = 2;
+      let candidate;
+      do {
+        const suffix = `-${n++}`;
+        candidate = `${id.slice(0, MAX_SPEC_ID_LENGTH - suffix.length)}${suffix}`;
+      } while (used.has(candidate) || reserved.has(candidate));
+      notes.push(`${label} #${i + 1} id "${id}" is a duplicate \u2014 renamed "${candidate}"`);
+      id = candidate;
+    }
+    used.add(id);
+    return id === original ? row : { ...row, id };
+  });
+}
+function normalizeSpecIds(requirements, edgePaths) {
+  const notes = [];
+  const reqs = normalizeIds(requirements, "requirement", false, notes);
+  const eps = edgePaths ? normalizeIds(edgePaths, "edge path", true, notes) : void 0;
+  const warning = notes.length > 0 ? ` (spec ids adjusted so comments anchor unambiguously: ${notes.join("; ")}. Keep ids unique, non-numeric and <= ${MAX_SPEC_ID_LENGTH} chars in revisions.)` : "";
+  return { requirements: reqs, edgePaths: eps, warning };
+}
+
 // src/mcp/tools/revise-artifact.ts
 var SUPERSEDE_VALIDATORS = {
   research: validatePresentFindingsInput,
@@ -36299,6 +36340,19 @@ async function handleReviseArtifact(ctx, args) {
     if (supersedeValidator) {
       const v2 = supersedeValidator({ title: args?.title ?? old.title, ...content });
       if (!v2.ok) return v2.error;
+    }
+    let specIdWarning = "";
+    if (old.type === "spec") {
+      const c = content;
+      if (Array.isArray(c.requirements)) {
+        const ids = normalizeSpecIds(
+          c.requirements,
+          Array.isArray(c.edgePaths) ? c.edgePaths : void 0
+        );
+        c.requirements = ids.requirements;
+        if (ids.edgePaths) c.edgePaths = ids.edgePaths;
+        specIdWarning = ids.warning;
+      }
     }
     const pre = await preflightArtifact(ctx, "revise_artifact", old.type, String(args?.title ?? old.title), content, { deferRecord: true });
     if (pre && !pre.ok) {
@@ -36372,7 +36426,7 @@ async function handleReviseArtifact(ctx, args) {
 
 \u26A0 Recalled stance \u2014 advisory, not a block (this revision records external or historical material rather than proposing that approach): ${pre.advisory}` : "";
     return {
-      content: [{ type: "text", text: `Superseded ${artifactId} \u2192 ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${formatStyleWarnings(newArtifact.type, newArtifact.content)}${advisory}` }]
+      content: [{ type: "text", text: `Superseded ${artifactId} \u2192 ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${specIdWarning}${formatStyleWarnings(newArtifact.type, newArtifact.content)}${advisory}` }]
     };
   }
   const artifacts = await store.getArtifacts();
@@ -37272,47 +37326,6 @@ async function handlePostPrReview(ctx, args) {
       isError: true
     };
   }
-}
-
-// src/mcp/spec-ids.ts
-var MAX_SPEC_ID_LENGTH = 64;
-function normalizeIds(rows, label, prefixNumeric, notes) {
-  const reserved = /* @__PURE__ */ new Set();
-  for (const r of rows) if (typeof r.id === "string" && r.id.length > 0) reserved.add(r.id);
-  const used = /* @__PURE__ */ new Set();
-  return rows.map((row, i) => {
-    if (typeof row.id !== "string" || row.id.length === 0) return row;
-    const original = row.id;
-    let id = original;
-    if (id.length > MAX_SPEC_ID_LENGTH) {
-      id = id.slice(0, MAX_SPEC_ID_LENGTH);
-      notes.push(`${label} #${i + 1} id truncated to ${MAX_SPEC_ID_LENGTH} chars ("${id}")`);
-    }
-    if (prefixNumeric && /^\d+$/.test(id)) {
-      const prefixed = `ep-${id}`;
-      notes.push(`${label} #${i + 1} id "${id}" is purely numeric (collides with the index fallback) \u2014 renamed "${prefixed}"`);
-      id = prefixed;
-    }
-    if (used.has(id)) {
-      let n = 2;
-      let candidate;
-      do {
-        const suffix = `-${n++}`;
-        candidate = `${id.slice(0, MAX_SPEC_ID_LENGTH - suffix.length)}${suffix}`;
-      } while (used.has(candidate) || reserved.has(candidate));
-      notes.push(`${label} #${i + 1} id "${id}" is a duplicate \u2014 renamed "${candidate}"`);
-      id = candidate;
-    }
-    used.add(id);
-    return id === original ? row : { ...row, id };
-  });
-}
-function normalizeSpecIds(requirements, edgePaths) {
-  const notes = [];
-  const reqs = normalizeIds(requirements, "requirement", false, notes);
-  const eps = edgePaths ? normalizeIds(edgePaths, "edge path", true, notes) : void 0;
-  const warning = notes.length > 0 ? ` (spec ids adjusted so comments anchor unambiguously: ${notes.join("; ")}. Keep ids unique, non-numeric and <= ${MAX_SPEC_ID_LENGTH} chars in revisions.)` : "";
-  return { requirements: reqs, edgePaths: eps, warning };
 }
 
 // src/mcp/tools/present-spec.ts
