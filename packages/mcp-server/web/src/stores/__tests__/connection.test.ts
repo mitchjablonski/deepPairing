@@ -184,6 +184,43 @@ describe("connection store — handleMessage dispatch", () => {
     expect(tasks[1]).toMatchObject({ status: "in_progress", statusNote: "half" });
   });
 
+  it("#571 slice 2 — the governing brief follows live WS progress and a supersede to v2", async () => {
+    const { selectGoverningBrief } = await import("../../lib/governingBrief");
+    useConnectionStore.getState().connect();
+    const spec = {
+      id: "spec_g1", sessionId: "sess_571", type: "spec", version: 1, parentId: null,
+      title: "Brief", status: "approved", agentReasoning: null,
+      statusHistory: [{ status: "approved", at: "2026-10-23T10:01:00.000Z" }],
+      createdAt: "2026-10-23T10:00:00.000Z", updatedAt: "2026-10-23T10:01:00.000Z",
+      content: { objective: "o", context: "Risk class: low-risk\nReview: packet", requirements: [], edgePaths: [{ id: "wake", path: "p", risk: "r" }],
+        tasks: [{ description: "t0", status: "pending" }, { description: "t1", status: "pending" }] },
+    };
+    activeAdapter.emit({
+      type: "connected", projectRoot: "/p",
+      state: { sessionId: "sess_571", artifacts: [spec], comments: [], requests: [], decisions: [] },
+    });
+    await flush();
+    const brief = () => selectGoverningBrief(useArtifactStore.getState().artifacts);
+    expect(brief()).toMatchObject({ id: "spec_g1", tasks: { done: 0, total: 2 }, edgePathCount: 1 });
+
+    activeAdapter.emit({
+      type: "plan_progress_updated",
+      artifact: { ...spec, content: { ...spec.content, tasks: [{ description: "t0", status: "done" }, { description: "t1", status: "in_progress" }] } },
+    });
+    await flush();
+    expect(brief()?.tasks).toMatchObject({ done: 1, total: 2 });
+
+    // revise_artifact: the successor arrives, then the parent flips to superseded.
+    activeAdapter.emit({
+      type: "artifact_created",
+      artifact: { ...spec, id: "spec_g2", version: 2, parentId: "spec_g1", status: "draft", statusHistory: [],
+        createdAt: "2026-10-23T10:10:00.000Z", updatedAt: "2026-10-23T10:10:00.000Z" },
+    });
+    activeAdapter.emit({ type: "artifact_updated", artifactId: "spec_g1", status: "superseded" });
+    await flush();
+    expect(brief()).toMatchObject({ id: "spec_g2", version: 2, awaitingApproval: true });
+  });
+
   it("C5 — hydrated flips true on the first `connected` payload", async () => {
     expect(useConnectionStore.getState().hydrated).toBe(false);
     useConnectionStore.getState().connect();
