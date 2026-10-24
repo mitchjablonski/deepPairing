@@ -10,8 +10,10 @@ import {
   coerceDebriefContent,
   coerceExplainerContent,
   coerceArtifactContent,
+  specEdgePathSectionId,
+  findSpecEdgePath,
 } from "../coerce-content.js";
-import { SpecContentSchema, SpecTaskSchema } from "../content-types.js";
+import { SpecContentSchema, SpecTaskSchema, SpecEdgePathSchema } from "../content-types.js";
 
 /**
  * The coercers guarantee a fully-shaped content object from raw/partial/
@@ -561,5 +563,83 @@ describe("#569 — spec task execution status (pilot task B)", () => {
     expect(out.tasks![1]!.statusNote).toBe("covered by a");
     expect(out.tasks![2]!.status).toBeUndefined();
     expect(out.tasks![3]).toEqual({ description: "d", estimate: "m" });
+  });
+});
+
+describe("#571 slice 1 — spec edge paths", () => {
+  const old = {
+    objective: "o",
+    context: "ctx",
+    requirements: [{ id: "R1", statement: "do", rationale: "why", acceptanceCriteria: ["it works"] }],
+    design: "shape",
+    tasks: [{ description: "t1" }],
+    openQuestions: ["q?"],
+  };
+
+  it("schema back-compat: a pre-#571 spec parses unchanged, with no edgePaths key", () => {
+    const parsed = SpecContentSchema.safeParse(old);
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && "edgePaths" in parsed.data).toBe(false);
+    // The coercer adds nothing either: the renderer sees exactly the old shape.
+    expect("edgePaths" in coerceSpecContent(old)).toBe(false);
+  });
+
+  it("schema accepts {path, risk, handling?} and rejects an entry missing path or risk", () => {
+    const parsed = SpecContentSchema.safeParse({
+      ...old,
+      edgePaths: [{ path: "poll wake", risk: "missed signal", handling: "re-read" }, { path: "inert mode", risk: "silent no-op" }],
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.edgePaths).toEqual([
+      { path: "poll wake", risk: "missed signal", handling: "re-read" },
+      { path: "inert mode", risk: "silent no-op" },
+    ]);
+    expect(SpecEdgePathSchema.safeParse({ path: "p" }).success).toBe(false);
+    expect(SpecEdgePathSchema.safeParse({ risk: "r" }).success).toBe(false);
+  });
+
+  it("coercion keeps edge paths, defaults wrong-typed text, and never drops an entry (index-stable grains)", () => {
+    const out = coerceSpecContent({
+      ...old,
+      edgePaths: [
+        { path: "a", risk: "ra", handling: "ha" },
+        "junk",
+        { path: 7, risk: "rb", handling: 9 },
+        { path: "c", risk: "rc" },
+      ],
+    });
+    expect(out.edgePaths).toEqual([
+      { path: "a", risk: "ra", handling: "ha" },
+      { path: "", risk: "" },
+      { path: "", risk: "rb" },
+      { path: "c", risk: "rc" },
+    ]);
+    // A non-array edgePaths is absent, not an empty list.
+    expect("edgePaths" in coerceSpecContent({ ...old, edgePaths: "nope" })).toBe(false);
+  });
+});
+
+describe("#571 review — edge-path stable ids", () => {
+  it("schema + coercion keep an optional stable id; an empty id is rejected / dropped", () => {
+    expect(SpecEdgePathSchema.safeParse({ id: "wake", path: "p", risk: "r" }).success).toBe(true);
+    expect(SpecEdgePathSchema.safeParse({ id: "", path: "p", risk: "r" }).success).toBe(false);
+    const out = coerceSpecContent({ objective: "o", requirements: [], edgePaths: [{ id: "wake", path: "p", risk: "r" }, { id: "", path: "q", risk: "r" }] });
+    expect(out.edgePaths).toEqual([{ id: "wake", path: "p", risk: "r" }, { path: "q", risk: "r" }]);
+  });
+
+  it("specEdgePathSectionId anchors by id, else by index", () => {
+    expect(specEdgePathSectionId({ id: "wake" }, 3)).toBe("spec:edge-path:wake");
+    expect(specEdgePathSectionId({}, 3)).toBe("spec:edge-path:3");
+  });
+
+  it("findSpecEdgePath resolves by id across an insert, and by index only onto id-less entries", () => {
+    const v2 = [{ id: "inert", path: "a" }, { id: "wake", path: "b" }, { path: "legacy" }];
+    expect(findSpecEdgePath(v2, "spec:edge-path:wake")).toEqual({ edgePath: v2[1], index: 1 });
+    expect(findSpecEdgePath(v2, "spec:edge-path:2")).toEqual({ edgePath: v2[2], index: 2 });
+    // index 0 is an id-anchored row: a legacy numeric key must not capture it.
+    expect(findSpecEdgePath(v2, "spec:edge-path:0")).toBeUndefined();
+    expect(findSpecEdgePath(v2, "spec:edge-path:gone")).toBeUndefined();
+    expect(findSpecEdgePath(v2, "debrief:0")).toBeUndefined();
+    expect(findSpecEdgePath(undefined, "spec:edge-path:0")).toBeUndefined();
   });
 });

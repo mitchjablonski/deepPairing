@@ -8,7 +8,7 @@ import type { ToolContext, ToolResult } from "./types.js";
 export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<ToolResult> {
   const validated = validatePresentSpecInput(args);
   if (!validated.ok) return validated.error;
-  const { title, objective, context, requirements, design, tasks, openQuestions, visuals } = validated.data;
+  const { title, objective, context, requirements, design, tasks, openQuestions, visuals, edgePaths } = validated.data;
   const requirementsArr = requirements;
   const tasksArr = tasks ?? [];
   const pre = (await preflightArtifact(ctx, "present_spec", "spec", title, validated.data))!;
@@ -30,9 +30,14 @@ export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<To
     tasks: tasksArr,
     openQuestions: openQuestions ?? [],
     ...(visuals ? { visuals } : {}),
+    // #571 slice 1 — passthrough, absent when the agent declared none (old
+    // specs' stored shape is unchanged).
+    ...(edgePaths ? { edgePaths } : {}),
   };
   // #160 — specs were a scanner GAP: design/context prose quotes configs and
-  // sample payloads, exactly where a pasted key hides. #162 — the scan runs
+  // sample payloads, exactly where a pasted key hides. (#571: the scan walks
+  // the whole content tree, so `edgePaths[].path/risk/handling` are covered
+  // with no per-field list to update.) #162 — the scan runs
   // INSIDE createArtifact now (parity with addComment); matches PERSIST on
   // the artifact (labels+location only — never the value) and we read them
   // back for the broadcast below.
