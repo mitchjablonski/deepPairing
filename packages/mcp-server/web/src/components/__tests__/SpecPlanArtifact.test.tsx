@@ -438,12 +438,19 @@ describe("#569 — spec task execution status renders like plan step status", ()
 
   it("#579 — the unmarked pending marker has an aria-label (spec and plan)", () => {
     render(<SpecArtifact artifact={specWith(tasks)} />);
-    expect(screen.getByLabelText("Task 4: pending")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Task 4: pending" })).toBeInTheDocument();
     render(<PlanArtifact artifact={mk("plan", { estimatedChanges: 2, steps: [
       { description: "one", reasoning: "r", status: "done" },
       { description: "two", reasoning: "r" },
     ] }, { status: "approved" })} />);
-    expect(screen.getByLabelText("Step 2: pending")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Step 2: pending" })).toBeInTheDocument();
+  });
+
+  it("the superseded cue keeps legible muted text — a colour token, not opacity", () => {
+    render(<SpecArtifact artifact={specWith(tasks, "superseded")} />);
+    const cue = screen.getByRole("note", { name: "Superseded spec progress" });
+    expect(cue.className).toContain("text-text-muted");
+    expect(cue.className).not.toMatch(/opacity-/);
   });
 
   it("plans keep their wording through the shared strip", () => {
