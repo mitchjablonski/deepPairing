@@ -36163,7 +36163,9 @@ async function handleUpdatePlanProgress(ctx, args) {
     draft: "still AWAITING REVIEW \u2014 get your pair's approval before executing",
     rejected: `REJECTED \u2014 do not execute it; address the feedback or present a new ${kind}`,
     retracted: "retracted",
-    obsolete: "obsolete"
+    obsolete: "obsolete",
+    superseded: `superseded \u2014 progress belongs on the latest version of this ${kind}; use its id`,
+    revised: `revised \u2014 progress belongs on the latest version of this ${kind}; use its id`
   };
   const warning = NOT_EXECUTABLE[artifact.status] ? `
 \u26A0 WARNING: this ${kind} is ${NOT_EXECUTABLE[artifact.status]}.` : "";
