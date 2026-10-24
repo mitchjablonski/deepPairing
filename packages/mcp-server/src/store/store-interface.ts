@@ -4,6 +4,7 @@ import type { PostedReviewRecord } from "./posted-reviews.js";
 import type { DecisionResolveOutcome, ResolutionAnnouncement } from "./decision-resolve-guard.js";
 import type { DurableReviewPostStore } from "../github/durable-review-post.js";
 import type { WorkerStopBatch } from "./worker-stop-notices.js";
+import type { RetirementInput, RetirementOutcome } from "./retirement.js";
 
 /** Allows both sync (FileStore) and async (DaemonClient) implementations */
 type MaybePromise<T> = T | Promise<T>;
@@ -247,6 +248,8 @@ export interface RejectedApproach {
  * returns Promises. Callers should always `await` the result.
  */
 export interface IStore {
+  /** Authoritative guarded retirement; never emulate with separate reads/writes. */
+  retireArtifact(input: RetirementInput): MaybePromise<RetirementOutcome>;
   /** Durable cross-process posting boundary; never substitute an in-memory fallback. */
   readonly reviewPosts: DurableReviewPostStore;
   // Session

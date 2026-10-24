@@ -1,5 +1,4 @@
-import { nanoid } from "nanoid";
-import { collectUnansweredQuestions } from "@deeppairing/shared";
+import { retirementFailure } from "../../store/retirement.js";
 import { maybeUpdateTaskStatus } from "../tasks-probe.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
@@ -53,84 +52,22 @@ export async function handleWithdrawArtifact(ctx: ToolContext, args: any): Promi
       isError: true,
     };
   }
-  if (artifact.status !== "draft") {
-    return {
-      content: [{ type: "text", text: `withdraw_artifact: ${artifactId} is ${artifact.status}, not a draft — withdrawal only applies to a draft you haven't heard back on. Use revise_artifact (supersede) to version it, or check_feedback to read its verdict.` }],
-      isError: true,
-    };
-  }
+  if (!store.retireArtifact) return { content: [{ type: "text", text: "withdraw_artifact: guarded retirement unavailable; nothing changed." }], isError: true };
+  const outcome = await store.retireArtifact({ artifactId, expectedVersion: artifact.version, expectedStatus: artifact.status, door: "withdraw", mode: "retract", reason });
+  if (outcome.kind !== "committed" && outcome.kind !== "already_retired") return { content: [{ type: "text", text: `withdraw_artifact: ${retirementFailure(outcome)}` }], isError: true };
 
-  // THE LOAD-BEARING GUARD — never dodge review. Reject if the draft carries
-  // unanswered human questions or undrained human comments.
-  const comments = await store.getCommentsForArtifact(artifactId);
-  const unanswered = collectUnansweredQuestions(comments).filter(
-    (q) => q.artifactId === artifactId || q.question.target?.artifactId === artifactId,
-  );
-  // #225 (N1) — DEDUPE: an unanswered question is a human comment with
-  // acknowledged=false, so before this it was counted TWICE — once as a question
-  // (collectUnansweredQuestions) and again as an "unread comment" — yielding the
-  // nonsense "1 unanswered question and 1 unread comment" for a single object. A
-  // question counts ONCE, as the question. Exclude the already-counted question
-  // ids from the undrained-comment bucket so a MIXED case (a real separate unread
-  // comment alongside a question) still reports both accurately.
-  const unansweredIds = new Set(unanswered.map((q) => q.question.id));
-  const undrainedComments = comments.filter(
-    (c) => c.author === "human" && !c.acknowledged && !unansweredIds.has(c.id),
-  );
-  if (unanswered.length > 0 || undrainedComments.length > 0) {
-    const bits: string[] = [];
-    if (unanswered.length > 0) bits.push(`${unanswered.length} unanswered question${unanswered.length === 1 ? "" : "s"}`);
-    if (undrainedComments.length > 0) bits.push(`${undrainedComments.length} unread comment${undrainedComments.length === 1 ? "" : "s"}`);
-    return {
-      content: [{
-        type: "text",
-        text:
-          `withdraw_artifact: REFUSED — ${artifactId} has ${bits.join(" and ")} from the human. ` +
-          `Withdrawing must never dodge review. Call check_feedback and answer_question to address the feedback first; then withdraw (or revise) with a clear conscience.`,
-      }],
-      isError: true,
-    };
-  }
-
-  // Stamp the reason onto content FIRST so it's present when the status flip
-  // broadcasts the retracted state (the panel renders "↩ Retracted by agent —
-  // <reason>" inline). It ALSO rides an agent comment below for thread history.
-  await store.setRetractReason?.(artifactId, reason);
-  await store.updateArtifactStatus(artifactId, "retracted", "agent_withdraw");
-  await maybeUpdateTaskStatus(server, artifactId, store);
-  // An agent-authored THREAD MARKER so the history reads honestly and a successor
-  // can thread onto it. #204 (UX L1) — the marker is now just "Withdrawn." (the
-  // reason is NOT repeated here): the inline "↩ Retracted by agent — <reason>"
-  // status surface already carries the reason ~150px away, so echoing the full
-  // sentence in an adjacent agent comment was the same words twice. The inline
-  // reason is the honest status surface (kept); this comment is only the thread
-  // marker that lets a successor chain onto the retraction.
-  await store.addComment({
-    id: `cmt_${nanoid(10)}`,
-    artifactId,
-    content: `Withdrawn.`,
-    author: "agent",
-  });
-  broadcast({ type: "artifact_updated", artifactId, status: "retracted" });
-  // #225 (N1, F2) — the load-bearing guard above inspects only THIS artifact's
-  // OWN comments, but the passive drain reads the whole session, so it can surface
-  // an unread PLAIN comment carried from an EARLIER version of this thread (the
-  // supersede chain). When that happens the withdrawal is NOT the clean, nothing-
-  // owed act the base text implies — so say so honestly rather than let the drained
-  // line ride in silently. (Obligation-bearing carried feedback — a question or a
-  // suggested edit — is NOT drained here after F1: it stays for check_feedback's
-  // rich lanes; and any feedback on THIS artifact would have BLOCKED the withdrawal
-  // outright via the guard. So this clause is specifically about carried chatter.)
-  const passive = await ctx.helpers.getPassiveFeedback();
-  const carriedNote = passive
-    ? ` Heads up: unread comment(s) carried from an earlier version of this thread were surfaced below — read them (they were plain comments; an open question or suggested edit would have stayed for check_feedback, and feedback on ${artifactId} itself would have blocked this withdrawal).`
-    : "";
+  // The authoritative operation persisted the reason/status/root marker first.
+  let taskWarning = "";
+  try { await maybeUpdateTaskStatus(server, artifactId, store); }
+  catch { taskWarning = " Retirement persisted, but the task summary could not be refreshed."; }
+  if (outcome.kind === "committed") broadcast({ type: "artifact_updated", artifactId, status: "retracted" });
+  // Retirement never drains session-wide feedback as a side effect.
   return {
     content: [{
       type: "text",
       text:
         `Withdrew ${artifactId} — "${reason}". It's off the human's review queue and recorded as retracted (not built). ` +
-        `Nothing was written to the ledger. Continue your workflow, or present a corrected artifact when ready.${carriedNote}${passive}`,
+        `Nothing was written to the ledger. Call check_feedback for feedback still owed; withdrawal did not acknowledge or answer it.${outcome.warning ? ` ${outcome.warning}` : ""}${taskWarning}`,
     }],
   };
 }

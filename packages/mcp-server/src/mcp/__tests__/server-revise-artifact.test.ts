@@ -15,6 +15,39 @@ beforeEach(() => {
 });
 
 describe("MCP Tool Handlers — revise_artifact", () => {
+  it.each(["retract", "obsolete"])("%s refuses acknowledged but still-open suggestions without draining other feedback", async (mode) => {
+    await callTool("present_findings", { summary: "Finding", findings: [{ category: "other", detail: "x", significance: "low" }] });
+    const artifact = store.getArtifacts()[0];
+    store.addComment({ id: "open_suggestion", artifactId: artifact.id, author: "human", content: "Use the safer edge path", intent: "suggestion", suggestion: { originalText: "old", replacementText: "new", lineStart: 1, lineEnd: 1, state: "countered" } });
+    store.acknowledgeComments(["open_suggestion"]);
+    store.addComment({ id: "unrelated", artifactId: "other", author: "human", content: "Keep this queued" });
+    const before = structuredClone(store.getComment("open_suggestion"));
+    const result = await callTool("revise_artifact", { artifactId: artifact.id, mode, reason: "Moving on" });
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("open suggestion");
+    expect(store.getArtifacts()[0].status).toBe("draft");
+    expect(store.getComment("open_suggestion")).toEqual(before);
+    expect(store.getComment("unrelated")?.acknowledged).toBe(false);
+  });
+
+  it("disarm root marker does not answer feedback, and check_feedback still delivers rich lanes", async () => {
+    await callTool("present_findings", { summary: "Finding", findings: [{ category: "other", detail: "x", significance: "low" }] });
+    const artifact = store.getArtifacts()[0];
+    store.createArtifact({ id: "external", type: "changeset", title: "External PR", content: { files: [], reviewIntent: "external" } });
+    store.updateArtifactStatus(artifact.id, "approved", "ui_approve_button");
+    store.addComment({ id: "still_owed", artifactId: artifact.id, author: "human", content: "Which boundary was tested?", intent: "question" });
+    store.addComment({ id: "still_suggested", artifactId: artifact.id, author: "human", content: "Use a timeout", intent: "suggestion", suggestion: { originalText: "old", replacementText: "new", lineStart: 1, lineEnd: 1, state: "pending" } });
+    const result = await callTool("revise_artifact", { artifactId: artifact.id, mode: "retract", reason: "Do not send this finding" });
+    expect(result.isError).toBeFalsy();
+    expect(store.getComment("still_owed")?.acknowledged).toBe(false);
+    expect(store.getComment("still_suggested")?.acknowledged).toBe(false);
+    const marker = store.getCommentsForArtifact(artifact.id).find((c) => c.author === "agent" && c.content.startsWith("Un-armed"));
+    expect(marker?.parentCommentId).toBeFalsy();
+    const feedback = await callTool("check_feedback");
+    expect((feedback.structuredContent as { questions: Array<{ commentId: string }> }).questions.map((q) => q.commentId)).toContain("still_owed");
+    expect(feedback.text).toContain("Use a timeout");
+  });
+
   it("blocks rejected approaches in revisions before superseding or creating artifacts", async () => {
     await callTool("present_findings", { summary: "Inspect dependency injection", findings: [{ category: "Architecture", detail: "Use constructor arguments", significance: "high" }] });
     const old = store.getArtifacts()[0];

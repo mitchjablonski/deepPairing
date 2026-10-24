@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { retirementFeedback, type RetirementInput, type RetirementOutcome } from "./retirement.js";
 import { classifyStaleResolve, classifyClosedDecision, type DecisionResolveOutcome, type ResolutionAnnouncement } from "./decision-resolve-guard.js";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -751,6 +752,114 @@ export class FileStore implements IStore {
       art.updatedAt = new Date().toISOString();
       this.scheduleFlush();
     }
+  }
+
+  /** #583 — locked disk+pending predicate, then one synchronous retirement.
+   * Atomic files are independent: a failed write retains the delta for retry. */
+  retireArtifact(input: RetirementInput): RetirementOutcome {
+    this.assertAuthorizationReadable();
+    if (this.disposed) throw new Error(`FileStore for session ${this.sessionId} is disposed`);
+    if (!input.artifactId || !Number.isInteger(input.expectedVersion) || input.expectedVersion < 1 || !input.reason.trim() ||
+      !["withdraw", "revise"].includes(input.door) || !["retract", "obsolete"].includes(input.mode) ||
+      (input.door === "withdraw" && input.mode !== "retract")) {
+      return { kind: "ineligible", message: "Invalid retirement request." };
+    }
+    return withSessionFlushLock(path.join(this.sessionDir(), ".flush.lock"), () => {
+      // Unlike flushRecords, read even when local state is clean. Do not let
+      // salvage/fallback turn damaged feedback or authority into an empty set.
+      const read = <T extends { id: string }>(file: string): T[] => {
+        const filePath = path.join(this.sessionDir(), file);
+        let raw: unknown;
+        try { raw = JSON.parse(fs.readFileSync(filePath, "utf8")); }
+        catch (error) {
+          if (errorCode(error) === "ENOENT" && !this.observedRecordFiles.has(file)) return [];
+          throw error;
+        }
+        if (!Array.isArray(raw) || raw.some((r: unknown) => !r || typeof r !== "object" || typeof (r as { id?: unknown }).id !== "string")) {
+          throw new Error(`Unreadable retirement collection: ${file}`);
+        }
+        this.observedRecordFiles.add(file);
+        return raw as T[];
+      };
+      try {
+        const disk = read<Artifact>("artifacts.json");
+        if (disk.some((a) => !ArtifactSchema.safeParse(a).success)) throw new Error("Unreadable retirement artifact authority");
+        this.artifacts = mergeArtifactRecords(JSON.parse(this.recordBaselines["artifacts.json"] ?? "[]") as Artifact[], this.artifacts, disk, (a) => a.id);
+      } catch (error) {
+        if (error instanceof SessionReviewConflictError) this.reviewConflict = error;
+        throw error;
+      }
+      const artifact = this.artifacts.find((a) => a.id === input.artifactId && a.sessionId === this.sessionId);
+      if (!artifact) return { kind: "not_found", message: `No artifact with id ${input.artifactId} in this session.` };
+      if (artifact.version !== input.expectedVersion) return { kind: "stale", message: "Artifact version changed; check_feedback before retrying." };
+      const reason = input.door === "withdraw" ? "agent_withdraw" : input.mode === "obsolete" ? "agent_obsolete" : "agent_retract";
+      const status = input.mode === "obsolete" ? "obsolete" : "retracted";
+      const history = (artifact as { statusHistory?: Array<{ status: string; at: string; reason?: string }> }).statusHistory ?? [];
+      const last = history.at(-1);
+      const content = artifact.content as Record<string, unknown> | null;
+      const replay = artifact.status === status && last?.status === status && last.reason === reason && content?.retractReason === input.reason;
+      // Matching replay precedes expected-status mismatch; never mutate history again.
+      if (!replay && artifact.status !== input.expectedStatus) return { kind: "stale", message: "Artifact status changed; check_feedback before retrying." };
+      const disarmed = input.door === "revise" && input.mode === "retract" && artifact.type === "research" &&
+        (artifact.status === "approved" || (replay && history.at(-2)?.status === "approved")) &&
+        this.artifacts.some((a) => a.sessionId === this.sessionId && a.type === "changeset" && (a.content as { reviewIntent?: unknown } | null)?.reviewIntent === "external");
+      if (!replay && !(input.door === "withdraw" ? artifact.status === "draft" : artifact.status === "draft" || artifact.status === "reviewing" || disarmed)) {
+        return { kind: "ineligible", message: input.door === "withdraw" ? `${artifact.id} is ${artifact.status}, not a draft — withdrawal only applies to your own draft.` : `${artifact.id} is ${artifact.status}, too late to ${input.mode}. Approved findings can be un-armed only in an external PR-review session.` };
+      }
+      let warning: string | undefined;
+      try {
+        const disk = read<Comment>("comments.json");
+        if (disk.some((c) => (c.author !== "human" && c.author !== "agent") || !c.target || typeof c.target.artifactId !== "string" || typeof c.content !== "string" ||
+          typeof c.acknowledged !== "boolean" || typeof c.createdAt !== "string" ||
+          (c.parentCommentId !== null && c.parentCommentId !== undefined && typeof c.parentCommentId !== "string") ||
+          (c.intent !== undefined && !["comment", "question", "suggestion"].includes(c.intent)) ||
+          (c.answeredByCommentId !== null && c.answeredByCommentId !== undefined && typeof c.answeredByCommentId !== "string") ||
+          (c.suggestion && !["pending", "countered", "applied", "insisted"].includes(c.suggestion.state)))) throw new Error("Unreadable feedback structure");
+        this.comments = mergeSessionRecords(JSON.parse(this.recordBaselines["comments.json"] ?? "[]") as Comment[], this.comments, disk, (c) => c.id);
+      } catch {
+        if (!disarmed && !replay) return { kind: "feedback_unknown", message: "Feedback could not be read safely; retirement refused. Nothing was acknowledged." };
+        warning = "Feedback could not be read safely; the root history marker was not written. Feedback remains owed.";
+      }
+      if (!disarmed && !replay) {
+        const debt = retirementFeedback(this.comments, artifact.id);
+        if (debt.unansweredQuestions || debt.openSuggestions || debt.undrainedComments) return debt;
+      }
+      this.feedbackNotifyHolds++;
+      const priorNotify = this.feedbackNotifyPending;
+      let committed = false;
+      try {
+        if (!replay) {
+          this.setRetractReason(artifact.id, input.reason);
+          this.updateArtifactStatus(artifact.id, status, reason);
+        }
+        // Artifact reason/status/history are one atomic-file unit. Do not flush
+        // unrelated sidecars or recursively acquire the session lock.
+        this.artifacts = this.flushRecords("artifacts.json", this.artifacts, (a) => a.id,
+          (raw) => FileStore.salvageArray<Artifact>("retirement artifacts", raw, "id"), false, mergeArtifactRecords);
+        let marker: Comment | undefined;
+        if (!warning) {
+          const at = (artifact.statusHistory ?? []).at(-1)?.at;
+          const markerId = `cmt_retire_${crypto.createHash("sha256").update(JSON.stringify([this.sessionId, artifact.id, artifact.version, input.door, input.mode, at, input.reason])).digest("hex").slice(0, 32)}`;
+          marker = this.comments.find((c) => c.id === markerId);
+          if (!marker) marker = this.addComment({ id: markerId, artifactId: artifact.id, author: "agent", content: input.door === "withdraw" ? "Withdrawn." : `${disarmed ? "Un-armed" : input.mode === "obsolete" ? "Overcome by new information" : "Retracted"}: ${input.reason}` });
+          // Root only: no parentCommentId, so a lifecycle marker never answers a question.
+          this.comments = this.flushRecords("comments.json", this.comments, (c) => c.id,
+            (raw) => FileStore.salvageArray<Comment>("retirement comments", raw, "id"));
+        }
+        committed = true;
+        return { kind: replay ? "already_retired" : "committed", artifact: this.artifacts.find((a) => a.id === artifact.id)!, marker, disarmed, warning };
+      } catch (error) {
+        // Applied delta stays pending, exactly like existing status/flush semantics.
+        // Never re-arm an artifact because a later comments write failed.
+        if (error instanceof SessionReviewConflictError) this.reviewConflict = error;
+        this.scheduleFlush();
+        return { kind: "persist_uncertain", message: "Retirement was applied in memory, but persistence is uncertain. Retry this exact request; do not assume it was undone or post the finding." };
+      } finally {
+        this.feedbackNotifyPending = priorNotify;
+        this.feedbackNotifyHolds--;
+        if (committed) this.notifyFeedbackWaiters();
+      }
+    });
   }
 
   updateArtifactStatus(

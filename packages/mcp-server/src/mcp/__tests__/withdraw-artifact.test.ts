@@ -50,7 +50,7 @@ describe("#198c withdraw_artifact", () => {
   // from an earlier version of the thread. When that happens the success text must
   // NOT imply a spotless withdrawal — it adds an honest "carried from an earlier
   // version" clause. When nothing was carried, no clause (byte-for-byte unchanged).
-  it("#225 F2 — adds an honest carried-feedback clause when the passive drain surfaced carried chatter", async () => {
+  it("retirement does not passively deliver unrelated or predecessor feedback", async () => {
     const store = fx.track(new FileStore(tmpDir, "s1"));
     seedDraft(store);
     const res = await handleWithdrawArtifact(
@@ -59,9 +59,9 @@ describe("#198c withdraw_artifact", () => {
     );
     expect(res.isError).toBeFalsy();
     const text = res.content[0]!.text as string;
-    expect(text).toContain("carried from an earlier version");
-    // The drained line still rides along.
-    expect(text).toContain("a carried plain comment");
+    expect(text).not.toContain("carried from an earlier version");
+    expect(text).not.toContain("a carried plain comment");
+    expect(text).toContain("Call check_feedback");
   });
 
   it("#225 F2 — no carried-feedback clause when nothing was drained", async () => {
