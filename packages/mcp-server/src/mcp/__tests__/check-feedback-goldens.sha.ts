@@ -104,7 +104,9 @@ export const CHECK_FEEDBACK_GOLDENS: Record<string, CheckFeedbackGolden> = {
   // is now one of the blocking lanes.
   render_failures: { prose: "4795b9dde556c86db3a122dcc418924d2b1be23bab575371abb1e546ce491e7f", struct: "741a170e295d6aad143c82a15af79f9663b6e0b96d8f2070dbbca58393d26e14" },
   scoped_wait_still_waiting: { prose: "42908de755d8a870009d285ed377c227e274ef5acdece5ec1c7959d50b51fc65", struct: "3fdcaf7107f306723a8d731c2c0484a09a172aa22cc4473fd4998950df2d47ce" },
-  debrief_grain_and_ask_anything: { prose: "5b389c6e9f3eda543e7e74a57f3586cd384ee6f10df2f213864c245aec4a6a7e", struct: "72dee06f32b6e37afd6ecba2b88ee7b88ae1aae3dec1147532456c64c9e795e0" },
+  // #570 deliberate CI-derived prose/struct re-pin (job 120735660488):
+  // informational debrief moves from pending to TO READ; questions/comments stay actionable.
+  debrief_grain_and_ask_anything: { prose: "c228480f553fbf8db13a3b15c4ca8d3a5a58c6ce43b6f5b99b0ffcfa64d7faab", struct: "33e692e98291ae9724d494405772cb0080b7b10b0223dd14d0fb212a1934328c" },
   // P3 — DELIBERATE re-pin, PROSE **and** STRUCT. A draft EXPLAINER is
   // acknowledge-only (its UI footer is "Got it"/"Ask more" — no verdict), so:
   //   - PROSE: it left the "⏳ WAITING: N artifact(s) still under review" nag
@@ -126,5 +128,6 @@ export const CHECK_FEEDBACK_GOLDENS: Record<string, CheckFeedbackGolden> = {
   //     structured-only client can finally see the unread explainer that
   //     `pendingArtifacts` deliberately omits.
   explainer_grain_and_ask_anything: { prose: "fb3d8eb96e97b9a1f033fb71f0ff0633b22a1064b65582da1f4a2bf9653752a8", struct: "c3e9898a40fee2f4e3e694efccab6d63470afd59f7cd9d8f0c26ff9b952624c1" },
-  debrief_per_item_grain: { prose: "47930da4e90029fdd1802d19e76e8f0a8291bea767df8cd5a48e9c8f63e412a8", struct: "c9ab6cc8a184bf7242d296f379f4952036472f27fd3393b4ec7da9e28e9c110b" },
+  // #570 same intentional classification change, reviewed synthetic output from CI job 120735660488.
+  debrief_per_item_grain: { prose: "752b1702e61b7a3cd11d71a53a195f95391acbe544bc9b8af4e8ac700ea52c4c", struct: "cec02e06e70c241a949cd982f6751ad323629e69fff45e48504f3e25ed3490ae" },
 };

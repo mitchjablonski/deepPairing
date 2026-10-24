@@ -681,13 +681,7 @@ describe("#188 — check_feedback byte-parity golden pins", () => {
       });
       const proseSha = sha(prose);
       const structSha = sha(struct);
-      // #570: expose BOTH synthetic payloads/hashes for the two intentional
-      // debrief reclassifications, even when the prose assertion fails first.
-      // Pins remain strict; only qualified CI output may supply reviewed replacements.
-      const debriefDiagnostic = scenario.name === "debrief_grain_and_ask_anything" || scenario.name === "debrief_per_item_grain"
-        ? `\nproseSha=${proseSha}\nstructSha=${structSha}\n---STRUCT---\n${struct}`
-        : "";
-      expect(proseSha, `prose drift for ${scenario.name}${debriefDiagnostic}\n---PROSE---\n${prose}`).toBe(GOLDEN[scenario.name]!.prose);
+      expect(proseSha, `prose drift for ${scenario.name}\n---PROSE---\n${prose}`).toBe(GOLDEN[scenario.name]!.prose);
       expect(structSha, `struct drift for ${scenario.name}\n---STRUCT---\n${struct}`).toBe(GOLDEN[scenario.name]!.struct);
     });
   }
