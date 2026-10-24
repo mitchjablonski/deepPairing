@@ -37274,14 +37274,58 @@ async function handlePostPrReview(ctx, args) {
   }
 }
 
+// src/mcp/spec-ids.ts
+var MAX_SPEC_ID_LENGTH = 64;
+function normalizeIds(rows, label, prefixNumeric, notes) {
+  const reserved = /* @__PURE__ */ new Set();
+  for (const r of rows) if (typeof r.id === "string" && r.id.length > 0) reserved.add(r.id);
+  const used = /* @__PURE__ */ new Set();
+  return rows.map((row, i) => {
+    if (typeof row.id !== "string" || row.id.length === 0) return row;
+    const original = row.id;
+    let id = original;
+    if (id.length > MAX_SPEC_ID_LENGTH) {
+      id = id.slice(0, MAX_SPEC_ID_LENGTH);
+      notes.push(`${label} #${i + 1} id truncated to ${MAX_SPEC_ID_LENGTH} chars ("${id}")`);
+    }
+    if (prefixNumeric && /^\d+$/.test(id)) {
+      const prefixed = `ep-${id}`;
+      notes.push(`${label} #${i + 1} id "${id}" is purely numeric (collides with the index fallback) \u2014 renamed "${prefixed}"`);
+      id = prefixed;
+    }
+    if (used.has(id)) {
+      let n = 2;
+      let candidate;
+      do {
+        const suffix = `-${n++}`;
+        candidate = `${id.slice(0, MAX_SPEC_ID_LENGTH - suffix.length)}${suffix}`;
+      } while (used.has(candidate) || reserved.has(candidate));
+      notes.push(`${label} #${i + 1} id "${id}" is a duplicate \u2014 renamed "${candidate}"`);
+      id = candidate;
+    }
+    used.add(id);
+    return id === original ? row : { ...row, id };
+  });
+}
+function normalizeSpecIds(requirements, edgePaths) {
+  const notes = [];
+  const reqs = normalizeIds(requirements, "requirement", false, notes);
+  const eps = edgePaths ? normalizeIds(edgePaths, "edge path", true, notes) : void 0;
+  const warning = notes.length > 0 ? ` (spec ids adjusted so comments anchor unambiguously: ${notes.join("; ")}. Keep ids unique, non-numeric and <= ${MAX_SPEC_ID_LENGTH} chars in revisions.)` : "";
+  return { requirements: reqs, edgePaths: eps, warning };
+}
+
 // src/mcp/tools/present-spec.ts
 async function handlePresentSpec(ctx, args) {
   const validated = validatePresentSpecInput(args);
   if (!validated.ok) return validated.error;
-  const { title, objective, context, requirements, design, tasks, openQuestions, visuals, edgePaths } = validated.data;
-  const requirementsArr = requirements;
+  const { title, objective, context, design, tasks, openQuestions, visuals } = validated.data;
+  const ids = normalizeSpecIds(validated.data.requirements, validated.data.edgePaths);
+  const requirementsArr = ids.requirements;
+  const edgePaths = ids.edgePaths;
+  const idWarning = ids.warning;
   const tasksArr = tasks ?? [];
-  const pre = await preflightArtifact(ctx, "present_spec", "spec", title, validated.data);
+  const pre = await preflightArtifact(ctx, "present_spec", "spec", title, { ...validated.data, requirements: requirementsArr, ...edgePaths ? { edgePaths } : {} });
   if (!pre.ok) return pre.response;
   const dedup = await ctx.helpers.beginPresentIdempotency("present_spec", hashPresentArgs(args));
   if (dedup.duplicate) return buildDedupResponse(dedup.duplicate, ctx.store.getLivePort?.() ?? ctx.port);
@@ -37342,11 +37386,11 @@ Decline to review requirements and acceptance criteria in the companion UI at ht
     await ctx.store.updateArtifactStatus(id, "approved", "elicit_accept");
     await maybeUpdateTaskStatus(ctx.server, id, ctx.store);
     return {
-      content: [{ type: "text", text: `Spec "${artifact.title}" recorded and approved (${id}). Proceed with present_plan.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }]
+      content: [{ type: "text", text: `Spec "${artifact.title}" recorded and approved (${id}). Proceed with present_plan.${servedNote}${idWarning}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }]
     };
   }
   return {
-    content: [{ type: "text", text: `Spec "${artifact.title}" presented for review (${id}). The human can challenge each requirement and acceptance criterion at localhost:${reviewPort}. Call check_feedback for their response.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }]
+    content: [{ type: "text", text: `Spec "${artifact.title}" presented for review (${id}). The human can challenge each requirement and acceptance criterion at localhost:${reviewPort}. Call check_feedback for their response.${servedNote}${idWarning}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }]
   };
 }
 
