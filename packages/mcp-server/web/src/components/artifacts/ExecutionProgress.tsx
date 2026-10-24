@@ -89,7 +89,7 @@ export function StepStatusMarker({
     );
   }
   return (
-    <span className="shrink-0 w-5 h-5 rounded-full bg-accent-blue-dim text-accent-blue text-xs font-bold flex items-center justify-center mt-0.5" aria-label={`${label}: pending`}>
+    <span className="shrink-0 w-5 h-5 rounded-full bg-accent-blue-dim text-accent-blue text-xs font-bold flex items-center justify-center mt-0.5" role="img" aria-label={`${label}: pending`}>
       {index + 1}
     </span>
   );
@@ -108,7 +108,7 @@ export function SupersededProgressCue({ noun = "step" }: { noun?: Noun }) {
     <div
       role="note"
       aria-label={`Superseded ${kind} progress`}
-      className="px-3 py-2 bg-surface-secondary border border-white/[0.06] rounded-lg text-2xs text-text-muted opacity-60"
+      className="px-3 py-2 bg-surface-secondary border border-white/[0.06] rounded-lg text-2xs text-text-muted"
     >
       Superseded — see the latest version of this {kind}. Progress below is a historical snapshot, not live.
     </div>
@@ -122,7 +122,7 @@ export function RevisionRequestedProgressCue({ noun = "step" }: { noun?: Noun })
     <div
       role="note"
       aria-label={`Revision requested ${kind} progress`}
-      className="px-3 py-2 bg-surface-secondary border border-white/[0.06] rounded-lg text-2xs text-text-muted opacity-60"
+      className="px-3 py-2 bg-surface-secondary border border-white/[0.06] rounded-lg text-2xs text-text-muted"
     >
       Revision requested — awaiting an updated brief for this {kind}. Progress below is a historical snapshot, not live.
     </div>
