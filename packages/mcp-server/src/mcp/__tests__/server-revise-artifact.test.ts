@@ -886,6 +886,9 @@ describe("#589 — revise_artifact normalizes spec ids", () => {
     expect(c.edgePaths.map((x: any) => x.id)).toEqual(["inert", "wake"]);
     expect(c.requirements[0].id).toBe("REQ-1");
     const fb = await callTool("check_feedback");
-    expect(fb.text).toContain("edge path #2: long-poll wake");
+    // The carried thread keeps its `wake` anchor (resolved against the artifact
+    // it was written on) and the id `wake` survives unchanged in v2.
+    expect(fb.text).toContain("long-poll wake] re-read after the wake");
+    expect(c.edgePaths[1].id).toBe("wake");
   });
 });
