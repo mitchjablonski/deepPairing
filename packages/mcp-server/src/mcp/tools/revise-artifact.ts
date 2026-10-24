@@ -3,7 +3,6 @@ import { retirementFailure } from "../../store/retirement.js";
 import type { DecisionOption } from "@deeppairing/shared";
 import type { ToolContext, ToolResult } from "./types.js";
 import { notifyResourcesListChanged, formatStyleWarnings, persistPreflightTrace } from "../tool-helpers.js";
-import { normalizeSpecIds } from "../spec-ids.js";
 import { preflightArtifact } from "../artifact-preflight.js";
 import { maybeUpdateTaskStatus } from "../tasks-probe.js";
 import { deriveReviseContent, finalizeReviseContent, reviseSnapshot, reviseTargetPrecondition } from "../proposal-resolution.js";
@@ -117,23 +116,13 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       const v = supersedeValidator({ title: args?.title ?? old.title, ...(content as Record<string, unknown>) });
       if (!v.ok) return v.error;
     }
-    // #589 — a spec revision gets the same id de-dup/bound/numeric-prefix as
-    // present_spec. Only collisions WITHIN the new content change; an id kept
-    // from v1 stays as-is, so threads still carry over. Mutates the raw
-    // content (the validator's `data` is a stripped copy).
-    let specIdWarning = "";
-    if (old.type === "spec") {
-      const c = content as { requirements?: unknown; edgePaths?: unknown };
-      if (Array.isArray(c.requirements)) {
-        const ids = normalizeSpecIds(
-          c.requirements as { id?: string }[],
-          Array.isArray(c.edgePaths) ? (c.edgePaths as { id?: string }[]) : undefined,
-        );
-        c.requirements = ids.requirements;
-        if (ids.edgePaths) c.edgePaths = ids.edgePaths;
-        specIdWarning = ids.warning;
-      }
-    }
+    // #589 — for a spec, the validator above also refuses duplicate, blank,
+    // oversized or ambiguous ids and dangling task links, BEFORE preflight,
+    // the admission snapshot and create, so the ordinary and stance-admitted
+    // branches see the same verdict. A replay (op.replay, above) writes
+    // nothing new: it returns an operation an earlier, validated call made.
+    // A revision must be valid as written even when v1 holds a legacy id;
+    // unchanged valid ids keep their threads.
     // A replacement proposes new work just like its original presentation.
     // Refuse before creating v2 or changing v1 so a blocked revision is atomic.
     const pre = await preflightArtifact(ctx, "revise_artifact", old.type, String(args?.title ?? old.title), content, { deferRecord: true });
@@ -271,7 +260,7 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       ? `\n\n⚠ Recalled stance — advisory, not a block (this revision records external or historical material rather than proposing that approach): ${pre.advisory}`
       : "";
     return {
-      content: [{ type: "text", text: `Superseded ${artifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${specIdWarning}${formatStyleWarnings(newArtifact.type, newArtifact.content)}${advisory}` }],
+      content: [{ type: "text", text: `Superseded ${artifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${formatStyleWarnings(newArtifact.type, newArtifact.content)}${advisory}` }],
     };
   }
 

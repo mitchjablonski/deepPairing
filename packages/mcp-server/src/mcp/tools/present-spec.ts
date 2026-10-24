@@ -3,20 +3,15 @@ import { preflightArtifact } from "../artifact-preflight.js";
 import { validatePresentSpecInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
-import { normalizeSpecIds } from "../spec-ids.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<ToolResult> {
   const validated = validatePresentSpecInput(args);
   if (!validated.ok) return validated.error;
-  const { title, objective, context, design, tasks, openQuestions, visuals } = validated.data;
-  // #589 — dedupe/bound/disambiguate ids (warn, don't reject).
-  const ids = normalizeSpecIds(validated.data.requirements, validated.data.edgePaths);
-  const requirementsArr = ids.requirements;
-  const edgePaths = ids.edgePaths;
-  const idWarning = ids.warning;
+  const { title, objective, context, requirements, design, tasks, openQuestions, visuals, edgePaths } = validated.data;
+  const requirementsArr = requirements;
   const tasksArr = tasks ?? [];
-  const pre = (await preflightArtifact(ctx, "present_spec", "spec", title, { ...validated.data, requirements: requirementsArr, ...(edgePaths ? { edgePaths } : {}) }))!;
+  const pre = (await preflightArtifact(ctx, "present_spec", "spec", title, validated.data))!;
   if (!pre.ok) return pre.response;
 
   // N2 (#226) — short-window de-dup for an identical, still-draft present_spec.
@@ -95,11 +90,11 @@ export async function handlePresentSpec(ctx: ToolContext, args: any): Promise<To
     await ctx.store.updateArtifactStatus(id, "approved", "elicit_accept");
     await maybeUpdateTaskStatus(ctx.server, id, ctx.store);
     return {
-      content: [{ type: "text", text: `Spec "${artifact.title}" recorded and approved (${id}). Proceed with present_plan.${servedNote}${idWarning}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }],
+      content: [{ type: "text", text: `Spec "${artifact.title}" recorded and approved (${id}). Proceed with present_plan.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }],
     };
   }
 
   return {
-    content: [{ type: "text", text: `Spec "${artifact.title}" presented for review (${id}). The human can challenge each requirement and acceptance criterion at localhost:${reviewPort}. Call check_feedback for their response.${servedNote}${idWarning}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }],
+    content: [{ type: "text", text: `Spec "${artifact.title}" presented for review (${id}). The human can challenge each requirement and acceptance criterion at localhost:${reviewPort}. Call check_feedback for their response.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }],
   };
 }
