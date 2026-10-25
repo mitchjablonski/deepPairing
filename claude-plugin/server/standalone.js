@@ -34448,7 +34448,7 @@ function writeSessionHtml(projectRoot2, sessionId, html, generatedAt) {
 }
 
 // src/version.ts
-var SERVER_VERSION = "0.1.71";
+var SERVER_VERSION = "0.1.72";
 function parseSemver(v2) {
   const m = /^\s*(\d+)\.(\d+)\.(\d+)/.exec(v2);
   if (!m) return null;
