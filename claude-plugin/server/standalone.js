@@ -25523,7 +25523,7 @@ function readBriefRef(raw) {
   if (raw === void 0)
     return void 0;
   const parsed = BriefRefSchema.safeParse(raw);
-  if (parsed.success)
+  if (parsed.success && briefRefProblems(raw).length === 0)
     return { ok: true, ref: parsed.data };
   const rawId = raw && typeof raw === "object" && typeof raw.artifactId === "string" ? raw.artifactId : void 0;
   return { ok: false, ...rawId !== void 0 ? { rawId } : {} };
@@ -34856,7 +34856,7 @@ No brief link was saved for ${saved.id}; the original reason is unavailable on r
   if (!read.ok) {
     return `
 
-Brief link (current): the saved link${read.rawId ? ` to ${read.rawId}` : ""} is unreadable, so it's shown raw and marked unavailable.`;
+Brief link (current): the saved link${read.rawId ? ` to ${read.rawId}` : ""} is unreadable or out of policy, so it's shown raw and marked unavailable (version unknown).`;
   }
   const view = describeBriefPin(read.ref, artifacts, saved.sessionId);
   return `
@@ -34869,7 +34869,7 @@ function briefEchoOf(decision, artifacts) {
   if (read === void 0) return null;
   if (!read.ok) {
     return {
-      line: `Exception to an unreadable brief link${read.rawId ? ` (${read.rawId})` : ""}, version unknown`,
+      line: `Exception to an unreadable or out-of-policy brief link${read.rawId ? ` (${read.rawId})` : ""}, version unknown`,
       echo: { artifactId: read.rawId ?? null, version: "unknown", status: "unavailable", requirementIds: [], edgePathIds: [], grains: [], malformed: true }
     };
   }
