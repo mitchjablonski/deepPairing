@@ -15310,6 +15310,13 @@ var ExplainerContentSchema = external_exports.object({
   unknowns: external_exports.array(external_exports.string()).optional().describe("Honest gaps: what you could NOT determine and why (e.g. 'I couldn't tell whether the CLI path is covered \u2014 I didn't read cli/init.ts'). Renders above the fold with a one-click Ask.")
 });
 
+// ../shared/dist/schemas/brief-ref.js
+var BriefRefSchema = external_exports.object({
+  artifactId: external_exports.string(),
+  requirementIds: external_exports.array(external_exports.string()).optional(),
+  edgePathIds: external_exports.array(external_exports.string()).optional()
+}).strict();
+
 // ../shared/dist/schemas/stance-exception.js
 var StanceRefSchema = external_exports.object({
   description: external_exports.string(),
@@ -15325,7 +15332,11 @@ var ProposalSnapshotSchema = external_exports.object({
   relatedArtifactIds: external_exports.array(external_exports.string()).optional(),
   feature: external_exports.string().optional(),
   parentId: external_exports.string().optional(),
-  version: external_exports.number().int().positive().optional()
+  version: external_exports.number().int().positive().optional(),
+  /** #572 slice A — the NORMALIZED brief pin, decided once when the proposal
+   *  was resolved (absent when none was given or a new ref was dropped). Part
+   *  of the effective digest, so the claim creates exactly this pin. */
+  briefRef: BriefRefSchema.optional()
 }).strict();
 var ProposalPreconditionSchema = external_exports.discriminatedUnion("kind", [
   external_exports.object({
@@ -15514,6 +15525,17 @@ var ArtifactSchema = external_exports.object({
    * Optional for backward compatibility; absent on every ordinary artifact.
    */
   admission: ArtifactAdmissionSchema.optional(),
+  /**
+   * #572 slice A — on a decision: the exact governing brief version (spec
+   * artifact id) and the requirement / edge-path ids this card is an exception
+   * to. DECLARED metadata only: not drift detection, authority or acceptance.
+   * Deliberately `unknown` on read: a stored ref is never revalidated
+   * destructively, so a malformed one still loads (render it via
+   * `readBriefRef`, raw and unavailable). New refs are normalized at the tool
+   * boundary (BriefRefSchema + caps). Optional for backward compatibility;
+   * absent → the stored JSON is byte-identical to before.
+   */
+  briefRef: external_exports.unknown().optional(),
   content: external_exports.record(external_exports.string(), external_exports.unknown()),
   agentReasoning: external_exports.string().nullable(),
   relatedArtifactIds: external_exports.array(external_exports.string()).optional(),

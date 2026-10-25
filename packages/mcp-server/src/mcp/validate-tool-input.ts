@@ -34,6 +34,9 @@ import {
   ExplainerContentSchema,
   PlanVisualSchema,
   DecisionOptionBaseSchema,
+  MAX_SPEC_ID_LENGTH,
+  MAX_BRIEF_REF_IDS,
+  MAX_BRIEF_REF_ARTIFACT_ID_LENGTH,
 } from "@deeppairing/shared";
 import { specIdError } from "./spec-ids.js";
 
@@ -1199,6 +1202,20 @@ const FEATURE_TAG = z.string().optional()
 const PRESENTED_BY = z.string().optional()
   .describe("Optional label for WHO is presenting (e.g. 'coordinator', 'builder:auth-fix', 'reviewer'). Subagents: set it, then call check_feedback({presentedBy}) with the same label so you receive (and consume) only the feedback on your own artifacts.");
 
+// #572 slice A — advertisement-only like FEATURE_TAG: the handler normalizes
+// args.briefRef itself (a bad ref drops the LINK with a warning, never the
+// card), so the validators deliberately don't reject it.
+const BRIEF_ID = z.string().min(1).max(MAX_SPEC_ID_LENGTH);
+const BRIEF_REF = z.object({
+  artifactId: z.string().min(1).max(MAX_BRIEF_REF_ARTIFACT_ID_LENGTH)
+    .describe("The approved brief's EXACT artifact id (a present_spec art_ id; each revision has its own id, so this pins one version)"),
+  requirementIds: z.array(BRIEF_ID).max(MAX_BRIEF_REF_IDS).optional()
+    .describe("The brief's requirements[].id values this card deviates from"),
+  edgePathIds: z.array(BRIEF_ID).max(MAX_BRIEF_REF_IDS).optional()
+    .describe("The brief's edgePaths[].id values this card concerns"),
+}).optional()
+  .describe("Exception to a brief: name the governing brief version and the requirement it deviates from. A declared link, not drift detection. A bad or unknown ref is dropped with a warning; the card is still presented. To re-brief, present a new card against the new brief's id.");
+
 // `satisfies` (not a Record annotation) keeps the literal keys, so property
 // access stays exact under noUncheckedIndexedAccess.
 export const TOOL_INPUT_SCHEMAS = {
@@ -1215,6 +1232,7 @@ export const TOOL_INPUT_SCHEMAS = {
     relatedFindings: z.array(z.string()).optional()
       .describe("Artifact IDs of findings that motivated this decision"),
     feature: FEATURE_TAG, presentedBy: PRESENTED_BY,
+    briefRef: BRIEF_REF,
   }),
   present_spec: SpecContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG, presentedBy: PRESENTED_BY }),
   present_plan: PlanContentSchema.extend({

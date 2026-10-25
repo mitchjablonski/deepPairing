@@ -11,9 +11,12 @@
  * on read, so legacy anchors (`spec:edge-path:<index>`, existing requirement
  * ids) keep resolving.
  */
+import { MAX_SPEC_ID_LENGTH } from "@deeppairing/shared";
 import type { ToolErrorResponse } from "./validate-tool-input.js";
 
-export const MAX_SPEC_ID_LENGTH = 64;
+// #572 — the cap now lives in shared (brief refs reuse it, and the web reads
+// it without importing this server-only writer). Same value, same export.
+export { MAX_SPEC_ID_LENGTH };
 const MAX_LISTED_PROBLEMS = 20;
 
 interface SpecIdInput {

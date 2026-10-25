@@ -81,6 +81,9 @@ const CreateArtifactBody = z
     feature: z.string().optional(),
     // #533 — the presenting agent's label (normalized by the store).
     presentedBy: z.string().optional(),
+    // #572 slice A — a decision's normalized brief pin (the store shape-checks
+    // it and omits anything that isn't a BriefRef).
+    briefRef: z.unknown().optional(),
   })
   .passthrough();
 const AddCommentBody = z

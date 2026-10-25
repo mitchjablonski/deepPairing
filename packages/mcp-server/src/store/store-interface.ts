@@ -1,4 +1,4 @@
-import type { Artifact, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SuggestionState, SuggestionCounter, DecisionOption, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
+import type { Artifact, ArtifactType, BriefRef, ArtifactStatus, Comment, CommentSuggestion, SuggestionState, SuggestionCounter, DecisionOption, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
 
 import type { PostedReviewRecord } from "./posted-reviews.js";
 import type { DecisionResolveOutcome, ResolutionAnnouncement } from "./decision-resolve-guard.js";
@@ -98,6 +98,13 @@ export interface CreateArtifactParams {
    * stay byte-identical.
    */
   presentedBy?: string | null;
+  /**
+   * #572 slice A — a decision's NORMALIZED brief pin (see Artifact.briefRef).
+   * The store persists it only when it has the BriefRef shape, and OMITS it
+   * otherwise, so artifacts without one stay byte-identical. Caps are applied
+   * earlier, once, at the tool boundary — never here.
+   */
+  briefRef?: BriefRef;
   // #162 — `secretWarnings` was REMOVED from this param shape: the store now
   // scans `content` authoritatively at create time (parity with addComment),
   // so callers no longer pre-compute or pass warnings — they read the result

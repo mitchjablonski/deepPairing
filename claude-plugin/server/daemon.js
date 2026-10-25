@@ -19510,6 +19510,13 @@ var ExplainerContentSchema = external_exports.object({
   unknowns: external_exports.array(external_exports.string()).optional().describe("Honest gaps: what you could NOT determine and why (e.g. 'I couldn't tell whether the CLI path is covered \u2014 I didn't read cli/init.ts'). Renders above the fold with a one-click Ask.")
 });
 
+// ../shared/dist/schemas/brief-ref.js
+var BriefRefSchema = external_exports.object({
+  artifactId: external_exports.string(),
+  requirementIds: external_exports.array(external_exports.string()).optional(),
+  edgePathIds: external_exports.array(external_exports.string()).optional()
+}).strict();
+
 // ../shared/dist/schemas/stance-exception.js
 var StanceRefSchema = external_exports.object({
   description: external_exports.string(),
@@ -19525,7 +19532,11 @@ var ProposalSnapshotSchema = external_exports.object({
   relatedArtifactIds: external_exports.array(external_exports.string()).optional(),
   feature: external_exports.string().optional(),
   parentId: external_exports.string().optional(),
-  version: external_exports.number().int().positive().optional()
+  version: external_exports.number().int().positive().optional(),
+  /** #572 slice A — the NORMALIZED brief pin, decided once when the proposal
+   *  was resolved (absent when none was given or a new ref was dropped). Part
+   *  of the effective digest, so the claim creates exactly this pin. */
+  briefRef: BriefRefSchema.optional()
 }).strict();
 var ProposalPreconditionSchema = external_exports.discriminatedUnion("kind", [
   external_exports.object({
@@ -19744,6 +19755,17 @@ var ArtifactSchema = external_exports.object({
    * Optional for backward compatibility; absent on every ordinary artifact.
    */
   admission: ArtifactAdmissionSchema.optional(),
+  /**
+   * #572 slice A — on a decision: the exact governing brief version (spec
+   * artifact id) and the requirement / edge-path ids this card is an exception
+   * to. DECLARED metadata only: not drift detection, authority or acceptance.
+   * Deliberately `unknown` on read: a stored ref is never revalidated
+   * destructively, so a malformed one still loads (render it via
+   * `readBriefRef`, raw and unavailable). New refs are normalized at the tool
+   * boundary (BriefRefSchema + caps). Optional for backward compatibility;
+   * absent → the stored JSON is byte-identical to before.
+   */
+  briefRef: external_exports.unknown().optional(),
   content: external_exports.record(external_exports.string(), external_exports.unknown()),
   agentReasoning: external_exports.string().nullable(),
   relatedArtifactIds: external_exports.array(external_exports.string()).optional(),
@@ -27869,6 +27891,7 @@ var FileStore = class _FileStore {
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const featureId = normalizeFeatureId(params.feature)?.slug;
     const presentedBy = typeof params.presentedBy === "string" && params.presentedBy.trim() ? params.presentedBy.trim().slice(0, 80) : void 0;
+    const briefRef = params.briefRef !== void 0 ? BriefRefSchema.safeParse(params.briefRef) : void 0;
     const secretWarnings = scanContentForSecrets(params.content);
     const artifact = {
       id: params.id,
@@ -27888,6 +27911,8 @@ var FileStore = class _FileStore {
       ...featureId ? { featureId } : {},
       // #533 — the presenter label, same omit-when-empty discipline.
       ...presentedBy ? { presentedBy } : {},
+      // #572 slice A — same omit-when-absent discipline.
+      ...briefRef?.success ? { briefRef: structuredClone(briefRef.data) } : {},
       createdAt: now,
       updatedAt: now
     };
@@ -32536,7 +32561,11 @@ function reviseInheritedHash(target) {
     provenance,
     stakes: target.content?.stakes ?? null,
     relatedArtifactIds: target.relatedArtifactIds ?? null,
-    featureId: target.featureId ?? null
+    featureId: target.featureId ?? null,
+    // #572 slice A — the brief pin a revision carries. Hashed RAW (as stored),
+    // so any change to it between block and claim refuses the claim. Spread
+    // only when present, so a pin-less target hashes exactly as before.
+    ...target.briefRef !== void 0 ? { briefRef: target.briefRef } : {}
   }));
 }
 function reviseTargetPrecondition(target) {
@@ -32922,7 +32951,7 @@ var StanceExceptionRegistry = class {
       const st = this.derived(a);
       if (st === "active") {
         if (reg && a.registrationId === reg.registrationId) {
-          candidates.push({ id: a.id, stance: a.stance, grantedVia: a.grantedVia, reason: a.reason });
+          candidates.push({ id: a.id, stance: a.stance, grantedVia: a.grantedVia, reason: a.reason, frozenBriefRef: a.snapshot.briefRef ?? null });
         }
         continue;
       }
@@ -33040,7 +33069,9 @@ var StanceExceptionRegistry = class {
         ...snapshot.relatedArtifactIds ? { relatedArtifactIds: snapshot.relatedArtifactIds } : {},
         ...snapshot.parentId ? { parentId: snapshot.parentId } : {},
         ...snapshot.version ? { version: snapshot.version } : {},
-        ...snapshot.feature ? { feature: snapshot.feature } : {}
+        ...snapshot.feature ? { feature: snapshot.feature } : {},
+        // #572 slice A — the brief pin exactly as allowed (part of the digest).
+        ...snapshot.briefRef ? { briefRef: snapshot.briefRef } : {}
       }, admission);
     } catch (error51) {
       if (!store.getArtifacts().some((a) => a.id === childId)) {
@@ -35155,7 +35186,10 @@ var CreateArtifactBody = external_exports.object({
   // anyway, but declaring it keeps the internal contract honest.
   feature: external_exports.string().optional(),
   // #533 — the presenting agent's label (normalized by the store).
-  presentedBy: external_exports.string().optional()
+  presentedBy: external_exports.string().optional(),
+  // #572 slice A — a decision's normalized brief pin (the store shape-checks
+  // it and omits anything that isn't a BriefRef).
+  briefRef: external_exports.unknown().optional()
 }).passthrough();
 var AddCommentBody = external_exports.object({
   id: external_exports.string().min(1),

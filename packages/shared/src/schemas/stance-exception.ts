@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { BriefRefSchema } from "./brief-ref.js";
 
 /**
  * #470 — one-proposal stance exceptions ("Allow this proposal once").
@@ -37,6 +38,10 @@ export const ProposalSnapshotSchema = z.object({
   feature: z.string().optional(),
   parentId: z.string().optional(),
   version: z.number().int().positive().optional(),
+  /** #572 slice A — the NORMALIZED brief pin, decided once when the proposal
+   *  was resolved (absent when none was given or a new ref was dropped). Part
+   *  of the effective digest, so the claim creates exactly this pin. */
+  briefRef: BriefRefSchema.optional(),
 }).strict();
 export type ProposalSnapshot = z.infer<typeof ProposalSnapshotSchema>;
 
