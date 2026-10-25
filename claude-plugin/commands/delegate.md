@@ -51,8 +51,9 @@ building. Three things follow from having no brief:
 - **The guardrail hook still guards.** Without a brief, a guardrail path
   (migrations, CI workflows, infrastructure, secrets: the SKILL's Guardrails
   section) is covered only if an approved artifact from the last ~8 hours lists
-  that exact file in its `file_map`. A scopeless options or findings card covers
-  nothing. So an edit there prompts me, or stops in strict-stop mode. That prompt is correct, not a nag: such an edit makes the run
+  that exact file in its `file_map`, or if an approved spec or plan with no file
+  list was approved earlier in this session (it covers the whole session). A
+  scopeless options or findings card covers nothing. So an edit there prompts me, or stops in strict-stop mode. That prompt is correct, not a nag: such an edit makes the run
   escalated, so brief before you make it (move 3). Ordinary edits never touch it.
 - **No checklist.** Skip `update_plan_progress`; there's no brief to mark.
 
