@@ -80,8 +80,28 @@ describe("#572 — BriefRefChip on the options card", () => {
     setArtifacts([d]);
     render(<DecisionArtifactView artifact={d} />);
     const chip = screen.getByTestId("brief-ref-chip");
-    expect(chip).toHaveTextContent("Exception to art_b1 (link unreadable, unavailable)");
+    expect(chip).toHaveTextContent("Exception to art_b1 (link unreadable or out of policy, unavailable)");
     expect(chip.getAttribute("data-brief-state")).toBe("malformed");
+  });
+
+  it("a shape-valid but out-of-policy stored ref (duplicate, blank, over-cap) is unavailable and not clickable, even with the brief present", () => {
+    for (const briefRef of [
+      { artifactId: "art_b1", requirementIds: ["REQ-1", "REQ-1"] },
+      { artifactId: "art_b1", requirementIds: ["  "] },
+      { artifactId: "art_b1", requirementIds: Array.from({ length: 9 }, (_, i) => `REQ-${i}`) },
+      { artifactId: "art_b1", edgePathIds: ["a".repeat(65)] },
+    ]) {
+      const d = decision(briefRef);
+      setArtifacts([spec("art_b1"), d]);
+      const { unmount } = render(<DecisionArtifactView artifact={d} />);
+      const chip = screen.getByTestId("brief-ref-chip");
+      expect(chip.getAttribute("data-brief-state"), JSON.stringify(briefRef)).toBe("malformed");
+      expect(chip.tagName).not.toBe("BUTTON");
+      expect(chip.textContent).not.toContain("v1");
+      // Loaded unchanged.
+      expect(useArtifactStore.getState().artifacts.find((a) => a.id === "art_d")!.briefRef).toEqual(briefRef);
+      unmount();
+    }
   });
 
   it("renders agent ids as text, never markup", () => {

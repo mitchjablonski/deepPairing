@@ -8,7 +8,8 @@ import { useArtifactStore } from "../../stores/artifact";
  * text, never markup). The pin is resolved against the EXACT brief id in the
  * card's own session: no successor walk, no "current brief" lookup. Before
  * the brief hydrates (or when it's gone) the raw id shows as unavailable with
- * "version unknown"; a stored ref that can't be read shows raw, unavailable.
+ * "version unknown"; a stored ref that can't be read, or breaks the ref
+ * policy (caps, blank, duplicate ids), shows raw, unavailable, not clickable.
  * It changes nothing about pending, attention, approval or defaults.
  */
 export function BriefRefChip({ artifact }: { artifact: Artifact }) {
@@ -20,7 +21,7 @@ export function BriefRefChip({ artifact }: { artifact: Artifact }) {
   if (!read.ok) {
     return (
       <div className={`${base} border-border-default text-text-muted`} data-testid="brief-ref-chip" data-brief-state="malformed">
-        <span className="truncate">Exception to {read.rawId ?? "a brief"} (link unreadable, unavailable)</span>
+        <span className="truncate">Exception to {read.rawId ?? "a brief"} (link unreadable or out of policy, unavailable)</span>
       </div>
     );
   }

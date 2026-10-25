@@ -77,10 +77,28 @@ describe("persisted refs load tolerantly", () => {
       expect(readBriefRef(briefRef)?.ok).toBe(false);
     }
     expect(readBriefRef({ artifactId: "art_x", requirementIds: "REQ-1" })).toEqual({ ok: false, rawId: "art_x" });
-    // Out of NEW-ref policy but well-shaped: read as a ref (caps are not re-applied).
-    const oversized = { artifactId: "art_x", requirementIds: Array.from({ length: 12 }, (_, i) => `R${i}`) };
-    expect(readBriefRef(oversized)).toEqual({ ok: true, ref: oversized });
     expect(readBriefRef(undefined)).toBeUndefined();
+  });
+
+  it("a shape-valid but out-of-policy stored ref loads unchanged yet classifies as unavailable", () => {
+    for (const briefRef of [
+      { artifactId: "art_b1", requirementIds: ["REQ-1", "REQ-1"] },
+      { artifactId: "art_b1", requirementIds: Array.from({ length: 9 }, (_, i) => `R${i}`) },
+      { artifactId: "art_b1", edgePathIds: ["a".repeat(65)] },
+      { artifactId: "art_b1", requirementIds: ["  "] },
+      { artifactId: "   " },
+      { artifactId: "x".repeat(65) },
+    ]) {
+      const before = JSON.stringify(briefRef);
+      const parsed = ArtifactSchema.safeParse({ ...base, briefRef });
+      expect(parsed.success).toBe(true);
+      expect(JSON.stringify((parsed as { data: { briefRef: unknown } }).data.briefRef)).toBe(before);
+      expect(readBriefRef(briefRef)?.ok, before).toBe(false);
+      expect(JSON.stringify(briefRef)).toBe(before);
+    }
+    expect(readBriefRef({ artifactId: "art_b1", requirementIds: ["REQ-1", "REQ-1"] })).toEqual({ ok: false, rawId: "art_b1" });
+    // In policy: a resolved pin.
+    expect(readBriefRef({ artifactId: "art_b1", requirementIds: ["REQ-1"] })).toEqual({ ok: true, ref: { artifactId: "art_b1", requirementIds: ["REQ-1"] } });
   });
 
   it("an artifact with no ref still parses", () => {

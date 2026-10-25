@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import type { BriefRef } from "@deeppairing/shared";
 import type { FileStore } from "../../store/file-store.js";
 import { setupServerTest, makeCallTool } from "./server-test-harness.js";
+import { savedBriefAdvisory } from "../brief-ref.js";
 
 const ctx = setupServerTest();
 const callTool = makeCallTool(ctx);
@@ -110,8 +111,38 @@ describe("#572 — the resolved-decision echo", () => {
     store.resolveDecision("dec_d1", "a");
     const res = await callTool("check_feedback");
     expect(res.text).toContain('selected "Inject config"');
-    expect(res.text).toContain("Exception to an unreadable brief link (art_odd), version unknown");
+    expect(res.text).toContain("Exception to an unreadable or out-of-policy brief link (art_odd), version unknown");
     const d = (res.structuredContent as { decisions: Array<{ briefRef?: Record<string, unknown> }> }).decisions[0]!;
     expect(d.briefRef).toMatchObject({ artifactId: "art_odd", version: "unknown", status: "unavailable", malformed: true });
+  });
+
+  it("a shape-valid but out-of-policy stored pin loads unchanged, echoes version unknown, and no advisory claims a valid pin", async () => {
+    seedSpec("art_brief1");
+    const cases = [
+      { artifactId: "art_brief1", requirementIds: ["REQ-1", "REQ-1"] },
+      { artifactId: "art_brief1", requirementIds: ["  "] },
+      { artifactId: "art_brief1", requirementIds: Array.from({ length: 9 }, (_, i) => `REQ-${i}`) },
+      { artifactId: "art_brief1", edgePathIds: ["a".repeat(65)] },
+    ];
+    for (const [i, briefRef] of cases.entries()) {
+      seedDecision(`art_p${i}`, `dec_p${i}`, undefined);
+      // As an older writer might have left it on disk (shape-valid, out of policy).
+      store.getArtifacts().find((a) => a.id === `art_p${i}`)!.briefRef = briefRef;
+      store.resolveDecision(`dec_p${i}`, "a");
+    }
+    const res = await callTool("check_feedback");
+    const ds = (res.structuredContent as { decisions: Array<{ artifactId: string; briefRef?: Record<string, unknown> }> }).decisions;
+    expect(ds).toHaveLength(cases.length);
+    for (const d of ds) {
+      expect(d.briefRef).toMatchObject({ artifactId: "art_brief1", version: "unknown", status: "unavailable", malformed: true });
+    }
+    expect(res.text).not.toContain('Exception to "Auth brief" v1');
+    for (const [i, briefRef] of cases.entries()) {
+      const art = store.getArtifacts().find((a) => a.id === `art_p${i}`)!;
+      expect(art.briefRef).toEqual(briefRef); // unchanged
+      const advisory = savedBriefAdvisory(art, { briefRef }, store.getArtifacts());
+      expect(advisory).toContain("unreadable or out of policy");
+      expect(advisory).not.toContain('"Auth brief" v1');
+    }
   });
 });

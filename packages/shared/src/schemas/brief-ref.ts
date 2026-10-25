@@ -85,14 +85,18 @@ export function briefRefProblems(raw: unknown): string[] {
 /**
  * Read a stored `briefRef` without revalidating it destructively.
  *  - `undefined` → no ref was saved;
- *  - `{ok: true}` → a well-formed ref (caps are NOT re-applied);
- *  - `{ok: false}` → present but malformed: render the raw id (if any) as
- *    unavailable; never drop the artifact that carries it.
+ *  - `{ok: true}` → a well-formed ref that also meets the ref policy
+ *    (`briefRefProblems`: caps, non-blank, no duplicate ids in a list);
+ *  - `{ok: false}` → present but malformed OR out of policy: render the raw
+ *    id (if any) as unavailable, version unknown, never as a resolved pin.
+ * Classification only: the stored value is never rejected, truncated,
+ * deduplicated or rewritten, and the artifact carrying it still loads.
+ * (Legacy duplicate/numeric SPEC rows are a separate concern: matchBriefGrain.)
  */
 export function readBriefRef(raw: unknown): { ok: true; ref: BriefRef } | { ok: false; rawId?: string } | undefined {
   if (raw === undefined) return undefined;
   const parsed = BriefRefSchema.safeParse(raw);
-  if (parsed.success) return { ok: true, ref: parsed.data };
+  if (parsed.success && briefRefProblems(raw).length === 0) return { ok: true, ref: parsed.data };
   const rawId = raw && typeof raw === "object" && typeof (raw as { artifactId?: unknown }).artifactId === "string"
     ? (raw as { artifactId: string }).artifactId
     : undefined;

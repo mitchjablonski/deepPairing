@@ -97,7 +97,7 @@ export function savedBriefAdvisory(saved: Artifact | undefined, args: unknown, a
       : "";
   }
   if (!read.ok) {
-    return `\n\nBrief link (current): the saved link${read.rawId ? ` to ${read.rawId}` : ""} is unreadable, so it's shown raw and marked unavailable.`;
+    return `\n\nBrief link (current): the saved link${read.rawId ? ` to ${read.rawId}` : ""} is unreadable or out of policy, so it's shown raw and marked unavailable (version unknown).`;
   }
   const view = describeBriefPin(read.ref, artifacts, saved.sessionId);
   return `\n\nBrief link (current, from the saved card): ${formatBriefPin(view)}.`;
@@ -114,7 +114,7 @@ export interface BriefRefEcho {
   edgePathIds: string[];
   /** Per-grain match within the pinned version ("unavailable" without the brief). */
   grains: Array<{ kind: "requirement" | "edgePath"; id: string; match: string }>;
-  /** Present (true) only for a stored ref that couldn't be read. */
+  /** Present (true) only for a stored ref that is unreadable or out of policy. */
   malformed?: true;
 }
 
@@ -130,7 +130,7 @@ export function briefEchoOf(decision: Artifact | undefined, artifacts: readonly 
   if (read === undefined) return null;
   if (!read.ok) {
     return {
-      line: `Exception to an unreadable brief link${read.rawId ? ` (${read.rawId})` : ""}, version unknown`,
+      line: `Exception to an unreadable or out-of-policy brief link${read.rawId ? ` (${read.rawId})` : ""}, version unknown`,
       echo: { artifactId: read.rawId ?? null, version: "unknown", status: "unavailable", requirementIds: [], edgePathIds: [], grains: [], malformed: true },
     };
   }
