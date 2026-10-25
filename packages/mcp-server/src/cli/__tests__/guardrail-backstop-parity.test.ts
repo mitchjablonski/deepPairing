@@ -273,8 +273,17 @@ const MATRIX: Case[] = [
     expectAsk: "has recent approval covering this file",
   },
   { name: "(b) guardrail Edit + live spec → pass", artifacts: [art("sp1", "spec")], toolName: "Edit", file: "migrations/1.sql", expectAsk: null },
-  { name: "(b2) guardrail Edit + approved findings → pass", artifacts: [art("r1", "research")], toolName: "Edit", file: ".env", expectAsk: null },
-  { name: "(b3) guardrail Edit + live options → pass", artifacts: [art("d1", "decision")], toolName: "Edit", file: "Dockerfile", expectAsk: null },
+  // #569 — these two FLIPPED: a scopeless findings/options approval no longer
+  // arms the same-session fallback (only a run-scoping spec/plan does). Listing
+  // the file in a file_map still covers it (b2'/b3').
+  { name: "(b2) guardrail Edit + approved SCOPELESS findings → ask (#569)", artifacts: [art("r1", "research")], toolName: "Edit", file: ".env", expectAsk: "GUARDRAIL_ESCALATION" },
+  { name: "(b3) guardrail Edit + approved SCOPELESS options → ask (#569)", artifacts: [art("d1", "decision")], toolName: "Edit", file: "Dockerfile", expectAsk: "GUARDRAIL_ESCALATION" },
+  { name: "(b2') approved findings listing the file → pass", artifacts: [{ ...art("r1", "research"), content: { visuals: [{ kind: "file_map", files: [{ path: ".env" }] }] } }], toolName: "Edit", file: ".env", expectAsk: null },
+  { name: "(b3') approved options listing the file → pass", artifacts: [{ ...art("d1", "decision"), content: { visuals: [{ kind: "file_map", files: [{ path: "Dockerfile" }] }] } }], toolName: "Edit", file: "Dockerfile", expectAsk: null },
+  { name: "(b6) #569 quiet delegate run + approved scopeless fork card → ask", artifacts: [art("cs", "changeset", "draft"), art("cc", "code_change"), art("d1", "decision")], toolName: "Edit", file: ".github/workflows/ci.yml", expectAsk: "GUARDRAIL_ESCALATION" },
+  { name: "(b7) #569 quiet delegate run + earlier scopeless findings and options → ask", artifacts: [art("r1", "research"), art("d1", "decision"), art("cs", "changeset", "draft")], toolName: "Write", file: "migrations/003_drop.sql", expectAsk: "GUARDRAIL_ESCALATION" },
+  { name: "(b8) #569 quiet delegate run, ordinary edit → pass", artifacts: [art("cs", "changeset", "draft"), art("d1", "decision")], toolName: "Edit", file: "src/index.ts", expectAsk: null },
+  { name: "(b9) approved scopeless plan still arms the same-session fallback", artifacts: [art("p1", "plan")], toolName: "Edit", file: "migrations/1.sql", expectAsk: null },
   { name: "(b4) a DRAFT spec never licenses an edit", artifacts: [art("sp1", "spec", "draft")], toolName: "Edit", file: "terraform/main.tf", expectAsk: "GUARDRAIL_ESCALATION" },
   { name: "(b5) guardrail Edit + REJECTED spec → ask (the ceremony isn't standing)", artifacts: [art("sp1", "spec", "rejected")], toolName: "Edit", file: "terraform/main.tf", expectAsk: "Allow this edit to terraform/main.tf?" },
   { name: "(c) non-guardrail Edit → pass (zero behaviour change)", artifacts: [], toolName: "Edit", file: "src/index.ts", expectAsk: null },

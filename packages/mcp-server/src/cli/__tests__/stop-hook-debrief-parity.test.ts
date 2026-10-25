@@ -104,6 +104,13 @@ const MATRIX: Case[] = [
   // (e) …and ceremony still escalates over the top of it (a decision means the
   //     pair shaped something of their own, whatever else the session read).
   { name: "EXTERNAL changeset + code_change + decision (Q6 scope)", artifacts: [csExternal("x1"), cc("c1"), dec("d1")], owesDebrief: true },
+  // #569 proposal 2 — the QUIET delegate start posts no brief (no spec). Its
+  // packet still owes and then satisfies the closing obligation: a changeset
+  // alone owes a debrief; the packet's one debrief (draft — informational since
+  // #570/#585) closes it; a single-file quiet fix closes trivially as before.
+  { name: "quiet delegate run, no brief: changeset owes a debrief (#569)", artifacts: [cs("s1"), cc("c1")], owesDebrief: true },
+  { name: "quiet delegate run, no brief: changeset + draft debrief closes (#569)", artifacts: [cs("s1"), { ...dbf("b1"), status: "draft" }], owesDebrief: false },
+  { name: "quiet delegate run, no brief: changeset + debrief closes (#569)", artifacts: [cs("s1"), dbf("b1")], owesDebrief: false },
 ];
 
 /** Runs a stop script against a project dir seeded with `artifacts`, returns

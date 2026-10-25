@@ -1183,6 +1183,7 @@ function guardrailScopeKey(category, identity) {
   if (agent !== void 0 && (typeof agent !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(agent))) return void 0;
   return `scope:${session}:${agent ?? ""}:${category}`;
 }
+var SCOPELESS_FALLBACK_TYPES = /* @__PURE__ */ new Set(["spec", "plan"]);
 function object(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -1285,7 +1286,7 @@ function readSessionCeremony(projectRoot, now = Date.now(), failures, scope = {}
         if (scope.targetPath && coverage.paths?.includes(scope.targetPath)) return { reachable: true, hasLiveCeremony: true };
         if (id !== currentSession) continue;
         if (coverage.declared) sameSessionDeclaration = true;
-        else sameSessionFallback = true;
+        else if (SCOPELESS_FALLBACK_TYPES.has(artifact.type)) sameSessionFallback = true;
       }
     } catch {
       continue;

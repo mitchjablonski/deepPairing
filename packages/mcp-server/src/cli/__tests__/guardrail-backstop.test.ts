@@ -502,11 +502,22 @@ describe("evaluateGuardrailBackstop — the five pinned cases", () => {
     expect(d?.reason).toContain("(migrations — hard to reverse)");
   });
 
-  it("(b) guardrail edit WITH a live spec/options/findings/plan → PASS silently (no nagging the escalated arc)", () => {
-    for (const type of ["research", "decision", "spec", "plan"]) {
+  it("(b) guardrail edit WITH an approved scopeless spec/plan in the session → PASS silently (no nagging the escalated arc)", () => {
+    for (const type of ["spec", "plan"]) {
       fs.rmSync(path.join(dir, ".deeppairing"), { recursive: true, force: true });
       seedSession([art(type)]);
       expect(evalAndRecord("migrations/1.sql"), `a live ${type} should license the guardrail edit`).toBeNull();
+    }
+  });
+
+  it("(b') #569 — scopeless approved findings/options do NOT license guardrail edits; listing the file does", () => {
+    for (const type of ["research", "decision"]) {
+      fs.rmSync(path.join(dir, ".deeppairing"), { recursive: true, force: true });
+      seedSession([art(type)]);
+      expect(evalAndRecord("migrations/1.sql"), `a scopeless ${type} must not license the edit`).not.toBeNull();
+      fs.rmSync(path.join(dir, ".deeppairing"), { recursive: true, force: true });
+      seedSession([{ ...art(type), content: { visuals: [{ kind: "file_map", files: [{ path: "migrations/1.sql" }] }] } }]);
+      expect(evalAndRecord("migrations/1.sql"), `a ${type} listing the file covers it`).toBeNull();
     }
   });
 
@@ -976,5 +987,70 @@ describe("evaluatePreflightHook — composition with the rejected-approach gate"
     seedSession([]);
     const d = evaluatePreflightHook({ toolName: "Edit", toolInput: edit("src/a.ts"), projectRoot: dir, now: NOW, env: ON });
     expect(d).toEqual({ fire: false });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #569 proposal 2 — the QUIET delegate start (no brief card)
+// ---------------------------------------------------------------------------
+
+/**
+ * `/deeppairing:delegate` now posts its `present_spec` brief only for a real
+ * decision. A trivial or low-risk run states its five answers in chat and
+ * builds with NO pre-work artifact at all — exactly the session shape a trivial
+ * run has always had. This pins what the backstop does to that shape, through
+ * the shared core both hook emitters (plugin bundle + init-generated script)
+ * run: ordinary edits are untouched (no nag), a guardrail edit still asks (or
+ * stops under strict-stop), and the escalated brief the guidance then requires
+ * silences it only once approved and only for the files its file_map lists.
+ */
+describe("#569 quiet delegate start: no brief, no nag, guardrail paths still guarded", () => {
+  // Mid-run quiet session: the agent has presented code, but no brief exists.
+  const quietRun = (): Art[] => [art("changeset", "draft"), art("code_change", "approved")];
+  const run = (rel: string, mode?: "ask" | "strict-stop") => evaluatePreflightHook({
+    toolName: "Edit", toolInput: edit(rel), projectRoot: dir, now: NOW, env: ON, sessionId: "s1", mode,
+  });
+
+  it("ordinary edits in a quiet run never fire", () => {
+    seedSession(quietRun());
+    for (const rel of ["src/a.ts", "packages/web/src/App.tsx", "docs/notes.md", "src/migrations.js"]) {
+      expect(run(rel), rel).toEqual({ fire: false });
+    }
+  });
+
+  it("a guardrail edit in a quiet run still asks, and strict-stop still stops", () => {
+    seedSession(quietRun());
+    const ask = run(".github/workflows/ci.yml");
+    expect(ask.fire).toBe(true);
+    expect(ask.source).toBe("guardrail");
+    expect(ask.reason).toContain("GUARDRAIL_ESCALATION");
+    const stop = run("migrations/1.sql", "strict-stop");
+    expect(stop.fire).toBe(true);
+    expect(stop.reason).toContain("strict-stop");
+  });
+
+  it("an approved scopeless fork card mid-run does NOT silence the backstop (ask, or stop under strict-stop)", () => {
+    // The hole the quiet start opened pre-fix: no brief to veto the scopeless
+    // same-session fallback, so the first approved present_options card
+    // silenced every guardrail class for 8h.
+    seedSession([...quietRun(), art("decision")]);
+    expect(run(".github/workflows/ci.yml").fire).toBe(true);
+    expect(run("migrations/1.sql", "strict-stop").fire).toBe(true);
+    expect(run("src/a.ts")).toEqual({ fire: false });
+  });
+
+  it("an approved scopeless decision or findings earlier in the session still asks", () => {
+    seedSession([art("research", "approved", iso(NOW - 2 * 60 * 60 * 1000)), art("decision", "approved", iso(NOW - 60 * 60 * 1000)), ...quietRun()]);
+    expect(run("Dockerfile").fire).toBe(true);
+    expect(run(".env", "strict-stop").fire).toBe(true);
+  });
+
+  it("the escalated brief silences the ask only once approved, and only for its file_map", () => {
+    const brief = (status: string): Art => ({ ...art("spec", status), content: { visuals: [{ kind: "file_map", files: [{ path: "migrations/1.sql" }] }] } });
+    seedSession([...quietRun(), brief("draft")]);
+    expect(run("migrations/1.sql").fire).toBe(true); // a draft brief licenses nothing
+    seedSession([...quietRun(), brief("approved")]);
+    expect(run("migrations/1.sql").fire).toBe(false);
+    expect(run("migrations/2_drop.sql").fire).toBe(true); // outside the declared files
   });
 });
