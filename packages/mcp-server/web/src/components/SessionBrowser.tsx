@@ -8,6 +8,8 @@ import { enterSessionReplay } from "../lib/session-replay";
 import { ArtifactIcon } from "./icons/ArtifactIcons";
 import { WaitingForClaude } from "./WaitingForClaude";
 import { demoArtifacts, demoComments } from "@deeppairing/shared/__fixtures__/demo-session";
+import { isDemoSessionId } from "@deeppairing/shared";
+import { DemoTag } from "./ProvenanceMarker";
 
 interface SearchResult {
   sessionId: string;
@@ -38,6 +40,7 @@ export function SessionBrowser({ onPicked }: { onPicked?: () => void } = {}) {
   const addComment = useArtifactStore((s) => s.addComment);
   const selectArtifact = useArtifactStore((s) => s.selectArtifact);
   const reset = useArtifactStore((s) => s.reset);
+  const setSampleContent = useArtifactStore((s) => s.setSampleContent);
   const hasActiveSession = useConnectionStore((s) => s.activeSessions.length > 0);
 
   // Cross-session search state
@@ -49,6 +52,10 @@ export function SessionBrowser({ onPicked }: { onPicked?: () => void } = {}) {
 
   const loadDemo = () => {
     reset();
+    // #569 proposal 1 — these fixtures carry no `demo_` session id, so flag
+    // the store: every surface then labels them "Demo — sample content".
+    // reset() clears it, so loading any real session drops the label.
+    setSampleContent(true, [...new Set(demoArtifacts.map((a) => a.sessionId))]);
     for (const artifact of demoArtifacts) {
       addArtifact(artifact);
     }
@@ -226,8 +233,9 @@ export function SessionBrowser({ onPicked }: { onPicked?: () => void } = {}) {
         >
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-text-primary truncate">
-                {session.summary}
+              <p className="text-sm font-medium text-text-primary truncate flex items-center gap-1.5">
+                {isDemoSessionId(session.id) && <DemoTag />}
+                <span className="truncate">{session.summary}</span>
               </p>
               <div className="flex items-center gap-2 mt-1">
                 <span className="text-2xs text-text-muted">
@@ -299,6 +307,7 @@ export function SearchResults({
           <div className="text-2xs text-text-muted truncate">
             <span className="opacity-70">session:</span>{" "}
             <span className="text-text-secondary font-mono">{hits[0]?.sessionTitle || sessionId}</span>
+            {isDemoSessionId(sessionId) && <> <DemoTag /></>}
           </div>
           {hits.map((r) => (
             <button

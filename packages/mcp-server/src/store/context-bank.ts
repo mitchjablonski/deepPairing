@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Artifact, Comment } from "@deeppairing/shared";
-import { collectUnansweredQuestions, isClosedArtifactStatus } from "@deeppairing/shared";
+import { collectUnansweredQuestions, isClosedArtifactStatus, isDemoSessionId } from "@deeppairing/shared";
 import { salvageArray, salvageLog } from "./salvage.js";
 import { listAllDecisions, type ProjectDecision } from "./session-scan.js";
 import { readProjectRegistry, type ProjectRegistryReadEntry } from "./project-registry.js";
@@ -100,15 +100,12 @@ export const DEFAULT_BANK_TTL_MS = 20_000;
  * artifacts polluting real queues, and the fix for that is a visible label
  * rather than a silent filter that could swallow real work.
  */
-const KNOWN_FIXTURE_SESSION_IDS: ReadonlySet<string> = new Set([
-  "b-demo",
-  "dv1-demo",
-  "batch2-preview",
-]);
-
+//
+// #569 proposal 1 — the rule itself now lives in @deeppairing/shared
+// (`isDemoSessionId`) so the companion's live-vs-demo markers use the SAME
+// predicate as this bank's `fixtureLike` flag. Behaviour is unchanged.
 function looksLikeFixtureSession(sessionId: string): boolean {
-  const id = sessionId.toLowerCase();
-  return id.startsWith("demo_") || KNOWN_FIXTURE_SESSION_IDS.has(id);
+  return isDemoSessionId(sessionId);
 }
 
 /** An open decision, with the age + supersede context the triage view needs. */

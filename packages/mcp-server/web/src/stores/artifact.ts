@@ -431,6 +431,15 @@ export interface ArtifactState {
    *  no-Map/Set store convention. Cleared in reset(). */
   resolvedDecisions: Record<string, ResolvedDecisionInfo>;
   recordResolvedDecision: (decisionId: string, info: ResolvedDecisionInfo) => void;
+  /** #569 proposal 1 — true while the store holds the client-side "try the
+   *  demo session" fixture (SessionBrowser.loadDemo), whose artifacts carry
+   *  no `demo_` session id. Labelling only: nothing gates, counts or routes
+   *  on it. It applies ONLY to `sampleSessionIds` (the fixture's own session
+   *  ids), and clears on reset(), on any artifact from another session, and
+   *  when a real session becomes active (stores/connection.ts). */
+  sampleContent: boolean;
+  sampleSessionIds: string[];
+  setSampleContent: (on: boolean, sessionIds?: string[]) => void;
 
   addArtifact: (artifact: Artifact) => void;
   updateArtifact: (id: string, status: ArtifactStatus, version?: number) => void;
@@ -698,6 +707,9 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   acknowledgedDecisions: {},
   resolvedDecisions: {},
   requests: [],
+  sampleContent: false,
+  sampleSessionIds: [],
+  setSampleContent: (on, sessionIds = []) => set({ sampleContent: on, sampleSessionIds: on ? sessionIds : [] }),
 
   // U0.1 — upsert by id. Field bug: a single comment posted to an artifact
   // visibly increased its count over time while the user just sat on the
@@ -709,13 +721,19 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   addArtifact: (artifact) =>
     set((state) => {
       supersedeRollbacks(`art:${artifact.id}:`); // #422 — authoritative
+      // #569 review — real work arriving ends the sample: its label must
+      // never ride onto an artifact from another session.
+      const sampleClear = state.sampleContent && !state.sampleSessionIds.includes(artifact.sessionId)
+        ? { sampleContent: false, sampleSessionIds: [] as string[] }
+        : {};
       const idx = state.artifacts.findIndex((a) => a.id === artifact.id);
       if (idx >= 0) {
         const next = state.artifacts.slice();
         next[idx] = { ...state.artifacts[idx], ...artifact };
-        return { artifacts: next };
+        return { artifacts: next, ...sampleClear };
       }
       return {
+        ...sampleClear,
         artifacts: [...state.artifacts, artifact],
         // Don't default-select a superseded version — its successor (the
         // revision that replaced it) is what the human should land on, where
@@ -1403,7 +1421,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     storeGeneration++;
     backfilledIds.clear(); // #458 review — the merged history went with the store
     rollbackChains = {}; // #422 — nothing from before the boundary may roll back into it
-    set({ artifacts: [], comments: {}, selectedArtifactId: null, unreadIds: [], acknowledgedDecisions: {}, resolvedDecisions: {}, requests: [] });
+    set({ artifacts: [], comments: {}, selectedArtifactId: null, unreadIds: [], acknowledgedDecisions: {}, resolvedDecisions: {}, requests: [], sampleContent: false, sampleSessionIds: [] });
   },
 
   markDecisionsAcknowledged: (decisionIds) =>

@@ -380,3 +380,5 @@ export {
 export { LedgerDigestSchema, type LedgerDigest } from "./schemas/ledger-digest.js";
 
 export { computeLineDiff, collapseDiff, type DiffLine, type DiffGap, type DiffRow } from "./line-diff.js";
+
+export { isDemoSessionId, KNOWN_SAMPLE_SESSION_IDS } from "./session-provenance.js";
