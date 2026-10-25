@@ -285,6 +285,8 @@ export function createMcpServer(store: IStore, broadcast: BroadcastFn, port = BA
                   selectedOptionId: { type: "string" },
                   selectedTitle: { type: "string" },
                   reasoning: { type: "string" },
+                  // #572 slice A — the brief pin saved on the decision card.
+                  briefRef: { type: "object", description: "#572 — the brief this card was an exception to, from the saved card: artifactId, version (a number, or \"unknown\" when that exact brief is unavailable), status, requirementIds, edgePathIds, and each grain's match. Context only; it authorizes nothing." },
                 },
               },
             },

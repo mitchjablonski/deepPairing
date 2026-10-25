@@ -4,9 +4,38 @@ import { validatePresentOptionsInput } from "../validate-tool-input.js";
 import { maybeEmitTaskHandle } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
 import type { ToolContext, ToolResult } from "./types.js";
-import type { ProposalSnapshot } from "@deeppairing/shared";
+import type { Artifact, BriefRef, ProposalSnapshot } from "@deeppairing/shared";
 import { wireForm } from "../proposal-resolution.js";
 import { admitBlockedProposal, admittedResult, beginStanceOperation } from "../stance-admission.js";
+import { formatBriefNotes, hasRawBriefRef, normalizeNewBriefRef, savedBriefAdvisory, type BriefRefNormalization } from "../brief-ref.js";
+
+/** #572 — this session's artifacts, or null when they can't be read. */
+async function readArtifacts(ctx: ToolContext): Promise<Artifact[] | null> {
+  try { return await ctx.store.getArtifacts(); } catch { return null; }
+}
+
+/** Append a suffix to a tool result's first text block. */
+function withSuffix(result: ToolResult, suffix: string): ToolResult {
+  if (!suffix) return result;
+  const [first, ...rest] = result.content;
+  return { ...result, content: [{ type: "text", text: `${first!.text}${suffix}` }, ...rest] };
+}
+
+/** #572 — normalize a new ref once. A call without one reads nothing extra. */
+async function normalizeBrief(ctx: ToolContext, args: unknown): Promise<BriefRefNormalization> {
+  if (!hasRawBriefRef(args)) return { notes: [] };
+  return normalizeNewBriefRef((args as { briefRef: unknown }).briefRef, await readArtifacts(ctx), ctx.store.getSessionId());
+}
+
+/** #572 — the CURRENT advisory for a replayed/deduplicated card, from its saved
+ *  pin. Replay and dedup key on the raw args, so a call without a ref matches
+ *  only a card saved without one: nothing to say, nothing extra read. */
+async function savedAdvisoryFor(ctx: ToolContext, artifactId: string, args: unknown): Promise<string> {
+  if (!hasRawBriefRef(args)) return "";
+  const arts = await readArtifacts(ctx);
+  if (!arts) return "";
+  return savedBriefAdvisory(arts.find((a) => a.id === artifactId), args, arts);
+}
 
 export async function handlePresentOptions(ctx: ToolContext, args: any): Promise<ToolResult> {
   const validated = validatePresentOptionsInput(args);
@@ -14,7 +43,9 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
   // #470 (§6 step 0) — replay a committed admitted operation first.
   const op = await beginStanceOperation(ctx, "present_options", args);
   if (op.refusal) return op.refusal;
-  if (op.replay) return admittedResult(op.replay);
+  // #572 — a replay serves the SAVED result: no re-normalization; any brief
+  // line is a current advisory derived from the saved card's pin.
+  if (op.replay) return withSuffix(admittedResult(op.replay), await savedAdvisoryFor(ctx, String(op.replay.artifactId), args));
   const { context, options: validatedOptions, stakes } = validated.data;
   // M1.1 — the short fork-naming title (already trimmed/capped by the input
   // schema). When present it becomes the artifact/session title, the card
@@ -35,24 +66,37 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
   if (!pre.ok) {
     // #470 — the decision exactly as it would be persisted, minus the
     // server-minted decisionId (the daemon mints it at admission).
-    const snapshot = wireForm({
+    // #572 slice A — normalize the brief ref ONCE, for this proposed write;
+    // the pin (or its absence) is part of the snapshot and its digest.
+    const brief = await normalizeBrief(ctx, args);
+    const snapshotWith = (briefRef: BriefRef | undefined) => wireForm({
       kind: "create", type: "decision", title: artifactTitle,
       content: { context, ...(title ? { title } : {}), options: proposedOptions, stakes },
       relatedArtifactIds: args?.relatedFindings, feature: args?.feature,
+      ...(briefRef ? { briefRef } : {}),
     }) as ProposalSnapshot;
     const outcome = await admitBlockedProposal(ctx, {
       toolName: "present_options",
       handle: op.handle,
       pre,
-      resolved: { snapshot, preconditions: [] },
+      resolved: { snapshot: snapshotWith(brief.ref), preconditions: [] },
       regate: (exclude) => preflightArtifact(ctx, "present_options", "decision", artifactTitle, validated.data, { deferRecord: true, excludeStances: exclude }),
+      // The claim reuses the pin the human allowed, not this call's lookup.
+      rebindFrozenBriefRef: (frozen) => ({ snapshot: snapshotWith(frozen), preconditions: [] }),
     });
     if ("response" in outcome) return outcome.response;
     // #499 review — the admitted path says what the normal path says.
-    const admitted = (await ctx.store.getArtifacts()).find((a) => a.id === String(outcome.admitted.artifactId));
+    const arts = await ctx.store.getArtifacts();
+    const admitted = arts.find((a) => a.id === String(outcome.admitted.artifactId));
     notifyResourcesListChanged(ctx.server);
     if (admitted) await maybeEmitTaskHandle(ctx.server, admitted, ctx.store);
-    return admittedResult(outcome.admitted, ` They can select at localhost:${ctx.store.getLivePort?.() ?? ctx.port}.`);
+    // A fresh admission of THIS call's own normalization reports its write
+    // notes; a replay, or a claim made with the frozen pin, reports a current
+    // advisory from what was actually saved.
+    const briefLine = outcome.admitted.status === "admitted" && !outcome.rebound
+      ? formatBriefNotes(brief)
+      : savedBriefAdvisory(admitted, args, arts);
+    return admittedResult(outcome.admitted, ` They can select at localhost:${ctx.store.getLivePort?.() ?? ctx.port}.${briefLine}`);
   }
 
   // N2 (#226) — short-window de-dup: an identical present_options still in
@@ -63,16 +107,19 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
   if (dedup.duplicate) {
     const dupArt = (await ctx.store.getArtifacts()).find((a) => a.id === dedup.duplicate!.artifactId);
     const dupDecisionId = (dupArt?.content as { decisionId?: unknown } | undefined)?.decisionId;
-    return buildDedupResponse(
+    // #572 — dedup serves the saved card: a current advisory from its pin.
+    return withSuffix(buildDedupResponse(
       dedup.duplicate,
       ctx.store.getLivePort?.() ?? ctx.port,
       typeof dupDecisionId === "string" ? { decisionId: dupDecisionId } : undefined,
-    );
+    ), await savedAdvisoryFor(ctx, dedup.duplicate.artifactId, args));
   }
   // O3 (#231) — LIVE bound port for the human-facing review URL (getLivePort
   // survives a TIME_WAIT idle-respawn; ctx.port is the stale spawn-time value).
   const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
 
+  // #572 slice A — normalize the brief ref ONCE, for this write.
+  const brief = await normalizeBrief(ctx, args);
   const id = `art_${nanoid(10)}`;
   const decisionId = `dec_${nanoid(10)}`;
   // M1.1 — spread title only when present so an absent-title artifact's content
@@ -94,6 +141,7 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
       feature: args?.feature,
       // #533 — the presenting agent's label (check_feedback ownership filter).
       presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : undefined,
+      ...(brief.ref ? { briefRef: brief.ref } : {}),
     });
   } catch (e) {
     dedup.abort?.();
@@ -153,7 +201,7 @@ export async function handlePresentOptions(ctx: ToolContext, args: any): Promise
   // = title ?? context): byte-identical for a title-less call, short and
   // quotable when a title exists.
   return {
-    content: [{ type: "text", text: `Decision "${artifactTitle}" presented to human (${decisionId}, artifact ${id}). They can select at localhost:${reviewPort}. Call check_feedback for their choice.${formatPreflightTraceSummary(pre.trace)}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }],
+    content: [{ type: "text", text: `Decision "${artifactTitle}" presented to human (${decisionId}, artifact ${id}). They can select at localhost:${reviewPort}. Call check_feedback for their choice.${formatBriefNotes(brief)}${formatPreflightTraceSummary(pre.trace)}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }],
     structuredContent: { artifactId: id, decisionId },
   };
 }

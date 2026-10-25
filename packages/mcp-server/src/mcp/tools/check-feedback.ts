@@ -9,6 +9,7 @@ import { AUTONOMY_POLICY_LINE } from "../autonomy-policy.js";
 import { formatWorkerStops, workerStopClause, type WorkerStopBatch } from "../../store/worker-stop-notices.js";
 import { sessionOwesDebrief } from "../../debrief-gate.js";
 import { cliInvocation } from "../../cli-invocation.js";
+import { briefEchoOf } from "../brief-ref.js";
 import {
   LIVE_POLL_GRACE_MS,
   PendingAcks,
@@ -878,7 +879,13 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
       const notChosenNote = option && notChosen.length > 0
         ? `\n    Not picked this time: ${notChosen.join(", ")}. This is context only, not a rejection — no stance was recorded and they stay open to propose later.`
         : "";
-      formattedDecisions.push(`- Decision "${decisionLabel}": selected "${option?.title ?? d.response?.optionId}"${d.response?.reasoning ? ` (reasoning: ${d.response.reasoning})` : ""}${notChosenNote}`);
+      // #572 slice A — the brief pin, read from the SAVED decision artifact
+      // (same session) and resolved only against that exact brief id. Missing
+      // brief → "version unknown"; missing decision artifact → no echo, the
+      // choice is still delivered. Context only: it authorizes nothing.
+      const brief = briefEchoOf(postWakeArtifacts.find((a) => a.id === d.artifactId && a.type === "decision"), postWakeArtifacts);
+      const briefNote = brief ? `\n    ${brief.line} (the link saved on this card; context, not an acceptance).` : "";
+      formattedDecisions.push(`- Decision "${decisionLabel}": selected "${option?.title ?? d.response?.optionId}"${d.response?.reasoning ? ` (reasoning: ${d.response.reasoning})` : ""}${notChosenNote}${briefNote}`);
       structuredDecisions.push({
         decisionId: d.decisionId,
         artifactId: d.artifactId,
@@ -886,6 +893,7 @@ async function assembleCheckFeedback(ctx: ToolContext, args: any): Promise<ToolR
         selectedOptionId: d.response?.optionId,
         selectedTitle: option?.title,
         reasoning: d.response?.reasoning,
+        ...(brief ? { briefRef: brief.echo } : {}),
       });
     }
     if (recordedIds.length > 0) await store.acknowledgeDecisions(recordedIds);

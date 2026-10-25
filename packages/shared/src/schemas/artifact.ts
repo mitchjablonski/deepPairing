@@ -269,6 +269,17 @@ export const ArtifactSchema = z.object({
    * Optional for backward compatibility; absent on every ordinary artifact.
    */
   admission: ArtifactAdmissionSchema.optional(),
+  /**
+   * #572 slice A — on a decision: the exact governing brief version (spec
+   * artifact id) and the requirement / edge-path ids this card is an exception
+   * to. DECLARED metadata only: not drift detection, authority or acceptance.
+   * Deliberately `unknown` on read: a stored ref is never revalidated
+   * destructively, so a malformed one still loads (render it via
+   * `readBriefRef`, raw and unavailable). New refs are normalized at the tool
+   * boundary (BriefRefSchema + caps). Optional for backward compatibility;
+   * absent → the stored JSON is byte-identical to before.
+   */
+  briefRef: z.unknown().optional(),
   content: z.record(z.string(), z.unknown()),
   agentReasoning: z.string().nullable(),
   relatedArtifactIds: z.array(z.string()).optional(),

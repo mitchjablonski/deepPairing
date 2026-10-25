@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import {
   coerceChangesetContent,
+  readBriefRef,
   type Artifact,
+  type BriefRef,
   type ProposalPrecondition,
   type ProposalSnapshot,
   type StanceRef,
@@ -153,7 +155,7 @@ const CLOSED_TARGET_STATUSES: ReadonlySet<string> = new Set(["superseded", "retr
 
 /** Every field a revision can inherit from its target: title, an external
  *  changeset's identity and display provenance (never headSha), a decision's
- *  stakes, refs and feature. Hashed whether or not this revision inherits it,
+ *  stakes, refs, feature and (#572) brief pin. Hashed whether or not this revision inherits it,
  *  so ANY change to the target's inheritable state refuses the claim. */
 export function reviseInheritedHash(target: Artifact): string {
   let provenance: unknown = null;
@@ -171,7 +173,22 @@ export function reviseInheritedHash(target: Artifact): string {
     stakes: (target.content as { stakes?: unknown } | null)?.stakes ?? null,
     relatedArtifactIds: target.relatedArtifactIds ?? null,
     featureId: target.featureId ?? null,
+    // #572 slice A — the brief pin a revision carries. Hashed RAW (as stored),
+    // so any change to it between block and claim refuses the claim. Spread
+    // only when present, so a pin-less target hashes exactly as before.
+    ...(target.briefRef !== undefined ? { briefRef: target.briefRef } : {}),
   }));
+}
+
+/**
+ * #572 slice A — the pin a revision CARRIES from its target: the exact saved
+ * ref, never re-resolved and never retargeted (re-briefing means presenting a
+ * new card). A stored ref that isn't readable isn't carried; the predecessor
+ * keeps it untouched.
+ */
+export function carriedBriefRef(target: Artifact): BriefRef | undefined {
+  const read = readBriefRef(target.briefRef);
+  return read?.ok ? read.ref : undefined;
 }
 
 export function reviseTargetPrecondition(target: Artifact): ProposalPrecondition {
@@ -226,6 +243,7 @@ export function reviseSnapshot(old: Artifact, title: string, reason: string, con
     version: old.version + 1,
     ...(old.relatedArtifactIds ? { relatedArtifactIds: old.relatedArtifactIds } : {}),
     ...(old.featureId ? { feature: old.featureId } : {}),
+    ...(carriedBriefRef(old) ? { briefRef: carriedBriefRef(old) } : {}),
   } as ProposalSnapshot);
 }
 

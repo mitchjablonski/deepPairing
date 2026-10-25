@@ -219,6 +219,24 @@ export {
 } from "./schemas/stance-exception.js";
 
 export {
+  MAX_SPEC_ID_LENGTH,
+  MAX_BRIEF_REF_IDS,
+  MAX_BRIEF_REF_ARTIFACT_ID_LENGTH,
+  BRIEF_CLOSED_STATUSES,
+  BriefRefSchema,
+  briefRefProblems,
+  readBriefRef,
+  matchBriefGrain,
+  describeBriefPin,
+  formatBriefPin,
+  type BriefRef,
+  type BriefGrainMatch,
+  type BriefGrainView,
+  type BriefLookupArtifact,
+  type BriefPinView,
+} from "./schemas/brief-ref.js";
+
+export {
   PreflightConsideredConceptSchema,
   PreflightNearMissSchema,
   PreflightBlockSummarySchema,

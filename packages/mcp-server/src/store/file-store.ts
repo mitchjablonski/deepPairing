@@ -4,8 +4,8 @@ import { retirementFeedback, type RetirementInput, type RetirementOutcome } from
 import { classifyStaleResolve, classifyClosedDecision, type DecisionResolveOutcome, type ResolutionAnnouncement } from "./decision-resolve-guard.js";
 import path from "node:path";
 import crypto from "node:crypto";
-import type { Artifact, ArtifactAdmission, ArtifactType, ArtifactStatus, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
-import { ArtifactSchema, suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode } from "@deeppairing/shared";
+import type { Artifact, ArtifactAdmission, ArtifactType, ArtifactStatus, BriefRef, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
+import { ArtifactSchema, BriefRefSchema, suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { capConceptLength } from "./concept-hygiene.js";
@@ -625,6 +625,7 @@ export class FileStore implements IStore {
     version?: number;
     feature?: string | null;
     presentedBy?: string | null;
+    briefRef?: BriefRef;
   }): Artifact {
     // #338 (F1) — a frozen writer refuses BEFORE any side effect. Pre-this a
     // createArtifact on a conflicted store pushed the record into memory,
@@ -644,6 +645,10 @@ export class FileStore implements IStore {
       typeof params.presentedBy === "string" && params.presentedBy.trim()
         ? params.presentedBy.trim().slice(0, 80)
         : undefined;
+    // #572 slice A — the brief pin, shape-checked (never capped or rewritten:
+    // the tool normalized it once). A non-BriefRef value from a passthrough
+    // wire body is dropped rather than persisted.
+    const briefRef = params.briefRef !== undefined ? BriefRefSchema.safeParse(params.briefRef) : undefined;
     // #162 — the store scans AUTHORITATIVELY, mirroring addComment. Pre-#162
     // the tool handlers pre-scanned and passed `secretWarnings` in, and this
     // method trusted the param — so a bearer-authed caller POSTing straight to
@@ -674,6 +679,8 @@ export class FileStore implements IStore {
       ...(featureId ? { featureId } : {}),
       // #533 — the presenter label, same omit-when-empty discipline.
       ...(presentedBy ? { presentedBy } : {}),
+      // #572 slice A — same omit-when-absent discipline.
+      ...(briefRef?.success ? { briefRef: structuredClone(briefRef.data) } : {}),
       createdAt: now,
       updatedAt: now,
     };

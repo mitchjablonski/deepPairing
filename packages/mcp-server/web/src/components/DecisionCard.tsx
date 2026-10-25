@@ -22,6 +22,7 @@ import { useChainComments } from "../hooks/useChainComments";
 import type { InitialResolved } from "./decision/types";
 import { SpeechIcon } from "./icons/ArtifactIcons";
 import { useOfflineReason } from "../hooks/useOfflineReason";
+import { BriefRefChip } from "./decision/BriefRefChip";
 
 interface DecisionCardProps {
   event: DecisionRequestEvent;
@@ -937,6 +938,8 @@ export function DecisionArtifactView({ artifact }: { artifact: Artifact }) {
 
   return (
     <>
+      {/* #572 slice A — the brief this card is an exception to (text only). */}
+      <BriefRefChip artifact={artifact} />
       <DecisionCard
         event={{
           type: "decision_request",

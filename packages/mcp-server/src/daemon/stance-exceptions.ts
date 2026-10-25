@@ -547,7 +547,7 @@ export class StanceExceptionRegistry {
    *  registration for this fingerprint. `inactive` explains a refusal. */
   inspect(sessionId: string, token: string | undefined, fingerprint: string) {
     const reg = this.resolveToken(token);
-    const candidates: Array<{ id: string; stance: StanceRef; grantedVia: StanceGrantOrigin; reason: string }> = [];
+    const candidates: Array<{ id: string; stance: StanceRef; grantedVia: StanceGrantOrigin; reason: string; frozenBriefRef: ProposalSnapshot["briefRef"] | null }> = [];
     const inactive: Array<{ id: string; state: StanceAllowanceReceiptState; artifactId?: string; ceilingAt: string }> = [];
     const held = new Set<string>();
     for (const a of this.allowances.values()) {
@@ -557,7 +557,13 @@ export class StanceExceptionRegistry {
       if (st === "active") {
         // Fallback mode: another live wrapper's allowance is not ours to claim.
         if (reg && a.registrationId === reg.registrationId) {
-          candidates.push({ id: a.id, stance: a.stance, grantedVia: a.grantedVia, reason: a.reason });
+          // #572 slice A — the FROZEN brief pin of the snapshot the human
+          // allowed (null: none was saved). Read-only, and only for the
+          // calling registration's own active allowances. The tool claims
+          // with this pin instead of re-resolving the brief from the live
+          // store; the claim below still requires the request's digest to
+          // equal the allowance's, and still creates from the STORED snapshot.
+          candidates.push({ id: a.id, stance: a.stance, grantedVia: a.grantedVia, reason: a.reason, frozenBriefRef: a.snapshot.briefRef ?? null });
         }
         continue;
       }
@@ -712,6 +718,8 @@ export class StanceExceptionRegistry {
         ...(snapshot.parentId ? { parentId: snapshot.parentId } : {}),
         ...(snapshot.version ? { version: snapshot.version } : {}),
         ...(snapshot.feature ? { feature: snapshot.feature } : {}),
+        // #572 slice A — the brief pin exactly as allowed (part of the digest).
+        ...(snapshot.briefRef ? { briefRef: snapshot.briefRef } : {}),
       }, admission);
     } catch (error) {
       // Release only on proof: nothing in memory means nothing can commit.

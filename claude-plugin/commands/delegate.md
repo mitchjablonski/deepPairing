@@ -98,6 +98,15 @@ these:
 - a gate block you can't route around and still meet done;
 - done being unreachable as written. Name the scope fork; never redefine done.
 
+With a brief, each of these cards names it: pass
+`briefRef: {artifactId, requirementIds?, edgePathIds?}` with the approved
+brief's exact id and the requirement (or edge path) the card deviates from, and
+make its `context` say what changed and the exact decision you need from me.
+After a re-brief, present a **new** card with the new brief's id; don't revise
+an old card to point at it. After a quiet start there's no brief, so omit
+`briefRef`. It's a declared link, not drift detection: deepPairing shows the
+link, it doesn't check that you named the right requirement.
+
 **Stop and brief** if you're about to edit a guardrail path, a file outside
 your declared `file_map` visual in a different top-level package or directory
 (after a quiet start, where nothing is declared: any file outside the top-level

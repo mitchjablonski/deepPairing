@@ -451,6 +451,10 @@ export interface ArtifactState {
   /** Upsert an existing comment by id (e.g. from a comment_updated WS event). */
   updateComment: (comment: Comment) => void;
   selectArtifact: (id: string | null) => void;
+  /** #572 slice A — open EXACTLY this artifact id, without the live-successor
+   *  walk selectArtifact applies: a brief pin opens the version it pins, even
+   *  when that version was superseded. No-op for an id not in the store. */
+  selectArtifactExact: (id: string) => void;
   /** Re-select the artifact you were last on (persisted across reloads), if
    *  it's present in the freshly-hydrated session. Called after hydration. */
   restoreSelection: () => void;
@@ -826,6 +830,15 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
     return {
       selectedArtifactId: resolved,
       unreadIds: state.unreadIds.filter((uid) => uid !== resolved),
+    };
+  }),
+
+  selectArtifactExact: (id) => set((state) => {
+    if (!state.artifacts.some((a) => a.id === id)) return {};
+    lsSetSelection(id);
+    return {
+      selectedArtifactId: id,
+      unreadIds: state.unreadIds.filter((uid) => uid !== id),
     };
   }),
 

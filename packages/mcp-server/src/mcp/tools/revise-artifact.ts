@@ -5,7 +5,7 @@ import type { ToolContext, ToolResult } from "./types.js";
 import { notifyResourcesListChanged, formatStyleWarnings, persistPreflightTrace } from "../tool-helpers.js";
 import { preflightArtifact } from "../artifact-preflight.js";
 import { maybeUpdateTaskStatus } from "../tasks-probe.js";
-import { deriveReviseContent, finalizeReviseContent, reviseSnapshot, reviseTargetPrecondition } from "../proposal-resolution.js";
+import { carriedBriefRef, deriveReviseContent, finalizeReviseContent, reviseSnapshot, reviseTargetPrecondition } from "../proposal-resolution.js";
 import { admitBlockedProposal, admittedResult, beginStanceOperation } from "../stance-admission.js";
 import {
   validatePresentFindingsInput,
@@ -197,6 +197,12 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       // #533 — the successor keeps its presenter, so a subagent filtering
       // check_feedback by presentedBy still owns the feedback on v2.
       ...(old.presentedBy ? { presentedBy: old.presentedBy } : {}),
+      // #572 slice A — a supersede (a decision "tune") CARRIES the exact brief
+      // pin: content replacement never erases it, and it is never moved to a
+      // newer brief (no implicit latest lookup). Re-briefing = a new card.
+      // The admitted path carries the same pin via reviseSnapshot, bound by
+      // reviseInheritedHash.
+      ...(carriedBriefRef(old) ? { briefRef: carriedBriefRef(old) } : {}),
     });
     await store.updateArtifactStatus(old.id, "superseded", "agent_supersede");
     await maybeUpdateTaskStatus(server, old.id, store);

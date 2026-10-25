@@ -459,6 +459,16 @@ describe("S0 — delegate.md carries the five moves and the run rules", () => {
     expect(brief.indexOf("`edgePaths[]`")).toBeLessThan(brief.indexOf("`tasks[]`"));
   });
 
+  it("#572 slice A: move 3 cards name their brief with briefRef, re-brief with a new card, and say it's not drift detection", () => {
+    const run = text.slice(text.indexOf("(3) Run"), text.indexOf("(4) Packet"));
+    expect(run).toContain("`briefRef: {artifactId, requirementIds?, edgePathIds?}`");
+    expect(run).toContain("brief's exact id");
+    expect(run).toContain("say what changed and the exact decision you need");
+    expect(run).toContain("After a re-brief, present a **new** card with the new brief's id");
+    expect(run).toContain("After a quiet start there's no brief, so omit");
+    expect(run).toContain("a declared link, not drift detection");
+  });
+
   it("#569 pilot B: move 3 tracks the brief's tasks with update_plan_progress, not log_reasoning per task", () => {
     const run = text.slice(text.indexOf("(3) Run"), text.indexOf("(4) Packet"));
     expect(run).toContain("`update_plan_progress`");

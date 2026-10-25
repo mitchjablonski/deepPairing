@@ -1,8 +1,9 @@
 import { nanoid } from "nanoid";
-import type { ProposalPrecondition, ProposalSnapshot, StanceRef } from "@deeppairing/shared";
+import type { BriefRef, ProposalPrecondition, ProposalSnapshot, StanceRef } from "@deeppairing/shared";
 import type { ToolContext, ToolResult } from "./tools/types.js";
 import { recordPreflightBlockEvent, type PreflightBlockedEvent, type PreflightHelperResult } from "./tool-helpers.js";
-import { callFingerprint, MAX_SNAPSHOT_BYTES } from "./proposal-resolution.js";
+import { callFingerprint, MAX_SNAPSHOT_BYTES, stableStringify } from "./proposal-resolution.js";
+import { frozenBriefRefOf } from "./brief-ref.js";
 
 /**
  * #470 — the tool side of "Allow this proposal once" (design §6). The tool
@@ -141,9 +142,22 @@ export async function admitBlockedProposal(
     resolved: { snapshot: ProposalSnapshot; preconditions: ProposalPrecondition[] } | null;
     /** Re-run the gate with these stance rows removed (deferRecord). */
     regate: (exclude: StanceRef[]) => Promise<PreflightHelperResult> | null;
+    /**
+     * #572 slice A — rebuild the resolution around the brief pin the human
+     * ALLOWED. A pin is normalized from mutable store state (does the brief
+     * exist, is it a spec), so re-normalizing raw args at claim time could
+     * differ from the allowed snapshot and refuse an unchanged call — or worse,
+     * propose a different link. When every candidate reports the same frozen
+     * pin, the claim is sent with it. Nothing is relaxed: the daemon still
+     * checks fingerprint, registration, session, stance, preconditions and that
+     * this request's digest equals the allowance's, and still creates from its
+     * own stored snapshot.
+     */
+    rebindFrozenBriefRef?: (frozen: BriefRef | undefined) => { snapshot: ProposalSnapshot; preconditions: ProposalPrecondition[] };
   },
-): Promise<{ response: ToolResult } | { admitted: OperationResult }> {
-  const { toolName, handle, pre, resolved } = input;
+): Promise<{ response: ToolResult } | { admitted: OperationResult; rebound: boolean }> {
+  const { toolName, handle, pre } = input;
+  let resolved = input.resolved;
   // The block event, carrying what a grant would bind to. An oversized
   // snapshot is left off (the daemon records the block as not eligible)
   // so the block itself still reaches the log under the body cap.
@@ -163,9 +177,17 @@ export async function admitBlockedProposal(
   // 2. Inspect — read-only, never consumes.
   let candidates: Array<{ id: string; stance: StanceRef }> = [];
   let inactiveLine = "";
+  let rebound = false;
   try {
     const seen = await ctx.store.inspectStanceExceptions(handle.callFingerprint);
     candidates = (seen.candidates ?? []) as Array<{ id: string; stance: StanceRef }>;
+    // #572 slice A — the frozen-pin retrieval (see rebindFrozenBriefRef).
+    const frozen = input.rebindFrozenBriefRef && resolved ? frozenBriefRefOf(seen.candidates ?? []) : { found: false as const };
+    if (frozen.found && input.rebindFrozenBriefRef && resolved) {
+      const next = input.rebindFrozenBriefRef(frozen.ref);
+      rebound = stableStringify(next.snapshot) !== stableStringify(resolved.snapshot);
+      resolved = next;
+    }
     const first = (seen.inactive ?? [])[0] as { state?: string; artifactId?: string; ceilingAt?: string } | undefined;
     if (first?.state) inactiveLine = STANCE_MESSAGES.inactive(first.state, first.artifactId, first.ceilingAt);
   } catch {
@@ -191,7 +213,7 @@ export async function admitBlockedProposal(
       block: { ...pre.event },
     },
   }) as OperationResult;
-  if (result.status === "admitted" || result.status === "replayed") return { admitted: result };
+  if (result.status === "admitted" || result.status === "replayed") return { admitted: result, rebound };
   const dep = result.dependency as { id: string | null; what: "prior" | "target" } | undefined;
   if (result.code === "stance_exception_dependencies_changed" && dep && typeof result.newBlockId === "string") {
     // The daemon already recorded this call's block, linked to the old allowance.
