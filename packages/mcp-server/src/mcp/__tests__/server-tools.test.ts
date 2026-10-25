@@ -537,6 +537,9 @@ describe("MCP Tool Handlers — tool CRUD surface", () => {
         const r = await callTool("present_spec", { ...briefArgs, requirements: [req("REQ-1"), req("REQ-2"), req("REQ-1")] });
         refused(r);
         expect(r.text).toContain('requirements[2].id "REQ-1" duplicates requirements[0].id');
+        expect(r.text).toContain("rename one of them");
+        expect(r.text).toContain("won't carry over");
+        expect(r.text).toContain("Keep an id that is still valid unchanged");
       });
 
       it("duplicate edge-path ids", async () => {
@@ -568,7 +571,7 @@ describe("MCP Tool Handlers — tool CRUD surface", () => {
         });
         refused(r);
         expect(r.text).toContain("requirements[0].id");
-        expect(r.text).toContain("is 65 chars — shorten it to 64 or fewer");
+        expect(r.text).toContain("is 65 chars — rename it to 64 or fewer chars; comment threads on that row from earlier versions won't carry over");
         expect(r.text).toContain("edgePaths[0].id");
         const ok = await callTool("present_spec", { ...briefArgs, requirements: [req("R".repeat(64))] });
         expect(ok.isError).toBeFalsy();
@@ -582,6 +585,8 @@ describe("MCP Tool Handlers — tool CRUD surface", () => {
         });
         refused(r);
         expect(r.text).toContain('edgePaths[0].id "2" is purely numeric');
+        expect(r.text).toContain('rename numeric edge-path id "2" (e.g. to "ep-2"); comment threads on that row from earlier versions won\'t carry over');
+        expect(r.text).toContain("Keep an id that is still valid unchanged");
       });
 
       it("a task linking a requirement id the spec doesn't declare", async () => {
