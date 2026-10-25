@@ -3,7 +3,9 @@ import type { Provenance } from "../lib/provenance";
 /**
  * #569 proposal 1 — live work vs demo/sample content, made unmistakable.
  *
- *   - ProvenanceChip: compact, inline. Live work reads "● Live · <project>";
+ *   - ProvenanceChip: compact, inline. Live work reads "● Live · <project>"
+ *     — deliberately CALM (muted text, green dot, no fill or border) so the
+ *     loud treatment stays reserved for demo;
  *     demo/sample reads "Demo" in a dashed violet chip. Text carries the
  *     meaning — colour is a second channel, never the only one. Violet, not
  *     amber: amber is the "needs you" colour in this shell.
@@ -28,8 +30,7 @@ export function ProvenanceChip({ provenance, className = "" }: { provenance: Pro
       <span
         data-testid="provenance-live"
         data-provenance="live"
-        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs shrink-0 min-w-0
-                    bg-accent-green-dim text-accent-green border border-accent-green ${className}`}
+        className={`inline-flex items-center gap-1 px-1 py-0.5 text-2xs shrink-0 min-w-0 text-text-secondary ${className}`}
         title={`Real work${name ? ` in ${name}` : ""}${provenance.history ? " (past session, read-only)" : ""} — not demo content`}
       >
         <span className="w-1.5 h-1.5 rounded-full bg-accent-green shrink-0" aria-hidden="true" />
