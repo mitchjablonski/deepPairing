@@ -68,7 +68,9 @@ describe("#569 P1 — classification", () => {
     expect(classifyProvenance({ sessionId: "demo_1729" })?.kind).toBe("demo");
     expect(classifyProvenance({ sessionId: "b-demo" })?.kind).toBe("demo");
     expect(classifyProvenance({ sessionId: "sess_abc", projectName: "app" })).toEqual({ kind: "live", projectName: "app", history: false });
-    expect(classifyProvenance({ sessionId: "s1", sampleContent: true })?.kind).toBe("sample");
+    expect(classifyProvenance({ sessionId: "sess_1", sampleContent: true, sampleSessionIds: ["sess_1"] })?.kind).toBe("sample");
+    expect(classifyProvenance({ sessionId: null, sampleContent: true })?.kind).toBe("sample"); // offline preview
+    expect(classifyProvenance({ sessionId: "s1", sampleContent: true, sampleSessionIds: ["sess_1"] })?.kind).toBe("live"); // id wins
     expect(classifyProvenance({ sessionId: null })).toBeNull();
   });
 
