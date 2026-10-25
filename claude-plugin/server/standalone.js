@@ -25462,6 +25462,115 @@ var ExplainerContentSchema = external_exports.object({
   unknowns: external_exports.array(external_exports.string()).optional().describe("Honest gaps: what you could NOT determine and why (e.g. 'I couldn't tell whether the CLI path is covered \u2014 I didn't read cli/init.ts'). Renders above the fold with a one-click Ask.")
 });
 
+// ../shared/dist/schemas/brief-ref.js
+var MAX_SPEC_ID_LENGTH = 64;
+var MAX_BRIEF_REF_IDS = 8;
+var MAX_BRIEF_REF_ARTIFACT_ID_LENGTH = 64;
+var BriefRefSchema = external_exports.object({
+  artifactId: external_exports.string(),
+  requirementIds: external_exports.array(external_exports.string()).optional(),
+  edgePathIds: external_exports.array(external_exports.string()).optional()
+}).strict();
+var REF_KEYS = /* @__PURE__ */ new Set(["artifactId", "requirementIds", "edgePathIds"]);
+function show(s) {
+  return JSON.stringify(s.length > 40 ? `${s.slice(0, 40)}\u2026` : s);
+}
+function listProblems(raw, field2, problems) {
+  if (raw === void 0)
+    return;
+  if (!Array.isArray(raw)) {
+    problems.push(`${field2} must be an array of ids`);
+    return;
+  }
+  if (raw.length > MAX_BRIEF_REF_IDS)
+    problems.push(`${field2} has ${raw.length} ids (at most ${MAX_BRIEF_REF_IDS})`);
+  const seen = /* @__PURE__ */ new Set();
+  raw.forEach((id, i) => {
+    if (typeof id !== "string") {
+      problems.push(`${field2}[${i}] must be a string`);
+      return;
+    }
+    if (id.trim().length === 0)
+      problems.push(`${field2}[${i}] is blank`);
+    else if (id.length > MAX_SPEC_ID_LENGTH)
+      problems.push(`${field2}[${i}] ${show(id)} is ${id.length} characters (at most ${MAX_SPEC_ID_LENGTH})`);
+    if (seen.has(id))
+      problems.push(`${field2}[${i}] ${show(id)} is listed twice`);
+    seen.add(id);
+  });
+}
+function briefRefProblems(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return ["briefRef must be an object {artifactId, requirementIds?, edgePathIds?}"];
+  }
+  const obj2 = raw;
+  const problems = [];
+  for (const k of Object.keys(obj2))
+    if (!REF_KEYS.has(k))
+      problems.push(`unknown key ${show(k)}`);
+  const id = obj2.artifactId;
+  if (typeof id !== "string")
+    problems.push("artifactId must be a string");
+  else if (id.trim().length === 0)
+    problems.push("artifactId is blank");
+  else if (id.length > MAX_BRIEF_REF_ARTIFACT_ID_LENGTH)
+    problems.push(`artifactId is ${id.length} characters (at most ${MAX_BRIEF_REF_ARTIFACT_ID_LENGTH})`);
+  listProblems(obj2.requirementIds, "requirementIds", problems);
+  listProblems(obj2.edgePathIds, "edgePathIds", problems);
+  return problems;
+}
+function readBriefRef(raw) {
+  if (raw === void 0)
+    return void 0;
+  const parsed = BriefRefSchema.safeParse(raw);
+  if (parsed.success)
+    return { ok: true, ref: parsed.data };
+  const rawId = raw && typeof raw === "object" && typeof raw.artifactId === "string" ? raw.artifactId : void 0;
+  return { ok: false, ...rawId !== void 0 ? { rawId } : {} };
+}
+function matchBriefGrain(rows, id) {
+  if (!Array.isArray(rows))
+    return "unknown";
+  let n = 0;
+  for (const row of rows) {
+    if (row && typeof row === "object" && row.id === id)
+      n++;
+  }
+  return n === 0 ? "unknown" : n === 1 ? "known" : "ambiguous";
+}
+var BRIEF_CLOSED_STATUSES = /* @__PURE__ */ new Set(["superseded", "rejected", "retracted", "obsolete"]);
+function describeBriefPin(ref, artifacts, sessionId) {
+  const brief = artifacts.find((a) => a.id === ref.artifactId && a.sessionId === sessionId && a.type === "spec");
+  const ids = (list2, kind, rows) => (list2 ?? []).map((id) => brief ? { kind, id, match: matchBriefGrain(rows, id) } : { kind, id });
+  const content = brief?.content;
+  const grains = [
+    ...ids(ref.requirementIds, "requirement", content?.requirements),
+    ...ids(ref.edgePathIds, "edgePath", content?.edgePaths)
+  ];
+  if (!brief)
+    return { artifactId: ref.artifactId, available: false, closed: false, grains };
+  return {
+    artifactId: ref.artifactId,
+    available: true,
+    title: brief.title,
+    version: brief.version,
+    status: brief.status,
+    closed: BRIEF_CLOSED_STATUSES.has(brief.status),
+    grains
+  };
+}
+function grainLabel(g) {
+  const name = g.kind === "edgePath" ? `edge path ${g.id}` : g.id;
+  return g.match === "unknown" ? `${name} (unknown)` : g.match === "ambiguous" ? `${name} (ambiguous)` : name;
+}
+function formatBriefPin(view) {
+  const grains = view.grains.length > 0 ? ` \xB7 ${view.grains.map(grainLabel).join(", ")}` : "";
+  if (!view.available)
+    return `Exception to brief ${view.artifactId} (version unknown, brief unavailable)${grains}`;
+  const closed = view.closed ? ` (${view.status})` : "";
+  return `Exception to "${view.title}" v${view.version}${grains}${closed}`;
+}
+
 // ../shared/dist/schemas/stance-exception.js
 var StanceRefSchema = external_exports.object({
   description: external_exports.string(),
@@ -25477,7 +25586,11 @@ var ProposalSnapshotSchema = external_exports.object({
   relatedArtifactIds: external_exports.array(external_exports.string()).optional(),
   feature: external_exports.string().optional(),
   parentId: external_exports.string().optional(),
-  version: external_exports.number().int().positive().optional()
+  version: external_exports.number().int().positive().optional(),
+  /** #572 slice A — the NORMALIZED brief pin, decided once when the proposal
+   *  was resolved (absent when none was given or a new ref was dropped). Part
+   *  of the effective digest, so the claim creates exactly this pin. */
+  briefRef: BriefRefSchema.optional()
 }).strict();
 var ProposalPreconditionSchema = external_exports.discriminatedUnion("kind", [
   external_exports.object({
@@ -25693,6 +25806,17 @@ var ArtifactSchema = external_exports.object({
    * Optional for backward compatibility; absent on every ordinary artifact.
    */
   admission: ArtifactAdmissionSchema.optional(),
+  /**
+   * #572 slice A — on a decision: the exact governing brief version (spec
+   * artifact id) and the requirement / edge-path ids this card is an exception
+   * to. DECLARED metadata only: not drift detection, authority or acceptance.
+   * Deliberately `unknown` on read: a stored ref is never revalidated
+   * destructively, so a malformed one still loads (render it via
+   * `readBriefRef`, raw and unavailable). New refs are normalized at the tool
+   * boundary (BriefRefSchema + caps). Optional for backward compatibility;
+   * absent → the stored JSON is byte-identical to before.
+   */
+  briefRef: external_exports.unknown().optional(),
   content: external_exports.record(external_exports.string(), external_exports.unknown()),
   agentReasoning: external_exports.string().nullable(),
   relatedArtifactIds: external_exports.array(external_exports.string()).optional(),
@@ -30588,8 +30712,16 @@ function reviseInheritedHash(target) {
     provenance,
     stakes: target.content?.stakes ?? null,
     relatedArtifactIds: target.relatedArtifactIds ?? null,
-    featureId: target.featureId ?? null
+    featureId: target.featureId ?? null,
+    // #572 slice A — the brief pin a revision carries. Hashed RAW (as stored),
+    // so any change to it between block and claim refuses the claim. Spread
+    // only when present, so a pin-less target hashes exactly as before.
+    ...target.briefRef !== void 0 ? { briefRef: target.briefRef } : {}
   }));
+}
+function carriedBriefRef(target) {
+  const read = readBriefRef(target.briefRef);
+  return read?.ok ? read.ref : void 0;
 }
 function reviseTargetPrecondition(target) {
   return {
@@ -30636,7 +30768,8 @@ function reviseSnapshot(old, title, reason, content) {
     parentId: old.id,
     version: old.version + 1,
     ...old.relatedArtifactIds ? { relatedArtifactIds: old.relatedArtifactIds } : {},
-    ...old.featureId ? { feature: old.featureId } : {}
+    ...old.featureId ? { feature: old.featureId } : {},
+    ...carriedBriefRef(old) ? { briefRef: carriedBriefRef(old) } : {}
   });
 }
 
@@ -31175,9 +31308,8 @@ var TOOL_ERROR_RETRYABLE = {
 };
 
 // src/mcp/spec-ids.ts
-var MAX_SPEC_ID_LENGTH = 64;
 var MAX_LISTED_PROBLEMS = 20;
-function show(id) {
+function show2(id) {
   return JSON.stringify(id.length > 40 ? `${id.slice(0, 40)}\u2026` : id);
 }
 function checkIds(ids, label, field2, numericIsAmbiguous, problems) {
@@ -31190,14 +31322,14 @@ function checkIds(ids, label, field2, numericIsAmbiguous, problems) {
       return;
     }
     if (id.length > MAX_SPEC_ID_LENGTH) {
-      problems.push(`${at} ${show(id)} is ${id.length} chars \u2014 rename it to ${MAX_SPEC_ID_LENGTH} or fewer chars; comment threads on that row from earlier versions won't carry over`);
+      problems.push(`${at} ${show2(id)} is ${id.length} chars \u2014 rename it to ${MAX_SPEC_ID_LENGTH} or fewer chars; comment threads on that row from earlier versions won't carry over`);
     }
     if (numericIsAmbiguous && /^\d+$/.test(id)) {
-      problems.push(`${at} ${show(id)} is purely numeric, which collides with the position-based anchor \u2014 rename numeric edge-path id ${show(id)} (e.g. to "ep-${id.slice(0, MAX_SPEC_ID_LENGTH - 3)}"); comment threads on that row from earlier versions won't carry over`);
+      problems.push(`${at} ${show2(id)} is purely numeric, which collides with the position-based anchor \u2014 rename numeric edge-path id ${show2(id)} (e.g. to "ep-${id.slice(0, MAX_SPEC_ID_LENGTH - 3)}"); comment threads on that row from earlier versions won't carry over`);
     }
     const prev = firstAt.get(id);
     if (prev !== void 0) {
-      problems.push(`${at} ${show(id)} duplicates ${field2}[${prev}].id \u2014 rename one of them (every ${label} needs its own id); comment threads on the renamed row from earlier versions won't carry over`);
+      problems.push(`${at} ${show2(id)} duplicates ${field2}[${prev}].id \u2014 rename one of them (every ${label} needs its own id); comment threads on the renamed row from earlier versions won't carry over`);
     } else {
       firstAt.set(id, i);
     }
@@ -31213,7 +31345,7 @@ function specIdProblems(content) {
   (content.tasks ?? []).forEach((t, i) => {
     (t.linkedRequirementIds ?? []).forEach((ref, j) => {
       if (!declared.has(ref)) {
-        problems.push(`tasks[${i}].linkedRequirementIds[${j}] ${show(ref)} names no requirement in this spec \u2014 link an existing requirements[].id or drop it`);
+        problems.push(`tasks[${i}].linkedRequirementIds[${j}] ${show2(ref)} names no requirement in this spec \u2014 link an existing requirements[].id or drop it`);
       }
     });
   });
@@ -31827,6 +31959,12 @@ var ARTIFACT_TITLE = external_exports.string().min(1).describe("Descriptive titl
 var SERVED_REQUEST_ID = external_exports.string().optional().describe("If this artifact serves a human request (from check_feedback's 'Human requests' block), the request id (e.g. 'req_ab12cd34ef') \u2014 links it so the request clears");
 var FEATURE_TAG = external_exports.string().optional().describe("A short, STABLE tag for the feature/milestone this work belongs to (e.g. 'milestone-7', 'auth-rework'). Keep it IDENTICAL across every artifact of the same feature so they group together in the Features view \u2014 match the human's milestone naming if one exists; don't invent a new tag per run.");
 var PRESENTED_BY = external_exports.string().optional().describe("Optional label for WHO is presenting (e.g. 'coordinator', 'builder:auth-fix', 'reviewer'). Subagents: set it, then call check_feedback({presentedBy}) with the same label so you receive (and consume) only the feedback on your own artifacts.");
+var BRIEF_ID = external_exports.string().min(1).max(MAX_SPEC_ID_LENGTH);
+var BRIEF_REF = external_exports.object({
+  artifactId: external_exports.string().min(1).max(MAX_BRIEF_REF_ARTIFACT_ID_LENGTH).describe("The approved brief's EXACT artifact id (a present_spec art_ id; each revision has its own id, so this pins one version)"),
+  requirementIds: external_exports.array(BRIEF_ID).max(MAX_BRIEF_REF_IDS).optional().describe("The brief's requirements[].id values this card deviates from"),
+  edgePathIds: external_exports.array(BRIEF_ID).max(MAX_BRIEF_REF_IDS).optional().describe("The brief's edgePaths[].id values this card concerns")
+}).optional().describe("Exception to a brief: name the governing brief version and the requirement it deviates from. A declared link, not drift detection. A bad or unknown ref is dropped with a warning; the card is still presented. To re-brief, present a new card against the new brief's id.");
 var TOOL_INPUT_SCHEMAS = {
   // #206 (I1) — `feature` is advertised on EVERY artifact-creating tool (the
   // whole point of slice 2: tag at the source so grouping recall stops leaking).
@@ -31841,7 +31979,8 @@ var TOOL_INPUT_SCHEMAS = {
   present_options: PresentOptionsInputSchema.extend({
     relatedFindings: external_exports.array(external_exports.string()).optional().describe("Artifact IDs of findings that motivated this decision"),
     feature: FEATURE_TAG,
-    presentedBy: PRESENTED_BY
+    presentedBy: PRESENTED_BY,
+    briefRef: BRIEF_REF
   }),
   present_spec: SpecContentSchema.extend({ title: ARTIFACT_TITLE, servedRequestId: SERVED_REQUEST_ID, feature: FEATURE_TAG, presentedBy: PRESENTED_BY }),
   present_plan: PlanContentSchema.extend({
@@ -34662,6 +34801,113 @@ Decline to review in detail at http://localhost:${reviewPort}`
   };
 }
 
+// src/mcp/brief-ref.ts
+var DROPPED = "briefRef dropped, so this card has no brief link:";
+function hasRawBriefRef(args) {
+  return !!args && typeof args === "object" && args.briefRef !== void 0;
+}
+function normalizeNewBriefRef(raw, artifacts, sessionId) {
+  if (raw === void 0) return { notes: [] };
+  const problems = briefRefProblems(raw);
+  if (problems.length > 0) {
+    return { notes: [`${DROPPED} ${problems.join("; ")}. Nothing was truncated; the card itself was presented. Fix the ref and present a new card if it should name its brief.`] };
+  }
+  const parsed = BriefRefSchema.parse(raw);
+  const ref = {
+    artifactId: parsed.artifactId,
+    ...parsed.requirementIds ? { requirementIds: [...parsed.requirementIds] } : {},
+    ...parsed.edgePathIds ? { edgePathIds: [...parsed.edgePathIds] } : {}
+  };
+  if (!artifacts) {
+    return { notes: [`${DROPPED} this session's artifacts couldn't be read to check ${ref.artifactId}. The card itself was presented.`] };
+  }
+  const target = artifacts.find((a) => a.id === ref.artifactId);
+  if (!target || target.sessionId !== sessionId) {
+    return { notes: [`${DROPPED} ${ref.artifactId} is not an artifact in this session. Other sessions aren't searched. The card itself was presented.`] };
+  }
+  if (target.type !== "spec") {
+    return { notes: [`${DROPPED} ${ref.artifactId} is a ${target.type}, not a brief (a present_spec artifact). The card itself was presented.`] };
+  }
+  const view = describeBriefPin(ref, artifacts, sessionId);
+  const notes = [`Linked: ${formatBriefPin(view)}. This is a declared link, not a check that the requirement is the right one.`];
+  if (view.closed) {
+    notes.push(`The pinned brief ${ref.artifactId} (v${view.version}) is ${view.status}. The link stays on that exact version and was not moved to a newer one. To raise this against the current brief, present a new card with its id.`);
+  }
+  for (const g of view.grains) {
+    const what = g.kind === "edgePath" ? "edge path" : "requirement";
+    if (g.match === "unknown") notes.push(`${what} ${JSON.stringify(g.id)} isn't in ${ref.artifactId} v${view.version}. It's kept and marked unknown.`);
+    if (g.match === "ambiguous") notes.push(`${what} ${JSON.stringify(g.id)} matches more than one row in ${ref.artifactId} v${view.version} (a legacy duplicate id). It's kept and marked ambiguous.`);
+  }
+  return { ref, notes };
+}
+function formatBriefNotes(n) {
+  return n.notes.length > 0 ? `
+
+${n.notes.join("\n")}` : "";
+}
+function savedBriefAdvisory(saved, args, artifacts) {
+  if (!saved) return "";
+  const read = readBriefRef(saved.briefRef);
+  if (read === void 0) {
+    return hasRawBriefRef(args) ? `
+
+No brief link was saved for ${saved.id}; the original reason is unavailable on replay. To link it, present a new card.` : "";
+  }
+  if (!read.ok) {
+    return `
+
+Brief link (current): the saved link${read.rawId ? ` to ${read.rawId}` : ""} is unreadable, so it's shown raw and marked unavailable.`;
+  }
+  const view = describeBriefPin(read.ref, artifacts, saved.sessionId);
+  return `
+
+Brief link (current, from the saved card): ${formatBriefPin(view)}.`;
+}
+function briefEchoOf(decision, artifacts) {
+  if (!decision) return null;
+  const read = readBriefRef(decision.briefRef);
+  if (read === void 0) return null;
+  if (!read.ok) {
+    return {
+      line: `Exception to an unreadable brief link${read.rawId ? ` (${read.rawId})` : ""}, version unknown`,
+      echo: { artifactId: read.rawId ?? null, version: "unknown", status: "unavailable", requirementIds: [], edgePathIds: [], grains: [], malformed: true }
+    };
+  }
+  const view = describeBriefPin(read.ref, artifacts, decision.sessionId);
+  return {
+    line: formatBriefPin(view),
+    echo: {
+      artifactId: read.ref.artifactId,
+      version: view.available && typeof view.version === "number" ? view.version : "unknown",
+      status: view.available && view.status ? view.status : "unavailable",
+      requirementIds: [...read.ref.requirementIds ?? []],
+      edgePathIds: [...read.ref.edgePathIds ?? []],
+      grains: view.grains.map((g) => ({ kind: g.kind, id: g.id, match: g.match ?? "unavailable" }))
+    }
+  };
+}
+function frozenBriefRefOf(candidates) {
+  if (candidates.length === 0) return { found: false };
+  let first;
+  let value;
+  for (const c of candidates) {
+    if (!Object.prototype.hasOwnProperty.call(c, "frozenBriefRef")) return { found: false };
+    const raw = c.frozenBriefRef;
+    let ref;
+    if (raw !== null) {
+      const parsed = BriefRefSchema.safeParse(raw);
+      if (!parsed.success) return { found: false };
+      ref = parsed.data;
+    }
+    const key = stableStringify(ref ?? null);
+    if (first === void 0) {
+      first = key;
+      value = ref;
+    } else if (key !== first) return { found: false };
+  }
+  return value ? { found: true, ref: value } : { found: true };
+}
+
 // src/mcp/stance-admission.ts
 var STANCE_MESSAGES = {
   blockHint: "If this is a false positive, ask your pair to choose **Allow this proposal once** on the block card. Then retry this **identical** call (every argument the same, not only the matched text). You cannot grant this yourself.",
@@ -34721,7 +34967,8 @@ function withLine(response, line) {
 ${line}` }, ...rest] };
 }
 async function admitBlockedProposal(ctx, input) {
-  const { toolName, handle, pre, resolved } = input;
+  const { toolName, handle, pre } = input;
+  let resolved = input.resolved;
   const fits = !!resolved && Buffer.byteLength(JSON.stringify(resolved.snapshot)) <= MAX_SNAPSHOT_BYTES;
   const exceptionFields = { callFingerprint: handle.callFingerprint, ...fits ? { snapshot: resolved.snapshot, preconditions: resolved.preconditions } : {} };
   const blockOf = (event) => ({ ...event, ...exceptionFields });
@@ -34735,9 +34982,16 @@ async function admitBlockedProposal(ctx, input) {
   }
   let candidates = [];
   let inactiveLine = "";
+  let rebound = false;
   try {
     const seen = await ctx.store.inspectStanceExceptions(handle.callFingerprint);
     candidates = seen.candidates ?? [];
+    const frozen = input.rebindFrozenBriefRef && resolved ? frozenBriefRefOf(seen.candidates ?? []) : { found: false };
+    if (frozen.found && input.rebindFrozenBriefRef && resolved) {
+      const next = input.rebindFrozenBriefRef(frozen.ref);
+      rebound = stableStringify(next.snapshot) !== stableStringify(resolved.snapshot);
+      resolved = next;
+    }
     const first = (seen.inactive ?? [])[0];
     if (first?.state) inactiveLine = STANCE_MESSAGES.inactive(first.state, first.artifactId, first.ceilingAt);
   } catch {
@@ -34758,7 +35012,7 @@ async function admitBlockedProposal(ctx, input) {
       block: { ...pre.event }
     }
   });
-  if (result.status === "admitted" || result.status === "replayed") return { admitted: result };
+  if (result.status === "admitted" || result.status === "replayed") return { admitted: result, rebound };
   const dep = result.dependency;
   if (result.code === "stance_exception_dependencies_changed" && dep && typeof result.newBlockId === "string") {
     void ctx.store.recordMetric?.({ kind: "preflight_block", source: "session" });
@@ -34770,12 +35024,34 @@ ${STANCE_MESSAGES.blockHint}`) };
 }
 
 // src/mcp/tools/present-options.ts
+async function readArtifacts(ctx) {
+  try {
+    return await ctx.store.getArtifacts();
+  } catch {
+    return null;
+  }
+}
+function withSuffix(result, suffix) {
+  if (!suffix) return result;
+  const [first, ...rest] = result.content;
+  return { ...result, content: [{ type: "text", text: `${first.text}${suffix}` }, ...rest] };
+}
+async function normalizeBrief(ctx, args) {
+  if (!hasRawBriefRef(args)) return { notes: [] };
+  return normalizeNewBriefRef(args.briefRef, await readArtifacts(ctx), ctx.store.getSessionId());
+}
+async function savedAdvisoryFor(ctx, artifactId, args) {
+  if (!hasRawBriefRef(args)) return "";
+  const arts = await readArtifacts(ctx);
+  if (!arts) return "";
+  return savedBriefAdvisory(arts.find((a) => a.id === artifactId), args, arts);
+}
 async function handlePresentOptions(ctx, args) {
   const validated = validatePresentOptionsInput(args);
   if (!validated.ok) return validated.error;
   const op = await beginStanceOperation(ctx, "present_options", args);
   if (op.refusal) return op.refusal;
-  if (op.replay) return admittedResult(op.replay);
+  if (op.replay) return withSuffix(admittedResult(op.replay), await savedAdvisoryFor(ctx, String(op.replay.artifactId), args));
   const { context, options: validatedOptions, stakes } = validated.data;
   const title = validated.data.title;
   const artifactTitle = title ?? context;
@@ -34784,38 +35060,45 @@ async function handlePresentOptions(ctx, args) {
   );
   const pre = await preflightArtifact(ctx, "present_options", "decision", artifactTitle, validated.data, { deferRecord: true });
   if (!pre.ok) {
-    const snapshot = wireForm({
+    const brief2 = await normalizeBrief(ctx, args);
+    const snapshotWith = (briefRef) => wireForm({
       kind: "create",
       type: "decision",
       title: artifactTitle,
       content: { context, ...title ? { title } : {}, options: proposedOptions, stakes },
       relatedArtifactIds: args?.relatedFindings,
-      feature: args?.feature
+      feature: args?.feature,
+      ...briefRef ? { briefRef } : {}
     });
     const outcome = await admitBlockedProposal(ctx, {
       toolName: "present_options",
       handle: op.handle,
       pre,
-      resolved: { snapshot, preconditions: [] },
-      regate: (exclude) => preflightArtifact(ctx, "present_options", "decision", artifactTitle, validated.data, { deferRecord: true, excludeStances: exclude })
+      resolved: { snapshot: snapshotWith(brief2.ref), preconditions: [] },
+      regate: (exclude) => preflightArtifact(ctx, "present_options", "decision", artifactTitle, validated.data, { deferRecord: true, excludeStances: exclude }),
+      // The claim reuses the pin the human allowed, not this call's lookup.
+      rebindFrozenBriefRef: (frozen) => ({ snapshot: snapshotWith(frozen), preconditions: [] })
     });
     if ("response" in outcome) return outcome.response;
-    const admitted = (await ctx.store.getArtifacts()).find((a) => a.id === String(outcome.admitted.artifactId));
+    const arts = await ctx.store.getArtifacts();
+    const admitted = arts.find((a) => a.id === String(outcome.admitted.artifactId));
     notifyResourcesListChanged(ctx.server);
     if (admitted) await maybeEmitTaskHandle(ctx.server, admitted, ctx.store);
-    return admittedResult(outcome.admitted, ` They can select at localhost:${ctx.store.getLivePort?.() ?? ctx.port}.`);
+    const briefLine = outcome.admitted.status === "admitted" && !outcome.rebound ? formatBriefNotes(brief2) : savedBriefAdvisory(admitted, args, arts);
+    return admittedResult(outcome.admitted, ` They can select at localhost:${ctx.store.getLivePort?.() ?? ctx.port}.${briefLine}`);
   }
   const dedup = await ctx.helpers.beginPresentIdempotency("present_options", hashPresentArgs(args));
   if (dedup.duplicate) {
     const dupArt = (await ctx.store.getArtifacts()).find((a) => a.id === dedup.duplicate.artifactId);
     const dupDecisionId = dupArt?.content?.decisionId;
-    return buildDedupResponse(
+    return withSuffix(buildDedupResponse(
       dedup.duplicate,
       ctx.store.getLivePort?.() ?? ctx.port,
       typeof dupDecisionId === "string" ? { decisionId: dupDecisionId } : void 0
-    );
+    ), await savedAdvisoryFor(ctx, dedup.duplicate.artifactId, args));
   }
   const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
+  const brief = await normalizeBrief(ctx, args);
   const id = `art_${nanoid3(10)}`;
   const decisionId = `dec_${nanoid3(10)}`;
   const content = { context, ...title ? { title } : {}, options: proposedOptions, decisionId, stakes };
@@ -34829,7 +35112,8 @@ async function handlePresentOptions(ctx, args) {
       relatedArtifactIds: args?.relatedFindings,
       feature: args?.feature,
       // #533 — the presenting agent's label (check_feedback ownership filter).
-      presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : void 0
+      presentedBy: typeof args?.presentedBy === "string" ? args.presentedBy : void 0,
+      ...brief.ref ? { briefRef: brief.ref } : {}
     });
   } catch (e) {
     dedup.abort?.();
@@ -34870,7 +35154,7 @@ async function handlePresentOptions(ctx, args) {
     stakes
   });
   return {
-    content: [{ type: "text", text: `Decision "${artifactTitle}" presented to human (${decisionId}, artifact ${id}). They can select at localhost:${reviewPort}. Call check_feedback for their choice.${formatPreflightTraceSummary(pre.trace)}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }],
+    content: [{ type: "text", text: `Decision "${artifactTitle}" presented to human (${decisionId}, artifact ${id}). They can select at localhost:${reviewPort}. Call check_feedback for their choice.${formatBriefNotes(brief)}${formatPreflightTraceSummary(pre.trace)}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}` }],
     structuredContent: { artifactId: id, decisionId }
   };
 }
@@ -35685,14 +35969,18 @@ ${lines.join("\n")}`
       const notChosen = d.options.filter((o) => o.id !== d.response?.optionId).map((o) => `"${o.title}"`);
       const notChosenNote = option && notChosen.length > 0 ? `
     Not picked this time: ${notChosen.join(", ")}. This is context only, not a rejection \u2014 no stance was recorded and they stay open to propose later.` : "";
-      formattedDecisions.push(`- Decision "${decisionLabel}": selected "${option?.title ?? d.response?.optionId}"${d.response?.reasoning ? ` (reasoning: ${d.response.reasoning})` : ""}${notChosenNote}`);
+      const brief = briefEchoOf(postWakeArtifacts.find((a) => a.id === d.artifactId && a.type === "decision"), postWakeArtifacts);
+      const briefNote = brief ? `
+    ${brief.line} (the link saved on this card; context, not an acceptance).` : "";
+      formattedDecisions.push(`- Decision "${decisionLabel}": selected "${option?.title ?? d.response?.optionId}"${d.response?.reasoning ? ` (reasoning: ${d.response.reasoning})` : ""}${notChosenNote}${briefNote}`);
       structuredDecisions.push({
         decisionId: d.decisionId,
         artifactId: d.artifactId,
         context: d.context,
         selectedOptionId: d.response?.optionId,
         selectedTitle: option?.title,
-        reasoning: d.response?.reasoning
+        reasoning: d.response?.reasoning,
+        ...brief ? { briefRef: brief.echo } : {}
       });
     }
     if (recordedIds.length > 0) await store.acknowledgeDecisions(recordedIds);
@@ -36406,7 +36694,13 @@ async function handleReviseArtifact(ctx, args) {
       ...old.featureId ? { feature: old.featureId } : {},
       // #533 — the successor keeps its presenter, so a subagent filtering
       // check_feedback by presentedBy still owns the feedback on v2.
-      ...old.presentedBy ? { presentedBy: old.presentedBy } : {}
+      ...old.presentedBy ? { presentedBy: old.presentedBy } : {},
+      // #572 slice A — a supersede (a decision "tune") CARRIES the exact brief
+      // pin: content replacement never erases it, and it is never moved to a
+      // newer brief (no implicit latest lookup). Re-briefing = a new card.
+      // The admitted path carries the same pin via reviseSnapshot, bound by
+      // reviseInheritedHash.
+      ...carriedBriefRef(old) ? { briefRef: carriedBriefRef(old) } : {}
     });
     await store.updateArtifactStatus(old.id, "superseded", "agent_supersede");
     await maybeUpdateTaskStatus(server, old.id, store);
@@ -38278,7 +38572,9 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
                   context: { type: "string" },
                   selectedOptionId: { type: "string" },
                   selectedTitle: { type: "string" },
-                  reasoning: { type: "string" }
+                  reasoning: { type: "string" },
+                  // #572 slice A — the brief pin saved on the decision card.
+                  briefRef: { type: "object", description: `#572 \u2014 the brief this card was an exception to, from the saved card: artifactId, version (a number, or "unknown" when that exact brief is unavailable), status, requirementIds, edgePathIds, and each grain's match. Context only; it authorizes nothing.` }
                 }
               }
             },
