@@ -31190,14 +31190,14 @@ function checkIds(ids, label, field2, numericIsAmbiguous, problems) {
       return;
     }
     if (id.length > MAX_SPEC_ID_LENGTH) {
-      problems.push(`${at} ${show(id)} is ${id.length} chars \u2014 shorten it to ${MAX_SPEC_ID_LENGTH} or fewer`);
+      problems.push(`${at} ${show(id)} is ${id.length} chars \u2014 rename it to ${MAX_SPEC_ID_LENGTH} or fewer chars; comment threads on that row from earlier versions won't carry over`);
     }
     if (numericIsAmbiguous && /^\d+$/.test(id)) {
-      problems.push(`${at} ${show(id)} is purely numeric, which collides with the position-based anchor \u2014 use a word id such as "wake" or "ep-${id.slice(0, 8)}"`);
+      problems.push(`${at} ${show(id)} is purely numeric, which collides with the position-based anchor \u2014 rename numeric edge-path id ${show(id)} (e.g. to "ep-${id.slice(0, MAX_SPEC_ID_LENGTH - 3)}"); comment threads on that row from earlier versions won't carry over`);
     }
     const prev = firstAt.get(id);
     if (prev !== void 0) {
-      problems.push(`${at} ${show(id)} duplicates ${field2}[${prev}].id \u2014 every ${label} needs its own id`);
+      problems.push(`${at} ${show(id)} duplicates ${field2}[${prev}].id \u2014 rename one of them (every ${label} needs its own id); comment threads on the renamed row from earlier versions won't carry over`);
     } else {
       firstAt.set(id, i);
     }
@@ -31230,7 +31230,7 @@ function specIdError(content) {
       type: "text",
       text: `INPUT_VALIDATION_FAILED: spec ids refused \u2014 comment threads anchor to these ids, so each must be unique, non-blank, at most ${MAX_SPEC_ID_LENGTH} chars, and (for edge paths) not purely numeric; task links must name a requirement in this spec:
 ${listed.map((p) => `- ${p}`).join("\n")}${more}
-Fix the ids and send the spec again (present_spec, or revise_artifact for a revision). Keep an id that already existed unchanged so its threads carry over. The artifact was NOT created.`
+Fix the ids and send the spec again (present_spec, or revise_artifact for a revision). Keep an id that is still valid unchanged so its threads carry over; ids listed above must be renamed, and threads on a renamed id stay on the earlier version (nothing is migrated). The artifact was NOT created.`
     }],
     isError: true,
     _meta: { code: "INPUT_VALIDATION_FAILED", retryable: true }
