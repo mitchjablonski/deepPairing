@@ -229,22 +229,33 @@ one exception stays the trivial carve-out above.
   they rarely have to.
 
 **Delegated work — the human hands you the task.** Under `/deeppairing:delegate`
-(or a level that quiets the run), the shape is: ONE approved brief (`present_spec`),
-a quiet build, ONE understanding packet (`present_changeset`, then a single
-`present_debrief`). Omit `confidence` on every artifact in the run: at `balanced`
-a `high` draft arms the auto-approve countdown.
+(or a level that quiets the run), the shape is: a brief (`present_spec`) ONLY when
+there's a real decision, a quiet build, ONE understanding packet (`present_changeset`,
+then a single `present_debrief`), and a short terminal summary. Omit `confidence` on
+every artifact in the run: at `balanced` a `high` draft arms the auto-approve countdown.
 
+- **The brief is conditional.** Post it when the risk class is `escalated`, the
+  will-ask list is non-empty, or there's a genuine architectural or hard-to-reverse
+  fork. Otherwise state the five answers (objective, acceptance, decide alone,
+  will ask: none, risk class) in chat and start: no card, no `check_feedback` wait
+  for an approval that can't come. Without a brief, a guardrail path is covered
+  only if an approved artifact from the last ~8 hours lists that exact file, so
+  the guardrail backstop still prompts on a guardrail path; brief (escalated)
+  before that edit. Under `supervised`, always post the brief.
+- **End with a terminal summary:** what landed, what to check first, anything
+  deferred. That's the default touchpoint; the packet is the record.
 - **Required decisions are never capped or batched:** a will-ask item (yours or
   added by your pair), an architectural or hard-to-reverse fork, uncertainty about
   whether a call is yours or how risky it is, a gate block you cannot route around,
   done being unreachable as written. **Uncertainty escalates.** Batch only what you
   are sure is your own.
 - **Reclassification boundary.** An approved low-risk brief silences the guardrail hook only for its covered files, so
-  you are the check. A guardrail path, a file outside the brief's `file_map` visual in
-  another package, a new dependency, or a schema or CI change means stop,
-  supersede the brief with `revise_artifact` and new `content` whose `context`
-  says `Risk class: escalated` and whose `file_map` visual lists the new files,
-  then wait for approval.
+  you are the check. A guardrail path, a file outside the brief's `file_map` visual
+  in another package (after a quiet start: any file in another package than the
+  task names), a new dependency, or a schema or CI change means stop and brief: supersede the brief with `revise_artifact` and new
+  `content` whose `context` says `Risk class: escalated` and whose `file_map` visual
+  lists the new files, or after a quiet start post that brief now. Then wait for
+  approval.
 - **Packet caps.** `needsYourEyes` is three at most, ranked, with lines. Proof is
   what you ran; `not-run` is valid with a reason. One debrief, superseded, never
   duplicated.
@@ -254,7 +265,8 @@ a `high` draft arms the auto-approve countdown.
 
 Words to the agent:
 
-- "The brief is the only card before approval. One finding that matters goes in its
+- "No real decision, no brief: say the five answers in chat and build. When there
+  is a brief, it is the only card before approval. One finding that matters goes in its
   `context`. Under `escalated`, a plan may follow the approved brief only when the
   order of changes needs agreement, and the brief says so."
 - "Your will-ask list is a promise. Everything on it gets a card, however small.
@@ -262,7 +274,7 @@ Words to the agent:
 - "If you are not sure a call is yours, or not sure how risky it is, ask.
   Uncertainty escalates. Batch only what you are sure of."
 - "A guardrail path, an undeclared package, a new dependency, a schema or CI change
-  under a low-risk brief means stop and re-brief. The budget does not apply to this."
+  under a low-risk brief or a quiet start means stop and brief. The budget does not apply to this."
 - "Three hotspots, ranked, each with lines. Proof is what you ran. `not-run` is a
   valid outcome with a reason."
 
@@ -739,10 +751,12 @@ opt-in [strict-stop compatibility mode](../../../docs/preflight-modes.md):
   malformed or out-of-root entries make the artifact's declaration unusable;
   any invalid entry invalidates the whole artifact's coverage. Otherwise an
   eligible same-session declaration blocks older scopeless siblings from
-  bypassing scope. Without such a declaration, approved scopeless ceremony
-  covers only the same usable event session (and the same existing agent when
+  bypassing scope. Without such a declaration, an approved scopeless **spec or
+  plan** (the run-scoping types) covers only the same usable event session (and the same existing agent when
   both sides provide usable IDs; stored artifacts currently have no agent
-  attribution). Unrelated declarations do not veto this fallback. Draft, stale
+  attribution). A scopeless findings or options card never arms this fallback
+  (#569): list the guardrail file in its `file_map` visual to cover it.
+  Unrelated declarations do not veto this fallback. Draft, stale
   and demo artifacts neither authorize nor veto. **A just-presented draft does
   not count.** It asks at most **once per guardrail class per 30 minutes** — **per
   file** for migrations and secrets — scoped to `session_id` plus the existing

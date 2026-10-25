@@ -457,6 +457,11 @@ function guardrailScopeKey(category: string, identity: PreflightIdentity): strin
   return `scope:${session}:${agent ?? ""}:${category}`;
 }
 
+/** #569 — the pre-work types whose approval, WITHOUT a file declaration, can
+ *  license guardrail edits in the same session: the run-scoping ones. Findings
+ *  (`research`) and options (`decision`) cover only the files they list. */
+export const SCOPELESS_FALLBACK_TYPES: ReadonlySet<string> = new Set(["spec", "plan"]);
+
 type Coverage = { declared: boolean; paths: string[] | null };
 function object(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -539,7 +544,9 @@ function artifactCoverage(projectRoot: string, artifact: Record<string, unknown>
  *     → reachable:false → the caller FAILS OPEN and never asks. We cannot tell
  *     whether the ceremony happened, and a hook must not block on ignorance.
  *   - reachable, applicable approved research/decision/spec/plan within CEREMONY_MAX_AGE_MS
- *     → hasLiveCeremony:true → pass silently.
+ *     → hasLiveCeremony:true → pass silently. "Applicable" = exact file_map /
+ *     plan-file coverage (any of the four types, any session), or — scopeless —
+ *     an approved spec or plan in the same session (#569: SCOPELESS_FALLBACK_TYPES).
  *   - reachable, nothing live → the exact skip case → ask.
  *
  * An individual unparseable artifacts.json is skipped, not fatal — one corrupt
@@ -599,7 +606,14 @@ export function readSessionCeremony(projectRoot: string, now: number = Date.now(
         if (scope.targetPath && coverage.paths?.includes(scope.targetPath)) return { reachable: true, hasLiveCeremony: true };
         if (id !== currentSession) continue;
         if (coverage.declared) sameSessionDeclaration = true;
-        else sameSessionFallback = true;
+        // #569 — only a RUN-SCOPING artifact (an approved spec or plan) arms the
+        // scopeless same-session fallback. A scopeless findings or options card
+        // settles one question, not the run: pre-#569 any approved one silenced
+        // every guardrail class for the whole session for 8h, which a quiet
+        // delegate start (no brief to veto it) made reachable through its first
+        // fork card. Such cards still authorize through exact file_map coverage
+        // above, and still veto when they declare files.
+        else if (SCOPELESS_FALLBACK_TYPES.has(artifact.type as string)) sameSessionFallback = true;
       }
     } catch {
       continue;

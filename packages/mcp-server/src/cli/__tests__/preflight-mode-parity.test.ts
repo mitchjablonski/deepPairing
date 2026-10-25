@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { canonicalProjectDir } from "../../git-worktree.js";
 import { ensurePreflightHook } from "../setup-tasks.js";
+import { deriveSessionId } from "../../session-id.js";
 import { evaluatePreflightHook, PREFLIGHT_MODE_WARNING, resolvePreflightMode, sanitizeStrictReason } from "../preflight-hook-core.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../..");
@@ -115,6 +116,24 @@ describe.each(["init", "plugin"] as const)("#544 %s mode contract", copy => {
     }
     expect(f.state().guardrailAsks).toEqual(stamps);
     expect(f.run(undefined, input).stdout).toBe(""); // default dedup unchanged
+  });
+
+  it("#569 a quiet delegate run's approved scopeless fork card licenses no guardrail edit (ask, and deny under strict-stop)", () => {
+    const f = fixture(copy);
+    const sd = path.join(f.root, ".deeppairing/sessions", deriveSessionId(f.root, "s1").sessionId);
+    fs.mkdirSync(sd, { recursive: true });
+    const at = new Date().toISOString();
+    fs.writeFileSync(path.join(sd, "artifacts.json"), JSON.stringify([
+      { id: "cs", type: "changeset", status: "draft", createdAt: at },
+      { id: "d1", type: "decision", status: "approved", createdAt: at },
+    ]));
+    const input = (file: string) => JSON.stringify({ ...JSON.parse(f.payload(file, "name: ci")), session_id: "s1" });
+    const denied = JSON.parse(f.run("strict-stop", input(".github/workflows/ci.yml")).stdout);
+    expect(denied.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(denied.stopReason).toContain("GUARDRAIL_ESCALATION");
+    const asked = JSON.parse(f.run(undefined, input("migrations/001.sql")).stdout);
+    expect(asked.hookSpecificOutput.permissionDecision).toBe("ask");
+    expect(f.run(undefined, input("src/safe.ts")).stdout).toBe("");
   });
 
   it("strict -> ask does not suppress the first ordinary ask", () => {

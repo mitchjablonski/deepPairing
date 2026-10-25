@@ -208,8 +208,9 @@ deepPairing installs three Claude Code hooks, all local-only, network-free, and 
     authorize across sessions. No prose, glob or directory-prefix inference is
     used. Any invalid entry makes that artifact's declared coverage unusable.
     Eligible declared coverage in the event's session prevents an older
-    scopeless sibling from bypassing it. Otherwise approved scopeless ceremony
-    can authorize only that same usable session; unrelated declarations do not
+    scopeless sibling from bypassing it. Otherwise an approved scopeless spec or
+    plan (never a scopeless findings or options card, #569) can authorize only
+    that same usable session; unrelated declarations do not
     veto it. Draft, stale and demo artifacts neither authorize nor veto fallback.
     No producer agent identity is invented when artifacts carry none.
     Those paths match at **any depth**, not only at the repository
