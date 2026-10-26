@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   coerceChangesetContent,
-  readBriefRef,
+  carryableBriefRef,
   type Artifact,
   type BriefRef,
   type ProposalPrecondition,
@@ -183,12 +183,15 @@ export function reviseInheritedHash(target: Artifact): string {
 /**
  * #572 slice A — the pin a revision CARRIES from its target: the exact saved
  * ref, never re-resolved and never retargeted (re-briefing means presenting a
- * new card). A stored ref that isn't readable isn't carried; the predecessor
- * keeps it untouched.
+ * new card). #601 review — carry reads SHAPE ONLY (carryableBriefRef), not the
+ * policy-aware presentation classifier (readBriefRef): a shape-valid legacy
+ * pin that presents as unavailable is still carried unchanged onto the
+ * successor (normal supersede and the admitted snapshot, so its digest too).
+ * Only a ref that isn't shape-readable at all isn't carried; the predecessor
+ * keeps it untouched either way.
  */
 export function carriedBriefRef(target: Artifact): BriefRef | undefined {
-  const read = readBriefRef(target.briefRef);
-  return read?.ok ? read.ref : undefined;
+  return carryableBriefRef(target.briefRef);
 }
 
 export function reviseTargetPrecondition(target: Artifact): ProposalPrecondition {

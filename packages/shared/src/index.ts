@@ -226,6 +226,7 @@ export {
   BriefRefSchema,
   briefRefProblems,
   readBriefRef,
+  carryableBriefRef,
   matchBriefGrain,
   describeBriefPin,
   formatBriefPin,

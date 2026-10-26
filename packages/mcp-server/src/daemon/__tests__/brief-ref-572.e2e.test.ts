@@ -19,6 +19,8 @@ import type { Artifact, ArtifactStatus } from "@deeppairing/shared";
 import { StanceWorld, holdStance, registrationTokenOf, type Wrapper } from "./stance-exceptions.harness.js";
 import { hashPresentArgs } from "../../mcp/tool-helpers.js";
 import { reviseInheritedHash } from "../../mcp/proposal-resolution.js";
+import { briefEchoOf } from "../../mcp/brief-ref.js";
+import { readBriefRef } from "@deeppairing/shared";
 
 let world: StanceWorld;
 afterEach(async () => { await world?.dispose(); });
@@ -417,5 +419,76 @@ describe("#572 matrix — persistence, reload and a malformed stored ref", () =>
     const reloaded = decisions(w2.sessionId);
     expect(reloaded.find((a) => a.id === good!.id)!.briefRef).toEqual(briefRef);
     expect(reloaded.find((a) => a.id === other!.id)!.briefRef).toEqual({ artifactId: 42, requirementIds: "REQ-1" });
+  });
+});
+
+describe("#601 review — supersede carries a shape-valid legacy pin unchanged, even when it presents as unavailable", () => {
+  /** Shape-valid but out of the new-ref policy (as an older writer left it). */
+  const LEGACY_PINS = [
+    { artifactId: "art_brief1", requirementIds: ["REQ-1", "REQ-1"] },
+    { artifactId: "art_brief1", requirementIds: ["  "] },
+    { artifactId: "art_brief1", requirementIds: Array.from({ length: 9 }, (_, i) => `REQ-${i}`) },
+    { artifactId: "art_brief1", edgePathIds: ["a".repeat(65)] },
+  ];
+
+  /** A card whose stored pin is `pin`, set on the daemon store's own record. */
+  async function cardWithLegacyPin(w: Wrapper, pin: Record<string, unknown>, title: string): Promise<Artifact> {
+    await w.call("present_options", plainArgs({ title }));
+    const card = newestDecision(w.sessionId);
+    card.briefRef = structuredClone(pin);
+    return card;
+  }
+
+  function expectUnavailable(a: Artifact, all: Artifact[]): void {
+    expect(readBriefRef(a.briefRef)?.ok).toBe(false);
+    expect(briefEchoOf(a, all)?.echo).toMatchObject({ version: "unknown", status: "unavailable", malformed: true });
+  }
+
+  it("normal supersede: predecessor and successor briefRef are equal; both still present as unavailable", async () => {
+    world = new StanceWorld();
+    const w = await world.wrapper();
+    seedSpec(w.sessionId, "art_brief1");
+    for (const [i, pin] of LEGACY_PINS.entries()) {
+      const v1 = await cardWithLegacyPin(w, pin, `legacy ${i}`);
+      const res = await w.call("revise_artifact", { artifactId: v1.id, mode: "supersede", reason: "tune", content: { context: `Which logger now (${i})?`, options: OPTIONS } });
+      expect(res.isError, JSON.stringify(pin)).toBeFalsy();
+      const v2 = decisions(w.sessionId).find((a) => a.parentId === v1.id)!;
+      expect(v2.briefRef).toEqual(pin);
+      expect(arts(w.sessionId).find((a) => a.id === v1.id)!.briefRef).toEqual(pin);
+      expectUnavailable(v2, arts(w.sessionId));
+      expectUnavailable(v1, arts(w.sessionId));
+    }
+  });
+
+  it("admitted supersede: the snapshot (and so its digest) carries the legacy pin; the successor equals the predecessor", async () => {
+    world = new StanceWorld();
+    const w = await world.wrapper();
+    seedSpec(w.sessionId, "art_brief1");
+    const pin = LEGACY_PINS[0]!;
+    const v1 = await cardWithLegacyPin(w, pin, "legacy admitted");
+    const revise = { artifactId: v1.id, mode: "supersede", reason: "Name the removal", content: { context: "Remove global mutable state: which owner?", options: OPTIONS } };
+    const { block } = await blockThenAllow(w, revise, "revise_artifact");
+    expect(block.snapshot!.briefRef).toEqual(pin);
+    const res = await w.call("revise_artifact", revise);
+    expect(res.isError).toBeFalsy();
+    const v2 = decisions(w.sessionId).find((a) => a.parentId === v1.id)!;
+    expect(v2.admission?.effectiveDigest).toBe(block.effectiveDigest);
+    expect(v2.briefRef).toEqual(pin);
+    expect(arts(w.sessionId).find((a) => a.id === v1.id)!.briefRef).toEqual(pin);
+    expectUnavailable(v2, arts(w.sessionId));
+  });
+
+  it("changing the raw legacy target pin between grant and claim still invalidates the allowance", async () => {
+    world = new StanceWorld();
+    const w = await world.wrapper();
+    seedSpec(w.sessionId, "art_brief1");
+    const v1 = await cardWithLegacyPin(w, LEGACY_PINS[0]!, "legacy changed");
+    const revise = { artifactId: v1.id, mode: "supersede", reason: "Name the removal", content: { context: "Remove global mutable state: which owner?", options: OPTIONS } };
+    await blockThenAllow(w, revise, "revise_artifact");
+    v1.briefRef = { artifactId: "art_brief1", requirementIds: ["REQ-1", "REQ-1", "REQ-1"] };
+    const res = await w.call("revise_artifact", revise);
+    expect(res.isError).toBe(true);
+    expect(res.text).toContain(`depended on the state of ${v1.id}, which changed`);
+    expect(decisions(w.sessionId).filter((a) => a.parentId === v1.id)).toHaveLength(0);
   });
 });

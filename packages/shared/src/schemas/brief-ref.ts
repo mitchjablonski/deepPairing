@@ -103,6 +103,21 @@ export function readBriefRef(raw: unknown): { ok: true; ref: BriefRef } | { ok: 
   return { ok: false, ...(rawId !== undefined ? { rawId } : {}) };
 }
 
+/**
+ * HISTORICAL CARRY reader (shape only). A revision carries its predecessor's
+ * stored relationship exactly as far as it is shape-readable — including a
+ * legacy pin that is out of the new-ref policy (duplicate, blank, over-cap)
+ * and that `readBriefRef` therefore PRESENTS as unavailable. Carry is not
+ * presentation: it never applies `briefRefProblems`, never rejects the
+ * artifact and never normalizes the arrays. Undefined when nothing
+ * shape-readable is stored.
+ */
+export function carryableBriefRef(raw: unknown): BriefRef | undefined {
+  if (raw === undefined) return undefined;
+  const parsed = BriefRefSchema.safeParse(raw);
+  return parsed.success ? parsed.data : undefined;
+}
+
 /** known = exactly one explicit-id match; unknown = none; ambiguous = 2+. */
 export type BriefGrainMatch = "known" | "unknown" | "ambiguous";
 
