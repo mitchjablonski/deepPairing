@@ -25528,6 +25528,12 @@ function readBriefRef(raw) {
   const rawId = raw && typeof raw === "object" && typeof raw.artifactId === "string" ? raw.artifactId : void 0;
   return { ok: false, ...rawId !== void 0 ? { rawId } : {} };
 }
+function carryableBriefRef(raw) {
+  if (raw === void 0)
+    return void 0;
+  const parsed = BriefRefSchema.safeParse(raw);
+  return parsed.success ? parsed.data : void 0;
+}
 function matchBriefGrain(rows, id) {
   if (!Array.isArray(rows))
     return "unknown";
@@ -30720,8 +30726,7 @@ function reviseInheritedHash(target) {
   }));
 }
 function carriedBriefRef(target) {
-  const read = readBriefRef(target.briefRef);
-  return read?.ok ? read.ref : void 0;
+  return carryableBriefRef(target.briefRef);
 }
 function reviseTargetPrecondition(target) {
   return {

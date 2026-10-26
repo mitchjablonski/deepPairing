@@ -8,6 +8,7 @@ import {
   formatBriefPin,
   matchBriefGrain,
   readBriefRef,
+  carryableBriefRef,
   MAX_SPEC_ID_LENGTH,
 } from "../../index.js";
 
@@ -162,5 +163,24 @@ describe("describeBriefPin / formatBriefPin — the exact pin, same session, no 
       expect(view.grains.every((g) => g.match === undefined)).toBe(true);
       expect(formatBriefPin(view)).toContain("Exception to brief art_b1 (version unknown, brief unavailable)");
     }
+  });
+});
+
+describe("#601 review — carryableBriefRef is shape-only (historical carry), separate from presentation", () => {
+  it("carries shape-valid out-of-policy refs exactly, without normalizing arrays", () => {
+    for (const ref of [
+      { artifactId: "art_b1", requirementIds: ["REQ-1", "REQ-1"] },
+      { artifactId: "art_b1", requirementIds: ["  "] },
+      { artifactId: "art_b1", requirementIds: Array.from({ length: 9 }, (_, i) => `R${i}`) },
+      { artifactId: "x".repeat(65), edgePathIds: ["a".repeat(65)] },
+    ]) {
+      expect(readBriefRef(ref)?.ok).toBe(false);
+      expect(carryableBriefRef(ref)).toEqual(ref);
+    }
+  });
+  it("carries nothing for an absent or shape-invalid ref", () => {
+    expect(carryableBriefRef(undefined)).toBeUndefined();
+    expect(carryableBriefRef({ artifactId: 3 })).toBeUndefined();
+    expect(carryableBriefRef({ artifactId: "art_b1", requirementIds: "REQ-1" })).toBeUndefined();
   });
 });
