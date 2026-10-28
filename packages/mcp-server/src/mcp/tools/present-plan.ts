@@ -5,6 +5,7 @@ import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
 import { resolveProjectRoot } from "../../project-root.js";
 import { scanSkeletonFences } from "../../skeleton-scope.js";
+import { attachSkeletonSnapshot } from "../skeleton-snapshot.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 /**
@@ -12,12 +13,16 @@ import type { ToolContext, ToolResult } from "./types.js";
  * `skelId` with no fence on disk (or a fence no step claims) is a plan that
  * doesn't match the code it describes. Reported, not refused. Never throws.
  */
-export function skeletonPlanNote(steps: Array<{ skelId?: string }>): string {
+export function skeletonPlanNote(
+  steps: Array<{ skelId?: string }>,
+  // Parity PR 2 — the code-view snapshot already walked the tree; reuse it.
+  scan?: ReturnType<typeof scanSkeletonFences>,
+): string {
   try {
     const ids = steps.map((st) => st.skelId).filter((id): id is string => typeof id === "string" && id.length > 0);
     if (ids.length === 0) return "";
     const root = resolveProjectRoot();
-    const { fences, errors } = scanSkeletonFences(root.worktree?.workspaceRoot ?? root.projectRoot);
+    const { fences, errors } = scan ?? scanSkeletonFences(root.worktree?.workspaceRoot ?? root.projectRoot);
     const onDisk = new Set(fences.map((f) => f.id));
     const claimed = new Set(ids);
     const missing = [...claimed].filter((id) => !onDisk.has(id));
@@ -49,7 +54,14 @@ export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<To
   const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
 
   const id = `art_${nanoid(10)}`;
-  const content = { steps: planSteps, estimatedChanges, ...(visuals ? { visuals } : {}) };
+  // Skeleton plans, parity PR 2 — a plan with skelId steps carries its skeleton
+  // AS CODE: the fenced (and file-map "create") files are read from disk into
+  // annotated_code visuals (stable id per path) after the agent's own visuals.
+  // A plan without skelId steps is the same object, byte-unchanged.
+  const agentContent = { steps: planSteps, estimatedChanges, ...(visuals ? { visuals } : {}) };
+  const skeleton = attachSkeletonSnapshot<Record<string, unknown>>(agentContent);
+  const content = skeleton.content;
+  const skeletonNote = `${skeletonPlanNote(planSteps, skeleton.scan)}${skeleton.note}`;
   // #160 — plans were a scanner GAP: step descriptions/reasoning (and visuals
   // like a prototype's source) routinely quote config blocks, exactly where a
   // pasted key hides. #162 — the scan runs INSIDE createArtifact now (parity
@@ -107,11 +119,11 @@ export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<To
     await maybeUpdateTaskStatus(ctx.server, id, ctx.store);
     await ctx.store.resolvePlanReview(id, "approved");
     return {
-      content: [{ type: "text", text: `Plan "${args?.title}" approved (${id}). Proceed with implementation.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${skeletonPlanNote(planSteps)}${await ctx.helpers.getPassiveFeedback()}` }],
+      content: [{ type: "text", text: `Plan "${args?.title}" approved (${id}). Proceed with implementation.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, agentContent)}${skeletonNote}${await ctx.helpers.getPassiveFeedback()}` }],
     };
   }
 
   return {
-    content: [{ type: "text", text: `Plan "${args?.title}" presented for review (${id}). Human can approve/revise/reject at localhost:${reviewPort}. Call check_feedback for their verdict.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${skeletonPlanNote(planSteps)}${await ctx.helpers.getPassiveFeedback()}` }],
+    content: [{ type: "text", text: `Plan "${args?.title}" presented for review (${id}). Human can approve/revise/reject at localhost:${reviewPort}. Call check_feedback for their verdict.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, agentContent)}${skeletonNote}${await ctx.helpers.getPassiveFeedback()}` }],
   };
 }

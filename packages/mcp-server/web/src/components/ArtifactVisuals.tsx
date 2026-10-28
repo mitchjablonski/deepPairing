@@ -4,6 +4,7 @@ import { PrototypeFrame } from "./PrototypeFrame";
 import { CommentableCode } from "./CommentableCode";
 import { CommentTrigger, AskTrigger } from "./CommentThread";
 import { useChainComments } from "../hooks/useChainComments";
+import { SkeletonSummary, skeletonLineDecoration, type SkeletonStepLike } from "./SkeletonFences";
 
 const kindLabel: Record<string, string> = {
   diagram: "Diagram",
@@ -48,9 +49,14 @@ export function ArtifactVisuals({
   visuals,
   readOnly = false,
   cap = false,
+  skeletonSteps,
 }: {
   artifactId: string;
   visuals: PlanVisual[];
+  /** Skeleton plans — the plan's steps, so a `skelcode:` snapshot can shade its
+   *  fences by LIVE step status (an in_progress step's fence reads "active").
+   *  Only the plan card passes it; every other caller is unchanged. */
+  skeletonSteps?: SkeletonStepLike[];
   /** #207 (I2) — withhold the per-visual comment/ask composers + freeze
    *  region-anchoring when the parent artifact is retracted/terminal ("closed")
    *  or replayed ("frozen"): a comment posted here would reach the agent as
@@ -91,23 +97,26 @@ export function ArtifactVisuals({
           >
             <div className="flex items-center gap-2 min-w-0">
               <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] bg-surface-elevated text-text-muted">
-                {kindLabel[v.kind] ?? v.kind}
+                {v.skeleton ? "Skeleton code" : (kindLabel[v.kind] ?? v.kind)}
               </span>
               {v.title && (
                 <span className="text-sm font-semibold text-text-primary truncate">{v.title}</span>
               )}
             </div>
 
-            {cap && v.kind !== "diagram" ? (
+            {v.skeleton && v.kind === "annotated_code" && <SkeletonSummary visual={v} steps={skeletonSteps} />}
+
+            {(cap || v.skeleton) && v.kind !== "diagram" ? (
               // T3 — bound the non-diagram body so a tall file_map / annotated_code
               // / prototype can't run unbounded on the changeset (diagram self-caps
               // via MermaidDiagram's own well). max-h + overflow-auto only scroll
               // when the content actually exceeds 60vh; short visuals are untouched.
+              // Skeleton snapshots are whole files, so they always take the cap.
               <div data-dp-visual-cap="true" className="max-h-[60vh] overflow-auto rounded-md">
-                <VisualBody artifactId={artifactId} visual={v} readOnly={readOnly} />
+                <VisualBody artifactId={artifactId} visual={v} readOnly={readOnly} skeletonSteps={skeletonSteps} />
               </div>
             ) : (
-              <VisualBody artifactId={artifactId} visual={v} readOnly={readOnly} />
+              <VisualBody artifactId={artifactId} visual={v} readOnly={readOnly} skeletonSteps={skeletonSteps} />
             )}
 
             {v.caption && <div className="text-2xs text-text-secondary leading-relaxed">{v.caption}</div>}
@@ -145,9 +154,12 @@ export function VisualBody({
   readOnly = false,
   staticPreview = false,
   optionId,
+  skeletonSteps,
 }: {
   artifactId: string;
   visual: PlanVisual;
+  /** Skeleton plans — see ArtifactVisuals.skeletonSteps. */
+  skeletonSteps?: SkeletonStepLike[];
   // `readOnly` governs ONLY per-line/per-visual comment-anchoring (turned off in
   // decision options and revision diffs). `staticPreview` governs ONLY whether a
   // prototype renders the static placeholder instead of the runnable sandbox —
@@ -194,7 +206,7 @@ export function VisualBody({
 
   if (visual.kind === "annotated_code") {
     return typeof visual.code === "string" && visual.code.length > 0 ? (
-      <AnnotatedCode artifactId={artifactId} visual={visual} readOnly={readOnly} />
+      <AnnotatedCode artifactId={artifactId} visual={visual} readOnly={readOnly} skeletonSteps={skeletonSteps} />
     ) : (
       <div className="text-2xs text-text-muted">No code provided.</div>
     );
@@ -205,7 +217,17 @@ export function VisualBody({
 }
 
 // --- annotated_code: real code + line-anchored agent notes, per-line commentable
-function AnnotatedCode({ artifactId, visual, readOnly = false }: { artifactId: string; visual: PlanVisual; readOnly?: boolean }) {
+function AnnotatedCode({
+  artifactId,
+  visual,
+  readOnly = false,
+  skeletonSteps,
+}: {
+  artifactId: string;
+  visual: PlanVisual;
+  readOnly?: boolean;
+  skeletonSteps?: SkeletonStepLike[];
+}) {
   const allComments = useChainComments(artifactId); // Bug2 — chain aggregation
   const filePath = typeof visual.filePath === "string" ? visual.filePath : undefined;
   const lineStart = typeof visual.lineStart === "number" && Number.isFinite(visual.lineStart) ? visual.lineStart : 1;
@@ -248,6 +270,7 @@ function AnnotatedCode({ artifactId, visual, readOnly = false }: { artifactId: s
       annotationsByLine={annotationsByLine}
       targetContext={{ visualId: visual.id }}
       readOnly={readOnly}
+      lineDecoration={skeletonLineDecoration(visual, skeletonSteps)}
     />
   );
 }

@@ -243,7 +243,47 @@ export const PlanVisualSchema = z.object({
   annotations: z.array(PlanVisualAnnotationSchema).optional(),
 });
 
-export type PlanVisual = z.infer<typeof PlanVisualSchema>;
+/**
+ * Skeleton plans (#606 parity PR 2) — one SKEL[id] fence inside a server-side
+ * skeleton snapshot. Lines are absolute (1-based) in the snapshot's code.
+ * `todo` = the body still holds SKEL_TODO; `filled` otherwise. "Active" is not
+ * stored: the companion derives it live from the claiming step's status.
+ */
+export const SkeletonFenceViewSchema = z.object({
+  id: z.string(),
+  title: z.string().optional(),
+  openLine: z.number(),
+  closeLine: z.number(),
+  status: z.enum(["todo", "filled"]),
+});
+
+export type SkeletonFenceView = z.infer<typeof SkeletonFenceViewSchema>;
+
+/**
+ * Skeleton plans — the SERVER-SET metadata on an `annotated_code` visual that
+ * present_plan / revise_artifact snapshot from disk (id `skelcode:<path>`).
+ * Deliberately NOT part of PlanVisualSchema: agents never author it (the tool
+ * input schemas stay unchanged and a supplied value is stripped); it rides only
+ * on stored content, through the coercer, to the renderer.
+ */
+export const SkeletonCodeSnapshotSchema = z.object({
+  fences: z.array(SkeletonFenceViewSchema),
+  /** An unfenced skeleton file (a file_map "create" entry with no fences). */
+  tracked: z.boolean().optional(),
+  /** Set when the snapshot cap cut the file short. */
+  truncated: z.object({ shownLines: z.number(), totalLines: z.number() }).optional(),
+  /** Malformed SKEL markers in this file (fences are then unknown). */
+  markerError: z.string().optional(),
+});
+
+export type SkeletonCodeSnapshot = z.infer<typeof SkeletonCodeSnapshotSchema>;
+
+/** A visual as STORED (agent shape + the optional server-set skeleton snapshot). */
+export const StoredPlanVisualSchema = PlanVisualSchema.extend({
+  skeleton: SkeletonCodeSnapshotSchema.optional(),
+});
+
+export type PlanVisual = z.infer<typeof StoredPlanVisualSchema>;
 
 // --- research content ---------------------------------------------------------
 // Defined here (not up by FindingSchema) so it can reference PlanVisualSchema

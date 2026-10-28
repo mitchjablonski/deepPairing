@@ -5,6 +5,7 @@ import type { ToolContext, ToolResult } from "./types.js";
 import { notifyResourcesListChanged, formatStyleWarnings, persistPreflightTrace } from "../tool-helpers.js";
 import { preflightArtifact } from "../artifact-preflight.js";
 import { maybeUpdateTaskStatus } from "../tasks-probe.js";
+import { attachSkeletonSnapshot, stripSkeletonVisuals } from "../skeleton-snapshot.js";
 import { carriedBriefRef, deriveReviseContent, finalizeReviseContent, reviseSnapshot, reviseTargetPrecondition } from "../proposal-resolution.js";
 import { admitBlockedProposal, admittedResult, beginStanceOperation } from "../stance-admission.js";
 import {
@@ -153,6 +154,13 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
     // A superseded decision inherits the old stakes when none are given.
     // (#470 — shared with the stance-exception snapshot: finalizeReviseContent.)
     finalizeReviseContent(old, content);
+    // Skeleton plans, parity PR 2 — a revised skeleton plan gets a FRESH code
+    // snapshot from disk (the agent's echoed snapshot visuals are dropped and
+    // re-read). Ids are per path, so line threads carry onto v2. Applied after
+    // the gate: the preflight judged the agent's content, not file text.
+    const skeletonSnap = old.type === "plan" ? attachSkeletonSnapshot(content) : { content, note: "" };
+    // STYLE lints the agent's prose, never the server-authored snapshot captions.
+    const styleContent = old.type === "plan" && Array.isArray(content.visuals) ? { ...content, visuals: stripSkeletonVisuals(content.visuals) } : content;
 
     const title = String(args?.title ?? old.title);
     const newId = `art_${nanoid(10)}`;
@@ -181,7 +189,7 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       id: newId,
       type: old.type,
       title,
-      content: content as Record<string, unknown>,
+      content: skeletonSnap.content as Record<string, unknown>,
       agentReasoning: reason,
       parentId: old.id,
       version: old.version + 1,
@@ -266,7 +274,7 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       ? `\n\n⚠ Recalled stance — advisory, not a block (this revision records external or historical material rather than proposing that approach): ${pre.advisory}`
       : "";
     return {
-      content: [{ type: "text", text: `Superseded ${artifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${formatStyleWarnings(newArtifact.type, newArtifact.content)}${advisory}` }],
+      content: [{ type: "text", text: `Superseded ${artifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${formatStyleWarnings(newArtifact.type, styleContent)}${skeletonSnap.note}${advisory}` }],
     };
   }
 

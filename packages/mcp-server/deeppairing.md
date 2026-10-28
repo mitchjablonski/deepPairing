@@ -158,7 +158,9 @@ throw new Error("SKEL_TODO");
 
 Then call `present_plan` with one step per fence (`skelId: "2"`), in build
 order, plus a Mermaid architecture `diagram` and a `file_map` visual. The reply
-checks the fences exist on disk. After approval, `update_plan_progress`
+checks the fences exist on disk, and the plan card shows the fenced files (and
+the `file_map`'s new files) as code the human can comment on line by line;
+those comments arrive in `check_feedback` with file, line and fence. After approval, `update_plan_progress`
 `in_progress` opens that step's fence, and the preflight hook asks on any edit
 outside it. Mark the step `done` when its `SKEL_TODO` is gone. A structural
 change (new helper, signature, file) is a skeleton change: propose it and

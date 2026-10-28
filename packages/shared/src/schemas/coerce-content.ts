@@ -10,6 +10,8 @@ import type {
   PlanVisualFile,
   PlanVisualDocSection,
   PlanVisualAnnotation,
+  SkeletonCodeSnapshot,
+  SkeletonFenceView,
   SpecContent,
   SpecRequirement,
   SpecTask,
@@ -297,6 +299,33 @@ function coerceVisual(v: unknown, fallbackId: string): PlanVisual {
         return ann;
       });
   }
+  // Skeleton plans (#606 parity PR 2) — the server-set fence snapshot on an
+  // annotated_code visual. Built field by field like everything above, so a
+  // malformed value degrades to "no fences" rather than reaching the renderer.
+  if (out.kind === "annotated_code" && isObj(o.skeleton)) out.skeleton = coerceSkeletonSnapshot(o.skeleton);
+  return out;
+}
+
+function coerceSkeletonSnapshot(o: Record<string, unknown>): SkeletonCodeSnapshot {
+  const fences: SkeletonFenceView[] = (Array.isArray(o.fences) ? o.fences : [])
+    .filter(isObj)
+    .filter((f) => typeof f.id === "string" && f.id.length > 0 && Number.isFinite(f.openLine) && Number.isFinite(f.closeLine))
+    .map((f) => {
+      const fence: SkeletonFenceView = {
+        id: f.id as string,
+        openLine: f.openLine as number,
+        closeLine: f.closeLine as number,
+        status: f.status === "filled" ? "filled" : "todo",
+      };
+      if (typeof f.title === "string" && f.title) fence.title = f.title;
+      return fence;
+    });
+  const out: SkeletonCodeSnapshot = { fences };
+  if (o.tracked === true) out.tracked = true;
+  if (isObj(o.truncated) && Number.isFinite(o.truncated.shownLines) && Number.isFinite(o.truncated.totalLines)) {
+    out.truncated = { shownLines: o.truncated.shownLines as number, totalLines: o.truncated.totalLines as number };
+  }
+  if (typeof o.markerError === "string" && o.markerError) out.markerError = o.markerError;
   return out;
 }
 
