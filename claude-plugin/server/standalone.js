@@ -3227,8 +3227,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path18) {
-      let input = path18;
+    function removeDotSegments(path19) {
+      let input = path19;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3427,8 +3427,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path18, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path18 && path18 !== "/" ? path18 : void 0;
+        const [path19, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path19 && path19 !== "/" ? path19 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -6790,12 +6790,12 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list2, fs17, exportName) {
+    function addFormats(ajv, list2, fs18, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list2)
-        ajv.addFormat(f, fs17[f]);
+        ajv.addFormat(f, fs18[f]);
     }
     module.exports = exports = formatsPlugin;
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -7326,10 +7326,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj2, path18) {
-  if (!path18)
+function getElementAtPath(obj2, path19) {
+  if (!path19)
     return obj2;
-  return path18.reduce((acc, key) => acc?.[key], obj2);
+  return path19.reduce((acc, key) => acc?.[key], obj2);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -7738,11 +7738,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path18, issues) {
+function prefixIssues(path19, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path18);
+    iss.path.unshift(path19);
     return iss;
   });
 }
@@ -7889,16 +7889,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path18 = []) => {
+  const processError = (error52, path19 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path18, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path19, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path18, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path19, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path18, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path19, ...issue2.path]);
       } else {
-        const fullpath = [...path18, ...issue2.path];
+        const fullpath = [...path19, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -7925,17 +7925,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path18 = []) => {
+  const processError = (error52, path19 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path18, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path19, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path18, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path19, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path18, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path19, ...issue2.path]);
       } else {
-        const fullpath = [...path18, ...issue2.path];
+        const fullpath = [...path19, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -7967,8 +7967,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path18 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path18) {
+  const path19 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path19) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -20966,13 +20966,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path18 = ref.slice(1).split("/").filter(Boolean);
-  if (path18.length === 0) {
+  const path19 = ref.slice(1).split("/").filter(Boolean);
+  if (path19.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path18[0] === defsKey) {
-    const key = path18[1];
+  if (path19[0] === defsKey) {
+    const key = path19[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -30249,11 +30249,11 @@ Each is a continuation of an existing thread (parentCommentId points at one of y
   } catch {
   }
   try {
-    const fs17 = await import("node:fs");
-    const path18 = await import("node:path");
-    const claudeMd = path18.join(process.cwd(), "CLAUDE.md");
-    if (fs17.existsSync(claudeMd)) {
-      const content = fs17.readFileSync(claudeMd, "utf-8");
+    const fs18 = await import("node:fs");
+    const path19 = await import("node:path");
+    const claudeMd = path19.join(process.cwd(), "CLAUDE.md");
+    if (fs18.existsSync(claudeMd)) {
+      const content = fs18.readFileSync(claudeMd, "utf-8");
       if (!content.includes("<!-- deepPairing -->")) {
         contextualParts.push(
           "\n\u{1F4A1} Tip: run `" + cliInvocation("init") + "` to add the deepPairing protocol to CLAUDE.md so the agent follows it on every session (optional \u2014 the plugin's pairing-protocol skill covers most of this already)."
@@ -31161,7 +31161,7 @@ function formatStyleWarnings(type, content) {
   located.sort((a, b) => bySeverity(a.v, b.v));
   const { shown } = topDistinctStyleLines(located, MAX_STYLE_LINES);
   const rest = located.length - shown.length;
-  const lines = shown.map(({ path: path18, v: v2 }) => `- ${path18}: ${v2.message}`);
+  const lines = shown.map(({ path: path19, v: v2 }) => `- ${path19}: ${v2.message}`);
   return styleBlock(result.score, lines, rest);
 }
 function formatProseStyleWarnings(label, text, mode = "strict") {
@@ -31175,7 +31175,7 @@ function formatProseStyleWarnings(label, text, mode = "strict") {
   const located = [...result.violations].sort(bySeverity).map((v2) => ({ path: label, v: v2 }));
   const { shown } = topDistinctStyleLines(located, MAX_STYLE_LINES);
   const rest = located.length - shown.length;
-  return styleBlock(result.score, shown.map(({ path: path18, v: v2 }) => `- ${path18}: ${v2.message}`), rest);
+  return styleBlock(result.score, shown.map(({ path: path19, v: v2 }) => `- ${path19}: ${v2.message}`), rest);
 }
 function styleBlock(score, lines, rest) {
   const tail = rest > 0 ? ` (+${rest} more)` : "";
@@ -31574,9 +31574,9 @@ function scalarTypeTag(i) {
 function isScalarBoundIssue(i) {
   return i.code === "too_big" || i.code === "too_small";
 }
-function receivedSize(input, path18) {
+function receivedSize(input, path19) {
   let cur = input;
-  for (const seg of path18) {
+  for (const seg of path19) {
     if (cur == null || typeof cur !== "object") return void 0;
     cur = cur[seg];
   }
@@ -31599,8 +31599,8 @@ function scalarIssueClause(i, input) {
   }
   return `${field2} (${scalarTypeTag(i)})`;
 }
-function collapsePath(path18) {
-  return path18.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
+function collapsePath(path19) {
+  return path19.map((seg) => typeof seg === "number" ? "[*]" : String(seg)).join(".").replace(/\.\[\*\]/g, "[*]");
 }
 function formatValidationError(toolName, err, example, input) {
   const raw = err.issues;
@@ -31626,9 +31626,9 @@ function formatValidationError(toolName, err, example, input) {
   }
   const groupArr = [...groups.values()];
   const issues = groupArr.slice(0, 5).map((g) => {
-    const path18 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
+    const path19 = g.count > 1 ? collapsePath(g.first.path) : g.first.path.length ? g.first.path.join(".") : "(root)";
     const suffix = g.count > 1 ? ` (${g.count}\xD7)` : "";
-    return `  \u2022 ${path18}: ${g.first.message}${suffix}`;
+    return `  \u2022 ${path19}: ${g.first.message}${suffix}`;
   });
   const more = groupArr.length > 5 ? `
   \u2022 \u2026and ${groupArr.length - 5} more` : "";
@@ -32812,7 +32812,7 @@ ${SIZE_CLIPPED_NOTE}` : "";
   return `${head}<pre class="code"${langAttr}><code>${fitted.text}${trunc}${sizeTrunc}</code></pre>`;
 }
 function diffBlock(file2, includeCode, projectRoot2) {
-  const path18 = sanitizePath(file2.path, projectRoot2);
+  const path19 = sanitizePath(file2.path, projectRoot2);
   const changeType = esc2(file2.changeType ?? "modified");
   const hunks = Array.isArray(file2.hunks) ? file2.hunks : [];
   const stats = file2.stats;
@@ -32829,7 +32829,7 @@ function diffBlock(file2, includeCode, projectRoot2) {
   const additions = stats?.additions ?? derived.additions;
   const deletions = stats?.deletions ?? derived.deletions;
   const statLine = `<span class="diffstat"><span class="add">+${additions}</span> <span class="del">\u2212${deletions}</span></span>`;
-  const header = `<div class="file-head"><code class="path">${esc2(path18)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
+  const header = `<div class="file-head"><code class="path">${esc2(path19)}</code><span class="chip chip--${changeType}">${changeType}</span>${statLine}</div>`;
   if (!includeCode) {
     return `<div class="file">${header}<p class="redacted">Diff omitted from this export.</p></div>`;
   }
@@ -32948,9 +32948,9 @@ function evidenceBlock(evidence, includeCode, projectRoot2) {
     }
     if (!ev || typeof ev !== "object") continue;
     const e = ev;
-    const path18 = sanitizePath(e.filePath, projectRoot2);
+    const path19 = sanitizePath(e.filePath, projectRoot2);
     const range = e.lineStart != null ? `:${e.lineStart}${e.lineEnd != null && e.lineEnd !== e.lineStart ? `-${e.lineEnd}` : ""}` : "";
-    let anchor = path18 ? `<p class="anchor"><code>${esc2(path18 + range)}</code></p>` : "";
+    let anchor = path19 ? `<p class="anchor"><code>${esc2(path19 + range)}</code></p>` : "";
     if (!anchor && e.locator && typeof e.locator.value === "string" && e.locator.value.length > 0) {
       const loc = e.locator;
       const label = loc.kind === "url" ? loc.href && loc.href.length > 0 ? `${loc.value} (${loc.href})` : loc.value : loc.kind === "charRange" ? `chars ${loc.value}` : loc.kind === "quote" ? `\u201C${loc.value}\u201D` : loc.value;
@@ -33107,9 +33107,9 @@ function decisionBody(a, ctx) {
 }
 function codeChangeBody(a, ctx) {
   const content = coerceCodeChangeContent(a.content);
-  const path18 = sanitizePath(content.filePath, ctx.projectRoot);
+  const path19 = sanitizePath(content.filePath, ctx.projectRoot);
   const parts = [
-    `<div class="file-head"><code class="path">${esc2(path18)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
+    `<div class="file-head"><code class="path">${esc2(path19)}</code><span class="chip chip--${esc2(content.changeType)}">${esc2(content.changeType)}</span></div>`
   ];
   if (content.reasoning) parts.push(`<p class="why">Why: ${renderInline(content.reasoning)}</p>`);
   if (content.concept?.name) {
@@ -36712,6 +36712,13 @@ import path10 from "node:path";
 var SKEL_TODO = "SKEL_TODO";
 var SKELETON_SCOPE_DIR = "skeleton-scopes";
 var SKELETON_SCOPE_MAX_AGE_MS = 8 * 60 * 60 * 1e3;
+function parseReshape(raw) {
+  if (!raw || typeof raw !== "object") return void 0;
+  const r = raw;
+  if (typeof r.fromId !== "string" || !r.fromId) return void 0;
+  const strs = (v2) => Array.isArray(v2) ? v2.filter((x) => typeof x === "string" && x.length > 0) : [];
+  return { fromId: r.fromId, files: strs(r.files), restoreApproved: r.restoreApproved === true, restoreSkelIds: strs(r.restoreSkelIds) };
+}
 var COMMENT = String.raw`(?:\/\/|#|--|;|\/\*|<!--|\{\/\*)`;
 var ID = String.raw`([A-Za-z0-9][\w.-]*)`;
 var OPEN_RE = new RegExp(String.raw`^\s*${COMMENT}\s*SKEL\[${ID}\]\s*(.*?)\s*(?:\*\/\}?|-->)?\s*$`);
@@ -36816,12 +36823,30 @@ function skeletonScopeDir(projectRoot2) {
 function scopeFileName(artifactId) {
   return /^[A-Za-z0-9_-]{1,80}$/.test(artifactId) ? `${artifactId}.json` : null;
 }
+function parseScope(raw, now) {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw;
+  const ids = Array.isArray(r.activeSkelIds) ? r.activeSkelIds.filter((x) => typeof x === "string" && x.length > 0) : [];
+  const reshape = parseReshape(r.reshape);
+  if (ids.length === 0 && !reshape || typeof r.artifactId !== "string") return null;
+  const at = Date.parse(String(r.updatedAt));
+  if (!Number.isFinite(at) || now - at > SKELETON_SCOPE_MAX_AGE_MS) return null;
+  return {
+    artifactId: r.artifactId,
+    activeSkelIds: ids,
+    updatedAt: String(r.updatedAt),
+    ...typeof r.planTitle === "string" ? { planTitle: r.planTitle } : {},
+    ...typeof r.sessionId === "string" && r.sessionId ? { sessionId: r.sessionId } : {},
+    ...typeof r.workspaceRoot === "string" && r.workspaceRoot ? { workspaceRoot: r.workspaceRoot } : {},
+    ...reshape ? { reshape } : {}
+  };
+}
 function writeSkeletonScope(projectRoot2, scope) {
   const name = scopeFileName(scope.artifactId);
   if (!name) return;
   const file2 = path10.join(skeletonScopeDir(projectRoot2), name);
   try {
-    if (scope.activeSkelIds.length === 0) {
+    if (scope.activeSkelIds.length === 0 && !scope.reshape) {
       fs10.rmSync(file2, { force: true });
       return;
     }
@@ -36830,6 +36855,15 @@ function writeSkeletonScope(projectRoot2, scope) {
     fs10.writeFileSync(tmp, JSON.stringify(scope, null, 2));
     fs10.renameSync(tmp, file2);
   } catch {
+  }
+}
+function readSkeletonScopeFile(projectRoot2, artifactId, now = Date.now()) {
+  const name = scopeFileName(artifactId);
+  if (!name) return null;
+  try {
+    return parseScope(JSON.parse(fs10.readFileSync(path10.join(skeletonScopeDir(projectRoot2), name), "utf-8")), now);
+  } catch {
+    return null;
   }
 }
 function within(dir, abs) {
@@ -37195,6 +37229,79 @@ function nextReadStamp() {
   return lastStamp;
 }
 
+// src/mcp/skeleton-finalize.ts
+import fs12 from "node:fs";
+import path12 from "node:path";
+var MAX_BYTES = 1e6;
+var MAX_LISTED = 20;
+function within3(dir, abs) {
+  const rel = path12.relative(dir, abs);
+  return rel === "" || !rel.startsWith("..") && !path12.isAbsolute(rel);
+}
+var PROSE_FILE2 = /\.(md|mdx|markdown|rst|txt)$/i;
+function skeletonLeftovers(root, content) {
+  const c = content ?? {};
+  const declared = planDeclaredFiles(c);
+  const claimed = new Set((c.steps ?? []).map((st) => st?.skelId).filter((id) => typeof id === "string" && id.length > 0));
+  const { fences, errors } = scanSkeletonFences(root, { files: declared });
+  const out = [];
+  for (const f of fences) {
+    if (PROSE_FILE2.test(f.file) && !claimed.has(f.id)) continue;
+    out.push({ file: f.file, line: f.openLine, what: `SKEL[${f.id}]` });
+    out.push({ file: f.file, line: f.closeLine, what: `/SKEL[${f.id}]` });
+  }
+  const files = new Set([...declared, ...fences.map((f) => f.file)].filter((f) => !PROSE_FILE2.test(f)));
+  let realRoot;
+  try {
+    realRoot = fs12.realpathSync(root);
+  } catch {
+    realRoot = root;
+  }
+  for (const rel of files) {
+    try {
+      const abs = fs12.realpathSync(path12.resolve(root, rel));
+      if (!within3(realRoot, abs)) continue;
+      const st = fs12.statSync(abs);
+      if (!st.isFile() || st.size > MAX_BYTES) continue;
+      const lines = fs12.readFileSync(abs, "utf-8").split("\n");
+      const shown = path12.relative(realRoot, abs).split(path12.sep).join("/");
+      lines.forEach((l, i) => {
+        if (l.includes("SKEL_TODO")) out.push({ file: shown, line: i + 1, what: "SKEL_TODO" });
+      });
+    } catch {
+    }
+  }
+  out.sort((a, b) => a.file === b.file ? a.line - b.line : a.file < b.file ? -1 : 1);
+  return { leftovers: out, errors };
+}
+function allSkeletonStepsDone(content) {
+  const steps = (content ?? {}).steps ?? [];
+  const skel = steps.filter((s) => typeof s?.skelId === "string" && s.skelId);
+  return skel.length > 0 && skel.every((s) => s.status === "done" || s.status === "skipped");
+}
+function formatLeftovers(title, found) {
+  const { leftovers, errors } = found;
+  if (leftovers.length === 0 && errors.length === 0) return "";
+  const listed = leftovers.slice(0, MAX_LISTED).map((l) => `${l.file}:${l.line} ${l.what}`);
+  const more = leftovers.length > MAX_LISTED ? ` (+${leftovers.length - MAX_LISTED} more)` : "";
+  const bad = errors.length > 0 ? `; malformed markers: ${errors.slice(0, 5).join("; ")}` : "";
+  return `
+\u26A0 Skeleton markers remain in "${title}"'s files \u2014 strip them before the change is reviewed: ${listed.join(", ")}${more}${bad}.`;
+}
+function finalizeCheckNote(artifacts, root) {
+  try {
+    const current = artifacts.filter((a) => a.type === "plan" && a.status === "approved" && isLivePlanVersion(a, artifacts) && allSkeletonStepsDone(a.content)).sort((a, b) => a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0)[0];
+    if (!current) return "";
+    const r = root ?? (() => {
+      const pr = resolveProjectRoot();
+      return pr.worktree?.workspaceRoot ?? pr.projectRoot;
+    })();
+    return formatLeftovers(current.title, skeletonLeftovers(r, current.content));
+  } catch {
+    return "";
+  }
+}
+
 // src/mcp/tools/update-plan-progress.ts
 var VALID_STATUSES = /* @__PURE__ */ new Set(["pending", "in_progress", "done", "skipped"]);
 async function handleUpdatePlanProgress(ctx, args) {
@@ -37225,6 +37332,10 @@ async function handleUpdatePlanProgress(ctx, args) {
   }
   const all = await store.getArtifacts();
   const before = all.find((a) => a.id === artifactId);
+  const priorStatuses = (before?.content?.steps ?? []).map((st) => ({
+    status: st?.status,
+    skelId: st?.skelId
+  }));
   const resnap = before && isLivePlanVersion(before, all) ? resnapshotSkeleton(before.content) : null;
   const artifact = resnap ? await store.updatePlanProgress(artifactId, updates, { skeletonVisuals: resnap.visuals, ...resnap.readAt !== void 0 ? { skeletonReadAt: resnap.readAt } : {} }) : await store.updatePlanProgress(artifactId, updates);
   if (!artifact) {
@@ -37260,10 +37371,36 @@ async function handleUpdatePlanProgress(ctx, args) {
     if (lines.length > 0) mismatchNote = `
 \u26A0 The checklist and the code disagree: ${lines.join("; ")}.`;
   }
+  let liftedNote = "";
+  if (!isSpec) {
+    const lifted = updates.filter((u) => u.status === "pending").filter((u) => priorStatuses[u.stepIndex]?.status === "in_progress" && typeof priorStatuses[u.stepIndex]?.skelId === "string").map((u) => ({ index: u.stepIndex, skelId: priorStatuses[u.stepIndex].skelId, status: u.status }));
+    if (lifted.length > 0) {
+      const what = lifted.map((l) => `SKEL[${l.skelId}] (step ${l.index + 1}, now ${l.status})`).join(", ");
+      try {
+        await store.addComment({
+          id: `cmt_${nanoid3(10)}`,
+          artifactId: artifact.id,
+          author: "agent",
+          content: `Fence lifted without completing the step: ${what}. Edits outside the skeleton are no longer gated for ${lifted.length === 1 ? "it" : "them"}. If this is a skeleton change, it should come to you as a revised plan.`
+        });
+      } catch {
+      }
+      liftedNote = `
+\u26A0 Fence lifted without done: ${what}. Your pair sees a notice on the plan. If you need a structural change, propose it and revise_artifact the plan (reason "Skeleton change: \u2026") instead.`;
+    }
+  }
+  const isSkeleton = !isSpec && (c.steps ?? []).some((st) => typeof st.skelId === "string" && st.skelId);
+  const reshapeNote = isSkeleton && artifact.status === "draft" && artifact.parentId ? "\nThis is a reshaped skeleton awaiting re-review: fills are paused. Until your pair approves it, the preflight hook asks before any edit to this plan's files." : "";
+  let finalizeNote = "";
+  if (isSkeleton && artifact.status === "approved" && allSkeletonStepsDone(artifact.content) && updates.some((u) => u.status === "done" || u.status === "skipped")) {
+    const root = resolveProjectRoot();
+    const found = skeletonLeftovers(root.worktree?.workspaceRoot ?? root.projectRoot, artifact.content);
+    finalizeNote = formatLeftovers(artifact.title, found) || "\nEvery skeleton step is done and no SKEL markers remain: present the whole change with present_changeset next.";
+  }
   return {
     content: [{
       type: "text",
-      text: `${isSpec ? "Spec" : "Plan"} progress recorded: ${done}/${items.length} ${unit} complete. The companion UI checklist is live \u2014 keep marking ${unit} as you finish them.${warning}${skeletonNote}${mismatchNote}`
+      text: `${isSpec ? "Spec" : "Plan"} progress recorded: ${done}/${items.length} ${unit} complete. The companion UI checklist is live \u2014 keep marking ${unit} as you finish them.${warning}${skeletonNote}${mismatchNote}${liftedNote}${reshapeNote}${finalizeNote}`
     }]
   };
 }
@@ -37276,7 +37413,8 @@ function syncSkeletonScope(sessionId, artifact, updates, scan) {
     const workspaceRoot = root.worktree?.workspaceRoot ?? root.projectRoot;
     const approved = artifact.status === "approved";
     const activeSkelIds = approved ? steps.filter((st) => st.skelId && st.status === "in_progress").map((st) => st.skelId) : [];
-    writeSkeletonScope(root.projectRoot, { artifactId: artifact.id, planTitle: artifact.title, activeSkelIds, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), sessionId, workspaceRoot });
+    const reshape = readSkeletonScopeFile(root.projectRoot, artifact.id)?.reshape;
+    writeSkeletonScope(root.projectRoot, { artifactId: artifact.id, planTitle: artifact.title, activeSkelIds, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), sessionId, workspaceRoot, ...reshape ? { reshape } : {} });
     const finished = updates.filter((u) => u.status === "done").map((u) => steps[u.stepIndex]?.skelId).filter((id) => typeof id === "string" && id.length > 0);
     const notes = [];
     if (finished.length > 0) {
@@ -37302,6 +37440,35 @@ function retirementFailure(outcome) {
   if (outcome.kind !== "blocked_feedback") return outcome.message;
   const counts = [outcome.unansweredQuestions ? `${outcome.unansweredQuestions} unanswered question(s)` : "", outcome.openSuggestions ? `${outcome.openSuggestions} open suggestion(s)` : "", outcome.undrainedComments ? `${outcome.undrainedComments} unread comment(s)` : ""].filter(Boolean);
   return `REFUSED \u2014 ${counts.join(" and ")}. Call check_feedback and address the feedback first; retirement must never dodge review.`;
+}
+
+// src/mcp/skeleton-reshape.ts
+function writeReshapeScope(args) {
+  try {
+    const oldSteps = (args.oldPlan.content ?? {}).steps ?? [];
+    const newSteps = (args.newContent ?? {}).steps ?? [];
+    const isSkel = (steps) => steps.some((st) => typeof st?.skelId === "string" && st.skelId.length > 0);
+    if (!isSkel(oldSteps) && !isSkel(newSteps)) return;
+    const root = resolveProjectRoot();
+    const workspaceRoot = root.worktree?.workspaceRoot ?? root.projectRoot;
+    const declared = [
+      ...planDeclaredFiles(args.oldPlan.content),
+      ...planDeclaredFiles(args.newContent)
+    ];
+    const fenced = scanSkeletonFences(workspaceRoot, { files: [...new Set(declared)] }).fences.map((f) => f.file);
+    const files = [.../* @__PURE__ */ new Set([...declared, ...fenced])];
+    const restoreSkelIds = oldSteps.filter((st) => typeof st?.skelId === "string" && st.skelId && st.status === "in_progress").map((st) => st.skelId);
+    writeSkeletonScope(root.projectRoot, {
+      artifactId: args.newId,
+      planTitle: args.newTitle,
+      activeSkelIds: [],
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      sessionId: args.sessionId,
+      workspaceRoot,
+      reshape: { fromId: args.oldPlan.id, files, restoreApproved: args.oldPlan.status === "approved", restoreSkelIds }
+    });
+  } catch {
+  }
 }
 
 // src/mcp/tools/revise-artifact.ts
@@ -37363,6 +37530,7 @@ async function handleReviseArtifact(ctx, args) {
       };
     }
     const content = deriveReviseContent(old, suppliedContent);
+    const oldStatusAtRevise = old.status;
     const supersedeValidator = SUPERSEDE_VALIDATORS[old.type];
     if (supersedeValidator) {
       const v2 = supersedeValidator({ title: args?.title ?? old.title, ...content });
@@ -37379,6 +37547,9 @@ async function handleReviseArtifact(ctx, args) {
         regate: (exclude) => preflightArtifact(ctx, "revise_artifact", old.type, String(args?.title ?? old.title), content, { deferRecord: true, excludeStances: exclude })
       });
       if ("response" in outcome2) return outcome2.response;
+      if (old.type === "plan" && typeof outcome2.admitted.artifactId === "string" && outcome2.admitted.status === "admitted") {
+        writeReshapeScope({ sessionId: store.getSessionId(), oldPlan: { id: old.id, status: oldStatusAtRevise, content: old.content }, newId: outcome2.admitted.artifactId, newTitle: String(args?.title ?? old.title), newContent: content });
+      }
       await maybeUpdateTaskStatus(server, old.id, store);
       notifyResourcesListChanged(server);
       const skelNote = old.type === "plan" && Array.isArray(content.steps) && content.steps.some((st) => typeof st?.skelId === "string" && st.skelId) ? " The skeleton code view is not re-read on an allowed revision; revise again to refresh it." : "";
@@ -37420,6 +37591,9 @@ async function handleReviseArtifact(ctx, args) {
       // reviseInheritedHash.
       ...carriedBriefRef(old) ? { briefRef: carriedBriefRef(old) } : {}
     });
+    if (old.type === "plan") {
+      writeReshapeScope({ sessionId: store.getSessionId(), oldPlan: { id: old.id, status: oldStatusAtRevise, content: old.content }, newId, newTitle: title, newContent: skeletonSnap.content });
+    }
     await store.updateArtifactStatus(old.id, "superseded", "agent_supersede");
     await maybeUpdateTaskStatus(server, old.id, store);
     await store.addComment({
@@ -37445,11 +37619,13 @@ async function handleReviseArtifact(ctx, args) {
     broadcast({ type: "artifact_created", artifact: newArtifact });
     broadcast({ type: "artifact_updated", artifactId: old.id, status: "superseded" });
     notifyResourcesListChanged(server);
+    const reshapeNote = old.type === "plan" && Array.isArray(content.steps) && content.steps.some((st) => typeof st?.skelId === "string" && st.skelId) ? `
+Skeleton change: your pair re-reviews the reshaped skeleton on the card. Fills are PAUSED: until they approve ${newId}, the preflight hook asks before any edit to this plan's files. Continue on ${newId} once approved.` : "";
     const advisory = pre?.ok && pre.advisory ? `
 
 \u26A0 Recalled stance \u2014 advisory, not a block (this revision records external or historical material rather than proposing that approach): ${pre.advisory}` : "";
     return {
-      content: [{ type: "text", text: `Superseded ${artifactId} \u2192 ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${formatStyleWarnings(newArtifact.type, styleContent)}${skeletonSnap.note}${advisory}` }]
+      content: [{ type: "text", text: `Superseded ${artifactId} \u2192 ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${formatStyleWarnings(newArtifact.type, styleContent)}${skeletonSnap.note}${reshapeNote}${advisory}` }]
     };
   }
   const artifacts = await store.getArtifacts();
@@ -38697,10 +38873,11 @@ Raise it WITH THEM, not on the PR: one present_findings entry with audience: "in
   const prLabel2 = source?.number ? `PR #${source.number}` : "the PR";
   const reviewedCommit = source?.headSha ? ` at immutable commit ${source.headSha.slice(0, 12)}` : ` with NO immutable head SHA recorded (legacy-readable, but APPROVE will be refused until the current headRefOid is presented and reviewed)`;
   const closing = isExternal ? `This is an EXTERNAL review \u2014 ${prLabel2}${source?.author ? ` by ${source.author}` : ""}${reviewedCommit} is someone else's code. Their per-file verdicts are their REVIEW OPINION and stay LOCAL: nothing is posted and nothing lands until they say to post it. Do NOT apply, revise, or "fix" these files. Keep polling check_feedback and answer what they ask \u2014 trace callers, read the surrounding code, run a safe test \u2014 and when they say to post it, call post_pr_review (REQUEST_CHANGES only if a surviving finding is high/critical \u2014 the tool CHECKS this now and refuses otherwise \u2014 else COMMENT). No present_debrief is owed for a review of code you did not write.` : `When the feature wraps, end with present_debrief.`;
+  const skeletonFinalize = isExternal ? "" : finalizeCheckNote(await ctx.store.getArtifacts());
   return {
     content: [{
       type: "text",
-      text: `Changeset "${artifact.title}" presented for review (${id}) \u2014 ${fileCount} file${fileCount === 1 ? "" : "s"}. The human reviews each file (and can comment across files) at localhost:${reviewPort}. Call check_feedback for their per-file review state, comments, and verdict. ${closing}${traceSummary}${advisory}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`
+      text: `Changeset "${artifact.title}" presented for review (${id}) \u2014 ${fileCount} file${fileCount === 1 ? "" : "s"}. The human reviews each file (and can comment across files) at localhost:${reviewPort}. Call check_feedback for their per-file review state, comments, and verdict. ${closing}${skeletonFinalize}${traceSummary}${advisory}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`
     }]
   };
 }
@@ -38773,13 +38950,15 @@ Do not leave that unsaid. Name the stance in the debrief itself \u2014 revise_ar
     ]),
     ...(needsYourEyes ?? []).flatMap((n) => typeof n.artifactRef === "string" ? [n.artifactRef] : [])
   ].filter((r) => typeof r === "string" && r.length > 0);
-  const knownIds = new Set((await ctx.store.getArtifacts()).map((a) => a.id));
+  const allArtifacts = await ctx.store.getArtifacts();
+  const knownIds = new Set(allArtifacts.map((a) => a.id));
+  const skeletonFinalize = finalizeCheckNote(allArtifacts);
   const dangling = [...new Set(refIds)].filter((r) => !knownIds.has(r));
   const danglingNote = dangling.length > 0 ? ` \u26A0 ${dangling.length} reference${dangling.length === 1 ? "" : "s"} don't resolve to a live artifact: ${dangling.join(", ")} \u2014 the drill-in link${dangling.length === 1 ? "" : "s"} will go nowhere. Fix the id${dangling.length === 1 ? "" : "s"} (or drop the ref) with revise_artifact if that wasn't intentional.` : "";
   return {
     content: [{
       type: "text",
-      text: `Debrief "${artifact.title}" presented for review (${id}) \u2014 ${sectionCount} section${sectionCount === 1 ? "" : "s"}${eyesCount > 0 ? `, ${eyesCount} item${eyesCount === 1 ? "" : "s"} flagged for your eyes` : ""}. This is the primary comprehension surface: the human reads the walk-through and can ask ANYTHING in the thread at localhost:${reviewPort}. Call check_feedback for their questions, comments, and verdict.${danglingNote}${servedNote}${traceSummary}${advisory}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`
+      text: `Debrief "${artifact.title}" presented for review (${id}) \u2014 ${sectionCount} section${sectionCount === 1 ? "" : "s"}${eyesCount > 0 ? `, ${eyesCount} item${eyesCount === 1 ? "" : "s"} flagged for your eyes` : ""}. This is the primary comprehension surface: the human reads the walk-through and can ask ANYTHING in the thread at localhost:${reviewPort}. Call check_feedback for their questions, comments, and verdict.${danglingNote}${skeletonFinalize}${servedNote}${traceSummary}${advisory}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${await ctx.helpers.getPassiveFeedback()}`
     }]
   };
 }
@@ -39035,22 +39214,22 @@ Read a full session via resource deeppairing://session/{id} or an artifact via d
 }
 
 // src/daemon/status.ts
-import fs12 from "node:fs";
-import path12 from "node:path";
+import fs13 from "node:fs";
+import path13 from "node:path";
 function findDaemonJson(startDir) {
-  let dir = path12.resolve(startDir);
+  let dir = path13.resolve(startDir);
   for (; ; ) {
-    const candidate = path12.join(dir, ".deeppairing", "daemon.json");
-    if (fs12.existsSync(candidate)) {
+    const candidate = path13.join(dir, ".deeppairing", "daemon.json");
+    if (fs13.existsSync(candidate)) {
       try {
-        const parsed = JSON.parse(fs12.readFileSync(candidate, "utf-8"));
+        const parsed = JSON.parse(fs13.readFileSync(candidate, "utf-8"));
         const info = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
         return { dir, info };
       } catch {
         return { dir, info: {} };
       }
     }
-    const parent = path12.dirname(dir);
+    const parent = path13.dirname(dir);
     if (parent === dir) return null;
     dir = parent;
   }
@@ -39969,40 +40148,40 @@ Workflow: SINGLE REVIEW SURFACE \u2014 the companion UI is the only review surfa
 
 // src/daemon/lifecycle.ts
 import { spawn as spawn2, execFileSync } from "node:child_process";
-import fs14 from "node:fs";
+import fs15 from "node:fs";
 import net from "node:net";
-import path14 from "node:path";
+import path15 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // src/daemon/token.ts
-import fs13 from "node:fs";
+import fs14 from "node:fs";
 import os3 from "node:os";
-import path13 from "node:path";
+import path14 from "node:path";
 function runtimeBaseDir() {
   const xdg = process.env.XDG_RUNTIME_DIR?.trim();
-  if (xdg && path13.isAbsolute(xdg)) {
+  if (xdg && path14.isAbsolute(xdg)) {
     try {
-      if (fs13.statSync(xdg).isDirectory()) return path13.join(xdg, "deeppairing");
+      if (fs14.statSync(xdg).isDirectory()) return path14.join(xdg, "deeppairing");
     } catch {
     }
   }
-  return path13.join(os3.tmpdir(), "deeppairing");
+  return path14.join(os3.tmpdir(), "deeppairing");
 }
 function tokenSidecarPath(projectRoot2) {
-  return path13.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
+  return path14.join(runtimeBaseDir(), `${projectHashOf(projectRoot2)}.json`);
 }
 function readTokenSidecar(projectRoot2) {
   try {
     const file2 = tokenSidecarPath(projectRoot2);
-    if (!fs13.existsSync(file2)) return null;
-    return JSON.parse(fs13.readFileSync(file2, "utf-8"));
+    if (!fs14.existsSync(file2)) return null;
+    return JSON.parse(fs14.readFileSync(file2, "utf-8"));
   } catch {
     return null;
   }
 }
 
 // src/daemon/lifecycle.ts
-var __thisDir2 = path14.dirname(fileURLToPath3(import.meta.url));
+var __thisDir2 = path15.dirname(fileURLToPath3(import.meta.url));
 var DAEMON_FILE = "daemon.json";
 var MAX_PORT_ATTEMPTS = 10;
 function logStale(msg) {
@@ -40013,13 +40192,13 @@ function logStale(msg) {
   }
 }
 function daemonInfoPath(projectRoot2) {
-  return path14.join(projectRoot2, ".deeppairing", DAEMON_FILE);
+  return path15.join(projectRoot2, ".deeppairing", DAEMON_FILE);
 }
 function readDaemonInfo(projectRoot2) {
   const infoPath = daemonInfoPath(projectRoot2);
   try {
-    if (!fs14.existsSync(infoPath)) return null;
-    const info = JSON.parse(fs14.readFileSync(infoPath, "utf-8"));
+    if (!fs15.existsSync(infoPath)) return null;
+    const info = JSON.parse(fs15.readFileSync(infoPath, "utf-8"));
     if (!info.authToken) {
       const sidecar = readTokenSidecar(projectRoot2);
       if (sidecar?.authToken && (sidecar.pid === void 0 || sidecar.pid === info.pid)) {
@@ -40103,7 +40282,7 @@ async function isDaemonRunning(projectRoot2, range = { start: preferredPortFor(p
   }
   if (info) {
     try {
-      fs14.unlinkSync(daemonInfoPath(projectRoot2));
+      fs15.unlinkSync(daemonInfoPath(projectRoot2));
     } catch {
     }
   }
@@ -40167,8 +40346,8 @@ function buildReadinessTimeoutMessage(args) {
     `deepPairing daemon did not become ready within ${timeoutMs}ms (probed this project's ports ${first}\u2013${last}).`,
     hint
   ];
-  const logPath = path14.join(projectRoot2, ".deeppairing", "daemon.log");
-  if (fs14.existsSync(logPath)) {
+  const logPath = path15.join(projectRoot2, ".deeppairing", "daemon.log");
+  if (fs15.existsSync(logPath)) {
     lines.push(`See ${logPath} for the daemon's own startup log.`);
   }
   lines.push(`To diagnose: ${cliInvocation("doctor")}`);
@@ -40210,8 +40389,8 @@ async function describePortHolders(projectRoot2) {
   return parts.join("\n");
 }
 function spawnDaemon(projectRoot2) {
-  const daemonScript = path14.join(__thisDir2, "../../dist/daemon/index.js");
-  const scriptPath = fs14.existsSync(daemonScript) ? daemonScript : path14.join(__thisDir2, "daemon.js");
+  const daemonScript = path15.join(__thisDir2, "../../dist/daemon/index.js");
+  const scriptPath = fs15.existsSync(daemonScript) ? daemonScript : path15.join(__thisDir2, "daemon.js");
   const child = spawn2("node", [scriptPath], {
     cwd: projectRoot2,
     detached: true,
@@ -40303,7 +40482,7 @@ function pidIsGone(pid) {
 function readProcessStartTime(pid) {
   try {
     if (process.platform === "linux") {
-      const stat = fs14.readFileSync(`/proc/${pid}/stat`, "utf-8");
+      const stat = fs15.readFileSync(`/proc/${pid}/stat`, "utf-8");
       const rparen = stat.lastIndexOf(")");
       if (rparen === -1) return null;
       const rest = stat.slice(rparen + 1).trim().split(/\s+/);
@@ -40586,11 +40765,11 @@ var DaemonClient = class {
   async refreshAuthTokenFromDaemonInfo() {
     if (!this.projectRoot) return false;
     try {
-      const fs17 = await import("node:fs");
-      const path18 = await import("node:path");
-      const infoPath = path18.join(this.projectRoot, ".deeppairing", "daemon.json");
-      if (!fs17.existsSync(infoPath)) return false;
-      const raw = fs17.readFileSync(infoPath, "utf-8");
+      const fs18 = await import("node:fs");
+      const path19 = await import("node:path");
+      const infoPath = path19.join(this.projectRoot, ".deeppairing", "daemon.json");
+      if (!fs18.existsSync(infoPath)) return false;
+      const raw = fs18.readFileSync(infoPath, "utf-8");
       const info = JSON.parse(raw);
       if (typeof info.authToken !== "string" || !info.authToken) return false;
       if (info.authToken === this.authToken) return false;
@@ -40644,7 +40823,7 @@ var DaemonClient = class {
    * with the stored meta and retry the original call. Other non-2xx
    * statuses throw with a structured error so caller bugs surface.
    */
-  async request(path18, init, isRetry = false) {
+  async request(path19, init, isRetry = false) {
     const extraHeaders = {};
     if (this.projectHash) extraHeaders["X-Project-Hash"] = this.projectHash;
     if (this.authToken) extraHeaders["Authorization"] = `Bearer ${this.authToken}`;
@@ -40655,12 +40834,12 @@ var DaemonClient = class {
     };
     let res;
     try {
-      res = await fetch(`${this.baseUrl}${path18}`, initWithHash);
+      res = await fetch(`${this.baseUrl}${path19}`, initWithHash);
     } catch (err2) {
       if (errorName(err2) === "AbortError" || errorName(err2) === "TimeoutError") throw err2;
       if (!isRetry) {
         const recovered = await this.recoverDaemonConnection();
-        if (recovered) return this.request(path18, init, true);
+        if (recovered) return this.request(path19, init, true);
       }
       throw new Error(
         `[deepPairing] daemon connection lost (likely after host sleep). Reconnect failed \u2014 run \`${cliInvocation("doctor")}\` to diagnose, or restart Claude Code.`
@@ -40675,7 +40854,7 @@ var DaemonClient = class {
     if (res.status === 401 && body?.code === "daemon_auth_required" && !isRetry) {
       const rotated = await this.refreshAuthTokenFromDaemonInfo();
       if (rotated) {
-        return this.request(path18, init, true);
+        return this.request(path19, init, true);
       }
     }
     if (res.status === 404 && body?.code === "session_not_registered" && !isRetry) {
@@ -40686,7 +40865,7 @@ var DaemonClient = class {
       }
       await this.register(this.lastRegisterMeta);
       void this.notifyRecovered();
-      return this.request(path18, init, true);
+      return this.request(path19, init, true);
     }
     const msg = body?.error ?? `request failed (${res.status})`;
     const err = new Error(`[deepPairing] ${msg}`);
@@ -40707,15 +40886,15 @@ var DaemonClient = class {
       );
     }
   }
-  async post(path18, body) {
-    return this.request(path18, {
+  async post(path19, body) {
+    return this.request(path19, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: body != null ? JSON.stringify(body) : void 0
     });
   }
-  async get(path18) {
-    return this.request(path18, {});
+  async get(path19) {
+    return this.request(path19, {});
   }
   // --- Session lifecycle ---
   /**
@@ -41132,9 +41311,9 @@ var DaemonClient = class {
    * 5xx from the daemon used to flow back as `data.results === undefined`
    * and the caller fell back to `[]` silently. Now non-2xx throws.
    */
-  async requestPublic(path18) {
+  async requestPublic(path19) {
     const init = this.projectHash ? { headers: { "X-Project-Hash": this.projectHash } } : {};
-    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path18}`, init);
+    const res = await fetch(`http://localhost:${this.portFromBaseUrl()}${path19}`, init);
     if (res.ok) return res.json();
     let body = {};
     try {
@@ -41179,12 +41358,12 @@ var DaemonClient = class {
 };
 
 // src/store/project-registry.ts
-import fs15 from "node:fs";
+import fs16 from "node:fs";
 import os4 from "node:os";
-import path15 from "node:path";
+import path16 from "node:path";
 var REGISTRY_VERSION = 1;
 function realHomeRegistryPath() {
-  return path15.join(os4.homedir(), ".deeppairing", "projects.json");
+  return path16.join(os4.homedir(), ".deeppairing", "projects.json");
 }
 var testPathOverride = null;
 function projectRegistryPath() {
@@ -41208,8 +41387,8 @@ function readFile() {
   }
   let raw;
   try {
-    if (!fs15.existsSync(filePath)) return emptyFile();
-    raw = JSON.parse(fs15.readFileSync(filePath, "utf-8"));
+    if (!fs16.existsSync(filePath)) return emptyFile();
+    raw = JSON.parse(fs16.readFileSync(filePath, "utf-8"));
   } catch (err) {
     salvageLog("projects.json", `unreadable/unparseable \u2014 starting from empty (${String(err)})`);
     return emptyFile();
@@ -41233,7 +41412,7 @@ function readFile() {
     }
     projects[key] = {
       projectRoot: v2.projectRoot,
-      name: typeof v2.name === "string" && v2.name ? v2.name : path15.basename(v2.projectRoot),
+      name: typeof v2.name === "string" && v2.name ? v2.name : path16.basename(v2.projectRoot),
       lastSeen: typeof v2.lastSeen === "string" ? v2.lastSeen : (/* @__PURE__ */ new Date(0)).toISOString()
     };
   }
@@ -41244,13 +41423,13 @@ function upsertProject(projectRoot2, now = /* @__PURE__ */ new Date()) {
   try {
     const filePath = projectRegistryPath();
     const file2 = readFile();
-    const key = path15.resolve(projectRoot2);
+    const key = path16.resolve(projectRoot2);
     file2.projects[key] = {
       projectRoot: key,
-      name: path15.basename(key) || key,
+      name: path16.basename(key) || key,
       lastSeen: now.toISOString()
     };
-    fs15.mkdirSync(path15.dirname(filePath), { recursive: true });
+    fs16.mkdirSync(path16.dirname(filePath), { recursive: true });
     writeJsonAtomic(filePath, file2);
     return true;
   } catch (err) {
@@ -41262,9 +41441,9 @@ function upsertProject(projectRoot2, now = /* @__PURE__ */ new Date()) {
 
 // src/session-id.ts
 import crypto4 from "node:crypto";
-import path16 from "node:path";
+import path17 from "node:path";
 function deriveSessionId(projectRoot2, claudeSessionIdRaw) {
-  const projectName = path16.basename(projectRoot2);
+  const projectName = path17.basename(projectRoot2);
   const safeProjectName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 32);
   const projectHash = crypto4.createHash("sha256").update(projectRoot2).digest("hex").slice(0, 8);
   const base = `session_${safeProjectName}_${projectHash}`;
@@ -41276,17 +41455,17 @@ function deriveSessionId(projectRoot2, claudeSessionIdRaw) {
 }
 
 // src/standalone.ts
-import fs16 from "node:fs";
-import path17 from "node:path";
+import fs17 from "node:fs";
+import path18 from "node:path";
 var { projectRoot, source: projectRootSource, worktree: projectWorktree, worktreeRejected } = resolveProjectRoot();
-var dpDir = path17.join(projectRoot, ".deeppairing");
-var logFile = path17.join(dpDir, "server.log");
+var dpDir = path18.join(projectRoot, ".deeppairing");
+var logFile = path18.join(dpDir, "server.log");
 function log(msg) {
   const line = `[${(/* @__PURE__ */ new Date()).toISOString()}] [mcp] ${msg}
 `;
   try {
-    fs16.mkdirSync(path17.dirname(logFile), { recursive: true });
-    fs16.appendFileSync(logFile, line);
+    fs17.mkdirSync(path18.dirname(logFile), { recursive: true });
+    fs17.appendFileSync(logFile, line);
   } catch {
   }
 }
@@ -41308,7 +41487,7 @@ async function main() {
     log(`WARN: daemon at port ${port} did not advertise authToken \u2014 internal calls will 401. Run \`${cliInvocation("doctor")}\` to refresh daemon.json.`);
   }
   log(`Daemon ready on port ${port}`);
-  const projectName = path17.basename(projectRoot);
+  const projectName = path18.basename(projectRoot);
   const claudeSessionIdEnv = process.env.CLAUDE_CODE_SESSION_ID;
   const derived = deriveSessionId(projectRoot, claudeSessionIdEnv);
   const sessionId = derived.sessionId;

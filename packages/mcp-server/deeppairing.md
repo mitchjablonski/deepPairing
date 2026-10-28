@@ -166,7 +166,8 @@ line and fence). Fence each step's test stub with the same id. After approval, `
 `in_progress` opens that step's fence, and the preflight hook asks on any edit
 outside it. Mark the step `done` when its `SKEL_TODO` is gone. A structural
 change (new helper, signature, file) is a skeleton change: propose it and
-`revise_artifact` the plan (or set the step back to `pending`) instead of
+`revise_artifact` the plan (supersede, reason `Skeleton change: …`; until the
+human approves it, the hook asks on any edit to the plan's files) instead of
 routing around the fence. When every step is done, strip the marker lines and
 present the whole change with `present_changeset` before `present_debrief`.
 The review floor holds at every autonomy level. Approving the skeleton approves its shape

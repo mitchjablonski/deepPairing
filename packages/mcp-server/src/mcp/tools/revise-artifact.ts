@@ -6,6 +6,7 @@ import { notifyResourcesListChanged, formatStyleWarnings, persistPreflightTrace 
 import { preflightArtifact } from "../artifact-preflight.js";
 import { maybeUpdateTaskStatus } from "../tasks-probe.js";
 import { attachSkeletonSnapshot } from "../skeleton-snapshot.js";
+import { writeReshapeScope } from "../skeleton-reshape.js";
 import { carriedBriefRef, deriveReviseContent, finalizeReviseContent, reviseSnapshot, reviseTargetPrecondition } from "../proposal-resolution.js";
 import { admitBlockedProposal, admittedResult, beginStanceOperation } from "../stance-admission.js";
 import {
@@ -105,6 +106,8 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
     // presented a fresh immutable diff may supply a new source explicitly.
     // (#470 — shared with the stance-exception snapshot: deriveReviseContent.)
     const content = deriveReviseContent(old, suppliedContent);
+    // Parity PR 4 — the target's status BEFORE this revise touches anything.
+    const oldStatusAtRevise = old.status;
 
     // F3 — route the new content through the SAME strict validator the
     // original present_* tool uses, keyed on the artifact type. Pre-this,
@@ -141,6 +144,10 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
         regate: (exclude) => preflightArtifact(ctx, "revise_artifact", old.type, String(args?.title ?? old.title), content, { deferRecord: true, excludeStances: exclude }),
       });
       if ("response" in outcome) return outcome.response;
+      // Parity PR 4 (#610 M1) — the allowed revision pauses fills the same way.
+      if (old.type === "plan" && typeof outcome.admitted.artifactId === "string" && outcome.admitted.status === "admitted") {
+        writeReshapeScope({ sessionId: store.getSessionId(), oldPlan: { id: old.id, status: oldStatusAtRevise, content: old.content }, newId: outcome.admitted.artifactId, newTitle: String(args?.title ?? old.title), newContent: content });
+      }
       await maybeUpdateTaskStatus(server, old.id, store);
       notifyResourcesListChanged(server);
       // #607 review M2 — the admission snapshot is digest-bound, so it never
@@ -221,6 +228,12 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       // reviseInheritedHash.
       ...(carriedBriefRef(old) ? { briefRef: carriedBriefRef(old) } : {}),
     });
+    // Parity PR 4 (#610 review M1) — a reshaped skeleton's fills are PAUSED
+    // (enforced by the preflight hook) until the human approves the new version.
+    // `old.status` is read before the supersede flips it.
+    if (old.type === "plan") {
+      writeReshapeScope({ sessionId: store.getSessionId(), oldPlan: { id: old.id, status: oldStatusAtRevise, content: old.content }, newId, newTitle: title, newContent: skeletonSnap.content });
+    }
     await store.updateArtifactStatus(old.id, "superseded", "agent_supersede");
     await maybeUpdateTaskStatus(server, old.id, store);
 
@@ -279,11 +292,15 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
     // agent is rewriting prose it already wrote, so it is the only place the
     // STYLE block can be acted on immediately rather than "next artifact" —
     // and pre-this it was the one present-shaped path that stayed silent.
+    // Parity PR 4 — reshape: superseding a skeleton plan IS a skeleton change.
+    const reshapeNote = old.type === "plan" && Array.isArray(content.steps) && (content.steps as Array<{ skelId?: unknown }>).some((st) => typeof st?.skelId === "string" && st.skelId)
+      ? `\nSkeleton change: your pair re-reviews the reshaped skeleton on the card. Fills are PAUSED: until they approve ${newId}, the preflight hook asks before any edit to this plan's files. Continue on ${newId} once approved.`
+      : "";
     const advisory = pre?.ok && pre.advisory
       ? `\n\n⚠ Recalled stance — advisory, not a block (this revision records external or historical material rather than proposing that approach): ${pre.advisory}`
       : "";
     return {
-      content: [{ type: "text", text: `Superseded ${artifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${formatStyleWarnings(newArtifact.type, styleContent)}${skeletonSnap.note}${advisory}` }],
+      content: [{ type: "text", text: `Superseded ${artifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${formatStyleWarnings(newArtifact.type, styleContent)}${skeletonSnap.note}${reshapeNote}${advisory}` }],
     };
   }
 

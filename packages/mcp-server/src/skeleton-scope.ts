@@ -59,6 +59,34 @@ export interface SkeletonScope {
   /** The working tree the plan is filled in (a linked worktree's own dir, not
    *  the canonical root). Edits to files outside it are not this scope's. */
   workspaceRoot?: string;
+  /**
+   * Parity PR 4 (#610 review M1) — set on the scope of a RESHAPED skeleton plan
+   * (the newer version a supersede created; `artifactId` is that version).
+   * While that version awaits approval (draft / revised) the fence is PAUSED:
+   * the hook asks on any edit to the plan's declared files. Once approved, its
+   * own in-progress fences apply; if it is rejected or retracted, the previous
+   * version's fences are restored — only when that version had been approved.
+   */
+  reshape?: SkeletonReshape;
+}
+
+export interface SkeletonReshape {
+  /** The version this reshape superseded. */
+  fromId: string;
+  /** The plans' declared files (both versions), relative to `workspaceRoot`. */
+  files: string[];
+  /** Was the superseded version approved when it was superseded? */
+  restoreApproved: boolean;
+  /** Its in-progress fences then (restored only when `restoreApproved`). */
+  restoreSkelIds: string[];
+}
+
+function parseReshape(raw: unknown): SkeletonReshape | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as Partial<SkeletonReshape>;
+  if (typeof r.fromId !== "string" || !r.fromId) return undefined;
+  const strs = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.length > 0) : []);
+  return { fromId: r.fromId, files: strs(r.files), restoreApproved: r.restoreApproved === true, restoreSkelIds: strs(r.restoreSkelIds) };
 }
 
 const COMMENT = String.raw`(?:\/\/|#|--|;|\/\*|<!--|\{\/\*)`;
@@ -193,7 +221,9 @@ function parseScope(raw: unknown, now: number): SkeletonScope | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Partial<SkeletonScope>;
   const ids = Array.isArray(r.activeSkelIds) ? r.activeSkelIds.filter((x): x is string => typeof x === "string" && x.length > 0) : [];
-  if (ids.length === 0 || typeof r.artifactId !== "string") return null;
+  const reshape = parseReshape(r.reshape);
+  // A reshape scope is live with no active ids: it pauses, then restores.
+  if ((ids.length === 0 && !reshape) || typeof r.artifactId !== "string") return null;
   const at = Date.parse(String(r.updatedAt));
   if (!Number.isFinite(at) || now - at > SKELETON_SCOPE_MAX_AGE_MS) return null;
   return {
@@ -203,6 +233,7 @@ function parseScope(raw: unknown, now: number): SkeletonScope | null {
     ...(typeof r.planTitle === "string" ? { planTitle: r.planTitle } : {}),
     ...(typeof r.sessionId === "string" && r.sessionId ? { sessionId: r.sessionId } : {}),
     ...(typeof r.workspaceRoot === "string" && r.workspaceRoot ? { workspaceRoot: r.workspaceRoot } : {}),
+    ...(reshape ? { reshape } : {}),
   };
 }
 
@@ -233,7 +264,7 @@ export function writeSkeletonScope(projectRoot: string, scope: SkeletonScope): v
   if (!name) return;
   const file = path.join(skeletonScopeDir(projectRoot), name);
   try {
-    if (scope.activeSkelIds.length === 0) {
+    if (scope.activeSkelIds.length === 0 && !scope.reshape) {
       fs.rmSync(file, { force: true });
       return;
     }
@@ -260,15 +291,107 @@ export function skeletonScopeActive(projectRoot: string, now: number = Date.now(
  * the backstop's contract).
  */
 export function planApprovedOnDisk(projectRoot: string, sessionId: string, artifactId: string): boolean {
-  if (!/^[A-Za-z0-9_-]{1,160}$/.test(sessionId)) return false;
+  return planOnDisk(projectRoot, sessionId, artifactId)?.status === "approved";
+}
+
+/** Parity PR 4 — a plan's status and in-progress fence ids, read from the
+ *  owning session's artifacts.json. Null when unreadable or not a plan. */
+export function planOnDisk(projectRoot: string, sessionId: string, artifactId: string): { status: string; inProgressSkelIds: string[] } | null {
+  if (!/^[A-Za-z0-9_-]{1,160}$/.test(sessionId)) return null;
   try {
     const arr = JSON.parse(fs.readFileSync(path.join(projectRoot, ".deeppairing", "sessions", sessionId, "artifacts.json"), "utf-8"));
-    if (!Array.isArray(arr)) return false;
-    const plan = arr.find((a: unknown) => !!a && typeof a === "object" && (a as { id?: unknown }).id === artifactId) as { type?: unknown; status?: unknown } | undefined;
-    return plan?.type === "plan" && plan.status === "approved";
+    if (!Array.isArray(arr)) return null;
+    const plan = arr.find((a: unknown) => !!a && typeof a === "object" && (a as { id?: unknown }).id === artifactId) as
+      | { type?: unknown; status?: unknown; content?: { steps?: Array<{ skelId?: unknown; status?: unknown }> } }
+      | undefined;
+    if (plan?.type !== "plan" || typeof plan.status !== "string") return null;
+    const steps = Array.isArray(plan.content?.steps) ? plan.content!.steps! : [];
+    const inProgressSkelIds = steps
+      .filter((st) => st && typeof st.skelId === "string" && st.skelId && st.status === "in_progress")
+      .map((st) => st.skelId as string);
+    return { status: plan.status, inProgressSkelIds };
   } catch {
-    return false;
+    return null;
   }
+}
+
+/**
+ * Parity PR 4 (#610 review M1) — what each live scope means right now, read
+ * against the store: `fenced` scopes gate edits to their active fences (an
+ * approved plan's own, an approved reshape's in-progress fences, or a
+ * rejected reshape's restored previous fences); `paused` scopes are reshapes
+ * awaiting approval, which ask on any edit to their declared files.
+ */
+export function resolveSkeletonScopes(projectRoot: string, scopes: SkeletonScope[]): { fenced: SkeletonScope[]; paused: SkeletonScope[] } {
+  const fenced: SkeletonScope[] = [];
+  const paused: SkeletonScope[] = [];
+  for (const s of scopes) {
+    if (!s.sessionId) continue;
+    const plan = planOnDisk(projectRoot, s.sessionId, s.artifactId);
+    if (!plan) continue;
+    if (!s.reshape) {
+      if (plan.status === "approved" && s.activeSkelIds.length > 0) fenced.push(s);
+      continue;
+    }
+    if (plan.status === "draft" || plan.status === "revised") {
+      paused.push(s);
+    } else if (plan.status === "approved") {
+      const ids = [...new Set([...s.activeSkelIds, ...plan.inProgressSkelIds])];
+      if (ids.length > 0) fenced.push({ ...s, activeSkelIds: ids });
+    } else if ((plan.status === "rejected" || plan.status === "retracted") && s.reshape.restoreApproved && s.reshape.restoreSkelIds.length > 0) {
+      fenced.push({ ...s, activeSkelIds: s.reshape.restoreSkelIds });
+    }
+  }
+  return { fenced, paused };
+}
+
+/** Read one plan's scope file (null when absent, stale or unreadable). */
+export function readSkeletonScopeFile(projectRoot: string, artifactId: string, now: number = Date.now()): SkeletonScope | null {
+  const name = scopeFileName(artifactId);
+  if (!name) return null;
+  try {
+    return parseScope(JSON.parse(fs.readFileSync(path.join(skeletonScopeDir(projectRoot), name), "utf-8")), now);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parity PR 4 — the paused gate: while a reshaped skeleton awaits approval,
+ * any Edit/Write/MultiEdit to one of its declared files asks (strict-stop:
+ * stops). Null when no paused scope of this session/tree names the file.
+ */
+export function evaluatePausedEdit(args: {
+  toolName: string;
+  toolInput: unknown;
+  paused: SkeletonScope[];
+  sessionId: string;
+  projectRoot: string;
+  strict?: boolean;
+}): SkeletonScopeViolation | null {
+  if (args.toolName !== "Edit" && args.toolName !== "Write" && args.toolName !== "MultiEdit") return null;
+  const input = (args.toolInput ?? {}) as Record<string, unknown>;
+  const fp = input.file_path ?? input.filePath;
+  if (typeof fp !== "string" || !fp) return null;
+  const abs = path.resolve(args.projectRoot, fp);
+  if (abs.split(path.sep).includes(".deeppairing")) return null;
+  const mine = args.paused.filter((s) => s.sessionId === args.sessionId && (!s.workspaceRoot || within(s.workspaceRoot, abs)));
+  for (const s of mine) {
+    const base = s.workspaceRoot ?? args.projectRoot;
+    const rel = path.relative(base, abs).split(path.sep).join("/");
+    const files = (s.reshape?.files ?? []).map((f) => path.relative(base, path.resolve(base, f)).split(path.sep).join("/"));
+    if (!files.includes(rel)) continue;
+    const plan = s.planTitle ? ` ("${s.planTitle}")` : "";
+    return {
+      skelIds: [],
+      target: rel,
+      reason: args.strict
+        ? `Edit to ${rel} stopped before execution (strict-stop mode). The skeleton${plan} was reshaped and the new version awaits your approval, so fills are paused. [SKELETON_PAUSED]`
+        : `Allow this edit while the skeleton change awaits your approval? The skeleton${plan} was reshaped and the new version isn't approved yet, so fills are paused for its files (${rel}).\n` +
+          `[SKELETON_PAUSED — agent: a reshaped skeleton plan awaits re-review. Don't fill or restructure its files until your pair approves the new version; poll check_feedback.]`,
+    };
+  }
+  return null;
 }
 
 function within(dir: string, abs: string): boolean {

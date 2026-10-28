@@ -1064,6 +1064,13 @@ import path5 from "node:path";
 var SKEL_TODO = "SKEL_TODO";
 var SKELETON_SCOPE_DIR = "skeleton-scopes";
 var SKELETON_SCOPE_MAX_AGE_MS = 8 * 60 * 60 * 1e3;
+function parseReshape(raw) {
+  if (!raw || typeof raw !== "object") return void 0;
+  const r = raw;
+  if (typeof r.fromId !== "string" || !r.fromId) return void 0;
+  const strs = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string" && x.length > 0) : [];
+  return { fromId: r.fromId, files: strs(r.files), restoreApproved: r.restoreApproved === true, restoreSkelIds: strs(r.restoreSkelIds) };
+}
 var COMMENT = String.raw`(?:\/\/|#|--|;|\/\*|<!--|\{\/\*)`;
 var ID = String.raw`([A-Za-z0-9][\w.-]*)`;
 var OPEN_RE = new RegExp(String.raw`^\s*${COMMENT}\s*SKEL\[${ID}\]\s*(.*?)\s*(?:\*\/\}?|-->)?\s*$`);
@@ -1099,7 +1106,8 @@ function parseScope(raw, now) {
   if (!raw || typeof raw !== "object") return null;
   const r = raw;
   const ids = Array.isArray(r.activeSkelIds) ? r.activeSkelIds.filter((x) => typeof x === "string" && x.length > 0) : [];
-  if (ids.length === 0 || typeof r.artifactId !== "string") return null;
+  const reshape = parseReshape(r.reshape);
+  if (ids.length === 0 && !reshape || typeof r.artifactId !== "string") return null;
   const at = Date.parse(String(r.updatedAt));
   if (!Number.isFinite(at) || now - at > SKELETON_SCOPE_MAX_AGE_MS) return null;
   return {
@@ -1108,7 +1116,8 @@ function parseScope(raw, now) {
     updatedAt: String(r.updatedAt),
     ...typeof r.planTitle === "string" ? { planTitle: r.planTitle } : {},
     ...typeof r.sessionId === "string" && r.sessionId ? { sessionId: r.sessionId } : {},
-    ...typeof r.workspaceRoot === "string" && r.workspaceRoot ? { workspaceRoot: r.workspaceRoot } : {}
+    ...typeof r.workspaceRoot === "string" && r.workspaceRoot ? { workspaceRoot: r.workspaceRoot } : {},
+    ...reshape ? { reshape } : {}
   };
 }
 function readSkeletonScopes(projectRoot, now = Date.now()) {
@@ -1131,16 +1140,64 @@ function readSkeletonScopes(projectRoot, now = Date.now()) {
 function skeletonScopeActive(projectRoot, now = Date.now()) {
   return readSkeletonScopes(projectRoot, now).length > 0;
 }
-function planApprovedOnDisk(projectRoot, sessionId, artifactId) {
-  if (!/^[A-Za-z0-9_-]{1,160}$/.test(sessionId)) return false;
+function planOnDisk(projectRoot, sessionId, artifactId) {
+  if (!/^[A-Za-z0-9_-]{1,160}$/.test(sessionId)) return null;
   try {
     const arr = JSON.parse(fs4.readFileSync(path5.join(projectRoot, ".deeppairing", "sessions", sessionId, "artifacts.json"), "utf-8"));
-    if (!Array.isArray(arr)) return false;
+    if (!Array.isArray(arr)) return null;
     const plan = arr.find((a) => !!a && typeof a === "object" && a.id === artifactId);
-    return plan?.type === "plan" && plan.status === "approved";
+    if (plan?.type !== "plan" || typeof plan.status !== "string") return null;
+    const steps = Array.isArray(plan.content?.steps) ? plan.content.steps : [];
+    const inProgressSkelIds = steps.filter((st) => st && typeof st.skelId === "string" && st.skelId && st.status === "in_progress").map((st) => st.skelId);
+    return { status: plan.status, inProgressSkelIds };
   } catch {
-    return false;
+    return null;
   }
+}
+function resolveSkeletonScopes(projectRoot, scopes) {
+  const fenced = [];
+  const paused = [];
+  for (const s of scopes) {
+    if (!s.sessionId) continue;
+    const plan = planOnDisk(projectRoot, s.sessionId, s.artifactId);
+    if (!plan) continue;
+    if (!s.reshape) {
+      if (plan.status === "approved" && s.activeSkelIds.length > 0) fenced.push(s);
+      continue;
+    }
+    if (plan.status === "draft" || plan.status === "revised") {
+      paused.push(s);
+    } else if (plan.status === "approved") {
+      const ids = [.../* @__PURE__ */ new Set([...s.activeSkelIds, ...plan.inProgressSkelIds])];
+      if (ids.length > 0) fenced.push({ ...s, activeSkelIds: ids });
+    } else if ((plan.status === "rejected" || plan.status === "retracted") && s.reshape.restoreApproved && s.reshape.restoreSkelIds.length > 0) {
+      fenced.push({ ...s, activeSkelIds: s.reshape.restoreSkelIds });
+    }
+  }
+  return { fenced, paused };
+}
+function evaluatePausedEdit(args) {
+  if (args.toolName !== "Edit" && args.toolName !== "Write" && args.toolName !== "MultiEdit") return null;
+  const input2 = args.toolInput ?? {};
+  const fp = input2.file_path ?? input2.filePath;
+  if (typeof fp !== "string" || !fp) return null;
+  const abs = path5.resolve(args.projectRoot, fp);
+  if (abs.split(path5.sep).includes(".deeppairing")) return null;
+  const mine = args.paused.filter((s) => s.sessionId === args.sessionId && (!s.workspaceRoot || within(s.workspaceRoot, abs)));
+  for (const s of mine) {
+    const base = s.workspaceRoot ?? args.projectRoot;
+    const rel = path5.relative(base, abs).split(path5.sep).join("/");
+    const files = (s.reshape?.files ?? []).map((f) => path5.relative(base, path5.resolve(base, f)).split(path5.sep).join("/"));
+    if (!files.includes(rel)) continue;
+    const plan = s.planTitle ? ` ("${s.planTitle}")` : "";
+    return {
+      skelIds: [],
+      target: rel,
+      reason: args.strict ? `Edit to ${rel} stopped before execution (strict-stop mode). The skeleton${plan} was reshaped and the new version awaits your approval, so fills are paused. [SKELETON_PAUSED]` : `Allow this edit while the skeleton change awaits your approval? The skeleton${plan} was reshaped and the new version isn't approved yet, so fills are paused for its files (${rel}).
+[SKELETON_PAUSED \u2014 agent: a reshaped skeleton plan awaits re-review. Don't fill or restructure its files until your pair approves the new version; poll check_feedback.]`
+    };
+  }
+  return null;
 }
 function within(dir, abs) {
   const rel = path5.relative(dir, abs);
@@ -1741,11 +1798,17 @@ function evaluateSkeletonScope(args) {
     const target = toolInputTargetPath(args.toolInput);
     if (typeof target !== "string" || !target) return null;
     const sessionId = deriveSessionId(args.projectRoot, usableSessionId(args.sessionId)).sessionId;
-    const scope = selectSkeletonScope(
-      // M5 — and only while that plan is approved in the store.
-      scopes.filter((s) => s.sessionId && planApprovedOnDisk(args.projectRoot, s.sessionId, s.artifactId)),
-      { sessionId, targetAbs: path6.resolve(args.projectRoot, target) }
-    );
+    const { fenced, paused } = resolveSkeletonScopes(args.projectRoot, scopes);
+    const hold = evaluatePausedEdit({
+      toolName: args.toolName,
+      toolInput: args.toolInput,
+      paused,
+      sessionId,
+      projectRoot: args.projectRoot,
+      strict: args.mode === "strict-stop"
+    });
+    if (hold) return { fire: true, reason: hold.reason, source: "skeleton", skeleton: { skelIds: [], paused: true } };
+    const scope = selectSkeletonScope(fenced, { sessionId, targetAbs: path6.resolve(args.projectRoot, target) });
     const violation = evaluateSkeletonEdit({
       toolName: args.toolName,
       toolInput: args.toolInput,
@@ -1803,7 +1866,7 @@ function hookGateRecord(decision, mode = "ask") {
   try {
     if (!decision.fire) return void 0;
     const stance = decision.stance;
-    const g = decision.guardrail ?? (decision.skeleton ? { category: "skeleton-scope", path: decision.target ?? "", note: `Skeleton fence ${decision.skeleton.skelIds.map((i) => `SKEL[${i}]`).join(", ")}`, rationale: "Filling an approved skeleton: edits stay inside the in-progress step's fence." } : void 0);
+    const g = decision.guardrail ?? (decision.skeleton ? decision.skeleton.paused ? { category: "skeleton-paused", path: decision.target ?? "", note: "Skeleton change awaiting approval", rationale: "A reshaped skeleton awaits your re-review: fills are paused for its files." } : { category: "skeleton-scope", path: decision.target ?? "", note: `Skeleton fence ${decision.skeleton.skelIds.map((i) => `SKEL[${i}]`).join(", ")}`, rationale: "Filling an approved skeleton: edits stay inside the in-progress step's fence." } : void 0);
     const concept = gateText(stance?.concept ?? g?.note, 200);
     if (!concept) return void 0;
     const source = stance ? decision.source === "team" ? "team" : "session" : "guardrail";

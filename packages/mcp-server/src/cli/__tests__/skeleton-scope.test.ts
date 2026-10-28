@@ -227,12 +227,12 @@ describe("planDeclaredFiles + scanSkeletonFences (M3/M4)", () => {
 
 // ---- the hook, in-process and spawned ----
 
-function seedPlan(root: string, sessionId: string, artifactId: string, status: string): void {
+function seedPlan(root: string, sessionId: string, artifactId: string, status: string, content?: unknown): void {
   const dir = path.join(root, ".deeppairing", "sessions", sessionId);
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, "artifacts.json");
   const existing = fs.existsSync(file) ? (JSON.parse(fs.readFileSync(file, "utf-8")) as Array<{ id: string }>) : [];
-  fs.writeFileSync(file, JSON.stringify([...existing.filter((a) => a.id !== artifactId), { id: artifactId, type: "plan", status, createdAt: new Date(NOW).toISOString() }]));
+  fs.writeFileSync(file, JSON.stringify([...existing.filter((a) => a.id !== artifactId), { id: artifactId, type: "plan", status, createdAt: new Date(NOW).toISOString(), ...(content ? { content } : {}) }]));
 }
 
 describe("through evaluatePreflightHook", () => {
@@ -321,6 +321,70 @@ describe("through evaluatePreflightHook", () => {
     });
   });
 
+  describe("parity PR 4 (#610 M1): a reshape awaiting approval PAUSES fills", () => {
+    const V2 = "art_v2";
+    const reshape = (over: Partial<NonNullable<SkeletonScope["reshape"]>> = {}, v2Status = "draft", v2Content?: unknown, owner = fallbackSession) => {
+      seedPlan(root, owner, V2, v2Status, v2Content);
+      writeSkeletonScope(root, scope([], {
+        artifactId: V2,
+        sessionId: owner,
+        workspaceRoot: root,
+        reshape: { fromId: "art_plan", files: ["src/a.ts", "src/new.ts"], restoreApproved: true, restoreSkelIds: ["1"], ...over },
+      }));
+    };
+    const STUB_FILL = { old_string: STUB, new_string: "return raw;" };
+
+    it("asks on ANY edit to the plan's declared files — even a fill inside a fence — and stops under strict-stop", () => {
+      live(["1"], {}, "superseded"); // v1's own scope no longer counts
+      reshape();
+      expect(skeletonScopeActive(root, NOW)).toBe(true); // the fast path keeps going
+      const d = hook(STUB_FILL);
+      expect(d).toMatchObject({ fire: true, source: "skeleton", skeleton: { skelIds: [], paused: true }, target: "src/a.ts" });
+      expect(d.reason).toContain("[SKELETON_PAUSED");
+      expect(d.reason).toContain("Allow this edit while the skeleton change awaits your approval?");
+      const w = evaluatePreflightHook({ toolName: "Write", toolInput: { file_path: path.join(root, "src", "new.ts"), content: "x" }, projectRoot: root, now: NOW, env: {} });
+      expect(w.fire).toBe(true);
+      expect(hook(STUB_FILL, { mode: "strict-stop" }).reason).toMatch(/stopped before execution \(strict-stop mode\).*fills are paused/);
+      expect(hookGateRecord(d)).toMatchObject({ guardrail: "skeleton-paused", concept: "Skeleton change awaiting approval", target: "src/a.ts" });
+    });
+
+    it("files outside the plan aren't paused, and another session is never affected", () => {
+      reshape();
+      const other = path.join(root, "src", "other.ts");
+      fs.writeFileSync(other, "export const x = 1;\n");
+      expect(evaluatePreflightHook({ toolName: "Edit", toolInput: { file_path: other, old_string: "1", new_string: "2" }, projectRoot: root, now: NOW, env: {} }).fire).toBe(false);
+      expect(hook(STUB_FILL, { sessionId: "99999999-2222-3333-4444-555555555555" }).fire).toBe(false);
+      // …and a reshape owned by another session doesn't pause this one.
+      fs.rmSync(path.join(root, ".deeppairing"), { recursive: true, force: true });
+      reshape({}, "draft", undefined, deriveSessionId(root, CLAUDE_SID).sessionId);
+      expect(hook(STUB_FILL).fire).toBe(false);
+    });
+
+    it("approving v2 replaces the pause with v2's own in-progress fences", () => {
+      reshape({}, "approved", { steps: [{ skelId: "1", status: "pending" }, { skelId: "2", status: "in_progress" }] });
+      expect(hook({ old_string: "smooth(raw", new_string: "smoothed(raw" })).toMatchObject({ fire: true, skeleton: { skelIds: ["2"] } });
+      expect(hook({ old_string: "smooth(raw", new_string: "smoothed(raw" }).reason).toContain("[SKELETON_SCOPE");
+      // Approved with nothing in progress: no fence, no pause.
+      reshape({}, "approved", { steps: [{ skelId: "2", status: "pending" }] });
+      expect(hook(STUB_FILL).fire).toBe(false);
+    });
+
+    it("rejecting or retracting v2 restores v1's approved fences; never when v1 wasn't approved", () => {
+      for (const status of ["rejected", "retracted"]) {
+        reshape({}, status);
+        expect(hook({ old_string: "interpolate(a", new_string: "interp(a" }), status).toMatchObject({ fire: true, skeleton: { skelIds: ["1"] } });
+        expect(hook(STUB_FILL).fire, status).toBe(false); // the restored fence-1 fill is allowed
+      }
+      reshape({ restoreApproved: false }, "rejected");
+      expect(hook({ old_string: "interpolate(a", new_string: "interp(a" }).fire).toBe(false);
+    });
+
+    it("a reshape scope survives with no active ids (written and read back)", () => {
+      reshape();
+      expect(readSkeletonScopes(root, NOW).find((x) => x.artifactId === V2)?.reshape).toMatchObject({ fromId: "art_plan", restoreApproved: true, restoreSkelIds: ["1"] });
+    });
+  });
+
   it("ignores a stale scope and removes the file when nothing is in progress", () => {
     live(["1"], { updatedAt: new Date(NOW - SKELETON_SCOPE_MAX_AGE_MS - 1).toISOString() });
     expect(readSkeletonScopes(root, NOW)).toEqual([]);
@@ -388,5 +452,26 @@ describe.each([
     expect(out?.hookSpecificOutput.permissionDecisionReason).toContain("[SKELETON_SCOPE");
     expect(launch(cmd, ev(STUB, "return raw;", sid))).toBeNull();
     expect(launch(cmd, ev("smooth(raw", "smoothed(raw", "99999999-2222-3333-4444-555555555555"))).toBeNull();
+  }, 120_000);
+
+  it.skipIf(!built)("parity PR 4: a reshape awaiting approval asks even on a fill, only for the owning session", () => {
+    const cmd = command();
+    const sid = "11111111-2222-3333-4444-555555555555";
+    const owner = deriveSessionId(dir, sid).sessionId;
+    seedPlan(dir, owner, "art_plan", "superseded");
+    seedPlan(dir, owner, "art_v2", "draft");
+    writeSkeletonScope(dir, {
+      ...scope([], { artifactId: "art_v2" }),
+      updatedAt: new Date().toISOString(),
+      sessionId: owner,
+      workspaceRoot: dir,
+      reshape: { fromId: "art_plan", files: ["src/a.ts"], restoreApproved: true, restoreSkelIds: ["1"] },
+    });
+    const file = path.join(dir, "src", "a.ts");
+    const ev = (session_id?: string) => ({ tool_name: "Edit", session_id, tool_input: { file_path: file, old_string: STUB, new_string: "return raw;" } });
+    const out = launch(cmd, ev(sid));
+    expect(out?.hookSpecificOutput.permissionDecision).toBe("ask");
+    expect(out?.hookSpecificOutput.permissionDecisionReason).toContain("[SKELETON_PAUSED");
+    expect(launch(cmd, ev("99999999-2222-3333-4444-555555555555"))).toBeNull();
   }, 120_000);
 });

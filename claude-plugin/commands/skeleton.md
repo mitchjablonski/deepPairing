@@ -22,19 +22,23 @@ pairing protocol):
    those nodes by fence status, read from the code, and jumps to the fence on
    click. Style existing-system nodes with `classDef existing`. Tell me which one or two calls you're
    least sure about. Then wait for my verdict with `check_feedback`.
-3. Once I approve, fill the steps in order. For each one, `update_plan_progress`
-   → `in_progress`, replace the stub inside the fence, run the tests, then
-   `done`. Each progress call re-reads the fenced files, so the plan card
-   follows the fills, and the reply warns when the checklist and the code
-   disagree. Don't stop between steps unless something needs my call. Approving
-   the shape doesn't lower my autonomy level: anything it routes to me still
-   comes to me.
+3. Once I approve, fill **one step** the way `/deeppairing:skeleton-fill`
+   does: `update_plan_progress` → `in_progress`, replace the stub inside the
+   fence, run the tests, then `done`. Then stop and report. I continue with
+   `/deeppairing:skeleton-fill` (the next step), `/deeppairing:skeleton-fill <id>`
+   or `/deeppairing:skeleton-fill all` (the rest, in order). Each progress call
+   re-reads the fenced files, so the plan card follows the fills, and the reply
+   warns when the checklist and the code disagree. Approving the shape doesn't
+   lower my autonomy level: anything it routes to me still comes to me.
 4. If a step needs a structural change, stop and propose it. Don't work around
-   the fence. Once I agree, set the step back to `pending` (or revise the
-   plan) before you make the structural edit.
-5. When every step is done, strip the marker lines, then present the whole
-   change with `present_changeset` for my review before it lands. That floor
-   holds at every autonomy level; an approved shape isn't a reviewed diff.
-   Close with `present_debrief`.
+   the fence, and don't set the step back to `pending` to lift it. Once I
+   agree, `revise_artifact` the plan (`mode: "supersede"`, a reason that starts
+   `Skeleton change:`). I re-review the new skeleton; until I approve it, fills
+   are paused and the preflight hook asks me before any edit to the plan's files.
+5. When every step is done, strip the marker lines (the progress reply and
+   `present_changeset` warn about any `SKEL[`, `/SKEL[` or `SKEL_TODO` left in
+   the plan's files), then present the whole change with `present_changeset`
+   for my review before it lands. That floor holds at every autonomy level; an
+   approved shape isn't a reviewed diff. Close with `present_debrief`.
 
 $ARGUMENTS
