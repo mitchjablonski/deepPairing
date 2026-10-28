@@ -58,9 +58,15 @@ export function DiagramRegionLayer({
   svg,
   hostRef,
   chromeHost,
+  onPlainClick,
 }: {
   artifactId: string;
   visualId: string;
+  /** Skeleton plans (parity PR 3) — a click (no drag) that lands on no
+   *  existing region goes here, in client coords, so a diagram can hit-test its
+   *  own nodes (a step node jumps to its fence). Drag-to-comment is unchanged,
+   *  and a click on an existing region still re-opens its thread first. */
+  onPlainClick?: (clientX: number, clientY: number) => void;
   // #173 — the decision OPTION this diagram belongs to. When set, a region
   // comment anchors to optionId + visualId + region together (all three already
   // in the schema), and existing region comments are scoped to THIS option so
@@ -818,6 +824,7 @@ export function DiagramRegionLayer({
         }
       }
       if (best) openRegion(best.region);
+      else onPlainClick?.(sel.left, sel.top);
       return;
     }
     const s = el?.getBoundingClientRect();

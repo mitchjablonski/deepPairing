@@ -72,3 +72,30 @@ export function describeSkeletonLine(art: Artifact | undefined, visualId: unknow
   const status = stepIndex >= 0 && content!.steps![stepIndex]!.status === "in_progress" ? "active" : fence.status === "todo" ? "pending" : "filled";
   return ` (inside the SKEL[${fence.id}] fence${stepIndex >= 0 ? `, step ${stepIndex + 1}` : ""} — ${status})`;
 }
+
+/**
+ * Parity PR 3 — where the checklist and the code disagree, read from the
+ * code: a step marked done whose fence still holds SKEL_TODO, or a pending
+ * step whose fences are all filled. `skipIds` are steps another warning in the
+ * same reply already names (#606's "done with SKEL_TODO" check).
+ */
+export function skeletonProgressMismatches(
+  steps: Array<{ skelId?: string; status?: string }>,
+  fences: Array<{ id: string; file: string; openLine: number; status: "todo" | "filled" }>,
+  skipIds: ReadonlySet<string> = new Set(),
+): string[] {
+  const out: string[] = [];
+  steps.forEach((st, i) => {
+    const id = st?.skelId;
+    if (typeof id !== "string" || !id || skipIds.has(id)) return;
+    const mine = fences.filter((f) => f.id === id);
+    if (mine.length === 0) return;
+    const todo = mine.filter((f) => f.status === "todo");
+    if (st.status === "done" && todo.length > 0) {
+      out.push(`step ${i + 1} (SKEL[${id}]) is marked done, but SKEL_TODO is still in the code at ${todo.map((f) => `${f.file}:${f.openLine}`).join(", ")}`);
+    } else if ((st.status === undefined || st.status === "pending") && todo.length === 0) {
+      out.push(`step ${i + 1} (SKEL[${id}]) is still pending, but its fence is already filled in the code — mark it done, or say why not`);
+    }
+  });
+  return out;
+}

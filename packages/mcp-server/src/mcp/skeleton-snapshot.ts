@@ -300,7 +300,13 @@ export function buildSkeletonSnapshot(args: {
         title: rel,
         filePath: rel,
         caption: `Content withheld: possible secret detected (${what}).`,
-        skeleton: { fences: [], withheld: `possible secret detected (${what})` },
+        // Fence status only (no titles: a marker line could hold the value),
+        // so the diagram and checklist still read progress from the code.
+        skeleton: {
+          fences: fences.map((f) => ({ id: f.id, openLine: f.openLine, closeLine: f.closeLine, status: f.status })),
+          withheld: `possible secret detected (${what})`,
+          takenAt: new Date().toISOString(),
+        },
       });
       continue;
     }
@@ -311,6 +317,7 @@ export function buildSkeletonSnapshot(args: {
     const skeleton: SkeletonCodeSnapshot = {
       fences: fenceViews(fences, cut ? cut.shownLines : null),
       ...(cut ? { truncated: { shownLines: cut.shownLines, totalLines: cut.totalLines } } : {}),
+      takenAt: new Date().toISOString(),
     };
     const n = skeleton.fences.length;
     const captionParts = [
@@ -386,5 +393,37 @@ export function attachSkeletonSnapshot<T extends Record<string, unknown>>(
     return { content: next as T, note: snap.note, ...(snap.scan ? { scan: snap.scan } : {}) };
   } catch {
     return { content, note: "" };
+  }
+}
+
+/**
+ * Parity PR 3 — progress read from the code. update_plan_progress re-reads a
+ * skeleton plan's fenced files (same bounds and allowlist as present_plan) so
+ * the code view and diagram follow the fills as they land. A file whose text
+ * is unchanged keeps its old `takenAt`, so line comments on it are not flagged
+ * as possibly moved. Null for a non-skeleton plan. Never throws.
+ */
+export function resnapshotSkeleton(
+  content: unknown,
+  opts: { root?: string; limits?: SkeletonSnapshotLimits } = {},
+): SkeletonSnapshotResult | null {
+  try {
+    const c = (content ?? {}) as { steps?: unknown; visuals?: unknown };
+    const steps = Array.isArray(c.steps) ? (c.steps as Array<{ skelId?: unknown }>) : [];
+    if (!steps.some((st) => typeof st?.skelId === "string" && st.skelId.length > 0)) return null;
+    const root = opts.root ?? (() => {
+      const r = resolveProjectRoot();
+      return r.worktree?.workspaceRoot ?? r.projectRoot;
+    })();
+    const previous = (Array.isArray(c.visuals) ? (c.visuals as PlanVisual[]) : []).filter((v) => v && isSkeletonVisualId(v.id));
+    const snap = buildSkeletonSnapshot({ steps, visuals: stripSkeletonVisuals(c.visuals) ?? [], root, ...(opts.limits ? { limits: opts.limits } : {}) });
+    for (const v of snap.visuals) {
+      const old = previous.find((p) => p.id === v.id);
+      if (!v.skeleton || !old?.skeleton?.takenAt) continue;
+      if (old.code === v.code && (old.skeleton.withheld ?? "") === (v.skeleton.withheld ?? "")) v.skeleton.takenAt = old.skeleton.takenAt;
+    }
+    return snap;
+  } catch {
+    return null;
   }
 }

@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { decorateStepNodes, stepNodeAt } from "../lib/skeletonDiagram";
+import type { StepNodeState } from "./SkeletonFences";
 import { errorMessage } from "@deeppairing/shared";
 import { createPortal } from "react-dom";
 import { useModal } from "../hooks/useModal";
@@ -113,8 +115,13 @@ export function MermaidDiagram({
   source,
   region,
   report,
+  stepNodes,
 }: {
   source: string;
+  /** Skeleton plans (parity PR 3) — colour + pattern `step_<id>` nodes by fence
+   *  status and jump to the fence on click. Omitted for every other diagram,
+   *  which renders exactly as before. */
+  stepNodes?: { states: Record<string, StepNodeState>; onJump: (skelId: string) => void };
   // #140 — when present, the diagram becomes region-commentable (drag a rect /
   // pick a node). Passed ONLY for the interactive artifact view; a decision
   // preview or revision diff omits it and the diagram behaves exactly as before.
@@ -170,6 +177,26 @@ export function MermaidDiagram({
   // blank — which would unmount DiagramRegionLayer and drop an OPEN region
   // composer (unsent text + focus). Only a genuine SOURCE change clears state.
   const lastSourceRef = useRef<string | null>(null);
+
+  // Parity PR 3 — decorate step nodes after each render (DOM-only; the SVG
+  // string and the region layer's inputs are untouched). Keyed on the status
+  // content, not object identity, so a progress broadcast re-colours in place.
+  const stepNodesRef = useRef(stepNodes);
+  stepNodesRef.current = stepNodes;
+  const stepKey = stepNodes
+    ? JSON.stringify(Object.values(stepNodes.states).map((st) => [st.skelId, st.status, st.mismatch ?? "", st.stepNumber]))
+    : "";
+  useEffect(() => {
+    const host = hostRef.current;
+    const current = stepNodesRef.current;
+    if (!host || !svg || !current) return;
+    return decorateStepNodes(host, current.states, (id) => stepNodesRef.current?.onJump(id));
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberate: keyed on the status CONTENT (stepKey); stepNodes is a fresh object every render
+  }, [svg, stepKey]);
+  const onPlainClick = (x: number, y: number) => {
+    const id = stepNodeAt(hostRef.current, x, y);
+    if (id) stepNodesRef.current?.onJump(id);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -399,6 +426,7 @@ export function MermaidDiagram({
               svg={svg}
               hostRef={hostRef}
               chromeHost={chromeHost}
+              {...(stepNodes ? { onPlainClick } : {})}
             />
           )}
         </div>

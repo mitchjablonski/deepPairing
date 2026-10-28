@@ -1,5 +1,7 @@
 import { resolveProjectRoot } from "../../project-root.js";
 import { planDeclaredFiles, scanSkeletonFences, writeSkeletonScope } from "../../skeleton-scope.js";
+import { resnapshotSkeleton } from "../skeleton-snapshot.js";
+import { skeletonProgressMismatches } from "../skeleton-line.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 const VALID_STATUSES = new Set(["pending", "in_progress", "done", "skipped"]);
@@ -42,7 +44,14 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
     });
   }
 
-  const artifact = await store.updatePlanProgress(artifactId, updates);
+  // Skeleton plans, parity PR 3 — progress read from the code: re-read the
+  // plan's fenced files (present_plan's bounds + allowlist) so the code view
+  // and diagram follow the fills. Non-skeleton plans and specs skip this.
+  const before = (await store.getArtifacts()).find((a) => a.id === artifactId);
+  const resnap = before?.type === "plan" ? resnapshotSkeleton(before.content) : null;
+  const artifact = resnap
+    ? await store.updatePlanProgress(artifactId, updates, { skeletonVisuals: resnap.visuals })
+    : await store.updatePlanProgress(artifactId, updates);
   if (!artifact) {
     return {
       content: [{ type: "text", text: `update_plan_progress: ${artifactId} is not a known plan or spec artifact (or no update touched an existing plan step or spec task).` }],
@@ -76,10 +85,20 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
     ? `\n⚠ WARNING: this ${kind} is ${NOT_EXECUTABLE[artifact.status]}.`
     : "";
   const skeletonNote = isSpec ? "" : syncSkeletonScope(store.getSessionId(), artifact, updates);
+  // Parity PR 3 — the checklist vs the code. Steps finished in THIS call are
+  // already named by syncSkeletonScope's own "still has SKEL_TODO" check.
+  let mismatchNote = "";
+  if (resnap?.scan && c.steps) {
+    const finishedNow = new Set(
+      updates.filter((u) => u.status === "done").map((u) => c.steps?.[u.stepIndex]?.skelId).filter((id): id is string => typeof id === "string" && id.length > 0),
+    );
+    const lines = skeletonProgressMismatches(c.steps, resnap.scan.fences, finishedNow);
+    if (lines.length > 0) mismatchNote = `\n⚠ The checklist and the code disagree: ${lines.join("; ")}.`;
+  }
   return {
     content: [{
       type: "text",
-      text: `${isSpec ? "Spec" : "Plan"} progress recorded: ${done}/${items.length} ${unit} complete. The companion UI checklist is live — keep marking ${unit} as you finish them.${warning}${skeletonNote}`,
+      text: `${isSpec ? "Spec" : "Plan"} progress recorded: ${done}/${items.length} ${unit} complete. The companion UI checklist is live — keep marking ${unit} as you finish them.${warning}${skeletonNote}${mismatchNote}`,
     }],
   };
 }

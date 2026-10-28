@@ -16,11 +16,17 @@ pairing protocol):
    typechecker if there is one.
 2. `present_plan` with one step per fence (`skelId`), each step's `files`, a
    Mermaid architecture `diagram` visual (how the new pieces connect to each
-   other and to the existing system) and a `file_map` of every skeleton file. Tell me which one or two calls you're
+   other and to the existing system) and a `file_map` of every skeleton file.
+   In the diagram, give each step's node the id `step_<id>`, with dots and
+   dashes as underscores (step `2.1` is `step_2_1`). The plan card colours
+   those nodes by fence status, read from the code, and jumps to the fence on
+   click. Style existing-system nodes with `classDef existing`. Tell me which one or two calls you're
    least sure about. Then wait for my verdict with `check_feedback`.
 3. Once I approve, fill the steps in order. For each one, `update_plan_progress`
    → `in_progress`, replace the stub inside the fence, run the tests, then
-   `done`. Don't stop between steps unless something needs my call. Approving
+   `done`. Each progress call re-reads the fenced files, so the plan card
+   follows the fills, and the reply warns when the checklist and the code
+   disagree. Don't stop between steps unless something needs my call. Approving
    the shape doesn't lower my autonomy level: anything it routes to me still
    comes to me.
 4. If a step needs a structural change, stop and propose it. Don't work around

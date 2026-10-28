@@ -5,7 +5,7 @@ import { classifyStaleResolve, classifyClosedDecision, type DecisionResolveOutco
 import path from "node:path";
 import crypto from "node:crypto";
 import type { Artifact, ArtifactAdmission, ArtifactType, ArtifactStatus, BriefRef, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
-import { ArtifactSchema, BriefRefSchema, suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode } from "@deeppairing/shared";
+import { ArtifactSchema, BriefRefSchema, suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode, SKELETON_VISUAL_PREFIX } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { capConceptLength } from "./concept-hygiene.js";
@@ -1022,6 +1022,7 @@ export class FileStore implements IStore {
   updatePlanProgress(
     artifactId: string,
     updates: Array<{ stepIndex: number; status: "pending" | "in_progress" | "done" | "skipped"; statusNote?: string }>,
+    opts?: { skeletonVisuals?: unknown[] },
   ): Artifact | null {
     this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
@@ -1040,6 +1041,19 @@ export class FileStore implements IStore {
       touched = true;
     }
     if (!touched) return null;
+    // Skeleton plans (parity PR 3) — progress read from the code: swap in the
+    // server's fresh snapshot of the fenced files. Only `skelcode:` visuals are
+    // replaced (and only `skelcode:` ids are accepted), so the agent's own
+    // visuals never change here. The secret re-scan below covers the new text.
+    if (art.type === "plan" && Array.isArray(opts?.skeletonVisuals)) {
+      const isSkel = (v: unknown) =>
+        !!v && typeof v === "object" && typeof (v as { id?: unknown }).id === "string" && (v as { id: string }).id.startsWith(SKELETON_VISUAL_PREFIX);
+      const plan = art.content as { visuals?: unknown[] };
+      const kept = (Array.isArray(plan.visuals) ? plan.visuals : []).filter((v) => !isSkel(v));
+      const next = [...kept, ...opts.skeletonVisuals.filter(isSkel)];
+      if (next.length > 0) plan.visuals = next;
+      else delete plan.visuals;
+    }
     // #162 — statusNote is free text, and this is the ONLY path that mutates
     // artifact content after creation (revise/supersede creates a NEW
     // artifact; renameArtifact touches the title; updateArtifactStatus is

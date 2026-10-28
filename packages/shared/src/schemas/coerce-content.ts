@@ -332,6 +332,7 @@ function coerceSkeletonSnapshot(o: Record<string, unknown>): SkeletonCodeSnapsho
   }
   if (typeof o.markerError === "string" && o.markerError) out.markerError = o.markerError;
   if (typeof o.withheld === "string" && o.withheld) out.withheld = o.withheld;
+  if (typeof o.takenAt === "string" && o.takenAt) out.takenAt = o.takenAt;
   return out;
 }
 

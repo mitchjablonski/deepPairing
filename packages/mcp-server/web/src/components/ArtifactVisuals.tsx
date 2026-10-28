@@ -4,7 +4,16 @@ import { PrototypeFrame } from "./PrototypeFrame";
 import { CommentableCode } from "./CommentableCode";
 import { CommentTrigger, AskTrigger } from "./CommentThread";
 import { useChainComments } from "../hooks/useChainComments";
-import { SkeletonSummary, skeletonLineDecoration, type SkeletonStepLike } from "./SkeletonFences";
+import {
+  SkeletonSummary,
+  skeletonLineDecoration,
+  planStepNodeStates,
+  jumpToFence,
+  STEP_GLYPH,
+  type SkeletonStepLike,
+  type StepNodeState,
+} from "./SkeletonFences";
+import { sourceHasStepNodes } from "../lib/skeletonDiagram";
 
 const kindLabel: Record<string, string> = {
   diagram: "Diagram",
@@ -80,6 +89,10 @@ export function ArtifactVisuals({
   // renderers). A visualId that only exists on one version simply won't match.
   const comments = useChainComments(artifactId);
   if (!visuals || visuals.length === 0) return null;
+  // Parity PR 3 — every skelId step's state, read from the code snapshots, for
+  // the status-coloured diagram. Empty (so diagrams are untouched) unless this
+  // is a skeleton plan with a code view.
+  const stepNodeStates = skeletonSteps && visuals.some((v) => v?.skeleton) ? planStepNodeStates(visuals, skeletonSteps) : undefined;
 
   return (
     <div className="space-y-3">
@@ -111,8 +124,16 @@ export function ArtifactVisuals({
                 // #607 review L2 — line threads posted on an EARLIER version of
                 // this file's snapshot are shown by line number; the re-read may
                 // have moved the code under them, so say so.
+                // Parity PR 3 — a re-read on update_plan_progress changes the
+                // code in place, so a comment older than this file's last text
+                // change (takenAt) may have moved too.
                 carriedComments={
-                  comments.filter((c) => c.target.visualId === v.id && c.target.artifactId !== artifactId && c.target.lineStart != null).length
+                  comments.filter(
+                    (c) =>
+                      c.target.visualId === v.id &&
+                      c.target.lineStart != null &&
+                      (c.target.artifactId !== artifactId || (!!v.skeleton?.takenAt && c.createdAt < v.skeleton.takenAt)),
+                  ).length
                 }
               />
             )}
@@ -124,10 +145,10 @@ export function ArtifactVisuals({
               // when the content actually exceeds 60vh; short visuals are untouched.
               // Skeleton snapshots are whole files, so they always take the cap.
               <div data-dp-visual-cap="true" className="max-h-[60vh] overflow-auto rounded-md">
-                <VisualBody artifactId={artifactId} visual={v} readOnly={readOnly} skeletonSteps={skeletonSteps} />
+                <VisualBody artifactId={artifactId} visual={v} readOnly={readOnly} skeletonSteps={skeletonSteps} stepNodeStates={stepNodeStates} />
               </div>
             ) : (
-              <VisualBody artifactId={artifactId} visual={v} readOnly={readOnly} skeletonSteps={skeletonSteps} />
+              <VisualBody artifactId={artifactId} visual={v} readOnly={readOnly} skeletonSteps={skeletonSteps} stepNodeStates={stepNodeStates} />
             )}
 
             {v.caption && <div className="text-2xs text-text-secondary leading-relaxed">{v.caption}</div>}
@@ -166,11 +187,14 @@ export function VisualBody({
   staticPreview = false,
   optionId,
   skeletonSteps,
+  stepNodeStates,
 }: {
   artifactId: string;
   visual: PlanVisual;
   /** Skeleton plans — see ArtifactVisuals.skeletonSteps. */
   skeletonSteps?: SkeletonStepLike[];
+  /** Parity PR 3 — skelId → state, for `step_<id>` nodes in a diagram. */
+  stepNodeStates?: Record<string, StepNodeState>;
   // `readOnly` governs ONLY per-line/per-visual comment-anchoring (turned off in
   // decision options and revision diffs). `staticPreview` governs ONLY whether a
   // prototype renders the static placeholder instead of the runnable sandbox —
@@ -187,8 +211,12 @@ export function VisualBody({
   // Defensive even though the coercer shapes visuals upstream: a renderer must
   // never throw on a malformed field (legacy/partial content) — degrade instead.
   if (visual.kind === "diagram") {
-    return typeof visual.source === "string" && visual.source.trim() ? (
+    const states = stepNodeStates ?? {};
+    const skelIds = Object.keys(states);
+    const isSkeletonDiagram = typeof visual.source === "string" && skelIds.length > 0 && sourceHasStepNodes(visual.source, skelIds);
+    const diagram = typeof visual.source === "string" && visual.source.trim() ? (
       <MermaidDiagram
+        {...(isSkeletonDiagram ? { stepNodes: { states, onJump: (id: string) => jumpToFence(states[id]?.target) } } : {})}
         source={visual.source}
         // #140 — region-comment the diagram ONLY in the live artifact view.
         // readOnly (decision-option preview, revision diff) omits it, so those
@@ -204,6 +232,13 @@ export function VisualBody({
       />
     ) : (
       <div className="text-2xs text-text-muted">No diagram source provided.</div>
+    );
+    if (!isSkeletonDiagram) return diagram;
+    return (
+      <>
+        {diagram}
+        <StepNodeLegend source={visual.source ?? ""} states={states} />
+      </>
     );
   }
 
@@ -416,5 +451,39 @@ function TreeRow({ node, depth }: { node: TreeNode; depth: number }) {
         <TreeRow key={child.name} node={child} depth={depth + 1} />
       ))}
     </>
+  );
+}
+
+/**
+ * Parity PR 3 — the diagram's step nodes as a TEXT list: each status in words
+ * (with its glyph), any checklist/code mismatch, and a keyboard-reachable jump
+ * to the fence. The coloured nodes are the at-a-glance view; this is the
+ * accessible one.
+ */
+function StepNodeLegend({ source, states }: { source: string; states: Record<string, StepNodeState> }) {
+  const shown = Object.values(states).filter((st) => sourceHasStepNodes(source, [st.skelId]));
+  if (shown.length === 0) return null;
+  return (
+    <ul aria-label="Skeleton steps in this diagram" className="flex flex-wrap gap-1.5 pt-1" data-skel-legend="true">
+      {shown.map((st) => (
+        <li key={st.skelId}>
+          <button
+            type="button"
+            disabled={!st.target}
+            onClick={() => jumpToFence(st.target)}
+            data-skel-legend-step={st.skelId}
+            data-skel-status={st.status}
+            className={`rounded border px-1.5 py-0.5 text-[10px] text-text-secondary disabled:cursor-default ${
+              st.mismatch ? "border-accent-red/60" : "border-white/[0.08]"
+            } hover:border-accent-blue/40`}
+            title={st.target ? `Jump to SKEL[${st.skelId}] in ${st.target.filePath}` : "This fence isn't in the code view"}
+          >
+            <span aria-hidden="true">{STEP_GLYPH[st.status]} </span>
+            Step {st.stepNumber} · SKEL[{st.skelId}] · {st.label}
+            {st.mismatch && <span className="text-accent-red"> · ⚠ {st.mismatch}</span>}
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }
