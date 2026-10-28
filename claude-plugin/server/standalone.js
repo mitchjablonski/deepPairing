@@ -25969,7 +25969,19 @@ var CommentTargetSchema = external_exports.object({
     filePath: external_exports.string(),
     lineStart: external_exports.number().int(),
     lineEnd: external_exports.number().int().optional()
-  })).optional().describe("Cross-file comment anchors \u2014 2+ entries make this a cross-file thread spanning changeset files")
+  })).optional().describe("Cross-file comment anchors \u2014 2+ entries make this a cross-file thread spanning changeset files"),
+  // Skeleton plans, parity PR 3 (#609 review M2) — which skeleton snapshot a
+  // line comment was written on, captured AT COMMENT TIME: the approved
+  // `skelcode:` snapshot (immutable) or the live `skelcode-live:` view as of a
+  // read. The live view is re-read in place, so the line's text and fence are
+  // recorded here; check_feedback resolves against them, not the current code.
+  skeletonAnchor: external_exports.object({
+    snapshot: external_exports.enum(["approved", "live"]),
+    takenAt: external_exports.string().max(64).optional(),
+    readAt: external_exports.number().optional(),
+    fenceId: external_exports.string().max(120).optional(),
+    lineText: external_exports.string().max(500).optional()
+  }).optional().describe("Skeleton plans: the snapshot (approved / live as of a read) a line comment was written on, with its line text and fence at that time")
 });
 var CommentAuthorSchema = external_exports.enum(["human", "agent"]);
 var CommentIntentSchema = external_exports.enum(["comment", "question", "suggestion"]);
@@ -27796,8 +27808,8 @@ function maskNonProse(text) {
     blank(chars, m.index, m.index + m[0].length);
   }
   const masked3 = chars.join("");
-  const quoteLine = /^[ \t]*>.*$/gm;
-  while ((m = quoteLine.exec(masked3)) !== null) {
+  const quoteLine2 = /^[ \t]*>.*$/gm;
+  while ((m = quoteLine2.exec(masked3)) !== null) {
     blank(chars, m.index, m.index + m[0].length);
   }
   const masked4 = chars.join("");
@@ -29173,17 +29185,35 @@ function stripForgedSkeleton(content) {
   }
   return out;
 }
-function describeSkeletonLine(art, visualId, line) {
+var quoteLine = (text) => {
+  const t = text.trim().replace(/\s+/g, " ");
+  return JSON.stringify(t.length > 120 ? `${t.slice(0, 117)}...` : t);
+};
+function describeSkeletonLine(art, visualId, line, anchor, createdAt) {
   if (!art || art.type !== "plan" || !isSkeletonVisualId(visualId) || typeof line !== "number") return null;
   const content = art.content;
   const visual = content?.visuals?.find((v2) => v2?.id === visualId);
+  const live = isSkeletonLiveVisualId(visualId);
   const fences = Array.isArray(visual?.skeleton?.fences) ? visual.skeleton.fences : null;
-  if (!fences) return null;
-  const fence = fences.find((f) => line >= f.openLine && line <= f.closeLine);
-  if (!fence) return " (skeleton code, outside any fence \u2014 a structural line)";
-  const stepIndex = (content?.steps ?? []).findIndex((s) => s?.skelId === fence.id);
-  const status = stepIndex >= 0 && content.steps[stepIndex].status === "in_progress" ? "active" : fence.status === "todo" ? "pending" : "filled";
-  return ` (inside the SKEL[${fence.id}] fence${stepIndex >= 0 ? `, step ${stepIndex + 1}` : ""} \u2014 ${status})`;
+  if (!fences && !anchor) return null;
+  const anchored = anchor && typeof anchor.fenceId === "string" ? anchor.fenceId : void 0;
+  const fenceId = anchor ? anchored : fences?.find((f) => line >= f.openLine && line <= f.closeLine)?.id;
+  let where;
+  if (!fenceId) {
+    where = " (skeleton code, outside any fence \u2014 a structural line)";
+  } else {
+    const stepIndex = (content?.steps ?? []).findIndex((s) => s?.skelId === fenceId);
+    const fence = fences?.find((f) => f.id === fenceId);
+    const status = stepIndex >= 0 && content.steps[stepIndex].status === "in_progress" ? "active" : fence?.status === "filled" ? "filled" : "pending";
+    where = ` (inside the SKEL[${fenceId}] fence${stepIndex >= 0 ? `, step ${stepIndex + 1}` : ""} \u2014 ${status})`;
+  }
+  if (!live) return `${where} \u2014 on the approved skeleton`;
+  const readIso = typeof anchor?.readAt === "number" && Number.isFinite(anchor.readAt) ? new Date(Math.floor(anchor.readAt)).toISOString() : void 0;
+  const asOf = readIso ?? anchor?.takenAt ?? createdAt;
+  const currentTakenAt = visual?.skeleton?.takenAt;
+  const movedSince = anchor ? !!currentTakenAt && currentTakenAt !== anchor.takenAt : !!currentTakenAt && !!createdAt && createdAt < currentTakenAt;
+  const changed = movedSince || !visual ? `; the code has changed since, so this line may have moved${anchor?.lineText !== void 0 ? ` \u2014 when commented it read ${quoteLine(anchor.lineText)}` : ""}` : "";
+  return `${where} \u2014 on the live view${asOf ? ` as of ${asOf}` : ""}${changed}`;
 }
 function skeletonProgressMismatches(steps, fences, skipIds = /* @__PURE__ */ new Set()) {
   const out = [];
@@ -29388,7 +29418,9 @@ ${s.replacementText}${note ? `
   const skeletonLine = describeSkeletonLine(
     artsForTargets.find((a) => a.id === c.target.artifactId),
     c.target.visualId,
-    c.target.lineStart
+    c.target.lineStart,
+    c.target.skeletonAnchor,
+    c.createdAt
   );
   if (skeletonLine) loc += skeletonLine;
   let removedLine;
