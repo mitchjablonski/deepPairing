@@ -5,8 +5,10 @@ import { buildBriefExceptionIndex, exceptionBucket, summarizeBriefExceptions } f
 /**
  * #572 slice A2 — the pure exception index, against Sol's adversarial matrix
  * (#572 comments 6392292748 / 6392364247 as amended by 6406954041) and the two
- * Opus resolutions (6456727748): unknown-grain pins count once at brief level
- * but are never attributed to a requirement; `revised` counts as open.
+ * final scope review (6406954041): unknown-grain valid pins count once per
+ * lineage in the brief total but never in requirement coverage; buckets are the
+ * terminal's exact artifact status (`revised` included), never a resurrected
+ * open ancestor.
  */
 const now = "2026-10-27T00:00:00.000Z";
 function art(over: Record<string, unknown>): Artifact {
@@ -37,7 +39,7 @@ describe("lineage: the latest decision per lineage counts once", () => {
     expect(r.total).toBe(1);
     expect(ids(r.entries)).toEqual(["d3"]);
     expect(r.buckets.retracted).toBe(1);
-    expect(r.buckets.open).toBe(0); // no stale open ancestor resurrected
+    expect(r.buckets.draft + r.buckets.reviewing).toBe(0); // no stale open ancestor resurrected
     expect(ids(r.byRequirement["REQ-1"]!)).toEqual(["d3"]);
   });
 
@@ -45,7 +47,7 @@ describe("lineage: the latest decision per lineage counts once", () => {
     for (const status of ["rejected", "obsolete"]) {
       const r = idx([brief("b1"), card("d1", pin(), { status: "draft" }), card("d2", pin(), { status, parentId: "d1" })]);
       expect(r.total).toBe(1);
-      expect(r.buckets.open).toBe(0);
+      expect(r.buckets.draft).toBe(0);
       expect(r.entries[0]!.bucket).toBe(status);
     }
   });
@@ -72,7 +74,7 @@ describe("lineage: the latest decision per lineage counts once", () => {
   it("a superseded terminal with no visible successor is incomplete, not open", () => {
     const r = idx([brief("b1"), card("d1", pin(), { status: "superseded" })]);
     expect(r.buckets.incomplete).toBe(1);
-    expect(r.buckets.open).toBe(0);
+    expect(r.buckets.draft + r.buckets.reviewing).toBe(0);
   });
 
   it("branch, cycle, duplicate id and cross-type parent: excluded from totals, shown as ambiguous with exact members", () => {
@@ -172,7 +174,7 @@ describe("requirement attribution (exact raw explicit ids)", () => {
     expect(Object.values(r.byRequirement).flat()).toEqual([]);
   });
 
-  it("Opus (a): unknown / ambiguous grains count once in the total but are unattributed, never under a row", () => {
+  it("unknown / ambiguous grains count once in the total but are unattributed, never under a row", () => {
     const r = idx([
       brief("b1"),
       card("unknown", pin(["REQ-9"])),
@@ -262,21 +264,28 @@ describe("session isolation", () => {
 });
 
 describe("status buckets (artifact status only)", () => {
-  it("open, approved, rejected, retracted, obsolete, incomplete and other are distinct; revised is open (Opus b)", () => {
-    expect(exceptionBucket("draft")).toBe("open");
-    expect(exceptionBucket("reviewing")).toBe("open");
-    expect(exceptionBucket("revised")).toBe("open");
+  it("draft, reviewing, approved, rejected, retracted, obsolete, incomplete and exact other statuses are distinct", () => {
+    expect(exceptionBucket("draft")).toBe("draft");
+    expect(exceptionBucket("reviewing")).toBe("reviewing");
+    expect(exceptionBucket("revised")).toBe("other"); // shown as its exact status
     expect(exceptionBucket("approved")).toBe("approved");
     expect(exceptionBucket("rejected")).toBe("rejected");
     expect(exceptionBucket("retracted")).toBe("retracted");
     expect(exceptionBucket("obsolete")).toBe("obsolete");
     expect(exceptionBucket("superseded")).toBe("incomplete");
     expect(exceptionBucket("weird")).toBe("other");
-    const statuses = ["draft", "revised", "approved", "rejected", "retracted", "obsolete", "weird"];
+    const statuses = ["draft", "reviewing", "revised", "approved", "rejected", "retracted", "obsolete", "weird"];
     const r = idx([brief("b1"), ...statuses.map((status, i) => card(`d${i}`, pin(["REQ-1"]), { status }))]);
-    expect(r.total).toBe(7);
-    expect(r.buckets).toEqual({ open: 2, approved: 1, rejected: 1, retracted: 1, obsolete: 1, incomplete: 0, other: 1 });
-    expect(r.otherStatuses).toEqual(["weird"]);
+    expect(r.total).toBe(8);
+    expect(r.buckets).toEqual({ draft: 1, reviewing: 1, approved: 1, rejected: 1, retracted: 1, obsolete: 1, incomplete: 0, other: 2 });
+    expect(r.otherStatuses).toEqual({ revised: 1, weird: 1 });
+  });
+
+  it("a revised terminal keeps its own status; its draft ancestor is never resurrected", () => {
+    const r = idx([brief("b1"), card("d1", pin(), { status: "superseded" }), card("d2", pin(), { status: "revised", parentId: "d1" })]);
+    expect(r.total).toBe(1);
+    expect(r.entries[0]!.status).toBe("revised");
+    expect(r.buckets.draft + r.buckets.reviewing).toBe(0);
   });
 
   it("the derivation never mutates its input", () => {

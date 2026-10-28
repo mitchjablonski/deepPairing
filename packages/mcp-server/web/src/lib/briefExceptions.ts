@@ -27,40 +27,41 @@ import { matchBriefGrain, readBriefRef, type Artifact, type BriefGrainMatch } fr
  *    siblings or descendants are not counted here.
  *  - A pin to the exact brief is attributed per requirement by EXACT raw
  *    explicit id (`matchBriefGrain`). A unique match lists the card under that
- *    requirement; an unknown or ambiguous id is "unattributed" (Opus
- *    resolution (a): it still counts once in the brief total, never under a
- *    requirement). Whole-brief / edge-path-only pins are "not
+ *    requirement; an unknown or ambiguous id is "unattributed" (it still
+ *    counts once per lineage in the brief total, never in requirement
+ *    coverage). Whole-brief / edge-path-only pins are "not
  *    requirement-specific".
  *  - A pin to a verified ANCESTOR version is historical: grouped by the exact
  *    pinned artifact id + raw grain, labelled "raised against vN", never
  *    attached to a current requirement row by a reused id.
- *  - Status buckets are artifact-status only (root disposition: no recorded
- *    selected-choice claim). `revised` is open (Opus resolution (b)). An
- *    approved card is a resolved CARD, never a satisfied requirement; its
- *    choice is not verified here. A superseded terminal with no visible
- *    successor is incomplete, not open.
+ *  - Status buckets are the terminal's exact artifact status only (Sol's
+ *    final A2 review: no recorded selected-choice claim, no confirmation
+ *    state, no "awaiting/saving selection"). `revised` is shown as its own
+ *    exact status, never as an open ancestor. An approved card is a resolved
+ *    CARD, never a satisfied requirement; its choice is unverified here. A
+ *    superseded terminal with no visible successor is incomplete, never
+ *    live or open.
  */
 
-export type ExceptionBucket = "open" | "approved" | "rejected" | "retracted" | "obsolete" | "incomplete" | "other";
+export type ExceptionBucket = "draft" | "reviewing" | "approved" | "rejected" | "retracted" | "obsolete" | "incomplete" | "other";
 
-export const EXCEPTION_BUCKETS: readonly ExceptionBucket[] = ["open", "approved", "rejected", "retracted", "obsolete", "incomplete", "other"];
+export const EXCEPTION_BUCKETS: readonly ExceptionBucket[] = ["draft", "reviewing", "approved", "rejected", "retracted", "obsolete", "incomplete", "other"];
 
 export const EXCEPTION_BUCKET_LABELS: Record<ExceptionBucket, string> = {
-  open: "open",
-  approved: "approved · choice not verified here",
+  draft: "draft",
+  reviewing: "reviewing",
+  approved: "approved · choice unverified",
   rejected: "rejected",
   retracted: "retracted",
   obsolete: "obsolete",
   incomplete: "superseded, no visible successor",
-  other: "other status",
+  other: "other status", // shown with the exact status string
 };
 
 export function exceptionBucket(status: string): ExceptionBucket {
   switch (status) {
     case "draft":
     case "reviewing":
-    case "revised":
-      return "open";
     case "approved":
     case "rejected":
     case "retracted":
@@ -124,8 +125,8 @@ export interface BriefExceptionIndex {
   /** Distinct identified lineages linked to this brief (exact or historical), each once. */
   total: number;
   buckets: Record<ExceptionBucket, number>;
-  /** Exact status strings behind the "other" bucket. */
-  otherStatuses: string[];
+  /** Exact status strings behind the "other" bucket, with their lineage counts. */
+  otherStatuses: Record<string, number>;
   /** Counted lineages whose history is incomplete (missing parent). */
   incompleteHistory: number;
   entries: ExceptionEntry[];
@@ -143,7 +144,7 @@ export interface BriefExceptionIndex {
 }
 
 function emptyBuckets(): Record<ExceptionBucket, number> {
-  return { open: 0, approved: 0, rejected: 0, retracted: 0, obsolete: 0, incomplete: 0, other: 0 };
+  return { draft: 0, reviewing: 0, approved: 0, rejected: 0, retracted: 0, obsolete: 0, incomplete: 0, other: 0 };
 }
 
 /** Unique explicit string ids of a stored row list, in order (never generated/index ids). */
@@ -195,7 +196,7 @@ export function buildBriefExceptionIndex(artifacts: readonly Artifact[], briefId
   for (const a of session) (byId[a.id] ??= []).push(a);
 
   const index: BriefExceptionIndex = {
-    briefId, briefIdAmbiguous: false, total: 0, buckets: emptyBuckets(), otherStatuses: [], incompleteHistory: 0,
+    briefId, briefIdAmbiguous: false, total: 0, buckets: emptyBuckets(), otherStatuses: {}, incompleteHistory: 0,
     entries: [], requirementIds: [], byRequirement: {}, briefLevel: [], unattributed: [], historical: [], ambiguous: [], unreadable: [],
   };
   const briefs = (byId[briefId] ?? []).filter((a) => a.type === "spec");
@@ -288,7 +289,7 @@ export function buildBriefExceptionIndex(artifacts: readonly Artifact[], briefId
     index.entries.push(entry);
     index.total++;
     index.buckets[entry.bucket]++;
-    if (entry.bucket === "other" && !index.otherStatuses.includes(status)) index.otherStatuses.push(status);
+    if (entry.bucket === "other") index.otherStatuses[status] = (index.otherStatuses[status] ?? 0) + 1;
     if (entry.incompleteHistory) index.incompleteHistory++;
 
     if (entry.historical) {

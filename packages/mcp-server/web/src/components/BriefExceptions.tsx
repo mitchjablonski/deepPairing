@@ -53,8 +53,11 @@ export function briefExceptionStripText(state: BriefExceptionsState): string | n
     case "ready": {
       const { index } = state;
       if (index.total === 0) return summarizeBriefExceptions(index);
-      const open = index.buckets.open > 0 ? ` · ${index.buckets.open} open` : "";
-      return `${summarizeBriefExceptions(index)}${open}`;
+      const statuses = (["draft", "reviewing"] as const)
+        .filter((k) => index.buckets[k] > 0)
+        .map((k) => ` · ${index.buckets[k]} ${k}`)
+        .join("");
+      return `${summarizeBriefExceptions(index)}${statuses}`;
     }
   }
 }
@@ -128,7 +131,9 @@ export function BriefExceptionsSection({ briefId, sessionId }: { briefId: string
   const { index } = state;
   const bucketLine = EXCEPTION_BUCKETS
     .filter((b) => index.buckets[b] > 0)
-    .map((b) => `${index.buckets[b]} ${b === "other" ? `other (${index.otherStatuses.join(", ")})` : EXCEPTION_BUCKET_LABELS[b]}`)
+    .flatMap((b) => b === "other"
+      ? Object.entries(index.otherStatuses).map(([status, n]) => `${n} ${status}`)
+      : [`${index.buckets[b]} ${EXCEPTION_BUCKET_LABELS[b]}`])
     .join(" · ");
   const requirementGroups = index.requirementIds.filter((id) => (index.byRequirement[id] ?? []).length > 0);
   return (

@@ -67,13 +67,15 @@ describe("#572 A2 — linked exception cards on the brief", () => {
     render(<SpecArtifact artifact={b} />);
     const section = screen.getByTestId("brief-exceptions");
     expect(within(section).getByTestId("brief-exceptions-summary")).toHaveTextContent("3 linked exception lineages in this view");
-    // revised is open (Opus b); approved is a resolved card, its choice not verified here.
-    expect(within(section).getByTestId("brief-exceptions-buckets")).toHaveTextContent("2 open · 1 approved · choice not verified here");
+    // Exact terminal statuses: revised is its own status (never an open
+    // ancestor); approved is a resolved card, its choice unverified.
+    expect(within(section).getByTestId("brief-exceptions-buckets")).toHaveTextContent("1 draft · 1 approved · choice unverified · 1 revised");
+    expect(section.textContent).not.toMatch(/awaiting selection|saving selection|selected/i);
     const reqGroups = within(section).getAllByTestId("brief-exceptions-requirement");
     expect(reqGroups.map((g) => g.querySelector("summary")!.textContent)).toEqual(["REQ-1 (1)", "REQ-2 (1)"]);
     expect(within(reqGroups[0]!).getAllByTestId("brief-exception-entry").map((e) => e.getAttribute("data-decision-id"))).toEqual(["d2"]);
     expect(within(section).getByTestId("brief-exceptions-brief-level")).toHaveTextContent("Card d3");
-    // Opus (a): an unknown grain is unattributed, never under a requirement.
+    // An unknown grain counts in the total but is unattributed, never under a requirement.
     const un = within(section).getByTestId("brief-exceptions-unattributed");
     expect(un).toHaveTextContent("Card d4");
     expect(un).toHaveTextContent("REQ-9 (unknown)");
@@ -149,7 +151,7 @@ describe("#572 A2 — hydration and replay", () => {
     expect(document.body.textContent).not.toContain("linked exception lineage");
     act(() => setConnection({ hydrated: true }));
     expect(screen.getByTestId("brief-exceptions-summary")).toHaveTextContent("1 linked exception lineage in this view");
-    expect(screen.getByTestId("governing-brief-exceptions")).toHaveTextContent("1 linked exception lineage in this view · 1 open");
+    expect(screen.getByTestId("governing-brief-exceptions")).toHaveTextContent("1 linked exception lineage in this view · 1 draft");
   });
 
   it("hydration evidence for ANOTHER binding is not readiness", () => {
@@ -199,7 +201,7 @@ describe("#572 A2 — the governing-brief strip", () => {
     const selectedBefore = selectGoverningBrief(visible(), arts);
     render(<><SpecArtifact artifact={b} /><GoverningBriefStrip artifacts={visible()} /></>);
     expect(screen.getByTestId("brief-exceptions-summary")).toHaveTextContent("2 linked exception lineages in this view");
-    expect(screen.getByTestId("governing-brief-exceptions")).toHaveTextContent("2 linked exception lineages in this view · 1 open");
+    expect(screen.getByTestId("governing-brief-exceptions")).toHaveTextContent("2 linked exception lineages in this view · 1 draft");
     expect(selectGoverningBrief(visible(), useArtifactStore.getState().artifacts)).toEqual(selectedBefore);
     fireEvent.click(screen.getByTestId("governing-brief-open"));
     expect(useArtifactStore.getState().selectedArtifactId).toBe("b1");
