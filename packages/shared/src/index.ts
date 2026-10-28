@@ -416,4 +416,6 @@ export {
   liveVisualIdFor,
   approvedVisualIdFor,
   isLivePlanVersion,
+  SKELETON_ANCHOR_LIMITS,
+  sanitizeSkeletonAnchor,
 } from "./skeleton.js";

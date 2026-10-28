@@ -5,7 +5,7 @@ import { classifyStaleResolve, classifyClosedDecision, type DecisionResolveOutco
 import path from "node:path";
 import crypto from "node:crypto";
 import type { Artifact, ArtifactAdmission, ArtifactType, ArtifactStatus, BriefRef, Comment, CommentSuggestion, SessionAnnotation, TeamPreference, PreflightTrace, Request, RequestIntent, RequestScope, RequestSource } from "@deeppairing/shared";
-import { ArtifactSchema, BriefRefSchema, suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode, isSkeletonLiveVisualId, isLivePlanVersion } from "@deeppairing/shared";
+import { ArtifactSchema, BriefRefSchema, suggestionSummary, isLateCommentableStatus, isClosedArtifactStatus, errorMessage, errorCode, isSkeletonLiveVisualId, isLivePlanVersion, sanitizeSkeletonAnchor } from "@deeppairing/shared";
 import { nanoid } from "nanoid";
 import { getGlobalStore } from "./global-store.js";
 import { capConceptLength } from "./concept-hygiene.js";
@@ -1267,7 +1267,9 @@ export class FileStore implements IStore {
     const comment: Comment = {
       id: params.id,
       sessionId: this.sessionId,
-      target: { artifactId: params.artifactId, ...params.target },
+      // #609 review LOW — the browser-supplied skeleton anchor is capped and
+      // shape-checked here, the single choke point every comment converges on.
+      target: { artifactId: params.artifactId, ...sanitizeSkeletonAnchor(params.target) },
       parentCommentId: params.parentCommentId ?? null,
       author: params.author,
       content: params.content,

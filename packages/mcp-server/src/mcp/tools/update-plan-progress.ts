@@ -1,7 +1,9 @@
 import { resolveProjectRoot } from "../../project-root.js";
 import { planDeclaredFiles, scanSkeletonFences, writeSkeletonScope } from "../../skeleton-scope.js";
 import { isLivePlanVersion } from "@deeppairing/shared";
+import { nanoid } from "nanoid";
 import { resnapshotSkeleton } from "../skeleton-snapshot.js";
+import { allSkeletonStepsDone, formatLeftovers, skeletonLeftovers } from "../skeleton-finalize.js";
 import { skeletonProgressMismatches } from "../skeleton-line.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
@@ -54,6 +56,12 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
   // `skelcode:` snapshot is never rewritten.
   const all = await store.getArtifacts();
   const before = all.find((a) => a.id === artifactId);
+  // #608 (a) — the step statuses BEFORE this call (the store mutates in place),
+  // to see a fence lifted without the step being done.
+  const priorStatuses = ((before?.content as { steps?: Array<{ status?: string; skelId?: string }> } | undefined)?.steps ?? []).map((st) => ({
+    status: st?.status,
+    skelId: st?.skelId,
+  }));
   const resnap = before && isLivePlanVersion(before, all) ? resnapshotSkeleton(before.content) : null;
   const artifact = resnap
     ? await store.updatePlanProgress(artifactId, updates, { skeletonVisuals: resnap.visuals, ...(resnap.readAt !== undefined ? { skeletonReadAt: resnap.readAt } : {}) })
@@ -102,10 +110,48 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
     const lines = skeletonProgressMismatches(c.steps, resnap.scan.fences, finishedNow);
     if (lines.length > 0) mismatchNote = `\n⚠ The checklist and the code disagree: ${lines.join("; ")}.`;
   }
+  // #608 (a) — a skeleton step that leaves `in_progress` without `done` lifts
+  // its own fence. Not refused (the human may have asked for it), but never
+  // silent: a notice on the plan in the companion, and a line to the agent.
+  let liftedNote = "";
+  if (!isSpec) {
+    const lifted = updates
+      .filter((u) => u.status === "pending" || u.status === "skipped")
+      .filter((u) => priorStatuses[u.stepIndex]?.status === "in_progress" && typeof priorStatuses[u.stepIndex]?.skelId === "string")
+      .map((u) => ({ index: u.stepIndex, skelId: priorStatuses[u.stepIndex]!.skelId!, status: u.status }));
+    if (lifted.length > 0) {
+      const what = lifted.map((l) => `SKEL[${l.skelId}] (step ${l.index + 1}, now ${l.status})`).join(", ");
+      try {
+        await store.addComment({
+          id: `cmt_${nanoid(10)}`,
+          artifactId: artifact.id,
+          author: "agent",
+          content: `Fence lifted without completing the step: ${what}. Edits outside the skeleton are no longer gated for ${lifted.length === 1 ? "it" : "them"}. If this is a skeleton change, it should come to you as a revised plan.`,
+        });
+      } catch {
+        /* the notice is best-effort; the reply below still says it */
+      }
+      liftedNote = `\n⚠ Fence lifted without done: ${what}. Your pair sees a notice on the plan. If you need a structural change, propose it and revise_artifact the plan (reason "Skeleton change: …") instead.`;
+    }
+  }
+  // Parity PR 4 — reshape: a skeleton plan's newer version waits for approval
+  // before fills resume.
+  const isSkeleton = !isSpec && (c.steps ?? []).some((st) => typeof st.skelId === "string" && st.skelId);
+  const reshapeNote = isSkeleton && artifact.status === "draft" && artifact.parentId
+    ? "\nThis is a reshaped skeleton awaiting re-review: fills are paused (no fence opens) until your pair approves it."
+    : "";
+  // Parity PR 4 — the finalize check once the last skeleton step is done.
+  let finalizeNote = "";
+  if (isSkeleton && artifact.status === "approved" && allSkeletonStepsDone(artifact.content) && updates.some((u) => u.status === "done" || u.status === "skipped")) {
+    const root = resolveProjectRoot();
+    const found = skeletonLeftovers(root.worktree?.workspaceRoot ?? root.projectRoot, artifact.content);
+    finalizeNote = formatLeftovers(artifact.title, found) ||
+      "\nEvery skeleton step is done and no SKEL markers remain: present the whole change with present_changeset next.";
+  }
   return {
     content: [{
       type: "text",
-      text: `${isSpec ? "Spec" : "Plan"} progress recorded: ${done}/${items.length} ${unit} complete. The companion UI checklist is live — keep marking ${unit} as you finish them.${warning}${skeletonNote}${mismatchNote}`,
+      text: `${isSpec ? "Spec" : "Plan"} progress recorded: ${done}/${items.length} ${unit} complete. The companion UI checklist is live — keep marking ${unit} as you finish them.${warning}${skeletonNote}${mismatchNote}${liftedNote}${reshapeNote}${finalizeNote}`,
     }],
   };
 }

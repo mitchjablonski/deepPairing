@@ -279,11 +279,15 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
     // agent is rewriting prose it already wrote, so it is the only place the
     // STYLE block can be acted on immediately rather than "next artifact" —
     // and pre-this it was the one present-shaped path that stayed silent.
+    // Parity PR 4 — reshape: superseding a skeleton plan IS a skeleton change.
+    const reshapeNote = old.type === "plan" && Array.isArray(content.steps) && (content.steps as Array<{ skelId?: unknown }>).some((st) => typeof st?.skelId === "string" && st.skelId)
+      ? `\nSkeleton change: your pair re-reviews the reshaped skeleton on the card. Fills are paused (no fence opens) until they approve ${newId}; continue on that id.`
+      : "";
     const advisory = pre?.ok && pre.advisory
       ? `\n\n⚠ Recalled stance — advisory, not a block (this revision records external or historical material rather than proposing that approach): ${pre.advisory}`
       : "";
     return {
-      content: [{ type: "text", text: `Superseded ${artifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${formatStyleWarnings(newArtifact.type, styleContent)}${skeletonSnap.note}${advisory}` }],
+      content: [{ type: "text", text: `Superseded ${artifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${formatStyleWarnings(newArtifact.type, styleContent)}${skeletonSnap.note}${reshapeNote}${advisory}` }],
     };
   }
 

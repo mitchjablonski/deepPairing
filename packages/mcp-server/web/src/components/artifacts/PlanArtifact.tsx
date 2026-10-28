@@ -226,8 +226,28 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
     }
   };
 
+  // Parity PR 4 — reshape: a newer version of a skeleton plan is a skeleton
+  // CHANGE, so it reads as one and says fills are paused until approval.
+  const isSkeletonPlan = steps.some((st) => typeof st?.skelId === "string" && st.skelId.length > 0);
+  const reshaped = isSkeletonPlan && !!artifact.parentId && artifact.status === "draft";
+
   return (
     <div className="space-y-4">
+      {reshaped && (
+        <div
+          role="note"
+          data-skel-reshape="true"
+          className="rounded-md border border-accent-amber/50 bg-accent-amber-dim/30 px-3 py-2 text-xs text-text-primary space-y-0.5"
+        >
+          <div className="font-semibold">
+            Skeleton change (v{artifact.version}): Claude reshaped the skeleton you approved.
+          </div>
+          <div className="text-text-secondary">
+            Re-review the new shape below. Fills are paused until you approve this version.
+          </div>
+          {artifact.agentReasoning && <div className="text-text-muted italic">Why: {artifact.agentReasoning}</div>}
+        </div>
+      )}
       {/* Visuals frame the plan — diagrams / file maps / prototypes the human
           can comment on directly. Self-hides when the plan has none.
           #207 (I2 review) — composers withheld when the plan is retracted/
