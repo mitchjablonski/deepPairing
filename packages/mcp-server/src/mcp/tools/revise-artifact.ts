@@ -5,6 +5,7 @@ import type { ToolContext, ToolResult } from "./types.js";
 import { notifyResourcesListChanged, formatStyleWarnings, persistPreflightTrace } from "../tool-helpers.js";
 import { preflightArtifact } from "../artifact-preflight.js";
 import { maybeUpdateTaskStatus } from "../tasks-probe.js";
+import { attachSkeletonSnapshot } from "../skeleton-snapshot.js";
 import { carriedBriefRef, deriveReviseContent, finalizeReviseContent, reviseSnapshot, reviseTargetPrecondition } from "../proposal-resolution.js";
 import { admitBlockedProposal, admittedResult, beginStanceOperation } from "../stance-admission.js";
 import {
@@ -142,7 +143,15 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       if ("response" in outcome) return outcome.response;
       await maybeUpdateTaskStatus(server, old.id, store);
       notifyResourcesListChanged(server);
-      return admittedResult(outcome.admitted, ` Superseded ${artifactId} (v${old.version + 1} is the draft awaiting review). Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback.`);
+      // #607 review M2 — the admission snapshot is digest-bound, so it never
+      // carries file text read from disk (that could differ at claim time). Its
+      // content was stripped of any agent-supplied skeleton metadata by
+      // deriveReviseContent; a skeleton plan admitted this way shows no code
+      // view until its next ordinary revise.
+      const skelNote = old.type === "plan" && Array.isArray(content.steps) && (content.steps as Array<{ skelId?: unknown }>).some((st) => typeof st?.skelId === "string" && st.skelId)
+        ? " The skeleton code view is not re-read on an allowed revision; revise again to refresh it."
+        : "";
+      return admittedResult(outcome.admitted, ` Superseded ${artifactId} (v${old.version + 1} is the draft awaiting review). Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback.${skelNote}`);
     }
     // #171 — reviewState is HUMAN-driven review PROGRESS, never agent input. A
     // v2 changeset must start with FRESH review state: carrying an echoed
@@ -153,6 +162,14 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
     // A superseded decision inherits the old stakes when none are given.
     // (#470 — shared with the stance-exception snapshot: finalizeReviseContent.)
     finalizeReviseContent(old, content);
+    // Skeleton plans, parity PR 2 — a revised skeleton plan gets a FRESH code
+    // snapshot from disk (the agent's echoed snapshot visuals are dropped and
+    // re-read). Ids are per path, so line threads carry onto v2. Applied after
+    // the gate: the preflight judged the agent's content, not file text.
+    const skeletonSnap = old.type === "plan" ? attachSkeletonSnapshot(content) : { content, note: "" };
+    // STYLE lints the agent's prose (deriveReviseContent already stripped any
+    // echoed snapshot visuals), never the server-authored snapshot captions.
+    const styleContent = content;
 
     const title = String(args?.title ?? old.title);
     const newId = `art_${nanoid(10)}`;
@@ -181,7 +198,7 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       id: newId,
       type: old.type,
       title,
-      content: content as Record<string, unknown>,
+      content: skeletonSnap.content as Record<string, unknown>,
       agentReasoning: reason,
       parentId: old.id,
       version: old.version + 1,
@@ -266,7 +283,7 @@ export async function handleReviseArtifact(ctx: ToolContext, args: any): Promise
       ? `\n\n⚠ Recalled stance — advisory, not a block (this revision records external or historical material rather than proposing that approach): ${pre.advisory}`
       : "";
     return {
-      content: [{ type: "text", text: `Superseded ${artifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${formatStyleWarnings(newArtifact.type, newArtifact.content)}${advisory}` }],
+      content: [{ type: "text", text: `Superseded ${artifactId} → ${newId} (v${old.version + 1}). Draft is awaiting review. Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback (they carry onto v${old.version + 1}).${formatStyleWarnings(newArtifact.type, styleContent)}${skeletonSnap.note}${advisory}` }],
     };
   }
 

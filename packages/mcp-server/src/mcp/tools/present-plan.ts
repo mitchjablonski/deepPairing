@@ -5,6 +5,7 @@ import { maybeEmitTaskHandle, maybeUpdateTaskStatus } from "../tasks-probe.js";
 import { persistPreflightTrace, formatPreflightTraceSummary, notifyResourcesListChanged, revisionNudge, linkServedRequest, hashPresentArgs, buildDedupResponse, formatStyleWarnings } from "../tool-helpers.js";
 import { resolveProjectRoot } from "../../project-root.js";
 import { planDeclaredFiles, scanSkeletonFences } from "../../skeleton-scope.js";
+import { attachSkeletonSnapshot } from "../skeleton-snapshot.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 /**
@@ -12,7 +13,12 @@ import type { ToolContext, ToolResult } from "./types.js";
  * `skelId` with no fence on disk (or a fence no step claims) is a plan that
  * doesn't match the code it describes. Reported, not refused. Never throws.
  */
-export function skeletonPlanNote(content: { steps: Array<{ skelId?: string; files?: unknown }>; visuals?: Array<{ kind?: unknown; files?: unknown }> }): string {
+export function skeletonPlanNote(
+  content: { steps: Array<{ skelId?: string; files?: unknown }>; visuals?: Array<{ kind?: unknown; files?: unknown }> },
+  // Parity PR 2 — the code-view snapshot already scanned the same declared
+  // files (planDeclaredFiles); reuse that scan instead of reading them twice.
+  scan?: ReturnType<typeof scanSkeletonFences>,
+): string {
   try {
     const ids = content.steps.map((st) => st.skelId).filter((id): id is string => typeof id === "string" && id.length > 0);
     if (ids.length === 0) return "";
@@ -20,7 +26,7 @@ export function skeletonPlanNote(content: { steps: Array<{ skelId?: string; file
     // #606 review M3/M4 — read the plan's declared files only; fall back to a
     // bounded, prose-skipping walk when the plan declares none.
     const declared = planDeclaredFiles(content);
-    const { fences, errors, truncated } = scanSkeletonFences(root.worktree?.workspaceRoot ?? root.projectRoot, { files: declared });
+    const { fences, errors, truncated } = scan ?? scanSkeletonFences(root.worktree?.workspaceRoot ?? root.projectRoot, { files: declared });
     const onDisk = new Set(fences.map((f) => f.id));
     const claimed = new Set(ids);
     const missing = [...claimed].filter((id) => !onDisk.has(id));
@@ -54,7 +60,14 @@ export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<To
   const reviewPort = ctx.store.getLivePort?.() ?? ctx.port;
 
   const id = `art_${nanoid(10)}`;
-  const content = { steps: planSteps, estimatedChanges, ...(visuals ? { visuals } : {}) };
+  // Skeleton plans, parity PR 2 — a plan with skelId steps carries its skeleton
+  // AS CODE: the fenced (and file-map "create") files are read from disk into
+  // annotated_code visuals (stable id per path) after the agent's own visuals.
+  // A plan without skelId steps is the same object, byte-unchanged.
+  const agentContent = { steps: planSteps, estimatedChanges, ...(visuals ? { visuals } : {}) };
+  const skeleton = attachSkeletonSnapshot<Record<string, unknown>>(agentContent);
+  const content = skeleton.content;
+  const skeletonNote = `${skeletonPlanNote(agentContent, skeleton.scan)}${skeleton.note}`;
   // #160 — plans were a scanner GAP: step descriptions/reasoning (and visuals
   // like a prototype's source) routinely quote config blocks, exactly where a
   // pasted key hides. #162 — the scan runs INSIDE createArtifact now (parity
@@ -112,11 +125,11 @@ export async function handlePresentPlan(ctx: ToolContext, args: any): Promise<To
     await maybeUpdateTaskStatus(ctx.server, id, ctx.store);
     await ctx.store.resolvePlanReview(id, "approved");
     return {
-      content: [{ type: "text", text: `Plan "${args?.title}" approved (${id}). Proceed with implementation.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${skeletonPlanNote(content)}${await ctx.helpers.getPassiveFeedback()}` }],
+      content: [{ type: "text", text: `Plan "${args?.title}" approved (${id}). Proceed with implementation.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, agentContent)}${skeletonNote}${await ctx.helpers.getPassiveFeedback()}` }],
     };
   }
 
   return {
-    content: [{ type: "text", text: `Plan "${args?.title}" presented for review (${id}). Human can approve/revise/reject at localhost:${reviewPort}. Call check_feedback for their verdict.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${skeletonPlanNote(content)}${await ctx.helpers.getPassiveFeedback()}` }],
+    content: [{ type: "text", text: `Plan "${args?.title}" presented for review (${id}). Human can approve/revise/reject at localhost:${reviewPort}. Call check_feedback for their verdict.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, agentContent)}${skeletonNote}${await ctx.helpers.getPassiveFeedback()}` }],
   };
 }

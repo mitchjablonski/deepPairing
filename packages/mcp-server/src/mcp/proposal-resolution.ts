@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { stripForgedSkeleton } from "./skeleton-line.js";
 import {
   coerceChangesetContent,
   carryableBriefRef,
@@ -207,7 +208,10 @@ export function reviseTargetPrecondition(target: Artifact): ProposalPrecondition
 /** The supersede content exactly as revise_artifact persists it, minus the
  *  server-minted decisionId. */
 export function deriveReviseContent(old: Artifact, supplied: Record<string, unknown>): Record<string, unknown> {
-  const content: Record<string, unknown> = { ...supplied };
+  // #607 review M2 — server-only skeleton snapshot metadata (`skelcode:`
+  // visuals, `skeleton` fields) never comes from the agent, for ANY type. Both
+  // the ordinary supersede and the stance-admission snapshot start here.
+  const content: Record<string, unknown> = { ...stripForgedSkeleton(supplied) };
   if (old.type === "changeset") {
     const oldChangeset = coerceChangesetContent(old.content);
     if (oldChangeset.reviewIntent === "external") {

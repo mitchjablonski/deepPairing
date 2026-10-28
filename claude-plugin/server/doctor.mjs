@@ -15014,6 +15014,28 @@ var PlanVisualSchema = external_exports.object({
   /** kind="annotated_code": line-anchored explanations. */
   annotations: external_exports.array(PlanVisualAnnotationSchema).optional()
 });
+var SkeletonFenceViewSchema = external_exports.object({
+  id: external_exports.string(),
+  title: external_exports.string().optional(),
+  openLine: external_exports.number(),
+  closeLine: external_exports.number(),
+  status: external_exports.enum(["todo", "filled"])
+});
+var SkeletonCodeSnapshotSchema = external_exports.object({
+  fences: external_exports.array(SkeletonFenceViewSchema),
+  /** An unfenced skeleton file (a file_map "create" entry with no fences). */
+  tracked: external_exports.boolean().optional(),
+  /** Set when the snapshot cap cut the file short. */
+  truncated: external_exports.object({ shownLines: external_exports.number(), totalLines: external_exports.number() }).optional(),
+  /** Malformed SKEL markers in this file (fences are then unknown). */
+  markerError: external_exports.string().optional(),
+  /** Set when the server WITHHELD the file's content (a secret-shaped value
+   *  was found on disk). The visual then carries no `code` at all. */
+  withheld: external_exports.string().optional()
+});
+var StoredPlanVisualSchema = PlanVisualSchema.extend({
+  skeleton: SkeletonCodeSnapshotSchema.optional()
+});
 var ResearchContentSchema = external_exports.object({
   summary: external_exports.string(),
   findings: external_exports.array(FindingSchema),

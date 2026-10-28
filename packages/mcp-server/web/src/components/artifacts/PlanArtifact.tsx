@@ -232,7 +232,7 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
           can comment on directly. Self-hides when the plan has none.
           #207 (I2 review) — composers withheld when the plan is retracted/
           terminal or replayed. */}
-      <ArtifactVisuals artifactId={artifact.id} visuals={content.visuals ?? []} readOnly={writeLocked} />
+      <ArtifactVisuals artifactId={artifact.id} visuals={content.visuals ?? []} readOnly={writeLocked} skeletonSteps={steps} />
 
       {steps.length > 0 && (
         <div className="space-y-3">
