@@ -80,6 +80,21 @@ export const CommentTargetSchema = z.object({
     )
     .optional()
     .describe("Cross-file comment anchors — 2+ entries make this a cross-file thread spanning changeset files"),
+  // Skeleton plans, parity PR 3 (#609 review M2) — which skeleton snapshot a
+  // line comment was written on, captured AT COMMENT TIME: the approved
+  // `skelcode:` snapshot (immutable) or the live `skelcode-live:` view as of a
+  // read. The live view is re-read in place, so the line's text and fence are
+  // recorded here; check_feedback resolves against them, not the current code.
+  skeletonAnchor: z
+    .object({
+      snapshot: z.enum(["approved", "live"]),
+      takenAt: z.string().max(64).optional(),
+      readAt: z.number().optional(),
+      fenceId: z.string().max(120).optional(),
+      lineText: z.string().max(500).optional(),
+    })
+    .optional()
+    .describe("Skeleton plans: the snapshot (approved / live as of a read) a line comment was written on, with its line text and fence at that time"),
 });
 
 export type CommentTarget = z.infer<typeof CommentTargetSchema>;

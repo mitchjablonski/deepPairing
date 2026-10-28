@@ -1,5 +1,8 @@
 import { resolveProjectRoot } from "../../project-root.js";
 import { planDeclaredFiles, scanSkeletonFences, writeSkeletonScope } from "../../skeleton-scope.js";
+import { isLivePlanVersion } from "@deeppairing/shared";
+import { resnapshotSkeleton } from "../skeleton-snapshot.js";
+import { skeletonProgressMismatches } from "../skeleton-line.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 const VALID_STATUSES = new Set(["pending", "in_progress", "done", "skipped"]);
@@ -42,7 +45,19 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
     });
   }
 
-  const artifact = await store.updatePlanProgress(artifactId, updates);
+  // Skeleton plans, parity PR 3 — progress read from the code: re-read the
+  // plan's fenced files (present_plan's bounds + allowlist) so the code view
+  // and diagram follow the fills. Non-skeleton plans and specs skip this.
+  // #609 review — only a LIVE plan version is re-read (the store enforces the
+  // same rule under its write); a closed version keeps the code it was
+  // reviewed with. The result lands in `skelcode-live:` visuals; the approved
+  // `skelcode:` snapshot is never rewritten.
+  const all = await store.getArtifacts();
+  const before = all.find((a) => a.id === artifactId);
+  const resnap = before && isLivePlanVersion(before, all) ? resnapshotSkeleton(before.content) : null;
+  const artifact = resnap
+    ? await store.updatePlanProgress(artifactId, updates, { skeletonVisuals: resnap.visuals, ...(resnap.readAt !== undefined ? { skeletonReadAt: resnap.readAt } : {}) })
+    : await store.updatePlanProgress(artifactId, updates);
   if (!artifact) {
     return {
       content: [{ type: "text", text: `update_plan_progress: ${artifactId} is not a known plan or spec artifact (or no update touched an existing plan step or spec task).` }],
@@ -75,11 +90,22 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
   const warning = NOT_EXECUTABLE[artifact.status]
     ? `\n⚠ WARNING: this ${kind} is ${NOT_EXECUTABLE[artifact.status]}.`
     : "";
-  const skeletonNote = isSpec ? "" : syncSkeletonScope(store.getSessionId(), artifact, updates);
+  // #609 review L3 — one scan per call: the re-read's scan feeds the fence check.
+  const skeletonNote = isSpec ? "" : syncSkeletonScope(store.getSessionId(), artifact, updates, resnap?.scan);
+  // Parity PR 3 — the checklist vs the code. Steps finished in THIS call are
+  // already named by syncSkeletonScope's own "still has SKEL_TODO" check.
+  let mismatchNote = "";
+  if (resnap?.scan && c.steps) {
+    const finishedNow = new Set(
+      updates.filter((u) => u.status === "done").map((u) => c.steps?.[u.stepIndex]?.skelId).filter((id): id is string => typeof id === "string" && id.length > 0),
+    );
+    const lines = skeletonProgressMismatches(c.steps, resnap.scan.fences, finishedNow);
+    if (lines.length > 0) mismatchNote = `\n⚠ The checklist and the code disagree: ${lines.join("; ")}.`;
+  }
   return {
     content: [{
       type: "text",
-      text: `${isSpec ? "Spec" : "Plan"} progress recorded: ${done}/${items.length} ${unit} complete. The companion UI checklist is live — keep marking ${unit} as you finish them.${warning}${skeletonNote}`,
+      text: `${isSpec ? "Spec" : "Plan"} progress recorded: ${done}/${items.length} ${unit} complete. The companion UI checklist is live — keep marking ${unit} as you finish them.${warning}${skeletonNote}${mismatchNote}`,
     }],
   };
 }
@@ -98,6 +124,7 @@ function syncSkeletonScope(
   sessionId: string,
   artifact: { id: string; title: string; status: string; content: unknown },
   updates: Array<{ stepIndex: number; status: string }>,
+  scan?: ReturnType<typeof scanSkeletonFences>,
 ): string {
   try {
     const content = (artifact.content ?? {}) as { steps?: Array<{ status?: string; skelId?: string; files?: unknown }>; visuals?: Array<{ kind?: unknown; files?: unknown }> };
@@ -117,7 +144,7 @@ function syncSkeletonScope(
     if (finished.length > 0) {
       // Fences live in the working tree (a linked worktree's own files), not
       // the canonical root the scope file is keyed to.
-      const { fences } = scanSkeletonFences(workspaceRoot, { files: planDeclaredFiles(content) });
+      const { fences } = scan ?? scanSkeletonFences(workspaceRoot, { files: planDeclaredFiles(content) });
       for (const id of finished) {
         const mine = fences.filter((f) => f.id === id);
         const todo = mine.filter((f) => f.status === "todo");

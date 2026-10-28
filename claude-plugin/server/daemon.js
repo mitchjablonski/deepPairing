@@ -19232,7 +19232,14 @@ var SkeletonCodeSnapshotSchema = external_exports.object({
   markerError: external_exports.string().optional(),
   /** Set when the server WITHHELD the file's content (a secret-shaped value
    *  was found on disk). The visual then carries no `code` at all. */
-  withheld: external_exports.string().optional()
+  withheld: external_exports.string().optional(),
+  /** When this file's snapshot text last CHANGED (ISO). A re-read that finds
+   *  the same text keeps the old stamp, so a line comment made before it is
+   *  known to sit on unchanged code. */
+  takenAt: external_exports.string().optional(),
+  /** LIVE snapshots only: a per-process monotonic read stamp. The store keeps
+   *  the newest read, so concurrent progress calls can't regress the view. */
+  readAt: external_exports.number().optional()
 });
 var StoredPlanVisualSchema = PlanVisualSchema.extend({
   skeleton: SkeletonCodeSnapshotSchema.optional()
@@ -19905,7 +19912,19 @@ var CommentTargetSchema = external_exports.object({
     filePath: external_exports.string(),
     lineStart: external_exports.number().int(),
     lineEnd: external_exports.number().int().optional()
-  })).optional().describe("Cross-file comment anchors \u2014 2+ entries make this a cross-file thread spanning changeset files")
+  })).optional().describe("Cross-file comment anchors \u2014 2+ entries make this a cross-file thread spanning changeset files"),
+  // Skeleton plans, parity PR 3 (#609 review M2) — which skeleton snapshot a
+  // line comment was written on, captured AT COMMENT TIME: the approved
+  // `skelcode:` snapshot (immutable) or the live `skelcode-live:` view as of a
+  // read. The live view is re-read in place, so the line's text and fence are
+  // recorded here; check_feedback resolves against them, not the current code.
+  skeletonAnchor: external_exports.object({
+    snapshot: external_exports.enum(["approved", "live"]),
+    takenAt: external_exports.string().max(64).optional(),
+    readAt: external_exports.number().optional(),
+    fenceId: external_exports.string().max(120).optional(),
+    lineText: external_exports.string().max(500).optional()
+  }).optional().describe("Skeleton plans: the snapshot (approved / live as of a read) a line comment was written on, with its line text and fence at that time")
 });
 var CommentAuthorSchema = external_exports.enum(["human", "agent"]);
 var CommentIntentSchema = external_exports.enum(["comment", "question", "suggestion"]);
@@ -20381,7 +20400,7 @@ function coerceVisual(v, fallbackId) {
       return ann;
     });
   }
-  if (out.kind === "annotated_code" && out.id.startsWith(SKELETON_VISUAL_PREFIX) && isObj(o.skeleton)) {
+  if (out.kind === "annotated_code" && (out.id.startsWith(SKELETON_VISUAL_PREFIX) || out.id.startsWith("skelcode-live:")) && isObj(o.skeleton)) {
     out.skeleton = coerceSkeletonSnapshot(o.skeleton);
   }
   return out;
@@ -20408,6 +20427,10 @@ function coerceSkeletonSnapshot(o) {
     out.markerError = o.markerError;
   if (typeof o.withheld === "string" && o.withheld)
     out.withheld = o.withheld;
+  if (typeof o.takenAt === "string" && o.takenAt)
+    out.takenAt = o.takenAt;
+  if (typeof o.readAt === "number" && Number.isFinite(o.readAt))
+    out.readAt = o.readAt;
   return out;
 }
 function coerceRequirement(v) {
@@ -21226,6 +21249,16 @@ function isDemoSessionId(sessionId) {
     return false;
   const id = sessionId.toLowerCase();
   return id.startsWith("demo_") || KNOWN_SAMPLE_SESSION_IDS.includes(id);
+}
+
+// ../shared/dist/skeleton.js
+var SKELETON_LIVE_VISUAL_PREFIX = "skelcode-live:";
+var isSkeletonLiveVisualId = (id) => typeof id === "string" && id.startsWith(SKELETON_LIVE_VISUAL_PREFIX);
+var CLOSED_FOR_PROGRESS = /* @__PURE__ */ new Set(["superseded", "rejected", "retracted", "obsolete"]);
+function isLivePlanVersion(art, artifacts) {
+  if (art.type !== "plan" || CLOSED_FOR_PROGRESS.has(art.status))
+    return false;
+  return !artifacts.some((a) => a.parentId === art.id);
 }
 
 // src/cli/hook-scripts.generated.ts
@@ -28255,7 +28288,7 @@ var FileStore = class _FileStore {
     }
   }
   /** D10 (H2) — patch plan step statuses in place. See store-interface.ts. */
-  updatePlanProgress(artifactId, updates) {
+  updatePlanProgress(artifactId, updates, opts) {
     this.assertAuthorizationReadable();
     const art = this.artifacts.find((a) => a.id === artifactId);
     if (!art || art.type !== "plan" && art.type !== "spec") return null;
@@ -28271,6 +28304,23 @@ var FileStore = class _FileStore {
       touched = true;
     }
     if (!touched) return null;
+    if (art.type === "plan" && Array.isArray(opts?.skeletonVisuals) && isLivePlanVersion(art, this.artifacts)) {
+      const plan = art.content;
+      const current = Array.isArray(plan.visuals) ? plan.visuals : [];
+      const incoming = opts.skeletonVisuals.filter((v) => !!v && typeof v === "object" && isSkeletonLiveVisualId(v.id));
+      const stampOf = (vs) => vs.reduce((m, v) => {
+        const r = v.skeleton?.readAt;
+        return typeof r === "number" && r > m ? r : m;
+      }, -Infinity);
+      const stored = current.filter((v) => !!v && typeof v === "object" && isSkeletonLiveVisualId(v.id));
+      const readAt = typeof opts.skeletonReadAt === "number" ? opts.skeletonReadAt : stampOf(incoming);
+      const newer = stored.length === 0 || readAt > stampOf(stored);
+      if (newer) {
+        const next = [...current.filter((v) => !(v && typeof v === "object" && isSkeletonLiveVisualId(v.id))), ...incoming];
+        if (next.length > 0) plan.visuals = next;
+        else delete plan.visuals;
+      }
+    }
     const secretWarnings = scanContentForSecrets(art.content);
     if (secretWarnings.length > 0) {
       art.secretWarnings = secretWarnings;
@@ -35612,13 +35662,17 @@ function createDaemonRoutes(sessions, sessionMeta, createSession, broadcast, log
     if (!r.ok) return r.response;
     const bodyR = await readJsonObject(c);
     if (!bodyR.ok) return bodyR.res;
-    const { updates } = bodyR.body;
+    const { updates, skeletonVisuals, skeletonReadAt } = bodyR.body;
     if (!Array.isArray(updates)) return c.json({ error: "updates must be an array" }, 400);
     const VALID = /* @__PURE__ */ new Set(["pending", "in_progress", "done", "skipped"]);
     const clean = updates.filter(
       (u) => Number.isInteger(u?.stepIndex) && u.stepIndex >= 0 && VALID.has(u?.status)
     );
-    const artifact = r.store.updatePlanProgress(artifactId, clean);
+    const artifact = r.store.updatePlanProgress(
+      artifactId,
+      clean,
+      Array.isArray(skeletonVisuals) ? { skeletonVisuals, ...typeof skeletonReadAt === "number" && Number.isFinite(skeletonReadAt) ? { skeletonReadAt } : {} } : void 0
+    );
     if (!artifact) return c.json({ artifact: null });
     broadcast(sessionId, { type: "plan_progress_updated", artifact });
     return c.json({ artifact });

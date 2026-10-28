@@ -25184,7 +25184,14 @@ var SkeletonCodeSnapshotSchema = external_exports.object({
   markerError: external_exports.string().optional(),
   /** Set when the server WITHHELD the file's content (a secret-shaped value
    *  was found on disk). The visual then carries no `code` at all. */
-  withheld: external_exports.string().optional()
+  withheld: external_exports.string().optional(),
+  /** When this file's snapshot text last CHANGED (ISO). A re-read that finds
+   *  the same text keeps the old stamp, so a line comment made before it is
+   *  known to sit on unchanged code. */
+  takenAt: external_exports.string().optional(),
+  /** LIVE snapshots only: a per-process monotonic read stamp. The store keeps
+   *  the newest read, so concurrent progress calls can't regress the view. */
+  readAt: external_exports.number().optional()
 });
 var StoredPlanVisualSchema = PlanVisualSchema.extend({
   skeleton: SkeletonCodeSnapshotSchema.optional()
@@ -25962,7 +25969,19 @@ var CommentTargetSchema = external_exports.object({
     filePath: external_exports.string(),
     lineStart: external_exports.number().int(),
     lineEnd: external_exports.number().int().optional()
-  })).optional().describe("Cross-file comment anchors \u2014 2+ entries make this a cross-file thread spanning changeset files")
+  })).optional().describe("Cross-file comment anchors \u2014 2+ entries make this a cross-file thread spanning changeset files"),
+  // Skeleton plans, parity PR 3 (#609 review M2) — which skeleton snapshot a
+  // line comment was written on, captured AT COMMENT TIME: the approved
+  // `skelcode:` snapshot (immutable) or the live `skelcode-live:` view as of a
+  // read. The live view is re-read in place, so the line's text and fence are
+  // recorded here; check_feedback resolves against them, not the current code.
+  skeletonAnchor: external_exports.object({
+    snapshot: external_exports.enum(["approved", "live"]),
+    takenAt: external_exports.string().max(64).optional(),
+    readAt: external_exports.number().optional(),
+    fenceId: external_exports.string().max(120).optional(),
+    lineText: external_exports.string().max(500).optional()
+  }).optional().describe("Skeleton plans: the snapshot (approved / live as of a read) a line comment was written on, with its line text and fence at that time")
 });
 var CommentAuthorSchema = external_exports.enum(["human", "agent"]);
 var CommentIntentSchema = external_exports.enum(["comment", "question", "suggestion"]);
@@ -26424,7 +26443,7 @@ function coerceVisual(v2, fallbackId) {
       return ann;
     });
   }
-  if (out.kind === "annotated_code" && out.id.startsWith(SKELETON_VISUAL_PREFIX) && isObj(o.skeleton)) {
+  if (out.kind === "annotated_code" && (out.id.startsWith(SKELETON_VISUAL_PREFIX) || out.id.startsWith("skelcode-live:")) && isObj(o.skeleton)) {
     out.skeleton = coerceSkeletonSnapshot(o.skeleton);
   }
   return out;
@@ -26451,6 +26470,10 @@ function coerceSkeletonSnapshot(o) {
     out.markerError = o.markerError;
   if (typeof o.withheld === "string" && o.withheld)
     out.withheld = o.withheld;
+  if (typeof o.takenAt === "string" && o.takenAt)
+    out.takenAt = o.takenAt;
+  if (typeof o.readAt === "number" && Number.isFinite(o.readAt))
+    out.readAt = o.readAt;
   return out;
 }
 function coerceRequirement(v2) {
@@ -27785,8 +27808,8 @@ function maskNonProse(text) {
     blank(chars, m.index, m.index + m[0].length);
   }
   const masked3 = chars.join("");
-  const quoteLine = /^[ \t]*>.*$/gm;
-  while ((m = quoteLine.exec(masked3)) !== null) {
+  const quoteLine2 = /^[ \t]*>.*$/gm;
+  while ((m = quoteLine2.exec(masked3)) !== null) {
     blank(chars, m.index, m.index + m[0].length);
   }
   const masked4 = chars.join("");
@@ -28502,6 +28525,19 @@ var LedgerDigestSchema = external_exports.object({
   globalLedger: external_exports.object({ concepts: count, projects: count, multiProjectConcepts: count })
 });
 
+// ../shared/dist/skeleton.js
+var SKELETON_LIVE_VISUAL_PREFIX = "skelcode-live:";
+var isSkeletonApprovedVisualId = (id) => typeof id === "string" && id.startsWith(SKELETON_VISUAL_PREFIX);
+var isSkeletonLiveVisualId = (id) => typeof id === "string" && id.startsWith(SKELETON_LIVE_VISUAL_PREFIX);
+var isAnySkeletonVisualId = (id) => isSkeletonApprovedVisualId(id) || isSkeletonLiveVisualId(id);
+var liveVisualIdFor = (approvedId) => `${SKELETON_LIVE_VISUAL_PREFIX}${approvedId.slice(SKELETON_VISUAL_PREFIX.length)}`;
+var CLOSED_FOR_PROGRESS = /* @__PURE__ */ new Set(["superseded", "rejected", "retracted", "obsolete"]);
+function isLivePlanVersion(art, artifacts) {
+  if (art.type !== "plan" || CLOSED_FOR_PROGRESS.has(art.status))
+    return false;
+  return !artifacts.some((a) => a.parentId === art.id);
+}
+
 // src/store/global-store.ts
 var LEDGER_VERSION = 1;
 var LEDGER_LOCK_TIMEOUT_MS = 1e3;
@@ -29123,7 +29159,7 @@ var ACKNOWLEDGE_ONLY_DRAFT_TYPES = ["explainer", "debrief"];
 
 // src/mcp/skeleton-line.ts
 var skeletonVisualId = (relPath) => `${SKELETON_VISUAL_PREFIX}${relPath}`;
-var isSkeletonVisualId = (id) => typeof id === "string" && id.startsWith(SKELETON_VISUAL_PREFIX);
+var isSkeletonVisualId = (id) => isAnySkeletonVisualId(id);
 function stripSkeletonVisuals(visuals) {
   if (!Array.isArray(visuals)) return void 0;
   return visuals.filter((v2) => !(v2 && typeof v2 === "object" && isSkeletonVisualId(v2.id))).map((v2) => {
@@ -29149,17 +29185,51 @@ function stripForgedSkeleton(content) {
   }
   return out;
 }
-function describeSkeletonLine(art, visualId, line) {
+var quoteLine = (text) => {
+  const t = text.trim().replace(/\s+/g, " ");
+  return JSON.stringify(t.length > 120 ? `${t.slice(0, 117)}...` : t);
+};
+function describeSkeletonLine(art, visualId, line, anchor, createdAt) {
   if (!art || art.type !== "plan" || !isSkeletonVisualId(visualId) || typeof line !== "number") return null;
   const content = art.content;
   const visual = content?.visuals?.find((v2) => v2?.id === visualId);
+  const live = isSkeletonLiveVisualId(visualId);
   const fences = Array.isArray(visual?.skeleton?.fences) ? visual.skeleton.fences : null;
-  if (!fences) return null;
-  const fence = fences.find((f) => line >= f.openLine && line <= f.closeLine);
-  if (!fence) return " (skeleton code, outside any fence \u2014 a structural line)";
-  const stepIndex = (content?.steps ?? []).findIndex((s) => s?.skelId === fence.id);
-  const status = stepIndex >= 0 && content.steps[stepIndex].status === "in_progress" ? "active" : fence.status === "todo" ? "pending" : "filled";
-  return ` (inside the SKEL[${fence.id}] fence${stepIndex >= 0 ? `, step ${stepIndex + 1}` : ""} \u2014 ${status})`;
+  if (!fences && !anchor) return null;
+  const anchored = anchor && typeof anchor.fenceId === "string" ? anchor.fenceId : void 0;
+  const fenceId = anchor ? anchored : fences?.find((f) => line >= f.openLine && line <= f.closeLine)?.id;
+  let where;
+  if (!fenceId) {
+    where = " (skeleton code, outside any fence \u2014 a structural line)";
+  } else {
+    const stepIndex = (content?.steps ?? []).findIndex((s) => s?.skelId === fenceId);
+    const fence = fences?.find((f) => f.id === fenceId);
+    const status = stepIndex >= 0 && content.steps[stepIndex].status === "in_progress" ? "active" : fence?.status === "filled" ? "filled" : "pending";
+    where = ` (inside the SKEL[${fenceId}] fence${stepIndex >= 0 ? `, step ${stepIndex + 1}` : ""} \u2014 ${status})`;
+  }
+  if (!live) return `${where} \u2014 on the approved skeleton`;
+  const readIso = typeof anchor?.readAt === "number" && Number.isFinite(anchor.readAt) ? new Date(Math.floor(anchor.readAt)).toISOString() : void 0;
+  const asOf = readIso ?? anchor?.takenAt ?? createdAt;
+  const currentTakenAt = visual?.skeleton?.takenAt;
+  const movedSince = anchor ? !!currentTakenAt && currentTakenAt !== anchor.takenAt : !!currentTakenAt && !!createdAt && createdAt < currentTakenAt;
+  const changed = movedSince || !visual ? `; the code has changed since, so this line may have moved${anchor?.lineText !== void 0 ? ` \u2014 when commented it read ${quoteLine(anchor.lineText)}` : ""}` : "";
+  return `${where} \u2014 on the live view${asOf ? ` as of ${asOf}` : ""}${changed}`;
+}
+function skeletonProgressMismatches(steps, fences, skipIds = /* @__PURE__ */ new Set()) {
+  const out = [];
+  steps.forEach((st, i) => {
+    const id = st?.skelId;
+    if (typeof id !== "string" || !id || skipIds.has(id)) return;
+    const mine = fences.filter((f) => f.id === id);
+    if (mine.length === 0) return;
+    const todo = mine.filter((f) => f.status === "todo");
+    if (st.status === "done" && todo.length > 0) {
+      out.push(`step ${i + 1} (SKEL[${id}]) is marked done, but SKEL_TODO is still in the code at ${todo.map((f) => `${f.file}:${f.openLine}`).join(", ")}`);
+    } else if ((st.status === void 0 || st.status === "pending") && todo.length === 0) {
+      out.push(`step ${i + 1} (SKEL[${id}]) is still pending, but its fence is already filled in the code \u2014 mark it done, or say why not`);
+    }
+  });
+  return out;
 }
 
 // src/mcp/tools/check-feedback-delivery.ts
@@ -29348,7 +29418,9 @@ ${s.replacementText}${note ? `
   const skeletonLine = describeSkeletonLine(
     artsForTargets.find((a) => a.id === c.target.artifactId),
     c.target.visualId,
-    c.target.lineStart
+    c.target.lineStart,
+    c.target.skeletonAnchor,
+    c.createdAt
   );
   if (skeletonLine) loc += skeletonLine;
   let removedLine;
@@ -36765,103 +36837,6 @@ function within(dir, abs) {
   return rel === "" || !rel.startsWith("..") && !path10.isAbsolute(rel);
 }
 
-// src/mcp/tools/update-plan-progress.ts
-var VALID_STATUSES = /* @__PURE__ */ new Set(["pending", "in_progress", "done", "skipped"]);
-async function handleUpdatePlanProgress(ctx, args) {
-  const { store, broadcast } = ctx;
-  const artifactId = String(args?.artifactId ?? "").trim();
-  const rawUpdates = Array.isArray(args?.updates) ? args.updates : null;
-  if (!artifactId || !rawUpdates || rawUpdates.length === 0) {
-    return {
-      content: [{ type: "text", text: "update_plan_progress requires artifactId and a non-empty updates array." }],
-      isError: true
-    };
-  }
-  const updates = [];
-  for (const u of rawUpdates) {
-    const stepIndex = Number(u?.stepIndex);
-    const status = String(u?.status ?? "");
-    if (!Number.isInteger(stepIndex) || stepIndex < 0 || !VALID_STATUSES.has(status)) {
-      return {
-        content: [{ type: "text", text: `update_plan_progress: each update needs stepIndex (int \u2265 0) and status (pending|in_progress|done|skipped); got ${JSON.stringify(u)}.` }],
-        isError: true
-      };
-    }
-    updates.push({
-      stepIndex,
-      status,
-      ...u?.statusNote != null ? { statusNote: String(u.statusNote) } : {}
-    });
-  }
-  const artifact = await store.updatePlanProgress(artifactId, updates);
-  if (!artifact) {
-    return {
-      content: [{ type: "text", text: `update_plan_progress: ${artifactId} is not a known plan or spec artifact (or no update touched an existing plan step or spec task).` }],
-      isError: true
-    };
-  }
-  broadcast({ type: "plan_progress_updated", artifact });
-  const isSpec = artifact.type === "spec";
-  const kind = isSpec ? "spec" : "plan";
-  const unit = isSpec ? "tasks" : "steps";
-  const c = artifact.content;
-  const items = (isSpec ? c.tasks : c.steps) ?? [];
-  const done = items.filter((st) => st.status === "done" || st.status === "skipped").length;
-  const NOT_EXECUTABLE = {
-    draft: "still AWAITING REVIEW \u2014 get your pair's approval before executing",
-    rejected: `REJECTED \u2014 do not execute it; address the feedback or present a new ${kind}`,
-    retracted: "retracted",
-    obsolete: "obsolete",
-    superseded: `superseded \u2014 progress belongs on the latest version of this ${kind}; use its id`,
-    revised: "revised \u2014 revision requested; awaiting an updated brief; do not execute this version"
-  };
-  const warning = NOT_EXECUTABLE[artifact.status] ? `
-\u26A0 WARNING: this ${kind} is ${NOT_EXECUTABLE[artifact.status]}.` : "";
-  const skeletonNote = isSpec ? "" : syncSkeletonScope(store.getSessionId(), artifact, updates);
-  return {
-    content: [{
-      type: "text",
-      text: `${isSpec ? "Spec" : "Plan"} progress recorded: ${done}/${items.length} ${unit} complete. The companion UI checklist is live \u2014 keep marking ${unit} as you finish them.${warning}${skeletonNote}`
-    }]
-  };
-}
-function syncSkeletonScope(sessionId, artifact, updates) {
-  try {
-    const content = artifact.content ?? {};
-    const steps = content.steps ?? [];
-    if (!steps.some((st) => typeof st.skelId === "string" && st.skelId)) return "";
-    const root = resolveProjectRoot();
-    const workspaceRoot = root.worktree?.workspaceRoot ?? root.projectRoot;
-    const approved = artifact.status === "approved";
-    const activeSkelIds = approved ? steps.filter((st) => st.skelId && st.status === "in_progress").map((st) => st.skelId) : [];
-    writeSkeletonScope(root.projectRoot, { artifactId: artifact.id, planTitle: artifact.title, activeSkelIds, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), sessionId, workspaceRoot });
-    const finished = updates.filter((u) => u.status === "done").map((u) => steps[u.stepIndex]?.skelId).filter((id) => typeof id === "string" && id.length > 0);
-    const notes = [];
-    if (finished.length > 0) {
-      const { fences } = scanSkeletonFences(workspaceRoot, { files: planDeclaredFiles(content) });
-      for (const id of finished) {
-        const mine = fences.filter((f) => f.id === id);
-        const todo = mine.filter((f) => f.status === "todo");
-        if (mine.length === 0) notes.push(`SKEL[${id}] has no fence in the plan's files \u2014 was it removed, or is its file missing from the plan?`);
-        else if (todo.length > 0) notes.push(`SKEL[${id}] still has SKEL_TODO at ${todo.map((f) => `${f.file}:${f.openLine}`).join(", ")} \u2014 finish it before marking the step done.`);
-      }
-    }
-    const fenced = activeSkelIds.length > 0 ? `
-Skeleton fence active: edits are gated to ${activeSkelIds.map((id) => `SKEL[${id}]`).join(", ")} until the step is done. A structural change (new helper, signature, file) is a skeleton change \u2014 propose it, don't route around the fence.` : !approved && steps.some((st) => st.skelId && st.status === "in_progress") ? "\nSkeleton fence NOT opened: this plan isn't approved." : "";
-    return fenced + (notes.length > 0 ? `
-\u26A0 ${notes.join("\n\u26A0 ")}` : "");
-  } catch {
-    return "";
-  }
-}
-
-// src/store/retirement.ts
-function retirementFailure(outcome) {
-  if (outcome.kind !== "blocked_feedback") return outcome.message;
-  const counts = [outcome.unansweredQuestions ? `${outcome.unansweredQuestions} unanswered question(s)` : "", outcome.openSuggestions ? `${outcome.openSuggestions} open suggestion(s)` : "", outcome.undrainedComments ? `${outcome.undrainedComments} unread comment(s)` : ""].filter(Boolean);
-  return `REFUSED \u2014 ${counts.join(" and ")}. Call check_feedback and address the feedback first; retirement must never dodge review.`;
-}
-
 // src/mcp/skeleton-snapshot.ts
 import fs11 from "node:fs";
 import path11 from "node:path";
@@ -37099,7 +37074,13 @@ function buildSkeletonSnapshot(args) {
         title: rel,
         filePath: rel,
         caption: `Content withheld: possible secret detected (${what}).`,
-        skeleton: { fences: [], withheld: `possible secret detected (${what})` }
+        // Fence status only (no titles: a marker line could hold the value),
+        // so the diagram and checklist still read progress from the code.
+        skeleton: {
+          fences: fences.map((f) => ({ id: f.id, openLine: f.openLine, closeLine: f.closeLine, status: f.status })),
+          withheld: `possible secret detected (${what})`,
+          takenAt: (/* @__PURE__ */ new Date()).toISOString()
+        }
       });
       continue;
     }
@@ -37108,7 +37089,8 @@ function buildSkeletonSnapshot(args) {
     used += Buffer.byteLength(code, "utf-8");
     const skeleton = {
       fences: fenceViews(fences, cut ? cut.shownLines : null),
-      ...cut ? { truncated: { shownLines: cut.shownLines, totalLines: cut.totalLines } } : {}
+      ...cut ? { truncated: { shownLines: cut.shownLines, totalLines: cut.totalLines } } : {},
+      takenAt: (/* @__PURE__ */ new Date()).toISOString()
     };
     const n = skeleton.fences.length;
     const captionParts = [
@@ -37175,6 +37157,151 @@ function attachSkeletonSnapshot(content, opts = {}) {
   } catch {
     return { content, note: "" };
   }
+}
+function resnapshotSkeleton(content, opts = {}) {
+  try {
+    const c = content ?? {};
+    const steps = Array.isArray(c.steps) ? c.steps : [];
+    if (!steps.some((st) => typeof st?.skelId === "string" && st.skelId.length > 0)) return null;
+    const root = opts.root ?? (() => {
+      const r = resolveProjectRoot();
+      return r.worktree?.workspaceRoot ?? r.projectRoot;
+    })();
+    const all = (Array.isArray(c.visuals) ? c.visuals : []).filter((v2) => v2 && typeof v2 === "object");
+    const readAt = nextReadStamp();
+    const snap = buildSkeletonSnapshot({ steps, visuals: stripSkeletonVisuals(c.visuals) ?? [], root, ...opts.limits ? { limits: opts.limits } : {} });
+    const live = [];
+    for (const v2 of snap.visuals) {
+      if (v2.kind !== "annotated_code" || !v2.skeleton || !isSkeletonApprovedVisualId(v2.id)) continue;
+      const liveId = liveVisualIdFor(v2.id);
+      const prior = all.find((p) => p.id === liveId) ?? all.find((p) => p.id === v2.id);
+      const takenAt = prior?.skeleton?.takenAt && prior.code === v2.code && (prior.skeleton.withheld ?? "") === (v2.skeleton.withheld ?? "") ? prior.skeleton.takenAt : v2.skeleton.takenAt;
+      live.push({
+        ...v2,
+        id: liveId,
+        caption: (v2.caption ?? "").replace("Read from disk when the plan was presented.", "Live: re-read from disk on the latest progress update."),
+        skeleton: { ...v2.skeleton, ...takenAt ? { takenAt } : {}, readAt }
+      });
+    }
+    return { visuals: live, note: snap.note, readAt, ...snap.scan ? { scan: snap.scan } : {} };
+  } catch {
+    return null;
+  }
+}
+var lastStamp = 0;
+function nextReadStamp() {
+  const now = Date.now();
+  lastStamp = now > lastStamp ? now : lastStamp + 1e-3;
+  return lastStamp;
+}
+
+// src/mcp/tools/update-plan-progress.ts
+var VALID_STATUSES = /* @__PURE__ */ new Set(["pending", "in_progress", "done", "skipped"]);
+async function handleUpdatePlanProgress(ctx, args) {
+  const { store, broadcast } = ctx;
+  const artifactId = String(args?.artifactId ?? "").trim();
+  const rawUpdates = Array.isArray(args?.updates) ? args.updates : null;
+  if (!artifactId || !rawUpdates || rawUpdates.length === 0) {
+    return {
+      content: [{ type: "text", text: "update_plan_progress requires artifactId and a non-empty updates array." }],
+      isError: true
+    };
+  }
+  const updates = [];
+  for (const u of rawUpdates) {
+    const stepIndex = Number(u?.stepIndex);
+    const status = String(u?.status ?? "");
+    if (!Number.isInteger(stepIndex) || stepIndex < 0 || !VALID_STATUSES.has(status)) {
+      return {
+        content: [{ type: "text", text: `update_plan_progress: each update needs stepIndex (int \u2265 0) and status (pending|in_progress|done|skipped); got ${JSON.stringify(u)}.` }],
+        isError: true
+      };
+    }
+    updates.push({
+      stepIndex,
+      status,
+      ...u?.statusNote != null ? { statusNote: String(u.statusNote) } : {}
+    });
+  }
+  const all = await store.getArtifacts();
+  const before = all.find((a) => a.id === artifactId);
+  const resnap = before && isLivePlanVersion(before, all) ? resnapshotSkeleton(before.content) : null;
+  const artifact = resnap ? await store.updatePlanProgress(artifactId, updates, { skeletonVisuals: resnap.visuals, ...resnap.readAt !== void 0 ? { skeletonReadAt: resnap.readAt } : {} }) : await store.updatePlanProgress(artifactId, updates);
+  if (!artifact) {
+    return {
+      content: [{ type: "text", text: `update_plan_progress: ${artifactId} is not a known plan or spec artifact (or no update touched an existing plan step or spec task).` }],
+      isError: true
+    };
+  }
+  broadcast({ type: "plan_progress_updated", artifact });
+  const isSpec = artifact.type === "spec";
+  const kind = isSpec ? "spec" : "plan";
+  const unit = isSpec ? "tasks" : "steps";
+  const c = artifact.content;
+  const items = (isSpec ? c.tasks : c.steps) ?? [];
+  const done = items.filter((st) => st.status === "done" || st.status === "skipped").length;
+  const NOT_EXECUTABLE = {
+    draft: "still AWAITING REVIEW \u2014 get your pair's approval before executing",
+    rejected: `REJECTED \u2014 do not execute it; address the feedback or present a new ${kind}`,
+    retracted: "retracted",
+    obsolete: "obsolete",
+    superseded: `superseded \u2014 progress belongs on the latest version of this ${kind}; use its id`,
+    revised: "revised \u2014 revision requested; awaiting an updated brief; do not execute this version"
+  };
+  const warning = NOT_EXECUTABLE[artifact.status] ? `
+\u26A0 WARNING: this ${kind} is ${NOT_EXECUTABLE[artifact.status]}.` : "";
+  const skeletonNote = isSpec ? "" : syncSkeletonScope(store.getSessionId(), artifact, updates, resnap?.scan);
+  let mismatchNote = "";
+  if (resnap?.scan && c.steps) {
+    const finishedNow = new Set(
+      updates.filter((u) => u.status === "done").map((u) => c.steps?.[u.stepIndex]?.skelId).filter((id) => typeof id === "string" && id.length > 0)
+    );
+    const lines = skeletonProgressMismatches(c.steps, resnap.scan.fences, finishedNow);
+    if (lines.length > 0) mismatchNote = `
+\u26A0 The checklist and the code disagree: ${lines.join("; ")}.`;
+  }
+  return {
+    content: [{
+      type: "text",
+      text: `${isSpec ? "Spec" : "Plan"} progress recorded: ${done}/${items.length} ${unit} complete. The companion UI checklist is live \u2014 keep marking ${unit} as you finish them.${warning}${skeletonNote}${mismatchNote}`
+    }]
+  };
+}
+function syncSkeletonScope(sessionId, artifact, updates, scan) {
+  try {
+    const content = artifact.content ?? {};
+    const steps = content.steps ?? [];
+    if (!steps.some((st) => typeof st.skelId === "string" && st.skelId)) return "";
+    const root = resolveProjectRoot();
+    const workspaceRoot = root.worktree?.workspaceRoot ?? root.projectRoot;
+    const approved = artifact.status === "approved";
+    const activeSkelIds = approved ? steps.filter((st) => st.skelId && st.status === "in_progress").map((st) => st.skelId) : [];
+    writeSkeletonScope(root.projectRoot, { artifactId: artifact.id, planTitle: artifact.title, activeSkelIds, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), sessionId, workspaceRoot });
+    const finished = updates.filter((u) => u.status === "done").map((u) => steps[u.stepIndex]?.skelId).filter((id) => typeof id === "string" && id.length > 0);
+    const notes = [];
+    if (finished.length > 0) {
+      const { fences } = scan ?? scanSkeletonFences(workspaceRoot, { files: planDeclaredFiles(content) });
+      for (const id of finished) {
+        const mine = fences.filter((f) => f.id === id);
+        const todo = mine.filter((f) => f.status === "todo");
+        if (mine.length === 0) notes.push(`SKEL[${id}] has no fence in the plan's files \u2014 was it removed, or is its file missing from the plan?`);
+        else if (todo.length > 0) notes.push(`SKEL[${id}] still has SKEL_TODO at ${todo.map((f) => `${f.file}:${f.openLine}`).join(", ")} \u2014 finish it before marking the step done.`);
+      }
+    }
+    const fenced = activeSkelIds.length > 0 ? `
+Skeleton fence active: edits are gated to ${activeSkelIds.map((id) => `SKEL[${id}]`).join(", ")} until the step is done. A structural change (new helper, signature, file) is a skeleton change \u2014 propose it, don't route around the fence.` : !approved && steps.some((st) => st.skelId && st.status === "in_progress") ? "\nSkeleton fence NOT opened: this plan isn't approved." : "";
+    return fenced + (notes.length > 0 ? `
+\u26A0 ${notes.join("\n\u26A0 ")}` : "");
+  } catch {
+    return "";
+  }
+}
+
+// src/store/retirement.ts
+function retirementFailure(outcome) {
+  if (outcome.kind !== "blocked_feedback") return outcome.message;
+  const counts = [outcome.unansweredQuestions ? `${outcome.unansweredQuestions} unanswered question(s)` : "", outcome.openSuggestions ? `${outcome.openSuggestions} open suggestion(s)` : "", outcome.undrainedComments ? `${outcome.undrainedComments} unread comment(s)` : ""].filter(Boolean);
+  return `REFUSED \u2014 ${counts.join(" and ")}. Call check_feedback and address the feedback first; retirement must never dodge review.`;
 }
 
 // src/mcp/tools/revise-artifact.ts
@@ -40657,8 +40784,12 @@ var DaemonClient = class {
   async updateArtifactStatus(artifactId, status, reason) {
     await this.post(`/artifacts/${artifactId}/status`, { status, reason });
   }
-  async updatePlanProgress(artifactId, updates) {
-    const data = await this.post(`/artifacts/${artifactId}/plan-progress`, { updates });
+  async updatePlanProgress(artifactId, updates, opts) {
+    const data = await this.post(`/artifacts/${artifactId}/plan-progress`, {
+      updates,
+      ...Array.isArray(opts?.skeletonVisuals) ? { skeletonVisuals: opts.skeletonVisuals } : {},
+      ...typeof opts?.skeletonReadAt === "number" ? { skeletonReadAt: opts.skeletonReadAt } : {}
+    });
     return data?.artifact ?? null;
   }
   async getArtifacts() {

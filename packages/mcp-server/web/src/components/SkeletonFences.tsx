@@ -1,4 +1,5 @@
 import type { PlanVisual, SkeletonFenceView } from "@deeppairing/shared";
+import { isSkeletonApprovedVisualId, liveVisualIdFor } from "@deeppairing/shared";
 import type { CodeLineDecoration } from "./CommentableCode";
 
 /**
@@ -45,6 +46,15 @@ export function fenceStatus(fence: SkeletonFenceView, steps: SkeletonStepLike[] 
   return fence.status === "filled" ? "filled" : "pending";
 }
 
+/** Parity PR 3 — the checklist vs the code, read from the code. */
+export function fenceMismatch(fence: SkeletonFenceView, steps: SkeletonStepLike[] | undefined): string | null {
+  const owner = (steps ?? []).find((s) => s?.skelId === fence.id);
+  if (!owner) return null;
+  if (owner.status === "done" && fence.status === "todo") return "Marked done, but SKEL_TODO is still in the code";
+  if ((owner.status === undefined || owner.status === "pending") && fence.status === "filled") return "Filled in the code, but the step isn't marked done";
+  return null;
+}
+
 function stepFor(fence: SkeletonFenceView, steps: SkeletonStepLike[] | undefined): { index: number; step: SkeletonStepLike } | null {
   const list = steps ?? [];
   const index = list.findIndex((s) => s?.skelId === fence.id);
@@ -66,15 +76,16 @@ export function skeletonLineDecoration(
     const owner = stepFor(fence, steps);
     const stepText = owner ? `Step ${owner.index + 1}` : "No step claims it";
     const marker = lineNum === fence.openLine || lineNum === fence.closeLine;
+    const mismatch = fenceMismatch(fence, steps);
     return {
       className: `${s.row}${marker ? " opacity-80" : ""}`,
-      attrs: { "data-skel-fence": fence.id, "data-skel-status": status },
+      attrs: { "data-skel-fence": fence.id, "data-skel-status": status, ...(mismatch ? { "data-skel-mismatch": "true" } : {}) },
       header:
         lineNum === fence.openLine ? (
           <div
             role="note"
-            className={`flex items-center gap-1.5 px-2 py-0.5 font-sans text-2xs ${s.row}`}
-            aria-label={`SKEL[${fence.id}] fence, ${stepText}, ${s.label}`}
+            className={`flex flex-wrap items-center gap-1.5 px-2 py-0.5 font-sans text-2xs ${s.row}`}
+            aria-label={`SKEL[${fence.id}] fence, ${stepText}, ${s.label}${mismatch ? `. ${mismatch}` : ""}`}
           >
             <span aria-hidden="true">{s.glyph}</span>
             <span className={`rounded px-1 font-mono ${s.chip}`}>SKEL[{fence.id}]</span>
@@ -83,6 +94,7 @@ export function skeletonLineDecoration(
               · {stepText}
               {owner?.step.description ? `: ${owner.step.description}` : fence.title ? `: ${fence.title}` : ""}
             </span>
+            {mismatch && <span className="font-medium text-accent-red">⚠ {mismatch}</span>}
           </div>
         ) : undefined,
     };
@@ -130,4 +142,84 @@ export function SkeletonSummary({
       )}
     </div>
   );
+}
+
+// --- parity PR 3: the plan-wide view of every fence, for the diagram -------
+
+export type StepNodeState = {
+  /** The step's skelId (dots and dashes intact). */
+  skelId: string;
+  status: FenceStatus | "unknown";
+  label: string;
+  /** Step number (1-based) and description, for the text cue. */
+  stepNumber: number;
+  description?: string;
+  mismatch?: string;
+  /** Where to scroll: the first fence of this id in the code view. */
+  target?: { filePath: string; line: number };
+};
+
+const STATUS_RANK: Record<FenceStatus, number> = { active: 3, pending: 2, filled: 1 };
+
+/**
+ * One state per skelId step, read from the plan's `skelcode:` snapshots (the
+ * code) plus live step status. A step whose fence isn't in the code view
+ * (capped, skipped, protected) is "unknown", never guessed.
+ */
+export function planStepNodeStates(visuals: PlanVisual[], steps: SkeletonStepLike[] | undefined): Record<string, StepNodeState> {
+  const out: Record<string, StepNodeState> = {};
+  // #609 review — progress reads the LIVE snapshot where one exists; the
+  // approved snapshot stands in only for files never re-read.
+  const ids = new Set(visuals.map((v) => v?.id));
+  const snaps = visuals.filter(
+    (v) =>
+      v?.kind === "annotated_code" &&
+      v.skeleton &&
+      Array.isArray(v.skeleton.fences) &&
+      !(isSkeletonApprovedVisualId(v.id) && ids.has(liveVisualIdFor(v.id))),
+  );
+  (steps ?? []).forEach((st, i) => {
+    const id = st?.skelId;
+    if (typeof id !== "string" || !id || out[id]) return;
+    let status: FenceStatus | "unknown" = "unknown";
+    let target: StepNodeState["target"];
+    let mismatch: string | undefined;
+    for (const v of snaps) {
+      for (const f of v.skeleton!.fences) {
+        if (f.id !== id) continue;
+        const fs = fenceStatus(f, steps);
+        if (status === "unknown" || STATUS_RANK[fs] > STATUS_RANK[status]) status = fs;
+        if (!target && typeof v.filePath === "string" && !v.skeleton!.withheld) target = { filePath: v.filePath, line: f.openLine };
+        mismatch = mismatch ?? fenceMismatch(f, steps) ?? undefined;
+      }
+    }
+    out[id] = {
+      skelId: id,
+      status,
+      label: status === "unknown" ? "Not in the code view" : STATUS_STYLE[status].label,
+      stepNumber: i + 1,
+      ...(st.description ? { description: st.description } : {}),
+      ...(mismatch ? { mismatch } : {}),
+      ...(target ? { target } : {}),
+    };
+  });
+  return out;
+}
+
+export const STEP_GLYPH: Record<FenceStatus | "unknown", string> = {
+  pending: STATUS_STYLE.pending.glyph,
+  filled: STATUS_STYLE.filled.glyph,
+  active: STATUS_STYLE.active.glyph,
+  unknown: "?",
+};
+
+const attrValue = (s: string) => s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+
+/** Scroll the code view to a fence's opening line. False when it isn't on screen. */
+export function jumpToFence(target: { filePath: string; line: number } | undefined, root: ParentNode = document): boolean {
+  if (!target) return false;
+  const el = root.querySelector(`[data-comment-anchor="line:${attrValue(target.filePath)}:${target.line}"]`) as HTMLElement | null;
+  if (!el) return false;
+  el.scrollIntoView?.({ block: "center", behavior: "smooth" });
+  return true;
 }

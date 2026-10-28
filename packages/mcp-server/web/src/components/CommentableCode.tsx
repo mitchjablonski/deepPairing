@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import type { Comment, PlanVisualAnnotation } from "@deeppairing/shared";
+import type { Comment, CommentTarget, PlanVisualAnnotation } from "@deeppairing/shared";
 import { useHighlightedCode } from "../hooks/useHighlightedCode";
 import { detectLanguage } from "../lib/highlighter";
 import { LineGutter, LineCommentChips, LineComposer, type LineMode } from "./LineComments";
@@ -66,6 +66,9 @@ interface CommentableCodeProps {
    *  the line (e.g. the fence's step + status, in text). Absent → every line
    *  renders exactly as before. */
   lineDecoration?: (lineNum: number) => CodeLineDecoration | undefined;
+  /** Optional per-line additions to the comment target (skeleton plans: the
+   *  snapshot, fence and line text the comment is written on). */
+  lineTargetExtra?: (lineNum: number) => { skeletonAnchor?: CommentTarget["skeletonAnchor"] } | undefined;
 }
 
 export interface CodeLineDecoration {
@@ -86,6 +89,7 @@ export function CommentableCode({
   targetContext,
   readOnly = false,
   lineDecoration,
+  lineTargetExtra,
 }: CommentableCodeProps) {
   // One open composer at a time across the whole block. Mode lives here too so
   // the gutter and composer agree on which tab is active.
@@ -217,7 +221,7 @@ export function CommentableCode({
                 mode={mode}
                 setMode={setMode}
                 existingComments={chips}
-                targetContext={targetContext}
+                targetContext={lineTargetExtra ? { ...targetContext, ...lineTargetExtra(lineNum) } : targetContext}
                 onClose={closeLine}
               />
             )}

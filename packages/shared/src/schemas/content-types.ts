@@ -282,6 +282,13 @@ export const SkeletonCodeSnapshotSchema = z.object({
   /** Set when the server WITHHELD the file's content (a secret-shaped value
    *  was found on disk). The visual then carries no `code` at all. */
   withheld: z.string().optional(),
+  /** When this file's snapshot text last CHANGED (ISO). A re-read that finds
+   *  the same text keeps the old stamp, so a line comment made before it is
+   *  known to sit on unchanged code. */
+  takenAt: z.string().optional(),
+  /** LIVE snapshots only: a per-process monotonic read stamp. The store keeps
+   *  the newest read, so concurrent progress calls can't regress the view. */
+  readAt: z.number().optional(),
 });
 
 export type SkeletonCodeSnapshot = z.infer<typeof SkeletonCodeSnapshotSchema>;

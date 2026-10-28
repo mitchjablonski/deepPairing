@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { PlanVisual } from "@deeppairing/shared";
 import { ArtifactVisuals } from "../ArtifactVisuals";
-import { SkeletonSummary } from "../SkeletonFences";
+import { SkeletonSummary, planStepNodeStates } from "../SkeletonFences";
 import { useArtifactStore } from "../../stores/artifact";
 
 /**
@@ -132,6 +133,76 @@ describe("skeleton code in the plan card", () => {
     expect(container.querySelector('[data-skel-carried="true"]')?.textContent).toMatch(/2 line comments from an earlier version.*may have moved/);
     rerender(<SkeletonSummary visual={SKELETON} steps={STEPS} />);
     expect(container.querySelector('[data-skel-carried="true"]')).toBeNull();
+  });
+
+  describe("#609 review — the approved snapshot vs the live progress view", () => {
+    const LIVE: PlanVisual = {
+      ...SKELETON,
+      id: "skelcode-live:src/a.ts",
+      code: CODE.replace('throw new Error("SKEL_TODO");', "return dedupe(raw);"),
+      skeleton: { fences: SKELETON.skeleton!.fences.map((f) => ({ ...f, status: "filled" as const })) },
+    };
+    const comment = (id: string, visualId: string) =>
+      useArtifactStore.getState().addComment({
+        id,
+        sessionId: "s",
+        target: { artifactId: "art_p", visualId, filePath: "src/a.ts", lineStart: 3, lineEnd: 3 },
+        parentCommentId: null,
+        author: "human",
+        content: `note ${id}`,
+        acknowledged: false,
+        createdAt: "2026-10-01T00:00:00.000Z",
+      } as any);
+
+    it("one card per file: the live view by default, 'As approved' on request, with a changed badge", () => {
+      const { container } = render(<ArtifactVisuals artifactId="art_p" visuals={[SKELETON, LIVE]} skeletonSteps={STEPS} />);
+      expect(screen.getByText("Visuals (1)")).toBeInTheDocument();
+      expect(container.textContent).toContain("return dedupe(raw);");
+      expect(container.textContent).not.toContain('throw new Error("SKEL_TODO");');
+      expect(screen.getByRole("button", { name: "Live progress" })).toHaveAttribute("aria-pressed", "true");
+      expect(container.querySelector('[data-skel-changed="true"]')?.textContent).toBe("Changed since approval");
+      fireEvent.click(screen.getByRole("button", { name: "As approved" }));
+      expect(container.textContent).toContain('throw new Error("SKEL_TODO");');
+      expect(container.textContent).not.toContain("return dedupe(raw);");
+      expect(screen.getByRole("button", { name: "As approved" })).toHaveAttribute("aria-pressed", "true");
+    });
+
+    it("comments stay on the snapshot they were written on, and the other view says how many it holds", () => {
+      comment("c_approved", "skelcode:src/a.ts");
+      const { container } = render(<ArtifactVisuals artifactId="art_p" visuals={[SKELETON, LIVE]} skeletonSteps={STEPS} />);
+      // Live view: the approved-view comment is not drawn on live line 3…
+      expect(container.textContent).not.toContain("note c_approved");
+      // …but its existence is named.
+      expect(container.querySelector('[data-skel-other-comments="true"]')?.textContent).toBe("1 comment on the as-approved view");
+      fireEvent.click(screen.getByRole("button", { name: "As approved" }));
+      expect(container.querySelector('[data-skel-other-comments="true"]')).toBeNull();
+    });
+
+    it("M2: a line comment records the snapshot, its read time, the fence and the line text", async () => {
+      const live: PlanVisual = { ...LIVE, skeleton: { ...LIVE.skeleton!, takenAt: "2026-10-27T10:00:00.000Z", readAt: 1793095200000 } };
+      render(<ArtifactVisuals artifactId="art_p" visuals={[SKELETON, live]} skeletonSteps={STEPS} />);
+      const commentBtns = screen.getAllByRole("button", { name: /add a comment on this line/i });
+      await userEvent.click(commentBtns[2]!); // line 3
+      await userEvent.type(screen.getByPlaceholderText(/add a comment on this line/i), "dedupe by distance");
+      const submit = screen.getAllByRole("button", { name: /^Comment$/ });
+      await userEvent.click(submit[submit.length - 1]!);
+      const call = (fetch as any).mock.calls.find((c: any[]) => typeof c[1]?.body === "string" && c[1].body.includes("dedupe by distance"));
+      const body = JSON.parse(call[1].body);
+      expect(body.target.visualId).toBe("skelcode-live:src/a.ts");
+      expect(body.target.lineStart).toBe(3);
+      expect(body.target.skeletonAnchor).toEqual({
+        snapshot: "live",
+        takenAt: "2026-10-27T10:00:00.000Z",
+        readAt: 1793095200000,
+        fenceId: "1",
+        lineText: "  return dedupe(raw);",
+      });
+    });
+
+    it("the diagram/progress states read the live snapshot", () => {
+      const states = planStepNodeStates([SKELETON, LIVE], [{ skelId: "1", status: "pending" }]);
+      expect(states["1"]!.status).toBe("filled");
+    });
   });
 
   it("an ordinary annotated_code visual renders exactly as before (no fence decoration)", () => {

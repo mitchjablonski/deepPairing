@@ -158,7 +158,8 @@ throw new Error("SKEL_TODO");
 
 Only when the human asks for it. Then call `present_plan` with one step per
 fence (`skelId: "2"`), in build order, plus a Mermaid architecture `diagram`
-and a `file_map` of every skeleton file. The reply checks that the fences exist
+and a `file_map` of every skeleton file. Name each step's diagram node
+`step_<id>` (step `2.1` is `step_2_1`) so the card colours it by fence status. The reply checks that the fences exist
 in the declared files, and the plan card shows the fenced files as code the
 human can comment on line by line (unfenced new files by path only) (comments arrive in `check_feedback` with file,
 line and fence). Fence each step's test stub with the same id. After approval, `update_plan_progress`

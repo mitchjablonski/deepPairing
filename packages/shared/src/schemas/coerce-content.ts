@@ -305,7 +305,7 @@ function coerceVisual(v: unknown, fallbackId: string): PlanVisual {
   // malformed value degrades to "no fences" rather than reaching the renderer.
   // Only a server snapshot id may carry it (defence in depth: every tool path
   // strips agent-supplied `skeleton`, and this keeps a stray one off the card).
-  if (out.kind === "annotated_code" && out.id.startsWith(SKELETON_VISUAL_PREFIX) && isObj(o.skeleton)) {
+  if (out.kind === "annotated_code" && (out.id.startsWith(SKELETON_VISUAL_PREFIX) || out.id.startsWith("skelcode-live:")) && isObj(o.skeleton)) {
     out.skeleton = coerceSkeletonSnapshot(o.skeleton);
   }
   return out;
@@ -332,6 +332,8 @@ function coerceSkeletonSnapshot(o: Record<string, unknown>): SkeletonCodeSnapsho
   }
   if (typeof o.markerError === "string" && o.markerError) out.markerError = o.markerError;
   if (typeof o.withheld === "string" && o.withheld) out.withheld = o.withheld;
+  if (typeof o.takenAt === "string" && o.takenAt) out.takenAt = o.takenAt;
+  if (typeof o.readAt === "number" && Number.isFinite(o.readAt)) out.readAt = o.readAt;
   return out;
 }
 

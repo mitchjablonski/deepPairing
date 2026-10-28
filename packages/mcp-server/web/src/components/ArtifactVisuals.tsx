@@ -1,10 +1,21 @@
 import type { Comment, PlanVisual, PlanVisualFile, PlanVisualDocSection, PlanVisualAnnotation } from "@deeppairing/shared";
+import { approvedVisualIdFor, isSkeletonLiveVisualId } from "@deeppairing/shared";
+import { useState } from "react";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { PrototypeFrame } from "./PrototypeFrame";
 import { CommentableCode } from "./CommentableCode";
 import { CommentTrigger, AskTrigger } from "./CommentThread";
 import { useChainComments } from "../hooks/useChainComments";
-import { SkeletonSummary, skeletonLineDecoration, type SkeletonStepLike } from "./SkeletonFences";
+import {
+  SkeletonSummary,
+  skeletonLineDecoration,
+  planStepNodeStates,
+  jumpToFence,
+  STEP_GLYPH,
+  type SkeletonStepLike,
+  type StepNodeState,
+} from "./SkeletonFences";
+import { sourceHasStepNodes } from "../lib/skeletonDiagram";
 
 const kindLabel: Record<string, string> = {
   diagram: "Diagram",
@@ -79,19 +90,38 @@ export function ArtifactVisuals({
   // posted on v1 still surfaces on v2 (same data-loss class as the other
   // renderers). A visualId that only exists on one version simply won't match.
   const comments = useChainComments(artifactId);
+  // #609 review — a skeleton file with a LIVE snapshot shows it by default;
+  // this records the cards switched to "as approved" (keyed by approved id).
+  const [asApproved, setAsApproved] = useState<Record<string, boolean>>({});
   if (!visuals || visuals.length === 0) return null;
+  // The live snapshots ride with their approved card, not as cards of their own.
+  const liveFor: Record<string, PlanVisual> = {};
+  for (const v of visuals) if (v && isSkeletonLiveVisualId(v.id)) liveFor[approvedVisualIdFor(v.id)] = v;
+  const cards = visuals.filter((v) => !(v && isSkeletonLiveVisualId(v.id) && visuals.some((a) => a?.id === approvedVisualIdFor(v.id))));
+  // Parity PR 3 — every skelId step's state, read from the code snapshots, for
+  // the status-coloured diagram. Empty (so diagrams are untouched) unless this
+  // is a skeleton plan with a code view.
+  const stepNodeStates = skeletonSteps && visuals.some((v) => v?.skeleton) ? planStepNodeStates(visuals, skeletonSteps) : undefined;
 
   return (
     <div className="space-y-3">
       <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wide">
-        Visuals ({visuals.length})
+        Visuals ({cards.length})
       </h3>
-      {visuals.map((v) => {
+      {cards.map((card) => {
+        // #609 review — live progress view by default; "as approved" on request.
+        // Each view is its own visual id, so a comment stays on the snapshot it
+        // was written on.
+        const live = liveFor[card.id];
+        const showingApproved = !live || !!asApproved[card.id];
+        const v = live && !showingApproved ? live : card;
+        const changedSinceApproval = !!live && ((live.code ?? "") !== (card.code ?? "") || (live.skeleton?.withheld ?? "") !== (card.skeleton?.withheld ?? ""));
+        const otherViewComments = live ? comments.filter((c) => c.target.visualId === (showingApproved ? live.id : card.id)).length : 0;
         const existing = comments.filter((c) => c.target.visualId === v.id).length;
         const noun = kindNoun[v.kind] ?? "visual";
         return (
           <div
-            key={v.id}
+            key={card.id}
             data-comment-anchor={`visual:${v.id}`}
             className="group bg-surface-secondary rounded-lg border border-white/[0.06] p-3 space-y-2 transition-colors hover:border-accent-blue/25"
           >
@@ -104,6 +134,39 @@ export function ArtifactVisuals({
               )}
             </div>
 
+            {live && (
+              <div className="flex flex-wrap items-center gap-2 text-[10px]" data-skel-views="true">
+                <div role="group" aria-label="Which snapshot" className="inline-flex rounded border border-white/[0.08] overflow-hidden">
+                  <button
+                    type="button"
+                    aria-pressed={!showingApproved}
+                    onClick={() => setAsApproved((m) => ({ ...m, [card.id]: false }))}
+                    className={`px-1.5 py-0.5 ${!showingApproved ? "bg-accent-blue-dim text-accent-blue" : "text-text-muted"}`}
+                  >
+                    Live progress
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={showingApproved}
+                    onClick={() => setAsApproved((m) => ({ ...m, [card.id]: true }))}
+                    className={`px-1.5 py-0.5 ${showingApproved ? "bg-accent-blue-dim text-accent-blue" : "text-text-muted"}`}
+                  >
+                    As approved
+                  </button>
+                </div>
+                {changedSinceApproval ? (
+                  <span className="text-accent-amber" data-skel-changed="true">Changed since approval</span>
+                ) : (
+                  <span className="text-text-muted">Unchanged since approval</span>
+                )}
+                {otherViewComments > 0 && (
+                  <span className="text-text-muted" data-skel-other-comments="true">
+                    {otherViewComments} comment{otherViewComments === 1 ? "" : "s"} on the {showingApproved ? "live" : "as-approved"} view
+                  </span>
+                )}
+              </div>
+            )}
+
             {v.skeleton && v.kind === "annotated_code" && (
               <SkeletonSummary
                 visual={v}
@@ -111,8 +174,16 @@ export function ArtifactVisuals({
                 // #607 review L2 — line threads posted on an EARLIER version of
                 // this file's snapshot are shown by line number; the re-read may
                 // have moved the code under them, so say so.
+                // Parity PR 3 — a re-read on update_plan_progress changes the
+                // code in place, so a comment older than this file's last text
+                // change (takenAt) may have moved too.
                 carriedComments={
-                  comments.filter((c) => c.target.visualId === v.id && c.target.artifactId !== artifactId && c.target.lineStart != null).length
+                  comments.filter(
+                    (c) =>
+                      c.target.visualId === v.id &&
+                      c.target.lineStart != null &&
+                      (c.target.artifactId !== artifactId || (!!v.skeleton?.takenAt && c.createdAt < v.skeleton.takenAt)),
+                  ).length
                 }
               />
             )}
@@ -124,10 +195,10 @@ export function ArtifactVisuals({
               // when the content actually exceeds 60vh; short visuals are untouched.
               // Skeleton snapshots are whole files, so they always take the cap.
               <div data-dp-visual-cap="true" className="max-h-[60vh] overflow-auto rounded-md">
-                <VisualBody artifactId={artifactId} visual={v} readOnly={readOnly} skeletonSteps={skeletonSteps} />
+                <VisualBody artifactId={artifactId} visual={v} readOnly={readOnly} skeletonSteps={skeletonSteps} stepNodeStates={stepNodeStates} />
               </div>
             ) : (
-              <VisualBody artifactId={artifactId} visual={v} readOnly={readOnly} skeletonSteps={skeletonSteps} />
+              <VisualBody artifactId={artifactId} visual={v} readOnly={readOnly} skeletonSteps={skeletonSteps} stepNodeStates={stepNodeStates} />
             )}
 
             {v.caption && <div className="text-2xs text-text-secondary leading-relaxed">{v.caption}</div>}
@@ -166,11 +237,14 @@ export function VisualBody({
   staticPreview = false,
   optionId,
   skeletonSteps,
+  stepNodeStates,
 }: {
   artifactId: string;
   visual: PlanVisual;
   /** Skeleton plans — see ArtifactVisuals.skeletonSteps. */
   skeletonSteps?: SkeletonStepLike[];
+  /** Parity PR 3 — skelId → state, for `step_<id>` nodes in a diagram. */
+  stepNodeStates?: Record<string, StepNodeState>;
   // `readOnly` governs ONLY per-line/per-visual comment-anchoring (turned off in
   // decision options and revision diffs). `staticPreview` governs ONLY whether a
   // prototype renders the static placeholder instead of the runnable sandbox —
@@ -187,8 +261,12 @@ export function VisualBody({
   // Defensive even though the coercer shapes visuals upstream: a renderer must
   // never throw on a malformed field (legacy/partial content) — degrade instead.
   if (visual.kind === "diagram") {
-    return typeof visual.source === "string" && visual.source.trim() ? (
+    const states = stepNodeStates ?? {};
+    const skelIds = Object.keys(states);
+    const isSkeletonDiagram = typeof visual.source === "string" && skelIds.length > 0 && sourceHasStepNodes(visual.source, skelIds);
+    const diagram = typeof visual.source === "string" && visual.source.trim() ? (
       <MermaidDiagram
+        {...(isSkeletonDiagram ? { stepNodes: { states, onJump: (id: string) => jumpToFence(states[id]?.target) } } : {})}
         source={visual.source}
         // #140 — region-comment the diagram ONLY in the live artifact view.
         // readOnly (decision-option preview, revision diff) omits it, so those
@@ -204,6 +282,13 @@ export function VisualBody({
       />
     ) : (
       <div className="text-2xs text-text-muted">No diagram source provided.</div>
+    );
+    if (!isSkeletonDiagram) return diagram;
+    return (
+      <>
+        {diagram}
+        <StepNodeLegend source={visual.source ?? ""} states={states} />
+      </>
     );
   }
 
@@ -263,6 +348,9 @@ function AnnotatedCode({
     const t = c.target;
     if (t?.lineStart == null || t.findingIndex != null || t.stepIndex != null || t.evidenceIndex != null) continue;
     if (filePath != null && t.filePath !== filePath) continue;
+    // #609 review — a skeleton snapshot (approved or live) shows only the
+    // comments written on IT, so a thread stays on the code it was about.
+    if (visual.skeleton && t.visualId !== visual.id) continue;
     const start = Math.floor(Number(t.lineStart));
     if (!Number.isFinite(start)) continue;
     const end = t.lineEnd == null ? start : Math.floor(Number(t.lineEnd));
@@ -291,6 +379,26 @@ function AnnotatedCode({
       targetContext={{ visualId: visual.id }}
       readOnly={readOnly}
       lineDecoration={skeletonLineDecoration(visual, skeletonSteps)}
+      // #609 review M2 — a comment on a skeleton snapshot records WHICH
+      // snapshot, its read time, and the fence + line text it was written on,
+      // so check_feedback can place it even after the live view is re-read.
+      {...(visual.skeleton
+        ? {
+            lineTargetExtra: (lineNum: number) => {
+              const fence = visual.skeleton!.fences.find((f) => lineNum >= f.openLine && lineNum <= f.closeLine);
+              const text = (visual.code ?? "").split("\n")[lineNum - lineStart];
+              return {
+                skeletonAnchor: {
+                  snapshot: (isSkeletonLiveVisualId(visual.id) ? "live" : "approved") as "live" | "approved",
+                  ...(visual.skeleton!.takenAt ? { takenAt: visual.skeleton!.takenAt } : {}),
+                  ...(typeof visual.skeleton!.readAt === "number" ? { readAt: visual.skeleton!.readAt } : {}),
+                  ...(fence ? { fenceId: fence.id } : {}),
+                  ...(typeof text === "string" ? { lineText: text.slice(0, 500) } : {}),
+                },
+              };
+            },
+          }
+        : {})}
     />
   );
 }
@@ -416,5 +524,39 @@ function TreeRow({ node, depth }: { node: TreeNode; depth: number }) {
         <TreeRow key={child.name} node={child} depth={depth + 1} />
       ))}
     </>
+  );
+}
+
+/**
+ * Parity PR 3 — the diagram's step nodes as a TEXT list: each status in words
+ * (with its glyph), any checklist/code mismatch, and a keyboard-reachable jump
+ * to the fence. The coloured nodes are the at-a-glance view; this is the
+ * accessible one.
+ */
+function StepNodeLegend({ source, states }: { source: string; states: Record<string, StepNodeState> }) {
+  const shown = Object.values(states).filter((st) => sourceHasStepNodes(source, [st.skelId]));
+  if (shown.length === 0) return null;
+  return (
+    <ul aria-label="Skeleton steps in this diagram" className="flex flex-wrap gap-1.5 pt-1" data-skel-legend="true">
+      {shown.map((st) => (
+        <li key={st.skelId}>
+          <button
+            type="button"
+            disabled={!st.target}
+            onClick={() => jumpToFence(st.target)}
+            data-skel-legend-step={st.skelId}
+            data-skel-status={st.status}
+            className={`rounded border px-1.5 py-0.5 text-[10px] text-text-secondary disabled:cursor-default ${
+              st.mismatch ? "border-accent-red/60" : "border-white/[0.08]"
+            } hover:border-accent-blue/40`}
+            title={st.target ? `Jump to SKEL[${st.skelId}] in ${st.target.filePath}` : "This fence isn't in the code view"}
+          >
+            <span aria-hidden="true">{STEP_GLYPH[st.status]} </span>
+            Step {st.stepNumber} · SKEL[{st.skelId}] · {st.label}
+            {st.mismatch && <span className="text-accent-red"> · ⚠ {st.mismatch}</span>}
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }

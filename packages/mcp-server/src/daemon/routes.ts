@@ -707,7 +707,7 @@ export function createDaemonRoutes(
     if (!r.ok) return r.response;
     const bodyR = await readJsonObject(c);
     if (!bodyR.ok) return bodyR.res;
-    const { updates } = bodyR.body as { updates?: unknown };
+    const { updates, skeletonVisuals, skeletonReadAt } = bodyR.body as { updates?: unknown; skeletonVisuals?: unknown; skeletonReadAt?: unknown };
     if (!Array.isArray(updates)) return c.json({ error: "updates must be an array" }, 400);
     // D10 review — mirror the handler's validation (junk statuses would
     // persist, then silently vanish on the next restart when coercePlanStep
@@ -716,7 +716,16 @@ export function createDaemonRoutes(
     const clean = updates.filter(
       (u: any) => Number.isInteger(u?.stepIndex) && u.stepIndex >= 0 && VALID.has(u?.status),
     );
-    const artifact = r.store.updatePlanProgress(artifactId, clean);
+    // Skeleton plans (parity PR 3) — the MCP side's fresh LIVE code snapshot;
+    // the store accepts only `skelcode-live:` visuals, only on a live plan
+    // version, and only when this read is newer than the stored one.
+    const artifact = r.store.updatePlanProgress(
+      artifactId,
+      clean,
+      Array.isArray(skeletonVisuals)
+        ? { skeletonVisuals, ...(typeof skeletonReadAt === "number" && Number.isFinite(skeletonReadAt) ? { skeletonReadAt } : {}) }
+        : undefined,
+    );
     // D10 review — not-found is a DOMAIN result, not a transport error:
     // DaemonClient.request throws on non-2xx, so a 404 here surfaced as an
     // opaque throw instead of the handler's crafted isError message (and the

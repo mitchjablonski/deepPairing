@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { PlanVisual, SkeletonCodeSnapshot, SkeletonFenceView } from "@deeppairing/shared";
+import { isSkeletonApprovedVisualId, liveVisualIdFor, type PlanVisual, type SkeletonCodeSnapshot, type SkeletonFenceView } from "@deeppairing/shared";
 import { isSkeletonVisualId, skeletonVisualId, stripSkeletonVisuals } from "./skeleton-line.js";
 import { planDeclaredFiles, scanSkeletonFences, scanSkeletonText, type SkeletonFence } from "../skeleton-scope.js";
 import { ruleForRelPath } from "../guardrail-rules.js";
@@ -76,6 +76,8 @@ export interface SkeletonSnapshotResult {
   note: string;
   /** The fence scan, so present_plan's fence check reuses it. */
   scan?: ScanResult;
+  /** resnapshotSkeleton only: this read's monotonic stamp. */
+  readAt?: number;
 }
 
 type ReadOutcome = { ok: true; text: string } | { ok: false; reason: string };
@@ -300,7 +302,13 @@ export function buildSkeletonSnapshot(args: {
         title: rel,
         filePath: rel,
         caption: `Content withheld: possible secret detected (${what}).`,
-        skeleton: { fences: [], withheld: `possible secret detected (${what})` },
+        // Fence status only (no titles: a marker line could hold the value),
+        // so the diagram and checklist still read progress from the code.
+        skeleton: {
+          fences: fences.map((f) => ({ id: f.id, openLine: f.openLine, closeLine: f.closeLine, status: f.status })),
+          withheld: `possible secret detected (${what})`,
+          takenAt: new Date().toISOString(),
+        },
       });
       continue;
     }
@@ -311,6 +319,7 @@ export function buildSkeletonSnapshot(args: {
     const skeleton: SkeletonCodeSnapshot = {
       fences: fenceViews(fences, cut ? cut.shownLines : null),
       ...(cut ? { truncated: { shownLines: cut.shownLines, totalLines: cut.totalLines } } : {}),
+      takenAt: new Date().toISOString(),
     };
     const n = skeleton.fences.length;
     const captionParts = [
@@ -387,4 +396,61 @@ export function attachSkeletonSnapshot<T extends Record<string, unknown>>(
   } catch {
     return { content, note: "" };
   }
+}
+
+/**
+ * Parity PR 3 — progress read from the code. update_plan_progress re-reads a
+ * LIVE skeleton plan's fenced files (same bounds and allowlist as
+ * present_plan) into `skelcode-live:<path>` visuals. The approved
+ * `skelcode:<path>` snapshot — what the human reviewed — is never touched
+ * (#609 review). A file whose text is unchanged since the last live read (or
+ * since approval) keeps its `takenAt`, so line comments on it are not flagged
+ * as possibly moved. `readAt` is a per-process monotonic stamp the store uses
+ * to keep the newest read. Null for a non-skeleton plan. Never throws.
+ */
+export function resnapshotSkeleton(
+  content: unknown,
+  opts: { root?: string; limits?: SkeletonSnapshotLimits } = {},
+): SkeletonSnapshotResult | null {
+  try {
+    const c = (content ?? {}) as { steps?: unknown; visuals?: unknown };
+    const steps = Array.isArray(c.steps) ? (c.steps as Array<{ skelId?: unknown }>) : [];
+    if (!steps.some((st) => typeof st?.skelId === "string" && st.skelId.length > 0)) return null;
+    const root = opts.root ?? (() => {
+      const r = resolveProjectRoot();
+      return r.worktree?.workspaceRoot ?? r.projectRoot;
+    })();
+    const all = (Array.isArray(c.visuals) ? (c.visuals as PlanVisual[]) : []).filter((v) => v && typeof v === "object");
+    const readAt = nextReadStamp();
+    const snap = buildSkeletonSnapshot({ steps, visuals: stripSkeletonVisuals(c.visuals) ?? [], root, ...(opts.limits ? { limits: opts.limits } : {}) });
+    // Only the per-file CODE snapshots go live; the path-only unfenced list is
+    // the file map's, and doesn't change with disk.
+    const live: PlanVisual[] = [];
+    for (const v of snap.visuals) {
+      if (v.kind !== "annotated_code" || !v.skeleton || !isSkeletonApprovedVisualId(v.id)) continue;
+      const liveId = liveVisualIdFor(v.id);
+      const prior = all.find((p) => p.id === liveId) ?? all.find((p) => p.id === v.id);
+      const takenAt =
+        prior?.skeleton?.takenAt && prior.code === v.code && (prior.skeleton.withheld ?? "") === (v.skeleton.withheld ?? "")
+          ? prior.skeleton.takenAt
+          : v.skeleton.takenAt;
+      live.push({
+        ...v,
+        id: liveId,
+        caption: (v.caption ?? "").replace("Read from disk when the plan was presented.", "Live: re-read from disk on the latest progress update."),
+        skeleton: { ...v.skeleton, ...(takenAt ? { takenAt } : {}), readAt },
+      });
+    }
+    return { visuals: live, note: snap.note, readAt, ...(snap.scan ? { scan: snap.scan } : {}) };
+  } catch {
+    return null;
+  }
+}
+
+let lastStamp = 0;
+/** Strictly increasing within this process (two reads in one millisecond still order). */
+function nextReadStamp(): number {
+  const now = Date.now();
+  lastStamp = now > lastStamp ? now : lastStamp + 0.001;
+  return lastStamp;
 }
