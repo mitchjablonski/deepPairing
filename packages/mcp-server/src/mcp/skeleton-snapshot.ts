@@ -267,7 +267,7 @@ export function buildSkeletonSnapshot(args: {
   for (const rel of fenced) {
     const remaining = limits.maxTotalBytes - used;
     // L3 — once the count or byte budget is spent, nothing else is opened.
-    if (visuals.length >= limits.maxFiles || remaining < MIN_USEFUL_BYTES) {
+    if (visuals.length >= limits.maxFiles || remaining < Math.min(MIN_USEFUL_BYTES, limits.maxTotalBytes)) {
       omitted.push(rel);
       continue;
     }
