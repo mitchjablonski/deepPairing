@@ -1,6 +1,6 @@
 /**
  * Skeleton plans — the fence gate. While a `skelId` plan step is in_progress
- * (.deeppairing/skeleton-scope.json, written by update_plan_progress), an
+ * (.deeppairing/skeleton-scopes/<artifactId>.json, written by update_plan_progress), an
  * Edit/Write/MultiEdit that touches code outside that step's SKEL fence asks
  * the human: it's a skeleton change. Pure evaluator first, then through
  * evaluatePreflightHook against a real temp project.
@@ -11,9 +11,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   SKELETON_SCOPE_MAX_AGE_MS,
+  bodyEscapesFence,
   evaluateSkeletonEdit,
-  readSkeletonScope,
+  readSkeletonScopes,
   scanSkeletonFences,
+  selectSkeletonScope,
   scanSkeletonText,
   writeSkeletonScope,
   type SkeletonScope,
@@ -36,8 +38,8 @@ export function interpolate(a: Point, b: Point): Point[] {
 `;
 
 const NOW = Date.UTC(2026, 9, 27, 12, 0, 0);
-const scope = (ids: string[], at = NOW - 60_000): SkeletonScope => ({
-  artifactId: "art_plan",
+const scope = (ids: string[], at = NOW - 60_000, artifactId = "art_plan"): SkeletonScope => ({
+  artifactId,
   planTitle: "Stroke smoothing",
   activeSkelIds: ids,
   updatedAt: new Date(at).toISOString(),
@@ -93,6 +95,51 @@ describe("evaluateSkeletonEdit (pure)", () => {
     ] })).not.toBeNull();
   });
 
+  it("#606 review: refuses a new_string that smuggles markers and a new function past the close marker", () => {
+    // The reviewer's exact payload: the stub becomes a return, the ORIGINAL
+    // close marker now closes an injected second SKEL[1] fence.
+    const injected = 'return 2;\n  // /SKEL[1]\n}\nexport function injected() {\n  // SKEL[1] extra\n  return 9;';
+    const v = run("Edit", { old_string: 'throw new Error("SKEL_TODO");', new_string: injected });
+    expect(v?.reason).toMatch(/adds, removes or retitles SKEL markers/);
+  });
+
+  it("refuses a fill that closes the enclosing function without touching markers", () => {
+    const escape = "return raw;\n}\nexport function injected() {\n  return [];";
+    // A formatted escape trips the indentation rule first; either rule refusing is the point.
+    expect(run("Edit", { old_string: 'throw new Error("SKEL_TODO");', new_string: escape })?.reason).toMatch(/indented outside|closes the block/);
+    expect(run("Edit", { old_string: 'throw new Error("SKEL_TODO");', new_string: "return raw; } export function injected() { return [];" })?.reason)
+      .toMatch(/closes the block/);
+  });
+
+  it("allows a real multi-line fill with nested blocks, strings and comments", () => {
+    const fill = [
+      "const out: Point[] = [];",
+      "  for (const p of raw) {",
+      "    // skip near-duplicates (don't sqrt: compare squared distance)",
+      "    if (out.length && dist2(out[out.length - 1], p) < 0.25) continue;",
+      '    out.push({ ...p, label: "}{)(" });',
+      "  }",
+      "  return out;",
+    ].join("\n");
+    expect(run("Edit", { old_string: 'throw new Error("SKEL_TODO");', new_string: fill })).toBeNull();
+  });
+
+  it("applies MultiEdit sequentially and checks each edit against the text it lands in", () => {
+    expect(run("MultiEdit", { edits: [
+      { old_string: 'throw new Error("SKEL_TODO");', new_string: "const a = raw;\n  return a;" },
+      { old_string: "const a = raw;", new_string: "const a = [...raw];" },
+    ] })).toBeNull();
+    expect(run("MultiEdit", { edits: [
+      { old_string: 'throw new Error("SKEL_TODO");', new_string: "return raw;" },
+      { old_string: "return raw;\n  // /SKEL[1]", new_string: "return raw;" },
+    ] })).not.toBeNull();
+  });
+
+  it("a whole-file Write is held to the same result checks", () => {
+    const smuggled = SRC.replace('throw new Error("SKEL_TODO");', "return raw;\n  // /SKEL[1]\n}\nfunction x() {\n  // SKEL[1] again");
+    expect(run("Write", { content: smuggled })).not.toBeNull();
+  });
+
   it("allows a whole-file Write that only changes the active fence body", () => {
     const filled = SRC.replace('throw new Error("SKEL_TODO");', "return raw.filter(Boolean);");
     expect(run("Write", { content: filled })).toBeNull();
@@ -108,6 +155,38 @@ describe("evaluateSkeletonEdit (pure)", () => {
     expect(v.reason.startsWith("Allow this edit outside the skeleton?")).toBe(true);
     expect(v.reason).toContain("[SKELETON_SCOPE");
     expect(v.reason).toContain('"Stroke smoothing"');
+  });
+});
+
+describe("bodyEscapesFence", () => {
+  it("catches the Python shape: a dedent past the marker", () => {
+    expect(bodyEscapesFence("    return 1\ndef injected():\n    return 9", "    # SKEL[1] x", "f.py")).toMatch(/indented outside/);
+    expect(bodyEscapesFence("    if x:\n        return 1\n    return 2  # don't", "    # SKEL[1] x", "f.py")).toBeNull();
+  });
+
+  it("flags a bracket left open past the fence", () => {
+    expect(bodyEscapesFence("  if (x) {", "  // SKEL[1] x", "a.ts")).toMatch(/left a bracket open|leaves a bracket open/);
+  });
+});
+
+describe("selectSkeletonScope (#606 review: per-plan ownership)", () => {
+  const a = { ...scope(["1"], NOW, "art_a"), sessionId: "s_a", workspaceRoot: "/proj" };
+  const b = { ...scope(["9"], NOW, "art_b"), sessionId: "s_b", workspaceRoot: "/proj" };
+  const wt = { ...scope(["5"], NOW, "art_wt"), sessionId: "s_a", workspaceRoot: "/proj-wt" };
+
+  it("applies only the edit's own session's scopes", () => {
+    expect(selectSkeletonScope([a, b], { sessionId: "s_a", targetAbs: "/proj/src/a.ts" })?.activeSkelIds).toEqual(["1"]);
+    expect(selectSkeletonScope([a, b], { sessionId: "s_b", targetAbs: "/proj/src/a.ts" })?.activeSkelIds).toEqual(["9"]);
+    expect(selectSkeletonScope([a, b], { sessionId: "s_other", targetAbs: "/proj/src/a.ts" })).toBeNull();
+  });
+
+  it("with no session on the event, fences with every live scope for that tree (more, never less)", () => {
+    expect(selectSkeletonScope([a, b], { targetAbs: "/proj/src/a.ts" })?.activeSkelIds).toEqual(["1", "9"]);
+  });
+
+  it("a scope governs only files in its own working tree", () => {
+    expect(selectSkeletonScope([a, wt], { sessionId: "s_a", targetAbs: "/proj-wt/src/a.ts" })?.activeSkelIds).toEqual(["5"]);
+    expect(selectSkeletonScope([wt], { sessionId: "s_a", targetAbs: "/proj/src/a.ts" })).toBeNull();
   });
 });
 
@@ -151,10 +230,27 @@ describe("through evaluatePreflightHook", () => {
 
   it("ignores a stale scope and removes the file when nothing is in progress", () => {
     writeSkeletonScope(root, scope(["1"], NOW - SKELETON_SCOPE_MAX_AGE_MS - 1));
-    expect(readSkeletonScope(root, NOW)).toBeNull();
+    expect(readSkeletonScopes(root, NOW)).toEqual([]);
     expect(hook({ old_string: "import", new_string: "x" }).fire).toBe(false);
     writeSkeletonScope(root, scope([]));
-    expect(fs.existsSync(path.join(root, ".deeppairing", "skeleton-scope.json"))).toBe(false);
+    expect(fs.existsSync(path.join(root, ".deeppairing", "skeleton-scopes", "art_plan.json"))).toBe(false);
+  });
+
+  it("#606 review: plan B finishing never removes plan A's fence", () => {
+    writeSkeletonScope(root, scope(["1"], NOW - 60_000, "art_a"));
+    writeSkeletonScope(root, scope(["2"], NOW - 60_000, "art_b"));
+    writeSkeletonScope(root, scope([], NOW - 60_000, "art_b")); // B marks its step done
+    expect(readSkeletonScopes(root, NOW).map((s) => s.artifactId)).toEqual(["art_a"]);
+    expect(hook({ old_string: "smooth(raw", new_string: "smoothed(raw" }).fire).toBe(true);
+  });
+
+  it("routes by the hook event's Claude session id, derived the way the server derives it", () => {
+    writeSkeletonScope(root, { ...scope(["1"]), sessionId: "session_other_deadbeef_x" });
+    const d = evaluatePreflightHook({
+      toolName: "Edit", toolInput: { file_path: file, old_string: "smooth(raw", new_string: "smoothed(raw" },
+      projectRoot: root, now: NOW, env: {}, sessionId: "11111111-2222-3333-4444-555555555555",
+    });
+    expect(d.fire).toBe(false); // another session's plan doesn't fence this one
   });
 
   it("scanSkeletonFences reports repo-relative fences and malformed files", () => {

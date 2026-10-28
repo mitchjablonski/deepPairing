@@ -37,7 +37,13 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-const scopeFile = () => path.join(root, ".deeppairing", "skeleton-scope.json");
+const scopeFile = (artifactId: string) => path.join(root, ".deeppairing", "skeleton-scopes", `${artifactId}.json`);
+const presentSkeleton = async (title: string, skelId: string) => {
+  await callTool("present_plan", { title, steps: [{ description: "fill", reasoning: "r", skelId }], estimatedChanges: 1 });
+  const plan = store.getArtifacts().filter((a) => a.type === "plan").at(-1)!;
+  store.updateArtifactStatus(plan.id, "approved", "ui_approve_button");
+  return plan;
+};
 
 describe("skeleton plans", () => {
   it("persists skelId and reports the on-disk fence check", async () => {
@@ -60,7 +66,7 @@ describe("skeleton plans", () => {
     expect(res.text).not.toContain("Skeleton");
     const plan = store.getArtifacts().find((a) => a.type === "plan")!;
     await callTool("update_plan_progress", { artifactId: plan.id, updates: [{ stepIndex: 0, status: "in_progress" }] });
-    expect(fs.existsSync(scopeFile())).toBe(false);
+    expect(fs.existsSync(path.join(root, ".deeppairing", "skeleton-scopes"))).toBe(false);
   });
 
   it("in_progress opens the fence; done with SKEL_TODO left warns; done after the fill closes it", async () => {
@@ -71,19 +77,37 @@ describe("skeleton plans", () => {
     });
     expect(presented.text).toContain("Skeleton check: 1 fence found on disk");
     const plan = store.getArtifacts().find((a) => a.type === "plan")!;
+    store.updateArtifactStatus(plan.id, "approved", "ui_approve_button");
 
     const started = await callTool("update_plan_progress", { artifactId: plan.id, updates: [{ stepIndex: 0, status: "in_progress" }] });
     expect(started.text).toContain("Skeleton fence active");
-    expect(JSON.parse(fs.readFileSync(scopeFile(), "utf-8"))).toMatchObject({ artifactId: plan.id, activeSkelIds: ["1"], planTitle: "Smoothing skeleton" });
+    expect(JSON.parse(fs.readFileSync(scopeFile(plan.id), "utf-8"))).toMatchObject({
+      artifactId: plan.id, activeSkelIds: ["1"], planTitle: "Smoothing skeleton", sessionId: store.getSessionId(), workspaceRoot: root,
+    });
 
     const early = await callTool("update_plan_progress", { artifactId: plan.id, updates: [{ stepIndex: 0, status: "done" }] });
     expect(early.text).toContain("SKEL[1] still has SKEL_TODO at a.ts:2");
-    expect(fs.existsSync(scopeFile())).toBe(false);
+    expect(fs.existsSync(scopeFile(plan.id))).toBe(false);
 
     fs.writeFileSync(path.join(root, "a.ts"), SRC.replace('throw new Error("SKEL_TODO");', "return [...new Set(raw)];"));
     await callTool("update_plan_progress", { artifactId: plan.id, updates: [{ stepIndex: 0, status: "in_progress" }] });
     const done = await callTool("update_plan_progress", { artifactId: plan.id, updates: [{ stepIndex: 0, status: "done" }] });
     expect(done.text).not.toContain("SKEL_TODO");
-    expect(fs.existsSync(scopeFile())).toBe(false);
+    expect(fs.existsSync(scopeFile(plan.id))).toBe(false);
+  });
+
+  it("#606 review: a second plan's progress (even a draft's) never replaces or removes the first plan's fence", async () => {
+    fs.writeFileSync(path.join(root, "b.ts"), "export function g() {\n  // SKEL[2] g\n  throw new Error(\"SKEL_TODO\");\n  // /SKEL[2]\n}\n");
+    const a = await presentSkeleton("Plan A", "1");
+    await callTool("update_plan_progress", { artifactId: a.id, updates: [{ stepIndex: 0, status: "in_progress" }] });
+
+    await callTool("present_plan", { title: "Plan B (draft)", steps: [{ description: "g", reasoning: "r", skelId: "2" }], estimatedChanges: 1 });
+    const b = store.getArtifacts().filter((x) => x.type === "plan").at(-1)!;
+    expect(b.status).toBe("draft");
+    await callTool("update_plan_progress", { artifactId: b.id, updates: [{ stepIndex: 0, status: "in_progress" }] });
+    await callTool("update_plan_progress", { artifactId: b.id, updates: [{ stepIndex: 0, status: "done" }] });
+
+    expect(fs.existsSync(scopeFile(b.id))).toBe(false);
+    expect(JSON.parse(fs.readFileSync(scopeFile(a.id), "utf-8")).activeSkelIds).toEqual(["1"]);
   });
 });

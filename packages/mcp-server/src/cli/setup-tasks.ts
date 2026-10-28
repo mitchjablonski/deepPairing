@@ -676,9 +676,10 @@ function ledgersPresent(projectRoot) {
 }
 
 // Skeleton plans — a live fence scope is the fourth reason to keep going. One
-// stat, no import: the core re-reads the file and applies the age check.
+// readdir, no import: the core re-reads the per-plan files and applies the
+// age and session checks.
 function skeletonScopePresent(projectRoot) {
-  try { return fs.existsSync(path.join(projectRoot, ".deeppairing", "skeleton-scope.json")); } catch { return false; }
+  try { return fs.readdirSync(path.join(projectRoot, ".deeppairing", "skeleton-scopes")).some((n) => n.endsWith(".json")); } catch { return false; }
 }
 
 // #532 — a few stat calls: is the nearest .git (walking up) a FILE? That is a

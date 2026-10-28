@@ -34,7 +34,7 @@ import {
 import type { GuardrailMatch, GuardrailRule, StateMatch } from "../guardrail-rules.js";
 // Skeleton plans — the fence gate. Leaf module like guardrail-rules; the
 // generated hook reaches skeletonScopeActive through this core's re-export.
-import { evaluateSkeletonEdit, readSkeletonScope, skeletonScopeActive } from "../skeleton-scope.js";
+import { evaluateSkeletonEdit, readSkeletonScopes, selectSkeletonScope, skeletonScopeActive } from "../skeleton-scope.js";
 export { skeletonScopeActive };
 export {
   DEEPPAIRING_STATE_CATEGORY,
@@ -1020,7 +1020,7 @@ function evaluateHookGates(args: {
   if (toolName === "NotebookEdit") return state ?? { fire: false };
   const { strings, paths } = buildProposals(toolName, toolInput);
   // A pure deletion has no proposal strings but can still cross a fence.
-  if (strings.length === 0) return state ?? evaluateSkeletonScope({ toolName, toolInput, projectRoot, now: args.now, failures }) ?? { fire: false };
+  if (strings.length === 0) return state ?? evaluateSkeletonScope({ toolName, toolInput, projectRoot, now: args.now, failures, sessionId: args.sessionId, agentId: args.agentId }) ?? { fire: false };
 
   const result = runPreflightSkippingBadEntries({
     toolName,
@@ -1047,7 +1047,7 @@ function evaluateHookGates(args: {
   // Skeleton plans — after the stance gate (its pinned wording leads) and
   // before the backstop: an approved skeleton plan IS live ceremony, so the
   // fence is the more specific thing to say.
-  const skeleton = evaluateSkeletonScope({ toolName, toolInput, projectRoot, now: args.now, failures });
+  const skeleton = evaluateSkeletonScope({ toolName, toolInput, projectRoot, now: args.now, failures, sessionId: args.sessionId, agentId: args.agentId });
   if (skeleton) return skeleton;
   return evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env, mode: args.mode, failures, sessionId: args.sessionId, agentId: args.agentId }) ?? { fire: false };
 }
@@ -1060,13 +1060,24 @@ export function evaluateSkeletonScope(args: {
   projectRoot: string;
   now?: number;
   failures?: PreflightFailureSink;
-}): HookDecision | null {
+} & PreflightIdentity): HookDecision | null {
   try {
+    const scopes = readSkeletonScopes(args.projectRoot, args.now);
+    if (scopes.length === 0) return null;
+    const target = toolInputTargetPath(args.toolInput);
+    if (typeof target !== "string" || !target) return null;
+    // #606 review — a plan's fence governs its OWN session's edits. The hook
+    // derives the session id exactly as the server did (same canonical root).
+    const sid = usableSessionId(args.sessionId);
+    const scope = selectSkeletonScope(scopes, {
+      sessionId: sid ? deriveSessionId(args.projectRoot, sid).sessionId : undefined,
+      targetAbs: path.resolve(args.projectRoot, target),
+    });
     const violation = evaluateSkeletonEdit({
       toolName: args.toolName,
       toolInput: args.toolInput,
       projectRoot: args.projectRoot,
-      scope: readSkeletonScope(args.projectRoot, args.now),
+      scope,
       readFile: (abs) => {
         try {
           return fs.readFileSync(abs, "utf-8");

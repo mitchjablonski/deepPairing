@@ -25,9 +25,11 @@ import path from "node:path";
 
 export const SKEL_TODO = "SKEL_TODO";
 
-/** `.deeppairing/skeleton-scope.json` — written by update_plan_progress, read by
- *  the hook. One small file keeps the hook's fast path to a single stat. */
-export const SKELETON_SCOPE_FILE = "skeleton-scope.json";
+/** `.deeppairing/skeleton-scopes/<artifactId>.json` — ONE FILE PER PLAN,
+ *  written only by that plan's update_plan_progress. Per-plan files mean
+ *  progress on plan B can never replace or remove plan A's fence (#606 review)
+ *  and there is no shared read-modify-write to lose an update in. */
+export const SKELETON_SCOPE_DIR = "skeleton-scopes";
 
 /** A scope older than this is ignored (a crashed run must not fence tomorrow's
  *  unrelated edits). Mirrors CEREMONY_MAX_AGE_MS. */
@@ -51,6 +53,12 @@ export interface SkeletonScope {
   /** Fence ids of the plan's in_progress skeleton steps. Empty = no fencing. */
   activeSkelIds: string[];
   updatedAt: string;
+  /** The deepPairing session executing the plan. The hook applies a scope only
+   *  to edits from that session (when the hook event carries one). */
+  sessionId?: string;
+  /** The working tree the plan is filled in (a linked worktree's own dir, not
+   *  the canonical root). Edits to files outside it are not this scope's. */
+  workspaceRoot?: string;
 }
 
 const COMMENT = String.raw`(?:\/\/|#|--|;|\/\*|<!--|\{\/\*)`;
@@ -128,27 +136,58 @@ export function scanSkeletonFences(root: string, maxFiles = 20_000): { fences: S
   return { fences, errors };
 }
 
-export function skeletonScopePath(projectRoot: string): string {
-  return path.join(projectRoot, ".deeppairing", SKELETON_SCOPE_FILE);
+
+export function skeletonScopeDir(projectRoot: string): string {
+  return path.join(projectRoot, ".deeppairing", SKELETON_SCOPE_DIR);
 }
 
-/** The live scope, or null (absent, stale, unreadable, or nothing in progress). */
-export function readSkeletonScope(projectRoot: string, now: number = Date.now()): SkeletonScope | null {
+function scopeFileName(artifactId: string): string | null {
+  return /^[A-Za-z0-9_-]{1,80}$/.test(artifactId) ? `${artifactId}.json` : null;
+}
+
+function parseScope(raw: unknown, now: number): SkeletonScope | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Partial<SkeletonScope>;
+  const ids = Array.isArray(r.activeSkelIds) ? r.activeSkelIds.filter((x): x is string => typeof x === "string" && x.length > 0) : [];
+  if (ids.length === 0 || typeof r.artifactId !== "string") return null;
+  const at = Date.parse(String(r.updatedAt));
+  if (!Number.isFinite(at) || now - at > SKELETON_SCOPE_MAX_AGE_MS) return null;
+  return {
+    artifactId: r.artifactId,
+    activeSkelIds: ids,
+    updatedAt: String(r.updatedAt),
+    ...(typeof r.planTitle === "string" ? { planTitle: r.planTitle } : {}),
+    ...(typeof r.sessionId === "string" && r.sessionId ? { sessionId: r.sessionId } : {}),
+    ...(typeof r.workspaceRoot === "string" && r.workspaceRoot ? { workspaceRoot: r.workspaceRoot } : {}),
+  };
+}
+
+/** Every live scope (absent, stale and unreadable files are skipped). */
+export function readSkeletonScopes(projectRoot: string, now: number = Date.now()): SkeletonScope[] {
+  let names: string[];
   try {
-    const raw = JSON.parse(fs.readFileSync(skeletonScopePath(projectRoot), "utf-8")) as Partial<SkeletonScope>;
-    const ids = Array.isArray(raw.activeSkelIds) ? raw.activeSkelIds.filter((x): x is string => typeof x === "string" && x.length > 0) : [];
-    if (ids.length === 0 || typeof raw.artifactId !== "string") return null;
-    const at = Date.parse(String(raw.updatedAt));
-    if (!Number.isFinite(at) || now - at > SKELETON_SCOPE_MAX_AGE_MS) return null;
-    return { artifactId: raw.artifactId, planTitle: typeof raw.planTitle === "string" ? raw.planTitle : undefined, activeSkelIds: ids, updatedAt: String(raw.updatedAt) };
+    names = fs.readdirSync(skeletonScopeDir(projectRoot)).filter((n) => n.endsWith(".json"));
   } catch {
-    return null;
+    return [];
   }
+  const out: SkeletonScope[] = [];
+  for (const n of names) {
+    try {
+      const scope = parseScope(JSON.parse(fs.readFileSync(path.join(skeletonScopeDir(projectRoot), n), "utf-8")), now);
+      if (scope) out.push(scope);
+    } catch {
+      /* skip */
+    }
+  }
+  return out;
 }
 
-/** Write (or, with no active ids, remove) the scope file. Atomic; never throws. */
+/** Write this plan's scope, or remove it when nothing is in progress. Touches
+ *  only the plan's own file. Atomic; never throws. */
 export function writeSkeletonScope(projectRoot: string, scope: SkeletonScope): void {
-  const file = skeletonScopePath(projectRoot);
+  const name = scopeFileName(scope.artifactId);
+  if (!name) return;
+  const file = path.join(skeletonScopeDir(projectRoot), name);
   try {
     if (scope.activeSkelIds.length === 0) {
       fs.rmSync(file, { force: true });
@@ -163,9 +202,34 @@ export function writeSkeletonScope(projectRoot: string, scope: SkeletonScope): v
   }
 }
 
-/** The hook's fast-path test: is there anything to fence right now? */
+/** The hook's fast-path test: is any plan's fence live right now? */
 export function skeletonScopeActive(projectRoot: string, now: number = Date.now()): boolean {
-  return readSkeletonScope(projectRoot, now) !== null;
+  return readSkeletonScopes(projectRoot, now).length > 0;
+}
+
+function within(dir: string, abs: string): boolean {
+  const rel = path.relative(dir, abs);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+/**
+ * The scopes that govern one edit: the edit's own session's (when the hook
+ * event names one), and only those whose working tree holds the target file.
+ * With no session on the event, every live scope for that tree applies — more
+ * fencing, never less. Returns one merged scope, or null.
+ */
+export function selectSkeletonScope(scopes: SkeletonScope[], args: { sessionId?: string; targetAbs: string }): SkeletonScope | null {
+  const mine = scopes.filter(
+    (s) => (!args.sessionId || !s.sessionId || s.sessionId === args.sessionId) && (!s.workspaceRoot || within(s.workspaceRoot, args.targetAbs)),
+  );
+  if (mine.length === 0) return null;
+  const titles = [...new Set(mine.map((s) => s.planTitle).filter((t): t is string => !!t))];
+  return {
+    artifactId: mine.map((s) => s.artifactId).join(","),
+    activeSkelIds: [...new Set(mine.flatMap((s) => s.activeSkelIds))],
+    updatedAt: mine.map((s) => s.updatedAt).sort().at(-1)!,
+    ...(titles.length > 0 ? { planTitle: titles.join(", ") } : {}),
+  };
 }
 
 // ---- the gate ----
@@ -187,19 +251,27 @@ function spanOf(text: string, index: number, needle: string): [number, number] {
   return [start, end];
 }
 
-function occurrences(text: string, needle: string, all: boolean): number[] {
-  const out: number[] = [];
-  if (!needle) return out;
-  let i = text.indexOf(needle);
+/** Apply one Edit the way the Edit tool does: first occurrence, or all. Null
+ *  when old_string is absent (the tool call fails on its own). */
+function applyEdit(text: string, oldStr: string, newStr: string, all: boolean): { text: string; spans: Array<[number, number]> } | null {
+  if (!oldStr) return null;
+  const first = text.indexOf(oldStr);
+  if (first === -1) return null;
+  const spans: Array<[number, number]> = [];
+  let out = "";
+  let from = 0;
+  let i = first;
   while (i !== -1) {
-    out.push(i);
+    spans.push(spanOf(text, i, oldStr));
+    out += text.slice(from, i) + newStr;
+    from = i + oldStr.length;
     if (!all) break;
-    i = text.indexOf(needle, i + needle.length);
+    i = text.indexOf(oldStr, from);
   }
-  return out;
+  return { text: out + text.slice(from), spans };
 }
 
-/** A whole-file Write may change only the fence bodies. */
+/** Text outside the given fences' BODIES (markers included) must be identical. */
 function preservesOutside(original: string, next: string, fences: SkeletonFence[]): boolean {
   const lines = original.split("\n");
   const sorted = [...fences].sort((a, b) => a.openLine - b.openLine);
@@ -222,6 +294,48 @@ function preservesOutside(original: string, next: string, fences: SkeletonFence[
   return true;
 }
 
+const signature = (fences: SkeletonFence[]): string => fences.map((f) => `${f.id}\u0000${f.title}`).join("\u0001");
+
+const HASH_COMMENT_EXT = /\.(py|pyi|rb|sh|bash|zsh|ya?ml|toml|r|pl|ex|exs|nim|cr|coffee)$/i;
+
+/**
+ * Does a filled body escape the scope it was fenced in? Language-agnostic
+ * heuristics, so a miss falls back to "ask" only in the direction of MORE
+ * prompting:
+ *   - brackets — a running ()[]{} depth (strings and line comments skipped)
+ *     that dips below zero closed the enclosing function/block; one that
+ *     doesn't end at zero left something open for the code after the fence.
+ *   - indentation — a non-blank body line indented less than the opening
+ *     marker left the enclosing block (the Python shape of the same escape).
+ */
+export function bodyEscapesFence(body: string, markerLine: string, file: string): string | null {
+  const indentOf = (l: string) => (/^[ \t]*/.exec(l)?.[0] ?? "").replace(/\t/g, "    ").length;
+  const markerIndent = indentOf(markerLine);
+  const hash = HASH_COMMENT_EXT.test(file);
+  let depth = 0;
+  let quote: string | null = null;
+  const lines = body.split("\n");
+  for (const line of lines) {
+    if (line.trim() && !quote && indentOf(line) < markerIndent) return "a line is indented outside the fence's block";
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i]!;
+      if (quote) {
+        if (c === "\\") i++;
+        else if (c === quote) quote = null;
+        continue;
+      }
+      if (c === '"' || c === "'" || c === "`") quote = c;
+      else if ((c === "/" && line[i + 1] === "/") || (hash && c === "#")) break;
+      else if (c === "(" || c === "[" || c === "{") depth++;
+      else if (c === ")" || c === "]" || c === "}") {
+        if (--depth < 0) return "it closes the block the fence sits in";
+      }
+    }
+    if (quote && quote !== "`") quote = null; // ' and " don't span lines
+  }
+  return depth === 0 ? null : "it leaves a bracket open past the fence";
+}
+
 export interface SkeletonScopeViolation {
   /** Human-first prose, then the bracketed agent line (guardrailReason's shape). */
   reason: string;
@@ -231,8 +345,12 @@ export interface SkeletonScopeViolation {
 
 /**
  * Pure over (tool call, scope, file reader). Null = no opinion: no live scope,
- * not an edit tool, or the edit stays inside an active fence. A fault is also
- * null — the hook fails open.
+ * not an edit tool, or the edit's RESULT changes only active fence bodies and
+ * each stays inside its block. A fault is also null — the hook fails open.
+ *
+ * #606 review — the result is what's checked, not just where old_string sat:
+ * new_string can carry markers or close the enclosing function, and an
+ * old-span check alone admitted both.
  */
 export function evaluateSkeletonEdit(args: {
   toolName: string;
@@ -269,26 +387,61 @@ export function evaluateSkeletonEdit(args: {
   const original = args.readFile(abs);
   if (original === null) return args.toolName === "Write" ? violation(`It creates a new file, ${shown}`) : null;
 
-  let fences: SkeletonFence[];
+  let before: SkeletonFence[];
   try {
-    fences = scanSkeletonText(original, shown).filter((f) => ids.includes(f.id));
+    before = scanSkeletonText(original, shown);
   } catch {
     return violation(`${shown} has malformed SKEL markers`);
   }
-  if (fences.length === 0) return violation(`${shown} has no ${label} fence`);
+  const active = before.filter((f) => ids.includes(f.id));
+  if (active.length === 0) return violation(`${shown} has no ${label} fence`);
 
+  // 1. Build the result. Edits are checked one by one against the text they
+  //    actually apply to (MultiEdit is sequential), so the first out-of-fence
+  //    edit is named by its own line numbers.
+  let next: string;
   if (args.toolName === "Write") {
-    return preservesOutside(original, String(input.content ?? ""), fences) ? null : violation(`It rewrites ${shown} outside the fence`);
-  }
-  const edits = args.toolName === "MultiEdit" ? (Array.isArray(input.edits) ? input.edits : []) : [input];
-  for (const e of edits as Array<Record<string, unknown>>) {
-    const needle = typeof e?.old_string === "string" ? e.old_string : "";
-    for (const idx of occurrences(original, needle, e?.replace_all === true)) {
-      const [start, end] = spanOf(original, idx, needle);
-      if (!fences.some((f) => start > f.openLine && end < f.closeLine)) {
-        return violation(`It touches ${shown}:${start}${end > start ? `-${end}` : ""}`);
+    next = String(input.content ?? "");
+  } else {
+    const edits = (args.toolName === "MultiEdit" ? (Array.isArray(input.edits) ? input.edits : []) : [input]) as Array<Record<string, unknown>>;
+    next = original;
+    for (const e of edits) {
+      const oldStr = typeof e?.old_string === "string" ? e.old_string : "";
+      const applied = applyEdit(next, oldStr, typeof e?.new_string === "string" ? e.new_string : "", e?.replace_all === true);
+      if (!applied) return null; // the tool fails on its own
+      let current: SkeletonFence[];
+      try {
+        current = scanSkeletonText(next, shown).filter((f) => ids.includes(f.id));
+      } catch {
+        return violation(`${shown} has malformed SKEL markers`);
       }
+      for (const [start, end] of applied.spans) {
+        if (!current.some((f) => start > f.openLine && end < f.closeLine)) {
+          return violation(`It touches ${shown}:${start}${end > start ? `-${end}` : ""}`);
+        }
+      }
+      next = applied.text;
     }
+  }
+
+  // 2. The markers must survive exactly: same fences, same order, same titles.
+  let after: SkeletonFence[];
+  try {
+    after = scanSkeletonText(next, shown);
+  } catch {
+    return violation(`It leaves malformed SKEL markers in ${shown}`);
+  }
+  if (signature(after) !== signature(before)) return violation(`It adds, removes or retitles SKEL markers in ${shown}`);
+
+  // 3. Everything outside the active bodies must be byte-identical.
+  if (!preservesOutside(original, next, active)) return violation(`It changes ${shown} outside the fence`);
+
+  // 4. And each filled body must stay inside the block it was fenced in.
+  const nextLines = next.split("\n");
+  for (const f of after.filter((x) => ids.includes(x.id))) {
+    const body = nextLines.slice(f.openLine, f.closeLine - 1).join("\n");
+    const escape = bodyEscapesFence(body, nextLines[f.openLine - 1] ?? "", shown);
+    if (escape) return violation(`In ${shown}:${f.openLine}-${f.closeLine}, ${escape}`);
   }
   return null;
 }
