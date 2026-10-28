@@ -128,8 +128,13 @@ describe("skeleton diagram — click to the fence", () => {
     };
     render(<MermaidDiagram source={SOURCE} region={{ artifactId: "a", visualId: "arch" }} stepNodes={{ states, onJump }} />);
     await waitFor(() => expect(document.querySelector("g.dp-skel-step")).not.toBeNull());
-    const g = node("step_1");
-    g.getBoundingClientRect = () => ({ left: 0, top: 0, right: 100, bottom: 40, width: 100, height: 40, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+    // Layout for the step node only (by attribute, so a re-render that swaps
+    // the SVG DOM keeps it); everything else measures as zero, as in happy-dom.
+    const zero = { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+    const box = { ...zero, right: 100, bottom: 40, width: 100, height: 40 } as DOMRect;
+    const spy = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      return this.getAttribute("data-skel-step") === "1" ? box : zero;
+    });
     const overlay = screen.getByTestId("dp-region-overlay");
     fireEvent.pointerDown(overlay, { button: 0, pointerId: 1, clientX: 10, clientY: 10 });
     fireEvent.pointerUp(overlay, { pointerId: 1, clientX: 11, clientY: 10 });
@@ -142,6 +147,7 @@ describe("skeleton diagram — click to the fence", () => {
     fireEvent.pointerUp(overlay, { pointerId: 2, clientX: 300, clientY: 200 });
     expect(screen.getByText(/Commenting on/)).toBeInTheDocument();
     expect(onJump).not.toHaveBeenCalled();
+    spy.mockRestore();
   });
 
   it("decorateStepNodes wires a direct click (read-only views) and its undo restores the node", () => {
