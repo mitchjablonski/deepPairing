@@ -14967,7 +14967,15 @@ var PlanStepSchema = external_exports.object({
    * Optional for back-compat (absent = execution not tracked).
    */
   status: external_exports.enum(["pending", "in_progress", "done", "skipped"]).optional().describe("Execution status, updated by the agent via update_plan_progress"),
-  statusNote: external_exports.string().optional().describe("One-line note shown beside the step (e.g. why it was skipped)")
+  statusNote: external_exports.string().optional().describe("One-line note shown beside the step (e.g. why it was skipped)"),
+  /**
+   * Skeleton plans — the SKEL fence id this step fills. The skeleton (stubs
+   * fenced `SKEL[id] … /SKEL[id]` with a `SKEL_TODO` body) is written to disk
+   * BEFORE the plan is presented; while this step is `in_progress` the
+   * preflight hook fences edits to that id's regions. Optional for back-compat
+   * (absent = an ordinary prose step).
+   */
+  skelId: external_exports.string().regex(/^[A-Za-z0-9][\w.-]*$/).optional().describe("Skeleton plans: the SKEL[id] fence this step fills. While the step is in_progress, edits outside that fence are gated.")
 });
 var PlanVisualFileSchema = external_exports.object({
   path: external_exports.string(),
@@ -17865,6 +17873,12 @@ function ledgersPresent(projectRoot) {
   return false;
 }
 
+// Skeleton plans \u2014 a live fence scope is the fourth reason to keep going. One
+// stat, no import: the core re-reads the file and applies the age check.
+function skeletonScopePresent(projectRoot) {
+  try { return fs.existsSync(path.join(projectRoot, ".deeppairing", "skeleton-scope.json")); } catch { return false; }
+}
+
 // #532 \u2014 a few stat calls: is the nearest .git (walking up) a FILE? That is a
 // linked worktree or a submodule; resolveHookRoots tells them apart.
 function nearestDotGitIsFile(dir) {
@@ -17960,7 +17974,7 @@ process.stdin.on("end", async () => {
     if (toolName !== "Edit" && toolName !== "Write" && toolName !== "MultiEdit" && toolName !== "NotebookEdit") {
       return await finish();
     }
-    if (!ledgersPresent(projectRoot) && !(await targetsGuardrailPath(projectRoot, toolInput))) {
+    if (!ledgersPresent(projectRoot) && !skeletonScopePresent(projectRoot) && !(await targetsGuardrailPath(projectRoot, toolInput))) {
       return await finish(); // nothing to match against \u2014 skip the matcher import
     }
     stage = "import";
@@ -18175,6 +18189,7 @@ var PREFLIGHT_FAILURE_SOURCES = [
   "matcher",
   "backstop",
   "state",
+  "skeleton",
   "hook"
 ];
 var PREFLIGHT_FAILURES_FIELD = "preflightFailures";
