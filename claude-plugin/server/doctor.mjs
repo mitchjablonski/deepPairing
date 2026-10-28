@@ -15035,7 +15035,10 @@ var SkeletonCodeSnapshotSchema = external_exports.object({
   /** When this file's snapshot text last CHANGED (ISO). A re-read that finds
    *  the same text keeps the old stamp, so a line comment made before it is
    *  known to sit on unchanged code. */
-  takenAt: external_exports.string().optional()
+  takenAt: external_exports.string().optional(),
+  /** LIVE snapshots only: a per-process monotonic read stamp. The store keeps
+   *  the newest read, so concurrent progress calls can't regress the view. */
+  readAt: external_exports.number().optional()
 });
 var StoredPlanVisualSchema = PlanVisualSchema.extend({
   skeleton: SkeletonCodeSnapshotSchema.optional()

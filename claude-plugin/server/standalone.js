@@ -25188,7 +25188,10 @@ var SkeletonCodeSnapshotSchema = external_exports.object({
   /** When this file's snapshot text last CHANGED (ISO). A re-read that finds
    *  the same text keeps the old stamp, so a line comment made before it is
    *  known to sit on unchanged code. */
-  takenAt: external_exports.string().optional()
+  takenAt: external_exports.string().optional(),
+  /** LIVE snapshots only: a per-process monotonic read stamp. The store keeps
+   *  the newest read, so concurrent progress calls can't regress the view. */
+  readAt: external_exports.number().optional()
 });
 var StoredPlanVisualSchema = PlanVisualSchema.extend({
   skeleton: SkeletonCodeSnapshotSchema.optional()
@@ -26428,7 +26431,7 @@ function coerceVisual(v2, fallbackId) {
       return ann;
     });
   }
-  if (out.kind === "annotated_code" && out.id.startsWith(SKELETON_VISUAL_PREFIX) && isObj(o.skeleton)) {
+  if (out.kind === "annotated_code" && (out.id.startsWith(SKELETON_VISUAL_PREFIX) || out.id.startsWith("skelcode-live:")) && isObj(o.skeleton)) {
     out.skeleton = coerceSkeletonSnapshot(o.skeleton);
   }
   return out;
@@ -26457,6 +26460,8 @@ function coerceSkeletonSnapshot(o) {
     out.withheld = o.withheld;
   if (typeof o.takenAt === "string" && o.takenAt)
     out.takenAt = o.takenAt;
+  if (typeof o.readAt === "number" && Number.isFinite(o.readAt))
+    out.readAt = o.readAt;
   return out;
 }
 function coerceRequirement(v2) {
@@ -28508,6 +28513,19 @@ var LedgerDigestSchema = external_exports.object({
   globalLedger: external_exports.object({ concepts: count, projects: count, multiProjectConcepts: count })
 });
 
+// ../shared/dist/skeleton.js
+var SKELETON_LIVE_VISUAL_PREFIX = "skelcode-live:";
+var isSkeletonApprovedVisualId = (id) => typeof id === "string" && id.startsWith(SKELETON_VISUAL_PREFIX);
+var isSkeletonLiveVisualId = (id) => typeof id === "string" && id.startsWith(SKELETON_LIVE_VISUAL_PREFIX);
+var isAnySkeletonVisualId = (id) => isSkeletonApprovedVisualId(id) || isSkeletonLiveVisualId(id);
+var liveVisualIdFor = (approvedId) => `${SKELETON_LIVE_VISUAL_PREFIX}${approvedId.slice(SKELETON_VISUAL_PREFIX.length)}`;
+var CLOSED_FOR_PROGRESS = /* @__PURE__ */ new Set(["superseded", "rejected", "retracted", "obsolete"]);
+function isLivePlanVersion(art, artifacts) {
+  if (art.type !== "plan" || CLOSED_FOR_PROGRESS.has(art.status))
+    return false;
+  return !artifacts.some((a) => a.parentId === art.id);
+}
+
 // src/store/global-store.ts
 var LEDGER_VERSION = 1;
 var LEDGER_LOCK_TIMEOUT_MS = 1e3;
@@ -29129,7 +29147,7 @@ var ACKNOWLEDGE_ONLY_DRAFT_TYPES = ["explainer", "debrief"];
 
 // src/mcp/skeleton-line.ts
 var skeletonVisualId = (relPath) => `${SKELETON_VISUAL_PREFIX}${relPath}`;
-var isSkeletonVisualId = (id) => typeof id === "string" && id.startsWith(SKELETON_VISUAL_PREFIX);
+var isSkeletonVisualId = (id) => isAnySkeletonVisualId(id);
 function stripSkeletonVisuals(visuals) {
   if (!Array.isArray(visuals)) return void 0;
   return visuals.filter((v2) => !(v2 && typeof v2 === "object" && isSkeletonVisualId(v2.id))).map((v2) => {
@@ -37117,17 +37135,32 @@ function resnapshotSkeleton(content, opts = {}) {
       const r = resolveProjectRoot();
       return r.worktree?.workspaceRoot ?? r.projectRoot;
     })();
-    const previous = (Array.isArray(c.visuals) ? c.visuals : []).filter((v2) => v2 && isSkeletonVisualId(v2.id));
+    const all = (Array.isArray(c.visuals) ? c.visuals : []).filter((v2) => v2 && typeof v2 === "object");
+    const readAt = nextReadStamp();
     const snap = buildSkeletonSnapshot({ steps, visuals: stripSkeletonVisuals(c.visuals) ?? [], root, ...opts.limits ? { limits: opts.limits } : {} });
+    const live = [];
     for (const v2 of snap.visuals) {
-      const old = previous.find((p) => p.id === v2.id);
-      if (!v2.skeleton || !old?.skeleton?.takenAt) continue;
-      if (old.code === v2.code && (old.skeleton.withheld ?? "") === (v2.skeleton.withheld ?? "")) v2.skeleton.takenAt = old.skeleton.takenAt;
+      if (v2.kind !== "annotated_code" || !v2.skeleton || !isSkeletonApprovedVisualId(v2.id)) continue;
+      const liveId = liveVisualIdFor(v2.id);
+      const prior = all.find((p) => p.id === liveId) ?? all.find((p) => p.id === v2.id);
+      const takenAt = prior?.skeleton?.takenAt && prior.code === v2.code && (prior.skeleton.withheld ?? "") === (v2.skeleton.withheld ?? "") ? prior.skeleton.takenAt : v2.skeleton.takenAt;
+      live.push({
+        ...v2,
+        id: liveId,
+        caption: (v2.caption ?? "").replace("Read from disk when the plan was presented.", "Live: re-read from disk on the latest progress update."),
+        skeleton: { ...v2.skeleton, ...takenAt ? { takenAt } : {}, readAt }
+      });
     }
-    return snap;
+    return { visuals: live, note: snap.note, readAt, ...snap.scan ? { scan: snap.scan } : {} };
   } catch {
     return null;
   }
+}
+var lastStamp = 0;
+function nextReadStamp() {
+  const now = Date.now();
+  lastStamp = now > lastStamp ? now : lastStamp + 1e-3;
+  return lastStamp;
 }
 
 // src/mcp/tools/update-plan-progress.ts
@@ -37158,9 +37191,10 @@ async function handleUpdatePlanProgress(ctx, args) {
       ...u?.statusNote != null ? { statusNote: String(u.statusNote) } : {}
     });
   }
-  const before = (await store.getArtifacts()).find((a) => a.id === artifactId);
-  const resnap = before?.type === "plan" ? resnapshotSkeleton(before.content) : null;
-  const artifact = resnap ? await store.updatePlanProgress(artifactId, updates, { skeletonVisuals: resnap.visuals }) : await store.updatePlanProgress(artifactId, updates);
+  const all = await store.getArtifacts();
+  const before = all.find((a) => a.id === artifactId);
+  const resnap = before && isLivePlanVersion(before, all) ? resnapshotSkeleton(before.content) : null;
+  const artifact = resnap ? await store.updatePlanProgress(artifactId, updates, { skeletonVisuals: resnap.visuals, ...resnap.readAt !== void 0 ? { skeletonReadAt: resnap.readAt } : {} }) : await store.updatePlanProgress(artifactId, updates);
   if (!artifact) {
     return {
       content: [{ type: "text", text: `update_plan_progress: ${artifactId} is not a known plan or spec artifact (or no update touched an existing plan step or spec task).` }],
@@ -37184,7 +37218,7 @@ async function handleUpdatePlanProgress(ctx, args) {
   };
   const warning = NOT_EXECUTABLE[artifact.status] ? `
 \u26A0 WARNING: this ${kind} is ${NOT_EXECUTABLE[artifact.status]}.` : "";
-  const skeletonNote = isSpec ? "" : syncSkeletonScope(store.getSessionId(), artifact, updates);
+  const skeletonNote = isSpec ? "" : syncSkeletonScope(store.getSessionId(), artifact, updates, resnap?.scan);
   let mismatchNote = "";
   if (resnap?.scan && c.steps) {
     const finishedNow = new Set(
@@ -37201,7 +37235,7 @@ async function handleUpdatePlanProgress(ctx, args) {
     }]
   };
 }
-function syncSkeletonScope(sessionId, artifact, updates) {
+function syncSkeletonScope(sessionId, artifact, updates, scan) {
   try {
     const content = artifact.content ?? {};
     const steps = content.steps ?? [];
@@ -37214,7 +37248,7 @@ function syncSkeletonScope(sessionId, artifact, updates) {
     const finished = updates.filter((u) => u.status === "done").map((u) => steps[u.stepIndex]?.skelId).filter((id) => typeof id === "string" && id.length > 0);
     const notes = [];
     if (finished.length > 0) {
-      const { fences } = scanSkeletonFences(workspaceRoot, { files: planDeclaredFiles(content) });
+      const { fences } = scan ?? scanSkeletonFences(workspaceRoot, { files: planDeclaredFiles(content) });
       for (const id of finished) {
         const mine = fences.filter((f) => f.id === id);
         const todo = mine.filter((f) => f.status === "todo");
@@ -40721,7 +40755,8 @@ var DaemonClient = class {
   async updatePlanProgress(artifactId, updates, opts) {
     const data = await this.post(`/artifacts/${artifactId}/plan-progress`, {
       updates,
-      ...Array.isArray(opts?.skeletonVisuals) ? { skeletonVisuals: opts.skeletonVisuals } : {}
+      ...Array.isArray(opts?.skeletonVisuals) ? { skeletonVisuals: opts.skeletonVisuals } : {},
+      ...typeof opts?.skeletonReadAt === "number" ? { skeletonReadAt: opts.skeletonReadAt } : {}
     });
     return data?.artifact ?? null;
   }
