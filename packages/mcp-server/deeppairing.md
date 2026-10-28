@@ -163,7 +163,8 @@ checks the fences exist on disk. After approval, `update_plan_progress`
 outside it. Mark the step `done` when its `SKEL_TODO` is gone. A structural
 change (new helper, signature, file) is a skeleton change: propose it and
 `revise_artifact` the plan instead of routing around the fence. Strip the
-marker lines when every step is done.
+marker lines when every step is done. Approving the skeleton approves its shape
+only: the Autonomy dial, guardrails and any high-risk call still apply mid-fill.
 
 ### log_reasoning
 Call BEFORE every Edit or Write. Explain what and why.

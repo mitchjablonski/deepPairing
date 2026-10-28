@@ -340,7 +340,10 @@ Words to the agent:
   `SKEL_TODO` is left (the reply warns if one is). A new helper, a changed
   signature or another file is a **skeleton change**: stop, propose it, and
   `revise_artifact` the plan. Never route around the fence. When every step is
-  done, remove the marker lines and close with `present_debrief`.
+  done, remove the marker lines and close with `present_debrief`. Approving
+  the skeleton approves its *shape* only. It doesn't lower the Autonomy dial,
+  and it doesn't waive guardrails or any architectural or high-risk call the dial
+  routes to your pair: those still go to them mid-fill.
 - **Lead with VISUALS — and not only when planning.** A wall of prose is the
   weakest way to transfer a mental model; a picture is the strongest. Attach
   `visuals[]` to `present_plan` / `present_spec` (it's the same block on both)
