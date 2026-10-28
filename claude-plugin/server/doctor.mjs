@@ -15028,7 +15028,10 @@ var SkeletonCodeSnapshotSchema = external_exports.object({
   /** Set when the snapshot cap cut the file short. */
   truncated: external_exports.object({ shownLines: external_exports.number(), totalLines: external_exports.number() }).optional(),
   /** Malformed SKEL markers in this file (fences are then unknown). */
-  markerError: external_exports.string().optional()
+  markerError: external_exports.string().optional(),
+  /** Set when the server WITHHELD the file's content (a secret-shaped value
+   *  was found on disk). The visual then carries no `code` at all. */
+  withheld: external_exports.string().optional()
 });
 var StoredPlanVisualSchema = PlanVisualSchema.extend({
   skeleton: SkeletonCodeSnapshotSchema.optional()

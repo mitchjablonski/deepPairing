@@ -24686,10 +24686,10 @@ function writeStringAtomic(filePath, data, opts) {
   const tmp = filePath + ".tmp." + process.pid + "." + Date.now() + "." + randomBytes(4).toString("hex");
   try {
     if (opts?.mode !== void 0) {
-      const O_NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
+      const O_NOFOLLOW2 = fs.constants.O_NOFOLLOW ?? 0;
       const fd = fs.openSync(
         tmp,
-        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | O_NOFOLLOW,
+        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | O_NOFOLLOW2,
         opts.mode
       );
       try {
@@ -25166,6 +25166,7 @@ var PlanVisualSchema = external_exports.object({
   /** kind="annotated_code": line-anchored explanations. */
   annotations: external_exports.array(PlanVisualAnnotationSchema).optional()
 });
+var SKELETON_VISUAL_PREFIX = "skelcode:";
 var SkeletonFenceViewSchema = external_exports.object({
   id: external_exports.string(),
   title: external_exports.string().optional(),
@@ -25180,7 +25181,10 @@ var SkeletonCodeSnapshotSchema = external_exports.object({
   /** Set when the snapshot cap cut the file short. */
   truncated: external_exports.object({ shownLines: external_exports.number(), totalLines: external_exports.number() }).optional(),
   /** Malformed SKEL markers in this file (fences are then unknown). */
-  markerError: external_exports.string().optional()
+  markerError: external_exports.string().optional(),
+  /** Set when the server WITHHELD the file's content (a secret-shaped value
+   *  was found on disk). The visual then carries no `code` at all. */
+  withheld: external_exports.string().optional()
 });
 var StoredPlanVisualSchema = PlanVisualSchema.extend({
   skeleton: SkeletonCodeSnapshotSchema.optional()
@@ -26420,8 +26424,9 @@ function coerceVisual(v2, fallbackId) {
       return ann;
     });
   }
-  if (out.kind === "annotated_code" && isObj(o.skeleton))
+  if (out.kind === "annotated_code" && out.id.startsWith(SKELETON_VISUAL_PREFIX) && isObj(o.skeleton)) {
     out.skeleton = coerceSkeletonSnapshot(o.skeleton);
+  }
   return out;
 }
 function coerceSkeletonSnapshot(o) {
@@ -26444,6 +26449,8 @@ function coerceSkeletonSnapshot(o) {
   }
   if (typeof o.markerError === "string" && o.markerError)
     out.markerError = o.markerError;
+  if (typeof o.withheld === "string" && o.withheld)
+    out.withheld = o.withheld;
   return out;
 }
 function coerceRequirement(v2) {
@@ -29115,9 +29122,33 @@ var WAITING_DRAFT_TYPES = ["research", "spec", "plan", "code_change", "changeset
 var ACKNOWLEDGE_ONLY_DRAFT_TYPES = ["explainer", "debrief"];
 
 // src/mcp/skeleton-line.ts
-var SKELETON_VISUAL_PREFIX = "skelcode:";
 var skeletonVisualId = (relPath) => `${SKELETON_VISUAL_PREFIX}${relPath}`;
 var isSkeletonVisualId = (id) => typeof id === "string" && id.startsWith(SKELETON_VISUAL_PREFIX);
+function stripSkeletonVisuals(visuals) {
+  if (!Array.isArray(visuals)) return void 0;
+  return visuals.filter((v2) => !(v2 && typeof v2 === "object" && isSkeletonVisualId(v2.id))).map((v2) => {
+    if (!v2 || typeof v2 !== "object" || !("skeleton" in v2)) return v2;
+    const { skeleton: _forged, ...rest } = v2;
+    return rest;
+  });
+}
+var hasForged = (visuals) => Array.isArray(visuals) && visuals.some((v2) => v2 && typeof v2 === "object" && (isSkeletonVisualId(v2.id) || "skeleton" in v2));
+function stripForgedSkeleton(content) {
+  if (!content || typeof content !== "object" || Array.isArray(content)) return content;
+  const c = content;
+  const topForged = hasForged(c.visuals);
+  const options = Array.isArray(c.options) ? c.options : null;
+  const optForged = !!options?.some((o) => o && typeof o === "object" && hasForged(o.visuals));
+  if (!topForged && !optForged) return content;
+  const out = { ...c };
+  if (topForged) out.visuals = stripSkeletonVisuals(c.visuals);
+  if (optForged && options) {
+    out.options = options.map(
+      (o) => o && typeof o === "object" && hasForged(o.visuals) ? { ...o, visuals: stripSkeletonVisuals(o.visuals) } : o
+    );
+  }
+  return out;
+}
 function describeSkeletonLine(art, visualId, line) {
   if (!art || art.type !== "plan" || !isSkeletonVisualId(visualId) || typeof line !== "number") return null;
   const content = art.content;
@@ -30814,7 +30845,7 @@ function reviseTargetPrecondition(target) {
   };
 }
 function deriveReviseContent(old, supplied) {
-  const content = { ...supplied };
+  const content = { ...stripForgedSkeleton(supplied) };
   if (old.type === "changeset") {
     const oldChangeset = coerceChangesetContent(old.content);
     if (oldChangeset.reviewIntent === "external") {
@@ -36903,6 +36934,7 @@ var SKELETON_SNAPSHOT_LIMITS = {
   maxTotalBytes: 192 * 1024,
   maxReadBytes: 1e6
 };
+var UNFENCED_VISUAL_ID = skeletonVisualId("unfenced");
 var MIN_USEFUL_BYTES = 512;
 function within2(dir, abs) {
   const rel = path11.relative(dir, abs);
@@ -36915,11 +36947,18 @@ function normalizeSkeletonPath(root, raw) {
   if (!within2(root, abs) || abs === path11.resolve(root)) return null;
   return path11.relative(root, abs).split(path11.sep).join("/");
 }
-var SECRET_FILE = /\.(pem|key|p12|pfx|jks|keystore)$/i;
+function isDeniedSegment(segment) {
+  const s = segment.toLowerCase();
+  return s.startsWith(".env") || s === ".git" || s === ".ssh" || s === ".deeppairing" || s === ".npmrc" || s === ".netrc" || s === ".pypirc" || s.startsWith("id_rsa") || s.startsWith("id_ed25519") || s.startsWith("credentials") || s.endsWith(".pem") || s.endsWith(".key") || s.endsWith(".p12");
+}
+function isDeniedPath(rel) {
+  const segs = rel.split(/[\\/]+/).filter(Boolean);
+  if (segs.some(isDeniedSegment)) return true;
+  return ruleForRelPath(rel.toLowerCase())?.category === "secrets";
+}
+var O_NOFOLLOW = fs11.constants.O_NOFOLLOW ?? 0;
 function readConfined(root, rel, limits) {
-  const segs = rel.split("/");
-  if (segs.includes(".git") || segs.includes(".deeppairing")) return { ok: false, reason: "git/deepPairing state is never snapshotted" };
-  if (ruleForRelPath(rel)?.category === "secrets" || SECRET_FILE.test(rel)) return { ok: false, reason: "a secrets path \u2014 withheld" };
+  if (isDeniedPath(rel)) return { ok: false, reason: "a protected path \u2014 never snapshotted" };
   let realRoot;
   let realAbs;
   try {
@@ -36933,23 +36972,41 @@ function readConfined(root, rel, limits) {
     return { ok: false, reason: "not on disk" };
   }
   if (!within2(realRoot, realAbs)) return { ok: false, reason: "it resolves outside the project (symlink)" };
-  let size;
+  if (isDeniedPath(path11.relative(realRoot, realAbs))) return { ok: false, reason: "a protected path \u2014 never snapshotted" };
+  let fd;
   try {
-    const st = fs11.statSync(realAbs);
+    fd = fs11.openSync(realAbs, fs11.constants.O_RDONLY | O_NOFOLLOW);
+  } catch {
+    return { ok: false, reason: "unreadable" };
+  }
+  try {
+    const st = fs11.fstatSync(fd);
     if (!st.isFile()) return { ok: false, reason: "not a regular file" };
-    size = st.size;
+    try {
+      const named = fs11.statSync(realAbs);
+      if (named.dev !== st.dev || named.ino !== st.ino) return { ok: false, reason: "it changed while being read" };
+    } catch {
+      return { ok: false, reason: "it changed while being read" };
+    }
+    if (st.size > limits.maxReadBytes) return { ok: false, reason: `too large to snapshot (${st.size} bytes)` };
+    const buf = Buffer.alloc(st.size);
+    let off = 0;
+    while (off < st.size) {
+      const n = fs11.readSync(fd, buf, off, st.size - off, off);
+      if (n <= 0) break;
+      off += n;
+    }
+    const data = buf.subarray(0, off);
+    if (data.subarray(0, 8192).includes(0)) return { ok: false, reason: "binary \u2014 not shown" };
+    return { ok: true, text: data.toString("utf-8") };
   } catch {
     return { ok: false, reason: "unreadable" };
+  } finally {
+    try {
+      fs11.closeSync(fd);
+    } catch {
+    }
   }
-  if (size > limits.maxReadBytes) return { ok: false, reason: `too large to snapshot (${size} bytes)` };
-  let buf;
-  try {
-    buf = fs11.readFileSync(realAbs);
-  } catch {
-    return { ok: false, reason: "unreadable" };
-  }
-  if (buf.subarray(0, 8192).includes(0)) return { ok: false, reason: "binary \u2014 not shown" };
-  return { ok: true, text: buf.toString("utf-8") };
 }
 function truncateToBytes(text, budget) {
   const lines = text.split("\n");
@@ -36974,33 +37031,26 @@ function fenceViews(fences, shownLines) {
     status: f.status
   }));
 }
-function stripSkeletonVisuals(visuals) {
-  if (!Array.isArray(visuals)) return void 0;
-  return visuals.filter((v2) => !(v2 && typeof v2 === "object" && isSkeletonVisualId(v2.id))).map((v2) => {
-    if (!v2 || typeof v2 !== "object" || !("skeleton" in v2)) return v2;
-    const { skeleton: _forged, ...rest } = v2;
-    return rest;
-  });
-}
 function buildSkeletonSnapshot(args) {
   const limits = args.limits ?? SKELETON_SNAPSHOT_LIMITS;
   const steps = Array.isArray(args.steps) ? args.steps : [];
   const skelIds = [...new Set(steps.map((s) => s?.skelId).filter((id) => typeof id === "string" && id.length > 0))];
   if (skelIds.length === 0) return { visuals: [], note: "" };
   const root = path11.resolve(args.root);
+  const agentVisuals = Array.isArray(args.visuals) ? args.visuals : [];
   const scan = scanSkeletonFences(root, {
     files: planDeclaredFiles({
       steps,
-      visuals: Array.isArray(args.visuals) ? args.visuals : []
+      visuals: agentVisuals
     })
   });
   const fenced = [];
   for (const id of skelIds) {
     for (const f of scan.fences) if (f.id === id && !fenced.includes(f.file)) fenced.push(f.file);
   }
-  const tracked = [];
+  const unfenced = [];
   const skipped = [];
-  for (const v2 of Array.isArray(args.visuals) ? args.visuals : []) {
+  for (const v2 of agentVisuals) {
     const vis = v2;
     if (vis?.kind !== "file_map" || !Array.isArray(vis.files)) continue;
     for (const entry of vis.files) {
@@ -37010,18 +37060,16 @@ function buildSkeletonSnapshot(args) {
         skipped.push(`${entry.path} (outside the project)`);
         continue;
       }
-      if (!fenced.includes(rel) && !tracked.includes(rel)) tracked.push(rel);
+      if (!fenced.includes(rel) && !unfenced.includes(rel)) unfenced.push(rel);
     }
   }
   const visuals = [];
   const omitted = [];
+  const withheld = [];
   let used = 0;
-  const candidates = [
-    ...fenced.map((rel) => ({ rel, tracked: false })),
-    ...tracked.map((rel) => ({ rel, tracked: true }))
-  ];
-  for (const { rel, tracked: isTracked } of candidates) {
-    if (visuals.length >= limits.maxFiles) {
+  for (const rel of fenced) {
+    const remaining = limits.maxTotalBytes - used;
+    if (visuals.length >= limits.maxFiles || remaining < Math.min(MIN_USEFUL_BYTES, limits.maxTotalBytes)) {
       omitted.push(rel);
       continue;
     }
@@ -37030,34 +37078,43 @@ function buildSkeletonSnapshot(args) {
       skipped.push(`${rel} (${read.reason})`);
       continue;
     }
-    const remaining = limits.maxTotalBytes - used;
-    const budget = Math.min(limits.maxFileBytes, remaining);
-    if (remaining < MIN_USEFUL_BYTES && Buffer.byteLength(read.text, "utf-8") > remaining) {
-      omitted.push(rel);
-      continue;
-    }
-    const cut = truncateToBytes(read.text, budget);
-    const code = cut ? cut.code : read.text.replace(/\n$/, "");
-    used += Buffer.byteLength(code, "utf-8");
-    let fences = [];
-    let markerError;
+    let fences;
     try {
       fences = scanSkeletonText(read.text, rel);
     } catch (err) {
-      markerError = err instanceof Error ? err.message : String(err);
+      skipped.push(`${rel} (malformed SKEL markers: ${err instanceof Error ? err.message : String(err)})`);
+      continue;
     }
+    if (!fences.some((f) => skelIds.includes(f.id))) {
+      skipped.push(`${rel} (no claimed fence)`);
+      continue;
+    }
+    const secrets = scanForSecrets(read.text);
+    if (secrets.length > 0) {
+      const what = secrets.map((m) => `${m.label}${m.line ? `, line ${m.line}` : ""}`).join("; ");
+      withheld.push(rel);
+      visuals.push({
+        id: skeletonVisualId(rel),
+        kind: "annotated_code",
+        title: rel,
+        filePath: rel,
+        caption: `Content withheld: possible secret detected (${what}).`,
+        skeleton: { fences: [], withheld: `possible secret detected (${what})` }
+      });
+      continue;
+    }
+    const cut = truncateToBytes(read.text, Math.min(limits.maxFileBytes, remaining));
+    const code = cut ? cut.code : read.text.replace(/\n$/, "");
+    used += Buffer.byteLength(code, "utf-8");
     const skeleton = {
       fences: fenceViews(fences, cut ? cut.shownLines : null),
-      ...isTracked && fences.length === 0 ? { tracked: true } : {},
-      ...cut ? { truncated: { shownLines: cut.shownLines, totalLines: cut.totalLines } } : {},
-      ...markerError ? { markerError } : {}
+      ...cut ? { truncated: { shownLines: cut.shownLines, totalLines: cut.totalLines } } : {}
     };
     const n = skeleton.fences.length;
     const captionParts = [
-      skeleton.tracked ? 'Skeleton file with no fences (a file-map "create" entry).' : `${n} fence${n === 1 ? "" : "s"}.`,
+      `${n} fence${n === 1 ? "" : "s"}.`,
       "Read from disk when the plan was presented. Comment on any line.",
-      ...cut ? [`Truncated: lines 1\u2013${cut.shownLines} of ${cut.totalLines} shown (snapshot size cap).`] : [],
-      ...markerError ? [`Malformed SKEL markers: ${markerError}`] : []
+      ...cut ? [`Truncated: lines 1\u2013${cut.shownLines} of ${cut.totalLines} shown (snapshot size cap).`] : []
     ];
     visuals.push({
       id: skeletonVisualId(rel),
@@ -37074,8 +37131,20 @@ function buildSkeletonSnapshot(args) {
     const last = visuals[visuals.length - 1];
     last.caption = `${last.caption ?? ""} Not shown (snapshot cap): ${omitted.join(", ")}.`.trim();
   }
+  if (unfenced.length > 0) {
+    visuals.push({
+      id: UNFENCED_VISUAL_ID,
+      kind: "file_map",
+      title: "Unfenced skeleton files (paths only)",
+      caption: "New files from the file map with no SKEL fence. Their content is not shown here.",
+      files: unfenced.map((p) => ({ path: p, change: "create", note: "no fence, content not shown" }))
+    });
+  }
+  const shown = visuals.filter((v2) => v2.kind === "annotated_code" && !v2.skeleton?.withheld).length;
   const noteParts = [];
-  if (visuals.length > 0) noteParts.push(`attached ${visuals.length} file${visuals.length === 1 ? "" : "s"} to the plan card as reviewable code`);
+  if (shown > 0) noteParts.push(`attached ${shown} fenced file${shown === 1 ? "" : "s"} to the plan card as reviewable code`);
+  if (unfenced.length > 0) noteParts.push(`listed ${unfenced.length} unfenced file${unfenced.length === 1 ? "" : "s"} by path only`);
+  if (withheld.length > 0) noteParts.push(`content withheld (possible secret detected): ${withheld.join(", ")}`);
   if (omitted.length > 0) noteParts.push(`not shown (cap of ${limits.maxFiles} files / ${Math.round(limits.maxTotalBytes / 1024)} KiB): ${omitted.join(", ")}`);
   if (skipped.length > 0) noteParts.push(`skipped: ${skipped.join("; ")}`);
   if (visuals.some((v2) => v2.skeleton?.truncated)) noteParts.push("some files are truncated (marked on the card)");
@@ -37089,12 +37158,15 @@ function attachSkeletonSnapshot(content, opts = {}) {
     const visuals = Array.isArray(content.visuals) ? content.visuals : void 0;
     const hasReserved = !!visuals?.some((v2) => v2 && typeof v2 === "object" && (isSkeletonVisualId(v2.id) || "skeleton" in v2));
     if (!hasSkel && !hasReserved) return { content, note: "" };
-    const root = opts.root ?? (() => {
-      const r = resolveProjectRoot();
-      return r.worktree?.workspaceRoot ?? r.projectRoot;
-    })();
     const kept = stripSkeletonVisuals(visuals) ?? [];
-    const snap = hasSkel ? buildSkeletonSnapshot({ steps, visuals: kept, root, ...opts.limits ? { limits: opts.limits } : {} }) : { visuals: [], note: "" };
+    let snap = { visuals: [], note: "" };
+    if (hasSkel) {
+      const root = opts.root ?? (() => {
+        const r = resolveProjectRoot();
+        return r.worktree?.workspaceRoot ?? r.projectRoot;
+      })();
+      snap = buildSkeletonSnapshot({ steps, visuals: kept, root, ...opts.limits ? { limits: opts.limits } : {} });
+    }
     const nextVisuals = [...kept, ...snap.visuals];
     const next = { ...content };
     if (nextVisuals.length > 0) next.visuals = nextVisuals;
@@ -37182,11 +37254,12 @@ async function handleReviseArtifact(ctx, args) {
       if ("response" in outcome2) return outcome2.response;
       await maybeUpdateTaskStatus(server, old.id, store);
       notifyResourcesListChanged(server);
-      return admittedResult(outcome2.admitted, ` Superseded ${artifactId} (v${old.version + 1} is the draft awaiting review). Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback.`);
+      const skelNote = old.type === "plan" && Array.isArray(content.steps) && content.steps.some((st) => typeof st?.skelId === "string" && st.skelId) ? " The skeleton code view is not re-read on an allowed revision; revise again to refresh it." : "";
+      return admittedResult(outcome2.admitted, ` Superseded ${artifactId} (v${old.version + 1} is the draft awaiting review). Any comments the human left on ${artifactId} that you haven't read yet will arrive on your next check_feedback.${skelNote}`);
     }
     finalizeReviseContent(old, content);
     const skeletonSnap = old.type === "plan" ? attachSkeletonSnapshot(content) : { content, note: "" };
-    const styleContent = old.type === "plan" && Array.isArray(content.visuals) ? { ...content, visuals: stripSkeletonVisuals(content.visuals) } : content;
+    const styleContent = content;
     const title = String(args?.title ?? old.title);
     const newId = `art_${nanoid3(10)}`;
     const decisionContent = old.type === "decision" ? content : null;

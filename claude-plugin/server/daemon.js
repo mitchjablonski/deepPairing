@@ -19214,6 +19214,7 @@ var PlanVisualSchema = external_exports.object({
   /** kind="annotated_code": line-anchored explanations. */
   annotations: external_exports.array(PlanVisualAnnotationSchema).optional()
 });
+var SKELETON_VISUAL_PREFIX = "skelcode:";
 var SkeletonFenceViewSchema = external_exports.object({
   id: external_exports.string(),
   title: external_exports.string().optional(),
@@ -19228,7 +19229,10 @@ var SkeletonCodeSnapshotSchema = external_exports.object({
   /** Set when the snapshot cap cut the file short. */
   truncated: external_exports.object({ shownLines: external_exports.number(), totalLines: external_exports.number() }).optional(),
   /** Malformed SKEL markers in this file (fences are then unknown). */
-  markerError: external_exports.string().optional()
+  markerError: external_exports.string().optional(),
+  /** Set when the server WITHHELD the file's content (a secret-shaped value
+   *  was found on disk). The visual then carries no `code` at all. */
+  withheld: external_exports.string().optional()
 });
 var StoredPlanVisualSchema = PlanVisualSchema.extend({
   skeleton: SkeletonCodeSnapshotSchema.optional()
@@ -20377,8 +20381,9 @@ function coerceVisual(v, fallbackId) {
       return ann;
     });
   }
-  if (out.kind === "annotated_code" && isObj(o.skeleton))
+  if (out.kind === "annotated_code" && out.id.startsWith(SKELETON_VISUAL_PREFIX) && isObj(o.skeleton)) {
     out.skeleton = coerceSkeletonSnapshot(o.skeleton);
+  }
   return out;
 }
 function coerceSkeletonSnapshot(o) {
@@ -20401,6 +20406,8 @@ function coerceSkeletonSnapshot(o) {
   }
   if (typeof o.markerError === "string" && o.markerError)
     out.markerError = o.markerError;
+  if (typeof o.withheld === "string" && o.withheld)
+    out.withheld = o.withheld;
   return out;
 }
 function coerceRequirement(v) {
