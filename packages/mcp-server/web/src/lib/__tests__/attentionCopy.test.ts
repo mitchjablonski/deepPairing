@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Artifact } from "@deeppairing/shared";
 import { computeAttention, type AttentionItem } from "../attention";
-import { afterFor, briefRiskClass, copyFor, copyLineText, ifIgnoredFor, reachFrom, whyFor, type AgentReach } from "../attentionCopy";
+import { afterFor, attentionHolds, briefRiskClass, copyFor, copyLineText, ifIgnoredFor, reachFrom, whyFor, type AgentReach } from "../attentionCopy";
 
 /**
  * #430 slice 1 — the ONE copy module both needs-you surfaces read
@@ -76,14 +76,14 @@ describe("if you leave it — conditional, never 'Claude is stopped' as a fact",
 });
 
 describe("after — what happens when you respond", () => {
-  it("brief: Approve → Claude builds N tasks · Request changes → Claude revises the brief", () => {
+  it("brief: conditional — Approve → the brief's N tasks can proceed · Request changes → Claude revises the brief", () => {
     const b = brief();
-    expect(afterFor(itemFor(b), [b], "live")).toBe("Approve → Claude builds 3 tasks · Request changes → Claude revises the brief");
+    expect(afterFor(itemFor(b), [b], "live")).toBe("Approve → the brief's 3 tasks can proceed · Request changes → Claude revises the brief");
   });
 
   it("brief without tasks does not invent a count", () => {
     const b = brief({ content: { objective: "o", requirements: [], context: BRIEF_CONTEXT } });
-    expect(afterFor(itemFor(b), [b], "live")).toBe("Approve → Claude starts the work · Request changes → Claude revises the brief");
+    expect(afterFor(itemFor(b), [b], "live")).toBe("Approve → the work can proceed · Request changes → Claude revises the brief");
   });
 
   it("plan, decision and review keep their existing copy", () => {
@@ -103,7 +103,7 @@ describe("after — what happens when you respond", () => {
     const b = brief();
     const after = afterFor(itemFor(b), [b], reach);
     expect(after).toMatch(expected);
-    expect(after).not.toContain("builds");
+    expect(after).not.toContain("can proceed");
   });
 });
 
@@ -114,7 +114,7 @@ describe("copyFor / copyLineText — the line both surfaces show", () => {
     expect(c.lane).toBe("REVIEW");
     expect(c.tags).toEqual(["Risk: escalated"]);
     expect(copyLineText("Lead-side worker-stop notice", c)).toBe(
-      "REVIEW Lead-side worker-stop notice · Risk: escalated · Approval required before this work proceeds · Approve → Claude builds 3 tasks · Request changes → Claude revises the brief",
+      "REVIEW Lead-side worker-stop notice · Risk: escalated · Approval required before this work proceeds · Approve → the brief's 3 tasks can proceed · Request changes → Claude revises the brief",
     );
   });
 
@@ -137,3 +137,27 @@ describe("copyFor / copyLineText — the line both surfaces show", () => {
     expect(reachFrom({ replay: false, tabOffline: false, agentGone: false })).toBe("live");
   });
 });
+
+describe("terminal-held items (Astra condition 3) — answered in the terminal, never here", () => {
+  const ask = { id: "b1", at: "2026-06-01T00:00:00.000Z", source: "session", concept: "migrations", via: "concept", lane: "hook", decision: "ask", targetPath: "db/migrate.sql" } as const;
+  const deny = { ...ask, id: "b2", decision: "deny" } as const;
+
+  it("attentionHolds marks only a hook `ask` terminal; keeps the existing titles", () => {
+    const holds = attentionHolds([ask, deny] as never, null);
+    expect(holds.map((h) => [h.id, h.terminal ?? false])).toEqual([["b1", true], ["b2", false]]);
+    expect(holds[0]!.title).toBe('"migrations": Claude Code asked about db/migrate.sql');
+    expect(attentionHolds([{ ...ask, seenAt: "2026-06-01T00:01:00.000Z" }] as never, null)).toEqual([]);
+  });
+
+  it("copy says to answer in the terminal and never implies a companion approval releases it", () => {
+    const item = computeAttention({ artifacts: [], system: { holds: attentionHolds([ask] as never, null) } }).next!;
+    expect(item.kind).toBe("held");
+    const c = copyFor(item, [], "live");
+    expect(c.lane).toBe("HELD IN TERMINAL");
+    expect(c.ifIgnored).toBe("Claude Code asked in the terminal — answer it there; nothing here releases it");
+    expect(c.after).toBe("Answer in the terminal — approving here does not release it");
+    expect(ifIgnoredFor(item, "replay")).toBe("History — nothing waits on this now");
+    expect(afterFor(item, [], "replay")).toMatch(/^Replay is read-only/);
+  });
+});
+

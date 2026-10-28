@@ -55,6 +55,10 @@ export interface AttentionItem {
   kind: DecideKind | WaitingKind | "read" | "flag" | "held";
   /** Decisions only: the decision content's optional `stakes`. */
   stakes?: "high" | "medium" | "low";
+  /** #430 slice 1 — held items only: a hook `ask` — Claude Code put the
+   *  question at the TERMINAL, so it is answered there, never here. Such a hold
+   *  joins the blocking tier for `next` (Astra condition 3); counts unchanged. */
+  terminal?: true;
   /** #430 slice 1 — the item belongs to a demo/sample session (#597's
    *  `isDemoSessionId`, or the client-side sample fixture). Label only. */
   demo?: true;
@@ -89,7 +93,7 @@ export interface AttentionInput {
     snapshotUnavailable?: boolean;
     sessionConflict?: boolean;
     /** Unread stance holds (preflight blocks) to keep as a read-only record. */
-    holds?: { id: string; title: string; at: string }[];
+    holds?: { id: string; title: string; at: string; terminal?: boolean }[];
   };
 }
 
@@ -149,8 +153,10 @@ function decideKind(a: Artifact): DecideKind {
 const TIER: Record<DecideKind, number> = { decision: 0, "review-blocking": 0, review: 2 };
 
 /** Tier, then oldest, then id — deterministic on timestamp ties. */
+const tierOf = (it: AttentionItem): number =>
+  it.kind === "held" ? (it.terminal ? 0 : 9) : (TIER[it.kind as DecideKind] ?? 9);
 const byConsequence = (x: AttentionItem, y: AttentionItem) =>
-  (TIER[x.kind as DecideKind] ?? 9) - (TIER[y.kind as DecideKind] ?? 9)
+  tierOf(x) - tierOf(y)
   || (x.createdAt ?? "").localeCompare(y.createdAt ?? "")
   || x.id.localeCompare(y.id);
 
@@ -233,10 +239,12 @@ export function computeAttention(input: AttentionInput): Attention {
   const waiting = [...questions, ...requests, ...revisions].sort(byOldest);
 
   const held: AttentionItem[] = (system.holds ?? [])
-    .map((h) => ({ id: h.id, title: h.title, createdAt: h.at, kind: "held" as const }))
+    .map((h): AttentionItem => ({ id: h.id, title: h.title, createdAt: h.at, kind: "held", ...(h.terminal ? { terminal: true as const } : {}) }))
     .sort(byOldest);
 
-  const next = decide[0] ?? null;
+  // #430 slice 1 — `next` is the most consequential item: the Decide head, or
+  // a terminal-held hook `ask` (blocking tier too), oldest first between them.
+  const next = [...decide.slice(0, 1), ...held.filter((h) => h.terminal)].sort(byConsequence)[0] ?? null;
   const highDecisionsBeyondNext = decide.filter(
     (d) => d !== next && d.kind === "decision" && d.stakes === "high",
   ).length;
@@ -246,7 +254,7 @@ export function computeAttention(input: AttentionInput): Attention {
 
   // Rule 2 — the primary slot.
   const primary: Attention["line"]["primary"] =
-    next ? { lane: "decide", item: next }
+    next ? { lane: next.kind === "held" ? "held" : "decide", item: next }
     : flags.length ? { lane: "flag", item: flags[0]! }
     : waiting.length ? { lane: "waiting", item: waiting[0]! }
     : held.length ? { lane: "held", item: held[0]! }
@@ -256,7 +264,7 @@ export function computeAttention(input: AttentionInput): Attention {
   // is non-empty (the worked table's first row: `+N high decision · Decide N`);
   // every OTHER lane is omitted only when it holds the primary slot.
   const summary: Attention["line"]["summary"] = [];
-  if (primary.lane === "decide" && highDecisionsBeyondNext > 0) {
+  if (next && highDecisionsBeyondNext > 0) {
     summary.push({ lane: "high-decision", count: highDecisionsBeyondNext });
   }
   if (decide.length) summary.push({ lane: "decide", count: decide.length });

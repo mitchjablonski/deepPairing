@@ -183,6 +183,37 @@ describe("most-consequential-first `next` (#430 slice 1) and the '+N high decisi
   });
 });
 
+describe("#430 slice 1 — a terminal-held hook `ask` is in the blocking tier (Astra condition 3)", () => {
+  it("it outranks an older finding and holds the primary slot; Decide/high counts are unchanged", () => {
+    const artifacts = [
+      art("research", "draft", { id: "f", createdAt: "2026-06-01T01:00:00.000Z" }),
+      art("decision", "draft", { id: "d", createdAt: "2026-06-01T04:00:00.000Z", content: { stakes: "high" } }),
+    ];
+    const holds = [{ id: "h", title: "asked about x", at: "2026-06-01T02:00:00.000Z", terminal: true }];
+    const a = computeAttention({ artifacts, system: { holds } });
+    expect(a.next?.id).toBe("h");
+    expect(a.next?.terminal).toBe(true);
+    expect(a.line.primary.lane).toBe("held");
+    expect(a.lanes.decide.length).toBe(2);
+    expect(a.lanes.held.map((x) => x.id)).toEqual(["h"]);
+    // The later high decision is still pinned, and Decide still shows its count.
+    expect(a.line.summary.slice(0, 2)).toEqual([{ lane: "high-decision", count: 1 }, { lane: "decide", count: 2 }]);
+  });
+
+  it("an older blocking draft still leads a newer terminal hold (oldest within the tier)", () => {
+    const artifacts = [art("plan", "draft", { id: "p", createdAt: "2026-06-01T01:00:00.000Z" })];
+    const a = computeAttention({ artifacts, system: { holds: [{ id: "h", title: "t", at: "2026-06-01T02:00:00.000Z", terminal: true }] } });
+    expect(a.next?.id).toBe("p");
+    expect(a.line.primary.lane).toBe("decide");
+  });
+
+  it("an ordinary (non-terminal) stance hold never becomes `next`", () => {
+    const a = computeAttention({ artifacts: [], system: { holds: [{ id: "h", title: "t", at: "2026-06-01T02:00:00.000Z" }] } });
+    expect(a.next).toBeNull();
+    expect(a.line.primary.lane).toBe("held");
+  });
+});
+
 describe("#430 slice 1 — the delegate brief is blocking", () => {
   const BRIEF_CONTEXT = "Decide alone: naming\nWill ask: none\nRisk class: escalated\nWhy: touches the hook\nReview: packet";
 

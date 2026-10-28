@@ -11,7 +11,7 @@ import { useSiblingSyncStore } from "../lib/siblingSync";
 import { sessionLabelsFrom } from "../lib/sessionLabel";
 import { WAITING_TONE } from "../lib/waitingTone";
 import { LANE_MARKS, NOTHING_GLYPH } from "../lib/laneMarks";
-import { copyFor, copyLineText, reachFrom, LANE_WORD } from "../lib/attentionCopy";
+import { attentionHolds, copyFor, copyLineText, reachFrom, LANE_WORD } from "../lib/attentionCopy";
 import { DemoTag } from "./ProvenanceMarker";
 import { resumePromptFor } from "./ResumeQuestionsBanner";
 import { RequestPips, RequestResumeButton, useRequestResumeBridge } from "./RequestComposerBanner";
@@ -146,18 +146,9 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
       snapshotUnavailable,
       sessionConflict,
       replay: replayActive,
-      // Unread stance holds (the same boundary the ⋯ gate log uses).
-      holds: blocks
-        // #470 (§4a) — a block you allowed is seen (daemon-written seenAt).
-        .filter((b) => !b.seenAt && (!lastSeenAt || b.at > lastSeenAt))
-        .map((b) => ({
-          id: b.id,
-          // #544 — a hook firing names the file Claude Code asked about.
-          title: b.lane === "hook" && b.targetPath
-            ? `"${b.concept}": Claude Code ${b.decision === "deny" ? "stopped" : "asked about"} ${b.targetPath}${b.agentType ? ` (${b.agentType} subagent)` : b.agentId ? " (subagent)" : ""}`
-            : b.proposal ? `"${b.concept}" stopped: ${b.proposal}` : `"${b.concept}"`,
-          at: b.at,
-        })),
+      // Unread stance holds (the same boundary the ⋯ gate log uses); a hook
+      // `ask` is terminal-held (#430 slice 1 — lib/attentionCopy).
+      holds: attentionHolds(blocks, lastSeenAt),
     },
   }), [artifacts, comments, requests, sessionLabels, boundSessionId, sampleContent, sampleSessionIds, tabOffline, staleDaemon, snapshotUnavailable, sessionConflict, replayActive, blocks, lastSeenAt]);
 
@@ -252,7 +243,8 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
   const requestBridge = useRequestResumeBridge();
   // #430 PR 5 — "quiet" = nothing needs your judgment right now: the demo CTA
   // and wrap card sit inline only then (never pushing a decision off the line).
-  const quiet = primary.lane === "nothing" || primary.lane === "waiting" || primary.lane === "held";
+  // #430 slice 1 — a terminal-held `ask` is blocking, not quiet.
+  const quiet = primary.lane === "nothing" || primary.lane === "waiting" || (primary.lane === "held" && !item?.terminal);
   const [demoDismissed, setDemoDismissed] = useState(false);
   const demoInline = !!quietCards.demo && quiet && !demoDismissed;
   const wrapInline = !!quietCards.wrap && quiet;
@@ -307,7 +299,8 @@ export function NextUpBar({ quietCards = {} }: { quietCards?: QuietCards } = {})
     // is not news either (only a genuinely new artifact is).
     if (prevNext.current !== undefined && prevNext.current !== nextId && !settling() && !(nextId && isBackfilled(nextId))) {
       const n = attention.next;
-      setAnnouncement(n ? `Next up: ${(LANE_WORD[n.kind] ?? "").toLowerCase()} — ${n.title}` : "Next up: nothing needs you");
+      const word = n?.kind === "held" ? "held in the terminal" : (n ? LANE_WORD[n.kind] ?? "" : "").toLowerCase();
+      setAnnouncement(n ? `Next up: ${word} — ${n.title}` : "Next up: nothing needs you");
     }
     prevNext.current = nextId;
     // attention.next is derived from the same memo as nextId.

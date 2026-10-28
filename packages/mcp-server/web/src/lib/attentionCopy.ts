@@ -37,6 +37,8 @@ export function admittedWhy(a: Artifact | undefined, blocks: PreflightBlockRecor
 
 /** The lane WORD (text, never colour alone). */
 export const LANE_WORD: Partial<Record<AttentionItem["kind"], string>> = {
+  // Only a terminal-held item reaches the copy line as `next`; an ordinary
+  // stance hold is a read-only record (the bar's "■ HELD" token says so).
   decision: "DECIDE",
   "review-blocking": "REVIEW",
   review: "REVIEW",
@@ -86,9 +88,36 @@ export function whyFor(item: AttentionItem, artifacts: Artifact[], blocks: Prefl
   }
 }
 
+/** The held lane's input, from the stance-hold store: UNREAD holds (the same
+ *  boundary the ⋯ gate log uses), titled as the bar has always titled them. A
+ *  hook `ask` is `terminal` — Claude Code asked at the terminal. */
+export function attentionHolds(
+  blocks: PreflightBlockRecord[],
+  lastSeenAt: string | null | undefined,
+): { id: string; title: string; at: string; terminal?: boolean }[] {
+  return blocks
+    // #470 (§4a) — a block you allowed is seen (daemon-written seenAt).
+    .filter((b) => !b.seenAt && (!lastSeenAt || b.at > lastSeenAt))
+    .map((b) => ({
+      id: b.id,
+      // #544 — a hook firing names the file Claude Code asked about.
+      title: b.lane === "hook" && b.targetPath
+        ? `"${b.concept}": Claude Code ${b.decision === "deny" ? "stopped" : "asked about"} ${b.targetPath}${b.agentType ? ` (${b.agentType} subagent)` : b.agentId ? " (subagent)" : ""}`
+        : b.proposal ? `"${b.concept}" stopped: ${b.proposal}` : `"${b.concept}"`,
+      at: b.at,
+      ...(b.lane === "hook" && b.decision === "ask" ? { terminal: true } : {}),
+    }));
+}
+
 /** "If you leave it": what waits on this item. Conditional wording — the
  *  artifact proves an approval is REQUIRED, not that Claude is stopped now. */
 export function ifIgnoredFor(item: AttentionItem, reach: AgentReach): string {
+  if (item.kind === "held" && item.terminal) {
+    if (reach === "replay") return "History — nothing waits on this now";
+    if (reach === "gone") return "Claude has exited";
+    // Terminal routing is unchanged: only an answer in the terminal releases it.
+    return "Claude Code asked in the terminal — answer it there; nothing here releases it";
+  }
   const blocking = item.kind === "decision" || item.kind === "review-blocking";
   if (item.kind !== "review" && !blocking) return "";
   if (reach === "replay") return "History — nothing waits on this now";
@@ -122,8 +151,10 @@ export function afterFor(item: AttentionItem, artifacts: Artifact[], reach: Agen
       }
       if (a && isDelegateBriefArtifact(a)) {
         const n = briefTaskCount(a);
-        const build = n > 0 ? `Claude builds ${n} task${n === 1 ? "" : "s"}` : "Claude starts the work";
-        return `Approve → ${build} · Request changes → Claude revises the brief`;
+        // Conditional (Astra condition 2): approval lets the work proceed; it
+        // does not prove Claude will build right now.
+        const work = n > 0 ? `the brief's ${n} task${n === 1 ? "" : "s"} can proceed` : "the work can proceed";
+        return `Approve → ${work} · Request changes → Claude revises the brief`;
       }
       return "Your verdicts go back as one review; Claude is waiting on it";
     }
@@ -133,6 +164,8 @@ export function afterFor(item: AttentionItem, artifacts: Artifact[], reach: Agen
         : "Your verdict reaches Claude on its next check (usually < 30s)";
     case "flag":
       return "Already stored and will appear in exports — if it's a real credential, rotate it";
+    case "held":
+      return item.terminal ? "Answer in the terminal — approving here does not release it" : "";
     case "question":
     case "request":
     case "revision":
@@ -169,7 +202,7 @@ export function copyFor(
     ...(item.demo ? ["Demo"] : []),
   ];
   return {
-    lane: LANE_WORD[item.kind] ?? null,
+    lane: item.kind === "held" && item.terminal ? "HELD IN TERMINAL" : LANE_WORD[item.kind] ?? null,
     tags,
     why: whyFor(item, artifacts, blocks),
     ifIgnored: ifIgnoredFor(item, reach),

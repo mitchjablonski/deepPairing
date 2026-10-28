@@ -6,7 +6,7 @@ import { useReplayStore } from "../stores/replay";
 import { usePreflightBlockStore } from "../stores/preflightBlocks";
 import { computePending, isSinglePendingInView } from "../lib/pending";
 import { computeAttention } from "../lib/attention";
-import { copyFor, copyLineText, reachFrom } from "../lib/attentionCopy";
+import { attentionHolds, copyFor, copyLineText, reachFrom } from "../lib/attentionCopy";
 import { noAgentLive } from "../lib/liveness";
 import { useTabOffline } from "../lib/connectionGrace";
 import { sessionLabelsFrom } from "../lib/sessionLabel";
@@ -50,14 +50,19 @@ export function PendingBanner() {
   const replayActive = useReplayStore((s) => s.active);
   const tabOffline = useTabOffline();
   const blocks = usePreflightBlockStore((s) => s.blocks);
+  const lastSeenAt = usePreflightBlockStore((s) => s.lastSeenAt);
 
   const { drafts, total } = computePending(artifacts);
-  // The Decide set IS computePending's drafts (parity-tested), so `next` is
-  // always one of `drafts` — only the order differs.
+  // The Decide set IS computePending's drafts (parity-tested), so `next` is one
+  // of `drafts` (only the order differs) — or a terminal-held hook `ask`, which
+  // has no chip: it is answered in the terminal, never dismissed here.
   const sessionLabels = useMemo(() => sessionLabelsFrom(activeSessions), [activeSessions]);
+  // Holds are passed so a terminal-held hook `ask` can lead (blocking tier,
+  // #430 slice 1) exactly as on the bar; the count below is still drafts only.
   const next = useMemo(() => computeAttention({
     artifacts, sessionLabels, boundSessionId, sample: { content: sampleContent, sessionIds: sampleSessionIds },
-  }).next, [artifacts, sessionLabels, boundSessionId, sampleContent, sampleSessionIds]);
+    system: { holds: attentionHolds(blocks, lastSeenAt) },
+  }).next, [artifacts, sessionLabels, boundSessionId, sampleContent, sampleSessionIds, blocks, lastSeenAt]);
   const reach = reachFrom({ replay: replayActive, tabOffline, agentGone: noAgentLive(activeSessions) });
   const copy = next ? copyFor(next, artifacts, reach, blocks) : null;
   const lead = next ? drafts.find((d) => d.id === next.artifactId) : undefined;

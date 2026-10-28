@@ -125,6 +125,16 @@ describe("#430 PR 2 — states A–G render the design's exact line", () => {
     expect(screen.getByText(/lives in the ⋯ gate log/)).toBeInTheDocument();
   });
 
+  it("#430 slice 1 — a terminal-held hook `ask` outranks an older finding and says to answer it in the terminal", () => {
+    useArtifactStore.setState({ artifacts: [art("r1", "research", "Old finding")] });
+    usePreflightBlockStore.setState({ blocks: [{ id: "b1", at: at(), source: "session", concept: "migrations", via: "concept", lane: "hook", decision: "ask", targetPath: "db/m.sql" }], lastSeenAt: null } as any);
+    render(<NextUpBar />);
+    expect(line()).toBe('■ HELD "migrations": Claude Code asked about db/m.sql · Decide 1');
+    expect(screen.getByTestId("next-up-if-ignored")).toHaveTextContent("answer it there; nothing here releases it");
+    expect(screen.getByText(/Answer in the terminal — approving here does not release it/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open" })).not.toBeInTheDocument();
+  });
+
   it("G — disconnected with work pending: the failure prefix comes first and the decision is still named", () => {
     useConnectionStore.setState({ connected: false } as any);
     useArtifactStore.setState({ artifacts: [decision("d1", "Store choice", "high")] });

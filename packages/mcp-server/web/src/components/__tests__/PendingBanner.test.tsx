@@ -151,7 +151,7 @@ describe("#430 slice 1 — PendingBanner's lead line", () => {
     id: "brief", type: "spec", title: "Worker-stop notice", createdAt: "2026-01-02T00:00:00.000Z",
     content: { objective: "Tell the lead when a worker stops", requirements: [], context: BRIEF_CONTEXT, tasks: [{ title: "a" }, { title: "b" }, { title: "c" }] },
   });
-  const BRIEF_LINE = "REVIEW Worker-stop notice · Risk: escalated · Approval required before this work proceeds · Approve → Claude builds 3 tasks · Request changes → Claude revises the brief";
+  const BRIEF_LINE = "REVIEW Worker-stop notice · Risk: escalated · Approval required before this work proceeds · Approve → the brief's 3 tasks can proceed · Request changes → Claude revises the brief";
 
   beforeEach(() => {
     useConnectionStore.setState({
@@ -163,7 +163,7 @@ describe("#430 slice 1 — PendingBanner's lead line", () => {
   });
   const seed = (...artifacts: any[]) => useArtifactStore.setState({ artifacts: artifacts.map((a) => ({ sessionId: "s1", ...a })), selectedArtifactId: null });
 
-  it("the delegate brief is blocking: it leads over an OLDER finding, with risk and 'Approve → Claude builds N tasks'", () => {
+  it("the delegate brief is blocking: it leads over an OLDER finding, with risk and conditional 'Approve → … N tasks can proceed'", () => {
     seed(finding, brief);
     render(<PendingBanner />);
     const lead = screen.getByTestId("pending-next");
@@ -226,12 +226,43 @@ describe("#430 slice 1 — PendingBanner's lead line", () => {
     seed(finding, brief);
     useConnectionStore.setState({ activeSessions: [{ sessionId: "s1", live: false }] } as any);
     const { unmount } = render(<PendingBanner />);
-    expect(screen.getByTestId("pending-next").getAttribute("data-next-copy")).not.toContain("builds");
+    expect(screen.getByTestId("pending-next").getAttribute("data-next-copy")).not.toContain("can proceed");
     expect(screen.getByTestId("pending-if-ignored")).toHaveTextContent("Claude has exited — this waits for the session to resume");
     unmount();
     useReplayStore.setState({ active: true } as any);
     render(<PendingBanner />);
     expect(screen.getByTestId("pending-after")).toHaveTextContent("Replay is read-only");
+  });
+
+  it("a terminal-held hook `ask` is blocking: it leads over an older finding, says answer in the terminal, has no chip; the count is drafts only", () => {
+    seed(finding, art({ id: "other", status: "approved", title: "Done" }));
+    usePreflightBlockStore.setState({ blocks: [{ id: "b1", at: "2026-01-05T00:00:00.000Z", source: "session", concept: "migrations", via: "concept", lane: "hook", decision: "ask", targetPath: "db/m.sql" }], lastSeenAt: null } as any);
+    render(<PendingBanner />);
+    const lead = screen.getByTestId("pending-next");
+    expect(lead.getAttribute("data-next-copy")).toBe('HELD IN TERMINAL "migrations": Claude Code asked about db/m.sql · Claude Code asked in the terminal — answer it there; nothing here releases it · Answer in the terminal — approving here does not release it');
+    expect(screen.getByText(/1 item waiting for you/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /migrations/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^dismiss old finding$/i })).toBeInTheDocument();
+  });
+
+  it("keyboard: the lead chip opens with Enter; dismiss is two-step by keyboard and focus stays on the chip", async () => {
+    seed(finding, brief);
+    const spy = vi.spyOn(useArtifactStore.getState(), "updateArtifactStatus").mockResolvedValue();
+    render(<PendingBanner />);
+    const user = userEvent.setup();
+    await user.tab();
+    expect(document.activeElement).toHaveAttribute("title", "Worker-stop notice");
+    await user.keyboard("{Enter}");
+    expect(useArtifactStore.getState().selectedArtifactId).toBe("brief");
+    act(() => { useArtifactStore.getState().selectArtifact(null); });
+    const dismiss = screen.getByRole("button", { name: /^dismiss worker-stop notice$/i });
+    dismiss.focus();
+    await user.keyboard("{Enter}");
+    expect(spy).not.toHaveBeenCalled();
+    const confirm = screen.getByRole("button", { name: /^confirm dismiss worker-stop notice$/i });
+    expect(document.activeElement).toBe(confirm);
+    await user.keyboard("{Enter}");
+    expect(spy).toHaveBeenCalledWith("brief", "obsolete");
   });
 });
 
