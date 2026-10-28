@@ -179,20 +179,19 @@ export function MermaidDiagram({
   const lastSourceRef = useRef<string | null>(null);
 
   // Parity PR 3 — decorate step nodes after each render (DOM-only; the SVG
-  // string and the region layer's inputs are untouched). Keyed on the status
-  // content, not object identity, so a progress broadcast re-colours in place.
+  // string and the region layer's inputs are untouched), so a progress
+  // broadcast re-colours in place.
   const stepNodesRef = useRef(stepNodes);
   stepNodesRef.current = stepNodes;
-  const stepKey = stepNodes
-    ? JSON.stringify(Object.values(stepNodes.states).map((st) => [st.skelId, st.status, st.mismatch ?? "", st.stepNumber]))
-    : "";
+  // No deps on purpose: React re-applies `dangerouslySetInnerHTML` whenever
+  // the prop object changes (every render), which wipes DOM-only decoration,
+  // so it is re-applied after EVERY commit (undo first). A handful of nodes.
   useEffect(() => {
     const host = hostRef.current;
     const current = stepNodesRef.current;
     if (!host || !svg || !current) return;
     return decorateStepNodes(host, current.states, (id) => stepNodesRef.current?.onJump(id));
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberate: keyed on the status CONTENT (stepKey); stepNodes is a fresh object every render
-  }, [svg, stepKey]);
+  });
   const onPlainClick = (x: number, y: number) => {
     const id = stepNodeAt(hostRef.current, x, y);
     if (id) stepNodesRef.current?.onJump(id);
