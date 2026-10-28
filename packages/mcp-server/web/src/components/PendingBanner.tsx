@@ -1,7 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { Artifact } from "@deeppairing/shared";
 import { useArtifactStore } from "../stores/artifact";
+import { useConnectionStore } from "../stores/connection";
+import { useReplayStore } from "../stores/replay";
+import { usePreflightBlockStore } from "../stores/preflightBlocks";
 import { computePending, isSinglePendingInView } from "../lib/pending";
+import { computeAttention } from "../lib/attention";
+import { copyFor, copyLineText, reachFrom } from "../lib/attentionCopy";
+import { noAgentLive } from "../lib/liveness";
+import { useTabOffline } from "../lib/connectionGrace";
+import { sessionLabelsFrom } from "../lib/sessionLabel";
 import { useOfflineReason } from "../hooks/useOfflineReason";
+import { DemoTag } from "./ProvenanceMarker";
 
 /**
  * The "waiting for your review" banner. Driven by the shared computePending
@@ -14,6 +24,15 @@ import { useOfflineReason } from "../hooks/useOfflineReason";
  * Every counted draft gets a quick "Dismiss" here (marks it obsolete), so an
  * abandoned draft can be cleared without opening the artifact and hunting for
  * the tertiary dismiss link.
+ *
+ * #430 slice 1 — the default view's needs-you line. The LEAD chip is the
+ * attention model's `next` (most consequential first), and under the chips one
+ * line says what it is, what waits on it and what happens when you respond —
+ * from lib/attentionCopy, the SAME module the opt-in Next-up bar reads. The
+ * count, the 3-chip cap, "+N more", Open and the two-step dismiss are
+ * unchanged; the old pulse is gone (words, not motion). This deliberately
+ * revises PR 3's "OFF exactly as before" for the lead item only (Astra's scope
+ * review, condition 4).
  */
 export function PendingBanner() {
   const offline = useOfflineReason(); // #467 review — the dismiss chip is an act
@@ -24,8 +43,27 @@ export function PendingBanner() {
   // UX5 — dismissing marks a draft obsolete, which the API can't undo back to
   // draft, so require a two-step confirm instead of a one-click destructive ✕.
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const sampleContent = useArtifactStore((s) => s.sampleContent);
+  const sampleSessionIds = useArtifactStore((s) => s.sampleSessionIds);
+  const activeSessions = useConnectionStore((s) => s.activeSessions);
+  const boundSessionId = useConnectionStore((s) => s.sessionId);
+  const replayActive = useReplayStore((s) => s.active);
+  const tabOffline = useTabOffline();
+  const blocks = usePreflightBlockStore((s) => s.blocks);
 
   const { drafts, total } = computePending(artifacts);
+  // The Decide set IS computePending's drafts (parity-tested), so `next` is
+  // always one of `drafts` — only the order differs.
+  const sessionLabels = useMemo(() => sessionLabelsFrom(activeSessions), [activeSessions]);
+  const next = useMemo(() => computeAttention({
+    artifacts, sessionLabels, boundSessionId, sample: { content: sampleContent, sessionIds: sampleSessionIds },
+  }).next, [artifacts, sessionLabels, boundSessionId, sampleContent, sampleSessionIds]);
+  const reach = reachFrom({ replay: replayActive, tabOffline, agentGone: noAgentLive(activeSessions) });
+  const copy = next ? copyFor(next, artifacts, reach, blocks) : null;
+  const lead = next ? drafts.find((d) => d.id === next.artifactId) : undefined;
+  const others = lead ? drafts.filter((d) => d !== lead) : drafts;
+  const shown: Artifact[] = lead ? [lead, ...others.slice(0, 2)] : others.slice(0, 3);
+  const hidden = lead ? others.slice(2) : others.slice(3);
   // J2b (#212) — lite-frame step-down: when the ONE pending draft is the card
   // already on screen, it IS the call to action (its own status badge + review
   // actions), so this banner would just restate what the card + the header count
@@ -57,14 +95,16 @@ export function PendingBanner() {
     <div
       role="region"
       aria-label="Waiting for you"
-      className="px-3 py-1 bg-accent-amber-dim/50 border-b border-accent-amber/15 flex items-center gap-2"
+      data-testid="pending-banner"
+      className="px-3 py-1 bg-accent-amber-dim/50 border-b border-accent-amber/15"
     >
-      <span className="w-1.5 h-1.5 rounded-full bg-accent-amber animate-pulse shrink-0" />
+      <div className="flex items-center gap-2 min-w-0">
+      {/* #430 slice 1 — no pulse: the line below says what waits, in words. */}
       <span className="text-2xs text-accent-amber font-medium shrink-0">
         {total} item{total > 1 ? "s" : ""} waiting for you
       </span>
       <div className="flex gap-1 ml-auto items-center min-w-0 overflow-x-auto">
-        {drafts.slice(0, 3).map((a) => (
+        {shown.map((a) => (
           <span key={a.id} className="flex items-center bg-accent-amber-dim rounded shrink-0">
             <button
               onClick={() => selectArtifact(a.id)}
@@ -112,20 +152,50 @@ export function PendingBanner() {
             pending the debrief/explainer (created last, at the end of a run) fell
             off silently. A quiet "+N more" jumps to the first hidden draft
             (advancing into the tail like the n-key), and its title lists them. */}
-        {drafts.length > 3 && (
+        {hidden.length > 0 && (
           <button
-            onClick={() => selectArtifact(drafts[3]!.id)}
+            onClick={() => selectArtifact(hidden[0]!.id)}
             // Sits on the chip background (like the sibling chips) rather than the
             // darker banner surface so the small text keeps AA contrast (a bare
             // text-accent-amber/70 on the banner bg fails 4.5:1 — caught by axe).
             className="px-2 py-0.5 text-2xs text-accent-amber bg-accent-amber-dim rounded shrink-0 hover:bg-accent-amber-dim/80 transition-colors"
-            title={`${drafts.length - 3} more waiting: ${drafts.slice(3).map((d) => d.title).join(", ")}`}
-            aria-label={`${drafts.length - 3} more waiting — jump to the next`}
+            title={`${hidden.length} more waiting: ${hidden.map((d) => d.title).join(", ")}`}
+            aria-label={`${hidden.length} more waiting — jump to the next`}
           >
-            +{drafts.length - 3} more
+            +{hidden.length} more
           </button>
         )}
       </div>
+      </div>
+      {/* #430 slice 1 — the lead item's line: what, if you leave it, after.
+          Plain text (no controls inside, so nothing nests), wraps rather than
+          truncating, existing contrast tokens only, no opacity on text. */}
+      {next && copy && (
+        <div data-testid="pending-next" data-next-copy={copyLineText(next.title, copy)} className="text-2xs pb-0.5 min-w-0">
+          <p className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 min-w-0 text-text-primary">
+            {copy.lane && <span className="font-semibold tracking-wide text-accent-amber">{copy.lane}</span>}
+            <span className="font-medium text-text-primary break-words min-w-0">{next.title}</span>
+            {copy.tags.map((t) => t === "Demo"
+              ? <DemoTag key={t} />
+              : (
+                <span
+                  key={t}
+                  className={`px-1 rounded font-semibold ${t === "HIGH" ? "bg-accent-red-dim text-accent-red" : "bg-surface-elevated text-text-secondary"}`}
+                >
+                  {t}
+                </span>
+              ))}
+            {next.sessionLabel && <span>in {next.sessionLabel}</span>}
+            {copy.ifIgnored && <span data-testid="pending-if-ignored">· {copy.ifIgnored}</span>}
+            {copy.after && <span data-testid="pending-after">· {copy.after}</span>}
+          </p>
+          {copy.why && (
+            <p data-testid="pending-why" className="text-text-primary line-clamp-2 break-words" title={copy.why}>
+              <span className="font-medium">Why </span>{copy.why}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

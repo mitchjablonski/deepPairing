@@ -1,6 +1,13 @@
 # Attention hierarchy — one next-action surface (proposal, #430)
 
 > **Status: PROPOSAL, revision 3. No UI code changes are included.**
+> **Slice 1 amendment (#430, Mitch 10-25, comment 6392254571):** §10 decision 3
+> is revised. `next` is **most consequential first**: the blocking tier (a
+> decision, or a draft plan / changeset / code_change / delegate brief) before a
+> non-blocking review, oldest first within a tier (ties by id). Counts are
+> unchanged. `Read N` is off the line (it stays in `⌄`). The default view's
+> PendingBanner reads the same why / if-ignored / after copy as the bar
+> (`web/src/lib/attentionCopy.ts`). See §4.3 and §10.
 > Revision 3: "+N high decision" is pinned and counts decisions only; the
 > precedence rules cover every lane combination; §7 wording matches the
 > one-line bar.
@@ -250,8 +257,12 @@ rows collapse into it.
 
 ### 4.3 Ordering and precedence
 
-**Order within Decide (decided): oldest-first.** `next` is the oldest Decide
-item; `n` / Shift+`n` walk the same order. To keep the reviewer's safety
+**Order within Decide (decided, revised by #430 slice 1): most consequential
+first.** `next` is the oldest item of the most consequential tier — blocking
+(a decision; a draft plan, changeset, code_change or delegate brief) before a
+non-blocking review — with ties broken by id; the `⌄` queue and the palette's
+"Next pending" walk the same order. (Revision 3 said oldest-first; Mitch
+revised it on 10-25.) To keep the reviewer's safety
 point, the bar shows **"+N high decision"** whenever high-stakes decisions exist
 beyond `next`, and clicking it opens the queue filtered to them — a second
 high-stakes decision is never hidden by the order.
@@ -529,7 +540,7 @@ Findings from the external pilot feed back into #430; screenshots alone do not v
 |---|---|---|
 | 1 | Lane model | **Approved:** Decide / Read / Waiting / System. |
 | 2 | Placement | **Approved:** a persistent one-line bar under the session tabs. |
-| 3 | Ordering within Decide | **Oldest-first** (chosen over stakes-first). Safety kept: the bar shows "+N high decision" (decisions with `stakes: "high"` only) so a second high-stakes decision is never hidden, and the indicator is never truncated (§4.3, §4.5). |
+| 3 | Ordering within Decide | **Revised (#430 slice 1, Mitch 10-25): most consequential first** — blocking tier, then review, oldest first within a tier. *Originally:* **Oldest-first** (chosen over stakes-first). Safety kept: the bar shows "+N high decision" (decisions with `stakes: "high"` only) so a second high-stakes decision is never hidden, and the indicator is never truncated (§4.3, §4.5). |
 | 4 | Stance-hold record | **Approved:** kept in the bar, read-only with "Why"; Retire stays in ⋯; never covers a pending decision. |
 | 5 | Start | **Approved**, using the split plan: PR 0 (acute, unflagged), then PR 1a (invisible selector), then the 1b–1e behaviour fixes (§8). |
 

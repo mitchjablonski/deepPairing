@@ -57,11 +57,14 @@ const seedExitedWithQuestions = () => {
   });
 };
 
-describe("#430 PR 3 — setting OFF: exactly as before", () => {
+describe("#430 PR 3 — setting OFF: as before, except the lead item's line (#430 slice 1)", () => {
   it("PendingBanner, TurnIndicator's 'your turn' and ResumeQuestionsBanner all render; no bar", () => {
     seedReviewQueue();
     const { unmount } = render(<App />);
     expect(screen.getByText(/4 items waiting for you/)).toBeInTheDocument();
+    // #430 slice 1 — the deliberate OFF-path revision (Astra condition 4): the
+    // lead chip is `next`, with its why / if-ignored / after line.
+    expect(screen.getByTestId("pending-next").getAttribute("data-next-copy")).toMatch(/^REVIEW First finding · Not blocking/);
     expect(screen.getByRole("button", { name: /Your turn —/ })).toBeInTheDocument();
     expect(screen.queryByTestId("next-up-bar")).not.toBeInTheDocument();
     unmount();
@@ -138,11 +141,11 @@ describe("#430 PR 3 — setting ON: absorbed, no duplicates", () => {
 });
 
 describe("#430 PR 3 — palette commands", () => {
-  it("'Next pending' walks the Decide queue oldest-first and wraps — with the bar OFF too", () => {
+  it("'Next pending' walks the Decide queue (most consequential first, oldest within a tier) and wraps — with the bar OFF too", () => {
     seedReviewQueue();
     const { unmount } = render(<CommandPalette onClose={() => {}} />);
     expect(screen.queryByText(/Open review queue/)).not.toBeInTheDocument(); // bar off → not offered
-    fireEvent.click(screen.getByText(/Next pending \(4 waiting on you, oldest first\)/));
+    fireEvent.click(screen.getByText(/Next pending \(4 waiting on you, most consequential first\)/));
     expect(useArtifactStore.getState().selectedArtifactId).toBe("r1");
     unmount();
     useArtifactStore.setState({ selectedArtifactId: "r4" });

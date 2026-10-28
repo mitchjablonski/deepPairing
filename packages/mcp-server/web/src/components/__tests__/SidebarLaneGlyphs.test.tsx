@@ -162,10 +162,10 @@ describe("#430 PR 4 — parity: the sidebar glyph matches the bar's lane for the
     s.addArtifact(decision("dec", "Which store backs the cache?"));
     renderBoth();
     const barGlyph = () => screen.getByTestId("next-up-bar").getAttribute("data-line")!.split(" ")[0];
-    // Oldest-first: the research draft is next.
-    expect(barGlyph()).toBe("●");
-    expect(rowDot("Refresh isn't coalesced").textContent).toBe(barGlyph());
-    expect(rowDot("Which store backs the cache?").textContent).toBe("▲");
+    // #430 slice 1 — most consequential first: the (later) decision is next.
+    expect(barGlyph()).toBe("▲");
+    expect(rowDot("Which store backs the cache?").textContent).toBe(barGlyph());
+    expect(rowDot("Refresh isn't coalesced").textContent).toBe("●");
   });
 
   it("waiting primary: the bar's ◌ is the revised row's ◌", () => {

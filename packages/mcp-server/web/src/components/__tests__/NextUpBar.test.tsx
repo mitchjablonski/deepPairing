@@ -70,24 +70,33 @@ describe("#430 PR 2 — states A–G render the design's exact line", () => {
   it("A — an urgent (high) decision is the oldest item; another high one waits behind it", () => {
     useArtifactStore.setState({ artifacts: [decision("d1", "Store choice", "high"), decision("d2", "Cache TTL", "high"), art("e1", "explainer", "How it reads")] });
     render(<NextUpBar />);
-    expect(line()).toBe("▲ Store choice · +1 high decision · Decide 2 · Read 1");
+    // #430 slice 1 — informational `Read N` is off the line (it stays in ⌄).
+    expect(line()).toBe("▲ Store choice · +1 high decision · Decide 2");
     expect(tokens()).toBe(line());
     expect(screen.getByText("DECIDE")).toBeInTheDocument(); // word + glyph, not colour only
     expect(screen.getByText(/Claude continues with the option you pick/)).toBeInTheDocument();
   });
 
-  it("B — review queue, oldest-first: an older finding leads and the later high decision is pinned as '+1 high decision'", () => {
+  it("B — #430 slice 1 (Mitch's decision): most consequential first — a later decision outranks an older finding", () => {
     useArtifactStore.setState({ artifacts: [art("r1", "research", "Oldest finding"), decision("d1", "Store choice", "high")] });
     render(<NextUpBar />);
-    // §5 lane glyph: a REVIEW leads with ●, a decision with ▲.
-    expect(line()).toBe("● Oldest finding · +1 high decision · Decide 2");
+    // §5 lane glyph: a decision leads with ▲; it IS next, so no "+1 high decision".
+    expect(line()).toBe("▲ Store choice · Decide 2");
+    expect(screen.getByText("DECIDE")).toBeInTheDocument();
+  });
+
+  it("B2 — a review alone still leads with ● REVIEW and says it is not blocking", () => {
+    useArtifactStore.setState({ artifacts: [art("r1", "research", "Oldest finding")] });
+    render(<NextUpBar />);
+    expect(line()).toBe("● Oldest finding · Decide 1");
     expect(screen.getByText("REVIEW")).toBeInTheDocument();
+    expect(screen.getByTestId("next-up-if-ignored")).toHaveTextContent("Not blocking — Claude can keep working");
   });
 
   it("C — info only", () => {
     useArtifactStore.setState({ artifacts: [art("e1", "explainer", "One"), art("e2", "reasoning", "Two")] });
     render(<NextUpBar />);
-    expect(line()).toBe("◇ Nothing needs you · Read 2");
+    expect(line()).toBe("◇ Nothing needs you"); // #430 slice 1 — no `Read N` on the line
   });
 
   it("D — waiting on the agent (live)", () => {
@@ -141,9 +150,11 @@ describe("#430 PR 2 — pinned '+N high decision' and truncation order", () => {
     const title = screen.getByText("▲ Store choice");
     const why = screen.getByText(/· Context for Store choice/);
     const after = screen.getByText(/· Claude continues/);
+    const ifIgnored = screen.getByTestId("next-up-if-ignored");
     const shrink = (el: HTMLElement) => Number(el.style.flexShrink);
     expect(shrink(why)).toBeGreaterThan(shrink(after));
-    expect(shrink(after)).toBeGreaterThan(shrink(title));
+    expect(shrink(after)).toBeGreaterThan(shrink(ifIgnored));
+    expect(shrink(ifIgnored)).toBeGreaterThan(shrink(title));
     fireEvent.click(high);
     expect(screen.getByText("High-stakes decisions (1)")).toBeInTheDocument();
   });

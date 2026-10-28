@@ -321,7 +321,8 @@ describe("#455 review — the bar never hides the demo CTA or the recap", () => 
     useArtifactStore.setState({ artifacts } as any);
     render(<App />);
     expect(bar().getAttribute("data-line")).toContain("Nothing needs you");
-    expect(bar().getAttribute("data-line")).toContain("Read 2"); // explainer + debrief
+    // #430 slice 1 — informational items are off the line (`Read N` lives in ⌄).
+    expect(bar().getAttribute("data-line")).not.toContain("Read");
     expect(within(bar()).getByTestId("demo-next-step")).toHaveTextContent("✓ Demo fired.");
     expect(screen.queryByTestId("next-up-next-step")).not.toBeInTheDocument();
     // Keep the real demo CTA fallback covered when actual review, rather than

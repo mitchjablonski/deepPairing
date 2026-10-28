@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
 import type { Artifact, Comment, Request } from "@deeppairing/shared";
 import { countUnansweredQuestions } from "@deeppairing/shared";
-import { computeAttention, type AttentionInput, type SummaryLane } from "../attention";
+import { computeAttention, isDelegateBriefArtifact, type AttentionInput, type SummaryLane } from "../attention";
 import { computePending, REVIEWABLE_TYPES } from "../pending";
+import { parseReviewMode, selectGoverningBrief } from "../governingBrief";
 
 /**
  * #430 PR 1a — the shared attention selector (docs/design/attention-hierarchy.md
@@ -105,17 +106,41 @@ describe("parity with today's counters (no counting rule changes in PR 1a)", () 
   });
 });
 
-describe("oldest-first `next` and the '+N high decision' count", () => {
-  it("next is the OLDEST Decide item regardless of input order or stakes", () => {
+describe("most-consequential-first `next` (#430 slice 1) and the '+N high decision' count", () => {
+  it("next is the OLDEST item of the most consequential tier — a blocking item outranks an older finding", () => {
     const artifacts = [
       art("decision", "draft", { id: "d_new", createdAt: "2026-06-01T03:00:00.000Z", content: { stakes: "high" } }),
       art("research", "draft", { id: "r_old", createdAt: "2026-06-01T01:00:00.000Z" }),
       art("plan", "draft", { id: "p_mid", createdAt: "2026-06-01T02:00:00.000Z" }),
     ];
     const a = computeAttention({ artifacts });
-    expect(a.lanes.decide.map((d) => d.id)).toEqual(["r_old", "p_mid", "d_new"]);
-    expect(a.next?.id).toBe("r_old");
-    expect(a.lanes.decide.map((d) => d.kind)).toEqual(["review", "review-blocking", "decision"]);
+    // Blocking tier (plan, decision) oldest-first, then the non-blocking review.
+    expect(a.lanes.decide.map((d) => d.id)).toEqual(["p_mid", "d_new", "r_old"]);
+    expect(a.next?.id).toBe("p_mid");
+    expect(a.lanes.decide.map((d) => d.kind)).toEqual(["review-blocking", "decision", "review"]);
+  });
+
+  it("within a tier it is oldest first, whatever the input order; timestamp ties break by id", () => {
+    const t0 = "2026-06-01T01:00:00.000Z";
+    const artifacts = [
+      art("research", "draft", { id: "r_b", createdAt: t0 }),
+      art("research", "draft", { id: "r_a", createdAt: t0 }),
+      art("research", "draft", { id: "r_first", createdAt: "2026-06-01T00:30:00.000Z" }),
+    ];
+    expect(computeAttention({ artifacts }).lanes.decide.map((d) => d.id)).toEqual(["r_first", "r_a", "r_b"]);
+    expect(computeAttention({ artifacts: [...artifacts].reverse() }).lanes.decide.map((d) => d.id)).toEqual(["r_first", "r_a", "r_b"]);
+  });
+
+  it("the order changes nothing that is counted: Decide size, high count and every lane are the same sets", () => {
+    const artifacts = [
+      art("research", "draft", { id: "f", createdAt: "2026-06-01T01:00:00.000Z" }),
+      art("decision", "draft", { id: "d", createdAt: "2026-06-01T02:00:00.000Z", content: { stakes: "high" } }),
+      art("explainer", "draft", { id: "e", createdAt: "2026-06-01T03:00:00.000Z" }),
+    ];
+    const a = computeAttention({ artifacts });
+    expect(a.lanes.decide.length).toBe(computePending(artifacts).total);
+    expect(new Set(a.lanes.decide.map((d) => d.id))).toEqual(new Set(computePending(artifacts).drafts.map((d) => d.id)));
+    expect(a.lanes.read.map((r) => r.id)).toEqual(["e"]);
   });
 
   it("counts only open DECISIONS with stakes 'high' — never findings' significance, never `next` itself", () => {
@@ -137,14 +162,81 @@ describe("oldest-first `next` and the '+N high decision' count", () => {
     expect(a.line.summary[0]).toEqual({ lane: "high-decision", count: 1 });
   });
 
-  it("when `next` is an older finding, every high decision behind it counts", () => {
+  it("a later high decision outranks an older finding, so it is `next` and not counted again", () => {
     const artifacts = [
       art("research", "draft", { id: "f", createdAt: "2026-06-01T01:00:00.000Z" }),
       art("decision", "draft", { id: "d", createdAt: "2026-06-01T02:00:00.000Z", content: { stakes: "high" } }),
     ];
     const a = computeAttention({ artifacts });
-    expect(a.next?.id).toBe("f");
+    expect(a.next?.id).toBe("d");
+    expect(a.highDecisionsBeyondNext).toBe(0);
+  });
+
+  it("when `next` is an older blocking plan, every high decision behind it counts", () => {
+    const artifacts = [
+      art("plan", "draft", { id: "p", createdAt: "2026-06-01T01:00:00.000Z" }),
+      art("decision", "draft", { id: "d", createdAt: "2026-06-01T02:00:00.000Z", content: { stakes: "high" } }),
+    ];
+    const a = computeAttention({ artifacts });
+    expect(a.next?.id).toBe("p");
     expect(a.highDecisionsBeyondNext).toBe(1);
+  });
+});
+
+describe("#430 slice 1 — the delegate brief is blocking", () => {
+  const BRIEF_CONTEXT = "Decide alone: naming\nWill ask: none\nRisk class: escalated\nWhy: touches the hook\nReview: packet";
+
+  it("a DRAFT brief is `review-blocking` and outranks an older finding", () => {
+    const artifacts = [
+      art("research", "draft", { id: "f", createdAt: "2026-06-01T01:00:00.000Z" }),
+      art("spec", "draft", { id: "brief", createdAt: "2026-06-01T02:00:00.000Z", content: { objective: "o", requirements: [], context: BRIEF_CONTEXT } }),
+    ];
+    const a = computeAttention({ artifacts });
+    expect(a.lanes.decide.find((d) => d.id === "brief")?.kind).toBe("review-blocking");
+    expect(a.next?.id).toBe("brief");
+  });
+
+  it("an ordinary spec (no `Review:` line) stays a non-blocking review", () => {
+    const a = computeAttention({ artifacts: [art("spec", "draft", { id: "s", content: { objective: "o", requirements: [], context: "Some background.\nWe should review this." } })] });
+    expect(a.next?.kind).toBe("review");
+  });
+
+  it("uses the governing strip's SEMANTIC marker (parseReviewMode), not its approved/started eligibility", () => {
+    const draft = art("spec", "draft", { id: "b1", content: { objective: "o", requirements: [], context: BRIEF_CONTEXT } });
+    // The strip does not show a fresh, unstarted draft brief…
+    expect(selectGoverningBrief([draft])).toBeNull();
+    // …but it is the same kind of artifact the strip shows once approved.
+    expect(parseReviewMode((draft.content as { context: string }).context)).toBe("packet");
+    expect(isDelegateBriefArtifact(draft)).toBe(true);
+    const approved = { ...draft, status: "approved" } as Artifact;
+    expect(selectGoverningBrief([approved])?.id).toBe("b1");
+    expect(isDelegateBriefArtifact(approved)).toBe(true);
+    expect(isDelegateBriefArtifact(art("plan", "draft", { content: { context: BRIEF_CONTEXT } }))).toBe(false);
+  });
+});
+
+describe("#430 slice 1 — demo / sample items are labelled, never re-ranked or re-counted", () => {
+  it("an item from a demo_ session carries `demo`; a live one does not; counts are unchanged", () => {
+    const artifacts = [
+      art("research", "draft", { id: "demo_f", sessionId: "demo_1", createdAt: "2026-06-01T01:00:00.000Z" }),
+      art("research", "draft", { id: "live_f", sessionId: "s1", createdAt: "2026-06-01T02:00:00.000Z" }),
+    ];
+    const a = computeAttention({ artifacts });
+    expect(a.lanes.decide.map((d) => [d.id, d.demo ?? false])).toEqual([["demo_f", true], ["live_f", false]]);
+    // Demo is a label, not a priority: the older demo item stays `next` in its tier.
+    expect(a.next?.id).toBe("demo_f");
+    expect(a.lanes.decide.length).toBe(computePending(artifacts).total);
+  });
+
+  it("the client-side sample fixture labels only its own sessions (classifyProvenance's rule)", () => {
+    const artifacts = [
+      art("research", "draft", { id: "fixture", sessionId: "sample_sess" }),
+      art("research", "draft", { id: "real", sessionId: "s1" }),
+    ];
+    const a = computeAttention({ artifacts, sample: { content: true, sessionIds: ["sample_sess"] } });
+    expect(a.lanes.decide.find((d) => d.id === "fixture")?.demo).toBe(true);
+    expect(a.lanes.decide.find((d) => d.id === "real")?.demo).toBeUndefined();
+    expect(computeAttention({ artifacts }).lanes.decide.some((d) => d.demo)).toBe(false);
   });
 });
 
@@ -204,9 +296,9 @@ describe("§4.3 worked table — the doc's rows, literally", () => {
   // [doc row, state, exact line]. "any" rows are instantiated with the lanes PRESENT.
   const ROWS: [string, State, string][] = [
     ["— ✓ any any any", { decide: true, flag: true, waiting: true, held: true, read: true },
-      "▲ Oldest finding · +1 high decision · Decide 3 · ⚠ flags 2 · Waiting 2 · Held 2 · Read 2"],
+      "▲ Store choice · Decide 3 · ⚠ flags 2 · Waiting 2 · Held 2 · Read 2"],
     ["✓ ✓ any any any", { failure: "disconnected", decide: true, flag: true, waiting: true, held: true, read: true },
-      "⚠ DISCONNECTED · ▲ Oldest finding · +1 high decision · Decide 3 · ⚠ flags 2 · Waiting 2 · Held 2 · Read 2"],
+      "⚠ DISCONNECTED · ▲ Store choice · Decide 3 · ⚠ flags 2 · Waiting 2 · Held 2 · Read 2"],
     ["— — ✓ any any", { flag: true, waiting: true, held: true, read: true },
       "⚠ Possible secret in Config dump · Waiting 2 · Held 2 · Read 2"],
     ["✓ — ✓ any any", { failure: "staleDaemon", flag: true, waiting: true, held: true, read: true },
