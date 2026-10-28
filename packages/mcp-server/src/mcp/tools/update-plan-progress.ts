@@ -1,3 +1,5 @@
+import { resolveProjectRoot } from "../../project-root.js";
+import { planDeclaredFiles, scanSkeletonFences, writeSkeletonScope } from "../../skeleton-scope.js";
 import type { ToolContext, ToolResult } from "./types.js";
 
 const VALID_STATUSES = new Set(["pending", "in_progress", "done", "skipped"]);
@@ -55,7 +57,7 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
   const isSpec = artifact.type === "spec";
   const kind = isSpec ? "spec" : "plan";
   const unit = isSpec ? "tasks" : "steps";
-  const c = artifact.content as { steps?: Array<{ status?: string }>; tasks?: Array<{ status?: string }> };
+  const c = artifact.content as { steps?: Array<{ status?: string; skelId?: string }>; tasks?: Array<{ status?: string }> };
   const items = (isSpec ? c.tasks : c.steps) ?? [];
   const done = items.filter((st) => st.status === "done" || st.status === "skipped").length;
   // D10 review (F2-class) — executing an unapproved/rejected plan (or spec,
@@ -73,10 +75,63 @@ export async function handleUpdatePlanProgress(ctx: ToolContext, args: any): Pro
   const warning = NOT_EXECUTABLE[artifact.status]
     ? `\n⚠ WARNING: this ${kind} is ${NOT_EXECUTABLE[artifact.status]}.`
     : "";
+  const skeletonNote = isSpec ? "" : syncSkeletonScope(store.getSessionId(), artifact, updates);
   return {
     content: [{
       type: "text",
-      text: `${isSpec ? "Spec" : "Plan"} progress recorded: ${done}/${items.length} ${unit} complete. The companion UI checklist is live — keep marking ${unit} as you finish them.${warning}`,
+      text: `${isSpec ? "Spec" : "Plan"} progress recorded: ${done}/${items.length} ${unit} complete. The companion UI checklist is live — keep marking ${unit} as you finish them.${warning}${skeletonNote}`,
     }],
   };
+}
+
+/**
+ * Skeleton plans — the plan's in_progress `skelId` steps become the preflight
+ * hook's fence: .deeppairing/skeleton-scopes/<artifactId>.json at the canonical
+ * root the hook reads, stamped with the owning session and working tree. Only
+ * an APPROVED plan opens a fence (#606 review); progress on a draft, rejected or
+ * revised plan removes its own file and touches no other plan's. A step marked
+ * done is checked against the plan's declared files: a fence still holding
+ * SKEL_TODO, or no fence at all, is reported. Plans without skelId steps are
+ * untouched. Never throws.
+ */
+function syncSkeletonScope(
+  sessionId: string,
+  artifact: { id: string; title: string; status: string; content: unknown },
+  updates: Array<{ stepIndex: number; status: string }>,
+): string {
+  try {
+    const content = (artifact.content ?? {}) as { steps?: Array<{ status?: string; skelId?: string; files?: unknown }>; visuals?: Array<{ kind?: unknown; files?: unknown }> };
+    const steps = content.steps ?? [];
+    if (!steps.some((st) => typeof st.skelId === "string" && st.skelId)) return "";
+    const root = resolveProjectRoot();
+    const workspaceRoot = root.worktree?.workspaceRoot ?? root.projectRoot;
+    const approved = artifact.status === "approved";
+    const activeSkelIds = approved ? steps.filter((st) => st.skelId && st.status === "in_progress").map((st) => st.skelId!) : [];
+    writeSkeletonScope(root.projectRoot, { artifactId: artifact.id, planTitle: artifact.title, activeSkelIds, updatedAt: new Date().toISOString(), sessionId, workspaceRoot });
+
+    const finished = updates
+      .filter((u) => u.status === "done")
+      .map((u) => steps[u.stepIndex]?.skelId)
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+    const notes: string[] = [];
+    if (finished.length > 0) {
+      // Fences live in the working tree (a linked worktree's own files), not
+      // the canonical root the scope file is keyed to.
+      const { fences } = scanSkeletonFences(workspaceRoot, { files: planDeclaredFiles(content) });
+      for (const id of finished) {
+        const mine = fences.filter((f) => f.id === id);
+        const todo = mine.filter((f) => f.status === "todo");
+        if (mine.length === 0) notes.push(`SKEL[${id}] has no fence in the plan's files — was it removed, or is its file missing from the plan?`);
+        else if (todo.length > 0) notes.push(`SKEL[${id}] still has SKEL_TODO at ${todo.map((f) => `${f.file}:${f.openLine}`).join(", ")} — finish it before marking the step done.`);
+      }
+    }
+    const fenced = activeSkelIds.length > 0
+      ? `\nSkeleton fence active: edits are gated to ${activeSkelIds.map((id) => `SKEL[${id}]`).join(", ")} until the step is done. A structural change (new helper, signature, file) is a skeleton change — propose it, don't route around the fence.`
+      : !approved && steps.some((st) => st.skelId && st.status === "in_progress")
+        ? "\nSkeleton fence NOT opened: this plan isn't approved."
+        : "";
+    return fenced + (notes.length > 0 ? `\n⚠ ${notes.join("\n⚠ ")}` : "");
+  } catch {
+    return "";
+  }
 }

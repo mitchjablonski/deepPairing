@@ -88,6 +88,8 @@ interface PlanStep {
   status?: "pending" | "in_progress" | "done" | "skipped";
   statusNote?: string;
   motivatedBy?: string[];
+  // Skeleton plans — the SKEL[id] fence this step fills.
+  skelId?: string;
   preview?: { before: string; after: string; filePath: string };
   condition?: string;
   branches?: BranchStep[];
@@ -310,6 +312,14 @@ export function PlanArtifact({ artifact }: PlanArtifactProps) {
                     )}
                     <div className={`flex-1 min-w-0 ${!checkedSteps[i] && artifact.status === "draft" ? "opacity-40 line-through" : ""}`}>
                       <p className="prose-field text-sm text-text-primary font-medium">
+                        {step.skelId && (
+                          <span
+                            className="mr-1.5 rounded px-1 py-px font-mono text-2xs text-accent-blue bg-accent-blue-dim align-middle"
+                            title={`Fills the SKEL[${step.skelId}] fence. While this step is in progress, edits outside it ask you first.`}
+                          >
+                            SKEL[{step.skelId}]
+                          </span>
+                        )}
                         {step.description}
                       </p>
                       <p className="prose-field text-xs text-text-muted mt-0.5">

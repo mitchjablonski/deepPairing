@@ -185,6 +185,18 @@ stamps. Unknown or malformed identities and strict-stop never dedup.
 A missing/unreadable/unparseable session store or
 `DEEPPAIRING_GUARDRAIL_BACKSTOP=off` leaves the backstop silent.
 
+The **skeleton fence** is a third class (`src/skeleton-scope.ts`, a leaf like
+the rules module). When an approved plan's `skelId` step is marked
+`in_progress`, `update_plan_progress` writes
+`.deeppairing/skeleton-scopes/<artifactId>.json` (one file per plan, stamped
+with the owning session and working tree). The hook applies a scope only to
+edits from that same derived session id, only for files in that tree, and only
+while the plan is still `approved` in that session's `artifacts.json`. It then
+validates the edit's *result*: the same SKEL markers, the lines outside the
+active bodies unchanged, and no body escaping its block. It runs after the
+stance and state gates and before the backstop; when a guardrail path is also
+involved, the backstop's reason rides along on the same ask. Faults fail open.
+
 ## Persistence layout
 
 ```

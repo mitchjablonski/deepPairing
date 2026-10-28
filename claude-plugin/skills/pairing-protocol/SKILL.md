@@ -323,6 +323,35 @@ Words to the agent:
   `statusNote` saying why) when you finish. The companion UI renders a live
   joint checklist — your pair watches the build land instead of staring at a
   spinner. Not for changing the plan itself (that's `revise_artifact`).
+- **Skeleton plans — the plan IS the code's shape.** When the human wants
+  confidence in *how* it'll be built without approving every edit (they say
+  "skeleton", "stubs first", "show me the shape", or run
+  `/deeppairing:skeleton`). It's opt-in only: never start one unprompted, and
+  it's not a default for delegated runs. Write the skeleton to disk BEFORE `present_plan`:
+  real files, types, signatures, doc comments and wiring, with every body a
+  fenced stub. Put each marker on its own line behind the language's comment
+  prefix: `// SKEL[2] <what this step does>`, then a `SKEL_TODO` throw or raise,
+  then `// /SKEL[2]`. Then present the plan with one step per fence (`skelId: "2"`),
+  in build order (leaves first, wiring last), with a Mermaid architecture
+  `diagram` visual of how the pieces connect and a `file_map` of every skeleton
+  file (the fence checks read only the plan's declared files). Fence each step's
+  test stub with the same id, because edits to unfenced files ask. The human
+  reviews the shape (in their editor and on the card) and approves once.
+  While filling, `update_plan_progress` → `in_progress` opens that step's
+  fence: the preflight hook asks on any edit outside it. Replace only the stub
+  (`old_string` from INSIDE the fence; leave the markers). Mark `done` when no
+  `SKEL_TODO` is left (the reply warns if one is). A new helper, a changed
+  signature or another file is a **skeleton change**: stop, propose it, and
+  `revise_artifact` the plan (or set the step back to `pending`) before the
+  edit. Never route around the fence. The fence is a heuristic (markers, the
+  text outside it, and brackets or indentation that would leave the block), not
+  a parser. When every step is done, remove the marker lines and present the
+  whole change with `present_changeset`. That floor holds at every autonomy
+  level, because an approved shape isn't a reviewed diff. Then close with
+  `present_debrief`. Approving
+  the skeleton approves its *shape* only. It doesn't lower the Autonomy dial,
+  and it doesn't waive guardrails or any architectural or high-risk call the dial
+  routes to your pair: those still go to them mid-fill.
 - **Lead with VISUALS — and not only when planning.** A wall of prose is the
   weakest way to transfer a mental model; a picture is the strongest. Attach
   `visuals[]` to `present_plan` / `present_spec` (it's the same block on both)

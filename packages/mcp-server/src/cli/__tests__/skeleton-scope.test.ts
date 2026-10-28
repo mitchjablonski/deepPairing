@@ -1,0 +1,392 @@
+/**
+ * Skeleton plans — the fence gate. While an APPROVED plan's `skelId` step is
+ * in_progress (.deeppairing/skeleton-scopes/<artifactId>.json, written by
+ * update_plan_progress), an Edit/Write/MultiEdit from that plan's own session
+ * whose RESULT changes code outside the step's SKEL fence asks the human: it's
+ * a skeleton change. Pure evaluator, then evaluatePreflightHook against a real
+ * temp project, then both real hook emitters spawned (#606 review M6).
+ */
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  SKELETON_SCOPE_MAX_AGE_MS,
+  bodyEscapesFence,
+  evaluateSkeletonEdit,
+  planDeclaredFiles,
+  readSkeletonScopes,
+  scanSkeletonFences,
+  scanSkeletonText,
+  selectSkeletonScope,
+  writeSkeletonScope,
+  type SkeletonScope,
+} from "../../skeleton-scope.js";
+import { deriveSessionId } from "../../session-id.js";
+import { GUARDRAIL_BACKSTOP_ENV, evaluatePreflightHook, hookGateRecord, skeletonScopeActive } from "../preflight-hook-core.js";
+import { ensurePreflightHook } from "../setup-tasks.js";
+
+const SRC = `import { Point } from "./types";
+
+export function smooth(raw: Point[]): Point[] {
+  // SKEL[1] drop near-duplicate points
+  throw new Error("SKEL_TODO");
+  // /SKEL[1]
+}
+
+export function interpolate(a: Point, b: Point): Point[] {
+  // SKEL[2] catmull-rom between a and b
+  throw new Error("SKEL_TODO");
+  // /SKEL[2]
+}
+`;
+const STUB = 'throw new Error("SKEL_TODO");';
+
+const NOW = Date.UTC(2026, 9, 27, 12, 0, 0);
+const scope = (ids: string[], over: Partial<SkeletonScope> = {}): SkeletonScope => ({
+  artifactId: "art_plan",
+  planTitle: "Stroke smoothing",
+  activeSkelIds: ids,
+  updatedAt: new Date(NOW - 60_000).toISOString(),
+  ...over,
+});
+
+describe("scanSkeletonText", () => {
+  it("finds fences with lines, titles and status, across comment styles", () => {
+    expect(scanSkeletonText(SRC, "a.ts").map(({ id, title, openLine, closeLine, status }) => ({ id, title, openLine, closeLine, status }))).toEqual([
+      { id: "1", title: "drop near-duplicate points", openLine: 4, closeLine: 6, status: "todo" },
+      { id: "2", title: "catmull-rom between a and b", openLine: 10, closeLine: 12, status: "todo" },
+    ]);
+    expect(scanSkeletonText("def f():\n    # SKEL[a.1] x\n    return 1\n    # /SKEL[a.1]\n", "f.py")[0]).toMatchObject({ id: "a.1", status: "filled" });
+    expect(scanSkeletonText("<!-- SKEL[3] markup -->\n<p/>\n<!-- /SKEL[3] -->\n", "x.html")[0]).toMatchObject({ id: "3", title: "markup" });
+  });
+
+  it("throws on unclosed, mismatched and nested fences", () => {
+    expect(() => scanSkeletonText("// SKEL[1] x\n", "a")).toThrow(/never closed/);
+    expect(() => scanSkeletonText("// SKEL[1] x\n// /SKEL[2]\n", "a")).toThrow(/closes SKEL\[1\]/);
+    expect(() => scanSkeletonText("// SKEL[1] x\n// SKEL[2] y\n", "a")).toThrow(/opened inside/);
+  });
+});
+
+describe("evaluateSkeletonEdit (pure)", () => {
+  const root = "/proj";
+  const file = "/proj/src/a.ts";
+  const run = (toolName: string, toolInput: Record<string, unknown>, ids = ["1"], text: string | null = SRC, strict = false) =>
+    evaluateSkeletonEdit({ toolName, toolInput: { file_path: file, ...toolInput }, projectRoot: root, scope: scope(ids), strict, readFile: (abs) => (abs === file ? text : null) });
+
+  it("has no opinion with no scope, or for non-edit tools", () => {
+    expect(evaluateSkeletonEdit({ toolName: "Edit", toolInput: { file_path: file, old_string: "import" }, projectRoot: root, scope: null, readFile: () => SRC })).toBeNull();
+    expect(run("Read", {})).toBeNull();
+  });
+
+  it("allows replacing the stub inside the active fence", () => {
+    expect(run("Edit", { old_string: STUB, new_string: "return raw;" })).toBeNull();
+  });
+
+  it("#606 H1: allows the realistic unique old_string that includes the fence's own marker line", () => {
+    // Two fences share an identical stub, so Edit needs the SKEL[2] marker to be unique.
+    const anchored = `  // SKEL[2] catmull-rom between a and b\n  ${STUB}`;
+    expect(run("Edit", { old_string: anchored, new_string: "  // SKEL[2] catmull-rom between a and b\n  return [a, b];" }, ["2"])).toBeNull();
+    // …but the marker line itself must survive intact: no suffix, no retitle.
+    expect(run("Edit", { old_string: anchored, new_string: "  // SKEL[2] catmull-rom between a and b; export const leak = 1;\n  return [a, b];" }, ["2"]))
+      .not.toBeNull();
+    const closing = `  ${STUB}\n  // /SKEL[2]`;
+    expect(run("Edit", { old_string: closing, new_string: "  return [a, b];\n  // /SKEL[2]" }, ["2"])).toBeNull();
+    expect(run("Edit", { old_string: closing, new_string: "  return [a, b];\n  // /SKEL[2] export const leak = 1;" }, ["2"])).not.toBeNull();
+  });
+
+  it("asks for a signature change, another step's fence, an unfenced file, and a new file", () => {
+    expect(run("Edit", { old_string: "smooth(raw: Point[])", new_string: "smooth(raw: Point[], k: number)" })?.reason).toMatch(/src\/a\.ts:3/);
+    // The first stub occurrence is step 1's, so with only step 2 active it is out of scope.
+    expect(run("Edit", { old_string: STUB, new_string: "x" }, ["2"])).not.toBeNull();
+    expect(run("Edit", { old_string: "const", new_string: "let" }, ["1"], "const x = 1;\n")?.reason).toMatch(/no step SKEL\[1\] fence/);
+    expect(run("Write", { content: "new" }, ["1"], null)?.reason).toMatch(/creates a new file/);
+  });
+
+  it("#606 review: refuses a new_string that smuggles markers and a new function past the close marker", () => {
+    const injected = "return 2;\n  // /SKEL[1]\n}\nexport function injected() {\n  // SKEL[1] extra\n  return 9;";
+    expect(run("Edit", { old_string: STUB, new_string: injected })?.reason).toMatch(/adds, removes or retitles SKEL markers/);
+  });
+
+  it("refuses a fill that closes the enclosing function without touching markers", () => {
+    // A formatted escape trips the indentation rule first; either rule refusing is the point.
+    expect(run("Edit", { old_string: STUB, new_string: "return raw;\n}\nexport function injected() {\n  return [];" })?.reason)
+      .toMatch(/indented outside|closes the block/);
+    expect(run("Edit", { old_string: STUB, new_string: "return raw; } export function injected() { return [];" })?.reason).toMatch(/closes the block/);
+  });
+
+  it("allows a real multi-line fill with nested blocks, strings and comments", () => {
+    const fill = [
+      "const out: Point[] = [];",
+      "  for (const p of raw) {",
+      "    // skip near-duplicates (don't sqrt: compare squared distance)",
+      "    if (out.length && dist2(out[out.length - 1], p) < 0.25) continue;",
+      '    out.push({ ...p, label: "}{)(" });',
+      "  }",
+      "  return out;",
+    ].join("\n");
+    expect(run("Edit", { old_string: STUB, new_string: fill })).toBeNull();
+  });
+
+  it("checks replace_all across fences and applies MultiEdit sequentially (M1)", () => {
+    expect(run("Edit", { old_string: STUB, new_string: "x", replace_all: true })).not.toBeNull();
+    expect(run("Edit", { old_string: STUB, new_string: "return [];", replace_all: true }, ["1", "2"])).toBeNull();
+    expect(run("MultiEdit", { edits: [
+      { old_string: STUB, new_string: "const a = raw;\n  return a;" },
+      { old_string: "const a = raw;", new_string: "const a = [...raw];" },
+    ] })).toBeNull();
+    // Edit 2's old_string only exists after edit 1 — it must still be checked.
+    expect(run("MultiEdit", { edits: [
+      { old_string: STUB, new_string: "return TOKEN;" },
+      { old_string: "return TOKEN;\n  // /SKEL[1]\n}\n", new_string: "return raw;\n  // /SKEL[1]\n}\nexport const leak = 1;\n" },
+    ] })).not.toBeNull();
+  });
+
+  it("holds a whole-file Write to the same result checks", () => {
+    expect(run("Write", { content: SRC.replace(STUB, "return raw.filter(Boolean);") })).toBeNull();
+    expect(run("Write", { content: SRC.replace(STUB, "return raw;").replace("export function interpolate", "export async function interpolate") })).not.toBeNull();
+    expect(run("Write", { content: SRC.replace(STUB, "return raw;\n  // /SKEL[1]\n}\nfunction x() {\n  // SKEL[1] again") })).not.toBeNull();
+  });
+
+  it("leaves deepPairing's own state to its own class", () => {
+    expect(evaluateSkeletonEdit({ toolName: "Write", toolInput: { file_path: "/proj/.deeppairing/x.json", content: "{}" }, projectRoot: root, scope: scope(["1"]), readFile: () => null })).toBeNull();
+  });
+
+  it("speaks to the human first with a greppable agent line; strict-stop words it as a stop (M2)", () => {
+    const v = run("Edit", { old_string: "import", new_string: "x" })!;
+    expect(v.reason.startsWith("Allow this edit outside the skeleton?")).toBe(true);
+    expect(v.reason).toContain("[SKELETON_SCOPE");
+    expect(v.reason).toContain('"Stroke smoothing"');
+    const strict = run("Edit", { old_string: "import", new_string: "x" }, ["1"], SRC, true)!;
+    expect(strict.reason).toMatch(/^Edit to src\/a\.ts stopped before execution \(strict-stop mode\)\./);
+    expect(strict.reason).not.toContain("Allow this edit");
+    expect(strict.reason).toContain("[SKELETON_SCOPE]");
+  });
+});
+
+describe("bodyEscapesFence", () => {
+  it("catches the Python shape: a dedent past the marker", () => {
+    expect(bodyEscapesFence("    return 1\ndef injected():\n    return 9", "    # SKEL[1] x", "f.py")).toMatch(/indented outside/);
+    expect(bodyEscapesFence("    if x:\n        return 1\n    return 2  # don't", "    # SKEL[1] x", "f.py")).toBeNull();
+  });
+
+  it("flags a bracket left open past the fence", () => {
+    expect(bodyEscapesFence("  if (x) {", "  // SKEL[1] x", "a.ts")).toMatch(/leaves a bracket open/);
+  });
+});
+
+describe("selectSkeletonScope (#606 H2: owned by one session and one tree)", () => {
+  const a = scope(["1"], { artifactId: "art_a", sessionId: "s_a", workspaceRoot: "/proj" });
+  const b = scope(["9"], { artifactId: "art_b", sessionId: "s_b", workspaceRoot: "/proj" });
+  const wt = scope(["5"], { artifactId: "art_wt", sessionId: "s_a", workspaceRoot: "/proj-wt" });
+
+  it("applies only the edit's own session's scopes — never another session's", () => {
+    expect(selectSkeletonScope([a, b], { sessionId: "s_a", targetAbs: "/proj/src/a.ts" })?.activeSkelIds).toEqual(["1"]);
+    expect(selectSkeletonScope([a, b], { sessionId: "s_b", targetAbs: "/proj/src/a.ts" })?.activeSkelIds).toEqual(["9"]);
+    expect(selectSkeletonScope([a, b], { sessionId: "s_other", targetAbs: "/proj/src/a.ts" })).toBeNull();
+  });
+
+  it("a scope governs only files in its own working tree", () => {
+    expect(selectSkeletonScope([a, wt], { sessionId: "s_a", targetAbs: "/proj-wt/src/a.ts" })?.activeSkelIds).toEqual(["5"]);
+    expect(selectSkeletonScope([wt], { sessionId: "s_a", targetAbs: "/proj/src/a.ts" })).toBeNull();
+  });
+});
+
+describe("planDeclaredFiles + scanSkeletonFences (M3/M4)", () => {
+  let root: string;
+  beforeEach(() => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "dp-skelscan-")));
+    fs.mkdirSync(path.join(root, "src"));
+    fs.writeFileSync(path.join(root, "src", "a.ts"), SRC);
+    fs.writeFileSync(path.join(root, "README.md"), "```ts\n// SKEL[7] example\nthrow new Error(\"SKEL_TODO\");\n// /SKEL[7]\n```\n");
+    fs.writeFileSync(path.join(root, "src", "bad.ts"), "// SKEL[9] open\n");
+  });
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  it("collects step files and file_map paths", () => {
+    expect(planDeclaredFiles({
+      steps: [{ files: ["src/a.ts", { filePath: "src/b.ts" }] }, {}],
+      visuals: [{ kind: "file_map", files: [{ path: "src/c.ts" }, { path: "src/a.ts" }] }, { kind: "diagram" }],
+    })).toEqual(["src/a.ts", "src/b.ts", "src/c.ts"]);
+  });
+
+  it("reads only the declared files when there are any", () => {
+    const { fences, errors } = scanSkeletonFences(root, { files: ["src/a.ts"] });
+    expect(fences.map((f) => `${f.file}:${f.id}`)).toEqual(["src/a.ts:1", "src/a.ts:2"]);
+    expect(errors).toEqual([]);
+  });
+
+  it("falls back to a walk that skips prose examples and reports malformed files", () => {
+    const { fences, errors } = scanSkeletonFences(root);
+    expect(fences.map((f) => f.id).sort()).toEqual(["1", "2"]); // README's SKEL[7] example is ignored
+    expect(errors[0]).toMatch(/src\/bad\.ts:1: SKEL\[9\] is never closed/);
+  });
+});
+
+// ---- the hook, in-process and spawned ----
+
+function seedPlan(root: string, sessionId: string, artifactId: string, status: string): void {
+  const dir = path.join(root, ".deeppairing", "sessions", sessionId);
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, "artifacts.json");
+  const existing = fs.existsSync(file) ? (JSON.parse(fs.readFileSync(file, "utf-8")) as Array<{ id: string }>) : [];
+  fs.writeFileSync(file, JSON.stringify([...existing.filter((a) => a.id !== artifactId), { id: artifactId, type: "plan", status, createdAt: new Date(NOW).toISOString() }]));
+}
+
+describe("through evaluatePreflightHook", () => {
+  let root: string;
+  let file: string;
+  let fallbackSession: string;
+  const CLAUDE_SID = "11111111-2222-3333-4444-555555555555";
+  beforeEach(() => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "dp-skel-")));
+    fs.mkdirSync(path.join(root, "src"));
+    file = path.join(root, "src", "a.ts");
+    fs.writeFileSync(file, SRC);
+    fallbackSession = deriveSessionId(root).sessionId;
+  });
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const live = (ids: string[], over: Partial<SkeletonScope> = {}, status = "approved") => {
+    const s = scope(ids, { sessionId: fallbackSession, workspaceRoot: root, ...over });
+    seedPlan(root, s.sessionId!, s.artifactId, status);
+    writeSkeletonScope(root, s);
+  };
+  const hook = (toolInput: Record<string, unknown>, extra: { sessionId?: string; mode?: "ask" | "strict-stop" } = {}) =>
+    evaluatePreflightHook({ toolName: "Edit", toolInput: { file_path: file, ...toolInput }, projectRoot: root, now: NOW, env: {}, ...extra });
+  const OUTSIDE = { old_string: "smooth(raw", new_string: "smoothed(raw" };
+
+  it("is silent with no scope (and the fast path says so)", () => {
+    expect(skeletonScopeActive(root, NOW)).toBe(false);
+    expect(hook({ old_string: "import", new_string: "x" }).fire).toBe(false);
+  });
+
+  it("fires on an out-of-fence edit from the owning session, and passes the fill", () => {
+    live(["1"]);
+    expect(skeletonScopeActive(root, NOW)).toBe(true);
+    expect(hook(OUTSIDE)).toMatchObject({ fire: true, source: "skeleton", skeleton: { skelIds: ["1"] }, toolName: "Edit", target: "src/a.ts" });
+    expect(hook({ old_string: STUB, new_string: "return raw;" }).fire).toBe(false);
+  });
+
+  it("fires on a pure deletion outside the fence (no proposal strings)", () => {
+    live(["1"]);
+    expect(hook({ old_string: 'import { Point } from "./types";\n', new_string: "" }).fire).toBe(true);
+  });
+
+  it("#606 H2: never fences another session — split-mode owner vs. an event with no identity, and vice versa", () => {
+    const owner = deriveSessionId(root, CLAUDE_SID).sessionId;
+    live(["1"], { sessionId: owner });
+    expect(hook(OUTSIDE, { sessionId: CLAUDE_SID }).fire).toBe(true);
+    expect(hook(OUTSIDE).fire).toBe(false); // no identity → fallback id ≠ owner
+    expect(hook(OUTSIDE, { sessionId: "99999999-2222-3333-4444-555555555555" }).fire).toBe(false);
+  });
+
+  it("#606 M5: the fence is live only while the plan is approved in the store", () => {
+    live(["1"]);
+    expect(hook(OUTSIDE).fire).toBe(true);
+    for (const status of ["draft", "revised", "superseded", "rejected", "retracted"]) {
+      seedPlan(root, fallbackSession, "art_plan", status);
+      expect(hook(OUTSIDE).fire, status).toBe(false);
+    }
+    fs.rmSync(path.join(root, ".deeppairing", "sessions"), { recursive: true });
+    expect(hook(OUTSIDE).fire).toBe(false); // unreadable store → fail open
+  });
+
+  it("#606 review: plan B finishing never removes plan A's fence", () => {
+    live(["1"], { artifactId: "art_a" });
+    live(["2"], { artifactId: "art_b" });
+    writeSkeletonScope(root, scope([], { artifactId: "art_b", sessionId: fallbackSession })); // B marks its step done
+    expect(readSkeletonScopes(root, NOW).map((s) => s.artifactId)).toEqual(["art_a"]);
+    expect(hook(OUTSIDE).fire).toBe(true);
+  });
+
+  it("strict-stop gets the strict wording; a guardrail path keeps its reason on the same ask (L2)", () => {
+    live(["1"]);
+    expect(hook(OUTSIDE, { mode: "strict-stop" }).reason).toMatch(/stopped before execution \(strict-stop mode\)/);
+    const mig = path.join(root, "migrations", "001.sql");
+    fs.mkdirSync(path.dirname(mig));
+    fs.writeFileSync(mig, "select 1;\n");
+    const d = evaluatePreflightHook({ toolName: "Edit", toolInput: { file_path: mig, old_string: "select 1;", new_string: "select 2;" }, projectRoot: root, now: NOW, env: {} });
+    expect(d.source).toBe("skeleton");
+    expect(d.reason).toContain("[SKELETON_SCOPE");
+    expect(d.reason).toContain("GUARDRAIL_ESCALATION");
+  });
+
+  it("logs a fence fire as its own guardrail class for the companion", () => {
+    live(["2"]);
+    expect(hookGateRecord(hook({ old_string: "import", new_string: "x" }))).toMatchObject({
+      source: "guardrail", guardrail: "skeleton-scope", concept: "Skeleton fence SKEL[2]", target: "src/a.ts",
+    });
+  });
+
+  it("ignores a stale scope and removes the file when nothing is in progress", () => {
+    live(["1"], { updatedAt: new Date(NOW - SKELETON_SCOPE_MAX_AGE_MS - 1).toISOString() });
+    expect(readSkeletonScopes(root, NOW)).toEqual([]);
+    expect(hook(OUTSIDE).fire).toBe(false);
+    writeSkeletonScope(root, scope([]));
+    expect(fs.existsSync(path.join(root, ".deeppairing", "skeleton-scopes", "art_plan.json"))).toBe(false);
+  });
+});
+
+// #606 review M6 — both real emitters, spawned, in a ledger-free project where
+// the fence is the ONLY reason past the fast path.
+const here = path.dirname(fileURLToPath(import.meta.url));
+const pluginBundle = path.resolve(here, "../../../../../claude-plugin/server/preflight.mjs");
+const distCore = path.resolve(here, "../../../dist/cli/preflight-hook-core.js");
+
+describe.each([
+  ["init-generated .deeppairing/hooks/preflight.mjs", "init", fs.existsSync(distCore)],
+  ["plugin bundle server/preflight.mjs", "plugin", fs.existsSync(pluginBundle)],
+] as const)("real hook launch: %s", (_name, kind, built) => {
+  let parent: string;
+  let dir: string;
+  let home: string;
+  beforeEach(() => {
+    parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "dp-skelspawn-")));
+    dir = path.join(parent, "project");
+    home = path.join(parent, "home");
+    fs.mkdirSync(path.join(dir, "src"), { recursive: true });
+    fs.mkdirSync(home);
+    vi.spyOn(os, "homedir").mockReturnValue(home);
+    fs.writeFileSync(path.join(dir, "src", "a.ts"), SRC);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(parent, { recursive: true, force: true });
+  });
+
+  const command = () => {
+    if (kind === "plugin") return `node "${pluginBundle}"`;
+    expect(ensurePreflightHook(dir).ok).toBe(true);
+    return JSON.parse(fs.readFileSync(path.join(dir, ".claude", "settings.local.json"), "utf8")).hooks.PreToolUse[0].hooks[0].command as string;
+  };
+  const launch = (cmd: string, payload: unknown) => {
+    const r = spawnSync("/bin/sh", ["-c", cmd], {
+      cwd: parent,
+      env: { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_PROJECT_DIR: dir, FORCE_COLOR: "0", [GUARDRAIL_BACKSTOP_ENV]: "" },
+      input: JSON.stringify(payload),
+      encoding: "utf8",
+      timeout: 15_000,
+    });
+    expect(r.status, r.stderr).toBe(0);
+    return r.stdout.trim() ? (JSON.parse(r.stdout) as { hookSpecificOutput: { permissionDecision: string; permissionDecisionReason: string } }) : null;
+  };
+
+  it.skipIf(!built)("asks on an out-of-fence edit, stays silent on the fill, and only for the owning session", () => {
+    const cmd = command();
+    const sid = "11111111-2222-3333-4444-555555555555";
+    const owner = deriveSessionId(dir, sid).sessionId;
+    seedPlan(dir, owner, "art_plan", "approved");
+    writeSkeletonScope(dir, { ...scope(["1"]), updatedAt: new Date().toISOString(), sessionId: owner, workspaceRoot: dir });
+    const file = path.join(dir, "src", "a.ts");
+    const ev = (old_string: string, new_string: string, session_id?: string) => ({ tool_name: "Edit", session_id, tool_input: { file_path: file, old_string, new_string } });
+
+    const out = launch(cmd, ev("smooth(raw", "smoothed(raw", sid));
+    expect(out?.hookSpecificOutput.permissionDecision).toBe("ask");
+    expect(out?.hookSpecificOutput.permissionDecisionReason).toContain("[SKELETON_SCOPE");
+    expect(launch(cmd, ev(STUB, "return raw;", sid))).toBeNull();
+    expect(launch(cmd, ev("smooth(raw", "smoothed(raw", "99999999-2222-3333-4444-555555555555"))).toBeNull();
+  }, 120_000);
+});
