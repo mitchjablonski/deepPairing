@@ -19175,7 +19175,7 @@ var PlanStepSchema = external_exports.object({
    * preflight hook fences edits to that id's regions. Optional for back-compat
    * (absent = an ordinary prose step).
    */
-  skelId: external_exports.string().regex(/^[A-Za-z0-9][\w.-]*$/).optional().describe("Skeleton plans: the SKEL[id] fence this step fills. While the step is in_progress, edits outside that fence are gated.")
+  skelId: external_exports.string().regex(/^[A-Za-z0-9][\w.-]*$/).optional().describe(`Skeleton plans: the SKEL[id] fence this step fills, e.g. "2" or "2.1" (starts with a letter or digit; then letters, digits, '.', '_' or '-'; no spaces). While the step is in_progress on an approved plan, edits outside that fence are gated.`)
 });
 var PlanVisualFileSchema = external_exports.object({
   path: external_exports.string(),

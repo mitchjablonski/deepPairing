@@ -1101,13 +1101,24 @@ function readSkeletonScopes(projectRoot, now = Date.now()) {
 function skeletonScopeActive(projectRoot, now = Date.now()) {
   return readSkeletonScopes(projectRoot, now).length > 0;
 }
+function planApprovedOnDisk(projectRoot, sessionId, artifactId) {
+  if (!/^[A-Za-z0-9_-]{1,160}$/.test(sessionId)) return false;
+  try {
+    const arr = JSON.parse(fs4.readFileSync(path5.join(projectRoot, ".deeppairing", "sessions", sessionId, "artifacts.json"), "utf-8"));
+    if (!Array.isArray(arr)) return false;
+    const plan = arr.find((a) => !!a && typeof a === "object" && a.id === artifactId);
+    return plan?.type === "plan" && plan.status === "approved";
+  } catch {
+    return false;
+  }
+}
 function within(dir, abs) {
   const rel = path5.relative(dir, abs);
   return rel === "" || !rel.startsWith("..") && !path5.isAbsolute(rel);
 }
 function selectSkeletonScope(scopes, args) {
   const mine = scopes.filter(
-    (s) => (!args.sessionId || !s.sessionId || s.sessionId === args.sessionId) && (!s.workspaceRoot || within(s.workspaceRoot, args.targetAbs))
+    (s) => s.sessionId === args.sessionId && (!s.workspaceRoot || within(s.workspaceRoot, args.targetAbs))
   );
   if (mine.length === 0) return null;
   const titles = [...new Set(mine.map((s) => s.planTitle).filter((t) => !!t))];
@@ -1150,22 +1161,30 @@ function applyEdit(text, oldStr, newStr, all) {
 }
 function preservesOutside(original, next, fences) {
   const lines = original.split("\n");
+  const out = next.split("\n");
   const sorted = [...fences].sort((a, b) => a.openLine - b.openLine);
   const segments = [];
   let from = 0;
   for (const f of sorted) {
-    segments.push(lines.slice(from, f.openLine).join("\n"));
+    segments.push(lines.slice(from, f.openLine));
     from = f.closeLine - 1;
   }
-  segments.push(lines.slice(from).join("\n"));
+  segments.push(lines.slice(from));
+  const matchesAt = (seg, at) => at >= 0 && at + seg.length <= out.length && seg.every((l, i) => out[at + i] === l);
   let pos = 0;
   for (let k = 0; k < segments.length; k++) {
     const seg = segments[k];
-    if (k === 0 && !next.startsWith(seg)) return false;
-    if (k === segments.length - 1) return next.endsWith(seg) && next.length - seg.length >= pos;
-    const idx = next.indexOf(seg, pos);
-    if (idx === -1) return false;
-    pos = idx + seg.length;
+    if (k === 0) {
+      if (!matchesAt(seg, 0)) return false;
+      pos = seg.length;
+    } else if (k === segments.length - 1) {
+      if (out.length - seg.length < pos || !matchesAt(seg, out.length - seg.length)) return false;
+    } else {
+      let at = pos;
+      while (at + seg.length <= out.length && !matchesAt(seg, at)) at++;
+      if (!matchesAt(seg, at)) return false;
+      pos = at + seg.length;
+    }
   }
   return true;
 }
@@ -1211,11 +1230,12 @@ function evaluateSkeletonEdit(args) {
   const shown = rel && !rel.startsWith("..") && !path5.isAbsolute(rel) ? rel.split(path5.sep).join("/") : abs;
   const ids = scope.activeSkelIds;
   const label = ids.length === 1 ? `step SKEL[${ids[0]}]` : `steps ${ids.map((i) => `SKEL[${i}]`).join(", ")}`;
+  const plan = scope.planTitle ? ` ("${scope.planTitle}")` : "";
   const violation = (what) => ({
     skelIds: ids,
     target: shown,
-    reason: `Allow this edit outside the skeleton? ${what}. The approved skeleton${scope.planTitle ? ` ("${scope.planTitle}")` : ""} is being filled, and ${label} may only change code inside its fence. Allowing it changes the structure you approved.
-[SKELETON_SCOPE \u2014 agent: this is a skeleton change. Don't route around the fence; stop and propose the change (what, where, why) to your pair, then revise the plan before filling on.]`
+    reason: args.strict ? `Edit to ${shown} stopped before execution (strict-stop mode). ${what}. The approved skeleton${plan} is being filled, and ${label} may only change code inside its fence. Propose the skeleton change to your pair and revise the plan, or set the step back to pending before an agreed structural edit. [SKELETON_SCOPE]` : `Allow this edit outside the skeleton? ${what}. The approved skeleton${plan} is being filled, and ${label} may only change code inside its fence. Allowing it changes the structure you approved.
+[SKELETON_SCOPE \u2014 agent: this is a skeleton change. Don't route around the fence; stop and propose the change (what, where, why) to your pair. Once they agree, revise the plan (or set the step back to pending) before the structural edit.]`
   });
   const original = args.readFile(abs);
   if (original === null) return args.toolName === "Write" ? violation(`It creates a new file, ${shown}`) : null;
@@ -1244,7 +1264,7 @@ function evaluateSkeletonEdit(args) {
         return violation(`${shown} has malformed SKEL markers`);
       }
       for (const [start, end] of applied.spans) {
-        if (!current.some((f) => start > f.openLine && end < f.closeLine)) {
+        if (!current.some((f) => start >= f.openLine && end <= f.closeLine)) {
           return violation(`It touches ${shown}:${start}${end > start ? `-${end}` : ""}`);
         }
       }
@@ -1661,7 +1681,7 @@ function evaluateHookGates(args) {
   const state = evaluateDeeppairingState({ toolInput, projectRoot, mode: args.mode, failures });
   if (toolName === "NotebookEdit") return state ?? { fire: false };
   const { strings, paths } = buildProposals(toolName, toolInput);
-  if (strings.length === 0) return state ?? evaluateSkeletonScope({ toolName, toolInput, projectRoot, now: args.now, failures, sessionId: args.sessionId, agentId: args.agentId }) ?? { fire: false };
+  if (strings.length === 0) return state ?? evaluateSkeletonScope({ toolName, toolInput, projectRoot, now: args.now, mode: args.mode, failures, sessionId: args.sessionId, agentId: args.agentId }) ?? { fire: false };
   const result = runPreflightSkippingBadEntries({
     toolName,
     proposalStrings: strings,
@@ -1678,8 +1698,13 @@ function evaluateHookGates(args) {
 ${state.reason}`, source: result.block.source, ...stance ? { stance } : {} } : { fire: true, reason, source: result.block.source, ...stance ? { stance } : {} };
   }
   if (state) return state;
-  const skeleton = evaluateSkeletonScope({ toolName, toolInput, projectRoot, now: args.now, failures, sessionId: args.sessionId, agentId: args.agentId });
-  if (skeleton) return skeleton;
+  const skeleton = evaluateSkeletonScope({ toolName, toolInput, projectRoot, now: args.now, mode: args.mode, failures, sessionId: args.sessionId, agentId: args.agentId });
+  if (skeleton) {
+    const backstop = evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env, mode: args.mode, failures, sessionId: args.sessionId, agentId: args.agentId });
+    return backstop?.fire && backstop.reason ? { ...skeleton, reason: `${skeleton.reason}
+
+${backstop.reason}` } : skeleton;
+  }
   return evaluateGuardrailBackstop({ toolInput, projectRoot, now: args.now, env: args.env, mode: args.mode, failures, sessionId: args.sessionId, agentId: args.agentId }) ?? { fire: false };
 }
 function evaluateSkeletonScope(args) {
@@ -1688,16 +1713,18 @@ function evaluateSkeletonScope(args) {
     if (scopes.length === 0) return null;
     const target = toolInputTargetPath(args.toolInput);
     if (typeof target !== "string" || !target) return null;
-    const sid = usableSessionId(args.sessionId);
-    const scope = selectSkeletonScope(scopes, {
-      sessionId: sid ? deriveSessionId(args.projectRoot, sid).sessionId : void 0,
-      targetAbs: path6.resolve(args.projectRoot, target)
-    });
+    const sessionId = deriveSessionId(args.projectRoot, usableSessionId(args.sessionId)).sessionId;
+    const scope = selectSkeletonScope(
+      // M5 — and only while that plan is approved in the store.
+      scopes.filter((s) => s.sessionId && planApprovedOnDisk(args.projectRoot, s.sessionId, s.artifactId)),
+      { sessionId, targetAbs: path6.resolve(args.projectRoot, target) }
+    );
     const violation = evaluateSkeletonEdit({
       toolName: args.toolName,
       toolInput: args.toolInput,
       projectRoot: args.projectRoot,
       scope,
+      strict: args.mode === "strict-stop",
       readFile: (abs) => {
         try {
           return fs5.readFileSync(abs, "utf-8");

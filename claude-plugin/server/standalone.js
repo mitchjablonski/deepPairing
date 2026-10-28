@@ -25127,7 +25127,7 @@ var PlanStepSchema = external_exports.object({
    * preflight hook fences edits to that id's regions. Optional for back-compat
    * (absent = an ordinary prose step).
    */
-  skelId: external_exports.string().regex(/^[A-Za-z0-9][\w.-]*$/).optional().describe("Skeleton plans: the SKEL[id] fence this step fills. While the step is in_progress, edits outside that fence are gated.")
+  skelId: external_exports.string().regex(/^[A-Za-z0-9][\w.-]*$/).optional().describe(`Skeleton plans: the SKEL[id] fence this step fills, e.g. "2" or "2.1" (starts with a letter or digit; then letters, digits, '.', '_' or '-'; no spaces). While the step is in_progress on an approved plan, edits outside that fence are gated.`)
 });
 var PlanVisualFileSchema = external_exports.object({
   path: external_exports.string(),
@@ -36572,10 +36572,36 @@ function scanSkeletonText(text, file2) {
   return fences;
 }
 var SKIP_DIRS = /* @__PURE__ */ new Set(["node_modules", ".git", ".deeppairing", "dist", "build", "out", ".next", ".turbo", "coverage", "__pycache__", ".venv", "venv", "target"]);
-function scanSkeletonFences(root, maxFiles = 2e4) {
+var PROSE_FILE = /\.(md|mdx|markdown|rst|txt)$/i;
+function scanFile(root, abs, fences, errors) {
+  let text;
+  try {
+    if (fs10.statSync(abs).size > 1e6) return;
+    text = fs10.readFileSync(abs, "utf-8");
+  } catch {
+    return;
+  }
+  if (!text.includes("SKEL[")) return;
+  const rel = path10.relative(root, abs).split(path10.sep).join("/");
+  try {
+    fences.push(...scanSkeletonText(text, rel));
+  } catch (err) {
+    errors.push(err instanceof Error ? err.message : String(err));
+  }
+}
+function scanSkeletonFences(root, opts = {}) {
   const fences = [];
   const errors = [];
+  if (opts.files && opts.files.length > 0) {
+    for (const f of new Set(opts.files)) {
+      const abs = path10.resolve(root, f);
+      if (within(root, abs)) scanFile(root, abs, fences, errors);
+    }
+    return { fences, errors, truncated: false };
+  }
+  const maxFiles = opts.maxFiles ?? 2e4;
   let seen = 0;
+  let truncated = false;
   const walk = (dir) => {
     let entries;
     try {
@@ -36584,32 +36610,36 @@ function scanSkeletonFences(root, maxFiles = 2e4) {
       return;
     }
     for (const e of entries) {
-      if (seen >= maxFiles) return;
+      if (seen >= maxFiles) {
+        truncated = true;
+        return;
+      }
       const abs = path10.join(dir, e.name);
       if (e.isDirectory()) {
         if (!SKIP_DIRS.has(e.name) && !e.name.startsWith(".")) walk(abs);
         continue;
       }
-      if (!e.isFile()) continue;
+      if (!e.isFile() || PROSE_FILE.test(e.name)) continue;
       seen++;
-      let text;
-      try {
-        if (fs10.statSync(abs).size > 1e6) continue;
-        text = fs10.readFileSync(abs, "utf-8");
-      } catch {
-        continue;
-      }
-      if (!text.includes("SKEL[")) continue;
-      const rel = path10.relative(root, abs).split(path10.sep).join("/");
-      try {
-        fences.push(...scanSkeletonText(text, rel));
-      } catch (err) {
-        errors.push(err instanceof Error ? err.message : String(err));
-      }
+      scanFile(root, abs, fences, errors);
     }
   };
   walk(root);
-  return { fences, errors };
+  return { fences, errors, truncated };
+}
+function planDeclaredFiles(content) {
+  const out = [];
+  const take = (v2) => {
+    if (typeof v2 === "string" && v2) out.push(v2);
+    else if (v2 && typeof v2 === "object") {
+      const o = v2;
+      const p = typeof o.filePath === "string" ? o.filePath : typeof o.path === "string" ? o.path : "";
+      if (p) out.push(p);
+    }
+  };
+  for (const st of content.steps ?? []) if (Array.isArray(st.files)) st.files.forEach(take);
+  for (const v2 of content.visuals ?? []) if (v2.kind === "file_map" && Array.isArray(v2.files)) v2.files.forEach(take);
+  return [...new Set(out)];
 }
 function skeletonScopeDir(projectRoot2) {
   return path10.join(projectRoot2, ".deeppairing", SKELETON_SCOPE_DIR);
@@ -36632,6 +36662,10 @@ function writeSkeletonScope(projectRoot2, scope) {
     fs10.renameSync(tmp, file2);
   } catch {
   }
+}
+function within(dir, abs) {
+  const rel = path10.relative(dir, abs);
+  return rel === "" || !rel.startsWith("..") && !path10.isAbsolute(rel);
 }
 
 // src/mcp/tools/update-plan-progress.ts
@@ -36686,7 +36720,7 @@ async function handleUpdatePlanProgress(ctx, args) {
   };
   const warning = NOT_EXECUTABLE[artifact.status] ? `
 \u26A0 WARNING: this ${kind} is ${NOT_EXECUTABLE[artifact.status]}.` : "";
-  const skeletonNote = isSpec ? "" : syncSkeletonScope(store.getSessionId(), artifact.id, artifact.title, c.steps ?? [], updates);
+  const skeletonNote = isSpec ? "" : syncSkeletonScope(store.getSessionId(), artifact, updates);
   return {
     content: [{
       type: "text",
@@ -36694,26 +36728,29 @@ async function handleUpdatePlanProgress(ctx, args) {
     }]
   };
 }
-function syncSkeletonScope(sessionId, artifactId, planTitle, steps, updates) {
+function syncSkeletonScope(sessionId, artifact, updates) {
   try {
+    const content = artifact.content ?? {};
+    const steps = content.steps ?? [];
     if (!steps.some((st) => typeof st.skelId === "string" && st.skelId)) return "";
     const root = resolveProjectRoot();
-    const activeSkelIds = steps.filter((st) => st.skelId && st.status === "in_progress").map((st) => st.skelId);
     const workspaceRoot = root.worktree?.workspaceRoot ?? root.projectRoot;
-    writeSkeletonScope(root.projectRoot, { artifactId, planTitle, activeSkelIds, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), sessionId, workspaceRoot });
+    const approved = artifact.status === "approved";
+    const activeSkelIds = approved ? steps.filter((st) => st.skelId && st.status === "in_progress").map((st) => st.skelId) : [];
+    writeSkeletonScope(root.projectRoot, { artifactId: artifact.id, planTitle: artifact.title, activeSkelIds, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), sessionId, workspaceRoot });
     const finished = updates.filter((u) => u.status === "done").map((u) => steps[u.stepIndex]?.skelId).filter((id) => typeof id === "string" && id.length > 0);
     const notes = [];
     if (finished.length > 0) {
-      const { fences } = scanSkeletonFences(workspaceRoot);
+      const { fences } = scanSkeletonFences(workspaceRoot, { files: planDeclaredFiles(content) });
       for (const id of finished) {
         const mine = fences.filter((f) => f.id === id);
         const todo = mine.filter((f) => f.status === "todo");
-        if (mine.length === 0) notes.push(`SKEL[${id}] has no fence in the working tree \u2014 was it removed or never written?`);
+        if (mine.length === 0) notes.push(`SKEL[${id}] has no fence in the plan's files \u2014 was it removed, or is its file missing from the plan?`);
         else if (todo.length > 0) notes.push(`SKEL[${id}] still has SKEL_TODO at ${todo.map((f) => `${f.file}:${f.openLine}`).join(", ")} \u2014 finish it before marking the step done.`);
       }
     }
     const fenced = activeSkelIds.length > 0 ? `
-Skeleton fence active: edits are gated to ${activeSkelIds.map((id) => `SKEL[${id}]`).join(", ")} until the step is done. A structural change (new helper, signature, file) is a skeleton change \u2014 propose it, don't route around the fence.` : "";
+Skeleton fence active: edits are gated to ${activeSkelIds.map((id) => `SKEL[${id}]`).join(", ")} until the step is done. A structural change (new helper, signature, file) is a skeleton change \u2014 propose it, don't route around the fence.` : !approved && steps.some((st) => st.skelId && st.status === "in_progress") ? "\nSkeleton fence NOT opened: this plan isn't approved." : "";
     return fenced + (notes.length > 0 ? `
 \u26A0 ${notes.join("\n\u26A0 ")}` : "");
   } catch {
@@ -37849,12 +37886,13 @@ Decline to review requirements and acceptance criteria in the companion UI at ht
 }
 
 // src/mcp/tools/present-plan.ts
-function skeletonPlanNote(steps) {
+function skeletonPlanNote(content) {
   try {
-    const ids = steps.map((st) => st.skelId).filter((id) => typeof id === "string" && id.length > 0);
+    const ids = content.steps.map((st) => st.skelId).filter((id) => typeof id === "string" && id.length > 0);
     if (ids.length === 0) return "";
     const root = resolveProjectRoot();
-    const { fences, errors } = scanSkeletonFences(root.worktree?.workspaceRoot ?? root.projectRoot);
+    const declared = planDeclaredFiles(content);
+    const { fences, errors, truncated } = scanSkeletonFences(root.worktree?.workspaceRoot ?? root.projectRoot, { files: declared });
     const onDisk = new Set(fences.map((f) => f.id));
     const claimed = new Set(ids);
     const missing = [...claimed].filter((id) => !onDisk.has(id));
@@ -37862,7 +37900,9 @@ function skeletonPlanNote(steps) {
     const notes = [
       ...missing.map((id) => `step skelId "${id}" has no SKEL[${id}] fence on disk \u2014 write the skeleton before presenting it`),
       ...unclaimed.map((id) => `SKEL[${id}] is a pending fence no step claims`),
-      ...errors.map((e) => `malformed SKEL markers: ${e}`)
+      ...errors.map((e) => `malformed SKEL markers: ${e}`),
+      ...declared.length === 0 ? ["the plan declares no files (step `files` or a `file_map`), so the whole tree was scanned \u2014 declare them"] : [],
+      ...truncated ? ["the scan hit its file cap, so some fences may be unseen"] : []
     ];
     return notes.length > 0 ? `
 \u26A0 Skeleton check: ${notes.join("; ")}.` : `
@@ -37928,11 +37968,11 @@ Decline to review steps in detail at http://localhost:${reviewPort}`
     await maybeUpdateTaskStatus(ctx.server, id, ctx.store);
     await ctx.store.resolvePlanReview(id, "approved");
     return {
-      content: [{ type: "text", text: `Plan "${args?.title}" approved (${id}). Proceed with implementation.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${skeletonPlanNote(planSteps)}${await ctx.helpers.getPassiveFeedback()}` }]
+      content: [{ type: "text", text: `Plan "${args?.title}" approved (${id}). Proceed with implementation.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${skeletonPlanNote(content)}${await ctx.helpers.getPassiveFeedback()}` }]
     };
   }
   return {
-    content: [{ type: "text", text: `Plan "${args?.title}" presented for review (${id}). Human can approve/revise/reject at localhost:${reviewPort}. Call check_feedback for their verdict.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${skeletonPlanNote(planSteps)}${await ctx.helpers.getPassiveFeedback()}` }]
+    content: [{ type: "text", text: `Plan "${args?.title}" presented for review (${id}). Human can approve/revise/reject at localhost:${reviewPort}. Call check_feedback for their verdict.${servedNote}${traceSummary}${nudge}${formatStyleWarnings(artifact.type, artifact.content)}${skeletonPlanNote(content)}${await ctx.helpers.getPassiveFeedback()}` }]
   };
 }
 
