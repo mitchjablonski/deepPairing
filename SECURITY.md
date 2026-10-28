@@ -196,6 +196,13 @@ deepPairing installs three Claude Code hooks, all local-only, network-free, and 
     hook apply: you see the prompt in the default, `acceptEdits`, `plan` and
     `auto` modes; `dontAsk` and a `-p` run with no one to answer refuse the
     edit; and `bypassPermissions` skips the prompt, so the edit can land.
+  - **Skeleton fence (`skeleton-scope`).** Only while an approved skeleton
+    plan's step is `in_progress` in *your* session: an Edit/Write/MultiEdit
+    whose result changes code outside that step's `SKEL[id]` fence, or changes
+    its markers, or escapes the block the fence sits in. It's a drift guard for
+    a cooperative agent, **not a security boundary**: Bash and NotebookEdit
+    aren't covered, the containment check is a heuristic, and a fault fails
+    open.
   - **Guardrail backstop.** The edit targets a guardrail path — a migration
     directory, CI config (`.github/workflows/`, `.gitlab-ci.yml`, `Jenkinsfile`,
     `.circleci/`), infrastructure (`Dockerfile*`, compose files, `terraform/`,
